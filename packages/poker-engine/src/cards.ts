@@ -1,15 +1,9 @@
 /**
- * Card representation.
+ * A card is one integer 0..51, `rankIndex * 4 + suitIndex`, so the evaluator and sampler need no
+ * allocation and a deck commits as 52 bytes.
  *
- * A card is a single integer 0..51, encoded as `rankIndex * 4 + suitIndex`.
- *
- *   rankIndex  0..12  → 2 3 4 5 6 7 8 9 T J Q K A     (ace high; the wheel is
- *                                                      handled in the evaluator)
+ *   rankIndex  0..12  → 2 3 4 5 6 7 8 9 T J Q K A     (ace high, the evaluator handles the wheel)
  *   suitIndex  0..3   → c d h s
- *
- * An integer encoding (rather than `{rank, suit}` objects) is what lets the
- * evaluator and the Monte Carlo sampler work on plain numbers with no allocation
- * per card, and lets a deck be compared, hashed and committed to as 52 bytes.
  */
 
 /** A card as a small integer, 0..51 inclusive. */
@@ -62,7 +56,6 @@ export const DECK_SIZE = 52;
 export const NUM_RANKS = 13;
 export const NUM_SUITS = 4;
 
-/** Raised for any malformed card, rank or suit input. */
 export class CardParseError extends Error {
   override readonly name = 'CardParseError';
 }
@@ -89,17 +82,12 @@ export function isCard(value: unknown): value is Card {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value < DECK_SIZE;
 }
 
-/** Throws unless `value` is a valid card id. */
 export function assertCard(value: unknown, what = 'card'): Card {
   if (!isCard(value)) throw new CardParseError(`${what} is not a valid card id: ${String(value)}`);
   return value;
 }
 
-/**
- * Rank as a character. Written with an explicit bounds check rather than a bare
- * index because `noUncheckedIndexedAccess` is on: every indexed read in this
- * repo is either guarded or comes from iteration.
- */
+/** Rank as a character. Bounds-checked because `noUncheckedIndexedAccess` is on. */
 export function rankChar(rank: RankIndex): string {
   const ch = RANKS[rank];
   if (ch === undefined) throw new CardParseError(`rank index out of range: ${rank}`);
@@ -161,9 +149,8 @@ export function parseCard(text: string): Card {
 }
 
 /**
- * Parses a whitespace- or comma-separated list, e.g. `"Ah Kd"` or `"AhKd"`.
- * Compact input is only unambiguous because every rank is one character (with
- * `10` handled above), so the compact form is split two characters at a time.
+ * Parses a whitespace- or comma-separated list, e.g. `"Ah Kd"`, or a compact run such as `"AhKd"`.
+ * Compact input works because every rank is one character, apart from `10`.
  */
 export function parseCards(text: string): Card[] {
   const trimmed = text.trim();
@@ -175,7 +162,6 @@ export function parseCards(text: string): Card[] {
       out.push(parseCard(token));
       continue;
     }
-    // Compact run such as "AhKdQc" or "10h9s".
     let rest = token;
     while (rest.length > 0) {
       const width = rest.startsWith('10') ? 3 : 2;
@@ -187,7 +173,6 @@ export function parseCards(text: string): Card[] {
   return out;
 }
 
-/** True when no card appears twice. */
 export function allDistinct(cards: readonly Card[]): boolean {
   let seen = 0n;
   for (const card of cards) {
@@ -198,11 +183,7 @@ export function allDistinct(cards: readonly Card[]): boolean {
   return true;
 }
 
-/**
- * Throws if any card is invalid or duplicated. Used at every boundary where
- * cards arrive from outside the engine (content files, scenario definitions,
- * request payloads) so a malformed set can never reach the evaluator.
- */
+/** Throws if any card is invalid or duplicated. Used wherever cards enter from outside the engine. */
 export function assertDistinctCards(cards: readonly Card[], what = 'cards'): void {
   const seen = new Set<Card>();
   for (const card of cards) {

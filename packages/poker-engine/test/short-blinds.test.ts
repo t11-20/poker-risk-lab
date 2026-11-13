@@ -1,33 +1,9 @@
 /**
- * Short blinds: a blind posted by a player who cannot cover it.
- *
- * ## The rule
- *
- * The bet level is the largest FULL wager in force, and preflop that is the big
- * blind — even when the player who posted it was all-in for less. A short blind
- * does not lower the price of playing for anybody else:
- *
- *   - a caller must still pay a whole big blind (or all-in for less than one), and
- *   - the minimum raise is still measured from a whole big blind, so preflop the
- *     first raise must reach 2 BB.
- *
- * Chips that nobody could match come back at settlement as an uncalled return, so
- * charging the full big blind never manufactures chips: with 5/10 blinds and a big
- * blind all-in for 3, a lone caller pays 10 and gets 7 back.
- *
- * The defect this file pins down derived the preflop bet level from the largest
- * amount actually committed. A short big blind made that the small blind, so the
- * level collapsed to the small blind: callers were under-charged and raises below
- * the true minimum were accepted (with 5/10 blinds and a big blind all-in for 3 the
- * level came out as 5, a call cost 5 instead of 10, and a "raise" to 15 was allowed
- * where the rules require 20).
- *
- * ## How the expectations here are derived
- *
- * Every number below is worked out from the rules by hand in the comments and then
- * written as a literal — never read back from the engine. Every scenario asserts
- * exact chip conservation before and after, because a bet-level change is exactly
- * the kind of fix that can quietly create or destroy chips at settlement.
+ * Short blinds. The preflop bet level is the big blind even when its poster is all-in for less, so
+ * callers pay a whole big blind and the first raise must reach 2 BB. Unmatched chips come back as an
+ * uncalled return. The defect derived the level from the largest commitment, so with 5/10 and a big
+ * blind all-in for 3 a call cost 5 and a raise to 15 was accepted. Expected numbers are worked by
+ * hand and written as literals, and every scenario asserts chip conservation.
  */
 
 import assert from 'node:assert/strict';
@@ -38,7 +14,6 @@ import { createDeterministicRandomForTests } from '../src/rng.ts';
 import type { Action, HandState, LegalAction, Pot, SeatIndex } from '../src/types.ts';
 import { call, check, chipsInSystem, deal, fold, play, raise, stackedDeck } from './helpers.ts';
 
-/** Blinds used throughout: small enough to read, big enough to be short of. */
 const BLINDS = { smallBlind: 5, bigBlind: 10 } as const;
 
 /** A brick board: no straight, no flush, no pair for any hand dealt below. */
@@ -50,7 +25,6 @@ function seat(state: HandState, index: SeatIndex) {
   return found;
 }
 
-/** The action types on offer, in the order the engine offers them. */
 function offered(state: HandState, index: SeatIndex): string[] {
   return legalActions(state, index).map((entry) => entry.type);
 }
@@ -71,8 +45,7 @@ function assertAwardsGoToEntitledSeats(state: HandState, where: string): void {
       pot.eligibleSeats.includes(award.seat),
       `${where}: pot ${pot.index} paid seat ${award.seat}, which is not eligible for it`,
     );
-    // Annotated because `assert.ok` above narrows through an assertion signature,
-    // which makes an inferred type here circular.
+    // Annotated because the `assert.ok` narrowing makes an inferred type circular.
     const eligibleScores: number[] = pot.eligibleSeats
       .map((candidate) => scoreBySeat.get(candidate))
       .filter((score): score is number => score !== undefined);
@@ -86,14 +59,9 @@ function assertAwardsGoToEntitledSeats(state: HandState, where: string): void {
   }
 }
 
-// ---------------------------------------------------------------------------
-// 1. A short BIG blind
-// ---------------------------------------------------------------------------
-
 test('a short big blind still sets the preflop bet level at one FULL big blind', () => {
-  // 4-handed, button seat 0 → SB 1, BB 2, UTG 3. Blinds 5/10 and the big blind
-  // holds only 3, so it posts 3 and is all-in. The largest amount that reached the
-  // pot is therefore the small blind's 5 — but the bet level is 10.
+  // 4-handed, button 0, SB 1, BB 2, UTG 3. Blinds 5/10, the big blind posts 3 all-in. The largest
+  // commitment is the small blind's 5, but the bet level is 10.
   const { state } = deal({
     stacks: [1000, 1000, 3, 1000],
     buttonSeat: 0,
@@ -115,7 +83,6 @@ test('a short big blind still sets the preflop bet level at one FULL big blind',
   assert.equal(minimumRaiseTo(state), 20, 'the first raise must reach 2 BB, measured from a full BB');
   assert.equal(state.toAct, 3, 'UTG is first to act preflop');
 
-  // What UTG is charged and offered.
   assert.equal(amountToCall(state, seat(state, 3)), 10, 'a caller pays a whole big blind');
   const utg = legalActions(state, 3);
   assert.deepEqual(
@@ -130,7 +97,6 @@ test('a short big blind still sets the preflop bet level at one FULL big blind',
   assert.equal(raiseOption?.maxTo, 1000);
   assert.equal(raiseOption?.costAtMin, 20);
 
-  // And the small blind, which has 5 out already, owes the other 5.
   const afterUtgCalls = play(state, [call(3)]);
   assert.equal(seat(afterUtgCalls, 3).committedThisStreet, 10, 'the caller paid the full big blind');
   assert.equal(seat(afterUtgCalls, 3).stack, 990);
@@ -149,9 +115,7 @@ test('a sub-minimum raise over a short big blind is rejected', () => {
   });
   const before = chipsInSystem(state);
 
-  // The minimum raise is to 20: the full big blind of 10 plus an increment of at
-  // least one big blind. Everything under that is illegal for a seat that can
-  // afford the minimum, including the 15 the collapsed level used to allow.
+  // The minimum raise is to 20, so 15 is illegal for a seat that can afford 20.
   for (const to of [6, 10, 11, 15, 19]) {
     assert.throws(
       () => applyAction(state, 3, { type: 'raise', to }),
@@ -168,20 +132,14 @@ test('a sub-minimum raise over a short big blind is rejected', () => {
   assert.equal(seat(raised, 3).stack, 980);
   assert.equal(chipsInSystem(raised), before, 'chips conserved exactly');
 
-  // The state is untouched by the rejected attempts: none of them moved a chip.
   assert.equal(chipsInSystem(state), before);
   assert.equal(seat(state, 3).stack, 1000);
 });
 
 test('a hand against a short big blind pays out exactly, with the caller charged in full', () => {
-  // Seats: 0 BTN (1000), 1 SB (1000), 2 BB (3, all-in on the post), 3 UTG (1000).
-  // UTG calls 10, the button folds, the small blind calls 10.
-  //
-  // Commitments: seat 1 = 10, seat 2 = 3, seat 3 = 10; the button put in nothing.
-  // Layers, from the caps of the seats still holding cards:
-  //   cap 3  → 3 x 3 = 9,  eligible 1, 2, 3   (seat 2's aces win it)
-  //   cap 10 → 7 x 2 = 14, eligible 1 and 3   (seat 3's kings win it)
-  // 9 + 14 = 23 = 10 + 3 + 10, so every chip in the middle is accounted for.
+  // UTG calls 10, the button folds, the SB calls 10. Commitments 10, 3, 10.
+  //   cap 3  → 3 x 3 = 9,  eligible 1, 2, 3   (seat 2's aces)
+  //   cap 10 → 7 x 2 = 14, eligible 1 and 3   (seat 3's kings)
   const deck = stackedDeck({ 1: '3s5c', 2: 'AhAd', 3: 'KsKc', 0: '6h7d' }, [1, 2, 3, 0], BRICKS);
   const { state } = deal({
     stacks: [1000, 1000, 3, 1000],
@@ -196,8 +154,6 @@ test('a hand against a short big blind pays out exactly, with the caller charged
     call(3),
     fold(0),
     call(1),
-    // Flop, turn and river checked down by the two seats with chips. The big blind
-    // is all-in, so it is never asked.
     check(1),
     check(3),
     check(1),
@@ -215,8 +171,7 @@ test('a hand against a short big blind pays out exactly, with the caller charged
   assert.equal(finished.result?.pots[1]?.amount, 14, 'side pot is the 7 each that seats 1 and 3 added');
   assert.deepEqual(finished.result?.pots[1]?.eligibleSeats, [1, 3]);
 
-  // Under the collapsed bet level the callers would each have paid 5, making the
-  // side pot 4 rather than 14 — these stacks are what distinguishes the two.
+  // A collapsed level would have made the side pot 4 rather than 14.
   assert.deepEqual(stacks(finished), [1000, 990, 9, 1004]);
   assert.equal(finished.result?.netBySeat[1], -10);
   assert.equal(finished.result?.netBySeat[2], 6);
@@ -224,10 +179,6 @@ test('a hand against a short big blind pays out exactly, with the caller charged
   assertAwardsGoToEntitledSeats(finished, 'short big blind, three-way showdown');
   assert.equal(chipsInSystem(finished), before, 'chips conserved exactly');
 });
-
-// ---------------------------------------------------------------------------
-// 2. A short SMALL blind, and both blinds short
-// ---------------------------------------------------------------------------
 
 test('a short small blind leaves the bet level at the full big blind', () => {
   // Seats: 0 BTN (1000), 1 SB (2, all-in on the post), 2 BB (1000), 3 UTG (1000).
@@ -249,7 +200,6 @@ test('a short small blind leaves the bet level at the full big blind', () => {
   assert.equal(amountToCall(state, seat(state, 3)), 10);
   assert.throws(() => applyAction(state, 3, { type: 'raise', to: 19 }), /below the minimum of 20/);
 
-  // The big blind keeps its option: everyone limps and it may still check or raise.
   const limped = play(state, [call(3), call(0)]);
   assert.equal(limped.toAct, 2, 'the short small blind is all-in, so the option passes to the BB');
   assert.deepEqual(offered(limped, 2), ['fold', 'check', 'raise']);
@@ -257,15 +207,10 @@ test('a short small blind leaves the bet level at the full big blind', () => {
 });
 
 test('both blinds short: the level is still a full big blind and the pot layers are exact', () => {
-  // Seats: 0 BTN (1000), 1 SB (2, all-in), 2 BB (3, all-in), 3 UTG (1000).
-  // Nobody at the table has posted as much as a big blind, yet the price of playing
-  // is a full big blind. UTG and the button both call 10.
-  //
-  // Commitments: 0 = 10, 1 = 2, 2 = 3, 3 = 10. Layers:
-  //   cap 2  → 2 x 4 = 8,  eligible 0, 1, 2, 3   (seat 1's aces win it)
-  //   cap 3  → 1 x 3 = 3,  eligible 0, 2, 3      (seat 2's kings win it)
-  //   cap 10 → 7 x 2 = 14, eligible 0 and 3      (seat 3's queens win it)
-  // 8 + 3 + 14 = 25 = 10 + 2 + 3 + 10.
+  // Nobody posted a full big blind, yet a call still costs 10. UTG and the button call.
+  //   cap 2  → 2 x 4 = 8,  eligible 0, 1, 2, 3   (seat 1's aces)
+  //   cap 3  → 1 x 3 = 3,  eligible 0, 2, 3      (seat 2's kings)
+  //   cap 10 → 7 x 2 = 14, eligible 0 and 3      (seat 3's queens)
   const board = 'Th 8s 2c 4d 9h';
   const deck = stackedDeck({ 1: 'AhAd', 2: 'KsKc', 3: 'QsQc', 0: '3s5c' }, [1, 2, 3, 0], board);
   const { state } = deal({
@@ -286,8 +231,6 @@ test('both blinds short: the level is still a full big blind and the pot layers 
   const finished = play(state, [
     call(3),
     call(0),
-    // Only seats 0 and 3 have chips; seat 3 is first to act postflop because the two
-    // seats between it and the button are all-in.
     check(3),
     check(0),
     check(3),
@@ -307,17 +250,9 @@ test('both blinds short: the level is still a full big blind and the pot layers 
   assert.equal(chipsInSystem(finished), before, 'chips conserved exactly');
 });
 
-// ---------------------------------------------------------------------------
-// 3. Heads-up, where the button is the small blind
-// ---------------------------------------------------------------------------
-
 test('heads-up: a button/small blind all-in on the post leaves nothing to decide', () => {
-  // Seat 0 = BTN/SB with 3 against a 5/10 blind, so it is all-in for 3. Seat 1
-  // posts the full 10 and has nothing to call, so no action is possible at all and
-  // `startHand` runs the board out on its own.
-  //
-  // Only 3 of seat 1's 10 can be contested: cap 3 → 6 for the pair of them, and the
-  // uncontested 7 goes straight back to seat 1.
+  // Seat 0 (BTN/SB) is all-in for 3 against 5/10. Seat 1 owes nothing, so `startHand` runs the board
+  // out. Cap 3 → 6 contested, and seat 1's uncontested 7 goes back.
   const deck = stackedDeck({ 1: 'KsKc', 0: 'AhAd' }, [1, 0], BRICKS);
   const { state } = deal({
     stacks: [3, 1000],
@@ -326,8 +261,7 @@ test('heads-up: a button/small blind all-in on the post leaves nothing to decide
     fixedDeck: deck,
   });
 
-  // No bet level to inspect: the hand is settled inside `startHand`, and settling
-  // clears the street's bet level along with the commitments it swept into the pot.
+  // Settling inside `startHand` clears the bet level, so there is none to inspect.
   assert.equal(state.street, 'complete', 'the hand is decided before anyone can act');
   assert.equal(state.actions.length, 0);
   assert.equal(state.board.length, 5);
@@ -339,9 +273,7 @@ test('heads-up: a button/small blind all-in on the post leaves nothing to decide
 });
 
 test('heads-up: a button/small blind that covers its blind but not the big blind must still act', () => {
-  // Seat 0 = BTN/SB with 7: it posts the 5 in full and has 2 behind, so it is short
-  // of the 10 bet level and owes a decision. It cannot raise — its 7 does not even
-  // reach the bet level — so call or fold is the whole list.
+  // Seat 0 (BTN/SB) has 7. It posts 5 and is short of the 10 level, so call or fold only.
   const deck = stackedDeck({ 1: 'KsKc', 0: 'AhAd' }, [1, 0], BRICKS);
   const setup = deal({
     stacks: [7, 1000],
@@ -379,12 +311,8 @@ test('heads-up: a button/small blind that covers its blind but not the big blind
 });
 
 test('heads-up: a short big blind still charges the button/small blind a full big blind', () => {
-  // Seat 0 = BTN/SB with 1000, seat 1 = BB with 3 and therefore all-in for 3.
-  //
-  // This is the shape the defect hid completely: the largest commitment on the
-  // table was the small blind's 5, so the bet level collapsed to 5, seat 0 looked
-  // fully paid up and the hand ran out with seat 0 never asked. The rule is that
-  // the level is 10, seat 0 owes 5 more and has a real decision.
+  // Seat 0 (BTN/SB) has 1000 and seat 1 (BB) is all-in for 3. The collapsed level of 5 made seat 0
+  // look paid up and it was never asked. The level is 10, so seat 0 owes 5.
   const deck = stackedDeck({ 1: 'AhAd', 0: 'KsKc' }, [1, 0], BRICKS);
   const setup = deal({
     stacks: [1000, 3],
@@ -402,17 +330,13 @@ test('heads-up: a short big blind still charges the button/small blind a full bi
   assert.deepEqual(offered(setup.state, 0), ['fold', 'call'], 'no raise: nobody could call one');
   assert.throws(() => applyAction(setup.state, 0, { type: 'raise', to: 20 }), /nobody to call it/);
 
-  // Calling: seat 0 pays the full big blind, of which only 3 can be matched, so 7
-  // returns. cap 3 → 6 contested by both.
+  // Calling: seat 0 pays 10, only 3 can be matched, so 7 returns.
   const called = applyAction(setup.state, 0, { type: 'call' }).state;
-  // `committedTotal`, not `committedThisStreet`: settlement sweeps the street's
-  // commitments into the pot and zeroes them, but keeps the totals for hand review.
+  // Settlement zeroes `committedThisStreet`, so read `committedTotal`.
   assert.equal(seat(called, 0).committedTotal, 10, 'the caller paid the full big blind');
   assert.equal(called.street, 'complete');
   assert.equal(called.board.length, 5);
   assert.equal(called.result?.showdowns.length, 2);
-  // The uncalled 7 is not a special case: it is simply the top layer, and seat 0 is
-  // its only eligible player, so the general algorithm hands it straight back.
   assert.equal(called.result?.pots.length, 2);
   assert.equal(called.result?.pots[0]?.amount, 6);
   assert.deepEqual(called.result?.pots[0]?.eligibleSeats, [0, 1]);
@@ -422,7 +346,7 @@ test('heads-up: a short big blind still charges the button/small blind a full bi
   assertAwardsGoToEntitledSeats(called, 'heads-up short big blind, called');
   assert.equal(chipsInSystem(called), before, 'chips conserved exactly');
 
-  // Folding is legal too, and costs seat 0 only the 3 that seat 1 could match.
+  // Folding costs seat 0 only the 3 that seat 1 could match.
   const folded = applyAction(setup.state, 0, { type: 'fold' }).state;
   assert.equal(folded.street, 'complete');
   assert.equal(folded.result?.endedByFold, true);
@@ -431,8 +355,7 @@ test('heads-up: a short big blind still charges the button/small blind a full bi
 });
 
 test('heads-up: both blinds short runs out with the smaller stack capping the pot', () => {
-  // Seat 0 = BTN/SB with 2 (all-in for 2), seat 1 = BB with 3 (all-in for 3).
-  // Nobody can act. cap 2 → 4 contested; seat 1's extra 1 is uncontested and returns.
+  // Both all-in (2 and 3). Cap 2 → 4 contested, and seat 1's extra 1 returns.
   const deck = stackedDeck({ 1: 'KsKc', 0: 'AhAd' }, [1, 0], BRICKS);
   const { state } = deal({
     stacks: [2, 3],
@@ -453,19 +376,12 @@ test('heads-up: both blinds short runs out with the smaller stack capping the po
   assert.equal(chipsInSystem(state), 5, 'chips conserved exactly');
 });
 
-// ---------------------------------------------------------------------------
-// 4. A short all-in raise does not reopen the betting
-// ---------------------------------------------------------------------------
-
 test('a short all-in raise over a short big blind does not reopen the action', () => {
   // Seats: 0 BTN (1000), 1 SB (45), 2 BB (3, all-in on the post), 3 UTG (1000).
-  //
-  //   UTG raises to 30   → complete (minimum was 20). Increment 20, so the next
-  //                        full raise would have to reach 50.
-  //   BTN calls 30       → it has now acted AT the current full-raise level.
-  //   SB shoves to 45    → its whole stack, but 15 short of the 50 a complete raise
-  //                        needs. It lifts the bet level without reopening anything.
-  //   UTG and BTN        → owe the extra 15, and must NOT be offered a raise.
+  //   UTG raises to 30   → complete, the next full raise is to 50.
+  //   BTN calls 30.
+  //   SB shoves to 45    → 15 short of a full raise, so nothing reopens.
+  //   UTG and BTN        → owe 15 and must NOT be offered a raise.
   const deck = stackedDeck({ 1: 'KsKc', 2: 'AhAd', 3: '6h7d', 0: '3s5c' }, [1, 2, 3, 0], BRICKS);
   const { state } = deal({
     stacks: [1000, 45, 3, 1000],
@@ -483,8 +399,6 @@ test('a short all-in raise over a short big blind does not reopen the action', (
   assert.equal(minimumRaiseTo(current), 50, 'a complete re-raise must reach 30 + 20');
   assert.equal(current.toAct, 1);
 
-  // The small blind cannot reach 50, so its only raise is the shove — and nothing
-  // between the two is legal.
   const shoveOption = legalActions(current, 1).find((entry) => entry.type === 'raise');
   assert.equal(shoveOption?.minTo, 45, 'the minimum collapses to the shove when the stack cannot reach 50');
   assert.equal(shoveOption?.maxTo, 45);
@@ -496,7 +410,6 @@ test('a short all-in raise over a short big blind does not reopen the action', (
   assert.equal(current.lastFullRaiseIncrement, 20, 'and it does not change the increment either');
   assert.equal(seat(current, 1).status, 'allIn');
 
-  // UTG acted at 30, which is still the last complete level: call or fold only.
   assert.equal(current.toAct, 3, 'the all-in big blind is skipped');
   assert.deepEqual(offered(current, 3), ['fold', 'call']);
   assert.equal(amountToCall(current, seat(current, 3)), 15);
@@ -507,10 +420,8 @@ test('a short all-in raise over a short big blind does not reopen the action', (
   assert.deepEqual(offered(current, 0), ['fold', 'call']);
   assert.throws(() => applyAction(current, 0, { type: 'raise', to: 200 }), /may not raise/);
 
-  // Play it out. Commitments: 0 = 45, 1 = 45, 2 = 3, 3 = 45. Layers:
-  //   cap 3  → 3 x 4 = 12,   eligible 0, 1, 2, 3  (seat 2's aces win it)
-  //   cap 45 → 42 x 3 = 126, eligible 0, 1, 3     (seat 1's kings win it)
-  // 12 + 126 = 138 = 45 + 45 + 3 + 45.
+  //   cap 3  → 3 x 4 = 12,   eligible 0, 1, 2, 3  (seat 2's aces)
+  //   cap 45 → 42 x 3 = 126, eligible 0, 1, 3     (seat 1's kings)
   const finished = play(current, [call(0), check(3), check(0), check(3), check(0), check(3), check(0)]);
   assert.equal(finished.street, 'complete');
   assert.equal(finished.result?.pots.length, 2);
@@ -522,18 +433,13 @@ test('a short all-in raise over a short big blind does not reopen the action', (
 });
 
 test('a complete raise after a short all-in reopens the action to the players it shut out', () => {
-  // The mirror image of the test above, and the reason the shut-out is expressed as
-  // "has this seat acted at the last COMPLETE level" rather than a sticky flag.
-  //
-  // Five seats, button 0 → SB 1, BB 2 (short, all-in for 3), UTG 3, then seat 4.
-  // The short stack is the button this time, so a seat that has not yet acted — the
-  // small blind — is still to come when the short all-in lands.
-  //
-  //   UTG raises to 30   → complete. Increment 20, next full raise to 50.
+  // The mirror image. A seat that has not acted may still raise after a short all-in.
+  // Five seats, button 0, SB 1, BB 2 (all-in for 3), UTG 3, seat 4.
+  //   UTG raises to 30   → complete, next full raise to 50.
   //   Seat 4 calls 30.
-  //   BTN shoves to 45   → short all-in: raises the level, reopens nothing.
-  //   SB has not acted   → it may raise, and to at least 45 + 20 = 65.
-  //   SB raises to 65    → complete, so UTG (which acted at 30) is live again.
+  //   BTN shoves to 45   → short, reopens nothing.
+  //   SB has not acted   → may raise, to at least 45 + 20 = 65.
+  //   SB raises to 65    → complete, so UTG is live again.
   const { state } = deal({
     stacks: [45, 1000, 3, 1000, 1000],
     buttonSeat: 0,
@@ -566,15 +472,7 @@ test('a complete raise after a short all-in reopens the action to the players it
   assert.equal(chipsInSystem(current), before, 'chips conserved exactly');
 });
 
-// ---------------------------------------------------------------------------
-// 5. Randomised soak, weighted hard towards short blind posts
-// ---------------------------------------------------------------------------
-
-/**
- * Picks a legal action, weighted towards calling so that short blinds actually get
- * contested rather than folded around, with enough aggression to build side pots.
- * `fold` is the final fallback and is always available when anything is.
- */
+/** A legal action weighted toward calling, so short blinds get contested and side pots form. */
 function chooseAction(legal: readonly LegalAction[], nextInt: (bound: number) => number): Action {
   const roll = nextInt(100);
   const aggressive = legal.find((entry) => entry.type === 'bet' || entry.type === 'raise');
@@ -605,9 +503,7 @@ test('SOAK: 3000 short-blind-heavy hands keep the level honest and conserve chip
     const players = 2 + nextInt(5);
     const bigBlind = [2, 10, 20, 50][nextInt(4)] ?? 10;
     const smallBlind = Math.max(1, Math.floor(bigBlind / 2));
-    // Half the stacks are deliberately below the big blind, and a third of those
-    // below the small blind, so short posts are the common case rather than a
-    // rarity. The rest are deep enough for real betting to happen around them.
+    // Half the stacks are below the big blind, a third of those below the small blind.
     const stackList = Array.from({ length: players }, () => {
       const scale = nextInt(6);
       if (scale === 0) return 1 + nextInt(Math.max(1, smallBlind));
@@ -641,9 +537,7 @@ test('SOAK: 3000 short-blind-heavy hands keep the level honest and conserve chip
     if (short.length > 0) handsWithAShortPost += 1;
     if (state.street === 'complete') handsDecidedByTheBlinds += 1;
 
-    // The rule, asserted straight off the deal: the price of playing is one whole
-    // big blind, whoever could or could not cover their blind. Skipped only when the
-    // blinds alone ended the hand, because settling clears the street's bet level.
+    // A call costs one whole big blind. Skipped when the blinds alone ended the hand.
     if (state.street === 'preflop') {
       assert.equal(
         state.betLevel,
@@ -662,8 +556,6 @@ test('SOAK: 3000 short-blind-heavy hands keep the level honest and conserve chip
       const legal = legalActions(state, toAct);
       assert.ok(legal.length > 0, `hand ${handIndex}: seat ${toAct} was asked to act with nothing to do`);
 
-      // Until somebody raises, the preflop level must stay at exactly one big
-      // blind: a short post must never drag it down.
       const raisedYet = state.actions.some(
         (logged) => logged.action.type === 'bet' || logged.action.type === 'raise',
       );

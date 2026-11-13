@@ -35,7 +35,6 @@ test('highestRank finds the top set bit, -1 when empty', () => {
 
 test('straightHigh: exhaustive over all 13-bit masks, checked against a naive scan', () => {
   const naive = (mask: number): number => {
-    // Ace-high down to six-high, then the wheel.
     for (let high = 12; high >= 4; high--) {
       let ok = true;
       for (let offset = 0; offset < 5; offset++) {
@@ -110,7 +109,6 @@ test('kickers decide within a category', () => {
   assert.ok(score('Ah Ad Kc Qs Jh') > score('Ah Ad Kc Qs Th'), 'better fifth card wins');
   assert.ok(score('Ah Ad Kc Qs Jh') === score('As Ac Kd Qh Jd'), 'suits are irrelevant');
   assert.ok(score('Kh Kd Ac Qs Jh') < score('Ah Ad 3c 2s 4h'), 'aces up beats kings with an ace kicker');
-  // Two pair: high pair, then low pair, then the single kicker.
   assert.ok(score('Kh Kd 3c 3s Ah') > score('Qh Qd Jc Js Ah'));
   assert.ok(score('Kh Kd 3c 3s Ah') > score('Kh Kd 2c 2s Ah'));
   assert.ok(score('Kh Kd 3c 3s Ah') > score('Kh Kd 3c 3s Qh'));
@@ -152,8 +150,7 @@ test('compareHands reports chops as 0', () => {
 
 test('EXHAUSTIVE: all 2,598,960 five-card hands match the reference evaluator', () => {
   const deck = orderedDeck();
-  // Category frequencies for 5 cards from 52 are a published, independently
-  // known result. Matching them proves the classifier, not just self-consistency.
+  // 5-card category frequencies are a published result, so matching them proves the classifier.
   const expectedCounts = new Map<number, number>([
     [HAND_CATEGORY.highCard, 1_302_540],
     [HAND_CATEGORY.pair, 1_098_240],
@@ -171,7 +168,7 @@ test('EXHAUSTIVE: all 2,598,960 five-card hands match the reference evaluator', 
   let disagreements = 0;
   const firstFailures: string[] = [];
 
-  // Iterate combinations inline rather than materialising 2.6M arrays.
+  // Iterate inline rather than materialising 2.6M arrays.
   for (let a = 0; a < DECK_SIZE; a++) {
     for (let b = a + 1; b < DECK_SIZE; b++) {
       for (let c = b + 1; c < DECK_SIZE; c++) {
@@ -210,8 +207,7 @@ test('EXHAUSTIVE: all 2,598,960 five-card hands match the reference evaluator', 
 });
 
 test('EXHAUSTIVE: full ordering agrees with the reference on a large random sample', () => {
-  // Category agreement above does not prove kicker ordering, so compare the full
-  // relative ordering of random pairs of hands.
+  // Category agreement does not prove kicker order, so compare random pairs of hands.
   const deck = orderedDeck();
   let seed = 0x2f6e2b1;
   const nextInt = (bound: number): number => {
@@ -265,8 +261,7 @@ test('7-card best-five agrees with brute force over combinations on a random sam
       seven.push(card);
     }
     const fast = evaluate(seven);
-    // Brute force: evaluate every 5-card subset with the fast evaluator and take
-    // the max. This checks "picks the best five", independent of the reference.
+    // Every 5-card subset with the fast evaluator, so "picks the best five" is checked independently.
     let bruteBest = -1;
     for (const combo of combinations(seven, 5)) {
       const s = evaluate(combo);

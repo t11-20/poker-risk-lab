@@ -1,36 +1,15 @@
 /**
  * Side pots and pot awarding.
  *
- * ## Building the layers
- *
- * Every seat's `committedTotal` — including folded seats, whose chips stay in the
- * middle — defines a set of distinct contribution levels. Sort them ascending and
- * each adjacent gap forms one pot layer:
+ * Each distinct `committedTotal` (folded seats included) is a level, and each gap between levels is
+ * a layer:
  *
  *     layer amount = Σ over seats of (min(committed, level) - min(committed, previousLevel))
  *
- * A seat is eligible for a layer if it is still holding cards AND its
- * `committedTotal` reaches that layer's cap. Folded seats contribute chips but are
- * eligible for nothing, which is exactly how a real table works.
- *
- * The uncalled-bet case needs no special handling: if one seat bet more than
- * anyone matched, the top layer has that seat as its only eligible player, so it
- * is awarded straight back. That is the same thing as returning the uncalled
- * portion, and it falls out of the general algorithm rather than being a branch.
- *
- * ## Odd chips
- *
- * A pot that does not divide evenly among winners leaves a remainder. The house
- * rule used here is the standard one: extra chips go to the winner closest to the
- * left of the button (i.e. first in position order starting from button+1). This
- * is deterministic — never random — so a hand replays identically.
- *
- * ## The invariant that matters
- *
- * Chips are conserved. `assertPotsBalance` checks that the layers sum to the total
- * committed, and `awardPots` checks that awards sum to the pot total. Both are
- * asserted in tests over randomised all-in situations, because a side-pot bug
- * silently creates or destroys chips and is otherwise very hard to notice.
+ * A seat is eligible for a layer if it still holds cards and reached the layer's cap. Folded seats
+ * contribute and win nothing. Odd chips go to the winner nearest the button's left, never randomly,
+ * so a hand replays identically. Chips are conserved, and `assertPotsBalance` and `awardPots` both
+ * assert it, because a side-pot bug has no other symptom.
  */
 
 import type { Card } from './cards.ts';
@@ -48,15 +27,8 @@ export interface UncontestedReturn {
 }
 
 /**
- * The three fields the layering rule actually reads off a seat.
- *
- * `SeatState` satisfies this structurally, so every existing caller is unaffected. It
- * exists because `contestablePotFor` below has to ask the same question about a
- * *hypothetical* table — the one that exists a moment after hero calls — and building a
- * whole `SeatState` (hole cards, `lastActedAtBetLevel`, `isAllInThisHand`) to ask it
- * would mean inventing five fields the answer does not depend on. Widening the parameter
- * is the alternative to a second copy of the layering rule, and a second copy of this
- * rule is exactly what the Coach's mispriced side pot was.
+ * The three fields the layering rule reads. `SeatState` satisfies it. `contestablePotFor` passes a
+ * hypothetical table through it instead of keeping a second copy of the layering rule.
  */
 export interface PotContributor {
   readonly seat: SeatIndex;
@@ -66,30 +38,15 @@ export interface PotContributor {
 
 export interface PotLayers {
   readonly pots: readonly Pot[];
-  /**
-   * Chips above the highest amount any live player committed. Nobody still
-   * holding cards can win them, so they go back to their contributor. This is
-   * what a dealer does with the uncalled part of a bet.
-   */
+  /** Chips above the highest live commitment. Nobody can win them, so they go back (an uncalled bet). */
   readonly returns: readonly UncontestedReturn[];
 }
 
 /**
- * Builds the pot layers from the seats' total commitments.
- *
- * Contributions are first capped at the highest amount any *live* seat committed.
- * Anything above that cap could not be won by anyone and is returned to its
- * contributor rather than sitting in an unwinnable layer.
- *
- * That cap is what makes this function total. Without it, a state where the
- * single largest contributor has folded produces a layer with no eligible seats,
- * and the awarding step has nowhere to put the chips.
- *
- * The short-blind fold against a shorter all-in big blind *is* legal play: the
- * unmatched part of the blind is an uncalled bet, and TDA / Robert’s Rules return
- * uncalled chips to the player who put them in. Returning that excess is the
- * dealer procedure, not a consolation for an illegal fold. A fold still forfeits
- * every chip that *was* matched.
+ * Builds the pot layers from total commitments. Contributions are capped at the highest live
+ * commitment and the excess is returned, so a folded top contributor never leaves a layer with no
+ * eligible seat. A short blind folding to a shorter all-in big blind gets its unmatched part back
+ * under TDA and Robert's Rules. Matched chips are forfeited.
  *
  * @param seats every seat that put chips in this hand, folded or not
  */
@@ -99,7 +56,6 @@ export function buildPotLayers(seats: readonly PotContributor[]): PotLayers {
 
   const live = seats.filter((seat) => seat.status === 'active' || seat.status === 'allIn');
   if (live.length === 0) {
-    // No live players at all: everything goes back where it came from.
     return {
       pots: [],
       returns: contributors.map((seat) => ({ seat: seat.seat, amount: seat.committedTotal })),
@@ -123,7 +79,6 @@ export function buildPotLayers(seats: readonly PotContributor[]): PotLayers {
     for (const seat of contributors) {
       amount += Math.min(contested(seat), level) - Math.min(contested(seat), previousLevel);
     }
-    // Seats still holding cards that reached this cap can win this layer.
     const eligibleSeats = live
       .filter((seat) => contested(seat) >= level)
       .map((seat) => seat.seat)
@@ -140,10 +95,8 @@ export function buildPotLayers(seats: readonly PotContributor[]): PotLayers {
     previousLevel = level;
   }
 
-  // Merge adjacent layers with identical eligibility. Without this, a table where
-  // three players are all-in for different amounts but all remain eligible would
-  // report three pots that always pay the same person — technically correct but
-  // confusing to display and to reason about.
+  // Merge adjacent layers with identical eligibility, so the display does not show three pots that
+  // always pay the same seat.
   const merged: Pot[] = [];
   for (const pot of pots) {
     const last = merged[merged.length - 1];
@@ -164,7 +117,6 @@ export function buildPotLayers(seats: readonly PotContributor[]): PotLayers {
   return layers;
 }
 
-/** Convenience wrapper for callers that only need the contested pots. */
 export function buildPots(seats: readonly PotContributor[]): Pot[] {
   return [...buildPotLayers(seats).pots];
 }
@@ -177,21 +129,17 @@ export interface StreetContribution {
 }
 
 export interface ContestablePotInput {
-  /** Every seat with chips in this hand, folded ones included — their chips stay in the middle. */
+  /** Every seat with chips in this hand, folded ones included. */
   readonly seats: readonly StreetContribution[];
   readonly heroSeat: SeatIndex;
-  /**
-   * What hero is about to put in, **already capped at hero's stack** — the engine's own
-   * `amountToCall`. Passing an uncapped figure describes a call hero cannot make and
-   * produces a pot hero cannot reach.
-   */
+  /** What hero is about to put in, already capped at hero's stack (the engine's `amountToCall`). */
   readonly callAmount: number;
   /** Everything in the middle right now, across every street, hero's pending call excluded. */
   readonly potTotal: number;
 }
 
 export interface ContestablePot {
-  /** `input.potTotal`, echoed so a caller can print both halves without re-deriving either. */
+  /** `input.potTotal`, echoed. */
   readonly potTotal: number;
   /** The part of `potTotal` hero could win by calling. Equal to `potTotal` in the ordinary spot. */
   readonly contestable: number;
@@ -200,44 +148,15 @@ export interface ContestablePot {
 }
 
 /**
- * How much of the middle hero could actually win, when hero is all-in for less than the
- * bet in front of them.
+ * How much of the middle hero could win when all-in for less than the bet faced. Pricing against
+ * the whole middle understated the needed equity. Heads-up 5/10, hero with 40 facing a shove of 310,
+ * the Coach quoted 8.6% against a pot of 320 when the true need was 37.5% (30 into 80).
+ * `test/invariants.test.ts` found the worst case understated by 271x.
  *
- * ## The defect this exists to close
- *
- * A learner all-in for less than the bet facing them was being priced against the whole
- * middle. Measured, heads-up at 5/10 with hero holding 40 and villain shoving 310: the
- * engine reported `potTotal 320, amountToCall 30` and laid out its own layers as an
- * 80-chip main pot both seats can win and a 270-chip side pot only villain can. The Coach
- * quoted "10.7 to 1, so you need 8.6%" against that 320. The true price is 30 into an
- * 80-chip pot — 1.67 to 1, 37.5% — so the requirement was understated 4.4x and a losing
- * call was published at +82.8 chips. `test/invariants.test.ts` plays 4,000 random hands at
- * 2-6 seats and mixed depths and finds 5,793 decision points with a call the engine capped,
- * 5,650 of them leaving chips beyond hero's reach — the worst understating the equity a call
- * needs by 271x.
- *
- * ## Why it is a sum over opponents, not one subtraction
- *
- * Three-handed with hero capped at 40, opponent A all-in for 100 and opponent B all-in for
- * 300, the chips above hero's reach are 60 from A *and* 260 from B. There are two side
- * pots, and subtracting only the largest bet's excess leaves the other opponent's on the
- * table. The layering below sums them because that is what layering does.
- *
- * ## Why this street's commitments are enough
- *
- * Only the current street can hold chips above hero's reach. A seat that is *to act* has
- * matched the closing level of every completed street — that is what being still in the
- * hand means — so no earlier-street contribution can sit above hero's total, and
- * `potTotal` carries all of it as contestable. A hero who could not match an earlier
- * street is all-in already and is never asked to act again. So the layering runs over
- * `committedThisStreet` and the carried-in money is added back whole.
- *
- * ## Implementation note
- *
- * `buildPotLayers` is asked rather than a formula written out here, on the table as it
- * would stand a moment after hero calls. The eligibility rule — folded seats contribute
- * chips and win nothing, a layer belongs to the seats that reached its cap — has exactly
- * one implementation, and the Coach reads it rather than owning a second one.
+ * The excess is summed across opponents, since each all-in above hero makes its own side pot. Only
+ * the current street can hold chips above hero's reach, because a seat to act has matched every
+ * earlier street. So layering runs over `committedThisStreet` and earlier streets count whole. The
+ * layering itself is `buildPotLayers` on the table as it stands right after hero calls.
  */
 export function contestablePotFor(input: ContestablePotInput): ContestablePot {
   const hero = input.seats.find((seat) => seat.seat === input.heroSeat);
@@ -258,8 +177,7 @@ export function contestablePotFor(input: ContestablePotInput): ContestablePot {
     );
   }
 
-  // The table one moment after hero calls. Hero's own call is what decides which layers
-  // hero reaches, so it has to be in the commitment the layering sees.
+  // The table right after hero calls. Hero's call decides which layers hero reaches.
   const afterCall: PotContributor[] = input.seats.map((seat) => ({
     seat: seat.seat,
     committedTotal: seat.committedThisStreet + (seat.seat === input.heroSeat ? input.callAmount : 0),
@@ -271,8 +189,7 @@ export function contestablePotFor(input: ContestablePotInput): ContestablePot {
   for (const pot of layers.pots) {
     if (pot.eligibleSeats.includes(input.heroSeat)) heroEligible += pot.amount;
   }
-  // `heroEligible` counts hero's own call, which is not yet in the middle. Every caller
-  // here reports a pot "before hero's call" and would double-count it otherwise.
+  // `heroEligible` includes hero's own call, which callers exclude from the pot.
   const contestableThisStreet = heroEligible - input.callAmount;
   const uncontestable = streetTotal - contestableThisStreet;
   const contestable = input.potTotal - uncontestable;
@@ -294,11 +211,7 @@ function sameSeats(a: readonly SeatIndex[], b: readonly SeatIndex[]): boolean {
   return true;
 }
 
-/**
- * Throws unless the pot layers plus the returns account for exactly the chips
- * committed. This is the conservation invariant: a side-pot bug silently creates
- * or destroys chips, and there is no other symptom.
- */
+/** Throws unless the layers plus the returns equal the chips committed. */
 export function assertPotsBalance(seats: readonly PotContributor[], layers: PotLayers): void {
   const committed = seats.reduce((sum, seat) => sum + seat.committedTotal, 0);
   const inPots = layers.pots.reduce((sum, pot) => sum + pot.amount, 0);
@@ -310,10 +223,7 @@ export function assertPotsBalance(seats: readonly PotContributor[], layers: PotL
   }
 }
 
-/**
- * Position order starting immediately left of the button. Used for odd-chip
- * assignment and for first-to-act ordering.
- */
+/** Seats in order starting left of the button. Used for odd chips and first-to-act. */
 export function seatOrderFromButton(
   buttonSeat: SeatIndex,
   maxSeats: number,
@@ -414,8 +324,7 @@ export function awardPots(input: AwardInput): PotAward[] {
       if (score === undefined) continue;
       if (score > bestScore) bestScore = score;
     }
-    // No scores at all means the hand ended by folding: the single remaining
-    // eligible seat takes it without showing.
+    // No scores means the hand ended by a fold, and the one eligible seat takes it unseen.
     const winners =
       bestScore < 0
         ? [...pot.eligibleSeats]
@@ -425,9 +334,7 @@ export function awardPots(input: AwardInput): PotAward[] {
 
     const share = Math.floor(pot.amount / winners.length);
     const remainder = pot.amount - share * winners.length;
-    // `remainder` is strictly less than `winners.length`, so each of the first
-    // `remainder` winners in button order gets exactly one extra chip. Handling
-    // it this way makes the distribution obviously total and obviously terminating.
+    // `remainder` < `winners.length`, so the first `remainder` winners in button order get one each.
     const oddChipOrder = seatOrderFromButton(input.buttonSeat, input.maxSeats, winners);
     const getsOddChip = new Set(oddChipOrder.slice(0, remainder));
 

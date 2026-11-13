@@ -1,17 +1,8 @@
-/**
- * The one setting the Telegram adapter needs, read once and refused rather than guessed.
- *
- * Same posture as `apps/api/src/config.ts`: configuration that cannot work stops the process at
- * boot with a message and exit 78 (`EX_CONFIG`), instead of starting a poll loop that fails on
- * every request. The token is a credential, so no message here ever contains it.
- */
+/** Bad configuration stops the process with exit 78 (`EX_CONFIG`). No message contains the token. */
 
 export const EXIT_CONFIG_INVALID = 78;
 
-/**
- * `<bot id>:<secret>`, as @BotFather issues them. Checked for shape only: a 401 from Telegram is
- * the only proof a token is live, and the poll loop refuses on that too.
- */
+/** `<bot id>:<secret>`. Shape only. The poll loop refuses on a 401. */
 const TOKEN_SHAPE = /^\d{5,}:[A-Za-z0-9_-]{30,}$/;
 
 export type BotConfig =

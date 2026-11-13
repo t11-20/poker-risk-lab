@@ -1,34 +1,10 @@
 /**
- * Equity: the share of the pot a hand wins on average, if the hand were played to
- * the river with no further betting.
+ * Equity, the share of the pot a hand wins on average if played to the river with no more betting.
  *
- * ## Exact when practical, sampled when not — and always said which
- *
- * Two players with known cards preflop is C(48,5) = 1,712,304 boards: enumerable
- * exactly in a fraction of a second. A range against a range is not — 200 hero
- * combinations against 300 opponent combinations is 60,000 matchups, each with over
- * a million boards, which is 10^11 evaluations.
- *
- * So `equity()` estimates the work first, enumerates exhaustively when the estimate
- * fits inside a budget, and falls back to bounded Monte Carlo when it does not. The
- * returned object always names the `method` it used, and for Monte Carlo it always
- * carries a confidence interval. A number without its method and its error bar is
- * not a result, it is a claim — and the whole point of this app is to teach the
- * difference.
- *
- * ## Ties
- *
- * A board where k players hold the best hand awards each of them 1/k of the pot.
- * That fractional share is what gets accumulated, which is why a hand's equity is
- * `wins + ties/k` and not just its win rate. Treating a chop as a loss (or as a
- * win) is a small error preflop and a large one on paired boards.
- *
- * ## Determinism
- *
- * Monte Carlo takes an explicit seed and is fully deterministic for a given
- * (spec, samples, seed). That is what lets the API shard a run across worker
- * threads by seed and combine the counts, and what lets a scenario's numbers be
- * reproducible for every learner.
+ * `equity()` estimates the work, enumerates exactly when it fits the budget and otherwise runs
+ * bounded Monte Carlo. The result names its `method`, and a sampled result always carries a 95%
+ * interval. A board where k players tie awards each 1/k of the pot, so equity is `wins + ties/k`.
+ * Monte Carlo is deterministic for a given (spec, samples, seed), which lets the API shard by seed.
  */
 
 import {
@@ -46,7 +22,6 @@ export class EquityError extends Error {
   override readonly name = 'EquityError';
 }
 
-/** One participant in an equity calculation. */
 export interface EquityPlayer {
   /** Shown to the learner, e.g. "hero" or "a tight opening range". */
   readonly label: string;
@@ -63,10 +38,7 @@ export interface EquitySpec {
 }
 
 export interface EquityOptions {
-  /**
-   * Upper bound on (matchups × boards) before falling back to Monte Carlo.
-   * The default keeps an exact run comfortably under a second.
-   */
+  /** Upper bound on (matchups × boards) before falling back to Monte Carlo. */
   readonly maxExactWork?: number;
   /** Monte Carlo sample count. Ignored when the exact path is taken. */
   readonly samples?: number;
@@ -104,39 +76,18 @@ export interface EquityResult {
   /** Boards enumerated (exact) or trials run (Monte Carlo). */
   readonly trials: number;
   /**
-   * How many hand-vs-hand assignments this figure stands on — and **the two methods
-   * mean different things by it**, which is why this is not one sentence.
+   * The matchups this figure stands on, which means different things per method.
    *
-   * - `exact-enumeration`: the LEGAL matchups actually enumerated. Every one of them
-   *   was dealt out and scored, so the number is exact and it is a count of work done.
-   * - `monte-carlo`: an UPPER BOUND — the product of the range sizes, `AA` against `AA`
-   *   being 6 x 6 = 36 — taken before card conflicts remove the assignments that cannot
-   *   exist. Only 6 of those 36 are legal (each `AA` combo leaves exactly one disjoint
-   *   `AA` combo), and the sampler never offers an illegal one to the evaluator: it
-   *   rejects and redraws. So on this path the field is neither a count of legal
-   *   matchups nor a count of assignments sampled.
-   *
-   * This comment used to say "distinct hand-vs-hand assignments considered" for both,
-   * and on the Monte Carlo path that was false in the direction that flatters the
-   * result: 36 where 6 is the truth, and a wider gap the more the ranges overlap.
-   * Nothing reads the field today, which is exactly why it was worth writing down
-   * rather than leaving for the first consumer to discover.
-   *
-   * The bound is what the Monte Carlo path publishes rather than the legal count
-   * because counting the legal ones means running `countMatchups`, which enumerates —
-   * and enumerating is the work this path exists to avoid. Paying for an enumeration to
-   * annotate a result that was sampled precisely because enumeration was too expensive
-   * would be the wrong trade for a field with no reader. `countMatchups(spec)` is
-   * exported for a caller that wants the legal figure and is willing to pay for it.
+   * - `exact-enumeration`: the legal matchups enumerated, an exact count.
+   * - `monte-carlo`: an upper bound, the product of the range sizes before card conflicts. `AA` vs
+   *   `AA` reports 36 where only 6 are legal. Counting the legal ones would mean enumerating, which
+   *   this path exists to avoid. `countMatchups(spec)` gives the legal figure.
    */
   readonly matchups: number;
   /** Present only for Monte Carlo. Exact enumeration has no sampling error. */
   readonly confidence: EquityConfidence | null;
   readonly elapsedMs: number;
-  /**
-   * Everything the number depends on, in plain language. Rendered next to the
-   * figure in the UI so a learner never sees an equity without its assumptions.
-   */
+  /** Everything the number depends on, in plain language, shown next to the figure in the UI. */
   readonly assumptions: readonly string[];
 }
 
@@ -145,14 +96,9 @@ const DEFAULT_SAMPLES = 100_000;
 const BOARD_TARGET = 5;
 
 /**
- * The most trials one Monte Carlo call will run.
- *
- * A ceiling exists because the trial loop is synchronous: nothing outside it — no
- * timer, no deadline, no worker-pool watchdog on the same thread — can interrupt it
- * once it starts. `Infinity` used to be accepted here and wedged the thread
- * permanently, which is the worst available failure mode and is not recoverable by
- * the caller. Five million trials is far past the point where the interval stops
- * moving (the half-width falls as 1/√n) and still returns.
+ * The most trials one Monte Carlo call will run. The trial loop is synchronous and nothing can
+ * interrupt it, so `Infinity` once wedged the thread. The half-width falls as 1/√n, so 5 million is
+ * far past the point where the interval stops moving.
  */
 export const MAX_MONTE_CARLO_SAMPLES = 5_000_000;
 
@@ -160,24 +106,13 @@ export const MAX_MONTE_CARLO_SAMPLES = 5_000_000;
 export const MIN_MONTE_CARLO_SAMPLES = 2;
 
 /**
- * Checks the two options a Monte Carlo run cannot recover from a bad value of.
+ * Validates `samples` and `seed`. Each rejection is an observed failure.
  *
- * Everything else in this package validates exhaustively and says so; this function is
- * what makes `monteCarloEquity` keep that promise. Each rejected value is a real
- * observed failure, not a hypothetical:
- *
- *   * `NaN` — `Math.floor(NaN)` is `NaN`, the loop never ran, and the function
- *     returned an equity of `NaN` with a `NaN` confidence interval. A number-shaped
- *     nothing, presented as a measurement.
- *   * `Infinity` — an unbounded synchronous loop. See `MAX_MONTE_CARLO_SAMPLES`.
- *   * `0`, negatives and fractions — silently clamped to a single trial, which is
- *     worse than an error: `firstPlayerStdDev` returns 0 below two trials, so the run
- *     reported a ±0.00-point 95% interval. That is a claim of certainty from one
- *     sample, and the exact path deliberately reports `null` rather than a fabricated
- *     zero precisely so that claim cannot be made. Requiring two trials means every
- *     interval this function returns came from real variance.
- *   * a non-integer `seed` — determinism is the contract ("same seed ⇒ identical
- *     result") and a fractional seed is not a value the sharding path can reproduce.
+ *   * `NaN` skipped the loop and returned a `NaN` equity.
+ *   * `Infinity` ran an unbounded synchronous loop.
+ *   * `0`, negatives and fractions were clamped to one trial, which reported a ±0.00 interval.
+ *     Two trials is the minimum that carries real variance.
+ *   * A non-integer `seed` breaks the determinism that sharding relies on.
  */
 function validateSampling(options: EquityOptions): number {
   const requested = options.samples ?? DEFAULT_SAMPLES;
@@ -233,24 +168,21 @@ function validateSpec(spec: EquitySpec): void {
   }
 }
 
-/** Cards not on the board, not dead, i.e. still available to deal. */
 function availableCards(spec: EquitySpec): Card[] {
   return remainingDeck([...spec.board, ...(spec.deadCards ?? [])]);
 }
 
-/** Accumulates pot share per player across trials. */
 class Tally {
   readonly playerCount: number;
   readonly wins: Float64Array;
   readonly ties: Float64Array;
   readonly share: Float64Array;
-  /** Σ of squared per-trial share, for the variance of the first player. */
+  /** Sum of squared per-trial share, for the first player's variance. */
   private firstShareSquaredSum = 0;
   private trials = 0;
 
-  // Fields are declared and assigned explicitly rather than through constructor
-  // parameter properties, which `erasableSyntaxOnly` forbids — that flag is what
-  // lets Node run this TypeScript directly with no build step in the dev loop.
+  // Explicit fields, not parameter properties, because `erasableSyntaxOnly` forbids them. That flag
+  // lets Node run this TypeScript directly.
   constructor(playerCount: number) {
     this.playerCount = playerCount;
     this.wins = new Float64Array(playerCount);
@@ -258,7 +190,6 @@ class Tally {
     this.share = new Float64Array(playerCount);
   }
 
-  /** Records one showdown. `scores[i]` is player i's hand score. */
   record(scores: Float64Array): void {
     let best = -1;
     let winners = 0;
@@ -286,12 +217,10 @@ class Tally {
     return this.trials;
   }
 
-  /** Sample standard deviation of the first player's per-trial pot share. */
   firstPlayerStdDev(): number {
     if (this.trials < 2) return 0;
     const mean = (this.share[0] ?? 0) / this.trials;
     const variance = Math.max(0, this.firstShareSquaredSum / this.trials - mean * mean);
-    // Bessel correction, so the interval is not optimistic at small sample sizes.
     return Math.sqrt((variance * this.trials) / (this.trials - 1));
   }
 
@@ -313,11 +242,8 @@ class Tally {
 }
 
 /**
- * Every legal assignment of one combination to each player, with no shared cards.
- *
- * Enumerating this is what makes a range-vs-range calculation correct rather than
- * approximate: an opponent holding the ace of hearts is not independent of hero
- * holding it, and pretending otherwise skews the result.
+ * Every legal assignment of one combination to each player, with no shared cards. Card removal
+ * between players is what makes a range-vs-range result exact.
  */
 function* enumerateMatchups(
   players: readonly EquityPlayer[],
@@ -345,22 +271,18 @@ function* enumerateMatchups(
   yield* recurse(0);
 }
 
-/** Counts legal matchups without materialising them. */
 export function countMatchups(spec: EquitySpec): number {
   const blocked = new Set<Card>([...spec.board, ...(spec.deadCards ?? [])]);
   let count = 0;
   for (const _matchup of enumerateMatchups(spec.players, blocked)) {
     count += 1;
-    // A cheap guard: beyond this the exact path is out of the question anyway.
+    // Past this the exact path is out of the question anyway.
     if (count > 5_000_000) return count;
   }
   return count;
 }
 
-/**
- * How much work an exact enumeration would be: legal matchups × boards per matchup.
- * Used to decide the method, and reported so the choice is inspectable.
- */
+/** Legal matchups × boards per matchup. It decides the method and is reported for inspection. */
 export function estimateExactWork(spec: EquitySpec): {
   matchups: number;
   boardsPerMatchup: number;
@@ -374,13 +296,7 @@ export function estimateExactWork(spec: EquitySpec): {
   return { matchups, boardsPerMatchup, total: matchups * boardsPerMatchup };
 }
 
-/**
- * A player's label as the subject of a sentence that starts an assumption.
- *
- * The label went in as it came, so the Coach's assumptions read "you holds exactly AhJh." and
- * "the profile holds any of 404 combinations": the reader's own label takes the plural verb, and
- * every assumption started in lower case. Seen on /legends/compare in both themes.
- */
+/** A player's label as the subject of an assumption: "You hold" or a capitalised "<label> holds". */
 function holdsClause(label: string): string {
   if (label.toLowerCase() === 'you') return 'You hold';
   return `${label.charAt(0).toUpperCase()}${label.slice(1)} holds`;
@@ -419,7 +335,6 @@ function assumptionsFor(spec: EquitySpec, method: EquityResult['method'], sample
   return notes;
 }
 
-/** Exhaustive enumeration over every legal matchup and every remaining board. */
 export function exactEquity(spec: EquitySpec): EquityResult {
   validateSpec(spec);
   const started = performance.now();
@@ -434,7 +349,6 @@ export function exactEquity(spec: EquitySpec): EquityResult {
 
   for (const matchup of enumerateMatchups(spec.players, blocked)) {
     matchups += 1;
-    // Cards taken by the hands in this matchup are unavailable to the board.
     const taken = new Set<Card>(blocked);
     for (const combo of matchup) {
       taken.add(combo[0]);
@@ -458,8 +372,7 @@ export function exactEquity(spec: EquitySpec): EquityResult {
       continue;
     }
 
-    // Nested loops rather than a generic combination generator: this is the inner
-    // loop of the whole package, and it runs millions of times.
+    // Nested loops, not a generic combination generator, because this inner loop runs millions of times.
     const n = deck.length;
     const pick = new Array<Card>(needed);
     const runBoard = (): void => {
@@ -500,12 +413,8 @@ export function exactEquity(spec: EquitySpec): EquityResult {
 }
 
 /**
- * Rejections allowed across a whole run, and how many have been spent.
- *
- * The budget is per-run rather than per-trial on purpose: one unlucky trial against
- * heavily overlapping ranges can reject many times and still be fine, while a spec
- * where a legal matchup is nearly impossible burns through the allowance steadily. A
- * per-trial cap would either abort a healthy run or never fire on a hopeless one.
+ * Rejections allowed across a whole run. Per run, not per trial, so an unlucky trial does not abort a
+ * healthy run while a hopeless spec still runs out.
  */
 interface RejectionBudget {
   spent: number;
@@ -513,16 +422,8 @@ interface RejectionBudget {
 }
 
 /**
- * Draws one legal matchup — a combination per player, no card used twice.
- *
- * Rejection sampling, rather than sequentially filtering each range against the cards
- * already dealt. Filtering would be faster and biased: it silently reweights the
- * later players' ranges towards whatever their blockers left, and the whole reason
- * this package enumerates matchups is that an opponent holding the ace of hearts is
- * not independent of hero holding it.
- *
- * Returns rather than assigning into an outer variable, so the sampling has no way to
- * leave a half-built assignment behind for the caller to trip over.
+ * Draws one legal matchup by rejection sampling. Filtering each range against cards already dealt
+ * would be faster but biased, because it reweights later players' ranges by their blockers.
  */
 function sampleLegalMatchup(
   rangeCombos: readonly (readonly Combo[])[],
@@ -559,12 +460,7 @@ function sampleLegalMatchup(
 }
 
 /**
- * Draws `needed` community cards from what this matchup left in the pool.
- *
- * Partial Fisher–Yates: only the first `needed` positions are shuffled, because the
- * rest of the order is never looked at. Drawing without replacement matters — two
- * board cards cannot be the same card — and a "pick a random index `needed` times"
- * loop is exactly the bug this avoids.
+ * Draws `needed` board cards without replacement by a partial Fisher-Yates shuffle.
  */
 function drawRunOut(
   pool: readonly Card[],
@@ -591,29 +487,18 @@ function drawRunOut(
 }
 
 /**
- * Bounded Monte Carlo.
- *
- * Each trial draws one combination per player (rejecting draws that share a card)
- * and a random run-out from what is left. The reported interval is the normal
- * approximation to the mean of a bounded random variable, which is well behaved
- * here because pot share lies in [0, 1] and sample sizes are large.
- *
- * Deterministic for a given seed. Shard by seed to parallelise, then combine with
- * `combineMonteCarlo`. The two draws are separate functions above, and the order of
- * the calls into `random` is what the determinism rests on: matchup first, then
- * run-out, once per trial.
+ * Bounded Monte Carlo. Each trial draws one combination per player, rejecting shared cards, then a
+ * run-out. The interval is the normal approximation, sound because pot share lies in [0, 1].
+ * Determinism rests on the order of draws: matchup first, then run-out, once per trial. Shard by seed
+ * and combine with `combineMonteCarlo`.
  */
 export function monteCarloEquity(spec: EquitySpec, options: EquityOptions = {}): EquityResult {
   validateSpec(spec);
   const samples = validateSampling(options);
   const started = performance.now();
   const seed = options.seed ?? 1;
-  // `createSamplingRandom`, NOT `createDeterministicRandomForTests`. The two produce the same
-  // stream for a given seed, so no estimate changes — but the test-only one refuses to exist
-  // under `NODE_ENV=production`, which made every sampled estimate on a production server throw
-  // and stopped any table whose bot needed one. See the note on `createSamplingRandom` in
-  // `@prl/poker-engine`'s `rng.ts` for the whole incident and why sampling is legitimately
-  // deterministic while dealing is not.
+  // `createSamplingRandom`, not the test-only generator, which refuses to exist under
+  // `NODE_ENV=production`. Both give the same stream for a seed. See `rng.ts` in `@prl/poker-engine`.
   const random = createSamplingRandom(seed);
 
   const playerCount = spec.players.length;
@@ -645,10 +530,7 @@ export function monteCarloEquity(spec: EquitySpec, options: EquityOptions = {}):
     method: 'monte-carlo',
     players: tally.toPlayerEquities(spec.players.map((player) => player.label)),
     trials: tally.count,
-    // The UPPER bound on legal matchups, not the legal count: card conflicts between
-    // the ranges are not subtracted here, because subtracting them is `countMatchups`
-    // and that is the enumeration this path exists to avoid. `EquityResult.matchups`
-    // documents the asymmetry with the exact path, which reports what it enumerated.
+    // An upper bound, not the legal count. See `EquityResult.matchups`.
     matchups: rangeCombos.reduce((product, combos) => product * combos.length, 1),
     confidence: { level: 0.95, halfWidthPoints: halfWidth * 100, samples: tally.count },
     elapsedMs: performance.now() - started,
@@ -656,12 +538,7 @@ export function monteCarloEquity(spec: EquitySpec, options: EquityOptions = {}):
   };
 }
 
-/**
- * Chooses the method by estimating the work, then runs it.
- *
- * This is the function everything else calls. It never silently guesses: the result
- * says which method ran, and a sampled result always carries its interval.
- */
+/** Chooses the method by estimating the work, then runs it. Everything else calls this. */
 export function equity(spec: EquitySpec, options: EquityOptions = {}): EquityResult {
   validateSpec(spec);
   const method = options.method ?? 'auto';
@@ -683,13 +560,8 @@ export function heroEquity(spec: EquitySpec, options: EquityOptions = {}): numbe
 }
 
 /**
- * Combines independent Monte Carlo shards into one result.
- *
- * Used by the API's worker pool: run N shards with different seeds in parallel,
- * then combine. Sharding by seed and summing is valid because the shards are
- * independent samples from the same distribution — the combined interval is
- * recomputed from the pooled sample size rather than averaged, which would
- * understate it.
+ * Combines independent Monte Carlo shards from different seeds. The interval is recomputed from the
+ * pooled sample size. Averaging shard intervals would report one shard's precision, not the run's.
  */
 export function combineMonteCarlo(shards: readonly EquityResult[]): EquityResult {
   if (shards.length === 0) throw new EquityError('cannot combine zero shards');
@@ -724,8 +596,6 @@ export function combineMonteCarlo(shards: readonly EquityResult[]): EquityResult
     };
   });
 
-  // Pool the shard intervals back into a standard deviation, then recompute the
-  // interval at the pooled sample size.
   let pooledVariance = 0;
   for (const shard of shards) {
     const halfWidth = (shard.confidence?.halfWidthPoints ?? 0) / 100;
@@ -742,7 +612,6 @@ export function combineMonteCarlo(shards: readonly EquityResult[]): EquityResult
     matchups: first.matchups,
     confidence: { level: 0.95, halfWidthPoints: combinedHalfWidth * 100, samples: totalTrials },
     elapsedMs: shards.reduce((max, shard) => Math.max(max, shard.elapsedMs), 0),
-    // Keep the shards' assumptions, but restate the sample count for the pooled run.
     assumptions: [
       ...first.assumptions.filter((note) => !note.startsWith('Estimated by sampling')),
       `Estimated by sampling ${totalTrials.toLocaleString('en-US')} random run-outs across ${shards.length} independent shards.`,

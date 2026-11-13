@@ -1,29 +1,10 @@
 /**
- * The Telegram adapter: long polling and four Bot API methods, over `fetch`, no library.
- *
- * Everything that decides anything is in `step`. This file turns an update into an `Event`, and
- * an `Outgoing` into a request: `sendMessage`, `editMessageText`, `answerCallbackQuery`, and
- * `getUpdates` to receive. `fetch` is injected, so `test/telegram.test.ts` asserts every request
- * shape without a network or a token.
- *
- * ## Private chats only
- *
- * An update from any chat whose `type` is not `private` is dropped without a reply, buttons
- * included. A group is where one reader's table would become a shared surface, and ADR 0010 rules
- * out both a shared table among strangers and any channel between users.
- *
- * ## Every press is answered exactly once
- *
- * Telegram shows a spinner on a pressed button until `answerCallbackQuery` is called for it. The
- * answer goes first, carrying the toast if `step` produced one and nothing otherwise, so the
- * button stops spinning before any edit lands.
- *
- * ## Updates are handled one at a time
- *
- * `step` is synchronous and the requests are awaited in order, so two presses never interleave on
- * one session. The cost is that every chat waits behind every other chat's requests; for a first
- * slice that is the right trade against a per-chat queue. Sessions live in a `Map` in memory and
- * are lost on restart, which `/about` tells the reader.
+ * The Telegram adapter: long polling and four Bot API methods over an injected `fetch`. All decisions
+ * are in `step`.
+ * Only private chats are served. ADR 0010 rules out a shared table and any channel between users.
+ * Every press is answered once with `answerCallbackQuery`, before any edit, to stop the spinner.
+ * Updates run one at a time so two presses never interleave on a session. Sessions live in memory
+ * and are lost on restart, which `/about` says.
  */
 
 import {
@@ -52,8 +33,7 @@ export class TelegramError extends Error {
   readonly description: string;
   readonly retryAfterSeconds: number | null;
   constructor(method: string, status: number, description: string, retryAfterSeconds: number | null) {
-    // The method and Telegram's own description only. The URL carries the token and is never
-    // part of a message that could reach a log.
+    // Never the URL, which carries the token.
     super(`${method} failed with ${status}: ${description}`);
     this.status = status;
     this.description = description;
@@ -92,10 +72,7 @@ export function telegramApi(token: string, fetchFn: Fetch): TelegramApi {
   };
 }
 
-/**
- * Fills Telegram's "/" menu from `COMMANDS`, once at start-up. A menu is a convenience: a refusal
- * is logged and polling goes ahead, and a token Telegram rejects is still caught by `poll`.
- */
+/** A refusal is logged and polling goes ahead. `poll` still catches a rejected token. */
 export async function registerCommands(api: TelegramApi, log: (line: string) => void): Promise<void> {
   const commands = Object.entries(COMMANDS).map(([command, { description }]) => ({ command, description }));
   try {
@@ -105,7 +82,6 @@ export async function registerCommands(api: TelegramApi, log: (line: string) => 
   }
 }
 
-/** The parts of a Telegram `Update` this adapter reads. Anything else is ignored. */
 interface Update {
   readonly update_id: number;
   readonly message?: {
@@ -133,7 +109,6 @@ export function newChats(): Chats {
   return { sessions: new Map() };
 }
 
-/** One update, start to finish. Returns without a request for anything outside a private chat. */
 export async function handleUpdate(
   update: Update,
   chats: Chats,
@@ -167,10 +142,8 @@ async function run(
   try {
     result = step(chats.sessions.get(chatId) ?? NEW_SESSION, event, deps);
   } catch (error) {
-    // A step that threw may have fed the bots' opponent models part of a hand, and those models
-    // refuse to be fed the same hand twice, so retrying the press would throw again for ever.
-    // Fail closed: drop the table and say so, rather than leave the reader on buttons that
-    // cannot work.
+    // The opponent models may have seen part of the hand and refuse it twice, so a retry would
+    // throw for ever. Fail closed and drop the table.
     chats.sessions.delete(chatId);
     result = {
       session: NEW_SESSION,
@@ -192,11 +165,9 @@ async function run(
 }
 
 /**
- * Telegram refuses a message over 4,096 characters. A preflop Why? against five opponents states
- * each opponent's range in full, about 650 characters apiece, and measured over 5,000 characters.
- * The assumptions may not be cut (CoachPanel's rule), so a long send is split at line breaks into
- * consecutive messages, with the buttons on the last. 4,000 leaves room for Telegram counting
- * UTF-16 units differently from what a reader sees.
+ * Telegram refuses a message over 4,096 characters, and a preflop Why? against five opponents
+ * measured over 5,000. Assumptions may not be cut, so a long send splits at line breaks with the
+ * buttons last. 4,000 leaves room for Telegram counting UTF-16 units.
  */
 export const MESSAGE_LIMIT = 4_000;
 
@@ -243,8 +214,7 @@ async function deliver(
       reply_markup: { inline_keyboard: keyboard(out.buttons) },
     });
   } catch (error) {
-    // Telegram refuses an edit that changes nothing with a 400. The message already says what the
-    // edit would have said, so that refusal is the outcome being asked for.
+    // A 400 for an edit that changes nothing means the message already says it.
     if (error instanceof TelegramError && error.description.includes('message is not modified')) return;
     throw error;
   }
@@ -267,17 +237,13 @@ export interface PollOptions {
   readonly shouldStop: () => boolean;
 }
 
-/** Why the loop stopped: only a refusal that no retry can fix stops it. */
 export type PollExit = { readonly kind: 'stopped' } | { readonly kind: 'refused'; readonly reason: string };
 
 const LONG_POLL_SECONDS = 30;
 
 /**
- * Long polling until stopped or refused.
- *
- * A 401 (the token is wrong or revoked) and a 409 (a webhook is set, or another process is
- * polling the same bot) cannot be fixed by retrying, so they stop the loop for the caller to exit
- * 78. Anything else is retried after a pause, honouring Telegram's `retry_after` on a 429.
+ * A 401 (bad token) or 409 (webhook set, or another poller) stops the loop so the caller exits 78.
+ * Anything else retries after a pause, honouring `retry_after` on a 429.
  */
 export async function poll(options: PollOptions): Promise<PollExit> {
   const chats = newChats();

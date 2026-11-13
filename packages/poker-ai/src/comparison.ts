@@ -1,53 +1,13 @@
 /**
- * The post-hand comparison: the learner's decisions beside the maths, and beside what the
- * model did.
+ * The post-hand comparison. Each learner decision beside the analysis and beside what the model did.
  *
- * This is the "Compare" step, and its whole job is to show the *shape* of each decision
- * rather than a verdict on it. Every figure comes from the analysis that was computed for
- * that decision point, and the actions the learner did not take are listed with their
- * expected value, so a decision reads as a set of priced options rather than as a mark out
- * of ten.
- *
- * ## Quality is never outcome, and the separation is structural
- *
- * `scoreDecisionQuality` takes an analysis and an action. It has no parameter capable of
- * carrying the run-out, the winner, or the chip result, so it cannot be influenced by any of
- * them — scoring the same decision against two different endings is the same call twice.
- * `HandComparison.chipResult` and `HandComparison.decisionQuality` are assembled
- * independently here, and the only place they meet is
- * `outcomeVersusQualityNote`, which exists to say out loud that they disagree.
- *
- * ## Three traps this file is built around
- *
- * **A model's analysis would leak its cards.** `analyse` is only ever called for the
- * *learner's own* decisions. A `CoachReport` for a model's decision is computed from that
- * seat's hole cards: its `outs.cleanCards` literally lists cards, and its equity figure is
- * derived from a holding the learner may never have been shown. A hand that ends in a fold
- * reveals nothing at a real table, and a review that quietly printed the folder's outs would
- * hand over exactly the information the game is played over. So a model decision carries its
- * `ModelReasoning` — generated from public state and declared parameters — and
- * `analysis: null`.
- *
- * **The recorded view must be the acting seat's own.** Every `RecordedDecision` is checked:
- * the view was built for that seat (`viewerSeat === seat`), it was that seat's turn
- * (`toAct === seat`), it belongs to this hand, and the engine actually offered the action
- * type taken. A comparison assembled from someone else's view, or from a view taken at a
- * different moment, would be quietly describing a situation that never existed — and the
- * numbers would look perfectly reasonable while doing it.
- *
- * **"Nothing was scored" is not "played well".** When no decision in the hand could be
- * scored, the aggregate quality is a zero with a note saying so, and the
- * outcome-versus-quality note is suppressed. Firing "the analysis supported this line" over
- * an empty measurement would be exactly the false congratulation this feature exists to
- * avoid.
- *
- * ## Why this is post-hand only
- *
- * `ModelReasoning.actionProbabilities` exposes the distribution the model sampled from, and
- * that distribution is conditioned on the model's hole cards. It is safe in a review of a
- * finished hand and it is a live information leak in a hand still being played. Nothing in
- * the inputs can prove a hand is over, so this is stated rather than enforced: the caller is
- * the hand's settlement path, and there is no other legitimate caller.
+ * `scoreDecisionQuality` has no parameter that can carry the run-out or chip result, so quality never
+ * depends on outcome. The two meet only in `outcomeVersusQualityNote`.
+ * Only the learner's own decisions are analysed. A model decision's `CoachReport` would list its outs and
+ * leak its hole cards, so it carries `ModelReasoning` from public state and `analysis: null`.
+ * Every recorded view must be the acting seat's own, on its turn, in this hand, with the action offered.
+ * When nothing was scored, the aggregate is a zero with a note and the outcome note is suppressed.
+ * Post-hand only. `actionProbabilities` is conditioned on the model's hole cards and would leak live.
  */
 
 import type {
@@ -74,13 +34,7 @@ export class ComparisonError extends Error {
   override readonly name = 'ComparisonError';
 }
 
-/**
- * One decision as the hand recorded it: what was done, and what the actor could see.
- *
- * `potBefore` and `toCall` are deliberately absent — they are read from the view, which is
- * the picture the actor actually had. Recording them separately would create a second source
- * for the same number, and two sources for one number disagree eventually.
- */
+/** `potBefore` and `toCall` are read from the view, so there is one source for each. */
 export interface RecordedDecision {
   /** Ordering within the hand. Must strictly increase across the recorded list. */
   readonly sequence: number;
@@ -88,45 +42,18 @@ export interface RecordedDecision {
   readonly action: Action;
   /** The acting seat's own redacted view, as it was at the moment of the decision. */
   readonly view: PlayerView;
-  /**
-   * The policy's decision, for a model seat. Null for the learner's own decisions, and for
-   * a model seat whose decision was not recorded — in which case the replay line states the
-   * action and claims nothing about why.
-   */
+  /** The policy's decision for a model seat. Null for the learner, and for an unrecorded model decision. */
   readonly decision: PolicyDecisionSummary | null;
-  /**
-   * The profile that played this seat, when a table seats more than one. Defaults to the
-   * profile passed to `buildHandComparison`, which is the heads-up case.
-   */
+  /** The profile that played this seat. Defaults to the one passed to `buildHandComparison`. */
   readonly profile?: StrategyProfile;
   readonly disclosure?: ProfileDisclosure;
 }
 
-// ---------------------------------------------------------------------------
-// The bands
-// ---------------------------------------------------------------------------
-
 /**
- * Where the bands sit, in big blinds of expected value given up.
- *
- * **These are a modelling choice, not a measurement, and the reasoning is:**
- *
- * * **0.5 big blinds — `consistent-with-analysis`.** Inside the analysis's own resolution.
- *   `buildCoachReport` already downgrades its suggestion confidence to `low` when the gap
- *   between its best two actions is under 0.25 big blinds and to `moderate` under a full
- *   one, and its equity figure is frequently sampled with an interval of its own. A decision
- *   inside half a big blind of the best priced action is not distinguishable from it, and
- *   presenting it as worse would be reading precision the report does not have.
- * * **2 big blinds — `slightly-off`.** Larger than the report's noise and smaller than the
- *   edge a whole hand usually turns on. Worth reviewing; not worth a strong claim, because a
- *   different range assumption can move a figure this far on its own.
- * * **Beyond 2 — `materially-off`.** A gap this size normally survives a change of
- *   assumption, so it is where the analysis is saying something a learner can act on.
- *
- * Both boundaries are **inclusive** of the tighter band: exactly 0.5 is
- * `consistent-with-analysis`, exactly 2 is `slightly-off`. A comparison epsilon absorbs
- * floating-point drift, so a shortfall that arithmetic renders as 0.5000000000000001 does
- * not fall through to the next band on a rounding artefact.
+ * Band edges in big blinds of EV given up. A modelling choice, not a measurement.
+ * 0.5bb is inside the report's own resolution (its confidence drops to `low` under a 0.25bb gap).
+ * 2bb is past the report's noise but still within what a different range assumption can move.
+ * Each edge belongs to the tighter band, with an epsilon for floating-point drift.
  */
 export const QUALITY_BANDS_IN_BIG_BLINDS = {
   consistentWithAnalysis: 0.5,
@@ -149,10 +76,6 @@ export function bandForShortfall(shortfallInBigBlinds: number): DecisionQuality[
   return 'materially-off';
 }
 
-// ---------------------------------------------------------------------------
-// scoreDecisionQuality
-// ---------------------------------------------------------------------------
-
 function formatUnits(value: number): string {
   return value.toFixed(1);
 }
@@ -171,8 +94,7 @@ function bandNote(input: {
   readonly bestLabel: string;
   readonly sizeNote: string;
 }): string {
-  // When the action taken *was* the best-priced one, saying it was "0.0 units behind itself"
-  // is true and unreadable. The two cases are different sentences, not one with a zero in it.
+  // A zero shortfall gets its own sentence rather than "0.0 units behind itself".
   const measured =
     input.shortfallUnits < 0.05
       ? `${input.chosenLabel} was the best-priced action in the analysis, giving up nothing against the ` +
@@ -201,13 +123,7 @@ function bandNote(input: {
   }
 }
 
-/**
- * One naming of an action for a note, used for both an `Action` and a priced candidate.
- *
- * A gerund ("raising to 140") rather than a bare verb, because every note below reads as
- * "<action> was priced at ...", and one formatter for both shapes is one fewer place for the
- * two to disagree.
- */
+/** One gerund ("raising to 140") for both an `Action` and a priced candidate. */
 function nameAction(type: ActionCandidate['action'], to: number | null): string {
   switch (type) {
     case 'bet':
@@ -235,17 +151,9 @@ export function analysisEvaluatedAction(analysis: CoachReport, action: Action): 
 }
 
 /**
- * How the chosen action compares with the best action the analysis priced.
- *
- * Computable at the moment of the decision: the inputs are one report and one action, and
- * the report is built from the cards and the price, never from the run-out. `evGivenUp` is
- * `chosenEv - bestAvailableEv`, so it is zero when the chosen action *was* the best priced
- * one and negative otherwise — never positive, because the chosen action is one of the
- * candidates the maximum was taken over.
- *
- * `bigBlind` is a parameter because `CoachReport` does not carry one. Guessing it would
- * silently move every band boundary, and a band that quietly means something different from
- * what it says is worse than a parameter.
+ * Compares the chosen action with the best action the analysis priced. `evGivenUp` is
+ * `chosenEv - bestAvailableEv`, so it is zero or negative.
+ * `bigBlind` is a parameter because `CoachReport` does not carry one, and a guess would move every band.
  */
 export function scoreDecisionQuality(input: {
   readonly analysis: CoachReport;
@@ -296,17 +204,7 @@ function capitalise(text: string): string {
   return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
 }
 
-// ---------------------------------------------------------------------------
-// Alternatives
-// ---------------------------------------------------------------------------
-
-/**
- * The other priced actions, so the learner sees the decision rather than a verdict.
- *
- * The chosen candidate is excluded by identity, which means the other *sizes* of the same
- * action stay in the list. That is deliberate: for a bet or a raise, "the same action at a
- * different price" is usually the most interesting comparison on the board.
- */
+/** Excludes the chosen candidate by identity, so other sizes of the same action stay listed. */
 function buildAlternatives(
   analysis: CoachReport,
   chosenAction: Action,
@@ -339,10 +237,6 @@ function buildAlternatives(
       };
     });
 }
-
-// ---------------------------------------------------------------------------
-// buildHandComparison
-// ---------------------------------------------------------------------------
 
 function validateRecorded(decision: RecordedDecision, handId: string, previousSequence: number): void {
   const where = `recorded decision at sequence ${decision.sequence}`;
@@ -387,13 +281,7 @@ interface ScoredTotals {
   readonly chosenEv: number;
 }
 
-/**
- * The hand-level quality: the scored decisions summed, not averaged.
- *
- * Summed because giving up half a big blind on each of three streets costs one and a half
- * big blinds, and an average would report it as half of one. The same band thresholds are
- * then applied to the total, which is the honest reading of "what did this hand cost".
- */
+/** Summed, not averaged, because half a big blind lost on three streets costs one and a half. */
 function aggregateQuality(totals: ScoredTotals, bigBlind: number): DecisionQuality {
   if (totals.count === 0) {
     return {
@@ -474,13 +362,7 @@ function buildComparedDecision(input: {
   };
 }
 
-/**
- * Assembles the whole comparison for one finished hand.
- *
- * `analyse` is injected so this function stays pure and cheap: the equity work belongs to
- * `@prl/poker-math` and to the caller's budget, and a comparison that computed it inline
- * could not be tested without running a Monte Carlo.
- */
+/** `analyse` is injected so this stays pure and testable without running a Monte Carlo. */
 export function buildHandComparison(input: {
   readonly handId: string;
   readonly handNumber: number;
@@ -528,8 +410,7 @@ export function buildHandComparison(input: {
       );
     }
     const isUser = recorded.seat === input.userSeat;
-    // Only the learner's own decisions are analysed — see the module comment on why a
-    // model's analysis would leak its hole cards into the learner's review.
+    // A model's analysis would leak its hole cards.
     const analysis = isUser ? input.analyse(recorded) : null;
     let quality: DecisionQuality | null = null;
     if (analysis !== null && analysisEvaluatedAction(analysis, recorded.action)) {
@@ -562,11 +443,7 @@ export function buildHandComparison(input: {
     decisions: compared,
     chipResult: input.chipResult,
     decisionQuality,
-    // Suppressed when nothing was scored: "consistent with the analysis" over an empty
-    // measurement is the absence of evidence, and dressing it as a well-played hand that
-    // lost would be the exact false congratulation this feature exists to avoid. The note
-    // itself lives in commentary.ts with the rest of the learner-facing prose, so there is
-    // one wording rather than two that drift.
+    // Suppressed when nothing was scored, so an empty measurement never reads as a well-played hand.
     outcomeVersusQualityNote:
       count === 0
         ? null

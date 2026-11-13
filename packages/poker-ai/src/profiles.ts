@@ -1,36 +1,8 @@
 /**
- * The opponent profiles.
- *
- * ## Read `labelling.ts` first
- *
- * Each profile has an **archetype name** (always used, and the production default) and an
- * optional **attributed name** shown only when a deployer explicitly opts in. The
- * educational content is identical either way, which is the point: the traits are the
- * substance and the name is a mnemonic.
- *
- * ## What the numbers are
- *
- * **Design parameters, not measurements.** Each vector was chosen to produce a style that
- * contrasts usefully with the others and that teaches something specific. Where a profile
- * carries an attributed name, the traits gesture at tendencies that have been widely
- * discussed in public poker commentary — *"plays a lot of hands and applies pressure"*,
- * *"famously patient"* — at exactly that level of coarseness. Nobody's hand histories were
- * consulted, nobody's real statistics appear here, and no claim is made that these
- * reproduce how any individual plays.
- *
- * Every profile therefore carries:
- *
- * * `learnFrom` — what a student should take from playing it. This is the actual product.
- * * `styleNotes` — how the style shows up at the table, in behavioural terms.
- * * `counterStrategy` — how to play *against* it. Included deliberately: an opponent you
- *   cannot form a plan against teaches nothing.
- * * `modelBasis` — an honest sentence about where the parameters came from.
- *
- * ## On the historical profiles
- *
- * Two profiles are attributed to players who have died. They get exactly the same
- * treatment: modelled tendencies, no impersonation, no invented quotes, no claims about
- * what anyone thought. Being unable to object is not a reason to be less careful.
+ * The opponent profiles. Read `labelling.ts` first. The archetype name is the default and an
+ * attributed name is opt-in. The teaching content is identical either way.
+ * The traits are design parameters chosen for contrast, not measurements. No hand histories or real
+ * statistics were used. The two profiles attributed to players who have died get the same treatment.
  */
 
 import {
@@ -55,15 +27,9 @@ export interface DifficultySettings {
   readonly id: Difficulty;
   readonly label: string;
   readonly description: string;
-  /**
-   * How strongly the profile's traits are expressed. Below 1 the style is muted towards
-   * a straightforward baseline, which makes it easier to read.
-   */
+  /** How strongly the traits are expressed. Below 1 the style is muted towards the baseline. */
   readonly traitExpression: number;
-  /**
-   * Extra randomness added to every decision. Higher means less consistent — easier to
-   * beat, and easier to misread.
-   */
+  /** Extra randomness added to every decision. */
   readonly noise: number;
   /** Whether the profile adapts to observed opponent tendencies at all. */
   readonly adaptationEnabled: boolean;
@@ -73,15 +39,7 @@ export interface DifficultySettings {
   readonly coachAvailable: boolean;
 }
 
-/**
- * The three difficulty settings.
- *
- * `educational` is not simply "worse". It is *more legible*: the style is muted, sizing is
- * more uniform, and the Coach stays available, so a learner can see the shape of the
- * strategy before facing the sharp version of it. `expert` expresses the traits fully,
- * adapts, and varies sizing — which is harder to play against precisely because it is
- * harder to read.
- */
+/** `educational` is more legible, not just weaker. Muted style, uniform sizing, Coach available. */
 export const DIFFICULTY_SETTINGS: Readonly<Record<Difficulty, DifficultySettings>> = {
   educational: {
     id: 'educational',
@@ -142,7 +100,6 @@ const ARCHETYPE_BASIS =
   'Design parameters chosen to produce a specific, contrasting teaching style. Not modelled on any individual.';
 
 const PROFILE_LIST: readonly StrategyProfile[] = [
-  // -----------------------------------------------------------------------
   {
     naming: {
       id: 'vocal-aggressor',
@@ -188,7 +145,6 @@ const PROFILE_LIST: readonly StrategyProfile[] = [
     bestFor: 'six-max',
   },
 
-  // -----------------------------------------------------------------------
   {
     naming: {
       id: 'adaptive-exploiter',
@@ -234,7 +190,6 @@ const PROFILE_LIST: readonly StrategyProfile[] = [
     bestFor: 'both',
   },
 
-  // -----------------------------------------------------------------------
   {
     naming: {
       id: 'patient-technician',
@@ -280,7 +235,6 @@ const PROFILE_LIST: readonly StrategyProfile[] = [
     bestFor: 'both',
   },
 
-  // -----------------------------------------------------------------------
   {
     naming: {
       id: 'reading-pressure-specialist',
@@ -326,7 +280,6 @@ const PROFILE_LIST: readonly StrategyProfile[] = [
     bestFor: 'heads-up',
   },
 
-  // -----------------------------------------------------------------------
   {
     naming: {
       id: 'old-school-pressure',
@@ -372,7 +325,6 @@ const PROFILE_LIST: readonly StrategyProfile[] = [
     bestFor: 'six-max',
   },
 
-  // -----------------------------------------------------------------------
   {
     naming: {
       id: 'mixed-game-generalist',
@@ -418,7 +370,6 @@ const PROFILE_LIST: readonly StrategyProfile[] = [
     bestFor: 'both',
   },
 
-  // -----------------------------------------------------------------------
   {
     naming: {
       id: 'volume-grinder',
@@ -450,13 +401,8 @@ const PROFILE_LIST: readonly StrategyProfile[] = [
       'How often re-raising preflop is available, and how much pressure that puts on someone who only raises with strong hands.',
     ],
     styleNotes: [
-      // The named quantity is `threeBetShareOfEntries`, which is what `threeBetTendency`
-      // declares and the only frequency it can be compared against (see `traits.ts` on why the
-      // multiplier is not a 3-bet frequency). This profile is the highest here on it — 0.93
-      // declared, 0.89 measured over 3,000 hands at `realistic`, against 0.88 for the next.
-      // The bare superlative that used to stand here was false under the natural reading: on
-      // unconditional 3-bet frequency this profile is third, because two looser profiles face
-      // and enter more openings. Naming the denominator is what makes the sentence checkable.
+      // Measured on `threeBetShareOfEntries`: 0.89 over 3,000 hands at `realistic`, next highest 0.88.
+      // On unconditional 3-bet frequency this profile is third, so the sentence names the denominator.
       'Re-raises a larger share of the openings it plays back at than any other profile here — which is not the same as making the most 3-bets, since looser profiles get more openings to answer.',
       'Takes marginal all-in spots that other profiles decline.',
       'Its short-run results swing hard in both directions.',
@@ -471,7 +417,6 @@ const PROFILE_LIST: readonly StrategyProfile[] = [
     bestFor: 'six-max',
   },
 
-  // -----------------------------------------------------------------------
   {
     naming: {
       id: 'disciplined-specialist',
@@ -517,7 +462,6 @@ const PROFILE_LIST: readonly StrategyProfile[] = [
     bestFor: 'both',
   },
 
-  // -----------------------------------------------------------------------
   {
     naming: {
       id: 'foundational-reader',
@@ -563,7 +507,6 @@ const PROFILE_LIST: readonly StrategyProfile[] = [
     bestFor: 'six-max',
   },
 
-  // -----------------------------------------------------------------------
   {
     naming: {
       id: 'range-narrator',
@@ -609,7 +552,6 @@ const PROFILE_LIST: readonly StrategyProfile[] = [
     bestFor: 'both',
   },
 
-  // -----------------------------------------------------------------------
   {
     naming: {
       id: 'fundamentals-coach',
@@ -643,11 +585,8 @@ const PROFILE_LIST: readonly StrategyProfile[] = [
     styleNotes: [
       'Tight, position-aware, and highly consistent — the easiest profile here to predict.',
       'One bet size for almost everything, chosen by pot fraction rather than by hand.',
-      // Both of these used to say the profile does not adapt at all, which contradicted the
-      // 0.30 sitting on the `exploitativeAdaptation` axis of the very same card — and 0.30 is
-      // not even the lowest here (the calling station is 0.10). The number is the one that
-      // moves the play, so the sentence is what changed; `assertStyleNotesMatchTraits` now
-      // refuses the old wording on any profile whose adaptation trait is not 0.
+      // `exploitativeAdaptation` is 0.30, so the note may not say it never adapts.
+      // `assertStyleNotesMatchTraits` refuses that wording.
       'Barely adapts to you: 0.30 on that axis, and nothing at all at the Educational setting.',
     ],
     counterStrategy: [
@@ -661,10 +600,7 @@ const PROFILE_LIST: readonly StrategyProfile[] = [
     bestFor: 'both',
   },
 
-  // -----------------------------------------------------------------------
-  // A pure archetype with no attribution, included because a learner should be able
-  // to practise against the classic beginner-punishing profile too, and because it is
-  // the clearest demonstration that the traits — not the names — do the teaching.
+  // A pure archetype with no attribution, showing that the traits do the teaching, not the names.
   {
     naming: {
       id: 'calling-station',
@@ -689,30 +625,12 @@ const PROFILE_LIST: readonly StrategyProfile[] = [
       foldToPressure: 0.14,
       barrelPersistence: 0.2,
     }),
-    // MEASURED 2026-08-27, before re-strengthening any of these. This profile is genuinely wide
-    // (`vpip` 0.52) and genuinely passive (it flat-calls the nut flush where others raise), and
-    // those are what the strings below now claim. The earlier wording — "against this profile you
-    // have almost none [fold equity]" and "with no fold equity, a bluff is a donation" — is not
+    // Measured 2026-11-11 on five flop spots, 30 seeds. Lowest raw fold weight of the twelve and the most
+    // calls (32-81% against 13-39%). It still folds as often as mid-field, because `continueAppetite` in
+    // `policy.ts` is the same for every profile and aggressive profiles raise instead of folding. On
+    // `pricedFoldToBetFrequency` it folds second-most, 0.275 over 8,000 hands. Letting the trait move the
+    // continue threshold was tried and reverted as fitting a number to the answer. The strings claim only
     // what the model does.
-    //
-    // MEASURED 2026-11-11, which corrects the cause this comment used to give. The trait is not
-    // too weak to show in the weights: on five fixed flop spots (`apps/api`'s
-    // `compareProfilesOnSpot` shape, 30 seeds) this profile has the LOWEST raw fold weight of the
-    // twelve in all ten spot-and-difficulty cases, and it calls the most in all ten: 32-81% of the
-    // time where the others call 13-39%. It still folds as often as the middle of the field, for
-    // two reasons the trait cannot reach. `continueAppetite` in `policy.ts` is the same function
-    // of equity for every profile, so a hand below the price folds whatever `foldToPressure` says;
-    // and the profiles that fold least are the aggressive ones, which put their continuing weight
-    // into raises. On the turns the trait acts on (`pricedFoldToBetFrequency` in `stats.ts`) this
-    // profile folds the second-most of the twelve, 0.275, on the simulation suite's 8,000-hand sweep.
-    //
-    // One lever was tried and reverted: letting the trait move the continue threshold, 0.25 of
-    // equity across the trait's range. On 3,000-hand sweeps, rank agreement on those turns rose
-    // from 0.510 to 0.734 and this profile only moved from third-most to fifth-most. Turning the
-    // constant up until it came out last would be fitting a number to the answer, so the model was
-    // left alone, the learner-facing comparison that called this axis "agreeing" was removed
-    // (`commentary.ts`), and the third line below no longer says this profile takes fold equity
-    // away "most".
     learnFrom: [
       'That the adjustment against a wide, passive caller is to value-bet thinner than usual, because far more of what calls you is worse.',
       'How to recognise a passive opponent from their actions within a handful of hands.',
@@ -735,15 +653,8 @@ const PROFILE_LIST: readonly StrategyProfile[] = [
 ];
 
 /**
- * Wordings that assert a profile ignores what it has seen, and the trait that would have to
- * be 0 for any of them to be true.
- *
- * Matched case-insensitively against the whole of every learner-facing string, so a claim
- * embedded mid-sentence is caught as well as one standing alone. The list is deliberately
- * about *phrasing* rather than meaning — nothing here can tell that "plays its own game
- * whatever you do" is the same claim — so it is a backstop, not a proof. What it does buy is
- * that the one specific sentence that shipped false cannot ship false again, and that anyone
- * copying it onto another profile has to make the number true first.
+ * Wordings that claim a profile ignores what it has seen. Matched case-insensitively against every
+ * learner-facing string. A phrasing backstop, not a proof.
  */
 const NO_ADAPTATION_CLAIMS: readonly string[] = [
   'does not adapt',
@@ -754,18 +665,9 @@ const NO_ADAPTATION_CLAIMS: readonly string[] = [
 ];
 
 /**
- * A styleNote may not claim the model ignores you unless its adaptation trait really is 0.
- *
- * `assertNoImpersonation` checks the *voice* of every string — third person, about the model,
- * no person's name. Nothing checked whether a sentence agreed with the vector printed beside
- * it, and `profileCard` renders both in one object: the radar axis read "Adapts to opponents:
- * 0.30" directly under "Does not adapt to you at all, by design." A card that contradicts
- * itself is the same class of defect as a model that contradicts its card, so this runs at
- * load time with the impersonation guard rather than in a test.
- *
- * The trait, not the difficulty, is the subject. `expressTraits` zeroes adaptation at
- * `educational`, so *every* profile ignores you there — a sentence on a card that is only true
- * at one of three settings is not a true sentence about the profile.
+ * A note may not claim the model ignores you unless `exploitativeAdaptation` is 0. `profileCard` renders
+ * the sentence beside the axis, so the card must not contradict itself. Runs at load time.
+ * The trait is the subject, not the difficulty. Every profile ignores you at `educational`.
  */
 function assertStyleNotesMatchTraits(profile: StrategyProfile): void {
   if (profile.traits.exploitativeAdaptation === 0) return;
@@ -791,13 +693,8 @@ function assertStyleNotesMatchTraits(profile: StrategyProfile): void {
 }
 
 /**
- * Validates the profile set once, at module load, so a bad profile fails loudly.
- *
- * Exported so a test can run the real guard against a deliberately broken profile rather than
- * restating the rule. A test that recomputes the implementation's own check passes whenever
- * both are wrong in the same way, which is exactly the failure a guard exists to catch. Not
- * re-exported from `index.ts`: the package's public surface is the validated `PROFILES`, and
- * nothing outside this package assembles a profile of its own.
+ * Validates the profile set at module load. Exported so a test can run the real guard on a broken
+ * profile. Not re-exported from `index.ts`.
  */
 export function validateProfiles(profiles: readonly StrategyProfile[]): readonly StrategyProfile[] {
   const ids = new Set<string>();
@@ -815,9 +712,7 @@ export function validateProfiles(profiles: readonly StrategyProfile[]): readonly
       throw new ProfileError(`profile "${profile.naming.id}" must state where its parameters came from`);
     }
 
-    // Every learner-facing string must describe the MODEL, not a person. This is the
-    // guardrail that matters most in this feature, so it runs at load time rather than
-    // only in a test — a profile that impersonates cannot even be imported.
+    // The impersonation guard runs at load time, so a profile that impersonates cannot be imported.
     for (const [field, strings] of [
       ['learnFrom', profile.learnFrom],
       ['styleNotes', profile.styleNotes],
@@ -880,14 +775,7 @@ export function allProfileCards(mode: NamingMode): readonly ProfileCard[] {
   return PROFILES.map((profile) => profileCard(profile, mode));
 }
 
-/**
- * Applies a difficulty setting to a profile's traits.
- *
- * Muting pulls every trait towards the baseline rather than towards 0.5, so a muted
- * profile still leans the way it is supposed to lean — just less far. Pulling towards 0.5
- * would make every profile converge on the same middling style, which would defeat the
- * point of having an easier difficulty at all.
- */
+/** Muting pulls each trait towards the baseline, not 0.5, so a muted profile still leans its own way. */
 export function expressTraits(profile: StrategyProfile, difficulty: Difficulty): Traits {
   const settings = DIFFICULTY_SETTINGS[difficulty];
   const baseline = baselineTraits();
@@ -898,16 +786,11 @@ export function expressTraits(profile: StrategyProfile, difficulty: Difficulty):
     const base = baseline[key];
     out[key] = base + (target - base) * expression;
   }
-  // Adaptation is switched off entirely at the easiest setting, so the style stays legible.
   if (!settings.adaptationEnabled) out['exploitativeAdaptation'] = 0;
   return makeTraits(out as Partial<Traits>, `${profile.naming.id} @ ${difficulty}`);
 }
 
-/**
- * How different the profile set is, pairwise. Used by the tests to assert the set spans a
- * genuine range of styles rather than being variations on one — a set that looked diverse
- * on its cards but played identically would be the quiet failure here.
- */
+/** Pairwise trait distance. Tests use it to assert the set spans a real range of styles. */
 export function profileDiversity(): {
   readonly pairs: number;
   readonly minDistance: number;

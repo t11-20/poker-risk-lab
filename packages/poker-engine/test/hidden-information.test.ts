@@ -1,14 +1,6 @@
 /**
- * Hidden-information isolation.
- *
- * These tests do not check that `redactFor` sets the fields we expect. They check
- * the property that actually matters: that a serialised player view contains no
- * card the recipient is not entitled to see, and no trace of the deck, the cursor
- * or the commitment salt.
- *
- * The scan is over `JSON.stringify(view)`, walking every value in the object graph,
- * because that is the form the data actually leaves the process in. A leak through
- * a field nobody thought to check is precisely the failure this is guarding.
+ * Hidden-information isolation. Scans `JSON.stringify(view)`, the form data leaves the process in,
+ * for any card the recipient may not see and any trace of the deck, cursor or salts.
  */
 
 import assert from 'node:assert/strict';
@@ -21,12 +13,8 @@ import type { HandState, SeatIndex } from '../src/types.ts';
 import { call, check, deal, fold, play, raise, stackedDeck } from './helpers.ts';
 
 /**
- * Asserts that no hidden card is present in the view.
- *
- * Cards are small integers, so they collide with stacks, pots and bet sizes. To
- * avoid a meaningless assertion, the check looks specifically at the places a card
- * could actually be represented — every array of numbers in the view, plus the
- * board and hole-card fields — rather than at every number anywhere.
+ * Asserts no hidden card is in the view. Cards are small integers that collide with stacks and bets,
+ * so only number arrays and the board and hole-card fields are checked.
  */
 function assertNoHiddenCards(state: HandState, viewerSeat: SeatIndex | null): void {
   const view = redactFor(state, { viewerSeat });
@@ -47,14 +35,12 @@ function assertNoHiddenCards(state: HandState, viewerSeat: SeatIndex | null): vo
   collectCardArrays(serialised);
 
   for (const array of cardBearingArrays) {
-    // A 52-length array of distinct 0..51 values is the deck itself and must never
-    // appear before the hand is complete.
+    // A 52-length array of distinct 0..51 values is the deck and must not appear before completion.
     if (array.length === 52 && new Set(array).size === 52) {
       assert.fail(`view for seat ${String(viewerSeat)} contains a full 52-card deck`);
     }
   }
 
-  // Board and hole cards are the only card-typed fields; check them precisely.
   for (const card of serialised.board) {
     assert.ok(!hidden.has(card), `board leaked hidden card ${cardToString(card)}`);
   }
@@ -73,7 +59,6 @@ function assertNoHiddenCards(state: HandState, viewerSeat: SeatIndex | null): vo
     }
   }
 
-  // The secrets must not appear under any key at all.
   const raw = JSON.stringify(serialised);
   assert.ok(!raw.includes('"deck"'), 'the view must not carry a deck field');
   assert.ok(!raw.includes('deckCursor'), 'the view must not carry the deck cursor');
@@ -112,7 +97,6 @@ test('the undealt deck is never visible at any point in a hand', () => {
   const { state } = deal({ stacks: [200, 200, 200], buttonSeat: 0, config: { maxSeats: 3 } });
   let current = state;
   const streets: string[] = [];
-  // Walk the hand street by street, checking every view after every action.
   while (current.street !== 'complete') {
     streets.push(current.street);
     for (const viewer of [0, 1, 2, null]) assertNoHiddenCards(current, viewer);
@@ -130,7 +114,7 @@ test('the undealt deck is never visible at any point in a hand', () => {
 });
 
 test('cards are only revealed at showdown, and only for seats that showed', () => {
-  // Two players reach showdown; a third folds and must keep its cards hidden.
+  // Two players reach showdown. A third folds and must keep its cards hidden.
   const deck = stackedDeck({ 1: 'AhAd', 2: 'KhKd', 0: '7c8d' }, [1, 2, 0], 'Qh 5s 2c 4d 9h');
   const { state } = deal({
     stacks: [200, 200, 200],
@@ -138,7 +122,6 @@ test('cards are only revealed at showdown, and only for seats that showed', () =
     config: { maxSeats: 3 },
     fixedDeck: deck,
   });
-  // Seat 0 folds; seats 1 and 2 go to showdown.
   let current = play(state, [fold(0), call(1), check(2)]);
   while (current.street !== 'complete') {
     const seat = current.toAct;
@@ -174,7 +157,6 @@ test('a hand that ends by folding reveals nobody’s cards', () => {
   for (const seat of spectator.seats) {
     assert.equal(seat.holeCards, null, 'no cards are shown when everyone folds');
   }
-  // The winner still sees its own cards.
   const winnerView = redactFor(finished, { viewerSeat: 2 });
   assert.ok(winnerView.seats.find((seat) => seat.seat === 2)?.holeCards !== null);
   assert.equal(winnerView.seats.find((seat) => seat.seat === 0)?.holeCards, null);
@@ -189,9 +171,8 @@ test('the commitment hash is published during the hand but the deck is not', () 
 });
 
 test('a hand won by folding reveals the board but NEVER the winner’s cards', () => {
-  // This is the test that killed the first commitment design. Hashing the whole
-  // deck and publishing salt + deck at the end would have exposed the cards of
-  // every player who never showed — in a heads-up fold, the winner's exact hand.
+  // Publishing the whole deck at the end would expose every unshown hand, in a heads-up fold the
+  // winner's exact cards. This killed the first commitment design.
   const { state } = deal({ stacks: [200, 200], buttonSeat: 0, config: { maxSeats: 2 } });
   const finished = play(state, [fold(0)]);
   assert.equal(finished.street, 'complete');
@@ -203,14 +184,13 @@ test('a hand won by folding reveals the board but NEVER the winner’s cards', (
   assert.equal(reveal.complete, false, 'a fold-out hand never produces a full deck reveal');
   assert.equal(reveal.cards.length, 0, 'no board was dealt and nobody showed, so nothing is revealed');
 
-  // The proofs that do exist must verify, and must not include any hidden card.
   const verification = verifyDeckReveal(reveal);
   assert.equal(verification.ok, true, verification.reason);
   const hidden = new Set(cardsHiddenFrom(finished, 0));
   for (const entry of reveal.cards) {
     assert.ok(!hidden.has(entry.card), `reveal leaked hidden card at position ${entry.index}`);
   }
-  // Seat 1 folded nothing — it won without showing, so its two cards stay hidden.
+  // Seat 1 won without showing, so its two cards stay hidden.
   assert.equal(hidden.size, 2 + 48, `the winner's two cards plus the 48 undealt cards stay sealed`);
 });
 

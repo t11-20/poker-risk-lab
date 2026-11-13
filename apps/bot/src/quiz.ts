@@ -1,27 +1,8 @@
 /**
- * A quiz in a chat: a topic, then one question per message, answered with a button or a number.
- *
- * ## There is no score, on purpose
- *
- * Nothing here counts how many answers matched, so nothing can be shown. The end of a run is the
- * quiz's own `reviewAdvice` and where to go next. That is the web's rule (`QuizRunner.tsx`, "There
- * is no score in this file, and that is the design") and guardrail §2's: reward the reasoning,
- * never the outcome, and a tally turns a reflection tool into a slot machine with homework.
- *
- * ## Nothing is labelled "correct" (guardrail §3)
- *
- * Multiple choice says "the answer this lesson gives". A numeric answer is "within the tolerance of"
- * a figure computed here, to the tolerance the question declares. A decision is not marked at all:
- * a poker action is consistent or not with an analysis whose assumptions are listed, so the reader
- * chooses first and is then shown the computed spot, the assumptions and the reasoning. Same
- * wording as the web's runner, so a learner reads one product.
- *
- * ## Every press names its question
- *
- * An answer, reveal or onward button carries the run tag and the position it was drawn for, and is
- * applied only while the session is at that run, that position and the stage the button belongs
- * to. Anything else is a toast and an unchanged session, which is what makes a double press, a
- * press on an earlier question, and a press from an earlier run no-ops.
+ * A quiz in chat, one question per message. Nothing counts matched answers, so there is no score
+ * (guardrail §2, as in `QuizRunner.tsx`). Nothing is labelled "correct" (guardrail §3). A decision is
+ * not marked; the reader sees the computed spot and its assumptions. Wording matches the web runner.
+ * A press applies only at its run tag, position and stage. Anything else is a toast and no change.
  */
 
 import { quizById, quizzes } from '@prl/content';
@@ -147,11 +128,7 @@ function momentOf(phase: QuizPhase): QuizMoment {
   return { run: phase.run, position: phase.position };
 }
 
-// ---------------------------------------------------------------------------
-// The question message
-// ---------------------------------------------------------------------------
-
-/** The question as first posted. Every later state of it is this text with more beneath. */
+/** Every later state of the question is this text with more beneath. */
 function questionText(phase: QuizPhase): string {
   const quiz = quizOf(phase);
   const question = questionOf(phase);
@@ -227,13 +204,9 @@ function questionMessage(phase: QuizPhase): Outgoing {
   return { kind: 'send', text: questionText(phase), buttons: questionButtons(phase) };
 }
 
-// ---------------------------------------------------------------------------
-// Answers
-// ---------------------------------------------------------------------------
-
 type QuizPress = Extract<Press, { kind: 'choose' | 'decide' | 'reveal' | 'onward' }>;
 
-/** The quiz phase a press was drawn for, or null when the session has moved on from it. */
+/** Null when the session has moved on from the press. */
 function drawnFor(session: Session, press: QuizPress): QuizPhase | null {
   const { phase } = session;
   if (phase.kind !== 'quiz') return null;
@@ -257,16 +230,11 @@ export function onQuizPress(session: Session, press: QuizPress): StepResult {
   if (press.kind === 'reveal' && question.kind === 'numeric') {
     return answered(session, phase, 'edit', revealLines(question));
   }
-  // A press of the right moment for a different kind of question: data this process did not write.
+  // Right moment, wrong question kind. This process did not write it.
   return toast(session, QUIZ_STALE);
 }
 
-/**
- * A typed answer, or null when typed text is not an answer to anything.
- *
- * Only a numeric question that is still being asked takes text. A number typed during a hand, on a
- * multiple-choice question, or after the question was answered falls through to the ordinary reply.
- */
+/** Only a numeric question still being asked takes text. Null otherwise. */
 export function onQuizText(session: Session, text: string): StepResult | null {
   const { phase } = session;
   if (phase.kind !== 'quiz' || phase.stage !== 'asking') return null;
@@ -285,8 +253,7 @@ export function onQuizText(session: Session, text: string): StepResult | null {
       ],
     };
   }
-  // A typed answer has no message to edit, so the verdict is a new message with the question's
-  // header on it, and the question above keeps its text and loses nothing but its relevance.
+  // A typed answer has no message to edit, so the verdict is a new message with the header.
   const quiz = quizOf(phase);
   const header = `${quiz.title} · Question ${phase.position + 1} of ${quiz.questions.length}`;
   return answered(session, phase, 'send', [header, '', ...numericLines(question, answer)]);

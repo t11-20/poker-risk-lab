@@ -1,10 +1,4 @@
-/**
- * The dependencies a real session runs on. Tests build their own; nothing else does.
- *
- * Cards are dealt from `createSecureRandom()`, a fresh CSPRNG per hand. Bot decisions draw from
- * one too: the web seeds its bots so a Legends match replays, and a chat table has no replay to
- * keep, so there is nothing a seed would buy.
- */
+/** Production dependencies. Bot decisions use a CSPRNG too, since a chat table has no replay to seed. */
 
 import { randomBytes } from 'node:crypto';
 import { createSecureRandom } from '@prl/poker-engine';
@@ -16,7 +10,7 @@ export function productionDeps(): Deps {
     dealRandom: () => createSecureRandom(),
     decisionRandom: () => createSecureRandom(),
     coach: coachReportFor,
-    // 48 bits: a stale button from an earlier table matching this one's tag is a 1 in 2^48 event.
+    // 48 bits, so a stale button matches a new tag with probability 2^-48.
     newTag: () => randomBytes(6).toString('base64url'),
   };
 }

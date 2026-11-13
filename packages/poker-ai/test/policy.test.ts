@@ -1,33 +1,9 @@
 /**
- * What the policy engine promises, checked by playing hands rather than by inspecting code.
- *
- * ## The shape of these tests
- *
- * Almost everything here drives the real engine: `startHand`, then a loop of `redactFor` ->
- * `decide` -> `applyAction` until the hand completes. That matters because the strongest claim
- * in this file — "a proposed action is always legal" — is only worth making against the engine
- * that decides legality. `applyAction` re-validates through `validateAction`, so a policy that
- * proposed something illegal would throw rather than quietly pass an assertion here.
- *
- * ## Two deliberate choices about speed
- *
- * `strengthTable()` in `@prl/poker-math` costs a few seconds to build and is memoised once per
- * process, so the first preflop decision in this file pays for it and nothing else does.
- *
- * The randomised sweep runs with `equitySamples` at the floor (200) rather than the 4,000 to
- * 12,000 a live hand would use. That is honest for what this test asserts: legality, integer
- * sizes and a normalised distribution are properties of the scoring and clamping, not of the
- * sampling precision. The behavioural tests further down use the real difficulty settings,
- * because a claim about how a *style* behaves would be worth much less at a sample count no
- * style ever runs at.
- *
- * ## The observation stub, and why the real model is checked separately
- *
- * Most tests hand `decide` a fixed `PolicyObservations` with neutral multipliers, so a
- * behavioural difference between two profiles cannot be an artefact of one of them having
- * adapted to something. One test then asserts that the real `OpponentModel` from
- * `opponent-model.ts` satisfies the same interface and produces a decision, which is the
- * integration this package actually ships.
+ * Policy promises, checked by playing hands through the real engine. `applyAction` re-validates, so
+ * an illegal proposal throws. The randomised sweep runs at the 200-sample floor because legality,
+ * integer sizes and a normalised distribution do not depend on sampling precision. Behavioural tests
+ * use the real difficulty settings and a fixed observation stub, so one profile cannot adapt to
+ * something the other did not see.
  */
 
 import assert from 'node:assert/strict';
@@ -66,10 +42,6 @@ import {
 } from '../src/profiles.ts';
 import type { Traits } from '../src/traits.ts';
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 const NEUTRAL_ADJUSTMENTS: ObservedAdjustments = {
   bluffMore: 1,
   valueBetThinner: 1,
@@ -78,13 +50,7 @@ const NEUTRAL_ADJUSTMENTS: ObservedAdjustments = {
   isolateMore: 1,
 };
 
-/**
- * A fixed observation source: no read, every multiplier neutral, one range for every seat.
- *
- * Deliberately not the real opponent model. A behavioural assertion about two profiles has to
- * be about the profiles, and a live model would let one of them adapt to something the other
- * did not see.
- */
+/** Not the real opponent model, so a behavioural difference cannot come from adaptation. */
 function stubObservations(range: ParsedRange, read: ObservedSeatRead | null = null): PolicyObservations {
   return {
     statsFor: () => read,
@@ -93,7 +59,6 @@ function stubObservations(range: ParsedRange, read: ObservedSeatRead | null = nu
   };
 }
 
-/** The live-hand settings with the sample count at the floor. See the module comment. */
 function fastSettings(difficulty: Difficulty): DifficultySettings {
   return { ...DIFFICULTY_SETTINGS[difficulty], equitySamples: 200 };
 }
@@ -127,12 +92,8 @@ function dealHand(options: {
 }
 
 /**
- * Builds a 52-card deck that deals known hole cards and a known board.
- *
- * The deal order in `machine.ts` is one card at a time, twice round the table starting left of
- * the button, then the flop, turn and river with no burn. A local copy rather than an import
- * from another package's test folder: a cross-package test import would be a dependency the
- * package manifest does not declare.
+ * `machine.ts` deals one card at a time, twice round from left of the button, then flop, turn and
+ * river with no burn. A local copy because a cross-package test import is an undeclared dependency.
  */
 function stackedDeck(
   holeBySeat: Readonly<Record<number, string>>,
@@ -184,7 +145,6 @@ function inputFor(options: {
   };
 }
 
-/** Everything asserted on every single decision the sweep produces. */
 function assertDecisionIsWellFormed(
   decision: PolicyDecision,
   legal: readonly LegalAction[],
@@ -260,7 +220,6 @@ interface SweepTotals {
   shortAllInSpots: number;
 }
 
-/** Plays one hand to completion with a policy in every seat. */
 function playPolicyHand(
   totals: SweepTotals,
   options: {
@@ -300,17 +259,12 @@ function playPolicyHand(
       if (decision.action.to === maxTo) totals.allIns += 1;
     }
 
-    // The engine is the authority: an illegal proposal throws here rather than being asserted
-    // legal by this file's own reading of the rules.
+    // The engine decides legality. An illegal proposal throws here.
     state = applyAction(state, seat, decision.action, { actionId: `t-${step}` }).state;
     step += 1;
   }
   totals.hands += 1;
 }
-
-// ---------------------------------------------------------------------------
-// The randomised sweep
-// ---------------------------------------------------------------------------
 
 const SWEEP_PROFILES = [
   'disciplined-specialist',
@@ -365,8 +319,7 @@ test('every proposed action is legal, integer-sized and inside the engine bounds
 
   assert.ok(totals.decisions > 4_000, `expected thousands of decisions, ran ${totals.decisions}`);
   assert.ok(totals.hands >= 800, `expected the full sweep to complete, played ${totals.hands} hands`);
-  // A sweep that never reached an aggressive action would pass every legality assertion above
-  // while testing almost nothing, so the coverage itself is asserted.
+  // A sweep with no aggressive actions would pass every legality check while testing little.
   assert.ok(totals.betsOrRaises > 500, `the sweep must exercise sizing, saw ${totals.betsOrRaises} bets`);
   assert.ok(totals.allIns > 0, 'the sweep must exercise the all-in clamp at least once');
   assert.ok(
@@ -375,11 +328,6 @@ test('every proposed action is legal, integer-sized and inside the engine bounds
   );
 });
 
-// ---------------------------------------------------------------------------
-// Reproducible, and not scripted
-// ---------------------------------------------------------------------------
-
-/** A fixed heads-up flop spot: a real hand, a real board, nothing owed. */
 function fixedFlopSpot(): { state: HandState; seat: SeatIndex } {
   const deck = stackedDeck({ 1: 'AhKd', 0: 'Qc7s' }, [1, 0], 'Kh 8d 3c');
   let state = dealHand({
@@ -443,11 +391,6 @@ test('the pre-sampling distribution has more than one live action wherever more 
   assert.ok(live.length > 1, 'a learner must be able to see that several actions were plausible');
 });
 
-// ---------------------------------------------------------------------------
-// Styles differ, in the direction their cards claim
-// ---------------------------------------------------------------------------
-
-/** The same first-to-act preflop decision, over many deals. */
 function preflopDecisionPoints(count: number): readonly { state: HandState; seat: SeatIndex }[] {
   const out: { state: HandState; seat: SeatIndex }[] = [];
   for (let seed = 1; seed <= count; seed++) {
@@ -492,9 +435,7 @@ test('a tight profile folds more preflop than a loose one in the same spots', ()
 });
 
 test('realised preflop entry frequency tracks the declared VPIP', () => {
-  // Not a statistical-suite tolerance: 150 first-to-act decisions carry a 95% half-width of
-  // about 0.08 on a frequency, so this asserts the ORDER and a loose band rather than a tight
-  // match. `test/simulation/` is where the tight assertion belongs.
+  // 150 decisions give a 95% half-width of about 0.08, so this asserts the order and a loose band.
   const spots = preflopDecisionPoints(150);
   for (const profileId of ['disciplined-specialist', 'patient-technician', 'calling-station']) {
     const declared = requireProfile(profileId).traits.vpip;
@@ -506,7 +447,6 @@ test('realised preflop entry frequency tracks the declared VPIP', () => {
   }
 });
 
-/** A fixed three-handed flop spot where the seat to act may check or bet. */
 function threeHandedFlopSpot(seed: number): { state: HandState; seat: SeatIndex } {
   let state = dealHand({ stacks: [300, 300, 300], buttonSeat: 0, seed, config: { maxSeats: 3 } });
   state = applyAction(state, 0, { type: 'call' }).state;
@@ -545,10 +485,6 @@ test('an aggressive profile bets or raises more often than a passive one in the 
   );
 });
 
-// ---------------------------------------------------------------------------
-// Difficulty
-// ---------------------------------------------------------------------------
-
 function entropyOf(decision: PolicyDecision): number {
   let total = 0;
   for (const entry of decision.distribution) {
@@ -558,7 +494,6 @@ function entropyOf(decision: PolicyDecision): number {
   return total;
 }
 
-/** A three-handed flop spot where the seat to act is facing a half-pot bet. */
 function threeHandedFlopBetFaced(seed: number): { state: HandState; seat: SeatIndex } {
   const { state, seat } = threeHandedFlopSpot(seed);
   const pot = redactFor(state, { viewerSeat: seat }).potTotal;
@@ -569,17 +504,9 @@ function threeHandedFlopBetFaced(seed: number): { state: HandState; seat: SeatIn
 }
 
 /**
- * Postflop, because that is where the noise mixture runs across the whole legal set.
- *
- * On a preflop entry decision the mixture deliberately runs inside the entering and
- * non-entering groups instead, so that the declared VPIP survives it — see the module comment in
- * `policy.ts`. The next test asserts that property directly, and asserting it there rather than
- * blurring the two into one average is what keeps both claims meaningful.
- *
- * Half the spots face a bet, which matters more than it looks: a two-action spot whose scores
- * are already close sits near the one-bit maximum at every noise level, so a set made only of
- * those would measure almost nothing. The lopsided three-action spots are where a floor under
- * every action is visible.
+ * Postflop, where the noise mixture runs across the whole legal set. Preflop entry mixes inside the
+ * entering and non-entering groups, tested next. Half the spots face a bet, because close two-action
+ * spots sit near maximum entropy at every noise level.
  */
 test('educational produces a measurably flatter postflop distribution than expert', () => {
   const spots = [
@@ -615,10 +542,8 @@ test('educational produces a measurably flatter postflop distribution than exper
 });
 
 test('the difficulty noise does not move the declared preflop entry frequency', () => {
-  // The same traits at two noise levels: the entry frequency must be identical, because the
-  // mixture is applied inside the entering and non-entering groups rather than across the entry
-  // decision. Mixing across it inflated every profile's realised VPIP by 0.05 to 0.06 — a tight
-  // profile entering 21% of pots while its card said 15%.
+  // The mixture runs inside the entering and non-entering groups, so entry frequency is identical at
+  // both noise levels. Mixing across them inflated realised VPIP by 0.05 to 0.06.
   const traits = traitsFor('disciplined-specialist');
   const spots = preflopDecisionPoints(30);
   for (const [index, spot] of spots.entries()) {
@@ -666,8 +591,7 @@ test('every plausible action clears the difficulty noise floor, and a free fold 
     );
   }
 
-  // Facing no bet, the engine still offers a fold. It must never be sampled, and it must be
-  // reported at exactly zero rather than dropped from the list.
+  // Facing no bet, the engine still offers a fold. It must be reported at exactly zero, not dropped.
   const state2 = dealHand({ stacks: [200, 200, 200], buttonSeat: 0, seed: 77, config: { maxSeats: 3 } });
   let flop = applyAction(state2, 0, { type: 'call' }).state;
   flop = applyAction(flop, 1, { type: 'call' }).state;
@@ -693,10 +617,6 @@ test('every plausible action clears the difficulty noise floor, and a free fold 
   assert.equal(foldEntry.weight, 0);
 });
 
-// ---------------------------------------------------------------------------
-// Reasoning output
-// ---------------------------------------------------------------------------
-
 test('the reasoning names driving traits, counterfactuals and the price', () => {
   const { state, seat } = fixedFlopSpot();
   const decision = decide(
@@ -719,7 +639,6 @@ test('the reasoning names driving traits, counterfactuals and the price', () => 
   assert.match(joined, /Stack depth:/, 'stack depth is one of the counterfactuals');
   assert.match(joined, /Price:/, 'the price is one of the counterfactuals');
   assert.match(joined, /Opponent read:/, 'the state of the read is stated, including when there is none');
-  // Counterfactuals have to contain arithmetic, not just a topic sentence.
   assert.match(joined, /\d/, 'a counterfactual without numbers teaches nothing');
 });
 
@@ -779,18 +698,9 @@ test('an observed read moves the reasoning and the multipliers it reports', () =
   assert.deepEqual(findImpersonation(note), []);
 });
 
-// ---------------------------------------------------------------------------
-// Adaptation: the read reaches a decision through exactly one gate
-// ---------------------------------------------------------------------------
-
 /**
- * A real `OpponentModel` carrying 200 hands of one extreme style, fed the way `bots.ts` feeds
- * one: `observeAction` per public action, then `observe` on the completed redacted view.
- *
- * Real hands rather than synthetic `PlayerView`s, because the claim under test is about what a
- * model that has actually watched a table does with a decision. `station` calls everything and
- * folds to nothing; `rock` folds every hand it is not given for free. Every seat gets the same
- * treatment, so whichever seat the policy picks as its primary opponent carries the same read.
+ * A real `OpponentModel` fed the way `bots.ts` feeds one, over 200 real hands. `station` calls
+ * everything and `rock` folds everything not free. Every seat gets the same treatment.
  */
 function modelAfterWatching(kind: 'station' | 'rock', ownSeat: SeatIndex, hands = 200): OpponentModel {
   const model = createOpponentModel(ownSeat);
@@ -836,22 +746,10 @@ function modelAfterWatching(kind: 'station' | 'rock', ownSeat: SeatIndex, hands 
 }
 
 /**
- * The paired-decision measurement that proved defect 1, kept as the guard.
- *
- * Two `decide` calls per spot with byte-identical view, hole cards, traits, difficulty and
- * seeded generator, varying ONLY the opponent model. At a difficulty whose card says
- * "adaptation is off entirely" the two must agree on every single one, because there should be
- * no channel through which a read reaches the decision at all.
- *
- * Before the fix: `adjustmentsFor` was gated on the adaptation weight and `rangeFor` was gated
- * on nothing, so `assessPostflop` priced every decision against a range built from what the
- * model had watched. Measured over 350 real postflop spots at `educational`, the sampled action
- * differed in 209 of 1,050 paired decisions — `{bet, to: 166}` against a station read versus
- * `{check}` against a folder read in the same spot. After: 0 of 1,050, and 0 here.
- *
- * The `expert` half is the negative control, and it is the half that would catch a "fix" that
- * simply stopped reading the sample: adaptation is on there, so the two reads MUST diverge. A
- * mute rather than a gate passes the educational assertion and fails this one.
+ * Two `decide` calls per spot, identical except for the opponent model. With adaptation off they
+ * must agree every time. Before the fix they differed in 209 of 1,050 paired decisions at
+ * `educational`. The `expert` half is the negative control. A fix that stopped reading the sample
+ * would fail it.
  */
 test('at a difficulty with adaptation off, the opponent read cannot move a decision', () => {
   const spots = [
@@ -860,8 +758,7 @@ test('at a difficulty with adaptation off, the opponent read cannot move a decis
   ];
   const profiles = ['adaptive-exploiter', 'vocal-aggressor'];
 
-  // Built once. `ownSeat` is only used by the `opponents` getter, which no policy reads, and
-  // every seat was fed the same style anyway — so one model per style serves every spot.
+  // Built once. `ownSeat` only feeds the `opponents` getter, which no policy reads.
   const station = modelAfterWatching('station', 0, 200);
   const rock = modelAfterWatching('rock', 0, 200);
   for (const seat of [0, 1, 2]) {
@@ -936,10 +833,6 @@ test('the real opponent model satisfies the observation interface a policy asks 
   assertDecisionIsWellFormed(decision, redactFor(state, { viewerSeat: seat }).legalActions, 'live model');
   assert.equal(model.statsFor(1 - seat), null, 'an unobserved seat is unknown, not neutral-with-numbers');
 });
-
-// ---------------------------------------------------------------------------
-// Input validation
-// ---------------------------------------------------------------------------
 
 test('a policy refuses a view that was redacted for a different seat', () => {
   const { state, seat } = fixedFlopSpot();

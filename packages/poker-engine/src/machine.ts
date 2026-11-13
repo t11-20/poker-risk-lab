@@ -1,16 +1,7 @@
 /**
- * The hand state machine.
- *
- * `startHand` deals; `applyAction` advances. Both are pure: they take a state and
- * return a new state plus the events that happened. Nothing in this file reads a
- * clock, touches the network, or mutates its arguments — the server owns all of
- * that and treats this module as the only authority on what is legal and what the
- * result is.
- *
- * Street transitions, all-in run-outs, showdown and pot awarding all happen inside
- * `applyAction` as a consequence of the action, so a caller cannot leave a hand in
- * a half-advanced state by forgetting to call something. The only way to move a
- * hand forward is to apply a legal action.
+ * The hand state machine. `startHand` deals and `applyAction` advances. Both are pure. No clock, no
+ * network, no mutated arguments. Street changes, run-outs, showdown and awards all happen inside
+ * `applyAction`, so a caller cannot leave a hand half-advanced.
  */
 
 import {
@@ -53,14 +44,12 @@ export class HandStateError extends Error {
   override readonly name = 'HandStateError';
 }
 
-/** Cards added to the board when each street is dealt. */
 const BOARD_CARDS = { flop: 3, turn: 1, river: 1 } as const;
 
 export interface SeatSetup {
   readonly seat: SeatIndex;
   readonly playerId: string;
   readonly stack: number;
-  /** Seats sitting out are not dealt in. */
   readonly sittingOut?: boolean;
 }
 
@@ -73,26 +62,16 @@ export interface StartHandOptions {
   readonly seats: readonly SeatSetup[];
   readonly random: RandomSource;
   /**
-   * Where the blinds actually fell, for a table running the dead-button rule.
-   *
-   * Omit it and the blinds are derived from the button exactly as they always
-   * were — correct for a single hand, and what every Scenario Lab hand and every
-   * test that deals one hand wants. Supply it and the button becomes a position
-   * rather than a derivation: it may name a seat nobody is playing from (a dead
-   * button), and the small blind may be `null` (a dead small blind). Both are
-   * legitimate outcomes of the rule that keeps the big blind advancing by
-   * exactly one live player per hand — see `advanceBlindRotation` in
-   * positions.ts for why the alternative charges people twice.
+   * Where the blinds fell, for a table running the dead-button rule. Omit it to derive them from
+   * the button. When supplied, the button may name an empty seat and the small blind may be `null`.
    */
   readonly blinds?: {
     readonly smallBlindSeat: SeatIndex | null;
     readonly bigBlindSeat: SeatIndex;
   };
   /**
-   * Deals a fixed deck instead of shuffling. Scenario Lab only: a teaching hand
-   * must deal the same cards to every learner. Such a hand still carries a real
-   * commitment and is labelled `fixed-deck-scenario` in `randomSourceKind`, so it
-   * can never be mistaken for a fairly dealt one.
+   * Deals a fixed deck instead of shuffling. Scenario Lab only. The hand still carries a real
+   * commitment and is labelled `fixed-deck-scenario` in `randomSourceKind`.
    */
   readonly fixedDeck?: readonly Card[];
 }
@@ -143,22 +122,13 @@ function validateSeats(options: StartHandOptions): readonly SeatSetup[] {
   return playing;
 }
 
-/**
- * Where the blinds fall for this deal, checked rather than trusted.
- *
- * The caller supplying the blinds is the caller taking responsibility for the
- * rotation, so every property the rest of the machine relies on is asserted here
- * — at the boundary, once, with a message that names the problem. Downstream
- * code then never has to ask whether the big blind is really in the hand.
- */
+/** Where the blinds fall for this deal. Supplied blinds are checked here, once, at the boundary. */
 function resolveBlinds(
   options: StartHandOptions,
   occupied: readonly SeatIndex[],
 ): { readonly smallBlindSeat: SeatIndex | null; readonly bigBlindSeat: SeatIndex } {
   const { buttonSeat, config } = options;
   if (options.blinds === undefined) {
-    // No rotation supplied: the button must be a real seat, because the blinds
-    // are about to be derived from it.
     if (!occupied.includes(buttonSeat)) {
       throw new HandStateError(`button seat ${buttonSeat} has no player with chips`);
     }
@@ -171,18 +141,14 @@ function resolveBlinds(
     throw new HandStateError(`big blind seat ${bigBlindSeat} has no player with chips`);
   }
   if (smallBlindSeat !== null && !occupied.includes(smallBlindSeat)) {
-    // A small blind seat that is not in the hand is a DEAD small blind, and a
-    // dead small blind is spelled `null`. Passing the seat anyway would post a
-    // blind for somebody who is not playing, so it is a caller bug, not a rule.
+    // A dead small blind is spelled `null`. Passing an absent seat would post a blind for a non-player.
     throw new HandStateError(`small blind seat ${smallBlindSeat} has no player with chips; pass null`);
   }
   if (smallBlindSeat === bigBlindSeat) {
     throw new HandStateError(`seat ${bigBlindSeat} cannot post both blinds`);
   }
   if (occupied.length === 2) {
-    // Heads-up the button IS the small blind, and both are the same live seat.
-    // Everything downstream — who acts first preflop, who acts last afterwards —
-    // depends on it, so it is refused rather than silently repaired.
+    // Heads-up the button is the small blind. Refused rather than repaired.
     if (smallBlindSeat !== buttonSeat) {
       throw new HandStateError(
         `heads-up the button posts the small blind: button ${buttonSeat}, ` +
@@ -193,10 +159,7 @@ function resolveBlinds(
   return { smallBlindSeat, bigBlindSeat };
 }
 
-/**
- * Deals a hand: shuffle, commit, post antes and blinds, deal hole cards, then set
- * the first player to act.
- */
+/** Deals a hand: shuffle, commit, post antes and blinds, deal hole cards, set the first actor. */
 export function startHand(options: StartHandOptions): StartedHand {
   validateConfig(options.config);
   const playing = validateSeats(options);
@@ -205,23 +168,14 @@ export function startHand(options: StartHandOptions): StartedHand {
   const occupied = playing.map((seat) => seat.seat).sort((a, b) => a - b);
   const blinds = resolveBlinds(options, occupied);
 
-  // The context binds the commitment to one specific hand, so a commitment can
-  // never be replayed as the commitment for a different hand.
+  // The context binds the commitment to this one hand, so it cannot be replayed for another.
   const context = `${options.roomId}:${options.handNumber}:${options.handId}`;
   let commitment: DeckCommitment;
   let secret: DeckSecret;
   let sourceKind: HandState['randomSourceKind'];
   /**
-   * A sampling source may estimate; it may never deal.
-   *
-   * `shuffledDeck` refuses this kind too, so by the time control reaches `commitToDeck` the
-   * outcome would already be an exception. The check is repeated here for two reasons that are
-   * not redundancy: it is what narrows `random.kind` to the three values a hand may be LABELLED
-   * with (`HandState['randomSourceKind']`), so the assignment below needs no cast — and a cast
-   * is precisely how a fourth kind would one day be recorded silently. And it refuses before the
-   * commitment is built rather than part-way through it, so the failure names the real cause.
-   *
-   * See `createSamplingRandom` in `rng.ts` for why a third kind of source exists at all.
+   * A sampling source may estimate but never deal. `shuffledDeck` refuses it too. Checking here
+   * narrows `random.kind` to the labelled kinds without a cast, and fails before the commitment is built.
    */
   const random = options.random;
   if (random.kind === 'deterministic-sampling') {
@@ -258,18 +212,9 @@ export function startHand(options: StartHandOptions): StartedHand {
 
   const events: HandEvent[] = [{ type: 'handStarted', handId: options.handId, commitment: commitment.root }];
 
-  // ---- forced bets ----
-  //
-  // Antes and blinds are both forced, but they are NOT the same kind of money.
-  // A blind is a live bet: it counts towards the bet level, and the player who
-  // posted it only has to add the difference to call. An ante is dead money: it
-  // goes straight to the pot and buys no part of the current bet.
-  //
-  // So antes increase `committedTotal` (side pots must know a player paid it, and
-  // a player all-in for only an ante is still eligible for that layer) and go
-  // directly into `potFromPreviousStreets`, but they do NOT touch
-  // `committedThisStreet`. Treating an ante as a live bet would make the opening
-  // bet level `ante + bigBlind` and quietly break every call amount at the table.
+  // A blind is a live bet and counts toward the bet level. An ante is dead money. It raises
+  // `committedTotal` (side pots need it) and goes straight to `potFromPreviousStreets`, but never
+  // touches `committedThisStreet`, or the opening bet level would become `ante + bigBlind`.
   const forcedBets: ForcedBet[] = [];
   let deadMoney = 0;
   const post = (target: SeatIndex, amount: number, kind: ForcedBet['kind']): void => {
@@ -285,8 +230,7 @@ export function startHand(options: StartHandOptions): StartedHand {
         stack,
         committedThisStreet: candidate.committedThisStreet + (isLiveBet ? paid : 0),
         committedTotal: candidate.committedTotal + paid,
-        // A player who cannot cover a blind or ante is all-in, not folded: they
-        // still have a live hand and can win the portion they paid for.
+        // Short of a blind or ante is all-in, not folded.
         status: stack === 0 ? 'allIn' : candidate.status,
         isAllInThisHand: candidate.isAllInThisHand || stack === 0,
       };
@@ -297,22 +241,16 @@ export function startHand(options: StartHandOptions): StartedHand {
     for (const target of orderFrom(buttonSeat, config.maxSeats, occupied)) post(target, config.ante, 'ante');
   }
   const { smallBlindSeat, bigBlindSeat } = blinds;
-  // A dead small blind posts nothing at all. It is not "posted by the house" and
-  // it is not moved onto the next player: the player it would move onto paid it
-  // last hand, and charging them again is the defect the dead-button rule exists
-  // to prevent. The hand is simply played for one big blind.
+  // A dead small blind posts nothing and is not moved onto the next player, who paid it last hand.
   if (smallBlindSeat !== null) post(smallBlindSeat, config.smallBlind, 'smallBlind');
   post(bigBlindSeat, config.bigBlind, 'bigBlind');
   events.push({ type: 'forcedBetsPosted', forcedBets });
 
-  // ---- hole cards ----
-  // One card at a time, twice round the table, starting left of the button. The
-  // order matters because the revealed deck must match the order cards actually
-  // came off it, or verification would fail on an honest hand.
+  // One card at a time, twice round, from left of the button. The order must match the deck or
+  // verification fails on an honest hand.
   const dealOrder = orderFrom(buttonSeat, config.maxSeats, occupied);
   const holeCards = new Map<SeatIndex, Card[]>();
-  // Which deck positions each seat's hole cards came from. Needed at showdown to
-  // build Merkle proofs for the hands that actually get shown, and only those.
+  // Deck positions of each seat's hole cards, for Merkle proofs of the hands that are shown.
   const holePositions = new Map<SeatIndex, number[]>();
   let cursor = 0;
   for (let round = 0; round < 2; round++) {
@@ -339,23 +277,10 @@ export function startHand(options: StartHandOptions): StartedHand {
   });
   events.push({ type: 'holeCardsDealt', seats: dealOrder });
 
-  // The opening bet level preflop is the big blind — the largest FULL wager in
-  // force — and NOT merely the largest amount that happened to reach the pot.
-  //
-  // The difference is a player who posts the big blind short: they are all-in for
-  // less than a big blind, so the biggest live commitment on the table can be as
-  // little as the small blind (or an even smaller short small blind). A short
-  // blind does not reduce what everyone else must pay to play. Deriving the level
-  // from the largest commitment collapsed it onto the short post, which
-  // under-charged every caller and, because the minimum raise is measured from the
-  // level, let sub-minimum raises through: with 5/10 blinds and a big blind all-in
-  // for 3, calls cost 5 instead of 10 and a "raise" to 15 was accepted instead of
-  // the 20 the rules require.
-  //
-  // `Math.max` rather than a bare `config.bigBlind` because the level must never be
-  // below what somebody has actually put in; validateConfig already guarantees
-  // bigBlind >= smallBlind, so preflop the two agree, but the max keeps this honest
-  // if a future forced bet posts above the big blind (a straddle, say).
+  // The preflop bet level is the big blind, not the largest commitment. A short big blind does not
+  // lower the cost to play. With 5/10 blinds and a big blind all-in for 3, deriving it from the
+  // largest commitment made calls cost 5 and accepted a raise to 15 instead of 20. `Math.max` keeps
+  // the level at or above any forced bet larger than the big blind.
   const postedThisStreet = seats.reduce((highest, seat) => Math.max(highest, seat.committedThisStreet), 0);
   const betLevel = Math.max(config.bigBlind, postedThisStreet);
 
@@ -376,8 +301,7 @@ export function startHand(options: StartHandOptions): StartedHand {
     commitment,
     toAct: null,
     betLevel,
-    // The big blind counts as a complete bet of one big blind. That is what makes
-    // the first raise have to reach 2 BB rather than BB + 1.
+    // The big blind counts as a complete bet, so the first raise must reach 2 BB.
     lastFullRaiseBetLevel: config.bigBlind,
     lastFullRaiseIncrement: config.bigBlind,
     potFromPreviousStreets: deadMoney,
@@ -390,8 +314,7 @@ export function startHand(options: StartHandOptions): StartedHand {
     boardPositions: [],
   };
 
-  // Blinds alone can leave nobody able to act — e.g. two players both all-in for
-  // less than the big blind. In that case the board runs out immediately.
+  // Blinds alone can leave nobody able to act (two short all-ins). The board then runs out.
   const opener = firstActor(dealt, 'preflop');
   if (opener === null) {
     return { state: advanceStreets(closeStreet(dealt), events), secret, events };
@@ -399,24 +322,15 @@ export function startHand(options: StartHandOptions): StartedHand {
   return { state: { ...dealt, toAct: opener }, secret, events };
 }
 
-/** The first seat to act on a street, or null when nobody can act. */
 function firstActor(state: HandState, street: BettingStreet): SeatIndex | null {
-  // Covers both "one contender left" and "no further wagering is possible". The
-  // second case matters at the top of a street and immediately after the blinds:
-  // `owesAction` is true for any active seat that has not acted yet, so without
-  // this guard the lone seat with chips behind would be asked to act — and offered
-  // a fold, and a bet nobody could call — on a hand that is already all-in.
+  // Without this, `owesAction` would ask the lone seat with chips to act on an all-in hand.
   if (isBettingClosedForHand(state)) return null;
   const occupied = dealtSeats(state.seats);
-  // Preflop the opener is read off the big blind the hand actually posted, not
-  // re-derived from the button. With a dead button or a dead small blind
-  // `button + 2` is not the big blind, and re-deriving would open the action on
-  // the wrong seat — under the gun would act out of turn, every hand.
+  // Read the opener off the posted big blind. With a dead button, `button + 2` is not the big blind.
   const start =
     street === 'preflop'
       ? firstToActPreflopFor(state.buttonSeat, state.bigBlindSeat, state.config.maxSeats, occupied)
       : firstToActPostflop(state.buttonSeat, state.config.maxSeats, occupied);
-  // Walk clockwise from `start` inclusive.
   for (const candidate of [start, ...orderFrom(start, state.config.maxSeats, occupied)]) {
     const seat = state.seats.find((entry) => entry.seat === candidate);
     if (seat !== undefined && owesAction(state, seat)) return candidate;
@@ -424,7 +338,6 @@ function firstActor(state: HandState, street: BettingStreet): SeatIndex | null {
   return null;
 }
 
-/** The next seat clockwise from `from` that still owes an action, else null. */
 function nextActor(state: HandState, from: SeatIndex): SeatIndex | null {
   const occupied = dealtSeats(state.seats);
   for (const candidate of orderFrom(from, state.config.maxSeats, occupied)) {
@@ -436,9 +349,8 @@ function nextActor(state: HandState, from: SeatIndex): SeatIndex | null {
 
 export interface ApplyActionOptions {
   /**
-   * True when the server acted for the seat rather than its player: its clock ran out, or the player
-   * had already stood up holding cards. The engine is told only that; which of the two it was is the
-   * live table's (`ArchivedAction.automaticReason` in `apps/api/src/rooms/table.ts`).
+   * True when the server acted for the seat (clock ran out, or the player stood up holding cards).
+   * Which one it was lives in `ArchivedAction.automaticReason` in `apps/api/src/rooms/table.ts`.
    */
   readonly automatic?: boolean;
   readonly actionId?: string | null;
@@ -449,10 +361,7 @@ export interface AppliedAction {
   readonly events: readonly HandEvent[];
 }
 
-/**
- * Applies one action and advances the hand as far as that action allows: closing
- * the street, dealing the next one, running out an all-in board, and settling.
- */
+/** Applies one action and advances the hand as far as it allows, through to settlement. */
 export function applyAction(
   state: HandState,
   seat: SeatIndex,
@@ -480,26 +389,16 @@ export function applyAction(
     committedThisStreet,
     committedTotal: actor.committedTotal + validated.cost,
     status: validated.kind === 'fold' ? 'folded' : stack === 0 ? 'allIn' : 'active',
-    // Records the bet level AFTER this action, not before.
-    //
-    // This matters for the raiser itself. If a raiser recorded the pre-action
-    // level, then `mayRaise` (lastActed < lastFullRaiseBetLevel) would compare
-    // the old level against the level the raiser just created, and the raiser
-    // would be allowed to raise its own raise. Recording the post-action level
-    // makes those two equal, so a player must wait for someone else to raise
-    // before it can raise again — which is the actual rule.
-    //
-    // For a check or a call the two levels are identical, so this is only ever a
-    // change for aggressive actions.
+    // The bet level AFTER this action. Recording the pre-action level would let a raiser re-raise
+    // its own raise under `mayRaise`.
     lastActedAtBetLevel: betLevel,
     isAllInThisHand: actor.isAllInThisHand || stack === 0,
   };
 
   const seats = state.seats.map((entry) => (entry.seat === seat ? updatedActor : entry));
 
-  // A complete raise reopens the action; a short all-in does not. Both cases are
-  // expressed purely by whether lastFullRaiseBetLevel moves — there are no
-  // per-seat "may raise" flags to keep in sync. See betting.ts.
+  // A complete raise reopens the action and a short all-in does not. Only `lastFullRaiseBetLevel`
+  // moves. See betting.ts.
   const reopens = validated.isCompleteRaise && raisedBetLevel;
 
   const logged: LoggedAction = {
@@ -527,14 +426,12 @@ export function applyAction(
 
   const events: HandEvent[] = [{ type: 'actionApplied', action: logged }];
 
-  // Everyone folded to one player: settle without a showdown, cards unseen.
   if (seatsInHand(next).length <= 1) {
     return { state: settle(next, events, true), events };
   }
 
-  // `isBettingRoundComplete` also returns true once no further wagering is possible
-  // for the whole hand, so a call that puts the last opponent all-in falls straight
-  // through to the run-out below instead of asking anyone else to act.
+  // Also true once no further wagering is possible, so a call that puts the last opponent all-in
+  // falls through to the run-out.
   if (!isBettingRoundComplete(next)) {
     const following = nextActor(next, seat);
     if (following !== null) return { state: { ...next, toAct: following }, events };
@@ -543,7 +440,6 @@ export function applyAction(
   return { state: advanceStreets(closeStreet(next), events), events };
 }
 
-/** Sweeps this street's commitments into the pot and clears per-street state. */
 function closeStreet(state: HandState): HandState {
   const collected = state.seats.reduce((sum, seat) => sum + seat.committedThisStreet, 0);
   return {
@@ -558,11 +454,8 @@ function closeStreet(state: HandState): HandState {
 }
 
 /**
- * Deals the next street. Normally one street then waits for action; when no
- * further betting is possible (everyone relevant is all-in) it runs the board out
- * to the river and shows down in one pass.
- *
- * Expects `state` to have already been passed through `closeStreet`.
+ * Deals the next street. When no further betting is possible it runs the board out and shows down
+ * in one pass. Expects `state` already passed through `closeStreet`.
  */
 function advanceStreets(state: HandState, events: HandEvent[]): HandState {
   let current = state;
@@ -596,7 +489,6 @@ function advanceStreets(state: HandState, events: HandEvent[]): HandState {
     };
     events.push({ type: 'streetAdvanced', street: nextStreet, newCards: dealt });
 
-    // Nobody can bet again: keep dealing to the river, then show down.
     if (isBettingClosedForHand(current)) continue;
 
     const opener = firstActor(current, nextStreet);
@@ -605,11 +497,8 @@ function advanceStreets(state: HandState, events: HandEvent[]): HandState {
   }
 }
 
-/** Builds pots, evaluates hands, awards chips and finalises the hand. */
 function settle(state: HandState, events: HandEvent[], endedByFold: boolean): HandState {
-  // Chips still sitting on the current street belong in the pot before we split
-  // it into layers. `buildPots` works off committedTotal, which already includes
-  // them, so this only keeps the displayed pot figure honest.
+  // `buildPots` uses committedTotal, which already includes these. This keeps the shown pot honest.
   const pending = state.seats.reduce((sum, seat) => sum + seat.committedThisStreet, 0);
 
   const { pots, returns } = buildPotLayers(state.seats);
@@ -639,8 +528,7 @@ function settle(state: HandState, events: HandEvent[], endedByFold: boolean): Ha
 
   const wonBySeat = new Map<SeatIndex, number>();
   for (const award of awards) wonBySeat.set(award.seat, (wonBySeat.get(award.seat) ?? 0) + award.amount);
-  // Uncontested chips go straight back to whoever put them in — they were never
-  // part of a pot anyone could win, so they are not "winnings".
+  // Uncontested chips go back to whoever put them in. They are not winnings.
   for (const entry of returns) wonBySeat.set(entry.seat, (wonBySeat.get(entry.seat) ?? 0) + entry.amount);
 
   const netBySeat: Record<number, number> = {};
@@ -650,10 +538,8 @@ function settle(state: HandState, events: HandEvent[], endedByFold: boolean): Ha
     return { ...seat, stack: seat.stack + won, committedThisStreet: 0 };
   });
 
-  // Only cards that legitimately became public are proved: every board card that
-  // was actually dealt, plus the hole cards of seats that showed. A hand that ends
-  // by folding therefore reveals no hole cards at all, which is the whole reason
-  // the commitment is a per-card Merkle tree rather than a hash of the deck.
+  // Prove only public cards, the dealt board and the hole cards of seats that showed. A fold reveals
+  // no hole cards, which is why the commitment is a per-card Merkle tree.
   const publicPositions = [...state.boardPositions];
   for (const showdown of showdowns) {
     for (const position of state.holeCardPositions[showdown.seat] ?? []) publicPositions.push(position);
@@ -680,11 +566,7 @@ function settle(state: HandState, events: HandEvent[], endedByFold: boolean): Ha
   };
 }
 
-/**
- * The action the server takes for a player who ran out of time: check if that is
- * free, otherwise fold. Never a call — silently spending a timed-out player's
- * chips would be indefensible.
- */
+/** The server's action for a timed-out player. Check if free, else fold. Never a call. */
 export function timeoutAction(state: HandState, seat: SeatIndex): Action {
   const actor = seatAt(state, seat);
   const toCall = Math.max(0, state.betLevel - actor.committedThisStreet);

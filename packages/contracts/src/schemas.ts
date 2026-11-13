@@ -1,26 +1,7 @@
 /**
- * JSON Schemas for every request body, query string and WebSocket message.
- *
- * ## Why plain JSON Schema and not a validation library
- *
- * Fastify already carries Ajv and compiles route schemas at startup, so these
- * schemas cost nothing extra and validate at the framework boundary rather than
- * inside a handler that might forget to call a parser. Adding zod (or similar) would
- * mean a second validator, a second set of rules to keep in step with these, and one
- * more dependency in a repo whose policy is to minimise them.
- *
- * ## Every schema is closed
- *
- * `additionalProperties: false` everywhere. An open schema silently accepts unknown
- * fields, which is how mass-assignment bugs happen: a client sends `{"units": 999999}`
- * to an endpoint that spreads the body into a record, and the field it was never
- * meant to control gets written.
- *
- * ## Bounds are real limits, not documentation
- *
- * Every string has a `maxLength` and every number a `minimum`/`maximum`. Unbounded
- * inputs are how a request turns into a denial of service — a 50 MB display name, a
- * Monte Carlo request for 10^12 samples, a board with a thousand cards.
+ * JSON Schemas for every request body, query string and WebSocket message, compiled by Fastify's Ajv
+ * at startup. Every schema sets `additionalProperties: false` to stop mass assignment. Every string has
+ * a `maxLength` and every number a range, so no input is unbounded.
  */
 
 import { ACCOUNT_DELETE_CONFIRMATION } from './api-types.ts';
@@ -34,23 +15,16 @@ const CONTENT_ID_PATTERN = '^[a-z0-9][a-z0-9-]{0,79}$';
 /** A UUID or an opaque client-generated token of bounded length. */
 const REQUEST_ID_PATTERN = '^[A-Za-z0-9_-]{8,64}$';
 
-/** Display names: printable, no control characters, no leading/trailing space. */
 const DISPLAY_NAME_SCHEMA = {
   type: 'string',
   minLength: 2,
   maxLength: 24,
-  // Letters, digits, space, and a small punctuation set. Excludes control
-  // characters, bidi overrides and zero-width characters, which are how a name is
-  // used to impersonate another player or to break a log line.
+  // Excludes control, bidi-override and zero-width characters, which impersonate players or break logs.
   pattern: "^[A-Za-z0-9][A-Za-z0-9 '._-]{0,22}[A-Za-z0-9]$",
 } as const;
 
 const CARDS_SCHEMA = { type: 'string', minLength: 2, maxLength: 24, pattern: CARDS_PATTERN } as const;
 const OPTIONAL_BOARD_SCHEMA = { type: 'string', maxLength: 24, pattern: `${CARDS_PATTERN}|^$` } as const;
-
-// ---------------------------------------------------------------------------
-// Auth
-// ---------------------------------------------------------------------------
 
 export const createGuestBodySchema = {
   $id: 'prl:createGuestBody',
@@ -64,29 +38,15 @@ export const oidcStartQuerySchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    // Only a path is accepted, never a full URL: an absolute redirect target is an
-    // open-redirect vulnerability, and the sign-in flow is exactly where it gets
-    // used to phish.
+    // A path only, never a full URL, so the sign-in flow cannot be an open redirect.
     redirectAfter: { type: 'string', maxLength: 256, pattern: '^/(?![/\\\\])[A-Za-z0-9/_\\-?=&.]*$' },
   },
 } as const;
 
 /**
- * The body of `POST /me/delete`.
- *
- * `const` rather than `type: 'boolean'`, and that is the security property rather than a
- * formatting preference. This endpoint destroys a learner's record and cannot be undone, so the
- * request has to be one nothing can send by accident: a boolean is producible by a mis-wired
- * client, a replayed form post, a double-submitted button or a JSON body assembled from a partial
- * object. A phrase somebody has to reproduce exactly is not.
- *
- * The phrase itself lives in `api-types.ts` so that the validator here and the control in
- * `apps/web` compare against one string. `maxLength` is stated as well as `const`, so a caller
- * sending megabytes is refused on length before the comparison rather than after it.
- *
- * This is deliberately NOT the whole defence. The CSRF layer already stops a cross-site caller
- * reaching this route at all, and the session cookie decides whose account is at stake; the
- * confirmation is what stops OUR OWN client firing it by mistake.
+ * The body of `POST /me/delete`. `const` rather than a boolean, so a mis-wired client, replay or double
+ * submit cannot erase an account. `maxLength` refuses a huge body before the comparison. CSRF and the
+ * session cookie are the other defences.
  */
 export const deleteAccountBodySchema = {
   $id: 'prl:deleteAccountBody',
@@ -99,30 +59,10 @@ export const deleteAccountBodySchema = {
 } as const;
 
 /**
- * The authorization-code callback's query string.
- *
- * ## Why the extra provider parameters are named here
- *
- * `additionalProperties: false` with `removeAdditional: false` (see `apps/api/src/app.ts`) means
- * an unknown query parameter is a 400 before the handler runs. That is the right default — it is
- * why an attacker cannot smuggle a parameter past validation — but it made this endpoint reject
- * every real identity provider.
- *
- * Google adds `scope`, `authuser`, `prompt` and `hd`. Keycloak adds `session_state`. Microsoft
- * adds `client_info`. And RFC 9207 adds `iss`, which OpenID-conformant deployments are now
- * REQUIRED to send. Any one of them was a 400 on a callback that was otherwise perfectly valid,
- * so a live sign-in against Google, Auth0, Okta, Entra or Keycloak could never have completed.
- * `docs/production/security.md` listed "the live OIDC flow is unverified" as a residual; this is
- * what that residual was hiding.
- *
- * They are enumerated rather than allowed wholesale. `additionalProperties: true` would accept
- * anything, and the point of a closed set is that a parameter nobody has thought about is a
- * refusal rather than a shrug. A provider that sends something not on this list is a deliberate
- * decision to add it here, with a reason.
- *
- * `iss` is not merely tolerated — `routes/auth.ts` compares it against the configured issuer.
- * RFC 9207 exists because a client with more than one provider can otherwise be induced to send
- * one provider's code to another's token endpoint, and the check is the whole mitigation.
+ * The authorization-code callback's query string. Unknown parameters are a 400, so the extra parameters
+ * that real providers send are listed here (Google `scope`/`authuser`/`prompt`/`hd`, Keycloak
+ * `session_state`, Microsoft `client_info`, RFC 9207 `iss`). Add a new one deliberately.
+ * `routes/auth.ts` checks `iss` against the configured issuer to stop code mix-up between providers.
  */
 export const oidcCallbackQuerySchema = {
   $id: 'prl:oidcCallbackQuery',
@@ -134,9 +74,9 @@ export const oidcCallbackQuerySchema = {
     state: { type: 'string', minLength: 8, maxLength: 256 },
     error: { type: 'string', maxLength: 256 },
     error_description: { type: 'string', maxLength: 512 },
-    /** RFC 9207. Validated against the configured issuer, never merely accepted. */
+    /** RFC 9207. Checked against the configured issuer. */
     iss: { type: 'string', maxLength: 512 },
-    /** Informational, echoed by several providers. Read by nothing here. */
+    /** Informational. Read by nothing here. */
     scope: { type: 'string', maxLength: 512 },
     session_state: { type: 'string', maxLength: 256 },
     authuser: { type: 'string', maxLength: 32 },
@@ -145,10 +85,6 @@ export const oidcCallbackQuerySchema = {
     client_info: { type: 'string', maxLength: 2048 },
   },
 } as const;
-
-// ---------------------------------------------------------------------------
-// Content
-// ---------------------------------------------------------------------------
 
 export const contentIdParamsSchema = {
   $id: 'prl:contentIdParams',
@@ -179,13 +115,7 @@ export const quizAttemptBodySchema = {
   },
 } as const;
 
-/**
- * The body of `POST /content/lessons/:id/read`.
- *
- * `additionalProperties: false` and a single required boolean: there is nothing else a client may
- * say about a read, and in particular no timestamp — the server stamps `now()` so a fleet with
- * drifting clocks cannot record a lesson as read before it existed.
- */
+/** The body of `POST /content/lessons/:id/read`. No timestamp, because the server stamps `now()`. */
 export const lessonReadBodySchema = {
   $id: 'prl:lessonReadBody',
   type: 'object',
@@ -205,15 +135,7 @@ export const scenarioAttemptBodySchema = {
   },
 } as const;
 
-// ---------------------------------------------------------------------------
-// Calculation
-// ---------------------------------------------------------------------------
-
-/**
- * Opponent count and sample count are both capped. Monte Carlo is the one endpoint
- * where a single small request can consume unbounded CPU, so the ceiling is part of
- * the schema rather than a check somewhere in the handler.
- */
+/** Opponent and sample counts are capped, because Monte Carlo can otherwise consume unbounded CPU. */
 export const equityBodySchema = {
   $id: 'prl:equityBody',
   type: 'object',
@@ -259,10 +181,6 @@ export const coachBodySchema = {
   },
 } as const;
 
-// ---------------------------------------------------------------------------
-// Rooms
-// ---------------------------------------------------------------------------
-
 export const createRoomBodySchema = {
   $id: 'prl:createRoomBody',
   type: 'object',
@@ -306,8 +224,7 @@ export const joinRoomBodySchema = {
   additionalProperties: false,
   required: ['inviteCode'],
   properties: {
-    // Base32-ish, generated server-side. Bounded so a brute-force attempt is a
-    // rate-limit problem rather than a parsing problem.
+    // Generated server-side. Bounded so brute force is a rate-limit problem, not a parsing one.
     inviteCode: { type: 'string', minLength: 8, maxLength: 32, pattern: '^[A-Za-z0-9-]{8,32}$' },
   },
 } as const;
@@ -328,10 +245,6 @@ export const sitBodySchema = {
   properties: { seat: { type: 'integer', minimum: 0, maximum: 5 } },
 } as const;
 
-// ---------------------------------------------------------------------------
-// Hands
-// ---------------------------------------------------------------------------
-
 export const handIdParamsSchema = {
   $id: 'prl:handIdParams',
   type: 'object',
@@ -341,27 +254,15 @@ export const handIdParamsSchema = {
 } as const;
 
 /**
- * The orderings `GET /hands` will apply, as an enum rather than a free string.
- *
- * This list is the whitelist. `apps/api/src/routes/hands.ts` maps each name to a fixed
- * `order by` clause written out in full — no column name and no direction is ever
- * interpolated into SQL — and the `Readonly<Record<HandSort, …>>` annotation on that table
- * means a name added here without a clause does not compile.
- *
- * Every entry is a total order over the whole history, not a re-sort of one page: `net-high`
- * means "the biggest gain in everything you have played", which is a different row from "the
- * biggest gain on this page". That distinction is why the ordering has to be a server
- * parameter at all — a client that sorted the six rows it was handed would print a heading it
- * could not honour.
- *
- * An unsettled hand has no net and no pot, and sorts last in every ordering that names one
- * rather than being treated as zero. Zero is a result; null is the absence of one.
+ * The orderings `GET /hands` applies. `apps/api/src/routes/hands.ts` maps each name to a fixed
+ * `order by` clause, so nothing is interpolated into SQL. Each is a total order over the whole history,
+ * not one page. An unsettled hand has no net or pot and sorts last, not as zero.
  */
 export const HAND_SORTS = ['recent', 'oldest', 'net-high', 'net-low', 'pot-high'] as const;
 
 export type HandSort = (typeof HAND_SORTS)[number];
 
-/** The default when the caller does not ask. Matches the pre-`sort` behaviour of the route. */
+/** The default when the caller does not ask. */
 export const DEFAULT_HAND_SORT: HandSort = 'recent';
 
 export const handListQuerySchema = {
@@ -371,24 +272,15 @@ export const handListQuerySchema = {
   properties: {
     roomId: { type: 'string', pattern: ID_PATTERN },
     limit: { type: 'integer', minimum: 1, maximum: 50 },
-    // Longer than the 128 it was: a cursor now carries the ordering it was issued for and
-    // that ordering's key value, so a stale cursor cannot be replayed against a different
-    // `sort`. It is still opaque to a client, which hands it back unchanged.
+    // A cursor carries its ordering and key value, so it cannot be replayed against another `sort`.
     cursor: { type: 'string', maxLength: 160, pattern: '^[A-Za-z0-9_:.-]{1,160}$' },
     sort: { type: 'string', enum: [...HAND_SORTS] },
   },
 } as const;
 
-// ---------------------------------------------------------------------------
-// WebSocket messages
-// ---------------------------------------------------------------------------
-
 const REQUEST_ID_SCHEMA = { type: 'string', pattern: REQUEST_ID_PATTERN } as const;
 
-/**
- * One discriminated schema for every inbound socket frame. Validated before the
- * router looks at the message, so a handler never sees a malformed frame.
- */
+/** One discriminated schema for every inbound socket frame, checked before the router sees it. */
 export const wsClientMessageSchema = {
   $id: 'prl:wsClientMessage',
   type: 'object',
@@ -467,7 +359,6 @@ export const wsClientMessageSchema = {
   ],
 } as const;
 
-/** Every schema, for one-shot registration with Ajv/Fastify at startup. */
 export const ALL_SCHEMAS = [
   createGuestBodySchema,
   oidcStartQuerySchema,
@@ -488,7 +379,6 @@ export const ALL_SCHEMAS = [
   wsClientMessageSchema,
 ] as const;
 
-/** Exported so tests can assert the patterns behave as intended. */
 export const PATTERNS = {
   CARD: CARD_PATTERN,
   CARDS: CARDS_PATTERN,

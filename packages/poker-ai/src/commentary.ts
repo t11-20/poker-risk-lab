@@ -1,102 +1,22 @@
 /**
- * Learner-facing explanation: what the model preferred, and why.
+ * Learner-facing explanation of what the model preferred, and why. Every string is about a model,
+ * built from its declared parameters and public game state. The subject is always "this model", and
+ * each claim names a trait axis with its value.
  *
- * This is the "Explain" step of the loop (Play → Observe → Calculate → Compare → Explain →
- * Replay), and it is the highest-risk surface in the whole feature. Every string here is
- * prose about a *model*, generated from that model's own declared parameters and from
- * public game state. Nothing here describes a person.
+ * `publishCommentary()` is the only function that mints a `LearnerFacing` string. It runs
+ * `assertNoImpersonation` (labelling.ts) and `assertModelVoice`, which bans attributed-name tokens from
+ * `PROFILES` (docs/AI-LEGENDS.md L7), human and first-person pronouns anywhere, verdict words
+ * (docs/PRODUCT-GUARDRAILS.md §3), caller identity labels, and the acting seat's private cards.
+ * A test asserts the brand cast appears exactly once.
  *
- * ## The voice, stated once so every template can be checked against it
+ * Caller labels are only checked against, never interpolated, because attributed mode puts a real
+ * name in them. `PolicyDecisionSummary` has no field derived from hole cards, and the policy's own
+ * `modelPreference`/`whatChangedIt` strings are not forwarded for the same reason. Card checks are
+ * case-sensitive ("As" is a card), so no template opens a sentence with "As".
+ * `always` and `never` are not banned because `stats.ts` rationales use "never". Trait descriptions
+ * are not interpolated because `riskTolerance` contains "correct".
  *
- * The grammatical subject of a model sentence is always **this model**, and every claim is
- * tied to a named trait axis *with its value*, so a learner can put the sentence next to
- * the profile card they picked and see where the behaviour came from. "This model prefers a
- * larger bet here because its sizing preference is high" is the shape. "Ivey senses
- * weakness" is fabrication about a human being, and "he would raise here" speaks for a
- * person about a decision they never made.
- *
- * ## Three guards, all at generation time, all in one chokepoint
- *
- * `publishCommentary()` is the only function in this package that produces a
- * `LearnerFacing` string, and it runs three checks before it does:
- *
- *   1. **`assertNoImpersonation`** from `labelling.ts` — the shared pattern list. It
- *      catches pronoun-led mental-state attribution, first-person openings, claims of
- *      endorsement, and overstatement of what the model is.
- *   2. **`assertModelVoice`** — the checks this file adds, and the interesting ones:
- *      * **No person-name token.** The list is derived from `naming.attributedName` across
- *        `PROFILES`, so it is *known data* rather than a verb list. `docs/AI-LEGENDS.md`
- *        §12 L7 names this as the gap in the pattern-based guard and this as the fix: the
- *        regex cannot catch "Ivey senses weakness" because there is no pronoun in it, but a
- *        name check catches it by the name.
- *      * **No human pronoun anywhere** (`he/him/his/she/her/hers/himself/herself`) and no
- *        first-person pronoun anywhere — not only at the start of the string, which is all
- *        the shared pattern list checks.
- *      * **No verdict word** (`correct`, `optimal`, `mistake`, `wrong`, `solved`, …). The
- *        product never says a play was right or wrong; it says what the maths supported and
- *        under which assumptions (`docs/PRODUCT-GUARDRAILS.md` §3).
- *      * **No caller-supplied identity label, verbatim.** See the trap below.
- *      * **No private card.** See the second trap below.
- *   3. **The type system.** Prose fields on the internal builders are typed
- *      `LearnerFacing`, which is a branded string. There is exactly **one** cast that mints
- *      one, inside `publishCommentary`, so a template that forgets the guard does not
- *      type-check. A test scans this file and asserts that the cast appears once — a
- *      convention nobody can quietly widen.
- *
- * ## Traps this file is built around, named rather than left to be discovered
- *
- * **An identity label handed in by a caller is untrusted prose.** `commentOnDecision`
- * receives an `actorLabel`, and in attributed naming mode that label contains a real
- * person's name. Interpolating it would smuggle the name into commentary while every
- * template stayed innocent. So a label is never placed in prose: it is only something the
- * output is checked *against*. Replay lines refer to the actor by role — "you" or "this
- * model" — and the UI renders the seat plate from `ProfileDisclosure`, where a name belongs.
- *
- * **The model's read of its own hand is derived from its hole cards, so it is not
- * representable here.** `PolicyDecisionSummary` has no field for an equity estimate, a
- * hand-strength band, or anything else computed from the cards the model can see and the
- * learner cannot. A hand that ends in a fold reveals nothing at a real table, and a replay
- * line saying "its read was strong" would hand over exactly the information the game is
- * played over. The guard also checks that no card the view holds privately appears in the
- * text — case-sensitively, because `as` and `ad` are English words while `As` and `Ad` are
- * cards, which is also why no template here may open a sentence with the word "As".
- *
- * **`always` and `never` are deliberately *not* in the pattern list.** Authored prose this
- * file reuses — the axis rationales in `stats.ts` — legitimately contains "never", and a
- * guard that rejects the material it is supposed to pass through gets worked around instead
- * of obeyed. The rule is kept where it belongs: the templates below avoid both words as
- * strategy claims, and say how often instead.
- *
- * **Trait *descriptions* are not interpolated, only labels and values.**
- * `TRAIT_DESCRIPTIONS.riskTolerance` contains the word "correct" in an authored,
- * carefully-scoped sentence. It is fine on a profile card and wrong in generated
- * commentary, and the verdict-word check would reject it — correctly.
- *
- * ## Reconciliation note: `./policy.ts` is owned by another module author
- *
- * This file touches the smallest possible surface of it, so a mismatch is one compile error
- * rather than a rewrite. What it consumes, and nothing else:
- *
- *   - `decision.action`, an engine `Action`
- *   - `decision.distribution`, entries carrying `{ action, probability }`
- *   - `decision.drivingTraits`, entries carrying `{ key, value }` — optional
- *
- * `PolicyDecision` also carries `modelPreference` and `whatChangedIt` strings of its own, and
- * this module deliberately **does not** forward them. Two reasons, both worth stating rather
- * than assuming:
- *
- *   1. Those strings are checked against `assertNoImpersonation` only. The name, pronoun,
- *      verdict-word and private-card checks live here, so the strings that reach the wire
- *      should be the ones minted here.
- *   2. A policy's own explanation of its decision can quote its hand assessment — an equity
- *      figure derived from its hole cards. That is information a learner is not entitled to
- *      for a hand that never showed down, which is why `PolicyDecisionSummary` cannot carry
- *      it and why the sentence is regenerated rather than passed along.
- *
- * A caller that knows the difficulty should pass it through:
- * `explainModelDecision({ decision: { ...policyDecision, difficulty }, ... })`. That is what
- * adds the noise-and-adaptation line and lets the explanation say where the vector in force
- * differs from the profile card.
+ * Pass `difficulty` in the decision to get the noise-and-adaptation line.
  */
 
 import type {
@@ -133,22 +53,9 @@ export class CommentaryError extends Error {
   override readonly name = 'CommentaryError';
 }
 
-/**
- * A string that has been through `publishCommentary`, and therefore through every guard.
- *
- * The brand exists only in the type system — it has no runtime representation, so it costs
- * nothing and it cannot be stripped by serialisation. Internal builders type their prose
- * fields as `LearnerFacing`, so a template that returns a bare `string` fails to compile.
- * The wire types in `@prl/contracts` declare these fields as `string`, which a
- * `LearnerFacing` satisfies, so nothing downstream has to know the brand exists.
- */
+/** Type-only brand, minted in `publishCommentary`. The wire types accept it as a plain `string`. */
 export type LearnerFacing = string & { readonly learnerFacingBrand: 'checked-by-publishCommentary' };
 
-// ---------------------------------------------------------------------------
-// The policy decision, as commentary needs to see it
-// ---------------------------------------------------------------------------
-
-/** One entry of the pre-sampling distribution: an action and the weight it carried. */
 export interface ActionProbability {
   readonly action: Action;
   /** 0..1. The whole distribution sums to 1. */
@@ -156,73 +63,36 @@ export interface ActionProbability {
 }
 
 /**
- * The slice of a policy's decision this module needs.
- *
- * Deliberately narrow and deliberately structural. `policy.ts` owns the full `PolicyDecision`;
- * anything carrying these fields is accepted here without conversion — including that type,
- * which `test/commentary.test.ts` asserts at compile time so the two cannot drift apart
- * silently. Commentary never depends on the policy's internals. Two omissions are
- * load-bearing:
- *
- *   * **No hand assessment.** No equity figure, no strength band, nothing derived from the
- *     model's hole cards. See the module comment.
- *   * **No `HandState`, and no other seat's anything.** The reasoning is generated from
- *     this decision, the seat's own `PlayerView`, and the profile's declared parameters.
- *
- * `distribution` is required, not optional. A decision presented without the distribution
- * it was sampled from reads as a rule, and "these styles are not scripted" is a claim this
- * feature has to be able to show rather than assert (`docs/AI-LEGENDS.md` §6).
+ * The slice of a policy decision this module needs. `PolicyDecision` satisfies it structurally, and
+ * a compile-time test pins that. It has no hand assessment and nothing about other seats.
+ * `distribution` is required so a decision never reads as a scripted rule (docs/AI-LEGENDS.md §6).
  */
 export interface PolicyDecisionSummary {
-  /** The action the policy sampled, exactly as it went to the engine. */
   readonly action: Action;
   /** The probability assigned to each legal action *before* sampling. Never empty. */
   readonly distribution: readonly ActionProbability[];
   /**
-   * The trait vector actually in force — i.e. after `expressTraits` applied the difficulty.
-   *
-   * Optional, and resolved in this order: this field, then `expressTraits(profile,
-   * difficulty)` when `difficulty` is given, then the profile's declared vector. Every value
-   * printed in one `ModelReasoning` comes from whichever vector won, so nothing inside one
-   * object can disagree with anything else in it.
+   * The trait vector in force. Resolved as this field, then `expressTraits(profile, difficulty)`, then
+   * the declared vector. Every printed value comes from the winner.
    */
   readonly traits?: Traits;
-  /**
-   * The axes the policy itself weighted, when it reports them.
-   *
-   * Preferred over the mapping in this file, and the reason the preference matters: the
-   * mapping here is a documented guess about which axes bear on a *kind* of action, while
-   * this is what actually moved the score. Only the **keys** are used — every value printed
-   * comes from the resolved vector above, so the two cannot drift apart inside one object.
-   */
+  /** The axes the policy weighted. Preferred over this file's mapping. Only the keys are used. */
   readonly drivingTraits?: readonly { readonly key: TraitKey; readonly value: number }[];
   /** The difficulty in force, when the caller knows it. Adds the noise and adaptation note. */
   readonly difficulty?: Difficulty;
 }
 
-// ---------------------------------------------------------------------------
-// The guards
-// ---------------------------------------------------------------------------
-
 /** Extra material a particular call site knows must not appear in its own output. */
 export interface VoiceContext {
-  /**
-   * Identity labels the caller supplied (a display name, a seat plate, a short label).
-   * Banned verbatim: identity belongs in `ProfileDisclosure`, not in prose.
-   */
+  /** Identity labels the caller supplied. Banned verbatim. */
   readonly labels?: readonly string[];
   /** Cards visible only to the acting seat. Banned verbatim. */
   readonly privateCards?: readonly Card[];
 }
 
 /**
- * Name tokens taken from the profile set itself.
- *
- * Tokens shorter than three letters are dropped: none exists today, and a two-letter name
- * would match half the English language, which would break commentary rather than protect
- * anyone. Every token is plain letters, so none needs regex escaping — asserted below
- * rather than assumed, because a name with a full stop in it would otherwise build a
- * pattern that matches far more than intended.
+ * Attributed-name tokens of three letters or more. Each must be plain letters, so none needs regex
+ * escaping.
  */
 function personNameTokens(): readonly string[] {
   const tokens = new Set<string>();
@@ -247,13 +117,7 @@ const PERSON_NAME_TOKENS: readonly string[] = personNameTokens();
 
 const PERSON_NAME_PATTERN = new RegExp(`\\b(?:${PERSON_NAME_TOKENS.join('|')})\\b`, 'iu');
 
-/**
- * The patterns this file adds to the shared list in `labelling.ts`.
- *
- * Each one errs towards rejection. A false positive costs a reworded template; a false
- * negative ships a sentence that speaks for a person, or passes a verdict this product has
- * no basis for.
- */
+/** Added to the shared list in `labelling.ts`. Each errs towards rejection. */
 const VOICE_PATTERNS: readonly { readonly pattern: RegExp; readonly why: string }[] = [
   {
     pattern: PERSON_NAME_PATTERN,
@@ -289,12 +153,7 @@ const ROLE_WORDS: ReadonlySet<string> = new Set([
   'hero',
 ]);
 
-/**
- * Rejects generated prose that speaks for a person, passes a verdict, or leaks a card.
- *
- * Exported so the tests can prove the guard fires, and so `comparison.ts` can reuse the
- * same definition of the voice rather than growing a second one.
- */
+/** Exported so tests can prove the guard fires and `comparison.ts` can reuse it. */
 export function assertModelVoice(text: string, where: string, context: VoiceContext = {}): void {
   for (const { pattern, why } of VOICE_PATTERNS) {
     const found = pattern.exec(text);
@@ -307,11 +166,8 @@ export function assertModelVoice(text: string, where: string, context: VoiceCont
   }
   for (const label of context.labels ?? []) {
     const trimmed = label.trim();
-    // An empty label would match every string, so it is skipped rather than trusted.
     if (trimmed === '') continue;
-    // A caller that hands in "you" is naming a role, not an identity, and the templates are
-    // built from that word. Skipping the role words keeps this check about identity rather
-    // than firing on the subject of the sentence.
+    // "you" names a role, and the templates are built from it.
     if (ROLE_WORDS.has(trimmed.toLowerCase())) continue;
     if (text.includes(trimmed)) {
       throw new CommentaryError(
@@ -333,25 +189,15 @@ export function assertModelVoice(text: string, where: string, context: VoiceCont
   }
 }
 
-/**
- * The one place a learner-facing string is minted.
- *
- * Whitespace is collapsed first so a template written across several lines cannot smuggle a
- * newline into a UI label, and so the guards see exactly the text a learner will read.
- */
+/** Collapses whitespace first, so the guards see exactly the text the learner reads. */
 export function publishCommentary(text: string, where: string, context: VoiceContext = {}): LearnerFacing {
   const collapsed = text.replace(/\s+/gu, ' ').trim();
   if (collapsed === '') throw new CommentaryError(`${where}: generated an empty string`);
   assertNoImpersonation(collapsed, where);
   assertModelVoice(collapsed, where, context);
-  // The only cast that produces a LearnerFacing. Everything above it is the reason it is
-  // safe, and `test/commentary.test.ts` asserts this is the only one in the file.
+  // The single brand cast in this file. `test/commentary.test.ts` asserts it is the only one.
   return collapsed as LearnerFacing;
 }
-
-// ---------------------------------------------------------------------------
-// Formatting, shared by every template
-// ---------------------------------------------------------------------------
 
 function formatChips(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
@@ -374,7 +220,6 @@ function formatMultiplier(value: number): string {
   return `${value.toFixed(2)}x`;
 }
 
-/** "Aggression at 0.68" — the atom every model sentence is built from. */
 function traitValue(key: TraitKey, value: number): string {
   return `${TRAIT_LABELS[key]} at ${formatTraitValue(value)}`;
 }
@@ -383,13 +228,7 @@ function trait(key: TraitKey, traits: Traits): string {
   return traitValue(key, traits[key]);
 }
 
-/**
- * A cost as a multiple of the pot, in the same units as `preferredPotFraction`.
- *
- * A multiple rather than a percentage so the learner can read the size straight against the
- * profile's declared sizing preference — "a preferred 0.97 of the pot, and this one is 1.18"
- * is a comparison; "118.2% of the pot against a preferred 0.97" is arithmetic homework.
- */
+/** A multiple of the pot, so it reads straight against `preferredPotFraction`. */
 function potFractionOf(cost: number, potBefore: number): string {
   return potBefore > 0 ? `${(cost / potBefore).toFixed(2)} of the pot` : 'an unmeasurable share of the pot';
 }
@@ -400,7 +239,7 @@ function breakEvenEquity(potBefore: number, toCall: number): number {
   return denominator <= 0 ? 0 : toCall / denominator;
 }
 
-/** Present tense, for a sentence about a preference: "raise to 140". */
+/** Present tense, as in "raise to 140". */
 function describeAction(action: Action): string {
   switch (action.type) {
     case 'fold':
@@ -418,7 +257,7 @@ function describeAction(action: Action): string {
   }
 }
 
-/** Past tense, for a replay line: "raised to 140". */
+/** Past tense, as in "raised to 140". */
 function describeActionTaken(action: Action): string {
   switch (action.type) {
     case 'fold':
@@ -445,14 +284,9 @@ function sameAction(left: Action, right: Action): boolean {
   return actionTotal(left) === actionTotal(right);
 }
 
-// ---------------------------------------------------------------------------
-// Reading a CoachReport
-//
-// These live here rather than in comparison.ts because both files need them and the
-// dependency runs one way: comparison imports commentary. One direction is enough.
-// ---------------------------------------------------------------------------
+// Shared with comparison.ts, which imports this file.
 
-/** The highest-EV candidate in the report. Throws on an empty candidate list. */
+/** Throws on an empty candidate list. */
 export function bestCandidate(analysis: CoachReport): ActionCandidate {
   let best: ActionCandidate | null = null;
   for (const candidate of analysis.candidates) {
@@ -464,13 +298,8 @@ export function bestCandidate(analysis: CoachReport): ActionCandidate {
 }
 
 /**
- * The candidate the report priced for this action, or null when it priced none.
- *
- * A bet and a raise are different actions to the engine and to the report, and they are not
- * matched across: a decision the report did not price is reported as unscored rather than
- * scored against something else. For a sized action the report prices the sizes the table's
- * sizing buttons offer, not every legal total, so the chosen size is matched to the nearest one it
- * priced — and every caller that shows a figure derived from this says which size it used.
+ * The candidate the report priced for this action, or null. Bet and raise never match each other.
+ * A sized action matches the nearest size priced, and every caller showing the figure names that size.
  */
 export function candidateForAction(analysis: CoachReport, action: Action): ActionCandidate | null {
   const sameType = analysis.candidates.filter((candidate) => candidate.action === action.type);
@@ -487,19 +316,9 @@ export function candidateForAction(analysis: CoachReport, action: Action): Actio
   return nearest;
 }
 
-// ---------------------------------------------------------------------------
-// explainModelDecision
-// ---------------------------------------------------------------------------
-
 /**
- * Which axes plausibly drove which action, when the policy does not say.
- *
- * A mapping, not a measurement: the policy scores every legal action from many traits at
- * once, and no post-hoc reading of one action can recover the exact weights. What this does
- * claim is narrower and true — these are the axes whose documented meaning bears on this
- * kind of action, and the values shown are the ones that were in force. `whatChangedIt`
- * carries the rest of the honesty. When `PolicyDecisionSummary.drivingTraits` is supplied it
- * is used first, because it is the real answer and this is the fallback.
+ * Axes whose meaning bears on each kind of action. A fallback mapping, not a measurement. The policy's
+ * own `drivingTraits` wins when supplied.
  */
 const AXES_BY_ACTION: Readonly<Record<Action['type'], readonly TraitKey[]>> = {
   fold: ['foldToPressure', 'riskTolerance', 'tournamentOrientation', 'vpip'],
@@ -509,13 +328,7 @@ const AXES_BY_ACTION: Readonly<Record<Action['type'], readonly TraitKey[]>> = {
   raise: ['aggressionFrequency', 'pressureTendency', 'betSizingPreference', 'threeBetTendency'],
 };
 
-/**
- * Ranks the candidate axes by how much they distinguish *this* profile.
- *
- * Signature axes first — they are what the profile card highlights — then by distance from
- * the baseline vector, because an axis sitting on the baseline explains nothing about why
- * this profile played differently from a plain one.
- */
+/** Signature axes first, then distance from the baseline, which is what distinguishes this profile. */
 function rankAxes(
   keys: readonly TraitKey[],
   traits: Traits,
@@ -531,13 +344,7 @@ function rankAxes(
   });
 }
 
-/**
- * The axes a sentence may name, best first.
- *
- * The policy's own report comes first when it made one, in its order, and is then topped up
- * from the fallback mapping — a sentence needs two axes to name, and a policy that reports one
- * driving axis should not force the explanation to say less than it can.
- */
+/** The policy's reported axes first, topped up from the fallback so a sentence can name two. */
 function chooseAxes(
   decision: PolicyDecisionSummary,
   traits: Traits,
@@ -568,14 +375,7 @@ function ownSeat(view: PlayerView, where: string): SeatView {
   return self;
 }
 
-/**
- * The vector whose values every sentence quotes.
- *
- * Resolved once, in one place, so that a single `ModelReasoning` cannot mix a muted value into
- * one sentence and a declared value into the next. `expressTraits` is deterministic, so
- * recomputing it from the difficulty is exact rather than an approximation of what the policy
- * used.
- */
+/** Resolved once so one `ModelReasoning` never mixes muted and declared values. */
 function traitsInForce(decision: PolicyDecisionSummary, profile: StrategyProfile): Traits {
   if (decision.traits !== undefined) return decision.traits;
   if (decision.difficulty !== undefined) return expressTraits(profile, decision.difficulty);
@@ -710,22 +510,10 @@ function sizingLine(traits: Traits): string {
 }
 
 /**
- * The one line here that makes a falsifiable promise about the machine rather than describing
- * a number, so it is the one worth stating the dependency of.
- *
- * "Nothing you did in earlier hands moves this decision" is true only while *every* channel
- * out of `opponent-model.ts` is gated on the adaptation weight. There are exactly two —
- * `adjustmentsFor` and `rangeFor` — and for a while only the first was: the assumed opponent
- * range tracked the read at every difficulty, and since `assessPostflop` prices relative
- * strength, equity and the value/bluff split against that range, this sentence was false at
- * the setting that prints it. Measured over 350 real postflop spots at `educational`, swapping
- * a 200-hand station read for a folder read changed the sampled action in 209 of 1,050 paired
- * decisions; with `rangeFor` gated it is 0 of 1,050, which is what
- * `test/policy.test.ts`'s paired-decision test now asserts.
- *
- * If a third channel is ever added and not gated, fix the channel. Softening this sentence to
- * survive it would trade a true promise for a vague one, which is the wrong direction for a
- * line whose whole job is to tell a learner what the difficulty setting bought them.
+ * The "nothing you did moves this decision" promise holds only while every channel out of
+ * `opponent-model.ts` (`adjustmentsFor` and `rangeFor`) is gated on adaptation. Pinned by the
+ * paired-decision test in `test/policy.test.ts` (0 of 1,050 changed). If a new channel appears,
+ * gate it rather than soften this sentence.
  */
 function difficultyLine(traits: Traits, difficulty: Difficulty): string {
   const settings = DIFFICULTY_SETTINGS[difficulty];
@@ -768,11 +556,8 @@ function mixLine(
 }
 
 /**
- * One sentence on what the model preferred, plus what would have moved it.
- *
- * `disclosure` is not interpolated anywhere. It is passed in so its display name and short
- * label can be banned from the output: that is the tightest available check that a name has
- * not leaked into prose, and it uses the data the call site already has.
+ * One sentence on what the model preferred, plus what would have moved it. `disclosure` is never
+ * interpolated. Its names are passed in only so the output can be checked against them.
  */
 export function explainModelDecision(input: {
   readonly decision: PolicyDecisionSummary;
@@ -832,10 +617,6 @@ export function explainModelDecision(input: {
   };
 }
 
-// ---------------------------------------------------------------------------
-// commentOnDecision
-// ---------------------------------------------------------------------------
-
 function headSentence(input: {
   readonly street: string;
   readonly potBefore: number;
@@ -882,12 +663,8 @@ function bestAsAction(candidate: ActionCandidate): Action {
 }
 
 /**
- * The replay line's second sentence: which axis, and how much weight this action had.
- *
- * Returns null when the decision carries neither a trait vector nor a reported driving axis.
- * `commentOnDecision` is not given a profile, so there is nothing to fall back to — and a
- * sentence claiming an axis it cannot name would be worse than the silence. The line then
- * states the action and claims nothing about why, which is the honest degradation.
+ * Which axis drove the action and how much weight it carried. Null when the decision carries neither
+ * traits nor a driving axis, since there is no profile to fall back to.
  */
 function modelSentence(decision: PolicyDecisionSummary, action: Action): string | null {
   const named = namedAxis(decision, action);
@@ -911,13 +688,7 @@ function namedAxis(decision: PolicyDecisionSummary, action: Action): string | nu
   return reported === undefined ? null : traitValue(reported.key, reported.value);
 }
 
-/**
- * One replay line for one decision.
- *
- * `actorLabel` is never placed in the output — see the module comment. It is passed in so
- * that it can be *banned* from the output, which is what makes a caller in attributed
- * naming mode safe by construction rather than by review.
- */
+/** One replay line. `actorLabel` is never placed in the output, only checked against. */
 export function commentOnDecision(input: {
   readonly street: string;
   readonly potBefore: number;
@@ -957,52 +728,16 @@ export function commentOnDecision(input: {
   return publishCommentary(parts.join(' '), where, context);
 }
 
-// ---------------------------------------------------------------------------
-// learnFromSummary
-// ---------------------------------------------------------------------------
-
 /**
- * The observed side of each measurable axis, read off the wire type.
- *
- * `stats.ts` already owns the declared side, the tolerance and the reason for it, and those
- * are reused here rather than restated. Only the observed accessor is rebuilt: its
- * `ObservableAxis.observedFrom` reads a `SeatSimulationStats`, which carries the raw counts
- * a simulation harness produces, and what arrives here is the wire's `ProfileObservedStats`,
- * which does not. Two shapes, one meaning, so the mapping is written out once here.
- *
- * ## Three axes are deliberately absent, and the absence is the honest answer
- *
- * `Partial` is load-bearing: `observedGaps` skips any axis with no entry here, and three axes
- * have none because the wire type cannot express the quantity they declare.
- *
- * `aggressionFrequency` is declared as the rate on a NEUTRAL hand assessment. The wire's
- * `aggressionFrequency` is the unconditional rate — the one a tracker computes and the only
- * one a learner watching from the other side of the table could ever compute, since the
- * model's read of its own hand is derived from cards the learner cannot see. The two differ
- * by about 0.1 by construction (see `stats.ts`), so mapping one onto the other would print
- * "this model is not behaving the way its card describes" under every profile in the set, for
- * every learner, permanently — a false accusation generated by a units error.
- *
- * `threeBetTendency` is a multiplier on the flat-calling range, and its only frequency is the
- * share of the openings the model plays back at that it re-raises. The wire carries the
- * unconditional 3-bet frequency instead, which is capped by how often the model enters a pot
- * at all. Same mismatch, same false accusation.
- *
- * `foldToPressure` failed the other way: it was mapped, and the agreement it reported was not
- * about the trait. The wire's `foldToBetFrequency` counts the preflop entry decision, which every
- * hand has and which the policy decides from `vpip`. Measured 2026-11-11 on the simulation suite's
- * 8,000-hand sweep, the twelve rates came out in exactly the reverse order of observed `vpip`. So calling-station's
- * line read "the card declares folds under pressure 0.14 … so the card and the play agree so far"
- * because it plays half its hands, while on the turns the trait acts on it folds the second-most
- * of the twelve (`pricedFoldToBetFrequency` in `stats.ts`). That is a false reassurance rather than
- * a false accusation, and it is the same units error.
- *
- * Adding the conditional figures to `ProfileObservedStats` would let the first two axes come back.
- * `foldToPressure` would not come back that way: on the priced turns its observed rates span
- * 0.165-0.301 against declared 0.14-0.76, so the trait is a weight rather than a frequency, and no
- * figure a learner can watch is the number on the card. Until one is, saying nothing about an
- * axis is better than saying something untrue about it — and `learnFrom` already carries the
- * profile's authored material on all three.
+ * The observed side of each axis, read from the wire's `ProfileObservedStats`. `stats.ts` owns the
+ * declared side and tolerance. `Partial` matters. Three axes are left out because the wire cannot
+ * express the quantity they declare.
+ * `aggressionFrequency` is declared on a neutral hand read; the wire rate is unconditional and about
+ * 0.1 lower by construction. `threeBetTendency` is a share of openings played back at; the wire rate
+ * is capped by entry frequency. Both would accuse every profile falsely.
+ * `foldToPressure` on the wire counts the preflop entry decision, so it tracks `vpip` in reverse
+ * (measured 2026-11-11, 8,000 hands). On priced turns observed rates span 0.165-0.301 against declared
+ * 0.14-0.76, so the trait is a weight, not a frequency, and no watchable figure matches the card.
  */
 const OBSERVED_FROM_WIRE: Readonly<Partial<Record<TraitKey, (observed: ProfileObservedStats) => number>>> = {
   vpip: (observed) => observed.vpip,
@@ -1074,7 +809,6 @@ function sampleLine(traits: Traits, observed: ProfileObservedStats, anchor: Trai
   );
 }
 
-/** How many observed-versus-declared lines a summary carries before it stops being read. */
 const MAX_OBSERVED_LINES = 3;
 
 function observedLines(profile: StrategyProfile, observed: ProfileObservedStats | null): readonly string[] {
@@ -1089,12 +823,8 @@ function observedLines(profile: StrategyProfile, observed: ProfileObservedStats 
 }
 
 /**
- * "What can I learn from this player?" — the profile's own material, plus what the
- * learner's own session actually showed.
- *
- * Other profiles are named by their **archetype** name. That name exists in both naming
- * modes and is safe prose; deriving an attributed one here would need a naming mode this
- * function is not given, and inventing one would be the wrong kind of guess.
+ * The profile's own material plus what the learner's session showed. Other profiles are named by
+ * archetype, which exists in both naming modes.
  */
 export function learnFromSummary(input: {
   readonly profile: StrategyProfile;
@@ -1112,8 +842,7 @@ export function learnFromSummary(input: {
   return {
     profileId: input.profile.naming.id,
     disclosure: input.disclosure,
-    // The authored material comes first: it is what the profile is for. The generated
-    // lines follow, because they only mean anything next to the claim they check.
+    // The generated lines only mean something next to the authored claim they check.
     learnFrom: [...input.profile.learnFrom, ...generated],
     counterStrategy: [...input.profile.counterStrategy],
     observed: input.observed,
@@ -1131,24 +860,9 @@ export function learnFromSummary(input: {
   };
 }
 
-// ---------------------------------------------------------------------------
-// outcomeVersusQualityNote
-// ---------------------------------------------------------------------------
-
 /**
- * The note shown when the chips and the maths point in opposite directions.
- *
- * Returns `null` whenever they agree, and whenever the hand was flat, so the note never
- * becomes wallpaper — a paragraph that appears under every hand is a paragraph nobody
- * reads, and this is the one worth reading.
- *
- * `slightly-off` returns `null` on purpose. A decision inside two big blinds of the best
- * expected value the report found is not in clear disagreement with any result; calling it
- * one would fire the note on most hands and cost it all its weight.
- *
- * Neither half of the note explains the other. It says both things are true, and says
- * plainly that the result is not evidence about the decision — which is the single most
- * transferable idea in the syllabus and the reason this field exists at all.
+ * Shown only when the chips and the analysis point in opposite directions. Null when they agree, when
+ * the hand was flat, and for `slightly-off`, so the note stays rare enough to be read.
  */
 export function outcomeVersusQualityNote(input: {
   readonly chipResult: number;

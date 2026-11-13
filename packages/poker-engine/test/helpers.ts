@@ -1,9 +1,4 @@
-/**
- * Test helpers for driving hands.
- *
- * `playHand` exists so tests read as a sequence of decisions rather than a pile of
- * state plumbing, which keeps the interesting part of each test visible.
- */
+/** Test helpers for driving hands. */
 
 import { orderedDeck, parseCards } from '../src/cards.ts';
 import { applyAction, type SeatSetup, startHand } from '../src/machine.ts';
@@ -31,11 +26,8 @@ export function testRandom(seed = 1): RandomSource {
 }
 
 /**
- * Builds a 52-card deck that deals specified hole cards and board, with all
- * remaining cards filling the rest in ascending order.
- *
- * Deal order must match `machine.ts`: one card at a time, twice round the table
- * starting left of the button, then burn-free flop/turn/river.
+ * A 52-card deck that deals the given hole cards and board, rest ascending. Deal order matches
+ * `machine.ts`: one card at a time, twice round from left of the button, then a burn-free board.
  *
  * @param holeCardsBySeat seat → two cards, e.g. `{0: 'AhAd', 1: 'KsKc'}`
  * @param dealOrder the seats in the order they receive cards (left of button first)
@@ -126,11 +118,8 @@ export function deal(options: {
 }
 
 /**
- * Total chips in existence: stacks plus whatever is still in the middle.
- *
- * Once a hand completes, the pot has been paid into the stacks, so adding
- * `committedTotal` then would double-count it. `committedTotal` is deliberately
- * not cleared at settle time because hand review needs it.
+ * Total chips, stacks plus the middle. A complete hand has paid the pot into stacks, and
+ * `committedTotal` is kept for hand review, so it is not added then.
  */
 export function chipsInSystem(state: HandState): number {
   const inStacks = state.seats.reduce((sum, seat) => sum + seat.stack, 0);

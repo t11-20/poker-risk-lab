@@ -1,23 +1,7 @@
 /**
- * A live view shows a side pot only when one exists.
- *
- * ## The failure this is written against
- *
- * `redactFor` filled `PlayerView.pots` with `buildPots(state.seats)`. `buildPots` layers by
- * `committedTotal` and is correct at SETTLEMENT, the only place it was designed for. Called on a
- * live state it turns an ordinary uncalled bet into a side pot, because mid-street the bettor's
- * `committedTotal` genuinely is higher than everyone else's — and it fires on the very first frame
- * of every hand, because the blinds are unequal.
- *
- * `PokerTable` passes `view.pots` straight to `PotDisplay`, which prints "Main pot N units, plus
- * the side pots below" whenever a second layer exists. Measured over a live-table fuzz before the
- * fix: 947 of 1,446 decision points — 65% — rendered a multi-layer pot with NO seat all in.
- *
- * It is not cosmetic. `PotDisplay`'s header says the layers exist so "a learner needs to see that a
- * side pot is a layer with an eligibility list rather than a bonus", so the concept was being
- * taught with data that was wrong two thirds of the time, and seats still in the hand were shown as
- * ineligible for the main pot. The Coach on the same screen priced the same spot correctly through
- * `contestablePotFor`, so the two halves of the play screen disagreed with each other.
+ * A live view shows a side pot only when one exists. `redactFor` used `buildPots`, which is correct
+ * only at settlement and turned uncalled bets and unequal blinds into phantom side pots. 947 of 1,446
+ * decision points (65%) in a live-table fuzz showed a multi-layer pot with nobody all in.
  */
 
 import assert from 'node:assert/strict';
@@ -38,7 +22,6 @@ function continueOnce(state: HandState): HandState {
 }
 
 test('the blinds alone do not make a side pot (REGRESSION)', () => {
-  // The first frame of every hand. Unequal blinds, nobody all in, one pot.
   const { state } = deal({ stacks: [1000, 1000, 1000, 1000] });
   const view = redactFor(state, { viewerSeat: 0 });
 
@@ -55,13 +38,8 @@ test('the blinds alone do not make a side pot (REGRESSION)', () => {
 });
 
 test('an uncalled bet is not a side pot (REGRESSION)', () => {
-  // Mid-street the bettor's committedTotal is genuinely higher than everyone else's. That is what
-  // an uncalled bet IS; it is not a layer boundary.
-  //
-  // Actions are driven from the engine's own `toAct` rather than a hand-written seat order. Two of
-  // my assumptions were wrong before this worked: the seat order, and the big blind (the helper's
-  // default is 2, not 10). `applyAction` also takes (state, seat, action) and returns `{ state }`,
-  // not a single options object.
+  // Mid-street the bettor's higher committedTotal is an uncalled bet, not a layer boundary.
+  // Actions follow the engine's `toAct`. The helper's default big blind is 2.
   const { state } = deal({ stacks: [1000, 1000, 1000] });
   let live = state;
   for (let step = 0; step < 3 && live.toAct !== null; step += 1) {
@@ -81,8 +59,7 @@ test('an uncalled bet is not a side pot (REGRESSION)', () => {
 });
 
 test('a real side pot is still layered, so the fix did not just flatten everything', () => {
-  // The other direction, and why `buildPots` is still called: a short stack all in for less than
-  // the others can wager is a genuine layer boundary with a shorter eligibility list.
+  // A short stack all in for less than others can wager is a real layer boundary.
   // A stack that cannot even cover the big blind, so the all-in is forced at the deal.
   const { state } = deal({ stacks: [1000, 1000, 1] });
   let live = state;
@@ -99,18 +76,13 @@ test('a real side pot is still layered, so the fix did not just flatten everythi
 });
 
 test('a folded seat is shown no price to call (REGRESSION)', () => {
-  // `PlayerView.amountToCall` promises "0 when nothing is owed". `amountToCall` in `betting.ts`
-  // has no status check — right for the betting logic, which only asks about the seat to act, and
-  // wrong for a view built for every recipient on every frame. A folded seat keeps its stack and,
-  // once the street closes, has `committedThisStreet: 0`, so it reported the full bet level for the
-  // rest of the hand. `PokerTable` draws that in the caution tone: "400 units to call", beside an
-  // ActionBar correctly saying it is not their turn. 6,772 occurrences in an engine fuzz.
+  // A folded seat once reported the full bet level as "to call" (6,772 times in an engine fuzz),
+  // because `betting.ts`'s `amountToCall` has no status check.
   const { state } = deal({ stacks: [1000, 1000, 1000] });
   const folder = state.toAct;
   assert.ok(folder !== null);
   let live = applyAction(state, folder, { type: 'fold' }).state;
 
-  // Drive on so the street closes and a fresh bet lands with the folder still at the table.
   for (let step = 0; step < 4 && live.toAct !== null; step += 1) live = continueOnce(live);
   const bettor = live.toAct;
   if (bettor !== null) {
@@ -129,7 +101,7 @@ test('a folded seat is shown no price to call (REGRESSION)', () => {
     `a folded seat was quoted ${view.amountToCall} to call at bet level ${live.betLevel}`,
   );
 
-  // The seat still to act must still be quoted a price, so this did not zero the field for everyone.
+  // The seat still to act is still quoted a price, so the field was not zeroed for everyone.
   if (live.toAct !== null) {
     const active = redactFor(live, { viewerSeat: live.toAct });
     assert.ok(active.amountToCall > 0, 'the seat to act must still be told what it costs');

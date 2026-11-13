@@ -1,9 +1,6 @@
 /**
- * `@prl/poker-engine` — a pure, deterministic No-Limit Hold'em rules engine.
- *
- * Zero runtime dependencies. No clock, no network, no I/O, no global mutable state.
- * The server treats this package as the only authority on what is legal, what
- * cards exist, and who won.
+ * `@prl/poker-engine`, a pure, deterministic No-Limit Hold'em rules engine. No dependencies, clock,
+ * network, I/O or global mutable state. The server's only authority on legality, cards and winners.
  */
 
 export {

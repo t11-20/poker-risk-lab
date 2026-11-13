@@ -1,36 +1,8 @@
 /**
- * The contract package's own tests.
- *
- * ## Why this file exists
- *
- * `packages/contracts/test/` was an empty directory. Its `test` script globbed it, found nothing,
- * printed `tests 0` and exited 0 — and `pnpm run test` reported the package as passing. A package
- * whose suite runs nothing is indistinguishable from one that passed, which is a false signal
- * rather than a missing one, and this package holds every request/query/WebSocket JSON Schema, the
- * wire protocol and the error catalogue.
- *
- * ## What is tested here, and what deliberately is not
- *
- * Here: the pure surface — the two type guards on hostile input, `wsError`'s shape, the error
- * catalogue's completeness and its status mapping, the close-code and limit tables, the `PATTERNS`
- * regexes against crafted near-misses, and the structural invariants every schema in `ALL_SCHEMAS`
- * must satisfy (a unique `$id`, and `additionalProperties: false` on every object, because the
- * closed contract is what makes a misspelled field an error rather than a silent no-op).
- *
- * Not here: compiling the schemas against accept/reject fixtures. That needs Ajv, and this package
- * declares zero runtime dependencies on purpose — importing Fastify's Ajv from here would be an
- * undeclared dependency. The server compiles these schemas with its own compiled Ajv, so that
- * matrix belongs on the api side, where `test/wiring.test.ts` already proves `app.ready()` accepts
- * every one of them and the route suites exercise the accept/reject behaviour through real
- * requests.
- *
- * ## Would these fail if the behaviour broke?
- *
- * Each group carries its own negative case: a guard is fed the values that would slip past a
- * `typeof` check, each pattern is fed a near-miss that must be refused as well as a value that must
- * be accepted, and the structural scans assert they found something to scan before asserting it was
- * clean. Verified by hand: deleting one entry from `ERROR_STATUS` fails the catalogue test, and
- * opening one schema with `additionalProperties: true` fails the closed-shape test.
+ * The contract package's own tests: type guards on hostile input, the error catalogue and its status
+ * map, close codes and limits, `PATTERNS` against near-misses, and the structural rules every schema in
+ * `ALL_SCHEMAS` must meet. Compiling schemas needs Ajv, which this package does not depend on, so
+ * accept/reject fixtures live in the API suites (`test/wiring.test.ts`).
  */
 
 import assert from 'node:assert/strict';
@@ -89,9 +61,7 @@ describe('isErrorCode', () => {
   });
 
   it('is not fooled by inherited object properties', () => {
-    // The failure mode a naive `code in ERROR_MESSAGES` implementation would have: every JavaScript
-    // object inherits `toString` and `constructor`, so an attacker-supplied `"constructor"` would
-    // be treated as a known error code and looked up in the message table.
+    // Every object inherits `toString` and `constructor`, so a naive `code in ERROR_MESSAGES` accepts them.
     assert.equal(isErrorCode('constructor'), false);
     assert.equal(isErrorCode('toString'), false);
     assert.equal(isErrorCode('__proto__'), false);
@@ -104,8 +74,7 @@ describe('isClientMessageType', () => {
   it('accepts exactly the protocol’s client message types', () => {
     for (const type of KNOWN) assert.equal(isClientMessageType(type), true, `${type} is a client type`);
     for (const value of HOSTILE) assert.equal(isClientMessageType(value), false);
-    // Server message types are NOT client message types. A guard that accepted them would let a
-    // client assert server authority in the one place the server trusts the discriminator.
+    // A guard that accepted server types would let a client claim server authority.
     for (const serverType of ['welcome', 'state', 'event', 'coach', 'ack', 'error', 'pong']) {
       assert.equal(
         isClientMessageType(serverType),
@@ -128,8 +97,7 @@ describe('wsError', () => {
         requestId: 'ws-abcdef12',
       },
     });
-    // The two request ids are genuinely different things — the client's correlation id and the
-    // server's log id — and swapping them would be invisible without this.
+    // The client's correlation id and the server's log id are different, and a swap would be invisible.
     assert.notEqual(frame.requestId, frame.error.requestId);
   });
 
@@ -164,9 +132,7 @@ describe('the error catalogue', () => {
   });
 
   it('never puts an identifier, a value or a stack trace in a user-facing message', () => {
-    // These messages are the ONLY text either transport sends. `errors.ts` on the server sends
-    // `ERROR_MESSAGES[code]` and never an internal message, so anything leaked here is leaked
-    // everywhere.
+    // These are the only text either transport sends, so anything leaked here is leaked everywhere.
     for (const code of ERROR_CODES) {
       const message = ERROR_MESSAGES[code];
       assert.doesNotMatch(
@@ -203,14 +169,12 @@ describe('the WebSocket tables', () => {
       assert.ok(value > 0, `${name} must be positive, got ${value}`);
       assert.ok(Number.isFinite(value), `${name} must be finite`);
     }
-    // A burst allowance below the sustained rate would make the "burst" concept meaningless, and a
-    // client that trusted the published numbers would be disconnected for behaving as told.
+    // A client that trusted the published numbers would otherwise be disconnected for obeying them.
     assert.ok(
       WS_LIMITS.burstAllowance >= WS_LIMITS.messagesPerSecond,
       'the burst allowance must be at least the sustained rate',
     );
-    // Two missed heartbeats is what the hub treats as gone, so the handshake window must be shorter
-    // than the heartbeat interval or a silent client would be closed by the wrong mechanism.
+    // Otherwise a silent client would be closed by the heartbeat instead of the handshake timeout.
     assert.ok(
       WS_LIMITS.handshakeTimeoutMs < WS_LIMITS.heartbeatIntervalMs,
       'the handshake window must close before the first heartbeat is due',
@@ -234,10 +198,8 @@ describe('the shared patterns', () => {
     },
     {
       name: 'CARDS',
-      // A newline between two cards IS accepted, and correctly so: the pattern separates cards with
-      // `\s*`, and `\s` includes `\n`. The first draft of this case listed `"Ah\nKs"` as a
-      // near-miss that must be refused, which was simply wrong about the pattern — the single-card
-      // CARD pattern has no `\s` at all and does refuse it, which is the case that matters.
+      // A newline between two cards is accepted, because the pattern separates cards with `\s*`.
+      // The single-card CARD pattern has no `\s` and refuses it.
       accept: ['AhKs', 'Ah Ks', 'Ah, Ks', '  Ah  Ks  ', 'Ah\nKs'],
       reject: ['', 'A', 'AhKz', 'Ah;Ks', 'Ah Ks!'],
     },
@@ -272,8 +234,7 @@ describe('the shared patterns', () => {
     it(`${testCase.name} accepts what it must and refuses the near-misses`, () => {
       const source = PATTERNS[testCase.name];
       assert.equal(typeof source, 'string', `${testCase.name} must be a pattern string`);
-      // `u` so the pattern is checked as JavaScript reads it; Ajv anchors with ^...$ in the source
-      // itself, which is why these are full-match patterns rather than searches.
+      // `u` so the pattern is checked as JavaScript reads it. Ajv uses the anchors in the source.
       const pattern = new RegExp(source, 'u');
       for (const value of testCase.accept) {
         assert.match(value, pattern, `${testCase.name} must accept ${JSON.stringify(value)}`);
@@ -285,8 +246,7 @@ describe('the shared patterns', () => {
   }
 
   it('anchors every pattern at both ends', () => {
-    // An unanchored pattern matches a substring, so `"Ah<script>"` would satisfy a card check. Ajv
-    // does not add anchors for you.
+    // Unanchored, `"Ah<script>"` would satisfy a card check. Ajv adds no anchors.
     for (const [name, source] of Object.entries(PATTERNS)) {
       assert.ok(source.startsWith('^'), `${name} is not anchored at the start`);
       assert.ok(source.endsWith('$'), `${name} is not anchored at the end`);
@@ -306,9 +266,8 @@ describe('every registered schema', () => {
   });
 
   it('closes every object, at every depth', () => {
-    // `removeAdditional` is off in the app's Ajv on purpose, so an unknown property is REJECTED
-    // rather than silently deleted — but only for objects that say `additionalProperties: false`.
-    // One object that forgets it is one endpoint where a misspelled field succeeds and does nothing.
+    // The app's Ajv has `removeAdditional` off, so only `additionalProperties: false` rejects a
+    // misspelled field instead of silently ignoring it.
     const open: string[] = [];
     let objectsChecked = 0;
 
@@ -335,8 +294,7 @@ describe('every registered schema', () => {
   });
 
   it('bounds every string and every number', () => {
-    // An unbounded string is a body-size problem the schema should have caught, and an unbounded
-    // integer reaches the engine as a bet size. Both are cheap to state and expensive to omit.
+    // An unbounded string is a body-size problem, and an unbounded integer reaches the engine as a bet size.
     const unbounded: string[] = [];
     let checked = 0;
 

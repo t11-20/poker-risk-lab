@@ -1,85 +1,18 @@
 /**
- * How a policy reads its own hand, cheaply enough to do it inside a live hand.
+ * How a policy reads its own hand cheaply enough to run inside a live hand.
  *
- * ## Why this file is separate from the policy, and why it is allowed to be coarse
+ * Exact enumeration costs 10^5 to 10^11 evaluations, so nothing here calls `equity()`, `exactEquity`
+ * or `computeOuts`. Every result reports its method and sample count.
  *
- * A policy runs several times per street at a table where a bot action has to land in tens
- * of milliseconds. Exact enumeration of a hand against a range is the honest calculation and
- * it is what the Coach shows a learner, but it is 10^5 to 10^11 hand evaluations
- * (`@prl/poker-math/equity`), which is a Coach panel's budget and not a decision's. So this
- * module answers the same questions with two bounded methods, and every result says which
- * one it used and how many samples were behind it. A number without its method is a claim,
- * not a result.
+ * Preflop uses the computed 169-class `strengthTable()`. Against `n` opponents equity is scaled by
+ * `1/(n+1) x (2 x equityHeadsUp) ^ (n ^ 0.4)`, exact at n = 1. Measured against 40,000-sample Monte
+ * Carlo (seed 4242, 18 classes, 2 to 5 opponents) gives mean error 2.3 points, worst 6.9. It overrates
+ * medium pairs multiway and underrates big pairs and suited connectors. Entry decisions use
+ * `preflopClassPercentile`, which has no scaling. The scaled figure only feeds price comparisons.
  *
- * Nothing here calls `equity()` (which may fall through to exact enumeration), `exactEquity`
- * or `computeOuts`. `computeOuts` is the honest out count and it runs a fresh equity
- * calculation for each of the ~45 cards that can come — perfect for the Coach, ruinous
- * inside a decision loop. The cheap substitute below is named for what it actually counts.
- *
- * ## Preflop: the computed 169-class table, not a chart
- *
- * `strengthTable()` from `@prl/poker-math/hand-ranking` measures every starting-hand class
- * by one narrow question — all-in, heads-up, against a hand drawn uniformly from the rest of
- * the deck — and it is *computed*, so its provenance can be shown to a learner. A published
- * preflop chart would be somebody else's material with numbers nobody here can check.
- *
- * That table costs a few seconds to build and is memoised once per process by the maths
- * package. This module adds a second, tiny memo: a label to entry map, so a preflop
- * assessment is a hash lookup rather than a 169-entry scan on every decision.
- *
- * ## The opponent-count scaling IS an approximation, and here is its measured error
- *
- * The table's figure is heads-up. Against `n` opponents this module uses
- *
- *     equity(n) = 1/(n+1) x (2 x equityHeadsUp) ^ (n ^ 0.4)
- *
- * which has three properties worth stating. At `n = 1` the exponent is exactly 1 and the
- * formula returns the table's figure unchanged, so heads-up is not approximated at all. A
- * hand with 50% heads-up equity maps to exactly `1/(n+1)`, the fair share, for every `n`. And
- * it is monotone in the heads-up figure, so it never reorders two hands.
- *
- * It is still an approximation, and the error is not uniform. Checked against 40,000-sample
- * Monte Carlo (seed 4242) over 18 representative classes at two to five opponents: mean
- * absolute error 2.3 percentage points, worst case 6.9 points. The direction is systematic
- * and worth knowing: it **overrates medium pairs** multiway (88 against five opponents comes
- * out 30.8% against a true 23.9%, because a coin-flip hand loses value fast as opponents are
- * added) and **underrates the biggest pairs and suited connectors** (AA against three
- * opponents comes out 57.0% against a true 63.6%; 76s runs about 4 points low). Multiway
- * equity is not a one-parameter function of heads-up equity, and no single exponent will make
- * it one.
- *
- * The policy's preflop *entry* decision does not depend on this number at all — it thresholds
- * `preflopClassPercentile`, which comes straight from the table's ranks and carries no
- * multiway approximation. The scaled equity is used for price comparisons, where a 2 to 7
- * point error is smaller than the difficulty noise the policy adds on purpose.
- *
- * ## Postflop: bounded Monte Carlo with an injected seed
- *
- * `monteCarloEquity` takes a seed, not a generator, so `assessPostflop` draws ONE integer
- * from the injected `RandomSource` and hands it over. Same policy input plus same seed gives
- * the same assessment, which is what makes a hand replayable; different seeds give slightly
- * different assessments, which is the sampling error that ADR 0012 and `docs/AI-LEGENDS.md`
- * L8 name and accept rather than hide. The sample count is clamped to a live-hand budget and
- * the number actually run is reported, so a clamp shows up in the output instead of being
- * silent.
- *
- * ## Two fields whose names would otherwise mislead
- *
- * **`outs` counts category improvements, not clean outs.** An unseen card is counted when it
- * lifts the model's own made-hand category. It does not check whether the improved hand
- * wins: the king that pairs an ace-high holding also hands a king-high range trips, and it is
- * counted here anyway. Dirty outs are a real distinction and `computeOuts` draws it properly;
- * this count exists to tell a made hand from a drawing one, and the policy never prices a
- * call off it. The price comes from `equity`.
- *
- * **`relativeStrength` is a percentile, and which population it is measured against depends
- * on the street.** Preflop it is measured within the range the model would continue with,
- * which is what "how strong is this hand for a style that plays this many hands" means.
- * Postflop the model's own continuing range is not in this function's input, so it is
- * measured against the assumed opponent continuing range: the share of the hands actually in
- * front of it that its current made hand beats at showdown, ties counted half. Both are
- * stated on the field. A single number silently swapping populations between streets would be
- * the kind of defect that survives review, so it is written down twice.
+ * Postflop draws one seed from the injected `RandomSource` for `monteCarloEquity`, so a hand replays.
+ * `outs` counts category improvements, not clean outs. `relativeStrength` is measured within the
+ * model's continuing range preflop and against the assumed opponent range postflop.
  */
 
 import {
@@ -109,18 +42,14 @@ export interface StrengthAssessment {
   /** 0..1 equity against the assumed opponent range. */
   readonly equity: number;
   /**
-   * 0..1 percentile. Preflop: within the range this profile would continue with, so 0 means
-   * "outside that range" and 1 means "the top of it". Postflop: the share of the assumed
-   * opponent continuing range that this holding currently beats at showdown, ties counted as
-   * half. See the module comment for why the population changes with the street.
+  /**
+   * 0..1 percentile. Preflop, within the range this profile would continue with (0 means outside it).
+   * Postflop, the share of the assumed opponent range this holding beats now, ties counted as half.
    */
   readonly relativeStrength: number;
   /** True when the hand is mostly drawing rather than made. Always false preflop. */
   readonly isDraw: boolean;
-  /**
-   * Cards still to come that would lift the made-hand CATEGORY. Not clean outs — see the
-   * module comment. 0 preflop and on the river, where there is nothing to count.
-   */
+  /** Cards to come that would lift the made-hand category. Not clean outs. 0 preflop and on the river. */
   readonly outs: number;
   /** `HAND_CATEGORY` value of the current made hand, or null when no board is out yet. */
   readonly madeHandCategory: number | null;
@@ -138,55 +67,30 @@ export interface PreflopClassStrength {
   /** Heads-up pot share all-in against a uniformly random hand. */
   readonly equityVsRandom: number;
   /**
-   * Share of all 1,326 dealt combinations this class is at least as strong as, 0..1.
-   * Combination-weighted, so 0.9955 for AA means "stronger than 99.55% of hands dealt",
-   * not "stronger than 99.55% of the 169 labels".
-   */
+  /** Combination-weighted share of all 1,326 dealt hands this class is at least as strong as, 0..1. */
   readonly percentileAmongAllHands: number;
 }
 
-/**
- * Sample bounds for a live decision.
- *
- * The ceiling is the `expert` difficulty's budget from `DIFFICULTY_SETTINGS`. A caller asking
- * for more is asking to spend a latency budget that is not theirs to spend, so the request is
- * clamped and the clamped figure is reported in `samples`. The floor keeps an assessment from
- * being so noisy that the action it produces is effectively a coin toss dressed up as a read.
- */
+/** Live-decision sample bounds. The ceiling is the `expert` budget. The floor keeps the read above noise. */
 const MIN_POSTFLOP_SAMPLES = 200;
 const MAX_POSTFLOP_SAMPLES = 12_000;
 
-/** `monteCarloEquity` wants an integer seed; this is the largest one worth drawing. */
 const MAX_SEED = 2 ** 31 - 1;
 
-/** The exponent in the opponent-count scaling. See the module comment for its measured error. */
+/** Measured error is in the module comment. */
 const MULTIWAY_EXPONENT = 0.4;
 
 /** Equity is never reported as certain either way: a bounded estimate cannot support that. */
 const MIN_EQUITY = 0.001;
 const MAX_EQUITY = 0.999;
 
-/**
- * How far equity has to exceed the current made-hand standing before the hand counts as
- * drawing. Eight points is wide enough that ordinary sampling noise at 200 samples (a half
- * width of about 3.5 points) does not flip the flag on its own.
- */
+/** Sampling half-width at 200 samples is about 3.5 points, so noise alone does not flip the draw flag. */
 const DRAW_EQUITY_MARGIN = 0.08;
 
 /** A draw needs somewhere to go: fewer than three improving cards is not a draw. */
 const MIN_DRAW_OUTS = 3;
 
-// ---------------------------------------------------------------------------
-// The preflop table, and the one memo this module keeps
-// ---------------------------------------------------------------------------
-
-/**
- * Label to entry, built once.
- *
- * `strengthTable()` is already memoised in the maths package, so this cache changes neither
- * the answer nor when the table is computed — it only turns a 169-entry linear scan into a
- * hash lookup, which matters because a six-max hand asks for one on every preflop decision.
- */
+/** Label to entry, so a preflop decision is a hash lookup rather than a 169-entry scan. */
 let memoisedByLabel: Map<string, HandClassStrength> | null = null;
 
 function tableByLabel(): Map<string, HandClassStrength> {
@@ -213,11 +117,8 @@ function requireTwoCards(cards: readonly Card[], where: string): Combo {
 }
 
 /**
- * What the computed table says about this holding, before any style or opponent count enters.
- *
- * Separate from `assessPreflop` because the policy needs the unscaled, un-styled percentile:
- * it is what the declared `vpip` is a threshold on, and mixing a style's own range width into
- * it would make the entry frequency depend on itself.
+ * The unscaled, unstyled percentile. The declared `vpip` is a threshold on it, so mixing in the style's
+ * own range width would make entry frequency depend on itself.
  */
 export function preflopClassPercentile(holeCards: readonly Card[]): PreflopClassStrength {
   const combo = requireTwoCards(holeCards, 'preflopClassPercentile');
@@ -230,18 +131,11 @@ export function preflopClassPercentile(holeCards: readonly Card[]): PreflopClass
     label,
     rank: entry.rank,
     equityVsRandom: entry.equityVsRandom,
-    // `cumulativePercent` counts this class and every stronger one, so the share of hands
-    // this class beats is what is left below it.
     percentileAmongAllHands: clamp01(1 - entry.cumulativePercent / 100),
   };
 }
 
-/**
- * Equity against `opponents` hands drawn uniformly at random.
- *
- * An approximation, with its measured error stated in the module comment. Exact at
- * `opponents === 1` by construction.
- */
+/** Equity against `opponents` uniformly random hands. An approximation, exact at `opponents === 1`. */
 export function scaleEquityForOpponents(headsUpEquity: number, opponents: number): number {
   if (!Number.isFinite(headsUpEquity) || headsUpEquity < 0 || headsUpEquity > 1) {
     throw new HandStrengthError(`headsUpEquity must be a probability in 0..1, received ${headsUpEquity}`);
@@ -255,13 +149,8 @@ export function scaleEquityForOpponents(headsUpEquity: number, opponents: number
 }
 
 /**
- * The preflop assessment.
- *
- * `traits` is used for exactly one thing: `traits.vpip` is the width of the range this style
- * would continue with, and `relativeStrength` is this holding's position inside that range.
- * A hand outside it reports 0 — the policy gates entry on `preflopClassPercentile`, which
- * keeps its resolution below the threshold, so nothing depends on resolution this field has
- * thrown away.
+ * `traits.vpip` sets the continuing range width, and `relativeStrength` is the holding's position in
+ * it. A hand outside the range reports 0.
  *
  * @param opponents how many opponents are still to be beaten, at least 1
  */
@@ -275,16 +164,12 @@ export function assessPreflop(
   const strength = preflopClassPercentile(combo);
   const width = clamp01(traits.vpip);
 
-  // Position inside the continuing range: 0 at its bottom edge, 1 at the top of the deck.
-  // A zero-width range would divide by zero; a style that plays nothing has no "inside".
   const relativeStrength = width <= 0 ? 0 : clamp01((strength.percentileAmongAllHands - (1 - width)) / width);
 
   return {
     equity: scaleEquityForOpponents(strength.equityVsRandom, opponents),
     relativeStrength,
-    // Preflop every hand still needs five cards, so "drawing rather than made" does not yet
-    // describe anything. The field is about a postflop hand whose value is in the cards to
-    // come, and claiming it preflop would make it mean two things.
+    // Preflop every hand still needs five cards, so "drawing" does not describe anything yet.
     isDraw: false,
     outs: 0,
     madeHandCategory: null,
@@ -292,10 +177,6 @@ export function assessPreflop(
     samples: table.samplesPerClass,
   };
 }
-
-// ---------------------------------------------------------------------------
-// Postflop
-// ---------------------------------------------------------------------------
 
 export interface PostflopAssessmentInput {
   readonly holeCards: readonly Card[];
@@ -347,10 +228,7 @@ export function assessPostflop(input: PostflopAssessmentInput): StrengthAssessme
   return {
     equity,
     relativeStrength: standing,
-    // Drawing means three things at once, and all three have to hold: there is a card to
-    // come, the made hand is no better than one pair, and the equity is materially above
-    // what the hand is worth at showdown right now. The third clause is what separates a
-    // draw from a weak made hand that is simply behind.
+    // The equity margin over showdown standing is what separates a draw from a weak made hand.
     isDraw:
       board.length < 5 &&
       category <= HAND_CATEGORY.pair &&
@@ -392,12 +270,8 @@ function legalOpponentCombos(range: ParsedRange, known: readonly Card[]): readon
 }
 
 /**
- * The share of the range in front of this hand that it currently beats, ties counted half.
- *
- * One `evaluate` per combination — a few hundred integer evaluations, which is the reason
- * this can run inside a decision while an equity enumeration cannot. It is deliberately a
- * *showdown-now* figure: it ignores the cards to come, which is exactly what makes it
- * complementary to `equity` and what makes the two together able to spot a draw.
+ * The share of the range this hand beats at showdown now, ties counted half. One `evaluate` per
+ * combination. It ignores cards to come, which is what lets it spot a draw next to `equity`.
  */
 function showdownStanding(heroScore: number, combos: readonly Combo[], board: readonly Card[]): number {
   let beaten = 0;
@@ -411,13 +285,8 @@ function showdownStanding(heroScore: number, combos: readonly Combo[], board: re
 }
 
 /**
- * Unseen cards that would lift the made-hand category.
- *
- * Counts self-improvement only, and says so on the field it fills. It does not ask whether
- * the improved hand wins, and it does not count improvement *within* a category — a card
- * that turns top pair into a better two pair counts, a card that only improves a kicker does
- * not. Both limits are deliberate: this is the cheap test that tells a draw from a made
- * hand, not a substitute for `computeOuts`.
+ * Unseen cards that lift the made-hand category. It ignores whether the improved hand wins and
+ * improvement within a category.
  */
 function countCategoryImprovements(combo: Combo, board: readonly Card[], currentCategory: number): number {
   const known: Card[] = [...combo, ...board];
@@ -428,16 +297,12 @@ function countCategoryImprovements(combo: Combo, board: readonly Card[], current
   return improving;
 }
 
-// ---------------------------------------------------------------------------
-// Small shared helpers
-// ---------------------------------------------------------------------------
-
 function clamp01(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.min(1, Math.max(0, value));
 }
 
-/** Equity is bounded away from 0 and 1: a sampled estimate cannot support certainty. */
+/** A sampled estimate cannot support certainty. */
 function clampEquity(value: number): number {
   if (!Number.isFinite(value)) {
     throw new HandStrengthError(`equity came back non-finite (${value})`);

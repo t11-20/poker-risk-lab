@@ -1,27 +1,8 @@
 /**
- * Tests for the opponent model.
- *
- * Three of these are not really tests of behaviour, they are tests of a *boundary*, and they
- * are written to fail by observation rather than by inspection:
- *
- *   - **The confidentiality test.** A hand that ends when everybody folds must record no
- *     showdown hands. Asserted from every viewer's angle, including the folder's own view,
- *     which genuinely does contain that seat's cards — so the test also asserts that the view
- *     it was handed was not empty of cards. A guard that passes because there was nothing to
- *     leak proves nothing.
- *   - **The public-information test.** The same completed hand, redacted for three different
- *     seats and for a spectator, must produce *identical* observations. Any dependence on who
- *     is looking is a dependence on private information, whatever the types say. This is a
- *     stronger claim than "the type has no card field", because a caller can hand a
- *     legitimately-shaped object built from privileged data.
- *   - **The empty-`seats` test.** The synthetic views below carry an empty `seats` array and
- *     everything still works, which demonstrates that `observeHandComplete` reads only the
- *     public action log and the showdown list — never `view.seats`, where the observer's own
- *     hole cards always sit.
- *
- * The counter arithmetic is worked out by hand in comments next to each assertion rather than
- * recomputed in the test. A test that recomputes the implementation's arithmetic passes when
- * both are wrong in the same way, which is the exact failure a frequency test exists to catch.
+ * Opponent model tests. The boundary tests fail by observation. A fold-out hand records no cards from
+ * any viewer's angle, the same hand redacted for different viewers yields identical observations, and
+ * synthetic views with empty `seats` prove the model reads only the action log and showdown list.
+ * Counter arithmetic is worked by hand in comments, not recomputed, so a shared error cannot pass.
  */
 
 import assert from 'node:assert/strict';
@@ -64,10 +45,6 @@ import {
   SHOWDOWN_HAND_CAP,
 } from '../src/opponent-model.ts';
 
-// ---------------------------------------------------------------------------
-// Driving real hands, so the boundary tests exercise the real redaction
-// ---------------------------------------------------------------------------
-
 const tableConfig: TableConfig = {
   smallBlind: 1,
   bigBlind: 2,
@@ -102,7 +79,6 @@ function act(state: HandState, action: Action): HandState {
   return applyAction(state, currentActor(state), action).state;
 }
 
-/** Checks when checking is legal, otherwise calls, until the hand is over. */
 function passiveToCompletion(state: HandState): HandState {
   let current = state;
   for (let guard = 0; guard < 200; guard++) {
@@ -113,10 +89,6 @@ function passiveToCompletion(state: HandState): HandState {
   }
   throw new Error('the hand did not complete within 200 actions');
 }
-
-// ---------------------------------------------------------------------------
-// Synthetic hands, for the arithmetic
-// ---------------------------------------------------------------------------
 
 type ScriptedEvent = Omit<PublicActionEvent, 'handId'>;
 
@@ -173,11 +145,8 @@ function toLoggedAction(event: ScriptedEvent, index: number): LoggedAction {
 }
 
 /**
- * A completed view carrying only a handId and an action log.
- *
- * `seats` is empty and `result` is null on purpose: if `observeHandComplete` ever started
- * reading `view.seats` — where the observer's own hole cards always sit — every test built on
- * this helper would break, which is the alarm we want.
+ * `seats` is empty and `result` is null on purpose. If `observeHandComplete` read `view.seats`, where
+ * the observer's own hole cards sit, every test built on this would break.
  */
 function scriptedView(base: PlayerView, handId: string, events: readonly ScriptedEvent[]): PlayerView {
   return {
@@ -200,7 +169,6 @@ function feedHand(
   return observeHandComplete(next, scriptedView(base, handId, events));
 }
 
-/** A completed real view, reused as the shape every synthetic view is built from. */
 function completedBaseView(): PlayerView {
   const state = passiveToCompletion(dealHand(3));
   assert.equal(state.street, 'complete', 'the base hand must complete');
@@ -219,7 +187,6 @@ function statsOf(observations: OpponentObservations, seat: number): DerivedSeatS
   return found;
 }
 
-/** A stable, order-independent picture of an observations object, for deep comparison. */
 function snapshot(observations: OpponentObservations): unknown {
   return {
     handsObserved: observations.handsObserved,
@@ -245,13 +212,8 @@ function deepFreeze(observations: OpponentObservations): OpponentObservations {
   return Object.freeze(observations);
 }
 
-// ---------------------------------------------------------------------------
-// 1. Confidentiality: a fold-out hand records nothing
-// ---------------------------------------------------------------------------
-
 test('a hand that ends in a fold records no showdown hands, from any viewer', () => {
-  // Heads-up, so one fold ends it: with maxSeats 2 the button posts the small blind and acts
-  // first, and folding leaves one player holding cards.
+  // Heads-up, the button posts the small blind and acts first, so one fold ends it.
   const dealt = dealHand(2, 'fold-out', 11);
   const state = act({ ...dealt, config: { ...dealt.config, maxSeats: 6 } }, { type: 'fold' });
   assert.equal(state.street, 'complete');
@@ -261,8 +223,7 @@ test('a hand that ends in a fold records no showdown hands, from any viewer', ()
   for (const viewerSeat of [0, 1, null]) {
     const view = redactFor(state, { viewerSeat });
 
-    // The guard must be doing work: the viewer's own cards ARE in this view. A test where
-    // there was nothing to leak would pass without proving anything.
+    // The viewer's own cards are in this view, so the guard has something to leak.
     if (viewerSeat !== null) {
       const own = view.seats.find((seat) => seat.seat === viewerSeat);
       assert.notEqual(own?.holeCards, null, `seat ${viewerSeat} should see its own cards`);
@@ -284,21 +245,16 @@ test('the folder is counted as having seen the hand, and the seat that never act
 
   const observations = observeHandComplete(emptyObservations(), redactFor(state, { viewerSeat: null }));
 
-  // The folder acted preflop, so it was offered a decision and declined to enter.
   assert.equal(seatOf(observations, folder).handsSeen, 1);
   assert.equal(seatOf(observations, folder).handsVoluntarilyEntered, 0);
-  // The other seat never got a turn, so it cannot have declined to enter and is not counted.
-  // Dividing by hands dealt instead would measure button rotation, not an entry threshold.
+  // The other seat never got a turn, so it is not counted. Dividing by hands dealt would measure
+  // button rotation.
   assert.equal(observations.bySeat.get(other), undefined);
   assert.equal(observations.handsObserved, 1);
 });
 
-// ---------------------------------------------------------------------------
-// 2. Public information only: the observer's identity cannot change the counters
-// ---------------------------------------------------------------------------
-
 test('a shown-down hand records exactly the hands that were shown', () => {
-  // Three seats, button 0: blinds are seats 1 and 2, and seat 0 acts first preflop.
+  // Button 0: blinds are seats 1 and 2, and seat 0 acts first preflop.
   const dealt = dealHand(3, 'showdown', 23);
   const folder = currentActor(dealt);
   const state = passiveToCompletion(act(dealt, { type: 'fold' }));
@@ -310,7 +266,6 @@ test('a shown-down hand records exactly the hands that were shown', () => {
 
   const observations = observeHandComplete(emptyObservations(), redactFor(state, { viewerSeat: folder }));
 
-  // The folder's OWN view contains the folder's own cards, and still records none of them.
   const ownView = redactFor(state, { viewerSeat: folder });
   assert.notEqual(
     ownView.seats.find((seat) => seat.seat === folder)?.holeCards,
@@ -326,8 +281,6 @@ test('a shown-down hand records exactly the hands that were shown', () => {
     assert.equal(seatOf(observations, seat).showdownsReached, 1);
   }
 
-  // Exactly one of the two showdown seats can have driven the betting, and in a hand that was
-  // checked down neither did.
   const aggressors = shownSeats.filter((seat) => seatOf(observations, seat).showdownHands[0]?.wasAggressor);
   assert.ok(aggressors.length <= 1, 'at most one seat can have made the last bet or raise');
 });
@@ -341,15 +294,9 @@ test('the same hand seen from different seats produces identical observations', 
   );
   const [first] = snapshots;
   for (const other of snapshots) {
-    // Any dependence on who is looking is a dependence on private information, whatever the
-    // input types say.
     assert.deepStrictEqual(other, first);
   }
 });
-
-// ---------------------------------------------------------------------------
-// 3. Counter arithmetic, worked out by hand
-// ---------------------------------------------------------------------------
 
 test('per-action counters follow a scripted sequence exactly', () => {
   const base = completedBaseView();
@@ -458,20 +405,14 @@ test('frequencies over 40 scripted hands match the arithmetic', () => {
   assert.ok(Math.abs(stats.aggressionFrequency - 10 / 56) < 1e-12);
   assert.ok(Math.abs(stats.foldToBetFrequency - 30 / 56) < 1e-12);
   assert.equal(stats.averageBetSizeAsPotFraction, 2);
-  // No 3-bet spot ever arose, so the rate is 0 over an empty denominator rather than NaN.
+  // An empty denominator gives 0, not NaN.
   assert.equal(stats.threeBetFrequency, 0);
-  // Nothing was shown down in a synthetic hand, so `result` was null and no cards exist here.
   assert.equal(stats.wentToShowdown, 0);
   assert.equal(seat.showdownHands.length, 0);
 
-  // 40 hands is exactly the `indicative` floor.
   assert.equal(stats.reliability, 'indicative');
   assert.equal(stats.reliability, reliabilityFor(40));
 });
-
-// ---------------------------------------------------------------------------
-// 4. A small sample says little
-// ---------------------------------------------------------------------------
 
 test('derivedStats returns null below the minimum and a value at it', () => {
   const base = completedBaseView();
@@ -488,7 +429,6 @@ test('derivedStats returns null below the minimum and a value at it', () => {
   observations = feedHand(observations, base, 'h20', [preflop(2, 'call', 2, 2)]);
   assert.equal(statsOf(observations, 2).handsSeen, MINIMUM_HANDS_FOR_STATS);
 
-  // A seat nobody has observed is also unknown, rather than a table of zeroes.
   assert.equal(derivedStats(observations, 4), null);
 });
 
@@ -509,7 +449,6 @@ test('the confidence interval shrinks as hands accumulate, through the documente
     const previous = measured[index - 1];
     const current = measured[index];
     if (previous === undefined || current === undefined) continue;
-    // Strictly shrinking: more hands can only narrow the interval.
     assert.ok(
       current.halfWidth < previous.halfWidth,
       `interval grew from ${previous.halfWidth} at ${previous.hands} hands to ${current.halfWidth} at ${current.hands}`,
@@ -533,19 +472,14 @@ test('the confidence interval shrinks as hands accumulate, through the documente
   assert.equal(at(INDICATIVE_MINIMUM_HANDS).reliability, 'indicative');
   assert.equal(at(REASONABLE_MINIMUM_HANDS - 1).reliability, 'indicative');
   assert.equal(at(REASONABLE_MINIMUM_HANDS).reliability, 'reasonable');
-  // There is no band above `reasonable`: counting public actions never earns certainty.
+  // Counting public actions never earns a band above `reasonable`.
   assert.equal(at(400).reliability, 'reasonable');
 });
-
-// ---------------------------------------------------------------------------
-// 5. Bounded memory
-// ---------------------------------------------------------------------------
 
 test('the bet-size window never exceeds its cap over 10,000 observations', () => {
   let observations = emptyObservations();
   const total = 10_000;
   for (let index = 0; index < total; index++) {
-    // A distinct size each time, so the contents can be checked as well as the length.
     observations = observeAction(observations, {
       handId: 'long-hand',
       seat: 0,
@@ -566,7 +500,7 @@ test('the bet-size window never exceeds its cap over 10,000 observations', () =>
   const samples = seatOf(observations, 0).betSizeSamples;
   assert.equal(samples.length, BET_SIZE_SAMPLE_CAP);
   assert.equal(seatOf(observations, 0).bets, total, 'the counter itself is not capped');
-  // Newest last, oldest dropped: the window holds observations 9937..10000 as pot fractions.
+  // The window holds observations 9937..10000 as pot fractions.
   assert.equal(samples[0], (total - BET_SIZE_SAMPLE_CAP + 1) / 100);
   assert.equal(samples[BET_SIZE_SAMPLE_CAP - 1], total / 100);
 });
@@ -581,7 +515,6 @@ test('the showdown window never exceeds its cap over 10,000 completed hands', ()
   let observations = emptyObservations();
   const total = 10_000;
   for (let index = 0; index < total; index++) {
-    // Same real hand, re-labelled: a genuine showdown list every time.
     observations = observeHandComplete(observations, { ...realView, handId: `h${index}` });
   }
 
@@ -594,14 +527,9 @@ test('the showdown window never exceeds its cap over 10,000 completed hands', ()
   }
   for (const seat of shownSeats) {
     assert.equal(seatOf(observations, seat).showdownHands.length, SHOWDOWN_HAND_CAP);
-    // The counter is unbounded even though the window is not.
     assert.equal(seatOf(observations, seat).showdownsReached, total);
   }
 });
-
-// ---------------------------------------------------------------------------
-// 6. Immutability
-// ---------------------------------------------------------------------------
 
 test('observing never mutates the input, even when it is deep-frozen', () => {
   const base = completedBaseView();
@@ -645,11 +573,6 @@ test('what the module returns is frozen, so a shared window cannot be pushed ont
   }, TypeError);
 });
 
-// ---------------------------------------------------------------------------
-// 7. Range estimation
-// ---------------------------------------------------------------------------
-
-/** Builds `hands` observed hands for one seat, `entered` of them voluntarily by calling. */
 function seatWithVpip(base: PlayerView, seat: number, hands: number, entered: number): OpponentObservations {
   let observations = emptyObservations();
   for (let index = 0; index < hands; index++) {
@@ -681,7 +604,6 @@ test('a tight seat is given a narrower range than a loose one', () => {
     tightRange.combos.length < looseRange.combos.length,
     `tight ${tightRange.combos.length} combos should be fewer than loose ${looseRange.combos.length}`,
   );
-  // The slice really is around the observed entry rate, not an arbitrary constant.
   assert.ok(tightRange.fractionOfAllHands >= 0.12 && tightRange.fractionOfAllHands < 0.16);
   assert.ok(looseRange.fractionOfAllHands >= 0.55 && looseRange.fractionOfAllHands < 0.6);
 });
@@ -701,13 +623,11 @@ test('a range narrows with each street of betting and with the strength of the a
   assert.ok(combos('flop', 'raise') < combos('flop', 'bet'));
   assert.ok(combos('flop', 'bet') < combos('flop', 'check'));
 
-  // Widening can walk back towards the entry range but never past it: a seat's range on a
-  // later street is a subset of what it entered with. Preflop is the only place the cap can
-  // bite, because there `keep ** 0` is 1 and the check multiplier is above 1.
+  // A later-street range is a subset of the entry range. Only preflop can hit the cap, because
+  // `keep ** 0` is 1 there and the check multiplier is above 1.
   assert.equal(combos('preflop', 'check'), combos('preflop', 'none'));
 });
 
-/** `hands` observed hands for one seat, every one entered and every flop bet called. */
 function seatThatNeverFolds(base: PlayerView, seat: number, hands: number): OpponentObservations {
   let observations = emptyObservations();
   for (let index = 0; index < hands; index++) {
@@ -720,29 +640,19 @@ function seatThatNeverFolds(base: PlayerView, seat: number, hands: number): Oppo
 }
 
 /**
- * An insufficient sample must be ignored on EVERY street, not just the one where it is free.
- *
- * The test this replaces asserted the same rule at `('preflop', 'none')` only, and preflop is
- * the one street where it could not fail: `streetsOfBetting` is 0 there, `keep ** 0` is 1, and
- * the per-street keep factor — the term that was reading the insufficient sample's own
- * fold-to-bet rate — drops out of the arithmetic entirely. A guard that can only be satisfied
- * is not a guard.
- *
- * Measured with this exact 25-hand sample before the fix: preflop 334 combos (correct, and
- * the reason nothing caught it), flop 300 against a neutral 184, turn 272 against 106, and
- * river 244 combos / 18.40% against a neutral 56 / 4.22% — 4.4x wider, from a sample the
- * module's own doc comment says it ignores. After: identical to neutral on all four.
+ * Preflop alone cannot catch this, because `keep ** 0` is 1 and the per-street keep factor drops out.
+ * Before the fix this 25-hand sample gave river 244 combos against a neutral 56.
  */
 test('an insufficient sample cannot move the range off the baseline assumption, on any street', () => {
   const base = completedBaseView();
-  // 25 hands: past the null floor, still `insufficient`. Entered every hand AND called every
-  // flop bet, so it pushes both terms — entry width and per-street keep — as far as they go.
+  // 25 hands is past the null floor and still `insufficient`. Entering every hand and calling every
+  // flop bet pushes both entry width and per-street keep to their limits.
   const veryLoose = statsOf(seatThatNeverFolds(base, 1, 25), 1);
   assert.equal(veryLoose.reliability, 'insufficient');
   assert.equal(veryLoose.vpip, 1, 'this seat entered every single observed hand');
   assert.equal(veryLoose.foldToBetFrequency, 0, 'and folded to none of the bets it faced');
 
-  // The baseline vpip is 0.25, so the entry range is the top 25% and not the top 100%.
+  // The baseline vpip is 0.25.
   const preflop = estimateRange(veryLoose, 'preflop', 'none', 1);
   assert.ok(preflop.fractionOfAllHands >= 0.25 && preflop.fractionOfAllHands < 0.3);
 
@@ -757,19 +667,13 @@ test('an insufficient sample cannot move the range off the baseline assumption, 
     );
   }
 
-  // The neutral river range really is narrow, so the assertion above is not passing because
-  // every street collapsed to the same number. Before the fix this seat's river range was 244.
+  // The neutral river range is narrow, so the streets did not all collapse to one number.
   assert.equal(estimateRange(neutralStats(1), 'river', 'none', 1).combos.length, 56);
 });
 
 /**
- * The gate defect 1 closed: a range is an adaptation, and it has to be scaled like one.
- *
- * `exploitAdjustments` was scaled by `adaptation x RELIABILITY_WEIGHT` and `estimateRange` was
- * scaled by neither, so a profile with adaptation 0 — which is every profile at the
- * `educational` difficulty — still played against a range built from what it had watched.
- * Negative control: at adaptation 0 the station and the rock below produced 300 and 84 combos
- * on the flop respectively; they must now both produce the neutral 184.
+ * `estimateRange` must scale by adaptation like `exploitAdjustments`, because every profile has
+ * adaptation 0 at `educational`. Before the fix the station and the rock gave 300 and 84 flop combos.
  */
 test('estimateRange returns the neutral baseline at adaptation 0, whatever it has counted', () => {
   const station: DerivedSeatStats = {
@@ -795,13 +699,12 @@ test('estimateRange returns the neutral baseline at adaptation 0, whatever it ha
     assert.equal(estimateRange(rock, street, 'none', 0).combos.length, neutral, `${street}: rock`);
   }
 
-  // And the gate is a gate, not a mute: at full adaptation the two reads are far apart, so a
-  // fix that simply stopped reading the sample would fail here.
+  // At full adaptation the reads differ, so a fix that stopped reading the sample fails here.
   assert.ok(
     estimateRange(station, 'flop', 'none', 1).combos.length >
       estimateRange(rock, 'flop', 'none', 1).combos.length + 100,
   );
-  // Half adaptation lands between the two, so the weight is a blend and not a switch.
+  // Half adaptation lands between, so the weight is a blend.
   const half = estimateRange(station, 'flop', 'none', 0.5).combos.length;
   const neutralFlop = estimateRange(neutralStats(1), 'flop', 'none', 1).combos.length;
   assert.ok(half > neutralFlop && half < estimateRange(station, 'flop', 'none', 1).combos.length);
@@ -812,19 +715,14 @@ test('estimateRange rejects a street, an action or an adaptation it does not mod
   assert.throws(() => estimateRange(stats, 'showdown', 'none', 1), ObservationError);
   assert.throws(() => estimateRange(stats, 'complete', 'none', 1), ObservationError);
   assert.throws(() => estimateRange(stats, 'flop', 'shove', 1), ObservationError);
-  // The same validation `exploitAdjustments` applies, for the same reason: a trait quietly
-  // clamped from 1.4 makes a profile behave differently from what its card claims.
+  // A trait silently clamped from 1.4 would make a profile differ from its card.
   assert.throws(() => estimateRange(stats, 'flop', 'none', 1.4), ObservationError);
   assert.throws(() => estimateRange(stats, 'flop', 'none', -0.1), ObservationError);
   assert.throws(() => estimateRange(stats, 'flop', 'none', Number.NaN), ObservationError);
   assert.doesNotThrow(() => estimateRange(stats, 'flop', 'none', 1));
 });
 
-// ---------------------------------------------------------------------------
-// 8. Exploit adjustments
-// ---------------------------------------------------------------------------
-
-/** Frequencies for a station: calls far too much, shows down constantly, limps in wide. */
+/** Calls far too much, shows down constantly, limps in wide. */
 function stationStats(): DerivedSeatStats {
   return {
     ...neutralStats(6),
@@ -860,7 +758,6 @@ test('an insufficient sample returns exactly neutral multipliers however adaptiv
   assert.strictEqual(adjustments.sizeUp, 1);
   assert.strictEqual(adjustments.isolateMore, 1);
 
-  // No stats at all behaves the same way, and says so.
   const unknown = exploitAdjustments(null, 1);
   assert.strictEqual(unknown.bluffMore, 1);
   assert.strictEqual(unknown.isolateMore, 1);
@@ -892,10 +789,9 @@ test('adaptation scales the adjustment monotonically, and an indicative sample h
   const half = exploitAdjustments(stats, 0.5);
   const indicative = exploitAdjustments({ ...stats, handsSeen: 60, reliability: 'indicative' }, 1);
 
-  // Every multiplier sits between neutral and the full adjustment.
   assert.ok(Math.abs(half.valueBetThinner - 1) < Math.abs(full.valueBetThinner - 1));
   assert.ok(Math.abs(half.valueBetThinner - 1) > 0);
-  // adaptation 0.5 at `reasonable` and adaptation 1 at `indicative` are the same weight, 0.5.
+  // adaptation 0.5 at `reasonable` and 1 at `indicative` are the same weight, 0.5.
   assert.ok(Math.abs(indicative.valueBetThinner - half.valueBetThinner) < 1e-12);
 });
 
@@ -905,10 +801,6 @@ test('exploitAdjustments rejects an adaptation that is not a trait value', () =>
   assert.throws(() => exploitAdjustments(stats, -0.1), ObservationError);
   assert.throws(() => exploitAdjustments(stats, Number.NaN), ObservationError);
 });
-
-// ---------------------------------------------------------------------------
-// 9. Validation and the double-count guards
-// ---------------------------------------------------------------------------
 
 test('observeAction rejects anything that is not a public action', () => {
   const observations = emptyObservations();
@@ -922,8 +814,7 @@ test('observeAction rejects anything that is not a public action', () => {
     () => observeAction(observations, { ...valid, potBefore: Number.POSITIVE_INFINITY }),
     ObservationError,
   );
-  // The unions make these unreachable in typed code; the runtime check is for callers
-  // crossing a wire boundary, where the string could be anything.
+  // The unions block these in typed code. The runtime check is for callers across a wire boundary.
   assert.throws(
     () => observeAction(observations, { ...valid, street: 'showdown' as PublicActionEvent['street'] }),
     ObservationError,
@@ -944,7 +835,6 @@ test('a hand cannot be counted twice', () => {
     () => observeAction(once, { handId: 'h1', ...postflop(1, 'bet', 0, 20, 10) }),
     ObservationError,
   );
-  // A different hand is fine, and the counters carry on.
   const twice = observeHandComplete(once, scriptedView(base, 'h2', [preflop(1, 'call', 2, 2)]));
   assert.equal(twice.handsObserved, 2);
   assert.equal(seatOf(twice, 1).handsSeen, 2);
@@ -959,14 +849,8 @@ test('observeHandComplete refuses a hand that is not over', () => {
   );
 });
 
-// ---------------------------------------------------------------------------
-// 10. No generated string can impersonate anyone
-// ---------------------------------------------------------------------------
-
 test('no reachable combination of frequencies produces text the impersonation guard rejects', () => {
-  // `assertNoImpersonation` runs at generation time, so a note that would fail it throws
-  // rather than being returned. That makes this a sweep for a *generator* bug: if any point
-  // in the reachable input space produces rejected text, this test throws where it is built.
+  // `assertNoImpersonation` throws at generation time, so this sweeps for a generator bug.
   const axis = [0, 0.33, 0.67, 1];
   const bands = ['insufficient', 'indicative', 'reasonable'] as const;
   let checked = 0;
@@ -1007,10 +891,6 @@ test('no reachable combination of frequencies produces text the impersonation gu
   assert.deepEqual(findImpersonation(exploitAdjustments(null, 1).note), []);
 });
 
-// ---------------------------------------------------------------------------
-// 11. The handle
-// ---------------------------------------------------------------------------
-
 test('the OpponentModel handle swaps snapshots without mutating the one already handed out', () => {
   const base = completedBaseView();
   const model = createOpponentModel(2);
@@ -1024,7 +904,6 @@ test('the OpponentModel handle swaps snapshots without mutating the one already 
   assert.equal(first.handsObserved, 0, 'the snapshot a policy already holds must not change');
   assert.equal(second.handsObserved, 1);
 
-  // No read yet, so the handle falls back to the neutral assumption rather than to null.
   assert.equal(model.statsFor(1), null);
   assert.equal(model.statsOrNeutralFor(1).reliability, 'insufficient');
   assert.equal(model.adjustmentsFor(1, 1).bluffMore, 1);
@@ -1034,15 +913,8 @@ test('the OpponentModel handle swaps snapshots without mutating the one already 
 });
 
 /**
- * `statsOrNeutralFor` must fall back across the whole `insufficient` band, not just the `null`
- * floor.
- *
- * These are two different thresholds — `derivedStats` returns null below 20 hands, while
- * `insufficient` runs to 40 — and the `?? neutralStats` that used to stand here caught only
- * the first. Negative control: at 25 hands of a seat that entered every pot, this returned the
- * raw vpip of 1 and fold-to-bet of 0. `ObservedSeatTendencies` documents that a caller cannot
- * lean on such a read, and the `opponents` getter is built from this method, so the doc was
- * false for the 20-to-39-hand window.
+ * `derivedStats` returns null below 20 hands, but `insufficient` runs to 40. Before the fix a 25-hand
+ * seat that entered every pot returned vpip 1 and fold-to-bet 0.
  */
 test('statsOrNeutralFor neutralises the whole insufficient band, not just the null floor', () => {
   const base = completedBaseView();
@@ -1060,8 +932,7 @@ test('statsOrNeutralFor neutralises the whole insufficient band, not just the nu
   assert.equal(guarded.vpip, neutralStats(1).vpip);
   assert.equal(guarded.foldToBetFrequency, neutralStats(1).foldToBetFrequency);
   assert.equal(guarded.tightness, neutralStats(1).tightness);
-  // And the `opponents` list, which is what the doc comment promises, agrees — while still
-  // reporting the true hand count so a caller can see why.
+  // The `opponents` list agrees, and still reports the true hand count.
   const seen = model.opponents.find((entry) => entry.seat === 1);
   assert.equal(seen?.handsObserved, 25);
   assert.equal(seen?.vpip, neutralStats(1).vpip);
@@ -1093,11 +964,10 @@ test('the opponents list excludes the model own seat, is sorted, and is neutral 
     'own seat 2 must be absent, and the rest sorted',
   );
 
-  // Seats 1 and 3 entered every observed hand, and their 200-hand sample is reliable.
   assert.equal(opponents[0]?.handsObserved, 200);
   assert.equal(opponents[0]?.vpip, 1);
-  // Seat 4 has 5 hands, so the numbers it contributes are the neutral baseline, not 1.0 —
-  // a policy that forgets to look at `handsObserved` still cannot act on 5 hands.
+  // Seat 4 contributes the neutral baseline, so a policy that ignores `handsObserved` cannot act on
+  // 5 hands.
   assert.equal(opponents[2]?.handsObserved, 5);
   assert.equal(opponents[2]?.vpip, neutralStats(4).vpip);
   assert.equal(opponents[2]?.foldToBetFrequency, neutralStats(4).foldToBetFrequency);

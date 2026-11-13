@@ -1,25 +1,8 @@
 /**
  * Content types: lessons, quizzes, glossary entries and Scenario Lab scenarios.
- *
- * ## The rule that shapes all of this
- *
- * Content stores *situations and reasoning*, never computed numbers. A scenario
- * says "hero holds Ah Kh, board is Qh 7h 2c, pot is 100, opponent bets 50, assume
- * this opponent range"; it does not say "hero has 35% equity". Every number the
- * learner sees is computed at runtime by `@prl/poker-math` from the situation.
- *
- * Two reasons this matters:
- *
- *   1. A hard-coded odds table is a lie waiting to happen. If the maths changes,
- *      or the number was wrong to begin with, nothing catches it — the content and
- *      the engine can disagree forever and the learner is taught the wrong thing.
- *   2. Tests can verify content. Because a scenario is a situation, the test suite
- *      can compute the answer independently and assert the teaching point holds.
- *
- * So `expectedInsight` below describes what should be true ("calling is
- * break-even or better", "folding is clearly best"), and the test suite checks
- * that the computed maths actually supports it. If a scenario's claim stops being
- * true, the build fails rather than the learner being misled.
+ * Content stores situations and reasoning, never computed numbers. `@prl/poker-math` computes every
+ * figure at runtime, and the test suite checks that each `expectedInsight` claim holds, so the
+ * teaching text and the maths cannot drift apart.
  */
 
 /** A stable, human-readable identifier used in URLs and progress records. */
@@ -44,17 +27,8 @@ export const TOPICS = [
 export type Topic = (typeof TOPICS)[number];
 
 /**
- * The one human name for each syllabus area, for every screen that shows a topic.
- *
- * There were three maps — `apps/web/src/lib/learn-curriculum.ts`, `apps/web/src/lib/lab-labels.ts`
- * and `apps/bot/src/learn.ts` — and they disagreed: the Lab's filter and chips said "Positions and
- * blinds" while Learn and the glossary said "Position and the blinds" for the same id (UX audit at
- * 6b3886e, Minor 4). A learner filtering the Lab by a name the curriculum never uses has been told
- * there are two topics. One map, here beside `TOPICS`, typed `Record<Topic, …>` so a topic added
- * without a name is a compile error rather than a slug on screen.
- *
- * Written out rather than de-slugged from the id, because "Pot odds and EV" and "Bet sizing and
- * SPR" need capitalisation a string transform cannot guess.
+ * The one display name for each syllabus area, shared by every screen. Typed `Record<Topic, …>` so a
+ * new topic without a name fails to compile. Written out because "Pot odds and EV" cannot be de-slugged.
  */
 export const TOPIC_LABELS: Readonly<Record<Topic, string>> = {
   'rules-and-flow': 'Rules and flow',
@@ -99,10 +73,7 @@ export type LessonBlock =
       readonly text: string;
     }
   | {
-      /**
-       * Embeds a live calculation. The client computes it with @prl/poker-math and
-       * renders the result, so the lesson text never contains a stale number.
-       */
+      /** Embeds a calculation the client computes with @prl/poker-math, so lesson text never goes stale. */
       readonly kind: 'liveCalculation';
       readonly calculation: LiveCalculation;
       readonly caption: string;
@@ -111,10 +82,7 @@ export type LessonBlock =
     }
   | { readonly kind: 'scenarioLink'; readonly scenarioId: ContentId; readonly prompt: string };
 
-/**
- * A calculation a lesson or scenario asks the app to perform. The parameters are
- * the situation; the result is computed, never stored.
- */
+/** A calculation a lesson or scenario asks the app to perform. Only the situation is stored. */
 export type LiveCalculation =
   | {
       readonly kind: 'equity';
@@ -161,10 +129,7 @@ export type LiveCalculation =
       readonly standardDeviationBbPer100: number;
     }
   | {
-      /**
-       * Independent-chip-model prize equity for a stack/payout situation.
-       * `stacks` and `payouts` are the situation; the shares are computed.
-       */
+      /** Independent-chip-model prize equity. `stacks` and `payouts` are the situation. */
       readonly kind: 'icm';
       readonly stacks: readonly number[];
       readonly payouts: readonly number[];
@@ -202,10 +167,7 @@ export type QuizQuestion =
       readonly optionNotes?: readonly string[];
     }
   | {
-      /**
-       * The expected value is COMPUTED from `calculation`, not stored. The learner's
-       * answer is accepted within `tolerance`.
-       */
+      /** The expected value is computed from `calculation`, and the answer is accepted within `tolerance`. */
       readonly kind: 'numeric';
       readonly id: ContentId;
       readonly prompt: string;
@@ -230,11 +192,7 @@ export interface Quiz {
   readonly topic: Topic;
   readonly lessonId?: ContentId;
   readonly questions: readonly QuizQuestion[];
-  /**
-   * Deliberately absent: any notion of a score threshold, streak, or "pass".
-   * Quizzes exist to surface reasoning, not to gate progress or manufacture
-   * compulsion. See docs/PRODUCT-GUARDRAILS.md.
-   */
+  /** No score threshold, streak or "pass" exists (docs/PRODUCT-GUARDRAILS.md). */
   readonly reviewAdvice: string;
 }
 
@@ -253,10 +211,7 @@ export type OpponentProfile = (typeof OPPONENT_PROFILES)[number];
 export type RangeSpec =
   /** Exact cards, e.g. "AhKh" — used when the scenario is about a known hand. */
   | { readonly kind: 'exact'; readonly cards: string }
-  /**
-   * A hand-class range in standard notation, e.g. "AA-TT, AKs, AQo+, 76s".
-   * Parsed by @prl/poker-math into concrete combinations.
-   */
+  /** Standard hand-class notation, e.g. "AA-TT, AKs, AQo+, 76s". */
   | { readonly kind: 'notation'; readonly notation: string; readonly label: string }
   /** Top N% of hands by a documented ordering. */
   | { readonly kind: 'topPercent'; readonly percent: number; readonly label: string };
@@ -265,28 +220,10 @@ export interface ScenarioSeat {
   readonly seat: number;
   readonly label: string;
   /**
-   * Chips BEHIND: what this seat still has to put in, *after* whatever it has
-   * already committed on the current street. It is NOT the seat's total.
-   *
-   * So a seat's chips at the start of the street are
-   * `stack + (scenario.committedThisStreet?.[seat] ?? 0)`, and a seat that is all
-   * in has `stack: 0` — nothing behind is the definition of all in, and a
-   * jamming seat written with chips still behind is a content bug, not a
-   * shorthand. `validate.ts` enforces both readings against the scenario's own
-   * `facingAction` text.
-   *
-   * The distinction is load-bearing rather than pedantic. `readSituation` in
-   * @prl/content passes this straight to `effectiveStack`, and the Coach computes
-   * the largest legal raise as `heroCommittedThisStreet + heroStack` — which is
-   * the total only under this reading. Under the other one it would double-count
-   * every chip hero has already put in this street. The ambiguity has cost real
-   * time: the release audit filed a P0 against that Coach line, and the P0 was
-   * wrong, because the convention was never written down anywhere.
-   *
-   * The data has always meant this. In `foundations.json` every seat's
-   * `stack + committedThisStreet` comes to the round 1000 the scenarios are built
-   * on (990 + 10, 995 + 5), and `potBeforeStreet` equals the sum of what the
-   * seats are missing from it. Neither holds under the "total" reading.
+   * Chips behind, after whatever the seat committed this street. Not the seat's total.
+   * Street-start chips are `stack + (committedThisStreet?.[seat] ?? 0)`, and an all-in seat has
+   * `stack: 0`. The Coach's largest raise is `heroCommittedThisStreet + heroStack`, which is correct
+   * only under this reading. `validate.ts` enforces it against `facingAction`.
    */
   readonly stack: number;
   /** Only hero's cards are known to the learner. */
@@ -296,11 +233,8 @@ export interface ScenarioSeat {
 }
 
 /**
- * A Scenario Lab situation.
- *
- * Note what is NOT here: any equity number, pot-odds percentage, or "correct
- * answer" expressed as a figure. `expectedInsight` states a *relationship* that the
- * computed maths must satisfy, and the scenario test suite enforces it.
+ * A Scenario Lab situation. It holds no equity, pot-odds figure or numeric answer. `expectedInsight`
+ * states relationships the computed maths must satisfy.
  */
 export interface Scenario {
   readonly id: ContentId;
@@ -326,11 +260,7 @@ export interface Scenario {
   readonly toCall: number;
   /** The range assumption the analysis rests on. Always stated, never implied. */
   readonly opponentRange: RangeSpec;
-  /**
-   * Assumptions the learner must know the analysis depends on. These are shown
-   * next to every number, because a number without its assumptions is a guess
-   * dressed as a fact.
-   */
+  /** Assumptions the analysis depends on, shown next to every number. */
   readonly assumptions: readonly string[];
   /** The reasoning the learner should arrive at, in prose. */
   readonly reasoning: string;
@@ -341,13 +271,7 @@ export interface Scenario {
   readonly glossaryTerms: readonly ContentId[];
 }
 
-/**
- * A machine-checkable claim about a scenario.
- *
- * The test suite computes the situation with @prl/poker-math and asserts each
- * claim. A scenario whose claim no longer holds fails the build, which is the whole
- * point: the teaching text and the maths cannot drift apart.
- */
+/** A machine-checkable claim, asserted against @prl/poker-math by the scenario tests. */
 export type ScenarioClaim =
   | {
       /** Hero's equity against the stated range falls in [min, max]. */

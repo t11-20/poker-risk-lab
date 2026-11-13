@@ -1,27 +1,9 @@
 /**
  * The sizes a seat is offered at the table, and the one rounding rule they are built with.
- *
- * ## Why this lives here and not in `@prl/ui`
- *
- * It did live in `@prl/ui` (`bet-sizing.ts`), and the Coach priced a different set of sizes with a
- * different rounding rule. The `ActionBar` offered the minimum raise as its default plus ⅓, ½, ⅔
- * and pot presets rounded to the nearest chip; the Coach priced three rungs of its own sizing
- * ladder — the smallest ladder rung at or above the floor, a middle one, and the shove — each
- * rounded DOWN. The Scenario Lab grades a learner's size by exact match against the priced rows,
- * so the two lists had to agree and nothing joined them. Measured over the 36 bundled scenarios at
- * commit 308fadf: of the 31 that offer a bet or a raise, the bar's default was unpriced in 23; on
- * `eq-second-pair-vs-wide-range` the ⅔-pot preset was 207 and the priced row 206, one chip apart
- * by rounding alone; and on `eq-flush-draw-turn-small-bet` the best row, "Raise to 67", was a size
- * no preset could reach. A learner pressed a button the product offered and was told "this
- * analysis did not price that size".
- *
- * So the sizes are defined once, here, and both sides read them: `ActionBar` renders its presets
- * from `TABLE_SIZING_PRESETS` through `presetTo` (re-exported by `@prl/ui` under its old names),
- * and `buildCoachReport` prices exactly `offeredSizes` — the default plus every preset. This
- * package is the one both can import: `@prl/ui` already depends on it, and it has no I/O.
- *
- * Everything here is pure and total: no throws, no `NaN` escaping, defined for every finite and
- * non-finite input. A formatter that throws mid-render takes out the table around it.
+ * `ActionBar` renders `TABLE_SIZING_PRESETS` through `presetTo`, and `buildCoachReport` prices
+ * exactly `offeredSizes`. The Lab grades a size by exact match, so the bar and the Coach must agree
+ * (they once differed in 23 of 31 scenarios). Every function is total and never throws, because a
+ * throw mid-render takes out the table.
  */
 
 /** The inclusive range of total street commitments the table will accept. */
@@ -49,15 +31,12 @@ export interface SizingPreset {
 }
 
 /**
- * The preset sizes, as a fraction of the pot **after** the call:
+ * The preset sizes, as a fraction of the pot after the call:
  *
  *     total = committedThisStreet + toCall + round(fraction × (pot + toCall))
  *
- * With nothing to call that reduces to a plain fraction-of-pot bet. Facing a bet it is the
- * standard pot-sized-raise construction — match the bet first, then bet a fraction of what is then
- * in the middle. That definition is printed next to the buttons in the UI, because "pot-sized
- * raise" means at least three different things in the wild and a learner should not have to
- * reverse-engineer which one a button implements.
+ * With nothing to call this is a plain fraction-of-pot bet. The UI prints this definition next to
+ * the buttons, because "pot-sized raise" has several meanings.
  */
 export const TABLE_SIZING_PRESETS: readonly SizingPreset[] = [
   { id: 'third', label: '⅓ pot', fraction: 1 / 3 },
@@ -68,17 +47,8 @@ export const TABLE_SIZING_PRESETS: readonly SizingPreset[] = [
 ];
 
 /**
- * Rounds to a whole chip and pins into `[min, max]`.
- *
- * Total by construction, and every branch is deliberate:
- *
- *  - non-finite in (`NaN` from an empty or half-typed field, `Infinity` from nothing sensible at
- *    all) collapses to `min`, which is always a legal amount;
- *  - an inverted or impossible range (`max < min`, which the server should never send but which a
- *    bug upstream could) also collapses to `min` rather than returning something between two
- *    contradictory bounds;
- *  - rounding happens BEFORE the pin, so a value just outside a bound cannot round its way back
- *    out again.
+ * Rounds to a whole chip and pins into `[min, max]`. A non-finite value and an inverted range both
+ * return `min`. Rounding happens before the pin, so a value outside a bound cannot round back out.
  */
 export function clampToBounds(value: number, bounds: BetBounds): number {
   if (!Number.isFinite(bounds.min)) return 0;
@@ -88,13 +58,9 @@ export function clampToBounds(value: number, bounds: BetBounds): number {
 }
 
 /**
- * The total a preset resolves to, already clamped into the legal range.
- *
- * **The one rounding rule.** The fraction of the pot is rounded to the NEAREST chip, once, here.
- * The Coach's ladder floors instead (`sizingLadder` in `./stacks.ts`), which is right for a ladder
- * that has to stay inside the fraction its label claims and wrong for a size a learner is offered,
- * because the button and the priced row then differ by a chip — 207 against 206, measured above.
- * Neither direction is more correct than the other; what is incorrect is having two.
+ * The total a preset resolves to, clamped into the legal range. The fraction is rounded to the
+ * nearest chip, once, here. `sizingLadder` floors instead, and the offered button must match the
+ * priced row exactly.
  */
 export function presetTo(preset: SizingPreset, context: SizingContext): number {
   const { bounds, pot, toCall, committedThisStreet } = context;
@@ -105,22 +71,15 @@ export function presetTo(preset: SizingPreset, context: SizingContext): number {
 
 /** One size the table offers, and which control offers it. */
 export interface OfferedSize {
-  /** `'minimum'` is the sizer's default — the floor, which is what an untouched sizer sends. */
+  /** `'minimum'` is the floor, which is what an untouched sizer sends. */
   readonly id: 'minimum' | SizingPreset['id'];
-  /** The total street commitment. */
   readonly to: number;
 }
 
 /**
- * Every size the `ActionBar` can produce without the learner typing or dragging: its default and
- * each preset, deduplicated and in ascending order.
- *
- * The default is the floor because that is what an untouched sizer sends — `resolveDraft(null,
- * bounds)` is `bounds.min`. On a short stack several presets clamp onto the same total, which is
- * correct and is why this list can be as short as one entry. When they do, the floor and the shove
- * keep their own names — they are added first — because a "⅔ pot" preset clamped up to the whole
- * stack IS the all-in, and naming it after a fraction it no longer is would put a false sentence
- * in the Coach's derivation.
+ * Every size the `ActionBar` can produce without typing or dragging, deduplicated and ascending.
+ * The floor and the shove are added first, so when a preset clamps onto one of them it keeps the
+ * plain name. A "⅔ pot" clamped to the whole stack is the all-in.
  */
 export function offeredSizes(context: SizingContext): readonly OfferedSize[] {
   const sizes: OfferedSize[] = [];
@@ -137,11 +96,8 @@ export function offeredSizes(context: SizingContext): readonly OfferedSize[] {
 }
 
 /**
- * The priced sizes either side of one the analysis did not price, so a refusal can say where the
- * priced ones are instead of only that this one is not among them.
- *
- * `below` is the largest priced size under `to`, `above` the smallest over it; either is `null`
- * when nothing priced lies on that side.
+ * The priced sizes either side of an unpriced `to`, so a refusal can name them. `below` is the
+ * largest priced size under `to` and `above` the smallest over it. Either is `null` when none exists.
  */
 export function nearestPricedSizes(
   to: number,

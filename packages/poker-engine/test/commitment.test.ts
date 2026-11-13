@@ -20,9 +20,7 @@ test('a commitment publishes only a root before the deal', () => {
   assert.equal(commitment.version, COMMITMENT_VERSION);
   assert.equal(commitment.algorithm, 'sha256');
   assert.match(commitment.root, /^[0-9a-f]{64}$/);
-  // The published object carries no salts, no deck and no card values at all.
-  // Checked by key name rather than substring: the version string itself contains
-  // the word "deck", so a naive substring check here would fail on nothing.
+  // Checked by key name, because the version string itself contains "deck".
   assert.deepEqual(Object.keys(commitment).sort(), ['algorithm', 'context', 'root', 'version']);
   const serialised = JSON.stringify(commitment);
   assert.ok(!serialised.includes('"salts"'), 'the commitment must not carry salts');
@@ -59,8 +57,7 @@ test('substituting a card at a revealed position fails verification', () => {
   const reveal = revealPositions(commitment, secret, [0, 1, 2]);
   const first = reveal.cards[0];
   assert.ok(first !== undefined);
-  // This is the attack the commitment exists to catch: the server claims a
-  // different card sat at a position after seeing how the hand played out.
+  // The attack the commitment exists to catch, a different card claimed at a position afterwards.
   const substituted: DeckReveal = {
     ...reveal,
     cards: [{ ...first, card: (first.card + 1) % DECK_SIZE }, ...reveal.cards.slice(1)],
@@ -107,8 +104,7 @@ test('a tampered proof path fails verification', () => {
 test('a reveal cannot be replayed under a different context', () => {
   const { commitment, secret } = commitToDeck('room_1:hand_1', random);
   const reveal = revealPositions(commitment, secret, [0, 1]);
-  // Same cards, salts and proofs, but claimed for a different hand. The context is
-  // hashed into every leaf, so the root no longer matches.
+  // Same cards, salts and proofs, claimed for a different hand. The context is in every leaf.
   const replayed: DeckReveal = {
     ...reveal,
     commitment: { ...commitment, context: 'room_1:hand_2' },
@@ -127,7 +123,6 @@ test('the same deck with different salts produces different roots', () => {
   const a = commitToDeckOrder('ctx', deck, random.bytes(DECK_SIZE * SALT_BYTES));
   const b = commitToDeckOrder('ctx', deck, random.bytes(DECK_SIZE * SALT_BYTES));
   assert.notEqual(a.commitment.root, b.commitment.root);
-  // ...and both verify, so neither is malformed.
   assert.equal(verifyDeckReveal(revealEverything(a.commitment, a.secret)).ok, true);
   assert.equal(verifyDeckReveal(revealEverything(b.commitment, b.secret)).ok, true);
 });
@@ -136,17 +131,13 @@ test('an unrevealed position leaks nothing about its card', () => {
   const { commitment, secret } = commitToDeck('room_1:hand_1', random);
   const reveal = revealPositions(commitment, secret, [0, 1]);
   const serialised = JSON.stringify(reveal);
-  // Cards at positions 2..51 must be absent. Since card values are small integers
-  // that collide with indices, check the structural claim instead: exactly the
-  // requested positions appear, each with exactly one card.
+  // Card values collide with indices, so check that exactly the requested positions appear.
   assert.deepEqual(
     reveal.cards.map((entry) => entry.index),
     [0, 1],
   );
   assert.ok(!serialised.includes('"deck"'));
-  // A brute-force attacker knows the root and the 52 candidate cards per position.
-  // The 32-byte salt is what makes each sealed leaf infeasible to test; assert it
-  // is actually that long, since a short salt would silently break the property.
+  // The 32-byte salt makes a sealed leaf infeasible to brute-force from 52 candidates.
   for (const entry of reveal.cards) assert.equal(Buffer.from(entry.saltHex, 'hex').length, 32);
 });
 

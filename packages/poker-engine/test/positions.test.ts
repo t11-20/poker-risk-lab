@@ -1,25 +1,15 @@
 /**
- * Position naming, checked against standard No-Limit Hold'em terminology.
+ * Position names against standard NLHE terminology. Expectations are literals and the seat walk is
+ * done here, not with `orderFrom`, so nothing is checked against the code under test. The earlier
+ * test only covered heads-up, which returns before the path that mislabelled 3+ handed tables.
  *
- * Every expectation in this file is written out from the standard naming as a
- * literal, and the clockwise seat walk is done here rather than with the engine's
- * own `orderFrom`, so nothing is checked against the code that produces it. That
- * matters: the only previous test of `positionLabels` asserted the two heads-up
- * labels, and heads-up returns before the code path that mislabelled every seat at
- * three or more handed.
- *
- * The reference naming, clockwise from the button:
- *
- *   2 handed  BTN/SB, BB          the button posts the small blind and is both
- *   3 handed  BTN, SB, BB         no seat is left over to name
- *   4 handed  BTN, SB, BB, CO     the one extra seat sits right of the button
+ *   2 handed  BTN/SB, BB
+ *   3 handed  BTN, SB, BB
+ *   4 handed  BTN, SB, BB, CO
  *   5 handed  BTN, SB, BB, UTG, CO
  *   6 handed  BTN, SB, BB, UTG, HJ, CO
  *
- * Two anchors define the whole scheme: UTG is the first seat after the big blind
- * (it is "under the gun" because it opens the preflop action), and CO is the seat
- * immediately right of the button (it acts just before the button, hence "cutoff").
- * The names in between are filled towards the blinds as the table grows.
+ * UTG is the first seat after the big blind and CO the seat right of the button.
  */
 
 import assert from 'node:assert/strict';
@@ -35,10 +25,7 @@ const STANDARD_ORDER = new Map<number, readonly PositionLabel[]>([
   [6, ['BTN', 'SB', 'BB', 'UTG', 'HJ', 'CO']],
 ]);
 
-/**
- * Occupied seats clockwise starting at the button, computed here so the referee
- * never borrows the engine's seat arithmetic.
- */
+/** Occupied seats clockwise from the button, computed here rather than with the engine's arithmetic. */
 function clockwiseFromButton(buttonSeat: number, maxSeats: number, occupied: readonly number[]): number[] {
   const order: number[] = [buttonSeat];
   for (let step = 1; step < maxSeats; step++) {
@@ -48,7 +35,6 @@ function clockwiseFromButton(buttonSeat: number, maxSeats: number, occupied: rea
   return order;
 }
 
-/** The label map the standard naming requires, built independently of the engine. */
 function refereeLabels(
   buttonSeat: number,
   maxSeats: number,
@@ -76,7 +62,6 @@ function refereeBlinds(
   const afterButton = clockwiseFromButton(buttonSeat, maxSeats, occupied).slice(1);
   const [first, second] = afterButton;
   assert.ok(first !== undefined, 'a table needs at least two players');
-  // Heads-up is a different rule set: the button posts the small blind.
   if (occupied.length === 2) {
     return { smallBlindSeat: buttonSeat, bigBlindSeat: first, isHeadsUp: true };
   }
@@ -89,8 +74,6 @@ function sortedEntries(labels: ReadonlyMap<number, PositionLabel>): [number, Pos
 }
 
 test('the complete label map, written out as literals, for 2 to 6 handed', () => {
-  // Flat literals, button on seat 0, no gaps. Read straight off the reference
-  // naming above; nothing here is derived from the engine.
   assert.deepEqual(sortedEntries(positionLabels(0, 2, [0, 1])), [
     [0, 'BTN/SB'],
     [1, 'BB'],
@@ -122,9 +105,7 @@ test('the complete label map, written out as literals, for 2 to 6 handed', () =>
     [5, 'CO'],
   ]);
 
-  // The button moved one seat: every label moves with it. Six-handed with the
-  // button on seat 2 was the case the old code reported as
-  // [HJ, CO, BTN, CO, MP, UTG]-flavoured nonsense, with no SB or BB anywhere.
+  // Six-handed with the button on seat 2 was a case the old code reported with no SB or BB.
   assert.deepEqual(sortedEntries(positionLabels(2, 6, [0, 1, 2, 3, 4, 5])), [
     [0, 'HJ'],
     [1, 'CO'],
@@ -151,7 +132,6 @@ test('every table size 2..6 and every button position matches standard naming', 
 });
 
 test('gapped seating is labelled by clockwise order, not by seat number', () => {
-  // A six-max table with three players sitting in seats 0, 2 and 5.
   assert.deepEqual(sortedEntries(positionLabels(0, 6, [0, 2, 5])), [
     [0, 'BTN'],
     [2, 'SB'],
@@ -162,7 +142,6 @@ test('gapped seating is labelled by clockwise order, not by seat number', () => 
     [2, 'BTN'],
     [5, 'SB'],
   ]);
-  // Two players in seats 1 and 4 of a six-max table is still heads-up.
   assert.deepEqual(sortedEntries(positionLabels(4, 6, [1, 4])), [
     [1, 'BB'],
     [4, 'BTN/SB'],
@@ -186,9 +165,7 @@ test('gapped seating is labelled by clockwise order, not by seat number', () => 
 });
 
 test('the seat that posts each blind is the seat labelled for it', () => {
-  // The regression in one assertion: the small blind was reported as the cutoff at
-  // six handed and as under the gun at three handed, so a learner reading the table
-  // saw the wrong position for the seat that had just been charged a blind.
+  // The regression. The small blind was labelled CO at six handed and UTG at three handed.
   for (let players = 2; players <= 6; players++) {
     const occupied = Array.from({ length: players }, (_, seat) => seat);
     for (const buttonSeat of occupied) {
@@ -229,9 +206,7 @@ test('every occupied seat gets exactly one label and no label is reused', () => 
       }
       const used = [...labels.values()];
       assert.equal(new Set(used).size, used.length, `${where}: duplicate label in ${used.join(',')}`);
-      // 'MP' is the fallback the old code fell through to once its name list ran
-      // out. At six or fewer seats every position has a real name, so it must
-      // never appear.
+      // 'MP' is the old fallback. At six or fewer seats every position has a real name.
       assert.ok(!used.includes('MP'), `${where}: fell through to the MP fallback`);
     }
   }

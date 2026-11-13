@@ -1,11 +1,6 @@
 /**
- * Starting-hand classes and range notation.
- *
- * There are 1326 distinct two-card combinations but only 169 strategically
- * distinct *classes*, because suits are interchangeable before a board exists:
- * 13 pairs, 78 suited classes and 78 offsuit classes.
- *
- * ## Notation supported
+ * Starting-hand classes and range notation. 1326 combinations fall into 169 classes (13 pairs, 78
+ * suited, 78 offsuit), because suits are interchangeable before a board exists.
  *
  *   AA            a specific pair
  *   TT+           that pair and every higher pair
@@ -16,13 +11,8 @@
  *   A5o+          same, offsuit
  *   random / 100% every hand
  *
- * `A2s+` uses the **fixed-high-card** convention: the first card stays, the second
- * climbs. Some writers use `T9s+` to mean "T9s and every higher suited connector",
- * which under the same syntax would mean something different. Rather than guess,
- * this parser implements only the fixed-high-card reading and *rejects* a `+` on a
- * class where the two readings disagree, telling the caller to list the hands
- * explicitly. Silently picking one meaning would make every range built on it
- * quietly wrong.
+ * `+` uses only the fixed-high-card reading. A `+` on a class where the connector reading would
+ * differ (`T9s+`) is rejected rather than guessed.
  */
 
 import {
@@ -95,7 +85,6 @@ export function allHandClasses(): HandClass[] {
   return out;
 }
 
-/** The concrete combinations that make up a class. */
 export function combosOfClass(handClass: HandClass): Combo[] {
   const out: Combo[] = [];
   if (handClass.shape === 'pair') {
@@ -121,7 +110,6 @@ export function combosOfClass(handClass: HandClass): Combo[] {
   return out;
 }
 
-/** The class a concrete combination belongs to. */
 export function classOfCombo(combo: Combo): HandClass {
   const [first, second] = combo;
   const highRank = Math.max(rankIndexOf(first), rankIndexOf(second));
@@ -140,12 +128,8 @@ export function comboToString(combo: Combo): string {
 }
 
 /**
- * A parsed range: a set of classes, and the concrete combinations they expand to.
- *
- * `weight` is deliberately absent. Weighted ranges ("call 60% of the time with
- * this") are a real concept, but presenting one to a learner without also
- * presenting the solver assumptions behind the weights would overstate how much is
- * known. Ranges here are unweighted sets, and the Coach says so.
+ * A parsed range: a set of classes and the combinations they expand to. Ranges are unweighted,
+ * because weights would imply solver assumptions this lab does not state. The Coach says so.
  */
 export interface ParsedRange {
   readonly notation: string;
@@ -174,14 +158,8 @@ function spanShapeChar(side: string): string | undefined {
 }
 
 /**
- * A span: "22-77" (pairs) or "A2s-A5s" (fixed high card, low card sweeping).
- *
- * Both sides are read before either is judged, so a span that is wrong in two ways
- * reports the wrong thing first rather than whichever check happens to be written
- * first: mixed shapes, then a moving high card, then a missing shape letter.
- *
- * The ends may arrive in either order — "77-22" and "22-77" are the same span — so the
- * bounds are taken with min/max rather than assuming the lower end comes first.
+ * A span: "22-77" (pairs) or "A2s-A5s" (fixed high card). Errors are checked in a fixed order: mixed
+ * shapes, then a moving high card, then a missing shape letter. The ends may come in either order.
  */
 function parseSpanToken(token: string): HandClass[] {
   const [leftRaw, rightRaw] = token.split('-');
@@ -210,10 +188,7 @@ function parseSpanToken(token: string): HandClass[] {
         '(e.g. "A2s-A5s"), so list the hands explicitly instead',
     );
   }
-  // Anything other than s or o is refused rather than read as suited. The shape used
-  // to fall back to 'suited' whenever the letter was not an 'o', which quietly turned
-  // a typo like "A2x-A5x" into a real suited range — a guess, and the one habit this
-  // parser exists to avoid. The single-class branch below has always rejected it.
+  // Anything other than s or o is refused, so a typo like "A2x-A5x" is not read as suited.
   if (leftShapeChar !== 's' && leftShapeChar !== 'o') {
     throw new RangeParseError(`span "${token}" must state s or o, e.g. "A2s-A5s"`);
   }
@@ -226,11 +201,8 @@ function parseSpanToken(token: string): HandClass[] {
 }
 
 /**
- * Two ranks with no shape letter: "AA", "TT+", "AK".
- *
- * A pair takes a `+` ("and every higher pair"). An unpaired holding does not: "KQ+"
- * would have to mean both shapes climbing, and there is no reading of it that is
- * obviously right, so it is refused with the two spellings that are unambiguous.
+ * Two ranks with no shape letter: "AA", "TT+", "AK". Only a pair takes `+`, because "KQ+" has no
+ * single reading.
  */
 function parseRankOnlyToken(token: string, body: string, plus: boolean): HandClass[] {
   const { high, low } = parseRankPair(body);
@@ -257,10 +229,8 @@ function parseShapedToken(token: string, body: string, plus: boolean): HandClass
   if (high === low) throw new RangeParseError(`"${token}" is a pair, so it cannot be suited or offsuit`);
   if (!plus) return [makeHandClass(high, low, shape)];
 
-  // The `+` ambiguity. "A2s+" is unambiguous because the ace is already the top
-  // rank: the only way to climb is the second card. For a class whose high card
-  // is NOT an ace, "T9s+" could mean T9s..TJs-style climbing of the low card, or
-  // the connector reading (T9s, JTs, QJs, ...). Those differ, so reject it.
+  // "A2s+" is unambiguous because the ace is the top rank. For a connector with a lower high card,
+  // "T9s+" could mean the low card climbing or a run of connectors, so it is rejected.
   if (high !== NUM_RANKS - 1 && low === high - 1) {
     throw new RangeParseError(
       `"${token}" is ambiguous: it could mean the low card climbing (${rankChar(high)}x${shapeChar}) ` +
@@ -272,14 +242,7 @@ function parseShapedToken(token: string, body: string, plus: boolean): HandClass
   return out;
 }
 
-/**
- * Expands one comma-separated token into classes.
- *
- * Four shapes of token, dispatched here and expanded in the three functions above.
- * Keeping the dispatch separate from the expansions is what stops this from becoming
- * one function nobody can follow: each branch of the notation is now readable, and
- * testable, on its own.
- */
+/** Expands one comma-separated token into classes. */
 function parseToken(rawToken: string): HandClass[] {
   const token = rawToken.trim();
   if (token === '') return [];
@@ -298,12 +261,8 @@ function parseToken(rawToken: string): HandClass[] {
 }
 
 /**
- * Parses a comma-separated range, e.g. `"AA-JJ, AKs, AQo+, 76s"`.
- *
- * `blockers` are cards known to be elsewhere (hero's hand, the board). Combinations
- * containing a blocker are removed, because an opponent cannot hold a card you can
- * see. Forgetting this is one of the most common range-arithmetic errors: it
- * inflates the opponent's number of strong combinations.
+ * Parses a comma-separated range, e.g. `"AA-JJ, AKs, AQo+, 76s"`. Combinations holding a `blockers`
+ * card (hero's hand, the board) are removed, because an opponent cannot hold a card you can see.
  */
 export function parseRange(notation: string, blockers: readonly Card[] = []): ParsedRange {
   const classes: HandClass[] = [];

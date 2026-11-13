@@ -1,23 +1,9 @@
 /**
- * What a reader sees and can press: the table text, the result text, and the buttons.
- *
- * Plain text, no Telegram `parse_mode`. Every string here is a template filled with numbers and
- * names this process chose, so there is nothing to escape, and a MarkdownV2 message that misses
- * one `.` or `-` is refused with a 400 rather than delivered.
- *
- * ## A button is exactly one entry of the engine's legal set
- *
- * `actionButtons` reads `view.legalActions` and nothing else. Fold, check and call are offered
- * when the engine offers them. A bet or raise is offered at preset sizes, each clamped into the
- * engine's own `[minTo, maxTo]` and deduplicated, so a size the engine would refuse cannot be drawn.
- *
- * ## Callback data names the moment it was drawn for
- *
- * An action button carries the hand id and the `actionSequence` of the view it was drawn from. A
- * press is applied only if both still match, which is the web's `expectedSequence` rule: a stale
- * or double-pressed button is answered with a toast and changes nothing. Telegram caps
- * `callback_data` at 64 bytes, and `encodePress` refuses anything longer rather than letting
- * Telegram reject the whole message.
+ * The table text, result text and buttons. Plain text with no `parse_mode`, because a MarkdownV2
+ * message that misses one escape is refused with a 400.
+ * `actionButtons` reads only `view.legalActions`. Bet and raise presets are clamped into the
+ * engine's `[minTo, maxTo]`, so a refused size cannot be drawn.
+ * Telegram caps `callback_data` at 64 bytes, and `encodePress` refuses anything longer.
  */
 
 import type { GlossaryEntry } from '@prl/contracts';
@@ -32,7 +18,7 @@ export interface Button {
   readonly data: string;
 }
 
-/** Everything a button can mean. The wire form is `encodePress`/`decodePress`, and only that. */
+/** The wire form is `encodePress`/`decodePress`, and only that. */
 export type Press =
   | { readonly kind: 'play' }
   | { readonly kind: 'about' }
@@ -41,32 +27,23 @@ export type Press =
   | { readonly kind: 'act'; readonly handId: string; readonly sequence: number; readonly action: Action }
   | { readonly kind: 'why'; readonly handId: string; readonly sequence: number }
   | { readonly kind: 'next'; readonly handId: string }
-  /** The topic list. */
   | { readonly kind: 'quizzes' }
   | { readonly kind: 'topic'; readonly topic: string }
-  /** Starts a run of the quiz with this id. Ids rather than positions: see `wireOf`. */
   | { readonly kind: 'quiz'; readonly quizId: string }
-  /** A multiple-choice option, by index into `options`. */
   | { readonly kind: 'choose'; readonly at: QuizMoment; readonly option: number }
   | { readonly kind: 'decide'; readonly at: QuizMoment; readonly action: DecisionAction }
   /** Shows a numeric question's computed figure without an answer. */
   | { readonly kind: 'reveal'; readonly at: QuizMoment }
   | { readonly kind: 'onward'; readonly at: QuizMoment }
-  /** A page of the lesson list, in reading order. */
   | { readonly kind: 'lessons'; readonly page: number }
-  /** Opens a lesson at its first page, as a new message. */
+  /** Opens a lesson as a new message. */
   | { readonly kind: 'lesson'; readonly lessonId: string }
-  /** Another page of a lesson, in the same message. Numbered from 0; the last is the key takeaways. */
+  /** Edits the same message. Numbered from 0. The last page is the key takeaways. */
   | { readonly kind: 'lessonPage'; readonly lessonId: string; readonly page: number }
-  /** How to use `/define`. */
   | { readonly kind: 'glossary' }
   | { readonly kind: 'term'; readonly id: string };
 
-/**
- * The question a quiz button was drawn for: the run and the position in it. A run is a fresh tag
- * from `Deps.newTag`, so a button from an earlier run of the same quiz, or from before a restart,
- * names a run the session is not in.
- */
+/** A run is a fresh tag from `Deps.newTag`, so a button from an earlier run matches nothing. */
 export interface QuizMoment {
   readonly run: string;
   readonly position: number;
@@ -78,7 +55,7 @@ export function termButton(entry: GlossaryEntry): Button {
   return { label: entry.term, data: encodePress({ kind: 'term', id: entry.id }) };
 }
 
-/** Two to a row: a term can be thirty characters, and a phone shows about two of those across. */
+/** Two to a row. A phone fits about two thirty-character terms across. */
 export function inPairs(buttons: readonly Button[]): Button[][] {
   const rows: Button[][] = [];
   for (let index = 0; index < buttons.length; index += 2) rows.push(buttons.slice(index, index + 2));
@@ -112,10 +89,9 @@ function wireOf(press: Press): string {
       return `n:${press.handId}`;
     case 'quizzes':
       return 'q';
-    // Content ids on the presses that start something, because those carry no run tag: an index
-    // would silently name a different quiz or term after a deploy that reordered the content.
-    // In-run presses use positions, which the run tag scopes. The longest id ships at 33 bytes.
-    // A lesson page names its lesson by id for the same reason, and needs no run tag: see `lesson.ts`.
+    // Presses that start something carry content ids, because they have no run tag and an index
+    // would name different content after a reorder. In-run presses use positions. The longest id
+    // ships at 33 bytes.
     case 'topic':
       return `qt:${press.topic}`;
     case 'quiz':
@@ -174,8 +150,7 @@ const PATTERNS = {
   onward: new RegExp(`^qn:${MOMENT}$`),
   term: /^g:([a-z0-9-]{1,60})$/,
   lessons: /^ll:(\d{1,2})$/,
-  // 57 is the longest id whose `lp:<id>:<two digits>` still fits in 64 bytes, so anything this
-  // decodes, `encodePress` can write back.
+  // 57 is the longest id whose `lp:<id>:<two digits>` fits in 64 bytes.
   lesson: /^lo:([a-z0-9-]{1,57})$/,
   lessonPage: /^lp:([a-z0-9-]{1,57}):(\d{1,2})$/,
 };
@@ -184,12 +159,7 @@ function momentOf(match: RegExpExecArray): QuizMoment {
   return { run: match[1] ?? '', position: Number(match[2]) };
 }
 
-/**
- * Parses callback data, or returns null for anything this process did not write.
- *
- * Callback data comes back from Telegram, which got it from a message this process sent, but a
- * client can send any string it likes, so it is parsed as untrusted input at this boundary.
- */
+/** Untrusted input, since a client can send any string. Null for anything this process did not write. */
 export function decodePress(data: string): Press | null {
   if (data === 'p') return { kind: 'play' };
   if (data === 'i') return { kind: 'about' };
@@ -248,7 +218,6 @@ const SIZE_PRESETS: readonly { readonly label: string; readonly potFraction: num
   { label: 'Pot', potFraction: 1 },
 ];
 
-/** One row per kind of decision: fold / check-or-call, then the sizes. */
 export function actionButtons(view: PlayerView): Button[][] {
   const own = view.seats.find((seat) => seat.isSelf);
   if (own === undefined) return [];
@@ -272,11 +241,8 @@ export function actionButtons(view: PlayerView): Button[][] {
 }
 
 /**
- * Bet or raise totals for the presets, clamped to the engine's bounds, deduplicated by total.
- *
- * A preset is a fraction of the pot as it will stand after the reader calls, added on top of the
- * call: `committed + toCall + f × (pot + toCall)`. That is the usual "pot-sized raise", and it is
- * a street TOTAL because the engine's `to` is one ("raise to", `Action` in the engine's types).
+ * Preset totals `committed + toCall + f × (pot + toCall)`, clamped and deduplicated. A street total,
+ * because the engine's `to` is one.
  */
 function sizesFor(legal: LegalAction, view: PlayerView, own: SeatView): { to: number; label: string }[] {
   const minTo = legal.minTo;
@@ -334,13 +300,7 @@ function seatLine(table: Table, seat: SeatView): string {
   return parts.join(' · ');
 }
 
-/**
- * A seat as a line of prose names it: "BB Patient Technician", or "You".
- *
- * The position is part of the name because the web's lineup seats two bots of one profile, and in
- * a transcript of a played hand "Patient Technician folds, Patient Technician checks" was two
- * different seats with nothing to tell them apart. Positions are unique within a hand.
- */
+/** "BB Patient Technician" or "You". The position tells apart two bots of one profile. */
 function who(table: Table, view: PlayerView, seat: SeatIndex): string {
   if (seat === READER_SEAT) return 'You';
   const position = view.seats.find((entry) => entry.seat === seat)?.position;
@@ -378,8 +338,7 @@ function recap(table: Table, view: PlayerView): string[] {
   }
   const since = view.actions.slice(Math.max(0, from));
   if (since.length === 0) return [];
-  // One line per street. Run together, "Calling Station calls, Calling Station bets 67" read as
-  // two actions on one street when the first was preflop and the second on the flop.
+  // One line per street, so actions on different streets do not read as one.
   const lines: string[] = [];
   for (const [index, logged] of since.entries()) {
     const words = actionWords(table, view, logged.seat, logged.action);
@@ -400,7 +359,6 @@ function header(table: Table, view: PlayerView): string[] {
   ];
 }
 
-/** The table at the reader's decision. */
 export function tableText(table: Table, view: PlayerView, coach: CoachReading | null): string {
   const lines = header(table, view);
   lines.push(...recap(table, view));

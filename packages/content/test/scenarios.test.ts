@@ -1,20 +1,7 @@
 /**
- * The test that keeps the teaching material honest.
- *
- * Content stores situations, never answers (ADR 0006). This suite computes the answers
- * with the real maths and checks that every scenario's stated teaching point actually
- * holds. A scenario whose claim stops being true fails the build here, rather than
- * quietly misleading a learner.
- *
- * It also checks the things a schema cannot: that a scenario is *playable* (the cards are
- * legal and distinct, the board matches the street, the pot arithmetic is coherent), that
- * every range parses under the real grammar, and that the set as a whole covers the
- * syllabus rather than clustering on one topic.
- *
- * Runtime note: equity for a range-vs-hand spot is enumerated exactly where it fits and
- * sampled otherwise, and a scenario set of this size means a few thousand equity runs. The
- * sample count is kept modest here for that reason and stated in the assertions that
- * depend on it.
+ * Content stores situations, never answers (ADR 0006). This suite computes the answers with the real
+ * maths and fails when a scenario's teaching point stops holding. It also checks playability, range
+ * grammar and topic coverage. Sample counts stay modest because the set runs thousands of equities.
  */
 
 import assert from 'node:assert/strict';
@@ -54,8 +41,7 @@ test('the content set is substantial enough to teach with', () => {
     `      ${stats.lessons} lessons, ${stats.quizzes} quizzes (${stats.quizQuestions} questions), ` +
       `${stats.scenarios} scenarios, ${stats.glossaryTerms} glossary terms, ${stats.topicsCovered} topics`,
   );
-  // 30+ scenarios is the stated deliverable; the rest are floors that would catch a
-  // content file failing to load rather than aspirations.
+  // 30 scenarios is the deliverable. The other floors catch a content file that failed to load.
   assert.ok(stats.scenarios >= 30, `expected at least 30 scenarios, found ${stats.scenarios}`);
   assert.ok(stats.lessons >= 12, `expected at least 12 lessons, found ${stats.lessons}`);
   assert.ok(stats.glossaryTerms >= 45, `expected at least 45 glossary terms, found ${stats.glossaryTerms}`);
@@ -67,8 +53,7 @@ test('every scenario is playable: legal distinct cards, board matches street, co
   for (const scenario of content().scenarios) {
     const situation = readSituation(scenario);
 
-    // The validator already checks these, but re-asserting here means a regression shows
-    // up as "scenario X is unplayable" rather than as a confusing equity failure later.
+    // The validator checks these too. Repeating them names the scenario before an equity failure.
     assert.equal(situation.heroCards.length, 2, `${scenario.id}: hero must hold 2 cards`);
     const expectedBoard = { preflop: 0, flop: 3, turn: 4, river: 5 }[scenario.street];
     assert.equal(
@@ -85,8 +70,6 @@ test('every scenario is playable: legal distinct cards, board matches street, co
     assert.ok(situation.heroStack > 0, `${scenario.id}: hero has no chips`);
     assert.ok(situation.opponentStacks.length >= 1, `${scenario.id}: no opponents`);
 
-    // A facing bet with nothing in the pot, or a price of zero while describing a bet,
-    // means the situation text and the numbers disagree.
     if (situation.toCall > 0) {
       assert.ok(
         situation.pot > 0,
@@ -94,7 +77,6 @@ test('every scenario is playable: legal distinct cards, board matches street, co
       );
     }
 
-    // The opponent's range must contain at least one hand hero does not block.
     assert.ok(
       situation.opponentRange.combos.length > 0,
       `${scenario.id}: the opponent range is empty once hero's cards and the board are removed`,
@@ -103,9 +85,7 @@ test('every scenario is playable: legal distinct cards, board matches street, co
 });
 
 test('every scenario range parses under the real grammar', () => {
-  // The range grammar deliberately REJECTS ambiguous notation ("T9s+", "AK+"). A scenario
-  // written with one of those would throw here rather than silently meaning something the
-  // author did not intend.
+  // The grammar rejects ambiguous notation such as "T9s+" and "AK+".
   for (const scenario of content().scenarios) {
     assert.doesNotThrow(
       () => readSituation(scenario),
@@ -152,8 +132,6 @@ test('CLAIMS: every scenario teaching point is verified against the computed mat
     [],
     `${failures.length} scenario claim(s) are not supported by the maths:\n\n${failures.join('\n\n')}`,
   );
-  // A suite that verified nothing would pass silently, which is the failure mode worth
-  // guarding against in a test whose whole purpose is verification.
   assert.ok(
     verificationClaims >= 20,
     `only ${verificationClaims} independent claims — the set should assert more`,
@@ -161,8 +139,7 @@ test('CLAIMS: every scenario teaching point is verified against the computed mat
 });
 
 test('scenario analysis is deterministic for a given seed', () => {
-  // Reproducibility matters here beyond tidiness: a teaching scenario must show every
-  // learner the same numbers, and a flaky claim check would be worse than no check.
+  // Every learner must see the same numbers.
   const scenario = content().scenarios[0];
   assert.ok(scenario !== undefined);
   const first = analyseScenario(scenario, { samples: 5_000, seed: 42 });
@@ -187,7 +164,6 @@ test('scenarios span the syllabus rather than clustering on one topic', () => {
     `      difficulty: ${[...byDifficulty.entries()].map(([level, count]) => `${level}=${count}`).join(', ')}`,
   );
   assert.ok(byTopic.size >= 6, `scenarios cover only ${byTopic.size} topics`);
-  // No single topic should dominate — a set that is 80% pot odds is not a syllabus.
   const largest = Math.max(...byTopic.values());
   assert.ok(
     largest <= content().scenarios.length * 0.4,
@@ -197,15 +173,12 @@ test('scenarios span the syllabus rather than clustering on one topic', () => {
 });
 
 test('no scenario states a computed figure as prose fact', () => {
-  // ADR 0006: prose describes relationships, not computed numbers. A percentage in the
-  // reasoning is almost always a hard-coded equity that will drift out of step with the
-  // maths. Explicitly labelled approximations are allowed, since the rule of 2 and 4 is
-  // itself a lesson.
+  // ADR 0006. A percentage in prose is a hard-coded equity that drifts from the maths. Labelled
+  // approximations are allowed, since the rule of 2 and 4 is itself a lesson.
   const allowed = /(?:roughly|about|approximately|around|rule of|order of|near(?:ly)?|circa|ballpark)/i;
   const offenders: string[] = [];
   for (const scenario of content().scenarios) {
     const prose = [scenario.reasoning, ...scenario.commonMistakes, ...scenario.assumptions].join(' ');
-    // Percentages, and "x in y" style odds statements.
     for (const match of prose.matchAll(/(\d+(?:\.\d+)?)\s*%/g)) {
       const start = Math.max(0, (match.index ?? 0) - 60);
       const context = prose.slice(start, (match.index ?? 0) + 20);
@@ -245,7 +218,6 @@ test('no lesson or quiz states a computed figure as prose fact', () => {
   }
   for (const quiz of content().quizzes) {
     for (const question of quiz.questions) {
-      // A numeric question must NOT contain its own answer.
       check(`quiz ${quiz.id} question ${question.id}`, question.prompt);
     }
   }
@@ -257,24 +229,10 @@ test('no lesson or quiz states a computed figure as prose fact', () => {
 });
 
 test('a quiz prompt that names the blinds and a stack depth agrees with the chips it names', () => {
-  // The defect this exists for shipped. `icm-q2` opened "Blinds are 1 and 2. A player with
-  // exactly 10 big blinds moves all in" and then did its arithmetic on a stack of 10 chips
-  // — 5 big blinds, not 10. Everything downstream was right for the chips (pot 13, call 8,
-  // break-even 38.1%), so no assertion anywhere could see it; only the depth in WORDS was
-  // wrong, and wrong by a factor of two, in the one lesson whose own takeaway is that a
-  // tournament stack is only meaningful in big blinds and whose next question asks the
-  // learner to carry that figure forward.
-  //
-  // `checkStatedDepth` in `src/validate.ts` catches exactly this shape — it exists because
-  // `rk-nine-big-blinds-call-or-fold` was titled "Nine big blinds" while giving hero 13.5 of
-  // them — but it reads a scenario's `title` and `opponentRange.label` and needs a seat list
-  // to check against. A quiz question has neither, so quiz prompts were outside its reach.
-  //
-  // What makes the check possible without seats: a prompt that states the blinds is a prompt
-  // doing chip arithmetic out loud, so the stack it is talking about appears in it as a
-  // number. A depth of N big blinds therefore has to be one of the amounts the prompt names.
-  // Narrow on purpose — a prompt that states a depth and never names the chips is not read as
-  // a claim, because guessing there is how a content gate starts crying wolf.
+  // `icm-q2` called a 10-chip stack "10 big blinds" at blinds of 1 and 2. `checkStatedDepth` in
+  // validate.ts needs seats, which quiz questions lack. A prompt that states the blinds names the
+  // stack in chips, so N big blinds must be one of its numbers. A prompt that names no chips is
+  // not read as a claim.
   const STATES_BLINDS = /blinds are (\d+) and (\d+)/i;
   const STATED_DEPTH = /\b(\d+)\s+big\s+blinds?\b/gi;
   const offenders: string[] = [];
@@ -299,7 +257,6 @@ test('a quiz prompt that names the blinds and a stack depth agrees with the chip
     }
   }
 
-  // A sweep of nothing is not a pass: if no prompt states both, this test proved nothing.
   assert.ok(claimsChecked > 0, 'no quiz prompt stated both the blinds and a depth; the sweep is empty');
   assert.deepEqual(
     offenders,
@@ -309,8 +266,7 @@ test('a quiz prompt that names the blinds and a stack depth agrees with the chip
 });
 
 test('content contains no gambling or dark-pattern language', () => {
-  // PRODUCT-GUARDRAILS §1 and §2, checked mechanically. A phrase list is crude, but it
-  // catches the drift that matters: content that starts talking about money or streaks.
+  // PRODUCT-GUARDRAILS §1 and §2, as a phrase list.
   const banned: readonly { readonly pattern: RegExp; readonly why: string }[] = [
     { pattern: /\breal money\b/i, why: 'implies real-money play' },
     { pattern: /\bcash ?out\b|\bwithdraw(?:al)?\b|\bdeposit\b/i, why: 'implies a money transfer' },
@@ -382,14 +338,8 @@ test('the tournament lesson computes ICM for the learner', () => {
 });
 
 test('numeric quiz questions ask for a field their calculation can actually produce', () => {
-  // A mismatch here is invisible until a learner opens the quiz and the app cannot compute
-  // an expected answer, so it is worth pinning down at build time.
-  //
-  // The valid field names are DERIVED by actually running each calculation and reading the
-  // keys off the result, rather than maintained as a hand-written list. A hand-written list
-  // is a second place for the truth to live, and it drifted the first time this test ran:
-  // it claimed `outs` produced `cleanOuts` when the real field is `cleanCount`, so the test
-  // failed on correct content. Deriving it means the test cannot be wrong about the API.
+  // Field names come from running each calculation, because a hand-written list drifted
+  // (`cleanOuts` for `cleanCount`).
   const heroCards = parseCards('Ah Kh');
   const board = parseCards('Qh 7h 2c');
   const numericKeys = (value: object): readonly string[] =>
@@ -443,16 +393,14 @@ test('numeric quiz questions ask for a field their calculation can actually prod
 });
 
 test('a scenario with an impossible card set is rejected rather than analysed', () => {
-  // Proves the guard can fail. A validation suite that only ever sees good input is not
-  // evidence of anything.
+  // Negative control.
   const good = content().scenarios[0];
   assert.ok(good !== undefined);
   const hero = good.seats.find((seat) => seat.isHero === true);
   assert.ok(hero !== undefined);
   const broken = {
     ...good,
-    // Give hero a card that is already on the board, if there is a board; otherwise
-    // duplicate hero's own card.
+    // A board card if there is a board, otherwise hero's own card.
     seats: good.seats.map((seat) =>
       seat.isHero === true
         ? {

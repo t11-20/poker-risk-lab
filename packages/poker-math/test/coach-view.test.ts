@@ -1,29 +1,10 @@
 /**
  * `coachSpotForView` gives the reports the API gave before it existed, to the byte.
- *
- * ## The pin
- *
- * `fixtures/coach-views.json` was written at the commit before this module, by dealing five hands
- * through the real engine from fixed seeds and asking the API's own `coachForView` and
- * `coachTaskForView` (then in `apps/api/src/ws/router.ts`) for each seat-to-act's view: preflop
- * six-handed, flop heads-up, a preflop side pot with the reader as the short stack, the river, and
- * a turn under a named notation range. The views are stored as data, so the pin does not move
- * when the engine's dealing does. `apps/api/test/coach-task-pin.test.ts` holds the tasks.
- *
- * The `report` halves were re-pinned when the Coach began pricing the sizes the table's bar offers
- * (`offeredSizes`) instead of three ladder rungs. Only `candidates` and `suggestion` moved, in the
- * four views that offer a raise or a bet; the views, the tasks and every other field are as
- * written, and the side-pot view — fold and call only — is byte-identical.
- *
- * The bot's copy, run over the same four default-range views, differed from the API's in every
- * one, and only in the opponent labels (`seat N+1` against `seat N`), which reach the learner
- * through the assumptions list. That disagreement is what this module ends.
- *
- * ## Would it fail if a figure moved? Yes, and that was checked by moving one
- *
- * The assumed range was changed from `top:40` to `top:39` in `LIVE_COACH_POLICY` and this file
- * run: the four default-range views failed and the notation one passed. The labels were changed to
- * the bot's old `seat N+1`: all five failed. Restored, all pass.
+ * `fixtures/coach-views.json` holds five views dealt from fixed seeds (six-handed preflop, flop
+ * heads-up, a preflop side pot with the reader short, the river, and a turn under a notation range),
+ * stored as data so the pin does not move with the engine's dealing. The `report` halves were
+ * re-pinned when the Coach began pricing `offeredSizes`. `apps/api/test/coach-task-pin.test.ts`
+ * holds the tasks. Changing the assumed range to `top:39` fails the four default-range views.
  */
 
 import assert from 'node:assert/strict';
@@ -137,9 +118,7 @@ test('refuses a view with no live opponent, and one after the betting', () => {
   });
 });
 
-// Audit at 308fadf: the live Coach listed "seat 2 / seat 3 / seat 6" under "Equity by player" and
-// "Seat 2 holds any of 518 combinations…" in its assumptions, beside seat plates that show a name and
-// a position and no number. The API now passes the names it dealt in.
+// Opponents are labelled with the names the API dealt in, not seat numbers the plates do not show.
 test('names each opponent the way the caller names the seat, and says so in the assumptions', () => {
   const { view } = pinnedAt('preflop');
   const names = new Map(view.seats.map((seat) => [seat.seat, `Player at ${String(seat.seat)}`]));
@@ -165,7 +144,7 @@ test('falls back to the seat number for a seat with no usable name, and never to
   const opponents = view.seats.filter((seat) => !seat.isSelf && seat.status === 'active');
   const [first, second, third] = opponents;
   assert.ok(first !== undefined && second !== undefined && third !== undefined);
-  // "You" would be read as the reader by `holdsClause` and written up as "You hold any of…".
+  // "You" would read as the reader in `holdsClause`.
   const names = new Map([
     [first.seat, 'You'],
     [second.seat, '   '],
@@ -178,7 +157,6 @@ test('falls back to the seat number for a seat with no usable name, and never to
   assert.equal(bySeat.get(third.seat), `seat ${String(third.seat + 1)}`, 'a seat the caller has no name for');
 });
 
-/** Each opponent's label by seat index, from a reading of the pinned six-handed preflop view. */
 function labelsBySeat(names: ReadonlyMap<number, string>): {
   readonly bySeat: ReadonlyMap<number, string | undefined>;
   readonly spot: CoachSpot;
@@ -196,8 +174,7 @@ function labelsBySeat(names: ReadonlyMap<number, string>): {
   return { bySeat, spot: reading.spot };
 }
 
-// Review on PR #36 (Devin): guest names are not unique, and two opponents called Alex came back as two
-// "Alex" equity rows and two "Alex holds any of…" assumptions, with nothing to say which was which.
+// Guest names are not unique, so opponents who share a name are told apart by seat.
 test('opponents who share a name are told apart by seat, in the equity rows and the assumptions alike', () => {
   const names = new Map([
     [0, 'Alex'],
@@ -227,8 +204,8 @@ test('opponents who share a name are told apart by seat, in the equity rows and 
 });
 
 test('a name is shared ignoring case, and with a seat that has folded', () => {
-  // `holdsClause` capitalises, so "alex" and "Alex" read as the same "Alex holds any of…"; and the
-  // Alex who folded in seat 6 is still on a plate beside the Coach.
+  // `holdsClause` capitalises, so "alex" and "Alex" collide. The Alex who folded in seat 6 is still
+  // on a plate.
   const { bySeat } = labelsBySeat(
     new Map([
       [0, 'alex'],
@@ -241,8 +218,7 @@ test('a name is shared ignoring case, and with a seat that has folded', () => {
 });
 
 test('a name in the shape of a seat label falls back to its own seat, so it cannot take another', () => {
-  // Seat 1 has no name and is labelled "seat 2"; a guest in seat 4 who calls themselves "seat 2", or
-  // "Alex (seat 1)", would otherwise have been a second "seat 2" or the first Alex's label.
+  // A guest named "seat 2" or "Alex (seat 1)" must not collide with a generated label.
   const { bySeat } = labelsBySeat(
     new Map([
       [0, 'Alex'],

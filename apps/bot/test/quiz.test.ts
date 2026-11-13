@@ -16,10 +16,7 @@ import { MESSAGE_LIMIT } from '../src/telegram.ts';
 import { type Button, CALLBACK_DATA_MAX_BYTES } from '../src/view.ts';
 import { buttonsOf, find, message, press, testDeps } from './helpers.ts';
 
-/**
- * Run tags at the decoder's own 24-character ceiling, so every byte count measured here is the
- * worst case a run can produce. Production tags are 8.
- */
+/** Run tags at the decoder's 24-character ceiling, the worst case. Production tags are 8. */
 function longTagDeps(): Deps {
   let runs = 0;
   return {

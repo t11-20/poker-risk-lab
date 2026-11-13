@@ -1,70 +1,13 @@
 /**
- * Stack depth: what can actually change hands, and what that does to the decision.
+ * Stack depth: effective stack, SPR, the sizing ladder, big blinds and M.
  *
- * ## Effective stack — the only stack that matters
+ * SPR bands have edges 1, 3, 6, 13 (conventional teaching landmarks). They are lower-inclusive and
+ * upper-exclusive, with the top band strictly above 13, and the tests pin the boundaries. The
+ * `implication` strings describe what depth does to the decision and never name an action.
  *
- * Table stakes cut both ways. Nobody can bet you off a hand by wagering more than
- * you can cover, and you cannot win more from an opponent than you yourself risked.
- * So the number that governs a hand is not your stack and not theirs, it is the
- * smaller of the two: `min(hero, deepest opponent)`. Chips above that line are not
- * in play, and counting them is how a player talks themselves into a decision the
- * chips could not have paid for.
- *
- * ## SPR, and why it is a shape rather than an answer
- *
- * `SPR = effective stack / pot`, read at the start of a street. It says how much
- * room is left to manoeuvre, and therefore *when* the commitment decision arrives —
- * at SPR 1 it has already arrived, at SPR 20 it is several streets away. What it
- * never says is what to do, and the `implication` strings here are written with that
- * constraint in mind: they describe what the depth does to the decision, and they do
- * not tell anybody which action to pick, because that depends on the hand, the
- * opponent's range and position, none of which SPR knows about.
- *
- * The band edges (1, 3, 6, 13) are conventional teaching landmarks, not thresholds
- * that anything discontinuous happens at. They are lower-inclusive and
- * upper-exclusive, with the top band opening strictly above 13, so every ratio lands
- * in exactly one band and the boundaries are pinned by tests rather than left to
- * whoever reads the comment next.
- *
- * ## The sizing ladder
- *
- * One bet size produces three numbers a learner needs side by side:
- *
- *     amount                = the chips you put out
- *     priceLaidToCaller     = b / (pot + 2b)   the equity a caller needs to break even
- *     minimumDefenceFrequency = pot / (pot + b) the share of their range that has to
- *                                               continue for a bluff not to print
- *
- * A pot-sized bet lays the caller exactly 1/3 and has an MDF of exactly 1/2 — those
- * two identities are asserted in the tests and are the anchors for reading the rest
- * of the ladder.
- *
- * Rung amounts are computed as `floor((pot x numerator) / denominator)`. The exact
- * fraction is taken first so an integral pot does not drift by a hundredth of a chip,
- * and the floor is then applied because **chips are integers everywhere in this app**
- * — the engine rejects a fractional bet, so a ladder rung that is not a whole number
- * is not a submittable action. `priceLaidToCaller` is derived from the rounded amount
- * rather than the ideal fraction, so the price shown is the price of the bet the
- * player can actually make. Rounding can collapse two rungs onto the same amount in a
- * very small pot; duplicates are dropped rather than shown twice.
- *
- * Neither price is worked out in this file. Both come from `odds.ts`, which owns
- * pricing for the whole package: `priceLaidByBet` for the caller's break-even equity
- * and `defenceFrequency` for MDF and alpha. Restating either formula here would give
- * the app two places to be right and two places to drift.
- *
- * ## Big blinds and M
- *
- * Both convert a raw stack into a unit that survives the blinds going up. Big blinds
- * measure buying power, M measures time: how many orbits a stack could sit out
- * before the forced bets ate it. M falls as blinds rise even when the stack does
- * not, which is the pressure a tournament applies and a cash game does not.
- *
- * The ante is where M implementations quietly disagree, so this one refuses to
- * guess. A traditional ante is posted by everyone at the table; a big-blind ante is
- * posted once by one player for the whole table. Those give M values a table-size
- * apart, so an ante supplied without `playersAtTable` throws instead of picking a
- * convention on the caller's behalf.
+ * Chips are integers everywhere in this app, so ladder rungs are `floor((pot x num) / den)` and each
+ * price is computed from the rounded amount. Prices come from `odds.ts`, never restated here.
+ * A pot-sized bet lays the caller exactly 1/3 with an MDF of exactly 1/2 (asserted in the tests).
  */
 
 import { chips, percent, ratio } from './format.ts';
@@ -74,17 +17,12 @@ export class StackError extends Error {
   override readonly name = 'StackError';
 }
 
-// ---------------------------------------------------------------------------
-// Validation
-// ---------------------------------------------------------------------------
-
 function requireFinite(name: string, value: number): void {
   if (!Number.isFinite(value)) {
     throw new StackError(`${name} must be a finite number, received ${String(value)}`);
   }
 }
 
-/** A chip amount: finite and not negative. Zero is allowed. */
 function requireChips(name: string, value: number): void {
   requireFinite(name, value);
   if (value < 0) throw new StackError(`${name} must be 0 or more chips, received ${value}`);
@@ -96,20 +34,9 @@ function requirePositiveChips(name: string, value: number): void {
   if (value <= 0) throw new StackError(`${name} must be more than 0 chips, received ${value}`);
 }
 
-// ---------------------------------------------------------------------------
-// Effective stack
-// ---------------------------------------------------------------------------
-
 /**
- * The most that can change hands: `min(heroStack, max(opponentStacks))`.
- *
- * The `max` over opponents is not a typo. Against one opponent the effective stack
- * is the smaller of the two stacks; multiway, every opponent gives you a different
- * pair and therefore a different effective stack, and the single figure everyone
- * means by "the effective stack" is the deepest of those — the most that can move
- * against any one player. The explanation says so, because a learner reading one
- * number off a three-way pot needs to know it does not apply to the short stack in
- * the middle.
+ * The most that can change hands, `min(heroStack, max(opponentStacks))`. Multiway, each opponent has
+ * its own effective stack, and this is the deepest of them. The explanation says so.
  */
 export function effectiveStack(
   heroStack: number,
@@ -129,16 +56,8 @@ export function effectiveStack(
   }
   const effective = Math.min(heroStack, deepest);
 
-  // The all-in case is its own sentence, because the general one is FALSE here.
-  //
-  // With every opponent already all in, `deepest` is 0 and the second branch below rendered "at
-  // most 0 can change hands even though you have 260. The 260 above that is not in play this hand
-  // — nobody can pay you for it and nobody can take it." The Coach printed that on spots where it
-  // was simultaneously pricing a call of 170 out of that same 260, and on
-  // `rk-an-all-in-that-is-nearly-even` where the call was hero's entire remaining stack. The chips
-  // in front of hero are emphatically in play; what is finished is the BETTING, and those are
-  // different claims. Zero is still the right number for SPR — there is no future street to size
-  // against — so only the sentence changes.
+  // With every opponent all in, `deepest` is 0. The general sentence would call hero's chips "not in
+  // play" while the Coach prices a call from them, so the betting being over gets its own sentence.
   const core =
     deepest === 0
       ? `Every opponent is already all in, so there is no more betting: the only chips that can still move are the ones in front of you now. Your remaining ${chips(heroStack)} is not a betting stack this hand, it is what you would call from.`
@@ -153,10 +72,6 @@ export function effectiveStack(
   return { effective, explanation: `${core}${multiway}` };
 }
 
-// ---------------------------------------------------------------------------
-// Stack-to-pot ratio
-// ---------------------------------------------------------------------------
-
 export type SprBand = 'very-low' | 'low' | 'medium' | 'high' | 'very-high';
 
 export interface SprResult {
@@ -169,21 +84,8 @@ export interface SprResult {
 }
 
 /**
- * Band edges as documented at the top of the file: lower-inclusive,
- * upper-exclusive, with the top band opening strictly above 13. Written as a plain
- * chain rather than a table because a table with an inclusive top edge needs a
- * "nextAfter(13)" to express, and the chain is what the tests can pin exactly.
- */
-/**
- * The band for a ratio, for callers that hold the ratio and not the two figures behind it.
- *
- * Exported because `@prl/ui`'s `describeSpr` had its OWN edges — 1/4/8/15 against the 1/3/6/13
- * here — and `CoachPanel` renders its label directly above the sentence this module generates. So
- * one panel said "3.3 — low" over prose reading 'which is the "medium" band', thirteen lines apart,
- * on five of the thirty-six Lab scenarios. Worse at 6.82, where the two disagreed about the
- * MEANING and not just the word: "roughly two streets of betting" against "several streets fit".
- *
- * A learner cannot tell which to believe, and neither can a reviewer. There is now one classifier.
+ * The band for a ratio. `@prl/ui` once had its own edges (1/4/8/15), and one panel showed two bands
+ * thirteen lines apart. This is now the only classifier.
  */
 export function sprBandFor(spr: number): SprBand {
   return bandOf(spr);
@@ -197,12 +99,7 @@ function bandOf(spr: number): SprBand {
   return 'very-high';
 }
 
-/**
- * What the depth does to the decision. Deliberately free of instructions: each one
- * says when the commitment decision arrives and what room is left, and none of them
- * names an action, because SPR does not know your hand, their range or your
- * position. A test asserts these strings stay free of prescriptive language.
- */
+/** What the depth does to the decision. A test asserts these strings name no action. */
 const BAND_IMPLICATIONS: Record<SprBand, string> = {
   'very-low':
     'The pot is already larger than what is behind, so a single bet gets the rest of the stack in. There is no later street to hold chips back for: at this depth the decision is effectively made now.',
@@ -234,18 +131,10 @@ export function stackToPotRatio(effectiveStackSize: number, pot: number): SprRes
   };
 }
 
-// ---------------------------------------------------------------------------
-// Sizing ladder
-// ---------------------------------------------------------------------------
-
 export interface SizingOption {
   /** How a player would say it: "one third pot", "pot", "all-in". */
   readonly label: string;
-  /**
-   * `amount / pot` — the fraction this rung ACTUALLY is, after rounding to whole
-   * chips, not the ideal fraction in its label. A "one third pot" rung in a pot of 100
-   * is 33 chips and so reports 0.33, because the price beside it is the price of 33.
-   */
+  /** `amount / pot` after rounding to whole chips, not the ideal fraction in the label. */
   readonly fractionOfPot: number;
   /** Whole chips. Every figure on this rung is derived from this amount. */
   readonly amount: number;
@@ -257,10 +146,7 @@ export interface SizingOption {
 }
 
 /**
- * Rungs as exact fractions rather than decimals, so the amount is
- * `floor((pot x numerator) / denominator)`. Taking the fraction exactly before
- * flooring is what makes an integral pot land where it should: `pot x 0.3333...` can
- * fall a hundredth of a chip short and then floor to one chip less than a third.
+ * Rungs as exact fractions, so `pot x 0.3333...` cannot fall short and floor to one chip under a third.
  */
 const SIZING_RUNGS = [
   { numerator: 1, denominator: 4, label: 'one quarter pot' },
@@ -290,9 +176,6 @@ function buildOption(
   label: string,
   alsoAllIn: boolean,
 ): SizingOption {
-  // Both prices come from odds.ts rather than being restated here. That is the whole
-  // point of having a pricing module: the ladder cannot drift away from the pot-odds
-  // arithmetic the rest of the app quotes, because it is not doing its own.
   const price = priceLaidByBet(pot, amount);
   const defence = defenceFrequency(pot, amount);
   return {
@@ -306,12 +189,8 @@ function buildOption(
 }
 
 /**
- * One size, priced the way a ladder rung is, for a caller that chose the amount itself.
- *
- * The Coach prices the sizes the table's bar offers (`offeredSizes` in `./table-sizing.ts`) rather
- * than the ladder's rungs, and it still needs each size's price and defence frequency computed by
- * the same arithmetic. Exposing the rung builder keeps that one computation rather than two.
- * `fractionOfPot` is the fraction the amount actually is.
+ * One size, priced the same way as a ladder rung. The Coach uses it for the sizes the table's bar
+ * offers (`offeredSizes` in `./table-sizing.ts`). `fractionOfPot` is the fraction the amount is.
  */
 export function sizingOptionAt(pot: number, amount: number, label: string, isAllIn: boolean): SizingOption {
   requirePositiveChips('pot', pot);
@@ -320,23 +199,11 @@ export function sizingOptionAt(pot: number, amount: number, label: string, isAll
 }
 
 /**
- * The usable bet sizes at this pot, each with the price it lays and the defence it
- * demands.
+ * The usable bet sizes at this pot, each with the price it lays and the defence it demands.
  *
- * Rungs above `maxBet` are dropped — offering a size the stack cannot pay for would
- * be worse than useless — and an all-in rung is appended. If the all-in happens to
- * land exactly on a fraction rung (a pot-sized bet with exactly a pot behind, say)
- * the two are not listed twice: the fraction rung keeps its more informative label
- * and its note records that the size is also an all-in. Exact equality is the right
- * test for that coincidence, because every rung amount is a whole number of chips.
- *
- * Two more rungs get dropped, both for the same reason — a rung has to be a bet
- * somebody could actually make. A fraction that rounds down to 0 chips is not a bet
- * at all (a quarter of a 3-chip pot), and a fraction that rounds onto an amount
- * already on the ladder is the same bet under a second name.
- *
- * A `maxBet` below every fraction leaves the all-in as the only rung, which is
- * itself worth seeing: at that depth there is no sizing decision left to make.
+ * Rungs above `maxBet`, rungs that round to 0 chips and rungs that duplicate an amount are dropped.
+ * An all-in rung is appended, unless it equals a fraction rung exactly. That rung keeps its label and
+ * its note records the all-in.
  */
 export function sizingLadder(pot: number, maxBet: number): readonly SizingOption[] {
   requirePositiveChips('pot', pot);
@@ -347,13 +214,9 @@ export function sizingLadder(pot: number, maxBet: number): readonly SizingOption
 
   const seenAmounts = new Set<number>();
   for (const rung of SIZING_RUNGS) {
-    // Chips are integers everywhere in this app — the engine rejects a fractional bet
-    // — so a ladder rung must round to a real, submittable amount. Rounding down keeps
-    // the option inside `maxBet` and inside the pot fraction it claims to be, which
-    // matters because the displayed price is computed from this amount.
+    // Rounding down keeps the rung inside `maxBet` and inside the fraction it claims.
     const amount = Math.floor((pot * rung.numerator) / rung.denominator);
     if (amount <= 0 || amount > maxBet) continue;
-    // Rounding can collapse two rungs onto the same amount in a small pot.
     if (seenAmounts.has(amount)) continue;
     seenAmounts.add(amount);
     const isAllIn = amount === maxBet;
@@ -361,8 +224,7 @@ export function sizingLadder(pot: number, maxBet: number): readonly SizingOption
     options.push(buildOption(pot, amount, amount / pot, rung.label, isAllIn));
   }
 
-  // Every rung kept above is at most maxBet, so if none of them WAS maxBet the
-  // all-in is strictly larger than all of them and belongs at the end of the ladder.
+  // No kept rung was maxBet, so the all-in is larger than all of them and goes last.
   if (!allInAlreadyListed) {
     options.push(buildOption(pot, maxBet, maxBet / pot, 'all-in', true));
   }
@@ -370,28 +232,10 @@ export function sizingLadder(pot: number, maxBet: number): readonly SizingOption
   return options;
 }
 
-// ---------------------------------------------------------------------------
-// Commitment
-// ---------------------------------------------------------------------------
-
 /**
- * What is left behind after one pot-sized bet is called.
- *
- * Bet the pot and get called and the pot is `3 x pot` with `effectiveStack - pot`
- * behind, so
- *
- *     SPR after = (effectiveStack - pot) / (3 x pot)
- *
- * The identity worth knowing falls straight out of that: at an SPR of exactly 4 the
- * figure is `(4p - p) / 3p = 1`, and an SPR of 1 is the depth at which the next
- * pot-sized bet is the whole stack. Two pot-sized bets, called, commit a stack that
- * started four pots deep — which is why "SPR 4" gets talked about as a commitment
- * threshold, and it is arithmetic rather than doctrine.
- *
- * When the pot is already at least as large as the effective stack, a pot-sized bet
- * does not exist: the stack goes in first and nothing is behind. That returns 0
- * rather than a negative SPR, and the note says why — clamping is only dishonest
- * when it is silent.
+ * SPR left after one pot-sized bet is called, `(effectiveStack - pot) / (3 x pot)`. At SPR 4 this is
+ * exactly 1, so two called pot-sized bets commit the stack. When the pot is at least the effective
+ * stack this returns 0, and the note says why.
  */
 export function commitmentThreshold(input: { effectiveStack: number; pot: number }): {
   readonly sprAfterPotSizedBet: number;
@@ -432,11 +276,7 @@ export function commitmentThreshold(input: { effectiveStack: number; pot: number
   };
 }
 
-// ---------------------------------------------------------------------------
-// Stack depth in big blinds, and M
-// ---------------------------------------------------------------------------
-
-/** Stack depth in big blinds — buying power, in a unit that survives a blind rise. */
+/** Stack depth in big blinds. */
 export function stackInBigBlinds(
   stack: number,
   bigBlind: number,
@@ -452,19 +292,11 @@ export function stackInBigBlinds(
 }
 
 /**
- * The tournament M-ratio: how many orbits a stack could sit out before the forced
- * bets ate it.
+ * The tournament M-ratio, `M = stack / (smallBlind + bigBlind + ante x playersAtTable)`.
  *
- *     M = stack / (smallBlind + bigBlind + ante x playersAtTable)
- *
- * `playersAtTable` is how many players post `ante` each orbit. For a traditional
- * ante that is everyone at the table. For a big-blind ante, where one player posts
- * for the whole table, pass the total as `ante` with `playersAtTable: 1`.
- *
- * With no ante the ante term is 0 and M is `stack / (smallBlind + bigBlind)`. With
- * an ante and no `playersAtTable` this throws rather than guessing: the two
- * conventions differ by a factor of the table size, so a default here would silently
- * change every M in the app by up to 9x.
+ * For a traditional ante `playersAtTable` is everyone. For a big-blind ante pass the total as `ante`
+ * with `playersAtTable: 1`. An ante without `playersAtTable` throws, because the two conventions
+ * differ by up to 9x.
  */
 export function mRatio(input: {
   stack: number;

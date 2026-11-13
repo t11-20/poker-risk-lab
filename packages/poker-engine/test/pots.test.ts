@@ -53,7 +53,7 @@ test('folded players contribute chips but are eligible for nothing', () => {
 });
 
 test('three different all-in amounts build a main pot and two side pots', () => {
-  // Classic: short stack 50, middle 120, big 300 — all in, all live.
+  // Short stack 50, middle 120, big 300, all in, all live.
   const seats = [
     seat({ seat: 0, committedTotal: 50, status: 'allIn' }),
     seat({ seat: 1, committedTotal: 120, status: 'allIn' }),
@@ -62,17 +62,14 @@ test('three different all-in amounts build a main pot and two side pots', () => 
   const pots = buildPots(seats);
   assert.equal(pots.length, 3);
 
-  // Main pot: 50 from each of three.
   assert.equal(pots[0]?.amount, 150);
   assert.deepEqual(pots[0]?.eligibleSeats, [0, 1, 2]);
   assert.equal(pots[0]?.capPerSeat, 50);
 
-  // First side pot: (120-50) from seats 1 and 2.
   assert.equal(pots[1]?.amount, 140);
   assert.deepEqual(pots[1]?.eligibleSeats, [1, 2]);
 
-  // Second side pot: (300-120) from seat 2 alone — the uncalled portion, which
-  // comes straight back without any special-case code.
+  // Second side pot: seat 2's uncalled portion, returned with no special-case code.
   assert.equal(pots[2]?.amount, 180);
   assert.deepEqual(pots[2]?.eligibleSeats, [2]);
 
@@ -96,8 +93,6 @@ test('the uncalled portion of a bet returns to the bettor', () => {
 });
 
 test('layers with identical eligibility are merged into one displayed pot', () => {
-  // Two all-ins for different amounts but both still eligible for everything they
-  // paid into, plus a caller who covers both.
   const seats = [seat({ seat: 0, committedTotal: 100 }), seat({ seat: 1, committedTotal: 100 })];
   const pots = buildPots(seats);
   assert.equal(pots.length, 1, 'no spurious layers when commitments are equal');
@@ -112,7 +107,6 @@ test('a split pot divides evenly and odd chips go left of the button', () => {
   ];
   const pots = buildPots(seats);
   assert.equal(pots[0]?.amount, 21);
-  // All three tie.
   const scores = new Map([
     [0, 500],
     [1, 500],
@@ -129,10 +123,8 @@ test('a split pot divides evenly and odd chips go left of the button', () => {
   assert.equal(byseat.get(2), 7);
   assert.equal(byseat.get(0), 7);
 
-  // An odd chip only exists when the pot does not divide by the number of
-  // winners. Three contributors of 7 make a pot of 21; if only two of them tie,
-  // the split is 10 each with one chip left over, which must go to the winner
-  // first in order left of the button.
+  // Three contributors of 7 make 21. Two tie, so 10 each and the odd chip goes to the winner first
+  // left of the button.
   const oddSeats = [
     seat({ seat: 0, committedTotal: 7 }),
     seat({ seat: 1, committedTotal: 7 }),
@@ -142,7 +134,6 @@ test('a split pot divides evenly and odd chips go left of the button', () => {
   assert.equal(oddPots[0]?.amount, 21);
   const oddAwards = awardPots({
     pots: oddPots,
-    // Seats 1 and 2 tie for the best hand; seat 0 loses.
     scores: new Map([
       [0, 100],
       [1, 500],
@@ -166,7 +157,6 @@ test('a split pot divides evenly and odd chips go left of the button', () => {
     [1],
   );
 
-  // Move the button and the odd chip follows it.
   const movedButton = awardPots({
     pots: oddPots,
     scores: new Map([
@@ -209,17 +199,13 @@ test('awarding never creates or destroys chips, over many random all-in shapes',
       const status = nextInt(4) === 0 ? 'folded' : nextInt(2) === 0 ? 'allIn' : 'active';
       seats.push(seat({ seat: index, committedTotal: 1 + nextInt(200), status }));
     }
-    // At least one seat must remain live, otherwise the situation is impossible.
     if (!seats.some((s) => s.status !== 'folded')) {
       const first = seats[0];
       if (first !== undefined) seats[0] = { ...first, status: 'active' };
     }
 
-    // This fuzz deliberately generates shapes that legal play cannot reach —
-    // including a folded seat as the single largest contributor. Those are exactly
-    // the states that used to make pot construction throw, so they are worth
-    // covering: the invariant must be "chips are conserved", not "the inputs were
-    // reachable".
+    // Includes shapes legal play cannot reach, such as a folded seat as the largest contributor. The
+    // invariant is chip conservation, not reachability.
     const layers = buildPotLayers(seats);
     assertPotsBalance(seats, layers);
 
@@ -271,10 +257,8 @@ test('bestFiveCards returns the five cards that actually make the hand', () => {
 });
 
 test('end to end: a three-way all-in builds side pots and pays the right players', () => {
-  // Seat 0 (BTN, 300), seat 1 (SB, 50), seat 2 (BB, 120).
-  // Deal order left of button: 1, 2, 0.
-  // Give seat 1 the best hand, seat 2 second, seat 0 worst — so the short stack
-  // wins the main pot and seat 2 takes the side pot.
+  // Seat 0 (BTN, 300), seat 1 (SB, 50), seat 2 (BB, 120). Deal order 1, 2, 0. Seat 1 has the best
+  // hand and wins the main pot, seat 2 takes the side pot.
   const deck = stackedDeck({ 1: 'AhAd', 2: 'KhKd', 0: '3s5c' }, [1, 2, 0], 'Qh 8s 2c 4d 9h');
   const { state } = deal({
     stacks: [300, 50, 120],
@@ -284,7 +268,6 @@ test('end to end: a three-way all-in builds side pots and pays the right players
   });
   const before = chipsInSystem(state);
 
-  // Everyone gets all-in. Seat 0 acts first three-handed.
   let current = applyAction(state, 0, { type: 'raise', to: 300 }).state;
   current = applyAction(current, 1, { type: 'call' }).state;
   current = applyAction(current, 2, { type: 'call' }).state;
@@ -309,7 +292,6 @@ test('end to end: a three-way all-in builds side pots and pays the right players
   assert.equal(sideAward[0]?.seat, 2);
   assert.equal(result.pots[1]?.amount, 140);
 
-  // The rest is seat 0's uncalled money coming back.
   const returned = result.awards.filter((a) => a.potIndex === 2);
   assert.equal(returned[0]?.seat, 0);
   assert.equal(result.pots[2]?.amount, 180);
@@ -320,7 +302,6 @@ test('end to end: a three-way all-in builds side pots and pays the right players
 });
 
 test('a chopped pot in a real hand splits the chips', () => {
-  // Both players play the board: identical hands.
   const deck = stackedDeck({ 1: '2c3d', 0: '2h3h' }, [1, 0], 'Ah Ad Ac Ks Kd');
   const { state } = deal({
     stacks: [100, 100],

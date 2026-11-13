@@ -1,29 +1,12 @@
 /**
- * The learning half's figures: what a lesson's live calculation shows, what a numeric answer is
- * checked against, how close it has to be, and what a decision question's spot computes to.
- *
- * Content comes only from `@prl/content`, which validates it at load. Every number here is
- * computed from the situation a question stores (ADR 0006); nothing in this file or in the content
- * is an answer to read off.
- *
- * ## What is duplicated, and from where
- *
- * An app must not depend on an app (ADR 0014), so three pieces are copied with their originals
- * named beside them. The grading rule is not one of them: `withinTolerance` is `@prl/contracts`'s,
- * the same function the API grades a web reader's answer with.
- *
- *
- *   - the field table a numeric question's `field` is read from: `potOddsFields` through
- *     `outsFields`, `closedFormTable` and `expectedValueFor` in `apps/api/src/routes/content.ts`.
- *     The API's copy is the one that grades a web reader's answer, so it is the one to agree with.
- *     The web's own `computeCalculation` (`apps/web/src/lib/learn-calculations.ts`) cannot be the
- *     source: it imports runtime values from `@prl/ui`, which is React.
- *   - the equity spec for a calculation: `equitySpec` in `apps/web/src/lib/learn-calculations.ts`,
- *     every opponent an exact holding. All three equity questions name a flop and exact cards, so
- *     `equity()` enumerates exactly and needs no sampling or worker. Every lesson's opponents are
- *     exact holdings too; three are preflop, and enumerate 1.4 to 1.7 million run-outs exactly,
- *     measured at 285 to 334 ms each on first use, once per process (`calculate` caches).
- *   - the unit words and the decimals: `apps/web/src/lib/quiz-tolerance.ts`.
+ * Lesson figures, numeric answer targets and tolerances, and decision spots. Every number is
+ * computed from the stored situation (ADR 0006). An app must not depend on an app (ADR 0014), so
+ * three pieces are copied from their originals:
+ *   - the field table, from `apps/api/src/routes/content.ts`, which grades web answers.
+ *   - the equity spec, from `equitySpec` in `apps/web/src/lib/learn-calculations.ts`. Opponents are
+ *     exact holdings, so `equity()` enumerates. Preflop spots take 285 to 334 ms once per process.
+ *   - the unit words and decimals, from `apps/web/src/lib/quiz-tolerance.ts`.
+ * Grading uses `withinTolerance` from `@prl/contracts`, the same function as the API.
  */
 
 import { analyseScenario, quizzes, type ScenarioAnalysis, scenarioById } from '@prl/content';
@@ -56,16 +39,10 @@ export type NumericQuestion = Extract<QuizQuestion, { kind: 'numeric' }>;
 export type DecisionQuestion = Extract<QuizQuestion, { kind: 'decision' }>;
 export type QuizUnit = NumericQuestion['unit'];
 
-// ---------------------------------------------------------------------------
-// Topics and quizzes
-// ---------------------------------------------------------------------------
-
-/** The shared names in `@prl/contracts`, so the bot calls a topic what the web app calls it. */
 export function topicLabel(topic: Topic): string {
   return TOPIC_LABELS[topic];
 }
 
-/** Topics that have at least one quiz, in the syllabus order `TOPICS` declares. */
 export function quizTopics(): readonly Topic[] {
   return TOPICS.filter((topic) => quizzes().some((quiz) => quiz.topic === topic));
 }
@@ -78,19 +55,14 @@ export function isTopic(value: string): value is Topic {
   return (TOPICS as readonly string[]).includes(value);
 }
 
-// ---------------------------------------------------------------------------
-// Calculations: one computation for a lesson's figures and a quiz's target
-// ---------------------------------------------------------------------------
-
 export interface Figure {
   readonly label: string;
   readonly value: number;
   /** The unit a numeric question asking for this field must declare. Grading only. */
   readonly unit: QuizUnit;
   /**
-   * What follows the number when a reader is shown it, where the grading unit's own word would be
-   * false: an expected result in big blinds is graded as `chips` and would print as "units", a
-   * multiplier is a `count` and would print as "4 cards". Empty for a bare number.
+   * Display word when the grading unit's word would be false, such as big blinds graded as `chips`.
+   * Empty for a bare number.
    */
   readonly words?: string;
   /** A parameter the content stated rather than a result. The caption already says it. */
@@ -98,28 +70,20 @@ export interface Figure {
 }
 
 /**
- * A calculation's figures, how they were obtained, and the arithmetic in words.
- *
- * The web computes a lesson's figure and a quiz's target with one function so that a quiz cannot
- * mark a reader wrong for following the lesson (`learn-calculations.ts`, "That is not
- * code-sharing for tidiness"). This is that function here. A quiz field reads one figure; a lesson
- * shows all of them, which is why some kinds carry figures the API's table does not have (every
- * player's equity, the exact figure beside the rule of 2 and 4, the bounds of the 95% interval):
- * the captions ask the reader to look at those numbers.
+ * One function computes a lesson's figures and a quiz's target, so a quiz cannot mark a reader
+ * wrong for following the lesson. Lessons show figures the API table lacks because captions cite them.
  */
 export interface Calculation {
-  /** One sentence: exact or approximate, and how much work it took. A sampled figure's interval. */
+  /** Includes a sampled figure's interval. */
   readonly method: string;
   readonly working: string;
   readonly figures: Readonly<Record<string, Figure>>;
 }
 
 export interface Expected {
-  /** The target, in the question's own unit. */
   readonly value: number;
   readonly unit: QuizUnit;
   readonly tolerance: number;
-  /** The arithmetic in words, from the maths package, and the method. */
   readonly working: string;
 }
 
@@ -135,7 +99,7 @@ function exactCards(text: string): ReturnType<typeof exactRange> {
 const ARITHMETIC = 'Exact arithmetic: nothing is sampled or estimated.';
 const CLOSED_FORM = 'Closed form: exact given the inputs, and the inputs are assumptions.';
 
-/** One card to come is the turn, with 46 cards unseen; two is the flop, with 47. */
+/** One card to come has 46 unseen, two have 47. */
 const UNSEEN_BY_CARDS_TO_COME = { 1: 46, 2: 47 } as const;
 
 function compute(calculation: LiveCalculation): Calculation {
@@ -151,8 +115,7 @@ function compute(calculation: LiveCalculation): Calculation {
             value: asPercent(odds.breakEvenEquity),
             unit: 'percent',
           },
-          // No "X to 1" exists for a free call, so the field is absent and a question asking for
-          // it fails at `expectedAnswer`, not by grading a reader against a 0.
+          // A free call has no "X to 1". The missing field fails at `expectedAnswer`, not as a 0.
           ...(odds.oddsRatio === null
             ? {}
             : { oddsRatio: { label: 'Price offered', value: odds.oddsRatio, unit: 'ratio' as const } }),
@@ -171,7 +134,7 @@ function compute(calculation: LiveCalculation): Calculation {
           `figure beside it is counted from the ${unseen} unseen cards.`,
         working: `${estimate.explanation} ${estimate.caveat} ${hit.derivation}`,
         figures: {
-          // Already in percentage points: scaling it again would turn 36% into 3,600%.
+          // Already in percentage points. Scaling it again would turn 36% into 3,600%.
           estimatePercent: {
             label: 'Rule-of-thumb estimate',
             value: estimate.estimatePercent,
@@ -240,8 +203,7 @@ function compute(calculation: LiveCalculation): Calculation {
         method: `${CLOSED_FORM} Malmuth–Harville.`,
         working: result.explanation,
         figures: {
-          // The API's name for the first stack's share, which in every shipped situation is the
-          // largest. A quiz question reads it by this name.
+          // The API's name for the first stack's share. That stack is the largest in shipped content.
           chipLeaderShare: { label: label(0), value: shareOf(0), unit: 'percent' },
           ...others,
         },
@@ -316,8 +278,7 @@ function compute(calculation: LiveCalculation): Calculation {
       };
     }
     case 'outs': {
-      // The web refuses an outs breakdown with no opponent holding, and so does this: "how many
-      // outs" has no answer without saying what hero is trying to beat.
+      // Outs need the holding they beat, as on the web.
       if (calculation.opponentCards === undefined) {
         throw new Error('an outs calculation needs the opponent holding it is counted against');
       }
@@ -350,8 +311,7 @@ function compute(calculation: LiveCalculation): Calculation {
       });
       const [hero, ...opponents] = result.players;
       if (hero === undefined) throw new Error('an equity result with no players');
-      // A sampled figure always carries its interval, `equity.ts`'s own rule: the
-      // bare percentage reads as exact, and at 100,000 run-outs it is not.
+      // A sampled figure always carries its interval (the rule in `equity.ts`).
       const method =
         result.method === 'exact-enumeration'
           ? `Exact: every one of ${result.trials.toLocaleString('en-US')} run-outs was played out.`
@@ -388,10 +348,7 @@ function compute(calculation: LiveCalculation): Calculation {
 
 const calculationCache = new Map<string, Calculation>();
 
-/**
- * The calculation's figures, computed once per process: the content does not change while it
- * runs, and a preflop equity enumerates 1.7 million run-outs.
- */
+/** Cached per process. A preflop equity enumerates 1.7 million run-outs. */
 export function calculate(calculation: LiveCalculation): Calculation {
   const key = JSON.stringify(calculation);
   const cached = calculationCache.get(key);
@@ -402,11 +359,8 @@ export function calculate(calculation: LiveCalculation): Calculation {
 }
 
 /**
- * The figure a numeric answer is checked against, computed from the question's calculation.
- *
- * Throws on the two content bugs the API also refuses: a field the calculation does not produce,
- * and a unit that disagrees with the field's. The second is the one that would mark every reader
- * wrong: a `percent` question over a fraction accepts 0.333 and refuses 33.3.
+ * Throws, as the API does, on a field the calculation lacks or a unit that disagrees with it. A
+ * `percent` question over a fraction would accept 0.333 and refuse 33.3.
  */
 export function expectedAnswer(question: NumericQuestion): Expected {
   const computed = calculate(question.calculation);
@@ -430,7 +384,6 @@ export function expectedAnswer(question: NumericQuestion): Expected {
   };
 }
 
-/** A figure as a lesson shows it: `Break-even equity: 33.3%`, `Expected result: 500.0 big blinds`. */
 export function figureLine(figure: Figure): string {
   if (figure.words === undefined) return `${figure.label}: ${figureText(figure.value, figure.unit)}`;
   const number = figure.value.toLocaleString('en-US', {
@@ -449,7 +402,7 @@ const UNIT_WORDS: Readonly<Record<QuizUnit, string>> = {
   hands: 'hands',
 };
 
-/** `QUIZ_UNIT_DECIMALS` in the same file: how many decimals a FIGURE in this unit is worth. */
+/** `QUIZ_UNIT_DECIMALS` in the same file. */
 const UNIT_DECIMALS: Readonly<Record<QuizUnit, number>> = {
   percent: 1,
   chips: 1,
@@ -458,14 +411,13 @@ const UNIT_DECIMALS: Readonly<Record<QuizUnit, number>> = {
   hands: 0,
 };
 
-/** `toleranceDecimals` in the same file: a tolerance is often a fraction of its unit's step. */
+/** `toleranceDecimals` in the same file. A tolerance is often a fraction of its unit's step. */
 function toleranceDecimals(tolerance: number, unitDecimals: number): number {
   const scaled = Math.abs(tolerance) * 10 ** unitDecimals;
   if (!Number.isFinite(scaled)) return unitDecimals;
   return Number.isInteger(Math.round(scaled * 1e6) / 1e6) ? unitDecimals : unitDecimals + 1;
 }
 
-/** `33.3%`, `2.0 to 1`, `12.5 units`, `9 cards`. */
 export function figureText(value: number, unit: QuizUnit, decimals = UNIT_DECIMALS[unit]): string {
   const number = value.toLocaleString('en-US', {
     minimumFractionDigits: decimals,
@@ -474,21 +426,14 @@ export function figureText(value: number, unit: QuizUnit, decimals = UNIT_DECIMA
   return unit === 'percent' ? `${number}%` : `${number} ${UNIT_WORDS[unit]}`;
 }
 
-/**
- * The tolerance as a reader is told it, at enough decimals to be true: `counting-outs-q4` declares
- * 0.5 cards, and at the unit's own zero decimals that would print "1 cards", which is twice the band
- * the grader applies. The defect `apps/web/src/lib/quiz-tolerance.ts` exists for.
- */
+/** Enough decimals to be true. A 0.5-card tolerance at zero decimals would print "1 cards". */
 export function toleranceText(tolerance: number, unit: QuizUnit): string {
   return figureText(tolerance, unit, toleranceDecimals(tolerance, UNIT_DECIMALS[unit]));
 }
 
 /**
- * A typed number, or null for anything that is not plainly one.
- *
- * Accepts `33.3`, `-12`, `.5`, `1,200`, and a trailing unit a reader might add (`33.3%`, `2.5 to 1`,
- * `9 cards`). Refuses everything else rather than pulling a number out of a sentence: "about 30,
- * maybe 35" is not an answer of 30.
+ * Null unless the text is plainly one number, with an optional trailing unit (`33.3%`, `2.5 to 1`).
+ * "about 30, maybe 35" is not an answer of 30.
  */
 export function parseNumber(text: string): number | null {
   const match =
@@ -500,21 +445,13 @@ export function parseNumber(text: string): number | null {
   return Number.isFinite(value) ? value : null;
 }
 
-// ---------------------------------------------------------------------------
-// Decision questions
-// ---------------------------------------------------------------------------
-
-/**
- * The two actions a decision question offers. Both shipped decision questions ask "call or fold"
- * of a spot with a price, and the analysis prices exactly those two. A raise would need a size,
- * and the API refuses to grade a size its analysis did not price, so none is offered.
- */
+/** No raise, because the API refuses to grade a size its analysis did not price. */
 export const DECISION_ACTIONS = ['fold', 'call'] as const;
 export type DecisionAction = (typeof DECISION_ACTIONS)[number];
 
 export interface DecisionSpot {
   readonly facingAction: string;
-  /** The opponent range as the scenario states it: the assumption every figure rests on. */
+  /** The opponent range as the scenario states it. Every figure rests on it. */
   readonly range: string;
   readonly analysis: ScenarioAnalysis;
   readonly assumptions: readonly string[];
@@ -528,7 +465,7 @@ function rangeText(range: RangeSpec): string {
 
 const spotCache = new Map<string, DecisionSpot>();
 
-/** The scenario a decision question points at, computed. Measured at 2 and 4 ms, exact. */
+/** Exact. Measured at 2 and 4 ms. */
 export function decisionSpot(question: DecisionQuestion): DecisionSpot {
   const cached = spotCache.get(question.scenarioId);
   if (cached !== undefined) return cached;

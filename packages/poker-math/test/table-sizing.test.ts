@@ -1,9 +1,6 @@
 /**
- * The sizes the table offers, which are also the sizes the Coach prices.
- *
- * `apps/web/test/lab-sizes-priced.test.ts` is the sweep that matters — every bundled scenario, the
- * real bar's inputs against a real report. This file pins the arithmetic it rests on, in spots small
- * enough to check by hand.
+ * The sizes the table offers, which are also the sizes the Coach prices. This pins the arithmetic in
+ * spots small enough to check by hand. `apps/web/test/lab-sizes-priced.test.ts` is the full sweep.
  */
 
 import assert from 'node:assert/strict';
@@ -37,8 +34,7 @@ describe('offeredSizes', () => {
   });
 
   it('rounds the fraction to the nearest chip, which is what the bar sends (REGRESSION)', () => {
-    // `eq-second-pair-vs-wide-range`: ⅔ of 310 is 206.67. The ladder floored it to 206 and the
-    // bar rounded it to 207, and the 207 the button sent was a size nothing had priced.
+    // `eq-second-pair-vs-wide-range`: ⅔ of 310 is 206.67, and the bar rounds it to 207. Both must agree.
     assert.ok(twoThirds !== undefined);
     const to = presetTo(twoThirds, {
       bounds: { min: 1, max: 1000 },
@@ -50,8 +46,8 @@ describe('offeredSizes', () => {
   });
 
   it('names a preset clamped onto the floor or the stack by the floor or the stack', () => {
-    // 60 behind facing nothing in a pot of 300: every fraction clamps to the shove, and a "pot"
-    // label on a size that is the whole stack would be a false sentence in the derivation.
+    // 60 behind facing nothing in a pot of 300: every fraction clamps to the shove, and none is
+    // labelled "pot".
     const short = offeredSizes({ bounds: { min: 10, max: 60 }, pot: 300, toCall: 0, committedThisStreet: 0 });
     assert.deepEqual(short, [
       { id: 'minimum', to: 10 },

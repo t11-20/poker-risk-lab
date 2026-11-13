@@ -1,28 +1,8 @@
 /**
- * `@prl/content` — the teaching material, loaded and validated.
- *
- * ## Server-side only, on purpose
- *
- * This package reads its JSON from disk with `node:fs`. It is imported by
- * `apps/api` and **not** by `apps/web`: the browser gets content over the API
- * instead. Two reasons that split is deliberate rather than incidental:
- *
- *   1. Bundling. JSON module imports need `with { type: 'json' }` under Node's ESM
- *      resolver but not under a bundler, so a package that imports JSON directly
- *      ends up needing two incompatible spellings. Reading from disk sidesteps that
- *      entirely.
- *   2. Personalisation. The API already has to merge content with the caller's
- *      progress and compute the live figures, so content has to pass through the
- *      server regardless. Shipping the whole bundle to the client as well would
- *      duplicate it.
- *
- * ## Validated at load, not at use
- *
- * The bundle is validated once, on first access, by `validateContent`. A malformed
- * content file therefore fails at start-up with a precise message rather than
- * halfway through rendering a lesson. See `validate.ts` for why that matters more
- * than usual here: content that is merely *shaped* wrong is a crash, but content
- * that is *semantically* wrong quietly teaches the wrong thing.
+ * `@prl/content`, the teaching material, loaded and validated. Server-side only. It reads JSON
+ * with `node:fs`, which avoids the two incompatible JSON import spellings of Node ESM and bundlers.
+ * The browser gets content through the API, which merges it with progress anyway.
+ * The bundle is validated once on first access, so bad content fails at start-up.
  */
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
@@ -38,15 +18,9 @@ export type {
   ScenarioSituation,
 } from './scenario-analysis.ts';
 /**
- * The scenario bridge, re-exported because this entry point is the whole of what any other
- * package can reach — the `exports` map publishes `.` and nothing else, so a deep import of
- * `dist/scenario-analysis.js` is blocked.
- *
- * `scenario-analysis.ts` describes itself as the bridge between the content and the maths, and
- * `apps/api` is the caller it exists for: the API serves a scenario with its analysis computed
- * live, and `readSituation` is the one definition of how a stored scenario becomes a pot, a
- * price, a board and a range. Without these lines the API would have to reimplement that
- * reading, which is precisely the second source of truth ADR 0006 exists to prevent.
+ * Re-exported because the `exports` map publishes only `.`. `readSituation` is the one definition of
+ * how a stored scenario becomes a pot, price, board and range, so the API must not reimplement it
+ * (ADR 0006).
  */
 export {
   analyseScenario,
@@ -69,14 +43,7 @@ export class ContentLoadError extends Error {
   override readonly name = 'ContentLoadError';
 }
 
-/**
- * The data directory, resolved relative to this module.
- *
- * `dist/index.js` and `src/index.ts` sit at different depths, so the directory is
- * located by walking up until `data/` is found rather than by a hard-coded `../..`.
- * That keeps the same code working whether the package is running from source
- * (tests, `node --watch`) or from its build output.
- */
+/** Walks up to `data/`, because `src/index.ts` and `dist/index.js` sit at different depths. */
 function findDataDirectory(): string {
   let current = dirname(fileURLToPath(import.meta.url));
   for (let depth = 0; depth < 6; depth++) {
@@ -125,10 +92,7 @@ function readJsonArraysIn(dir: string): unknown[] {
   return out;
 }
 
-/**
- * Reads the raw content from disk without validating it. Exposed so tooling can
- * report every problem in one pass instead of stopping at the first throw.
- */
+/** Unvalidated, so tooling can report every problem in one pass. */
 export function readRawContent(dataDirectory = findDataDirectory()): RawContent {
   const scenarios = readJsonArraysIn(join(dataDirectory, 'scenarios'));
   const lessons = readJsonArraysIn(join(dataDirectory, 'lessons'));
@@ -150,18 +114,11 @@ export const CONTENT_VERSION = '1.0.0';
 
 let cached: ContentBundle | null = null;
 
-/**
- * The validated bundle. Loaded and validated on first call, then memoised — the
- * files do not change while the process runs.
- */
+/** Validated on first call, then memoised. The files do not change while the process runs. */
 export function content(): ContentBundle {
   if (cached === null) cached = validateContent(readRawContent());
   return cached;
 }
-
-// ---------------------------------------------------------------------------
-// Lookups
-// ---------------------------------------------------------------------------
 
 function indexById<T extends { id: string }>(records: readonly T[]): Map<string, T> {
   return new Map(records.map((record) => [record.id, record]));
@@ -217,7 +174,6 @@ export function scenariosByTopic(topic: Topic): readonly Scenario[] {
   return content().scenarios.filter((scenario) => scenario.topic === topic);
 }
 
-/** The quiz attached to a lesson, if there is one. */
 export function quizForLesson(lessonId: ContentId): Quiz | null {
   const lesson = lessonById(lessonId);
   if (lesson?.quizId === undefined) {
@@ -226,10 +182,7 @@ export function quizForLesson(lessonId: ContentId): Quiz | null {
   return quizById(lesson.quizId);
 }
 
-/**
- * Lessons in an order that respects prerequisites — a reading order a learner can
- * follow front to back. Validation has already rejected cycles, so this terminates.
- */
+/** Prerequisites first. Validation rejects cycles, so this terminates. */
 export function lessonsInReadingOrder(): readonly Lesson[] {
   const all = content().lessons;
   const byId = indexById(all);
@@ -246,7 +199,7 @@ export function lessonsInReadingOrder(): readonly Lesson[] {
     out.push(lesson);
   };
 
-  // Stable outer order: by difficulty, then by the order they appear in the files.
+  // By difficulty, then file order (the sort is stable).
   const difficultyRank = { intro: 0, core: 1, advanced: 2 } as const;
   const sorted = [...all].sort((a, b) => difficultyRank[a.difficulty] - difficultyRank[b.difficulty]);
   for (const lesson of sorted) emit(lesson);

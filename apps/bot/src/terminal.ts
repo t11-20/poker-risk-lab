@@ -1,10 +1,6 @@
 /**
- * The terminal adapter: the same `step` as Telegram, with buttons numbered.
- *
- * It exists so a person, a test and a transcript can play without Telegram. It honours the same
- * contract the Telegram adapter does: `edit` replaces the message whose button was pressed, which
- * here is always the latest message that has buttons, because that is the only one a number can
- * press.
+ * The same `step` as Telegram, with numbered buttons. `edit` replaces the latest message with
+ * buttons, the only one a number can press.
  */
 
 import {
@@ -44,8 +40,7 @@ export async function runTerminal(io: TerminalIo, deps: Deps): Promise<Session> 
     const line = raw.trim();
     io.write(`> ${line}\n`);
     if (line === '/quit') break;
-    // A bare number presses a button here, which Telegram never confuses with typing. A quiz
-    // answer of 2 next to two buttons needs a way to be typed, and this is it.
+    // A bare number presses a button, so a numeric answer needs another way to be typed.
     if (line.startsWith("'")) {
       apply({ kind: 'text', text: line.slice(1) });
       continue;

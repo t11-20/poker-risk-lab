@@ -1,30 +1,8 @@
 /**
- * Tests for src/commentary.ts.
- *
- * ## What is actually being proven here
- *
- * The interesting assertions in this file are not "the string looks right". They are:
- *
- *   1. **No generated string trips the guard, across hundreds of generated inputs.** The
- *      fuzz below walks every profile, every difficulty, several real hand situations and
- *      every action the engine offered in each of them, and asserts `findImpersonation`
- *      returns nothing for every learner-facing string produced. Views come from
- *      `startHand` + `redactFor`, so the inputs are the real redacted shape rather than a
- *      hand-written stand-in that might be missing the field that breaks a template.
- *   2. **The guard can fail.** A guard test that only ever sees passing text proves nothing,
- *      so `findImpersonation` and `assertModelVoice` are both fed text that must be
- *      rejected — including the three examples from `docs/AI-LEGENDS.md` §3.
- *   3. **The brand is minted in exactly one place.** A source scan asserts there is one
- *      `as LearnerFacing` cast in `src/commentary.ts`, with a proof that the scan would
- *      catch a second one. That is what makes "every string goes through the guard" a
- *      structural claim rather than a convention.
- *   4. **Every model sentence names a trait with its value.** Behaviour a learner cannot
- *      trace back to the profile card they picked is not an explanation.
- *   5. **The outcome-versus-quality note fires in exactly two of the four combinations**, so
- *      it stays the note that means something rather than wallpaper.
- *
- * Randomness in the fuzz comes from `createDeterministicRandomForTests`, so a failure here
- * is reproducible from the seed rather than a flake that reappears on Tuesdays.
+ * Commentary tests. The fuzz runs every profile, difficulty, real redacted situation and offered
+ * action, and asserts `findImpersonation` finds nothing in any learner-facing string. The guard is
+ * also fed text it must reject, including the examples in `docs/AI-LEGENDS.md` §3. A source scan
+ * asserts the brand cast appears once in `src/commentary.ts`. Randomness is seeded.
  */
 
 import assert from 'node:assert/strict';
@@ -63,10 +41,6 @@ import { TRAIT_KEYS, TRAIT_LABELS, type TraitKey } from '../src/traits.ts';
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 
-// ---------------------------------------------------------------------------
-// Real hands, real views
-// ---------------------------------------------------------------------------
-
 function config(overrides: Partial<TableConfig> = {}): TableConfig {
   return { smallBlind: 1, bigBlind: 2, ante: 0, maxSeats: 6, actionTimeoutSeconds: 30, ...overrides };
 }
@@ -77,7 +51,6 @@ function nextSeat(state: HandState): SeatIndex {
   return seat;
 }
 
-/** Plays a script and returns the acting seat's own view at the end of it. */
 function situation(options: {
   readonly stacks: readonly number[];
   readonly maxSeats?: number;
@@ -163,7 +136,6 @@ function situations(): readonly { readonly name: string; readonly view: PlayerVi
   ];
 }
 
-/** Every action the engine offered in this view, at a few sizes where it offered a range. */
 function offeredActions(view: PlayerView): readonly Action[] {
   const out: Action[] = [];
   for (const legal of view.legalActions) {
@@ -181,7 +153,6 @@ function offeredActions(view: PlayerView): readonly Action[] {
   return out;
 }
 
-/** A distribution over the offered actions, weighted by an injected deterministic source. */
 function distributionOver(
   actions: readonly Action[],
   chosen: Action,
@@ -192,7 +163,7 @@ function distributionOver(
     const isChosen =
       action.type === chosen.type &&
       ('to' in action ? action.to : null) === ('to' in chosen ? chosen.to : null);
-    // The chosen action must carry weight: a policy cannot sample what it never scored.
+    // A policy cannot sample an action it never scored.
     return (isChosen ? 4 : 0) + random.nextInt(5);
   });
   const total = weights.reduce((sum, weight) => sum + weight, 0);
@@ -202,13 +173,7 @@ function distributionOver(
   }));
 }
 
-/**
- * A decision in one of the three shapes a caller can legitimately supply.
- *
- * The seed picks between them, so the fuzz covers all three: the full summary, a
- * `PolicyDecision`-style object that reports its driving axes but no vector, and the bare
- * minimum of an action and a distribution. All three have to produce guarded prose.
- */
+/** The seed picks one of the three decision shapes a caller can supply. All must produce guarded prose. */
 function decisionFor(
   view: PlayerView,
   action: Action,
@@ -223,7 +188,7 @@ function decisionFor(
     case 0:
       return { action, distribution, traits, difficulty };
     case 1:
-      // The shape `policy.ts` returns: driving axes reported, no vector, no difficulty.
+      // The shape `policy.ts` returns.
       return {
         action,
         distribution,
@@ -236,10 +201,6 @@ function decisionFor(
       return { action, distribution, difficulty };
   }
 }
-
-// ---------------------------------------------------------------------------
-// A CoachReport, built here so the EVs are exact
-// ---------------------------------------------------------------------------
 
 export function coachReport(options: {
   readonly candidates: readonly ActionCandidate[];
@@ -271,10 +232,7 @@ export function coachReport(options: {
       pot,
       toCall,
       breakEvenEquity: toCall / (pot + toCall),
-      // `null`, not `0`, and for the same reason as in `comparison.test.ts`: a free call has
-      // no "X to 1" price, and 0 is a price — the worst one there is. Two test helpers had
-      // invented that third convention between them; the contract's `number | null` is the
-      // only one now.
+      // A free call has no "X to 1" price, and 0 would be the worst price. The contract is `number | null`.
       oddsRatio: toCall === 0 ? null : pot / toCall,
       equitySurplus: 0.42 - toCall / (pot + toCall),
       explanation: 'A test price, stated so the figures below have something to be relative to.',
@@ -313,15 +271,10 @@ function candidate(action: ActionCandidate['action'], ev: number, to?: number): 
   };
 }
 
-// ---------------------------------------------------------------------------
-// Assertions shared by the fuzz
-// ---------------------------------------------------------------------------
-
 function escapeForRegex(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** True when the text names a trait axis and gives its value to two decimals. */
 function namesATraitWithValue(text: string): boolean {
   return TRAIT_KEYS.some((key: TraitKey) =>
     new RegExp(`${escapeForRegex(TRAIT_LABELS[key])} at \\d\\.\\d{2}`).test(text),
@@ -335,13 +288,8 @@ function assertClean(text: string, where: string): void {
     [],
     `${where} tripped the impersonation guard: ${JSON.stringify(text)}`,
   );
-  // The stricter local guard as well, with no context: a generated string must survive both.
   assertModelVoice(text, where);
 }
-
-// ---------------------------------------------------------------------------
-// The guard, and the proof it can fail
-// ---------------------------------------------------------------------------
 
 test('findImpersonation rejects the shapes the shared pattern list covers', () => {
   const banned = [
@@ -358,7 +306,6 @@ test('findImpersonation rejects the shapes the shared pattern list covers', () =
   for (const text of banned) {
     assert.ok(findImpersonation(text).length > 0, `should have been rejected: ${JSON.stringify(text)}`);
   }
-  // And the voice it requires is accepted, so the guard is not simply rejecting everything.
   assert.deepEqual(
     findImpersonation('This model prefers a larger bet here because its sizing preference is high.'),
     [],
@@ -366,34 +313,21 @@ test('findImpersonation rejects the shapes the shared pattern list covers', () =
 });
 
 test('the shared pattern list catches a name plus a mental-state verb, and so does the local guard', () => {
-  // This test used to assert the OPPOSITE: that the shared list could not see
-  // "Ivey senses weakness" because the sentence contains no pronoun, and that only
-  // commentary.ts's stricter local guard caught it. That was measured and documented rather
-  // than assumed, which was right — but it left the shared guard weakest at the exact case it
-  // was written to prevent, and four modules (policy, stats, opponent-model, profiles) gate on
-  // the shared half alone.
-  //
-  // The shared list now carries a name-plus-mental-state-verb pattern and a gendered-pronoun
-  // pattern. Both were validated against every string the package can produce (4,955 of them)
-  // with zero false positives, so closing the gap cost nothing. Both guards must now catch it,
-  // and the assertion is kept in BOTH directions so a later loosening of either one fails here.
+  // Both guards must catch this. The shared list has a name-plus-mental-state-verb pattern, checked
+  // against all 4,955 strings the package produces with zero false positives.
   const impersonation = 'Ivey senses weakness and applies pressure.';
   const findings = findImpersonation(impersonation);
   assert.ok(findings.length > 0, 'the shared guard must catch a named person plus a mental-state verb');
   assert.match(findings[0]?.why ?? '', /named person/);
   assert.throws(() => assertModelVoice(impersonation, 'test'), /names a person/);
 
-  // The other sentence the shared list used to miss: a gendered pronoun with a poker verb,
-  // which the `would (say|tell|think|feel)` pattern could not see because `raise` is neither.
+  // A gendered pronoun with a poker verb, which `would (say|tell|think|feel)` cannot see.
   assert.ok(findImpersonation('He would raise here.').length > 0);
 
-  // And legitimate model commentary is still accepted, so this is not a guard that rejects
-  // everything — which is the failure mode a tightened pattern list invites.
   assert.deepEqual(
     findImpersonation('This model prefers a larger bet, and it treats position as decisive.'),
     [],
   );
-  // Every attributed name in the set is caught, whichever half of it appears.
   for (const profile of PROFILES) {
     const attributed = profile.naming.attributedName;
     if (attributed === undefined) continue;
@@ -438,7 +372,7 @@ test('a caller-supplied label and a private card are both banned from prose', ()
       }),
     /repeats the identity label/,
   );
-  // An empty label matches every string, so it must be skipped rather than trusted.
+  // An empty label matches every string, so it is skipped.
   assert.doesNotThrow(() => assertModelVoice('This model checked.', 'test', { labels: ['', '   '] }));
 
   const view = situations()[0]?.view;
@@ -453,7 +387,7 @@ test('a caller-supplied label and a private card are both banned from prose', ()
       }),
     /a card only the acting seat can see/,
   );
-  // Case matters: "as" is a word, "As" is a card, and lowercase prose must survive.
+  // "as" is a word and "As" is a card.
   assert.doesNotThrow(() =>
     assertModelVoice('This model prefers a bet, as the price is short.', 'test', {
       privateCards: [card],
@@ -466,15 +400,7 @@ test('publishCommentary rejects empty text and collapses whitespace', () => {
   assert.equal(publishCommentary('This  model\n  prefers a bet.', 'test'), 'This model prefers a bet.');
 });
 
-/**
- * Compile-time reconciliation with `policy.ts`.
- *
- * `PolicyDecisionSummary` exists so that commentary depends on the smallest possible surface
- * of the policy. This assertion is what stops that from being a hope: if `PolicyDecision` ever
- * stops being usable as a commentary input, the *typecheck* fails here with a named type
- * rather than the API failing to compile somewhere further out. It costs one erased type and
- * one boolean.
- */
+/** If `PolicyDecision` stops being a valid commentary input, the typecheck fails here with a named type. */
 type PolicyDecisionIsAcceptableHere = PolicyDecision extends PolicyDecisionSummary ? true : never;
 const POLICY_DECISION_RECONCILED: PolicyDecisionIsAcceptableHere = true;
 
@@ -483,22 +409,16 @@ test('a policy decision is accepted as commentary input with no conversion', () 
 });
 
 test('the LearnerFacing brand is minted in exactly one place', () => {
-  // This is what makes "every learner-facing string went through the guard" structural: the
-  // only way to produce the branded type is the one cast inside publishCommentary.
+  // The only way to produce the branded type is the one cast inside publishCommentary.
   const source = readFileSync(join(SRC, 'commentary.ts'), 'utf8');
   const withoutComments = source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
   const casts = withoutComments.match(/as LearnerFacing/g) ?? [];
   assert.equal(casts.length, 1, `expected exactly one brand cast, found ${casts.length}`);
-  // Proof the scan can fail: it must count a second cast if one is ever added.
   assert.equal(
     ('const a = x as LearnerFacing; const b = y as LearnerFacing;'.match(/as LearnerFacing/g) ?? []).length,
     2,
   );
 });
-
-// ---------------------------------------------------------------------------
-// The fuzz
-// ---------------------------------------------------------------------------
 
 test('explainModelDecision never impersonates, over every profile and every offered action', () => {
   let generated = 0;
@@ -524,7 +444,6 @@ test('explainModelDecision never impersonates, over every profile and every offe
         }
 
         assert.ok(reasoning.drivingTraits.length > 0, `${where}: no driving traits`);
-        // Every value printed comes from one vector, resolved the same way here as there.
         const inForce =
           decision.traits ??
           (decision.difficulty === undefined ? profile.traits : expressTraits(profile, decision.difficulty));
@@ -542,7 +461,7 @@ test('explainModelDecision never impersonates, over every profile and every offe
         assert.ok(reasoning.actionProbabilities.length >= 1);
         for (const entry of reasoning.actionProbabilities) assertClean(entry.action, `${where} action label`);
 
-        // Identical input, identical output: nothing here reads a clock or a global.
+        // Nothing here reads a clock or a global.
         assert.deepEqual(explainModelDecision({ decision, profile, disclosure, view }), reasoning);
         generated += 1;
       }
@@ -579,12 +498,10 @@ test('explainModelDecision refuses inputs that could not have happened', () => {
   const action = legal[0];
   assert.ok(action !== undefined);
 
-  // No distribution at all.
   assert.throws(
     () => explainModelDecision({ decision: { action, distribution: [], traits }, profile, disclosure, view }),
     /distribution it was sampled from/,
   );
-  // A distribution that does not sum to 1.
   assert.throws(
     () =>
       explainModelDecision({
@@ -595,7 +512,6 @@ test('explainModelDecision refuses inputs that could not have happened', () => {
       }),
     /not a distribution/,
   );
-  // An action with no weight cannot have been sampled.
   const other = legal[1];
   assert.ok(other !== undefined);
   assert.throws(
@@ -615,7 +531,6 @@ test('explainModelDecision refuses inputs that could not have happened', () => {
       }),
     /carries no weight/,
   );
-  // An action the engine never offered.
   const illegal: Action = view.legalActions.some((entry) => entry.type === 'check')
     ? { type: 'call' }
     : { type: 'check' };
@@ -629,7 +544,6 @@ test('explainModelDecision refuses inputs that could not have happened', () => {
       }),
     /did not offer/,
   );
-  // A spectator view has no seat whose decision this could be.
   const spectator = { ...view, viewerSeat: null };
   assert.throws(
     () =>
@@ -685,9 +599,7 @@ test('commentOnDecision never impersonates, and never repeats the label it was h
           if (label.trim() !== '' && label !== 'you') {
             assert.ok(!text.includes(label), `${where}: the label leaked into prose`);
           }
-          // A model line names an axis whenever the decision gave it one to name. With
-          // neither a vector nor a reported axis there is no profile to fall back to, and the
-          // line states the action and claims nothing about why.
+          // With neither a vector nor a reported axis, the line states the action and claims no reason.
           const canName =
             decision !== null && (decision.traits !== undefined || (decision.drivingTraits ?? []).length > 0);
           if (!isUser && canName) {
@@ -735,10 +647,6 @@ test('commentOnDecision rejects impossible inputs', () => {
   assert.throws(() => commentOnDecision({ ...base, toCall: Number.NaN }), /toCall/);
 });
 
-// ---------------------------------------------------------------------------
-// learnFromSummary
-// ---------------------------------------------------------------------------
-
 function observedStats(overrides: Partial<ProfileObservedStats> = {}): ProfileObservedStats {
   return {
     handsObserved: 120,
@@ -771,7 +679,7 @@ test('learnFromSummary passes the authored material through and adds only guarde
     assert.ok(namesATraitWithValue(line), `generated learnFrom[${index}] names no trait: ${line}`);
   }
 
-  // Contrasts name other profiles by archetype only — the name that is safe in both modes.
+  // Contrasts name other profiles by archetype only, which is safe in both modes.
   assert.equal(summary.contrasts.length, others.length);
   for (const contrast of summary.contrasts) {
     const other = profileById(contrast.otherProfileId);
@@ -805,7 +713,6 @@ test('learnFromSummary separates sampling error from a model that does not match
   const profile = requireProfile('disciplined-specialist');
   const disclosure = profileDisclosure(profile.naming, 'archetype');
 
-  // Declared vpip is 0.15. An observed 0.55 with a tight interval is a real disagreement.
   const wide = learnFromSummary({
     profile,
     disclosure,
@@ -817,7 +724,7 @@ test('learnFromSummary separates sampling error from a model that does not match
     'a gap past both the tolerance and the sampling error should be reported as a defect',
   );
 
-  // The same gap with a 40-hand interval cannot be separated from noise, and must not be.
+  // The same gap over a 40-hand interval cannot be separated from noise.
   const narrow = learnFromSummary({
     profile,
     disclosure,
@@ -832,9 +739,7 @@ test('learnFromSummary separates sampling error from a model that does not match
 });
 
 test('learnFromSummary never compares folds under pressure with the observed fold-to-bet rate (REGRESSION)', () => {
-  // That rate counts the preflop entry decision, which `vpip` decides, so it agreed with
-  // calling-station's 0.14 because the profile plays half its hands. Both directions are tried:
-  // the rate the app measured for it, and one far enough off to have been called a defect.
+  // That rate counts the preflop entry decision, which `vpip` decides. Both directions are tried.
   const profile = requireProfile('calling-station');
   const disclosure = profileDisclosure(profile.naming, 'archetype');
   const foldTrait = /folds under pressure/i;
@@ -863,10 +768,6 @@ test('learnFromSummary drops the profile from its own contrast list', () => {
   });
   assert.ok(!summary.contrasts.some((contrast) => contrast.otherProfileId === profile.naming.id));
 });
-
-// ---------------------------------------------------------------------------
-// outcomeVersusQualityNote
-// ---------------------------------------------------------------------------
 
 function quality(band: DecisionQuality['band'], evGivenUp: number): DecisionQuality {
   return {
@@ -901,7 +802,6 @@ test('the outcome-versus-quality note fires in exactly the two combinations that
   assert.equal(wellPlayedWin, null, 'agreement must not produce a note, or the note becomes wallpaper');
   assert.equal(badlyPlayedLoss, null, 'agreement must not produce a note, or the note becomes wallpaper');
 
-  // The separation has to be explicit in the wording, not implied by the field name.
   assert.match(wellPlayedLoss, /Both of those are true at the same time/);
   assert.match(wellPlayedLoss, /that is what variance is/);
   assert.match(wellPlayedLoss, /not evidence against the decisions/);
@@ -919,7 +819,6 @@ test('a flat hand and a middling band produce no note', () => {
     null,
   );
   assert.equal(outcomeVersusQualityNote({ chipResult: 0, quality: quality('materially-off', -9) }), null);
-  // 'slightly-off' is not a clear disagreement with either result, in either direction.
   assert.equal(outcomeVersusQualityNote({ chipResult: -42, quality: quality('slightly-off', -2) }), null);
   assert.equal(outcomeVersusQualityNote({ chipResult: 42, quality: quality('slightly-off', -2) }), null);
 });

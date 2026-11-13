@@ -1,30 +1,11 @@
 /**
- * A Coach report's candidate table, re-priced at a different assumed fold frequency.
+ * A Coach report's candidate table, re-priced at a different assumed fold frequency, in the browser.
  *
- * ## Why this exists
- *
- * Every scenario's assumptions say the fold frequency behind its bet and raise rows is "an input
- * you can change, not something measured", and the Lab's own tagline is "change one input, watch
- * the maths move". After deciding, the page offered no input at all. This is the arithmetic for
- * one: the same `evOfBet` and `evOfRaise` the Coach priced the rows with, re-run in the browser at
- * the reader's own frequency, from nothing but the report already on the page.
- *
- * ## What it reads, and why that is enough
- *
- * A bet or raise row's EV is a function of five figures: the pot it can win, the price faced, the
- * increment, hero's equity when called, and the fold frequency. The report carries all of them:
- * `potOdds.pot` is the contestable pot the Coach priced into (`buildCoachReport` hands it the
- * same `contestablePot`), `toCall` is the price, a raise's increment is `cost - toCall` because
- * `cost` is `evOfRaise`'s `risk`, a bet's is its `cost`, and `potShareIfCalled` is the equity. The
- * fold, call and check rows do not read a fold frequency at all, so they are returned unchanged.
- *
- * ## It refuses rather than approximates
- *
- * Before re-pricing anything it re-prices every row at the frequency the report says it used, and
- * compares with the report's own figure. If any row does not come back to within a millionth of a
- * unit, the reconstruction is wrong for this report and the answer is `unavailable` with the
- * reason — never a table of figures that only look like the Coach's. A control that silently
- * disagreed with the analysis beside it would teach the reader that the analysis is arbitrary.
+ * It reruns `evOfBet` and `evOfRaise` from figures the report carries. `potOdds.pot` is the
+ * contestable pot, a raise's increment is `cost - toCall` (`cost` is `evOfRaise`'s `risk`), and
+ * `potShareIfCalled` is the equity. Fold, call and check rows read no fold frequency and pass
+ * through. Every row is first reproduced at the analysed frequency to within 1e-6. If any fails, the
+ * result is `unavailable`, never figures that only look like the Coach's.
  */
 
 import type { ActionCandidate, CoachReport } from '@prl/contracts';
@@ -37,7 +18,6 @@ export interface RepricedRow {
   readonly analysedEv: number;
   /** The figure at the frequency asked for. Equal to `analysedEv` for a row that reads none. */
   readonly ev: number;
-  /** Whether this row's figure depends on the fold frequency at all. */
   readonly readsFoldEquity: boolean;
 }
 
@@ -48,7 +28,6 @@ export type FoldEquityRepricing =
       readonly analysedFoldEquity: number;
       /** The frequency these figures are priced at, as a fraction in 0..1. */
       readonly foldEquity: number;
-      /** Every candidate, in the report's own order. */
       readonly rows: readonly RepricedRow[];
       /** The highest-EV row at `foldEquity`, and at the analysed frequency. */
       readonly best: RepricedRow;
@@ -78,8 +57,7 @@ function rowEvAt(candidate: ActionCandidate, report: CoachReport, f: number): nu
       }).ev;
     }
   } catch {
-    // An input `ev.ts` refuses (a non-positive increment, say) means this is not a row the Coach
-    // could have priced from these figures, which is a reconstruction failure, not a zero.
+    // `ev.ts` refused the input, so the Coach could not have priced this row from these figures.
     return null;
   }
   return null;

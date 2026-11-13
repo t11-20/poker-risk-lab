@@ -1,41 +1,14 @@
 /**
- * Recipient-specific views.
+ * Recipient-specific views, the hidden-information boundary. `HandState` holds the deck, cursor,
+ * salts and every hole card, and none of it leaves the server except through here.
  *
- * This is the hidden-information boundary. `HandState` contains the whole deck,
- * the read cursor, the commitment salt and every player's hole cards. None of that
- * may leave the server except through this module.
+ * `redactFor` builds a new `PlayerView` from scratch rather than deleting fields, so a secret added
+ * to `HandState` later is absent until someone adds it deliberately (fails closed).
  *
- * The design decision that matters: `redactFor` does not take `HandState` and
- * delete fields from it. It **constructs a different type** — `PlayerView` — from
- * scratch, listing only the fields a client is allowed to see. Deleting fields
- * fails open: add a secret to `HandState` later and it silently starts leaking.
- * Building a narrower type fails closed: add a field and it simply is not in the
- * view until someone deliberately puts it there, and TypeScript will not let a
- * `HandState` be used where a `PlayerView` is expected.
- *
- * `test/hidden-information.test.ts` backs this up at runtime by deep-scanning
- * serialised views for every card that should not be visible.
- *
- * ## Entitlement is an identity, never a position
- *
- * The second design decision, and the one that was got wrong once: **who** a view
- * is for is a *person*, not a seat number. A seat index is a position at a table.
- * A `HandState` outlives the seating that produced it — a server may keep a
- * finished hand around for the terminal frame, for review or for the archive —
- * and the moment a player stands up and somebody else takes that chair, the seat
- * index and the person diverge. An authorisation decision keyed on the index then
- * hands the new occupant the previous occupant's unshown hole cards, marked as
- * their own.
- *
- * So `redactFor` resolves a *seat state* first (`viewerFor`) and every downstream
- * decision — `isSelf`, hole-card visibility, `legalActions`, `amountToCall`, the
- * `viewerSeat` echoed back — is taken from that one resolved seat. `isSelf` is
- * `playerId` equality, so it cannot be true for somebody who merely inherited a
- * chair. `HandState.seats[].playerId` is written once by `startHand` and never
- * mutated by `applyAction`, which makes it exactly the right anchor: it is the
- * roster **as it was at the moment the hand was dealt**.
- *
- * `test/redaction-identity.test.ts` asserts that property directly.
+ * Entitlement is a person, never a seat. A finished hand outlives its seating, so keying on the seat
+ * index would hand a new occupant the previous player's unshown cards. Every decision comes from the
+ * one seat `viewerFor` resolves by `playerId`, which `startHand` writes once and `applyAction` never
+ * changes. Pinned by `test/hidden-information.test.ts` and `test/redaction-identity.test.ts`.
  */
 
 import { amountToCall, legalActions, totalPot } from './betting.ts';
@@ -65,20 +38,9 @@ export interface SeatView {
   readonly committedTotal: number;
   readonly status: SeatStatus;
   readonly position: PositionLabel | null;
-  /**
-   * The recipient's own cards, or cards shown at a completed showdown. Null in
-   * every other case — including for the recipient's own seat before cards are
-   * dealt, and for opponents at all times during play.
-   */
+  /** Own cards, or cards shown at a completed showdown. Null otherwise. */
   readonly holeCards: readonly [Card, Card] | null;
-  /**
-   * True when this seat is the recipient themselves.
-   *
-   * Decided by `playerId`, not by seat index: a recipient who has taken a chair
-   * somebody else was dealt into is not that somebody. `holeCards` above is
-   * non-null for exactly `isSelf || showed down`, so this flag and that field
-   * always agree.
-   */
+  /** True when this seat is the recipient, decided by `playerId` rather than seat index. */
   readonly isSelf: boolean;
   readonly isButton: boolean;
   readonly isToAct: boolean;
@@ -112,32 +74,17 @@ export interface PlayerView {
   /** Present only once the hand is complete. Carries the Merkle proofs. */
   readonly result: HandResult | null;
   /**
-   * Which seat of THIS hand the recipient occupies; null for a pure spectator.
-   *
-   * Resolved from the hand, never echoed back from the request: asking for a
-   * player who was not dealt into this hand, or for a seat this hand does not
-   * have, produces `null` and therefore the spectator view.
+   * The recipient's seat in THIS hand, or null for a spectator. Resolved from the hand, never echoed
+   * from the request.
    */
   readonly viewerSeat: SeatIndex | null;
   readonly randomSourceKind: HandState['randomSourceKind'];
 }
 
 /**
- * Who a view is being built for. Exactly one of the two forms.
- *
- * `viewerPlayerId` is the form a server must use. It names a *person*, and the
- * person is looked up in this hand's own dealt roster, so it stays correct for
- * as long as the `HandState` exists — including after the hand is over and the
- * seating around it has completely turned over.
- *
- * `viewerSeat` is the *positional* form, and it is only ever valid when the index
- * was read out of the very same `HandState` (a `toAct`, a `SeatState.seat`, a
- * loop over `state.seats`) in the same breath. Passing an index that came from
- * anywhere else — a lobby roster, a socket's remembered seat, a database row —
- * is the bug this type is split in two to make visible at the call site. It is
- * kept because the engine's own callers (simulation, policy harnesses, tests)
- * genuinely are iterating one state's seats, and for them the two forms are the
- * same thing.
+ * Who a view is for. Servers must use `viewerPlayerId`, which is looked up in this hand's dealt roster.
+ * `viewerSeat` is valid only for an index read from the same `HandState` (simulation, harnesses,
+ * tests). An index from a lobby, socket or database row is the bug this split exists to expose.
  */
 export type RedactOptions =
   | {
@@ -152,13 +99,8 @@ export type RedactOptions =
     };
 
 /**
- * The one seat of this hand the view belongs to, or null for a spectator.
- *
- * Fails closed in every ambiguous case: an unknown player, a seat this hand does
- * not contain, an empty id, or — impossible through `LiveTable.sit`, but not
- * something this function is willing to assume — a state in which one id somehow
- * occupies two seats. Every one of those returns `null`, which is the spectator
- * view: no hole cards, no legal actions, nothing owed.
+ * The one seat of this hand the view belongs to, or null for a spectator. Fails closed on an unknown
+ * player, a missing seat, an empty id, or one id in two seats.
  */
 function viewerFor(state: HandState, options: RedactOptions): SeatState | null {
   const playerId = options.viewerPlayerId;
@@ -173,32 +115,10 @@ function viewerFor(state: HandState, options: RedactOptions): SeatState | null {
 }
 
 /**
- * Pot layers as they exist DURING a hand, which is not what `buildPots` answers.
- *
- * `buildPots` layers by `committedTotal` and is correct at settlement, the only place it was
- * designed for. Called on a live state it turns an ordinary uncalled bet into a side pot, because
- * mid-street the bettor's `committedTotal` genuinely is higher than everybody else's. Nobody is
- * all in; no side pot exists; the table drew one anyway.
- *
- * It fired at the deal of EVERY hand, because the blinds are unequal. Six-handed 5/10 with nothing
- * but the blinds posted:
- *
- *     [{amount:10, eligibleSeats:[2,3], capPerSeat:5,  index:0},
- *      {amount:5,  eligibleSeats:[3],   capPerSeat:10, index:1}]
- *
- * which `PotDisplay` renders as "Main pot 10 units, plus the side pots below / side pot 1: 5 units
- * — seat 3 eligible". Measured over a live-table fuzz: 947 of 1,446 decision points, 65%, showed a
- * multi-layer pot with no seat all-in. Every one was a phantom, and it told a learner that seats
- * still in the hand could not win the main pot.
- *
- * That is worse than a cosmetic slip because of what the component is FOR: `PotDisplay`'s header
- * says the layers are drawn so "a learner needs to see that a side pot is a layer with an
- * eligibility list rather than a bonus". The concept was being taught with data that was wrong two
- * thirds of the time. The Coach on the same screen priced the same spot correctly, through
- * `contestablePotFor`, so the two halves of the play screen disagreed.
- *
- * A side pot exists only once a seat is ALL IN for less than the others can still wager. Until
- * then there is one pot, and everyone still holding cards is eligible for it.
+ * Pot layers during a hand. `buildPots` is correct only at settlement. Mid-street it turns an
+ * uncalled bet, or the unequal blinds, into a phantom side pot. A live-table fuzz showed 947 of 1,446
+ * decision points (65%) with a multi-layer pot and nobody all-in. A side pot exists only once a seat
+ * is all in for less than others can still wager.
  */
 function livePots(state: HandState): readonly Pot[] {
   const contesting = state.seats.filter((seat) => seat.status !== 'folded');
@@ -220,18 +140,9 @@ function livePots(state: HandState): readonly Pot[] {
 }
 
 /**
- * Builds the view one recipient is allowed to see.
- *
- * Hole-card visibility, in full:
- *   - own seat: always visible to that recipient, where "own" means the seat
- *     whose `playerId` IS the recipient — not the seat they happen to sit in now
- *   - any seat: visible once `street === 'complete'` AND that seat appears in the
- *     showdown list (i.e. it actually showed its hand)
- *   - otherwise: null
- *
- * A hand that ends by folding produces an empty showdown list, so nobody's cards
- * are revealed — which is the correct behaviour and a real information leak if
- * gotten wrong, since it would tell observers whether a folder was bluffing.
+ * Builds the view one recipient may see. Hole cards are visible to their own player (by `playerId`)
+ * and, once `street === 'complete'`, for seats in the showdown list. Otherwise null. A hand won by a
+ * fold shows nobody's cards, or observers would learn whether the folder was bluffing.
  */
 export function redactFor(state: HandState, options: RedactOptions): PlayerView {
   const viewer = viewerFor(state, options);
@@ -244,9 +155,7 @@ export function redactFor(state: HandState, options: RedactOptions): PlayerView 
   const occupied = state.seats.filter((seat) => seat.status !== 'sittingOut').map((seat) => seat.seat);
   const labels =
     occupied.length >= 2
-      ? // The blinds are handed over rather than re-derived from the button: this
-        // hand may have been dealt with a dead button or a dead small blind, and
-        // `assignBlinds` would both refuse the first and mislabel the second.
+      ? // Pass the blinds. `assignBlinds` refuses a dead button and mislabels a dead small blind.
         positionLabels(state.buttonSeat, state.config.maxSeats, occupied, {
           smallBlindSeat: state.smallBlindSeat,
           bigBlindSeat: state.bigBlindSeat,
@@ -254,10 +163,7 @@ export function redactFor(state: HandState, options: RedactOptions): PlayerView 
       : new Map<SeatIndex, PositionLabel>();
 
   const seats: SeatView[] = state.seats.map((seat) => {
-    // Identity AND position, both taken from the one resolved seat. Seat indices
-    // are unique within a state and so are player ids within a deal, so this can
-    // be true for at most one seat — and never for somebody who merely inherited
-    // the chair a dealt-in player left behind.
+    // At most one seat matches, and never someone who only inherited the chair.
     const isSelf = viewer !== null && seat.playerId === viewer.playerId && seat.seat === viewer.seat;
     const maySeeCards = isSelf || shownSeats.has(seat.seat);
     return {
@@ -288,33 +194,19 @@ export function redactFor(state: HandState, options: RedactOptions): PlayerView 
     betLevel: state.betLevel,
     minimumRaiseTo: state.betLevel + Math.max(state.lastFullRaiseIncrement, state.config.bigBlind),
     potTotal: totalPot(state),
-    // Pot layers are public information: everyone at a real table can see the
-    // side pots forming. `livePots` is why this is not `buildPots` directly.
+    // Pot layers are public. See `livePots` for why this is not `buildPots`.
     pots: livePots(state),
     forcedBets: [...state.forcedBets],
     actions: [...state.actions],
     actionSequence: state.actionSequence,
     legalActions: viewer !== null && state.toAct === viewer.seat ? legalActions(state, viewer.seat) : [],
-    // A seat that is not `active` owes nothing, and the field's contract above already says so:
-    // "0 when nothing is owed". `amountToCall` in `betting.ts` is `max(0, min(betLevel -
-    // committedThisStreet, stack))` with no status check — correct for the betting logic, which
-    // only ever asks about the seat to act, and wrong for a VIEW, which is built for every
-    // recipient on every frame. A folded seat keeps its stack and, once the street closes, has
-    // `committedThisStreet: 0`, so it reported the full bet level for the rest of the hand.
-    //
-    // `PokerTable` renders that as a `prl-badge--caution` reading "400 units to call" — the alarm
-    // tone — beside an ActionBar correctly saying "Waiting for another player to act". Measured:
-    // 6,772 occurrences in an engine fuzz, 541 and 427 in two live-table runs. Not exploitable,
-    // since the bet level is public, but it is false information in the alarm colour on the screen
-    // where a learner is working out what "to call" means.
-    //
-    // `contestablePotFor` takes the same view of a folded hero and THROWS: "seat N is folded and
-    // can win nothing; there is no price".
+    // A non-active seat owes nothing. `betting.ts`'s `amountToCall` has no status check, so a folded
+    // seat reported the full bet level as "to call" for the rest of the hand (6,772 times in an
+    // engine fuzz).
     amountToCall: viewer === null || viewer.status !== 'active' ? 0 : amountToCall(state, viewer),
     commitmentRoot: state.commitment.root,
     commitmentContext: state.commitment.context,
-    // The result carries the revealed deck and salt — but only ever after the
-    // hand is complete, which is exactly when revealing them is harmless.
+    // The revealed deck and salts are sent only once the hand is complete.
     result: isComplete ? state.result : null,
     viewerSeat,
     randomSourceKind: state.randomSourceKind,
@@ -322,14 +214,8 @@ export function redactFor(state: HandState, options: RedactOptions): PlayerView 
 }
 
 /**
- * Every card the given recipient must NOT be able to see in their view. Used by
- * the hidden-information tests to assert the redaction actually holds, rather
- * than trusting that it does.
- *
- * Takes the same recipient the view does — either form of `RedactOptions`, or a
- * bare seat index for the positional callers that predate the split — and
- * resolves it through the same `viewerFor`, so the expectation and the view can
- * never disagree about who is asking.
+ * Every card the recipient must NOT see. Used by the hidden-information tests. Resolves the recipient
+ * through `viewerFor`, so the expectation and the view agree on who is asking.
  */
 export function cardsHiddenFrom(state: HandState, viewer: RedactOptions | SeatIndex | null): Card[] {
   const options: RedactOptions =
@@ -348,9 +234,7 @@ export function cardsHiddenFrom(state: HandState, viewer: RedactOptions | SeatIn
     hidden.push(...seat.holeCards);
   }
 
-  // Undealt cards are always hidden — including after the hand completes. The
-  // reveal proves only the positions that became public, so the rest of the deck
-  // stays sealed forever.
+  // Undealt cards stay hidden after the hand too. The reveal proves only the public positions.
   for (let index = state.deckCursor; index < state.deck.length; index++) {
     const card = state.deck[index];
     if (card !== undefined) hidden.push(card);

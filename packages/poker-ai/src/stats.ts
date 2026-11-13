@@ -1,112 +1,21 @@
 /**
- * Measuring what the profiles actually did, and testing whether two of them differ.
+ * Measures what the profiles did in simulation and tests whether two of them differ. `traits.ts`
+ * declares each profile, and `compareToDeclared` checks the declaration against a run.
  *
- * ## Why this file exists
+ * Every rate states its denominator. `vpip` and `pfr` are over preflop decisions offered, not hands
+ * dealt, because a blind seat often never acts and that would measure button rotation.
  *
- * "Twelve distinct styles" is a claim on a card until something measures it. `traits.ts`
- * declares what each profile is *supposed* to do; this module turns a run of simulated
- * hands into the same quantities, so the declaration can be checked rather than trusted.
- * When the two disagree, that is a defect in the model and it gets reported — see
- * `compareToDeclared`, and `ProfileStatsResponse.divergences` on the wire, which exists
- * precisely so a mismatch is surfaced to a learner instead of hidden.
+ * A trait is compared on the condition it is declared on. `aggressionFrequency` is measured on a
+ * neutral assessment, with folds left to `foldToPressure`. Unconditionally the mean signed error was
+ * -0.095 and six profiles could not reach their card. Conditioned, it is -0.004. `threeBetTendency`
+ * is a multiplier, so it is compared through `threeBetRaiseShare`.
  *
- * ## The denominators are the whole design
+ * The z-test pools the samples, because under the null the two rates are equal:
  *
- * Every rate here is a ratio, and choosing the wrong denominator is how a statistic
- * quietly measures something other than what it is named after. The trap worth naming:
+ *     p = (x1 + x2) / (n1 + n2),   se = sqrt(p(1-p) (1/n1 + 1/n2)),   z = (p1 - p2) / se
  *
- * A hand-history tracker computes VPIP over **hands dealt**. That is right for a tracker,
- * because it is describing a session. It is wrong here. The button rotates every hand, and
- * a seat in the blinds frequently never gets a turn — heads-up, when the button folds
- * preflop the big blind never acts at all. Divide by hands dealt and the resulting figure
- * is a blend of the policy's entry threshold and the rate at which the table denied it a
- * decision. Compare *that* to `traits.vpip` and the test measures button rotation.
- *
- * So the denominator for `vpip` and `pfr` is **preflop decisions offered**: hands in which
- * this seat was to act at least once before the flop. A seat that never got to act cannot
- * have declined to enter. Every other rate below states its denominator on the field, for
- * the same reason.
- *
- * ## The same trap one level up: the CONDITION is part of the quantity
- *
- * Choosing the right denominator is not enough if the two sides of a comparison are
- * conditioned on different things. Two of the sixteen traits are declared on a condition,
- * and for a long time this file compared them against unconditional rates:
- *
- * `aggressionFrequency` is declared as the rate "when aggression is available **and its hand
- * assessment is neutral**". Measured unconditionally it came out below the declared value on
- * all twelve profiles — mean signed error -0.095 over 8,000 hands each — and that was read as
- * a modelling bias. It is not one. About 60% of the postflop turns on which aggression is
- * legal are air, and on air the model bets at `bluffFrequency`, which every profile declares
- * far below its `aggressionFrequency`; an average over both has to land between them. It
- * cannot land on the higher one: at an air share of 0.6, reaching a declared 0.74
- * unconditionally while honouring a declared bluff frequency of 0.46 would require betting
- * 1.19 of the non-air hands. Six of the twelve profiles are unreachable in exactly that way,
- * so the old comparison was not merely wrong about the model, it was **unsatisfiable** —
- * against a `bluffFrequency` axis in this same list that passes. Measured on the condition it
- * is declared on, the mean signed error is -0.004 with the misses scattered on both sides.
- *
- * The same argument applies once more inside that condition, and it is worth following to the
- * end. The aggressive line's alternative is the PASSIVE line — check or call. Folding is
- * neither, and how readily this model folds is `foldToPressure`, a separate declared trait with
- * its own row in `OBSERVABLE_AXES`. Counting folds in the aggression denominator therefore
- * measures a blend of two traits and reads low exactly where the other trait is high: worth
- * 0.03 of the rate on average and 0.045 on `disciplined-specialist`, whose `foldToPressure` of
- * 0.76 is the highest in the set. The policy's own arithmetic says the same thing — the
- * aggressive weight is set to the PASSIVE weight times the trait's odds, so the identity that
- * makes the realised rate equal the declared trait normalises over {passive, aggressive}.
- *
- * `threeBetTendency` is declared as a multiplier on the range the model would merely call
- * with, not as a frequency at all. Comparing it against the observed 3-bet frequency compares
- * a knob against a rate whose ceiling is a different declared number: a 3-bet requires
- * entering the pot, so the realised 3-bet frequency is bounded above by the entry rate, and a
- * profile declaring `vpip` 0.15 cannot re-raise 44% of the openings it faces without
- * contradicting the other figure on its own card. The multiplier's only frequency is
- * `threeBetRaiseShare` in `policy.ts` — the share of the openings it plays back at that it
- * re-raises rather than flat-calls — and that is what is measured here.
- *
- * Neither correction moved a tolerance and neither changed a decision. What changed is which
- * quantity is placed next to which; the aggression tolerance is the same 0.18 it always was,
- * and the 3-bet tolerance was **narrowed** from 0.30 to 0.15 because a like-for-like
- * comparison no longer needs the slack that a knob-against-a-rate comparison did.
- *
- * ## Two-proportion z-test, derived
- *
- * Testing whether two profiles enter pots at genuinely different rates is a comparison of
- * two binomial proportions. Under the null hypothesis the two rates are equal, so the best
- * estimate of the common rate is the **pooled** proportion — combine the successes and the
- * trials rather than averaging the two rates:
- *
- *     p = (x1 + x2) / (n1 + n2)
- *
- * A sample proportion has variance `p(1-p)/n`. The two samples are independent, so the
- * variance of their difference is the sum, and the standard error is its square root:
- *
- *     se = sqrt( p(1-p)/n1 + p(1-p)/n2 ) = sqrt( p(1-p) (1/n1 + 1/n2) )
- *     z  = (p1 - p2) / se
- *
- * Pooling matters: using each sample's own variance instead is the two-sample *interval*
- * formula, not the test, and it is systematically the wrong denominator under the null.
- *
- * `z` is then compared against a two-sided normal critical value, and that value comes from
- * `normalQuantile` in `@prl/poker-math` — a workspace package this one already depends on.
- * No statistics library was added, and none will be.
- *
- * It is worth saying why the inverse normal is *not* reimplemented here, because there was a
- * version of this file that did. `@prl/poker-math/variance` carries Acklam's rational
- * approximation with a relative error below 1.15e-9. A local reimplementation — bisection on
- * the Abramowitz & Stegun tail formula, whose own error bound is 7.5e-8 — lands about 3e-5
- * away in `z` at alpha = 0.001, which is *visible in the fourth decimal place* against the
- * published table value of 3.2905. Two implementations of one function is two things to get
- * right; the more accurate one that already exists wins.
- *
- * ## Nothing here scores a decision
- *
- * `netChips` and `bbPer100` are results. Every other field is a frequency. No function in
- * this file combines the two, and none of them produces a verdict — a profile that lost
- * chips over 20,000 hands is not thereby playing badly, and this module must never be the
- * place that quietly implies otherwise. Decision quality is computed from EV before the
- * run-out is known, and it lives elsewhere.
+ * The critical value comes from `normalQuantile` in `@prl/poker-math` (Acklam, relative error below
+ * 1.15e-9). `netChips` and `bbPer100` are results. Nothing here scores a decision.
  */
 
 import { LEGEND_TRAIT_KEYS, type LegendTraitAxis, type ProfileObservedStats } from '@prl/contracts';
@@ -128,22 +37,9 @@ export class StatsError extends Error {
   override readonly name = 'StatsError';
 }
 
-// ---------------------------------------------------------------------------
-// The normal critical value
-// ---------------------------------------------------------------------------
-
 /**
- * The two-sided critical value for a significance level: the `z` with `Phi(z) = 1 - alpha/2`.
- *
- * A thin wrapper, and deliberately so. All it adds to `normalQuantile` is the two-sided
- * convention — that a test at alpha splits the rejection region between both tails, so the
- * quantile wanted is `1 - alpha/2` and not `1 - alpha`. Writing that conversion once, in a
- * function whose name says "two-sided", is the point: `normalQuantile(1 - alpha)` at a call
- * site is a one-character-looking mistake that halves every significance claim in the suite.
- *
- * `test/stats.test.ts` pins the conventional levels against published table values —
- * 1.9600, 2.5758, 3.2905 — plus the interquartile point 0.6745, which sits in a completely
- * different part of the curve and so would catch an approximation calibrated only in the tail.
+ * The two-sided critical value, the `z` with `Phi(z) = 1 - alpha/2`. Writing `normalQuantile(1 - alpha)`
+ * by mistake halves every significance claim. Pinned against 1.9600, 2.5758, 3.2905 and 0.6745.
  */
 export function normalTwoSidedCriticalValue(alpha: number): number {
   if (!Number.isFinite(alpha) || alpha <= 0 || alpha >= 1) {
@@ -155,17 +51,7 @@ export function normalTwoSidedCriticalValue(alpha: number): number {
 /** 1.959963…, the multiplier for a 95% interval. Computed rather than typed in. */
 const Z_95 = normalTwoSidedCriticalValue(0.05);
 
-// ---------------------------------------------------------------------------
-// What a simulated seat produced
-// ---------------------------------------------------------------------------
-
-/**
- * The raw counts behind every rate.
- *
- * Carried alongside the rates because a rate cannot be tested. A two-proportion z-test
- * needs successes and trials; recovering them from a rounded frequency is guesswork, and
- * the whole point of this module is that the significance claims are checkable.
- */
+/** Raw counts behind every rate, because a z-test needs successes and trials, not a rounded rate. */
 export interface SeatSimulationCounts {
   /** Hands in which this seat was to act at least once preflop. */
   readonly preflopOpportunities: number;
@@ -178,13 +64,8 @@ export interface SeatSimulationCounts {
   /** Of those, turns on which it re-raised. */
   readonly threeBets: number;
   /**
-   * Of those, the ones that were this seat's FIRST voluntary preflop decision of the hand.
-   *
-   * The narrower denominator that `threeBetTendency` actually describes. The trait moves the
-   * raising share of the preflop *entry* decision, which happens once per hand; a later turn —
-   * facing a four-bet after opening — is priced on equity instead and is not gated by the
-   * trait at all, so pooling the two measures a blend of one thing the trait controls and one
-   * it does not.
+   * Of those, the seat's first voluntary preflop decision. `threeBetTendency` gates only that entry
+   * decision. A later turn facing a four-bet is priced on equity.
    */
   readonly threeBetEntryOpportunities: number;
   /** Of those, turns on which it entered the pot at all: called or re-raised. */
@@ -196,29 +77,14 @@ export interface SeatSimulationCounts {
   /** Of those, turns on which it bet or raised. */
   readonly aggressiveActions: number;
   /**
-   * Of those, the ones on which the model's own assessment was neutral.
-   *
-   * "Neutral" is `NEUTRAL_ASSESSMENT_BAND` in `policy.ts` — the band in which the hand-read
-   * term of the aggressive weight is exactly 1 — so this file and the policy cannot drift
-   * apart about what the word means. Zero when the harness was driven by a stand-in that
-   * published no assessment; a rate over an empty denominator reads as 0 and is reported next
-   * to its count, never smoothed.
+   * Of those, the turns with a neutral assessment (`NEUTRAL_ASSESSMENT_BAND` in `policy.ts`). Zero
+   * when a stand-in published no assessment.
    */
   readonly neutralAggressionOpportunities: number;
   /**
-   * Of those, turns on which it folded — removed from the rate's denominator.
-   *
-   * Folding is neither the aggressive line nor the passive one, and it is governed by
-   * `foldToPressure`, which is a declared trait with its own axis in this same list. Leaving
-   * folds in would make the aggression axis measure a blend of two traits, which is the exact
-   * category of error this file was corrected for. It is also what the policy's own arithmetic
-   * says: `scoreAggression` sets the aggressive weight to the PASSIVE weight times the trait's
-   * odds, so the identity that makes the realised rate equal the declared trait normalises over
-   * {passive, aggressive} and not over {fold, passive, aggressive}.
-   *
-   * Measured, the difference is worth 0.03 of the rate on average and 0.045 on the profile with
-   * the highest `foldToPressure` — one-sided downward on all twelve, and largest exactly where
-   * that trait is largest.
+   * Of those, turns on which it folded. Removed from the rate's denominator, because folding is
+   * `foldToPressure` and `scoreAggression` normalises over passive and aggressive only. Leaving folds
+   * in read 0.03 low on average and 0.045 low on the highest-`foldToPressure` profile.
    */
   readonly neutralFolds: number;
   /** Of those, turns on which it bet or raised. */
@@ -245,16 +111,8 @@ export interface SeatSimulationCounts {
   /** Postflop bets and raises whose size went into the sizing average. */
   readonly sizedActions: number;
   /**
-   * Of those, the ones that were an OPENING bet rather than a raise.
-   *
-   * Kept separate because the two are not the same measurement, and pooling them is how a
-   * sizing statistic quietly stops measuring sizing. `preferredPotFraction` describes the
-   * fraction of the pot a profile likes to *bet*. A raise's `chips added` is the call plus the
-   * increment, so on the same pot a raise scores far above the fraction the profile chose —
-   * mechanically, not stylistically. `averageBetSizeAsPotFraction` pools both, because that is
-   * what a hand-history tracker reports and what a learner will compare against; the
-   * declared-versus-observed axis uses the opening bets alone, because that is the quantity the
-   * trait is about.
+   * Of those, the OPENING bets. A raise also pays the call, so it scores above the chosen fraction.
+   * The trait axis uses opening bets only. `averageBetSizeAsPotFraction` pools both, like a tracker.
    */
   readonly openingBets: number;
   /** Every turn this seat took, all streets. Sanity check on the harness. */
@@ -262,9 +120,7 @@ export interface SeatSimulationCounts {
 }
 
 /**
- * One seat's behaviour across a simulation run.
- *
- * Field-by-field denominators, since a frequency without one is not a measurement:
+ * One seat's behaviour across a run, with each field's denominator:
  *
  * | field                        | numerator                        | denominator                  |
  * |------------------------------|----------------------------------|------------------------------|
@@ -291,52 +147,30 @@ export interface SeatSimulationStats {
   readonly pfr: number;
   readonly threeBetFrequency: number;
   /**
-   * The share of the openings it entered that it re-raised rather than flat-called.
-   *
-   * The frequency `threeBetTendency` declares, and the one the trait comparison uses. Kept
-   * beside `threeBetFrequency` rather than replacing it: the unconditional rate is what a
-   * hand-history tracker shows a learner, and both are true statements about different
-   * questions. See the module comment for why only one of them can be compared to the card.
+   * The share of entered openings it re-raised rather than flat-called, which the trait comparison
+   * uses. `threeBetFrequency` is the unconditional tracker rate.
    */
   readonly threeBetShareOfEntries: number;
   readonly aggressionFrequency: number;
-  /**
-   * The same rate over the turns on which the model's own assessment was neutral.
-   *
-   * The quantity `aggressionFrequency` on the profile card is defined as. `aggressionFrequency`
-   * above is the unconditional rate — the tracker statistic — and sits well below it on every
-   * profile, because most postflop turns are not neutral and the model bets air at
-   * `bluffFrequency` by design. Both are reported; only this one is comparable to the card.
-   */
+  /** `aggressionFrequency` on a neutral assessment, the quantity the card declares. */
   readonly neutralAggressionFrequency: number;
   readonly bluffFrequency: number;
   readonly wentToShowdown: number;
   readonly foldToBetFrequency: number;
   /**
-   * Folds facing a bet, over the turns facing a bet that the policy PRICES — every one except the
-   * preflop entry decision, which `decide` hands to the `vpip` entry plan instead of `scoreFold`.
-   *
-   * `foldToBetFrequency` counts that entry decision, every hand has one, and folding there is what
-   * `vpip` declares. Measured 2026-11-11 on the simulation suite's own sweep (8,000 hands per
-   * profile against reading-pressure-specialist at realistic, seed 20260817): the twelve profiles'
-   * `foldToBetFrequency` came out in exactly the reverse order of their observed `vpip`, rho -1.000, so the axis compared against
-   * `foldToPressure` was ranking hand selection. This rate is the one the trait acts on. It is
-   * printed by the simulation suite and asserted on by nothing: see the `foldToPressure` axis below.
+   * Folds facing a bet, excluding the preflop entry decision, which `decide` gives to the `vpip` plan.
+   * `foldToBetFrequency` includes it and ranked the profiles in reverse `vpip` order (rho -1.000 over
+   * 8,000 hands, 2026-11-11). Printed by the simulation suite and asserted by nothing.
    */
   readonly pricedFoldToBetFrequency: number;
   readonly averageBetSizeAsPotFraction: number;
-  /**
-   * The same average over OPENING bets only, which is the quantity `betSizingPreference`
-   * actually declares. See `SeatSimulationCounts.openingBets` for why the two differ.
-   */
+  /** The same average over OPENING bets only, the quantity `betSizingPreference` declares. */
   readonly averageOpeningBetAsPotFraction: number;
   readonly netChips: number;
   readonly bbPer100: number;
   /**
-   * Half-width of a 95% interval on a frequency measured over `handsDealt` observations,
-   * at the worst case p = 0.5. Deliberately conservative and deliberately one number: it
-   * exists so a learner reading a 40-hand sample sees how little it says, and a per-field
-   * interval would invite reading the narrowest one.
+   * 95% half-width over `handsDealt` at the worst case p = 0.5. One conservative number, so a learner
+   * sees how little a small sample says.
    */
   readonly confidenceHalfWidth: number;
   readonly counts: SeatSimulationCounts;
@@ -359,19 +193,12 @@ export interface DecisionObservation {
   /** True when the seat's two cards made no pair or better with the board. */
   readonly holdingIsAir: boolean;
   /**
-   * The acting model's own relative-strength assessment, 0..1, or null when it published none.
-   *
-   * The observer's own `holdingIsAir` cannot stand in for this. Air is a showdown-value
-   * classification made from the cards; "neutral" is a position in the model's read of its
-   * hand against the range it assumes it is against, which is the thing
-   * `traits.aggressionFrequency` is conditioned on. Null is carried rather than defaulted so
-   * that a run driven by a stand-in reports an empty denominator instead of a plausible number
-   * measuring something else.
+   * The model's own relative-strength assessment, 0..1, or null when it published none.
+   * `holdingIsAir` cannot stand in, because air is a showdown classification and neutral is a read.
    */
   readonly assessedRelativeStrength: number | null;
 }
 
-/** How one hand ended for one seat. */
 export interface HandOutcomeObservation {
   /** True when the seat still held cards at the moment the flop was dealt. */
   readonly sawFlop: boolean;
@@ -382,17 +209,8 @@ export interface HandOutcomeObservation {
 }
 
 /**
- * A mutable accumulator, one per seat per run.
- *
- * A class rather than a pile of counters threaded through the harness, for the same
- * reason `Tally` in `@prl/poker-math/equity` is a class: the per-hand bookkeeping (did
- * this seat get a turn preflop? did it enter voluntarily?) has to be reset at exactly the
- * right moment, and `beginHand`/`endHand` make the wrong moment a visible mistake rather
- * than a silently wrong denominator.
- *
- * Fields are assigned in the constructor body rather than through parameter properties,
- * which `erasableSyntaxOnly` forbids — that flag is what lets Node run this TypeScript
- * with no build step.
+ * One accumulator per seat per run. `beginHand` and `endHand` make the per-hand resets explicit.
+ * Fields are assigned in the constructor because `erasableSyntaxOnly` forbids parameter properties.
  */
 export class SeatObservations {
   readonly seat: number;
@@ -447,15 +265,7 @@ export class SeatObservations {
     this.handsDealt += 1;
   }
 
-  /**
-   * Called for every turn this seat took, in order.
-   *
-   * Split by street into two private methods rather than one branch, because the two halves
-   * count different things over different denominators and the only thing they share is the
-   * fold-facing-a-bet tally at the bottom. Keeping them apart makes it hard to add a counter
-   * to the wrong street, which is the mistake that produces a plausible number measuring
-   * something other than its name.
-   */
+  /** Called for every turn this seat took, in order. */
   noteDecision(observation: DecisionObservation): void {
     if (!this.handOpen) throw new StatsError(`seat ${this.seat}: noteDecision outside a hand`);
     this.decisions += 1;
@@ -477,21 +287,15 @@ export class SeatObservations {
     }
   }
 
-  /** Latches the per-hand preflop facts, and counts 3-bet spots. */
   private notePreflop(observation: DecisionObservation, aggressive: boolean): void {
     this.hadPreflopTurn = true;
     const entering = observation.action === 'call' || aggressive;
-    // The seat's first voluntary preflop decision is the one the entry threshold gates, and it
-    // is exactly the turn on which nothing voluntary has happened yet. Read before the latch
-    // below, because the latch is what ends it.
+    // The first voluntary preflop decision is the entry decision. Read before the latch below.
     const isEntryDecision = !this.enteredVoluntarily;
-    // Calling, betting and raising are voluntary. Checking the big blind option is not: the
-    // chips were already forced in, so the seat has not chosen to play.
+    // Checking the big blind option is not voluntary, because those chips were forced in.
     if (entering) this.enteredVoluntarily = true;
     if (aggressive) this.raisedPreflop = true;
-    // A 3-bet spot needs both halves: facing a raise, and a re-raise actually legal. After a
-    // short all-in it is not, and counting that turn as a declined re-raise would understate
-    // the rate.
+    // A 3-bet spot needs a re-raise to be legal. After a short all-in it is not.
     if (observation.facingPreflopRaise && observation.aggressionAvailable) {
       this.threeBetOpportunities += 1;
       if (aggressive) this.threeBets += 1;
@@ -505,7 +309,6 @@ export class SeatObservations {
     }
   }
 
-  /** Counts postflop aggression, bluffs and bet sizes. */
   private notePostflop(observation: DecisionObservation, aggressive: boolean): void {
     if (observation.aggressionAvailable) {
       this.aggressionOpportunities += 1;
@@ -605,43 +408,16 @@ export class SeatObservations {
   }
 }
 
-/**
- * A rate with no observations is 0, not NaN.
- *
- * Zero is honest here in a way NaN is not: it propagates through comparisons and averages
- * as a number, and every rate is reported next to the count it came from, so a reader can
- * see that the denominator was empty. A NaN would poison a Spearman correlation silently.
- */
+/** An empty denominator gives 0, not NaN, because NaN would silently poison a Spearman correlation. */
 function ratio(numerator: number, denominator: number): number {
   return denominator === 0 ? 0 : numerator / denominator;
 }
 
-// ---------------------------------------------------------------------------
-// Air detection: what makes an aggressive action a bluff
-// ---------------------------------------------------------------------------
-
 /**
- * True when these two cards make no pair or better with this board.
- *
- * Used to classify an aggressive action as a bluff, so it has to be computable at the
- * moment of the action, before the run-out is known. What it counts, precisely:
- *
- *   - a pocket pair, or a hole card whose rank appears on the board → not air
- *   - a straight or a flush that uses at least one hole card → not air
- *   - anything else, including every draw → air
- *
- * Two deliberate consequences, both stated rather than left to be discovered:
- *
- * 1. **Semi-bluffs count as bluffs.** A nut flush draw firing the flop is air by this
- *    definition, and that is the right reading of `traits.bluffFrequency` — "a hand that
- *    has little chance of winning at showdown". A draw that has not got there has none.
- * 2. **A hand the board makes for everybody is not showdown value.** If the board itself
- *    is a straight or a flush, this seat holds no edge it can bet, so the holding still
- *    counts as air.
- *
- * This is the observer's classification, not the policy's. It reads hole cards, which the
- * policy may only ever see for its own seat — measuring from outside the game is exactly
- * what an observer is for, and nothing here is handed back to a policy.
+ * True when these two cards make no pair or better with this board. Not air means a pocket pair, a
+ * hole card paired on the board, or a straight or flush that uses a hole card. Semi-bluffs therefore
+ * count as bluffs, and a straight or flush the board makes alone is still air.
+ * This is the observer's classification. It reads hole cards and is never handed to a policy.
  */
 export function holdingIsAir(holeCards: readonly [Card, Card], board: readonly Card[]): boolean {
   const [first, second] = holeCards;
@@ -674,21 +450,9 @@ export function holdingIsAir(holeCards: readonly [Card, Card], board: readonly C
   return true;
 }
 
-// ---------------------------------------------------------------------------
-// Declared versus observed
-// ---------------------------------------------------------------------------
-
 /**
- * The wire shape, for the profile card's "what it actually did" panel.
- *
- * Carries the UNCONDITIONAL rates on every axis, which is what a hand-history tracker reports
- * and therefore what a learner can check against their own session. That is deliberately not
- * the same set of numbers `compareToDeclared` uses: `aggressionFrequency` here averages over
- * every postflop turn and will read well below the card's figure, and `threeBetFrequency` here
- * is bounded by how often the model enters a pot at all. The conditional counterparts are on
- * `SeatSimulationStats` and are the ones the declared-versus-observed check compares, because
- * they are the quantities the traits declare. Both are true; they answer different questions,
- * and `ProfileStatsResponse.divergences` exists so the learner sees the second one alongside.
+ * The wire shape for the profile card. It carries the unconditional tracker rates, which a learner
+ * can check against their own session. `compareToDeclared` uses the conditional rates instead.
  */
 export function toObservedStats(stats: SeatSimulationStats): ProfileObservedStats {
   return {
@@ -706,30 +470,16 @@ export function toObservedStats(stats: SeatSimulationStats): ProfileObservedStat
 }
 
 /**
- * A trait axis that a simulation can actually measure, with the tolerance that counts as
- * agreement and the reason for it.
- *
- * Only seven of the sixteen axes appear. The other nine — `positionSensitivity`,
- * `sizingVariance`, `riskTolerance` and the rest — are real parameters that change real
- * decisions, but none of them is a frequency, so no single observed rate is the same kind
- * of number. Inventing a mapping for them would produce a table that looked complete and
- * compared nothing. They are tested by their effects (a position-sensitive profile's VPIP
- * differs by seat) rather than by a declared-versus-observed row.
+ * A trait axis a simulation can measure. Seven of the sixteen appear. The others are not frequencies,
+ * so they are tested by their effects instead.
  */
 export interface ObservableAxis {
   readonly key: TraitKey;
   readonly declaredFrom: (traits: Traits) => number;
   readonly observedFrom: (stats: SeatSimulationStats) => number;
   /**
-   * What the two numbers are, in one clause a learner can read.
-   *
-   * Required, and rendered in the divergence note, because four of the seven axes do not
-   * compare the raw trait against a rate of the same name — `pfrShareOfVpip` is a ratio of two
-   * measured rates, `betSizingPreference` is inverted through `preferredPotFraction`,
-   * `threeBetTendency` is a multiplier read back through the share it produces, and
-   * `aggressionFrequency` is conditioned on a neutral assessment. A sentence that says only
-   * "declares X, measured Y" invites the reader to assume the obvious denominator, and
-   * assuming the obvious denominator is how this file got two axes wrong.
+   * What the two numbers are, in one clause a learner can read. Required because four axes do not
+   * compare the trait against a rate of the same name.
    */
   readonly quantity: string;
   /** Absolute difference at which the two stop counting as agreeing. */
@@ -739,30 +489,10 @@ export interface ObservableAxis {
 }
 
 /**
- * Tolerances, and where they come from.
- *
- * Two sources of slack, kept separate on purpose:
- *
- * **Sampling.** At 8,000 observations the 95% half-width on a proportion is at worst
- * `1.96 x 0.5 / sqrt(8000)` = 0.011. So anything above about 0.02 is not sampling noise.
- * Every tolerance below is larger than that, which means none of them is being used to
- * paper over a small sample — they are all describing how tightly the trait is coupled to
- * the statistic.
- *
- * **Coupling.** `vpip` and `pfrShareOfVpip` are thresholds the policy applies directly, so
- * they should land close. The other five are one step removed from what the policy scores,
- * and the tolerance has to be wide enough to say so honestly. Widening a tolerance to make a
- * test pass is the failure this comment exists to prevent: each number below is justified by
- * the trait's own documentation, and a profile that misses it is reported, not accommodated.
- *
- * **What a tolerance may never absorb: a mismatch of quantity.** Two of these axes used to
- * compare a trait against a rate conditioned differently from the trait's own definition, and
- * the wide tolerances that comparison needed were quietly doing the work of a definition.
- * That is the failure this list is most exposed to, because a plausible number over the wrong
- * condition looks like a small modelling error right up until the sign of the miss is the
- * same on every profile. It was, on both axes, on all twelve — see the module comment for the
- * arithmetic. The correction was to measure the declared quantity: neither tolerance was
- * widened, and the 3-bet one halved.
+ * At 8,000 observations the worst-case 95% half-width is 1.96 x 0.5 / sqrt(8000) = 0.011, so each
+ * tolerance describes how tightly the trait couples to the statistic, not sampling noise. `vpip` and
+ * `pfrShareOfVpip` are applied directly and land close. A tolerance never absorbs a mismatch of
+ * quantity, and a profile that misses is reported, not accommodated.
  */
 export const OBSERVABLE_AXES: readonly ObservableAxis[] = [
   {
@@ -827,12 +557,8 @@ export const OBSERVABLE_AXES: readonly ObservableAxis[] = [
 ];
 
 /**
- * The inverse of `preferredPotFraction`: pot fraction back to a 0..1 trait value.
- *
- * Clamped, because a measured average can land outside the 0.25..1.5 band the trait maps
- * onto — a stack too short to make the preferred size, or a minimum raise that the engine
- * forced upwards. Clamping keeps the comparison on the trait's own scale; the raw fraction
- * is still on `SeatSimulationStats` for anyone who wants it unclamped.
+ * The inverse of `preferredPotFraction`, clamped to 0..1 because a measured average can fall outside
+ * the 0.25..1.5 band (short stacks, forced minimum raises).
  */
 export function inversePreferredPotFraction(potFraction: number): number {
   const raw = (potFraction - 0.25) / 1.25;
@@ -853,17 +579,9 @@ export interface TraitDivergence {
 }
 
 /**
- * Axes where the run disagrees with the profile card by more than the documented
- * tolerance.
- *
- * Compares against the profile's **declared** vector — the numbers on its card — so it is
- * the right check for a `realistic` or `expert` run. An `educational` run mutes every
- * trait towards the baseline by design (`expressTraits`), so divergence there is the
- * feature working, not a defect; pass the muted vector to `compareToDeclaredTraits` if
- * that is what you mean to test.
- *
- * An empty list is the claim "this model behaves the way its card says". That claim is
- * what `test/simulation/profile-differentiation.test.ts` exists to check.
+ * Axes where the run disagrees with the declared card by more than the tolerance, for `realistic` or
+ * `expert` runs. An `educational` run mutes traits by design, so pass the muted vector to
+ * `compareToDeclaredTraits`.
  */
 export function compareToDeclared(
   profileId: string,
@@ -904,17 +622,9 @@ function format(value: number): string {
   return value.toFixed(3);
 }
 
-// ---------------------------------------------------------------------------
-// The radar view
-// ---------------------------------------------------------------------------
-
 /**
- * Every trait as a ready-to-render radar axis, label and plain-language meaning included.
- *
- * Built by iterating the **wire** key list and indexing the trait-keyed records, which is
- * a compile-time proof that every wire key is a trait key. The length check closes the
- * other direction, so the two lists cannot drift apart without something failing loudly
- * rather than a radar chart quietly losing an axis.
+ * Every trait as a radar axis. Iterating the wire keys proves each is a trait key at compile time,
+ * and the length check covers the other direction.
  */
 export function radarAxes(traits: Traits): readonly LegendTraitAxis[] {
   if (LEGEND_TRAIT_KEYS.length !== TRAIT_KEYS.length) {
@@ -931,10 +641,6 @@ export function radarAxes(traits: Traits): readonly LegendTraitAxis[] {
   }));
 }
 
-// ---------------------------------------------------------------------------
-// Tests of difference
-// ---------------------------------------------------------------------------
-
 export interface ProportionSample {
   readonly successes: number;
   readonly trials: number;
@@ -947,13 +653,8 @@ export interface TwoProportionResult {
 }
 
 /**
- * Two-proportion z-test. See the module comment for the derivation.
- *
- * The degenerate case is handled rather than divided by: when both samples are all
- * successes or all failures the pooled proportion is 0 or 1, the standard error is 0, and
- * there is no test to run. Returning `z = 0` with a note that says so is the honest
- * answer — the alternative is an Infinity that reads as overwhelming significance when in
- * fact the two samples are identical.
+ * Two-proportion z-test with a pooled proportion. When the standard error is 0 it returns `z = 0`
+ * with a note, not an Infinity that would read as overwhelming significance.
  */
 export function twoProportionZTest(a: ProportionSample, b: ProportionSample): TwoProportionResult {
   validateSample(a, 'a');
@@ -1004,13 +705,8 @@ function validateSample(sample: ProportionSample, which: string): void {
 }
 
 /**
- * How far an observed proportion sits from an expected one, in standard errors.
- *
- * The expected proportion is treated as known rather than estimated, so the standard
- * error is `sqrt(p(1-p)/n)` with `p` the expectation — this is a goodness-of-fit check
- * against a policy's own declared probability, not a comparison of two samples. Used by
- * the "not scripted" test to check that a sampled action distribution matches the
- * distribution the policy said it was sampling from.
+ * Goodness of fit against a known expected proportion, in standard errors `sqrt(p(1-p)/n)`. The
+ * "not scripted" test checks sampled actions against the declared distribution with it.
  */
 export function proportionDeviationInSigmas(successes: number, trials: number, expected: number): number {
   validateSample({ successes, trials }, 'observed');
@@ -1018,8 +714,7 @@ export function proportionDeviationInSigmas(successes: number, trials: number, e
     throw new StatsError(`expected must be a probability, received ${String(expected)}`);
   }
   if (expected === 0 || expected === 1) {
-    // A degenerate expectation has no standard error. Either the observation matches it
-    // exactly or it contradicts it outright, so report 0 or Infinity rather than NaN.
+    // A degenerate expectation has no standard error, so report 0 or Infinity rather than NaN.
     const matches = successes === (expected === 0 ? 0 : trials);
     return matches ? 0 : Number.POSITIVE_INFINITY;
   }
@@ -1028,16 +723,8 @@ export function proportionDeviationInSigmas(successes: number, trials: number, e
 }
 
 /**
- * Spearman's rank correlation, with ties handled properly.
- *
- * Implemented as the Pearson correlation of the two rank vectors, not as the textbook
- * shortcut `1 - 6 Σd² / (n³ - n)`. The shortcut is only correct when there are no ties;
- * with tied ranks it is wrong, and the amount it is wrong by depends on how many ties
- * there are, which is the worst possible failure mode for a number a test asserts on.
- * Averaging tied ranks and correlating handles both cases with one code path.
- *
- * @returns rho in [-1, 1]. Zero when either vector is constant, since a vector with no
- *          spread has no ordering to correlate — reported as 0 rather than NaN.
+ * Spearman's rho as the Pearson correlation of average ranks, because the `1 - 6 Σd² / (n³ - n)`
+ * shortcut is wrong with ties. Returns 0 when either vector is constant.
  */
 export function spearmanRho(first: readonly number[], second: readonly number[]): number {
   if (first.length !== second.length) {
@@ -1090,12 +777,7 @@ export function averageRanks(values: readonly number[]): number[] {
   return ranks;
 }
 
-/**
- * Profiles ordered by one observed statistic, strongest first, for the ordering test.
- *
- * Returns the values alongside the ids so a failing assertion can print the table that
- * produced it rather than just a correlation coefficient.
- */
+/** Profiles ordered by one observed statistic, strongest first, with values for failure output. */
 export function rankByObserved(
   stats: readonly SeatSimulationStats[],
   pick: (entry: SeatSimulationStats) => number,
@@ -1106,13 +788,8 @@ export function rankByObserved(
 }
 
 /**
- * Sums several runs of the same seat into one, for combining shards of a simulation.
- *
- * The zeroed accumulator is written out field by field rather than assembled through an index
- * signature. It costs the same lines the old version spent reading them back out with `?? 0`,
- * and it buys a compile error when a counter is added to `SeatSimulationCounts` and forgotten
- * here — where the previous shape combined a missing counter to a silent zero, which is the
- * worst available failure for a function whose entire job is to add things up.
+ * Sums several runs of the same seat. The zeroed accumulator is written out so a new counter in
+ * `SeatSimulationCounts` is a compile error here, not a silent zero.
  */
 export function combineCounts(counts: readonly SeatSimulationCounts[]): SeatSimulationCounts {
   const total: Record<keyof SeatSimulationCounts, number> = {

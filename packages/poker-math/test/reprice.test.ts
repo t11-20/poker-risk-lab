@@ -1,10 +1,6 @@
 /**
- * Re-pricing a report at another fold frequency gives the report the Coach would have built there.
- *
- * The Lab's fold-frequency control recomputes the candidate table in the browser from the report
- * alone. That is only honest if the result is the Coach's own arithmetic, so the strongest test is
- * the direct one: build the report at 35%, re-price it at f, and compare with the report the Coach
- * builds when it is TOLD f — row by row, to a billionth of a unit.
+ * Re-pricing a report at another fold frequency gives the report the Coach builds when told that
+ * frequency, row by row to a billionth of a unit. The Lab's fold-frequency control relies on it.
  */
 
 import assert from 'node:assert/strict';

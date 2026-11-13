@@ -1,37 +1,9 @@
 /**
- * The architectural test: a policy cannot cheat.
- *
- * `redact.ts` proves that a *view* carries no hidden card. This file proves the next claim
- * along, which is the one the AI Legends feature rests on: that the policy, given such a view,
- * does not reach for anything it should not — and that there is nothing there to reach for.
- *
- * Three assertions, in increasing strength.
- *
- * **1. The input type cannot represent a secret.** `PolicyInput` has seven keys and none of
- * them is `HandState`. The keys are asserted at runtime and the whole input is serialised and
- * walked, because "the type has no deck field" is a claim about today's type and a serialised
- * walk is a claim about the object that actually existed.
- *
- * **2. No hidden card is present in what the policy is handed.** Every card in the serialised
- * input is checked against `cardsHiddenFrom(state, seat)` — the engine's own answer to "what
- * must this seat not see" — which covers the other seats' hole cards and every undealt card.
- *
- * **3. The policy is instrumented while it runs.** The view is wrapped in a `Proxy` that
- * records every property path read, at every depth. `decide` then runs for real, and the
- * recorded read set is asserted to be a subset of the permitted fields and to contain no
- * forbidden path — including, notably, no `holeCards` path at all. The policy takes its own
- * cards from `input.holeCards`, so it has no reason to touch that field on any seat, and
- * asserting it never does turns "it only reads its own" into "it reads nobody's".
- *
- * This is proof by observation rather than by inspection, which is the only version that stays
- * true: a reviewer reading the code concludes it does not cheat today, and this concludes that
- * the run that just happened did not.
- *
- * **4. The companion invariance check.** Two hands are built that differ ONLY in an opponent's
- * hole cards and in the undealt deck behind them. Hero's view of the two is identical except
- * for the deck commitment root, which is public. The decision must be byte-identical: a policy
- * whose behaviour changes when an invisible card changes is reading something it must not, and
- * this catches that even if it happened through a channel nobody thought to name.
+ * A policy cannot cheat, proved by observation. `PolicyInput` keys are asserted at runtime and the
+ * serialised input is checked against `cardsHiddenFrom`. The view is wrapped in a recording `Proxy`
+ * while `decide` runs, and the read set must stay inside an allow-list with no `holeCards` path at
+ * all, because the policy's own cards arrive in `input.holeCards`. Two hands that differ only in an
+ * opponent's cards and the undealt deck must produce byte-identical decisions.
  */
 
 import assert from 'node:assert/strict';
@@ -55,11 +27,7 @@ import { decide, type PolicyInput, type PolicyObservations } from '../src/policy
 import { DIFFICULTY_SETTINGS, expressTraits, requireProfile } from '../src/profiles.ts';
 import type { Traits } from '../src/traits.ts';
 
-// ---------------------------------------------------------------------------
-// Fixtures
-// ---------------------------------------------------------------------------
-
-/** The keys a policy input is allowed to have. Anything else is a new channel into the policy. */
+/** Anything else is a new channel into the policy. */
 const PERMITTED_INPUT_KEYS = [
   'difficulty',
   'holeCards',
@@ -71,12 +39,8 @@ const PERMITTED_INPUT_KEYS = [
 ] as const;
 
 /**
- * Top-level `PlayerView` fields the policy may read.
- *
- * Deliberately a closed list rather than "everything public". `commitmentRoot` and `result` are
- * both public and both stay off it: the root is nothing a strategy could use, and `result`
- * carries the showdown hole cards, so a policy that started reading it would be one refactor
- * away from learning what a folder had.
+ * A closed list. `commitmentRoot` is useless to a strategy, and `result` carries showdown hole cards,
+ * so reading it would be one refactor away from learning what a folder held.
  */
 const PERMITTED_VIEW_FIELDS = new Set([
   'actions',
@@ -93,7 +57,6 @@ const PERMITTED_VIEW_FIELDS = new Set([
   'viewerSeat',
 ]);
 
-/** Paths that must never appear in a read set, whatever else changes. */
 const FORBIDDEN_PATH_PARTS = ['deck', 'deckCursor', 'deckSalts', 'salt', 'holeCards', 'result'];
 
 const OBSERVATIONS: PolicyObservations = {
@@ -108,15 +71,12 @@ const OBSERVATIONS: PolicyObservations = {
   }),
 };
 
-/** Live-hand settings with the sample count at the floor: this file tests plumbing, not equity. */
+/** Sample count at the floor, because this file tests plumbing, not equity. */
 const SETTINGS = { ...DIFFICULTY_SETTINGS.realistic, equitySamples: 200 };
 
 /**
- * A 52-card deck dealing known hole cards and a known board.
- *
- * Deal order matches `machine.ts`: one card at a time, twice round the table starting left of
- * the button, then the flop, turn and river with no burn. Kept local rather than imported from
- * another package's test folder, which would be an undeclared dependency.
+ * Deal order matches `machine.ts`. One card at a time, twice round from left of the button, then
+ * flop, turn and river with no burn. Local, because a cross-package test import is undeclared.
  */
 function stackedDeck(
   holeBySeat: Readonly<Record<number, string>>,
@@ -178,10 +138,6 @@ function inputFor(
   };
 }
 
-// ---------------------------------------------------------------------------
-// 1. The input type cannot represent a secret
-// ---------------------------------------------------------------------------
-
 test('a policy input has exactly the seven permitted keys, and no HandState among them', () => {
   const state = dealThreeHanded(11);
   const seat = state.toAct;
@@ -196,7 +152,6 @@ test('a policy input has exactly the seven permitted keys, and no HandState amon
   for (const key of ['deck', 'deckCursor', 'deckSalts', 'commitment', 'state', 'handState']) {
     assert.equal(Object.hasOwn(input, key), false, `PolicyInput must not carry "${key}"`);
   }
-  // `HandState` fields exist on the state and must not be reachable from the input's view.
   assert.equal(Object.hasOwn(input.view, 'deck'), false, 'PlayerView is built field by field');
   assert.equal(Object.hasOwn(input.view, 'deckCursor'), false);
   assert.equal(Object.hasOwn(input.view, 'deckSalts'), false);
@@ -226,12 +181,8 @@ test('the serialised policy input contains no deck, cursor or salt, and no hidde
 });
 
 /**
- * Every card-shaped value in a serialised object graph.
- *
- * Cards are small integers, so a blanket "no number in the hidden set" scan would collide with
- * stacks and pot sizes and assert nothing. This looks only where a card can actually live: the
- * `board` array and any `holeCards` array. That is the same narrowing the engine's own
- * `test/hidden-information.test.ts` applies, and for the same reason.
+ * Cards are small integers, so scanning every number would collide with stacks and pots. This looks
+ * only at `board` and `holeCards` arrays, as the engine's `test/hidden-information.test.ts` does.
  */
 function cardsInSerialised(value: unknown, key = ''): Card[] {
   if (Array.isArray(value)) {
@@ -246,26 +197,14 @@ function cardsInSerialised(value: unknown, key = ''): Card[] {
   return [];
 }
 
-// ---------------------------------------------------------------------------
-// 2 and 3. Instrumented: what the policy actually read
-// ---------------------------------------------------------------------------
-
 interface ReadLog {
   readonly paths: string[];
   readonly reads: { readonly path: string; readonly value: unknown }[];
 }
 
 /**
- * Wraps an object graph so every property read is recorded with its full path.
- *
- * Two details make the recording complete rather than decorative:
- *
- *   - Symbol keys are returned untouched, and functions are returned **unbound**. Returning a
- *     bound copy of `Array.prototype.find` would run it against the raw array and the reads
- *     inside it would vanish from the log. Unbound, `proxy.find(...)` executes with `this` set
- *     to the proxy, so `length` and every index it touches are recorded too.
- *   - Object results are wrapped recursively, so a read of `seats` followed by `seats[1].status`
- *     logs `seats.1.status` and not merely `seats`.
+ * Records every property read with its full path. Functions are returned unbound, so `proxy.find`
+ * runs with `this` as the proxy and its index reads are logged. Objects are wrapped recursively.
  */
 function recordingProxy<T extends object>(target: T, path: string, log: ReadLog): T {
   return new Proxy(target, {
@@ -288,8 +227,7 @@ function assertReadSetIsClean(log: ReadLog, state: HandState, seat: SeatIndex, w
   for (const path of log.paths) {
     const [head] = path.split('.');
     if (head === undefined) continue;
-    // Array indices, `length` and array methods appear as segments; only the top-level field
-    // name is checked against the allow-list.
+    // Only the top-level field name is checked against the allow-list.
     assert.ok(
       PERMITTED_VIEW_FIELDS.has(head),
       `${where}: the policy read view.${path}, which is not on the permitted list`,
@@ -302,11 +240,8 @@ function assertReadSetIsClean(log: ReadLog, state: HandState, seat: SeatIndex, w
     }
   }
 
-  // Whatever it read, none of the VALUES may be a card this seat is not entitled to. Only the
-  // board can legitimately hand a card back, so that is where this looks — and only at its
-  // numeric indices. Cards are small integers, so `board.length` of 0 IS the two of clubs and
-  // an unnarrowed scan reports the empty preflop board as a leak. The same collision is why the
-  // engine's own hidden-information test checks card-bearing positions rather than every number.
+  // Only the board can hand a card back, so only its numeric indices are checked. `board.length` 0
+  // is the two of clubs, so an unnarrowed scan flags the empty preflop board.
   const hidden = new Set(cardsHiddenFrom(state, seat));
   for (const read of log.reads) {
     if (typeof read.value !== 'number') continue;
@@ -319,10 +254,8 @@ function assertReadSetIsClean(log: ReadLog, state: HandState, seat: SeatIndex, w
 }
 
 test('an instrumented policy never reads a hidden field, on any street', () => {
-  // Several hands, because a hand can end preflop and this needs the flop, turn and river
-  // scoring paths instrumented too. A loose, passive profile in every seat is what gets the
-  // walk to the river reliably without the test scripting the actions itself — the policy has
-  // to be the thing making the decisions for the read set to mean anything.
+  // Several hands so the flop, turn and river paths run. A loose passive profile in every seat reaches
+  // the river without scripting, so the policy makes the decisions.
   const traits = expressTraits(requireProfile('calling-station'), 'realistic');
   const streetsSeen = new Set<string>();
   let decisions = 0;
@@ -340,8 +273,7 @@ test('an instrumented policy never reads a hidden field, on any street', () => {
       const decision = decide(inputFor(state, seat, 100 + seed * 7 + step, view, traits));
       assertReadSetIsClean(log, state, seat, `seed ${seed} seat ${seat} on ${state.street}`);
 
-      // The read set must include the fields a decision genuinely needs, otherwise a policy
-      // that read nothing at all would pass the assertion above.
+      // A policy that read nothing would otherwise pass.
       for (const required of ['legalActions', 'seats', 'potTotal', 'amountToCall']) {
         assert.ok(
           log.paths.some((path) => path === required || path.startsWith(`${required}.`)),
@@ -370,9 +302,7 @@ test('the instrumented read set never contains a holeCards path, not even the se
   const view = recordingProxy(redactFor(state, { viewerSeat: seat }), '', log);
   decide(inputFor(state, seat, 55, view));
 
-  // The view legitimately contains this seat's own cards; the policy still does not read them,
-  // because they arrive through `input.holeCards`. Asserting the field is untouched turns "it
-  // only reads its own cards" into the stronger "it reads nobody's".
+  // The view contains this seat's own cards, and the policy still must not read them.
   const own = view.seats.find((entry) => entry.seat === seat)?.holeCards ?? null;
   assert.ok(own !== null, 'the view really does carry this seat’s own cards');
   const touched = log.paths.filter((path) => path.endsWith('holeCards'));
@@ -381,8 +311,7 @@ test('the instrumented read set never contains a holeCards path, not even the se
     [],
     'sanity: the filter above matches what it claims to',
   );
-  // The `own` read above is itself instrumented, so the log now contains exactly one such path
-  // and it belongs to this assertion rather than to the policy.
+  // The `own` read above is instrumented, so the log holds exactly one such path, from this test.
   assert.equal(
     touched.length,
     1,
@@ -392,7 +321,6 @@ test('the instrumented read set never contains a holeCards path, not even the se
 
 test('every seat’s policy is instrumented in the same hand, and none of them reads another’s cards', () => {
   const state = dealThreeHanded(15);
-  // Only the seat to act has legal actions, so the others are checked by walking the hand.
   const seat = state.toAct;
   assert.ok(seat !== null);
   for (const viewer of [0, 1, 2]) {
@@ -406,10 +334,6 @@ test('every seat’s policy is instrumented in the same hand, and none of them r
   }
 });
 
-// ---------------------------------------------------------------------------
-// 4. Invariance under a card the policy cannot see
-// ---------------------------------------------------------------------------
-
 test('swapping an invisible opponent hand leaves the decision byte-identical', () => {
   const board = 'Kh 8d 3c 5s 9h';
   const dealOrder: readonly SeatIndex[] = [1, 2, 0];
@@ -418,8 +342,7 @@ test('swapping an invisible opponent hand leaves the decision byte-identical', (
   const first = dealThreeHanded(16, stackedDeck({ 0: 'AhKd', 1: '7c2d', 2: 'Ts9c' }, dealOrder, board));
   const second = dealThreeHanded(16, stackedDeck({ 0: 'AhKd', 1: 'QsJs', 2: '4h4d' }, dealOrder, board));
 
-  // Identical scripted preflop action in both, so the only difference reaching hero's view is
-  // behind the redaction boundary.
+  // The same scripted preflop action in both, so the only difference is behind the redaction boundary.
   const toFlop = (state: HandState): HandState => {
     let current = applyAction(state, 0, { type: 'call' }).state;
     current = applyAction(current, 1, { type: 'call' }).state;
@@ -437,7 +360,6 @@ test('swapping an invisible opponent hand leaves the decision byte-identical', (
     'the opponent genuinely holds something different',
   );
 
-  // Advance both to hero's turn.
   const advanceToHero = (state: HandState): HandState => {
     let current = state;
     while (current.toAct !== hero) {
@@ -464,8 +386,7 @@ test('swapping an invisible opponent hand leaves the decision byte-identical', (
 });
 
 test('the deck commitment differs between those two hands, so the views were not identical', () => {
-  // Without this the test above could pass by the two hands being the same hand. The commitment
-  // root is public, differs because the decks differ, and is not read by the policy.
+  // Proves the two hands differ. The public commitment root differs because the decks differ.
   const board = 'Kh 8d 3c 5s 9h';
   const dealOrder: readonly SeatIndex[] = [1, 2, 0];
   const first = dealThreeHanded(16, stackedDeck({ 0: 'AhKd', 1: '7c2d', 2: 'Ts9c' }, dealOrder, board));

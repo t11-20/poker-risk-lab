@@ -1,70 +1,25 @@
 /**
- * Variance: why a good decision can lose, and lose for a long time.
- *
- * ## The one asymmetry everything in this file rests on
- *
- * Play N hands with an edge of `w` big blinds per 100 hands and a standard
- * deviation of `s` big blinds per 100 hands. Treat one block of 100 hands as a
- * single step, so the sample is `n = N / 100` steps long. Then:
+ * Variance under a normal model. One block of 100 hands is one step, so N hands is n = N / 100 steps.
  *
  *     expected result    = w * n           means add
- *     variance           = s^2 * n         variances add, for independent steps
- *     standard deviation = s * sqrt(n)     deviations do NOT add
+ *     standard deviation = s * sqrt(n)     variances add, deviations do not
  *
- * The mean grows in proportion to the sample; the spread grows with its square
- * root. So the signal-to-noise ratio `w * n / (s * sqrt(n)) = (w / s) * sqrt(n)`
- * improves only with sqrt(n). That single asymmetry is the whole reason a big
- * sample is informative and a small one is not, and read the other way round it is
- * also why a genuinely winning player can be stuck for tens of thousands of hands:
- * at n = 100 blocks (10,000 hands) the noise term is still ten times one block's
- * worth of edge.
- *
- * Everything else here — intervals, hands needed for precision, risk of ruin,
- * downswing depth — is that asymmetry pushed through a normal distribution.
- *
- * ## What the normal model buys, and what it costs
- *
- * A single hand's result is nothing like normal: most hands are a small win or a
- * small loss, a few are a whole stack, and the distribution is lumpy and skewed.
- * The central limit theorem is what rescues the model — a sum of thousands of
- * roughly independent hands is close to normal even when one hand is not — and
- * `test/variance.test.ts` demonstrates exactly that by simulating a deliberately
- * skewed per-hand distribution and checking the aggregate against these formulas.
- *
- * What it costs: the tails. Real results have fatter tails than a normal, because
- * hands are not fully independent (tilt, fatigue, opponents adapting) and because
- * stakes, table selection and skill all drift over a sample this long. Every
- * function here therefore returns its `assumptions`, and the risk-of-ruin figure
- * says in words that it is an approximation. A number without its assumptions is a
- * guess dressed as a fact; this module exists to teach the difference.
- *
- * ## Units
- *
- * Win rate and standard deviation are always big blinds per 100 hands, results are
- * always big blinds. The standard deviation is an input, not a constant: it has to
- * be measured from a real sample. Figures quoted for online no-limit hold'em are
- * commonly in the region of 80–110 bb/100, but that is other people's sample, not
- * yours — and note how much larger it is than any plausible win rate. That gap,
- * not the size of anyone's edge, is what produces long losing stretches.
- *
- * In this app the units are free, valueless and resettable, so "ruin" here is a
- * teaching device for a distribution reaching a barrier — never a financial event.
+ * Win rate `w` and deviation `s` are bb/100. Results are bb. The deviation is a measured input,
+ * commonly 80-110 bb/100 online. The central limit theorem makes a sum of hands near normal, and
+ * `test/variance.test.ts` checks that against a skewed per-hand distribution. Real tails are fatter,
+ * so every function returns its `assumptions`. Units here are play chips, so "ruin" is a barrier in a
+ * distribution.
  */
 
 export class VarianceError extends Error {
   override readonly name = 'VarianceError';
 }
 
-// ---------------------------------------------------------------------------
-// Normal distribution
-// ---------------------------------------------------------------------------
-
 /** 1 / sqrt(2 * pi), the standard normal density's scale factor. */
 const INV_SQRT_TWO_PI = 0.3989422804014327;
 
-// Zelen & Severo, Abramowitz & Stegun "Handbook of Mathematical Functions"
-// formula 26.2.17. Coefficients are named rather than held in an array so no
-// indexed read needs an undefined check under `noUncheckedIndexedAccess`.
+// Zelen & Severo, Abramowitz & Stegun 26.2.17. Named constants rather than an array so no indexed
+// read needs an undefined check under `noUncheckedIndexedAccess`.
 const ZS_P = 0.2316419;
 const ZS_B1 = 0.31938153;
 const ZS_B2 = -0.356563782;
@@ -73,39 +28,22 @@ const ZS_B4 = -1.821255978;
 const ZS_B5 = 1.330274429;
 
 /**
- * The upper tail 1 - Phi(x) for x >= 0, by A&S 26.2.17.
- *
- * The published error bound is |epsilon(x)| < 7.5e-8 in absolute terms, and a
- * sweep against a high-precision erf over x in [0, 8] at a step of 0.0005 puts the
- * worst case at 7.45e-8 near x = 0.72 — see the accuracy test, which asserts that
- * bound at named points rather than taking it on trust.
- *
- * Computing the *upper* tail and subtracting once is deliberate: it keeps the
- * relative accuracy of small tail probabilities, which is where every interesting
- * figure in this module lives (a 2% chance of ruin, a 5% chance of a downswing).
- * Evaluating a "lower tail" formula and subtracting from 1 would lose those digits
- * to cancellation.
+ * The upper tail 1 - Phi(x) for x >= 0, by A&S 26.2.17. Published bound |eps| < 7.5e-8. A sweep over
+ * [0, 8] at step 0.0005 measured a worst case of 7.45e-8 near x = 0.72, and the accuracy test pins it.
+ * Computing the upper tail keeps relative accuracy for small tail probabilities, which subtracting a
+ * lower tail from 1 would lose to cancellation.
  */
 function standardNormalUpperTail(x: number): number {
   const t = 1 / (1 + ZS_P * x);
   const density = INV_SQRT_TWO_PI * Math.exp(-0.5 * x * x);
-  // Horner, innermost coefficient first.
   const polynomial = t * (ZS_B1 + t * (ZS_B2 + t * (ZS_B3 + t * (ZS_B4 + t * ZS_B5))));
   return density * polynomial;
 }
 
 /**
- * The standard normal cumulative distribution: P(Z <= z).
- *
- * Accuracy: absolute error below 7.5e-8 everywhere (A&S 26.2.17; see
- * `standardNormalUpperTail`). That is ample for teaching figures quoted to a
- * tenth of a percent, and far short of what you would want for deep-tail
- * finance work — which is stated here so nobody has to guess.
- *
- * Negative z is handled by reflection, `Phi(-z) = 1 - Phi(z)`, so the returned
- * values are symmetric to floating-point rounding rather than to the accuracy of
- * the approximation. z = 0 returns exactly 0.5 rather than the approximation's
- * 0.5000000005, because a reader checking the function by hand should see 0.5.
+ * The standard normal CDF, P(Z <= z), to an absolute error below 7.5e-8. Negative z uses
+ * `Phi(-z) = 1 - Phi(z)`, so results are symmetric to rounding. z = 0 returns exactly 0.5, not the
+ * approximation's 0.5000000005.
  */
 export function normalCdf(z: number): number {
   requireFinite(z, 'z');
@@ -114,10 +52,7 @@ export function normalCdf(z: number): number {
   return z > 0 ? 1 - tail : tail;
 }
 
-// Peter Acklam's rational approximation to the inverse standard normal CDF.
-// Published relative error bound |eps| < 1.15e-9 over the whole open interval
-// (0, 1); a sweep against a high-precision inverse CDF measures 1.13e-9. Named
-// constants again, for the same indexed-access reason as above.
+// Acklam's inverse normal CDF. Published relative error < 1.15e-9 on (0, 1), measured 1.13e-9.
 const ACKLAM_SPLIT = 0.02425;
 const ACKLAM_A1 = -3.969683028665376e1;
 const ACKLAM_A2 = 2.209460984245205e2;
@@ -150,18 +85,10 @@ function acklamTail(q: number): number {
 }
 
 /**
- * The standard normal quantile: the z with `normalCdf(z) = p`.
- *
- * Acklam's rational approximation, relative error below 1.15e-9. It is NOT the
- * numerical inverse of `normalCdf` above — refining it against a CDF that itself
- * carries 7.5e-8 of error would make it worse, not better. The consequence, which
- * the tests pin down: `normalCdf(normalQuantile(p))` returns p to about 1e-7
- * (limited by the CDF), while `normalQuantile(normalCdf(z))` returns z to about
- * 2e-5 for |z| <= 3 and worse further out — because the CDF is nearly flat in the
- * tails, so a small error in a probability is a large error in a z.
- *
- * This is what supplies the multiplier for a confidence interval at any level,
- * rather than hard-coding 1.96 and pretending 95% is the only choice.
+ * The standard normal quantile, the z with `normalCdf(z) = p`, by Acklam (relative error < 1.15e-9).
+ * It is not refined against `normalCdf`, whose 7.5e-8 error would make it worse. The tests pin the
+ * round trips: `normalCdf(normalQuantile(p))` returns p to about 1e-7, and
+ * `normalQuantile(normalCdf(z))` returns z to about 2e-5 for |z| <= 3 and worse in the tails.
  */
 export function normalQuantile(p: number): number {
   requireFinite(p, 'p');
@@ -173,8 +100,7 @@ export function normalQuantile(p: number): number {
   }
   if (p < ACKLAM_SPLIT) return acklamTail(Math.sqrt(-2 * Math.log(p)));
   if (p > 1 - ACKLAM_SPLIT) return -acklamTail(Math.sqrt(-2 * Math.log(1 - p)));
-  // Central branch: an odd rational function of q = p - 0.5, so p = 0.5 returns
-  // exactly 0 and the two halves are exact mirror images.
+  // Central branch, odd in q = p - 0.5, so p = 0.5 returns exactly 0 and the halves mirror exactly.
   const q = p - 0.5;
   const r = q * q;
   const numerator =
@@ -184,10 +110,6 @@ export function normalQuantile(p: number): number {
   return numerator / denominator;
 }
 
-// ---------------------------------------------------------------------------
-// Validation
-// ---------------------------------------------------------------------------
-
 function requireFinite(value: number, what: string): number {
   if (!Number.isFinite(value)) {
     throw new VarianceError(`${what} must be a finite number, received ${String(value)}`);
@@ -195,11 +117,7 @@ function requireFinite(value: number, what: string): number {
   return value;
 }
 
-/**
- * Hands must be a whole number of at least 1. Zero hands has no distribution to
- * describe (the deviation would be 0 and every probability a division by it), and
- * half a hand is not a thing — so both are refused rather than clamped.
- */
+/** Zero hands has no distribution and half a hand does not exist, so both are refused, not clamped. */
 function requireHands(hands: number): number {
   requireFinite(hands, 'hands');
   if (!Number.isInteger(hands)) {
@@ -215,12 +133,7 @@ function requireWinRate(winRate: number): number {
   return requireFinite(winRate, 'winRateBbPer100');
 }
 
-/**
- * A standard deviation of zero or less is refused everywhere. Zero would describe
- * poker with no variance, which is not the game, and every figure here divides by
- * it; negative is not a standard deviation at all. Returning NaN or quietly
- * flipping the sign would hide a caller's bug behind a plausible-looking number.
- */
+/** A deviation of 0 or less is refused, because every figure divides by it. */
 function requireDeviation(deviation: number): number {
   requireFinite(deviation, 'standardDeviationBbPer100');
   if (deviation <= 0) {
@@ -242,10 +155,6 @@ function requireConfidence(confidence: number): number {
   return confidence;
 }
 
-// ---------------------------------------------------------------------------
-// Shared scaling and formatting
-// ---------------------------------------------------------------------------
-
 const HANDS_PER_BLOCK = 100;
 
 /** The conventional two-sided 95% multiplier, rounded from 1.959963985. */
@@ -254,26 +163,15 @@ const Z_95_CONVENTIONAL = 1.96;
 const DEFAULT_CONFIDENCE = 0.95;
 
 /**
- * Default downswing depths, as multiples of the projected result's own standard
- * deviation.
- *
- * A fixed list of round big-blind figures was the first thing tried here, and it is
- * a trap: over 50,000 hands at a 90 bb/100 deviation the spread is 2,012 bb, so
- * "50 bb down" and "300 bb down" differ by less than a tenth of a standard
- * deviation and the table comes out as six rows all saying about 30%. Scaling the
- * depths to the distribution puts every row where a probability is actually
- * changing, and it teaches the more useful habit of reading a downswing in units of
- * the noise rather than in units of the bankroll.
+ * Default downswing depths, as multiples of the projected result's standard deviation. Fixed bb
+ * figures fail, because over 50,000 hands at 90 bb/100 the spread is 2,012 bb and "50 bb down" and
+ * "300 bb down" land within a tenth of a deviation of each other.
  */
 const DEFAULT_DOWNSWING_MULTIPLES = [0.25, 0.5, 1, 1.5, 2] as const;
 
 /**
- * Rounds to two significant figures, so a generated threshold reads as "500 bb"
- * rather than "503.1 bb".
- *
- * Written to be total: a non-positive or unrepresentable input comes straight back
- * out rather than turning into a 0 or a NaN that the threshold validation would
- * then blame on the caller.
+ * Rounds to two significant figures, so a threshold reads "500 bb", not "503.1 bb". A non-positive or
+ * unrepresentable input comes back unchanged.
  */
 function roundToTwoSignificantFigures(value: number): number {
   if (!(value > 0)) return value;
@@ -283,7 +181,7 @@ function roundToTwoSignificantFigures(value: number): number {
   return Number.isFinite(rounded) && rounded > 0 ? rounded : value;
 }
 
-/** How many 100-hand blocks a sample is. The step size of the whole model. */
+/** The step size of the whole model. */
 function blocksOf(hands: number): number {
   return hands / HANDS_PER_BLOCK;
 }
@@ -294,20 +192,14 @@ function twoSidedZ(confidence: number): number {
 }
 
 /**
- * P(result < threshold) under the normal model.
- *
- * The zero-deviation branch cannot be reached through the public functions, which
- * all reject a non-positive standard deviation. It is here so the helper is total:
- * with no spread the distribution is a point mass at `expected`, and 1 or 0 is the
- * honest answer where `(threshold - expected) / 0` would be an Infinity or a NaN
- * that then poisons every figure downstream.
+ * P(result < threshold) under the normal model. The public functions reject a zero deviation. The
+ * zero branch keeps the helper total by treating the result as a point mass.
  */
 function probabilityOfFinishingBelow(threshold: number, expected: number, deviation: number): number {
   if (deviation === 0) return expected < threshold ? 1 : 0;
   return normalCdf((threshold - expected) / deviation);
 }
 
-/** Big blinds, with a sensible number of digits for the magnitude. */
 function bb(value: number): string {
   return `${Math.abs(value) >= 100 ? value.toFixed(0) : value.toFixed(1)} bb`;
 }
@@ -325,11 +217,7 @@ function hands(count: number): string {
   return `${count.toLocaleString('en-US')} hands`;
 }
 
-/**
- * A probability as a percentage, with enough digits to stay meaningful when it is
- * small. An exact zero is labelled rather than printed as "0%": it means the
- * figure underflowed double precision, not that the outcome is impossible.
- */
+/** An exact 0 means the figure underflowed double precision, so it is labelled rather than shown as 0%. */
 function percent(probability: number): string {
   const value = probability * 100;
   if (value === 0) return 'effectively 0% (below what this arithmetic can represent, not impossible)';
@@ -356,10 +244,6 @@ function normalModelAssumptions(): string[] {
   ];
 }
 
-// ---------------------------------------------------------------------------
-// Projecting a win rate forward
-// ---------------------------------------------------------------------------
-
 export interface WinRateProjection {
   readonly hands: number;
   readonly winRateBbPer100: number;
@@ -372,21 +256,7 @@ export interface WinRateProjection {
   readonly assumptions: readonly string[];
 }
 
-/**
- * What a given edge and a given amount of noise imply for a sample of N hands.
- *
- * The two scaling laws are the point of the function:
- *
- *     expectedBb           = winRate * (N / 100)
- *     standardDeviationBb  = deviation * sqrt(N / 100)
- *
- * The mean is linear because expectations add: N/100 blocks each contributing
- * `winRate` sum to `winRate * N/100`. The deviation is a square root because
- * *variances* add, not deviations — the blocks are independent, so variance is
- * `deviation^2 * N/100` and the deviation is its square root. Doubling the sample
- * therefore doubles the expected result but multiplies the swing by only sqrt(2),
- * which is why the edge eventually wins out and why "eventually" is so far away.
- */
+/** What an edge and a deviation imply for N hands. Expected bb is linear in N, the deviation is sqrt(N). */
 export function projectResults(input: {
   hands: number;
   winRateBbPer100: number;
@@ -434,10 +304,6 @@ export function projectResults(input: {
   };
 }
 
-// ---------------------------------------------------------------------------
-// What a sample can and cannot tell you about a win rate
-// ---------------------------------------------------------------------------
-
 export interface ObservedWinRateInterval {
   readonly hands: number;
   readonly observedBbPer100: number;
@@ -451,19 +317,9 @@ export interface ObservedWinRateInterval {
 }
 
 /**
- * The confidence interval around a win rate you actually observed.
- *
- *     halfWidth = z * deviation / sqrt(N / 100)
- *
- * Why that is the same square root as everywhere else, seen from the other end: an
- * observed win rate per 100 hands is the *average* of N/100 blocks, each with
- * standard deviation `deviation`. The standard error of a mean of n independent
- * draws is `deviation / sqrt(n)`, so the noise on the observed rate shrinks with
- * sqrt(N) — the same relationship as `projectResults`, divided through by n.
- *
- * `intervalIncludesZero` is the field that matters. While it is true, the sample is
- * consistent with being a losing player, and no amount of confident framing changes
- * that.
+ * The confidence interval around an observed win rate, `halfWidth = z * deviation / sqrt(N / 100)`.
+ * The observed rate is a mean of N/100 blocks, so its standard error is `deviation / sqrt(n)`.
+ * `intervalIncludesZero` true means the sample is consistent with a losing player.
  */
 export function observedWinRateInterval(input: {
   hands: number;
@@ -526,14 +382,8 @@ export function observedWinRateInterval(input: {
 }
 
 /**
- * How many hands it takes to measure a win rate to a stated precision.
- *
- *     N = 100 * (z * deviation / halfWidth)^2
- *
- * This is `observedWinRateInterval`'s half-width solved for N, and it is rounded UP
- * because a fractional hand cannot be played and rounding down would quietly miss
- * the precision that was asked for. The square is the whole lesson: wanting twice
- * the precision costs four times the hands.
+ * Hands needed to measure a win rate to a half-width, `N = 100 * (z * deviation / halfWidth)^2`.
+ * Rounded up, because rounding down would miss the requested precision.
  */
 export function handsNeededForPrecision(input: {
   standardDeviationBbPer100: number;
@@ -566,10 +416,6 @@ export function handsNeededForPrecision(input: {
   return { hands: handCount, explanation };
 }
 
-// ---------------------------------------------------------------------------
-// Risk of ruin
-// ---------------------------------------------------------------------------
-
 export interface RiskOfRuin {
   readonly bankrollBb: number;
   readonly winRateBbPer100: number;
@@ -580,7 +426,7 @@ export interface RiskOfRuin {
   readonly assumptions: readonly string[];
 }
 
-/** The assumptions behind the diffusion approximation. Load-bearing, every one. */
+/** The assumptions behind the diffusion approximation. */
 function riskOfRuinAssumptions(): string[] {
   return [
     'The edge is constant: the same win rate for every hand, forever.',
@@ -604,18 +450,13 @@ function riskOfRuinAssumptions(): string[] {
 }
 
 /**
- * The standard diffusion (Brownian motion with drift) approximation to the risk of
- * ever going broke.
+ * The diffusion approximation to the risk of ever going broke.
  *
  *     P(ruin) = exp(-2 * bankroll * winRate / deviation^2)     for winRate > 0
  *     P(ruin) = 1                                              for winRate <= 0
  *
- * The `winRate <= 0` case is not a special case bolted on; it is the answer. A
- * random walk with no drift is recurrent, so given infinite time it visits every
- * level including zero, and with negative drift it is dragged there. Only a
- * positive edge gives a bankroll any chance of surviving forever.
- *
- * See `formula` on the result for the derivation and the unit cancellation.
+ * A walk with zero drift is recurrent, so without an edge ruin is certain. `formula` on the result
+ * carries the derivation and the unit cancellation.
  */
 export function riskOfRuin(input: {
   bankrollBb: number;
@@ -692,17 +533,8 @@ export function riskOfRuin(input: {
 }
 
 /**
- * The bankroll that holds the risk of ruin at a target, by inverting the formula
- * above:
- *
- *     target = exp(-2 * B * winRate / sd^2)
- *     ln(target) = -2 * B * winRate / sd^2
- *     B = sd^2 * ln(1 / target) / (2 * winRate)
- *
- * A target of 0 is refused rather than answered with Infinity: zero risk of ruin
- * needs an infinite bankroll, and a function that returns Infinity invites a caller
- * to render it. A win rate of zero or less is refused for the same reason — with no
- * edge, ruin is certain at every bankroll, so no finite answer exists.
+ * The bankroll that holds the risk of ruin at a target, `B = sd^2 * ln(1 / target) / (2 * winRate)`.
+ * A target of 0 and a win rate of 0 or less are refused, because no finite bankroll answers them.
  */
 export function bankrollForRiskTolerance(input: {
   targetRiskOfRuin: number;
@@ -757,10 +589,6 @@ export function bankrollForRiskTolerance(input: {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Downswings
-// ---------------------------------------------------------------------------
-
 export interface DownswingOutlook {
   readonly hands: number;
   readonly winRateBbPer100: number;
@@ -772,16 +600,9 @@ export interface DownswingOutlook {
 }
 
 /**
- * How bad the end of a sample can look, from the same normal model.
- *
- *     P(finish at least X bb down) = Phi((-X - expected) / deviation)
- *
- * Note carefully what this is: the distribution of the ENDPOINT after N hands. The
- * probability of being X bb down at some point *during* those hands is strictly
- * higher, because a run gets thousands of chances to be at its worst and only one
- * chance to finish there. Quoting an endpoint figure as if it were the depth of the
- * worst dip understates a downswing, so the difference is stated in the explanation
- * and in the assumptions rather than left for the reader to discover the hard way.
+ * The distribution of the result after N hands, `P(at least X bb down) = Phi((-X - expected) / sd)`.
+ * This is the endpoint only. Being X bb down at some point during the run is strictly more likely,
+ * and the explanation and assumptions say so.
  */
 export function downswingOutlook(input: {
   hands: number;
@@ -813,9 +634,8 @@ export function downswingOutlook(input: {
       );
     }
   }
-  // Ascending, duplicates collapsed: the output is a table a learner reads, and a
-  // repeated row with an identical probability is noise. Documented rather than
-  // silent, and the input list is never mutated.
+  // Ascending with duplicates collapsed, so the learner's table has no repeated rows. The input list is
+  // not mutated.
   const thresholds = [...new Set(requested)].sort((left, right) => left - right);
 
   const probabilityOfBeingDown = probabilityOfFinishingBelow(0, expectedBb, standardDeviationBb);

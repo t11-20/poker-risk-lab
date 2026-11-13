@@ -1,27 +1,10 @@
 /**
- * Tests for the computed starting-hand strength table.
- *
- * ## Where the expected values come from
- *
- * Nothing here is compared against a published chart or against a figure this
- * package produced earlier. Every check is one of:
- *
- *   - a counting fact (169 classes, 1326 combinations, 6/4/12 per class),
- *   - a closed-form identity (a random hand against a random hand is worth exactly
- *     half the pot, so the combination-weighted mean of the table must be 0.5),
- *   - a structural inequality that holds for reasons independent of this code (a
- *     suited hand strictly dominates its offsuit twin: identical ranks, plus flushes),
- *   - or a determinism property of the seeded generator.
- *
- * ## Sample counts
- *
- * The shared table below uses 2,000 samples per class, NOT the 20,000 default, and
- * builds in roughly a third of a second instead of three seconds. 2,000 is enough for
- * every structural check here — the tightest of the 78 suited-versus-offsuit gaps is
- * still over a percentage point wide at that count, because every class is sampled
- * from an identically seeded stream and the shared noise cancels out of the
- * differences. The tests that must exercise the real default (`topPercentRange`, the
- * memo) pay for one full-precision table between them, once.
+ * Tests for the computed starting-hand strength table. Every check is a counting fact (169 classes,
+ * 1326 combinations, 6/4/12 per class), a closed form (the combination-weighted mean is 0.5), a
+ * structural inequality (suited beats its offsuit twin), or seeded determinism.
+ * The shared table uses 2,000 samples per class, not the 20,000 default, and builds in about a third
+ * of a second. Every class shares an identically seeded stream, so the noise cancels out of the
+ * differences and the tightest suited-versus-offsuit gap is still over a point wide.
  */
 
 import assert from 'node:assert/strict';
@@ -77,36 +60,25 @@ test('ranks run 1..169 with no gaps, strongest first', () => {
 });
 
 test('AA ranks first', () => {
-  // Ground truth: AA is the unique class that is never behind before the flop. It
-  // holds the two best cards, dominates every other pair, and no other class can
-  // start ahead of it, so no ordering by all-in equity can put anything above it.
+  // AA is the only class never behind before the flop.
   assert.equal(table.entries[0]?.label, 'AA');
   assert.equal(entryFor('AA').rank, 1);
 });
 
 test('the ends of the table hold the hands they have to hold', () => {
-  // Ground truth for the tail: a hand of two low, unconnected, unsuited cards can
-  // make nothing without help — no pair, no flush, and the gap removes most
-  // straights. 72o and 32o are the canonical examples and must be down there.
-  //
-  // Membership, not exact rank: several offsuit tail classes sit within half a point
-  // of each other in truth, so sampling reorders them freely and an exact-rank
-  // assertion would be asserting noise. (32s is not asserted absent — the weakest
-  // suited hand genuinely sits among the weakest offsuit ones.)
+  // 72o and 32o make nothing without help and must be in the tail. Membership, not exact rank, because
+  // tail classes sit within half a point of each other. 32s is not asserted absent.
   const worstTen = new Set(table.entries.slice(-10).map((entry) => entry.label));
   const tail = [...worstTen].join(',');
   assert.ok(worstTen.has('72o'), `72o should be in the worst ten, tail was ${tail}`);
   assert.ok(worstTen.has('32o'), `32o should be in the worst ten, tail was ${tail}`);
   for (const label of worstTen) {
-    // A pair cannot reach the tail: the weakest of them, 22, is a made hand and wins
-    // about half of all-ins against a random holding, roughly fifteen points clear of
-    // anything down here.
+    // 22 wins about half of all-ins against a random hand, about fifteen points clear of the tail.
     assert.notEqual(label[0], label[1], `${label} is a pair and cannot be in the worst ten`);
   }
 
-  // Ground truth for the head: the five biggest pairs each start ahead of every
-  // unpaired hand and ahead of every smaller pair, with gaps of two to three points
-  // between them — far outside the sampling noise.
+  // The five biggest pairs lead every unpaired hand and every smaller pair by two to three points,
+  // far outside sampling noise.
   const topTen = new Set(table.entries.slice(0, 10).map((entry) => entry.label));
   for (const label of ['AA', 'KK', 'QQ', 'JJ', 'TT']) {
     assert.ok(topTen.has(label), `${label} should be in the top ten, head was ${[...topTen].join(',')}`);
@@ -114,9 +86,7 @@ test('the ends of the table hold the hands they have to hold', () => {
 });
 
 test('every pair beats the offsuit class of the same top rank', () => {
-  // Ground truth: 88 versus 87o is not a matter of taste. The pair starts as a made
-  // hand; the offsuit holding needs to improve, and every eight in the deck it could
-  // pair is already accounted for. All 78 offsuit classes are checked.
+  // A pair starts as a made hand, so 88 beats 87o. All 78 offsuit classes are checked.
   let checked = 0;
   for (const handClass of classes) {
     if (handClass.shape !== 'offsuit') continue;
@@ -134,11 +104,8 @@ test('every pair beats the offsuit class of the same top rank', () => {
 });
 
 test('suited beats the identical offsuit class, for all 78 pairs of classes', () => {
-  // The strongest structural check in this file. A suited class and its offsuit twin
-  // hold the SAME two ranks; the suited version can additionally make a flush and can
-  // never do worse for it. So the inequality must hold 78 times out of 78 — one
-  // failure means the table is wrong or too noisy to use, not that the sample was
-  // unlucky.
+  // A suited class holds the same ranks as its offsuit twin plus flushes, so the inequality must hold
+  // 78 times out of 78.
   let checked = 0;
   let tightestGapPoints = Number.POSITIVE_INFINITY;
   let tightestPair = '';
@@ -159,9 +126,7 @@ test('suited beats the identical offsuit class, for all 78 pairs of classes', ()
     checked += 1;
   }
   assert.equal(checked, 78, 'there are 78 suited classes');
-  // Recorded rather than asserted tightly: the margin is what makes the check above
-  // meaningful at this sample count, and a future change that shrinks it towards zero
-  // should be noticed here first.
+  // The margin is what makes the check above meaningful at this sample count.
   assert.ok(
     tightestGapPoints > 0.5,
     `tightest suited/offsuit gap was ${tightestGapPoints.toFixed(3)} points at ${tightestPair}, which is ` +
@@ -170,17 +135,9 @@ test('suited beats the identical offsuit class, for all 78 pairs of classes', ()
 });
 
 test('the combination-weighted mean equity is a half', () => {
-  // Closed-form ground truth, independent of every number in the table: for any two
-  // hands, equity(A vs B) + equity(B vs A) = 1. Average over B uniform and you get
-  // this table's `equityVsRandom` for A; average that over A uniform — which means
-  // weighting each class by its 6, 4 or 12 combinations — and the answer must be
-  // exactly 0.5.
-  //
-  // The tolerance is 1.5 percentage points and that looseness is deliberate rather
-  // than sloppy: every class is sampled from an identically seeded stream, so the
-  // per-class errors are strongly correlated and do NOT cancel across the 169 classes
-  // the way independent errors would. That correlation is what makes the ordering
-  // trustworthy at 2,000 samples; the price is a weaker check on the absolute level.
+  // equity(A vs B) + equity(B vs A) = 1, so the combination-weighted mean of `equityVsRandom` is
+  // exactly 0.5. The 1.5-point tolerance is loose because the shared seed correlates the per-class
+  // errors, so they do not cancel across classes.
   const comboCountOfLabel = new Map(classes.map((handClass) => [handClass.label, handClass.comboCount]));
   let weightedTotal = 0;
   let combos = 0;
@@ -199,8 +156,7 @@ test('the combination-weighted mean equity is a half', () => {
 });
 
 test('cumulativePercent is non-decreasing, weighted by combinations, and ends at 100', () => {
-  // Ground truth: recomputed here from the 6/4/12 combination counts in ranges.ts,
-  // in rank order, with no reference to the values the table reported.
+  // Recomputed from the 6/4/12 combination counts in ranges.ts, in rank order.
   const comboCountOfLabel = new Map(classes.map((handClass) => [handClass.label, handClass.comboCount]));
   let running = 0;
   let previous = 0;
@@ -217,15 +173,12 @@ test('cumulativePercent is non-decreasing, weighted by combinations, and ends at
   const last = table.entries[table.entries.length - 1]?.cumulativePercent ?? 0;
   assert.ok(Math.abs(last - 100) < 0.01, `the last cumulativePercent was ${last}, expected 100`);
 
-  // AA alone is 6 of 1326 combinations = 0.4525%. If the table had weighted the 169
-  // labels equally instead, the first entry would read 1/169 = 0.5917%, so this one
-  // number distinguishes the two.
+  // AA is 6 of 1326 combinations = 0.4525%. Equal weighting of labels would give 1/169 = 0.5917%.
   assert.ok(Math.abs((table.entries[0]?.cumulativePercent ?? 0) - (6 / 1326) * 100) < 1e-12);
 });
 
 test('the same seed and sample count reproduce the table exactly', () => {
-  // Sampling is only defensible in a teaching tool if the figures a learner sees are
-  // the figures the next learner sees.
+  // A learner must see the same figures as the next learner.
   const first = computeStrengthTable({ samplesPerClass: 600, seed: 4242 });
   const second = computeStrengthTable({ samplesPerClass: 600, seed: 4242 });
   assert.deepEqual(first, second);
@@ -252,9 +205,7 @@ test('computeStrengthTable rejects sample counts and seeds it cannot honour', ()
 });
 
 test('the assumptions name the sampling, the framing, and what is NOT modelled', () => {
-  // A product guardrail, not a formatting check: an equity figure shipped without
-  // "this is all-in equity, not playability" teaches the wrong lesson, and this file
-  // is where that regression would be caught.
+  // The equity figure must ship with "this is all-in equity, not playability".
   const joined = table.assumptions.join(' ').toLowerCase();
   assert.ok(table.assumptions.length >= 5);
   assert.ok(joined.includes('sampl'), 'must say the figures are sampled');
@@ -273,10 +224,7 @@ test('strengthOf finds a class and returns null for anything else', () => {
   assert.equal(strengthOf('', table), null);
 });
 
-// ---------------------------------------------------------------------------
-// topPercentRange, which deliberately uses the memoised DEFAULT table. The three
-// tests below share the cost of building it once.
-// ---------------------------------------------------------------------------
+// topPercentRange uses the memoised default table. These tests share the cost of building it.
 
 test('the default table is memoised, and uses the documented defaults', () => {
   const first = strengthTable();
@@ -298,8 +246,7 @@ test('topPercentRange(100) is every class, and topPercentRange(1) is a handful l
   const labels = tightest.classes.map((handClass) => handClass.label);
   assert.ok(labels.includes('AA'), `the top 1% must include AA, got ${labels.join(',')}`);
   assert.ok(labels.length <= 6, `the top 1% should be a handful of classes, got ${labels.length}`);
-  // Ground truth for "at least": the range must cover the requested share, so its
-  // combination count cannot be below 1% of 1326 = 13.26 combinations.
+  // The range must cover at least 1% of 1326 = 13.26 combinations.
   assert.ok(
     tightest.fractionOfAllHands >= 0.01,
     `the top 1% covered only ${(tightest.fractionOfAllHands * 100).toFixed(3)}% of hands`,
@@ -319,7 +266,6 @@ test('topPercentRange grows monotonically and always covers at least what was as
       `top ${percent}% must not be smaller than the tighter range before it`,
     );
     previousCombos = range.combos.length;
-    // Built through parseRange, so it must round-trip as ordinary notation.
     assert.ok(range.notation.includes('AA'));
   }
 });

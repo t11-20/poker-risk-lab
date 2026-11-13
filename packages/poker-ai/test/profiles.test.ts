@@ -1,19 +1,8 @@
 /**
- * Tests for the profile set itself: does a card say what its own vector says?
- *
- * The existing guard on this material, `assertNoImpersonation`, checks the *voice* of every
- * learner-facing string — third person, about the model, no person's name. It cannot tell
- * whether a sentence agrees with the number printed beside it, and `profileCard` renders the
- * prose and the trait vector in one object. That gap shipped: `fundamentals-coach` carried
- * "Does not adapt to you at all, by design." in its styleNotes while its
- * `exploitativeAdaptation` trait was 0.30 — not even the lowest in the set, and rendered on
- * the same card as the radar axis "Adapts to opponents: 0.30".
- *
- * A profile that behaves differently from its own card is the worst defect this package can
- * have, and a card that contradicts itself is that defect one step earlier. So the check runs
- * inside `validateProfiles`, at module load, and the tests below drive that function rather
- * than restating its rule — a test that recomputes the implementation passes whenever both are
- * wrong the same way.
+ * Does a profile card agree with its own vector? `assertNoImpersonation` checks voice, not whether a
+ * sentence matches the number beside it. `fundamentals-coach` once said "Does not adapt to you at
+ * all" at `exploitativeAdaptation` 0.30. The check runs in `validateProfiles` at module load, and
+ * these tests drive that function rather than restating its rule.
  */
 
 import assert from 'node:assert/strict';
@@ -30,7 +19,6 @@ import {
 } from '../src/profiles.ts';
 import { makeTraits } from '../src/traits.ts';
 
-/** The wordings the guard rejects, phrased the way a card would actually carry them. */
 const NO_ADAPTATION_WORDINGS: readonly string[] = [
   'Does not adapt to you at all, by design.',
   'Never adapts to anything it has seen.',
@@ -40,9 +28,6 @@ const NO_ADAPTATION_WORDINGS: readonly string[] = [
 ];
 
 test('no shipped profile claims to ignore a read while carrying a non-zero adaptation trait', () => {
-  // The set as it stands must survive its own guard. Before the fix `fundamentals-coach`
-  // failed twice here: styleNotes[2] "Does not adapt to you at all, by design." and
-  // learnFrom[1] "...produce a solid strategy with no reads at all.", both at adaptation 0.30.
   assert.doesNotThrow(() => validateProfiles(PROFILES));
 
   const coach = requireProfile('fundamentals-coach');
@@ -56,9 +41,7 @@ test('no shipped profile claims to ignore a read while carrying a non-zero adapt
 });
 
 test('validateProfiles refuses a profile whose prose and adaptation trait disagree', () => {
-  // Built from a real profile so the ONLY thing wrong with it is the sentence: impersonation,
-  // the minimum entry counts and the stated modelBasis all still pass, which is what makes it
-  // certain that the new check is the one that fired.
+  // Built from a real profile so the sentence is the only thing wrong with it.
   const base = requireProfile('patient-technician');
   assert.ok(base.traits.exploitativeAdaptation > 0);
 
@@ -75,8 +58,7 @@ test('validateProfiles refuses a profile whose prose and adaptation trait disagr
 });
 
 test('the same claim is allowed on a profile whose adaptation trait really is zero', () => {
-  // The guard has to be a guard, not a ban: a profile that genuinely ignores everything it has
-  // seen is a legitimate design, and this is what would have to be true for the old sentence.
+  // A profile that ignores everything it has seen is a legitimate design.
   const base = requireProfile('patient-technician');
   const honest: StrategyProfile = {
     ...base,
@@ -87,12 +69,8 @@ test('the same claim is allowed on a profile whose adaptation trait really is ze
 });
 
 /**
- * The claim is about the trait, not about one difficulty setting.
- *
- * `expressTraits` zeroes adaptation at `educational`, so at that setting *every* profile
- * ignores what it has seen. A card sentence that is only true at one of three settings is not
- * a true sentence about the profile, which is why the guard reads the declared vector — the
- * one `profileCard` renders — rather than an expressed one.
+ * `expressTraits` zeroes adaptation at `educational`, so the guard reads the declared vector that
+ * `profileCard` renders.
  */
 test('adaptation is zero for every profile at educational and non-zero for all of them elsewhere', () => {
   assert.deepEqual(DIFFICULTIES, ['educational', 'realistic', 'expert']);
@@ -110,19 +88,9 @@ test('adaptation is zero for every profile at educational and non-zero for all o
 });
 
 /**
- * The superlative in `volume-grinder`'s styleNotes names its denominator, and has to.
- *
- * "Re-raises preflop more than any other profile here" is true under `threeBetShareOfEntries`
- * — the share of the openings it plays back at that it re-raises, the only frequency
- * `threeBetTendency` declares — and false under the natural reading. Measured over 3,000 hands
- * per profile at `realistic`, unconditional 3-bet frequency put `reading-pressure-specialist`
- * (0.446) and `old-school-pressure` (0.408) at or above `volume-grinder` (0.408), because both
- * are looser and face more openings. On the declared quantity `volume-grinder` leads: 0.934
- * declared and 0.886 observed, against 0.881 declared for the next profile.
- *
- * `traits.ts` warns about exactly this misreading on `threeBetTendency`. This test asserts the
- * arithmetic behind the sentence, so a trait edit that costs the profile the lead fails here
- * rather than leaving a false superlative on a card.
+ * "Re-raises preflop more than any other profile here" is true under `threeBetShareOfEntries` and
+ * false under the unconditional 3-bet rate, where looser profiles face more openings (3,000 hands:
+ * `reading-pressure-specialist` 0.446 against `volume-grinder` 0.408).
  */
 test('volume-grinder really does lead on the quantity its styleNote names', () => {
   const grinder = requireProfile('volume-grinder');
@@ -134,9 +102,7 @@ test('volume-grinder really does lead on the quantity its styleNote names', () =
     'the claim must name its denominator; a bare superlative reads as 3-bet frequency and is false',
   );
 
-  // Mirrors `threeBetRaiseShare` in `policy.ts`. Written out rather than imported on purpose:
-  // importing the expression would make this pass whenever the mapping and the card moved
-  // together, and the card is supposed to be checkable against the mapping.
+  // Mirrors `threeBetRaiseShare` in `policy.ts`, written out so the card is checked against it.
   const share = (id: string): number => {
     const traits = expressTraits(requireProfile(id), 'realistic');
     return Math.min(1, traits.pfrShareOfVpip * (0.55 + 0.55 * traits.threeBetTendency));
@@ -152,8 +118,7 @@ test('volume-grinder really does lead on the quantity its styleNote names', () =
     'and it leads by more than the 3,000-hand sampling error, not by a rounding error',
   );
 
-  // The natural misreading really is false, which is why the sentence had to name the
-  // quantity: a looser profile enters more pots and therefore makes more 3-bets outright.
+  // The unconditional reading is false, which is why the sentence names its quantity.
   const grinderTraits = expressTraits(grinder, 'realistic');
   const specialist = expressTraits(requireProfile('reading-pressure-specialist'), 'realistic');
   assert.ok(specialist.vpip > grinderTraits.vpip, 'the profile that out-3-bets it is the looser one');

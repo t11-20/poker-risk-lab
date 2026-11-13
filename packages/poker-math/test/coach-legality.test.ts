@@ -1,64 +1,11 @@
 /**
- * Every ACTION the Coach can publish, handed to the engine that would have to accept it.
- *
- * ## Why this test exists
- *
- * `coach.test.ts` used to check that a candidate's `to` was an integer. That is a check on
- * the *type* of the number and says nothing about whether it is a legal action, and it
- * passed happily while the Coach published raise sizes below the minimum legal raise in 20
- * of the 34 shipped scenarios that face a bet — including the size it printed as the
- * headline of its own suggestion. A learner following the panel would have had the action
- * rejected by the server with a `BettingRuleError`.
- *
- * That was fixed at the level of the *size*. This file now covers the level above it, which
- * was still open: whether the action is **available at all**. Legality is not a function of
- * the pot, the stacks and the big blind, and three of the engine's rules are invisible from
- * them —
- *
- *   - no bet or raise when every live opponent is all-in, because nobody could call it;
- *   - no bet or raise when the last increase was a short all-in and this seat has already
- *     acted at that level (`mayRaise`);
- *   - no action of any kind, not even a fold, once betting is closed for the hand.
- *
- * — so the Coach's only guard, `if (maxRaiseBy > 0)`, could not see any of them. Measured
- * before the fix, in a three-handed preflop spot with one seat folded and the other all-in:
- * the engine offered `fold, call`, the Coach published three raises, and its headline
- * suggestion was "raise to 80-100" at "reasonable confidence".
- *
- * So this file does not re-derive what "legal" means. It asks `@prl/poker-engine`, whose
- * `legalActions` is the single definition of legality in this codebase and is exercised
- * here through both `validateAction` (the same function `applyAction` calls) and, in the
- * played-out cases below, `applyAction` itself. Every candidate is checked, not only the
- * aggressive ones: a fold the engine refuses is as wrong as a raise it refuses.
- *
- * ## The three halves
- *
- * 1. **Every shipped scenario.** The Scenario Lab's data files are read from disk and each
- *    one's street is reconstructed as a `HandState`. Reading `@prl/content` would be
- *    circular — that package depends on this one — so the JSON is parsed here, strictly,
- *    and a shape this file does not recognise fails the test rather than being skipped.
- *    The engine's own `legalActions` for that reconstructed state is handed to the Coach,
- *    which is exactly what `coachSpotForView` does with a live view.
- * 2. **Hands actually played.** Blinds posted and actions applied through `applyAction`,
- *    then the Coach is built from `redactFor(state, seat)` exactly as the live WebSocket
- *    caller builds it. This is the half that would catch a mistake in the reconstruction
- *    of half one.
- * 3. **Hands the engine restricts.** The two spots above, played out, where the engine
- *    withholds aggression for a reason nothing in the pot or the stacks reveals.
- * 4. **The derivation, measured against the engine.** `deriveLegalActions` is what the
- *    callers with no `HandState` are given instead of the engine's list. It is only worth
- *    having if it agrees with the engine, so it is run against the engine's own answer for
- *    every state this file builds — and the single case where it is knowingly wider is
- *    named, asserted, and explained rather than left to be discovered.
- *
- * ## What this file could NOT catch, and where that is caught instead
- *
- * Every case here hands `buildCoachReport` its own input. That is the right shape for
- * testing a filter and the wrong shape for testing whether the *product* reaches the
- * filter: the field was optional, `CoachTask` had no slot for it, and four of the five
- * Coach surfaces therefore analysed with the guard disabled while this file passed. The
- * end-to-end half lives in `apps/api/test/coach-legality.test.ts`, which drives the real
- * task builders through a real worker pool. Both are needed; neither replaces the other.
+ * Every action the Coach can publish, handed to `@prl/poker-engine`, whose `legalActions` is the one
+ * definition of legality. Every candidate is checked, folds included. Availability depends on more
+ * than pot, stacks and big blind. The engine allows no aggression when every live opponent is all-in,
+ * none after a short all-in this seat has already acted at (`mayRaise`), and nothing once betting is
+ * closed.
+ * Scenario JSON is parsed here, strictly, because `@prl/content` depends on this package.
+ * Whether the product reaches this filter is tested end to end in `apps/api/test/coach-legality.test.ts`.
  */
 
 import assert from 'node:assert/strict';
@@ -94,14 +41,9 @@ import { exactRange, type ParsedRange, parseRange } from '../src/ranges.ts';
 
 const SCENARIO_DIR = path.join(import.meta.dirname, '..', '..', 'content', 'data', 'scenarios');
 
-// The scenarios have wide ranges on early streets, so a few need the sampled path. The
-// count only has to be enough to produce a report; no figure here depends on its precision.
+// A few scenarios need the sampled path. No figure here depends on its precision.
 const SAMPLES = 4_000;
 const SEED = 20_260_818;
-
-// ---------------------------------------------------------------------------
-// Reading the shipped scenarios, strictly
-// ---------------------------------------------------------------------------
 
 function asRecord(value: unknown, where: string): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -160,11 +102,9 @@ function rangeOf(raw: Record<string, unknown>, id: string, blockers: readonly Ca
 }
 
 /**
- * One spot per shipped scenario, in the same terms `readSituation` in `@prl/content`
- * produces them: `pot` is everything in the middle before hero's call — chips carried in
- * from earlier streets plus everything committed on this street by anybody, hero included
- * — and `toCall` is what hero adds on top. Hero's own share of this street's commitments
- * is kept separately, because that is the part a legal raise total needs.
+ * One spot per shipped scenario, as `readSituation` in `@prl/content` produces them. `pot` is
+ * everything in the middle before hero's call, hero's chips included, and `toCall` is what hero adds.
+ * Hero's own share of this street is kept separately because a legal raise total needs it.
  */
 function readScenarioSpots(): readonly ScenarioSpot[] {
   const spots: ScenarioSpot[] = [];
@@ -216,10 +156,6 @@ function readScenarioSpots(): readonly ScenarioSpot[] {
   return spots;
 }
 
-// ---------------------------------------------------------------------------
-// Turning a spot into a state the betting rules can be asked about
-// ---------------------------------------------------------------------------
-
 function tuple(cards: readonly Card[], id: string): readonly [Card, Card] {
   const [first, second] = cards;
   if (first === undefined || second === undefined) throw new Error(`${id}: needs two hole cards`);
@@ -227,18 +163,9 @@ function tuple(cards: readonly Card[], id: string): readonly [Card, Card] {
 }
 
 /**
- * A real hand, with this street's betting reconstructed on top of it.
- *
- * The deck, salts and commitment come from `startHand` and are never consulted: the only
- * question asked of this state is "what may this seat do now", which `betting.ts` answers
- * from the seats' commitments, the bet level, the last full raise increment and the big
- * blind. Those five are exactly what is set here.
- *
- * `lastFullRaiseIncrement` is set to `toCall`, which is the tightest reconstruction the
- * stored data supports and the one that makes the engine's minimum as *low* as it can
- * legitimately be: in a two-handed street the last complete raise took the level from
- * hero's own commitment to the level now in force, so its increment is exactly `toCall`.
- * Anything smaller would raise the engine's minimum and make this test easier to pass.
+ * A real hand with this street's betting reconstructed on top. Only the betting fields matter.
+ * `lastFullRaiseIncrement` is `toCall`, which makes the engine's minimum as low as it can legitimately
+ * be. Anything smaller would make this test easier to pass.
  */
 function stateForSpot(spot: ScenarioSpot): HandState {
   const opponentStack = spot.opponentStacks[0] ?? 1_000;
@@ -305,15 +232,14 @@ function coachInputFor(spot: ScenarioSpot, state: HandState): CoachInput {
     street: spot.street,
     opponents: [{ label: 'villain', range: spot.opponentRange }],
     pot: spot.pot,
-    // A described scenario, so the derivation rather than the engine's layering — the same
-    // choice `POST /math/coach` makes, for the same reason.
+    // A described scenario, so the derivation, as `POST /math/coach` does.
     contestablePot: deriveContestablePot(spot),
     toCall: spot.toCall,
     heroCommittedThisStreet: spot.heroCommittedThisStreet,
     heroStack: spot.heroStack,
     opponentStacks: spot.opponentStacks,
     bigBlind: spot.bigBlind,
-    // The engine's own ruling, exactly as `coachSpotForView` passes it from a live view.
+    // The engine's own ruling, as `coachSpotForView` passes it.
     legalActions: legalActions(state, 0).map((entry) => entry.type),
     samples: SAMPLES,
     seed: SEED,
@@ -321,19 +247,9 @@ function coachInputFor(spot: ScenarioSpot, state: HandState): CoachInput {
 }
 
 /**
- * Hands every action in a report to the engine. Returns the rejections rather than throwing,
- * so a failure can report how many scenarios are affected instead of stopping at the first.
- *
- * Three separate questions, and all three have to be asked:
- *
- *   1. Does the engine offer this action *kind* at all? A `raise` candidate in a spot whose
- *      `legalActions` is `[fold, call]` is refused before any size is looked at, so a
- *      size-only check reports it as "below the minimum of undefined" or not at all.
- *   2. Is the size inside the engine's own bounds?
- *   3. Does `validateAction` — the function `applyAction` itself calls — accept it, and does
- *      the total and the cost it computes match what the Coach published? A candidate whose
- *      `to` the engine accepts but reinterprets is a panel showing a learner one number and
- *      the table charging them another.
+ * Hands every action in a report to the engine and returns the rejections, so a failure can count
+ * affected scenarios. It asks whether the engine offers the action kind, whether the size is inside
+ * its bounds, and whether `validateAction` accepts it with the same total and cost the Coach published.
  */
 function rejectionsFor(
   state: HandState,
@@ -359,9 +275,7 @@ function rejectionsFor(
       return;
     }
     const entry = legal.find((candidate) => candidate.type === action);
-    // Bounds first, so a failure says which end was missed, then the engine's own
-    // validation, which is the authority and covers everything else (integrality, the
-    // stack, whose turn it is).
+    // Bounds first, so a failure says which end was missed, then the engine's own validation.
     if (to !== undefined && entry?.minTo !== undefined && to < entry.minTo) {
       problems.push(`${what}: ${action} to ${to} is below the engine minimum of ${entry.minTo}`);
     }
@@ -407,14 +321,9 @@ function rejectionsFor(
   return problems;
 }
 
-// ---------------------------------------------------------------------------
-// Half one: every shipped scenario
-// ---------------------------------------------------------------------------
-
 test('every action the Coach publishes for a shipped scenario is legal to the engine', () => {
   const spots = readScenarioSpots();
-  // A guard on the guard: if the data moves or the parser silently drops rows, this test
-  // would pass by checking nothing at all.
+  // A sweep of nothing is not a pass.
   assert.ok(spots.length >= 30, `expected the shipped Scenario Lab, found ${spots.length} scenarios`);
 
   const failures: string[] = [];
@@ -451,20 +360,13 @@ test('every action the Coach publishes for a shipped scenario is legal to the en
   );
 });
 
-// ---------------------------------------------------------------------------
-// Half two: hands actually played
-// ---------------------------------------------------------------------------
-
 interface PlayedHand {
   readonly label: string;
   readonly state: HandState;
   readonly seat: SeatIndex;
 }
 
-/**
- * Heads-up, blinds 5 and 10. Seat 0 has the button, so it posts the small blind and acts
- * first preflop; seat 1 is the big blind.
- */
+/** Heads-up, blinds 5 and 10. Seat 0 has the button, posts the small blind and acts first preflop. */
 function headsUp(stacks: readonly [number, number]): HandState {
   return startHand({
     handId: 'played',
@@ -483,16 +385,13 @@ function headsUp(stacks: readonly [number, number]): HandState {
 function playedHands(): readonly PlayedHand[] {
   const hands: PlayedHand[] = [];
 
-  // (i) Preflop from the blinds. The button raises to 30; the big blind has 10 out
-  //     already and owes 20, and the minimum legal raise is to 50 — not to 20 + a ladder
-  //     rung, which is what the Coach used to publish and the engine used to refuse.
+  // (i) Preflop. The button raises to 30. The big blind owes 20, and the minimum legal raise is to 50.
   {
     const opened = applyAction(headsUp([1_000, 1_000]), 0, { type: 'raise', to: 30 }).state;
     hands.push({ label: 'preflop, big blind facing a raise to 30', state: opened, seat: 1 });
   }
 
-  // (ii) Hero bets the flop and is raised, so hero has chips out AND faces a raise — the
-  //      case where the two halves of the old bug compounded.
+  // (ii) Hero bets the flop and is raised, so hero has chips out and faces a raise.
   {
     let state = headsUp([1_000, 1_000]);
     state = applyAction(state, 0, { type: 'call' }).state; // button limps
@@ -503,9 +402,8 @@ function playedHands(): readonly PlayedHand[] {
     hands.push({ label: 'flop, hero bet 20 and was raised to 80', state, seat: 1 });
   }
 
-  // (iii) A short stack whose only aggression is an all-in *below* the minimum raise. The
-  //       engine allows that as an incomplete raise; the Coach must offer exactly it and
-  //       nothing smaller.
+  // (iii) A short stack whose only aggression is an all-in below the minimum raise. The engine allows
+  //       that as an incomplete raise, and the Coach must offer exactly it.
   {
     const opened = applyAction(headsUp([1_000, 95]), 0, { type: 'raise', to: 60 }).state;
     hands.push({ label: 'preflop, 95-chip big blind facing a raise to 60', state: opened, seat: 1 });
@@ -515,14 +413,9 @@ function playedHands(): readonly PlayedHand[] {
 }
 
 /**
- * The Coach input for a played hand, built from the redacted view exactly as
- * `coachSpotForView` in `src/coach-view.ts` builds it — which is the point: if the
- * live caller can construct an illegal size, so can this.
- *
- * `tellTheMinimum` is the one variation. With it, the engine's own `minimumRaiseTo` is
- * passed through; without it, the Coach has to derive a floor from the betting rules.
- * Both are real code paths (the WebSocket caller has a hand state, the ad-hoc calculator
- * and the profile comparison do not) and both are tested.
+ * The Coach input for a played hand, built from the redacted view as `coachSpotForView` builds it.
+ * `tellTheMinimum` passes the engine's `minimumRaiseTo`. Without it the Coach derives the floor, as
+ * the ad-hoc calculator and the profile comparison must.
  */
 function inputForPlayedHand(hand: PlayedHand, tellTheMinimum: boolean, tellTheActions = true): CoachInput {
   const view = redactFor(hand.state, { viewerSeat: hand.seat });
@@ -542,15 +435,14 @@ function inputForPlayedHand(hand: PlayedHand, tellTheMinimum: boolean, tellTheAc
     heroCards,
     board: view.board,
     street,
-    // A wide range with hero's own cards and the board removed as blockers, so no spot can
-    // fail for want of a legal matchup.
+    // Hero's cards and the board are removed as blockers, so no spot lacks a legal matchup.
     opponents: live.map((seat) => ({
       label: `seat ${seat.seat}`,
       range: parseRange('22+, A2s+, K9s+, QTs+, JTs, A9o+, KTo+, QJo', [...heroCards, ...view.board]),
     })),
     pot: view.potTotal,
-    // From the engine's own layering, exactly as `coachSpotForView` does it. These are real played
-    // hands and several of them leave hero all-in for less than the bet in front of them.
+    // From the engine's layering, as `coachSpotForView` does it. Some of these hands leave hero all-in
+    // for less than the bet.
     contestablePot: contestablePotFor({
       seats: view.seats,
       heroSeat: own.seat,
@@ -563,13 +455,8 @@ function inputForPlayedHand(hand: PlayedHand, tellTheMinimum: boolean, tellTheAc
     opponentStacks: live.map((seat) => seat.stack),
     bigBlind: view.config.bigBlind,
     ...(tellTheMinimum ? { minimumRaiseTo: view.minimumRaiseTo } : {}),
-    // The view's own list, which is `legalActions(state, seat)` — populated by `redactFor`
-    // only for the seat that is to act. This is the line `coachSpotForView` has too.
-    //
-    // `tellTheActions: false` is the other real code path, not a hypothetical: it is what a
-    // caller with no `HandState` produces, and what the Coach then has to answer for itself.
-    // Leaving the field off used to mean "every action is legal"; it now means the derivation
-    // runs, and the cases below check that the two answers agree.
+    // `redactFor` fills `legalActions` only for the seat to act. `tellTheActions: false` is what a
+    // caller with no `HandState` produces, and then the derivation runs.
     ...(tellTheActions ? { legalActions: view.legalActions.map((entry) => entry.type) } : {}),
     samples: SAMPLES,
     seed: SEED,
@@ -588,15 +475,12 @@ test('every size the Coach publishes for a hand actually played is legal to the 
     const problems = rejectionsFor(hand.state, hand.seat, report);
     assert.deepEqual(problems, [], `${hand.label}: ${problems.join('; ')}`);
 
-    // `validateAction` is what `applyAction` calls, but run the real thing at least once
-    // per hand as well: a size that validates and then fails to apply would be a defect
-    // no amount of validation caught.
+    // Apply the first aggressive size for real too. A size that validates but fails to apply is a defect.
     const first = aggressive[0];
     assert.ok(first?.to !== undefined);
     const applied = applyAction(hand.state, hand.seat, { type: first.action, to: first.to });
     assert.ok(applied.state.actionSequence > hand.state.actionSequence, `${hand.label}: the action applied`);
 
-    // The suggestion's own headline size, applied for real too, when it has one.
     const range = report.suggestion.sizeRange;
     if (range !== undefined && (report.suggestion.action === 'bet' || report.suggestion.action === 'raise')) {
       applyAction(hand.state, hand.seat, { type: report.suggestion.action, to: range.min });
@@ -605,15 +489,9 @@ test('every size the Coach publishes for a hand actually played is legal to the 
   }
 });
 
-// ---------------------------------------------------------------------------
-// Half three: the spots where the engine withholds aggression
-// ---------------------------------------------------------------------------
-
 /**
- * Three seats, blinds 5 and 10, so a seat can be all-in while a live decision remains for
- * somebody else. Two seats cannot produce either of the states below: heads-up, a seat
- * that is all-in and matched closes the betting for the whole hand and the board simply
- * runs out.
+ * Three seats, blinds 5 and 10, so a seat can be all-in while somebody else still has a decision.
+ * Heads-up, an all-in that is matched closes the betting for the whole hand.
  */
 function threeHanded(stacks: readonly [number, number, number]): HandState {
   return startHand({
@@ -628,17 +506,14 @@ function threeHanded(stacks: readonly [number, number, number]): HandState {
 }
 
 /**
- * Spots the engine will not let hero raise in, for reasons no amount of pot arithmetic
- * reveals. Both were verified against `legalActions` when they were written; the assertion
- * inside the test re-verifies it rather than trusting the comment, so a change to the
- * betting rules turns this into a failure instead of a test that quietly checks nothing.
+ * Spots where the engine refuses hero a raise for reasons pot arithmetic does not reveal. The test
+ * re-verifies each premise against `legalActions`.
  */
 function restrictedHands(): readonly PlayedHand[] {
   const hands: PlayedHand[] = [];
 
-  // (iv) Every live opponent is all-in. Seat 0 folds, seat 1 shoves its 40, and seat 2 has
-  //      990 behind facing 30 to call — plenty for a raise by any arithmetic the Coach can
-  //      do, and nobody left who could call one. Engine: fold, call.
+  // (iv) Every live opponent is all-in. Seat 0 folds, seat 1 shoves its 40, and seat 2 has 990 behind
+  //      facing 30. Nobody is left to call a raise. Engine: fold, call.
   {
     let state = threeHanded([1_000, 40, 1_000]);
     state = applyAction(state, 0, { type: 'fold' }).state;
@@ -646,10 +521,9 @@ function restrictedHands(): readonly PlayedHand[] {
     hands.push({ label: 'every live opponent is all-in', state, seat: 2 });
   }
 
-  // (v) A short all-in that does not reopen the action. Seat 0 raises to 30, seat 1 calls,
-  //     seat 2 is all-in for 45 — short of the 50 minimum, so it is an incomplete raise and
-  //     `lastFullRaiseBetLevel` stays at 30. Seat 0 last acted at 30, so `mayRaise` is
-  //     false: it may call the extra 15 or fold, and nothing else. Engine: fold, call.
+  // (v) A short all-in that does not reopen the action. Seat 0 raises to 30, seat 1 calls, seat 2 is
+  //     all-in for 45, short of the 50 minimum, so `lastFullRaiseBetLevel` stays at 30 and seat 0's
+  //     `mayRaise` is false. Engine: fold, call.
   {
     let state = threeHanded([1_000, 1_000, 45]);
     state = applyAction(state, 0, { type: 'raise', to: 30 }).state;
@@ -667,8 +541,7 @@ test('the Coach publishes no action the engine withholds, however affordable it 
 
   for (const hand of hands) {
     const offered = legalActions(hand.state, hand.seat).map((entry) => entry.type);
-    // The premise of the spot, asserted rather than assumed. If a rules change ever makes
-    // a raise legal here, this fails loudly instead of leaving a test that proves nothing.
+    // The premise, asserted. If a rules change makes a raise legal here, this fails.
     assert.deepEqual(
       [...offered].sort(),
       ['call', 'fold'],
@@ -676,8 +549,7 @@ test('the Coach publishes no action the engine withholds, however affordable it 
     );
 
     const input = inputForPlayedHand(hand, true);
-    // Hero can plainly afford a raise. That is the whole point: affordability was the only
-    // thing the Coach used to check.
+    // Hero can afford a raise, so affordability alone would wrongly allow one.
     assert.ok(
       input.heroStack - input.toCall > input.bigBlind * 2,
       `${hand.label}: hero must have chips behind for this to prove anything`,
@@ -696,7 +568,6 @@ test('the Coach publishes no action the engine withholds, however affordable it 
     assert.notEqual(report.suggestion.action, 'bet', `${hand.label}: suggested a bet`);
     assert.deepEqual(rejectionsFor(hand.state, hand.seat, report), [], hand.label);
 
-    // And the suggestion is applicable for real, not merely validatable.
     const suggested = report.suggestion.action;
     assert.ok(suggested === 'fold' || suggested === 'call', `${hand.label}: suggested ${suggested}`);
     applyAction(hand.state, hand.seat, { type: suggested });
@@ -704,10 +575,8 @@ test('the Coach publishes no action the engine withholds, however affordable it 
 });
 
 test('an empty legal-action list is refused rather than answered', () => {
-  // `legalActions` returns nothing in two states: betting is closed for the hand, and it is
-  // not this seat's turn. In both, every action the Coach could name would be rejected, so
-  // a report is not a weaker answer than usual — it is a wrong one. `redactFor` produces
-  // exactly this for any seat that is not to act, which is how a live caller reaches it.
+  // `legalActions` is empty when betting is closed or it is not this seat's turn. Any action would be
+  // rejected, so the Coach must not report. `redactFor` produces this for every seat not to act.
   const [first] = restrictedHands();
   assert.ok(first !== undefined);
   const bystander = redactFor(first.state, { viewerSeat: 1 });
@@ -724,9 +593,8 @@ test('an empty legal-action list is refused rather than answered', () => {
 });
 
 test('a legal-action list that disagrees with the spot is refused, not silently applied', () => {
-  // Filtering against a stale list would drop the one candidate hero actually has and
-  // publish a report built from a different decision point. Both directions are checked
-  // because a caller can pair either with the wrong `toCall`.
+  // Filtering against a stale list would publish a report for a different decision point. Both
+  // directions are checked.
   const [restricted] = restrictedHands();
   assert.ok(restricted !== undefined);
   const facingABet = inputForPlayedHand(restricted, true);
@@ -743,9 +611,7 @@ test('a legal-action list that disagrees with the spot is refused, not silently 
 });
 
 test('the smallest raise the Coach offers is never below the engine minimum, told it or not', () => {
-  // The derived floor has to hold up on its own, because two callers legitimately cannot
-  // supply the engine's figure. Same spots, once with `minimumRaiseTo` and once without:
-  // both must clear the engine's minimum, and the derived one must never undercut it.
+  // The derived floor must clear the engine's minimum on its own, because two callers cannot supply it.
   const smallest = (report: ReturnType<typeof buildCoachReport>): number =>
     Math.min(
       ...report.candidates
@@ -778,11 +644,6 @@ test('the smallest raise the Coach offers is never below the engine minimum, tol
   }
 });
 
-// ---------------------------------------------------------------------------
-// Half four: the derivation the callers with no hand state are given
-// ---------------------------------------------------------------------------
-
-/** The engine's own answer, as a sorted list of action names. */
 function engineOffers(state: HandState, seat: SeatIndex): readonly string[] {
   return legalActions(state, seat)
     .map((entry) => entry.type)
@@ -790,18 +651,14 @@ function engineOffers(state: HandState, seat: SeatIndex): readonly string[] {
 }
 
 test('the derived legal set reproduces the engine on every state this file builds', () => {
-  // The derivation is only worth having if it agrees with the authority. Both halves of the
-  // file are re-used rather than re-stated: the scenario reconstructions (heads-up, hero to
-  // act) and the hands actually played through `applyAction`.
+  // The derivation is checked against the engine on the scenario reconstructions and the played hands.
   const spots = readScenarioSpots();
   assert.ok(spots.length >= 30, `expected the shipped Scenario Lab, found ${spots.length}`);
 
   const mismatches: string[] = [];
   for (const spot of spots) {
     const state = stateForSpot(spot);
-    // The reconstruction is heads-up, so the derivation is asked about the same one opponent
-    // rather than about the whole multiway seat list — like against like, or a disagreement
-    // here would be about the fixture and not about the rule.
+    // The reconstruction is heads-up, so the derivation is asked about the same one opponent.
     const derived = [
       ...deriveLegalActions({
         toCall: spot.toCall,
@@ -829,13 +686,10 @@ test('the derived legal set reproduces the engine on every state this file build
 });
 
 test('the derivation matches the engine when nobody is left to call, and is knowingly wider only for mayRaise', () => {
-  // The two restricted shapes, one each way, so the derivation's limits are a measured claim
-  // rather than a sentence in a doc comment.
   const [everyoneAllIn, shortAllIn] = restrictedHands();
   assert.ok(everyoneAllIn !== undefined && shortAllIn !== undefined);
 
-  // (iv) The rule this fix exists for. Nothing in the pot, the price or hero's own stack says
-  // a raise is unavailable — only `opponentStacks` does, and the derivation reads it.
+  // (iv) Only `opponentStacks` shows a raise is unavailable, and the derivation reads it.
   const allInInput = inputForPlayedHand(everyoneAllIn, true, false);
   assert.ok(
     allInInput.opponentStacks.some((stack) => stack === 0),
@@ -846,10 +700,8 @@ test('the derivation matches the engine when nobody is left to call, and is know
     engineOffers(everyoneAllIn.state, everyoneAllIn.seat),
   );
 
-  // (v) The one case the derivation cannot see: a short all-in that did not reopen the action.
-  // It depends on `lastFullRaiseBetLevel` and `lastActedAtBetLevel`, neither of which survives
-  // into a description of a spot. Asserted as a known, bounded gap — if it ever closes, or ever
-  // widens to something else, this fails instead of quietly drifting.
+  // (v) The one case the derivation cannot see. It depends on `lastFullRaiseBetLevel` and
+  // `lastActedAtBetLevel`, which a spot description does not carry. Asserted as a known, bounded gap.
   const shortInput = inputForPlayedHand(shortAllIn, true, false);
   assert.deepEqual(engineOffers(shortAllIn.state, shortAllIn.seat), ['call', 'fold']);
   assert.deepEqual([...deriveLegalActions(shortInput)].sort(), ['call', 'fold', 'raise']);
@@ -860,9 +712,7 @@ test('the derivation matches the engine when nobody is left to call, and is know
 });
 
 test('with no legal-action list at all, the Coach still withholds a raise nobody could call', () => {
-  // The regression that shipped. `legalActions` was optional and its absence disabled the
-  // filter, so this exact input published three raises and headlined one of them. Every caller
-  // that crosses `CoachTask` used to produce exactly this input.
+  // Absent `legalActions` once disabled the filter, and this input published three raises.
   const [everyoneAllIn] = restrictedHands();
   assert.ok(everyoneAllIn !== undefined);
 
@@ -889,8 +739,7 @@ test('with no legal-action list at all, the Coach still withholds a raise nobody
 });
 
 test('with no legal-action list, an ordinary spot is not over-restricted either', () => {
-  // The other direction. A fail-closed guard that closes on everything teaches a learner that
-  // lines exist which do not, and the fix would have traded one wrong panel for another.
+  // The other direction. A guard that closes on everything shows the learner lines that do not exist.
   for (const hand of playedHands()) {
     const derived = buildCoachReport(inputForPlayedHand(hand, true, false));
     const told = buildCoachReport(inputForPlayedHand(hand, true, true));
@@ -903,16 +752,9 @@ test('with no legal-action list, an ordinary spot is not over-restricted either'
   }
 });
 
-// ---------------------------------------------------------------------------
-// Half five: nothing published costs more than hero has
-// ---------------------------------------------------------------------------
-
 test('no candidate costs more than hero has behind, or reaches a total hero cannot reach', () => {
-  // `heroStack` is chips BEHIND, so `cost` is measured against it directly and `to` — a whole
-  // street commitment — against `heroCommittedThisStreet + heroStack`. Confusing the two is a
-  // double-count in one direction and a needless refusal in the other, which is why both are
-  // checked here on data that exercises both: scenarios where hero has posted a blind, and
-  // scenarios where hero has not.
+  // `heroStack` is chips behind, so `cost` is checked against it and `to` against
+  // `heroCommittedThisStreet + heroStack`. The data includes spots with and without a posted blind.
   const spots = readScenarioSpots();
   const problems: string[] = [];
   let withCommitment = 0;
@@ -941,21 +783,9 @@ test('no candidate costs more than hero has behind, or reaches a total hero cann
 });
 
 test("the bounds a grader holds a learner to are the engine's own maxTo, and never below its minTo", () => {
-  // `minimumAggressiveTo` and `maximumTo` used to be private to this module: the Coach applied
-  // them to what it *published* and nothing applied them to what the product *accepted*. The
-  // Scenario Lab's attempt endpoint now refuses a submitted size outside them, which promotes
-  // both from an internal detail to a rule a learner is held to — so both are measured against
-  // the engine here rather than trusted.
-  //
-  // The two directions are not symmetric, and the asymmetry is the point:
-  //
-  //   - `maximumTo` must equal the engine's `maxTo` exactly. It is pure arithmetic on chips
-  //     hero holds, there is nothing to derive, and a refusal above it is a refusal of a size
-  //     hero could not have paid for. Getting it wrong in either direction is a defect.
-  //   - `minimumAggressiveTo` may sit at or above the engine's `minTo` and never below it. Below
-  //     it would accept a size the table rejects; above it refuses a legal one, which the
-  //     derivation's own doc admits is possible for a spot whose facing bet is not the last full
-  //     raise. Measured, so the size of that gap is a fact rather than a hope.
+  // The Scenario Lab's attempt endpoint refuses sizes outside these bounds, so both are measured
+  // against the engine. `maximumTo` must equal the engine's `maxTo` exactly. `minimumAggressiveTo` may
+  // sit at or above `minTo`, never below. It can be above when the facing bet is not the last full raise.
   let checked = 0;
   for (const hand of playedHands()) {
     const input = inputForPlayedHand(hand, false);
@@ -974,15 +804,13 @@ test("the bounds a grader holds a learner to are the engine's own maxTo, and nev
       minimumAggressiveTo(input) >= aggressive.minTo,
       `${hand.label}: derived floor ${minimumAggressiveTo(input)} sits below the engine minimum of ${aggressive.minTo}`,
     );
-    // Told the engine's figure, the derivation is not consulted at all and the floor is exact.
+    // Told the engine's figure, the floor is exact.
     assert.equal(minimumAggressiveTo(inputForPlayedHand(hand, true)), aggressive.minTo);
     checked += 1;
   }
   assert.ok(checked >= 3, `only ${checked} hands exercised the bounds`);
 
-  // The all-in clamp, which is part of the floor rather than part of its callers: a stack too
-  // short to reach the minimum may still shove, and a floor above hero's whole stack would
-  // refuse the one aggressive action left to them.
+  // A stack too short to reach the minimum may still shove, so the floor clamps to the all-in.
   const short = {
     toCall: 40,
     heroCommittedThisStreet: 10,
