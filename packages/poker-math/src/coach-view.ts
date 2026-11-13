@@ -90,15 +90,54 @@ export type CoachSpotReading =
 export type SeatNamer = (seat: SeatIndex) => string | undefined;
 
 /**
- * The label an opponent is given: the client's name for the seat, or its one-based number.
+ * The label a seat is given on its own: the client's name for it, or its one-based number.
  *
  * A name that is blank, or that is "you" in any case, falls back to the number. "you" is not a
  * hypothetical: `holdsClause` in `equity.ts` reads that label as the reader and conjugates for them,
  * so an opponent who chose it as a display name would have been written up as "You hold any of…".
+ *
+ * So does a name in either shape this file writes — "seat 4", or anything ending "(seat 4)" — so
+ * that a guest cannot pick the label `opponentLabels` gives somebody else. That is what lets the
+ * disambiguation there be one pass: a name that survives this can equal another name, never a label.
  */
-function opponentLabel(seat: SeatIndex, nameOf: SeatNamer | undefined): string {
+function seatLabel(seat: SeatIndex, nameOf: SeatNamer | undefined): string {
   const name = nameOf?.(seat)?.trim() ?? '';
-  return name === '' || name.toLowerCase() === 'you' ? `seat ${seat + 1}` : name;
+  const unusable = name === '' || name.toLowerCase() === 'you' || GENERATED_LABEL.test(name);
+  return unusable ? `seat ${seat + 1}` : name;
+}
+
+const GENERATED_LABEL = /^seat \d+$|\(seat \d+\)$/iu;
+
+/**
+ * Each opponent's label, unique among every other seat in the view.
+ *
+ * Review on PR #36 (Devin): display names are not unique — `createGuest` takes any name — so two
+ * opponents both called Alex came back as two "Alex" rows under "Equity by player" and two "Alex holds
+ * any of…" assumptions, and nothing on screen said which Alex was which. A name another seat also
+ * resolves to gets its one-based seat number, "Alex (seat 2)", in the equity row and the assumption
+ * alike, because both are read off this one label; a name nobody shares is left exactly as it was.
+ *
+ * Compared against EVERY other seat, folded ones included, as `onlyTheReaderIsNamed` in the web's
+ * `use-live-table.ts` does (review on PR #33): a folded Alex is still on a plate beside the Coach, so
+ * a lone "Alex" row does not say which of the two the figure is about. Compared ignoring case, because
+ * `holdsClause` capitalises the first letter, which writes "alex" and "Alex" up as the same "Alex
+ * holds any of…".
+ */
+function opponentLabels(
+  view: PlayerView,
+  opponents: readonly { readonly seat: SeatIndex }[],
+  nameOf: SeatNamer | undefined,
+): readonly string[] {
+  const seen = new Map<string, number>();
+  for (const seat of view.seats) {
+    if (seat.isSelf) continue;
+    const key = seatLabel(seat.seat, nameOf).toLowerCase();
+    seen.set(key, (seen.get(key) ?? 0) + 1);
+  }
+  return opponents.map(({ seat }) => {
+    const label = seatLabel(seat, nameOf);
+    return (seen.get(label.toLowerCase()) ?? 0) > 1 ? `${label} (seat ${seat + 1})` : label;
+  });
 }
 
 /**
@@ -150,9 +189,10 @@ export function coachSpotForView(
       board: view.board,
       street,
       // Five is `buildCoachReport`'s ceiling, and a six-max table cannot exceed it.
-      opponents: opponents
-        .slice(0, 5)
-        .map((seat) => ({ label: opponentLabel(seat.seat, nameOf), range: policy.range })),
+      opponents: opponentLabels(view, opponents.slice(0, 5), nameOf).map((label) => ({
+        label,
+        range: policy.range,
+      })),
       pot: view.potTotal,
       contestablePot: contestable,
       toCall: view.amountToCall,

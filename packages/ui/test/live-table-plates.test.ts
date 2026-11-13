@@ -81,6 +81,50 @@ describe('the turn ring, handed the deadline the server set', () => {
   });
 });
 
+/** The ring as painted, `remainingMs` before its deadline, and whether an "s" is painted after the digits. */
+async function ringAt(
+  remainingMs: number,
+): Promise<{ readonly digits: string; readonly unit: boolean; readonly tight: boolean }> {
+  const TurnTimer = await loadComponent<TurnTimerProps>('components/TurnTimer', 'TurnTimer');
+  const markup = renderToStaticMarkup(
+    createElement(TurnTimer, {
+      clock: { deadlineMs: SERVER_TIME + remainingMs, serverTimeMs: SERVER_TIME, budgetSeconds: 240 },
+      label: 'Your turn timer',
+    }),
+  );
+  return {
+    digits: digits(markup),
+    unit: /class="prl-turn-timer__unit"/u.test(markup),
+    tight: /class="prl-turn-timer__value"[^>]*data-digits="3"/u.test(markup),
+  };
+}
+
+/**
+ * Three digits and an "s" do not fit the seat ring: at 1440x900 "196s" painted 31.7px of glyphs
+ * across the 24px hole of a 32px ring, over the stroke on both sides. The unit goes at three digits.
+ */
+describe('the countdown fits inside the ring', () => {
+  it('paints a bare figure at three digits and keeps the "s" at two', async () => {
+    // `tight` is the hook for the -0.05em in `components.css`: three bare digits still measured
+    // 25.4px of advance boxes in the 24px hole, so they are set a hair closer.
+    assert.deepEqual(await ringAt(196_000), { digits: '196', unit: false, tight: true });
+    assert.deepEqual(await ringAt(100_000), { digits: '100', unit: false, tight: true });
+    assert.deepEqual(await ringAt(99_000), { digits: '99', unit: true, tight: false });
+    assert.deepEqual(await ringAt(7_500), { digits: '8', unit: true, tight: false });
+  });
+
+  it('says seconds in the accessible name whatever is painted', async () => {
+    const TurnTimer = await loadComponent<TurnTimerProps>('components/TurnTimer', 'TurnTimer');
+    const markup = renderToStaticMarkup(
+      createElement(TurnTimer, {
+        clock: { deadlineMs: SERVER_TIME + 196_000, serverTimeMs: SERVER_TIME, budgetSeconds: 240 },
+        label: 'Your turn timer',
+      }),
+    );
+    assert.equal(name(markup), 'Your turn timer: 240 seconds to act');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // What each seat did on this street
 // ---------------------------------------------------------------------------

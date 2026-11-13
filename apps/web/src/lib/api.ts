@@ -647,6 +647,20 @@ function notifyMutationAccepted(mutating: boolean): void {
 }
 
 /**
+ * The same "ask again" for a change the API made over the table's socket rather than over HTTP.
+ *
+ * A hand settling moves the reader's units — they are the stacks of their live seats
+ * (`users.readUnits`) — and it arrives as a `state` frame, so `notifyMutationAccepted` never saw it.
+ * The audit at 6b3886e found the header pill reading 1,000 UNITS at a bust while
+ * `GET /auth/session` answered `"units":0` and the seat said STACK 0, and 1,000 against a stack of
+ * 334 at 1440. Same listeners, same re-read, same single authority for the figure: the caller says
+ * only that the session may have moved, never what to.
+ */
+export function notifySessionChanged(): void {
+  notifyMutationAccepted(true);
+}
+
+/**
  * Registers a listener, and returns the function that removes it.
  *
  * Returns a no-op unsubscribe on the server rather than throwing: a client component's effect body

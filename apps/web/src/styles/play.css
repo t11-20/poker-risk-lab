@@ -365,16 +365,52 @@
 }
 
 /**
+ * Who did what on the street, beside the controls (`StreetLine` in `TableStage.tsx`).
+ *
+ * It wraps rather than truncates. The line names at most three actions — `street-summary.ts` keeps
+ * the latest and says how many it left out — so at 360px it is two lines at most, and an ellipsis
+ * would cut off the end of it, which is the most recent action and the one the price is made of.
+ */
+.prl-play__street {
+  margin: 0;
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+  font-variant-numeric: var(--prl-numeric);
+}
+
+.prl-play__street > .prl-label {
+  margin-inline-end: var(--prl-space-2);
+}
+
+/**
  * Your cards, your stack and your street commitment, beside the controls that change them.
  *
- * Hidden below 900px, where the stacked table already pins the viewer's own plate directly above this
- * band and a second copy a centimetre away would be noise. From 900px up the plate can be anywhere
- * inside a 32rem field, so this is what makes the guarantee structural rather than lucky.
+ * Hidden below 900px, where the stacked table puts the viewer's own plate directly above this band and
+ * a second copy a centimetre away would be noise. From 900px up the plate can be anywhere inside a
+ * 32rem field, so this is what makes the guarantee structural rather than lucky.
+ *
+ * "Directly above" stopped being enough below 900px once a decision with a raise legal scrolled the
+ * page to the sizer (`lib/follow-the-table.ts`): at 390x844 that left the plate at -174..46 and the
+ * board at -303..-203. The cards are carried there by `.prl-hand-glance` below, inside the bar, and
+ * the board with them. Not by this block: its stack and street figures are on the buttons and in the
+ * sizer's readout already, and at `md` with two figures beside the cards it is the taller of the two.
  */
 .prl-play__hud {
   display: none;
   align-items: center;
   gap: var(--prl-space-6) var(--prl-space-9);
+}
+
+/**
+ * The reader's cards and the board inside the bar (`HandGlance` in `@prl/ui`), shown where the row
+ * sticks (section 3.1: a column under 46rem, where the follow scroll can take the plate off the top)
+ * and this block is not drawn (below 900px; section 8 hides it again above). Measured on the decision
+ * fixture: glance at 320, 390 and 768; HUD at 1024, 1280 and 1440; neither at 899, where the column
+ * is wide enough for the row to sit still, the follow never moves, and the plate stays above the band.
+ * So the band never draws the reader's cards twice, and never shifts: it is decided here, before paint.
+ */
+.prl-play .prl-hand-glance {
+  display: none;
 }
 
 .prl-play__hud-stats {
@@ -444,6 +480,10 @@
    ========================================================================================== */
 
 @container prl-play-column (width < 46rem) {
+  .prl-play .prl-hand-glance {
+    display: flex;
+  }
+
   .prl-play .prl-action-bar__actions {
     position: sticky;
     z-index: var(--prl-z-raised);
@@ -834,6 +874,12 @@
   .prl-play__hud {
     display: flex;
   }
+
+  /* After section 3.1 in the source, so this wins at the 900..1279px widths where the column is
+     still narrow enough for the row to stick: the block above carries the cards there. */
+  .prl-play .prl-hand-glance {
+    display: none;
+  }
 }
 
 /* ==========================================================================================
@@ -896,6 +942,12 @@
      action scrolls the page away" looked like once the focus moves stopped scrolling. */
   .prl-play__decision > .prl-callout,
   .prl-play__decision > .prl-play__ack {
+    grid-column: 1 / -1;
+  }
+
+  /* The street line is about the whole decision too, and auto-placed it would take the plate's
+     column and widen it, exactly as the acknowledgement did. */
+  .prl-play__decision > .prl-play__street {
     grid-column: 1 / -1;
   }
 }

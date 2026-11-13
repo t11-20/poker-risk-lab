@@ -31,9 +31,11 @@
  *   3. **Your cards** are in the band's own readout at 900px and above. They also appear on the seat
  *      plate at the bottom of the oval — the duplication is deliberate and it is what buys the
  *      guarantee, because a plate positioned inside a 32rem field can be below the fold on a short
- *      viewport. Below 900px the readout is hidden, because the stacked table already pins the
- *      viewer's plate directly above this band and showing the cards twice a centimetre apart is
- *      noise.
+ *      viewport. Below 900px the readout is hidden, because the stacked table puts the viewer's plate
+ *      directly above this band and showing the cards twice a centimetre apart is noise — except
+ *      that a decision with a raise legal scrolls a phone to the sizer and takes the plate off the
+ *      top, so there the bar carries `HandGlance`: the two cards and the board, small, between the
+ *      price and the sizer. See `handGlanceFor` below.
  *   4. **The Coach's equity figure** is the first thing in the Coach panel, and the rail is
  *      `position: sticky` from 900px up with its own scroll region. The top of the panel is always
  *      the top of the rail.
@@ -111,9 +113,11 @@ import {
   CardRow,
   CoachPanel,
   formatChips,
+  HandGlance,
   type PlayerView,
   PokerTable,
   type StyleWithVars,
+  streetSummary,
   type TableAction,
   type TurnClock,
 } from '@prl/ui';
@@ -122,6 +126,7 @@ import {
   type FocusEvent,
   type PointerEvent,
   type ReactElement,
+  type ReactNode,
   type RefObject,
   useEffect,
   useRef,
@@ -254,6 +259,12 @@ export interface TableStageProps {
    * `app/play/LiveTable.tsx`.
    */
   readonly decisionRef?: RefObject<HTMLDivElement | null>;
+  /**
+   * A standing notice for the decision band, where the reader is looking when it applies — the live
+   * table's out-of-units notice. The caller decides when, because only the caller reads the roster.
+   * Not announced: the hand that caused it was narrated as it happened.
+   */
+  readonly decisionNotice?: ReactNode;
 }
 
 /** Skeletons at the real content's dimensions, so nothing reflows when the data lands. */
@@ -366,6 +377,45 @@ function HeroReadout({ view }: HeroReadoutProps): ReactElement | null {
         <dd className="prl-play__hud-value">{formatChips(hero.committedThisStreet)}</dd>
       </dl>
     </div>
+  );
+}
+
+/**
+ * Who did what on this street, in one line beside the controls — or, until somebody acts on the new
+ * street, on the one that just closed. See `street-summary.ts` in `@prl/ui` for both defects.
+ *
+ * Not a live region. The table's narration already said every one of these as it happened, and a
+ * second region repeating them would read each action twice. This is the same facts for the eye, put
+ * where the eye is at a decision: beside "To continue", which is the figure they explain.
+ */
+function StreetLine({
+  view,
+  seatNames,
+}: {
+  readonly view: PlayerView | null;
+  readonly seatNames: Readonly<Record<number, string>> | undefined;
+}): ReactElement | null {
+  const line = view === null ? null : streetSummary(view, seatNames);
+  if (line === null) return null;
+  return (
+    <p className="prl-play__street">
+      <span className="prl-label">{line.label}</span>
+      {line.earlier > 0 ? (
+        <span className="prl-play__street-earlier">
+          <span aria-hidden="true">{' …'}</span>
+          <span className="prl-visually-hidden">{`, after ${String(line.earlier)} earlier,`}</span>
+        </span>
+      ) : null}
+      {line.actions.map((phrase, index) => (
+        // The phrase's place on its street, counted from the street's first action, plus the phrase:
+        // a street's actions are only ever appended to, so that pair names one action for good.
+        <span key={`${String(line.earlier + index)}:${phrase}`}>
+          {index === 0 ? ' ' : <span aria-hidden="true">{' · '}</span>}
+          {index === 0 ? null : <span className="prl-visually-hidden">{'; '}</span>}
+          {phrase}
+        </span>
+      ))}
+    </p>
   );
 }
 
@@ -494,12 +544,14 @@ const NO_VIEW_LINE: Readonly<Record<'error' | 'idle' | 'waiting', string>> = {
 interface DecisionBandProps {
   readonly status: TableStageStatus;
   readonly view: PlayerView | null;
+  readonly seatNames: Readonly<Record<number, string>> | undefined;
   readonly submission: TableSubmission | null;
   readonly turnAnnouncement: string;
   readonly isLive: boolean;
   readonly onAct: (action: TableAction) => void;
   readonly autoActed: string | null;
   readonly decisionRef: RefObject<HTMLDivElement | null> | undefined;
+  readonly notice: ReactNode;
 }
 
 /**
@@ -538,6 +590,22 @@ const SUBMISSION_IN_FLIGHT: ReadonlySet<TableSubmission['status']> = new Set<Tab
 ]);
 
 /**
+ * The reader's cards and the board for the bar to draw between the price and the sizer, or null.
+ *
+ * Only while a bet or a raise is legal, because that is exactly when `useFollowTheTable` scrolls a
+ * phone to the sizer and the plate goes off the top (measured at 390x844: plate at -174..46, board
+ * at -303..-203). With no sizer the row is followed by its nearest edge, which stops as soon as the
+ * row can stick, so the page moves by the least it can and the table above the band is not traded
+ * away. `styles/play.css` decides the widths it is drawn at; this decides the moments.
+ */
+function handGlanceFor(view: PlayerView): ReactElement | null {
+  const hole = view.seats.find((seat) => seat.isSelf)?.holeCards ?? null;
+  if (hole === null) return null;
+  if (!view.legalActions.some((action) => action.type === 'bet' || action.type === 'raise')) return null;
+  return <HandGlance hole={hole} board={view.board} />;
+}
+
+/**
  * Your own figures, the controls, and the price — the last block in the table column.
  *
  * Guarantees 1 to 3 in the module comment live here. Nothing about its position is set in
@@ -545,7 +613,8 @@ const SUBMISSION_IN_FLIGHT: ReadonlySet<TableSubmission['status']> = new Set<Tab
  * rather than the feature, and for the test that now holds that line.
  */
 function DecisionBand(props: DecisionBandProps): ReactElement {
-  const { status, view, submission, turnAnnouncement, isLive, onAct, autoActed, decisionRef } = props;
+  const { status, view, seatNames, submission, turnAnnouncement, isLive, onAct, autoActed, decisionRef } =
+    props;
   const pending = submission !== null && SUBMISSION_IN_FLIGHT.has(submission.status);
   const rejected = submission !== null && SUBMISSION_ALERTS.has(submission.status);
 
@@ -624,6 +693,13 @@ function DecisionBand(props: DecisionBandProps): ReactElement {
         {turnAnnouncement}
       </div>
 
+      {/*
+        Before the plate, not after it: from 46rem of column the band is a grid of the plate and the
+        controls, and this line spans both. After the plate it took the second row and pushed the
+        controls to a third, leaving the plate alone in the first (measured at 1440x900).
+      */}
+      <StreetLine view={view} seatNames={seatNames} />
+
       {view === null ? null : <HeroReadout view={view} />}
 
       {view === null ? (
@@ -641,6 +717,7 @@ function DecisionBand(props: DecisionBandProps): ReactElement {
           toCall={view.amountToCall}
           committedThisStreet={view.seats.find((seat) => seat.isSelf)?.committedThisStreet ?? 0}
           disabled={pending}
+          context={handGlanceFor(view)}
           idleText={
             status === 'complete'
               ? 'This hand is complete. Nothing is owed and there is nothing to decide.'
@@ -648,6 +725,8 @@ function DecisionBand(props: DecisionBandProps): ReactElement {
           }
         />
       )}
+
+      {props.notice}
 
       {/*
         Not a live region: the table's narration already said "(the clock ran out, so the server
@@ -929,6 +1008,8 @@ export function TableStage(props: TableStageProps): ReactElement {
           onAct={act}
           autoActed={props.autoActed ?? null}
           decisionRef={props.decisionRef}
+          seatNames={seatNames}
+          notice={props.decisionNotice}
         />
       </div>
 

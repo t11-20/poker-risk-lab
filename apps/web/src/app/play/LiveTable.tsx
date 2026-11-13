@@ -72,7 +72,8 @@ import {
   useState,
 } from 'react';
 import { TableStage, type TableStageStatus } from '@/components/TableStage.tsx';
-import { reviewHrefFor } from '@/lib/coach-body.ts';
+import { noAnalysisReason, readerHasDecisions, reviewHrefFor } from '@/lib/coach-body.ts';
+import { sizerFollowDelta, watchDelta } from '@/lib/follow-the-table.ts';
 import { LEGENDS_PATH } from '@/lib/legend-links.ts';
 import { describeTable } from '@/lib/table-description.ts';
 import { INVITE_CODE_EXAMPLE, MAX_INVITE_CODE_INPUT } from '@/lib/table-rooms.ts';
@@ -122,7 +123,8 @@ function coachOffReason(off: NonNullable<LiveTableModel['coachOff']>): string {
 
 /**
  * The panel's own default sentence is "with no table state there is nothing to price", and it is
- * TRUE only while there is no table state. These two are the cases where there is one.
+ * TRUE only while there is no table state. This and `noAnalysisReason` in `lib/coach-body.ts` are
+ * the cases where there is one.
  *
  * ## The defect
  *
@@ -144,10 +146,6 @@ const COACH_IN_FLIGHT_REASON =
   'server-side from your own redacted view, which takes a moment; nothing is estimated here while ' +
   'you wait.';
 
-const COACH_NOT_ASKED_REASON =
-  'There is no analysis of this spot. The Coach prices a decision, so it is computed when one is ' +
-  'yours to make — use "Refresh the analysis" to ask for it now.';
-
 function coachUnavailableProps(
   live: LiveTableModel,
 ): { readonly coachUnavailableReason: string } | Record<string, never> {
@@ -161,8 +159,10 @@ function coachUnavailableProps(
     };
   }
   if (live.table.coachRequest !== null) return { coachUnavailableReason: COACH_IN_FLIGHT_REASON };
-  // Only when there is genuinely no table state does the panel's own default sentence hold.
-  if (live.table.view !== null) return { coachUnavailableReason: COACH_NOT_ASKED_REASON };
+  // Only when there is genuinely no table state does the panel's own default sentence hold. With
+  // one, the sentence depends on whether the reader still has a decision in it: see
+  // `noAnalysisReason` for the folded reader who was told to press a button.
+  if (live.table.view !== null) return { coachUnavailableReason: noAnalysisReason(live.table.view) };
   return {};
 }
 
@@ -401,6 +401,7 @@ function controlsSignature(live: ConnectionPanelProps['live']): string {
     live.table.betweenHands ? 'between' : 'in-hand',
     live.coachOff === null ? 'coach' : 'no-coach',
     live.dealingIn ? 'dealing-in' : 'manual',
+    readerHasDecisions(live.table.view) ? 'in-the-hand' : 'out-of-the-hand',
     live.join.state,
   ].join('/');
 }
@@ -528,7 +529,13 @@ function ConnectionControls({
           </Link>
         ) : null}
 
-        {isLive && seated && !table.betweenHands && live.coachOff === null ? (
+        {/* Only while the reader still has decisions in the hand: after a fold, or the clock folding
+            for them, there is nothing for the Coach to price and the press asked for nothing. */}
+        {isLive &&
+        seated &&
+        !table.betweenHands &&
+        live.coachOff === null &&
+        readerHasDecisions(table.view) ? (
           <Button variant="ghost" onClick={live.askCoach}>
             Refresh the analysis
           </Button>
@@ -850,6 +857,33 @@ function ConnectionPanel({ live, inLegendMatch = false }: ConnectionPanelProps):
 }
 
 /**
+ * The out-of-units notice again, in the decision band, where the reader is looking when they bust.
+ *
+ * The full notice is in the connection card, beside the Deal control it disables, and that card is
+ * above the table: measured at the moment of a bust, at y -1,203..-780 at 390x844 and above a Deal at
+ * -558 at 1440x900 (audit at 6b3886e, M4). What was on screen was STACK 0, "went all in" and the
+ * showdown — the result, and not that the reader was out. This says so where they are, with the way
+ * on. The card keeps the longer version, which carries the fallback for a reset that does not reach
+ * a seat already taken.
+ *
+ * Not a live region, like the card's: nothing was refused, and the hand that took the last unit was
+ * narrated as it happened.
+ */
+function OutOfUnitsAtTheTable(): ReactElement {
+  return (
+    <Callout tone="warning" title="You are out of units">
+      <p>
+        Your seat has nothing in front of it, so the server deals every hand without you. Units are free
+        practice counters: reset them to the starting amount to play on.
+      </p>
+      <p>
+        <Link href="/record">Reset your units on your record page</Link>
+      </p>
+    </Callout>
+  );
+}
+
+/**
  * Keeps the decision band on screen when the table has something new for the reader.
  *
  * ## The defect this exists for
@@ -863,11 +897,18 @@ function ConnectionPanel({ live, inLegendMatch = false }: ConnectionPanelProps):
  *
  * ## When it scrolls, and when it does not
  *
- * Twice, both edges the reader is waiting for: a hand is dealt with the reader in it, and a
- * decision becomes theirs. Never on a frame that merely re-describes a spot already on screen, and
- * never when the target is already in view — so a reader who is looking at the table is not moved
- * by a pixel. Not while they are typing somewhere else on the page either: pulling a half-typed
- * invite code out from under the caret would be worse than the defect.
+ * On the edges the reader is waiting for: a decision becomes theirs; and, while it is not, a hand is
+ * dealt with them in it, their decision ends, or the hand does. Never on a frame that merely
+ * re-describes a spot already on screen, and never when what it would bring in is already in view —
+ * so a reader who is looking at the table is not moved by a pixel. Not while they are typing
+ * somewhere else on the page either: pulling a half-typed invite code out from under the caret would
+ * be worse than the defect.
+ *
+ * The edges that are not a decision are "watched": the table on screen with the band under it
+ * (`watchDelta` in `lib/follow-the-table.ts`). They used to be followed like a decision, by the
+ * band's nearest edge, which was harmless while a decision left the reader's plate on screen. Once a
+ * raise brings the sizer in on a phone (below), it is not, and the band by its nearest edge kept the
+ * reader under the table for the rest of the session.
  *
  * ## What it brings into view: the buttons, by the nearest edge
  *
@@ -886,6 +927,13 @@ function ConnectionPanel({ live, inLegendMatch = false }: ConnectionPanelProps):
  * bottom put the reader's own plate — the only place their cards are shown at that width — under the
  * header. The row is sticky inside its bar there, so bringing it in by the nearest edge stops as soon
  * as it can stick, with the plate and the board still above it.
+ *
+ * ## Except when the reader can size a bet, and the row can stick over the sizer
+ *
+ * Stopping where the row sticks put it straight over the sizer, which is above it in flow: at 390x844
+ * every preset hit-tested to Fold, Call or Raise, and a tap on ½ pot sent a min-raise. So when there
+ * is a sizer and the row is sticky, the sizer is brought in with the row at its own place under it —
+ * `sizerScroll` below, and `lib/follow-the-table.ts` for the measurements and the trade it makes.
  *
  * This moves the viewport only. Focus is the business of the rescues in `ActionBar` and
  * `TableStage`, which now all pass `preventScroll` so the two cannot fight; nothing here moves the
@@ -909,23 +957,96 @@ function typingElsewhere(band: HTMLElement): boolean {
   );
 }
 
+/**
+ * The scroll that makes the sizer reachable, when there is a sizer and the row can stick over it; null
+ * otherwise, and the buttons are followed as above. See `lib/follow-the-table.ts` for the defect.
+ *
+ * The row's `position` is read rather than the viewport's width: it is the only honest answer to
+ * "can the row cover the sizer here", and it is a container query that decides it, not a media one.
+ */
+function sizerScroll(band: HTMLElement): number | null {
+  const bar = band.querySelector<HTMLElement>('.prl-action-bar');
+  const sizer = bar?.querySelector<HTMLElement>('.prl-sizer');
+  const row = bar?.querySelector<HTMLElement>('.prl-action-bar__actions');
+  if (bar == null || sizer == null || row == null) return null;
+  if (window.getComputedStyle(row).position !== 'sticky') return null;
+  const root = window.getComputedStyle(document.documentElement);
+  const street = band.querySelector<HTMLElement>('.prl-play__street');
+  const first = street ?? bar;
+  const after = bar.querySelector<HTMLElement>('.prl-action-bar__note');
+  const sizerBox = sizer.getBoundingClientRect();
+  // `display: none` at the widths where the HUD holds the cards: a zero box is "not drawn", not "at 0".
+  const hand = bar.querySelector<HTMLElement>('.prl-hand-glance')?.getBoundingClientRect();
+  return sizerFollowDelta({
+    regionTop: first.getBoundingClientRect().top,
+    handTop: hand === undefined || hand.height === 0 ? null : hand.top,
+    streetBottom: street === null ? null : street.getBoundingClientRect().bottom,
+    coverBottom: document.querySelector('.prl-shell__header')?.getBoundingClientRect().bottom ?? 0,
+    sizerTop: sizerBox.top,
+    sizerBottom: sizerBox.bottom,
+    rowFlowBottom: (after ?? bar).getBoundingClientRect()[after == null ? 'bottom' : 'top'],
+    rowTop: row.getBoundingClientRect().top,
+    viewTop: Number.parseFloat(root.scrollPaddingBlockStart) || 0,
+    viewBottom: window.innerHeight - (Number.parseFloat(root.scrollPaddingBlockEnd) || 0),
+  });
+}
+
+/** The scroll that puts the table back on screen above the band; see `watchDelta`. */
+function watchScroll(band: HTMLElement, dealt: boolean): number {
+  const table =
+    document.querySelector<HTMLElement>('.prl-table__hero') ?? document.querySelector('.prl-table__field');
+  if (table === null) return 0;
+  const root = window.getComputedStyle(document.documentElement);
+  const box = band.getBoundingClientRect();
+  return watchDelta({
+    bandTop: box.top,
+    bandBottom: box.bottom,
+    tableBottom: table.getBoundingClientRect().bottom,
+    viewTop: Number.parseFloat(root.scrollPaddingBlockStart) || 0,
+    viewBottom: window.innerHeight - (Number.parseFloat(root.scrollPaddingBlockEnd) || 0),
+    dealt,
+  });
+}
+
 function useFollowTheTable(live: LiveTableModel, band: RefObject<HTMLDivElement | null>): void {
   const reduced = usePrefersReducedMotion();
   const view = live.table.view;
-  const dealtHand = view !== null && !live.table.betweenHands && view.seats.some((seat) => seat.isSelf);
-  const handId = dealtHand ? view.handId : null;
   // Non-empty exactly while the decision is the reader's, and set on the edge — see
   // `turnAnnouncement` in `lib/use-live-table.ts` — so it changes once per turn, not per frame.
   const turnEdge = live.table.turnAnnouncement;
+  // A hand the reader was dealt into, and whether it is over: the other edges worth following.
+  const handEdge =
+    view !== null && view.viewerSeat !== null ? `${view.handId}:${String(view.street === 'complete')}` : null;
+  const watchEdge = turnEdge === '' ? handEdge : null;
 
+  // The reader's decision: the buttons, or the sizer with the buttons under it.
   useEffect(() => {
-    if (handId === null && turnEdge === '') return;
+    if (turnEdge === '') return;
     const element = band.current;
     if (element === null || typingElsewhere(element)) return;
+    const sized = sizerScroll(element);
+    if (sized !== null) {
+      if (sized !== 0) window.scrollBy({ top: sized, behavior: reduced ? 'auto' : 'smooth' });
+      return;
+    }
     const target = element.querySelector<HTMLElement>('.prl-action-bar__actions') ?? element;
     if (inView(target)) return;
     target.scrollIntoView({ block: 'nearest', behavior: reduced ? 'auto' : 'smooth' });
-  }, [handId, turnEdge, band, reduced]);
+  }, [turnEdge, band, reduced]);
+
+  // Everything else the reader waits for — a deal, the end of their decision, the end of the hand —
+  // is watched: the table on screen with the band under it. See `watchDelta`.
+  const watchedHand = useRef<string | null>(null);
+  useEffect(() => {
+    if (watchEdge === null) return;
+    const hand = watchEdge.slice(0, watchEdge.lastIndexOf(':'));
+    const dealt = hand !== watchedHand.current;
+    watchedHand.current = hand;
+    const element = band.current;
+    if (element === null || typingElsewhere(element)) return;
+    const by = watchScroll(element, dealt);
+    if (by !== 0) window.scrollBy({ top: by, behavior: reduced ? 'auto' : 'smooth' });
+  }, [watchEdge, band, reduced]);
 }
 
 export function LiveTable({
@@ -961,6 +1082,7 @@ export function LiveTable({
         onAct={act}
         autoActed={table.autoActed}
         decisionRef={decisionRef}
+        {...(live.outOfUnits ? { decisionNotice: <OutOfUnitsAtTheTable /> } : {})}
         idleMessage={IDLE_TABLE_MESSAGE}
         {...coachUnavailableProps(live)}
         {...(status === 'complete' ? { reviewHref: reviewHrefFor(table.view) } : {})}

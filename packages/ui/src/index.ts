@@ -47,6 +47,7 @@ export {
   type CardDescription,
   type CardValue,
   describeCard,
+  handAndBoardName,
   isCardValue,
   listCardNames,
   parseCardText,
@@ -74,6 +75,7 @@ export { Chip, type ChipProps, type ChipTone } from './components/Chip.tsx';
 export { CoachPanel, type CoachPanelProps } from './components/CoachPanel.tsx';
 export { EquityBar, type EquityBarPlayer, type EquityBarProps } from './components/EquityBar.tsx';
 export { Formula, type FormulaProps } from './components/Formula.tsx';
+export { HandGlance, type HandGlanceProps } from './components/HandGlance.tsx';
 export {
   Metric,
   type MetricDelta,
@@ -203,6 +205,8 @@ export {
 } from './radar.ts';
 // What each seat did on the street in progress, for the plate's status line.
 export { lastActionsThisStreet } from './seat-actions.ts';
+// Who did what on the street, as one line for the decision band.
+export { STREET_SUMMARY_LIMIT, type StreetSummary, streetSummary } from './street-summary.ts';
 // -- Table types, projected out of the wire contract -------------------------
 export type {
   ActionName,

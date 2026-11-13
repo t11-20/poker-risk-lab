@@ -74,6 +74,7 @@ import {
 import type { PlayerView, TableAction, TurnClock } from '@prl/ui';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { TableSubmission } from '@/components/TableStage.tsx';
+import { notifySessionChanged } from './api.ts';
 import {
   BOT_TABLE_REQUEST,
   chooseRoom,
@@ -99,6 +100,10 @@ import {
   type TableSocketStatus,
   tableSocketUrl,
 } from './table-socket.ts';
+
+/** When the header re-reads the session after a hand settles; see `settledHand` in the hook. */
+export const SETTLED_ASK_MS = 1_000;
+export const SETTLED_RETRY_MS = 5_000;
 
 /** Where the tab remembers its room, so a reload rejoins instead of creating another table. */
 const ROOM_STORAGE_KEY = 'prl.play.roomId';
@@ -1898,6 +1903,43 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
   const turn = useMemo<TurnClock | null>(
     () => turnClockFor({ deadlineMs, serverTimeMs, turnBudgetMs, room, betweenHands }),
     [deadlineMs, serverTimeMs, turnBudgetMs, room, betweenHands],
+  );
+
+  /**
+   * A hand the reader was dealt into has settled, so the units the header shows may have moved.
+   *
+   * Once per hand, keyed on the frame that completes it, so a re-render of the same finished hand
+   * does not re-ask. See `notifySessionChanged` in `lib/api.ts` for why the header is told to ask
+   * rather than told a figure.
+   *
+   * ## Why not at once
+   *
+   * The units are the seat's stack as the DATABASE holds it, and the API writes it on its archive
+   * queue AFTER it has broadcast the frame that ends the hand (`RoomRegistry`'s `stacksSettled`).
+   * Asked at once, the session answers the stack from before the hand: measured on the live table,
+   * the pill trailed by exactly one hand on 4 of 4 hands (1,000 beside a stack of 1,162; then 1,162
+   * beside 1,260). Polled from the frame's arrival every 10ms, the new figure was there 12-34ms
+   * later on 8 of 8 hands. So the header is asked at `SETTLED_ASK_MS`, thirty times the slowest of
+   * those, and once more at `SETTLED_RETRY_MS` for an archive queue running behind; an answer that
+   * is still stale fails safe, as the stale figure the pill already showed.
+   */
+  const settledHand =
+    view !== null && view.street === 'complete' && view.viewerSeat !== null ? view.handId : null;
+  //
+  // The timers outlive the hand on purpose: a reader who presses Deal inside the second must not
+  // cancel the re-read of the hand that just paid them. Only leaving the page clears them.
+  const settleTimers = useRef<number[]>([]);
+  useEffect(() => {
+    if (settledHand === null || typeof window === 'undefined') return;
+    for (const ms of [SETTLED_ASK_MS, SETTLED_RETRY_MS]) {
+      settleTimers.current.push(window.setTimeout(notifySessionChanged, ms));
+    }
+  }, [settledHand]);
+  useEffect(
+    () => () => {
+      for (const timer of settleTimers.current) window.clearTimeout(timer);
+    },
+    [],
   );
 
   const seatNames = useMemo(() => namesFor(table.room), [table.room]);
