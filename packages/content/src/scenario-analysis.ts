@@ -171,7 +171,7 @@ export function analyseScenario(scenario: Scenario, options: AnalyseOptions = {}
   const result = equity(
     {
       players: [
-        { label: 'hero', range: heroRange },
+        { label: 'you', range: heroRange },
         { label: 'opponent', range: situation.opponentRange },
       ],
       board: situation.board,

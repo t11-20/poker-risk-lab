@@ -380,7 +380,7 @@ test('two pair on the flop reports no outs count at all, and still reports the c
   // explaining, and the explanation is where the counts get their real meaning.
   assert.match(result.explanation, /already in front/);
   assert.ok(
-    result.assumptions.some((note) => note.includes('cards that keep hero ahead')),
+    result.assumptions.some((note) => note.includes('cards that keep you ahead')),
     'the assumptions still say what the counts are',
   );
 

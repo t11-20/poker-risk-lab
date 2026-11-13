@@ -212,13 +212,13 @@ export function potOdds(pot: number, toCall: number): PotOdds {
     toCall === 0
       ? 'Checking is free. There is nothing to call, so nothing to lose by continuing: the ' +
         `break-even equity is 0% and any chance of winning the ${units(pot)} in the middle is enough. ` +
-        'There is no "X to 1" price because hero is not paying a price, which is why the ratio is ' +
+        'There is no "X to 1" price because you are not paying a price, which is why the ratio is ' +
         'reported as no price at all rather than as a number.'
-      : `Hero risks ${units(toCall)} to win the ${units(pot)} already in the middle, a price of ` +
+      : `You risk ${units(toCall)} to win the ${units(pot)} already in the middle, a price of ` +
         `${ratioText(oddsRatio)}. Calling breaks even at ${units(toCall)} / (${units(pot)} + ` +
         `${units(toCall)}) = ${percent(breakEvenEquity)} equity: with less than that, calling loses ` +
         'units over many repetitions of this spot; with more, it gains them. The ' +
-        `${units(pot)} is what is in the middle before hero's own ${units(toCall)} goes in — counting ` +
+        `${units(pot)} is what is in the middle before your own ${units(toCall)} goes in — counting ` +
         'the call inside the pot understates the equity a call needs.';
 
   return { pot, toCall, breakEvenEquity, oddsRatio, explanation };
@@ -306,23 +306,23 @@ export function ruleOf24(outs: number, cardsToCome: 1 | 2): RuleOfThumbEstimate 
   const explanation =
     `${outs} out${outs === 1 ? '' : 's'} with ${streets === 2 ? 'two cards' : 'one card'} to come, ` +
     `times ${multiplier}, is roughly ${estimatePercent}% — the rule of 2 and 4. It works because one ` +
-    'card off a stub of about 46 cards is worth a little over 2%, so 2% per out per card is close ' +
-    'enough to do in your head. Count clean outs only: a card that improves hero but hands an ' +
-    'opponent a better hand at the same time is not an out, and counting it is a bigger error than ' +
+    'card out of the 46 or so you have not seen is worth a little over 2%, so 2% per out per card is ' +
+    'close enough to do in your head. Count clean outs only: a card that improves your hand but hands ' +
+    'an opponent a better one at the same time is not an out, and counting it is a bigger error than ' +
     'anything the shortcut itself does.';
 
   const caveat =
     streets === 2
-      ? 'The x4 form counts BOTH the turn and the river, which hero only gets to see for this price ' +
-        'if there is no more betting. Call this bet and then face another on the turn and hero has ' +
+      ? 'The x4 form counts BOTH the turn and the river, which you only get to see for this price ' +
+        'if there is no more betting. Call this bet and then face another on the turn and you have ' +
         'paid for one card, not two, so x4 overstates what the call is buying. The error also grows ' +
         'with the out count: at 15 outs x4 says 60% where the exact figure with 47 cards unseen is ' +
         '54.1%, an overstatement of 5.9 points, while at 4 outs it slightly understates (16% against ' +
         '16.5%). Use it to sanity-check a decision, never to settle a close one.'
-      : 'The x2 form charges 2% per out where one card off a 46-card stub is worth about 2.17%, so it ' +
+      : 'The x2 form charges 2% per out where one card out of 46 unseen is worth about 2.17%, so it ' +
         'understates, and always in the same direction: 9 outs is 19.6%, not 18%. The gap grows with ' +
         "the out count — 15 outs is 32.6% against the shortcut's 30%. It also assumes every out is " +
-        'clean and that hitting wins, which on a board where hero is drawing to second best is the ' +
+        'clean and that hitting wins, which on a board where you are drawing to second best is the ' +
         'larger error by far.';
 
   return { outs, cardsToCome: streets, multiplier, estimatePercent, explanation, caveat };
@@ -460,7 +460,7 @@ export function probabilityOfHitting(outs: number, unseen: number, cardsToCome: 
       derivation:
         misses === 0
           ? `Two cards to come with ${outs} outs and ${unseen} cards unseen: every card left in the ` +
-            'stub is an out, so there is nothing that can miss and hitting is certain — 100%.'
+            'deck is an out, so there is nothing that can miss and hitting is certain — 100%.'
           : `Two cards to come, ${outs} outs, ${unseen} cards unseen. Exactly one card misses, and two ` +
             'cards cannot both be that one card, so at least one out has to arrive — 100%.',
     };
@@ -547,13 +547,13 @@ export function impliedOdds(input: {
     assumptions: [
       `The ${units(expectedAdditionalWinnings)} is an estimate about future streets, not a fact. It is ` +
         'the one figure here that cannot be counted off the table.',
-      'It assumes hero gets paid when the draw comes in. An opponent who shuts down, or a card obvious ' +
+      'It assumes you get paid when the draw comes in. An opponent who shuts down, or a card obvious ' +
         'enough to scare them, pays less than the estimate.',
-      'It assumes that extra money only moves when hero hits. Chips lost on the streets where hero ' +
-        'misses, or hits and is still second best, belong in reverse implied odds instead.',
-      'It assumes the stacks contain it: nobody can pay hero more than they have behind, so the ' +
+      'It assumes that extra money only moves when you hit. Chips lost on the streets where you ' +
+        'miss, or hit and are still second best, belong in reverse implied odds instead.',
+      'It assumes the stacks contain it: nobody can pay you more than they have behind, so the ' +
         'estimate can never exceed the effective stack.',
-      'It says nothing about how often the opponent raises hero off the draw before the last card, ' +
+      'It says nothing about how often the opponent raises you off the draw before the last card, ' +
         'which is the usual reason a call priced on implied odds never gets to collect them.',
     ],
   };
@@ -605,7 +605,7 @@ export function reverseImpliedOdds(input: {
   const explanation =
     expectedAdditionalLosses === 0
       ? `With nothing extra expected to go in, this is just the pot price: ${potPriceText}. Setting ` +
-        'the estimate to 0 is a claim that the hand is never going to cost hero more than this call.'
+        'the estimate to 0 is a claim that the hand is never going to cost you more than this call.'
       : `On the pot alone, calling ${units(toCall)} into ${units(pot)} needs ${potPriceText}. If this ` +
         `hand tends to cost another ${units(expectedAdditionalLosses)} on later streets — paying off ` +
         'a better hand, or improving into second best — then the call is really ' +
@@ -622,12 +622,12 @@ export function reverseImpliedOdds(input: {
     explanation,
     assumptions: [
       `The ${units(expectedAdditionalLosses)} is an estimate about future streets, not a fact. Nothing ` +
-        'on the table tells hero what this hand will cost after the call.',
-      'It counts two different futures at once: the times hero misses and pays anyway, and the times ' +
-        'hero improves and is still beaten by the hands that pay off.',
+        'on the table tells you what this hand will cost after the call.',
+      'It counts two different futures at once: the times you miss and pay anyway, and the times ' +
+        'you improve and are still beaten by the hands that pay off.',
       'Second-best hands are where this bites hardest. A hand that can only win small pots and lose ' +
         'big ones has reverse implied odds no pot price can rescue.',
-      'Position changes the size of it. Out of position hero has to guess more often, and the cost of ' +
+      'Position changes the size of it. Out of position you have to guess more often, and the cost of ' +
         'guessing wrong is what this estimate is trying to measure.',
       'Implied and reverse implied odds are estimates about the same future streets. Applying one and ' +
         'ignoring the other is how a call gets talked into existence.',
@@ -675,15 +675,15 @@ export function defenceFrequency(pot: number, betSize: number): DefenceFrequency
   const explanation =
     `A bet of ${units(betSize)} into ${units(pot)} risks ${units(betSize)} to win ${units(pot)}, so a ` +
     `pure bluff breaks even when it works ${units(betSize)} / (${units(pot)} + ${units(betSize)}) = ` +
-    `${percent(alpha)} of the time. That share is alpha. If hero folds more often than ` +
+    `${percent(alpha)} of the time. That share is alpha. If you fold more often than ` +
     `${percent(alpha)} here, any two cards can bet at a profit; defending — calling or raising — at ` +
     `least ${percent(minimumDefenceFrequency)} of the time takes that away. The two figures are the ` +
     'two halves of one whole, which is why they always add to 1.';
 
   const caveat =
-    "This figure comes from the bettor's arithmetic, not from hero's hand. It assumes the bettor's " +
+    "This figure comes from the bettor's arithmetic, not from your hand. It assumes the bettor's " +
     'range is polarised into hands that want a call and hands that want a fold, that the hand ends ' +
-    'here with no further betting, and that every hand hero defends with is worth defending. Against ' +
+    'here with no further betting, and that every hand you defend with is worth defending. Against ' +
     'someone who never bluffs, folding far more than alpha is right and costs nothing; against ' +
     'someone who bluffs constantly, defending far more is. It also says nothing about WHICH hands to ' +
     'defend, which is the part that actually decides the spot. Treat it as a reference point, never ' +

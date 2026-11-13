@@ -646,7 +646,7 @@ function buildRuleOfThumb(outs: OutsResult, cardsToCome: 1 | 2): NonNullable<Equ
     note:
       `${accuracy.estimate.explanation} ${accuracy.verdict} ` +
       `The comparison is against the exact chance of one of those ${outs.cleanCount} clean cards ` +
-      `arriving (${exact.derivation}), not against hero's equity: hitting and winning are different ` +
+      `arriving (${exact.derivation}), not against your equity: hitting and winning are different ` +
       `questions, and ${outs.dirtyCount === 0 ? 'the dirty-out count is zero here only because every out is clean' : `the ${outs.dirtyCount} dirty outs are exactly the gap between them`}. ` +
       'The shortcut is an approximation and this is its error, stated rather than hidden.',
   };
