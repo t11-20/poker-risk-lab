@@ -1,34 +1,10 @@
 /**
- * Runtime validation for the content data files.
- *
- * ## Why validate content at all
- *
- * The lessons, quizzes, scenarios and glossary live as JSON under `data/`. TypeScript
- * cannot check a JSON file against a union type — `resolveJsonModule` gives you the
- * *inferred* shape of the literal, not a guarantee that it satisfies `Scenario`. So a
- * malformed scenario would typecheck, build, deploy, and then throw somewhere deep in
- * a React render or, worse, silently teach something wrong.
- *
- * This module is the boundary. Every content file passes through it, and anything
- * that does not match the contract fails loudly at load time with a path that says
- * exactly which field of which record is wrong.
- *
- * ## Why hand-written and not a schema library
- *
- * The repo's dependency policy is strict, and a validator is precisely the kind of
- * code that should not pull in a dependency tree of its own. These validators are
- * plain functions over `unknown` with no cleverness: each one narrows one field and
- * reports the path it was at. That also lets the error messages be genuinely
- * specific ("scenarios[7].board: 'Qh 7h 2c' has 3 cards but street is 'turn', which
- * needs 4") rather than a generic schema trace.
- *
- * ## What is checked beyond shape
- *
- * Shape alone is not enough for content that teaches. The semantic checks matter more:
- * duplicate cards across a scenario, a board length that contradicts the street,
- * a glossary reference that points at nothing, a prerequisite cycle. Those are the
- * defects that produce a plausible-looking lesson that is quietly wrong, and they are
- * all checked here.
+ * Runtime validation for the content JSON. `resolveJsonModule` types a file by its literal shape,
+ * so nothing else proves a record satisfies the contract. Every file passes through here and fails
+ * at load time with the path of the bad field.
+ * Hand-written rather than a schema library, to keep dependencies out and messages specific.
+ * Beyond shape it checks duplicate cards, board length against street, dangling references and
+ * prerequisite cycles.
  */
 
 import {
@@ -80,10 +56,6 @@ class Problems {
     return this.list;
   }
 }
-
-// ---------------------------------------------------------------------------
-// Primitive checks
-// ---------------------------------------------------------------------------
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -188,7 +160,6 @@ function describe(value: unknown): string {
   return `${typeof value} ${JSON.stringify(value)}`;
 }
 
-/** Parses a card string, recording a problem instead of throwing. */
 function parseCardsSafely(problems: Problems, path: string, text: string): Card[] {
   if (text.trim() === '') return [];
   try {
@@ -199,10 +170,6 @@ function parseCardsSafely(problems: Problems, path: string, text: string): Card[
     return [];
   }
 }
-
-// ---------------------------------------------------------------------------
-// Glossary
-// ---------------------------------------------------------------------------
 
 function validateGlossaryEntry(problems: Problems, path: string, raw: unknown): GlossaryEntry {
   if (!isRecord(raw)) {
@@ -228,10 +195,6 @@ function validateGlossaryEntry(problems: Problems, path: string, raw: unknown): 
   if (!Array.isArray(raw['topics'])) problems.add(`${path}.topics`, 'expected an array of topics');
   return entry;
 }
-
-// ---------------------------------------------------------------------------
-// Live calculations
-// ---------------------------------------------------------------------------
 
 function validateIcmCalculation(
   problems: Problems,
@@ -379,10 +342,6 @@ function validateLiveCalculation(problems: Problems, path: string, raw: unknown)
   }
 }
 
-// ---------------------------------------------------------------------------
-// Lessons
-// ---------------------------------------------------------------------------
-
 const BLOCK_KINDS = [
   'prose',
   'heading',
@@ -489,10 +448,6 @@ function validateLesson(problems: Problems, path: string, raw: unknown): Lesson 
   };
 }
 
-// ---------------------------------------------------------------------------
-// Quizzes
-// ---------------------------------------------------------------------------
-
 const QUESTION_KINDS = ['multipleChoice', 'numeric', 'decision'] as const;
 const UNITS = ['percent', 'chips', 'ratio', 'count', 'hands'] as const;
 
@@ -520,26 +475,15 @@ function validateQuizQuestion(problems: Problems, path: string, raw: unknown): Q
       ? requireStringArray(problems, `${path}.optionNotes`, optionNotes, { max: 6 })
       : null;
     if (notes !== null && options.length > 0) {
-      // A note array is positional: `optionNotes[i]` explains `options[i]`, and the runner renders
-      // them side by side. Nothing joined them, so an option added or removed without the notes
-      // following ships a quiz whose rationale sits against the wrong choice.
-      //
-      // WHAT THIS DOES NOT CATCH, measured rather than assumed: reversing an `options` array and
-      // leaving `optionNotes` and `correctIndex` alone passes both checks below. The marker has not
-      // moved and neither has the index, so nothing here can see that `correctIndex` now names a
-      // different string. That is the worse defect — a student marked wrong for a right answer —
-      // and it is not detectable from this file, because no note quotes the option it explains.
-      // Catching it needs the correct ANSWER pinned by text rather than by position, which is a
-      // content-model change and not this guard. Said plainly because the first version of this
-      // comment claimed the reorder case and the negative control disproved it.
+      // `optionNotes[i]` explains `options[i]`. These checks do not catch a reversed `options` array
+      // with notes and `correctIndex` left alone. That needs the answer pinned by text, not position.
       if (notes.length !== options.length) {
         problems.add(
           `${path}.optionNotes`,
           `${notes.length} note(s) for ${options.length} option(s); they are read positionally`,
         );
       }
-      // The convention the whole file follows: the note on the right answer opens with "Correct:".
-      // It is what makes a reorder visible, so it is asserted rather than left to review.
+      // The note on the right answer opens with "Correct:".
       const marked = notes.findIndex((note) => note.trimStart().startsWith('Correct:'));
       if (marked !== -1 && marked !== correctIndex) {
         problems.add(
@@ -605,10 +549,6 @@ function validateQuiz(problems: Problems, path: string, raw: unknown): Quiz {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Scenarios
-// ---------------------------------------------------------------------------
-
 const STREETS = ['preflop', 'flop', 'turn', 'river'] as const;
 const CLAIM_KINDS = [
   'equityBetween',
@@ -622,7 +562,6 @@ const CLAIM_KINDS = [
   'ruleOf24ErrorAtMost',
 ] as const;
 
-/** Community cards required for each street. A mismatch is a content bug. */
 export const BOARD_LENGTH_BY_STREET: Readonly<Record<(typeof STREETS)[number], number>> = {
   preflop: 0,
   flop: 3,
@@ -673,14 +612,7 @@ function validateScenarioSeat(problems: Problems, path: string, raw: unknown): S
   return {
     seat: requireInteger(problems, `${path}.seat`, raw['seat'], { min: 0, max: 5 }),
     label: requireString(problems, `${path}.label`, raw['label'], { max: 16 }),
-    // min 0, not 1. `stack` is chips BEHIND (see ScenarioSeat in @prl/contracts),
-    // so a seat that is all in has exactly 0 — and a floor of 1 made the only
-    // correct way to write an all-in opponent unrepresentable. That is not a
-    // hypothetical: five shipped scenarios described a seat as moving all in and
-    // then gave it its whole stack again as chips behind, which fed effectiveStack
-    // and every fold-equity figure derived from it. checkSituationCoherence below
-    // now REQUIRES 0 for a seat the scenario narrates as all in, so this is a
-    // narrower rule than the one it replaces, not a looser one.
+    // min 0, because `stack` is chips behind and an all-in seat has exactly 0.
     stack: requireInteger(problems, `${path}.stack`, raw['stack'], { min: 0, max: 10_000_000 }),
     ...(typeof isHero === 'boolean' ? { isHero } : {}),
     ...(typeof holeCards === 'string' ? { holeCards } : {}),
@@ -736,52 +668,26 @@ function validateScenarioClaim(problems: Problems, path: string, raw: unknown): 
   }
 }
 
-// ---------------------------------------------------------------------------
-// Scenario coherence
-//
-// Shape is not the interesting failure mode for a scenario. A scenario can be
-// perfectly shaped and still describe a table that cannot exist — and that kind of
-// defect is invisible in review, because the prose reads correctly and only the
-// numbers underneath it disagree.
-//
-// The release audit found exactly that. `rk-nine-big-blinds-call-or-fold` said
-// "the small blind moves all in for 7,200, which is their whole stack" and then
-// recorded that seat with 7,200 still BEHIND, so every figure derived from the
-// effective stack was computed against an opponent who had twice what they had.
-// It was titled "Nine big blinds" while giving hero 13.5 of them. Nothing failed.
-//
-// The checks below are the ones that can be made mechanically from what a scenario
-// already states about itself: the price against the committed chips, the stated
-// all-ins against the chips behind, the narrated bet sizes against the pot, and any
-// stack depth quoted in words against the blinds. Where a claim is not mechanically
-// checkable it is left alone rather than guessed at — a content gate that cries wolf
-// gets a blanket suppression, which is worse than not having it.
-// ---------------------------------------------------------------------------
+// Scenario coherence. A well-shaped scenario can still describe a table that cannot exist, and the
+// prose hides it. These checks compare what a scenario states about itself: the price against the
+// commitments, narrated all-ins against chips behind, narrated bets against the pot, and depth in
+// words against the blinds. A claim that cannot be checked mechanically is left alone, so the gate
+// raises no false alarms.
 
 /** "moves all in for 7,200", "is all-in for 220". The comma is how the data writes it. */
 const ALL_IN_FOR = /all[-\s]?in for ([\d,]+)/gi;
 /** "bets 25 into a pot of 120", "bet 55 into 110", "leads out for 25 into a pot of 110". */
 const WAGER_INTO_POT =
   /(?:bets?|leads out for|all[-\s]?in for)\s+([\d,]+)\s+into\s+(?:a pot of\s+)?([\d,]+)/gi;
-/**
- * The scenario stating outright that hero's call is for everything.
- *
- * `you` as well as `hero`: the prompts and the situation line now address the learner, because
- * "hero" was never defined for them (UX audit at 6b3886e, Minor 7). Matching `hero` alone would
- * have let this check go quiet on the one scenario that says it, behind a green validation.
- */
+/** The scenario saying hero's call is for everything. Prose says `you` as well as `hero`. */
 const CALLING_IS_ALL_IN = /calling puts (?:hero|you) all[-\s]?in/i;
 
 /**
- * A stack depth quoted in words: "Nine big blinds", "seventy blinds deep", "12 blinds".
- *
- * The quantity is the only capture. An optional group for the preceding qualifier
- * looked tidier and was wrong: being greedy, it took "Nine" out of "Nine big blinds"
- * and left "big" as the number, so the phrase this whole check exists for was the
- * one it silently skipped. The word before the match is read separately, below.
+ * A stack depth in words, such as "Nine big blinds" or "12 blinds". The quantity is the only capture.
+ * A greedy qualifier group would take "Nine" and leave "big" as the number, so the word before the
+ * match is read separately.
  */
 const STATED_DEPTH = /\b(\d+|[a-z]+(?:-[a-z]+)?)\s+(?:big\s+)?blinds?\b/gi;
-/** The word immediately before a match, which is what bounds it (if anything does). */
 const WORD_BEFORE = /([a-z-]+)[^a-z-]*$/i;
 const DEPTH_QUALIFIERS = new Set([
   'under',
@@ -828,7 +734,7 @@ const NUMBER_WORDS: Readonly<Record<string, number>> = {
   ninety: 90,
 };
 
-/** The number a depth phrase names, or null when the token is not a number at all. */
+/** Null when the token is not a number. */
 function readNumberToken(token: string): number | null {
   if (/^\d+$/.test(token)) return Number(token);
   const parts = token.toLowerCase().split('-');
@@ -841,7 +747,6 @@ function readNumberToken(token: string): number | null {
   return total;
 }
 
-/** "7,200" as written in the prose -> 7200. */
 const readAmount = (text: string): number => Number(text.replace(/,/g, ''));
 
 interface SeatMoney {
@@ -862,13 +767,7 @@ function seatMoney(seats: readonly ScenarioSeat[], committed: Record<number, num
 const describeSeat = (money: SeatMoney): string =>
   `seat ${money.seat.seat} (${money.seat.label}) has ${money.seat.stack} behind and ${money.committed} committed`;
 
-/**
- * The price hero is being asked, against the chips actually on the table.
- *
- * `toCall` is the difference between the largest commitment and hero's own — it is
- * not a free field. And hero cannot be asked for more than hero has behind, which
- * is the check that would have caught a hero stack written as a total.
- */
+/** `toCall` must equal the largest commitment minus hero's, and cannot exceed hero's stack behind. */
 function checkPrice(problems: Problems, path: string, money: readonly SeatMoney[], scenario: Scenario): void {
   const hero = money.find((entry) => entry.seat.isHero === true);
   if (hero === undefined) return;
@@ -898,12 +797,7 @@ function checkPrice(problems: Problems, path: string, money: readonly SeatMoney[
   }
 }
 
-/**
- * Every all-in the prose narrates, against the seat it must belong to.
- *
- * Nothing behind is what "all in" MEANS, so the seat that put in that amount has to
- * have `stack: 0`. This is the check that fails on the defect the audit found.
- */
+/** Every all-in the prose narrates needs a seat with that commitment and `stack: 0`. */
 function checkNarratedAllIns(
   problems: Problems,
   path: string,
@@ -992,15 +886,8 @@ function checkPreflopPosting(
 }
 
 /**
- * A stack depth stated in words, against the blinds.
- *
- * A depth in the TITLE describes hero's spot — that is what a scenario title is —
- * so it is checked against hero. One in the range label describes whoever the range
- * belongs to, so any seat satisfies it. Both readings of a depth are accepted:
- * chips behind, and chips at the start of the street. What is rejected is a number
- * that matches neither, which is how "Nine big blinds" came to be worth 13.5 of them.
- *
- * Half a big blind of slack, because a title rounds and should be allowed to.
+ * A depth in the title is checked against hero, one in the range label against any seat. Chips behind
+ * and chips at the start of the street both count. Half a big blind of slack, because titles round.
  */
 function checkStatedDepth(
   problems: Problems,
@@ -1021,8 +908,7 @@ function checkStatedDepth(
   for (const [field, text, candidates] of sources) {
     for (const match of text.matchAll(STATED_DEPTH)) {
       const before = WORD_BEFORE.exec(text.slice(0, match.index))?.[1] ?? '';
-      // "under four big blinds each" describes two seats and names neither, so it
-      // is not a claim about any one stack and must not be read as one.
+      // "under four big blinds each" is not a claim about any one stack.
       if (DEPTH_QUALIFIERS.has(before.toLowerCase())) continue;
       const stated = readNumberToken(match[1] ?? '');
       if (stated === null) continue;
@@ -1041,11 +927,7 @@ function checkStatedDepth(
   }
 }
 
-/**
- * Everything above, plus the two invariants that need no prose to check.
- * Skipped entirely when the shape checks already failed: coherence errors derived
- * from a scenario that has no hero would be noise on top of the real problem.
- */
+/** Skipped when the shape checks failed, since coherence errors on top of those are noise. */
 function checkSituationCoherence(problems: Problems, path: string, scenario: Scenario): void {
   const heroes = scenario.seats.filter((seat) => seat.isHero === true);
   if (scenario.seats.length < 2 || heroes.length !== 1) return;
@@ -1067,8 +949,7 @@ function checkSituationCoherence(problems: Problems, path: string, scenario: Sce
 
   const money = seatMoney(scenario.seats, committed);
   for (const entry of money) {
-    // A seat with nothing behind and nothing in front of it is not in the hand,
-    // and it drags the effective stack to zero for everyone else.
+    // A seat with no chips anywhere would drag the effective stack to zero.
     if (entry.seat.stack === 0 && entry.committed === 0) {
       problems.add(
         `${path}.seats`,
@@ -1118,8 +999,7 @@ function validateScenario(problems: Problems, path: string, raw: unknown): Scena
   const claims = claimsRaw.map((claim, index) =>
     validateScenarioClaim(problems, `${path}.expectedInsight[${index}]`, claim),
   );
-  // A clean-out count is only meaningful against one specific hand: against a range,
-  // "how many outs" depends on which hand in the range the opponent holds.
+  // Clean outs exist only against one specific hand, not a range.
   if (opponentRange.kind !== 'exact' && claims.some((claim) => claim.kind === 'cleanOutsEquals')) {
     problems.add(
       `${path}.expectedInsight`,
@@ -1165,10 +1045,7 @@ function validateScenario(problems: Problems, path: string, raw: unknown): Scena
     ...(Object.keys(committed).length > 0 ? { committedThisStreet: committed } : {}),
   };
 
-  // Last, and on the assembled record rather than on `raw`: every coherence check
-  // compares one validated field against another, so running them here means they
-  // can trust the types and say something specific about the situation instead of
-  // re-deriving it from unknowns.
+  // Last, on the assembled record, so coherence checks can trust the types.
   checkSituationCoherence(problems, path, scenario);
   return scenario;
 }
@@ -1234,18 +1111,13 @@ function checkNoCardAppearsTwice(
 
   if (opponentRange.kind !== 'exact') return;
   const rangeCards = parseCardsSafely(problems, `${path}.opponentRange.cards`, opponentRange.cards);
-  // An exact opponent range normally RESTATES the cards already given on that
-  // opponent's seat — the same two cards described in two places, not two pairs of
-  // cards. Only treat them as additional (and therefore as a possible duplicate)
-  // when they do not match any seat's holding, which is the case that really is a
-  // content bug: an exact range naming cards nobody at the table holds.
+  // An exact range usually restates a seat's cards. Only cards no seat holds count as extra.
   const restatesASeat = seatHoleCards.some(
     (cards) => cards.length === rangeCards.length && cards.every((card) => rangeCards.includes(card)),
   );
   if (!restatesASeat) noteCards(rangeCards, 'the opponent range');
 }
 
-/** `committedThisStreet` as a seat-keyed record, with every key and value checked. */
 function readCommittedThisStreet(problems: Problems, path: string, raw: unknown): Record<number, number> {
   const committed: Record<number, number> = {};
   if (raw === undefined) return committed;
@@ -1292,10 +1164,6 @@ function emptyScenario(): Scenario {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Bundle-level checks
-// ---------------------------------------------------------------------------
-
 export interface RawContent {
   readonly lessons: readonly unknown[];
   readonly quizzes: readonly unknown[];
@@ -1305,10 +1173,8 @@ export interface RawContent {
 }
 
 /**
- * Validates everything and returns a typed bundle, or throws with every problem
- * found. Cross-references (glossary ids, quiz→lesson links, prerequisite cycles) are
- * checked after the individual records, so a broken reference is reported as a
- * reference problem rather than as a missing field somewhere unrelated.
+ * Returns a typed bundle or throws with every problem. Cross-references are checked after the
+ * records, so a broken reference reports as a reference problem.
  */
 export function validateContent(raw: RawContent): ContentBundle {
   const problems = new Problems();
@@ -1344,7 +1210,6 @@ export function validateContent(raw: RawContent): ContentBundle {
   return { version: raw.version, lessons, quizzes, scenarios, glossary };
 }
 
-/** The id sets every cross-reference check is resolved against. */
 interface KnownIds {
   readonly glossary: ReadonlySet<ContentId>;
   readonly lessons: ReadonlySet<ContentId>;
@@ -1436,10 +1301,7 @@ function assertUniqueIds(problems: Problems, where: string, records: readonly { 
   }
 }
 
-/**
- * A prerequisite cycle would make the lesson graph unrenderable and would deadlock
- * any "what should I read next" logic, so it is rejected rather than tolerated.
- */
+/** A prerequisite cycle would deadlock "what to read next", so it is rejected. */
 function detectPrerequisiteCycles(problems: Problems, lessons: readonly Lesson[]): void {
   const byId = new Map(lessons.map((lesson) => [lesson.id, lesson]));
   const state = new Map<string, 'visiting' | 'done'>();
@@ -1461,7 +1323,6 @@ function detectPrerequisiteCycles(problems: Problems, lessons: readonly Lesson[]
   for (const lesson of lessons) visit(lesson.id, []);
 }
 
-/** Validates without throwing, for tooling that wants to report all problems. */
 export function collectContentProblems(raw: RawContent): readonly string[] {
   try {
     validateContent(raw);

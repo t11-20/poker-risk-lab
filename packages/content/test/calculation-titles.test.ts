@@ -1,9 +1,6 @@
 /**
- * The optional `title` on a lesson's live calculation: carried through when present, refused when
- * it is not a short string, and absent when a block does not set one.
- *
- * It exists because /learn/pot-odds showed three calculators in a row all headed "The price of
- * this call", the heading a calculation's kind supplies, with only the caption telling them apart.
+ * The optional `title` on a live calculation. It exists because /learn/pot-odds showed three
+ * calculators all headed "The price of this call".
  */
 
 import assert from 'node:assert/strict';

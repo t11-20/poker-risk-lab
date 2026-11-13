@@ -1,23 +1,7 @@
 /**
- * The gate for a scenario that is well-formed and still describes a table that
- * cannot exist.
- *
- * Every check here has a defect behind it that shipped. `validate.ts` looked at
- * `expectedInsight` and at shapes, so a scenario could say "the small blind moves
- * all in for 7,200, which is their whole stack" while recording that seat with
- * 7,200 still behind, and nothing anywhere failed — the effective stack, the
- * fold-equity figures and the Coach's sizing advice were all computed against an
- * opponent who had twice what they had. The same scenario was titled "Nine big
- * blinds" while giving hero 13.5 of them.
- *
- * So this file does two things, and both matter:
- *
- *   1. It pins the shipped data. The scenarios that carried the defect are
- *      asserted directly, by number, so a revert is a test failure.
- *   2. It proves the validator can FAIL. A content gate that has only ever seen
- *      good input is not evidence of anything, so each check is exercised by
- *      reintroducing exactly the defect it exists to catch. Every mutation below
- *      produced a passing build before this work.
+ * Scenarios that are well-formed but describe a table that cannot exist. A shipped scenario said a
+ * seat moved all in for 7,200 and still recorded 7,200 behind. The first tests pin the shipped data
+ * by number. The rest reintroduce each defect to prove the validator fails on it.
  */
 
 import assert from 'node:assert/strict';
@@ -29,7 +13,6 @@ type RawScenario = Record<string, unknown>;
 const isRecord = (value: unknown): value is RawScenario =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-/** A deep copy of one shipped scenario, ready to be broken on purpose. */
 function scenarioNamed(id: string): RawScenario {
   const found = readRawContent().scenarios.find(
     (scenario): scenario is RawScenario => isRecord(scenario) && scenario['id'] === id,
@@ -38,12 +21,7 @@ function scenarioNamed(id: string): RawScenario {
   return structuredClone(found);
 }
 
-/**
- * Validates the whole bundle with `scenario` standing in for the scenario set, and
- * returns only the problems about it. The rest of the bundle is real so that
- * glossary and lesson cross-references resolve; the filter keeps the assertions
- * about the one record under test.
- */
+/** Problems about `scenario` alone. The rest of the bundle is real so cross-references resolve. */
 function problemsFor(scenario: RawScenario): readonly string[] {
   const raw = readRawContent();
   return collectContentProblems({ ...raw, scenarios: [scenario] }).filter((problem) =>
@@ -78,19 +56,13 @@ function committedOf(scenario: RawScenario): Record<string, number> {
 const mentioning = (problems: readonly string[], needle: RegExp): string[] =>
   problems.filter((problem) => needle.test(problem));
 
-// ---------------------------------------------------------------------------
-// 1. The shipped data
-// ---------------------------------------------------------------------------
-
 test('every shipped scenario is internally coherent', () => {
   const problems = collectContentProblems(readRawContent());
   assert.deepEqual(problems, [], `content validation failed:\n  - ${problems.join('\n  - ')}`);
 });
 
 test('a seat the prose calls all in has nothing behind, in every shipped scenario', () => {
-  // The defect, stated as an invariant. `stack` is chips BEHIND, so an all-in seat
-  // holds 0 — and the scenarios that got this wrong were the ones teaching push-fold
-  // and fold equity, where the effective stack is the whole point.
+  // `stack` is chips behind, so an all-in seat holds 0.
   const offenders: string[] = [];
   for (const scenario of content().scenarios) {
     const committed = scenario.committedThisStreet ?? {};
@@ -108,8 +80,7 @@ test('a seat the prose calls all in has nothing behind, in every shipped scenari
 });
 
 test('rk-nine-big-blinds-call-or-fold is nine big blinds deep, on both sides', () => {
-  // Pinned by number because this is the scenario the audit found, and because the
-  // two figures are the ones a well-meaning edit would get wrong again.
+  // Pinned by number. This is the scenario the audit found.
   const scenario = content().scenarios.find((entry) => entry.id === 'rk-nine-big-blinds-call-or-fold');
   assert.ok(scenario !== undefined);
   const committed = scenario.committedThisStreet ?? {};
@@ -143,14 +114,9 @@ test('rk-when-survival-outweighs-chip-ev really does put hero all in, as it says
   assert.equal(scenario.toCall, hero.stack);
 });
 
-// ---------------------------------------------------------------------------
-// 2. The validator can fail
-// ---------------------------------------------------------------------------
-
 test('an all-in seat written with chips behind is rejected', () => {
   const scenario = scenarioNamed('rk-nine-big-blinds-call-or-fold');
-  // Exactly the shipped defect: the seat's whole stack recorded as both committed
-  // and behind.
+  // The shipped defect: the whole stack recorded as both committed and behind.
   seatLabelled(scenario, 'SB')['stack'] = 7200;
 
   const problems = problemsFor(scenario);
@@ -209,8 +175,7 @@ test('a preflop scenario where the blinds are not posted is rejected', () => {
 
 test('committedThisStreet cannot name a seat that is not at the table', () => {
   const scenario = scenarioNamed('fl-board-plays-itself-river');
-  // 0 so the outstanding bet, and therefore toCall, is unchanged: this asserts one
-  // thing rather than cascading into the price check.
+  // 0 keeps toCall unchanged, so only one check fires.
   committedOf(scenario)['4'] = 0;
 
   assert.match(problemsFor(scenario).join('\n'), /seat 4 is not at this table/);
@@ -231,9 +196,7 @@ test('a big blind that is not above the small blind is rejected', () => {
 });
 
 test('a bounded depth in the prose is not read as a claim about one seat', () => {
-  // "under four big blinds each" describes two short stacks of 2.5 and 3.5, and a
-  // check that demanded a seat at exactly four would fire on correct content. A gate
-  // that cries wolf gets suppressed, so this stays a control.
+  // "under four big blinds each" describes stacks of 2.5 and 3.5. This control must stay quiet.
   const scenario = scenarioNamed('rk-when-survival-outweighs-chip-ev');
   assert.deepEqual(problemsFor(scenario), []);
   assert.ok(
