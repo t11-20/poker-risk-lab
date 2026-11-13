@@ -35,9 +35,13 @@
 
 import { formatIndex } from '@prl/ui';
 import type { ReactElement } from 'react';
+import { SuitMark } from '@/components/SuitMark.tsx';
+import type { NavArea } from '@/lib/nav.ts';
 
 export interface ProcessStep {
   readonly label: string;
+  /** The suit of the part of the product where this step happens (`SuitMark`). */
+  readonly area: NavArea;
   /** One line on what the step actually involves. Never a slogan. */
   readonly detail: string;
 }
@@ -47,10 +51,22 @@ export interface ProcessStep {
  * a second copy of a four-item list is a second thing to keep in step.
  */
 export const PROCESS_STEPS: readonly ProcessStep[] = [
-  { label: 'Learn', detail: 'What the number means, and what it assumes.' },
-  { label: 'Calculate', detail: 'Equity, outs, pot odds and break-even — computed, never looked up.' },
-  { label: 'Decide', detail: 'Act on the price in front of you, with the cost of every option shown.' },
-  { label: 'Review', detail: 'Price the decision after the fact, separately from how it turned out.' },
+  { label: 'Learn', area: 'learn', detail: 'What the number means, and what it assumes.' },
+  {
+    label: 'Calculate',
+    area: 'lab',
+    detail: 'Equity, outs, pot odds and break-even — computed, never looked up.',
+  },
+  {
+    label: 'Decide',
+    area: 'play',
+    detail: 'Act on the price in front of you, with the cost of every option shown.',
+  },
+  {
+    label: 'Review',
+    area: 'review',
+    detail: 'Price the decision after the fact, separately from how it turned out.',
+  },
 ];
 
 export interface ProcessSpineProps {
@@ -82,7 +98,10 @@ export function ProcessSpine(props: ProcessSpineProps): ReactElement {
             <span aria-hidden="true" className="prl-spine__index prl-index">
               {formatIndex(position + 1)}
             </span>
-            <span className="prl-spine__label prl-label prl-label--strong">{step.label}</span>
+            <span className="prl-spine__label prl-label prl-label--strong">
+              <SuitMark area={step.area} className="prl-spine__mark" />
+              {step.label}
+            </span>
             <span className="prl-spine__detail">{step.detail}</span>
           </li>
         );

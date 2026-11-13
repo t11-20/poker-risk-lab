@@ -302,26 +302,48 @@
   min-height: var(--prl-pill-h);
 }
 
+/**
+ * The brand mark is a playing card's corner, drawn as a small card: rank over suit on the card
+ * face, at a card's 5:7 proportion. It replaced a numbered circle ("00") that said nothing about
+ * the subject; the card is the one object every page of this product is about.
+ */
 .prl-pillbar__brand .prl-shell__brand-index {
-  display: inline-grid;
-  place-items: center;
-  width: var(--prl-pill-h);
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  width: calc(var(--prl-pill-h) * 5 / 7);
   height: var(--prl-pill-h);
-  border: 1px solid var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
-  border-radius: 50%;
-  background-color: var(--prl-shell-nav-fill);
-  box-shadow: var(--prl-elevation-2);
-  color: var(--prl-accent-text);
-  transition:
-    background-color var(--prl-dur-instant) var(--prl-ease-hover),
-    border-color var(--prl-dur-instant) var(--prl-ease-hover);
+  border: 1px solid var(--prl-card-edge);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-card-face);
+  box-shadow: var(--prl-elevation-1);
+  color: var(--prl-suit-spade);
+  font-family: var(--prl-font-display);
+  font-stretch: var(--prl-stretch-display);
+  font-weight: 800;
+  line-height: 1;
+  transition: transform var(--prl-dur-instant) var(--prl-ease-hover);
+}
+
+.prl-shell__brand-rank {
+  font-size: var(--prl-type-body-lg);
+}
+
+.prl-shell__brand-suit {
+  color: var(--prl-suit-diamond);
+  font-size: var(--prl-type-body-sm);
 }
 
 .prl-pillbar__brand:hover .prl-shell__brand-index {
-  border-color: var(--prl-accent-edge);
-  background-color: var(--prl-surface-hover);
+  transform: rotate(-4deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .prl-pillbar__brand:hover .prl-shell__brand-index {
+    transform: none;
+  }
 }
 
 /** Hidden below 1280px, where the bar needs the room for controls that do something. */
@@ -636,39 +658,11 @@
 }
 
 /**
- * The glyph, and why it is a hairline drawing rather than a character.
- *
- * `content: "→"` needs a font that has it, is announced as "rightwards arrow" by some screen
- * readers, and cannot follow the text colour reliably in forced-colors mode. A hairline shaft and
- * a rotated corner are none of those things: they inherit `currentcolor`, they need no font, and
- * they are decorative in the accessibility tree because the element carries no text at all.
+ * The heart beside "Play" takes the text colour on the accent fill, like the word it marks: a red
+ * heart on the blue fill measured 1.9:1 against it. Two classes, to outrank the suit colour rule.
  */
-.prl-pillbar__cta-glyph {
-  position: relative;
-  width: var(--prl-space-6);
-  height: var(--prl-space-4);
-}
-
-/** The shaft. */
-.prl-pillbar__cta-glyph::before {
-  content: "";
-  position: absolute;
-  inset-block-start: 50%;
-  inset-inline: 0;
-  border-block-start: 1px solid currentcolor;
-}
-
-/** The head: a square with two edges, turned through 45°, sitting on the end of the shaft. */
-.prl-pillbar__cta-glyph::after {
-  content: "";
-  position: absolute;
-  inset-block-start: 50%;
-  inset-inline-end: 0;
-  width: var(--prl-space-3);
-  height: var(--prl-space-3);
-  border-block-start: 1px solid currentcolor;
-  border-inline-end: 1px solid currentcolor;
-  transform: translateY(-50%) rotate(45deg);
+.prl-pillbar__cta .prl-pillbar__cta-mark {
+  color: inherit;
 }
 
 /**
@@ -912,8 +906,7 @@
 
 .prl-shell__header[data-stuck="true"] .prl-pill-group,
 .prl-shell__header[data-stuck="true"] .prl-units__value,
-.prl-shell__header[data-stuck="true"] .prl-nav-trigger,
-.prl-shell__header[data-stuck="true"] .prl-shell__brand-index {
+.prl-shell__header[data-stuck="true"] .prl-nav-trigger {
   border-color: var(--prl-line-strong);
 }
 

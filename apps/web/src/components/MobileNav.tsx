@@ -63,7 +63,6 @@
  * with an invisible sheet and — this is the real bug — a body that is still scroll-locked.
  */
 
-import { formatIndex } from '@prl/ui';
 import Link from 'next/link';
 import {
   type ReactElement,
@@ -73,6 +72,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { SuitMark } from '@/components/SuitMark.tsx';
 import { isCurrentDestination, NAV_DESTINATIONS, NAV_SHEET_QUERY, RECORD_DESTINATION } from '@/lib/nav.ts';
 import { ThemeToggle } from './ThemeToggle.tsx';
 
@@ -402,7 +402,7 @@ export function MobileNav(props: MobileNavProps): ReactElement {
             which is which. */}
         <nav aria-label="All sections" className="prl-sheet__nav">
           <ul className="prl-sheet__list">
-            {NAV_DESTINATIONS.map((destination, position) => {
+            {NAV_DESTINATIONS.map((destination) => {
               const current = isCurrentDestination(destination.href, pathname);
               return (
                 <li className="prl-sheet__item" key={destination.href}>
@@ -412,17 +412,15 @@ export function MobileNav(props: MobileNavProps): ReactElement {
                     href={destination.href}
                     onClick={close}
                   >
-                    <span aria-hidden="true" className="prl-sheet__index prl-index">
-                      {formatIndex(position + 1)}
-                    </span>
+                    <SuitMark area={destination.area ?? null} className="prl-sheet__index" />
                     <span className="prl-sheet__label">{destination.label}</span>
                     <span className="prl-sheet__summary">{destination.summary}</span>
                   </Link>
                 </li>
               );
             })}
-            {/* After the five and unnumbered: see `RECORD_DESTINATION`. The blank index keeps its
-                label in the same column as the five above it. */}
+            {/* After the five and unmarked: see `RECORD_DESTINATION`. The blank mark keeps its label
+                in the same column as the five above it. */}
             <li className="prl-sheet__item">
               <Link
                 aria-current={isCurrentDestination(RECORD_DESTINATION.href, pathname) ? 'page' : undefined}
@@ -430,7 +428,7 @@ export function MobileNav(props: MobileNavProps): ReactElement {
                 href={RECORD_DESTINATION.href}
                 onClick={close}
               >
-                <span aria-hidden="true" className="prl-sheet__index prl-index prl-index--blank" />
+                <SuitMark area={null} className="prl-sheet__index" />
                 <span className="prl-sheet__label">{RECORD_DESTINATION.label}</span>
                 <span className="prl-sheet__summary">{RECORD_DESTINATION.summary}</span>
               </Link>

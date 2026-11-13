@@ -72,6 +72,7 @@ import {
 } from '@/lib/legends-data.ts';
 import { LiveTable } from './LiveTable.tsx';
 import '@/styles/play.css';
+import { SuitMark } from '@/components/SuitMark.tsx';
 
 export const metadata: Metadata = {
   title: 'Play',
@@ -199,9 +200,7 @@ function FixturePage({ state }: { readonly state: TableStateName }): ReactElemen
     <div className="prl-play">
       <header className="prl-play__head">
         <p className="prl-play__eyebrow">
-          <span className="prl-index" aria-hidden="true">
-            02
-          </span>
+          <SuitMark area="play" />
           <span className="prl-label">Play — fixture</span>
         </p>
         <h1 className="prl-play__title">Six-handed table</h1>
@@ -304,9 +303,7 @@ export default async function PlayPage({ searchParams }: PlayPageProps): Promise
     <div className="prl-play">
       <header className="prl-play__head">
         <p className="prl-play__eyebrow">
-          <span className="prl-index" aria-hidden="true">
-            02
-          </span>
+          <SuitMark area="play" />
           <span className="prl-label">{legend === null ? 'Play' : legend.copy.eyebrow}</span>
         </p>
         <h1 className="prl-play__title">{legend === null ? 'Six-handed table' : legend.copy.heading}</h1>

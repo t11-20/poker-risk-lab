@@ -1,0 +1,74 @@
+/**
+ * `/checks` — four claims and what backs each one.
+ *
+ * Moved from `home.css` section 5 with the list itself. A row is a claim beside its evidence on a
+ * wide screen and the claim above its evidence on a narrow one; the hairline between rows is the
+ * decorative use `--prl-line-subtle` exists for.
+ */
+
+.prl-checks-page {
+  padding-block-end: var(--prl-section-y);
+}
+
+.prl-checks {
+  display: grid;
+  gap: 0;
+  margin: 0;
+}
+
+.prl-checks__row {
+  display: grid;
+  gap: var(--prl-space-4);
+  padding-block: var(--prl-space-8);
+  border-block-start: var(--prl-hairline);
+}
+
+.prl-checks__claim {
+  color: var(--prl-text);
+  font-size: var(--prl-type-heading);
+  font-weight: var(--prl-weight-semibold);
+  letter-spacing: var(--prl-tracking-heading);
+  line-height: var(--prl-leading-heading);
+}
+
+.prl-checks__detail {
+  margin: 0;
+  max-width: var(--prl-measure);
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body);
+  line-height: var(--prl-leading-body);
+}
+
+.prl-checks__command {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  margin-block-start: var(--prl-space-4);
+  padding: var(--prl-space-3) var(--prl-space-5);
+  border: var(--prl-hairline);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-inset);
+  color: var(--prl-text-muted);
+  font-family: var(--prl-font-mono);
+  font-size: var(--prl-type-body-sm);
+  overflow-wrap: anywhere;
+}
+
+@media (min-width: 900px) {
+  .prl-checks__row {
+    grid-template-columns: minmax(0, 30ch) minmax(0, var(--prl-measure));
+    column-gap: var(--prl-space-11);
+  }
+}
+
+.prl-checks__source {
+  max-width: var(--prl-measure);
+  padding-block-start: var(--prl-space-8);
+  border-block-start: var(--prl-hairline);
+}
+
+.prl-checks__prose {
+  margin-block: 0 var(--prl-space-5);
+  color: var(--prl-text-secondary);
+  line-height: var(--prl-leading-body);
+}

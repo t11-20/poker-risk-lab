@@ -471,8 +471,43 @@ body {
   text-decoration: none;
 }
 
-.prl-shell__brand-index {
-  color: var(--prl-accent-text);
+/* ---- the suit marks (`SuitMark`) ----------------------------------------------------------- */
+
+/**
+ * Four-colour, like the deck on the table, so the four parts of the loop are told apart at a glance
+ * — and never by colour alone: the shape differs and the area's name is always beside it. The
+ * colours are the suit tokens on the card stock, and their lighter partners on the card back,
+ * where a spade in card ink would be navy on navy.
+ */
+.prl-suit-mark {
+  display: inline-block;
+  min-width: 1em;
+  color: var(--prl-mark-spade);
+  font-family: var(--prl-font-display);
+  font-stretch: var(--prl-stretch-display);
+  font-weight: 800;
+  line-height: 1;
+  text-align: center;
+}
+
+.prl-suit-mark[data-area="play"] {
+  color: var(--prl-mark-heart);
+}
+
+.prl-suit-mark[data-area="lab"] {
+  color: var(--prl-mark-diamond);
+}
+
+.prl-suit-mark[data-area="review"] {
+  color: var(--prl-mark-club);
+}
+
+.prl-suit-mark[data-area="legends"] {
+  color: var(--prl-text);
+}
+
+.prl-nav__mark {
+  margin-inline-end: var(--prl-space-2);
 }
 
 .prl-shell__brand-name {
@@ -1110,6 +1145,10 @@ body {
 
 .prl-spine__label {
   color: var(--prl-text);
+}
+
+.prl-spine__mark {
+  margin-inline-end: var(--prl-space-3);
 }
 
 .prl-spine__detail {

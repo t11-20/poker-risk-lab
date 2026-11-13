@@ -57,6 +57,7 @@ import { difficultyLabel, streetLabel, topicLabel } from '../../lib/lab-labels.t
 import { readerCallOptions } from '../../lib/server-session.ts';
 import '../../styles/page.css';
 import '../../styles/lab.css';
+import { SuitMark } from '@/components/SuitMark.tsx';
 
 const DESCRIPTION =
   'Decision situations with the maths worked out: pot odds, outs, expected value and stack depth, each with its assumptions stated before you decide.';
@@ -253,9 +254,7 @@ export default async function LabIndexPage({ searchParams }: LabIndexProps): Pro
     <div className="prl-container prl-lab-page">
       <header className="prl-page-head">
         <p className="prl-eyebrow">
-          <span className="prl-index" aria-hidden="true">
-            03
-          </span>{' '}
+          <SuitMark area="lab" />
           Lab
         </p>
         <h1 className="prl-display-2 prl-page-head__title">Scenario Lab</h1>

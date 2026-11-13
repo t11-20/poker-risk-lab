@@ -355,6 +355,12 @@
   --prl-suit-club: #127152;
   --prl-suit-heart: #c02637;
   --prl-suit-diamond: #2b44d4;
+  /* Suit marks on the page rather than on a card face (`SuitMark`): on the card back the card's own
+     inks would be navy on navy, so the page carries a lighter partner for each. */
+  --prl-mark-spade: var(--prl-ink-000);
+  --prl-mark-heart: #ff8593;
+  --prl-mark-diamond: #9dabff;
+  --prl-mark-club: #4fd3a0;
 
   /* ==========================================================================
      TYPOGRAPHY
@@ -363,8 +369,8 @@
      resolves to a real grotesk on every target platform.
      ========================================================================== */
   --prl-font-sans:
-    "Archivo Variable", "Inter var", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, sans-serif;
+    "Archivo Variable", "Inter var", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text",
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   /* One family at two widths. Headlines are Archivo condensed and heavy — the voice of a card's
      corner index and a printed odds board — and body text is the same family at its normal
      width, so the two are told apart by shape rather than by a second typeface. */
@@ -835,6 +841,10 @@
 
     --prl-card-face: #ffffff;
     --prl-card-face-dim: #e6e8ee;
+    --prl-mark-spade: #161b33;
+    --prl-mark-heart: #c02637;
+    --prl-mark-diamond: #2b44d4;
+    --prl-mark-club: #127152;
   }
 }
 
@@ -920,6 +930,10 @@
 
   --prl-card-face: #ffffff;
   --prl-card-face-dim: #e6e8ee;
+  --prl-mark-spade: #161b33;
+  --prl-mark-heart: #c02637;
+  --prl-mark-diamond: #2b44d4;
+  --prl-mark-club: #127152;
 }
 
 :root[data-theme="dark"] {

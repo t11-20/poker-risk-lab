@@ -132,6 +132,7 @@ import { UnitsBadge } from '@prl/ui';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { type ReactElement, useEffect, useRef, useState } from 'react';
+import { SuitMark } from '@/components/SuitMark.tsx';
 import { API_PATHS, apiGet, fetchSession, safeFetch, subscribeToAcceptedMutations } from '@/lib/api.ts';
 import { isCurrentDestination, NAV_DESTINATIONS, RECORD_DESTINATION } from '@/lib/nav.ts';
 import { MobileNav } from './MobileNav.tsx';
@@ -321,15 +322,16 @@ export function SiteHeader(props: SiteHeaderProps): ReactElement {
       <header aria-label="Site" className="prl-shell__header" data-stuck={stuck ? 'true' : 'false'}>
         <div className="prl-shell__header-inner prl-pillbar prl-container">
           <Link className="prl-shell__brand prl-pillbar__brand" href="/">
-            {/* The numbered motif applied to the product itself: the wordmark is the zeroth item in
-                the system. As a mark rather than a prefix it is also what identifies the app below
-                1280px, where the name itself gives up its room to controls that do something. */}
-            <span aria-hidden="true" className="prl-shell__brand-index prl-index">
-              00
+            {/* A card's corner index — ace over diamond, the Lab's suit — is the product's mark. As a
+                mark rather than a prefix it is also what identifies the app below 1280px, where the
+                name itself gives up its room to controls that do something. */}
+            <span aria-hidden="true" className="prl-shell__brand-index">
+              <span className="prl-shell__brand-rank">A</span>
+              <span className="prl-shell__brand-suit">{'\u2666\uFE0E'}</span>
             </span>
             {/* `display: none` on the visible name at 375 and 860–1279 removes it from the a11y
                 tree. The visually-hidden copy stays in the name so the home control is never
-                "00" with no words. */}
+                a card index with no words. */}
             <span className="prl-visually-hidden">Poker Risk Lab, home</span>
             <span className="prl-shell__brand-name" aria-hidden="true">
               Poker Risk<span className="prl-shell__brand-tail"> Lab</span>
@@ -353,6 +355,7 @@ export function SiteHeader(props: SiteHeaderProps): ReactElement {
                       className="prl-nav__link"
                       href={destination.href}
                     >
+                      <SuitMark area={destination.area ?? null} className="prl-nav__mark" />
                       <span className="prl-nav__label">{destination.label}</span>
                       {/* Always rendered so the empty case is a CSS state rather than a second
                           branch; `:empty` collapses it to nothing at all. */}
@@ -371,10 +374,8 @@ export function SiteHeader(props: SiteHeaderProps): ReactElement {
               className="prl-pillbar__cta prl-pill-group"
               href={CTA_DESTINATION.href}
             >
+              <SuitMark area="play" className="prl-pillbar__cta-mark" />
               <span>{CTA_DESTINATION.label}</span>
-              {/* Two borders on a rotated square, not an arrow character: it inherits the ink, it
-                  needs no font to be installed, and it is not read out as "north east arrow". */}
-              <span aria-hidden="true" className="prl-pillbar__cta-glyph" />
             </Link>
           </nav>
 

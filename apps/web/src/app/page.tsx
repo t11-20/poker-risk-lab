@@ -7,18 +7,19 @@
  * front of you, with its method and its assumptions attached — and none of it is a gambling
  * product. Everything on this page serves one of those two sentences.
  *
- * ## Five sections, and why each one is here
+ * ## Four sections, and why each one is here
  *
- *  1. **Hero.** One display-1 statement, one primary action, one secondary. The "not a gambling
- *     product" line is here at full size rather than in the footer, because a disclosure that only
- *     exists at the bottom of a page is a disclosure written to be missed.
- *  2. **The process spine** — `01 LEARN → 02 CALCULATE → 03 DECIDE → 04 REVIEW`. The claim that
- *     playing a hand is one step of four, and that the step most products skip is the last one.
- *  3. **The metrics band.** Four figures, each of which is a checkable fact with a command that
- *     checks it. Not "trusted by", not "10,000 players" — evidence, not social proof.
- *  4. **Three capability modules.** What the reader can actually do, as hairlined panels.
- *  5. **How correctness is established.** This is genuinely the differentiator, so it gets a
- *     section rather than a footnote: every claim paired with the thing that verifies it.
+ *  1. **Hero.** A statement, two actions, the "not a gambling product" line at full size — a
+ *     disclosure that only exists at the bottom of a page is written to be missed — and beside them
+ *     one hand with its price worked out (`HomeSpot`). The hand replaced a boxed notice: the product
+ *     is a decision with its price attached, so the first screen shows one rather than describing it.
+ *  2. **The process spine.** Learn, calculate, decide, review: playing a hand is one step of four,
+ *     and the step most products skip is the last one.
+ *  3. **Three ways in.** What the reader can actually do, each under its area's suit.
+ *  4. **What has been checked.** Four checkable figures, and a link to the page that names the test
+ *     behind each. The tests themselves used to be listed here, with `pnpm` commands, which is
+ *     material for a reviewer rather than for somebody deciding whether to learn poker; it is now
+ *     `/checks`.
  *
  * There are no testimonials, no logos, no counters of other people's activity, no streaks and
  * nothing that rewards an outcome. The design system rules all of those out and the product
@@ -32,18 +33,23 @@
  * scripting off (`.prl-reveal[data-revealed='false']` is neutralised under `@media (scripting:
  * none)`, and `MetricsBand` renders its real figures on the server for exactly that reason).
  *
- * One `h1`, then `h2` per section, then `h3` on the module panels — so `heading-order` holds.
+ * One `h1`, then `h2` per section, then `h3` on the three ways in — so `heading-order` holds.
  */
 
 import { lessonsInReadingOrder } from '@prl/content';
-import { formatIndex, Panel, Reveal } from '@prl/ui';
+import { Reveal } from '@prl/ui';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import type { ReactElement } from 'react';
+import { HomeSpot } from '@/components/HomeSpot.tsx';
 import { MetricsBand } from '@/components/MetricsBand.tsx';
 import { ProcessSpine } from '@/components/ProcessSpine.tsx';
+import { SuitMark } from '@/components/SuitMark.tsx';
+import { CHECKS_PATH } from '@/lib/checks.ts';
+import { homeSpot } from '@/lib/home-spot.ts';
 import { firstLesson } from '@/lib/learn-curriculum.ts';
 import { LEARN_PATH, lessonHref } from '@/lib/learn-data.ts';
+import type { NavArea } from '@/lib/nav.ts';
 import { RECORD_PATH } from '@/lib/record-data.ts';
 import '@/styles/home.css';
 
@@ -57,7 +63,7 @@ export const metadata: Metadata = {
 
 interface CapabilityModule {
   readonly title: string;
-  readonly eyebrow: string;
+  readonly area: NavArea;
   readonly summary: string;
   readonly points: readonly string[];
   readonly href: string;
@@ -81,7 +87,7 @@ const FOUNDATIONS_HREF = FOUNDATIONS === null ? LEARN_PATH : lessonHref(FOUNDATI
  */
 const MODULES: readonly CapabilityModule[] = [
   {
-    eyebrow: 'Learn',
+    area: 'learn',
     title: 'Read the reasoning',
     summary:
       'Lessons that build one idea at a time, each ending in a quiz that asks you to reason rather than to recall.',
@@ -94,7 +100,7 @@ const MODULES: readonly CapabilityModule[] = [
     action: 'Start with the foundations',
   },
   {
-    eyebrow: 'Play',
+    area: 'play',
     title: 'Take the decisions',
     summary:
       'Six-max no-limit hold’em against strategy simulations, with the price of every option printed on the button that takes it.',
@@ -107,7 +113,7 @@ const MODULES: readonly CapabilityModule[] = [
     action: 'Sit at a table',
   },
   {
-    eyebrow: 'Analyse',
+    area: 'lab',
     title: 'Change one input',
     summary:
       'The Scenario Lab isolates a single variable — a card, a bet size, an opponent’s range — so you can watch what it does to the maths.',
@@ -121,83 +127,43 @@ const MODULES: readonly CapabilityModule[] = [
   },
 ];
 
-interface ProofEntry {
-  readonly claim: string;
-  readonly detail: string;
-  /** The command or file that settles it. A claim nobody can check is an assertion. */
-  readonly check: string;
-}
-
-/**
- * Four claims, each with the thing that verifies it. Every figure below comes from
- * `docs/VERIFICATION.md` and every command is one that actually exists in `package.json`.
- */
-const PROOF: readonly ProofEntry[] = [
-  {
-    claim: 'Every seven-card hand, enumerated',
-    detail:
-      'All 133,784,560 seven-card hands are classified and their nine category counts matched against the independently published frequencies — figures derived mathematically long before this code existed, so agreeing with them cannot be circular. A single misclassified hand moves at least two counters.',
-    check: 'pnpm run test:exhaustive',
-  },
-  {
-    claim: 'Ordering checked, not just classification',
-    detail:
-      'Agreeing on the category does not prove the kickers are ranked correctly, so 200,000 random pairs of hands are compared for relative order against an independent reference evaluator, and 20,000 seven-card hands against brute force over all 21 five-card subsets. Zero disagreements.',
-    check: 'pnpm run test:unit',
-  },
-  {
-    claim: 'Teaching claims checked against the maths',
-    detail:
-      'All 36 scenarios carry qualitative claims — 74 of them — asserted by a human and then confirmed by the computation. A scenario whose teaching point stops being true fails the build rather than quietly misleading somebody.',
-    check: 'pnpm --filter @prl/content test',
-  },
-  {
-    claim: 'Nothing is looked up in an odds table',
-    detail:
-      'A hard-coded odds table is a lie waiting to happen: if it was wrong when it was written, or right for a situation slightly different from yours, nothing in the product will ever say so. No figure here is produced by reading one — every one is computed from the actual deck at the moment you ask, and arrives with its method: exact enumeration, or Monte Carlo with an interval. The single exception is a bundled worked example shown when the calculator cannot be reached, and the page you are on says so at the top when that happens.',
-    check: 'docs/THREAT-MODEL.md',
-  },
-];
-
 export default function HomePage(): ReactElement {
+  const spot = homeSpot();
   return (
     <>
-      <section className="prl-home__hero prl-container">
-        <p className="prl-home__eyebrow prl-label">
-          <span aria-hidden="true" className="prl-home__eyebrow-index prl-index">
-            00
-          </span>
-          Practice units only · no real money
-        </p>
+      <section aria-labelledby="home-title" className="prl-home__hero prl-container">
+        <div className="prl-home__pitch">
+          <h1 className="prl-home__title" id="home-title">
+            Every bet has a price. Learn to read it.
+          </h1>
 
-        <h1 className="prl-home__title">A decision laboratory with a poker table in it.</h1>
+          <p className="prl-home__lede">
+            Play no-limit hold’em with practice units while the odds, the price of each call and what it is
+            worth over time are worked out from the cards in front of you — every figure with how it was
+            computed and what it assumes.
+          </p>
 
-        <p className="prl-home__lede">
-          Play no-limit hold’em while the probability, price and expected value behind every choice are
-          computed from the actual deck in front of you — each figure with its method, its interval and the
-          assumptions it was computed under.
-        </p>
+          <div className="prl-home__actions">
+            {/* A link, styled as the primary button. `Button` in @prl/ui deliberately has no `href`:
+                a button that is really a link is a link, and the app's links go through next/link. */}
+            <Link className="prl-btn prl-btn--primary prl-btn--lg" href="/play">
+              Start a hand
+            </Link>
+            <Link className="prl-btn prl-btn--secondary prl-btn--lg" href="/learn">
+              Read the lessons
+            </Link>
+          </div>
 
-        <div className="prl-home__actions">
-          {/* A link, styled as the primary button. `Button` in @prl/ui deliberately has no `href`:
-              a button that is really a link is a link, and the app's links go through next/link. */}
-          <Link className="prl-btn prl-btn--primary prl-btn--lg" href="/play">
-            Start a hand
-          </Link>
-          <Link className="prl-btn prl-btn--secondary prl-btn--lg" href="/learn">
-            Read the lessons
-          </Link>
-        </div>
-
-        <div className="prl-home__guardrail">
-          <p className="prl-home__guardrail-label prl-label prl-label--strong">Not a gambling product</p>
-          <p className="prl-home__guardrail-text">
-            There is no real money in this app. Chips are <strong>units</strong>: free practice counters with
-            no monetary value, which cannot be bought, sold, transferred or cashed out, and which you can{' '}
+          <p className="prl-home__guardrail">
+            <strong>Not a gambling product.</strong> There is no real money in this app. Chips are{' '}
+            <strong>units</strong>: free practice counters with no monetary value, which cannot be bought,
+            sold, transferred or cashed out, and which you can{' '}
             <Link href={RECORD_PATH}>reset to the starting amount at any time</Link>. Nothing here is a
             recommendation, and no figure is presented as the one correct play.
           </p>
         </div>
+
+        <HomeSpot spot={spot} />
       </section>
 
       <Reveal>
@@ -216,79 +182,43 @@ export default function HomePage(): ReactElement {
 
       <section className="prl-home__section prl-container">
         <div className="prl-home__section-head">
-          <h2 className="prl-home__section-title">What has been checked</h2>
-          <p className="prl-home__section-lede">
-            Four figures, each of them a fact you can verify yourself rather than a claim you have to take on
-            trust.
-          </p>
-        </div>
-        <MetricsBand />
-      </section>
-
-      <section className="prl-home__section prl-container">
-        <div className="prl-home__section-head">
           <h2 className="prl-home__section-title">Three ways in</h2>
           <p className="prl-home__section-lede">
             The same maths underneath all three, presented for reading, for deciding under time pressure, and
             for taking apart one variable at a time.
           </p>
         </div>
-        <div className="prl-home__modules">
-          {MODULES.map((module, position) => (
-            <Reveal key={module.href} stagger={position}>
-              <Panel
-                className="prl-home__module"
-                eyebrow={module.eyebrow}
-                headingLevel={3}
-                index={position + 1}
-                title={module.title}
-              >
-                <div className="prl-home__module-body">
-                  <p className="prl-home__module-text">{module.summary}</p>
-                  <ul className="prl-home__module-points">
-                    {module.points.map((point) => (
-                      <li className="prl-home__module-point" key={point}>
-                        <span>{point}</span>
-                      </li>
-                    ))}
-                  </ul>
-                  <p className="prl-home__module-link">
-                    <Link href={module.href}>{module.action}</Link>
-                  </p>
-                </div>
-              </Panel>
-            </Reveal>
+        <ul className="prl-home__ways">
+          {MODULES.map((module) => (
+            <li className="prl-home__way" key={module.href}>
+              <h3 className="prl-home__way-title">
+                <SuitMark area={module.area} className="prl-home__way-mark" />
+                {module.title}
+              </h3>
+              <p className="prl-home__way-text">{module.summary}</p>
+              <ul className="prl-home__way-points">
+                {module.points.map((point) => (
+                  <li key={point}>{point}</li>
+                ))}
+              </ul>
+              <p className="prl-home__way-link">
+                <Link href={module.href}>{module.action}</Link>
+              </p>
+            </li>
           ))}
-        </div>
+        </ul>
       </section>
 
-      <Reveal>
-        <section className="prl-home__section prl-container">
-          <div className="prl-home__section-head">
-            <h2 className="prl-home__section-title">How correctness is established</h2>
-            <p className="prl-home__section-lede">
-              An educational tool that teaches a wrong number is worse than no tool at all, so this is the
-              part of the product with the most work in it. Each claim below names what backs it.
-            </p>
-          </div>
-          <dl className="prl-home__proof">
-            {PROOF.map((entry, position) => (
-              <div className="prl-home__proof-row" key={entry.claim}>
-                <dt className="prl-home__proof-term">
-                  <span aria-hidden="true" className="prl-home__proof-index prl-index">
-                    {formatIndex(position + 1)}
-                  </span>
-                  <span>{entry.claim}</span>
-                </dt>
-                <dd className="prl-home__proof-detail">
-                  {entry.detail}
-                  <code className="prl-home__proof-check">{entry.check}</code>
-                </dd>
-              </div>
-            ))}
-          </dl>
-        </section>
-      </Reveal>
+      <section className="prl-home__section prl-container">
+        <div className="prl-home__section-head">
+          <h2 className="prl-home__section-title">What has been checked</h2>
+          <p className="prl-home__section-lede">
+            Four figures, each of them a fact you can verify yourself rather than a claim you have to take on
+            trust. <Link href={CHECKS_PATH}>How the numbers are checked</Link> names the test behind each one.
+          </p>
+        </div>
+        <MetricsBand />
+      </section>
     </>
   );
 }

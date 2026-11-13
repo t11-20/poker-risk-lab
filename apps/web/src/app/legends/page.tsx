@@ -34,6 +34,7 @@ import { DifficultyPicker } from '@/components/DifficultyPicker.tsx';
 import { LegendCard } from '@/components/LegendCard.tsx';
 import { LegendDifficultyScope } from '@/components/LegendDifficultyScope.tsx';
 import { LegendQuickStart } from '@/components/LegendQuickStart.tsx';
+import { SuitMark } from '@/components/SuitMark.tsx';
 import {
   compareHref,
   DEFAULT_COMPARE_PROFILE_IDS,
@@ -101,9 +102,7 @@ export default async function LegendsPage({
   return (
     <div className="prl-legend-page">
       <div className="prl-legend-head">
-        <span className="prl-index" aria-hidden="true">
-          04
-        </span>
+        <SuitMark area="legends" />
         <h1 className="prl-legend-head__title prl-display-2">AI Legends: opponent profiles</h1>
         {/*
           It used to end "chosen to contrast with the others so you can feel the difference between

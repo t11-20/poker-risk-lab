@@ -56,6 +56,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import type { ReactElement } from 'react';
 import { Onboarding } from '@/components/Onboarding.tsx';
+import { SuitMark } from '@/components/SuitMark.tsx';
 import {
   asDifficulty,
   buildCurriculum,
@@ -171,9 +172,7 @@ export default async function LearnPage(): Promise<ReactElement> {
     <div className="prl-learn-page">
       <header className="prl-learn-page__head">
         <span className="prl-label prl-learn-page__eyebrow">
-          <span className="prl-index" aria-hidden="true">
-            {formatIndex(1)}
-          </span>
+          <SuitMark area="learn" />
           Learn
         </span>
         <h1 className="prl-display-2">The curriculum</h1>
