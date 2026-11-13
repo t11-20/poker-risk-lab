@@ -1,143 +1,27 @@
 /**
- * One live table: the authoritative `HandState`, the seating around it, and the queue that
- * makes both safe to touch.
+ * One live table: the authoritative `HandState`, the seating around it, and the queue that makes
+ * both safe to touch.
  *
- * ###########################################################################
- * ##  EVERY MUTATION GOES THROUGH ONE ASYNC QUEUE PER TABLE.               ##
- * ##                                                                       ##
- * ##  `sit`, `stand`, `startHand`, `submitAction` and the turn-timer expiry ##
- * ##  are all `enqueue(...)`d, so the engine's reducer is never re-entered  ##
- * ##  concurrently for the same hand. This is THE correctness requirement   ##
- * ##  of this file (ARCHITECTURE.md section 8).                             ##
- * ##                                                                       ##
- * ##  Why it is needed even though `applyAction` is synchronous: the        ##
- * ##  callers are not. Two sockets, a bot's thinking delay and a fired      ##
- * ##  timer are four independent async contexts, and every `await` in a     ##
- * ##  handler is a point at which another of them runs. Without the queue,  ##
- * ##  two submissions that each read `actionSequence` 41 could both pass    ##
- * ##  their own checks and then apply, and the second would land on a state ##
- * ##  its submitter never saw. `expectedSequence` catches that only if the  ##
- * ##  two are ordered; the queue is what orders them.                      ##
- * ###########################################################################
+ * EVERY MUTATION GOES THROUGH ONE ASYNC QUEUE PER TABLE (ARCHITECTURE.md section 8). The callers
+ * are async, so without it two submissions that both read `actionSequence` 41 could both apply.
  *
- * ## What leaves this object
+ * A SEAT INDEX IS A POSITION, A USER ID IS A PERSON. `this.seats` is who sits here now and
+ * `this.hand.state.seats` is who was dealt in. They diverge between hands, so visibility, actions
+ * and settlement resolve by user id against the hand's own roster. That is also why a finished hand
+ * can be retained for reconnects and `archivedDeal()` without leaking to a newcomer in the chair.
  *
- * `viewFor(userId)` returns `redactFor(state, { viewerPlayerId: userId })`, and there is no other
- * way out. No method returns a `HandState`, a `DeckSecret`, a deck, a salt or another seat's
- * cards, and the public action facts emitted for the bots' opponent models (`PublicActionEvent`)
- * have nowhere to put a card — that type has no card field, by construction (see `@prl/poker-ai`'s
- * `opponent-model.ts`, which says so for exactly this reason).
+ * `viewFor` (via `redactFor`) is the only way state leaves. The `DeckSecret` is held privately,
+ * never persisted or logged, and dropped once the reveal is built. An interrupted hand is lost.
  *
- * ###########################################################################
- * ##  A SEAT INDEX IS A POSITION. A USER ID IS A PERSON. ENTITLEMENT IS     ##
- * ##  DECIDED BY THE PERSON, EVERY TIME.                                    ##
- * ##                                                                        ##
- * ##  This table holds two rosters that can disagree: `this.seats`, which is ##
- * ##  who is sitting here *now*, and `this.hand.state.seats`, which is who   ##
- * ##  was dealt in *then* — pinned by the engine at deal time and never      ##
- * ##  mutated afterwards. Between hands they diverge for real: somebody      ##
- * ##  stands, somebody else takes the chair, and seat 3 is now a different   ##
- * ##  human being than the seat 3 still sitting in the finished hand.        ##
- * ##                                                                        ##
- * ##  So nothing here translates a user id into a seat index and then uses   ##
- * ##  the index to decide what that user may see or do. `viewFor` hands the  ##
- * ##  user id straight to `redactFor`, which resolves it against the hand's  ##
- * ##  own dealt roster; `submitAction` finds the actor's seat in the hand by ##
- * ##  id; settlement pays chips to ids. The lookups that remain by index are ##
- * ##  the ones that are genuinely about the chair (`sit`, `isSeatFree`,      ##
- * ##  the button), and none of them decides entitlement.                     ##
- * ###########################################################################
+ * The `actionId` memo is checked BEFORE turn and sequence checks, so a retry of an applied action
+ * returns the original outcome with `deduplicated: true` instead of `not_your_turn`.
  *
- * ## How long a finished hand is kept, and why that is safe
- *
- * `this.hand` is NOT cleared when a hand completes. It is kept until the next deal replaces it,
- * because the completed `HandState` is what every terminal frame is built from — the showdown, the
- * awards, the Merkle reveal — and a client that reconnects between hands, or that was mid-reconnect
- * when the river landed, has to be able to ask for it. `archivedDeal()` and `archivedResult()` read
- * it too, after the fact.
- *
- * Retention is what gave the seat-reuse bug something to leak *from*, so it is worth being exact
- * about why it is now inert: a retained hand carries its own roster, `seats[].playerId`, written
- * once by `startHand` and never touched by `applyAction`. Entitlement is resolved against that and
- * only that. A hand can therefore be kept for as long as it is useful without the current seating
- * being able to reach into it — which is a much better property than a shorter retention window,
- * because a window only shrinks the race, and this closes it.
- *
- * ## The deck secret
- *
- * `startHand` hands back a `DeckSecret` — the shuffled deck and the 52 Merkle salts. It is held
- * in a private field, never persisted (there is no column, and
- * `db/migrations/0001_initial.sql` explains at length why there never will be), never logged,
- * and dropped the moment the hand completes and the engine has built the reveal from it. The
- * `HandState` carries the same two secrets and dies with the hand: an interrupted hand is
- * deliberately unrecoverable, which is a much cheaper failure than a schema that could leak the
- * cards nobody was entitled to see.
- *
- * ## Idempotency, exactly
- *
- * A submission is looked up in a per-hand memo of `actionId -> outcome` BEFORE any legality
- * check. For a *new* action the order of checks is then the one the brief specifies: it is that
- * seat's turn, `expectedSequence` matches, then `applyAction`. The memo is hoisted above them
- * deliberately, because a retry of an action that already applied necessarily fails both — the
- * hand has moved on, so the sequence is stale, and it is usually somebody else's turn — so
- * checking them first would answer a dropped-response retry with `not_your_turn` or
- * `stale_action_sequence`, which is precisely the failure `actionId` exists to prevent. A
- * duplicate returns the ORIGINAL outcome with `deduplicated: true`. Nothing is applied twice
- * and nothing about a duplicate is an error.
- *
- * The memo mirrors the partial unique index on `(hand_id, action_id)`: the index is what makes
- * double application impossible across processes; this makes a retry correct and cheap inside
- * one, and it is also what lets the socket answer a retry with the sequence the original was
- * applied at.
- *
- * ###########################################################################
- * ##  THE BIG BLIND ADVANCES BY ONE LIVE PLAYER PER HAND. EVERYTHING ELSE   ##
- * ##  ABOUT THE ROTATION FOLLOWS FROM THAT.                                 ##
- * ##                                                                        ##
- * ##  This table used to advance the BUTTON by one occupied seat and read    ##
- * ##  the blinds off it as button + 1 / button + 2 among whoever happened to ##
- * ##  be seated at that instant. That is correct for one hand and wrong for  ##
- * ##  a sequence of them: seat somebody between the button and the blinds    ##
- * ##  and the assignment shifts backwards onto players who have already      ##
- * ##  paid. Measured over 40 hands with a join/leave schedule, six players   ##
- * ##  paid the big blind twice in a row and one skipped it entirely          ##
- * ##  (`docs/audit/poker-correctness.md`, P1-1). Two consecutive big blinds  ##
- * ##  cost `2 x BB` where the rules charge `BB + SB`.                        ##
- * ##                                                                        ##
- * ##  `nextRotation` now runs the dead-button rule out of the engine's       ##
- * ##  `advanceBlindRotation`: the big blind moves one seat forward in the    ##
- * ##  rotation, the small blind falls where the big blind was, the button    ##
- * ##  falls where the small blind was, and either of the last two is DEAD    ##
- * ##  when nobody in the hand is sitting there. A dead button and a dead     ##
- * ##  small blind are correct outcomes, not errors, and the engine's         ##
- * ##  `startHand` takes both as inputs so neither has to be re-derived.      ##
- * ###########################################################################
- *
- * ## What an arriving player owes, and why "wait for the big blind"
- *
- * Nothing used to track blind obligations, so a player could sit down anywhere and be dealt
- * straight in — including on the button, for free, having paid nothing. Standing up as the blinds
- * approached and sitting back down afterwards was unpunished (P1-2: four of fifteen seating
- * combinations gave the newcomer a completely free hand, twice on the button).
- *
- * The two standard remedies are "post an amount equivalent to the blind you missed" and "wait for
- * the big blind to reach you". This table implements the second, for all entries, and the choice
- * is deliberate rather than expedient:
- *
- *   - It needs no new kind of money. Posting a missed blind means a DEAD big blind — money that
- *     goes to the pot without buying any part of the current bet — which is a forced-bet kind the
- *     engine does not have, a `hand_actions` shape the schema does not have, and a rule the Coach
- *     would then have to teach. Waiting costs a player nothing but time.
- *   - It cannot be gamed. The obligation is keyed by USER ID in `blindDebts` and is NOT cleared by
- *     standing up, so leaving as the blinds approach and returning afterwards leaves the debt
- *     exactly where it was: the player still sits out until the big blind reaches their seat.
- *   - This is play money. Nobody is protected from an unfair edge by being made to pay; the point
- *     of the rule here is that the rotation is honest and the learner sees a real one.
- *
- * The one case where waiting cannot apply is a table that would be left with fewer than two
- * players in the hand. There the game restarts: every obligation is discharged, the rotation is
- * re-seeded, and everyone posts normally — which is what a card room does when a game breaks and
- * re-forms, and is the only alternative to a table that can never deal again.
+ * The big blind advances by one live player per hand (dead-button rule, engine
+ * `advanceBlindRotation`). The old button-first rotation made six players pay the big blind twice
+ * in 40 hands (`docs/audit/poker-correctness.md`, P1-1).
+ * An arriving player waits for the big blind. The debt is keyed by user id in `blindDebts` and
+ * survives standing up. Posting a missed blind would need a dead-blind kind the engine lacks.
+ * If fewer than two players could be dealt, the game restarts and all debts are cleared.
  */
 
 import type { AutomaticReason, WsEvent } from '@prl/contracts';
@@ -184,7 +68,6 @@ import {
 } from './narration.ts';
 import { type Clock, type TurnExpiry, TurnTimer } from './timers.ts';
 
-/** The wire event payload, without the envelope the hub adds. */
 export type TableEvent = WsEvent['event'];
 
 /** One seated player. Bots are seats like any other; `isBot` says how the seat decides. */
@@ -208,72 +91,34 @@ export interface ActionOutcome {
   readonly deduplicated: boolean;
 }
 
-/** Why the table changed. Used for logging and for deciding whether a bot should look. */
 export type TableChangeReason = 'seating' | 'handStarted' | 'action' | 'handComplete';
 
-/**
- * One seat's chips at the instant a hand settled.
- *
- * By user id, never by seat index, for the reason the banner at the top of this file gives: these
- * figures are written to `room_members.stack`, and paying a chair rather than a person is how a
- * seat that changed hands gets its predecessor's closing stack.
- */
+/** By user id, never seat index, because these are written to `room_members.stack`. */
 export interface SettledStack {
   readonly userId: string;
   readonly stack: number;
 }
 
-/**
- * One change, fanned out to whoever is watching.
- *
- * Carries public events and public action facts — never state. A subscriber that wants state
- * calls `viewFor(itsOwnUserId)`, which is the only path there is.
- */
+/** Public events and public action facts only, never state. */
 export interface TableNotice {
   readonly reason: TableChangeReason;
   readonly events: readonly TableEvent[];
   /** For the bots' opponent models. No cards: `PublicActionEvent` has no field for one. */
   readonly publicActions: readonly PublicActionEvent[];
-  /**
-   * The engine's own log entries for the actions applied on this change, for the archive.
-   *
-   * Safe to hand out: a `LoggedAction` carries a seat, an action and amounts, and no card. It is
-   * already in every `PlayerView.actions`, so this is public information in a shape the
-   * persistence layer can write directly. `ArchivedAction` adds only why an automatic one was taken.
-   */
+  /** The engine's log entries for this change. A `LoggedAction` holds no card. */
   readonly loggedActions: readonly ArchivedAction[];
   /** True on the one notice that carried a hand to completion. Exactly `settledStacks !== null`. */
   readonly handCompleted: boolean;
   /**
    * Every seat's chips as the hand settled, on the one notice that settled it; null otherwise.
-   *
-   * **Carried on the notice rather than read back off the table, and that is the whole point.**
-   * A subscriber that answered "who settled?" with `table.snapshot().seats` was asking a table
-   * that had already dropped the seats which stood up mid-hand: `settleIfComplete` writes the
-   * final stacks in and then removes the leavers on the next line, so by the time `handComplete`
-   * reached a listener the departing player was gone from the snapshot. A big blind who stood up
-   * and then won the pot uncontested was therefore never written back — `room_members.stack` kept
-   * its pre-hand value and the chips they won were destroyed — and the mirror case, a leaver who
-   * posted a blind and auto-folded, had the blind handed back at their next sit, creating chips.
-   *
-   * The list is taken at the one instant every seat is still present and already final, so a
-   * future edit cannot reintroduce that gap by moving a line: there is no later read to get wrong.
-   *
-   * Includes seats that were not dealt into the hand (somebody who sat down mid-hand), because
-   * they are seats whose stack the archive is equally responsible for.
+   * Captured before leavers are removed. Reading `table.snapshot()` after `handComplete` missed
+   * players who stood mid-hand and destroyed or created their chips. Includes seats not dealt in.
    */
   readonly settledStacks: readonly SettledStack[] | null;
   /**
-   * The users whose seat this notice released, by id. Empty on every other notice.
-   *
-   * Every seat release travels this way — the immediate one, for a player who was not in the live
-   * hand, and the deferred one, for a player who was and whose chair is freed when the hand
-   * settles. That is what lets the durable seat and the room membership hang off ONE event
-   * instead of off the moment a player asked to leave, which is separated from the release by an
-   * arbitrary amount of play. Before it did, `standFromTable` released `room_members.seat` only
-   * when the table freed the chair synchronously, so a mid-hand stand left the row seated for
-   * good: the summary showed the chair free, the next player to tap it was refused by
-   * `room_members_live_seat_key`, and a restart re-seated somebody who had left.
+   * The users whose seat this notice released. Every release, immediate or deferred to settlement,
+   * travels here so the durable seat is freed on one event. Freeing it at the stand request left
+   * mid-hand leavers seated in `room_members` for good.
    */
   readonly departed: readonly string[];
   /** The hand this notice belongs to, or null between hands. */
@@ -295,13 +140,7 @@ export interface ArchivedDealSeat {
   readonly status: SeatStatus;
 }
 
-/**
- * Everything the database needs about a deal.
- *
- * `prl.hand_seats.hole_cards` exists, so hole cards *are* persisted — that is what makes a hand
- * review possible — and they are read back only under `user_id = :viewer OR showed_down`. The deck
- * and the salts are a different matter and appear nowhere here.
- */
+/** Hole cards are read back only under `user_id = :viewer OR showed_down`. Deck and salts never. */
 export interface ArchivedDeal {
   readonly handId: string;
   readonly roomId: string;
@@ -331,25 +170,13 @@ export interface ArchivedResult {
 
 export type TableListener = (notice: TableNotice) => void;
 
-/** Seat-level facts the registry needs in order to build a `RoomSummary`. */
 export interface TableSnapshot {
   readonly seats: readonly TableSeat[];
   readonly handInProgress: boolean;
   readonly handNumber: number;
-  /**
-   * Where the button sat for the most recent hand, or where it will be seeded from.
-   *
-   * Under the dead-button rule this can name a seat nobody is sitting in: that is what a dead
-   * button IS, and reporting the next occupied seat instead would be reporting a lie.
-   */
+  /** Last button seat. Under the dead-button rule this can be an empty seat. */
   readonly buttonSeat: SeatIndex | null;
-  /**
-   * Seats that owe a blind and are therefore not being dealt in yet.
-   *
-   * Public, because it is not hidden information — everyone at a real table can see who is sitting
-   * out waiting for the blind — and because a client that does not render it shows a seated player
-   * who mysteriously receives no cards.
-   */
+  /** Seats sitting out until the big blind reaches them. Public, as at a real table. */
   readonly awaitingBigBlind: readonly SeatIndex[];
   /** Absolute server time by which the seat to act must act, or null. */
   readonly deadlineMs: number | null;
@@ -359,45 +186,16 @@ export interface LiveTableOptions {
   readonly roomId: string;
   readonly config: TableConfig;
   readonly clock: Clock;
-  /**
-   * The source cards are dealt from: `createSecureRandom()` in production. A table is never
-   * handed the deterministic generator, and every hand records which kind it was dealt from.
-   */
+  /** `createSecureRandom()` in production. Every hand records which kind dealt it. */
   readonly random: RandomSource;
-  /** Generates `hand_...` ids. Injected so a test can read the ids it asserts on. */
   readonly nextHandId: () => string;
-  /**
-   * Hands already played in this room, so the next one continues the numbering.
-   *
-   * `hands_room_hand_number_key` is unique per room, and a table re-opened after a restart starts
-   * from zero unless it is told otherwise — which would make the first deal collide.
-   */
+  /** Hands already played here, so a re-opened table does not collide on `hands_room_hand_number_key`. */
   readonly initialHandNumber?: number;
-  /**
-   * The blind positions this room was last playing under, for a table re-opened after a restart.
-   *
-   * Without it the rotation silently resets to the first seat to sit down, which hands somebody a
-   * second big blind across the restart boundary — `prl.hands.button_seat` is persisted precisely
-   * so that it does not have to. See `RoomRegistry.open`, which reconstructs this.
-   */
+  /** Blind positions to resume after a restart, so nobody pays a second big blind. */
   readonly initialBlinds?: BlindPositions;
-  /**
-   * Floor on a lone person's turn clock, in seconds. Defaults to `DEFAULT_LEARNER_TURN_SECONDS`.
-   *
-   * Optional because it is a policy about learners rather than a property of the room, and
-   * because every existing caller wants the default. Supply it from `AppConfig.learnerTurnSeconds`
-   * to make `LEARNER_TURN_SECONDS` effective for a deployment; supply it directly to drive the
-   * clock in a test. It applies to exactly one situation — a person at a table where everybody
-   * else is a bot — which `turnSecondsFor` sets out at length.
-   */
+  /** Floor on a lone person's turn clock, in seconds. See `turnSecondsFor`. */
   readonly learnerTurnSeconds?: number;
-  /**
-   * Non-fatal problems: a subscriber that threw, a rejected timeout. Never given a card.
-   *
-   * `ProblemHook` requires a typed `event` on the detail, so each of the five failures below is
-   * countable separately rather than being one prose string an operator has to grep for. See
-   * `observability/telemetry.ts`.
-   */
+  /** Non-fatal problems, each with a typed `event` so it is counted separately. Never given a card. */
   readonly onProblem?: ProblemHook;
 }
 
@@ -413,30 +211,16 @@ interface LiveHand {
   state: HandState;
   /** Dropped to null the moment the hand completes. Never persisted, never logged. */
   secret: DeckSecret | null;
-  /**
-   * The deal as it was, captured once.
-   *
-   * Held rather than recomputed because the stacks in `state` move as the hand progresses, and the
-   * archive wants the stacks each seat *started* with.
-   */
+  /** Captured at the deal, because the archive wants starting stacks and `state` moves. */
   readonly deal: ArchivedDeal;
   /** Each dealt-in seat's display name, as it was at the deal. See `narration.ts`. */
   readonly names: ReadonlyMap<SeatIndex, string>;
 }
 
 /**
- * What an arriving player owes before they may be dealt in.
- *
- * Keyed by user id rather than by seat, and deliberately not cleared when they stand up: a debt
- * that lived on the chair would be discharged by the act of leaving it, which is exactly the dodge
- * this exists to close.
- *
- * So a departure does NOT remove the entry, and that is not an oversight to tidy up. `blindDebts`
- * is discharged in exactly two places — being dealt in, and the game restarting (`nextRotation`
- * clears it wholesale) — and clearing it when somebody stands would reintroduce P1-2, in which
- * four of fifteen seating combinations bought a completely free hand. What is left over is one
- * small entry per person who sat down owing a blind at this table and never came back, on a map
- * that dies with the room: a bound, not a leak.
+ * Keyed by user id and not cleared on standing up, so leaving cannot discharge it (P1-2: four of
+ * fifteen seating combinations got a free hand). Cleared only on being dealt in or a game restart.
+ * Entries for people who never return die with the room.
  */
 interface BlindDebt {
   /** The hand number this table had reached when the obligation was incurred. */
@@ -444,15 +228,8 @@ interface BlindDebt {
 }
 
 /**
- * The engine's log entry, plus why the server took it when nobody submitted it.
- *
- * The reason lives here rather than in `@prl/poker-engine` because the engine never decides one: it
- * is told "automatic" and nothing else, and a timer and a departure are both this class's ideas.
- * Putting it on `LoggedAction` would also have put it into every `PlayerView.actions` on the wire,
- * which the live table neither needs nor validates (it reads `seatTimedOut` instead).
- *
- * Without it the archive wrote `was_automatic = true` for both of this class's automatic paths, and
- * the hand review told a reader who had pressed "Stand up" that their clock ran out.
+ * The engine only knows "automatic". The reason is this class's, and keeping it off `LoggedAction`
+ * keeps it off the wire. Without it the review said "time ran out" to someone who pressed Stand up.
  */
 export interface ArchivedAction extends LoggedAction {
   /** Non-null exactly when `wasAutomatic`. See `AUTOMATIC_REASONS` in `@prl/contracts`. */
@@ -467,13 +244,7 @@ interface ApplyOptions {
   readonly extraEvents?: readonly TableEvent[];
 }
 
-/**
- * What one mutation accumulated, before it is published.
- *
- * One object rather than three parallel arrays, because the three are filled together for every
- * applied action and a caller that forgot one would publish a notice the archive or the opponent
- * models silently missed.
- */
+/** Filled together for every applied action, so no notice misses one of the three. */
 interface Applied {
   readonly events: TableEvent[];
   readonly publicActions: PublicActionEvent[];
@@ -509,17 +280,13 @@ export class LiveTable {
   private currentMemo: HandMemo | null = null;
   /** Kept so a retry arriving after the hand ended is deduplicated rather than re-applied. */
   private previousMemo: HandMemo | null = null;
-  /**
-   * Units resets that arrived while their player was in the live hand, applied when it settles.
-   *
-   * By user id, like everything about a person. See `restack`.
-   */
+  /** Units resets that arrived while their player was in the live hand, applied at settlement. By user id. */
   private readonly pendingRestacks = new Map<string, number>();
   /** The hand whose stacks have already been written back, so settlement happens once. */
   private settledHandId: string | null = null;
   private closed = false;
 
-  /** The serialisation point. See the banner at the top of this file. */
+  /** The serialisation point. See the file header. */
   private queue: Promise<void> = Promise.resolve();
 
   constructor(options: LiveTableOptions) {
@@ -538,8 +305,7 @@ export class LiveTable {
     this.timer = new TurnTimer({
       clock: options.clock,
       onExpiry: (expiry) => {
-        // Queued, never applied inline: the timer fires from the event loop and has to take its
-        // turn behind whatever mutation is already in flight.
+        // Queued behind whatever mutation is in flight, never applied inline.
         this.enqueue(() => this.applyTimeout(expiry)).catch((error: unknown) => {
           this.onProblem('turn timeout could not be applied', {
             event: 'turn-timeout',
@@ -550,17 +316,7 @@ export class LiveTable {
     });
   }
 
-  // -------------------------------------------------------------------------
-  // The queue
-  // -------------------------------------------------------------------------
-
-  /**
-   * Runs `work` after everything already queued for this table.
-   *
-   * The returned promise rejects to the caller while the chain itself swallows the rejection.
-   * Without that split, one `illegal_action` would wedge the table for good — and a table that
-   * stops accepting actions after a single rejected one is a far worse failure than the error.
-   */
+  /** The chain swallows rejections the caller still sees, so one `illegal_action` cannot wedge it. */
   private enqueue<T>(work: () => T): Promise<T> {
     const result = this.queue.then(work);
     this.queue = result.then(
@@ -570,23 +326,10 @@ export class LiveTable {
     return result;
   }
 
-  // -------------------------------------------------------------------------
-  // Reads: synchronous, and therefore always of a consistent state
-  // -------------------------------------------------------------------------
-
   /**
-   * The redacted view for one user. **The only way state leaves this object.**
-   *
-   * The user id goes to `redactFor` untranslated — deliberately, and this is the whole fix for the
-   * seat-reuse leak. There is no seat lookup here to get wrong, and no seat index in scope for a
-   * future edit to reach for: `this.seats` is not consulted at all. Whether the caller is dealt
-   * into this hand is a question only the hand can answer, and `redactFor` asks it of the hand's
-   * own roster.
-   *
-   * Somebody who is not in this hand — a spectator, a player who sat down after the deal, or the
-   * new occupant of a chair whose previous owner played it — gets the spectator view
-   * (`viewerSeat: null`), which shows no hole cards at all except those actually shown down. Null
-   * before the first deal.
+   * The redacted view for one user. The only way state leaves this object.
+   * The user id goes to `redactFor` untranslated and `this.seats` is not consulted, which is the fix
+   * for the seat-reuse leak. Anyone not dealt in gets the spectator view. Null before the first deal.
    */
   viewFor(userId: string): PlayerView | null {
     if (this.hand === null) return null;
@@ -594,18 +337,13 @@ export class LiveTable {
   }
 
   snapshot(): TableSnapshot {
-    // Only while the hand can still move. Once it has settled, `settleIfComplete` has written every
-    // final stack into the seating, so the seat IS the figure — and reading the retained hand
-    // instead hid anything that changed the seat afterwards: a reader busted in the last hand and
-    // then reset kept showing 0 here, because the finished hand still said 0. See `restack`.
+    // Only while the hand can still move. After settlement the seat holds the final figure, and a
+    // retained hand would hide a later `restack`.
     const live = this.handInProgress ? (this.hand?.state ?? null) : null;
     const seats = this.seats.map((seat) => {
-      // By id, not by index. A finished hand outlives its seating, so the seat 3 in a retained
-      // hand may belong to somebody who has since left — and reporting their closing stack as the
-      // new occupant's would conjure or destroy chips in every member list on the table.
+      // By id. A retained hand's seat 3 may belong to someone who left.
       const inHand = live?.seats.find((entry) => entry.playerId === seat.userId);
-      // Mid-hand the chips are split between what is behind and what is already committed. The
-      // table figure has to be the sum, or a member list appears to lose chips during a hand.
+      // Mid-hand the table figure is behind plus committed.
       if (inHand === undefined) return seat;
       return { ...seat, stack: inHand.stack + inHand.committedThisStreet };
     });
@@ -614,8 +352,7 @@ export class LiveTable {
       handInProgress: this.handInProgress,
       handNumber: this.handNumber,
       buttonSeat: this.buttonSeat,
-      // Derived from `blindDebts` at read time rather than stored on the seat, so there is one
-      // source of truth for the obligation and no second copy to drift out of step with it.
+      // Derived from `blindDebts`, the single source of truth.
       awaitingBigBlind: this.seats
         .filter((seat) => this.blindDebts.has(seat.userId))
         .map((seat) => seat.seat),
@@ -628,24 +365,14 @@ export class LiveTable {
   }
 
   /**
-   * Each dealt-in seat's display name, as it was at the deal — the names the narration uses.
-   *
-   * For the live Coach, which used to label opponents "seat 2" beside plates that show names and no
-   * numbers (audit at 308fadf). The deal's names rather than the seating's for the reason in
-   * `narration.ts`: a chair can change hands between deals, and a name taken from the current
-   * seating would put the newcomer's name on the previous player's range. Empty before the first
-   * deal.
+   * Each dealt-in seat's display name as it was at the deal, for the live Coach. From the deal, not
+   * the seating, because a chair can change hands. Empty before the first deal.
    */
   dealtNames(): ReadonlyMap<SeatIndex, string> {
     return this.hand?.names ?? new Map();
   }
 
-  /**
-   * True while this player still owes a blind and is therefore not being dealt in.
-   *
-   * By user id, because the obligation belongs to the person: it survives standing up, taking a
-   * different chair, and coming back three hands later.
-   */
+  /** By user id: the obligation survives standing up and changing chairs. */
   owesBlind(userId: string): boolean {
     return this.blindDebts.has(userId);
   }
@@ -676,22 +403,14 @@ export class LiveTable {
   }
 
   /**
-   * The current deal, for the persistence layer.
-   *
-   * ## This and `archivedResult` are the only methods that return hole cards
-   *
-   * They exist because `prl.hand_seats.hole_cards` exists: a learner reviewing their own hand has
-   * to be able to see what they held, and a seat that showed at showdown is public. Both records
-   * are for the database and nothing else — no socket frame is built from them, and the read path
-   * back out (`src/routes/hands.ts`) carries `user_id = :viewer OR showed_down` in the SQL. The
-   * deck, the cursor and the salts appear in neither, because there is no column for them and
-   * never will be.
+   * This and `archivedResult` are the only methods that return hole cards, and only to the database.
+   * The read path (`src/routes/hands.ts`) filters `user_id = :viewer OR showed_down`. No deck or salts.
    */
   archivedDeal(): ArchivedDeal | null {
     return this.hand?.deal ?? null;
   }
 
-  /** The completed hand, for the persistence layer. Null until the hand is complete. */
+  /** Null until the hand is complete. */
   archivedResult(): ArchivedResult | null {
     const live = this.hand;
     if (live === null || live.state.street !== 'complete') return null;
@@ -706,26 +425,15 @@ export class LiveTable {
         seat: seat.seat,
         netResult: result.netBySeat[seat.seat] ?? 0,
         status: seat.status,
-        // From `HandResult.showdowns` and nothing else: a seat that folded is not "showing"
-        // merely because the hand is over, and this flag is what opens its cards to the table.
+        // Only seats in `HandResult.showdowns`. This flag opens a seat's cards to the table.
         showedDown: shown.has(seat.seat),
       })),
     };
   }
 
-  // -------------------------------------------------------------------------
-  // Mutations
-  // -------------------------------------------------------------------------
-
   /**
-   * Seats a player.
-   *
-   * Legality that belongs to the *room* — is the caller a member, do they hold enough units — is
-   * the registry's business. This enforces only what the table itself knows.
-   *
-   * Arriving at a table with a rotation already running incurs a blind obligation: the player is
-   * seated, and is dealt in on the hand the big blind reaches their seat and not before. See the
-   * file comment for why waiting is the remedy chosen over posting.
+   * Enforces only what the table knows. Membership and units are the registry's business.
+   * Joining a running rotation incurs a blind debt: dealt in when the big blind reaches the seat.
    */
   sit(request: {
     readonly userId: string;
@@ -735,15 +443,8 @@ export class LiveTable {
     readonly isBot?: boolean;
     readonly botProfile?: string | null;
     /**
-     * True when this seat is being re-taken exactly as it stood before a restart.
-     *
-     * Such a player is already in the rotation and owes nothing — they were being dealt in a
-     * minute ago. Only the registry's re-open path passes it; a player sitting down of their own
-     * accord never does.
-     *
-     * The honest limit: an obligation that was outstanding when the process died is not persisted
-     * (there is no column for it), so a player who was waiting for the big blind is re-seated as
-     * though they had already paid. That costs at most one hand's blind, once, per restart.
+     * Re-taking a seat exactly as before a restart, so no debt is incurred. Debts are not persisted,
+     * so a waiting player skips at most one blind per restart.
      */
     readonly resumingSeat?: boolean;
   }): Promise<TableSeat> {
@@ -774,13 +475,9 @@ export class LiveTable {
         leaving: false,
       };
       this.seats = [...this.seats, seat].sort((left, right) => left.seat - right.seat);
-      // The first player to sit seeds the button, so the first hand deals it to the seat after
-      // them, exactly as it always has. Afterwards this holds the last hand's button.
+      // The first player seeds the button. Afterwards this holds the last hand's button.
       this.buttonSeat ??= seat.seat;
-      // A rotation is running as soon as one hand has been dealt, and only then is there anybody
-      // who has already paid for this player to jump ahead of. `has` first so that a player who
-      // stood up owing a blind and came back keeps the debt they already had, with its original
-      // `since` — the whole point is that the round trip changes nothing.
+      // Debts start once a rotation exists. `has` first, so a returning debtor keeps the original `since`.
       if (this.blinds !== null && request.resumingSeat !== true && !this.blindDebts.has(seat.userId)) {
         this.blindDebts.set(seat.userId, { since: this.handNumber + 1 });
       }
@@ -794,19 +491,9 @@ export class LiveTable {
   }
 
   /**
-   * Stands a player up.
-   *
-   * Somebody holding a live hand does not escape their bet: the seat is flagged `leaving`, folds
-   * automatically at its next turn (or immediately, if it is already its turn), and is removed
-   * from the seating when the hand completes. Pulling them out of the hand outright would mean
-   * rewriting a `HandState` behind the engine's back, and this architecture has no such
-   * side-channel — every change to a hand is an action the engine validated.
-   *
-   * A seat that has *already* folded or is all-in waits the same way rather than leaving at once.
-   * It has nothing left to decide, but it still has chips in the pot and a settled stack coming,
-   * and removing it now would drop it from the write-back in `settleIfComplete` — so its recorded
-   * stack would silently keep its pre-hand value and the chips it committed would be conjured out
-   * of nothing.
+   * A player in the live hand, even folded or all-in, is flagged `leaving`, auto-folds at their turn,
+   * and is removed at settlement. Changing a hand outside an engine action is not possible here, and
+   * removing them early would drop them from the stack write-back.
    */
   stand(userId: string): Promise<void> {
     return this.enqueue(() => {
@@ -818,9 +505,6 @@ export class LiveTable {
         return;
       }
 
-      // Flagged by id, like everything else that is about a player rather than a chair. Identical
-      // to matching on the index here — a user holds at most one seat — and identical for the same
-      // reason the index version was correct right up until it was not.
       this.seats = this.seats.map((entry) => (entry.userId === userId ? { ...entry, leaving: true } : entry));
       const applied = collector();
       this.runAutomaticActions(applied);
@@ -829,19 +513,9 @@ export class LiveTable {
   }
 
   /**
-   * Sets a seated player's chips to `stack` — the units reset, reaching the table that holds them.
-   *
-   * Between hands the seat's stack is the truth (`TableSeat.stack`), so writing only
-   * `room_members.stack` left this table dealing from the old figure and then settling it back over
-   * the reset. See `RoomRegistry.restackForUnitsReset` for the sequence that was measured.
-   *
-   * A player in the live hand is not restacked now: their chips are inside a `HandState` the engine
-   * owns, and this architecture changes a hand only through actions it validated (see `stand`). The
-   * reset is held and applied in `settleIfComplete`, so the settled stack the archive writes is the
-   * reset one, agreeing with the durable reset the caller has already made. Resolves `'deferred'`
-   * then, `'applied'` when it took effect, `'notSeated'` when there was nothing to reset here.
-   *
-   * Never throws for a closed table: a reset racing a table being torn down has nothing to do.
+   * The units reset reaching the table. Between hands `TableSeat.stack` is the truth, so writing only
+   * `room_members.stack` was settled back over (see `RoomRegistry.restackForUnitsReset`). A player in
+   * the live hand is deferred to `settleIfComplete`. Never throws for a closed table.
    */
   restack(userId: string, stack: number): Promise<'applied' | 'deferred' | 'notSeated'> {
     return this.enqueue(() => {
@@ -854,22 +528,18 @@ export class LiveTable {
       }
       if (seat.stack === stack) return 'applied';
       this.seats = this.seats.map((entry) => (entry.userId === userId ? { ...entry, stack } : entry));
-      // A seating change, so every socket gets the state frame with the new stack in it.
       this.publish('seating', collector(), null);
       return 'applied';
     });
   }
 
-  /** Deals the next hand. */
   startHand(): Promise<{ readonly handId: string }> {
     return this.enqueue(() => {
       this.assertOpen();
       if (this.handInProgress) {
         throw new AppError('illegal_action', { logDetail: 'a hand is already in progress' });
       }
-      // Everyone in the blind rotation: seated, with chips, not on the way out. Players who owe a
-      // blind are IN this list — that is how the rotation reaches them and collects it — but they
-      // are not necessarily dealt in, which is what `rotation.dealtIn` decides.
+      // Everyone in the blind rotation, including debtors. `rotation.dealtIn` decides who is dealt.
       const entrants = this.seats.filter((seat) => seat.stack > 0 && !seat.leaving);
       if (entrants.length < 2) {
         throw new AppError('illegal_action', {
@@ -879,8 +549,7 @@ export class LiveTable {
 
       const rotation = this.nextRotation(entrants);
       const playable = entrants.filter((seat) => rotation.dealtIn.includes(seat.seat));
-      // Being dealt in discharges the obligation: the seat the big blind landed on is paying it
-      // right now, and every other dealt-in seat never owed one.
+      // Being dealt in discharges the debt.
       for (const seat of playable) this.blindDebts.delete(seat.userId);
 
       const handId = this.nextHandId();
@@ -892,8 +561,7 @@ export class LiveTable {
         handNumber: this.handNumber,
         config: this.config,
         buttonSeat: rotation.buttonSeat,
-        // Handed over rather than derived. A dead button is not a seat the engine could find a
-        // player in, and a dead small blind is not a seat it should charge.
+        // Handed over: a dead button or dead small blind is not a seat the engine could derive.
         blinds: { smallBlindSeat: rotation.smallBlindSeat, bigBlindSeat: rotation.bigBlindSeat },
         seats: playable.map((seat) => ({ seat: seat.seat, playerId: seat.userId, stack: seat.stack })),
         random: this.random,
@@ -912,19 +580,14 @@ export class LiveTable {
 
       const applied = collector();
       applied.events.push(...this.wireEvents(dealt.events));
-      // A hand can be over before anybody acts — two seats both all-in for less than the blind —
-      // and a seat that stood up between hands folds before the first real decision.
+      // A hand can end before anyone acts (two short all-ins), and a leaver folds first.
       this.runAutomaticActions(applied);
       this.afterMutation('handStarted', applied);
       return { handId };
     });
   }
 
-  /**
-   * Applies one submitted action, or answers a duplicate with the outcome the original had.
-   *
-   * The order of the checks, and why the memo comes first, is in the file comment.
-   */
+  /** The memo is checked first. See the file header. */
   submitAction(userId: string, submitted: SubmittedAction): Promise<ActionOutcome> {
     return this.enqueue(() => {
       const memoed = this.lookupMemo(submitted.actionId);
@@ -937,9 +600,7 @@ export class LiveTable {
       if (!this.seats.some((entry) => entry.userId === userId)) {
         throw new AppError('not_seated', { logDetail: 'not seated at this table' });
       }
-      // The seat comes from the HAND, found by id. Reading it off the current seating instead is
-      // how a chair's new occupant would end up acting on the previous occupant's cards; a player
-      // who is at the table but was not dealt in has no seat here at all, and is simply not to act.
+      // The seat comes from the HAND, found by id, so a chair's new occupant cannot act on old cards.
       const acting = live.state.seats.find((entry) => entry.playerId === userId) ?? null;
       if (acting === null || live.state.toAct !== acting.seat) {
         throw new AppError('not_your_turn', {
@@ -979,17 +640,9 @@ export class LiveTable {
     this.previousMemo = null;
   }
 
-  // -------------------------------------------------------------------------
-  // Applying an action
-  // -------------------------------------------------------------------------
-
   /**
-   * The one place `applyAction` is called.
-   *
-   * The engine re-derives the legal set through `validateAction`, so a bug in a bot policy, a
-   * tampered client and a stale button on an honest client all fail the same way: the engine
-   * throws, the state is untouched, and the caller is told `illegal_action`. Returns null when
-   * the engine refused, so the automatic paths can log rather than throw into the event loop.
+   * The one place `applyAction` is called. The engine re-validates, so a bot bug, a tampered client
+   * and a stale button all fail as `illegal_action`. Returns null on refusal so automatic paths log.
    */
   private apply(seat: SeatIndex, action: Action, options: ApplyOptions): ActionOutcome | null {
     const live = this.hand;
@@ -1005,8 +658,7 @@ export class LiveTable {
         actionId: options.actionId,
       });
     } catch (error) {
-      // The engine's message names seats, bet levels and amounts: useful in a log, never on the
-      // wire. `logDetail` and `cause` are server-side only — see errors.ts.
+      // The engine's message names seats and bet levels. Log only, never the wire.
       this.onProblem('the engine rejected an action', {
         event: 'engine-rejection',
         seat,
@@ -1026,22 +678,14 @@ export class LiveTable {
     const outcome: ActionOutcome = { appliedSequence: applied.state.actionSequence, deduplicated: false };
     if (options.actionId !== null) this.recordMemo(options.actionId, outcome);
 
-    // A seat that has stood up folds as soon as the action reaches it, so a client never sees a
-    // table waiting on somebody who has left.
     this.runAutomaticActions(accumulated);
     this.afterMutation('action', accumulated);
     return outcome;
   }
 
   /**
-   * Folds every seat whose PLAYER has stood up but is still holding cards, in turn order.
-   *
-   * Bounded by the seat count: each iteration applies exactly one fold, and a fold strictly
-   * reduces the number of seats still in the hand, so this cannot spin.
-   *
-   * The `leaving` flag is looked up by the id the hand recorded for the seat, not by the chair.
-   * Folding somebody's hand because a *different* person who now holds that chair asked to leave
-   * would be the same class of mistake as showing them the cards.
+   * Folds every seat whose PLAYER has stood up, in turn order, matched by the hand's recorded id.
+   * Each fold shrinks the hand, so the seat-count guard bounds the loop.
    */
   private runAutomaticActions(accumulated: Applied): void {
     for (let guard = 0; guard <= this.config.maxSeats; guard += 1) {
@@ -1070,22 +714,18 @@ export class LiveTable {
       live.state = applied.state;
       const logged = applied.state.actions.at(-1);
       accumulated.publicActions.push({ ...fact, amountPaid: logged?.amountPaid ?? 0 });
-      // `departed`, never `timeout`: this player pressed "Stand up" (or left, or opened another
-      // practice table) holding cards, and no clock was involved. Recorded as the one thing it was.
+      // `departed`, never `timeout`. No clock was involved.
       if (logged !== undefined) accumulated.loggedActions.push({ ...logged, automaticReason: 'departed' });
       accumulated.events.push(...this.wireEvents(applied.events));
     }
   }
 
-  /** The timer fired. Check it still describes this hand and this seat, then act. */
   private applyTimeout(expiry: TurnExpiry): void {
     const live = this.hand;
     if (live === null || live.state.handId !== expiry.handId) return;
     if (live.state.street === 'complete' || live.state.toAct !== expiry.seat) return;
 
-    // Check if that is free, otherwise fold — NEVER a call. Silently spending the chips of
-    // somebody whose connection dropped would be indefensible, and the engine's `timeoutAction`
-    // is the single definition of that rule.
+    // Check if free, else fold. NEVER a call. `timeoutAction` is the single definition.
     const action = timeoutAction(live.state, expiry.seat);
     const applied = this.apply(expiry.seat, action, {
       actionId: null,
@@ -1097,57 +737,25 @@ export class LiveTable {
         event: 'timeout-rejection',
         seat: expiry.seat,
       });
-      // Re-armed, because nothing else will. `TurnTimer.fire` clears `armed` before it calls back,
-      // and `apply` returning null means it never reached `afterMutation` — so the table would be
-      // left waiting on a seat with `deadlineMs: null` and no expiry coming: a permanently frozen
-      // hand that no player and no operator can unstick, for a table whose only fault was one
-      // refused action. A fresh clock on the same seat is the correct outcome — the seat gets
-      // another full turn, and the next expiry either applies or lands here again.
+      // Re-armed, because `TurnTimer.fire` already cleared `armed` and `apply` returned before
+      // `afterMutation`. Without this the hand freezes with `deadlineMs: null`.
       this.armTimer();
     }
   }
 
-  // -------------------------------------------------------------------------
-  // After every mutation: settle, arm the timer, publish
-  // -------------------------------------------------------------------------
-
   private afterMutation(reason: TableChangeReason, applied: Applied): void {
     const settledStacks = this.settleIfComplete();
     this.armTimer();
-    // `handStarted` is NEVER overwritten, and that exception is the fix rather than an oversight.
-    // A hand can be over before anybody acts — two seats both all-in for less than the big blind,
-    // which `startHand` already says exists — and this line used to read
-    // `completed ? 'handComplete' : reason`, which threw the start away. The archive gates
-    // `hands.start` on `reason === 'handStarted'`, so no row was ever written for such a hand;
-    // `handsRepository.complete` then threw `hand_not_active` against a row that did not exist,
-    // which aborted the rest of that archive step and took `stacksSettled` and
-    // `roomStatusChanged` down with it. Both players kept their pre-hand stacks while the winner
-    // actually held the pot. It also made `handsCompleted` climb while `handsStarted` did not.
-    //
-    // The two facts are independent and both now travel: `reason` says what CAUSED the change,
-    // `handCompleted`/`settledStacks` say whether it FINISHED. Anything asking "did this hand
-    // end" must read the flag — the reason cannot answer it, and never could for the hand above.
+    // `handStarted` is NEVER overwritten. A hand that ends before anyone acts still needs the
+    // archive's `hands.start`, which is gated on that reason. Read `handCompleted` to ask if it ended.
     const published = reason === 'handStarted' || settledStacks === null ? reason : 'handComplete';
     this.publish(published, applied, settledStacks);
   }
 
   /**
-   * Writes a finished hand's stacks back to the seating, drops the deck secret, and hands back
-   * what every seat closed on.
-   *
-   * The secret goes here rather than at the next deal because this is the moment it stops being
-   * needed: the engine has already built the reveal for the cards that legitimately became
-   * public, and everything still sealed must stay sealed forever — including from us.
-   *
-   * Returns the settled stacks exactly once per hand, and null every other time, so a subscriber
-   * cannot fold the same hand into its counters twice (which `@prl/poker-ai`'s
-   * `observeHandComplete` refuses outright, and rightly: double counting corrupts every rate at
-   * once while looking completely normal).
-   *
-   * The figures are RETURNED rather than left to be read back off the table, because the very
-   * next thing this method does is remove the seats that stood up mid-hand. See
-   * `TableNotice.settledStacks` for the chips that were destroyed while a subscriber read the
-   * later snapshot instead.
+   * Writes a finished hand's stacks back, drops the deck secret (the reveal is already built), and
+   * returns the settled stacks exactly once per hand. Once, because `observeHandComplete` refuses
+   * double counting. Returned rather than read back, because leavers are removed next.
    */
   private settleIfComplete(): readonly SettledStack[] | null {
     const live = this.hand;
@@ -1155,21 +763,17 @@ export class LiveTable {
     if (this.settledHandId === live.state.handId) return null;
     this.settledHandId = live.state.handId;
 
-    // Keyed by player id: chips belong to people, not to chairs. A seat that changed hands would
-    // otherwise be paid its predecessor's closing stack.
+    // Keyed by player id: chips belong to people, not chairs.
     const finalStacks = new Map(live.state.seats.map((seat) => [seat.playerId, seat.stack]));
     this.seats = this.seats.map((seat) => {
-      // A reset made during the hand wins over the hand's result: that is what the learner asked
-      // for, and the durable reset was written when they asked. See `restack`.
+      // A reset made during the hand wins over the hand's result. See `restack`.
       const stack = this.pendingRestacks.get(seat.userId) ?? finalStacks.get(seat.userId);
       return stack === undefined ? seat : { ...seat, stack };
     });
     this.pendingRestacks.clear();
     live.secret = null;
 
-    // Read HERE, between the write-back and the removal, and nowhere else. Move this line below
-    // `removeSeats` and the departing seats vanish from it, which is exactly the defect this
-    // return value exists to make unrepeatable.
+    // Read HERE, between the write-back and `removeSeats`, or departing seats vanish from it.
     const settled: readonly SettledStack[] = this.seats.map((seat) => ({
       userId: seat.userId,
       stack: seat.stack,
@@ -1181,63 +785,22 @@ export class LiveTable {
   }
 
   /**
-   * How long the seat currently to act gets, in seconds.
-   *
-   * ## The problem this solves
-   *
-   * At `action_timeout_seconds = 60` the product's two headline features were in direct tension:
-   * you could read the analysis or you could act, not both. The Coach panel a learner is *meant
-   * to read at that moment* runs to thousands of characters plus a five-row EV table and a
-   * card-by-card table with one row per unseen card — several minutes of reading — and a
-   * browser-level verification pass lost two hands to `seat 0 | fold | was_automatic = t` while
-   * the learner was reading it. Nothing was hidden (the countdown is on screen, and folding
-   * rather than calling on expiry is the correct rule) and the clock was still shorter than the
-   * thing it was asking the learner to read.
-   *
-   * ## The rule
-   *
-   * A seat gets the longer of the room's clock and `learnerTurnSeconds` when, and only when, all
-   * three of these hold:
-   *
-   *   1. **the seat is a person.** A bot has nothing to read and acts inside its thinking delay;
-   *      for a bot the timer is only a safety net against a policy that threw, and four minutes
-   *      is four minutes of a frozen table before that net catches anything;
-   *   2. **nobody else at the table is a person.** This is the clause that keeps the extra time
-   *      free. The audited spot is a play-money educational table against bots with nothing at
-   *      stake, where a longer clock costs exactly nothing because bots do not get bored. Put a
-   *      second human in the room and it stops being free: the room's `action_timeout_seconds`
-   *      is the pace everybody there agreed to, and one player's reading time is now everybody's
-   *      waiting time. That room can still configure up to 300 seconds for itself;
-   *   3. **the room's own clock is shorter.** `Math.max`, so a room that deliberately allows
-   *      longer keeps what it chose. This raises a clock that is too short; it never lowers one.
-   *
-   * The timeout mechanism itself is untouched, deliberately. An abandoned seat still folds — a
-   * clock that never expires lets one absent player stall a table forever, which is a worse
-   * failure than the one being fixed here. `DEFAULT_LEARNER_TURN_SECONDS` in `../config.ts`
-   * carries the number and why it is that number.
-   *
-   * ## The alternative that was rejected
-   *
-   * Leaving the first decision of a hand untimed. The first decision is precisely when a seat is
-   * most likely to have been abandoned — the tab was closed before the hand started — so an
-   * untimed first action is the stall above, on the most common path to it.
+   * How long the seat to act gets, in seconds. At 60 s a learner could not read the Coach and act
+   * (a verification pass lost two hands while reading). A seat gets `max(room clock,
+   * learnerTurnSeconds)` only when it is a person and nobody else at the table is, so the extra time
+   * keeps no one waiting. A bot's timer is only a safety net. The room can still allow up to 300 s.
+   * The timeout still folds an abandoned seat. Leaving the first decision untimed was rejected,
+   * because that is when a seat is most often abandoned.
    */
   private turnSecondsFor(toAct: SeatIndex): number {
     const configured = this.config.actionTimeoutSeconds;
-    // Resolved by PERSON, not by chair: the hand's roster is pinned at deal time, so the seat
-    // index is looked up in the hand and the id it yields is looked up in the seating. Reading
-    // `this.seats[toAct]` directly would ask who is sitting there *now*, which is a different
-    // question and the class of bug the banner at the top of this file exists to prevent.
+    // Resolved by person: the hand's seat yields an id, and the id is looked up in the seating.
     const dealt = this.hand?.state.seats.find((seat) => seat.seat === toAct);
     if (dealt === undefined) return configured;
     const actorId = dealt.playerId;
-    // Not `=== false`: a seat the current seating has lost track of is not evidence of a bot, and
-    // the two failure directions are not symmetric. Too long a clock costs a table some waiting;
-    // too short a clock folds a hand out from under somebody who was reading.
+    // Not `=== false`. An unknown seat is not evidence of a bot, and too short a clock is the worse error.
     if (this.seats.find((seat) => seat.userId === actorId)?.isBot === true) return configured;
-    // Everyone at the table, not only those dealt into this hand: a player waiting for the big
-    // blind is sitting there watching, and is kept waiting by a long clock exactly as a player in
-    // the hand is.
+    // Everyone at the table counts, including players waiting for the big blind.
     const anotherPersonIsWaiting = this.seats.some((seat) => seat.userId !== actorId && !seat.isBot);
     if (anotherPersonIsWaiting) return configured;
     return Math.max(configured, this.learnerTurnSeconds);
@@ -1249,9 +812,7 @@ export class LiveTable {
       this.timer.cancel();
       return;
     }
-    // Armed for bots as well as people. A bot is expected to act well inside its thinking delay,
-    // so for a bot the timer is a safety net: a policy that threw would otherwise freeze the
-    // table until somebody noticed.
+    // Armed for bots too, as a safety net against a policy that threw.
     this.timer.arm({
       handId: live.state.handId,
       seat: live.state.toAct,
@@ -1260,13 +821,8 @@ export class LiveTable {
   }
 
   /**
-   * Fans one change out.
-   *
-   * `settledStacks` and `departed` are parameters rather than fields a listener could read back,
-   * because both describe an instant that has already passed by the time a listener runs: the
-   * seats that settled are removed inside `settleIfComplete`, and the seats that departed are
-   * gone from `this.seats` before this is called. Anything a subscriber needs about a change has
-   * to travel ON the change.
+   * `settledStacks` and `departed` travel on the notice because both describe an instant that has
+   * passed by the time a listener runs.
    */
   private publish(
     reason: TableChangeReason,
@@ -1279,8 +835,7 @@ export class LiveTable {
       events: applied.events,
       publicActions: applied.publicActions,
       loggedActions: applied.loggedActions,
-      // Derived, never passed separately: the two used to be independent arguments and a caller
-      // that set one without the other would publish a completed hand with nothing to settle.
+      // Derived, so a completed hand always has stacks to settle.
       handCompleted: settledStacks !== null,
       settledStacks,
       departed,
@@ -1292,8 +847,7 @@ export class LiveTable {
       try {
         listener(notice);
       } catch (error) {
-        // A subscriber that throws must not take the table with it, and must not stop the other
-        // subscribers from being told.
+        // One throwing subscriber must not stop the table or the others.
         this.onProblem('a table subscriber threw', {
           event: 'subscriber-throw',
           error: String(error),
@@ -1303,15 +857,7 @@ export class LiveTable {
     }
   }
 
-  // -------------------------------------------------------------------------
-  // Small helpers
-  // -------------------------------------------------------------------------
-
-  /**
-   * "Is this PERSON in the live hand", not "is this chair in it". The two differ for somebody who
-   * sat down after the deal: they hold no cards and owe nothing, so they leave at once rather than
-   * being held to the end of a hand they were never part of — and a reset reaches them at once.
-   */
+  /** Is this PERSON in the live hand. Someone who sat after the deal leaves and is reset at once. */
   private inTheLiveHand(userId: string): boolean {
     const live = this.hand;
     return (
@@ -1326,15 +872,8 @@ export class LiveTable {
   }
 
   /**
-   * Frees chairs, and says whose they were.
-   *
-   * The `departed` ids on the notice are the ONLY announcement a seat release gets, and both
-   * callers go through here — `stand`, for a player who is not in the live hand and leaves at
-   * once, and `settleIfComplete`, for one who is and whose chair is freed when the hand ends.
-   * A room that has durable state to tidy (`room_members.seat`, the in-memory membership) hangs
-   * it off this notice; hanging it off the moment somebody ASKED to leave is what left a seat
-   * unusable for the rest of the process's life, because that moment and this one are separated
-   * by an arbitrary amount of play. See `TableNotice.departed`.
+   * Frees chairs. Both callers (`stand` and `settleIfComplete`) go through here, so the `departed`
+   * ids are the only release announcement. See `TableNotice.departed`.
    */
   private removeSeats(seats: readonly TableSeat[]): void {
     const removing = new Set(seats.map((seat) => seat.seat));
@@ -1346,30 +885,21 @@ export class LiveTable {
         events: seats.map((seat) => ({ kind: 'playerLeft', displayName: seat.displayName })),
       },
       null,
-      // By id, like everything else here that is about a person rather than a chair: the listener
-      // uses it to find a `room_members` row, and that row is keyed by user.
+      // By id, because the listener finds a `room_members` row keyed by user.
       seats.map((seat) => seat.userId),
     );
   }
 
   /**
-   * Where the blinds fall for the hand about to be dealt.
-   *
-   * The dead-button rule, with one table-level policy the engine has no business knowing about:
-   * when honouring the outstanding obligations would leave fewer than two players in the hand, the
-   * game restarts. Every debt is discharged, the rotation is re-seeded from the last button, and
-   * everybody posts normally. The alternative is a table that can never deal again — one player
-   * live, one waiting, and no hand to advance the rotation that would end the wait — which is a
-   * far worse failure than a player being dealt in a hand or two early at a table of two.
+   * The dead-button rule, plus one table policy: if honouring debts would leave fewer than two in the
+   * hand, the game restarts with every debt discharged. Otherwise the table could never deal again.
    */
   private nextRotation(entrants: readonly TableSeat[]): BlindRotation {
     const seats = entrants.map((seat) => seat.seat).sort((left, right) => left - right);
     const previous = this.blinds;
     if (previous !== null) {
       const waiting = entrants.filter((seat) => this.blindDebts.has(seat.userId)).map((seat) => seat.seat);
-      // The big blind is computed here as well as inside `advanceBlindRotation` so that "would
-      // this deal a real hand?" can be answered before committing to it. It is the same call on
-      // the same inputs, so the two cannot disagree.
+      // Same call `advanceBlindRotation` makes, computed early to ask if this deals a real hand.
       const bigBlindSeat = nextOccupied(previous.bigBlindSeat, this.config.maxSeats, seats);
       const dealtIn = seats.filter((seat) => seat === bigBlindSeat || !waiting.includes(seat));
       if (dealtIn.length >= 2) {
@@ -1382,8 +912,6 @@ export class LiveTable {
       }
     }
 
-    // A fresh game. Nobody has paid anything yet under this rotation, so nobody can be charged
-    // twice and nobody owes anything.
     this.blindDebts.clear();
     return seedBlindRotation(this.seedButton(seats), this.config.maxSeats, seats);
   }
@@ -1414,13 +942,8 @@ export class LiveTable {
   }
 
   /**
-   * The public facts about an action, read from the state BEFORE it is applied.
-   *
-   * `raiseWasAvailable` comes off the engine's own legal set rather than being guessed, because
-   * it is the denominator of the 3-bet frequency: after a short all-in raising genuinely is not
-   * available, and counting that turn as a declined opportunity would understate every seat's
-   * aggression. Building this from privileged state is safe precisely because
-   * `PublicActionEvent` has nowhere to put a card.
+   * Read from the state BEFORE it is applied. `raiseWasAvailable` comes from the engine's legal set,
+   * because it is the 3-bet denominator. Safe because `PublicActionEvent` has no card field.
    */
   private publicFactFor(
     state: HandState,
@@ -1438,15 +961,14 @@ export class LiveTable {
       street: observable,
       action: action.type,
       toCall: Math.max(0, state.betLevel - committed),
-      // Blinds are always positive, so the real pot is never 0 here; the floor is only there so
-      // that the observer's `amountPaid / potBefore` can never divide by zero.
+      // The floor only prevents a divide by zero in `amountPaid / potBefore`.
       potBefore: Math.max(1, totalPotOf(state)),
       facingPreflopRaise: street === 'preflop' && state.betLevel > state.config.bigBlind,
       raiseWasAvailable: legal.some((entry) => entry.type === 'bet' || entry.type === 'raise'),
     };
   }
 
-  /** Turns the engine's events into wire events. Nothing hidden survives the mapping. */
+  /** Nothing hidden survives the mapping. */
   private wireEvents(events: readonly HandEvent[]): TableEvent[] {
     const out: TableEvent[] = [];
     const nameOf = namesFrom(this.hand?.names ?? new Map());
@@ -1468,7 +990,6 @@ export class LiveTable {
           });
           break;
         case 'streetAdvanced':
-          // Board cards are public the moment they are dealt: that is what a street is.
           out.push({
             kind: 'street',
             street: event.street,
@@ -1476,8 +997,6 @@ export class LiveTable {
           });
           break;
         case 'handComplete': {
-          // Only seats that actually showed appear in `showdowns`, so a hand that ended in a fold
-          // produces no card here at all.
           const shown = event.result.showdowns.map((showdown) => showdownSentence(showdown, nameOf));
           if (shown.length > 0) out.push({ kind: 'showdown', summaries: shown });
           const potCount = event.result.pots.length;
@@ -1488,9 +1007,7 @@ export class LiveTable {
           });
           break;
         }
-        // `holeCardsDealt` and `potsFormed` deliberately have no wire event: the first would be a
-        // notification *about* hidden information, and the second is already in every view's
-        // `pots`.
+        // No wire event: one would announce hidden information, and pots are in every view.
         case 'holeCardsDealt':
         case 'potsFormed':
           break;
@@ -1503,15 +1020,8 @@ export class LiveTable {
 }
 
 /**
- * The archive record for a freshly dealt hand.
- *
- * Built from the dealt state, at the one moment the starting stacks are the current ones.
- *
- * The `userId` is `playerId` — the id the engine recorded for that seat when it dealt — and the
- * seating is consulted only for `isBot`, and only by that same id. Reading the id out of the
- * seating by seat index instead would make the archive's notion of who held which cards depend on
- * who is sitting there when the row is written, which is the one thing a hand history must never
- * depend on.
+ * Built at the deal, while starting stacks are current. `userId` is the engine's `playerId`, and the
+ * seating is read only for `isBot` by that id, so a hand history never depends on who sits there later.
  */
 function dealRecordOf(state: HandState, seats: readonly TableSeat[]): ArchivedDeal {
   const seated = new Map(seats.map((seat) => [seat.userId, seat]));

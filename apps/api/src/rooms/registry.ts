@@ -1,60 +1,12 @@
 /**
  * `roomId -> live table`, plus the lifecycle around it.
- *
- * ## Why the live table is in memory and the room is in Postgres
- *
- * A room, its members and its finished hands are durable — they are what a learner comes back to.
- * A *hand in progress* is not, and cannot be: the deck and the commitment salts have no column
- * and never will (`db/migrations/0001_initial.sql` is emphatic about it), so a hand cannot be
- * resumed from the database after a restart. That is a deliberate trade — losing an in-flight hand
- * is far cheaper than a schema that can leak the cards nobody was entitled to see — and it means
- * the authoritative live state is this process's memory.
- *
- * The consequence, stated plainly: this design assumes one API process per room. That is what
- * `docs/adr/0001-modular-monolith.md` chose, and the day a second process is introduced, rooms
- * have to be pinned to one of them (or the whole live-table model has to move), because two
- * processes each holding "the" `HandState` for one room would deal two different hands.
- *
- * ## That assumption is now ENFORCED, and this is where it is enforced
- *
- * It used to be documented and nothing more. This header said it, `docker-compose.staging.yml` said
- * it beside `deploy.replicas: 1`, and not one line of code refused a second process — so an
- * operator scaling for capacity, or any rolling deploy where the new container serves before the
- * old one drains, produced two decks and two pots for one room, and whichever settlement landed
- * second destroyed the chips the other one paid out. Silently. Nothing raised anything.
- *
- * So opening a room now takes a LEASE on it (`rooms/ownership.ts`, `prl.room_ownership`), and:
- *
- *   * a room a live process already holds is refused, as a typed `room_owned_elsewhere`, counted;
- *   * every lease this process holds is renewed on a timer, and a renewal that updates no row
- *     means we have been fenced — the room is closed, its sockets are disconnected and it is
- *     dropped from this registry, at once, because continuing to serve a room we no longer own is
- *     the exact corruption the lease exists to prevent;
- *   * closing a room, and shutting down, release the lease, so the next process gets the room
- *     immediately rather than waiting out a TTL.
- *
- * A registry built with `ownership: null` enforces none of that and behaves exactly as this file
- * did before — which is what every test that drives rooms with a `Map`-backed store relies on, and
- * what `RoomRegistryOptions.ownership` sets out in full.
- *
- * ## The room record is a cache, and the cache is the live copy
- *
- * `RoomRecord` and the member list are held here so that a state frame — which goes out on every
- * change, to every socket — costs no query. The database row is the durable record; this is the
- * one being played on. Every write goes to both, in that order: persist, then update memory, so a
- * refused write never produces a live table that disagrees with the row behind it.
- *
- * ## The archive is a port, and a failing archive must not stop a hand
- *
- * `HandArchive` is the whole of what this module writes about hands. `postgresArchive` binds it to
- * `src/repositories/hands.ts` (owned by the hand-history work) and `noopArchive` is what the tests
- * and a database-less development run use. Writes are serialised per room on their own promise
- * chain, because `hands.start` must land before the first `appendAction` can reference it.
- *
- * When an archive write fails, play continues and the failure is logged. The hand in memory is the
- * authority, the players are mid-hand, and stopping a hand because a history row could not be
- * written would turn a reporting problem into a gameplay one. The cost is honest and worth naming:
- * a hand can be played that never appears in the history.
+ * A hand in progress lives only in this process's memory (the deck and salts have no column), so one
+ * API process must serve each room (ADR 0001). Opening a room takes a lease (`rooms/ownership.ts`): a
+ * room held elsewhere is refused as `room_owned_elsewhere`, and a fenced room is closed and dropped at
+ * once. `ownership: null` enforces none of this, for tests.
+ * The room record and members are cached here so a state frame costs no query. Writes persist first,
+ * then update memory. Archive writes are serialised per room, and a failed one is logged while play
+ * continues, so a hand can be missing from the history.
  */
 
 import type { RoomMember, RoomSummary } from '@prl/contracts';
@@ -83,10 +35,6 @@ import {
 } from './table.ts';
 import { type Clock, type ScheduledTask, systemClock } from './timers.ts';
 
-// ---------------------------------------------------------------------------
-// Records
-// ---------------------------------------------------------------------------
-
 /** The durable facts about a room, as this process holds them. */
 export interface RoomRecord {
   readonly id: string;
@@ -105,49 +53,24 @@ export interface RoomMemberRecord {
   readonly userId: string;
   readonly displayName: string;
   readonly isBot: boolean;
-  /**
-   * The strategy profile id for a bot, else null.
-   *
-   * The same value `room_members.bot_profile` now holds. It used to differ: the column was
-   * CHECK-constrained to five scenario range labels, so seven of the twelve Legends were written
-   * as `unknown` and only this record knew who was actually sitting there. Migration 0003 made the
-   * column carry the profile id, so the durable row and this record agree — which is the whole
-   * reason a restart can now put the same opponent back. See `rooms/bot-profile.ts`.
-   */
+  /** The strategy profile id for a bot, else null. Matches `room_members.bot_profile` since 0003. */
   readonly botProfile: string | null;
   /** Open sockets this member holds. Zero means "not connected", not "not a member". */
   sockets: number;
 }
-
-// ---------------------------------------------------------------------------
-// The archive port
-// ---------------------------------------------------------------------------
 
 export interface ArchivedStacks {
   readonly roomId: string;
   readonly stacks: readonly { readonly userId: string; readonly stack: number }[];
 }
 
-/**
- * Everything this module writes about hands and stacks.
- *
- * Deliberately narrow and deliberately a port: the SQL belongs to `src/repositories/*`, and the
- * live table must be usable — and testable — with no database at all.
- */
+/** A port, so the live table runs with no database. The SQL belongs to `src/repositories/*`. */
 export interface HandArchive {
   /** The next `hand_number` for a room, so a restart does not collide with played hands. */
   readonly nextHandNumber: (roomId: string) => Promise<number>;
-  /**
-   * The room's most recent deal, so a re-opened table picks the blind rotation back up rather
-   * than restarting it from whoever sits down first.
-   */
+  /** The room's most recent deal, so a re-opened table resumes the blind rotation. */
   readonly lastDealtHand: (roomId: string) => Promise<handsRepository.LastDealtHand | null>;
-  /**
-   * Closes hands that can never complete, for a room this process is about to take over.
-   *
-   * A hand interrupted by a restart is unrecoverable by design — the deck and the salts are never
-   * persisted — so the row has to be settled by somebody, and nobody was doing it.
-   */
+  /** Closes hands a restart interrupted. They can never complete, as the deck is never persisted. */
   readonly abandonInterruptedHands: (roomId: string) => Promise<readonly handsRepository.AbandonedHand[]>;
   readonly handStarted: (deal: ArchivedDeal) => Promise<void>;
   readonly actionsApplied: (handId: string, actions: readonly ArchivedAction[]) => Promise<void>;
@@ -174,13 +97,7 @@ export const noopArchive: HandArchive = {
   roomStatusChanged: async () => undefined,
 };
 
-/**
- * Binds the archive to `src/repositories/hands.ts` and `src/repositories/rooms.ts`.
- *
- * `sql` is a getter rather than a handle so that registering the routes never touches the
- * database: a missing pool surfaces as a failed write on a live table, logged, rather than as a
- * boot crash in a process that was only ever going to serve content.
- */
+/** `sql` is a getter so registering routes never touches the database. A missing pool fails writes. */
 export function postgresArchive(sql: () => Db): HandArchive {
   return {
     nextHandNumber: (roomId) => handsRepository.nextHandNumber(sql(), roomId),
@@ -252,10 +169,6 @@ export function postgresArchive(sql: () => Db): HandArchive {
   };
 }
 
-// ---------------------------------------------------------------------------
-// The room store port
-// ---------------------------------------------------------------------------
-
 /** What creating a room needs. Mirrors `createRoomBodySchema` plus the owner. */
 export interface CreateRoomSpec {
   readonly name: string;
@@ -268,15 +181,7 @@ export interface CreateRoomSpec {
   readonly actionTimeoutSeconds?: number;
 }
 
-/**
- * Room and member persistence, plus the two user-level facts a table needs.
- *
- * A port rather than a direct dependency for one reason that matters: every test in
- * `test/rooms.test.ts` and `test/ws-router.test.ts` runs against a `Map`-backed fake, so the whole
- * of rooms, seating, the socket protocol and the bots is exercised with no database anywhere. The
- * SQL itself is not duplicated — `postgresRoomStore` is a thin binding over
- * `src/repositories/rooms.ts` and `src/repositories/users.ts`, which own it.
- */
+/** A port so the rooms and socket tests run on a `Map`-backed fake. */
 export interface RoomStore {
   readonly create: (spec: CreateRoomSpec) => Promise<{
     readonly room: roomsRepository.RoomRow;
@@ -293,15 +198,12 @@ export interface RoomStore {
     readonly userId: string;
     readonly stack?: number;
     readonly isBot?: boolean;
-    /** All three facts, or none. A partial bot row cannot be rehydrated — see `bot-profile.ts`. */
+    /** All three facts, or none. A partial bot row cannot be rehydrated. See `bot-profile.ts`. */
     readonly bot?: DurableBotSeat | null;
   }) => Promise<roomsRepository.RoomMemberRow>;
   /** Resolves to the id of the membership that took the seat, which `recordFirstSit` is given. */
   readonly seatMember: (roomId: string, userId: string, seat: number) => Promise<string>;
-  /**
-   * Once the LIVE table has accepted the seat, never before, and for the membership `seatMember`
-   * seated — not whichever is live by then. See `rooms.recordFirstSit`.
-   */
+  /** Called only after the live table accepted the seat, for the membership `seatMember` seated. */
   readonly recordFirstSit: (memberId: string) => Promise<boolean>;
   readonly unseatMember: (roomId: string, userId: string) => Promise<void>;
   readonly removeMember: (roomId: string, userId: string) => Promise<void>;
@@ -352,10 +254,6 @@ export function postgresRoomStore(sql: () => Db): RoomStore {
   };
 }
 
-// ---------------------------------------------------------------------------
-// A live room
-// ---------------------------------------------------------------------------
-
 /** One room, live: its record, its members, its table and its bots. */
 export class LiveRoom {
   readonly record: RoomRecord;
@@ -366,24 +264,13 @@ export class LiveRoom {
   /** Serialises archive writes, so `hands.start` lands before the first action row. */
   private archiveQueue: Promise<void> = Promise.resolve();
   /**
-   * Serialises the durable work a released seat causes, so a caller can await it.
-   *
-   * Separate from `archiveQueue` deliberately: an archive write that fails must not stop a hand
-   * (see the file header), but a seat release is not reporting — it is what makes the chair
-   * usable again — and `standFromTable` awaits this chain so that the response it returns
-   * describes a seat that really has been freed.
+   * Serialises the durable work a released seat causes. Separate from `archiveQueue` because a seat
+   * release is not reporting, and `standFromTable` awaits it so its response describes a freed seat.
    */
   private releaseQueue: Promise<void> = Promise.resolve();
   /**
-   * Members who asked to leave the ROOM, not merely the chair, and are still holding a seat.
-   *
-   * Recorded here rather than acted on at once because a player in a live hand does not leave
-   * when they ask to: they fold at their turn and the chair is freed when the hand settles, which
-   * can be several minutes of play later. `leaveRoom` used to drop the in-memory membership only
-   * `if (seatOf(userId) === null)` at the instant of the request, and nothing re-ran it — so a
-   * mid-hand leaver was durably gone (`left_at` set, seat null) and still a live member for the
-   * rest of the process's life: `registry.require()` kept granting them the room summary, socket
-   * attach and spectator views, and `RoomSummary.members` kept listing them.
+   * Members who asked to leave the ROOM and still hold a seat in a live hand. The membership is
+   * dropped when the table releases the chair, so a mid-hand leaver does not stay a live member.
    */
   private readonly pendingRoomExit = new Set<string>();
   private readonly releaseSeat: ((userId: string) => Promise<void>) | null;
@@ -397,12 +284,8 @@ export class LiveRoom {
     readonly onProblem: ProblemHook;
     readonly metrics: AppMetrics;
     /**
-     * Frees the durable seat of a player the table has just released.
-     *
-     * A port rather than the `RoomStore` itself, because a `LiveRoom` is constructed directly by
-     * tests that have no store at all, and because this is the only durable write a room makes
-     * on its own initiative. `RoomRegistry.buildRoom` binds it to `store.unseatMember`; omitted,
-     * a released seat is released in memory only — which is exactly what a table-only test wants.
+     * Frees the durable seat of a player the table just released. `RoomRegistry.buildRoom` binds it to
+     * `store.unseatMember`. Omitted, a release is in memory only, for table-only tests.
      */
     readonly releaseSeat?: (userId: string) => Promise<void>;
   }) {
@@ -413,9 +296,7 @@ export class LiveRoom {
     this.releaseSeat = options.releaseSeat ?? null;
     this.unsubscribe = this.table.subscribe((notice) => {
       this.archiveNotice(notice, options.archive, options.onProblem);
-      // Both reactions hang off the SAME notice, and that is the design: settlement announces
-      // who left, and everything that must happen when a seat is released happens once, here.
-      // Four separate patches at four call sites is what produced the four defects this replaced.
+      // Both reactions hang off the same notice, so every seat release is handled once, here.
       this.releaseDeparted(notice, options.onProblem);
     });
   }
@@ -442,15 +323,8 @@ export class LiveRoom {
 
   /**
    * Starts a member's exit from the room, finishing it now if there is nothing to wait for.
-   *
-   * **Call this BEFORE `table.stand`, always.** `stand` releases the chair synchronously for a
-   * player who is not in the live hand, and the notice that does it is what completes the exit;
-   * marking afterwards would let that notice fire against an unmarked room and leave an ex-member
-   * live for the process's lifetime. Calling it first is correct in all three cases:
-   *
-   *   - not seated at all: there is no departure notice coming, so the exit completes here;
-   *   - seated, not in the hand: `stand` frees the chair at once and the notice completes it;
-   *   - seated and in the hand: the chair is freed when the hand settles, and so is the exit.
+   * Call this BEFORE `table.stand`, always. `stand` may release the chair synchronously, and that
+   * notice completes the exit only if the room was already marked.
    */
   beginRoomExit(userId: string): void {
     if (this.table.seatOf(userId) === null) {
@@ -460,45 +334,25 @@ export class LiveRoom {
     this.pendingRoomExit.add(userId);
   }
 
-  /**
-   * Resolves once every seat release this room has queued has been written.
-   *
-   * What it does NOT wait for is a release that has not been announced yet — a player still
-   * holding a live hand. That is the point: their chair is theirs until the hand settles, and the
-   * caller is told about the release that happened, not promised one that has not.
-   */
+  /** Resolves once every announced seat release is written. A seat still in a live hand is not waited for. */
   settleSeatReleases(): Promise<void> {
     return this.releaseQueue;
   }
 
   /**
-   * Resolves once every archive write queued so far has landed (or failed and been reported).
-   *
-   * Never rejects: the chain ends in a `catch`. Exists for a caller that writes a stack OUTSIDE this
-   * chain and must not be overtaken by a write still inside it — a units reset, whose
-   * `room_members.stack` update a queued `stacksSettled` from the hand before would otherwise
-   * overwrite.
+   * Never rejects. For a caller writing a stack outside this chain (a units reset) that a queued
+   * `stacksSettled` must not overwrite.
    */
   archiveSettled(): Promise<void> {
     return this.archiveQueue;
   }
 
-  /**
-   * Turns "the table released these seats" into the durable and in-memory tidying that owes it.
-   *
-   * One reaction, on one event, for both kinds of departure — the immediate one and the one that
-   * waits out a hand — which is what makes the two indistinguishable to everything downstream.
-   * The seat row is freed for every departure; the membership is dropped only for somebody who
-   * asked to leave the room rather than merely the chair.
-   */
+  /** One reaction for both departure kinds. The seat row is always freed, the membership on a room exit. */
   private releaseDeparted(notice: TableNotice, onProblem: ProblemHook): void {
     if (notice.departed.length === 0) return;
     const departed = [...notice.departed];
-    // Synchronously, and this is NOT the file's "persist, then update memory" rule being broken:
-    // the durable removal already happened, back in `leaveRoom`, at the moment the member asked
-    // to go. What is left is memory catching up with a row that is already written, and deferring
-    // that by even a microtask would let a request arriving on the same turn of the event loop as
-    // the settlement still find an ex-member and be served.
+    // Synchronous on purpose. The durable removal already happened in `leaveRoom`, and a microtask
+    // delay would let a same-turn request still be served to an ex-member.
     for (const userId of departed) {
       if (this.pendingRoomExit.delete(userId)) this.removeMember(userId);
     }
@@ -506,11 +360,7 @@ export class LiveRoom {
     const releaseSeat = this.releaseSeat;
     this.releaseQueue = this.releaseQueue
       .then(async () => {
-        // Per seat, not per pass. One settlement can free several chairs at once — two players
-        // who both stood up mid-hand leave on the same notice — and a single `await` over the
-        // whole list would let the first failure strand every chair behind it, silently. That is
-        // the same shape as the defect this whole mechanism exists to close: work that must
-        // happen, skipped because something unrelated went wrong first.
+        // Per seat, so one failure cannot strand the other chairs freed by the same notice.
         const stuck: string[] = [];
         let lastError: unknown = null;
         for (const userId of departed) {
@@ -523,20 +373,11 @@ export class LiveRoom {
         }
         if (stuck.length === 0) return;
 
-        // Counted here, at the source, for the reason `classifyProblem` gives: `seat-release` is
-        // `counted-at-source`, so the consumer in `routes/index.ts` deliberately does not count it
-        // again. By the number of CHAIRS, not by one — three stuck chairs and one failed pass are
-        // different sizes of incident, and only this loop knows which it was.
-        //
-        // Its own counter rather than `archiveFailures`, which is where this reported before
-        // `seat-release` existed: `ArchiveFailing` is zero-tolerance and its runbook is about
-        // losing hand history, so a stuck chair paging it sends somebody to the wrong subsystem.
-        // See `AppMetrics.seatReleaseFailures`.
+        // Counted at the source, by chairs (`seat-release` is `counted-at-source`). Its own counter,
+        // not `archiveFailures`, so a stuck chair does not page the history runbook.
         this.metrics.seatReleaseFailures.inc({}, stuck.length);
-        // Logged and swallowed, like an archive write: a failed release must not wedge the chain
-        // for every later departure. The cost is honest and is why this is alertable at all — the
-        // row stays seated, the summary (built from the live table) says the chair is free, and
-        // nothing retries, so the next learner to tap it is refused `seat_taken` until a restart.
+        // Logged and swallowed so the chain keeps working. Nothing retries, so the chair is refused
+        // `seat_taken` until a restart, which is why this is alertable.
         onProblem('a seat could not be released after its player left', {
           event: 'seat-release',
           roomId: this.record.id,
@@ -545,14 +386,10 @@ export class LiveRoom {
         });
       })
       .catch(() => {
-        // A backstop, not the handler: every `releaseSeat` rejection is caught per seat above, so
-        // the only way here is `onProblem` or the counter throwing. Nothing is swallowed silently
-        // that this class could have reported — what it prevents is an unhandled rejection, and a
-        // chain that stays rejected and skips every departure after this one.
+        // A backstop against `onProblem` or the counter throwing, so the chain never stays rejected.
       });
   }
 
-  /** Tracks open sockets so `RoomMember.connected` is a fact rather than a guess. */
   noteSocket(userId: string, delta: number): void {
     const member = this.members.get(userId);
     if (member === undefined) return;
@@ -560,10 +397,8 @@ export class LiveRoom {
   }
 
   close(): void {
-    // A hand still in progress when the room closes can never reach a settled result: the deck
-    // and the commitment salts live only in this process's memory (see the file header) and go
-    // with it. Counted here rather than inferred from the gap between `handsStarted` and
-    // `handsCompleted`, because that gap also contains every hand currently being played.
+    // A hand in progress at close can never settle. Counted here, because the started/completed
+    // gap also contains every hand being played.
     if (this.table.snapshot().handInProgress) {
       this.metrics.handsFailed.inc({ reason: 'room_closed' });
     }
@@ -574,23 +409,10 @@ export class LiveRoom {
     this.unsubscribe = null;
   }
 
-  /**
-   * Turns one table change into archive writes, in order, without ever blocking play.
-   *
-   * Each notice's writes are appended to this room's chain and awaited by nobody: the table has
-   * already moved on and the players are already looking at the new state. A rejected write is
-   * logged and the chain continues — see the file comment for why that is the right direction.
-   */
+  /** Appends this notice's archive writes to the room's chain. Nobody awaits it, and a failure is logged. */
   private archiveNotice(notice: TableNotice, archive: HandArchive, onProblem: ProblemHook): void {
-    // The hand lifecycle is counted here rather than inside `LiveTable`, because this is the one
-    // subscription every notice passes through and because the table is a component the tests
-    // construct directly — instrumenting it there would make every one of them a metrics test.
-    // Both conditions fire exactly once per hand: `handStarted` is the reason of a single notice,
-    // and `handCompleted` is set by `settleIfComplete`, which settles once per hand by design so
-    // that a subscriber cannot double-count. The two are INDEPENDENT — a hand that is over before
-    // anybody acts sets both on one notice — and the table no longer overwrites the reason with
-    // `handComplete`, which is what used to make `handsCompleted` climb while `handsStarted` did
-    // not, and falsify this paragraph's own claim that each fires exactly once per hand.
+    // Counted here, not in `LiveTable`, so table tests are not metrics tests. Each fires once per
+    // hand, and a hand that ends before anyone acts sets both on one notice.
     if (notice.reason === 'handStarted') this.metrics.handsStarted.inc();
     if (notice.handCompleted) this.metrics.handsCompleted.inc();
 
@@ -600,14 +422,9 @@ export class LiveRoom {
     const board = notice.board;
     const actions = notice.loggedActions;
     const result = notice.handCompleted ? this.table.archivedResult() : null;
-    // From the NOTICE, never from `this.table.snapshot().seats`. The snapshot is a later read, and
-    // by the time it happens `settleIfComplete` has already removed the seats that stood up
-    // mid-hand — so a departing winner was archived as though the hand had not paid them and the
-    // chips they won were destroyed. See `TableNotice.settledStacks`.
+    // From the NOTICE, never the snapshot, which has already dropped mid-hand leavers.
     const settled = notice.settledStacks;
-    // Completion wins when a hand starts and ends on one notice: the room is open at the end of
-    // it, and writing `playing` because the deal was also on this notice would leave the lobby
-    // advertising a hand that is already over.
+    // Completion wins when a hand starts and ends on one notice, so the lobby does not say `playing`.
     const roomStatus = notice.handCompleted ? 'open' : notice.reason === 'handStarted' ? 'playing' : null;
 
     this.archiveQueue = this.archiveQueue
@@ -621,14 +438,10 @@ export class LiveRoom {
         if (settled !== null) {
           await archive.stacksSettled({ roomId: this.record.id, stacks: settled });
         }
-        // `rooms.status` follows play, so a lobby read from the database agrees with the table.
         if (roomStatus !== null) await archive.roomStatusChanged(this.record.id, roomStatus);
       })
       .catch((error: unknown) => {
-        // Not a failed hand — play continued and the players got a result — so this has its own
-        // counter rather than `handsFailed`. Incremented here, at the write, because it is the
-        // only place that knows an archive write is what failed; the consumer of `onProblem`
-        // deliberately does not count `archive-write` again.
+        // Not a failed hand, so its own counter, counted here. The `onProblem` consumer does not count it.
         this.metrics.archiveFailures.inc();
         onProblem('a hand could not be archived', {
           event: 'archive-write',
@@ -639,19 +452,11 @@ export class LiveRoom {
   }
 }
 
-// ---------------------------------------------------------------------------
-// The registry
-// ---------------------------------------------------------------------------
-
 export interface RoomRegistryOptions {
   readonly clock?: Clock;
   /**
-   * How long a lone learner gets to act, in seconds, when every other seat is a bot.
-   * Supplied from `AppConfig.learnerTurnSeconds`; omitted, `LiveTable` applies its own default.
-   *
-   * It is threaded from here rather than read from the environment inside `LiveTable` because the
-   * table is a pure-ish component the tests construct directly, and a constant it reads for itself
-   * is a constant they cannot vary.
+   * How long a lone learner gets to act, in seconds, from `AppConfig.learnerTurnSeconds`. Threaded in
+   * so tests can vary it. Omitted, `LiveTable` applies its own default.
    */
   readonly learnerTurnSeconds?: number;
   /** The dealing source. `createSecureRandom()` unless a test needs otherwise. */
@@ -659,54 +464,22 @@ export interface RoomRegistryOptions {
   readonly archive?: HandArchive;
   /** Room and member persistence. Defaults to the repositories, bound lazily. */
   readonly store?: RoomStore;
-  /** Bots' thinking delay. Legibility only; see `bots.ts`. */
+  /** Bots' thinking delay. Legibility only. */
   readonly botThinkingDelayMs?: number;
   readonly nextHandId?: () => string;
-  /**
-   * Non-fatal problems from this registry, its tables and its bots.
-   *
-   * `ProblemHook` requires a typed `event` on the detail, which is what lets the consumer in
-   * `routes/index.ts` count "a bot could not act" separately from "a hand could not be
-   * archived" instead of matching on prose. See `observability/telemetry.ts`.
-   */
+  /** Non-fatal problems from this registry, its tables and its bots, each with a typed `event`. */
   readonly onProblem?: ProblemHook;
   /** Defaults to the process-wide metrics. A test that wants isolation passes its own. */
   readonly metrics?: AppMetrics;
   /**
    * The room lease, or `null` for a registry that does not enforce one.
-   *
-   * ## Why the default is null, and why that is not a hole
-   *
-   * `store` defaults to the real Postgres store because every caller of it already needs a
-   * database. This does not, and cannot: `test/rooms.test.ts` and `test/ws-router.test.ts` drive
-   * the whole of rooms, seating, the socket protocol and the bots against a `Map`-backed store with
-   * no Postgres anywhere, and a default that reached for `getSql()` would turn every one of those
-   * into a database test. A development run with no database is the same case.
-   *
-   * So the default is the historical behaviour — no lease, no refusal, no heartbeat — and the
-   * production wiring in `routes/index.ts` passes `postgresRoomOwnership(getSql)` explicitly, the
-   * same way it passes `postgresArchive(getSql)` and for the same reason. That file's header
-   * already records what happened the last time a registry was left on a permissive default: the
-   * archive wrote nothing and `GET /hands` was empty forever. The equivalent mistake here is worse
-   * and quieter, so `test/wiring.test.ts` asserts that the assembled app's registry enforces a
-   * lease, rather than trusting the call site to keep saying so.
-   *
-   * A registry with `ownership: null` is not "unsafe by default" in any deployment: it is one
-   * process with no database, which cannot have a second process contending for a room it is not
-   * persisting anyway.
+   * Null by default so the `Map`-backed tests and a database-less dev run need no Postgres. Production
+   * passes `postgresRoomOwnership(getSql)` in `routes/index.ts`, and `test/wiring.test.ts` asserts it.
    */
   readonly ownership?: RoomOwnership | null;
   /**
-   * Who may take a seat, or `null` for a deployment that does not gate seating.
-   *
-   * Null is the shipped default (`PRL_ENROLMENT_REQUIRED=off`) and the historical behaviour: any
-   * member of a room may sit at it. `routes/index.ts` passes `postgresSeatEntitlement(getSql)`
-   * when the config says `enforced`, and `test/wiring.test.ts` asserts that correspondence in both
-   * directions rather than trusting the call site to keep saying so — the same guard, for the same
-   * reason, as `ownership` above.
-   *
-   * See `rooms/entitlement.ts` for why the decision arrives as a port rather than as a `getSql()`
-   * inside this file.
+   * Who may take a seat, or `null` (the `PRL_ENROLMENT_REQUIRED=off` default) for no gate.
+   * `test/wiring.test.ts` asserts it is bound exactly when config says `enforced`.
    */
   readonly entitlement?: SeatEntitlement | null;
 }
@@ -731,28 +504,15 @@ export interface OpenRoomRequest {
   readonly record: RoomRecord;
   /** Members already known from the database, for a room being re-opened after a restart. */
   readonly members?: readonly Omit<RoomMemberRecord, 'sockets'>[];
-  /**
-   * Read the row again under the lease and refuse to build a closed room. Set by `ensureOpen`,
-   * whose record comes from a read that may be stale by then; see `buildOwnedRoom`.
-   */
+  /** Re-read the row under the lease and refuse a closed room. Set by `ensureOpen`; see `buildOwnedRoom`. */
   readonly recheckClosed?: boolean;
 }
 
-/**
- * Every live room in this process.
- *
- * One instance, created by the route module and shared with the WebSocket hub, so that both see
- * the same tables. Two registries would be two sets of tables for the same room ids.
- */
+/** Every live room in this process. One instance, shared by the routes and the WebSocket hub. */
 export class RoomRegistry {
   private readonly rooms = new Map<string, LiveRoom>();
 
-  /**
-   * Builds in flight, keyed by room id, so two concurrent first-touches share one build.
-   *
-   * Empty except during an open. An entry is removed when the build settles — including when
-   * it rejects, so a database blip during one open does not make the room unopenable.
-   */
+  /** Builds in flight, so concurrent first-touches share one. Removed on settle, including rejection. */
   private readonly opening = new Map<string, Promise<LiveRoom>>();
   private readonly clock: Clock;
   private readonly random: RandomSource;
@@ -772,14 +532,7 @@ export class RoomRegistry {
   private readonly leases = new Map<string, HeldLease>();
   /** The renewal timer, armed only while at least one lease is held. */
   private heartbeatTask: ScheduledTask | null = null;
-  /**
-   * Every release this registry has started, chained so `shutdown()` can wait for all of them.
-   *
-   * A chain rather than a set of loose promises for the reason `LiveRoom.releaseQueue` is one: the
-   * caller that matters — the shutdown path — has to be able to await "every release has been
-   * written", and a fire-and-forget release that nobody can wait for turns a graceful shutdown into
-   * a lease-TTL-long refusal for every room this process was serving.
-   */
+  /** Every release started, chained so `shutdown()` can await them rather than leave leases for a TTL. */
   private releaseQueue: Promise<void> = Promise.resolve();
   /** Who wants to know that a room was taken away. `ws/hub.ts` registers one, to close sockets. */
   private readonly evictionListeners = new Set<(roomId: string, reason: EvictionReason) => void>();
@@ -800,60 +553,17 @@ export class RoomRegistry {
     this.metrics = options.metrics ?? appMetrics();
     this.ownership = options.ownership ?? null;
     this.entitlement = options.entitlement ?? null;
-    // Read at scrape time from the map itself, never mirrored on open and close: a mirror drifts
-    // the first time somebody adds a path that removes a room and forgets the decrement, and a
-    // gauge that is quietly wrong during an incident is worse than no gauge (see `Gauge.setFrom`).
-    //
-    // The caveat, stated rather than hidden: a collector is one function, so if a process built
-    // several registries against the same metrics the last one would win. A server builds exactly
-    // one — `roomRegistry()` is a process-wide singleton — and a test that builds several passes
-    // its own `metrics`, which gives each registry its own gauge. Same caveat, same shape, as
-    // `getSharedPool` and the origin allowlist.
+    // Read at scrape time, never mirrored, so the gauge cannot drift. One registry per process; a
+    // test that builds several passes its own `metrics`.
     this.metrics.roomsLive.setFrom(() => this.rooms.size);
   }
 
   /**
    * Opens a live table for a room, or returns the one already open.
-   *
-   * ## Why there is an in-flight map and not just the `rooms` lookup
-   *
-   * The body below is a check-then-act across four `await`s: it reads `this.rooms`, then
-   * reconciles interrupted hands, then reads the hand count and the last deal, and only at the
-   * very end does it `this.rooms.set`. Two callers that both arrive while the room is cold both
-   * pass the lookup, both build a `LiveTable`, and the second `set` silently replaces the first.
-   *
-   * That is not a theoretical window. Both public entry points — `openRoomFor` in
-   * `routes/rooms.ts` and `reopenFor` in `ws/router.ts` — await a database round trip before
-   * calling this, and `ensureOpen` adds two more in front, so the window is several
-   * Postgres round trips wide and opens on exactly the sequence a page load performs: a
-   * `GET /rooms/:id` racing the WebSocket `hello`, or two tabs of one session.
-   *
-   * Three things went wrong when it lost, all reproduced:
-   *
-   *   1. **A permanently silent table.** `ensureSubscription` in `ws/router.ts` caches one
-   *      table subscription per room id and never re-checks it. Attached to the room that was
-   *      replaced, it listens to a table nobody mutates: `startHand` answers `ack` and then no
-   *      `state` and no `event` frame ever arrives. The socket stays healthy — pongs answered,
-   *      acks returned — so neither the client's handshake grace nor its ping watchdog fires and
-   *      it never reconnects. Nothing repairs it until every socket in the room has closed.
-   *   2. **A permanent lockout.** `joinByInviteCode` calls `addMember` on the room this returns.
-   *      If that is the orphan, the learner is a durable member who is absent from the mapped
-   *      room's member map, and `require()` — which never re-reads the database — answers
-   *      `room_not_found_or_not_permitted` for every later request, having just told the client
-   *      it joined.
-   *   3. **A leak.** The orphan's `LiveTable`, `TurnTimer`, `BotRunner` subscription and archive
-   *      listener are unreachable from `this.rooms`, so `closeAll()` cannot close them.
-   *
-   * The file header says one API process per room is a correctness constraint because two
-   * processes holding "the" `HandState` deal two different hands. This produced that condition
-   * inside one process.
-   *
-   * So a build in flight is published before its first `await`, and every other caller waits on
-   * it. The entry is removed when it settles, including on rejection, so a failed open does not
-   * poison the next attempt.
-   *
-   * `request.members` is applied only by the caller that actually builds the room, which is the
-   * same rule the `existing !== undefined` early return has always had.
+   * The build is a check-then-act across several `await`s, and a page load races `GET /rooms/:id`
+   * against the socket `hello`. Two builds produced a silent table (the socket subscribed to the
+   * replaced one), a lockout (`addMember` on the orphan), and a leak. So the build is published in
+   * `opening` before its first `await` and every other caller waits on it.
    */
   open(request: OpenRoomRequest): Promise<LiveRoom> {
     const existing = this.rooms.get(request.record.id);
@@ -862,9 +572,7 @@ export class RoomRegistry {
     const inFlight = this.opening.get(request.record.id);
     if (inFlight !== undefined) return inFlight;
 
-    // No `await` between here and the `set`, which is what makes this a lock rather than a
-    // slightly narrower race: `buildRoom` runs synchronously up to its own first `await`, so no
-    // other caller can be scheduled until the entry is published.
+    // No `await` before the `set`: `buildRoom` runs synchronously up to its first `await`.
     const build = this.buildRoom(request).finally(() => {
       this.opening.delete(request.record.id);
     });
@@ -873,61 +581,33 @@ export class RoomRegistry {
   }
 
   private async buildRoom(request: OpenRoomRequest): Promise<LiveRoom> {
-    // ########################################################################
-    // ## THE LEASE IS TAKEN FIRST. NOTHING ABOVE THIS LINE, EVER.           ##
-    // ########################################################################
-    //
-    // Not merely "before the table is built" — before `reconcileInterruptedHands`, which is the
-    // reason this is a hard rule rather than a tidy one. That call runs
-    // `hands.abandonInterruptedHands`, which settles every open hand row for the room on the stated
-    // grounds that "a hand interrupted by a restart is unrecoverable by design, so the row has to be
-    // settled by somebody". That reasoning is true for a room NOBODY is serving and false for a room
-    // another process is serving right now: its hand is not interrupted, it is in progress, in that
-    // process's memory, and closing the row underneath it destroys the record of a hand people are
-    // still playing. Reconciling before acquiring would make a refused open destructive.
-    //
-    // A failure here is deliberately FAIL-CLOSED: if the lease cannot be read, the room does not
-    // open. Every other path into this method has already reached Postgres — `ensureOpen` reads the
-    // room row and the roster first — so a database this cannot ask is a database that has already
-    // failed the open; and the one thing that must not happen is serving a room whose ownership is
-    // unknown.
+    // THE LEASE IS TAKEN FIRST. NOTHING ABOVE THIS LINE, EVER.
+    // `reconcileInterruptedHands` closes open hand rows, which would destroy a hand another process
+    // is still playing. Fail closed: if the lease cannot be read, the room does not open.
     await this.acquireLease(request.record.id);
     try {
       return await this.buildOwnedRoom(request);
     } catch (error) {
-      // The lease was taken and there is no room to hold it. Released rather than left to expire,
-      // because a build that failed on a transient read would otherwise make the room unopenable —
-      // by anybody, including this process on the very next request — for a whole lease TTL.
+      // Released rather than left to expire, or a transient failure locks the room for a TTL.
       this.releaseLeaseSoon(request.record.id);
       throw error;
     }
   }
 
   private async buildOwnedRoom(request: OpenRoomRequest): Promise<LiveRoom> {
-    // For a re-open, the row is read again here, under the lease and inside the `opening` entry,
-    // because the read that decided to open it may be stale by now. Measured: `ensureOpen` read the
-    // room as open and was loading its roster when `retirePracticeTables` closed the row; the
-    // retire found nothing live and nothing opening, returned, and this build then published a
-    // live table for a closed room — `GET /rooms/:id` answered 200 and a hand was dealt at it. A
-    // closer that runs after this read finds the build in `opening` and waits for it (see
-    // `retire`); one that ran before it is seen here. Only for `ensureOpen`: `createRoom` has just
-    // written the row, and a caller that opens from a record it holds has no row to be stale.
+    // Re-read under the lease, because the read that decided to open may be stale. Measured: a
+    // retire closed the row mid-open and this published a live table for a closed room. A later
+    // closer waits on `opening` (see `retire`). `createRoom` just wrote the row, so it skips this.
     if (request.recheckClosed === true && (await this.store.byId(request.record.id))?.status === 'closed') {
       throw new AppError('room_closed', {
         logDetail: `room ${request.record.id} closed while it was opening`,
       });
     }
-    // Nothing in this process holds a table for this room yet, so any hand still open in the
-    // database belongs to a process that is gone and can never finish it. Closed here, before the
-    // table exists, so the reconciliation can never race a hand this process is about to deal.
-    //
-    // The returned count is not read here on purpose: it is logged and counted against
-    // `handsFailed` inside, which is the only place that cannot be forgotten by a future caller.
+    // Any open hand in the database belongs to a dead process. Closed before the table exists, so
+    // it cannot race this process's deal. Counted inside.
     await this.reconcileInterruptedHands(request.record.id);
 
-    // Seeded from the database so a room re-opened after a restart cannot collide with a hand
-    // number that has already been played (`hands_room_hand_number_key`), and so the blind
-    // rotation carries on from where it was rather than restarting under the players.
+    // Seeded from the database so hand numbers do not collide and the blind rotation resumes.
     let played = 0;
     let blinds: BlindPositions | undefined;
     try {
@@ -936,8 +616,7 @@ export class RoomRegistry {
       blinds =
         last === null ? undefined : (blindsFromLastHand(last, request.record.config.maxSeats) ?? undefined);
     } catch (error) {
-      // A room that will not open is worse than one that opens with a fresh rotation, so both
-      // reads fail soft. The cost of the second one failing is one repeated big blind.
+      // Fail soft. The cost is one repeated big blind.
       this.onProblem('could not read the played hand count or the last deal', {
         event: 'room-open-read',
         roomId: request.record.id,
@@ -969,9 +648,7 @@ export class RoomRegistry {
       archive: this.archive,
       onProblem: this.onProblem,
       metrics: this.metrics,
-      // The one durable write a room makes on its own initiative, and the reason a mid-hand stand
-      // no longer strands `room_members.seat`: the release is announced by the table when the
-      // chair is actually freed, not when the player asked, so the two cannot drift apart.
+      // Announced when the table frees the chair, not when the player asked, so they cannot drift.
       releaseSeat: (userId) => this.store.unseatMember(request.record.id, userId),
     });
     for (const member of request.members ?? []) room.addMember(member);
@@ -984,27 +661,15 @@ export class RoomRegistry {
   }
 
   /**
-   * Closes any hand of this room that can never complete, and reports how many there were.
-   *
-   * Called from `open`, which is the moment this process takes responsibility for the room and
-   * the moment it can be sure nobody here is mid-hand in it. Public so that a startup task can
-   * sweep rooms that nobody re-opens — an orphan in a room the learner never revisits stays in
-   * their history until somebody closes it, and this is the call that does.
-   *
-   * A failure is logged and swallowed: a room that would not open because a history row could not
-   * be tidied would turn a reporting problem into a gameplay one, which is the same trade
-   * `LiveRoom.archiveNotice` makes and for the same reason.
+   * Closes any hand of this room that can never complete, and reports how many. Public for a startup
+   * sweep of rooms nobody re-opens. Failures are logged and swallowed, as in `archiveNotice`.
    */
   async reconcileInterruptedHands(roomId: string): Promise<number> {
     if (this.rooms.has(roomId)) return 0;
     try {
       const abandoned = await this.archive.abandonInterruptedHands(roomId);
       if (abandoned.length > 0) {
-        // These are hands that were dealt and never settled, which is exactly what
-        // `handsFailed` counts — and the count is what every caller used to throw away. Recorded
-        // here rather than at the call sites so that a future caller (a startup sweep over rooms
-        // nobody re-opens) cannot forget to, and by `abandoned.length` rather than by one,
-        // because one reconciliation can close several hands.
+        // Counted here so no caller can forget, by `abandoned.length` because one call can close several.
         this.metrics.handsFailed.inc({ reason: 'interrupted_by_restart' }, abandoned.length);
         this.onProblem('closed hands that were interrupted and can never complete', {
           event: 'hands-interrupted',
@@ -1023,12 +688,7 @@ export class RoomRegistry {
     }
   }
 
-  /**
-   * The room, or the one answer a stranger and a non-member both get.
-   *
-   * `room_not_found_or_not_permitted` for both cases, deliberately: a distinguishable "that room
-   * exists but is not yours" is a free way to confirm a room id.
-   */
+  /** Strangers and non-members get the same answer, so a room id cannot be confirmed. */
   require(roomId: string, userId: string): LiveRoom {
     const room = this.rooms.get(roomId);
     if (room === undefined || room.record.closed) {
@@ -1042,12 +702,7 @@ export class RoomRegistry {
     return room;
   }
 
-  /**
-   * Opens the live table for a persisted room, loading it if this process has not seen it.
-   *
-   * Returns null when there is no such room, which every caller turns into
-   * `room_not_found_or_not_permitted` — the same answer a non-member gets.
-   */
+  /** Opens the live table for a persisted room. Null when there is no such room. */
   async ensureOpen(roomId: string): Promise<LiveRoom | null> {
     const live = this.rooms.get(roomId);
     if (live !== undefined) return live;
@@ -1067,91 +722,32 @@ export class RoomRegistry {
         })),
       });
     } catch (error) {
-      // Closed between the read above and the build's own read of the row: the same answer as a
-      // room that was closed before this was called. See `buildOwnedRoom`.
+      // Closed between the read above and the build's own read. See `buildOwnedRoom`.
       if (error instanceof AppError && error.code === 'room_closed') return null;
       throw error;
     }
-    // Seats recorded in the database are re-taken at the live table, so a room re-opened after a
-    // restart looks the way the roster says it does — and a bot seat is re-registered with the
-    // runner, so it plays instead of sitting there until the turn clock folds it.
-    //
-    // ## Why this changed
-    //
-    // This loop used to re-take the seats and register no bots at all, on the stated reasoning
-    // that "a seat that cannot act is more honest than one that silently plays a different
-    // style". The premise was true and forced: `room_members.bot_profile` could not name seven of
-    // the twelve profiles, so there was frequently no style to put back. The conclusion did not
-    // follow — the fix for a column that cannot name the opponent is to make it name the opponent
-    // (migration 0003), not to stop restoring opponents. Restarting the only API process turned
-    // every AI Legends table into a row of timeout-folders, which teaches a learner nothing and
-    // silently ruins the session they were in the middle of.
-    //
-    // ## What is restored, and what honestly is not
-    //
-    // Restored exactly: the profile, the difficulty, and the decision seed — the three things
-    // that decide how the seat plays. `rehydrateBotSeat` reads them from the row and REFUSES
-    // rather than substituting when any is missing or unrecognised, so a retired profile id or a
-    // pre-0003 row leaves an inert seat and a logged reason. That is the old behaviour, kept for
-    // exactly the case it was right about.
-    //
-    // Not restored: `OpponentModel`. It is built from observed actions and those observations
-    // died with the process. A rehydrated bot therefore starts with no read on the table, which
-    // is a real difference and is stated here rather than papered over — it is also what a
-    // genuinely new opponent would have, so it costs the learner nothing they can be misled by.
-    //
-    // ## Restoring a chair is a way to end up seated, so it is gated too
-    //
-    // This loop is the third and last call site of `table.sit` (the others are `sitAtTable` and
-    // `seatBot`), and it is the one that seats somebody with nobody asking. `PRL_ENROLMENT_REQUIRED`
-    // therefore applies here as well, and the decision is explicit rather than inherited:
-    //
-    //   * **A bot is never asked.** A bot has a user row and can never have an enrolment, so
-    //     checking one would empty every Legends table on the first restart. `is_bot` is the whole
-    //     of the exemption and it is read from the durable row, not inferred.
-    //   * **A learner who is no longer entitled does NOT get the chair back.** Their access
-    //     expired, or was withdrawn, while they were sitting in it. Giving it back would mean a
-    //     revocation quietly stops applying to the one person it was aimed at, for as long as
-    //     nobody restarts the process — and then applies, months later, at a deploy nobody
-    //     connected to it. The seat is left free, the learner keeps their membership and can watch,
-    //     and their next `sit` gets the honest refusal with the sentence that tells them what to do.
-    //
-    //     "Left free" has to be made true in the DATABASE as well, and that is what the
-    //     `unseatMember` below is. `room_members_live_seat_key` is UNIQUE `(room_id, seat) WHERE
-    //     left_at IS NULL`, so a row that still names seat 3 holds seat 3 whether or not anybody
-    //     is in it: the live table would report the chair empty, the next learner to tap it would
-    //     be refused by that index with `seat_taken`, and it would stay that way for the life of
-    //     the room. That is the exact phantom-chair state `standFromTable` records having produced
-    //     once already — "the room summary showed the seat free, the next client to tap it was
-    //     refused for the rest of the process's life" — reached here instead. The write only nulls
-    //     `seat`; the membership and the STACK stay, so nothing the learner won is lost and a
-    //     re-entitled learner still buys in at what they had.
-    //   * **A read that FAILS leaves the seat unrestored too**, because it goes through the catch
-    //     below. That is fail-closed, and consistent with `buildRoom`, which refuses to open a room
-    //     whose lease it cannot read. This path has already made two successful queries to get here
-    //     (`store.byId` and `store.membersOfRooms`), so a database that cannot answer this one has
-    //     failed the open rather than merely this seat.
-    //
-    // The refusal is NOT reported as `seat-retake`. See `classifyProblem` in
-    // `observability/telemetry.ts`: that event is an actor failure, meaning a seat that owes an
-    // action and will not produce one, and this seat owes nothing because nobody is in it.
+    // Recorded seats are re-taken, and bot seats re-registered with the runner so they play rather
+    // than time out. `rehydrateBotSeat` refuses rather than substitutes, leaving an inert seat and a
+    // logged reason. `OpponentModel` is not restored; a rehydrated bot starts with no read.
+    // This is a call site of `table.sit`, so it is gated too:
+    //   * A bot is never asked. It can never hold an enrolment, and `is_bot` comes from the durable row.
+    //   * A learner no longer entitled does not get the chair back, or a revocation would not apply
+    //     until a restart. The seat is also freed in the database, because `room_members_live_seat_key`
+    //     would otherwise hold it and refuse the next sitter `seat_taken`. Membership and stack stay.
+    //   * A failed entitlement read leaves the seat unrestored (fail closed, via the catch below).
+    // The refusal is not `seat-retake`, which means a seat that owes an action.
     for (const member of members) {
       if (member.seat === null) continue;
       try {
         if (!member.is_bot && !(await this.entitledToResumeSeat(member.user_id))) {
           this.metrics.seatEntitlementRefusals.inc({ reason: 'seat_not_restored' });
-          // Fail-soft, and deliberately: a chair that could not be freed is a chair nobody else
-          // can take, which is a worse table than the one this open would otherwise refuse to
-          // produce at all. The refusal above already stands whether or not this write lands.
+          // Fail-soft. The refusal stands whether or not this write lands.
           const freed = await this.store
             .unseatMember(roomId, member.user_id)
             .then(() => true)
             .catch((error: unknown) => {
-              // Counted here because `seat-release` is `counted-at-source` in `classifyProblem`,
-              // and the source is this line: a log event whose counter never moves is a series an
-              // alert cannot see. The consequence is the one `seatReleaseFailures` names exactly —
-              // a chair the summary shows free that the next client is refused `seat_taken` for —
-              // so it is the same counter and the same runbook, not a new one.
+              // Counted here because `seat-release` is `counted-at-source`. Same counter and runbook
+              // as a stuck chair, since the consequence is the same.
               this.metrics.seatReleaseFailures.inc({}, 1);
               this.onProblem('a seat left empty by an expired enrolment could not be freed', {
                 event: 'seat-release',
@@ -1177,8 +773,7 @@ export class RoomRegistry {
           stack: member.stack,
           isBot: member.is_bot,
           botProfile: member.bot_profile,
-          // These players were in the rotation a moment ago; a restart is not an arrival, and
-          // charging them the newcomer's wait would sit the whole table out for an orbit.
+          // A restart is not an arrival, so no blind wait.
           resumingSeat: true,
         });
       } catch (error) {
@@ -1196,13 +791,8 @@ export class RoomRegistry {
   }
 
   /**
-   * Puts one persisted bot seat back on the runner, or says why it will not.
-   *
-   * Never throws: one unrepairable row must not cost the room its other seats. A refusal is
-   * logged with the seat's own reason and the seat stays occupied but inert, which the turn timer
-   * resolves by checking or folding it. There is deliberately no nearest-match fallback — seating
-   * `patient-technician` where the row asked for a profile this build no longer carries would be
-   * inventing an opponent, and the learner would have no way to tell.
+   * Never throws, so one bad row cannot cost the room its other seats. A refused seat stays inert and
+   * the turn timer folds it. No nearest-match fallback.
    */
   private rehydrateBot(room: LiveRoom, seat: number, member: roomsRepository.RoomMemberRow): void {
     const rehydrated = rehydrateBotSeat({
@@ -1230,13 +820,8 @@ export class RoomRegistry {
   }
 
   /**
-   * Creates a room: the durable row first, then the live table.
-   *
-   * That order matters. If the row fails to write there is no table to clean up, whereas a table
-   * created first would be a room the owner can play at and nobody can ever find again. The
-   * invite code comes back from the store exactly once and is returned to the caller unchanged —
-   * it is not stored here, not logged (`logging.ts` censors `/invite/i`), and unrecoverable
-   * afterwards.
+   * The durable row first, then the live table, so a failed write leaves nothing to clean up. The
+   * invite code is returned once and never stored or logged (`logging.ts` censors `/invite/i`).
    */
   async createRoom(
     principal: RoomPrincipal,
@@ -1245,8 +830,6 @@ export class RoomRegistry {
     const created = await this.store.create({ ...spec, ownerUserId: principal.userId });
     const record = recordFromRow(created.room);
     const room = await this.open({ record });
-    // The owner is a member from the start, so the room appears in their list and the membership
-    // check that guards every other endpoint has something to find.
     await this.store.addMember({ roomId: record.id, userId: principal.userId });
     room.addMember({
       userId: principal.userId,
@@ -1257,17 +840,10 @@ export class RoomRegistry {
     return { room, inviteCode: created.inviteCode };
   }
 
-  /**
-   * Joins a room by invite code.
-   *
-   * Joining twice is not an error: the second call finds the existing membership and answers with
-   * the same room. A client that retries a dropped response must not be told `already_seated` for
-   * a room it is in.
-   */
+  /** Joining twice is not an error, so a retried request is answered with the same room. */
   async joinByInviteCode(principal: RoomPrincipal, code: string): Promise<LiveRoom> {
     const row = await this.store.byInviteCode(code);
-    // One answer for "no such code" and "malformed code". Distinguishing them tells somebody
-    // probing codes that they had the format right, which is the only feedback a brute force needs.
+    // One answer for "no such code" and "malformed code", so a brute force learns nothing.
     if (row === null) throw new AppError('invite_code_invalid', { logDetail: 'no room for that code' });
     if (row.status === 'closed') throw new AppError('room_closed', { logDetail: `room ${row.id} is closed` });
 
@@ -1290,39 +866,13 @@ export class RoomRegistry {
 
   /**
    * Takes a seat: units checked, database first, then the live table.
-   *
-   * The database is the arbiter of "is that seat free", because `room_members_live_seat_key` is
-   * the only check that holds when two players tap the same seat in the same instant. The live
-   * table is then told, and if *it* refuses — which means the two copies had drifted — the
-   * database seat is given back, so a refused sit never leaves a seat allocated to somebody who is
-   * not at the table.
-   *
-   * ## THIS IS THE ONE PLACE A PERSON TAKES A SEAT
-   *
-   * ############################################################################
-   * ## BOTH TRANSPORTS ARRIVE HERE. `POST /rooms/:roomId/sit` AND THE SOCKET   ##
-   * ## `sit` FRAME CALL THIS METHOD AND NOTHING ELSE, WHICH IS WHY THE         ##
-   * ## ENTITLEMENT CHECK IS HERE AND NOT IN EITHER OF THEM.                    ##
-   * ############################################################################
-   *
-   * A guard on the REST route with the socket left open is worse than no guard: it reads as
-   * enforced, every test of it passes, and the whole product is reachable through the frame
-   * nobody guarded. `routes/rooms.ts` already says the two transports "run the same method" so
-   * they cannot drift; this is what that property is for. `test/rooms.test.ts` drives the REST
-   * route and `test/ws-router.test.ts` drives a real `sit` frame, and both are asserted rather
-   * than argued from this comment.
-   *
-   * ## Why the entitlement check is before every other check but `require`
-   *
-   * `require` stays first, and must: it is what makes "no such room" and "not your room"
-   * indistinguishable, and answering `enrolment_required` to a stranger who guessed a room id
-   * would confirm the room exists. After that, this runs BEFORE the durable membership read, the
-   * units read and `seatMember`, so a learner who may not sit never causes a durable write that
-   * has to be given back, and never has their units read to answer a question their units do not
-   * decide.
-   *
-   * `insufficient_units` is a nearby refusal and a deliberately different one: units are a thing
-   * the learner can fix themselves (`POST /me/units/reset`), and an enrolment is not.
+   * `room_members_live_seat_key` arbitrates a race for one seat. If the live table refuses, the
+   * database seat is given back.
+   * THIS IS THE ONE PLACE A PERSON TAKES A SEAT. `POST /rooms/:roomId/sit` and the socket `sit` frame
+   * both call it, so the entitlement check lives here. `test/rooms.test.ts` and
+   * `test/ws-router.test.ts` drive each transport.
+   * `require` stays first so a stranger cannot learn a room exists from `enrolment_required`. The
+   * entitlement check then runs before any durable write or units read.
    */
   async sitAtTable(roomId: string, principal: RoomPrincipal, seat: number): Promise<void> {
     const room = this.require(roomId, principal.userId);
@@ -1331,15 +881,9 @@ export class RoomRegistry {
     if (member === null) {
       throw new AppError('not_room_member', { logDetail: `not a live member of ${roomId}` });
     }
-    // A returning occupant keeps the stack the last settled hand left them. Inventing
-    // `startingStack` here is how a winning session vanished on stand/sit.
+    // A returning occupant keeps the stack the last settled hand left them.
     const buyIn = member.stack > 0 ? member.stack : room.record.startingStack;
-    // Only a rebuy is drawn against units: a membership holding chips is sat down with its own.
-    // That is what `units < buyIn` always meant, because `readUnits` used to include this very
-    // membership's stack — and since it counts only tables the learner has sat at, a room's first
-    // sit is no longer included, so the old comparison would refuse a fresh learner a room whose
-    // starting stack exceeds the allowance. A stack of 0 is only reached by playing here, so the
-    // membership is counted, and the refusal is exactly the one the header shows: 0 means reset.
+    // Only a rebuy (stack 0) is drawn against units. A membership holding chips sits with its own.
     if (member.stack === 0 && (await this.store.readUnits(principal.userId)) < buyIn) {
       throw new AppError('insufficient_units', {
         logDetail: `buy-in ${buyIn} exceeds available units`,
@@ -1360,13 +904,9 @@ export class RoomRegistry {
       await this.store.unseatMember(roomId, principal.userId).catch(() => undefined);
       throw error;
     }
-    // Devin Review on PR #25: a leave from another tab while the live table was taking this seat
-    // has already dropped the learner from the roster and written `left_at`. `addMember` below would
-    // put them back, and `require` would let them into a room they left. So the sit is undone and
-    // refused, as `seatMember` refuses a leave in its own gap. A changed record is a leave too: a
-    // rejoin made a new membership, which has not sat. This fails toward refusing a sit, never
-    // toward a member who has left. `liveMember` null (an owner not on the roster) is unchanged
-    // by this and is still added.
+    // A leave from another tab during the live sit already wrote `left_at`, and `addMember` would
+    // put the learner back. So the sit is undone and refused. A changed record is a leave too, since a
+    // rejoin made a new membership. A null `liveMember` (owner not on the roster) is still added.
     if (room.member(principal.userId) !== liveMember) {
       await room.table.stand(principal.userId);
       await room.settleSeatReleases();
@@ -1378,22 +918,14 @@ export class RoomRegistry {
       isBot: false,
       botProfile: null,
     });
-    // After the live sit, not inside `seatMember`: the live table can still refuse a chair the
-    // database granted, and a first sit written before that refusal counted a membership nobody had
-    // sat at toward units for as long as it lived. And by `memberId`: a leave and rejoin from another
-    // tab before this lands makes a new membership that has not sat. See `rooms.recordFirstSit`.
+    // After the live sit, which can still refuse, and by `memberId`, since a rejoin makes a new
+    // membership. See `rooms.recordFirstSit`.
     await this.recordFirstSit(roomId, principal.userId, memberId);
   }
 
   /**
-   * Writes the first sit, and does not fail a sit that has already happened if it cannot.
-   *
-   * The live table and the durable seat both hold the learner by now, so throwing would answer an
-   * error for a seat they are sitting in. Failing to record errs in the safe direction, and only
-   * after a stand: while seated the row counts by `seat is not null` (`users.readUnits`), and a
-   * learner who stands before the first deal reads the allowance until they sit again — less than
-   * the room holds for them, never more. Reported, because a quiet gap here is the hole migration
-   * 0008 was written to close.
+   * Does not fail a sit that already happened. A missed record errs safe: units read low, never
+   * high. Reported, because a quiet gap here is what migration 0008 closed.
    */
   private async recordFirstSit(roomId: string, userId: string, memberId: string): Promise<void> {
     try {
@@ -1409,16 +941,9 @@ export class RoomRegistry {
   }
 
   /**
-   * Refuses a seat to somebody this deployment does not consider entitled to one.
-   *
-   * Returns without asking anything when `entitlement` is null, which is `PRL_ENROLMENT_REQUIRED`
-   * unset or `off` — the shipped default, and every deployment that predates the switch.
-   *
-   * The `logDetail` names the room and the seat and NOT the reason the person is not entitled,
-   * because this call cannot know it: `SeatEntitlement.entitledToSit` answers a boolean on purpose
-   * (see its comment). An operator asking "why was this learner refused?" runs
-   * `pnpm run enrolments show --user <id>`, which is the tool that can answer it, against a
-   * database the request path is not allowed to write.
+   * Returns at once when `entitlement` is null (`PRL_ENROLMENT_REQUIRED` off).
+   * `logDetail` cannot name the reason, as `entitledToSit` is a boolean. An operator runs
+   * `pnpm run enrolments show --user <id>`.
    */
   private async requireEntitledToSit(userId: string, roomId: string, seat: number): Promise<void> {
     if (this.entitlement === null) return;
@@ -1429,43 +954,16 @@ export class RoomRegistry {
     });
   }
 
-  /**
-   * Whether a durably recorded seat may be given back to the person the row names.
-   *
-   * `true` with no query at all when this deployment does not gate seating, which keeps a room
-   * re-open on an open public instance exactly as cheap as it was — no extra round trip per seated
-   * member, per restart, per room.
-   *
-   * Not `async`: the null branch has nothing to await, and returning the port's promise directly is
-   * the shape `biome` insists on for a method whose only asynchrony is its callee's.
-   */
+  /** No query when seating is not gated. Not `async`, because biome wants the promise returned directly. */
   private entitledToResumeSeat(userId: string): Promise<boolean> {
     if (this.entitlement === null) return Promise.resolve(true);
     return this.entitlement.entitledToSit(userId);
   }
 
   /**
-   * Stands up, keeping the membership.
-   *
-   * The table goes first here, and that is the opposite order to `sitAtTable` for a reason: a
-   * player holding a live hand does not leave immediately — they are flagged, they fold at their
-   * turn, and the seat is released when the hand completes. Freeing the database seat first would
-   * let somebody else take a seat that is still holding cards.
-   *
-   * ## Why there is no `if (seatOf(userId) === null)` here any more
-   *
-   * There used to be, guarding the `unseatMember` call, and it was false for exactly the case
-   * that mattered: a player holding a live hand is flagged `leaving` and STAYS seated, so the
-   * durable seat was never released. `settleIfComplete` freed the live chair when the hand ended,
-   * on a path with no store and no listener, and nothing re-ran this. The room summary (built
-   * from the live table) then showed the seat free, the next client to tap it was refused by
-   * `room_members_live_seat_key` with `seat_taken` — for the rest of the process's life — and a
-   * restart re-seated a player who had left, with the stale stack that came with them.
-   *
-   * The release is now announced by the table on the notice that actually frees the chair, and
-   * `LiveRoom.releaseDeparted` does the write. This call awaits the chain only so that the
-   * synchronous case — a player who was not in the live hand — has been written by the time the
-   * caller answers. A player still in a hand has nothing queued yet, and correctly does not wait.
+   * Stands up, keeping the membership. The table goes first (unlike `sitAtTable`), because a player
+   * in a live hand keeps the chair until the hand settles. The table announces the release and
+   * `LiveRoom.releaseDeparted` writes it. Awaiting the chain covers the immediate case only.
    */
   async standFromTable(roomId: string, userId: string): Promise<void> {
     const room = this.require(roomId, userId);
@@ -1475,17 +973,7 @@ export class RoomRegistry {
 
   /**
    * Leaves the room altogether: stand up if seated, then drop the membership.
-   *
-   * `beginRoomExit` comes FIRST, before `stand`, and that order is load-bearing — `stand` can
-   * free the chair synchronously, and the notice that does it is what completes the exit. See
-   * `LiveRoom.beginRoomExit`, which also explains why an unseated member is dropped immediately.
-   *
-   * The durable writes are unconditional, as they always were. What used to be conditional — and
-   * on a condition evaluated at the wrong instant — was the in-memory membership: dropped only
-   * `if (seatOf(userId) === null)` at the moment of the request, which is false for anybody
-   * holding a live hand, and never re-run. A mid-hand leaver was therefore durably gone and still
-   * a live member, so `require()` kept letting them read the room and `RoomSummary.members` kept
-   * listing them.
+   * `beginRoomExit` comes FIRST, before `stand`. See `LiveRoom.beginRoomExit`.
    */
   async leaveRoom(roomId: string, userId: string): Promise<void> {
     const room = this.require(roomId, userId);
@@ -1497,55 +985,16 @@ export class RoomRegistry {
   }
 
   /**
-   * Closes the learner's previous practice tables, so that starting a new one does not mint a stack.
-   *
-   * ## The defect
-   *
-   * Every room a learner creates gives them a membership holding the room's `starting_stack` before
-   * they have sat anywhere (`createRoom` → `addMember`, which defaults the stack), and units are the
-   * sum of the stacks of every live membership (`users.readUnits`). Nothing ever closed a practice
-   * table: `POST /legends/matches` discards the invite code, so nobody else can join it, and the web
-   * client creates a new match every time a reader picks a Legend. Measured through the routes
-   * against the real store: a fresh guest reads 1,000; after three matches, 3,000; the UI audit saw
-   * the header go 1,000 → 2,000 → 3,000 → 3,960 with 995 on the screen. Each abandoned row was a real
-   * 1,000-chip stack the reader could go back and sit down with, so a reader grew their units by
-   * clicking, without playing a hand. Nothing transferable was created (there is no pool, and reset
-   * is free), but the figure on the badge stopped being the chips in front of anybody.
-   *
-   * ## The rule: one practice table at a time
-   *
-   * A practice table is a room this learner OWNS, that is open, and that has no chair for another
-   * person: every other live member is a bot, at least one is, and the bots fill every seat but one.
-   * That last clause is the safety property. A Legends match (one seat per profile, plus the
-   * learner's) and the six-handed bot table both match it; the private table for friends — six seats
-   * and two bots, with an invite code that may be in somebody's hand — does not, and neither does
-   * any room another person has joined, seated or not. Matching on `name` would close a friend's
-   * table that happened to share a label.
-   *
-   * ## A hand in progress is played out, not failed
-   *
-   * Skipping a room with a hand in progress would leave the reported sequence exactly as it was: the
-   * audit started its second match while the first was dealt and waiting on the reader. Closing the
-   * table under the hand was the first version of this, and it was wrong twice over:
-   *
-   *   - `LiveRoom.close` counts a hand it interrupts as `prl_hands_failed_total{reason=room_closed}`,
-   *     and `HandsFailing` pages on the first increase (`deploy/staging/observability/
-   *     alert-rules.yml`: "there is no acceptable background rate"). Every reader who picked a new
-   *     Legend mid-hand would have paged somebody.
-   *   - An abandoned hand settles at a net of zero, so starting a new match would have been a way to
-   *     void a hand you were losing — and `leaveRoom` is explicit that leaving mid-hand "is not a way
-   *     to avoid a bet".
-   *
-   * So the reader is stood up exactly as `leaveRoom` stands them — they fold at their turn — the
-   * bots finish the hand, it settles and is archived like any other, and the live table is closed
-   * on the notice that settles it. The ROW is closed first and at once, which is what the units
-   * figure reads, and `record.closed` is set at once, so `require()` refuses the room to every
-   * request in the meantime and nobody can deal another hand at it.
-   *
-   * Durable first: the room row is closed before the live table, so a concurrent `ensureOpen` reads
-   * `closed` and refuses rather than rebuilding the table this is tearing down.
-   *
-   * Returns the ids it closed, for the caller's tests and logs.
+   * Closes the learner's previous practice tables, so starting a new one does not mint a stack.
+   * Every created room gives its owner a membership with `starting_stack`, and units sum live
+   * memberships, so three Legends matches read 3,000 units without a hand played.
+   * A practice table is one this learner OWNS, open, where every other member is a bot (at least
+   * one) and the bots fill every seat but one. A friends' table or any room another person joined
+   * never matches. Matching on `name` would.
+   * A hand in progress is played out, not failed. Closing under it would page `HandsFailing` and let
+   * a learner void a losing hand. The reader is stood up, the bots finish, and the table closes on
+   * the settling notice. The row and `record.closed` are set at once, so `ensureOpen` and `require()`
+   * refuse the room meanwhile. Returns the ids it closed.
    */
   async retirePracticeTables(userId: string): Promise<readonly string[]> {
     const owned = (await this.store.listForUser(userId)).filter(
@@ -1566,16 +1015,9 @@ export class RoomRegistry {
 
   /**
    * Retires the learner's practice tables and then runs `create`, one learner's calls at a time.
-   *
-   * `create` must build the whole new table — the room AND its bots — because a room is only a
-   * practice table once its bots fill it, and `retirePracticeTables` cannot see one that is
-   * half-built. Measured without this: two `POST /legends/matches` from one learner at once (two
-   * tabs) each retired the first match, then each created a room, and both stayed open. With it,
-   * the second waits for the first and retires the table the first made.
-   *
-   * Per learner and in process memory, which is enough because a learner's rooms are served by
-   * the one API process (`replicas: 1`, ADR 0001 and ADR 0013). A failed turn does not block the
-   * next one: the queue carries on from its settlement, not its result.
+   * `create` must build the room AND its bots, as a half-built table is not yet a practice table.
+   * Measured without this: two tabs each retired the old match and both new rooms stayed open.
+   * In-process is enough under `replicas: 1`. A failed turn does not block the next.
    */
   replacePracticeTable<T>(userId: string, create: () => Promise<T>): Promise<T> {
     const before = this.practiceTableTurns.get(userId) ?? Promise.resolve();
@@ -1589,7 +1031,6 @@ export class RoomRegistry {
     );
     this.practiceTableTurns.set(userId, settled);
     void settled.then(() => {
-      // The last turn out removes the entry, so the map holds only learners with a turn pending.
       if (this.practiceTableTurns.get(userId) === settled) this.practiceTableTurns.delete(userId);
     });
     return turn;
@@ -1597,39 +1038,29 @@ export class RoomRegistry {
 
   /** One practice table, closed durably and then live. See `retirePracticeTables`. */
   private async retire(roomId: string, ownerUserId: string): Promise<boolean> {
-    // A build in flight would publish its room AFTER the lookup below and outlive the close.
+    // A build in flight would publish its room after the lookup below and outlive the close.
     await this.opening.get(roomId)?.catch(() => undefined);
-    // Not `store.close`: the roster `retirePracticeTables` read is already old by now, and a friend
-    // who joined since (the owner can leave, which frees their membership) had their table closed
-    // under them. `closePracticeTable` re-decides "nobody else is here" under the room-row lock a
-    // join takes. Refused means not retired: the room stays open and live, untouched.
+    // Not `store.close`: a friend may have joined since the roster read. `closePracticeTable`
+    // re-checks under the room-row lock a join takes. Refused means not retired.
     if (!(await this.store.closePracticeTable(roomId, ownerUserId))) return false;
-    // And again after the close: a build that began while the close was in flight may have read
-    // the row before the close committed. One that reads it after is refused by `buildOwnedRoom`;
-    // this is the other half, waiting for one that read it before and closing what it published.
+    // Again after the close, for a build that read the row before the close committed.
     await this.opening.get(roomId)?.catch(() => undefined);
     const live = this.rooms.get(roomId);
     if (live === undefined) return true;
     live.record.closed = true;
     if (live.table.handInProgress) {
-      // Subscribed BEFORE the stand: a reader whose turn it is folds inside `stand`, and in a
-      // heads-up match that fold is the notice that settles the hand.
+      // Subscribed BEFORE the stand: in heads-up the reader's fold inside `stand` settles the hand.
       const stop = live.table.subscribe((notice) => {
         if (!notice.handCompleted) return;
         stop();
-        // After the notice has reached every subscriber — the archive's included — and after the
-        // table's own queued work has returned, never from inside it.
+        // After every subscriber has seen the notice, never from inside the table's queue.
         queueMicrotask(() => this.close(roomId));
       });
       try {
         if (live.table.seatOf(ownerUserId) !== null) await live.table.stand(ownerUserId);
       } catch (error) {
-        // `seatOf` is read now and `stand` runs later, behind whatever is already queued at the
-        // table. Measured: a reader who had already stood (flagged, still in the hand) with the
-        // bot's hand-ending fold queued ahead of this `stand` — the fold settled the hand and freed
-        // the chair, `stand` threw `not_seated`, `POST /legends/matches` answered 409 for a room it
-        // had already closed, and the listeners below never ran. Not seated is the outcome this
-        // wanted; the settling notice it subscribed to above closes the table either way.
+        // `stand` runs behind queued work, so a queued bot fold can settle the hand first and make it
+        // throw `not_seated`. That outcome is fine, and the subscription above closes the table.
         if (!(error instanceof AppError && error.code === 'not_seated')) throw error;
       }
     } else {
@@ -1644,36 +1075,17 @@ export class RoomRegistry {
       try {
         listener(roomId);
       } catch {
-        // The room is closed, which is the property; a listener that threw is the listener's bug.
+        // The room is closed. A throwing listener is the listener's bug.
       }
     }
   }
 
   /**
    * Puts a learner's chips back to the starting stack at every live table they are seated at.
-   *
-   * ## The defect
-   *
-   * `POST /me/units/reset` used to write `room_members.stack` and nothing else, while the live table
-   * kept the stack it had in memory — and the live table is authoritative between hands. Measured
-   * from the UI audit: a seated reader busted to 0, reset ("Your units are back to 1000"), came back
-   * to the same room and was welcomed with a stack of 0, so `startHand` never dealt them in; the next
-   * bots-only hand then settled every seat, including theirs, and wrote the 0 BACK over the 1,000
-   * (`TableNotice.settledStacks` includes seats not dealt in). Stand up, take the seat, and the buy-in
-   * check refused it with `insufficient_units` — "reset your units and try again" — a moment after
-   * they had. Only a second reset, made while standing, stuck.
-   *
-   * ## Why the table moves first, and the archive is drained before the caller writes
-   *
-   * The caller writes the durable reset after this resolves. A settlement already queued on a room's
-   * archive chain would otherwise land after that write and undo it, which is the same clobber by a
-   * different route. `restack` is enqueued on the table, so every notice before it has already been
-   * appended to the chain by the time it returns; waiting for the chain then means the only writes
-   * that can follow the reset are ones the restacked table produced.
-   *
-   * A learner in a live hand is restacked when that hand settles — see `LiveTable.restack` — because
-   * reset is "always available and never penalised" (`docs/PRODUCT-GUARDRAILS.md` §1) and a reset
-   * refused for being mid-hand would be exactly the friction that forbids.
+   * Writing only `room_members.stack` left the table dealing 0, and the next settlement wrote 0 back.
+   * The caller writes the durable reset after this resolves. Draining each archive chain first means
+   * no queued settlement can overwrite it. A learner in a live hand is restacked at settlement,
+   * because reset is never refused (`docs/PRODUCT-GUARDRAILS.md` §1).
    */
   async restackForUnitsReset(userId: string): Promise<void> {
     for (const room of [...this.rooms.values()]) {
@@ -1711,8 +1123,6 @@ export class RoomRegistry {
       isBot: true,
       botProfile: spec.profileId,
     });
-    // A bot's units are never read, but the column says when this membership first sat, and it
-    // should say so for every row rather than only for the ones somebody reads.
     await this.recordFirstSit(roomId, spec.userId, memberId);
     return member;
   }
@@ -1738,59 +1148,27 @@ export class RoomRegistry {
     if (room === undefined) return;
     room.close();
     this.rooms.delete(roomId);
-    // Started here and awaited by `shutdown()`, never by this method: `close` is called from a
-    // Fastify `onClose` hook, from `closeAll`, and from a route — all of which are synchronous
-    // about it — and making it async would change three signatures to await a write whose failure
-    // costs one room one lease TTL. What the release buys is that the NEXT process gets the room at
-    // once instead of waiting the TTL out, which is the whole difference between a seamless deploy
-    // and a thirty-second refusal.
+    // Started here and awaited by `shutdown()`. `close` has synchronous callers, and the release lets
+    // the next process take the room without waiting out the TTL.
     this.releaseLeaseSoon(roomId);
   }
 
-  /**
-   * Closes every room. Called from the server's shutdown path.
-   *
-   * A closed room must not be able to keep a turn timer or a bot's scheduled decision alive: both
-   * hold a reference to the table, so a room that is merely forgotten would keep running.
-   */
+  /** Closes every room, so no turn timer or bot decision keeps a forgotten table alive. */
   closeAll(): void {
     for (const roomId of [...this.rooms.keys()]) this.close(roomId);
-    // A room whose build is still in flight holds a lease and is NOT in `this.rooms` yet — the
-    // lease is taken first, deliberately, and `buildOwnedRoom` is several awaits long after it. So
-    // the loop above cannot see it, and without this line the entry is simply dropped when the
-    // process goes: the row stays, and the replacement process is refused that room for a whole
-    // `LEASE_TTL_MS`. `shutdown()` avoids reaching this by waiting for the build; this is the
-    // backstop for the callers that cannot wait, and for a build that never settles.
+    // A build in flight holds a lease but is not in `this.rooms` yet. Without this the replacement
+    // process is refused that room for `LEASE_TTL_MS`.
     for (const roomId of [...this.leases.keys()]) this.releaseLeaseSoon(roomId);
     this.heartbeatTask?.cancel();
     this.heartbeatTask = null;
   }
 
   /**
-   * `closeAll()`, plus waiting for every lease to have actually been given back.
-   *
-   * This is what a graceful shutdown wants and what `closeAll` cannot be. Every room this process
-   * was serving is unopenable by the replacement process until its lease is released or expires, so
-   * a deploy that exits without waiting for these deletes makes every live table refuse to open for
-   * up to `LEASE_TTL_MS` — which is precisely the overlap window this whole mechanism exists to
-   * make safe, turned into an outage instead.
-   *
-   * ## Why the in-flight builds are waited for first
-   *
-   * `closeAll` can only close what is in `this.rooms`, and an open in flight is not: the lease is
-   * taken before `reconcileInterruptedHands` (which is a hard rule, argued in `buildRoom`) and the
-   * room is published several awaits later. A SIGTERM that lands in that gap used to produce two
-   * things at once, both reproduced — the lease was never released, so the replacement refused that
-   * room for a full TTL on a deploy that was otherwise seamless; and the build then published a
-   * `LiveRoom` with its table, bots and turn timer into a registry that had already shut down, with
-   * nothing left able to close them. Waiting is bounded: every await in a build is a query, and
-   * `db.ts` bounds every query at `DATABASE_STATEMENT_TIMEOUT_MS + 2,000` ms.
-   *
-   * `allSettled` and not `all`, because a build that FAILED has already released its own lease in
-   * `buildRoom`'s catch, and a rejection here must not skip the close below.
-   *
-   * Never rejects. A release that fails is reported through `onProblem` inside the chain and the
-   * lease expires on its own; a shutdown path that could throw here would be a deploy that hangs.
+   * `closeAll()`, plus waiting for every lease to be given back, so a deploy does not leave rooms
+   * unopenable for `LEASE_TTL_MS`.
+   * In-flight builds are awaited first. A SIGTERM mid-build otherwise left the lease held and later
+   * published a live room into a shut-down registry. Each await is a query, bounded by `db.ts`.
+   * `allSettled`, because a failed build already released its lease. Never rejects.
    */
   async shutdown(): Promise<void> {
     await Promise.allSettled([...this.opening.values()]);
@@ -1802,55 +1180,25 @@ export class RoomRegistry {
     return this.rooms.size;
   }
 
-  // -----------------------------------------------------------------------
-  // The lease
-  // -----------------------------------------------------------------------
-
-  /**
-   * True when this registry refuses a room another live process holds.
-   *
-   * Exists so `test/wiring.test.ts` can assert that the ASSEMBLED app enforces it. The wiring is
-   * one line in `routes/index.ts` and losing it would be invisible — every test still passes, every
-   * room still opens, and the guard is simply gone.
-   */
+  /** For `test/wiring.test.ts`. Losing the one line in `routes/index.ts` would otherwise be invisible. */
   get enforcesOwnership(): boolean {
     return this.ownership !== null;
   }
 
-  /**
-   * True when this registry refuses a seat to somebody who holds no live enrolment.
-   *
-   * The same accessor, for the same reason, as `enforcesOwnership`: `test/wiring.test.ts` asserts
-   * that the ASSEMBLED app's registry agrees with `PRL_ENROLMENT_REQUIRED` in both directions, and
-   * losing the one line in `routes/index.ts` that binds it would be invisible everywhere else —
-   * every test green, every room opening, every learner seated, and the whole switch inert.
-   */
+  /** For `test/wiring.test.ts`, which checks it matches `PRL_ENROLMENT_REQUIRED` in both directions. */
   get enforcesEntitlement(): boolean {
     return this.entitlement !== null;
   }
 
-  /**
-   * The lease this process holds for a room, or null. For tests and for the runbook's own checks.
-   *
-   * The fence is the interesting field: it increments on every acquisition, so a room whose fence
-   * has moved since this process took it has changed hands.
-   */
+  /** The lease this process holds for a room, or null. A moved fence means the room changed hands. */
   leaseFor(roomId: string): { readonly fence: number } | null {
     const lease = this.leases.get(roomId);
     return lease === undefined ? null : { fence: lease.fence };
   }
 
   /**
-   * Registers a listener for "this room was taken away from us", and returns its unsubscribe.
-   *
-   * The registry knows nothing about sockets, and must not: a `LiveRoom` is constructed directly by
-   * tests that have no hub at all. But a fenced room whose sockets stay open is a client still
-   * being sent state frames from a table this process is no longer allowed to own, so somebody has
-   * to close them — `ws/hub.ts` registers the listener that does, with
-   * `WS_CLOSE.serverShuttingDown`, which is the code the web client reconnects from with backoff.
-   *
-   * A listener that throws must not stop the eviction: the eviction is the safety property and the
-   * notification is a consequence of it.
+   * The registry knows nothing about sockets, so `ws/hub.ts` registers a listener that closes a
+   * fenced room's sockets with `WS_CLOSE.serverShuttingDown`. A throwing listener cannot stop the eviction.
    */
   onEviction(listener: (roomId: string, reason: EvictionReason) => void): () => void {
     this.evictionListeners.add(listener);
@@ -1860,12 +1208,8 @@ export class RoomRegistry {
   }
 
   /**
-   * Registers a listener for "this practice table was retired", and returns its unsubscribe.
-   *
-   * Separate from `onEviction` because nothing was taken away from this process — the room is
-   * closed everywhere — and because `EvictionReason` is a metric label for fencing, which a learner
-   * starting a new match is not. A socket left open on a retired table is the silent-table failure
-   * `ws/hub.ts` describes for eviction, so the hub closes them.
+   * Separate from `onEviction`, because nothing was taken from this process and `EvictionReason` is a
+   * fencing metric label. The hub closes the retired table's sockets.
    */
   onRetirement(listener: (roomId: string) => void): () => void {
     this.retirementListeners.add(listener);
@@ -1875,16 +1219,8 @@ export class RoomRegistry {
   }
 
   /**
-   * Takes the lease for a room, or refuses to serve it.
-   *
-   * A refusal is a typed `room_owned_elsewhere` and a counter, deliberately not `seat_taken` (an
-   * ordinary race between two learners, which must never page anybody) and deliberately not a 500
-   * (nothing broke; the guard worked). The holder is read back for the LOG LINE only — an operator
-   * needs "which process, and how stale is it" first, and none of it reaches the client, which is
-   * told a code and a request id like every other failure.
-   *
-   * The holder read is `catch`-guarded because it is diagnostics: failing to describe the holder
-   * must not change the answer, which is already decided.
+   * Takes the lease for a room, or refuses to serve it with `room_owned_elsewhere` and a counter (not
+   * `seat_taken`, not a 500). The holder is read for the log line only and cannot change the answer.
    */
   private async acquireLease(roomId: string): Promise<void> {
     const ownership = this.ownership;
@@ -1910,59 +1246,15 @@ export class RoomRegistry {
   }
 
   /**
-   * Renews every lease this process holds, and evicts every room it turns out not to.
-   *
-   * Public so that a test can run exactly one beat rather than waiting out an interval, and so that
-   * the eviction path can be exercised without a real timer. Production arms it on the clock;
-   * nothing else calls it.
-   *
-   * ## The distinction the whole method turns on
-   *
-   * A renewal that comes back WITHOUT a room is a fencing: the statement ran, the row exists, and
-   * its `owner_id` is not ours. A renewal that THROWS says nothing at all about ownership — the
-   * database was unreachable, or the query was abandoned by its deadline — and treating that as a
-   * fencing would close every live table in the process on a network blip. So the two are handled
-   * differently, and the second one is bounded by time rather than by a single failure: once our
-   * last CONFIRMED renewal is older than `LEASE_SELF_EVICT_AFTER_MS` we stop serving the room
-   * whatever the reason, because past that point another process is about to become entitled to it
-   * and we cannot prove we still hold it. `ownership.ts` has the argument for the three numbers and
-   * for why this threshold is strictly below the TTL.
-   *
-   * ## Why the verdict is applied to `asked` and not to `this.leases`
-   *
-   * A beat is a database round trip, and `acquireLease` runs on the request path throughout it. So
-   * `this.leases` at the bottom of this method is not the map that was read at the top: any room
-   * opened while the statement was out there has been added to it, and that room was never in the
-   * `roomIds` the statement carried — so it cannot be in the answer either. Judging the current map
-   * against an answer to an older question read every one of those rooms as FENCED.
-   *
-   * `asked` holds the FENCE each room had when the statement left, not merely which rooms there
-   * were, because there are two ways a lease entry can be one this beat has nothing to say about.
-   * The common one is a room opened mid-beat. The other is a room that was closed and re-opened
-   * inside one beat: `close` releases the row and the re-open inserts it again, so a statement that
-   * executed in the gap between those two legitimately does not return it — and the entry it would
-   * be judging is a NEW acquisition at a NEW fence, which `acquire` increments on every acquisition
-   * for exactly this kind of question. Comparing the fence answers both with one test, and does it
-   * without consulting a clock: the tests here drive a manual clock that never advances, so any
-   * rule of the form "confirmed since the beat started" would be true of everything.
-   *
-   * Both halves of what that produced were reproduced against this class with a beat held open
-   * across an `open()`:
-   *
-   *   * if the eviction landed AFTER the build published the room, a table a learner had just
-   *     opened was closed under them, their sockets were closed with `serverShuttingDown`, and
-   *     `prl_api_room_fencings_total{reason="fenced"}` — a zero-tolerance series — rose for an
-   *     incident that had not happened;
-   *   * if it landed BEFORE the build's `this.rooms.set` (the build is several awaits long), the
-   *     eviction deleted a lease entry the room did not have yet and the room was then published
-   *     with NO entry in `this.leases`. Nothing renews a room that is not in that map, so its
-   *     `heartbeat_at` goes stale, this process never self-evicts because it holds no lease to
-   *     time out, and after `LEASE_TTL_MS` another process is entitled to take a room this one is
-   *     still dealing at. That is precisely the two-processes-one-room state the lease exists to
-   *     make impossible, reached through the guard instead of around it.
-   *
-   * A lease this beat has nothing to say about needs no verdict from it: `acquireLease` has just
-   * stamped its `confirmedAt`, and the next beat asks about it.
+   * Renews every lease this process holds, and evicts every room it turns out not to. Public so a
+   * test can run one beat.
+   * A renewal that comes back WITHOUT a room is a fencing. One that THROWS says nothing about
+   * ownership, so it evicts only once the last confirmed renewal is older than
+   * `LEASE_SELF_EVICT_AFTER_MS`. See `ownership.ts` for the numbers.
+   * The verdict applies only to leases whose fence matches `asked`. A room opened, or closed and
+   * re-opened, during the round trip was not in the question. Judging it anyway closed fresh tables
+   * as `fenced`, or dropped a lease entry so the room was dealt at with nothing renewing it.
+   * Fences, not a clock, because the tests' manual clock never advances.
    */
   async heartbeatLeases(): Promise<void> {
     const ownership = this.ownership;
@@ -1974,10 +1266,7 @@ export class RoomRegistry {
     try {
       renewed = await ownership.heartbeat(roomIds);
     } catch (error) {
-      // Not reported on its own: a beat that fails once is an ordinary transient, this runs every
-      // few seconds, and a line per failure would fill the log during exactly the incident an
-      // operator is trying to read it in. The failure that MATTERS — one that lasted long enough to
-      // cost a lease — is reported by the eviction below, and carries this error with it.
+      // Not reported on its own, to keep the log readable. An eviction reports it if it costs a lease.
       failure = error;
     }
     const now = this.clock.now();
@@ -1999,19 +1288,10 @@ export class RoomRegistry {
   }
 
   /**
-   * Stops serving a room this process no longer owns. The whole point of the mechanism.
-   *
-   * Order matters and is the reverse of what reads naturally. The room is dropped from `rooms` and
-   * the table is closed FIRST, synchronously, before anything is logged or any listener is called:
-   * a listener that throws, or a `onProblem` consumer that does, must not be able to leave this
-   * process still serving the room. `LiveRoom.close()` stops the bots and the turn timer and closes
-   * the table, so no further hand can be dealt at it, and the eviction listeners then close the
-   * sockets that were watching.
-   *
-   * The lease is NOT released for a `fenced` eviction, and cannot be: `release` is owner-scoped, the
-   * row belongs to somebody else now, and the delete would match nothing. For `lease_expired` the
-   * row may still be ours — we simply could not reach it — so the release is attempted, best effort:
-   * if it lands, the room becomes openable at once instead of after the TTL.
+   * Stops serving a room this process no longer owns.
+   * The room is dropped and the table closed FIRST, before any logging or listener, so a throw
+   * cannot leave this process serving it. A `fenced` lease is not released, since the row is
+   * someone else's. A `lease_expired` one is released best effort.
    */
   private evict(roomId: string, reason: EvictionReason, cause: unknown): void {
     const lease = this.leases.get(roomId);
@@ -2026,20 +1306,11 @@ export class RoomRegistry {
       try {
         listener(roomId, reason);
       } catch {
-        // Swallowed on purpose, and not counted: the eviction has already happened, which is the
-        // property that matters. A hub that threw while closing sockets is a hub bug, and the
-        // sockets it failed to close are closed by their own heartbeat within two intervals.
+        // Swallowed on purpose. The eviction already happened, and the sockets' own heartbeat closes them.
       }
     }
-    // Guarded for the same reason the listener loop above is, and the omission was the same
-    // omission: the eviction has already happened, and nothing after this point may be able to
-    // undo it. A throwing hook here is not hypothetical — the production one is `app.log.warn`,
-    // and `test/room-ownership.test.ts` already provokes a build failure with "the log serialiser
-    // threw" — and its consequence was worse here than in the build. `heartbeatLeases` is called
-    // as `void this.heartbeatLeases().finally(...)`, so a rejection out of it is an UNHANDLED
-    // rejection, which Node's default handling turns into a dead process: a logger fault during a
-    // fencing took the API down, in the middle of the incident the fencing was reporting. It also
-    // skipped the release below.
+    // Through `report`, because `heartbeatLeases` is called as `void ...finally(...)`. A throwing
+    // logger here was an unhandled rejection that killed the process mid-fencing.
     this.report(
       reason === 'fenced'
         ? 'another API process took this room; it has been closed here'
@@ -2054,62 +1325,30 @@ export class RoomRegistry {
         ...(cause === null ? {} : { error: String(cause) }),
       },
     );
-    // The generation is passed explicitly because this method deleted the map entry at the top, so
-    // `releaseLeaseSoon` can no longer read it — and a release with no generation is one that says
-    // nothing about which acquisition it is giving back.
+    // The fence is passed explicitly, because the map entry was deleted at the top.
     if (reason === 'lease_expired') this.releaseLeaseSoon(roomId, lease?.fence ?? null);
   }
 
   /**
-   * `onProblem`, for the handful of places where the report must not be able to undo the action.
-   *
-   * NOT a blanket replacement, and deliberately not: everywhere else, a hook that throws is a fault
-   * the caller should see, and `buildRoom` relies on exactly that to prove it gives a lease back
-   * when a build fails. This is for the paths where the safety property has ALREADY been achieved
-   * by the time the line is written — an eviction, a lease release — and where a throw would either
-   * skip the cleanup after it or escape into a promise nobody is awaiting.
+   * `onProblem` for paths where the safety action already happened (an eviction, a lease release).
+   * Not a blanket replacement: elsewhere a throwing hook is a fault the caller should see, and
+   * `buildRoom` relies on that.
    */
   private report(...args: Parameters<ProblemHook>): void {
     try {
       this.onProblem(...args);
     } catch {
-      // There is nowhere left to report a reporting failure to. Swallowed rather than counted, for
-      // the reason the eviction listener loop gives: the thing that mattered has already happened.
+      // There is nowhere left to report a reporting failure to.
     }
   }
 
   /**
    * Queues the release of one lease, so `shutdown()` can wait for every one of them.
-   *
-   * Owner-scoped in the repository, which is what makes it safe to call for a room we may already
-   * have lost: the delete matches nothing and answers false.
-   *
-   * ## Why the fence is read HERE and carried into the chain
-   *
-   * ############################################################################
-   * ## A QUEUED RELEASE IS A STATEMENT ABOUT ONE GENERATION OF ONE LEASE.     ##
-   * ############################################################################
-   *
-   * The queue is serial and the release runs an unbounded time after this call — however long
-   * every release ahead of it takes. On the path that queues the most of them at once (a database
-   * slow enough that every beat is abandoned at its deadline, so every room is evicted
-   * `lease_expired`) each of those is a query that runs to its own 7,000 ms deadline before it
-   * fails, so the chain outlives the outage; the database recovers, the learners reconnect, and
-   * the rooms are re-acquired by THIS process at a new fence while the chain is still draining.
-   *
-   * Owner scoping cannot see that, because this process is the owner both times. Reproduced
-   * against this class with the release chain held open across an eviction and a re-open: the
-   * stale release deleted the row the re-open had just taken, the next beat found no row for a
-   * room this process was serving, and it evicted the room as `fenced` — a table closed under a
-   * learner and `prl_api_room_fencings_total{reason="fenced"}` raised for an incident that had not
-   * happened. Between the delete and that beat the room had no lease row at all while this process
-   * was dealing at it, which is the state the whole table exists to refuse.
-   *
-   * A room with no entry in `this.leases` is not released, and that is the point rather than an
-   * omission: without a generation there is nothing this call can say that is true a second later.
-   * Every caller that holds a lease has an entry — `close()` and `closeAll()` run over rooms this
-   * process opened, `buildRoom`'s catch runs after `acquireLease` set one, and `evict` reads the
-   * entry before it deletes it and passes what it read.
+   * A QUEUED RELEASE IS A STATEMENT ABOUT ONE GENERATION OF ONE LEASE. The chain can drain long
+   * after a slow-database outage, when this process has already re-acquired the room at a new
+   * fence. Owner scoping cannot tell those apart, and reproduced, the stale release deleted the new
+   * row and the next beat evicted the room as `fenced`. So the fence is read here and carried.
+   * A room with no entry in `this.leases` is not released.
    */
   private releaseLeaseSoon(roomId: string, fence: number | null = null): void {
     const ownership = this.ownership;
@@ -2119,37 +1358,16 @@ export class RoomRegistry {
     if (generation === null) return;
     this.releaseQueue = this.releaseQueue
       .then(async () => {
-        // The second half of the same guard, and it is needed because the fence is NOT monotonic
-        // across a release: `release` DELETES the row, so the next `acquire` is an INSERT and
-        // starts again at 1 — `test/room-ownership-database.test.ts` asserts exactly that ("a
-        // released lease leaves no row, so the next holder starts again"). So a stale release for
-        // generation 1 can match a fresh generation 1, if the row went in between by some other
-        // hand: a rolling-deploy neighbour that took the room after the TTL and released it, and
-        // then this process re-opened it. The fence cannot see that; this can. If the room is back
-        // in `this.leases` we are serving it again, and a release is simply wrong.
-        //
-        // What the pair does NOT close, stated rather than implied: a release this check has
-        // already waved through, whose DELETE then executes at Postgres AFTER the row was removed
-        // by somebody else and re-inserted here at a reused fence. Reaching it needs a dispatched
-        // statement to sit unexecuted for longer than `LEASE_TTL_MS` — long enough for a
-        // neighbouring process to take the room on expiry and give it back — while the re-open's
-        // INSERT, issued later, executes first. A database in that state has already failed the
-        // re-open. Closing it properly means a generation that survives a delete, which means not
-        // deleting; and releasing by expiry instead of by delete costs every deploy a whole TTL of
-        // refusals, which is the trade `db/migrations/0005` argues at length and gets right.
+        // Also skipped if the room is back in `this.leases`, because the fence restarts at 1 after a
+        // delete and a stale generation 1 can match a fresh one. Still open: a DELETE stalled past
+        // `LEASE_TTL_MS` while a neighbour took and released the room. Closing that would mean not
+        // deleting, which costs every deploy a TTL of refusals (`db/migrations/0005`).
         if (this.leases.has(roomId)) return;
         await ownership.release(roomId, generation);
       })
       .catch((error: unknown) => {
-        // Logged and swallowed, like an archive write and for the same reason: a failed release
-        // must not wedge the chain for every later room, and it must not fail a shutdown. The cost
-        // is bounded and worth naming — that one room is unopenable until its lease expires.
-        //
-        // Through `report`, because the swallowing is the point: this catch IS `releaseQueue`, and
-        // `shutdown()` awaits it and promises never to reject. A hook that threw in here put the
-        // rejection straight back into the chain, so a failing release plus a failing logger made
-        // the Fastify `onClose` hook reject — a deploy that fails on the way out, which is the one
-        // thing this path is written to prevent.
+        // Logged and swallowed so the chain and `shutdown()` never reject. One room stays unopenable
+        // until its lease expires. Through `report`, because this catch IS `releaseQueue`.
         this.report('a room lease could not be released; it will expire on its own', {
           event: 'room-lease-release',
           roomId,
@@ -2160,14 +1378,8 @@ export class RoomRegistry {
   }
 
   /**
-   * Arms the renewal timer, once, for as long as there is at least one lease to renew.
-   *
-   * Re-armed from inside the tick rather than run as an interval, for the reason `timers.ts` gives
-   * for the turn clock: an interval fires again while the previous beat is still in flight, and a
-   * beat is a database round trip that can take as long as its deadline. Two overlapping beats
-   * would race each other to write `confirmedAt`, and a slow database would accumulate them.
-   *
-   * It stops when the last room goes, so an idle process schedules nothing at all.
+   * Re-armed from inside the tick, not an interval, so a slow beat cannot overlap the next. Stops when
+   * the last room goes.
    */
   private armHeartbeat(): void {
     if (this.ownership === null || this.heartbeatTask !== null) return;
@@ -2179,25 +1391,14 @@ export class RoomRegistry {
     });
   }
 
-  /** Records that a member's socket opened or closed, for `RoomMember.connected`. */
   noteSocket(roomId: string, userId: string, delta: number): void {
     this.rooms.get(roomId)?.noteSocket(userId, delta);
   }
 }
 
-// ---------------------------------------------------------------------------
-// The process-wide registry
-// ---------------------------------------------------------------------------
-
 /**
- * One registry per process, so the room routes and the WebSocket hub see the same tables.
- *
- * They are separate route modules registered into separate encapsulated scopes, so a Fastify
- * decorator would not reach both without escaping encapsulation. Module scope is the same
- * mechanism `plugins/security.ts` uses for the origin allowlist, with the same caveat, stated
- * plainly: a process that built two apps with different configurations would share one registry.
- * A server builds one. A test that needs its own passes it explicitly — every entry point here
- * takes the registry as an option — and `resetRoomRegistryForTests` drops the shared one.
+ * One registry per process, so the room routes and the WebSocket hub see the same tables. Module
+ * scope because they are separate Fastify scopes. Tests pass their own or call `resetRoomRegistryForTests`.
  */
 let shared: RoomRegistry | null = null;
 
@@ -2212,20 +1413,11 @@ export function resetRoomRegistryForTests(): void {
   shared = null;
 }
 
-/**
- * The wire summary for a live room.
- *
- * Seat, stack and connection state come from the table and the member records rather than from a
- * query, because this is built on every state frame. A member who is not seated reports
- * `seat: null` and the stack the record holds, which is what a lobby renders.
- */
+/** Built from memory on every state frame, with no query. */
 export function toRoomSummary(room: LiveRoom): RoomSummary {
   const snapshot = room.table.snapshot();
   const seatByUser = new Map(snapshot.seats.map((seat) => [seat.userId, seat]));
-  // The seats the table is holding out of the deal until they have paid a blind. Read from the one
-  // snapshot taken above rather than by asking `table.owesBlind` per member, so every field in this
-  // summary describes the same instant — a member list in which one row came from a later read of
-  // the table is a table that never existed.
+  // From the one snapshot above, so every field describes the same instant.
   const awaitingBigBlind = new Set(snapshot.awaitingBigBlind);
   const members: RoomMember[] = room.memberList().map((member) => {
     const seat = seatByUser.get(member.userId);
@@ -2237,9 +1429,7 @@ export function toRoomSummary(room: LiveRoom): RoomSummary {
       isBot: member.isBot,
       botProfile: member.botProfile,
       connected: member.isBot || member.sockets > 0,
-      // Named field by field, like every other member of this object, because that is what makes
-      // the wire shape a deliberate decision rather than whatever the internal record happens to
-      // hold (ADR 0003). A member with no seat is not being held out of anything.
+      // Named field by field so the wire shape is deliberate (ADR 0003).
       awaitingBigBlind: seat !== undefined && awaitingBigBlind.has(seat.seat),
     };
   });
@@ -2254,15 +1444,14 @@ export function toRoomSummary(room: LiveRoom): RoomSummary {
     startingStack: room.record.startingStack,
     actionTimeoutSeconds: room.record.config.actionTimeoutSeconds,
     status: room.record.closed ? 'closed' : snapshot.handInProgress ? 'playing' : 'open',
-    // Not a variable, and not configurable: `rooms_visibility_invite_only` allows one value, and
-    // changing that is a migration and a review (ADR 0010).
+    // `rooms_visibility_invite_only` allows one value. Changing it is a migration (ADR 0010).
     visibility: 'invite_only',
     members,
     createdAt: room.record.createdAt,
   };
 }
 
-/** A summary for a room that has no live table — a closed one, or one from another process. */
+/** A summary for a room with no live table here, either closed or served by another process. */
 export function summaryFromRows(
   room: roomsRepository.RoomRow,
   members: readonly roomsRepository.RoomMemberRow[],
@@ -2286,12 +1475,8 @@ export function summaryFromRows(
       stack: member.stack,
       isBot: member.is_bot,
       botProfile: member.bot_profile,
-      // A room with no live table in this process has nobody connected to it, by definition.
       connected: member.is_bot,
-      // Nor anybody waiting for a blind: the obligation lives on the live table and is not
-      // persisted, so there is no such thing as one for a room nothing is playing. Stated rather
-      // than left off — the field is required precisely so that a mapping which forgot about it
-      // cannot compile.
+      // Debts are not persisted, so a room with no live table has none.
       awaitingBigBlind: false,
     })),
     createdAt: room.created_at.toISOString(),
@@ -2299,21 +1484,10 @@ export function summaryFromRows(
 }
 
 /**
- * The blind positions a re-opened table carries on from, reconstructed from the last deal.
- *
- * Only `button_seat` is persisted, so the other two positions are recovered the way the rules
- * define them for a hand with a live button: the small blind is the first seat clockwise from the
- * button that was dealt in, and the big blind is the next one. `orderFrom` is used rather than
- * `assignBlinds` precisely because the button may be a DEAD seat — nobody was playing from it, and
- * `assignBlinds` refuses that case, which is exactly the hand a reconstruction has to survive.
- *
- * The limit is stated in `repositories/hands.ts`: a hand whose SMALL blind was dead cannot be
- * reconstructed exactly, because its small blind seat is not in `dealtSeats` at all and the walk
- * lands on the big blind instead. That costs one player one repeated big blind, once, across a
- * single restart. Making it exact is a migration adding the two seat columns.
- *
- * Returns null for a hand with fewer than two dealt seats, which cannot have happened and which a
- * corrupt row could still claim.
+ * The blind positions a re-opened table carries on from. Only `button_seat` is persisted, so the
+ * blinds are walked with `orderFrom`, which accepts a dead button where `assignBlinds` refuses it.
+ * A hand whose small blind was dead is reconstructed one seat off, costing one repeated big blind
+ * per restart (see `repositories/hands.ts`). Null for fewer than two dealt seats.
  */
 export function blindsFromLastHand(
   hand: handsRepository.LastDealtHand,
@@ -2322,9 +1496,7 @@ export function blindsFromLastHand(
   const dealt = [...hand.dealtSeats].sort((left, right) => left - right);
   if (dealt.length < 2) return null;
   if (dealt.length === 2) {
-    // Heads-up the button posted the small blind, so both positions are the button's seat and the
-    // big blind is the other one. Derived rather than walked, because `orderFrom` heads-up would
-    // put the big blind on the button itself at the end of its lap.
+    // Heads-up the button posts the small blind. `orderFrom` would lap back onto the button.
     const other = dealt.find((seat) => seat !== hand.buttonSeat);
     if (other === undefined) return null;
     return { buttonSeat: hand.buttonSeat, smallBlindSeat: hand.buttonSeat, bigBlindSeat: other };
@@ -2336,7 +1508,6 @@ export function blindsFromLastHand(
   return { buttonSeat: hand.buttonSeat, smallBlindSeat, bigBlindSeat };
 }
 
-/** The `TableConfig` for a persisted room row. */
 export function configFromRow(room: roomsRepository.RoomRow): TableConfig {
   return {
     smallBlind: room.small_blind,
@@ -2347,7 +1518,6 @@ export function configFromRow(room: roomsRepository.RoomRow): TableConfig {
   };
 }
 
-/** The record for a persisted room row. */
 export function recordFromRow(room: roomsRepository.RoomRow): RoomRecord {
   return {
     id: room.id,
