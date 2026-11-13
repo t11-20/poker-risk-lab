@@ -42,7 +42,7 @@
     "design:contrast": "node scripts/check-contrast.mjs",
     "db:up": "docker compose up -d postgres",
     "db:down": "docker compose down",
-    "db:wait": "node scripts/db-wait.mjs",
+    "db:wait": "node --env-file-if-exists=.env scripts/db-wait.mjs",
     "db:migrate": "node --env-file-if-exists=.env apps/api/scripts/migrate.mjs up",
     "db:migrate:status": "node --env-file-if-exists=.env apps/api/scripts/migrate.mjs status",
     "db:seed": "node --env-file-if-exists=.env apps/api/scripts/migrate.mjs seed",
