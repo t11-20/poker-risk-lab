@@ -1,30 +1,8 @@
 /**
- * The socket client's three load-bearing decisions, asserted without a network or a DOM.
- *
- * ## What is worth testing here, and what is not
- *
- * The transport is a seam (`RawSocketFactory`) and time is a seam (`Scheduler`), so this file drives
- * the real `openTableSocket` with two functions and a fake clock. That is the whole point of those
- * two interfaces: a reconnect schedule you can only observe by waiting fifteen seconds is a schedule
- * nobody asserts.
- *
- * Three properties are checked, and each of them is a property a browser check cannot establish:
- *
- *  1. **Every frame is narrowed, not trusted.** A hostile or drifted frame must be refused, and the
- *     refusal must name the member that failed. The `oddsRatio` case is here explicitly, from both
- *     sides: `null` is the contract's "the call is free, so there is no price" and must be ACCEPTED
- *     — it used to be refused, as a workaround for a sentinel (`Infinity`) that `JSON.stringify`
- *     turns into `null`, and that defect is fixed at the source — while a string, a boolean or a
- *     `NaN` in the same member must still be refused by name.
- *  2. **A retry carries the same `actionId`.** This is the difference between a dropped response and
- *     a second bet, and it is invisible in a browser unless you can drop a socket at exactly the
- *     wrong moment.
- *  3. **Close codes are distinct and their retryability is right.** A `4401` that schedules a
- *     reconnect is a page that retries forever against a server that will keep saying no.
- *
- * What is NOT asserted here is anything about React or about rendering: `use-live-table.ts` and the
- * page were verified in a real browser against a real API, and a jsdom impression of that would
- * assert less while looking like it asserted more.
+ * The socket client's three load-bearing decisions, driven through the `RawSocketFactory` and
+ * `Scheduler` seams with a fake clock. Every frame is narrowed and a refusal names the member, a retry
+ * carries the same `actionId`, and a `4401` close never schedules a reconnect. React and rendering
+ * were verified in a real browser and are not asserted here.
  */
 
 import assert from 'node:assert/strict';
@@ -40,10 +18,6 @@ import {
   type Scheduler,
   tableSocketUrl,
 } from '../src/lib/table-socket.ts';
-
-// ---------------------------------------------------------------------------
-// Fakes
-// ---------------------------------------------------------------------------
 
 interface FakeSocket extends RawSocket {
   readonly sent: string[];
@@ -96,7 +70,6 @@ function fakeScheduler(): Scheduler & {
         entry.cancelled = true;
       };
     },
-    /** Fires every timer that is due soonest, advancing the clock to it. */
     run: () => {
       const live = queue.filter((entry) => !entry.cancelled);
       if (live.length === 0) return;
@@ -178,10 +151,6 @@ function stateFrame(overrides: Record<string, unknown> = {}): string {
   });
 }
 
-// ---------------------------------------------------------------------------
-// The URL
-// ---------------------------------------------------------------------------
-
 test('the socket URL is same-origin and its scheme is derived from the page', () => {
   assert.equal(
     tableSocketUrl({ protocol: 'http:', host: 'localhost:3000' }),
@@ -191,14 +160,9 @@ test('the socket URL is same-origin and its scheme is derived from the page', ()
     tableSocketUrl({ protocol: 'https:', host: 'poker.example' }),
     'wss://poker.example/api/v1/ws',
   );
-  // A secure page must never open an insecure socket: the browser blocks it as mixed content, which
-  // is a failure that only appears on the deployment that matters.
+  // A secure page must never open an insecure socket, which the browser blocks as mixed content.
   assert.ok(!tableSocketUrl({ protocol: 'https:', host: 'x.test' }).startsWith('ws:'));
 });
-
-// ---------------------------------------------------------------------------
-// Narrowing
-// ---------------------------------------------------------------------------
 
 test('a frame that is not JSON, not an object, or names no known type is refused', () => {
   for (const raw of ['not json', '[]', '"a string"', '{"type":"gotcha"}', '{}']) {
@@ -222,16 +186,12 @@ test('a state frame whose view has a member of the wrong type is refused, not co
   assert.equal(readServerMessage(stateFrame({ potTotal: '30' })).ok, false);
   // A card outside the deck is not a card.
   assert.equal(readServerMessage(stateFrame({ board: [0, 13, 99] })).ok, false);
-  // A street the contract does not define.
   assert.equal(readServerMessage(stateFrame({ street: 'fourth' })).ok, false);
 });
 
 test('a state frame carrying an opponent’s hole cards is refused, and the refusal is not silent', () => {
-  // The shape is impeccable — this is `stateFrame()` with one seat added — and the CONTENT is the
-  // worst defect this system can have. `test/hole-card-entitlement.test.ts` owns the rule and its
-  // negative control; what is asserted here is the wiring: the rejection reaches the caller with the
-  // seats on it, so `use-live-table.ts` can raise a `console.error` and tell the reader, rather than
-  // reading the fact back out of a substring of a sentence somebody is free to reword.
+  // The shape is valid and the content is a leak. `test/hole-card-entitlement.test.ts` owns the rule.
+  // This asserts the seats reach the caller, so `use-live-table.ts` need not parse a sentence.
   const leaking = stateFrame({
     seats: [
       {
@@ -320,20 +280,9 @@ function coachFrame(potOdds: Record<string, unknown>): string {
 }
 
 /**
- * The cross-package defect, now fixed at the source — and this is what proves the fix reaches here.
- *
- * The history is worth keeping, because this test used to assert the opposite. `packages/poker-math`
- * reported `Infinity` for `oddsRatio` when there was nothing to call, `JSON.stringify(Infinity)` is
- * `null`, and the contract declared the member `number`. So every check spot arrived here as a frame
- * the contract said was impossible, `formatOdds` in `@prl/ui` threw on it, and the error boundary
- * took the whole `/play` route down. This client's answer at the time was to REFUSE such a frame and
- * name the member, which turned a dead route into an empty panel with a reason.
- *
- * That was a workaround for somebody else's defect and it is gone, along with the carve-out in
- * `checkPotOdds` that implemented it. `oddsRatio` is `number | null` in `@prl/contracts` now, `null`
- * means "the call is free, so there is no price", and a frame carrying it is a valid frame. The
- * assertion is inverted rather than deleted: a check spot's report must now be ACCEPTED, and the
- * narrowing that used to reject it must not creep back.
+ * `oddsRatio` is `number | null` in `@prl/contracts`, and `null` means the call is free. It was once
+ * `Infinity`, which `JSON.stringify` turns into `null`, and this client refused such frames. A check
+ * spot's report must now be accepted, and that refusal must not creep back.
  */
 test('a coach report with a null oddsRatio is accepted: null is the contract, not a defect', () => {
   const outcome = readServerMessage(
@@ -368,13 +317,8 @@ test('a coach report with a finite oddsRatio is accepted', () => {
 });
 
 test('a coach report whose oddsRatio is neither a number nor null is still refused', () => {
-  // Widening the member to `number | null` widened it by exactly one value. A string, a boolean, an
-  // object or an absent member is still a frame that does not match the contract, and the refusal
-  // still names the member — which is what stops "accept null" from becoming "accept anything".
-  //
-  // `NaN` is deliberately not in this list: it cannot arrive. `JSON.stringify(NaN)` is `"null"`, so
-  // a server that sent one would be sending the free-call value — which is the same fact about JSON
-  // that made `Infinity` unusable as a sentinel in the first place.
+  // Widening to `number | null` added exactly one value, so anything else is still refused by name.
+  // `NaN` is not listed, because `JSON.stringify(NaN)` is `"null"` and it cannot arrive.
   for (const ratio of ['4', true, {}, [], undefined]) {
     const outcome = readServerMessage(
       coachFrame({
@@ -392,10 +336,6 @@ test('a coach report whose oddsRatio is neither a number nor null is still refus
     assert.match(outcome.rejection.reason, /potOdds\.oddsRatio/);
   }
 });
-
-// ---------------------------------------------------------------------------
-// Close codes
-// ---------------------------------------------------------------------------
 
 test('every close code the server can send produces its own message', () => {
   const codes = Object.values(WS_CLOSE);
@@ -421,10 +361,6 @@ test('the codes a reader cannot retry past are not retried, and the ones they ca
   assert.equal(describeClose(WS_CLOSE.unauthenticated, true).action, 'signIn');
   assert.equal(describeClose(WS_CLOSE.protocolMismatch, true).action, 'reload');
 });
-
-// ---------------------------------------------------------------------------
-// The client
-// ---------------------------------------------------------------------------
 
 test('the first frame is hello, carrying the protocol version and the room', () => {
   const { rig, factory } = harness();
@@ -464,8 +400,7 @@ test('nothing but hello is sent before the socket is open, and dispose stops eve
   });
   handle.dispose();
   assert.equal(rig.sockets[0]?.closes.length, 1);
-  // A disposed handle must not resurrect itself: a leaked socket per navigation reaches the
-  // four-per-session cap in four page views.
+  // A leaked socket per navigation reaches the four-per-session cap in four page views.
   rig.handlers[0]?.onClose(1006, 'gone', false);
   scheduler.run();
   assert.equal(rig.sockets.length, 1);
@@ -518,8 +453,7 @@ test('an action frame carries the actionId and expectedSequence it was given, un
     requestId: 'req-stable-0001',
   };
   handle.action(decision);
-  // The same decision, retried after a dropped response. The id must NOT change: the server refuses
-  // a repeated actionId, which is what makes the retry a no-op rather than a second bet.
+  // The server refuses a repeated actionId, so the retry is a no-op rather than a second bet.
   handle.action(decision);
   const frames = (rig.sockets[0]?.sent ?? [])
     .slice(1)
@@ -546,8 +480,7 @@ test('the client refuses to exceed the protocol rate limit rather than losing it
   });
   rig.handlers[0]?.onOpen();
   let accepted = 0;
-  // The clock does not advance, so the bucket never refills: exactly `burstAllowance` frames get
-  // through, minus the `hello` that has already been spent.
+  // The clock does not advance, so `burstAllowance` frames get through, minus the spent `hello`.
   for (let index = 0; index < WS_LIMITS.burstAllowance + 10; index += 1) {
     if (handle.startHand(`deal-${String(index).padStart(6, '0')}`) === 'sent') accepted += 1;
   }

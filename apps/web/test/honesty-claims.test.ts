@@ -1,52 +1,10 @@
 /**
  * The claims this product makes about itself have to survive being checked.
- *
- * ## What went wrong
- *
- * The footer told every learner on every page: *"There is no stored odds table anywhere in this
- * product, so there is no table that can be quietly wrong."* The home page said "No odds table,
- * anywhere", the metrics band counted "Hard-coded odds: 0", and the curriculum index said "There is
- * no odds table in this repository to go stale."
- *
- * `apps/web/src/fixtures/*.ts` ships eighteen stored `ruleOfThumb` blocks and twenty-one stored
- * `heroEquity` values — stored odds tables by any reading — as the offline fallback every screen in
- * this app is built to survive on. A release audit found four of them disagreeing with the live
- * calculation. So the product's own honesty statement was falsified by the exact defect it
- * disclaimed, in four places, and nothing could have noticed: it is prose.
- *
- * ## What is asserted, and what deliberately is not
- *
- * This does not try to decide whether a sentence is true — no test can. It pins the specific
- * unqualified phrasings that were checked and found false, so that "simplifying" the wording back
- * to them fails rather than shipping. The honest claim is narrower and is still worth making: no
- * figure is PRODUCED by a lookup, and where a bundled copy is shown the page says so.
- *
- * The fixtures themselves are read here and never edited. They are the evidence for why the
- * unqualified claim is false, and if they are ever genuinely removed from the product this file
- * should be revisited rather than deleted — at that point the strong claim becomes true again.
- *
- * ## The second thing this file pins: the legal surface
- *
- * `/terms`, `/privacy`, `/responsible-use` and the age gate were added later, and they are the pages
- * on which an overstatement is most tempting and most damaging. The failure has exactly the shape of
- * the one above — a sentence that reads better than the truth — with a worse consequence: a deployer
- * who reads "we comply with data-protection law" on their own privacy page has been told something
- * by their own software that nobody checked.
- *
- * So the same treatment is applied. `FALSIFIED_LEGAL` lists the phrasings those pages must never
- * carry: a compliance claim, a licensing claim, a claim that the age gate verified anything, a
- * safety-of-gambling claim, a guarantee, and "your data is anonymous" (it is pseudonymous — the IP
- * and user-agent digests are keyed HMACs). In the other direction, the claims those pages DO make
- * are tied to the code that makes them true: the privacy page's "no third-party trackers" is
- * asserted against `lib/csp.ts` naming no remote host, because an absence claim is only worth making
- * where something enforces it.
- *
- * ## Would this fail if the behaviour broke?
- *
- * Yes. Every legal pattern is fed a page that makes exactly the claim it forbids, and asserted to
- * fire — otherwise a typo in a pattern would leave the whole group passing over prose it never
- * matched. The reverse is asserted too: the patterns must not fire on the pages as written, because
- * a rule that failed on honest prose would be deleted rather than fixed.
+ * `src/fixtures/*.ts` ships stored `ruleOfThumb` and `heroEquity` values as the offline fallback, and
+ * a release audit found four of them wrong, so an unqualified "no odds table" claim is false. This pins
+ * the phrasings checked and found false, plus the legal-page overstatements (compliance, licensing,
+ * age checks, guarantees, anonymity). Every pattern is fed a violation, and must stay quiet on the
+ * pages as written. The fixtures are read here and never edited.
  */
 
 import assert from 'node:assert/strict';
@@ -58,14 +16,7 @@ import { fileURLToPath } from 'node:url';
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 const read = (...parts: readonly string[]): string => readFileSync(join(SRC, ...parts), 'utf8');
 
-/**
- * Every file that states, in prose a reader sees, where the numbers come from.
- *
- * The four legal-surface files are here for the same reason as the original four: they are prose a
- * reader is shown, and the "no odds table" claim is exactly the kind of confident absence a legal
- * page attracts. `/terms` §6 already talks about where figures come from, so it is squarely in
- * scope rather than swept in.
- */
+/** Every file that states, in prose a reader sees, where the numbers come from. */
 const CLAIM_FILES: readonly (readonly string[])[] = [
   ['components', 'SiteFooter.tsx'],
   ['components', 'MetricsBand.tsx'],
@@ -80,7 +31,6 @@ const CLAIM_FILES: readonly (readonly string[])[] = [
   ['components', 'AgeGate.tsx'],
 ];
 
-/** The legal surface, which has its own set of claims it must not make. */
 const LEGAL_FILES: readonly (readonly string[])[] = [
   ['app', 'terms', 'page.tsx'],
   ['app', 'privacy', 'page.tsx'],
@@ -90,12 +40,8 @@ const LEGAL_FILES: readonly (readonly string[])[] = [
 ];
 
 /**
- * Phrasings the legal surface must never carry.
- *
- * Each one is a claim this project has no standing to make, and each is the sentence somebody
- * reaches for when they want a legal page to sound finished. They are checked over prose only —
- * a comment may quote one to explain why it is forbidden, which is what the `prose` filter below
- * exists for.
+ * Phrasings the legal surface must never carry, checked over prose only, so a comment may quote one
+ * to explain the ban.
  */
 const FALSIFIED_LEGAL: readonly { readonly pattern: RegExp; readonly why: string }[] = [
   {
@@ -140,12 +86,7 @@ function proseOf(source: string): string {
     .join('\n');
 }
 
-/**
- * Phrasings that assert an ABSENCE the product cannot demonstrate.
- *
- * Each was on screen, and each is falsified by the bundled fallback. The narrower claim — nothing
- * is *looked up* — is fine and is what these were replaced with.
- */
+/** Absence claims the bundled fallback falsifies. The narrower claim, that nothing is looked up, is fine. */
 const FALSIFIED: readonly { readonly pattern: RegExp; readonly why: string }[] = [
   {
     pattern: /no stored odds table anywhere in this product/iu,
@@ -171,8 +112,6 @@ describe('nothing on screen claims an absence the fixtures contradict', () => {
     it(`${name} makes no unqualified "no odds table" claim`, () => {
       const text = read(...parts);
       for (const { pattern, why } of FALSIFIED) {
-        // A block comment may quote the old wording to explain why it was changed; the assertion is
-        // about what a reader is shown, so only non-comment lines are checked.
         const prose = proseOf(text);
         assert.doesNotMatch(
           prose,
@@ -186,11 +125,8 @@ describe('nothing on screen claims an absence the fixtures contradict', () => {
   }
 
   it('the footer still makes the honest version of the claim rather than saying nothing', () => {
-    // Deleting the statement would be the other way to pass this file, and it would be a worse
-    // product: the claim is the reason to trust the figures, and a narrower true one is still a
-    // claim. This asserts the replacement exists. Since 4.0 the full statement is on `/checks` and
-    // the footer carries one sentence and the link to it, so both are held: the footer may not
-    // drop the claim or the link, and the page may not drop either paragraph.
+    // Deleting the claim would also pass this file. The full statement is on `/checks` and the
+    // footer links to it, so both are held.
     const footer = read('components', 'SiteFooter.tsx');
     assert.match(footer, /never looked up/u);
     assert.match(footer, /href=\{CHECKS_PATH\}/u);
@@ -201,8 +137,7 @@ describe('nothing on screen claims an absence the fixtures contradict', () => {
   });
 
   it('the fallback really is labelled on the page, which is what makes the footer true', () => {
-    // The footer's second paragraph rests on this. If the on-page labelling is ever removed, the
-    // paragraph becomes false and has to change with it.
+    // The footer's second paragraph is only true while the fallback is labelled on the page.
     assert.match(read('app', 'learn', '[lessonId]', 'page.tsx'), /This lesson is the bundled copy/u);
     assert.match(read('app', 'play', 'page.tsx'), /Fixture — no server is connected/u);
   });
@@ -212,8 +147,7 @@ describe('the legal surface claims nothing it cannot stand behind', () => {
   for (const parts of LEGAL_FILES) {
     const name = parts.join('/');
     it(`${name} makes no compliance, licensing or verification claim`, () => {
-      // Whitespace is collapsed as well as comments dropped: the formatter reflows JSX prose to 110
-      // columns, so a forbidden phrase could straddle a line break and slip past a raw match.
+      // Whitespace collapsed, so a phrase cannot straddle a formatter line break.
       const prose = proseOf(read(...parts)).replace(/\s+/gu, ' ');
       for (const { pattern, why } of FALSIFIED_LEGAL) {
         assert.doesNotMatch(
@@ -226,9 +160,7 @@ describe('the legal surface claims nothing it cannot stand behind', () => {
   }
 
   it('the pages still make the honest versions of those claims rather than saying nothing', () => {
-    // Deleting a sentence is the other way to pass the group above, and it would be a worse
-    // product: the reason these pages are worth reading is that they say what is true. Each
-    // assertion here is the replacement for one of the forbidden phrasings.
+    // Deleting a sentence would also pass the group above. Each assertion is one honest replacement.
     const gate = read('components', 'AgeGate.tsx').replace(/\s+/gu, ' ');
     assert.match(gate, /self-declaration, not a check/u, 'in place of an age-verification claim');
 
@@ -246,17 +178,9 @@ describe('the legal surface claims nothing it cannot stand behind', () => {
       /no promise that it will be available/u,
       'in place of a guarantee, on a service that may be reset at any time',
     );
-    // The label on the assertion above used to end "on a service that is free and may be reset at
-    // any time", and the clause it guards used to open "This service is provided free of charge".
-    // That premise went when db/migrations/0006_cohort_enrolments.sql added a record of who holds a
-    // place in a course: an enrolment is granted out of band, so the software cannot tell whether a
-    // place was paid for, and withholding availability from somebody who paid is not the same act as
-    // withholding it from somebody who was given the thing.
-    //
-    // Which makes the sentence above only half of the honest claim now, and the missing half is the
-    // one a reader is actually owed: that the page is NOT deciding what the operator owes them. That
-    // is the sentence somebody tidying the clause would delete first, because it reads like a hedge
-    // rather than a term, so it gets its own assertion.
+    // Since 0006 an enrolment is granted out of band and the software cannot tell whether a place was
+    // paid for. The sentence saying the page does not settle what the operator owes reads like a hedge
+    // and would be deleted first, so it gets its own assertion.
     assert.match(
       terms,
       /whether the operator may do any of it without owing you something/u,
@@ -272,10 +196,8 @@ describe('the legal surface claims nothing it cannot stand behind', () => {
   });
 
   it('the "no third-party trackers" claim is backed by a policy with no remote host in it', () => {
-    // `/privacy` §1 asserts an absence. An absence claim is only worth making where something
-    // enforces it, so this ties the sentence to the directive list that makes it true. If a host is
-    // ever added to the policy — an analytics endpoint, a font CDN — this fails, and the page has
-    // to change before the host can ship.
+    // An absence claim is only worth making where something enforces it. A remote host added to the
+    // policy fails this, and the page has to change first.
     const csp = read('lib', 'csp.ts');
     const directives = csp
       .split('\n')
@@ -294,13 +216,6 @@ describe('the legal surface claims nothing it cannot stand behind', () => {
     assert.match(read('app', 'privacy', 'page.tsx'), /no third-party trackers/u);
   });
 });
-
-// ---------------------------------------------------------------------------
-// Negative controls for the group above.
-//
-// Every pattern is fed a page that makes exactly the claim it forbids, and asserted to fire. Without
-// this, a typo in a pattern would leave the whole group passing over documents it never matched.
-// ---------------------------------------------------------------------------
 
 describe('the legal-claim detectors catch a real violation', () => {
   const VIOLATIONS: readonly string[] = [
@@ -332,8 +247,7 @@ describe('the legal-claim detectors catch a real violation', () => {
   });
 
   it('does not fire on the pages as they are written', () => {
-    // The other half: the patterns have to be narrow enough that honest prose passes. A rule that
-    // failed on the real pages would be deleted rather than fixed, which is how a guard disappears.
+    // A rule that failed on honest prose would be deleted rather than fixed.
     assert.ok(LEGAL_FILES.length > 3);
     for (const parts of LEGAL_FILES) {
       const prose = proseOf(read(...parts)).replace(/\s+/gu, ' ');

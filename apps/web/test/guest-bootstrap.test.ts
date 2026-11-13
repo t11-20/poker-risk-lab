@@ -1,35 +1,8 @@
 /**
- * The guest session Learn and the Scenario Lab mint for a first-time visitor.
- *
- * ## The defect (PROD-048)
- *
- * `POST /auth/guest` had one caller in the whole client — `ensureSession` in `table-rooms.ts`,
- * reached only by opening a table. So a reader who came to Learn instead of to Play never got an
- * account, and every recording endpoint answered them honestly and uselessly: a lesson read came
- * back `completedAt: null`, a scenario attempt `recorded: false`, and `GET /me/progress` a 401 —
- * while `/learn` told them their reading "is counted on your record".
- *
- * Reproduced before the fix by fetching `/learn`, then `/learn/pot-odds`, then `/lab` with one
- * cookie jar and finding it empty, and `GET /auth/session` answering `user: null`.
- *
- * ## What is asserted here, and what is asserted elsewhere
- *
- * Here: the three decisions the proxy makes before it does anything at all (is this a path that
- * needs a guest, is there already a session, is this a document navigation), and the two-call CSRF
- * exchange itself against a stub. These are the parts that decide whether an account is created,
- * so they are the parts a regression would land in.
- *
- * Elsewhere: `scripts/smoke-test.mjs` **§11 "Guest bootstrap on Learn"** drives a real production
- * server — fresh jar to `/learn`, assert a session cookie comes back, assert it resolves to a guest
- * account, navigate and refresh and fire three concurrent requests and assert nothing further is
- * minted, assert a prefetch mints nothing, and finally record a lesson read as that guest and
- * assert the server stored it. A stub cannot prove the cookie reaches the browser.
- *
- * The section number is checked here rather than remembered: it was cited as §12 for two releases,
- * and §12 is the rate-limit flood, which deliberately runs LAST and drains the limiter's bucket. A
- * reader sent there to see the guest walk would have found a section whose whole purpose is to make
- * `POST /auth/guest` answer 429. Sending somebody to the wrong evidence is the same defect as
- * having none.
+ * The guest session Learn and the Scenario Lab mint for a first-time visitor (PROD-048). Only opening
+ * a table used to create an account, so a Learn reader's reads were never recorded.
+ * This pins the proxy's decisions and the two-call CSRF exchange against a stub. That the cookie
+ * reaches a browser is `scripts/smoke-test.mjs` §11 "Guest bootstrap on Learn" against a real server.
  */
 
 import assert from 'node:assert/strict';
@@ -53,8 +26,8 @@ describe('which requests may mint a guest', () => {
   });
 
   it('leaves every other path alone', () => {
-    // `/play` mints through `ensureSession` before it opens a socket; two mechanisms for one
-    // account is two things to keep in step. The rest must not create rows for a passing crawler.
+    // `/play` mints through `ensureSession` before it opens a socket. The rest must not create rows
+    // for a passing crawler.
     for (const path of ['/', '/play', '/legends', '/legends/compare', '/review', '/learn-more', '/labs']) {
       assert.equal(pathNeedsGuest(path), false, `${path} must not bootstrap`);
     }
@@ -70,8 +43,7 @@ describe('a request that already has a session', () => {
   });
 
   it('is not confused by a cookie whose name merely contains the session name', () => {
-    // This is the check that stops an authenticated reader being replaced by a guest, so a
-    // substring match here would be a real bug rather than a tidiness point.
+    // This stops an authenticated reader being replaced by a guest, so a substring match is a real bug.
     assert.equal(hasSessionCookie('not_prl_session=abc'), false);
     assert.equal(hasSessionCookie('prl_session_backup=abc'), false);
     assert.equal(hasSessionCookie('prl_csrf=abc'), false);
@@ -85,13 +57,12 @@ describe('only a top-level document navigation mints', () => {
 
   it('accepts a document request', () => {
     assert.equal(isDocumentNavigation(headers({ 'sec-fetch-dest': 'document' })), true);
-    // No `Sec-Fetch-Dest` at all: curl, a health check, the smoke test. A real page request.
+    // No `Sec-Fetch-Dest` at all is curl, a health check or the smoke test.
     assert.equal(isDocumentNavigation(headers({})), true);
   });
 
   it('refuses the several other requests one page view makes', () => {
-    // Each of these would otherwise create its own account for a single page view, which is the
-    // shape of "idempotent bootstrap" going wrong.
+    // Each of these would otherwise create its own account for one page view.
     assert.equal(isDocumentNavigation(headers({ rsc: '1' })), false);
     assert.equal(isDocumentNavigation(headers({ 'next-router-prefetch': '1' })), false);
     assert.equal(isDocumentNavigation(headers({ 'sec-fetch-dest': 'empty' })), false);
@@ -100,43 +71,27 @@ describe('only a top-level document navigation mints', () => {
   });
 
   it('reports a purpose:prefetch document as the document Next will answer it with', () => {
-    // This used to be false, and the reason it changed is worth keeping: `purpose: prefetch`
-    // changes nothing about what the server renders — such a request for `/play` is answered with
-    // the complete document, table and all, while `next-router-prefetch` is answered with a routing
-    // stub. So it IS a document navigation, and the age gate and the CSP both have to treat it as
-    // one. Not minting for it is a separate rule and now lives at the call site in `src/proxy.ts`.
+    // Next answers `purpose: prefetch` with the complete document, so it is a document navigation for
+    // the age gate and the CSP. Not minting for it is a separate rule, at the call site in `src/proxy.ts`.
     assert.equal(isDocumentNavigation(headers({ purpose: 'prefetch', 'sec-fetch-dest': 'document' })), true);
     assert.equal(isPrefetch(headers({ purpose: 'prefetch' })), true);
     assert.equal(isRouterPrefetch(headers({ purpose: 'prefetch' })), false);
   });
 
   it('separates "nobody asked for this" from "there is no page here"', () => {
-    // The two tests answer different questions and the whole `purpose: prefetch` hole was the
-    // result of one being used for the other's job.
+    // The `purpose: prefetch` hole came from using one of these for the other's job.
     assert.equal(isPrefetch(headers({ 'next-router-prefetch': '1' })), true);
     assert.equal(isRouterPrefetch(headers({ 'next-router-prefetch': '1' })), true);
     assert.equal(isPrefetch(headers({})), false);
     assert.equal(isRouterPrefetch(headers({})), false);
-    // Only the literal value counts, so a stray `purpose: navigate` is not a prefetch.
     assert.equal(isPrefetch(headers({ purpose: 'navigate' })), false);
   });
 });
 
 /**
- * `isRouterNavigation` is the age gate's half of the same question, and it exists because the
- * obvious implementation of it was wrong in a way nothing here could see.
- *
- * The gate used to ask `headers.get('rsc') !== null`, which is the header the App Router really
- * sends — and which Next deletes, along with the rest of its `FLIGHT_HEADERS`, before middleware
- * runs. A test that builds a `Headers` by hand cannot reproduce that deletion, so the honest thing
- * to state here is what these assertions are and are not: they pin the DECISION, and the proof
- * that the decision is being handed the headers it thinks it is belongs to
- * `scripts/age-gate-audit.mjs`, which clicks a real `<Link>` in a real Chrome against a real
- * production build. Neither half is sufficient alone. That is the whole lesson of the defect.
- *
- * The case that matters most below is the `sec-fetch-dest: empty` one WITHOUT an `rsc` header: it
- * is the shape a router navigation actually arrives in, and under the old test it was allowed
- * straight through a gate that was switched on.
+ * The age gate's half. Next deletes `rsc` and the other `FLIGHT_HEADERS` before middleware runs, so
+ * a router navigation arrives as `sec-fetch-dest: empty` with no `rsc`. These pin the decision, and
+ * `scripts/age-gate-audit.mjs` proves the headers in a real Chrome. Neither is sufficient alone.
  */
 describe('an in-app router navigation is a navigation for gating, and a prefetch is not', () => {
   const headers = (entries: Record<string, string>): Headers => new Headers(entries);
@@ -151,22 +106,18 @@ describe('an in-app router navigation is a navigation for gating, and a prefetch
       ),
       true,
     );
-    // And still accepts an `rsc` header if some runtime ever stops stripping it.
     assert.equal(isRouterNavigation(headers({ rsc: '1' }), 'GET'), true);
   });
 
   it('refuses a prefetch under either spelling', () => {
-    // Redirecting one of these would put the interstitial into the router cache for a page the
-    // reader never opened, which is a worse failure than not gating it: the prefetch itself
-    // renders nothing.
+    // Redirecting a prefetch would cache the interstitial for a page the reader never opened.
     assert.equal(isRouterNavigation(headers({ 'sec-fetch-dest': 'empty', rsc: '1' }), 'GET'), true);
     assert.equal(
       isRouterNavigation(headers({ 'sec-fetch-dest': 'empty', 'next-router-prefetch': '1' }), 'GET'),
       false,
     );
     assert.equal(isRouterNavigation(headers({ rsc: '1', 'next-router-prefetch': '1' }), 'GET'), false);
-    // And the other spelling is NOT excluded, because Next answers it with the page rather than
-    // with a stub. See `isRouterPrefetch` for the measurement behind that asymmetry.
+    // `purpose: prefetch` is not excluded, because Next answers it with the page (see `isRouterPrefetch`).
     assert.equal(
       isRouterNavigation(headers({ 'sec-fetch-dest': 'empty', purpose: 'prefetch' }), 'GET'),
       true,
@@ -174,8 +125,7 @@ describe('an in-app router navigation is a navigation for gating, and a prefetch
   });
 
   it('refuses the requests that are not navigations at all', () => {
-    // A document is a navigation, but it is `isDocumentNavigation`'s to report, not this one's;
-    // the proxy asks both. Subresources are nobody's.
+    // A document is `isDocumentNavigation`'s to report, and the proxy asks both.
     assert.equal(isRouterNavigation(headers({ 'sec-fetch-dest': 'document' }), 'GET'), false);
     assert.equal(isRouterNavigation(headers({ 'sec-fetch-dest': 'image' }), 'GET'), false);
     assert.equal(isRouterNavigation(headers({ 'sec-fetch-dest': 'script' }), 'GET'), false);
@@ -183,16 +133,11 @@ describe('an in-app router navigation is a navigation for gating, and a prefetch
   });
 
   it('refuses a POST, so a Server Action is never answered with a redirect', () => {
-    // A Server Action posts to the page's own URL with `sec-fetch-dest: empty`. Gating one would
-    // break it rather than gate it, and the page it was invoked from was gated already.
+    // A Server Action posts to the page's URL with `sec-fetch-dest: empty`, and a redirect would break it.
     assert.equal(isRouterNavigation(headers({ 'sec-fetch-dest': 'empty' }), 'POST'), false);
     assert.equal(isRouterNavigation(headers({ 'sec-fetch-dest': 'empty' }), 'HEAD'), true);
   });
 });
-
-// ---------------------------------------------------------------------------
-// The exchange
-// ---------------------------------------------------------------------------
 
 interface Recorded {
   readonly url: string;
@@ -212,9 +157,7 @@ function stubApi(options: {
   readonly csrfToken?: string | null;
 }): Recorded[] {
   const calls: Recorded[] = [];
-  // Not `async`: nothing in here awaits, and `fetch`'s contract is a promise rather than an async
-  // function. Returning `Promise.resolve(...)` says the same thing and keeps biome's
-  // "async without await" rule meaningful for the code that really does need it.
+  // Not `async`, because nothing here awaits, which keeps biome's async-without-await rule meaningful.
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     if (init?.signal?.aborted) {
       const error = new Error('The operation was aborted');
@@ -262,8 +205,7 @@ describe('minting the session', () => {
     assert.match(calls[1]?.url ?? '', /\/auth\/guest$/);
     assert.equal(calls[1]?.method, 'POST');
 
-    // The double-submit pair: the header token and the cookie the API issued with it. Sending one
-    // without the other is refused by `@fastify/csrf-protection`, which is the point of the pair.
+    // `@fastify/csrf-protection` refuses the header token without the cookie issued with it.
     assert.equal(calls[1]?.headers.get('x-csrf-token'), 'token-abc');
     assert.match(calls[1]?.headers.get('cookie') ?? '', /prl_csrf=secret-1/);
   });
@@ -280,16 +222,13 @@ describe('minting the session', () => {
     const minted = await mintGuestSession({ origin: 'http://localhost:3000' });
     assert.ok(minted !== null);
 
-    // Replayed verbatim: the attributes (`HttpOnly`, `Max-Age`, `SameSite`, and `Secure`/`__Host-`
-    // in production) are the API's decision, and rewriting them here would be a second, weaker
-    // cookie policy that nobody reviews.
+    // Replayed verbatim, because the attributes are the API's cookie policy.
     assert.deepEqual(minted.setCookies, [
       'prl_csrf=secret-1; Path=/; HttpOnly; SameSite=Lax',
       'prl_session=session-1; Max-Age=1209599; Path=/; HttpOnly; SameSite=Lax',
     ]);
 
-    // The forwarded request gets pairs only — no attributes, because this is a `Cookie` header
-    // being sent, not a `Set-Cookie` being stored.
+    // Pairs only, because this is a `Cookie` header being sent, not a `Set-Cookie` being stored.
     assert.deepEqual(minted.requestCookies, ['prl_csrf=secret-1', 'prl_session=session-1']);
     for (const pair of minted.requestCookies) assert.ok(!pair.includes(';'));
   });

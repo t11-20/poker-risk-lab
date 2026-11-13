@@ -1,48 +1,10 @@
 /**
- * The tolerance a numeric question STATES is never wider than the one it applies.
- *
- * ## The defect these exist for
- *
- * The hint under the numeric field rendered `question.tolerance` with `QUIZ_UNIT_DECIMALS`, which
- * is how many decimals a *figure* in that unit is worth showing. For `count` and `hands` that is
- * zero, and `(0.5).toFixed(0)` is `"1"`.
- *
- * Measured on `/learn/counting-outs` in Chrome 151, stepped through to the numeric question with
- * the API up. The field's hint read, in full:
- *
- *     "Anything within 1 cards of the computed figure is accepted."
- *
- * `counting-outs-q4` declares `tolerance: 0.5`, and the grader is
- * `Math.abs(answer - expected.value) <= Math.abs(expected.tolerance)`, so only the exact integer is
- * accepted. A learner who answered 8 to an answer of 9 did exactly what the hint said was allowed
- * and was told "8 cards is outside the tolerance of 9 cards".
- *
- * ## Why the third test is written the way it is
- *
- * It does not compare one string with another — a test carrying its own copy of the sentence passes
- * the moment somebody edits the sentence and the rule apart. It compares the NUMBER the field shows
- * with the number the grader uses, over every numeric question that actually ships. A sweep of
- * nothing is not a pass, so it asserts it read a non-empty set first.
- *
- * `withinTolerance` used to live in `lib/learn-calculations.ts`, which cannot be imported here: it
- * pulls runtime values from `@prl/ui`, whose entry point re-exports `.tsx`, and Node's type
- * stripping refuses that under `node --test`. So this file restated its rule in one line — and the
- * restatement is exactly why nobody noticed that the real one had a defect of its own.
- *
- * ## The second defect: the accepted band was narrower than the stated one
- *
- * `Math.abs(answer - expected.value) <= tolerance` is not the rule the field describes, because the
- * subtraction is not exact. For a stated tolerance of 0.2:
- *
- *     |3.2 − 3.0| = 0.20000000000000018   >  0.2   →  REFUSED
- *     |2.2 − 2.0| = 0.20000000000000018   >  0.2   →  REFUSED
- *     |8.2 − 8.0| = 0.1999999999999993    <= 0.2   →  accepted
- *
- * So an answer at exactly the tolerance the field promised was refused, or not, depending on the
- * binary representation of the expected value. The previous pass through this file recorded that
- * as "a separate, much smaller defect" and worked around it by measuring the sweep below from
- * zero. `withinTolerance` has moved into `lib/quiz-tolerance.ts` and is now driven directly, so the
- * sweep measures from a real magnitude and the workaround is gone.
+ * The tolerance a numeric question states is never wider or narrower than the one it applies.
+ * The hint once formatted `tolerance: 0.5` with zero decimals as "1", so a learner answering 8 to 9
+ * was refused (`counting-outs-q4`, measured in Chrome 151). Separately, `|3.2 - 3.0|` is
+ * 0.20000000000000018, so an answer exactly at a 0.2 tolerance was refused. The number the field shows
+ * is compared with the number the real grader in `lib/quiz-tolerance.ts` uses, over every shipped
+ * question, never a copied sentence.
  */
 
 import assert from 'node:assert/strict';
@@ -56,7 +18,6 @@ import {
   withinTolerance,
 } from '../src/lib/quiz-tolerance.ts';
 
-/** The REAL grader, driven directly. See the header for why it can be imported now. */
 const graderAccepts = (answer: number, expected: number, tolerance: number): boolean =>
   withinTolerance(answer, { value: expected, tolerance });
 
@@ -82,11 +43,7 @@ describe('the tolerance a numeric question states', () => {
     for (const question of numeric) {
       const stated = statedTolerance(question.tolerance, QUIZ_UNIT_DECIMALS[question.unit]);
       assert.ok(Number.isFinite(stated), `${question.id}: the stated tolerance is a number`);
-      // An answer exactly `stated` away from the truth is what the field promises will be accepted.
-      // Measured across a spread of magnitudes rather than from zero: the previous version of this
-      // sweep used a base of 0 precisely because `100.2 - 100` is 0.20000000000000284 and the
-      // grader refused it. That was the grader's defect, not the test's, and it is fixed — so the
-      // sweep now asks the question a learner's actual figures ask.
+      // Measured across magnitudes rather than from zero, because `100.2 - 100` is 0.20000000000000284.
       for (const base of [0, 1, 2, 3, 4, 8, 12.5, 33.3, 100, 120, 1_000, 1_250.5]) {
         assert.equal(
           graderAccepts(base + stated, base, question.tolerance),
@@ -106,15 +63,12 @@ describe('the tolerance a numeric question states', () => {
 });
 
 /**
- * The grader itself, at the boundary it advertises.
- *
- * The band the quiz ACCEPTS has to be the band the quiz STATES. Anything narrower refuses a learner
- * who did exactly what the field told them to; anything wider marks a wrong answer right.
+ * The band the quiz accepts has to be the band it states. Narrower refuses a learner who followed the
+ * field, and wider marks a wrong answer right.
  */
 describe('withinTolerance accepts exactly the band the field states', () => {
   it('accepts an answer at the boundary, at every magnitude', () => {
-    // Each of these is a real `(answer, expected)` pair whose difference is not representable:
-    // `3.2 - 3.0` is 0.20000000000000018 and was refused against a stated tolerance of 0.2.
+    // Each pair's difference is not representable, and each was once refused at its stated tolerance.
     for (const [answer, expected] of [
       [3.2, 3.0],
       [2.2, 2.0],
@@ -137,8 +91,7 @@ describe('withinTolerance accepts exactly the band the field states', () => {
   });
 
   it('NEGATIVE CONTROL: the old comparison refuses several of those', () => {
-    // The rule this replaced, restated. If it ever stops refusing anything, the cases above have
-    // stopped being at the boundary and prove nothing.
+    // The old rule, which must still refuse something, or the cases above are not at the boundary.
     const old = (answer: number, expected: number, tolerance: number): boolean =>
       Math.abs(answer - expected) <= Math.abs(tolerance);
     const refused = (
@@ -154,8 +107,7 @@ describe('withinTolerance accepts exactly the band the field states', () => {
   });
 
   it('still refuses an answer outside the band, which is the half that must not move', () => {
-    // The slack is the size of the arithmetic error and nothing more. A learner one whole unit of
-    // the last decimal outside the band is still outside it.
+    // The slack is the arithmetic error and nothing more, so one unit of the last decimal is still out.
     assert.equal(withinTolerance(3.21, { value: 3, tolerance: 0.2 }), false);
     assert.equal(withinTolerance(3.2000000001, { value: 3, tolerance: 0.2 }), false);
     assert.equal(withinTolerance(9, { value: 8, tolerance: 0.5 }), false);

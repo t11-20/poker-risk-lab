@@ -1,28 +1,10 @@
 /**
  * On a phone, a decision with a raise legal brings the sizer into view with the action row under it,
- * not under the row (audit at 6b3886e, M1).
- *
- * ## The defect
- *
- * The follow scroll brought the buttons in by their nearest edge, which stops where the row can
- * stick — and the row, stuck, was painted over the sizer above it. At 390x844 on the live table,
- * every decision with a raise legal: presets at 619..713 and the slider at 723..767 under the row at
- * 611..780, every preset hit-testing to Fold, Call or Raise, and a tap on ½ pot sending a min-raise.
- *
- * ## What is checked
- *
- * `sizerFollowDelta` is pure, so it is driven with the rectangles Chrome measured on this branch's
- * build before the change (390x844, dark, preflop facing a raise): bar 557..1249, sizer 624..992,
- * the row stuck at 611..780, and the note after the row — where the row sits in flow — at 1,168.
- * Scrolled by the answer, the row's flow position is above the line it sticks at, so it sits under
- * the sizer and covers none of it; measured after the change on the same decision shape, sizer
- * 220..587 and row 591..760 (213..580 and 584..753 since the glance, below), and `elementFromPoint`
- * returned the control itself at all five presets, the slider and the number field, on 10 of 10
- * decisions across both themes and 390x844 and 360x640. The negative control is the old geometry
- * itself: the detector says covered.
- *
- * The wiring in `LiveTable.tsx` imports `@prl/ui`, which this runner cannot load, so it is read
- * from source with its own negative control, as `focus-rescues-scroll.test.ts` reads the rest.
+ * not under the row (audit at 6b3886e, M1). Scrolling the buttons in by their nearest edge left the
+ * stuck row painted over the sizer, so a tap on ½ pot sent a min-raise.
+ * `sizerFollowDelta` is pure and is driven with rectangles Chrome measured at 390x844 and 360x640.
+ * The old geometry is the negative control. `LiveTable.tsx` imports `@prl/ui`, so its wiring is read
+ * from source, as `focus-rescues-scroll.test.ts` does.
  */
 
 import assert from 'node:assert/strict';
@@ -40,17 +22,13 @@ import {
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 
-/**
- * 390x844: the root's scroll padding, 92px above (the 77px header and a step of air) and the Coach
- * peek's 80px below. Read off `getComputedStyle(document.documentElement)` on the live table at 390
- * and at 360; this said 77 before the glance, which is the header alone.
- */
+/** 390x844 scroll padding read from `getComputedStyle`: 92px above (header plus air), the peek's 80 below. */
 const VIEW = { viewTop: 92, viewBottom: 844 - 80, coverBottom: 77 } as const;
 /** The row's own height at 390, and the line it sticks at: the 4rem peek above the bottom edge. */
 const ROW_HEIGHT = 169;
 const STICKS_BELOW = 844 - 64;
 
-/** Measured before the change: the row stuck over the sizer. Before the glance, too: no cards drawn. */
+/** Measured before the change, with the row stuck over the sizer and no cards drawn. */
 const BEFORE: SizerGeometry = {
   regionTop: 557,
   handTop: null,
@@ -95,7 +73,7 @@ describe('the follow scroll brings the sizer in with the row under it', () => {
     );
     assert.ok(after.regionTop >= VIEW.viewTop, `the price strip went under the header (${after.regionTop})`);
     assert.ok(after.rowFlowBottom <= VIEW.viewBottom, 'the row is under the Coach peek');
-    // And what was measured in Chrome after the change, on the same shape of decision.
+    // What was measured in Chrome after the change, on the same shape of decision.
     assert.deepEqual([after.sizerTop, after.sizerBottom], [220, 588]);
   });
 
@@ -119,13 +97,9 @@ describe('the follow scroll brings the sizer in with the row under it', () => {
 });
 
 /**
- * The reader's cards and the board stay on screen while they size a bet.
- *
- * The follow above took the reader's own plate and the board off the top at 390x844 (plate at
- * -174..46, board at -303..-203), so the bar now draws `HandGlance` between the price and the sizer,
- * and the follow keeps it in view. Each fixture is the layout Chrome measured AFTER the change on the
- * live table, both themes, placed where a deal leaves it — the sizer at 624, as in `BEFORE` — so the
- * answer has to bring every rectangle back to where it was measured.
+ * The reader's cards and the board stay on screen while they size a bet. The first follow took them
+ * off the top, so the bar draws `HandGlance` and the follow keeps it in view. Each fixture is the
+ * layout Chrome measured after the change, placed where a deal leaves it (sizer at 624, as in `BEFORE`).
  *
  *   390x844: street 56..77 (one line), price 106..144, glance 156..201, sizer 213..580, row in flow
  *            584..753 and the note after it at 757; number field 402..446.
@@ -219,9 +193,8 @@ function scrolled360(geometry: SizerGeometry, delta: number): SizerGeometry {
 }
 
 /**
- * Once the decision is over, the table comes back. Measured at 390x844 on this branch with only the
- * sizer follow in place: after a call the band collapsed to 92..204 under the header with the plate
- * at -146..55; at the end of a hand the result was at -157..-21 above a band at 108..355.
+ * Once the decision is over, the table comes back. Measured at 390x844 with only the sizer follow:
+ * after a call the plate was at -146..55, and at the end of a hand the result was at -157..-21.
  */
 describe('when the decision is not the reader’s, the table is watched', () => {
   const AFTER_A_CALL: WatchGeometry = {

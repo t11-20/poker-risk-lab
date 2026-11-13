@@ -1,47 +1,10 @@
 /**
- * What this app says out loud, and what it must never say instead.
- *
- * ## The defect these exist for
- *
- * The release audit's hardest finding on this client was on the live table's error path. The block
- * that replaces the table when it cannot be reached was an unlabelled `<div class="prl-error">`
- * with **no `role="alert"` and no live-region ancestor**, while the connection status region
- * simultaneously announced **"Ready to connect."** A screen-reader user was told the opposite of
- * what the screen said, on the most consequential error path in the product. WCAG 2.2 SC 4.1.3
- * (AA), on a page that had been reviewed repeatedly.
- *
- * The second was quieter and the same shape: the Coach's analysis arrives in a panel that is a
- * collapsed off-screen sheet below 600px, and nothing announced its arrival — while
- * `ScenarioStage.tsx` had been announcing the identical event correctly for the whole time.
- *
- * ## Why these are source assertions and not rendered ones
- *
- * `apps/web`'s tests run under `node --test` with no DOM and no JSX transform, so a component
- * cannot be rendered here; `scripts/a11y-audit.mjs` is what drives the real accessibility engine
- * over the delivered HTML. What this file adds is a check on the two things the audit tool cannot
- * see: an error state that is only reachable against a broken server, and a reducer transition.
- * `tableReducer` is a pure function and is driven for real below.
- *
- * ## The third defect: the table never said whose decision it was
- *
- * Whose turn it is, is the single most important fact at a poker table, and `Seat.tsx` marks it
- * three separate ways for a sighted reader — an accent edge, a "TO ACT" chip, and the draining timer
- * ring. None of the three is a live region, and no live region carried it, so a screen-reader user
- * heard the seat before them act and then silence. They were never told the decision had arrived,
- * what it cost, what was in the pot, or which actions were legal.
- *
- * The fix has to survive ADR 0009, which sends state WHOLE: every frame carries the entire table, so
- * a region fed from a frame announces on every frame. The reducer therefore diffs, and the tests
- * below drive that diff with the app's own typed fixture — including the case that matters most,
- * which is that a second identical frame announces NOTHING.
- *
- * ## Would these fail if the behaviour broke?
- *
- * The reducer half, yes, and by construction: `turnAnnouncementFor` is driven over a real
- * `PlayerView` and the assertions name the figures that must be in the sentence, so deleting the
- * announcement, dropping the pot from it, or announcing on the level instead of the edge each fail a
- * different assertion here. The source-assertion half is weaker on purpose and says so: it pins
- * exact markup that a previous audit found missing, so a revert fails rather than shipping.
+ * What this app says out loud, and what it must never say instead (WCAG 2.2 SC 4.1.3).
+ * `tableReducer` is pure and is driven for real. Markup is asserted over source text, because
+ * `apps/web` tests run under `node --test` with no DOM, and `scripts/a11y-audit.mjs` cannot reach an
+ * error state that needs a broken server.
+ * ADR 0009 sends the whole table on every frame, so the turn announcement is a diff, and a second
+ * identical frame must announce nothing.
  */
 
 import assert from 'node:assert/strict';
@@ -64,17 +27,10 @@ import {
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 const read = (...parts: readonly string[]): string => readFileSync(join(SRC, ...parts), 'utf8');
-/** `@prl/ui`'s source, for the one predicate three components in this app now share. */
 const UI_SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'packages', 'ui', 'src');
 const readUi = (...parts: readonly string[]): string => readFileSync(join(UI_SRC, ...parts), 'utf8');
 
-/**
- * Source with its comments removed.
- *
- * A rule stated in prose must not be read as a breach of itself. `TableStage.tsx` explains that
- * `role="alert"` implies `aria-live="assertive"` — and the first version of the assertion below
- * matched that sentence and reported the file as breaking a rule the sentence exists to keep.
- */
+/** Comments removed, because `TableStage.tsx` explains `role="alert"` in prose and a scan read that. */
 const withoutComments = (source: string): string =>
   source.replace(/\/\*[\s\S]*?\*\//gu, '').replace(/^\s*\/\/.*$/gmu, '');
 
@@ -103,8 +59,7 @@ describe('the live table announces its own failure', () => {
         '`status` stays null and the fall-through reads that as "Ready to connect." — which is how ' +
         'the page came to announce the opposite of the error beside it.',
     );
-    // The order matters: the `failed` branch has to come BEFORE the null-status fall-through, or it
-    // never runs.
+    // The failed branch has to come before the null-status fall-through, or it never runs.
     assert.ok(
       body.indexOf("phase === 'failed'") < body.indexOf('status === null'),
       'the failed branch must be reached before the "Ready to connect." fall-through',
@@ -112,13 +67,12 @@ describe('the live table announces its own failure', () => {
   });
 
   it('announces a quiz question that cannot be marked', () => {
-    // Same shape, one screen away: the block REPLACES the question, so a reader who cannot see it
-    // is left waiting at a field that has silently gone away.
+    // The block replaces the question, so without an alert the field silently goes away.
     assert.match(read('components', 'QuizRunner.tsx'), /<div className="prl-error" role="alert">/u);
   });
 });
 
-/** A coach frame, as the socket delivers one. The report's contents are irrelevant here. */
+/** A coach frame. The report's contents are irrelevant here. */
 function coachFrame(requestId: string): WsServerMessage {
   const report = { street: 'flop' } as unknown as CoachReport;
   return { type: 'coach', requestId, report } as WsServerMessage;
@@ -182,8 +136,7 @@ describe('the Coach’s arrival is announced', () => {
     assert.equal(refused.coach, null);
     assert.equal(refused.coachRequest, null);
     assert.match(refused.announcement, /review afterwards/u);
-    // And it KEEPS the server's own wording, which is the only thing this client actually learns
-    // about why the analysis is off at this table. See the block at the bottom of this file.
+    // The server's wording is the only thing this client learns about why the Coach is off.
     assert.equal(
       refused.coachRefusal,
       'The Coach is available in review after the hand, not while it is being played at this difficulty.',
@@ -191,8 +144,7 @@ describe('the Coach’s arrival is announced', () => {
   });
 
   it('says nothing for an answer to a request nobody made', () => {
-    // A `coach` frame whose id does not match the outstanding one is dropped entirely; announcing
-    // it would describe a panel that did not change.
+    // A stale id is dropped, and announcing it would describe a panel that did not change.
     const stale = tableReducer(EMPTY_TABLE_STATE, { kind: 'frame', frame: coachFrame('other') });
     assert.equal(stale.announcement, '');
     assert.equal(stale.coach, null);
@@ -200,17 +152,9 @@ describe('the Coach’s arrival is announced', () => {
 });
 
 /**
- * A view, built here rather than imported from `src/fixtures/table.ts`.
- *
- * Not a preference. That fixture imports `parseCardText` from `@prl/ui` as a runtime value, and
- * `@prl/ui` is consumed as source: its entry point re-exports `.tsx` components, which Node's type
- * stripping cannot load, so importing the fixture would fail this whole file with
- * `ERR_UNKNOWN_FILE_EXTENSION`. The same constraint is why `turnAnnouncementFor` formats its own
- * figures; see the comment on `units` in `use-live-table.ts`.
- *
- * It is typed as `PlayerView` and NOT cast, which is the point of writing it out: if the wire
- * contract grows a field, this stops compiling under `pnpm --filter @prl/web test` rather than
- * quietly testing a shape the server no longer sends.
+ * Built here, because `src/fixtures/table.ts` imports `@prl/ui` at runtime, which re-exports `.tsx`
+ * that Node type stripping cannot load (`ERR_UNKNOWN_FILE_EXTENSION`). Typed as `PlayerView` and not
+ * cast, so a new wire field stops this compiling.
  */
 const HERO_SEAT: SeatView = {
   seat: 0,
@@ -273,7 +217,6 @@ const DECISION_VIEW: PlayerView = {
   randomSourceKind: 'fixed-deck-scenario',
 };
 
-/** The same hand, settled: nobody is to act and there are no legal actions left. */
 const SETTLED_VIEW: PlayerView = {
   ...DECISION_VIEW,
   street: 'complete',
@@ -287,13 +230,7 @@ const SETTLED_VIEW: PlayerView = {
   actionSequence: 11,
 };
 
-/**
- * A `state` frame, as the socket delivers one.
- *
- * The room is cast rather than built: nothing under test reads a field of it except `members`, which
- * `seatFrom` searches, and constructing a full `RoomSummary` here would be forty lines of values
- * that no assertion depends on. Same idiom as `coachFrame` above.
- */
+/** The room is cast, because nothing under test reads it except `members`. */
 function stateFrame(view: PlayerView | null, revision: number): WsServerMessage {
   return {
     type: 'state',
@@ -313,7 +250,6 @@ function eventFrame(description: string): WsServerMessage {
   } as unknown as WsServerMessage;
 }
 
-/** The two events one `startHand` produces, in the order the API writes them. */
 function handStartedFrame(): WsServerMessage {
   return {
     type: 'event',
@@ -334,10 +270,8 @@ describe('the deal is announced with the blinds, in one write', () => {
   const BLINDS = 'smallBlind 5 from seat 3, bigBlind 10 from seat 4';
 
   it('writes nothing of its own when the hand starts', () => {
-    // The defect: `handStarted` used to put "A new hand was dealt." straight into the region, and
-    // `forcedBets` — the very next event of the SAME table notice — replaced it microseconds later.
-    // Two writes into one atomic polite region for one notice are one announcement, and it is the
-    // second one, so the deal was never heard. Measured in Chrome 151 by scripts/ax-assertions.mjs.
+    // `forcedBets` follows `handStarted` in the same notice, and two writes into one atomic region are
+    // heard as the second (measured in Chrome 151 by scripts/ax-assertions.mjs).
     const dealt = tableReducer(EMPTY_TABLE_STATE, { kind: 'frame', frame: handStartedFrame() });
     assert.equal(
       dealt.announcement,
@@ -356,10 +290,7 @@ describe('the deal is announced with the blinds, in one write', () => {
   });
 
   it('does not say it twice — the defect on the other side', () => {
-    // `role="status"` is atomic, so a sentence left in front of the table's later narration is read
-    // again on every event for the rest of the hand. That is the failure 3.17 exists to catch, and
-    // an implementation that wrote the deal and then APPENDED the blinds would produce it whenever
-    // the two frames landed in separate commits.
+    // `role="status"` is atomic, so a sentence left in front is read again on every event (check 3.17).
     const dealt = tableReducer(EMPTY_TABLE_STATE, { kind: 'frame', frame: handStartedFrame() });
     const posted = tableReducer(dealt, { kind: 'frame', frame: forcedBetsFrame(BLINDS) });
     const next = tableReducer(posted, { kind: 'frame', frame: eventFrame('Seat 3 called 50 units') });
@@ -368,10 +299,8 @@ describe('the deal is announced with the blinds, in one write', () => {
   });
 
   it('mounts the narration region outside the component that draws the table', () => {
-    // The other half of the same defect, and the one a reducer test cannot see. `PokerTable` is not
-    // rendered until a view arrives, and the frames that start a hand bring the first sentence and
-    // the first view in one commit — so the region used to be created already holding its text, and
-    // a live region that arrives with its text is announced by nothing.
+    // `PokerTable` mounts with the first view, and a live region that arrives holding its text is
+    // announced by nothing.
     const stage = withoutComments(read('components', 'TableStage.tsx'));
     const table = stage.indexOf('<PokerTable');
     const region = stage.indexOf('className="prl-live-region"');
@@ -403,9 +332,7 @@ describe('the table announces whose decision it is', () => {
   it('says so on the frame where the decision becomes the reader’s, with the figures', () => {
     const dealt = tableReducer(EMPTY_TABLE_STATE, { kind: 'frame', frame: stateFrame(DECISION_VIEW, 1) });
 
-    // Every figure a decision is made from. The layout guarantees a sighted reader sees the pot, the
-    // price and their own stack at the same time (TableStage's module comment); this is the same
-    // guarantee for a reader who cannot see the layout at all.
+    // The pot, the price and the stack, the figures a sighted reader sees together.
     assert.match(dealt.turnAnnouncement, /^Your turn on the flop\./u);
     assert.match(dealt.turnAnnouncement, /35 units to call/u, 'the price must be in the sentence');
     assert.match(dealt.turnAnnouncement, /Pot 100 units/u, 'the pot must be in the sentence');
@@ -419,10 +346,7 @@ describe('the table announces whose decision it is', () => {
   });
 
   it('says NOTHING on a second identical whole-state frame', () => {
-    // The assertion this whole design exists for. ADR 0009 pushes the entire table on every change,
-    // so a region wired straight to a frame re-announces the turn several times a second. The
-    // reducer diffs on the edge, so the string is carried unchanged — and an unchanged live region
-    // is a silent one.
+    // ADR 0009 pushes the whole table on every change, and an unchanged live region is silent.
     const first = tableReducer(EMPTY_TABLE_STATE, { kind: 'frame', frame: stateFrame(DECISION_VIEW, 1) });
     const second = tableReducer(first, { kind: 'frame', frame: stateFrame(DECISION_VIEW, 2) });
     assert.equal(
@@ -437,16 +361,13 @@ describe('the table announces whose decision it is', () => {
     const mine = tableReducer(EMPTY_TABLE_STATE, { kind: 'frame', frame: stateFrame(DECISION_VIEW, 1) });
     const over = tableReducer(mine, { kind: 'frame', frame: stateFrame(SETTLED_VIEW, 2) });
     assert.equal(over.turnAnnouncement, '');
-    // Cleared rather than left standing, so the NEXT turn is a change and is announced again.
+    // Cleared, so the next turn is a change and is announced again.
     const again = tableReducer(over, { kind: 'frame', frame: stateFrame(DECISION_VIEW, 3) });
     assert.match(again.turnAnnouncement, /^Your turn on the flop\./u);
   });
 
   it('says the NEW decision when one of the reader’s decisions follows straight on from another', () => {
-    // The defect, from the audit at 308fadf: "Your turn preflop. 74 units to call" read out while
-    // the buttons were Check and Bet on the flop. The reader's call closed the preflop betting and
-    // they were first to act on the flop, so no frame in between said it was anybody else's turn —
-    // and the reducer carried the old sentence whenever the last frame was the reader's turn too.
+    // The audit at 308fadf heard "Your turn preflop. 74 units to call" with Check and Bet on the flop.
     const preflop: PlayerView = { ...DECISION_VIEW, street: 'preflop', board: [] };
     const flop: PlayerView = {
       ...DECISION_VIEW,
@@ -473,8 +394,7 @@ describe('the table announces whose decision it is', () => {
   });
 
   it('agrees with the predicate the buttons are drawn from', () => {
-    // One definition, used by the reducer and by the hook. If these ever disagree the table can
-    // enable Fold while telling the reader it is somebody else's decision.
+    // If these disagree, the table can enable Fold while saying it is somebody else's decision.
     assert.equal(isViewersTurn(DECISION_VIEW, false), true);
     assert.equal(isViewersTurn(SETTLED_VIEW, false), false);
     assert.equal(isViewersTurn(DECISION_VIEW, true), false, 'between hands nothing is anybody’s turn');
@@ -506,9 +426,7 @@ describe('the reader’s own decision is echoed once, not prefixed forever', () 
   });
 
   it('is replaced by the next thing the table says', () => {
-    // The defect: `TableStage` used to CONCATENATE this phrase onto every announcement, and
-    // `role="status"` is atomic — so every subsequent event was read out as "You chose to fold.
-    // Seat 3 called 50 units." for the rest of the street.
+    // `role="status"` is atomic, so a prefixed echo was read before every event for the street.
     const sent = tableReducer(EMPTY_TABLE_STATE, { kind: 'submit', pending: FOLD, delivery: 'sent' });
     const next = tableReducer(sent, { kind: 'frame', frame: eventFrame('Seat 3 called 50 units') });
     assert.equal(next.announcement, 'Seat 3 called 50 units');
@@ -533,8 +451,7 @@ describe('the reader’s own decision is echoed once, not prefixed forever', () 
       /announcement=\{`\$\{spoken/u,
       'the template-literal concatenation is the defect; the echo belongs in the reducer',
     );
-    // Whitespace-tolerant: biome reflows this expression across two lines and an assertion that
-    // pinned the formatting would fail on a run of the formatter rather than on a real change.
+    // Whitespace-tolerant, because biome reflows this expression across two lines.
     assert.match(
       withoutComments(stage).replace(/\s+/gu, ' '),
       /const spoken = pressed === null \? \(announcement \?\? ''\) :/u,
@@ -557,15 +474,7 @@ describe('a refusal interrupts, and everything else is polite', () => {
   });
 
   it('wraps the server’s other refusals in an alert too, in EVERY branch', () => {
-    // `notice` is the server refusing something that was not a decision — a seat that had gone, a
-    // hand somebody else started, a rate limit — and it was once silent: a plain Callout with no
-    // live-region ancestor, so the reader pressed a button and nothing said anything.
-    //
-    // There are two branches now, because `enrolment_required` needs a heading and a next step of
-    // its own rather than "The server refused something". A split is exactly how one of them
-    // quietly becomes a silent Callout again, so both are checked AND the number of branches is
-    // asserted — a third one added without an alert must fail here rather than pass because the
-    // two named patterns still match.
+    // Both branches are checked and counted, so a third one added without an alert fails here.
     const live = withoutComments(read('app', 'play', 'LiveTable.tsx'));
     const branches = live.match(/\{table\.notice\s*(?:!==|===)\s*null/gu) ?? [];
     assert.equal(
@@ -589,11 +498,8 @@ describe('a refusal interrupts, and everything else is polite', () => {
   });
 
   it('puts the caret on the acknowledgement when acting disables the control it was on', () => {
-    // Found by `scripts/ax-tree-audit.mjs`: pressing Fold sets the submission to `pending`, which
-    // disables every control in the ActionBar, and a browser blurs a control that becomes disabled.
-    // The computed accessibility tree then reported a `RootWebArea` holding focus, named after the
-    // page title — which is what the reader hears: they press a button, and the next thing announced
-    // is the name of the page they were already on.
+    // A control that becomes disabled is blurred, and the AX tree then reported `RootWebArea` holding
+    // focus, so the reader heard the page title (scripts/ax-tree-audit.mjs).
     const stage = withoutComments(read('components', 'TableStage.tsx'));
     assert.match(stage, /const acknowledgementRef = useRef<HTMLDivElement \| null>\(null\);/u);
     assert.match(
@@ -601,14 +507,9 @@ describe('a refusal interrupts, and everything else is polite', () => {
       /acknowledgementRef\.current\?\.focus\(\{ preventScroll: true \}\);/u,
       'nothing moves the caret after a decision, so it is left on the document',
     );
-    // Both guards, and both are load-bearing. Without the first, a table that updates while the
-    // reader is in the Coach panel yanks them back to the controls; without the second, this steals
-    // focus from whatever legitimately holds it.
+    // The first guard keeps a reader in the Coach panel. The second never steals legitimate focus.
     assert.match(stage, /if \(submission === null \|\| !hadFocus\.current\) return;/u);
-    // The second guard used to be spelled out here as three comparisons. It is now one call to
-    // `browserAbandonedFocus`, shared from `@prl/ui`, because three components carried a copy and
-    // one of them — `LiveTable` — was a version behind and would never have fired. So this asserts
-    // the call, and the three states are asserted where the predicate actually lives.
+    // `browserAbandonedFocus` is shared from `@prl/ui`, so its states are asserted where it lives.
     assert.match(
       stage,
       /if \(!browserAbandonedFocus\(\)\) return;/u,
@@ -633,9 +534,7 @@ describe('a refusal interrupts, and everything else is polite', () => {
   });
 
   it('gives the caret somewhere with a name to land on', () => {
-    // A bare focusable `<div>` computes an EMPTY accessible name (measured in Chrome 151), so a
-    // reader whose caret has just been moved is told nothing about where it went. `role="status"`
-    // is exposed as the focused node in the tested browser and can carry the label.
+    // A bare focusable `<div>` computes an empty accessible name (measured in Chrome 151).
     const stage = withoutComments(read('components', 'TableStage.tsx'));
     assert.match(
       stage,
@@ -646,10 +545,7 @@ describe('a refusal interrupts, and everything else is polite', () => {
   it('keeps the turn region polite, because a turn is not an emergency', () => {
     const stage = read('components', 'TableStage.tsx');
     assert.match(stage, /aria-atomic="true" aria-live="polite" className="prl-live-region" role="status"/u);
-    // Exactly one assertive channel per screen. `role="alert"` implies assertive, and nothing else
-    // on the play screen may. Asserted over the CODE, because the comment above the error block
-    // explains that implication in prose and a naive scan reads its own documentation as a
-    // violation — which is what the first version of this assertion did.
+    // One assertive channel per screen. Asserted over code, because a comment explains it in prose.
     assert.doesNotMatch(
       withoutComments(stage),
       /aria-live="assertive"/u,
@@ -674,15 +570,12 @@ describe('a field that cannot be used says so on the field', () => {
       'the correction must be associated with the field, and must come first: a reader who has just ' +
         'been told the field is invalid needs the reason before the tolerance rule',
     );
-    // "Invalid" must mean the INPUT and never the answer: marking a wrong-but-well-formed answer
-    // invalid would be both false and the closest thing to a mark this product allows itself.
+    // "Invalid" means the input, never a wrong but well-formed answer.
     assert.match(
       quiz,
       /const malformed = badInput \|\| \(draft\.trim\(\) !== '' && !Number\.isFinite\(parsed\)\);/u,
     );
-    // `badInput` is load-bearing and cannot be dropped as redundant. An `<input type="number">`
-    // reports `value === ''` for text it could not parse, so a check written against the draft
-    // alone can NEVER fire — the first version of this fix had exactly that bug and looked correct.
+    // A number input reports `value === ''` for text it could not parse, so a draft-only check never fires.
     assert.match(
       quiz,
       /setBadInput\(event\.target\.validity\.badInput\)/u,
@@ -696,41 +589,10 @@ describe('a field that cannot be used says so on the field', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Why the Coach is off, and the difference between knowing and assuming
-// ---------------------------------------------------------------------------
-
 /**
- * The panel used to state a cause it had never observed.
- *
- * ## What a reader saw
- *
- * Live Coach goes off in two unrelated ways, and the panel printed one sentence for both:
- *
- *     "The Coach is available afterwards in review, not during this hand.
- *      Expert keeps the analysis off the table so the style is the thing you are reading."
- *
- * That sentence names a difficulty. This page knows the difficulty in exactly one of the two
- * cases — when it opened an Expert Legends match itself, from its own `?difficulty=expert`. The
- * other case is a `coach_not_available` refusal from the server: a fact about whichever table the
- * reader happens to be at, carrying no difficulty the client can read. Its wording was discarded
- * (`coachProblem` is set to null for this code) and the Expert sentence printed in its place.
- *
- * Measured in Chrome 151 against the built app, with the API up. Play a hand at
- * `/play?profile=vocal-aggressor&difficulty=expert`, then open plain `/play`. `chooseRoom` reuses
- * the room the reader already owns, so:
- *
- *     (a) /play?profile=…&difficulty=expert   heading "Heads-up against this style"
- *     (b) plain /play                          heading "Six-handed table"
- *
- * printed the *identical* Expert sentence. On (b) the reader chose no difficulty, the page passed
- * no `legendMatch`, and the only thing it had learned was that the server had said no.
- *
- * ## What is asserted
- *
- * The reducer half is driven for real. The mapping from "what was established" to "which sentence"
- * lives in `app/play/LiveTable.tsx` and is read from source, with the sentence that must NOT be
- * reachable from a refusal named explicitly.
+ * Live Coach goes off in two unrelated ways. The page knows the difficulty only when it opened an
+ * Expert Legends match itself. A `coach_not_available` refusal carries no difficulty, so it must not
+ * print the Expert sentence (measured in Chrome 151, where plain `/play` printed it).
  */
 describe('the Coach panel says the reason that applies, not the one that reads best', () => {
   const REFUSAL =
@@ -789,25 +651,22 @@ describe('the Coach panel says the reason that applies, not the one that reads b
     const hook = read('lib', 'use-live-table.ts');
     const panel = read('app', 'play', 'LiveTable.tsx');
 
-    // The hook decides WHAT was established. Expert first, because that is the stronger claim:
-    // this page opened the match, so the difficulty is its own parameter.
+    // Expert first, because this page opened that match and the difficulty is its own parameter.
     assert.match(hook, /options\.legendMatch\?\.difficulty === 'expert'\s*\?\s*\{ kind: 'expertLegends' \}/u);
     assert.match(hook, /kind: 'refusedByServer', serverReason: table\.coachRefusal/u);
 
-    // The panel turns that into copy, and the Expert sentence is reachable from exactly one arm.
     assert.match(
       withoutComments(panel),
       /off\.kind === 'expertLegends' \? EXPERT_COACH_REASON : refusedCoachReason\(off\.serverReason\)/u,
     );
-    // A refusal's sentence is the server's own words. It must not mention a difficulty this page
-    // never saw — the whole defect in one assertion.
+    // A refusal must not mention a difficulty this page never saw.
     assert.doesNotMatch(
       withoutComments(panel).replace(/const EXPERT_COACH_REASON =[\s\S]*?';/u, ''),
       /Expert keeps the analysis off the table/u,
       'the Expert wording appears somewhere other than the one constant it belongs to',
     );
 
-    // NEGATIVE CONTROL: the old mapping, fed to the same detector. One boolean, one sentence.
+    // NEGATIVE CONTROL: the old mapping, fed to the same detector.
     const old = 'if (!live.coachDuringHand) return { coachUnavailableReason: EXPERT_COACH_REASON };';
     assert.doesNotMatch(
       withoutComments(panel),
