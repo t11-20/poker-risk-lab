@@ -60,6 +60,7 @@ import {
   TABLE_STATES,
   type TableStateName,
 } from '@/fixtures/table.ts';
+import { disclaimerFraming } from '@/lib/disclaimer-framing.ts';
 import { legendMatchCopy } from '@/lib/legend-match-copy.ts';
 import {
   findProfile,
@@ -128,20 +129,36 @@ function stagePropsFor(state: TableStateName): {
  * profiles response `/legends` rendered. An outage falls back to the bundled profiles inside
  * `loadLegendProfiles`; anything else it throws is caught here and costs only the archetype name,
  * because a heading is not worth failing the table over.
+ *
+ * ## `specific`: the profile's own disclaimers, every one but the universal
+ *
+ * The framing line restates the universal disclaimer in one sentence. A profile can carry more —
+ * the course-derived notice on "Fundamentals-First Study Model", the attribution notice in
+ * attributed naming mode — and until "Start a match" on `/legends` (PR #41) the only way here was a
+ * card or a profile page that had printed them in full above its Play link. The form lists every
+ * profile by name, so a reader could pick that one and be dealt in without either screen saying it
+ * is not affiliated with any course provider (Devin Review on #41). They are printed here, in full,
+ * so every path to a legend table passes them, whichever page it started from.
  */
 async function legendHead(profileId: string, difficulty: MatchDifficulty) {
   let archetypeName: string | null = null;
   let setting: LegendDifficultyDto | null = null;
+  let specific: readonly string[] = [];
   try {
     const profiles = await loadLegendProfiles();
-    archetypeName = findProfile(profiles.data.profiles, profileId)?.disclosure.archetypeName ?? null;
+    const profile = findProfile(profiles.data.profiles, profileId);
+    archetypeName = profile?.disclosure.archetypeName ?? null;
     setting = profiles.data.difficulties.find((entry) => entry.id === difficulty) ?? null;
+    if (profile !== null) {
+      specific = disclaimerFraming(profile.disclosure.disclaimers, profiles.data.universalDisclaimer).inFull;
+    }
   } catch {
     // Fail in the safe direction: a generic heading, still framed, and the table still loads.
   }
   return {
     known: archetypeName !== null,
     copy: legendMatchCopy({ profileId, archetypeName, difficulty, setting }),
+    specific,
   };
 }
 
@@ -308,6 +325,11 @@ export default async function PlayPage({ searchParams }: PlayPageProps): Promise
             <Link href={LEGENDS_PATH}>Choose another opponent</Link>
           </p>
         )}
+        {legend?.specific.map((disclaimer) => (
+          <p className="prl-play__framing prl-note" key={disclaimer}>
+            {disclaimer}
+          </p>
+        ))}
       </header>
 
       <LiveTable key={tableKey} {...(legendMatch === undefined ? {} : { legendMatch })} />
