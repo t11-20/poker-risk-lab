@@ -88,11 +88,18 @@ const STATE_LEDE: Readonly<Record<TableStateName, string>> = {
     'left for the Coach to price; the useful feedback is in the hand’s review, not in the result.',
 };
 
-/** The six-handed table's lede. A legend match has its own — see `legendMatchCopy`. */
+/**
+ * The six-handed table's lede. A legend match has its own — see `legendMatchCopy`.
+ *
+ * True of every table this page can seat the reader at, because it is rendered before any room
+ * exists. It said "A private table against five bots", which the private table (two bots) and a
+ * friend's table reached by code are not (audit at 308fadf). Who is actually at the table is in the
+ * Room line of the connection panel, from `describeTable`, once there is a table to describe.
+ */
 const LIVE_LEDE =
-  'A private table against five bots, dealt and settled by the server. Every card, every stack, ' +
-  'every pot and every legal action on this screen arrived over the socket — nothing here is decided ' +
-  'in your browser.';
+  'A play-money table dealt and settled by the server: five bots to practise against, or a private ' +
+  'table with seats kept for people you invite. Every card, every stack, every pot and every legal ' +
+  'action on this screen arrived over the socket — nothing here is decided in your browser.';
 
 /** What each fixture state hands to the stage. Built here so the page reads as one table of cases. */
 function stagePropsFor(state: TableStateName): {

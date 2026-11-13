@@ -1428,8 +1428,9 @@ describe('NEGATIVE CONTROL — 3.18, the hand that ends in silence', () => {
 describe('NEGATIVE CONTROL — 3.19, a refusal nobody is interrupted for', () => {
   const check = checkFor('J3.19');
   const DECISION = regionKey('prl-play__stage', 'prl-play__main', 'prl-play__decision');
-  const REFUSAL =
-    '▲Watch outThe server refused itIt is not your turn to act. (not_your_turn). Nothing was applied.';
+  // Measured in Chrome 151 with "(not_your_turn)" after the server's sentence; the page has since
+  // stopped printing contract codes (audit at 308fadf), and this is the same alert without it.
+  const REFUSAL = '▲Watch outThe server refused itIt is not your turn to act. Nothing was applied.';
 
   /**
    * The hand 3.19's fixture plays: everything `HEALTHY_HAND` records, plus a second decision out of
@@ -1473,6 +1474,21 @@ describe('NEGATIVE CONTROL — 3.19, a refusal nobody is interrupted for', () =>
     const verdict = check.decide(evidence);
     assert.equal(verdict.ok, false);
     assert.match(verdict.detail, /carries the heading and none of/u);
+  });
+
+  it('fires when the refusal reads a contract code out after the server’s sentence', () => {
+    const evidence = REFUSED_HAND();
+    evidence.log = evidence.log.map((entry) =>
+      entry.live === 'assertive'
+        ? {
+            ...entry,
+            text: '▲Watch outThe server refused itIt is not your turn to act. (not_your_turn). Nothing was applied.',
+          }
+        : entry,
+    );
+    const verdict = check.decide(evidence);
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /reads a contract code out/u);
   });
 
   it('fires when something else on the screen interrupts as well', () => {
