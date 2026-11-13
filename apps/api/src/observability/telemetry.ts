@@ -1,38 +1,9 @@
 /**
- * The shared vocabulary the rest of the service is instrumented against.
- *
- * `registry.ts` is the mechanism and `metrics.ts` is the policy about *what* is exported. This
- * file is the policy about what the code is allowed to *say* — the closed sets of strings that
- * reach a metric label, and the two helpers that put a number on work the pool and the audit
- * log already do.
- *
- * ## Why the problem hook needed a discriminator
- *
- * `LiveTable`, `BotRunner`, `RoomRegistry` and `WsRouter` all report non-fatal failures through
- * one hook whose only parameter was a prose message. Seventeen distinct failure kinds arrived
- * as seventeen different sentences, so the only way to count "bots are failing to act" was a
- * substring match over log lines — which is not a metric, breaks the moment somebody rewords a
- * message, and cannot be alerted on. `PoolWarning` in `workers/pool.ts` got this right with a
- * four-value `event` union and is the model this follows.
- *
- * So `ProblemDetail.event` is required and typed. A call site that omits it, or invents a value,
- * fails `tsc` — which is the property that matters: the label set of
- * `prl_table_actor_failures_total` cannot drift without the compiler saying so.
- *
- * ### Why the event is a field on the detail and not the first argument
- *
- * `(event, message, detail)` would read better and is not worth what it costs. Nine test files
- * already consume this hook as `(message, detail)`, and reordering the parameters would silently
- * turn every one of their assertions into a comparison against the event name instead of the
- * message — a green suite asserting nothing. Keeping `message` first makes the change additive:
- * every existing consumer keeps working, and `detail.event` is the new, typed fact.
- *
- * ## What this file must never do
- *
- * Carry an identifier into a label. The events below are constants written in this repository;
- * nothing here interpolates a room id, a hand id, a user id or a caller-supplied string into a
- * value that reaches the registry. Those belong in the log line the hook also produces, which is
- * where retention and access are governed (`logging.ts`).
+ * The closed sets of strings that may reach a metric label, and helpers that count work the pool
+ * and the audit log already do. `ProblemDetail.event` is required and typed so the label set of
+ * `prl_table_actor_failures_total` cannot drift without `tsc` failing. `message` stays the first
+ * hook argument because nine test files read the hook as `(message, detail)`.
+ * Nothing here interpolates an id or caller string into a label. Those go to the log line.
  */
 
 import { getSql, isDatabaseConfigured } from '../db.ts';
@@ -41,21 +12,10 @@ import * as auditRepository from '../repositories/audit.ts';
 import type { PoolWarning } from '../workers/pool.ts';
 import { type AppMetrics, appMetrics, bindWorkerPoolMetrics } from './metrics.ts';
 
-// ---------------------------------------------------------------------------
-// The problem hook
-// ---------------------------------------------------------------------------
-
 /**
- * Every non-fatal failure the live-table stack can report, enumerated from the call sites.
- *
- * Not a guess and not a taxonomy invented here: each value below is exactly one `onProblem`
- * call in `rooms/registry.ts`, `rooms/table.ts`, `rooms/bots.ts` or `ws/router.ts`. Adding a
- * failure path means adding a value here, which is the point — a new failure that reuses an
- * existing name is a failure an operator cannot separate from the old one.
- *
- * Hyphenated rather than dotted, matching `PoolWarning.event`, and deliberately NOT matching the
- * audit log's dotted event grammar: these two vocabularies describe different things and a
- * shared spelling would invite somebody to pass one where the other is expected.
+ * Each value is exactly one `onProblem` call site. A new failure path gets a new value, so an
+ * operator can separate it from the old ones. Hyphenated like `PoolWarning.event`, unlike the
+ * dotted audit grammar, so the two vocabularies are not confused.
  */
 export type ProblemEvent =
   // rooms/registry.ts
@@ -88,13 +48,7 @@ export type ProblemEvent =
   // this file, when an audit write fails
   | 'audit-write';
 
-/**
- * The same list as a value, so a test can assert over all of it.
- *
- * Kept in step with the type by `classifyProblem`'s exhaustive switch: a value added to the
- * union and not to this array still has to be classified, and a value in this array that is not
- * in the union does not compile. Two halves of one fact, each of which fails loudly on its own.
- */
+/** Kept in step with the type by `classifyProblem`'s exhaustive switch. */
 export const PROBLEM_EVENTS: readonly ProblemEvent[] = [
   'archive-write',
   'room-open-read',
@@ -122,49 +76,25 @@ export const PROBLEM_EVENTS: readonly ProblemEvent[] = [
   'audit-write',
 ];
 
-/**
- * What a problem carries besides its message.
- *
- * The index signature is what keeps every existing call site's extra context (`roomId`, `seat`,
- * `error`) legal without enumerating a shape per event. It is deliberately `unknown` rather than
- * `string`: the values go to `app.log.warn`, which serialises and censors them, never to a label.
- */
+/** Extra values go to `app.log.warn`, which censors them, never to a label. */
 export interface ProblemDetail {
   readonly event: ProblemEvent;
   readonly [key: string]: unknown;
 }
 
-/** The hook every live-table component reports through. */
 export type ProblemHook = (message: string, detail: ProblemDetail) => void;
 
 /**
- * How one problem event is counted, decided in one place.
- *
- * - `actor` — a seat's actor (a bot policy, a rehydrated seat, or the turn timer) failed to
- *   produce an action. This is the class that stalls a table without any request failing, so it
- *   gets `prl_table_actor_failures_total` and the event as its reason.
- * - `counted-at-source` — already counted by the module that raised it, against a metric that
- *   needs a number the hook does not carry. `archive-write` increments
- *   `prl_archive_failures_total` inside `rooms/registry.ts`, `hands-interrupted` increments
- *   `prl_hands_failed_total` *by the number of hands it closed*, and `seat-release` increments
- *   `prl_seat_release_failures_total` by the number of chairs it could not free. Counting any of
- *   them again here would double it.
- *
- *   Counting at the source rather than here also means the number is right for a registry built
- *   with its own `onProblem` — every test, and any future embedder — instead of depending on the
- *   one consumer in `routes/index.ts` being wired up.
- * - `logged-only` — worth a log line and not worth a series. A subscriber that threw, a socket
- *   send that failed on an already-dead socket, an audit row that could not be written: each is
- *   real, none is a question an operator would put on a dashboard, and every metric costs
- *   cardinality that the ones above have to share.
+ * - `actor`. A seat's actor failed to act, which stalls a table with no failing request.
+ * - `counted-at-source`. The raising module counts it with a number the hook lacks (hands closed,
+ *   chairs not freed, lease reason). Counting here too would double it.
+ * - `logged-only`. A log line, not a series.
  */
 export type ProblemClass = 'actor' | 'counted-at-source' | 'logged-only';
 
 export function classifyProblem(event: ProblemEvent): ProblemClass {
   switch (event) {
-    // A bot that cannot decide, a bot whose action the engine refused, a seat that could not be
-    // re-taken or rehydrated after a restart, and a turn clock whose expiry could not be applied
-    // all end the same way: it is somebody's turn and nothing is going to act.
+    // It is somebody's turn and nothing is going to act.
     case 'bot-policy':
     case 'bot-action-rejected':
     case 'bot-rehydrate':
@@ -173,30 +103,9 @@ export function classifyProblem(event: ProblemEvent): ProblemClass {
     case 'timeout-rejection':
     case 'departed-seat-fold':
       return 'actor';
-    // `seat-release` is deliberately NOT folded into `archive-write`, which is where it used to
-    // report for want of a name of its own. The two are different subsystems with different
-    // consequences and different runbooks: an archive failure loses hand history while play
-    // continues, and a seat-release failure leaves a chair durably occupied by somebody who has
-    // left — the summary shows it free, the next client to tap it is refused `seat_taken`, and
-    // nothing retries. Paging the archive runbook for that sends somebody to the wrong system.
-    //
-    // `room-lease-refused` and `room-fenced` are counted at their source too, and NOT as actor
-    // failures. An actor failure is "it is somebody's turn and nothing is going to act", which the
-    // turn clock resolves; these two are "two processes are pointed at one room", which nothing in
-    // the process can resolve and which has its own page-tier alert. `rooms/registry.ts` increments
-    // `prl_room_ownership_refusals_total` and `prl_room_fencings_total` at the moment it decides,
-    // because only that code knows which of the two reasons a fencing had.
-    //
-    // `seat-entitlement` joins them, and is deliberately NOT `seat-retake` even though it is
-    // raised from the same loop and means "this chair was not given back". `seat-retake` is an
-    // ACTOR failure — "it is somebody's turn and nothing is going to act", which the turn clock
-    // has to resolve — and a seat left free on purpose is the opposite of that: nobody is in it,
-    // nobody is waiting on it, and no clock has anything to do. Reusing the nearest existing kind
-    // is the mistake `docs/production/runbooks/stuck-seat.md` records being made once already,
-    // where an archive failure and a stuck chair became one indistinguishable series and sent
-    // somebody to the wrong subsystem. `rooms/registry.ts` increments
-    // `prl_seat_entitlement_refusals_total{reason="seat_not_restored"}` at the moment it decides,
-    // because only that code knows which of the two reasons a refusal had.
+    // Each has its own metric and runbook. `seat-release` is not `archive-write`, and
+    // `seat-entitlement` is not `seat-retake` (a chair left free on purpose is not a stalled actor).
+    // Folding them together once sent an operator to the wrong subsystem (runbooks/stuck-seat.md).
     case 'archive-write':
     case 'hands-interrupted':
     case 'seat-release':
@@ -204,23 +113,15 @@ export function classifyProblem(event: ProblemEvent): ProblemClass {
     case 'room-fenced':
     case 'seat-entitlement':
       return 'counted-at-source';
-    // `engine-rejection` is deliberately NOT an actor failure: it is the engine refusing an
-    // action a client submitted, the caller is told `illegal_action`, and it is already counted
-    // as an API error. Folding it in here would make a table look broken every time somebody
-    // clicked a stale button.
+    // `engine-rejection` is a client's stale action, already counted as `illegal_action`.
     case 'engine-rejection':
     case 'opponent-model':
     case 'subscriber-throw':
     case 'room-open-read':
     case 'reconcile-read':
-    // A lease this process could not give back on the way out. Worth a line, not a series: the
-    // lease expires on its own within `LEASE_TTL_MS`, so the whole cost is that one room is
-    // unopenable for up to that long — and the two events that matter, being refused and being
-    // fenced, are counted above.
+    // The lease expires on its own within `LEASE_TTL_MS`.
     case 'room-lease-release':
-    // A first sit `rooms.recordFirstSit` could not write. A line and not a series: the learner is
-    // seated, the row counts by `seat is not null` while they are, and the cost is the allowance
-    // shown instead of the room's stack after a stand before the first deal — less, never more.
+    // The learner is still seated. The cost is a smaller stack shown after a stand before the deal.
     case 'first-sit-record':
     case 'socket-intent':
     case 'socket-send':
@@ -228,71 +129,38 @@ export function classifyProblem(event: ProblemEvent): ProblemClass {
     case 'audit-write':
       return 'logged-only';
     default: {
-      // Exhaustiveness, enforced by the compiler rather than by review. A value added to
-      // `ProblemEvent` and not handled above fails to build.
       const unreachable: never = event;
       return unreachable;
     }
   }
 }
 
-/**
- * Records one problem against the metrics, having already been logged by the caller.
- *
- * Separate from the logging so that the consumer in `routes/index.ts` reads as "log it, then
- * count it" rather than hiding a metric inside a logger call. Takes the metrics instance
- * explicitly-with-a-default for the same reason `recordApiError` does: production has one, and a
- * test that wants isolation passes its own.
- */
+/** Called after the caller has logged the problem. */
 export function recordProblem(event: ProblemEvent, metrics: AppMetrics = appMetrics()): void {
   if (classifyProblem(event) !== 'actor') return;
   metrics.tableActorFailures.inc({ reason: event });
 }
 
-// ---------------------------------------------------------------------------
-// Analysis
-// ---------------------------------------------------------------------------
-
-/** The two kinds of work that reach a calculator thread. A closed label set. */
 export type AnalysisKind = 'coach' | 'equity';
 
-/**
- * How one analysis ended.
- *
- * Four values rather than a boolean, because the three failures need different responses: a
- * timeout means the work is too big or the pool is too small, a rejection means the caller asked
- * for something the maths refuses (or the queue was full), and a failure means a thread died.
- */
+/** A timeout, a refusal and a dead thread each need a different response. */
 export type AnalysisOutcome = 'ok' | 'timeout' | 'rejected' | 'failed';
 
 /**
- * Classifies a thrown analysis failure.
- *
- * By contract error code, which is the one classification both `workers/pool.ts` and
- * `calc/parse.ts` already agree on — `computation_timeout` is only ever produced by the pool's
- * deadline, `computation_rejected` only by the maths refusing a task, and `service_unavailable`
- * only by the pool refusing to accept one. Anything else is a bug on our side and is counted as
- * such rather than being quietly folded into a caller-facing category.
+ * By contract code. `computation_timeout` comes only from the pool deadline, `computation_rejected`
+ * from the maths, `service_unavailable` from a full or closed pool. Anything else is our bug.
  */
 export function analysisOutcomeFor(error: unknown): Exclude<AnalysisOutcome, 'ok'> {
   if (!isAppError(error)) return 'failed';
   if (error.code === 'computation_timeout') return 'timeout';
-  // A full queue and a closed pool are both "we did not run this", which is the same operational
-  // question as "the maths refused it": neither consumed a thread.
+  // Neither consumed a thread.
   if (error.code === 'computation_rejected' || error.code === 'service_unavailable') return 'rejected';
   return 'failed';
 }
 
 /**
- * Times one Coach or equity analysis and counts how it ended.
- *
- * Wrapped around the `await` rather than measured inside the pool, because what matters to a
- * learner waiting for a Coach panel is the whole thing — queueing, the thread hand-off, the
- * calculation and the assembly — and the pool can only see the middle of that.
- *
- * The duration is observed on the failure path too. A timeout that was not recorded is a
- * histogram that gets *faster* as the service gets worse, which is the single most misleading
- * shape a latency graph can have.
+ * Wraps the whole `await`, including queueing, which the pool cannot see. Failures are timed too,
+ * or the histogram would get faster as the service got worse.
  */
 export async function observeAnalysis<T>(
   kind: AnalysisKind,
@@ -314,11 +182,7 @@ export async function observeAnalysis<T>(
   }
 }
 
-// ---------------------------------------------------------------------------
-// The worker pool
-// ---------------------------------------------------------------------------
-
-/** Only what the gauges need from `WorkerPool.stats()`, so this file imports no worker code. */
+/** Only what the gauges need, so this file imports no worker code. */
 export interface PoolStatsSource {
   readonly stats: () => {
     readonly size: number;
@@ -329,56 +193,22 @@ export interface PoolStatsSource {
 }
 
 /**
- * Which `workerTasks` outcome a `PoolWarning` describes.
- *
- * Honest about what this counter can and cannot see: the pool warns only about failures, so
- * `outcome="completed"` never arrives through this path. The per-request view — including the
- * successes — is `prl_analysis_total`, and the pool's own cumulative totals live in
- * `WorkerPool.stats()`, which a counter cannot mirror without drifting the first time a code
- * path settles a job and forgets to say so.
- *
- * `protocol-mismatch` is `failed` rather than a category of its own: it means a thread replied
- * out of turn, the thread is dropped and the job is rejected, which is the same outcome for the
- * caller as a thread that crashed.
- *
- * The parameter is `PoolWarning['event']` rather than the same union written out again, so a value
- * added to the pool's vocabulary fails to compile here until somebody decides what it means. The
- * import is type-only and erased, so this module still pulls in no worker code at runtime.
+ * The pool warns only about failures, so `completed` never arrives here. Successes are in
+ * `prl_analysis_total`. `protocol-mismatch` is `failed`, the same outcome as a crashed thread.
  */
 export function workerTaskOutcomeFor(event: PoolWarning['event']): 'failed' | 'timed_out' {
   return event === 'task-timeout' ? 'timed_out' : 'failed';
 }
 
 /**
- * Which metrics instances have already had a pool bound to them.
- *
- * `bindWorkerPoolMetrics` appends an `onCollect` hook, and both `routes/calc.ts` and
- * `routes/content.ts` take the shared pool — deliberately, so that whichever modules a
- * deployment registers, the gauges still exist. Binding twice would run the same four `set`
- * calls twice on every scrape, and an app built repeatedly in one test process would accumulate
- * a hook per build. A `WeakMap` keyed on the metrics instance keeps it to one, and holds neither
- * the metrics nor the pool alive.
- */
-/**
- * Which metrics instances have already had a pool getter bound.
- *
- * Keyed on the metrics instance, not the pool: the process-wide pool is replaced on
- * `closeSharedPool()`, and binding the *instance* at registration left scrapes reading a
- * closed leftover. One getter per metrics registry is enough — three route modules all pass
- * `peekSharedPool`, and a second hook on the same registry would write the same four gauges
- * twice.
+ * Keyed on the metrics instance, not the pool, because `closeSharedPool()` replaces the pool. Several
+ * route modules bind, and a second hook would write the same gauges twice per scrape.
  */
 const boundMetrics = new WeakSet<AppMetrics>();
 
-/**
- * A pool, or a getter that may return `null` when none exists yet.
- *
- * The getter form is what production uses: scrape-time `peekSharedPool()` so a Prometheus poll
- * cannot create threads, and so a pool that was closed and replaced is the one that is read.
- */
+/** Production passes `peekSharedPool`, so a scrape cannot create threads. */
 export type PoolStatsProvider = PoolStatsSource | (() => PoolStatsSource | null);
 
-/** Binds the worker-pool gauges once per metrics instance. Safe to call from every module. */
 export function bindCalculationPoolMetrics(
   pool: PoolStatsProvider,
   metrics: AppMetrics = appMetrics(),
@@ -392,70 +222,26 @@ export function bindCalculationPoolMetrics(
   }, metrics);
 }
 
-// ---------------------------------------------------------------------------
-// The audit log
-// ---------------------------------------------------------------------------
-
 /**
- * The security events this service writes to `prl.audit_log`, as a closed set.
- *
- * Each name satisfies `audit_log_event_shape` (3..64 characters, dot-separated lowercase
- * segments) and is a constant in this repository rather than anything a caller can influence.
- *
- * A name is added here at the same time as its write, never before: a name with no call site is
- * a promise the log does not keep, and an operator querying for it would read the empty result as
- * "it never happened" rather than "nothing records it".
- *
- * What is deliberately NOT here: anything routine. A successful sign-in, a hand played, a lesson
- * completed — none of them is a security event, and recording them would turn the audit log into
- * a second, worse activity log with the retention policy of an audit trail.
+ * Names satisfy `audit_log_event_shape`. A name is added with its write, never before, because an
+ * empty query result would read as "it never happened". Routine activity is not audited.
  */
 export type SecurityAuditEvent =
-  /** A socket handshake was refused: bad origin, unauthenticated, or too many for one session. */
   | 'ws.upgrade.refused'
-  /** A guest account was created. The one unauthenticated endpoint that writes a user row. */
   | 'auth.guest.created'
-  /** A session was ended deliberately — sign-out, or erasure taking every session with it. */
   | 'auth.session.revoked'
-  /** A learner erased their account. Irreversible, so the fact of it is worth keeping. */
   | 'auth.account.deleted'
-  /** A caller went so far past a rate limit that it was blocked outright rather than told to wait. */
   | 'security.rate_limit.banned';
 
 /**
- * The audit writes that have been started and not yet settled.
- *
- * ## Why this exists, and why it is not a queue
- *
- * The write in `recordSecurityAudit` is deliberately fire-and-forget: a security event must never
- * delay or fail the request it describes. That is right in production, and it makes the write
- * **unobservable to a test**, which is why `test/security-audit-trail.test.ts` polls for the row.
- *
- * Polling made that suite flaky in a way that got worse rather than better. It shares one
- * process-wide pool with every other API test, so the write queues behind whatever else is in
- * flight; the deadline was raised from five seconds to fifteen, and then failed at **15,036 ms**
- * inside `pnpm run verify`. A third raise would buy a few hundred more tests of headroom and fail
- * again, because the number was never the problem — waiting on a clock for something that has a
- * handle is.
- *
- * `awaitPendingAuditWrites()` gives the test that handle. Nothing in production calls it, and the
- * set is bounded by concurrency rather than by history: an entry removes itself when it settles.
+ * Lets a test await fire-and-forget audit writes instead of polling. Polling timed out at 15,036 ms
+ * inside `pnpm run verify` after the deadline was already raised to 15 s. Entries remove themselves.
  */
 const pendingAuditWrites = new Set<Promise<unknown>>();
 
-/**
- * Audit writes that were started and did not land, since this process began.
- *
- * `recordSecurityAudit` reports a failed write through `onFailure` and swallows it, which is right
- * — a security event must never fail the request it describes. The cost is that a test polling for
- * the row cannot tell "the write is slow" from "the write was refused and you will wait forever".
- * `security-audit-trail.test.ts` timed out at 15,024 ms against a 15,000 ms deadline while the
- * machine was saturated, and its message — "no audit row appeared within the deadline" — could not
- * say which of the two had happened. This counter lets it say.
- */
+/** Lets a waiting test tell a slow write from a refused one. */
 let auditWriteFailures = 0;
 
-/** For tests: how many audit writes have been reported as failed. */
 export function failedAuditWrites(): number {
   return auditWriteFailures;
 }
@@ -467,43 +253,16 @@ function trackAuditWrite(write: Promise<unknown>): void {
   });
 }
 
-/**
- * Resolve once every audit write started before this call has settled.
- *
- * For tests. A write started *after* this call is not waited for, and does not need to be: the
- * caller has already had the HTTP response for the thing whose audit row it wants, so the route
- * has returned and `recordSecurityAudit` has been reached.
- */
+/** For tests. Waits only for writes started before the call. */
 export async function awaitPendingAuditWrites(): Promise<void> {
   await Promise.allSettled([...pendingAuditWrites]);
 }
 
 /**
- * Writes one audit entry, and never lets it fail the thing it describes.
- *
- * ## Why this wrapper exists at all
- *
- * `repositories/audit.ts` throws on a failed write, deliberately and correctly: "the security
- * event was not recorded and nobody knows" is worse than a failed request, and its header says
- * the caller that must not fail can decide that for itself. This is that decision, taken once,
- * for the call sites where it is obviously right. Refusing a WebSocket upgrade and then throwing
- * because the *record* of the refusal could not be written would turn a working security control
- * into an outage — and the refusal is already in the request log, so the failure is not silent.
- *
- * The same trade `rooms/registry.ts` makes for a hand it could not archive, for the same reason.
- *
- * ## Why it is fire-and-forget
- *
- * The caller is a socket handler that has already closed the socket. Awaiting a database round
- * trip there would hold the handler open for an event that nobody is waiting on. The promise's
- * rejection IS handled — that is what `onFailure` is — so this cannot become an unhandled
- * rejection, which `server.ts` exits the process on.
- *
- * ## Why the database is checked rather than tried
- *
- * `getSql()` throws when `configureDatabase` was never called, which is the normal state for a
- * unit test and for a development run with no database. Asking first keeps that ordinary case
- * from producing a failure line on every refused upgrade.
+ * `repositories/audit.ts` throws on a failed write. Here the failure is reported and swallowed, so
+ * a refused WebSocket upgrade does not become an outage. Fire-and-forget because the socket is
+ * already closed. Rejection is handled by `onFailure`, since `server.ts` exits on an unhandled one.
+ * The database is checked first so unit tests without one produce no failure lines.
  */
 export function recordSecurityAudit(
   entry: {
@@ -533,7 +292,7 @@ export function recordSecurityAudit(
         .catch(report),
     );
   } catch (error) {
-    // `getSql()` or `record`'s synchronous validation threw. Same treatment: reported, swallowed.
+    // Synchronous throw from `getSql()` or validation. Same treatment.
     report(error);
   }
 }

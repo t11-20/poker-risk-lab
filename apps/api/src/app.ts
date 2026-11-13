@@ -1,34 +1,8 @@
 /**
- * `buildApp()` — the assembled Fastify instance, with nothing in it that talks to a table.
- *
- * This is the foundation the route modules, the WebSocket hub, the bots and the
- * repositories plug into. It owns the order things are registered in, because that order is
- * load-bearing (see the hook-order note in `plugins/security.ts`), and it owns the three
- * endpoints that must exist before any feature does: liveness, readiness and metrics.
- *
- * ## Why it is async
- *
- * Every plugin is `await app.register(...)`. Fastify's `register` is deferred by default —
- * the plugin does not run until `ready()` — which would mean `app.rateLimit`,
- * `app.csrfProtection` and the rest do not exist while this function is still running, and
- * the 404 handler could not be given a rate limit. Awaiting each registration forces it to
- * load immediately, so by the time `buildApp` returns, the instance is fully decorated and
- * a caller can attach routes that depend on those decorators.
- *
- * ## The seam for everyone else
- *
- * Do NOT add routes to this file. Write a route module — a plain Fastify plugin — and pass
- * it to `registerRoutes`:
- *
- * ```ts
- * const app = await buildApp();
- * await registerRoutes(app, [authRoutes, roomRoutes]);
- * await app.listen({ port: app.appConfig.port, host: app.appConfig.host });
- * ```
- *
- * A route module receives a child instance and reads shared state from the decorators
- * `app.appConfig` and `app.appDatabase`. It is registered under `API_PREFIX`, so its own
- * paths are written without it (`/rooms/:roomId`, not `/api/v1/rooms/:roomId`).
+ * `buildApp()` assembles the Fastify instance and owns registration order (see the hook-order note
+ * in `plugins/security.ts`) plus liveness, readiness and metrics. Each `register` is awaited so the
+ * decorators exist before `buildApp` returns. Do not add routes here. Pass a route module to
+ * `registerRoutes`, which mounts it under `API_PREFIX`.
  */
 
 import { timingSafeEqual } from 'node:crypto';
@@ -58,35 +32,23 @@ import { sharedPoolReadiness } from './workers/pool.ts';
 
 declare module 'fastify' {
   interface FastifyInstance {
-    /** The frozen configuration this instance was built with. */
     appConfig: AppConfig;
-    /** The database seam. A stub in tests; the real pool in production. */
+    /** A stub in tests, the real pool in production. */
     appDatabase: DatabaseHandle;
-    /** The metrics registry owned by this Fastify instance. */
     appMetrics: AppMetrics;
   }
 }
 
-/** Every route module lives under this prefix. Bump it only for a breaking API change. */
+/** Bump only for a breaking API change. */
 export const API_PREFIX = '/api/v1';
 
 /**
- * Reported by `/health`.
- *
- * Coarse on purpose: a build number or a git SHA on an unauthenticated endpoint tells
- * anyone which published vulnerabilities apply to this deployment. Keep this in step with
- * `package.json` by hand — the alternative, importing `package.json`, puts a file from
- * outside `rootDir` into the build.
+ * Coarse, because a build number on an unauthenticated endpoint tells anyone which advisories apply.
+ * Kept in step with `package.json` by hand, since importing it would pull a file outside `rootDir`.
  */
 const SERVICE_VERSION = '0.1.0';
 
-/**
- * Route modules other agents are expected to create. Listed here so the seam is discoverable
- * and so two people do not write the same file twice. This file must not import them.
- *
- * Each exports a default `FastifyPluginAsync` and registers its routes relative to
- * `API_PREFIX`.
- */
+/** Listed so the seam is discoverable. This file must not import them. */
 export const EXPECTED_ROUTE_MODULES: readonly string[] = [
   'src/routes/auth.ts', // guest sessions, OIDC start/callback, session read, sign-out
   'src/routes/content.ts', // lessons, quizzes, scenarios, glossary
@@ -97,50 +59,29 @@ export const EXPECTED_ROUTE_MODULES: readonly string[] = [
   'src/ws/hub.ts', // WebSocket upgrade + table hub (uses isAllowedOrigin)
 ];
 
-/** A route module: an ordinary Fastify plugin, registered under `API_PREFIX`. */
 export type RouteModule = FastifyPluginAsync;
 
 export interface BuildAppOptions {
-  /** Defaults to the process-wide config. Tests pass a hand-built one. */
   readonly config?: AppConfig;
-  /** Defaults to the real pool's handle. Tests pass a stub so no database is needed. */
+  /** Tests pass a stub so no database is needed. */
   readonly database?: DatabaseHandle;
-  /**
-   * Merged last into the Fastify options. For tests that need to change a server-level
-   * setting; not a way to weaken the security options, which are applied first for a reason.
-   */
+  /** Merged last. Not a way to weaken the security options. */
   readonly serverOptions?: FastifyServerOptions;
-  /**
-   * Defaults to the process-wide metrics. Tests pass their own so that counters do not
-   * accumulate across cases built in one process.
-   */
+  /** Tests pass their own so counters do not accumulate across cases. */
   readonly metrics?: AppMetrics;
-  /**
-   * Refuses every request except `UNGATED_ROUTES` while `admits()` says no. Absent by default, so
-   * every test that builds an app is ungated; `server.ts` passes the schema guard's. See
-   * `featureGateHook`.
-   */
+  /** Absent by default, so test apps are ungated. `server.ts` passes the schema guard's. */
   readonly featureGate?: FeatureGate;
 }
 
-/** What `server.ts` wires the schema guard in through. */
 export interface FeatureGate {
-  /** Synchronous and database-free: it runs on every request. `detail` is logged, never sent. */
+  /** Synchronous and database-free, since it runs on every request. `detail` is logged, never sent. */
   readonly admits: () => { readonly ok: boolean; readonly detail?: string };
-  /** Sent as `Retry-After` and `retryAfterSeconds` on the refusal. */
   readonly retryAfterSeconds: number;
 }
 
 /**
- * The routes a closed feature gate still answers: liveness, readiness and metrics.
- *
- * By route PATTERN, not by registration order. The obvious alternative — add the hook after these
- * three exist, so they "predate" it — does not work: measured on Fastify 5.12.8, an instance hook
- * added after `app.get('/before')` still runs for `/before`, because a route's hooks are collected
- * when the instance becomes ready, not when the route is declared. An exemption that depended on
- * ordering would have gated `/ready` itself and turned a degraded instance into one that cannot
- * say so. None of the three reads a table; `/ready` reports the gate's own state, and `/metrics`
- * is what an operator reads during exactly this incident.
+ * Exempt by route pattern, not registration order. On Fastify 5.12.8 an instance hook added after a
+ * route still runs for it, so an order-based exemption would have gated `/ready` itself.
  */
 const UNGATED_ROUTES: ReadonlySet<string> = new Set([
   `${API_PREFIX}/health`,
@@ -149,48 +90,13 @@ const UNGATED_ROUTES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The feature gate, as an instance `onRequest` hook.
- *
- * ## The incident
- *
- * PR #38's review (Devin): an API that boots while its database is down comes up degraded by
- * design (`docs/production/runbooks/db-unavailable.md`) and lets `/ready` report it. But only
- * something that routes on `/ready` withholds traffic, and the staging proxy does not — so when
- * the database came back BEHIND this build, learners reached routes whose writes failed on columns
- * that did not exist, which is the original incident with the boot check stepped around.
- *
- * ## Why here, and why a throw
- *
- * One instance hook covers every route module, registered or not yet written, and the WebSocket
- * upgrade: `@fastify/websocket` dispatches the upgrade through `fastify.routing`, so this answers
- * it with an HTTP 503 before the hub's handler can complete a handshake, and the plugin's own
- * `onResponse` hook destroys the socket. Registered after the security plugin, so CORS preflights,
- * the limiter and the security headers still apply, and before the route modules' session hook,
- * so a refused request costs no session lookup.
- *
- * Thrown as an `AppError` rather than answered in place so that the body, `Retry-After`, the
- * `no-store` header and the error counter all come from `errors.ts`, the one place every contract
- * error leaves. It logs at `error`, once per refused request, as every deliberate 5xx does: an
- * instance refusing real traffic is an incident, and the count of those lines is its size.
- *
- * Counted by the limiter first, the way the CORS hook in `plugins/security.ts` counts what it
- * answers: an instance hook runs before every route-level one, so without the call a closed gate
- * would answer an unlimited number of requests that the limiter never saw. Only on the refusal
- * path, because counting on the pass path would spend the global limiter's turn and quietly
- * disable every stricter per-route limit (that hook's comment has the detail).
- *
- * An unknown path is refused too (`routeOptions.url` is undefined for the 404 route): 503 rather
- * than 404 while closed, which tells a client nothing it could not learn from the next request.
- *
- * ## A refused upgrade must also close its socket
- *
- * The plugin destroys an upgrade's socket after an HTTP answer only when ITS `onRequest` hook has
- * flagged the request as a WebSocket, and that hook lives in the hub's context, which runs after
- * this one — so a throw here skips it. Measured with a `ws` client that did not hang up itself:
- * the 503 arrived and the TCP connection stayed open, and `app.close()` never resolved. That is
- * the deploy-killing socket `server.ts` describes (`trackConnections` marks it upgraded, and the
- * drain waits for upgraded connections), handed to anybody who connects while the gate is closed.
- * So the socket is destroyed once the 503 has been written, as the plugin itself would have.
+ * Refuses traffic while the schema guard says no. The staging proxy does not route on `/ready`, so
+ * without this a degraded instance served writes to columns that did not exist (PR #38 review).
+ * - One instance hook covers every route module and the WebSocket upgrade.
+ * - Thrown as an `AppError` so body, `Retry-After`, `no-store` and the counter come from `errors.ts`.
+ * - Counted by the limiter only on refusal, since counting on pass disables stricter per-route limits.
+ * - A refused upgrade's socket is destroyed after the 503. Otherwise it stayed open and
+ *   `app.close()` never resolved (measured with a `ws` client).
  */
 function featureGateHook(app: FastifyInstance, gate: FeatureGate) {
   const countRequest = app.rateLimit();
@@ -211,26 +117,11 @@ function featureGateHook(app: FastifyInstance, gate: FeatureGate) {
 }
 
 /**
- * Ajv options.
- *
- * Three of these are deliberate departures from Fastify's defaults:
- *
- * - `removeAdditional: false`. Fastify defaults to `true`, which *silently deletes* unknown
- *   properties. That is safe against mass assignment but it hides client bugs: a request
- *   with a misspelled field succeeds and does the wrong thing. Every schema in
- *   `@prl/contracts` is closed in order to *reject* unknown fields, so rejection is what
- *   happens.
- * - `allErrors: true`. Fastify defaults to `false`, which reports one field per request and
- *   turns fixing a form into a guessing game. Safe here because the schemas are ours and
- *   every one of them is bounded — the usual `allErrors` warning is about untrusted schemas.
- * - `discriminator: true`. Required by `wsClientMessageSchema`, which uses a discriminated
- *   `oneOf` so that a malformed socket frame is rejected against one branch instead of
- *   producing seven sets of errors.
- *
- * `coerceTypes: 'array'` is kept from Fastify's defaults, and is not free: query strings and
- * path parameters arrive as strings, so an integer parameter cannot validate without it. The
- * cost is that coercion applies to bodies too. The schemas guard against the consequences by
- * using `enum` and explicit bounds rather than relying on the type alone.
+ * - `removeAdditional: false` rejects unknown fields instead of silently deleting them.
+ * - `allErrors: true` reports every field. Safe because every schema is ours and bounded.
+ * - `discriminator: true` is required by `wsClientMessageSchema`.
+ * - `coerceTypes: 'array'` is needed for query and path integers. It also coerces bodies, so schemas
+ *   use `enum` and explicit bounds.
  */
 const AJV_OPTIONS = {
   customOptions: {
@@ -268,29 +159,9 @@ function readinessResponse(
 }
 
 /**
- * `db.ping()`, with a bound this endpoint enforces itself.
- *
- * ## Why the bound is here and not only in `db.ts`
- *
- * `/ready` is the endpoint that decides whether traffic arrives, so "always answers" is its
- * contract and not a property it may inherit from a collaborator. `DatabaseHandle` is an
- * interface with several implementations — the real pool, every stub in `test/`, whatever
- * gets written next — and a handle that hangs would hang this route with it. The real
- * `ping()` carries a tighter deadline of its own (`PROBE_QUERY_DEADLINE_MS`), so in
- * production this timer is a backstop that normally never fires; it fires when the handle
- * itself is the thing that is broken, which is exactly the case an endpoint's own contract
- * has to cover.
- *
- * ## Why a rejection is caught here too
- *
- * `ping()` is documented never to throw, and this route is the reason that matters: an
- * unhandled rejection from a probe would answer 500 `internal_error` — a shape that says
- * "bug", from the endpoint whose whole job is to say "do not send me traffic". Any handle
- * that breaks its contract by throwing is treated as a database that did not answer, which
- * is both true and the safe direction.
- *
- * The timer is `unref`'d and always cleared, so an answer inside the bound leaves nothing
- * behind and a probe never holds the process open through a shutdown.
+ * `/ready` must always answer, whatever `DatabaseHandle` implementation it gets. The real `ping()`
+ * has a tighter deadline, so this is a backstop. A rejection counts as a database that did not
+ * answer, never a 500. The timer is `unref`'d and always cleared.
  */
 async function pingWithinDeadline(db: DatabaseHandle, deadlineMs: number): Promise<DbCheck> {
   let timer: NodeJS.Timeout | null = null;
@@ -310,17 +181,8 @@ async function pingWithinDeadline(db: DatabaseHandle, deadlineMs: number): Promi
 }
 
 /**
- * Builds the instance.
- *
- * Registration order, and why:
- *
- * 1. `requestContextPlugin` first, so every later hook and every log line has a request id
- *    and a client key to work with.
- * 2. `securityPlugin`, so headers, CORS, CSRF and the rate limit are in place before any
- *    route exists to be attacked.
- * 3. Schemas, so a route can `$ref` them.
- * 4. Error handlers, including the 404 — which needs `app.rateLimit`, hence the awaits above.
- * 5. Health, readiness and metrics.
+ * Registration order is request context (request id, client key), security, metrics, feature gate,
+ * schemas, error handlers (the 404 needs `app.rateLimit`), then health, readiness and metrics.
  */
 export async function buildApp(overrides: BuildAppOptions = {}): Promise<FastifyInstance> {
   const config = overrides.config ?? getConfig();
@@ -333,13 +195,8 @@ export async function buildApp(overrides: BuildAppOptions = {}): Promise<Fastify
     genReqId: generateRequestId,
     ajv: AJV_OPTIONS,
     ...security,
-    // Merged rather than replaced: `securityServerOptions` sets the hardening half of the
-    // router options (parameter length, unsafe patterns) and this sets the ergonomic half.
-    // Spreading `security` on its own would silently drop one or the other.
+    // Merged, because `security.routerOptions` holds the hardening half and spreading would drop one.
     routerOptions: {
-      // Two URLs that differ only by a trailing slash are the same route. Without this,
-      // `/api/v1/rooms` and `/api/v1/rooms/` are different routes, which is a needless
-      // source of 404s.
       ignoreTrailingSlash: true,
       ignoreDuplicateSlashes: true,
       caseSensitive: true,
@@ -354,51 +211,28 @@ export async function buildApp(overrides: BuildAppOptions = {}): Promise<Fastify
 
   await app.register(requestContextPlugin, { config });
   await app.register(securityPlugin, { config });
-  // After the security layer, so its `onResponse` hook is registered after the hooks that can
-  // answer a request on their own — a preflight rejection and a 429 still reach `onResponse`,
-  // and both should be counted. Before the routes, so no route can escape it.
+  // After security, so preflight rejections and 429s are counted. Before routes, so none escapes.
   await app.register(metricsPlugin, { metrics });
   metrics.dbPoolMax.set({}, config.database.poolMax);
-  // After security and metrics, so a refusal is counted and carries the security headers; before
-  // any route module's hooks. See `featureGateHook`.
   if (overrides.featureGate !== undefined) {
     app.addHook('onRequest', featureGateHook(app, overrides.featureGate));
   }
 
-  // One registration for every shared schema, so route modules refer to them by `$id`
-  // (`{ body: { $ref: 'prl:createRoomBody#' } }`) and no schema is defined twice.
   for (const schema of ALL_SCHEMAS) app.addSchema(schema);
 
   registerErrorHandlers(app, { notFoundPreHandler: app.rateLimit() });
 
   /**
-   * Liveness. Answers from memory, touches nothing, and is exempt from the rate limit: it
-   * exists so an orchestrator can tell whether this process is alive, and it must never fail
-   * for a reason unrelated to that. `/ready` is NOT exempt — it queries the database, so it
-   * has to be as ratelimited as anything else that does. Keep `RATE_LIMIT_MAX` comfortably
-   * above the probe interval.
-   *
-   * The handler is deliberately a closure over `healthResponse()` and nothing else. It does
-   * not read `app.appDatabase`, and it must not start: a process whose database is frozen is
-   * a process that should be drained, not killed and replaced by another instance that will
-   * find the same frozen database. `test/db-deadlines.test.ts` holds that line by answering
-   * `/health` while a handle that never settles is wedged in `/ready`.
+   * Liveness answers from memory and is exempt from the rate limit. It must never read
+   * `app.appDatabase`, because a frozen database should drain the process, not restart it.
+   * `test/db-deadlines.test.ts` pins this. Keep `RATE_LIMIT_MAX` above the `/ready` probe rate.
    */
   app.get('/api/v1/health', { config: { rateLimit: false } }, async () => healthResponse());
 
   app.get('/api/v1/ready', async (_request, reply) => {
-    // Timed, because this probe is the one place the process routinely asks the pool for a
-    // connection on a schedule. Under pool exhaustion `select 1` still succeeds — it just
-    // waits — so the duration is the saturation signal that the boolean cannot carry. See
-    // `DB_PROBE_BUCKETS` in `observability/metrics.ts`.
-    //
-    // Two things about that signal changed with the deadlines, and both are worth knowing
-    // before reading this histogram. It is now CLIPPED at `READINESS_DEADLINE_MS`, which is the
-    // point — the observation that used to matter most here was one this endpoint never lived
-    // to make. And during one episode of trouble it records roughly ONE slow observation rather
-    // than one per probe, because `ping()` latches the query it gave up on and answers the next
-    // probes from that (see the latch note in `db.ts`). The count of readiness FAILURES, not the
-    // shape of this histogram, is what measures how long an episode lasted.
+    // Under pool exhaustion `select 1` waits, so the duration is the saturation signal. It is
+    // clipped at `READINESS_DEADLINE_MS`, and `ping()` latches a stuck query (see `db.ts`), so one
+    // episode records about one slow sample. Readiness failures measure the episode length.
     const startedAt = performance.now();
     const check = await pingWithinDeadline(db, READINESS_DEADLINE_MS);
     metrics.dbProbeDuration.observe({}, (performance.now() - startedAt) / 1_000);
@@ -408,20 +242,13 @@ export async function buildApp(overrides: BuildAppOptions = {}): Promise<Fastify
     if (!ready) {
       metrics.readinessFailures.inc();
       if (!check.ok) metrics.dbErrors.inc({ category: 'probe' });
-      // Logged here rather than returned: the caller gets a fixed string, the operator gets
-      // the reason.
       app.log.warn({ check, workers }, 'readiness check failed');
     }
-    // 503 while degraded, so a load balancer stops sending traffic without needing to parse
-    // the body.
     reply.status(ready ? 200 : 503);
     return readinessResponse(check, workers);
   });
 
-  // Both of these come AFTER `registerErrorHandlers`, and the order is load-bearing: Fastify
-  // binds a route's error handler when the route is added, so a route registered any earlier
-  // answers in the framework's error shape instead of the contract's single `ApiError` shape.
-  // See the ordering note on `registerRateLimitResetRoute`.
+  // After `registerErrorHandlers`, because Fastify binds a route's error handler when it is added.
   registerRateLimitResetRoute(app, config);
   registerMetricsRoute(app, config, metrics);
 
@@ -429,65 +256,27 @@ export async function buildApp(overrides: BuildAppOptions = {}): Promise<Fastify
 }
 
 /**
- * `GET /metrics`, in the Prometheus text exposition format.
- *
- * ## Why it is here and not in a route module
- *
- * Same reason as `/health` and `/ready`: it is not a feature of the product, it is how an
- * operator finds out whether the product is working. It must exist before any route module
- * does, it must not be under a feature module's encapsulation, and it must keep answering
- * when everything else is failing.
- *
- * ## Why it is authenticated, and why absence is silence rather than a 403
- *
- * The body names every route pattern, counts every error code, and reports uptime and live
- * connection counts. Together that is a description of both the deployment's shape and its
- * current load — reconnaissance, handed out for free, on a path every scanner tries.
- *
- * So a token is required. And when no token is configured in production the route is not
- * registered at all, rather than registered and refusing: a 403 from `/metrics` confirms
- * both that this software is running here and that somebody meant to expose metrics, while a
- * 404 is what every other absent path returns. `config.ts` warns at boot that metrics are
- * unavailable in that case, so the silence is never a surprise to the operator.
- *
- * Outside production a missing token leaves the route open, because the alternative is that
- * a developer's first encounter with the metric they just added is a 404.
- *
- * ## Why it is rate limited like anything else
- *
- * `/health` is exempt because an orchestrator must never be told to slow down about
- * liveness. Nothing depends on `/metrics` that way — a scrape that is refused is retried in
- * fifteen seconds — and an unauthenticated caller guessing at the token should be counted.
+ * Token-protected, because the body describes the deployment's routes and load. With no token in
+ * production the route is not registered, so it 404s like any absent path (a 403 would confirm it).
+ * `config.ts` warns at boot. Outside production a missing token leaves it open. Rate limited.
  */
 function registerMetricsRoute(app: FastifyInstance, config: AppConfig, metrics: AppMetrics): void {
   const token = config.metricsToken;
   if (token === null && config.isProduction) return;
 
-  // Synchronous on purpose. Rendering the exposition is a string build over in-memory
-  // counters — there is nothing to await — and a handler declared `async` with no `await`
-  // reads as though it were doing I/O that an operator might then go looking for.
   app.get('/metrics', (request, reply) => {
     if (token !== null && !metricsTokenAccepted(request, token)) {
       request.log.warn({}, 'metrics scrape refused: bad or missing token');
-      // Returning the reply is how Fastify is told the response is already handled.
       return reply.status(401).send(apiErrorBody('not_authenticated', request.id));
     }
     reply.header('content-type', METRICS_CONTENT_TYPE);
-    // Explicit, although the security layer's `onSend` hook would set it for an
-    // unauthenticated request anyway: a scrape held in a shared cache is a scrape that
-    // reports a stale process as healthy.
+    // A cached scrape would report a stale process as healthy.
     reply.header('cache-control', 'no-store');
     return reply.send(metrics.render());
   });
 }
 
-/**
- * Constant-time bearer check for the scrape token.
- *
- * Separate from `security.ts`'s equivalent rather than shared, because the two guard
- * different things and merging them would put a single helper between two independent
- * credentials — the kind of coupling that turns one mistake into two vulnerabilities.
- */
+/** Not shared with `security.ts`, so one bug cannot expose two independent credentials. */
 function metricsTokenAccepted(request: FastifyRequest, token: string): boolean {
   const header = request.headers.authorization;
   if (typeof header !== 'string' || !header.startsWith('Bearer ')) return false;
@@ -496,13 +285,7 @@ function metricsTokenAccepted(request: FastifyRequest, token: string): boolean {
   return provided.length === expected.length && timingSafeEqual(provided, expected);
 }
 
-/**
- * Registers route modules under `API_PREFIX`.
- *
- * Each module gets its own encapsulated child instance, which is what makes a route-scoped
- * hook or decorator possible without leaking to the rest of the API. Instance-level hooks
- * from the security layer still apply, because encapsulation inherits downwards.
- */
+/** Each module gets an encapsulated child, and instance hooks from the security layer still apply. */
 export async function registerRoutes(app: FastifyInstance, modules: readonly RouteModule[]): Promise<void> {
   for (const module of modules) {
     await app.register(module, { prefix: API_PREFIX });
