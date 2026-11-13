@@ -704,7 +704,7 @@ const TAUGHT_FIGURES: readonly TaughtFigure[] = [
   },
   {
     where: 'scenario fl-small-straight-beats-trips — a straight outranks three of a kind',
-    quote: "hero's best five cards are eight-seven-six-five-four, a straight",
+    quote: 'your best five cards are eight-seven-six-five-four, a straight',
     source: () => scenarioText('fl-small-straight-beats-trips'),
     expect: () => {
       const scenario = content().scenarios.find((one) => one.id === 'fl-small-straight-beats-trips');

@@ -193,10 +193,10 @@ export const LEARN_QUIZZES: readonly Quiz[] = [
         kind: 'decision',
         id: 'counting-outs-q5',
         prompt:
-          "Hero holds two of a suit and two more of that suit are on the board, which looks like a routine flush draw - except the opponent's cards are face up and they hold two higher cards of the same suit. Decide whether hero should call or fold, and then ask where hero's genuine chances are actually coming from.",
+          "You hold two of a suit and two more of that suit are on the board, which looks like a routine flush draw - except the opponent's cards are face up and they hold two higher cards of the same suit. Decide whether you should call or fold, and then ask where your genuine chances are actually coming from.",
         scenarioId: 'eq-dominated-flush-draw-turn',
         explanation:
-          "This spot is built to punish the reflex 'I have a flush draw, so I have nine outs'. The cards that complete hero's flush hand the opponent a better one, so they are not outs at all - they are the most expensive cards in the deck for hero, because hero will happily pay off with a hand that cannot win. Hero's real chances come from somewhere else entirely, and the app counts them for you once you look. Two habits to take from it. Count outs against what your opponent can hold rather than against your own hand in isolation. And notice that being face up is a teaching convenience: away from a lesson you would be estimating how often their range contains two of your suit, and that estimate is exactly what makes drawing to a second-best flush so costly.",
+          "This spot is built to punish the reflex 'I have a flush draw, so I have nine outs'. The cards that complete your flush give the opponent a better one, so they are not outs at all - they are the most expensive cards in the deck for you, because you will happily pay off with a hand that cannot win. Your real chances come from somewhere else entirely, and the app counts them for you once you look. Two habits to take from it. Count outs against what your opponent can hold rather than against your own hand in isolation. And notice that being face up is a teaching convenience: away from a lesson you would be estimating how often their range contains two of your suit, and that estimate is exactly what makes drawing to a second-best flush so costly.",
       },
     ],
     reviewAdvice:
