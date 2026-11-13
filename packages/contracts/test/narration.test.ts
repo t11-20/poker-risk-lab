@@ -1,10 +1,6 @@
 /**
- * `inSecondPerson`: the reader's own hand, narrated to them as "you".
- *
- * Audit at 308fadf: under the table, "How the hand ended" read "Guest 12D91B wins 1529 from the
- * pot." to the reader who was Guest 12D91B. The sentences here are the shapes
- * `apps/api/src/rooms/narration.ts` writes; `apps/api/test/table-narration.test.ts` runs the same
- * function over sentences a real table produced.
+ * `inSecondPerson`: the reader's own hand, narrated to them as "you". The sentences are the shapes
+ * `apps/api/src/rooms/narration.ts` writes. `apps/api/test/table-narration.test.ts` runs real ones.
  */
 
 import assert from 'node:assert/strict';

@@ -1,10 +1,4 @@
-/**
- * `@prl/contracts` — the wire contract shared by `apps/api` and `apps/web`.
- *
- * Zero runtime dependencies beyond types from `@prl/poker-engine`. Nothing here
- * performs I/O; it is types, JSON Schemas and constants only, so both sides of the
- * wire are compiled against exactly the same definition.
- */
+/** The wire contract between `apps/api` and `apps/web`. Types, JSON Schemas and constants, with no I/O. */
 
 export * from './api-paths.ts';
 export * from './api-types.ts';

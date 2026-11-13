@@ -1,26 +1,9 @@
 /**
  * Wire types for the "Play a Legend" learning mode.
- *
- * ## The shape enforces the guardrails
- *
- * Two things in this file are load-bearing rather than decorative:
- *
- * 1. **`ProfileDisclosureDto.disclaimers` is a required, non-empty array.** There is no
- *    way to serialise a profile without the framing that says it is an educational
- *    simulation and not a real person. A component that renders `displayName` and drops
- *    `disclaimers` is visibly wrong in review rather than quietly non-compliant.
- *
- * 2. **Commentary is `modelPreference`, not `thought`.** Every explanatory string in this
- *    file is named and typed as a statement about *the model's* preference. There is no
- *    field anywhere that could hold "what the player was thinking", because the type
- *    system is a better guardrail than a code-review convention.
- *
- * ## Outcome is never quality
- *
- * `HandComparison` carries `chipResult` and `decisionQuality` as separate, unrelated
- * fields, and `decisionQuality` is computed from the maths before the run-out is known.
- * A play that lost is not marked wrong, and a play that won is not marked right. That
- * separation is the single most important educational property of this feature.
+ * `ProfileDisclosureDto.disclaimers` is required and non-empty, so no profile serialises without the
+ * framing that it is an educational simulation. Commentary is typed as `modelPreference`, so no field
+ * can hold what a person was thinking. `HandComparison` keeps `chipResult` apart from
+ * `decisionQuality`, which comes from the maths before the run-out is known.
  */
 
 import type { CoachReport } from './api-types.ts';
@@ -60,10 +43,7 @@ export interface ProfileDisclosureDto {
   readonly tagline: string;
   /** True when an attributed name is being shown. */
   readonly attributed: boolean;
-  /**
-   * Required and never empty. The UI must render these with the profile — see the
-   * module comment for why this is a type-level guarantee rather than a convention.
-   */
+  /** Required and never empty. The UI renders these with the profile. */
   readonly disclaimers: readonly string[];
   readonly shortLabel: string;
 }
@@ -107,10 +87,6 @@ export interface LegendProfilesResponse {
   readonly universalDisclaimer: string;
 }
 
-// ---------------------------------------------------------------------------
-// Starting a match
-// ---------------------------------------------------------------------------
-
 export interface CreateLegendMatchRequest {
   /** One profile id for heads-up, up to five for a table. */
   readonly profileIds: readonly string[];
@@ -119,10 +95,7 @@ export interface CreateLegendMatchRequest {
   readonly smallBlind: number;
   readonly bigBlind: number;
   readonly ante?: number;
-  /**
-   * Fixes the deal so a session is reproducible for teaching. Optional; a match without
-   * one is dealt from the CSPRNG like any other.
-   */
+  /** Fixes the deal so a session is reproducible. Without it the deal comes from the CSPRNG. */
   readonly deterministicSeed?: number;
 }
 
@@ -137,16 +110,9 @@ export interface CreateLegendMatchResponse {
   readonly difficulty: LegendDifficultyDto;
 }
 
-// ---------------------------------------------------------------------------
-// Post-hand comparison — the educational core of the mode
-// ---------------------------------------------------------------------------
-
 /**
- * Why the model chose what it chose.
- *
- * Named `modelPreference` throughout, deliberately. Every string here describes the
- * model. None of them may describe a person's mental state; `@prl/poker-ai/labelling`
- * rejects such text before it can reach this type.
+ * Why the model chose what it chose. Every string describes the model, never a person's mental
+ * state, and `@prl/poker-ai/labelling` rejects such text.
  */
 export interface ModelReasoning {
   /** e.g. "this model prefers a larger bet here". Always third-person, always the model. */
@@ -159,11 +125,7 @@ export interface ModelReasoning {
   }[];
   /** How the decision would differ at a different position, stack depth, or price. */
   readonly whatChangedIt: readonly string[];
-  /**
-   * The probability the policy assigned to each action before sampling. Exposed because
-   * the styles are probabilistic, not scripted: the same spot does not always produce
-   * the same action, and a learner should be able to see that directly.
-   */
+  /** The policy's probability for each action before sampling, since styles are not scripted. */
   readonly actionProbabilities: readonly { readonly action: string; readonly probability: number }[];
 }
 
@@ -175,10 +137,7 @@ export interface DecisionQuality {
   readonly chosenEv: number;
   /** `chosenEv - bestAvailableEv`, so 0 is the best available and negative is a cost. */
   readonly evGivenUp: number;
-  /**
-   * A qualitative band, because a precise score would imply more certainty than the
-   * model has. Never a grade or a mark.
-   */
+  /** A qualitative band, never a grade, because a score would imply more certainty than the model has. */
   readonly band: 'consistent-with-analysis' | 'slightly-off' | 'materially-off';
   readonly note: string;
 }
@@ -198,10 +157,7 @@ export interface ComparedDecision {
   /** The maths at this decision point, computed at review time. */
   readonly analysis: CoachReport | null;
 
-  /**
-   * Other actions that were available, with their EV. Lets a learner see the shape of
-   * the decision rather than a verdict on it.
-   */
+  /** Other available actions with their EV, to show the shape of the decision. */
   readonly alternatives: readonly {
     readonly action: string;
     readonly to: number | null;
@@ -222,45 +178,20 @@ export interface HandComparison {
   readonly board: readonly string[];
   readonly decisions: readonly ComparedDecision[];
 
-  /**
-   * Net chips for the learner. Kept structurally separate from every quality field, and
-   * the summary text must never explain one by the other.
-   */
+  /** Net chips for the learner. The summary never explains this by the quality fields or vice versa. */
   readonly chipResult: number;
-  /**
-   * The learner's aggregate decision quality across the hand, computed from the maths
-   * with no reference to the result.
-   */
+  /** Aggregate decision quality, from the maths with no reference to the result. */
   readonly decisionQuality: DecisionQuality;
-  /**
-   * Present whenever the result and the decision quality point in opposite directions —
-   * a well-played hand that lost, or a badly-played hand that won. This is the mode's
-   * most valuable teaching moment, so it is a first-class field rather than an
-   * afterthought.
-   */
+  /** Present when the result and the decision quality point in opposite directions. */
   readonly outcomeVersusQualityNote: string | null;
   readonly profileId: string;
   readonly disclosure: ProfileDisclosureDto;
 }
 
-// ---------------------------------------------------------------------------
-// "What can I learn from this player?"
-// ---------------------------------------------------------------------------
-
 /**
- * What an `observed` block actually measured — the label that makes it not a fabrication.
- *
- * This exists because the difference is the whole point. "This model entered 32% of pots" is a
- * true and useful sentence about a simulation and a false one about a session that never
- * happened, and once the numbers are on screen the two are indistinguishable. A page shipped
- * claiming "Measured over 128 hands of your own play" over constants; the fix is not better copy
- * but a field that makes the claim checkable, so a screen cannot render the figures without
- * having been handed the statement of what they are.
- *
- * Optional rather than required, and for a stated reason: `learnFromSummary` in `@prl/poker-ai`
- * builds this response and knows nothing about where its caller got the observations, so a
- * required field would force a producer to invent an answer. Absent means the same as null —
- * unlabelled — and an unlabelled `observed` must not be rendered as anybody's play.
+ * What an `observed` block measured, so simulated figures are never shown as the reader's own play.
+ * Optional because `learnFromSummary` does not know where its observations came from. Absent means
+ * null, which means unlabelled, and unlabelled figures must not be rendered as anybody's play.
  */
 export type ObservedBasis =
   | {
@@ -285,24 +216,10 @@ export interface LearnFromProfileResponse {
   readonly learnFrom: readonly string[];
   readonly counterStrategy: readonly string[];
   /**
-   * Observed frequencies from the learner's own session against this profile, so the declared
-   * traits can be checked against what actually happened. Null until enough hands have been
-   * played to say anything.
-   *
-   * Still null in this build, and the reasons are recorded rather than hidden, because "null"
-   * and "we never wired it up" look identical from here:
-   *
-   *  - `room_members.bot_profile` accepts five legacy names plus `unknown`, so the durable rows
-   *    cannot say which of the twelve profiles sat in a seat for seven of them;
-   *  - `ProfileObservedStats.bluffFrequency` asks whether a bet was made with a hand that could
-   *    not win, which no observer on the other side of the table can see;
-   *  - `@prl/poker-ai`'s observer needs `raiseWasAvailable` per turn and says never to guess it;
-   *    the persisted action log has no column for it.
-   *
-   * What a large deterministic simulation of the model did IS measurable and is served, under a
-   * name that says so, by `ProfileStatsResponse`. It is not put here, because the prose
-   * `learnFromSummary` generates from this field says "across N hands you have seen", and that
-   * sentence is false about a simulation.
+   * Frequencies from the learner's own session against this profile. Always null in this build:
+   * `room_members.bot_profile` cannot name seven of the twelve profiles, `bluffFrequency` needs cards
+   * no observer sees, and the action log has no `raiseWasAvailable` column. Simulated figures are in
+   * `ProfileStatsResponse`, because `learnFromSummary` prose says "across N hands you have seen".
    */
   readonly observed: ProfileObservedStats | null;
   /** What `observed` measured. Absent or null means unlabelled, which means do not render it. */
@@ -330,10 +247,7 @@ export interface ProfileObservedStats {
   readonly wentToShowdown: number;
   readonly foldToBetFrequency: number;
   readonly averageBetSizeAsPotFraction: number;
-  /**
-   * Sampling error on the frequencies above, so a learner does not over-read 40 hands.
-   * Present because the whole app teaches that a small sample says little.
-   */
+  /** Sampling error on the frequencies above, so a learner does not over-read a small sample. */
   readonly confidenceHalfWidth: number;
 }
 
@@ -352,24 +266,11 @@ export interface ProfileStatsResponse {
   readonly referenceProfileId: string;
   readonly referenceName: string;
   /**
-   * Axes where the simulation disagrees materially with the declared trait. Surfaced
-   * rather than hidden: a model whose behaviour does not match its own card is a defect,
-   * and showing it is how it gets fixed.
-   *
-   * ## `note` is the only safe thing to render, and that is not a style preference
-   *
-   * Four of the seven measurable axes do not compare a trait against a rate of the same name:
-   * `aggressionFrequency` is declared on a NEUTRAL hand assessment, `threeBetTendency` is a
-   * multiplier read back through the share it produces, `pfrShareOfVpip` is a ratio of two
-   * measured rates, and `betSizingPreference` is inverted through `preferredPotFraction`. A
-   * consumer that paired `declared` against the like-named field of `simulated` would be
-   * comparing two different quantities and would print "this model is not behaving the way its
-   * card describes" under every profile, permanently — a false accusation produced by a units
-   * error, and the exact defect `@prl/poker-ai/stats` was corrected for.
-   *
-   * So the sentence is authored server-side by `describeDivergence`, which names the quantity it
-   * is talking about, and the raw pair is carried for anyone auditing the figure rather than for
-   * a UI to recombine.
+   * Axes where the simulation disagrees materially with the declared trait.
+   * Render only `note`. Four of the seven axes do not compare a trait with the like-named rate
+   * (`aggressionFrequency`, `threeBetTendency`, `pfrShareOfVpip`, `betSizingPreference`), so pairing
+   * `declared` with `simulated` is a units error. `describeDivergence` writes `note`, and the raw
+   * pair is for auditing.
    */
   readonly divergences: readonly {
     readonly key: LegendTraitKey;
@@ -380,24 +281,11 @@ export interface ProfileStatsResponse {
   }[];
 }
 
-// ---------------------------------------------------------------------------
-// Scenario mode: the same spot against several profiles
-// ---------------------------------------------------------------------------
-
 /**
- * The most trials `POST /legends/compare` will run per profile.
- *
- * On the wire because a client has to know it. The compare screen asked for 400 against a schema
- * whose maximum is 40, so every request it could ever have made was `invalid_request` before it
- * reached a handler — a second, independent reason that screen showed a bundled sample, sitting
- * behind the first one and invisible while the first one held.
- *
- * `MAX_COMPARE_TRIALS` in `apps/api/src/rooms/bots.ts` is the authority: it is what the schema and
- * the clamp are built from. This is the copy a client compiles against, and
- * `apps/api/test/legend-fixture-figures.test.ts` asserts the two are equal, so they cannot drift.
- *
- * Forty is a coarse sample, deliberately: the widest 95% interval on a proportion over forty
- * trials is about 15 points. A screen showing these distributions has to print that.
+ * The most trials `POST /legends/compare` runs per profile. `MAX_COMPARE_TRIALS` in
+ * `apps/api/src/rooms/bots.ts` is the authority, and `legend-fixture-figures.test.ts` asserts they
+ * are equal. The widest 95% interval on a proportion over 40 trials is about 15 points, and a screen
+ * showing these distributions must print that.
  */
 export const MAX_COMPARE_TRIALS = 40;
 
@@ -423,7 +311,7 @@ export interface CompareProfilesRequest {
 export interface ProfileComparisonEntry {
   readonly profileId: string;
   readonly disclosure: ProfileDisclosureDto;
-  /** Distribution over actions across the trials — these styles are not scripted. */
+  /** Distribution over actions across the trials. */
   readonly actionDistribution: readonly {
     readonly action: string;
     readonly probability: number;
@@ -438,9 +326,6 @@ export interface CompareProfilesResponse {
   readonly analysis: CoachReport;
   readonly entries: readonly ProfileComparisonEntry[];
   readonly trials: number;
-  /**
-   * What the spread across profiles teaches. Written to point at the *disagreement*,
-   * because two strong styles differing on the same spot is the lesson.
-   */
+  /** What the spread across profiles teaches. Points at the disagreement between styles. */
   readonly takeaway: string;
 }
