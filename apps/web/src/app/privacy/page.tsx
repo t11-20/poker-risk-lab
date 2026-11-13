@@ -1,100 +1,7 @@
 /**
- * `/privacy` — a data inventory, written from the schema rather than from intent.
- *
- * ## Why this page is written the way it is
- *
- * Most privacy policies are a description of what somebody meant to build. This one is a
- * description of `db/migrations/0001_initial.sql` through `0004_account_deletion.sql`, the
- * repositories in `apps/api/src/repositories`, and `apps/api/src/logging.ts`. Every table is named,
- * every column that holds anything about a reader is accounted for, and the digests are described
- * as what they are — including the honest limitation that a keyed HMAC is pseudonymisation and not
- * anonymisation, which is the sentence a policy of this kind usually leaves out.
- *
- * Naming the tables is deliberate. It makes the page checkable: a reader who can read SQL can
- * verify it, and so can the next engineer, which is the only mechanism that keeps a document like
- * this true a year after it was written. The alternative — categories like "usage information" —
- * cannot be falsified, which is exactly why it is the usual choice.
- *
- * ## What still needs a lawyer, and what does not
- *
- * The inventory does not. It is a factual claim about software and it is checked. What needs
- * counsel is who the controller is, which lawful basis covers each category, which statutory rights
- * apply to which readers, how long each category may be kept, and what a transfer out of the
- * hosting country requires. Those four clauses carry `COUNSEL_MARKER` and are listed in
- * `docs/production/legal-review-requirements.md`.
- *
- * ## One thing on this page is a policy rather than an observation
- *
- * The retention paragraph. `deleteExpired` and `deleteExpiredLoginAttempts` exist in
- * `apps/api/src/repositories/sessions.ts` and, when this page was first drafted, had no caller
- * anywhere outside the test suite — so expired rows were removable and nothing removed them. The
- * page said that in as many words rather than describing a sweep that did not run, and it said "if
- * a scheduled job is added, this paragraph changes with it".
- *
- * It has been, so it did. `apps/api/src/maintenance/retention-sweep.ts` runs both sweeps every six
- * hours in the API process. The paragraph below now describes what runs; what it still does not do
- * is decide the PERIODS, which are entry 7 of the counsel register and are a policy question, not
- * an observation about the code.
- *
- * ## The retention paragraph was also WRONG, in the direction that understates
- *
- * It said "a session lasts fourteen days from when it was issued". Fourteen days is the IDLE
- * window: `extendExpiry` in `apps/api/src/repositories/sessions.ts` slides it forward on every
- * visit past the halfway mark (`SESSION_REFRESH_AFTER`), bounded by `SESSION_ABSOLUTE_TTL_SECONDS`
- * in `apps/api/src/auth/session.ts` — SIXTY days from `created_at`. A learner who visits weekly
- * held one session row for four times as long as this page claimed. The ceiling is now stated, and
- * `apps/web/test/legal-pages.test.ts` reads both constants out of the API source and fails if the
- * page and the code disagree again. A retention period a document understates is worse than one it
- * leaves vague: the vague one sends a reader to ask, and the wrong one does not.
- *
- * Two smaller corrections went with it. "Only for the ten minutes an in-progress sign-in lasts"
- * described when a row stops WORKING, not when it stops EXISTING — the sweep is what removes it, so
- * the row can outlive its ten minutes by up to a sweep interval. And section 6 said what deletion
- * does without saying what it cannot reach: backups are sealed snapshots, and the shipped policy in
- * `scripts/backup.mjs` keeps one for up to six months.
- *
- * ## The proxy paragraph in §4 described a leak that had been fixed
- *
- * It said the reverse proxy "writes a conventional access log: one line per request carrying your
- * *raw* IP address, your *full* User-Agent string, the complete request line including anything in
- * the query string, and the page you came from", and that a federated sign-in's parameters were in
- * it too. That was true of `combined`, which is what both shipped configurations used when the
- * paragraph was written. Both were rewritten in the same commit as the paragraph
- * (`deploy/staging/nginx.conf:237-266`, `docker-compose.yml:591-626`): a `log_format prl_privacy`
- * built on `$uri`, which has no query string in it; `$remote_addr` mapped to a /24 or a /48, and to
- * the bare word `ip6` where it cannot be truncated confidently; the user agent reduced to one of
- * four classes; no `$http_referer` at all; and `error_log crit` with `/dev/null` on the OIDC
- * callback, because nginx stamps the request line onto its own error messages in a shape no
- * `log_format` controls.
- *
- * So the page was overstating the exposure, which sounds harmless and is not: a policy that
- * describes a worse system than the one running teaches its own readers that it is not written from
- * the code, and the next inaccuracy in the other direction gets the same credence. §4 now describes
- * `prl_privacy`, and says plainly that a network prefix is reduction and not anonymisation.
- *
- * ## §2, §5, §6 and §7 had to learn about enrolment
- *
- * `db/migrations/0006_cohort_enrolments.sql` added `prl.cohorts` and `prl.enrolments`, and the
- * inventory test failed on both, which is what it is for. Everything the page now says about them is
- * read out of that file: what the columns are (`:215-243`, `:262-322`), that there is no amount and
- * no currency column in it or anywhere else (`:25-30`), that the `reference` is opaque and may be
- * the literal word `scholarship` (`:32-37`, `:333-335`), that a withdrawal is an `UPDATE` and never
- * a delete (`:339-342`), that the runtime role is granted `SELECT` and nothing else on either table
- * (`:387-388`), and that deleting an account takes the enrolment with it by `ON DELETE CASCADE`
- * (`:269-270`, argued at `:168-193`). Nothing sweeps either table — `retention-sweep.ts` removes
- * expired sessions, expired sign-in attempts and abandoned guest accounts, and nothing else — so §5
- * says so rather than leaving "everything else" to cover a category nobody thought about.
- *
- * The half of that worth reading twice is in §6, and it is not visible from the migration alone.
- * Every grant, supersession and revocation writes an append-only `prl.audit_log` row in the SAME
- * transaction as the change (`apps/api/src/repositories/enrolments.ts:504,516,570`), and a grant's
- * `detail` carries the external `reference` (`:516-523`). `audit_log.user_id` is `ON DELETE SET
- * NULL` (`0001_initial.sql:855-856`), so erasure removes the enrolment row and leaves a detached row
- * saying that on a date, on somebody's authority, against that reference, a place was granted and
- * later ended. That is a real and defensible design — a withdrawal an operator cannot evidence is
- * worth nothing — and it is exactly the kind of thing a reader is entitled to be told rather than
- * left to infer from a referential action, so §2 and §6 both say it.
- *
+ * `/privacy`, a data inventory written from `db/migrations`, the repositories and `logging.ts`. Every
+ * table is named so a reader can check it, and `legal-pages.test.ts` fails when a table or a retention
+ * constant disagrees with this page. The clauses that need counsel carry `COUNSEL_MARKER`.
  * `robots` is not overridden here, for the reason written out on `/terms`.
  */
 
@@ -122,7 +29,7 @@ export const metadata: Metadata = {
     'schema: what is kept, what is only ever a digest, and what deletion removes.',
 };
 
-/** See the note on the identical function in `app/terms/page.tsx` for why it is repeated. */
+/** Repeated from `app/terms/page.tsx`. See the note there. */
 function CounselFlag(props: { readonly clause: CounselClause }): ReactElement {
   const { clause } = props;
   return (
@@ -140,13 +47,7 @@ interface InventoryEntry {
   readonly what: string;
 }
 
-/**
- * The inventory, one entry per table that holds anything about a reader.
- *
- * Ordered as the schema is: identity, then sessions, then the tables, then what you did. Every
- * sentence is a description of columns that exist. Where a column holds a digest rather than a
- * value, the entry says which kind of digest and what that does and does not protect.
- */
+/** One entry per table that holds anything about a reader, in schema order. */
 const INVENTORY: readonly InventoryEntry[] = [
   {
     table: 'prl.users',

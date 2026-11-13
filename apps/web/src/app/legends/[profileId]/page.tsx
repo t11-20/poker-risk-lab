@@ -1,38 +1,8 @@
 /**
- * `/legends/[profileId]` — one profile in full, and what can be learned from it.
- *
- * ## The order of the page is the argument
- *
- * Identity, then the framing, then the numbers, then what to do with them:
- *
- *   01 the archetype name (`h1`), the attributed name beneath it, the tagline
- *   02 the disclaimers, inline, in full
- *   03 three signature axes and the sixteen-axis radar
- *   04 all sixteen axes as labelled bars, each with its plain-language meaning
- *   05 what you can learn from the style, how it shows up, and how to play against it
- *   06 where the numbers came from
- *   07 declared traits against what the model actually did, measured, with the sampling interval
- *   08 declared traits against what YOU have seen it do — empty, and saying why
- *   09 the axes where this style differs most from the others
- *
- * Sections 07 and 08 are two sections rather than one, and separating them is a correction. There
- * was a single "against what you have seen" table, and what it rendered was a bundled constant
- * under the sentence "Measured over 128 hands of your own play". Two measurements exist here and
- * only one of them can be made today: what a deterministic simulation of the model did (07, real,
- * reproducible from a stated seed) and what it did against this reader (08, not yet computable).
- * Collapsing them is how one gets shown under the other's caption.
- *
- * Two of those are guardrails rather than layout. The **archetype name is the `h1`** and the
- * attributed name is a label beneath it, never the other way round. And the **counter-strategy
- * section is not optional**: an opponent a learner cannot form a plan against teaches nothing, so
- * "how to play against it" carries the same weight as "what to learn from it".
- *
- * ## What is deliberately not on this page
- *
- * No portrait, no likeness, no photograph. No ranking of the axes, no overall score, no stars, no
- * "difficulty rating" for the profile as a whole — the difficulty control chooses how *legible* the
- * style is, not how good it is. And no first-person commentary: every sentence here describes the
- * model, in the third person, exactly as it arrives on the wire.
+ * One Legends profile in full. The archetype name is the `h1` and the attributed name a label beneath
+ * it, and the counter-strategy section is required. The simulated measurement and the reader's own
+ * play are separate sections, so one is never shown under the other's caption. No likeness, no
+ * ranking or score, and no first-person commentary.
  */
 
 import type { LearnFromProfileResponse, LegendProfileCardDto, ProfileObservedStats } from '@prl/contracts';
@@ -90,11 +60,8 @@ const BEST_FOR_WORD: Readonly<Record<LegendProfileCardDto['bestFor'], string>> =
 };
 
 /**
- * The metadata names the archetype, never the attributed name.
- *
- * A browser tab, a bookmark and a shared link are all places the "(modelled style)" framing would
- * be truncated away, and an attributed name on its own in a title bar is the one context where it
- * reads as a claim about a person.
+ * The archetype, never the attributed name. A tab title truncates the "(modelled style)" framing, and
+ * a bare attributed name there reads as a claim about a person.
  */
 export async function generateMetadata({
   params,
@@ -112,37 +79,13 @@ export async function generateMetadata({
 }
 
 /**
- * What KIND of measurement a row holds, because the table has two and used to render one.
- *
- * ## The defect
- *
- * Every row went through `formatProbability(...) ?? NOT_A_PROBABILITY`, with a comment saying "a
- * measured frequency out of a simulation: a probability, so it goes through the domain". Seven of
- * the eight are. The eighth, `averageBetSizeAsPotFraction`, is a mean of pot fractions and is
- * legitimately greater than 1 — which `packages/ui/src/probability.ts`'s own header says in as
- * many words: "the ones that hold a pot fraction (a bet size as a share of the pot…) deliberately
- * do not [go through the domain], because those are legitimately greater than 1 and refusing them
- * would be the same conflation in reverse."
- *
- * Measured in Chrome 151 against the running API: `/legends/old-school-pressure` rendered the row
- * `Average bet size · not a probability · ± 1.5 points` for a perfectly ordinary average of
- * 1.0685 × the pot. A reader was shown a refusal where a figure belongs, on a page whose whole
- * subject is what a style measurably does.
- *
- * The interval column was wrong on that row too, and for the same reason: `confidenceHalfWidth` is
- * the binomial half-width of the FREQUENCIES. A mean of ratios has a different sampling
- * distribution and this page has no figure for it, so the honest cell says so rather than
- * borrowing one that does not apply.
+ * Seven rows are frequencies. `averageBetSizeAsPotFraction` is a mean of pot fractions, legitimately
+ * above 1 (1.0685 for old-school-pressure), so it must not go through the probability domain, and the
+ * binomial `confidenceHalfWidth` does not describe it.
  */
 type ObservedKind = 'frequency' | 'potFraction';
 
-/**
- * The interval cell for a row the frequencies' interval does not describe.
- *
- * Not an em dash on its own: a bare dash in a numeric column reads as a missing measurement, and
- * this one is not missing — it is a different quantity with a different sampling distribution that
- * this page has no figure for. Saying which is the whole point.
- */
+/** Words, not a dash, because a bare dash reads as a missing measurement. */
 const NO_INTERVAL = 'not a frequency';
 
 interface ObservedRow {
@@ -152,7 +95,6 @@ interface ObservedRow {
   readonly kind: ObservedKind;
 }
 
-/** The observed figures, in the order a hand actually produces them. */
 function observedRows(observed: ProfileObservedStats): readonly ObservedRow[] {
   return [
     {
@@ -194,13 +136,8 @@ function observedRows(observed: ProfileObservedStats): readonly ObservedRow[] {
     {
       label: 'Folded to a bet',
       value: observed.foldToBetFrequency,
-      // Not "the frequency its card describes". `stats.ts` says of this exact pairing that "the
-      // trait is about giving up a made hand; the observed rate includes every fold to a bet, most
-      // of which are hands that never had value", and `commentary.ts` refuses the same substitution
-      // for two other axes precisely so the app does not print a false accusation. Under the old
-      // wording, calling-station read as declaring 0.14 and doing 37.3% — a gap fifteen times the
-      // sampling interval printed on that very row, and not a disagreement at all. The neighbouring
-      // rows all describe the observed number plainly; this one now does too.
+      // Not the card's fold-under-pressure trait, which counts only made hands. Pairing them made
+      // calling-station look fifteen intervals off its own card (`stats.ts`).
       note: 'How often it folded facing a bet, on any street. Not the fold-under-pressure trait on its card, which is about giving up a made hand.',
       kind: 'frequency',
     },
@@ -213,24 +150,13 @@ function observedRows(observed: ProfileObservedStats): readonly ObservedRow[] {
   ];
 }
 
-/** The figure, in the domain the row actually lives in. See `ObservedKind` for the defect. */
 function observedFigure(row: ObservedRow): string {
   if (row.kind === 'frequency') return formatProbability(row.value) ?? NOT_A_PROBABILITY;
-  // A share of the pot, so never refused for exceeding 1. `formatChips` still answers the em dash
-  // for a value that is not a finite number, which is the only refusal this figure can earn.
+  // `formatChips` still refuses a non-finite value.
   return `${formatChips(row.value, { decimals: 2 })} × pot`;
 }
 
-/**
- * The measured-frequencies table.
- *
- * `caption` and `note` are props rather than literals, and that is the fix for a P1 rather than a
- * refactor. This component used to print "Measured over N hands of your own play" over whatever it
- * was handed, and what it was handed was a bundled constant describing no play at all. A component
- * that states the provenance of data it did not fetch will eventually state it wrongly, so the
- * sentence now comes from the caller that knows which measurement this is — and the two callers
- * are separated by `ObservedBasis`, not by convention.
- */
+/** `caption` and `note` are props, so the provenance comes from the caller that knows it. */
 function ObservedTable({
   observed,
   caption,
@@ -265,13 +191,6 @@ function ObservedTable({
             {observedRows(observed).map((row) => (
               <tr key={row.label}>
                 <th scope="row">{row.label}</th>
-                {/*
-                  A measured FREQUENCY out of a simulation is a probability, so it goes through the
-                  domain: a run that somehow published a rate above 1 must say so rather than print
-                  it beside a confidence interval as though it were a finding. A pot fraction is not
-                  one and must not be refused for exceeding 1 — see `ObservedKind` for the row that
-                  was, and what a reader was shown in place of it.
-                */}
                 <td className="prl-legend-table__figure">{observedFigure(row)}</td>
                 <td className="prl-legend-table__figure">
                   {row.kind === 'frequency' ? `± ${halfWidth}` : NO_INTERVAL}
@@ -305,10 +224,7 @@ function ContrastSection({
               return (
                 <Fragment key={difference.key}>
                   <dt className="prl-legend-contrast__label">{difference.label}</dt>
-                  {/*
-                    The sign is in the text and the direction word is in the accessible name, so the
-                    colour is the third cue rather than the only one.
-                  */}
+                  {/* Sign in the text and direction in the name, so colour is never the only cue. */}
                   <dd className="prl-legend-contrast__delta" data-direction={direction}>
                     {`${sign}${formatChips(difference.delta, { decimals: TRAIT_DECIMALS })}`}
                     <span className="prl-visually-hidden">{` ${direction} on this axis`}</span>
@@ -339,8 +255,6 @@ export default async function ProfilePage({
   const learn = await loadLearnFromProfile(profileId);
   if (profile === null || learn === null) return <NotFoundBody />;
 
-  // After the existence check, deliberately: `notFound()` has to be reached before anything is sent,
-  // and this call is what makes the "what it actually does" section real rather than a constant.
   const stats = await loadProfileStats(profileId);
 
   const { disclosure } = profile;
@@ -353,10 +267,7 @@ export default async function ProfilePage({
           <LegendSigil profileId={profile.id} size="lg" />
           <div className="prl-legend-identity__names">
             <h1 className="prl-legend-head__title prl-display-2">{disclosure.archetypeName}</h1>
-            {/*
-              Beneath the `h1`, at label size, carrying the "(modelled style)" framing the server put
-              in the string. The archetype is the profile; this is a mnemonic for it.
-            */}
+            {/* Beneath the `h1`, at label size. The server's string carries "(modelled style)". */}
             {disclosure.attributed ? (
               <span className="prl-legend-identity__attributed prl-label">{disclosure.displayName}</span>
             ) : null}
@@ -367,12 +278,7 @@ export default async function ProfilePage({
           <Chip>{BEST_FOR_WORD[profile.bestFor]}</Chip>
           <Chip tone="accent">{`Setting: ${difficulty}`}</Chip>
         </div>
-        {/*
-          The page's primary action, in the masthead. It used to exist only at the very bottom: measured
-          at 360px, y=11,328 of a 13,883px page (y=8,083 at 768, 7,249 at 1440), below sixteen trait
-          rows, three prose sections, two tables and the contrasts. A reader who came here to decide
-          had to read everything to act on the decision. The bottom one stays, for the reader who did.
-        */}
+        {/* Also in the masthead, because the bottom copy is at y=11,328 of 13,883px at 360px. */}
         <div className="prl-legend-card__actions">
           <Link
             className="prl-btn prl-btn--primary prl-btn--md"
@@ -397,11 +303,7 @@ export default async function ProfilePage({
         </Callout>
       )}
 
-      {/*
-        `--wide` is layout only: this copy of the block spans the page rather than sitting inside a
-        card, so above 900px its entries run in two capped columns instead of leaving four fifths of
-        a full-width panel empty. Nothing is shortened, collapsed or hidden by it.
-      */}
+      {/* `--wide` is layout only, two capped columns above 900px. Nothing is hidden. */}
       <ProfileDisclaimers className="prl-legend-disclaimers--wide" disclosure={disclosure} />
 
       <section className="prl-legend-section">

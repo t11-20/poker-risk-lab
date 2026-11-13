@@ -1,22 +1,7 @@
 /**
- * The glossary: every term the lessons use, addressable by id.
- *
- * ## Why it is one long page rather than a term-per-route
- *
- * Ninety entries of two sentences each is a reference, and a reference is something you scan,
- * search with the browser's own find-in-page, and link into. Ninety routes would be ninety round
- * trips to read four related definitions, and `Ctrl+F` — the tool people actually use on a
- * glossary — would only ever see one of them.
- *
- * ## The fragment contract
- *
- * Every `GlossaryTerm` popover in a lesson offers "open in the glossary", and every `seeAlso` in
- * the content points at a term id. Both resolve to `/learn/glossary#<id>`, so the ids on this page
- * are a contract with the rest of the section rather than a convenience. `GlossaryBrowser` starts
- * with its filters empty for exactly that reason: a filtered-out entry has no element to scroll to.
- *
- * The filtering, the A–Z jump list and the cross-reference buttons are the client component's
- * work. This page is the frame, the heading and the load.
+ * The glossary, one page so find-in-page sees every term. Lessons and `seeAlso` link to
+ * `/learn/glossary#<id>`, so `GlossaryBrowser` starts unfiltered. A filtered-out entry has no element
+ * to scroll to.
  */
 
 import { Callout } from '@prl/ui';

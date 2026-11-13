@@ -1,53 +1,9 @@
 /**
- * The hand history index: a dense, sortable, cursor-paginated table of finished hands.
- *
- * ## The net result is never colour alone
- *
- * `heroNet` is the one figure on this page somebody could get badly wrong, so it carries three
- * independent signals: an explicit `+` or `-` in the digits, the unit word ("units"), and the word
- * "gained", "lost" or "broke even" beside it (`netWord`). The semantic colour is the fourth signal and the only one a
- * reader could be unable to perceive. Thrown away, the column still reads correctly — which is the
- * test WCAG 1.4.1 actually asks.
- *
- * `heroNet` is also nullable, and null is not zero. A hand still being settled has no net yet, and
- * rendering that as `0 units` would state that it broke even. It reads "not settled".
- *
- * ## Sorting and paging are both server concerns, expressed as query parameters
- *
- * `?sort=` and `?cursor=` are links, not state. Two reasons: a sorted, paged view is then linkable
- * and survives a reload, and the sort has to be applied to the whole history rather than to the page
- * in front of you. Sorting one page of six rows client-side would produce an ordering that changes
- * meaning as you page — the second page's "biggest win" would be smaller than the first page's
- * smallest — which is worse than no sort at all.
- *
- * With the fixture the same rule holds: the sort is applied to the whole list and then the page is
- * cut from it, in that order, exactly as a keyset-paginated endpoint would.
- *
- * The cursor is the id of the first row of the next page rather than an offset, so a hand finishing
- * while somebody is paging does not shift rows under them.
- *
- * ## `sort` is served by the API, and the control offers nothing else
- *
- * `GET /api/v1/hands?sort=` takes one of `HAND_SORTS` and applies it in SQL over the reader's whole
- * history before the page is cut (`apps/api/src/routes/hands.ts`). This page sends the name it was
- * asked for and renders what comes back; it does not re-sort the rows it was handed, and there is no
- * ordering in the control that the server does not perform.
- *
- * That is the second half of a defect worth remembering. The schema for this endpoint was closed and
- * had no `sort`, so the `sort=` this page used to append came back `invalid_request` — invisible for
- * as long as every request 404'd on the wrong path, and a 400 on a working screen once the path was
- * fixed. The response at the time was to stop sending it, which left five orderings in the interface
- * and one performed by the server: four of the five labels named an ordering that nothing produced.
- * Removing the parameter and keeping the control is the worse of the two failures, because it looks
- * like it works.
- *
- * ## The session comes from the request, not from a browser
- *
- * Hand history is per-reader, and `credentials: 'include'` does nothing in a server-side `fetch`. So
- * this render forwards the reader's own session cookie through `readerCallOptions()` — see
- * `src/lib/server-session.ts` for the boundary that keeps that from becoming a general credential
- * forwarder. `signed-out` is now a real answer about this reader rather than a permanent property of
- * server rendering.
+ * The hand history index. The net is never colour alone. Sign, unit and word carry it (WCAG 1.4.1),
+ * and a null net reads "not settled", never 0. `?sort=` and `?cursor=` are links, and the server sorts
+ * the whole history in SQL before cutting the page, so this page never re-sorts the rows it gets. The
+ * cursor is a row id, not an offset, so a finishing hand does not shift rows. The reader's cookie is
+ * forwarded through `readerCallOptions()` because `credentials: 'include'` does nothing server-side.
  */
 
 import type { HandListResponse, HandSort, HandSummary } from '@prl/contracts';
@@ -74,30 +30,14 @@ export const metadata: Metadata = {
 const ROUTE = '/review';
 
 /**
- * The scroll container's accessible name.
- *
- * The region is a tab stop only while it scrolls sideways (`ScrollRegion`, and the 360px finding in
- * `../../lib/scroll-region.ts`), and whenever it is one it needs a name: a scrollable region has to
- * be keyboard-reachable (axe `scrollable-region-focusable`, WCAG 2.1.1) and an unnamed tab stop is a
- * silent one. The name stays when the stop goes, so a screen reader still finds the table as a
- * named region. Same problem as the EV table in `@prl/ui`'s CoachPanel, which is always a table.
- *
- * The name says nothing about scrolling: below 1024px the rows are cards and the region never
- * scrolls, so "scrolls sideways when the window is too narrow" was read out as a false sentence on
- * every phone.
+ * A scrolling region is a tab stop and needs a name (WCAG 2.1.1). The name says nothing about
+ * scrolling, because below 1024px the rows are cards and the region never scrolls.
  */
 const TABLE_LABEL = 'Hand history table';
 
-/** The narrow layout's sort `<select>`, for its `<label>`. One per page, so a constant is enough. */
 const SORT_SELECT_ID = 'prl-review-sort';
 
-/**
- * The orderings the page offers — the contract's list, not a second copy of it.
- *
- * Imported rather than re-declared so the control cannot offer a name the endpoint does not
- * accept, and cannot omit one it does. `SORT_LABEL` is annotated `Record<HandSort, string>`, so a
- * new ordering on the wire without a label here is a compile error rather than a blank link.
- */
+/** The contract's list, so the control cannot offer an ordering the endpoint does not perform. */
 const SORTS = HAND_SORTS;
 type Sort = HandSort;
 
@@ -120,17 +60,8 @@ function readCursor(value: string | string[] | undefined): string | null {
 }
 
 /**
- * Sorts the whole fixture history, mirroring the five clauses in `HAND_ORDERINGS` on the server.
- *
- * Only the offline path uses this. It exists so the control means the same thing whichever source
- * answered — a fixture that sorted differently from the endpoint would make the fallback teach a
- * different ordering under the same label — and it mirrors the server clause for clause: the same
- * nulls-last rule, and the same rule that the `(startedAt, id)` tiebreak runs in the same direction
- * as the leading column, so a page boundary falls in the same place.
- *
- * An unsettled hand (`heroNet === null`) sorts LAST in both net orderings, not first in one of them.
- * It has no net; slotting it among the break-even hands would invent one, and sorting it to the
- * front of "biggest loss first" would state that it was the worst.
+ * The fixture path only. Mirrors the server's `HAND_ORDERINGS` clause for clause, including nulls last
+ * in both net orderings and a `(startedAt, id)` tiebreak in the leading column's direction.
  */
 function sortHands(hands: readonly HandSummary[], sort: Sort): readonly HandSummary[] {
   const rows = [...hands];
@@ -148,12 +79,10 @@ function sortHands(hands: readonly HandSummary[], sort: Sort): readonly HandSumm
   }
 }
 
-/** `(startedAt, id)`, both in `direction`. The tiebreak every ordering below ends with. */
 function byTime(direction: 1 | -1): (a: HandSummary, b: HandSummary) => number {
   return (a, b) => direction * (a.startedAt.localeCompare(b.startedAt) || a.id.localeCompare(b.id));
 }
 
-/** `key` in `direction`, nulls after everything, then the timestamp tiebreak in the same direction. */
 function nullsLast(
   key: (hand: HandSummary) => number | null,
   direction: 1 | -1,
@@ -170,14 +99,7 @@ function nullsLast(
   };
 }
 
-/**
- * Why a fixture was used, when one was.
- *
- * `'signed-out'` is not an outage and must not be described as one. Hand history is per-reader, and
- * this render forwards the reader's own session cookie, so `not_authenticated` now means exactly
- * what it says: whoever is looking at this page has not signed in. The notice says which of the two
- * it is, and no longer claims the server render is the reason.
- */
+/** `'signed-out'` is not an outage, and the notice must not describe it as one. */
 type FixtureReason = 'unavailable' | 'signed-out';
 
 interface HistoryData {
@@ -188,18 +110,11 @@ interface HistoryData {
 }
 
 /**
- * `?state=empty` renders the no-hands-yet state from the fixture.
- *
- * The empty state is a real deliverable — a reader arriving with no history must not meet a broken
- * table — and it is unreachable otherwise, because the fixture always has hands and the API is not
- * built. This is the same `?state=` affordance the Play screen uses for its loading, error and
- * completed states, and it is safe for the same reason: the parameter is only consulted on the
- * fixture path, so once the API answers it is ignored entirely and cannot blank a real history.
+ * `?state=empty` shows the empty state from the fixture. It is read only on the fixture path, so it
+ * cannot blank a real history.
  */
 async function loadHistory(sort: Sort, cursor: string | null, forceEmpty: boolean): Promise<HistoryData> {
-  // Everything `prl:handListQuery` accepts that this page has an opinion about. `sort` is applied by
-  // the database over the whole history; the cursor the server hands back names a position in that
-  // same ordering, which is why the two always travel together.
+  // The cursor names a position in the `sort` ordering, so the two always travel together.
   const query = new URLSearchParams({ limit: String(HAND_PAGE_SIZE), sort });
   if (cursor !== null) query.set('cursor', cursor);
   try {
@@ -209,8 +124,7 @@ async function loadHistory(sort: Sort, cursor: string | null, forceEmpty: boolea
     );
     return { response, fromFixture: null, cursorRejected: false };
   } catch (error) {
-    // An edited or stale `?cursor=` — see `isRejectedCursor`. Page one, once, and the page says so.
-    // The retry carries no cursor, so it cannot come back here.
+    // A stale or edited cursor falls back to page one. The retry has no cursor, so it cannot loop.
     if (cursor !== null && isRejectedCursor(error)) {
       return { ...(await loadHistory(sort, null, forceEmpty)), cursorRejected: true };
     }
@@ -220,9 +134,7 @@ async function loadHistory(sort: Sort, cursor: string | null, forceEmpty: boolea
     if (forceEmpty) {
       return { response: emptyHandListFixture(), fromFixture: reason, cursorRejected: false };
     }
-    // Sort the whole list, then cut the page from it — the order a paginated endpoint uses, and the
-    // only order in which a cursor means anything. `sortHands` mirrors the server's five clauses so
-    // the control means the same thing on both paths.
+    // Sort the whole list, then cut the page, as the endpoint does.
     const ordered = sortHands(REVIEW_HAND_SUMMARIES, sort);
     const start = cursor === null ? 0 : ordered.findIndex((row) => row.id === cursor);
     const from = start < 0 ? 0 : start;
@@ -236,7 +148,7 @@ async function loadHistory(sort: Sort, cursor: string | null, forceEmpty: boolea
   }
 }
 
-/** The board as small cards. A card that will not parse is shown as its own text, not dropped. */
+/** A card that will not parse is shown as its own text, not dropped. */
 function BoardCells({ board }: { readonly board: readonly string[] }): ReactElement {
   if (board.length === 0) {
     return (
@@ -263,7 +175,6 @@ function BoardCells({ board }: { readonly board: readonly string[] }): ReactElem
   );
 }
 
-/** The net cell: sign, unit and word, with the colour as the fourth signal rather than the only one. */
 function NetCell({ net }: { readonly net: number | null }): ReactElement {
   if (net === null) {
     return (
@@ -282,12 +193,8 @@ function NetCell({ net }: { readonly net: number | null }): ReactElement {
 }
 
 /**
- * A column's name, printed inside the cell for the narrow layout only.
- *
- * Below 600px the header row is visually hidden and each row is drawn as a card, so a bare
- * "1,520 units" no longer sits under a "Pot" a reader can see. `aria-hidden`, because the header
- * row is still in the accessibility tree and a screen reader already announces each cell with its
- * column header — "Pot" twice is noise. `review.css` hides it from 600px up.
+ * The column name inside the cell, for the card layout below 600px. `aria-hidden` because the header
+ * row is still in the accessibility tree and already names each cell.
  */
 function CellLabel({ children }: { readonly children: string }): ReactElement {
   return (
@@ -311,21 +218,17 @@ export default async function ReviewIndexPage({
   const requestedCursor = readCursor(query['cursor']);
   const forceEmpty = readCursor(query['state']) === 'empty';
   const { response, fromFixture, cursorRejected } = await loadHistory(sort, requestedCursor, forceEmpty);
-  // The page shown is page one when the cursor was refused, so the paging links must say so too.
   const cursor = cursorRejected ? null : requestedCursor;
   const hands = response.hands;
 
   return (
-    // `prl-review-page` is the hook `review.css` needs to lay this page's opener out without editing
-    // `page.css`, which the Lab shares. It carries no styling of its own — see section 0 there.
     <div className="prl-container prl-review-page">
       <header className="prl-page-head">
         <p className="prl-eyebrow">
           <SuitMark area="review" />
           Review
         </p>
-        {/* Carries the nav's word. It said "Hand history" under a nav that said "Review", and the
-            links into it said "Your hand history": three names for one place (audit at 6b3886e). */}
+        {/* Carries the nav's word, "Review", so the place has one name. */}
         <h1 className="prl-display-2 prl-page-head__title">Review your hand history</h1>
         <p className="prl-page-head__standfirst">
           Every hand you have finished. Open one to step through it decision by decision, with the analysis
@@ -369,13 +272,8 @@ export default async function ReviewIndexPage({
         </div>
       ) : (
         <>
-          {/* Two forms of one control, and only one is rendered at a time: the other is
-              `display: none`, so it is out of the tab order and the accessibility tree, not merely out
-              of sight. The links are one press per ordering and fit one row from 600px up. Below that
-              they wrapped to five rows — measured at 360x640 on the fixture history, 247px of control,
-              and the first hand started at y=931 under a 640px fold. The select is one row and still
-              needs no script: a GET form, so the ordering stays a link a reader can share and the
-              server still applies it to the whole history. */}
+          {/* Two forms of one control, the other `display: none`. Below 600px the links wrapped to
+              247px at 360x640, so a GET form with a select takes their place and needs no script. */}
           <nav className="prl-review-sorts" aria-label="Sort hand history">
             <p className="prl-label prl-review-sorts__heading">Order</p>
             <ul className="prl-review-sorts__list">
@@ -418,11 +316,8 @@ export default async function ReviewIndexPage({
                   <th scope="col">Hand</th>
                   <th scope="col">When</th>
                   <th scope="col">Board</th>
-                  {/* The class is on the header as well as on the cells so the label sits over the
-                      column it names: `.prl-review-table__pot` end-aligns a tabular figure, and a
-                      start-aligned "Pot" above end-aligned digits is the misalignment the rule was
-                      added to remove. Adding the class beats an `:nth-child(4)` in the stylesheet,
-                      which would silently point at the wrong column the day one is inserted. */}
+                  {/* The class end-aligns the header over its digits. Not `:nth-child(4)`, which breaks
+                      when a column is inserted. */}
                   <th className="prl-review-table__pot" scope="col">
                     Pot
                   </th>
@@ -434,10 +329,7 @@ export default async function ReviewIndexPage({
                 {hands.map((hand) => (
                   <tr key={hand.id}>
                     <th className="prl-review-table__hand" scope="row">
-                      {/* The words are visible and the link covers the whole row — `review.css`, "THE
-                          ROW IS THE TARGET". Measured before: the way into a hand was its number, a
-                          21x44px target at every width, while the rest of the row did nothing and
-                          still lit up on hover as though it would. */}
+                      {/* The link covers the whole row (`review.css`, "THE ROW IS THE TARGET"). */}
                       <a className="prl-review-table__link" href={`${ROUTE}/${hand.id}`}>
                         {`Replay hand ${hand.handNumber}`}
                       </a>

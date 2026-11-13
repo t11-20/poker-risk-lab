@@ -1,42 +1,8 @@
 /**
- * One hand, replayed.
- *
- * The page loads the review, reconstructs the table state at every decision, and hands both to
- * `HandReplay`. The reconstruction runs here rather than in the client component on purpose — see
- * the header of `src/lib/hand-replay.ts` — so that the only engine code reaching the browser is the
- * one function `CommitmentVerifier` genuinely needs, imported in `src/lib/deck-proof.ts`.
- *
- * ## What the header states before the replay starts
- *
- * The net result, with its sign and the word beside it; whether the hand ended by folding; and,
- * where the reconstruction had to derive something the review payload does not carry, that it did.
- * A reader looking at a stack figure is entitled to know it was rebuilt from an action log rather
- * than read off the wire.
- *
- * ## "There is no such hand" and "we could not find out" are different screens
- *
- * They used to be the same one, and it was this route's worst defect. `loadReview` returned `null`
- * for four unrelated conditions — the API said 404, the API could not be reached, the reader has no
- * session, the bundled fixture does not carry this id — and the page turned every one of them into
- * `notFound()`. So a reader whose hand took longer to analyse than the client's deadline allowed
- * was told, in the product's own words, that "there is nothing at this address" about a hand that
- * demonstrably exists. That is the single claim this product cannot afford to get wrong, and it was
- * being made about the hands most worth opening: the deck-commitment proof lives at the bottom of
- * this page, and the hands with enough decisions to be worth verifying were exactly the slow ones.
- * See `EXPENSIVE_READ_TIMEOUT_MS` in `lib/api.ts` for the other half of that fix.
- *
- * `ReviewState` below is the shape that makes the conflation impossible to reintroduce: `missing`
- * is the only member the page is allowed to answer 404 for, and it is reachable only from a 404 the
- * API itself sent about an id the reader supplied.
- *
- * ### The status code, which is honest but not complete
- *
- * `missing` answers a real `404`. `unavailable` renders a `200` carrying an explanation, and that
- * is a known shortfall rather than an oversight: a server component can set a status only through
- * `notFound()`, or through `unauthorized()`/`forbidden()`, which are experimental and need
- * `experimental.authInterrupts` turned on in `next.config.ts`. A wrong status on a page whose text
- * is true is a much smaller failure than the reverse, which is what this replaces. Anyone enabling
- * that flag should route `signedOut` through `unauthorized()`.
+ * One hand, replayed. The reconstruction runs here, not in the client, so the only engine code in the
+ * browser is what `CommitmentVerifier` needs (`src/lib/hand-replay.ts`). "No such hand" and "could not
+ * find out" are different screens, and `missing` comes only from the API's own 404. `unavailable` renders a
+ * 200, because a server component can set 401 only through the experimental `unauthorized()`.
  */
 
 import type { HandReviewResponse } from '@prl/contracts';
@@ -68,40 +34,27 @@ interface RouteParams {
   readonly handId: string;
 }
 
-/**
- * Why the live answer could not be used.
- *
- * Two causes, and they are not interchangeable on screen: one says the service did not answer, the
- * other says this browser had nothing to identify the reader with. A single "unavailable" would
- * make the page guess which sentence to print.
- */
+/** Two causes, because each needs its own sentence on screen. */
 type ReviewFallbackCause = 'unreachable' | 'signedOut';
 
 type ReviewState =
-  /** The API answered. */
   | { readonly state: 'live'; readonly review: HandReviewResponse }
-  /** The API did not, and the bundled copy happens to carry this hand. Labelled on the page. */
+  /** The bundled copy carries this hand. Labelled on the page. */
   | {
       readonly state: 'sampled';
       readonly review: HandReviewResponse;
       readonly cause: ReviewFallbackCause;
       readonly detail: string;
     }
-  /** The API said 404 about an id the reader supplied. The only route to `notFound()`. */
+  /** The API said 404. The only route to the not-found body. */
   | { readonly state: 'missing' }
-  /** Nothing could be established about this hand, and the page says which of the two happened. */
   | { readonly state: 'unavailable'; readonly cause: ReviewFallbackCause; readonly detail: string };
 
 async function loadReview(handId: string): Promise<ReviewState> {
-  // The reader's own session cookie, forwarded from the incoming request — a server-side `fetch`
-  // has no cookie jar, so without this the API could only ever answer `not_authenticated` and a
-  // signed-in reader could never see their own hand. See `src/lib/server-session.ts`.
+  // A server-side `fetch` has no cookie jar, so the reader's cookie is forwarded.
   const reader = await readerCallOptions();
   const result = await safeFetch<HandReviewResponse>(() =>
-    // This endpoint BUILDS the review rather than fetching it — a Monte Carlo run per hero decision,
-    // under a budget the server itself sets at eight seconds. The default four-second deadline was
-    // shorter than that budget, so the client aborted healthy work and read its own abort as "there
-    // is no API". `EXPENSIVE_READ_TIMEOUT_MS` carries the arithmetic.
+    // The server builds the review under an eight-second budget, longer than the default deadline.
     apiGet<HandReviewResponse>(API_PATHS.hand(handId), {
       ...reader,
       timeoutMs: EXPENSIVE_READ_TIMEOUT_MS,
@@ -110,13 +63,9 @@ async function loadReview(handId: string): Promise<ReviewState> {
   if (result.ok) return { state: 'live', review: result.data };
 
   const error = result.error;
-  // `handId` came from the URL, so 404 is the API answering "you have no such hand" — the one
-  // condition that deserves the not-found screen. Note that the API answers 404 for a hand that
-  // belongs to somebody else too, deliberately (`apps/api/src/routes/hands.ts`), and that is still
-  // the right screen: to this reader the hand does not exist.
+  // The API also answers 404 for somebody else's hand. To this reader it does not exist.
   if (isMissingResource(error)) return { state: 'missing' };
-  // Anything else that is neither an outage nor a missing session is a defect rather than a fact
-  // about this hand, and it belongs in the error boundary with its request id.
+  // Anything else is a defect, for the error boundary with its request id.
   if (!isSignedOut(error) && !isApiUnavailable(error)) throw error;
 
   const cause: ReviewFallbackCause = isSignedOut(error) ? 'signedOut' : 'unreachable';
@@ -125,14 +74,7 @@ async function loadReview(handId: string): Promise<ReviewState> {
   return { state: 'unavailable', cause, detail: error.message };
 }
 
-/**
- * One load per request, shared by `generateMetadata` and the page.
- *
- * The title has to know what the page found — see `lib/review-titles.ts` — and finding out is the
- * slow request on this route: the server builds the replay, measured at 1722, 1771 and 1839 ms to
- * first byte. Asked separately, the metadata and the page would build it twice. `cache` is React's
- * per-request memo, which is the scope both run in.
- */
+/** One load per request for the title and the page. The build measured about 1.8s to first byte. */
 const loadReviewOnce = cache(loadReview);
 
 export async function generateMetadata({
@@ -149,18 +91,8 @@ export async function generateMetadata({
 }
 
 /**
- * The screen for "we could not establish anything about this hand".
- *
- * It is deliberately NOT the 404 page and deliberately not the error boundary. It names the hand
- * the reader asked for, says what actually happened, says what is still unknown — in particular
- * that nothing here has established the hand does not exist — and offers the two things that
- * help: the same URL again, and the list.
- *
- * The transport message is printed rather than summarised. It is this client's own sentence about
- * its own request (`ApiRequestError` from `lib/api.ts`, built before any server was involved), so
- * it carries no request content and nothing a reader should not see; and "could not reach the API
- * at …: The operation was aborted due to timeout" is the difference between a reader retrying and
- * a reader concluding their hand history has been lost.
+ * Not the 404 page and not the error boundary. It prints the client's own transport message, which
+ * carries no request content, because "aborted due to timeout" tells a reader to retry.
  */
 function ReviewUnavailable({
   handId,
@@ -224,10 +156,8 @@ export default async function HandReviewPage({
 }): Promise<ReactElement> {
   const { handId } = await params;
   const data = await loadReviewOnce(handId);
-  // The ONLY route to the not-found screen: the API itself said 404 about this id. Every other way
-  // of failing to produce a replay now has a screen that says what it was.
-  // Next 16 `notFound()` from a page returns empty HTML. Hand ids cannot be enumerated at
-  // build time, so render the same 404 body the routing-level page uses.
+  // Next 16 `notFound()` from a page returns empty HTML, and hand ids cannot be enumerated at build
+  // time, so this renders the routing-level 404 body.
   if (data.state === 'missing') return <NotFoundBody />;
   if (data.state === 'unavailable') {
     return <ReviewUnavailable handId={handId} cause={data.cause} detail={data.detail} />;
@@ -238,8 +168,6 @@ export default async function HandReviewPage({
   const net = review.hand.heroNet;
 
   return (
-    // See `/review`'s own page: the route class is what lets `review.css` own this opener's layout
-    // without reaching into `page.css`, which the Lab screens share.
     <div className="prl-container prl-review-page">
       <header className="prl-page-head">
         <p className="prl-eyebrow">
@@ -276,8 +204,7 @@ export default async function HandReviewPage({
           </li>
           <li>
             <span className="prl-label">Decisions</span>
-            {/* Counted the way the transport counts them, so "Decisions 13" here and "Decision 2 / 13"
-                there are one number. See `decisionCount`. */}
+            {/* Counted as the transport counts them (`decisionCount`). */}
             <span className="prl-review-summary__value">{String(decisionCount(replay))}</span>
           </li>
         </ul>
@@ -286,9 +213,6 @@ export default async function HandReviewPage({
       {data.state === 'sampled' ? (
         <p className="prl-source-note prl-note">
           <span className="prl-label prl-label--accent">Fixture data</span>{' '}
-          {/* The reason is read off the failure rather than assumed. This notice used to state that the
-              hands API was not reachable in both cases, which was false half the time: a reader with no
-              session got a working API and a sample hand described as an outage. */}
           {data.cause === 'signedOut'
             ? 'This browser is not carrying a session, so the hands API had nothing to look your history up with, and this replay is a sample hand rather than one of yours.'
             : 'The hands API is not reachable, so this replay is a bundled sample rather than one of your hands.'}{' '}

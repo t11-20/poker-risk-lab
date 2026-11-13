@@ -1,55 +1,10 @@
 'use client';
 
 /**
- * The live table: the client boundary for `/play`.
- *
- * Everything below the connection panel is drawn from `state` frames. There is no fixture on this
- * path and no local model of a hand — `useLiveTable` holds the last frame the server sent and this
- * component renders it. When the socket is not live there is nothing to draw, and the panel says
- * which of the several different reasons that is.
- *
- * ## Why the connection is a panel and not a spinner
- *
- * The socket can fail in ways that are not "try again": signed out (`4401`), not a member of the
- * room (`4403`), an origin the API does not allow (`4406`), a protocol this build does not speak
- * (`4400`). A spinner tells a reader none of that and leaves them waiting for something that is
- * never going to arrive. Each close code gets its own sentence and, where there is one, its own
- * control — sign in, or reload — from `describeClose` in `lib/table-socket.ts`.
- *
- * ## Private tables are reachable from here, in both directions
- *
- * Every room this page creates is `invite_only` and always has been — the server has supported
- * private multiplayer since it was built, and an audit ran a whole hand across two independent
- * sessions to prove it. What was missing was any way for a person to get at it: the invite code
- * came back from `POST /rooms` and was thrown away unread, and nothing in this client had ever
- * called `POST /rooms/join`.
- *
- * Both halves are here now. `InviteCode` shows the code for a room this page just created, framed
- * as what it is — a value that exists exactly once, because only its hash is stored.
- * `JoinByInviteCode` is the way in for the second person. Neither one keeps the code anywhere; see
- * the comment on `LiveTable.inviteCode` in `lib/use-live-table.ts`.
- *
- * ## Nothing here decides a poker question
- *
- * The seat number is the server's. The buttons are the server's `legalActions`. The bet sizer's
- * bounds are the server's `minTo`/`maxTo`. Sitting, standing, dealing and acting are all intents:
- * this component asks, and draws whatever comes back. The Coach's numbers are computed server-side
- * from the reader's own redacted view and arrive as a whole `CoachReport`.
- *
- * ## Where the keyboard caret goes when a control disappears
- *
- * Every control in this panel is conditional on a phase or a socket state, so pressing one usually
- * unmounts it: "Deal me in" is gone the moment setup starts, and at a table reached by invite code
- * "Take seat 2" is replaced by "Deal the next hand". The browser’s only response to the focused
- * node being removed is to drop focus to `<body>`, which puts a keyboard user back at the top of the
- * document after every single step of setting a table up, and tells a screen-reader user nothing.
-
- *
- * `ConnectionControls` therefore lands focus on this panel's status line when — and only when — the
- * caret was inside the row and the browser has actually given up on it. That is the same shape, and
- * the same two conditions, as `ActionBar`'s idle line in `@prl/ui`, and the conditions are the
- * design: focus must not be pulled back here because a socket state changed while the reader was
- * somewhere else entirely.
+ * The client boundary for `/play`. Everything below the connection panel is drawn from the server's
+ * `state` frames. Seats, legal actions and sizer bounds are the server's. This component only asks.
+ * Each socket close code gets its own sentence and control (`describeClose` in `lib/table-socket.ts`),
+ * because codes like `4401` and `4403` are not "try again".
  */
 
 import {
@@ -81,35 +36,14 @@ import type { TableSocketStatus } from '@/lib/table-socket.ts';
 import { type LiveTable as LiveTableModel, useLiveTable } from '@/lib/use-live-table.ts';
 
 /**
- * Why the Coach panel is empty, when it is empty because live Coach is off at this table.
- *
- * ## The defect these two exist for
- *
- * There was one sentence, and it was printed for both of the ways that happens.
- * `EXPERT_COACH_REASON` names a difficulty — and the client only knows the difficulty in ONE of
- * them: when this page opened the match itself, from its own `?difficulty=expert`. The other way
- * is a `coach_not_available` refusal from the server, which is a fact about whatever table the
- * reader is at and carries no difficulty this page can read. The refusal's own wording was thrown
- * away and this sentence printed in its place.
- *
- * Measured in Chrome 151 against the built app: play a hand at
- * `/play?profile=vocal-aggressor&difficulty=expert`, then open plain `/play`. `chooseRoom` reuses
- * the room the reader already owns, so the second page is headed "Six-handed table", passes no
- * `legendMatch`, and printed the identical sentence about Expert — a difficulty it had never been
- * told and the reader had not chosen on that page.
- *
- * So: the Expert sentence only where Expert is a thing this page knows, and the server's own
- * words everywhere else. `useLiveTable` decides which; see `CoachOff`.
+ * Used only when this page opened an Expert match itself. A `coach_not_available` refusal carries no
+ * difficulty, and plain `/play` can reuse an Expert room, so it gets the server's words instead.
+ * `useLiveTable` decides which (see `CoachOff`).
  */
 const EXPERT_COACH_REASON =
   'The Coach is available afterwards in review, not during this hand. Expert keeps the analysis off the table so the style is the thing you are reading.';
 
-/**
- * The refusal, in the server's words plus what this page can honestly add.
- *
- * The added sentence says where the rule lives and where the analysis is instead — both true
- * whatever produced the refusal — and names no difficulty, because none was observed.
- */
+/** The server's words plus a sentence true whatever produced the refusal. It names no difficulty. */
 function refusedCoachReason(serverReason: string): string {
   return (
     `${serverReason} That is a setting of the table you are at rather than anything about this ` +
@@ -122,24 +56,9 @@ function coachOffReason(off: NonNullable<LiveTableModel['coachOff']>): string {
 }
 
 /**
- * The panel's own default sentence is "with no table state there is nothing to price", and it is
- * TRUE only while there is no table state. This and `noAnalysisReason` in `lib/coach-body.ts` are
- * the cases where there is one.
- *
- * ## The defect
- *
- * `CoachUnavailable` in `components/TableStage.tsx` cannot tell "nothing has been asked for" from
- * "something was asked for and has not come back", because it is handed a report or a null. So the
- * panel printed a sentence denying the existence of the very table drawn beside it, for the whole
- * of every round trip. Measured in Chrome 151 at a live table with the API on the same machine:
- * the request went out at 6,683ms and the report landed at 8,034ms, and for that whole window the
- * panel read "No analysis — the Coach prices the decision in front of you, so with no table state
- * there is nothing to price." The server allows the analysis a three-second budget, so a loaded
- * deployment holds that sentence on screen more than twice as long.
- *
- * It was not a flicker in the worst case either: before the `welcome` fix in
- * `lib/use-live-table.ts`, a request lost with its socket was never re-issued and this sentence
- * was what the reader was left with permanently.
+ * The panel's default sentence denies there is any table state, so it must not show during a
+ * request. `CoachUnavailable` gets only a report or null and cannot tell the two apart. The round
+ * trip measured 1.35s locally and the server allows three seconds.
  */
 const COACH_IN_FLIGHT_REASON =
   'The analysis of this decision has been asked for and has not come back yet. It is computed ' +
@@ -159,22 +78,13 @@ function coachUnavailableProps(
     };
   }
   if (live.table.coachRequest !== null) return { coachUnavailableReason: COACH_IN_FLIGHT_REASON };
-  // Only when there is genuinely no table state does the panel's own default sentence hold. With
-  // one, the sentence depends on whether the reader still has a decision in it: see
-  // `noAnalysisReason` for the folded reader who was told to press a button.
   if (live.table.view !== null) return { coachUnavailableReason: noAnalysisReason(live.table.view) };
   return {};
 }
 
-/** What the empty stage says before anything has been asked for: what the one press will do. */
-/**
- * One line. The connection card directly above already says what "Deal me in" does, and this used
- * to say it again, so a phone at 390 read the same explanation twice in a row before a third line
- * said there was nothing to decide.
- */
+/** One line, because the connection card above already says what "Deal me in" does. */
 const IDLE_TABLE_MESSAGE = 'Your table is drawn here, from the server’s own frames, once you are dealt in.';
 
-/** One sentence per transport state, in the reader's terms rather than the protocol's. */
 const STATUS_LEDE: Readonly<Record<TableSocketStatus, string>> = {
   connecting: 'Opening a connection to the table.',
   handshaking: 'Connected. Introducing this page to the table and waiting for its first state.',
@@ -184,18 +94,9 @@ const STATUS_LEDE: Readonly<Record<TableSocketStatus, string>> = {
 };
 
 /**
- * What the stage should be showing.
- *
- * `idle` is its own status, not `loading`, and the difference is the first thing a visitor sees.
- * Before anybody pressed anything this returned `loading`, so `/play` opened on two large skeleton
- * blocks captioned "Loading the table." and "Waiting for the table." — a promise that something was
- * arriving, on a page where nothing had been asked for and nothing ever would be until the reader
- * acted. A skeleton that never resolves is the lie `CoachUnavailable` in `TableStage` already refuses
- * to tell.
- *
- * `complete` covers both the moment a hand finishes and the gap before the next one, because the
- * server sends `view: null` between hands and the hand that just ended is the honest thing to leave
- * on screen — labelled as finished, with its controls idle.
+ * `idle` is not `loading`. Before the first press nothing is on its way, so a skeleton would never
+ * resolve. `complete` also covers the gap between hands, where the server sends `view: null` and the
+ * finished hand stays on screen.
  */
 function stageStatusOf(live: LiveTableModel): TableStageStatus {
   if (live.closed !== null && !live.closed.retryable) return 'error';
@@ -213,28 +114,14 @@ interface ConnectionPanelProps {
 }
 
 /**
- * Where the setup has got to, as one sentence.
- *
- * ## The `failed` branch is a fix, not a nicety
- *
- * A setup that fails never opens a socket, so `live.status` stays `null` — and the final line
- * below used to read that as "Ready to connect." This paragraph is the page's ONLY `role="status"`
- * region, so a reader using a screen reader was told the table was ready to connect at the exact
- * moment the screen said it could not be prepared. The error itself was in an unlabelled `<div>`
- * with no live-region ancestor, so the false sentence was the *only* thing announced.
- *
- * The error is now announced by a `role="alert"` in `TableStage` (see the comment there), and this
- * region names the failure rather than denying it. Deliberately short: the reason itself is in the
- * alert and in the warning callout below, and repeating a paragraph in two live regions is how a
- * screen reader ends up reading the same failure three times.
+ * This is the page's only `role="status"` region. A failed setup never opens a socket, so the failed
+ * branch must come before the null-status line or a screen reader hears "Ready to connect". It stays
+ * short because `TableStage`'s `role="alert"` and the callout below already carry the reason.
  */
 function statusSentence(live: LiveTableModel): string {
   if (live.phase === 'idle' && live.resuming) return 'Reconnecting you to the table you were at.';
   if (live.phase === 'idle') {
-    // "Opens your practice table", not "creates a room": the press reuses a table this account
-    // already has (`chooseRoom`), and this sentence used to promise a new one to a reader who had
-    // just come back to /play from a table that was still being held for them (UI audit of
-    // 308fadf, item 15). Both halves are said because, from here, the page cannot know which.
+    // `chooseRoom` may reuse a held table or create one, and the page cannot know which yet.
     return (
       'Not connected yet. “Deal me in” starts a guest session if you need one — no email, no ' +
       'password — and opens your practice table: the one you already have, or a new one with bots ' +
@@ -248,7 +135,6 @@ function statusSentence(live: LiveTableModel): string {
   return live.status === null ? 'Ready to connect.' : STATUS_LEDE[live.status];
 }
 
-/** What the reader should do or expect next, given where the machine is. */
 function hintSentence(live: LiveTableModel): string {
   if (live.phase !== 'ready' || live.status !== 'live') return 'The table opens once the connection is live.';
   if (live.dealingIn) {
@@ -260,8 +146,7 @@ function hintSentence(live: LiveTableModel): string {
     return 'You have no units left at this seat, so the server deals every hand without you.';
   }
   if (live.table.seat === null) {
-    // The seat is whichever one is actually free, not a constant. At a room reached by invite code
-    // seat 1 is the owner's, so naming it here would send the joiner at a seat they cannot have.
+    // Not a constant seat. At a room reached by invite code seat 1 is the owner's.
     return live.readerSeat === null
       ? 'Every seat is taken, so there is nowhere to sit at this table right now.'
       : `Seat ${String(live.readerSeat + 1)} is free — take it to be dealt in.`;
@@ -274,24 +159,13 @@ function hintSentence(live: LiveTableModel): string {
     : 'A hand is in progress. Waiting for another seat to act.';
 }
 
-/** Every reason the table is not doing what the reader asked, each with the server's own wording. */
 function ConnectionNotices({ live }: ConnectionPanelProps): ReactElement {
   const { closed, table, setupError } = live;
   return (
     <>
       {/*
-        First, above every other notice, and with its own heading.
-
-        This is not the server refusing the reader something — it is this page refusing the SERVER
-        something, and it happens for exactly one reason: a `state` frame carried hole cards for a
-        seat that is neither the reader's own nor one that showed down. See
-        `lib/hole-card-entitlement.ts` for why the frame is refused whole rather than stripped of the
-        cards, and `use-live-table.ts` for the sentence.
-
-        `role="alert"` for the same reason the refusals below have one — an assertive region is right
-        when the reader has to stop what they are doing, and a table that has silently stopped
-        dealing is the case that most needs saying out loud. It sits above `closed` because a reader
-        who sees both should read this one first: the disconnection is a consequence of it.
+        This page refusing a frame that carried hole cards it should not have
+        (`lib/hole-card-entitlement.ts`). It sits above `closed` because the disconnection follows from it.
       */}
       {table.dataRefusal === null ? null : (
         <div role="alert">
@@ -311,34 +185,9 @@ function ConnectionNotices({ live }: ConnectionPanelProps): ReactElement {
         </Callout>
       )}
       {/*
-        `role="alert"`, and mounted only when there is a notice.
-
-        This is the server refusing something the reader asked for that was not a decision — a seat
-        that had gone, a hand somebody else already started, a rate limit. It was a plain `Callout`
-        with no live-region ancestor, so the refusal existed only as pixels: the reader pressed a
-        button, nothing happened, and the panel's polite status line went on describing a healthy
-        socket. An alert fires on insertion, which is why the node is conditional rather than
-        always-present-and-empty — the opposite of the rule for a polite region.
-      */}
-      {/*
-        One refusal gets its own panel, and it is the only one that needs one.
-
-        `enrolment_required` means this deployment serves a taught course and this account is not
-        in one that is running. Every other notice here is a momentary thing the reader can just
-        try again — a seat somebody took first, a hand already started — and the generic panel is
-        the right size for those. This one is permanent until somebody else acts, so the generic
-        heading ("The server refused something") would be the whole of what the reader learns, and
-        the button they pressed would look broken rather than refused.
-
-        The server's own sentence is shown unchanged and unlabelled by a code: it is the one place
-        in this app that already says what to do about it. No branch here prints a contract code any
-        more — the generic one used to append "(insufficient_units)" and the like, a machine token
-        after a sentence written for a person (audit at 308fadf). `noticeCode` is what branches.
-
-        There is no "get access" control here, and there must not be. This software has no way to
-        take money, holds no amount, currency or price anywhere in its schema, and nobody reading
-        this page can enrol themselves: a button here could only lie about what pressing it does.
-        What is offered instead is the true alternative — everything else on the site is open.
+        Refusals use `role="alert"` and mount only with a notice, because an alert fires on insertion.
+        `enrolment_required` gets its own panel because it lasts until an operator acts. It has no
+        "get access" control on purpose. Nobody can enrol themselves from this page.
       */}
       {table.notice !== null && table.noticeCode === 'enrolment_required' ? (
         <div role="alert">
@@ -352,16 +201,8 @@ function ConnectionNotices({ live }: ConnectionPanelProps): ReactElement {
         </div>
       ) : null}
       {/*
-        Not an alert. Nothing was refused and nothing interrupted the reader: the hand that took the
-        last unit was narrated as it happened, and this is the standing state that follows it. It
-        sits beside the control it disables, so the reason is where the reader goes to press it.
-
-        It goes when the server's next frame shows chips at the reader's seat — `outOfUnits` is read
-        off every frame's roster, nothing remembers it. Whether a reset reaches a seat already taken is
-        the server's to decide, and without PR #25 it does not: a reset writes the durable stack and
-        leaves the live seat at 0, so the reader comes back to this notice and a disabled Deal (review
-        on PR #27). The last paragraph is the way on that works against either server — a seat taken after
-        a reset made while standing is bought in at the reset figure — so it is never a dead end.
+        Not an alert, because nothing was refused. `outOfUnits` is read off each frame's roster. The
+        last paragraph is the fallback for a server whose reset leaves a taken seat at 0.
       */}
       {live.outOfUnits ? (
         <Callout tone="warning" title="You are out of units">
@@ -390,7 +231,10 @@ function ConnectionNotices({ live }: ConnectionPanelProps): ReactElement {
   );
 }
 
-/** The set of controls `ConnectionControls` has on screen, as a string: its focus rescue's trigger. */
+/**
+ * The set of controls on screen, as a string, so the focus rescue fires when a control is replaced
+ * inside one `ready`/`live` pair ("Take seat 2" becoming "Deal the next hand").
+ */
 function controlsSignature(live: ConnectionPanelProps['live']): string {
   return [
     live.phase,
@@ -407,26 +251,10 @@ function controlsSignature(live: ConnectionPanelProps['live']): string {
 }
 
 /**
- * The controls, each shown only where it is the thing to do.
- *
- * `signature` is what the focus effect watches: the set of controls currently on screen, as a
- * string. Watching a phase or a status instead would miss the case that actually bites — "Take
- * seat 2" being replaced by "Deal the next hand" happens inside a single `ready`/`live` pair, so
- * neither of those values changes at the moment the focused button is removed.
- *
- * ## One primary path, and the private tables behind a disclosure
- *
- * The bot table is what almost every visitor came for, and it used to share a row, at equal weight,
- * with "Start a private table to invite somebody to" and a whole join-by-code form — two flows that
- * need a second person to mean anything. They are behind a `<details>` now: closed by default, a
- * real `<summary>` so the keyboard and a screen reader get the disclosure for free, and inside the
- * same focus rescue as the primary row, because pressing "Start a private table…" unmounts it just
- * as pressing "Deal me in" does.
- *
- * The invite code goes in there too. For the bot table it is a code to a table with no free seat
- * (see `FRIENDS_TABLE_REQUEST`), so showing it at the top was the loudest thing on the page and the
- * least use; for a private table the reader pressed the button from inside the open disclosure, and
- * it stays open because nothing here remounts it.
+ * Every control here is conditional, so pressing one usually unmounts it and the browser drops focus
+ * to `<body>`. Focus then goes to the panel's status line, but only if the caret was inside this row
+ * and the browser gave up on it, the same two conditions as `ActionBar`'s idle line. The private-table
+ * flows sit inside the same rescue, because "Start a private table…" unmounts too.
  */
 function ConnectionControls({
   live,
@@ -440,11 +268,7 @@ function ConnectionControls({
 
   const signature = controlsSignature(live);
 
-  /**
-   * `hadFocus` stays true through the unmount deliberately: `focusout` fires as the button is
-   * removed with a null `relatedTarget`, and reading that as "the reader went elsewhere" would clear
-   * the flag one tick before the effect needs it.
-   */
+  /** Not cleared on a null `relatedTarget`, which is what `focusout` reports as the button unmounts. */
   const hadFocus = useRef(false);
   const onFocusCapture = (): void => {
     hadFocus.current = true;
@@ -457,19 +281,10 @@ function ConnectionControls({
   // biome-ignore lint/correctness/useExhaustiveDependencies: `signature` is the TRIGGER — the set of controls on screen, as a string. Nothing in the body reads it; removing it would run this effect once and leave every keyboard reader on <body> after each step of setting a table up.
   useEffect(() => {
     if (!hadFocus.current) return;
-    // Only when the browser has actually given up. If anything else legitimately holds focus — the
-    // reader tabbed on while the socket was opening — it keeps it.
-    //
-    // `browserAbandonedFocus` rather than a local `!== body && !== null`, which is what this was.
-    // `ActionBar` measured Chrome parking the caret on `<html>` after blurring a control, so a test
-    // that knows only `body` never fires — the same shape of stale copy that stopped `HandReplay`'s
-    // rescue from ever running. One definition, in the package that measured it.
+    // Not a local `=== body` test. Chrome parks the caret on `<html>` after a blur (measured in `ActionBar`).
     if (!browserAbandonedFocus()) return;
-    // `preventScroll`, because this line is at the TOP of the page and the control that vanished
-    // usually was not: when a hand ends the in-hand controls go and the caret is put here, and a plain
-    // `.focus()` scrolled a reader who was looking at the result of the hand back to scrollY 0, with
-    // the showdown and the result below the fold. The move is for the caret and the screen reader —
-    // the next Tab is "Deal the next hand" either way.
+    // The status line is at the top of the page, and a plain `.focus()` scrolled a reader looking at
+    // the showdown back to scrollY 0.
     fallbackRef.current?.focus({ preventScroll: true });
     hadFocus.current = false;
   }, [signature, fallbackRef]);
@@ -495,11 +310,7 @@ function ConnectionControls({
           </Button>
         ) : null}
 
-        {/*
-          Hidden while "Deal me in" is asking for the same things, so they cannot be pressed into a
-          second `sit` or a second deal. `DealIn` ends at `off` on every failure, which is what
-          brings them back.
-        */}
+        {/* Hidden while "Deal me in" runs, so they cannot send a second `sit` or deal. */}
         {manual && !seated && live.readerSeat !== null ? (
           <Button variant="primary" onClick={live.sit}>
             {`Take seat ${String(live.readerSeat + 1)}`}
@@ -518,19 +329,13 @@ function ConnectionControls({
           </Button>
         ) : null}
 
-        {/*
-          The way back to the choice. After "Stand up" in a legend match the only controls were
-          "Take seat 1" and "Start a fresh table", neither of which leads to another opponent, and the
-          shell's own nav was the only route to /legends. A link, not a button: it navigates.
-        */}
         {isLive && !seated && inLegendMatch ? (
           <Link className="prl-btn prl-btn--secondary prl-btn--md" href={LEGENDS_PATH}>
             Choose another opponent
           </Link>
         ) : null}
 
-        {/* Only while the reader still has decisions in the hand: after a fold, or the clock folding
-            for them, there is nothing for the Coach to price and the press asked for nothing. */}
+        {/* After a fold there is nothing for the Coach to price. */}
         {isLive &&
         seated &&
         !table.betweenHands &&
@@ -548,10 +353,8 @@ function ConnectionControls({
 }
 
 /**
- * The private-table flows, or in a legend match a link to the bot table instead. Both flows switch
- * this page's room without changing its URL, and the heading, the setting and the Coach rule above
- * are rendered from that URL: joining a friend's table here left "Heads-up against <archetype>,
- * Expert" over somebody else's table (Devin Review on #24).
+ * In a legend match, a link instead of the private-table flows. They switch the room without changing
+ * the URL, and the heading and Coach rule are rendered from the URL.
  */
 function OtherTables({ live, inLegendMatch = false }: ConnectionPanelProps): ReactElement {
   return inLegendMatch ? (
@@ -564,10 +367,6 @@ function OtherTables({ live, inLegendMatch = false }: ConnectionPanelProps): Rea
   );
 }
 
-/**
- * The private-table flows, behind a disclosure. See `ConnectionControls` for why they are here, and
- * why they stay inside its focus rescue.
- */
 function PlayWithSomebody({ live }: ConnectionPanelProps): ReactElement {
   const { phase } = live;
   return (
@@ -579,11 +378,7 @@ function PlayWithSomebody({ live }: ConnectionPanelProps): ReactElement {
           Nothing is dealt for you there: who sits where, and when a hand starts, is up to the people at the
           table.
         </p>
-        {/*
-          A second creation, not a variant of the first. The bot table fills five of its six seats,
-          so its invite code is a code to a table the server refuses everybody at — the private path
-          needs a room with seats left in it. See `FRIENDS_TABLE_REQUEST`.
-        */}
+        {/* A separate room, because the bot table fills five of six seats. See `FRIENDS_TABLE_REQUEST`. */}
         {phase === 'idle' || phase === 'ready' || phase === 'failed' ? (
           <p className="prl-btn-row">
             <Button variant="secondary" onClick={live.startPrivateTable}>
@@ -591,8 +386,7 @@ function PlayWithSomebody({ live }: ConnectionPanelProps): ReactElement {
             </Button>
           </p>
         ) : null}
-        {/* Keyed by the code so a new code remounts: it is brought into view, and a "Copied" left
-            over from the previous code is not shown beside one nobody has copied. */}
+        {/* Keyed by the code, so a new code scrolls into view and drops a stale "Copied". */}
         {live.inviteCode === null ? null : <InviteCode code={live.inviteCode} key={live.inviteCode} />}
         <JoinByInviteCode live={live} />
       </div>
@@ -601,45 +395,16 @@ function PlayWithSomebody({ live }: ConnectionPanelProps): ReactElement {
 }
 
 /**
- * The invite code for a room this page just created — the only moment it exists.
- *
- * ## Why this is a whole block and not a line in the facts list
- *
- * The server stores `sha256(code)` and has no column for the code itself, so it cannot be looked up
- * again by anybody, us included. `POST /rooms` is the one response that carries it. It used to be
- * discarded on arrival — no screen in this client had ever rendered the word `inviteCode` — which
- * is why "private, invite-only tables with people you already know" was a sentence about the server
- * and not something a reader could do.
- *
- * A value that exists once and is then gone forever has to be presented as one, so this says so
- * before the code rather than after it, and offers a copy that does not depend on selecting
- * nineteen characters by hand.
- *
- * ## The code is not stored anywhere by this client either
- *
- * Not in `sessionStorage` (which is where the room ID goes), not in `localStorage`, and not in the
- * URL. It lives in React state for as long as this component is mounted. A reload loses it, and
- * that is correct: writing it down would give this browser a durable key to a private room that the
- * server itself deliberately cannot reproduce.
- *
- * ## It is brought into view when it arrives
- *
- * The code arrives with the `POST /rooms` answer, after the button that asked for it has gone, and
- * nothing moved the page to it. The audit at 308fadf measured it at 390x844 at viewport y 796,
- * under the Coach sheet's 780px peek: a value shown once, on screen, and not visible. It is brought
- * in by its nearest edge, as `useFollowTheTable` brings the action row in, and for the same reason
- * that works — `scrollIntoView` honours the root's `scroll-padding-block-end`, which on a phone is
- * the peek (`styles/play.css`). Only if it is not already in view, so a reader who can see it is
- * not moved by a pixel. The viewport only: the caret is the business of the focus rescue in
- * `ConnectionControls`, and moving it here would race that.
+ * The server stores only `sha256(code)`, so `POST /rooms` is the one time the code exists. It lives in
+ * React state only, never in storage or the URL, so a reload loses it on purpose. On arrival it is
+ * scrolled in by its nearest edge (it measured under the phone's 780px Coach peek). Focus is left to
+ * the rescue in `ConnectionControls`.
  */
 function InviteCode({ code }: { readonly code: string }): ReactElement {
   const [copied, setCopied] = useState<'idle' | 'done' | 'failed'>('idle');
   const block = useRef<HTMLDivElement | null>(null);
   const reduced = usePrefersReducedMotion();
 
-  // On mount, and the caller keys this component by the code, so a second private table started
-  // from the same open disclosure is a new mount too: that code is just as shown-once as the first.
   useEffect(() => {
     const element = block.current;
     if (element === null || inView(element)) return;
@@ -647,10 +412,7 @@ function InviteCode({ code }: { readonly code: string }): ReactElement {
   }, [reduced]);
 
   const copy = (): void => {
-    // Feature-detected rather than assumed: the Clipboard API is unavailable over plain HTTP on a
-    // non-localhost origin and in some embedded webviews, and an unhandled rejection there would
-    // leave the reader pressing a button that silently does nothing. The code is on screen and
-    // selectable either way, so a failure costs the convenience and not the feature.
+    // The Clipboard API is missing over plain HTTP off localhost and in some webviews.
     if (typeof navigator === 'undefined' || navigator.clipboard === undefined) {
       setCopied('failed');
       return;
@@ -671,10 +433,7 @@ function InviteCode({ code }: { readonly code: string }): ReactElement {
         <Button variant="secondary" size="sm" onClick={copy}>
           Copy the code
         </Button>
-        {/*
-          Empty in the DOM from the first render rather than appearing with its text: a live region
-          that arrives at the same moment as its content is missed by several screen readers.
-        */}
+        {/* Present and empty from the start. Screen readers miss a region that mounts with its text. */}
         <span className="prl-note" role="status">
           {copied === 'done'
             ? 'Copied to the clipboard.'
@@ -693,17 +452,8 @@ function InviteCode({ code }: { readonly code: string }): ReactElement {
 }
 
 /**
- * The other half of a private table: arriving at one somebody else made.
- *
- * A real `<form>`, so Enter submits it from the field — a "join" that only works if you find the
- * button is a join that a person with a code in their clipboard gives up on. The button is not
- * disabled while the field is short: a disabled control with no stated reason is the pattern the
- * audit called out elsewhere in this app, and `normaliseInviteCode` produces a sentence saying what
- * is wrong instead.
- *
- * `aria-invalid` and `aria-describedby` are wired to the refusal, so the reason is announced with
- * the field rather than sitting somewhere below it — the field is where the reader is when they
- * find out.
+ * A real `<form>` so Enter submits. The button is not disabled for a short code, because
+ * `normaliseInviteCode` returns a sentence saying what is wrong, announced with the field.
  */
 function JoinByInviteCode({ live }: ConnectionPanelProps): ReactElement {
   const [code, setCode] = useState('');
@@ -760,17 +510,9 @@ function JoinByInviteCode({ live }: ConnectionPanelProps): ReactElement {
   );
 }
 
-/** The setup half: session, room, socket — and every reason one of them is not there. */
 function ConnectionPanel({ live, inLegendMatch = false }: ConnectionPanelProps): ReactElement {
   const room = live.table.room;
-  /**
-   * Where the caret lands when the control it was on is taken away.
-   *
-   * The status line, because it is the sentence that says what just changed — a reader who pressed
-   * "Deal me in" and is put here hears "Live. Everything on this screen is the server's own view…"
-   * rather than silence at the top of the document. `tabIndex={-1}` makes it a focus target for
-   * script without adding a tab stop that does nothing on the way to the real controls.
-   */
+  /** Focus target for the rescue. `tabIndex={-1}` adds no tab stop. */
   const statusRef = useRef<HTMLParagraphElement | null>(null);
 
   return (
@@ -787,28 +529,13 @@ function ConnectionPanel({ live, inLegendMatch = false }: ConnectionPanelProps):
       }
     >
       {/*
-        A polite live region, separate from the table's own. They describe different things — this
-        one is the transport, that one is the hand — and merging them would announce "seat 3 raised
-        to 300" and "reconnecting" as if they were the same kind of news.
-      */}
-      {/*
-        The transport sentence and the "what to do next" sentence are one block, so `play.css` can put
-        them side by side above 900px instead of stacking two short lines with a full gap between them.
-        Nothing is hidden or shortened by that — see section 1.1 there.
+        A polite region for the transport, separate from the table's region for the hand. `play.css`
+        puts the two lines side by side above 900px.
       */}
       <div className="prl-play__connection-lines">
         {/*
-          `aria-label` because this line is a PLACE THE CARET ARRIVES AT, not only a region that
-          speaks. `ConnectionControls` lands focus here every time a control it was on is removed —
-          "Deal me in", or "Take seat 2" at a table reached by code — and a `role="status"` takes no
-          name from its own contents, so the computed name was the empty string: a reader was moved
-          to a node the tree describes as an unnamed status. Measured by assertion 3.2's check in
-          `scripts/ax-assertions.mjs`, which failed on exactly this the first time it was run against
-          a live table, and it is the same lesson `ActionBar`'s in-flight line and `TableStage`'s
-          acknowledgement each carry a label for.
-
-          The label and the sentence deliberately say different things, as they do there: the label
-          names where the caret now is, and the sentence is what the transport is doing.
+          Labelled because focus lands here, and `role="status"` takes no name from its contents
+          (ax-assertions 3.2). The label names the place, the sentence the transport.
         */}
         <p
           aria-label="Where the table has got to"
@@ -821,14 +548,8 @@ function ConnectionPanel({ live, inLegendMatch = false }: ConnectionPanelProps):
         </p>
 
         {/*
-          Not a live region, and that is a decision rather than an omission.
-
-          Making it one is the obvious next step and it is wrong: `hintSentence` flips between "it is
-          your decision" and "waiting for another seat to act" on every action at the table, so a
-          live region here would announce a sentence carrying no figures once per seat per street,
-          on top of the table's narration. `TableStage`'s turn region already says the same thing
-          with the pot, the price, the stack and the legal actions in it. Two regions for one fact,
-          one of them empty of content, is how a reader learns to tune the useful one out.
+          Not a live region on purpose. The hint flips on every action, and `TableStage`'s turn region
+          already announces the turn with the figures in it.
         */}
         <p className="prl-note">{hintSentence(live)}</p>
       </div>
@@ -855,17 +576,8 @@ function ConnectionPanel({ live, inLegendMatch = false }: ConnectionPanelProps):
 }
 
 /**
- * The out-of-units notice again, in the decision band, where the reader is looking when they bust.
- *
- * The full notice is in the connection card, beside the Deal control it disables, and that card is
- * above the table: measured at the moment of a bust, at y -1,203..-780 at 390x844 and above a Deal at
- * -558 at 1440x900 (audit at 6b3886e, M4). What was on screen was STACK 0, "went all in" and the
- * showdown — the result, and not that the reader was out. This says so where they are, with the way
- * on. The card keeps the longer version, which carries the fallback for a reset that does not reach
- * a seat already taken.
- *
- * Not a live region, like the card's: nothing was refused, and the hand that took the last unit was
- * narrated as it happened.
+ * A short copy of the out-of-units notice in the decision band. At a bust the connection card is
+ * off screen above (y -1,203 at 390x844). Not a live region, like the card's.
  */
 function OutOfUnitsAtTheTable(): ReactElement {
   return (
@@ -882,62 +594,12 @@ function OutOfUnitsAtTheTable(): ReactElement {
 }
 
 /**
- * Keeps the decision band on screen when the table has something new for the reader.
- *
- * ## The defect this exists for
- *
- * The connection card is above the table, and it is tall — ~560px at 1440 once the room facts and
- * the private-table disclosure are in it — so `styles/play.css` section 3's promise that the table
- * and the band fit one viewport held only for a reader who had already scrolled past it. Measured
- * at 1440x900 on the live table: "Deal me in" at docY 360, and after it the first decision's Fold
- * at docY 1746, two screens down with nothing on screen saying a decision was waiting; at 390x844
- * Fold at docY ~1904, on every hand. Meanwhile the clock was running.
- *
- * ## When it scrolls, and when it does not
- *
- * On the edges the reader is waiting for: a decision becomes theirs; and, while it is not, a hand is
- * dealt with them in it, their decision ends, or the hand does. Never on a frame that merely
- * re-describes a spot already on screen, and never when what it would bring in is already in view —
- * so a reader who is looking at the table is not moved by a pixel. Not while they are typing
- * somewhere else on the page either: pulling a half-typed invite code out from under the caret would
- * be worse than the defect.
- *
- * The edges that are not a decision are "watched": the table on screen with the band under it
- * (`watchDelta` in `lib/follow-the-table.ts`). They used to be followed like a decision, by the
- * band's nearest edge, which was harmless while a decision left the reader's plate on screen. Once a
- * raise brings the sizer in on a phone (below), it is not, and the band by its nearest edge kept the
- * reader under the table for the rest of the session.
- *
- * ## What it brings into view: the buttons, by the nearest edge
- *
- * The action row when there is one (it is the thing the reader has to reach), the band when there
- * is not, and `block: 'nearest'` — never the band by its bottom edge. Measured on
- * `/play?state=decision` from scrollY 0, rects as viewport y:
- *
- *     390x844   band, block 'end'          plate -209..12, board -342..-242, buttons 499..668
- *               buttons, block 'nearest'   plate  316..537, board  183..283,  buttons 611..780
- *     1440x900  buttons, block 'nearest'   plate  146..465, board  118..230,  buttons 828..900
- *     768x1024  buttons, block 'nearest'   plate  656..877, board  511..623,  buttons 935..1024
- *     1024x768  buttons, block 'nearest'   plate  321..542, board  176..288,  buttons 679..768
- *
- * The first line is why: below 900px the band is ~715px against ~620px of viewport between the
- * header's and the Coach sheet's scroll padding, so the band can never be "in view" and aligning its
- * bottom put the reader's own plate — the only place their cards are shown at that width — under the
- * header. The row is sticky inside its bar there, so bringing it in by the nearest edge stops as soon
- * as it can stick, with the plate and the board still above it.
- *
- * ## Except when the reader can size a bet, and the row can stick over the sizer
- *
- * Stopping where the row sticks put it straight over the sizer, which is above it in flow: at 390x844
- * every preset hit-tested to Fold, Call or Raise, and a tap on ½ pot sent a min-raise. So when there
- * is a sizer and the row is sticky, the sizer is brought in with the row at its own place under it —
- * `sizerScroll` below, and `lib/follow-the-table.ts` for the measurements and the trade it makes.
- *
- * This moves the viewport only. Focus is the business of the rescues in `ActionBar` and
- * `TableStage`, which now all pass `preventScroll` so the two cannot fight; nothing here moves the
- * caret, so a screen-reader user's position is untouched. `scrollIntoView` honours the root's
- * `scroll-padding` (the sticky header above, the phone's Coach sheet peek below), and the reduced
- * motion preference decides between a smooth scroll and a jump.
+ * The connection card pushes the first decision two screens down (Fold at docY 1746 at 1440x900), so
+ * the page follows the table. It scrolls only on the edges the reader waits for, only when the target
+ * is out of view, and never while they type elsewhere. A decision brings in the action row by its
+ * nearest edge, never the band by its bottom. Below 900px the band (~715px) is taller than the view
+ * (~620px), and aligning its bottom hid the reader's plate under the header. Other edges are watched
+ * (`watchDelta`). Viewport only, because focus belongs to the rescues, which all pass `preventScroll`.
  */
 function inView(element: HTMLElement): boolean {
   const box = element.getBoundingClientRect();
@@ -956,11 +618,9 @@ function typingElsewhere(band: HTMLElement): boolean {
 }
 
 /**
- * The scroll that makes the sizer reachable, when there is a sizer and the row can stick over it; null
- * otherwise, and the buttons are followed as above. See `lib/follow-the-table.ts` for the defect.
- *
- * The row's `position` is read rather than the viewport's width: it is the only honest answer to
- * "can the row cover the sizer here", and it is a container query that decides it, not a media one.
+ * Null unless a sticky row could cover the sizer (at 390x844 a tap on ½ pot sent a min-raise). Reads the
+ * row's `position`, not the viewport width, because a container query decides it.
+ * See `lib/follow-the-table.ts`.
  */
 function sizerScroll(band: HTMLElement): number | null {
   const bar = band.querySelector<HTMLElement>('.prl-action-bar');
@@ -989,7 +649,6 @@ function sizerScroll(band: HTMLElement): number | null {
   });
 }
 
-/** The scroll that puts the table back on screen above the band; see `watchDelta`. */
 function watchScroll(band: HTMLElement, dealt: boolean): number {
   const table =
     document.querySelector<HTMLElement>('.prl-table__hero') ?? document.querySelector('.prl-table__field');
@@ -1009,15 +668,12 @@ function watchScroll(band: HTMLElement, dealt: boolean): number {
 function useFollowTheTable(live: LiveTableModel, band: RefObject<HTMLDivElement | null>): void {
   const reduced = usePrefersReducedMotion();
   const view = live.table.view;
-  // Non-empty exactly while the decision is the reader's, and set on the edge — see
-  // `turnAnnouncement` in `lib/use-live-table.ts` — so it changes once per turn, not per frame.
+  // Set on the edge, so it changes once per turn, not per frame.
   const turnEdge = live.table.turnAnnouncement;
-  // A hand the reader was dealt into, and whether it is over: the other edges worth following.
   const handEdge =
     view !== null && view.viewerSeat !== null ? `${view.handId}:${String(view.street === 'complete')}` : null;
   const watchEdge = turnEdge === '' ? handEdge : null;
 
-  // The reader's decision: the buttons, or the sizer with the buttons under it.
   useEffect(() => {
     if (turnEdge === '') return;
     const element = band.current;
@@ -1032,8 +688,6 @@ function useFollowTheTable(live: LiveTableModel, band: RefObject<HTMLDivElement 
     target.scrollIntoView({ block: 'nearest', behavior: reduced ? 'auto' : 'smooth' });
   }, [turnEdge, band, reduced]);
 
-  // Everything else the reader waits for — a deal, the end of their decision, the end of the hand —
-  // is watched: the table on screen with the band under it. See `watchDelta`.
   const watchedHand = useRef<string | null>(null);
   useEffect(() => {
     if (watchEdge === null) return;

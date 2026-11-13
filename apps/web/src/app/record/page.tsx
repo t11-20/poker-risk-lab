@@ -1,41 +1,8 @@
 /**
- * `/record` — what this learner has actually done, and the reset every page promises them.
- *
- * ## Why this route exists
- *
- * `GET /me/progress` was in no client. Nothing in `apps/web` called it, so not one of its figures
- * had ever been shown to the learner it was about, and `POST /me/units/reset` — which the footer
- * advertises on every page as available "whenever you like" — had no control anywhere.
- *
- * ## Why it is not on `/learn`, and not in the main navigation
- *
- * `/learn`'s own header states the line it holds: "the page will tell you how long the syllabus is,
- * and it will not tell you how you are doing against it." Putting a count of finished lessons on
- * the curriculum index would put a progress bar next to a syllabus, which is the shape the product
- * guardrails rule out — and the five numbered destinations are an argument about learning order
- * that a sixth entry would blunt. So this is its own page, reached from the footer's units
- * paragraph, which is where the promise it honours is actually made.
- *
- * ## Counted, never scored — on this page as much as in the API
- *
- * No percentage complete, no rank, no streak, no "you are ahead of N% of learners", no target and
- * no chart of anything over time. Every figure says how much you have looked at; none says how well
- * you did. `quizQuestionsAnswered` counts questions answered right or wrong, and whether they
- * matched is not in the response at all. See `apps/api/src/routes/progress.ts` and
- * `docs/PRODUCT-GUARDRAILS.md`.
- *
- * ## A server render, with one client island
- *
- * The figures are the reader's own, so this is a per-reader render carrying their session cookie
- * (`lib/server-session.ts`), which also makes the route dynamic — correct, because a private record
- * must never be prerendered or cached. Only the two controls — the reset and the deletion — are
- * client components, because a mutation needs the CSRF token that only a browser holds.
- *
- * ## Why the way out is on this page and not somewhere quieter
- *
- * This is the page that shows a reader what the product holds about them, so it is the page where
- * "and here is how to have none of it held" belongs. Anywhere else would be a deletion control
- * that has to be gone looking for.
+ * `/record`, the learner's own progress, the units reset the footer promises, and account deletion.
+ * Not on `/learn` and not in the main navigation, because a progress count beside the syllabus is the
+ * shape `docs/PRODUCT-GUARDRAILS.md` rules out. Counted, never scored: no percentage, rank or streak.
+ * A per-reader render, so it is never prerendered or cached.
  */
 
 import { Callout, Metric, Panel, pluralise } from '@prl/ui';
@@ -63,24 +30,12 @@ export const metadata: Metadata = {
     'resets your practice units to the starting amount, and the one that deletes your account.',
 };
 
-/**
- * `units` for the signed quantity, `number` for the counts.
- *
- * `unitsNetLifetime` is the only figure here that can be negative, and it is formatted as units so
- * the sign is rendered rather than dropped. A count with a sign would be nonsense; a net result
- * without one would be a lie.
- */
+/** `unitsNetLifetime` is the only signed figure, so only it is formatted as units. */
 function formatOf(figure: RecordFigureName): 'number' | 'units' {
   return figure === 'unitsNetLifetime' ? 'units' : 'number';
 }
 
-/**
- * One of the record's lists: a title per line, linked to its page when it has one.
- *
- * A list rather than the comma-joined run it replaced. Titles are sentences ("Pot odds: the price
- * the pot is offering"), and a comma between two sentences that themselves contain commas is not
- * a separator anybody can see.
- */
+/** A list, not a comma-joined run, because the titles contain commas. */
 function RecordList({
   entries,
   empty,
@@ -100,7 +55,7 @@ function RecordList({
   );
 }
 
-/** The reset block, which is shown whatever state the figures are in. It is a right, not a reward. */
+/** Shown whatever state the figures are in. */
 function ResetPanel(): ReactElement {
   return (
     <Panel title="Reset your units" eyebrow="Always available" index={2} headingLevel={2}>
@@ -129,12 +84,7 @@ export default async function RecordPage(): Promise<ReactElement> {
       <header className="prl-page-head">
         <p className="prl-label">Your record</p>
         <h1 className="prl-page-head__title prl-display-2">What you have actually done</h1>
-        {/*
-          Why there is no score, in the learner's words. The reason it is a FACT and not a design choice
-          that could be quietly reversed: `prl` has no column a score, percentage or streak could be
-          stored in, and `ProgressResponse` has no field one could be sent in. That sentence used to be
-          the visible copy (UX audit at 6b3886e, M5), which told a first-time learner about a database.
-        */}
+        {/* A fact, not a design choice. `prl` has no column a score could be stored in. */}
         <p className="prl-page-head__standfirst">
           Six counts and two lists, and nothing else. There is no score on this page, no percentage complete,
           no streak and no rank, and there is nowhere in Poker Risk Lab for one to be kept: what you have done
@@ -199,9 +149,6 @@ export default async function RecordPage(): Promise<ReactElement> {
             </dl>
           )}
 
-          {/* Topics are derived from the content bundle when this page is read, not stored against the
-              record, so a retired lesson contributes no topic rather than breaking the count. That was the
-              visible note (UX audit at 6b3886e, M5); the learner only needs what counts as a topic. */}
           <p className="prl-note">
             {`A topic counts once you have finished a lesson or tried a scenario in it. ${pluralise(record.progress.topicsTouched.length, 'topic')} so far.`}
           </p>
@@ -211,19 +158,8 @@ export default async function RecordPage(): Promise<ReactElement> {
       <ResetPanel />
 
       {/*
-        The way out, and it is deliberately the last thing on the page: below the reset rather than
-        beside it, because the two are opposites and a reader skimming for "put my units back" must
-        not land on "erase everything" by muscle memory.
-
-        Rendered UNCONDITIONALLY, with the condition passed in rather than wrapped around it, and
-        that is a fix rather than a style choice. A successful deletion signs the reader out and
-        this page then re-renders as `signedOut` — so a conditional here would take the deletion
-        receipt off the screen at the exact moment it was produced, and the receipt's counts
-        describe an account that no longer exists to look them up in. The component decides what to
-        draw; `DeleteAccount.tsx`'s header has the measurement and the reasoning.
-
-        It also has to stay in this slot. React reconciles by position, and the refresh below it
-        depends on this element being the same instance across the re-render so its state survives.
+        Last, below the reset, so a reader looking for one does not hit the other. Rendered
+        unconditionally and kept in this slot, so its receipt survives the refresh after deletion.
       */}
       <AccountDeletion deletable={record.state !== 'signedOut'} />
 

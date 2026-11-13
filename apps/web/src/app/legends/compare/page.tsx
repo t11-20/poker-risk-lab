@@ -1,30 +1,8 @@
 /**
- * `/legends/compare` — one spot, several styles, side by side.
- *
- * ## Why this screen exists
- *
- * A profile card tells you a style is aggressive. This page shows you what that means: the same
- * cards, the same pot, the same price, and four different answers. One shared maths panel at the
- * top establishes that nothing about the situation differs between the columns, so every difference
- * below it is the *style* and not the spot.
- *
- * ## The takeaway points at the disagreement, and does not resolve it
- *
- * `CompareProfilesResponse.takeaway` is written to name the disagreement rather than to pick a
- * winner, and this page renders it that way — after the columns, where a reader meets it having
- * already seen the spread. Two strong styles differing on one spot is the lesson; a page that
- * announced which column was right would have deleted it.
- *
- * ## Two honesty requirements this page carries
- *
- *  1. **Each weight is a sampled frequency, not a rule.** The distributions come from a finite
- *     number of trials, so the page prints the sampling interval that follows from that count, with
- *     the arithmetic shown. A distribution presented without one invites a reader to treat 46% and
- *     44% as different answers.
- *  2. **Every column carries the profile's disclaimers in full.** Four copies of the same framing is
- *     repetitive, and it is deliberate: the wire type makes the disclaimers non-optional per
- *     profile, a column is independently readable, and de-duplicating them would be exactly the
- *     kind of tidying that leaves a named opponent unlabelled.
+ * `/legends/compare`, one spot handed to several styles. One shared analysis shows the situation is
+ * identical across columns. The takeaway names the disagreement and never picks a winner. Each weight
+ * is sampled, so the interval is printed with its arithmetic. Every column carries its profile's
+ * disclaimers in full on purpose, because each column must read on its own.
  */
 
 import {
@@ -72,15 +50,9 @@ export const metadata: Metadata = {
     'per style showing the weights it would have sampled its action from.',
 };
 
-/**
- * The 95% normal-approximation multiplier.
- *
- * Named rather than inlined because it is the one number on this page that is a statistical
- * convention rather than a measurement, and a reader should be able to see which one it is.
- */
+/** The 95% normal-approximation multiplier, a convention rather than a measurement. */
 const Z_95 = 1.96;
 
-/** The picker's heading, and the fragment the top of the page links to. One constant for both ends. */
 const PICKER_HEADING_ID = 'change-comparison';
 
 /** The widest a 95% interval on a sampled proportion gets, which is at p = 0.5. */
@@ -93,7 +65,6 @@ function capitalise(text: string): string {
   return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
 }
 
-/** Engine card integers, dropping anything that does not parse. */
 function cards(text: string): readonly number[] {
   const parsed: number[] = [];
   for (const part of text.trim().split(/\s+/)) {
@@ -114,8 +85,7 @@ export default async function ComparePage({
 }): Promise<ReactElement> {
   const query = await searchParams;
   const difficulty = parseDifficulty(query['difficulty']);
-  // The profile list first, because it is what decides which of the requested ids are real. See
-  // `parseCompareSelection` for what happened to an unknown id, or a sixth, before this order.
+  // The profile list first, because it decides which requested ids are real.
   const profiles = await loadLegendProfiles();
   const selection = parseCompareSelection(
     query['profiles'],
@@ -148,11 +118,8 @@ export default async function ComparePage({
           <Chip>{`Setting: ${difficulty}`}</Chip>
         </div>
         <nav aria-label="Legends navigation" className="prl-legend-nav">
-          {/* First, because it is the one a reader who came here to compare different styles wants,
-              and the picker it leads to is at the foot of the page: measured at y=11996 of 15738 on
-              a phone, about fourteen screens down, with nothing at the top saying it existed. A plain
-              anchor rather than `Link`, so the browser's own fragment navigation scrolls (clear of the
-              sticky bar, via the root's `scroll-padding`) and moves focus to the heading. */}
+          {/* The picker is fourteen screens down on a phone. A plain anchor, so fragment navigation
+              scrolls and moves focus. */}
           <a href={`#${PICKER_HEADING_ID}`}>Change the styles</a>
           <Link href={LEGENDS_PATH}>All profiles</Link>
           <Link href={LEGENDS_HAND_REVIEW_PATH}>A finished hand, reviewed</Link>
@@ -197,11 +164,7 @@ export default async function ComparePage({
         </div>
       </section>
 
-      {/*
-        One shared analysis, at the top. The full Coach panel rather than a summary of it: the
-        assumptions, the method, the interval and the per-action expected values are what make the
-        columns below readable, and none of them may be dropped to save room.
-      */}
+      {/* The full Coach panel, not a summary. None of its parts may be dropped to save room. */}
       <CoachPanel report={analysis} title="The maths for this spot, computed once" />
 
       <section className="prl-legend-section">
@@ -285,16 +248,11 @@ export default async function ComparePage({
       )}
 
       <section className="prl-legend-section">
-        {/* The target of "Change the styles" at the top. `tabIndex={-1}` so following it puts focus
-            here as well as scrolling here — the next Tab is the first style's checkbox, not the
-            link the reader left fourteen screens up. Same arrangement as a lesson's title. */}
+        {/* `tabIndex={-1}` so the link at the top moves focus here as well as scroll. */}
         <h2 id={PICKER_HEADING_ID} tabIndex={-1}>
           Change the comparison
         </h2>
-        {/*
-          Named, because a form with an accessible name is a `form` landmark and this page has two of
-          them. Two unnamed landmarks with the same role are indistinguishable in a landmark list.
-        */}
+        {/* Named, because this page has two `form` landmarks. */}
         <form
           action={LEGENDS_COMPARE_PATH}
           aria-label="Choose which styles to compare"

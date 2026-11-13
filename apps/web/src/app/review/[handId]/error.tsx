@@ -1,29 +1,9 @@
 'use client';
 
 /**
- * The error state for a hand replay.
- *
- * ## What reaches this boundary, and what deliberately does not
- *
- * Not "the API is missing". The page treats an unreachable or unshipped endpoint as a normal
- * condition and renders from its fixture, so an absent API never lands here — if it did, a developer
- * with no server running would see an error page instead of the screen they are building.
- *
- * What does land here is a failure the reader needs to know about: a session that expired, a hand
- * that belongs to somebody else, a protocol version the server refuses, a malformed response. Those
- * are conditions with consequences, and each of them means the figures on this page would have been
- * wrong rather than merely absent.
- *
- * ## Why the message is short and the digest is shown
- *
- * Next redacts a server-side error's message before it reaches the browser and replaces it with a
- * `digest` — deliberately, because an exception string can carry a query, a path or an id. So this
- * component cannot know what went wrong and does not pretend to. It shows the digest, which is what
- * correlates the reader's failure with the server log line that explains it, and it offers the two
- * things that actually help: retry, and go back to the list.
- *
- * `reset()` re-renders the segment rather than reloading the document, so a transient failure costs
- * one click and no scroll position.
+ * The hand replay's error boundary. An unreachable API never lands here, because the page renders a
+ * fixture or an explanation instead. Next replaces a server error's message with a `digest`, so this
+ * shows the digest and does not guess the cause.
  */
 
 import { Button } from '@prl/ui';
