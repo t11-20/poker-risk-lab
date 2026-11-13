@@ -1,41 +1,13 @@
 /**
- * `prl.hands`, `prl.hand_seats`, `prl.hand_actions` — what was dealt, who did what, who won.
+ * `prl.hands`, `prl.hand_seats`, `prl.hand_actions`.
  *
- * ############################################################################
- * ## THE DECK AND THE COMMITMENT SALTS ARE NEVER WRITTEN HERE               ##
- * ############################################################################
+ * The deck and the commitment salts are never written here, and there is no column for either. Only
+ * the Merkle root is persisted. `assertRevealIsSafe` refuses a whole-deck reveal before SQL, matching
+ * the CHECK constraints in migration 0001. The accepted consequence is that an interrupted hand
+ * cannot be resumed after a restart.
  *
- * There is no column for either, and this file is the only place that could try. `start`
- * receives the board and the hole cards and nothing else; it never sees `HandState.deck`,
- * `deckCursor` or `deckSalts`, because those are the hand's secrets and they die with the
- * process. The one thing that *is* persisted before the hand is the Merkle root, which is a
- * commitment: it proves the deck order was fixed before the first action without revealing a
- * single card.
- *
- * `complete` is where that promise could be broken, so it is checked rather than trusted. A
- * `DeckReveal` with `complete: true`, or one carrying more than the 17 cards that can
- * legitimately become public (5 board + 2 hole cards for each of at most 6 seats), is refused
- * before it reaches SQL — see `assertRevealIsSafe`. Migration 0001 has the same two rules as
- * CHECK constraints; having them in both places means neither a bug here nor a hand-written
- * `UPDATE` can persist a whole-deck dump, and the failure happens at the boundary with a
- * readable log line rather than as an opaque constraint violation.
- *
- * The accepted consequence, stated in the migration and repeated here so nobody treats it as a
- * bug to fix: an interrupted hand cannot be resumed from the database after a restart. Losing
- * an in-flight hand is far cheaper than a schema that can leak cards nobody was entitled to see.
- *
- * ## Hole cards leave through exactly one projection
- *
- * `seatsOf` takes a viewer and the SQL decides, per row, whether `hole_cards` comes back at all.
- * Nothing else in this file selects that column. See the long comment on `seatsOf`.
- *
- * ## Cards cross this boundary in two different shapes, on purpose
- *
- * Writes take the engine's integer `Card` values and format them with `cardToString`, so there
- * is exactly one place a card is turned into the `"Ah"` notation the columns hold and
- * `prl.is_card_notation_array` validates. Reads return the notation, because that is what the
- * column contains and also exactly what `HandSummary.board` and `HandReviewSeat.holeCards` put
- * on the wire — parsing to integers and formatting again would be work in service of nothing.
+ * Writes take engine `Card` integers and format them with `cardToString`. Reads return the `"Ah"`
+ * notation, which is what the columns hold and what the wire carries.
  */
 
 import type { AutomaticReason } from '@prl/contracts';
@@ -54,28 +26,17 @@ import { AppError } from '../errors.ts';
 import { newHandActionId, newHandSeatId } from './ids.ts';
 import { type Db, jsonbText, violationError } from './sql.ts';
 
-/**
- * The most cards a hand's reveal may prove, from migration 0001:
- *
- *     5 board cards + 2 hole cards x 6 seats = 17
- *
- * There are no burn cards — the machine advances the board straight off the deck cursor — so
- * nothing else can legitimately be in there.
- */
+/** 5 board cards + 2 hole cards x 6 seats, from migration 0001. There are no burn cards. */
 export const MAX_PUBLIC_REVEALED_CARDS = 17;
 
-/** `prl.is_card_notation_array`'s per-element rule, so a read can check what it got. */
+/** `prl.is_card_notation_array`'s per-element rule. */
 const CARD_NOTATION = /^[2-9TJQKA][cdhs]$/;
 
-/** Default page size for hand history, and the ceiling `handListQuerySchema` also enforces. */
+/** `MAX_PAGE_SIZE` matches the ceiling `handListQuerySchema` enforces. */
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 50;
 
 export type RandomSourceKind = 'csprng' | 'deterministic-test-only' | 'fixed-deck-scenario';
-
-// ---------------------------------------------------------------------------
-// Row shapes
-// ---------------------------------------------------------------------------
 
 export interface HandRow {
   readonly id: string;
@@ -94,13 +55,7 @@ export interface HandRow {
   readonly completed_at: Date | null;
 }
 
-/**
- * One seat of one hand, as `seatsOf` returns it.
- *
- * `holeCards` is `null` whenever the viewer is not entitled to it. That is not a convention the
- * caller has to honour — it is what the query returned, and the column was never read for the
- * rows it does not apply to.
- */
+/** `holeCards` is null whenever the viewer is not entitled to it, because the SQL never selected it. */
 export interface HandSeatView {
   readonly seat: number;
   readonly userId: string | null;
@@ -127,7 +82,6 @@ export interface HandActionRow {
   readonly automatic_reason: AutomaticReason | null;
 }
 
-/** A row of the hand-history list, with the viewer's own net and the pot size already summed. */
 export interface HandListItem {
   readonly id: string;
   readonly roomId: string;
@@ -135,15 +89,11 @@ export interface HandListItem {
   readonly startedAt: Date;
   readonly completedAt: Date | null;
   readonly board: readonly string[];
-  /** The viewer's net for this hand, or null while the hand is unsettled. */
+  /** Null while the hand is unsettled. */
   readonly heroNet: number | null;
   readonly endedByFold: boolean;
   readonly potTotal: number;
 }
-
-// ---------------------------------------------------------------------------
-// Starting a hand
-// ---------------------------------------------------------------------------
 
 export interface StartHandSeatInput {
   readonly seat: number;
@@ -151,11 +101,7 @@ export interface StartHandSeatInput {
   readonly userId: string | null;
   readonly isBot: boolean;
   readonly startingStack: number;
-  /**
-   * The two cards dealt to this seat, as engine integers. Null for a seat sitting out, which is
-   * why the column is nullable: a seat that was never dealt in has no cards, and a placeholder
-   * empty array would be a seat that was dealt nothing.
-   */
+  /** Null for a seat sitting out. An empty array would mean a seat dealt nothing. */
   readonly holeCards: readonly Card[] | null;
   readonly status: SeatStatus;
 }
@@ -166,7 +112,7 @@ export interface StartHandInput {
   readonly roomId: string;
   readonly handNumber: number;
   readonly buttonSeat: number;
-  /** Snapshotted per hand. The room's settings may change; a played hand must not. */
+  /** Snapshotted per hand, so a later change to the room's settings does not rewrite history. */
   readonly config: TableConfig;
   readonly commitmentRoot: string;
   readonly commitmentContext: string;
@@ -175,16 +121,8 @@ export interface StartHandInput {
 }
 
 /**
- * Writes the hand and its seats.
- *
- * **Call this inside `withTransaction`.** A hand row with no seats is a hand nobody was dealt
- * into, and a partial set of seats is worse — the engine's view and the database's would
- * disagree about who is in the hand. Taking `Db` rather than opening its own transaction is what
- * lets the caller put the deal, the room status change and the first broadcast in one unit.
- *
- * The board starts empty and the street starts `preflop`, both as literals rather than
- * parameters: there is no legal way to start a hand at the turn, and a caller that wanted to
- * would be describing a hand the engine never dealt.
+ * Writes the hand and its seats. Call this inside `withTransaction`, so a partial set of seats can
+ * never be committed. The board and street are literals because no legal hand starts later.
  */
 export async function start(sql: Db, input: StartHandInput): Promise<HandRow> {
   if (input.seats.length === 0) {
@@ -211,10 +149,6 @@ export async function start(sql: Db, input: StartHandInput): Promise<HandRow> {
       throw new AppError('internal_error', { logDetail: 'hand insert returned no row' });
     }
 
-    // One statement per seat rather than a multi-row VALUES list. Six inserts inside a
-    // transaction that is already open cost six pipelined round trips, and in exchange every
-    // insert is a plain parameterised template that reads exactly like the others in this file —
-    // no driver helper deciding the column order, no array-of-arrays to line up with it.
     for (const seat of input.seats) {
       await sql`
         insert into prl.hand_seats (
@@ -235,13 +169,8 @@ export async function start(sql: Db, input: StartHandInput): Promise<HandRow> {
 }
 
 /**
- * The next hand number for a room.
- *
- * `max(hand_number) + 1` is safe *because* `hands_room_hand_number_key` is unique: a concurrent
- * second deal that computed the same number fails on the index instead of creating a duplicate,
- * and `sql.ts` maps that violation to `stale_action_sequence`. Without the index this would be a
- * classic read-modify-write race; with it, the racy read is fine because the write is the
- * arbiter.
+ * `max(hand_number) + 1` is safe because `hands_room_hand_number_key` is unique. A racing deal fails
+ * on the index, and `sql.ts` maps it to `stale_action_sequence`.
  */
 export async function nextHandNumber(sql: Db, roomId: string): Promise<number> {
   const rows = await sql<{ next: number }[]>`
@@ -250,14 +179,7 @@ export async function nextHandNumber(sql: Db, roomId: string): Promise<number> {
   return rows[0]?.next ?? 1;
 }
 
-/**
- * The id of the room's hand in progress, or null.
- *
- * Served by `hands_live_by_room_idx`, which is partial on `completed_at IS NULL` so it stays
- * tiny however long the history grows. There is at most one such hand; `limit 1` is belt and
- * braces, and an ordering by `hand_number desc` makes which one deterministic if a bug ever left
- * two behind.
- */
+/** Served by the partial `hands_live_by_room_idx`. The ordering is deterministic if a bug left two. */
 export async function activeHandIdForRoom(sql: Db, roomId: string): Promise<string | null> {
   const rows = await sql<{ id: string }[]>`
     select id from prl.hands
@@ -268,40 +190,21 @@ export async function activeHandIdForRoom(sql: Db, roomId: string): Promise<stri
   return rows[0]?.id ?? null;
 }
 
-/** Where the button sat for a room's most recent hand, and who was in it. */
 export interface LastDealtHand {
   readonly handId: string;
   readonly handNumber: number;
   readonly buttonSeat: number;
-  /** The seats that were dealt cards, ascending. */
   readonly dealtSeats: readonly number[];
 }
 
 /**
  * The most recent hand a room dealt, for restoring the blind rotation after a restart.
  *
- * ############################################################################
- * ## THE BUTTON IS PERSISTED. THE BLINDS ARE NOT, AND THAT IS THE LIMIT.    ##
- * ############################################################################
- *
- * `prl.hands.button_seat` is written on every deal, and a room re-opened after a restart used to
- * ignore it entirely and restart the rotation from the first seat to sit down — which hands
- * somebody a second consecutive big blind across the restart boundary, the exact defect the
- * dead-button rule exists to prevent (`docs/audit/poker-correctness.md`, P2).
- *
- * The rotation needs three positions and only one is stored, so the other two are reconstructed
- * from the button and the seats that were actually dealt in: the small blind is the first dealt
- * seat clockwise from the button and the big blind the one after it. That is EXACT for every hand
- * whose button and small blind were both live, which is every hand except one played with a dead
- * small blind — there the reconstruction lands one live seat early, and one player pays the big
- * blind twice across that single restart before the rotation is self-consistent again.
- *
- * Making it exact needs `small_blind_seat` and `big_blind_seat` columns on `prl.hands`, which is a
- * migration; this reconstruction is what can be done without one, and it is strictly better than
- * the reset it replaces.
- *
- * The newest hand is used whether or not it completed: an interrupted hand was still dealt, so its
- * button is still where the rotation had got to.
+ * Only the button is persisted. The blinds are reconstructed as the first and second dealt seats
+ * clockwise from it, which is exact except after a dead small blind, where one player pays the big
+ * blind twice across that restart (`docs/audit/poker-correctness.md`, P2). Exact needs
+ * `small_blind_seat` and `big_blind_seat` columns. An interrupted hand still counts, because it was
+ * dealt.
  */
 export async function lastDealtHand(sql: Db, roomId: string): Promise<LastDealtHand | null> {
   const rows = await sql<{ id: string; hand_number: number; button_seat: number }[]>`
@@ -313,8 +216,7 @@ export async function lastDealtHand(sql: Db, roomId: string): Promise<LastDealtH
   `;
   const hand = rows[0];
   if (hand === undefined) return null;
-  // `sittingOut` is the status of a seat that was never dealt cards, so excluding it is exactly
-  // "who was in the hand". A dead button seat has no row here at all, which is the point.
+  // `sittingOut` is a seat never dealt cards. A dead button seat has no row at all.
   const seats = await sql<{ seat: number }[]>`
     select seat from prl.hand_seats
      where hand_id = ${hand.id} and status <> 'sittingOut'
@@ -328,7 +230,6 @@ export async function lastDealtHand(sql: Db, roomId: string): Promise<LastDealtH
   };
 }
 
-/** One hand that was abandoned by `abandonInterruptedHands`. */
 export interface AbandonedHand {
   readonly handId: string;
   readonly roomId: string;
@@ -336,40 +237,15 @@ export interface AbandonedHand {
 }
 
 /**
- * Settles hands that can never complete, so they stop being permanent orphans.
+ * Closes hands that can never complete, so they stop showing in history as nulls
+ * (`docs/audit/poker-correctness.md`, P2).
  *
- * ############################################################################
- * ## AN INTERRUPTED HAND IS UNRECOVERABLE BY DESIGN, SO IT MUST BE CLOSED   ##
- * ############################################################################
+ * Net is zero because stacks are written to `prl.room_members.stack` only when a hand completes, so
+ * an interrupted hand never moved a durable chip. The constraints require a `result` on a completed
+ * hand, so it gets an empty `HandResult` with a reveal of no cards and an `abandoned` marker.
  *
- * The deck and the salts are never persisted (see the header of this file), so a hand that was in
- * progress when the process died cannot be resumed — that is a deliberate trade, not a bug. What
- * WAS a bug is that nothing ever finished the row: it sat at `completed_at IS NULL` forever and
- * turned up in the learner's own history with null fields and no explanation. Three accumulated in
- * a single audit session (`docs/audit/poker-correctness.md`, P2).
- *
- * ## Why net_result is zero, and why that is the whole of "chips are accounted for"
- *
- * Stacks are written back to `prl.room_members.stack` only when a hand COMPLETES
- * (`LiveRoom.archiveNotice` calls `stacksSettled` on the completing notice and on no other). An
- * interrupted hand therefore never moved a durable chip: every player's stored stack is still what
- * they had before the deal, and `hand_seats.starting_stack` says so. A net of exactly zero is not
- * a placeholder here — it is the true figure, and it is what makes the history add up.
- *
- * ## Why the result is shaped like a result
- *
- * `hands_completed_iff_street_complete` and `hands_result_iff_completed` mean a hand cannot be
- * closed without a `result`, and `hands_result_shape` names the six keys it must carry. So the
- * abandoned hand gets a real, empty `HandResult`: no showdowns, no pots, no awards, nobody's net
- * anything, and a reveal that proves no cards at all — which is also the only honest reveal for a
- * hand whose deck is gone. `endedByFold` is true in the sense the field is defined ("ended without
- * cards being shown"), and the extra `abandoned` key is the marker a history view can read to say
- * so in words rather than presenting it as an ordinary fold.
- *
- * Scoped to one room, because that is the unit that has an owner: the registry calls this as it
- * re-opens a room, at a moment when this process holds no live table for it. Running it across
- * every room would abandon another process's live hand, and the one-process-per-room assumption
- * this design rests on (see `rooms/registry.ts`) is not something a sweep should quietly rely on.
+ * Scoped to one room. The registry calls it while re-opening a room this process holds no live table
+ * for, and a sweep across rooms could abandon another process's live hand.
  */
 export async function abandonInterruptedHands(
   sql: Db,
@@ -413,8 +289,7 @@ export async function abandonInterruptedHands(
     returning id, room_id, hand_number
   `;
   for (const hand of abandoned) {
-    // Only the seats still unsettled: a hand cannot be half-settled today, but writing over a net
-    // that somebody had already recorded would be inventing a figure rather than closing a gap.
+    // Only unsettled seats, so a recorded net is never overwritten.
     await sql`
       update prl.hand_seats
          set net_result = 0
@@ -428,10 +303,6 @@ export async function abandonInterruptedHands(
   }));
 }
 
-// ---------------------------------------------------------------------------
-// Actions
-// ---------------------------------------------------------------------------
-
 export interface AppendActionInput {
   readonly handId: string;
   readonly sequence: number;
@@ -439,68 +310,43 @@ export interface AppendActionInput {
   readonly seat: number;
   readonly actionType: ActionType;
   /**
-   * "Raise to" semantics: the seat's TOTAL commitment for the street after the action, not the
-   * increment. Must be present for `bet` and `raise` and absent otherwise —
-   * `hand_actions_sizing_iff_bet_or_raise`.
+   * "Raise to" means the seat's total commitment for the street after the action, not the increment.
+   * Present only for `bet` and `raise` (`hand_actions_sizing_iff_bet_or_raise`).
    */
   readonly actionTo: number | null;
   readonly amountPaid: number;
   readonly betLevelAfter: number;
   readonly potAfter: number;
-  /** True when the server acted for the seat rather than its player. `automaticReason` says why. */
   readonly wasAutomatic: boolean;
-  /**
-   * Why, when `wasAutomatic`; null otherwise. Two fields rather than one so `was_automatic` keeps the
-   * meaning every row before migration 0009 already has, and the database refuses a reason on a
-   * decision a person made (`hand_actions_automatic_reason_only_if_automatic`).
-   */
+  /** Separate from `wasAutomatic` so rows before migration 0009 keep their meaning. */
   readonly automaticReason: AutomaticReason | null;
   /**
-   * The client's own id for this decision, stable across retries, or null for a server-generated
-   * automatic action. Null is what puts the row outside the partial unique index, which is
-   * correct: there may be many automatic actions in one hand and none of them is a retry.
+   * The client's id for this decision, stable across retries. Null for an automatic action, which
+   * keeps it outside the partial unique index.
    */
   readonly actionId: string | null;
 }
 
 export interface AppendActionResult {
-  /** False when this exact `actionId` was already recorded for this hand. */
   readonly applied: boolean;
-  /** The row id, present only when this call wrote it. */
   readonly id: string | null;
 }
 
 /**
  * Appends one action, at most once per client `actionId`.
  *
- * ############################################################################
- * ## THIS IS THE IDEMPOTENCY GUARANTEE, AND IT IS ONE STATEMENT             ##
- * ############################################################################
+ * A duplicated raise spends a stack twice, and a check-then-insert cannot prevent it across pooled
+ * connections. `on conflict ... do nothing` makes the second insert write nothing and return
+ * `applied: false`, which `WsActionAckMessage.deduplicated` reports.
  *
- * A duplicated "raise to 400" is not a duplicated row. It is chips leaving a player's stack
- * twice. No application-level check-then-insert can prevent it, because the check and the insert
- * are two statements and the race lives between them — two requests carrying the same
- * `actionId` on two different pooled connections can both pass every check.
- *
- * `on conflict (hand_id, action_id) where action_id is not null do nothing` closes that in one
- * statement: whichever insert arrives second writes nothing and returns no rows, and this
- * function reports `applied: false` so the caller answers with the current state rather than
- * applying the action again. `WsActionAckMessage.deduplicated` exists for exactly this answer.
- *
- * ## Why the conflict target is named rather than left bare
- *
- * `on conflict do nothing` with no target swallows *every* unique violation on the table,
- * including `hand_actions_hand_sequence_key`. That one means something entirely different — two
- * actions claimed the same sequence, so one of them was decided against a view of the hand that
- * no longer exists — and reporting it as a harmless duplicate would apply an action to a spot the
- * player never saw. Naming the target lets that violation escape, where `sql.ts` turns it into
- * `stale_action_sequence`. The `where` clause is required for Postgres to infer a partial index.
+ * The conflict target is named so `hand_actions_hand_sequence_key` still escapes and `sql.ts` maps it
+ * to `stale_action_sequence`. A bare target would report a stale action as a harmless duplicate. The
+ * `where` clause lets Postgres infer the partial index.
  */
 export async function appendAction(sql: Db, input: AppendActionInput): Promise<AppendActionResult> {
   const isSized = input.actionType === 'bet' || input.actionType === 'raise';
   if (isSized !== (input.actionTo !== null)) {
-    // `hand_actions_sizing_iff_bet_or_raise` would refuse this anyway; refusing here names the
-    // problem instead of surfacing a constraint name, and cannot be mistaken for a race.
+    // `hand_actions_sizing_iff_bet_or_raise` would refuse this too, with a less readable error.
     throw new AppError('internal_error', {
       logDetail: `action ${input.actionType} carried actionTo=${String(input.actionTo)}`,
     });
@@ -529,7 +375,6 @@ export async function appendAction(sql: Db, input: AppendActionInput): Promise<A
   }
 }
 
-/** Every action of a hand, in order. The replay. */
 export async function actionsOf(sql: Db, handId: string): Promise<readonly HandActionRow[]> {
   const rows = await sql<HandActionRow[]>`
     select sequence, street, seat, action_type, action_to, amount_paid, bet_level_after,
@@ -541,18 +386,9 @@ export async function actionsOf(sql: Db, handId: string): Promise<readonly HandA
   return rows;
 }
 
-// ---------------------------------------------------------------------------
-// Advancing and settling
-// ---------------------------------------------------------------------------
-
 /**
- * Records a street change and the board as it now stands.
- *
- * `'complete'` is deliberately not accepted. `hands_completed_iff_street_complete` pairs that
- * street with `completed_at`, and `hands_result_iff_completed` pairs `completed_at` with the
- * result — so finishing a hand is one statement that sets all three, which is `complete()`.
- * Allowing `'complete'` here would let a hand sit in the table looking finished to one query and
- * live to another.
+ * `'complete'` is excluded because the constraints tie it to `completed_at` and `result`, which only
+ * `complete()` sets together.
  */
 export async function advanceStreet(
   sql: Db,
@@ -571,14 +407,10 @@ export async function advanceStreet(
 
 export interface CompleteSeatInput {
   readonly seat: number;
-  /** Chips won minus chips committed, for this seat in this hand. May be negative. */
+  /** Chips won minus chips committed. May be negative. */
   readonly netResult: number;
   readonly status: SeatStatus;
-  /**
-   * True only for a seat that actually showed at showdown. This flag is what opens `hole_cards`
-   * to every player at the table, so it is set from `HandResult.showdowns` and from nothing else
-   * — a seat that folded is not "showing" merely because the hand is over.
-   */
+  /** Opens `hole_cards` to the whole table, so it is set from `HandResult.showdowns` only. */
   readonly showedDown: boolean;
 }
 
@@ -590,14 +422,8 @@ export interface CompleteHandInput {
 }
 
 /**
- * Settles a hand: the result, the reveal, the final board, and every seat's net.
- *
- * **Call this inside `withTransaction`.** A hand marked complete whose seats still have
- * `net_result IS NULL` is a hand that finished without paying anybody.
- *
- * The reveal is written twice, once as `prl.hands.reveal` and once inside `result`, because that
- * is what the schema describes and both copies have their own pair of CHECK constraints. Both
- * copies go through the same guard first.
+ * Settles a hand. Call this inside `withTransaction`, so a completed hand never has unsettled seats.
+ * The reveal is stored in `prl.hands.reveal` and inside `result`, and both pass the same guard.
  */
 export async function complete(sql: Db, input: CompleteHandInput): Promise<HandRow> {
   assertRevealIsSafe(input.result.reveal);
@@ -615,8 +441,6 @@ export async function complete(sql: Db, input: CompleteHandInput): Promise<HandR
     `;
     const hand = rows[0];
     if (hand === undefined) {
-      // Already settled, or no such hand. Either way the caller is acting on a hand that is not
-      // in progress, which is precisely what `hand_not_active` says.
       throw new AppError('hand_not_active', {
         logDetail: `hand ${input.handId} was not open for settlement`,
       });
@@ -637,20 +461,10 @@ export async function complete(sql: Db, input: CompleteHandInput): Promise<HandR
 }
 
 /**
- * Refuses a reveal that would expose more than the hand made public.
- *
- * Two checks, matching the two CHECK constraints on `prl.hands`, and both are about the same
- * attack: a reveal that carries every leaf — every card *and* every salt — is a dump of the whole
- * deck, including the hole cards of everyone who folded. Whether a player folded a bluff or a
- * monster is the information the game is played over, and the commitment scheme exists so that
- * publishing a proof does not publish that.
- *
- * `complete` is the flag `revealPositions()` sets when it revealed all 52 positions, and the
- * count is the arithmetic ceiling on what can legitimately be public. Checking both means a
- * reveal cannot get through by lying about one of them.
- *
- * Raised as `internal_error`: reaching this is a bug in the settlement path, not something a
- * client did, so the client learns nothing and the log gets the whole story.
+ * Refuses a reveal that would dump the deck, including folded hole cards. Mirrors the two CHECK
+ * constraints on `prl.hands`. `complete` is set by `revealPositions()` for all 52 positions, and the
+ * count is the ceiling, so a reveal cannot pass by lying about one. `internal_error`, because only a
+ * settlement bug reaches this.
  */
 export function assertRevealIsSafe(reveal: DeckReveal): void {
   if (reveal.complete) {
@@ -667,23 +481,10 @@ export function assertRevealIsSafe(reveal: DeckReveal): void {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Reads
-// ---------------------------------------------------------------------------
-
 /**
- * One hand, if the viewer is entitled to it.
- *
- * The entitlement is in the WHERE clause, not in the caller. A hand is visible to somebody who
- * had a seat in it, or who is a member of its room — that second arm is what lets a player who
- * sat down after hand 3 still review hand 3 at their own table. Everyone else gets null, and the
- * caller answers `hand_not_found`: an id that exists but is not yours must be indistinguishable
- * from an id that does not exist, or the endpoint becomes a way to confirm which hand ids are
- * real.
- *
- * Membership is checked without the `left_at IS NULL` predicate on purpose. Somebody who has left
- * the table keeps access to the history of the hands they were there for, and
- * `room_members_user_id_idx` is deliberately non-partial so this stays an index scan.
+ * One hand, if the viewer had a seat in it or is a member of its room. Otherwise null, so the caller
+ * answers `hand_not_found` and cannot confirm which ids exist. Membership ignores `left_at` on
+ * purpose, and `room_members_user_id_idx` is non-partial so this stays an index scan.
  */
 export async function byId(sql: Db, handId: string, viewerUserId: string): Promise<HandRow | null> {
   const rows = await sql<HandRow[]>`
@@ -707,43 +508,12 @@ export async function byId(sql: Db, handId: string, viewerUserId: string): Promi
 /**
  * The seats of a hand, with hole cards for the viewer's own seat and for seats that showed down.
  *
- * ############################################################################
- * ## THE HOLE-CARD RULE IS THIS `CASE`, AND IT IS IN THE SQL                ##
- * ############################################################################
+ * The hole-card rule is the `case` in this SQL, and nothing else here selects `hole_cards`. Filtered
+ * in SQL, the cards never reach the process, so a caller cannot leak what it was never given.
  *
- * `prl.hand_seats.hole_cards` has a column comment that says it "MUST only ever be SELECTed for
- * the owning user, or for any user once showed_down is true", and that there is no way to express
- * that as a constraint. This projection is where it is expressed:
- *
- * ```sql
- * case
- *   when s.showed_down then s.hole_cards
- *   when s.user_id is not null and s.user_id = $viewer then s.hole_cards
- *   else null
- * end as hole_cards
- * ```
- *
- * The rule lives in the query and not in a `.map()` afterwards, and the difference is not
- * stylistic. A repository that selected every seat's cards and trusted the caller to filter has
- * already lost: the cards are in the process, in the driver's row buffer, in whatever the caller
- * logs when debugging, and in the response the day somebody adds a field to the serialiser. One
- * forgotten `.filter()` in one route is a total loss of hidden information for every hand ever
- * played. Filtered in SQL, the bytes never leave Postgres, and a caller *cannot* leak what it was
- * never given.
- *
- * Three details that are load-bearing:
- *
- * - `s.user_id is not null` before the comparison. It is redundant to Postgres — `NULL = 'usr_x'`
- *   is NULL, which is not true, so a detached seat never matches — but it states the intent, and
- *   the intent is the thing a future edit could break. A seat whose account was deleted has
- *   `user_id IS NULL`, and a viewer must never inherit its cards.
- * - `${viewerUserId}::text`. Without the cast Postgres cannot infer the type of a parameter that
- *   appears only in a comparison, and passing null for an unauthenticated viewer would error.
- *   With it, a null viewer matches no seat and sees only what showed down.
- * - `showed_down` is checked first and on its own. Once a seat has shown at showdown its cards
- *   are public to the table, which is the whole reason
- *   `hand_seats_showdown_requires_hole_cards` exists — a seat cannot claim to have shown cards
- *   it has no record of holding.
+ * - `s.user_id is not null` states that a seat whose account was deleted never matches a viewer.
+ * - `${viewerUserId}::text` lets a null viewer bind, and match no seat.
+ * - `showed_down` first, because shown cards are public to the table.
  */
 export async function seatsOf(
   sql: Db,
@@ -796,44 +566,22 @@ export async function seatsOf(
 
 export interface ListHandsInput {
   readonly userId: string;
-  /** Narrows to one table. Omit for every hand the learner has played. */
   readonly roomId?: string;
   readonly limit?: number;
-  /** Opaque, from a previous page's `nextCursor`. */
   readonly cursor?: string;
 }
 
 export interface ListHandsResult {
   readonly hands: readonly HandListItem[];
-  /** Null when this was the last page. */
   readonly nextCursor: string | null;
 }
 
 /**
- * The learner's own hand history, newest first, cursor paginated.
+ * The learner's own hand history, newest first, keyset paginated on `(started_at, id)`.
  *
- * ## Keyset, not OFFSET
- *
- * `offset n` re-reads and discards n rows on every page, so page 40 costs forty times page 1, and
- * a hand dealt while the learner is reading shifts every subsequent page by one — which shows up
- * as a duplicated or skipped hand. The cursor here is `(started_at, id)`, compared as a row:
- * `(h.started_at, h.id) < ($ts, $id)`. Constant cost per page, and a hand arriving mid-read
- * cannot move anything already seen.
- *
- * `id` is in the key because `started_at` is not unique — two rooms can deal at the same
- * millisecond — and a keyset on a non-unique column silently drops the rows that tie with the
- * page boundary.
- *
- * ## What is computed in SQL and why
- *
- * `pot_total` and `ended_by_fold` come out of the `result` jsonb here rather than by shipping the
- * whole document to the caller. A settled `HandResult` carries every showdown, every pot layer,
- * every award and a full `DeckReveal` with its proofs; sending all of that so a list view can
- * render one number would be kilobytes per row, on a page of fifty.
- *
- * The sum is cast to `int` because `sum()` over `int` is `bigint`, which postgres.js returns as a
- * *string* to protect precision — a `potTotal` that is sometimes `90` and sometimes `"90"` is a
- * bug waiting in the JSON response.
+ * Keyset keeps page cost constant and stops a new hand shifting later pages. `id` breaks ties on
+ * `started_at`. `pot_total` and `ended_by_fold` are extracted in SQL so the list does not ship each
+ * full `HandResult`. The sum is cast to `int` because postgres.js returns `bigint` as a string.
  */
 export async function listForUser(sql: Db, input: ListHandsInput): Promise<ListHandsResult> {
   const limit = Math.min(Math.max(input.limit ?? DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
@@ -891,9 +639,7 @@ export async function listForUser(sql: Db, input: ListHandsInput): Promise<ListH
      limit ${limit + 1}
   `;
 
-  // One extra row is fetched to learn whether there is a next page, then dropped. The
-  // alternative — a `count(*)` over the whole history — is a second query that reads everything
-  // to answer a question worth one row.
+  // The extra row only signals a next page.
   const page = rows.slice(0, limit);
   const last = page.at(-1);
   const nextCursor =
@@ -915,40 +661,23 @@ export async function listForUser(sql: Db, input: ListHandsInput): Promise<ListH
   };
 }
 
-// ---------------------------------------------------------------------------
-// Cursors
-// ---------------------------------------------------------------------------
-
 interface HandCursor {
   readonly startedAt: Date;
   readonly id: string;
 }
 
 /**
- * `<epoch milliseconds>:<hand id>`.
- *
- * Not base64 and not signed, because there is nothing in it to hide or protect: both halves come
- * from a row the caller was just shown, and the query re-checks `s.user_id = $viewer` on every
- * page, so a forged cursor can only ever move somebody around inside their own history. What the
- * format does have to be is inside `handListQuerySchema`'s `^[A-Za-z0-9_:.-]{1,128}$` — digits, a
- * colon, and an id of lowercase letters, digits and underscore all qualify.
+ * `<epoch milliseconds>:<hand id>`. Unsigned, because the query re-checks the viewer on every page.
+ * Must fit `handListQuerySchema`'s `^[A-Za-z0-9_:.-]{1,128}$`.
  */
 export function encodeHandCursor(startedAt: Date, id: string): string {
   return `${startedAt.getTime()}:${id}`;
 }
 
 /**
- * Parses a cursor, or rejects it.
- *
- * Strict rather than forgiving. A cursor that half-parses would silently return the first page
- * again, which reads as "pagination is broken" and is very hard to reproduce; `invalid_request`
- * with the field named is a bug report that fixes itself.
- *
- * The timestamp half is matched against a digits-only pattern *before* `Number` sees it, and that
- * is not belt and braces — it is the fix for a bug this function had. `Number('')` is `0`, not
- * `NaN`, so a cursor of `":hand_abc"` with no timestamp at all passed an `Number.isSafeInteger`
- * check and silently became "everything since the epoch", which is the whole history. The same
- * trap catches `" 12"`, `"0x10"` and `"1e3"`, all of which `Number` happily accepts.
+ * Strict, so a malformed cursor is `invalid_request` rather than a silent first page. The digits-only
+ * pattern runs before `Number` because `Number('')` is 0, which turned `":hand_abc"` into the whole
+ * history. It also refuses `" 12"`, `"0x10"` and `"1e3"`.
  */
 export function decodeHandCursor(cursor: string): HandCursor {
   const match = /^(\d{1,15}):([a-z0-9][a-z0-9_-]{0,63})$/.exec(cursor);
@@ -963,11 +692,7 @@ export function decodeHandCursor(cursor: string): HandCursor {
   return { startedAt: new Date(millis), id };
 }
 
-// ---------------------------------------------------------------------------
-// Card notation at the boundary
-// ---------------------------------------------------------------------------
-
-/** Engine integers to the JSON array the columns hold. `cardToString` rejects a non-card. */
+/** `cardToString` rejects a non-card. */
 function notationJson(cards: readonly Card[]): string {
   return jsonbText(
     cards.map((card) => cardToString(card)),
@@ -980,24 +705,12 @@ function notationJsonOrNull(cards: readonly Card[] | null): string | null {
 }
 
 /**
- * A jsonb card array, validated on the way out.
- *
- * Exported because `HandRow.board`, `HandRow.result` and `HandRow.reveal` are typed `unknown` — the
- * driver hands back parsed jsonb and there is nothing at the type level to say what it parsed — so
- * every caller that wants the board needs this, and reinventing it per caller is how one of them
- * ends up trusting the column.
- *
- * `prl.is_card_notation_array` already guarantees the shape, so this could be a type assertion —
- * and is not, deliberately. `unknown` to a concrete type is exactly the boundary where an
- * assertion is a promise nobody checks: a row written before a constraint existed, a restored
- * dump, a future migration that relaxes something, and suddenly `board.map(...)` is operating on
- * whatever is there. Filtering costs one pass over at most five elements and the type is then
- * true rather than asserted.
+ * A jsonb card array, validated on the way out rather than asserted, because an old row or a
+ * restored dump may predate the constraint. Exported because the jsonb columns are typed `unknown`.
  */
 export function cardNotationArray(value: unknown): readonly string[] {
   if (!Array.isArray(value)) return [];
-  // Re-bound as `readonly unknown[]`, because `Array.isArray` narrows to `any[]` and letting
-  // `any` out of this function would defeat the point of validating at all.
+  // `Array.isArray` narrows to `any[]`, so re-bind before reading.
   const entries: readonly unknown[] = value;
   const cards: string[] = [];
   for (const entry of entries) {
@@ -1007,12 +720,8 @@ export function cardNotationArray(value: unknown): readonly string[] {
 }
 
 /**
- * Hole cards, or null.
- *
- * Null in, null out — that is the redacted case from `seatsOf`, and it must stay null rather than
- * becoming an empty array, because "you may not see these" and "this seat was dealt nothing" are
- * different facts. Anything that is not exactly two valid cards also becomes null: a partial
- * holding is not something to hand to a UI that will happily render one card.
+ * Null stays null, because "redacted" and "dealt nothing" differ. Anything but exactly two valid
+ * cards becomes null, so a UI never renders a partial holding.
  */
 function holeCardsFrom(value: unknown): readonly string[] | null {
   if (value === null || value === undefined) return null;

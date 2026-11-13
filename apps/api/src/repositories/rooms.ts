@@ -1,45 +1,14 @@
 /**
- * `prl.rooms` and `prl.room_members` — private tables and who is sitting at them.
+ * `prl.rooms` and `prl.room_members`.
  *
- * ## Two rules this file exists to keep
+ * One live member per seat and one live membership per user are partial unique indexes (migration
+ * 0002). The writes let the database refuse, and `sql.ts` maps the violation to `seat_taken` /
+ * `already_seated`. The invite code is never stored, only `sha256(code)`, and `visibility` admits
+ * only `'invite_only'`, so nothing can be enumerated.
  *
- * **One live member per seat, one live membership per user.** Both are partial unique indexes
- * in migration 0002, and both are races rather than validation problems: two players tapping
- * "sit in seat 3" at the same instant pass every application-level check, because the check
- * and the write are two statements. So the writes below are shaped so the database is the
- * thing that says no, and the violation is translated into `seat_taken` / `already_seated`
- * (see `sql.ts`) rather than escaping as a 500. Two seated players in seat 3 is not a display
- * bug — the engine would deal to a seat list containing the same index twice.
- *
- * **The invite code is never stored.** `create` mints one, stores `sha256(code)`, and returns
- * the plaintext exactly once. A database read cannot join a stranger's table, and an owner who
- * loses the code creates another room. `visibility` is `'invite_only'` and the CHECK allows no
- * other value, so there is no listing anybody can enumerate either.
- *
- * ## Why the failure diagnostics run as a second query
- *
- * `addMember` and `seatMember` do their work in one statement whose WHERE clause carries every
- * precondition — open room, room not full, seat inside `max_seats`. That makes "nothing matched"
- * ambiguous: the room might be closed, or full, or not exist, or the learner might already be in
- * it. Rather than split the write into a check-then-write with a round trip in the middle, the
- * rare no-match path runs a small diagnostic read to decide which of those it was. Correct
- * answer, correct error code, and nothing between the check and the write.
- *
- * ## A precondition in a WHERE clause is not automatically a lock
- *
- * This file used to say, flatly, that the single-statement shape left "the race window closed".
- * That is true of a predicate the database re-evaluates against the row it is writing —
- * `seatMember`'s `seat < max_seats` against the room row it joins, `users.adjustUnits`'
- * `m.stack + $delta >= 0` against the member row it updates — because under READ COMMITTED
- * EvalPlanQual re-checks exactly those against the committed version when a concurrent
- * transaction has touched the row.
- *
- * It was NOT true of `addMember`'s capacity test, which is a correlated `count(*)` over OTHER
- * rows. There is no row for EvalPlanQual to re-check, the count sees only what was committed
- * before the statement began, and it takes no lock on anything. Reproduced against a migrated
- * database: `max_seats = 2`, one live member, two transactions issuing that statement at the same
- * instant — both counted 1, both inserted, three live members in a two-seat room. `addMember` now
- * locks the room row first; the comment on it says what that buys and what it costs.
+ * Writes carry their preconditions in one statement's WHERE clause, and the rare no-match path runs
+ * a diagnostic read to choose the error. A WHERE predicate on the row being written is re-checked by
+ * EvalPlanQual. A `count(*)` over other rows is not, which is why `addMember` locks the room first.
  */
 
 import { AppError } from '../errors.ts';
@@ -48,47 +17,31 @@ import { hashInviteCode, sha256, timingSafeEquals } from './hashing.ts';
 import { generateInviteCode, newRoomId, newRoomMemberId } from './ids.ts';
 import { type Db, insideSavepoint, isUniqueViolation, violationError } from './sql.ts';
 
-/** Table-configuration bounds, copied from the `rooms_*` CHECK constraints in migration 0001. */
+/** Copied from the `rooms_*` CHECK constraints in migration 0001. */
 const NAME_MIN = 2;
 const NAME_MAX = 48;
 const SEATS_MIN = 2;
 const SEATS_MAX = 6;
 const TIMEOUT_MIN = 5;
 const TIMEOUT_MAX = 300;
-/** `room_members_seat_range`: seats are 0-based and never above 5, whatever `max_seats` says. */
+/** `room_members_seat_range`: 0-based and never above 5, whatever `max_seats` says. */
 const SEAT_MAX = 5;
 
 /**
- * Attempts at a unique invite code before giving up.
- *
- * `rooms_invite_code_hash_key` is unique because "a collision must make the code generator
- * retry, never pick a winner" — resolving it by returning the other room would hand a stranger
- * a private table. At 79 bits of entropy a collision will not happen; three attempts is here so
- * that if it somehow does, the answer is a retry and not a 500, and if it happens three times
- * the generator is broken and the loud failure is correct.
+ * A collision must retry, never return the other room. At 79 bits three collisions mean a broken
+ * generator, and the loud failure is correct.
  */
 const INVITE_CODE_ATTEMPTS = 3;
 
 export type RoomStatus = 'open' | 'playing' | 'closed';
 
-/**
- * The room columns every read here projects.
- *
- * `invite_code_hash` is deliberately absent. Nothing outside `byInviteCodeHash` needs it, and a
- * digest that never leaves the query cannot be logged by a caller that dumped a row.
- */
+/** `invite_code_hash` is deliberately absent, so a caller that logs a row cannot log the digest. */
 export interface RoomRow {
   readonly id: string;
   readonly name: string;
   /**
-   * Null once the creator has erased their account.
-   *
-   * `db/migrations/0004_account_deletion.sql` made this column nullable and `ON DELETE SET NULL`
-   * rather than `RESTRICT`, because a room holds other learners' hand history and cascading it
-   * would delete their hands. The deletion path closes every room it detaches, so an ownerless
-   * room is always a closed one — but the TYPE has to admit the value the column can hold, or
-   * every reader is one `row.owner_user_id.slice()` away from a runtime error on a row nobody
-   * expected to exist.
+   * Null once the creator has erased their account (migration 0004, `ON DELETE SET NULL`, so other
+   * learners' hands survive). An ownerless room is always closed.
    */
   readonly owner_user_id: string | null;
   readonly max_seats: number;
@@ -103,7 +56,6 @@ export interface RoomRow {
   readonly created_at: Date;
 }
 
-/** A membership row, joined to the learner's display name for the roster views. */
 export interface RoomMemberRow {
   readonly id: string;
   readonly room_id: string;
@@ -113,28 +65,20 @@ export interface RoomMemberRow {
   readonly stack: number;
   readonly is_bot: boolean;
   /**
-   * The `@prl/poker-ai` strategy profile id playing this seat, `'unknown'` for a row written
-   * before migration 0003, and null for a human. NOT an `OpponentProfile`: that five-value type is
-   * the Scenario Lab's range vocabulary, and reusing it here is what cost seven of the twelve
-   * Legends their identity across a restart.
+   * The `@prl/poker-ai` strategy profile id, `'unknown'` before migration 0003, null for a human. Not
+   * an `OpponentProfile`, which cost seven of the twelve Legends their identity across a restart.
    */
   readonly bot_profile: string | null;
-  /** `'educational' | 'realistic' | 'expert'`. Null only on a pre-0003 bot row. */
+  /** Null only on a pre-0003 bot row, like `bot_seed`. */
   readonly bot_difficulty: string | null;
-  /** The resolved uint32 decision seed. Null only on a pre-0003 bot row. */
   readonly bot_seed: number | null;
   readonly joined_at: Date;
   readonly left_at: Date | null;
 }
 
 /**
- * `RoomMemberRow` as Postgres hands it over.
- *
- * `bot_seed` is `bigint`, and postgres.js returns every int8 as a STRING — deliberately, because
- * an int8 does not fit a JavaScript number in general. This one always does (it is a uint32, and
- * the column has a CHECK saying so), but the driver cannot know that, so the conversion is done
- * here rather than by typing the column as something narrower than its domain. `int` would have
- * been the narrower type and it is signed: half the seed space would not fit.
+ * postgres.js returns `bigint` as a string. `bot_seed` is a CHECKed uint32, so it converts safely,
+ * and a signed `int` column could not hold half the seed space.
  */
 interface RoomMemberRowRaw extends Omit<RoomMemberRow, 'bot_seed'> {
   readonly bot_seed: string | null;
@@ -143,10 +87,6 @@ interface RoomMemberRowRaw extends Omit<RoomMemberRow, 'bot_seed'> {
 function toMemberRow(raw: RoomMemberRowRaw): RoomMemberRow {
   return { ...raw, bot_seed: raw.bot_seed === null ? null : Number(raw.bot_seed) };
 }
-
-// ---------------------------------------------------------------------------
-// Creating a room
-// ---------------------------------------------------------------------------
 
 export interface CreateRoomInput {
   readonly name: string;
@@ -161,15 +101,10 @@ export interface CreateRoomInput {
 
 export interface CreatedRoom {
   readonly room: RoomRow;
-  /**
-   * The plaintext invite code. Returned once, never stored, unrecoverable afterwards. Goes
-   * straight into `CreateRoomResponse.inviteCode` and nowhere else — `logging.ts` censors
-   * `inviteCode` and anything matching `/invite/i` precisely so this cannot end up in a log.
-   */
+  /** Returned once and never stored. `logging.ts` censors `/invite/i`. */
   readonly inviteCode: string;
 }
 
-/** What `validateRoomConfig` returns: the trimmed name and the two fields it defaulted. */
 export interface ValidatedRoomConfig {
   readonly name: string;
   readonly ante: number;
@@ -177,19 +112,9 @@ export interface ValidatedRoomConfig {
 }
 
 /**
- * Validates a table configuration against the schema's own arithmetic.
- *
- * Every rule here is a CHECK constraint in migration 0001, and every one of them is reachable
- * from a request that `createRoomBodySchema` accepts — the schema bounds each field
- * independently and cannot express a relationship between two of them. Concretely, the schema
- * happily accepts `smallBlind: 5, bigBlind: 5` (the CHECK wants `big_blind > small_blind`),
- * `ante: 500, bigBlind: 2` (`ante <= big_blind`), `startingStack: 2, bigBlind: 50`
- * (`starting_stack >= big_blind * 2`) and `name: "x"` (the CHECK wants 2 characters, the schema
- * allows 1). Without this function each of those is a check violation, which means a 500 for
- * what is plainly a bad request.
- *
- * Exported so the rejections can be tested without a database, and so a route that wants to refuse
- * a bad configuration before it mints an invite code has somewhere to ask.
+ * Mirrors the CHECK constraints in migration 0001. `createRoomBodySchema` bounds fields one at a
+ * time and accepts cross-field violations (`bigBlind <= smallBlind`, `ante > bigBlind`, a stack
+ * under two big blinds), which would otherwise surface as a 500.
  */
 export function validateRoomConfig(input: CreateRoomInput): ValidatedRoomConfig {
   const fields: Record<string, string> = {};
@@ -212,8 +137,7 @@ export function validateRoomConfig(input: CreateRoomInput): ValidatedRoomConfig 
     fields['ante'] = 'must be between 0 and the big blind';
   }
   if (!Number.isInteger(input.startingStack) || input.startingStack < input.bigBlind * 2) {
-    // Named in full because the reason is a teaching one: a stack that cannot cover two big
-    // blinds produces a table where the first forced bet is already all-in.
+    // Under two big blinds, the first forced bet is already all-in.
     fields['startingStack'] = 'must be at least twice the big blind';
   }
   const timeout = input.actionTimeoutSeconds ?? 30;
@@ -232,20 +156,9 @@ export function validateRoomConfig(input: CreateRoomInput): ValidatedRoomConfig 
 /**
  * Creates a room and returns its one-time invite code.
  *
- * ## The retry loop needs a savepoint, and that is not a detail
- *
- * A failed statement inside a Postgres transaction aborts the whole transaction: every later
- * statement answers `25P02 current transaction is aborted`. So a naive retry after a unique
- * violation only works when `sql` is the pool — and fails, differently and confusingly, the day
- * somebody puts `rooms.create` inside `withTransaction` alongside seating the owner and the bots.
- *
- * `insideSavepoint` wraps each attempt in `tx.savepoint(...)` when the handle is a transaction, so
- * a collision rolls back to the savepoint and the next attempt starts from a usable transaction.
- * Outside a transaction there is nothing to protect and the statement runs directly.
- *
- * The loop exists for `rooms_invite_code_hash_key` and nothing else: any other violation is
- * rethrown on the first attempt, so a genuine problem is not retried three times before being
- * reported.
+ * Each attempt runs in `insideSavepoint`, because a failed statement aborts a Postgres transaction
+ * (25P02) and a retry inside `withTransaction` would otherwise fail. Only
+ * `rooms_invite_code_hash_key` is retried.
  */
 export async function create(sql: Db, input: CreateRoomInput): Promise<CreatedRoom> {
   const { name, ante, actionTimeoutSeconds } = validateRoomConfig(input);
@@ -282,18 +195,12 @@ export async function create(sql: Db, input: CreateRoomInput): Promise<CreatedRo
       throw error;
     }
   }
-  // Unreachable in practice: three independent 79-bit collisions. Reported rather than
-  // swallowed, because if it ever happens the random source is broken and that is worth a page.
   throw new AppError('internal_error', {
     logDetail: `invite code generation collided ${INVITE_CODE_ATTEMPTS} times; check the random source`,
   });
 }
 
-// ---------------------------------------------------------------------------
-// Reads
-// ---------------------------------------------------------------------------
-
-/** One room by id, or null. Says nothing about whether the caller may see it. */
+/** Says nothing about whether the caller may see it. */
 export async function byId(sql: Db, roomId: string): Promise<RoomRow | null> {
   const rows = await sql<RoomRow[]>`
     select id, name, owner_user_id, max_seats, small_blind, big_blind, ante, starting_stack,
@@ -305,15 +212,8 @@ export async function byId(sql: Db, roomId: string): Promise<RoomRow | null> {
 }
 
 /**
- * One room by the digest of its invite code.
- *
- * Named for the digest because that is genuinely what it takes: `rooms_invite_code_hash_key` is
- * the index, and the plaintext has no column. `byInviteCode` below is the one to reach for from
- * a route — it hashes first, so a plaintext code cannot reach a query parameter by accident.
- *
- * The `timingSafeEquals` re-check is the same belt-and-braces measure as in
- * `sessions.findValidByToken`, for the same reason: the index has already established equality,
- * and this is what makes a future widening of the predicate fail closed instead of silently.
+ * Routes should call `byInviteCode`, which hashes first. The `timingSafeEquals` re-check makes a
+ * future widening of the predicate fail closed, as in `sessions.findValidByToken`.
  */
 export async function byInviteCodeHash(sql: Db, inviteCodeHash: Uint8Array): Promise<RoomRow | null> {
   const rows = await sql<(RoomRow & { readonly invite_code_hash: Buffer })[]>`
@@ -325,9 +225,7 @@ export async function byInviteCodeHash(sql: Db, inviteCodeHash: Uint8Array): Pro
   const row = rows[0];
   if (row === undefined) return null;
   if (!timingSafeEquals(row.invite_code_hash, inviteCodeHash)) return null;
-  // Rebuilt field by field rather than by rest-destructuring the digest away. Explicit is worth
-  // six lines here: it makes it impossible for a column added to the select above to start
-  // travelling outwards unnoticed, and the digest genuinely does not leave this function.
+  // Field by field, so a column added to the select cannot travel outwards unnoticed.
   return {
     id: row.id,
     name: row.name,
@@ -346,35 +244,22 @@ export async function byInviteCodeHash(sql: Db, inviteCodeHash: Uint8Array): Pro
 }
 
 /**
- * One room by the invite code a person typed.
- *
- * Returns null for a code that cannot be one at all (empty, absurdly long) as well as for a
- * code no room matches. The caller answers `invite_code_invalid` either way — distinguishing
- * "malformed" from "no such room" would tell somebody probing codes that they had the format
- * right, which is the only feedback a brute-force needs.
+ * Null for a malformed code and for an unknown one alike, so a brute-force learns nothing about the
+ * format from `invite_code_invalid`.
  */
 export function byInviteCode(sql: Db, code: string): Promise<RoomRow | null> {
   const digest = hashInviteCode(code);
-  // Not `async`: there is nothing to await here, and the linter is right to say so. The promise is
-  // the one `byInviteCodeHash` returns, or an already-resolved null for a code that cannot be one.
   return digest === null ? Promise.resolve(null) : byInviteCodeHash(sql, digest);
 }
 
 export interface ListRoomsOptions {
-  /** Closed rooms are excluded by default: the room list is where a learner goes to play. */
   readonly includeClosed?: boolean;
   readonly limit?: number;
 }
 
 /**
- * Rooms the learner owns or is currently sitting at.
- *
- * Owner-or-member rather than member alone, because an owner who stood up still needs the room
- * in their list to be able to close it. `exists` rather than a join, so a learner who is both
- * owner and member does not appear twice and no `distinct` is needed to hide it.
- *
- * Members are not included: `RoomSummary.members` is filled by `membersOfRooms` below, in one
- * further query for the whole page rather than one per room.
+ * Rooms the learner owns or is sitting at. Owners are included so one who stood up can still close
+ * the room. `exists` avoids duplicate rows for an owner who is also a member.
  */
 export async function listForUser(
   sql: Db,
@@ -402,11 +287,9 @@ export async function listForUser(
 }
 
 export interface MembersOptions {
-  /** Departed members are excluded by default. Include them for a history view. */
   readonly includeDeparted?: boolean;
 }
 
-/** The roster of one room, seated members first and then by join order. */
 export function membersOf(
   sql: Db,
   roomId: string,
@@ -415,17 +298,7 @@ export function membersOf(
   return membersOfRooms(sql, [roomId], options);
 }
 
-/**
- * The rosters of several rooms in one query.
- *
- * `= any(${ids}::text[])` rather than a generated `in (...)` list: it is one parameter whatever
- * the page size, it cannot be built wrongly, and — the practical part — an empty array is legal
- * and matches nothing, whereas `in ()` is a syntax error that only shows up when a learner
- * happens to be in no rooms.
- *
- * `nulls last` on the seat is what puts seated members before those waiting, which is the order
- * a table renders in.
- */
+/** `= any(...::text[])` is one parameter, and unlike `in ()` an empty array is legal. */
 export async function membersOfRooms(
   sql: Db,
   roomIds: readonly string[],
@@ -446,12 +319,8 @@ export async function membersOfRooms(
 }
 
 /**
- * One LIVE membership by its id, or null once it has left.
- *
- * `left_at is null` is the point of it. Devin Review on PR #25: this read "left or not", and
- * `seatMember` returns what it reads. A leave between its UPDATE and this read handed the departed
- * row back as a seat taken, `sitAtTable` put the learner back on the live roster, and `require`
- * let them into a room they had left. A membership that has left is not a member of anything.
+ * Null once the membership has left. Without `left_at is null`, a leave during `seatMember` handed
+ * back the departed row as seated and let the learner back into the room (PR #25 review).
  */
 async function liveMemberById(sql: Db, memberId: string): Promise<RoomMemberRow | null> {
   const rows = await sql<RoomMemberRowRaw[]>`
@@ -465,7 +334,7 @@ async function liveMemberById(sql: Db, memberId: string): Promise<RoomMemberRow 
   return raw === undefined ? null : toMemberRow(raw);
 }
 
-/** One learner's live membership of one room, or null. The authorisation primitive. */
+/** The authorisation primitive. */
 export async function memberOf(sql: Db, roomId: string, userId: string): Promise<RoomMemberRow | null> {
   const rows = await sql<RoomMemberRowRaw[]>`
     select m.id, m.room_id, m.user_id, u.display_name, m.seat, m.stack, m.is_bot, m.bot_profile,
@@ -478,89 +347,35 @@ export async function memberOf(sql: Db, roomId: string, userId: string): Promise
   return raw === undefined ? null : toMemberRow(raw);
 }
 
-// ---------------------------------------------------------------------------
-// Membership writes
-// ---------------------------------------------------------------------------
-
 export interface AddMemberInput {
   readonly roomId: string;
   readonly userId: string;
-  /** Chips in front of them. Defaults to the room's `starting_stack`. */
+  /** Defaults to the room's `starting_stack`. */
   readonly stack?: number;
   readonly isBot?: boolean;
   /**
-   * The whole of what a bot seat is: which strategy, how hard, and the decision seed.
-   *
-   * Required when `isBot`, forbidden otherwise — `room_members_bot_profile_iff_bot` and
-   * `room_members_bot_config_requires_bot`. All three together, because a profile id on its own
-   * does not reproduce an opponent and a row that carries only part of the answer is a seat that
-   * cannot be rehydrated. See `rooms/bot-profile.ts`.
+   * Required when `isBot`, forbidden otherwise. All three fields together, because a partial row
+   * cannot be rehydrated after a restart. See `rooms/bot-profile.ts`.
    */
   readonly bot?: DurableBotSeat | null;
 }
 
 /**
- * Joins a learner (or seats a bot) at a room, without taking a seat.
+ * Joins a learner (or seats a bot) at a room, without taking a seat. A new member has `seat = NULL`.
+ * Bots get real user rows, so no query special-cases them.
  *
- * A new member has `seat = NULL`, which means waiting rather than seated. `NULLS DISTINCT` in
- * `room_members_live_seat_key` is what lets several of those coexist; taking a seat is
- * `seatMember`, a separate decision with a separate failure.
+ * The `count(*)` in the WHERE clause locks nothing. The `for update` on the room row is what makes
+ * the capacity check atomic. Do not drop it. Without it, two joins of a two-seat room holding one
+ * member both counted 1 and both inserted (reproduced). With it, the loser blocks, and its insert
+ * takes a new READ COMMITTED snapshot that sees the winner. A REPEATABLE READ caller would defeat
+ * this, and `withTransaction` uses the cluster default.
  *
- * Bots get real user rows, so a seat is a seat whoever occupies it: the same membership, hand
- * seat and action shapes apply, and no query needs a special case for "this seat has no user".
+ * - `for update`, not `for share`, because two share locks coexist.
+ * - Lock and insert must share a transaction, and `rooms/registry.ts` passes the pool, hence
+ *   `inOneTransaction`.
+ * - No CHECK can express "at most `max_seats` live rows", and there is no member row to lock yet.
  *
- * ## The one statement, and the lock its WHERE clause cannot take
- *
- * `insert ... select ... from prl.rooms where <preconditions>` inserts zero rows when the room is
- * missing, closed, or already at `max_seats` live members. That is still the right shape — "read
- * the room, count the members, then insert" would put a whole round trip between the check and
- * the write — but for capacity it is not, on its own, enough.
- *
- * ############################################################################
- * ## THE `count(*)` IN THE WHERE CLAUSE LOCKS NOTHING. THE `for update` ON  ##
- * ## THE ROOM ROW IS WHAT MAKES THE CAPACITY CHECK ATOMIC. DO NOT DROP IT.  ##
- * ############################################################################
- *
- * `(select count(*) from prl.room_members ...) < r.max_seats` is an aggregate over rows this
- * statement is not writing. Under READ COMMITTED it reads the snapshot taken when the statement
- * began and takes no lock, so two joins of a two-seat room holding one live member both counted
- * 1, both inserted 1, and the room finished with three live members. That is measured, not
- * feared. (Contrast `users.adjustUnits`, whose `m.stack + $delta >= 0` IS safe unaided: it is a
- * predicate on the row being updated, which EvalPlanQual re-evaluates against the committed
- * version before the update goes through.)
- *
- * So joins of one room are serialised by locking the room row first, in the same transaction:
- *
- *   1. `select id from prl.rooms where id = $1 for update` — the loser of a race blocks here.
- *   2. the insert above, whose count now runs in a statement that BEGAN after the winner
- *      committed, and therefore sees the winner's row and refuses.
- *
- * Step 2 seeing step 1's winner is READ COMMITTED's per-statement snapshot doing the work: a new
- * statement takes a new snapshot, so the count taken once the lock is granted is current. A
- * caller that wrapped this in a REPEATABLE READ transaction would keep one transaction-wide
- * snapshot and the lock alone would not save it — no caller does, and `withTransaction` in
- * `db.ts` uses the cluster default.
- *
- * Three things here that look simplifiable and are not:
- *
- * - **`for update`, not `for share`.** Two share-lockers coexist happily, which is exactly the
- *   state being prevented. A shared lock passes every test that is not a race and restores the
- *   defect in full.
- * - **The lock and the insert must be in ONE transaction.** `rooms/registry.ts` calls this with
- *   the POOL handle, not inside `withTransaction`, and on the pool every statement is its own
- *   transaction — the row lock would be released before the insert ran, and the two statements
- *   would be strictly worse than the one they replaced. `inOneTransaction` below opens one when
- *   the handle is the pool and reuses the caller's when it is not.
- * - **The lock is on `prl.rooms`.** There is no `room_members` row to lock for a seat nobody
- *   holds yet; the room row is the only thing both racers can be made to queue behind. A
- *   cross-row CHECK ("at most `max_seats` live rows per room") is not something a constraint can
- *   express, which is why this is not in the schema.
- *
- * The cost, stated plainly: joins of the SAME room serialise, and a join now waits behind a
- * concurrent `setStatus`/`close` of that room, since both are `update prl.rooms`. Joins of
- * different rooms never meet. At six seats a table, that is not a throughput question — and the
- * blast radius it removes is real: the surplus member is unseated (`seatMember` still enforces
- * seat uniqueness and `seat < max_seats`), but they are in the room, counted, and shown.
+ * Joins of the same room serialise, and wait behind `setStatus`/`close` of that room.
  */
 export async function addMember(sql: Db, input: AddMemberInput): Promise<RoomMemberRow> {
   const isBot = input.isBot ?? false;
@@ -575,9 +390,7 @@ export async function addMember(sql: Db, input: AddMemberInput): Promise<RoomMem
 
   try {
     const member = await inOneTransaction(sql, async (tx) => {
-      // The whole of the fix. Everything below reads the room's live member count, and this is
-      // what stops another join reading the same count. A missing room takes the same no-match
-      // path as a full one, so it is diagnosed below rather than guessed at here.
+      // A missing room takes the same no-match path as a full one and is diagnosed below.
       const locked = await tx<{ id: string }[]>`
         select r.id from prl.rooms r where r.id = ${input.roomId} for update
       `;
@@ -601,8 +414,7 @@ export async function addMember(sql: Db, input: AddMemberInput): Promise<RoomMem
         returning id
       `;
       if (rows.length === 0) return null;
-      // Read back on `tx`, not on `sql`: inside a transaction of this function's own making, the
-      // row it just inserted is not visible to any other connection yet.
+      // On `tx`, because the new row is not yet visible to other connections.
       const inserted = await memberOf(tx, input.roomId, input.userId);
       if (inserted === null) {
         throw new AppError('internal_error', { logDetail: 'member insert succeeded but read back nothing' });
@@ -615,22 +427,12 @@ export async function addMember(sql: Db, input: AddMemberInput): Promise<RoomMem
     if (mapped !== null) throw mapped;
     throw error;
   }
-  // Nothing matched. Work out which precondition it was, in the order that matters.
   throw await diagnoseMembershipFailure(sql, input.roomId, input.userId, 'room_full');
 }
 
 /**
- * Takes a seat.
- *
- * Seat legality is split between three places on purpose. `room_members_seat_range` (0..5) is a
- * CHECK, so it is enforced everywhere; `seat < max_seats` is per-room and a CHECK cannot see
- * across tables, so it is in this statement's WHERE clause where it is evaluated against the
- * room row the UPDATE joins; and "is that seat free" is `room_members_live_seat_key`, because
- * no amount of application locking substitutes for the database refusing.
- *
- * Throws `seat_taken` (translated from the unique violation) when somebody else got there
- * first — including when they got there in the microsecond between this caller's check and this
- * caller's write, which is the case the index exists for.
+ * Takes a seat. The 0..5 range is a CHECK, `seat < max_seats` is in the WHERE clause against the
+ * joined room row, and seat uniqueness is `room_members_live_seat_key`, mapped to `seat_taken`.
  */
 export async function seatMember(
   sql: Db,
@@ -659,15 +461,12 @@ export async function seatMember(
     `;
     const seated = rows[0];
     if (seated !== undefined) {
-      // Read back by the id the UPDATE returned, not by (room, user, live): a leave and rejoin in
-      // between would answer with the new membership, and the caller records the first sit on this id.
+      // By id, because a leave and rejoin in between would return the new membership.
       const member = await liveMemberById(sql, seated.id);
       if (member !== null) return member;
-      // It left in between. Not a seat taken: `sitAtTable` must not put the learner back at a table
-      // they left. Fails toward refusing the sit. Thrown here, not diagnosed: after a leave AND a
-      // rejoin, `diagnoseMembershipFailure` finds a live member and answers a bad seat number. The
-      // departed row keeps the seat the UPDATE wrote, which holds nothing: both unique indexes are
-      // partial on `left_at is null`, so there is nothing to give back.
+      // It left in between. Refuse the sit rather than diagnose, because after a rejoin the
+      // diagnosis would find a live member. The departed row's seat holds nothing, since both
+      // unique indexes are partial on `left_at is null`.
       throw new AppError('not_room_member', { logDetail: `left ${roomId} while taking a seat` });
     }
   } catch (error) {
@@ -679,35 +478,14 @@ export async function seatMember(
 }
 
 /**
- * Records that this membership has sat at its table: `room_members.first_seated_at`, what
- * `users.readUnits` counts a membership by (migration 0008). Kept once set, so standing up leaves the
- * chips this membership holds in front of the learner. `memberId` is the id `seatMember` returned
- * for the seat being recorded. Returns false when that membership has left in between, which
- * `readUnits` does not count anyway.
+ * Sets `room_members.first_seated_at`, which `users.readUnits` counts a membership by (migration
+ * 0008). Never cleared. Returns false when the membership has left.
  *
- * ## Why this is not part of `seatMember`
- *
- * It was, and Devin Review on PR #25 found what that cost. `RoomRegistry.sitAtTable` takes the
- * durable seat FIRST — the database is what refuses a contested chair — and then the live table,
- * which can still refuse: a leaver mid-hand is durably gone (`left_at`) while their live chair holds
- * the cards. In a two-seat room the next member was given that chair by the database, refused it by
- * the live table (`room_full`), and stood back up by the failure path, which gives back `seat` and
- * nothing else. The row then carried a first sit that never happened, and a membership nobody had
- * sat at counted its whole `starting_stack` toward units for as long as it lived: `2000 !== 1000`
- * in `practice-table-units.test.ts`. So the fact is written only once the live table has accepted
- * the seat, and nothing ever has to clear it — the column's comment says it is never cleared.
- *
- * ## Why it is found by id
- *
- * It was found by (room, user, live), and Devin Review on PR #25 found what that cost. The live sit
- * resolves and then this is a round trip; a second tab that leaves and rejoins inside it makes a new
- * membership, never seated and holding `starting_stack`, and the write landed on that one. The
- * learner then read 2,000 for a 2,000-stack table the new membership had never sat at:
- * `2000 !== 1000` in `practice-table-units.test.ts`. So the row is the one the sit took.
- *
- * `left_at is null` keeps the write off a membership that left, and nothing more. It does NOT ask
- * for a seat: a stand before this lands still follows a genuine sit, and that sit is what keeps the
- * room's chips in front of a learner who stood before the first deal.
+ * Separate from `seatMember` because the live table can still refuse a seat the database granted,
+ * and the fact must only be written once the live table accepts. Found by id because a leave and
+ * rejoin in the gap would otherwise mark the new, never-seated membership. Both regressions are
+ * pinned by `2000 !== 1000` in `practice-table-units.test.ts` (PR #25 review). It does not require
+ * a seat, because a stand before this lands still followed a genuine sit.
  */
 export async function recordFirstSit(sql: Db, memberId: string): Promise<boolean> {
   const rows = await sql<{ id: string }[]>`
@@ -719,7 +497,6 @@ export async function recordFirstSit(sql: Db, memberId: string): Promise<boolean
   return rows.length > 0;
 }
 
-/** Stands up without leaving the table. Frees the seat for somebody else immediately. */
 export async function unseatMember(sql: Db, roomId: string, userId: string): Promise<boolean> {
   const rows = await sql<{ id: string }[]>`
     update prl.room_members
@@ -731,13 +508,8 @@ export async function unseatMember(sql: Db, roomId: string, userId: string): Pro
 }
 
 /**
- * Leaves the table.
- *
- * `left_at = now()` rather than a DELETE, and the grant matrix agrees — there is no DELETE on
- * `prl.room_members` at all. The row is the record of who sat where, and because both unique
- * indexes are partial on `left_at IS NULL`, setting it frees the seat and the membership slot in
- * the same statement without erasing the history. The seat number is deliberately left in place
- * for the same reason.
+ * Sets `left_at` and never deletes, and the grants allow no DELETE. Both unique indexes are partial
+ * on `left_at IS NULL`, so this frees the seat and the slot while keeping the history.
  */
 export async function removeMember(sql: Db, roomId: string, userId: string): Promise<boolean> {
   const rows = await sql<{ id: string }[]>`
@@ -750,12 +522,8 @@ export async function removeMember(sql: Db, roomId: string, userId: string): Pro
 }
 
 /**
- * Sets a live member's stack to an absolute value.
- *
- * Absolute, not a delta, because this is the settlement path: the engine has computed what every
- * seat now has, and writing "what it is" cannot drift the way a sequence of increments can. For
- * the relative case — a buy-in, a rebuy — use `users.adjustUnits`, which guards the subtraction
- * inside its own WHERE clause.
+ * Absolute, because this is settlement and a sequence of deltas can drift. For a relative change,
+ * use `users.adjustUnits`.
  */
 export async function updateMemberStack(
   sql: Db,
@@ -784,17 +552,7 @@ export async function updateMemberStack(
   }
 }
 
-// ---------------------------------------------------------------------------
-// Room status
-// ---------------------------------------------------------------------------
-
-/**
- * Moves a room between `open` and `playing`.
- *
- * `closed` is not reachable from here: `rooms_closed_at_matches_status` pairs the status with
- * `closed_at`, so closing is `close()` and only `close()`. Splitting them means no caller can
- * leave a room claiming to be closed with no time of closing, or the reverse.
- */
+/** `closed` is only reachable through `close()`, which sets `closed_at` with it. */
 export async function setStatus(sql: Db, roomId: string, status: 'open' | 'playing'): Promise<boolean> {
   const rows = await sql<{ id: string }[]>`
     update prl.rooms
@@ -806,25 +564,13 @@ export async function setStatus(sql: Db, roomId: string, status: 'open' | 'playi
 }
 
 export interface CloseRoomOptions {
-  /**
-   * When given, the room is only closed if this learner owns it. Passing it makes the
-   * authorisation part of the same statement as the write, so a room cannot be closed by
-   * someone who stopped being the owner between the check and the update.
-   */
+  /** Puts the ownership check in the same statement as the write. */
   readonly ownerUserId?: string;
 }
 
 /**
- * Closes a room.
- *
- * `status` and `closed_at` move together, which `rooms_closed_at_matches_status` requires.
- * Memberships are left exactly as they are: the roster of a closed table is history, the hands
- * played there still reference it, and there is no DELETE on `prl.rooms` at all — closing is a
- * status change, not a removal.
- *
- * Returns false when the room does not exist, is already closed, or is not owned by
- * `ownerUserId`. The three are not distinguished, because "that room exists but is not yours" is
- * exactly the answer `room_not_found_or_not_permitted` exists to avoid giving.
+ * Closes a room and leaves memberships as history. Returns false for missing, closed or not owned,
+ * without saying which, so `room_not_found_or_not_permitted` reveals nothing.
  */
 export async function close(sql: Db, roomId: string, options: CloseRoomOptions = {}): Promise<boolean> {
   const owner = options.ownerUserId ?? null;
@@ -840,36 +586,14 @@ export async function close(sql: Db, roomId: string, options: CloseRoomOptions =
 }
 
 /**
- * Closes a room the owner is retiring as a practice table, unless another person is a member.
+ * Closes a practice table unless another person is a member.
  *
- * ## The defect
- *
- * `RoomRegistry.retirePracticeTables` read the roster, decided "nobody else is here", and then
- * called `close`, which does not look at the roster at all. A join that landed between the two was
- * closed under the person who made it. Reachable through the routes: the owner of a two-seat table
- * with one bot leaves it (nothing stops an owner leaving), which frees a membership; a friend
- * holding the invite code joins; the owner starts a Legends match; the match's retire had read the
- * roster before the join committed. Found by review on PR #25, and reproduced in
- * `test/practice-table-units.test.ts` by joining inside the gap.
- *
- * ## Why two statements and not `update ... where not exists (...)`
- *
- * The same reason `addMember` takes its lock first. A `not exists` over `prl.room_members` is a
- * subquery on rows this statement does not write, so it is answered from the statement's own
- * snapshot. `addMember` only LOCKS the room row and never modifies it, so this UPDATE has no newer
- * row version to re-check against (EvalPlanQual never fires) and the subquery would not see the
- * join it waited for. So:
- *
- *   1. `select ... for update` on the room row — the lock `addMember` takes, so a join of this
- *      room in flight finishes first and a join that starts after waits for this to commit;
- *   2. a NEW statement, whose snapshot is taken once the lock is granted, and so sees every
- *      committed join, decides and writes.
- *
- * Only "another person" is re-decided here. A room's bots and `max_seats` do not change after it
- * is built, so the rest of the practice-table shape the registry checked still holds.
- *
- * Returns false when the room is missing, already closed, not this owner's, or has another person
- * in it — the caller treats all four as "not retired".
+ * `retirePracticeTables` read the roster and then called `close`, so a join in the gap was closed
+ * under its maker (PR #25 review, reproduced in `test/practice-table-units.test.ts`). A single
+ * `update ... where not exists` would not fix it, because `addMember` only locks the room row and
+ * EvalPlanQual never fires. So this takes the same `for update` lock, then decides in a new
+ * statement whose snapshot sees every committed join. Bots and `max_seats` do not change after a
+ * room is built, so only "another person" is re-checked.
  */
 export function closePracticeTable(sql: Db, roomId: string, ownerUserId: string): Promise<boolean> {
   return inOneTransaction(sql, async (tx) => {
@@ -896,31 +620,10 @@ export function closePracticeTable(sql: Db, roomId: string, ownerUserId: string)
   });
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 /**
- * Runs `fn` inside a transaction: the caller's when it passed one, a new one when it passed the
- * pool.
- *
- * `addMember` needs its `for update` on the room and its INSERT to be in the SAME transaction —
- * a lock taken by one statement and released before the next runs is decoration — and its callers
- * do not all provide one. `rooms/registry.ts` builds its store as
- * `addMember: (input) => roomsRepository.addMember(sql(), input)`, i.e. the pool, where every
- * statement commits on its own. The repository tests pass a `tx`. Both have to work, so the
- * decision is made here rather than pushed onto the callers, where "remember to wrap this one"
- * is the kind of rule that holds until somebody adds a caller.
- *
- * `'savepoint' in handle` narrows the union exactly as `insideSavepoint` in `sql.ts` does:
- * `TransactionSql` declares it and `Sql` does not. Reusing the caller's transaction rather than
- * nesting is not just tidiness — postgres.js has no nested `begin`, and the SAVEPOINT that would
- * stand in for one adds a round trip while changing nothing about the lock, which is held to the
- * end of the outermost transaction either way.
- *
- * Boxed for the reason `withTransaction` in `db.ts` boxes: postgres.js types `begin` as
- * `UnwrapPromiseArray<T>`, so an unboxed callback returning an array would come back with a
- * different type from one returning a row.
+ * Runs `fn` in the caller's transaction, or a new one when given the pool, because a row lock must
+ * share a transaction with the write it guards. `TransactionSql` declares `savepoint` and `Sql` does
+ * not. Boxed because postgres.js types `begin` as `UnwrapPromiseArray<T>`.
  */
 async function inOneTransaction<T>(handle: Db, fn: (handle: Db) => Promise<T>): Promise<T> {
   if ('savepoint' in handle) return fn(handle);
@@ -929,13 +632,8 @@ async function inOneTransaction<T>(handle: Db, fn: (handle: Db) => Promise<T>): 
 }
 
 /**
- * Refuses a bot seat that could not be put back after a restart, at the moment it is written.
- *
- * This is the forward half of migration 0003. The column CHECKs cannot express "a NEW bot row
- * must carry all three fields" without also rejecting the pre-0003 rows that legitimately carry
- * none, so the requirement lives here — one write path, one refusal, before anything reaches the
- * table. `durableProfile` and `durableSeed` throw on their own for a value the schema would
- * reject anyway, so an unknown profile id fails here rather than as a constraint violation.
+ * Refuses a bot seat that could not be restored after a restart. The column CHECKs cannot require
+ * all three fields on new rows without rejecting pre-0003 rows, so the rule lives here.
  */
 function normaliseBotSeat(isBot: boolean, bot: DurableBotSeat | null): DurableBotSeat | null {
   if (!isBot) {
@@ -967,15 +665,8 @@ function normaliseBotSeat(isBot: boolean, bot: DurableBotSeat | null): DurableBo
 }
 
 /**
- * Works out why a membership write matched nothing, and returns the error to throw.
- *
- * The order is the point. "Does the room exist" first, because every other answer would
- * otherwise confirm a room id to somebody who guessed it. Then closed, then already-a-member,
- * then the caller's own fallback — `room_full` for a join, `invalid_request` for a seat outside
- * this room's `max_seats`.
- *
- * Returns rather than throws so the call site reads `throw await diagnose...`, which keeps it
- * obvious that the function always ends in a throw. A `Promise<never>` helper would hide that.
+ * Chooses the error for a membership write that matched nothing. Existence is checked first, so no
+ * other answer confirms a guessed room id.
  */
 async function diagnoseMembershipFailure(
   sql: Db,
