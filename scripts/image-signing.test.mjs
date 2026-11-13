@@ -1,23 +1,8 @@
 #!/usr/bin/env node
 /**
- * Tests for the release-signature library.
- *
- * Run with:  node --test scripts/image-signing.test.mjs
- *
- * ## What these are for, and what they are NOT for
- *
- * The cryptography is cosign's and is not re-tested here. What IS tested is every way this
- * repository could report "the release images are signed" while that is false, because that is the
- * failure mode a signing gate has: it is trivially easy to build one that always passes, and the
- * result looks exactly like a working one.
- *
- * Each `describe` below is a negative control in the sense the repository uses the phrase: it fails
- * against the code as it was before this gate existed, where the answer to every one of these
- * questions was "nothing looked".
- *
- * The live, three-refusal demonstration against a real registry is a different thing and lives in
- * `scripts/supply-chain/image-provenance.mjs --negative-control`, because it needs a registry and
- * an ephemeral keypair. These are the parts that can be checked with no daemon at all.
+ * Tests for the release-signature library. They cover every way the repo could report "the release
+ * images are signed" while it is false. cosign's cryptography is not re-tested. The live three-refusal
+ * control is `scripts/supply-chain/image-provenance.mjs --negative-control`.
  */
 
 import assert from 'node:assert/strict';
@@ -41,7 +26,6 @@ const DIGEST_A = `sha256:${'a'.repeat(64)}`;
 const DIGEST_B = `sha256:${'b'.repeat(64)}`;
 const FINGERPRINT = 'f'.repeat(64);
 
-/** A well-formed sidecar, which each test then breaks in exactly one way. */
 const goodRecord = () => ({
   schema: SIGNATURES_SCHEMA,
   signedAt: '2026-08-25T00:00:00.000Z',
@@ -72,9 +56,7 @@ describe('parseSignatureRecord', () => {
   });
 
   it('refuses a record that names no images', () => {
-    // The one that matters most. `Object.entries({})` iterates zero times, so a reader written the
-    // obvious way verifies nothing, finds nothing wrong, and reports a pass. A sweep of nothing is
-    // not a pass.
+    // `Object.entries({})` iterates zero times, so an empty record must not pass.
     const record = goodRecord();
     record.images = {};
     const { problems } = parseSignatureRecord(record);
@@ -91,9 +73,7 @@ describe('parseSignatureRecord', () => {
   });
 
   it('refuses a TAG reference where a digest reference belongs', () => {
-    // A signature is over a digest. Recording a tag would mean the gate verified whatever that tag
-    // points at at verification time, which is the pointer-versus-content mistake the whole release
-    // pipeline is built to avoid.
+    // A tag would verify whatever it points at during verification.
     const record = goodRecord();
     record.images.api.reference = '127.0.0.1:5001/prl-api:4320f1c4ad21';
     const { problems } = parseSignatureRecord(record);
@@ -138,9 +118,7 @@ describe('reconcileWithManifest — the tie cosign cannot make', () => {
   });
 
   it('refuses a signature over a DIFFERENT, correctly-signed image', () => {
-    // This is the attack the sidecar exists to stop, and cosign cannot see it: every cryptographic
-    // check passes, because the signature really is valid — over some other artefact. Without this
-    // comparison the gate would report that the shipping images are signed.
+    // Every cosign check passes here, because the signature is valid over another artefact.
     const { problems, matched } = reconcileWithManifest(
       [signature],
       manifestWith({ api: { digest: DIGEST_B } }),
@@ -217,9 +195,7 @@ describe('attestationProblems', () => {
   });
 
   it('refuses an attestation over an EMPTY predicate', () => {
-    // `cosign attest` signs `{}` without complaint and the signature over it verifies perfectly.
-    // "An attestation exists" is therefore not evidence that anything was inventoried, which is the
-    // file-exists-therefore-pass failure mode wearing a signature.
+    // `cosign attest` signs `{}` and it verifies.
     const { problems, components } = attestationProblems(statement({ predicate: {} }), DIGEST_A);
     assert.equal(components, 0);
     assert.match(problems[0], /zero components/);
@@ -259,9 +235,6 @@ describe('publicKeyFingerprint', () => {
     '-----END PUBLIC KEY-----\n';
 
   it('fingerprints the KEY, not the file', () => {
-    // A trailing newline, a CRLF checkout or a re-export must not read as a key rotation. The gate
-    // fails loudly on a fingerprint mismatch, and a gate that cries rotation at a line ending is a
-    // gate somebody stops reading.
     const a = publicKeyFingerprint(pem);
     const b = publicKeyFingerprint(pem.replace(/\n/g, '\r\n').trimEnd());
     assert.equal(a.fingerprint, b.fingerprint);
@@ -276,51 +249,21 @@ describe('publicKeyFingerprint', () => {
 
 describe('the cosign flag sets', () => {
   it('turn the Sigstore signing config off on both sides', () => {
-    // cosign 3 refuses `--tlog-upload=false` unless the TUF-provided signing config is also off:
-    //   "--tlog-upload=false is not supported with --signing-config or --use-signing-config"
-    // Signing under one policy and verifying under another fails closed but for a reason that looks
-    // like a broken signature, so both halves are pinned here rather than discovered at 3am.
+    // cosign 3 refuses `--tlog-upload=false` unless the TUF signing config is also off.
     assert.ok(COSIGN_SIGN_FLAGS.includes('--use-signing-config=false'));
     assert.ok(COSIGN_SIGN_FLAGS.includes('--tlog-upload=false'));
     assert.ok(COSIGN_VERIFY_FLAGS.includes('--insecure-ignore-tlog'));
   });
 
   it('never carries a private key path into the verify side', () => {
-    // The property the whole two-script split exists to hold: a machine that can CHECK a signature
-    // must not be able to MINT one.
+    // A machine that can check a signature must not be able to mint one.
     assert.ok(!COSIGN_VERIFY_FLAGS.some((flag) => /cosign\.key|--key/.test(flag)));
   });
 });
 
-/**
- * The KEYLESS flag sets, which nothing checked at all.
- *
- * ## The defect this exists for
- *
- * `keylessVerifyFlags` and `COSIGN_KEYLESS_SIGN_FLAGS` are exported from `image-signing.mjs` and
- * were imported by NO test. `keylessVerifyFlags`'s own header calls its two flags "the entire
- * difference between provenance and arithmetic", and `verifyKeylessSignature` in
- * `supply-chain/image-provenance.mjs` says of the same pair that "with a WIDER version of them it
- * accepts a signature made by a workflow in a repository nobody has heard of, because Fulcio
- * issues a certificate to anybody's GitHub Actions job". Neither sentence was asserted anywhere.
- *
- * Measured against the suite as it stood: `node --test 'scripts/**\/*.test.mjs'` reported
- * 130 of 130 passing with each of these applied one at a time —
- *
- *   * `--certificate-identity <identity>` replaced by `--certificate-identity-regexp '.*'`
- *     (and the issuer likewise). cosign then verifies any Fulcio certificate from any repository:
- *     the signature is real, the provenance is gone, and the gate prints the same green line.
- *   * `--certificate-oidc-issuer <issuer>` dropped. An identity string is not self-authenticating;
- *     without the issuer another provider can assert any subject it likes.
- *   * `--insecure-ignore-tlog` ADDED to the keyless verify set. The keyed posture turns Rekor off
- *     and pays for it with a stated residual; keyless without the log keeps the cost and throws
- *     away the point, which is the paragraph `COSIGN_KEYLESS_SIGN_FLAGS` ends on.
- *   * `--tlog-upload=false` added to the keyless SIGN set, so nothing ever reaches Rekor.
- *
- * `keylessVerifyFlags` is asserted as an exact ORDERED pairing rather than with `includes`,
- * because `--certificate-identity` followed by the wrong value is the failure being guarded and
- * `includes('--certificate-identity')` cannot see it.
- */
+// The keyless flag sets. Before this block the whole suite passed with the identity widened to a
+// regexp, the issuer dropped, or the tlog switched off. Pairs are asserted in order, because
+// `includes('--certificate-identity')` cannot see a wrong value after it.
 describe('the keyless flag sets — who signed, not merely that somebody did', () => {
   const DEMANDED = {
     identity: 'https://github.com/prl/poker-risk-lab/.github/workflows/release-sign.yml@refs/heads/main',
@@ -348,9 +291,7 @@ describe('the keyless flag sets — who signed, not merely that somebody did', (
   });
 
   it('takes both values from its argument, so a record cannot choose what it is compared against', () => {
-    // The positive control. A function that returned the committed policy's constants whatever it
-    // was handed would satisfy both cases above against the real policy and would be unable to
-    // refuse anything, because the value it compared with would be the value under test.
+    // Positive control. A function returning the policy's constants regardless of input would pass above.
     const other = keylessVerifyFlags({
       identity: 'https://example.invalid/x@refs/tags/v9',
       issuer: 'https://idp.invalid',
@@ -363,23 +304,20 @@ describe('the keyless flag sets — who signed, not merely that somebody did', (
   });
 
   it('never turns the transparency log off on either side of the keyless posture', () => {
-    // The absence is load-bearing and is the one thing an `includes` check cannot state, so it is
-    // stated here: keyless signing without Rekor keeps the keyed posture's cost and loses its
-    // benefit, and `deploy/signing/keyless-policy.json` requires the log.
+    // `deploy/signing/keyless-policy.json` requires the transparency log.
     for (const flag of keylessVerifyFlags(DEMANDED)) {
       assert.ok(!/tlog|transparency/i.test(String(flag)), `keyless verify must not carry ${flag}`);
     }
     for (const flag of COSIGN_KEYLESS_SIGN_FLAGS) {
       assert.ok(!/tlog|transparency/i.test(String(flag)), `keyless signing must not carry ${flag}`);
     }
-    // A sweep of nothing is not a pass: both sets must actually have been read.
+    // Both sets must have been read.
     assert.ok(keylessVerifyFlags(DEMANDED).length >= 4);
     assert.ok(COSIGN_KEYLESS_SIGN_FLAGS.length >= 1);
   });
 
   it('carries no key material into the keyless path at all', () => {
-    // Same property as the keyed verify set above, for the side where there is no key to carry:
-    // a `--key` here would mean the keyless posture had quietly become the keyed one.
+    // A `--key` here would mean keyless had become keyed.
     for (const flag of [...keylessVerifyFlags(DEMANDED), ...COSIGN_KEYLESS_SIGN_FLAGS]) {
       assert.ok(!/cosign\.key|^--key$/.test(String(flag)));
     }

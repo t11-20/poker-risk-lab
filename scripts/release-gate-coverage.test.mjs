@@ -1,13 +1,7 @@
 #!/usr/bin/env node
 /**
- * Tests for the release-gate coverage guard.
- *
- * Run with:  node --test scripts/release-gate-coverage.test.mjs
- *
- * The guard's own failure mode is the one it exists to catch: a parser that reads
- * a workflow it does not understand, finds no jobs, and reports that every gate is
- * covered by the empty set. So the controls below are about the PARSER as much as
- * the verdict — each one takes a real workflow and breaks exactly one thing.
+ * Tests for the release-gate coverage guard. Each control breaks one thing in a real workflow,
+ * because a parser that finds no jobs would report every gate covered by the empty set.
  */
 
 import assert from 'node:assert/strict';
@@ -33,8 +27,7 @@ describe('the gate list is read, not copied', () => {
   it('finds every gate the verify script names', () => {
     const gates = gatesInVerify(PKG);
     assert.ok(gates.length >= 10, `parsed only ${gates.length} gates out of \`verify\``);
-    // Spot-checked against the script text so a parser that silently returned a
-    // truncated list could not pass this by returning its first few words.
+    // Spot-checked so a truncated list cannot pass.
     for (const gate of ['security:audit', 'design:contrast', 'test:ax', 'db:verify']) {
       assert.ok(gates.includes(gate), `\`verify\` runs ${gate} and the parser did not see it`);
     }
@@ -42,8 +35,7 @@ describe('the gate list is read, not copied', () => {
   });
 
   it('NEGATIVE CONTROL — refuses a verify script it cannot read, rather than reporting none', () => {
-    // The dangerous outcome is an EMPTY gate list: zero gates are trivially all
-    // covered, and the guard would pass for ever while checking nothing.
+    // An empty gate list is trivially all covered.
     assert.throws(() => gatesInVerify({ scripts: { verify: 'echo hello' } }), /for gate in/u);
     assert.throws(() => gatesInVerify({ scripts: {} }), /no `verify` script/u);
     assert.throws(() => gatesInVerify({ scripts: { verify: 'for gate in  ; do :; done' } }), /EMPTY/u);
@@ -55,10 +47,7 @@ describe('the workflow parser reads the job graph', () => {
     const jobs = parseWorkflow(RELEASE);
     assertParserSawTheFile(jobs, 'release.yml');
     assert.ok(jobs.has(ARTEFACT_JOB), 'no `build` job');
-    // Both spellings of `needs` are in use in this file — a scalar on `tests` and
-    // a flow sequence on `build` — and a parser that reads one and not the other
-    // silently shrinks the gating set, which makes coverage look worse or better
-    // depending on which job it loses.
+    // Both `needs` spellings are in use, a scalar on `tests` and a flow sequence on `build`.
     assert.deepEqual(jobs.get('tests')?.needs, ['gates']);
     assert.deepEqual(jobs.get(ARTEFACT_JOB)?.needs.sort(), ['browser-gates', 'tests']);
   });
@@ -78,10 +67,7 @@ describe('the workflow parser reads the job graph', () => {
   });
 
   it('does not read a comment as a command (REGRESSION)', () => {
-    // This repository's workflows carry long explanatory headers that name gates
-    // in prose. A parser that reads them reports coverage from the documentation
-    // of the hole rather than from its fix — the same mistake a CSS sweep on this
-    // branch made when it flagged prose out of its own comment.
+    // Comments in the workflows name gates in prose and must not count as coverage.
     const jobs = parseWorkflow(
       'jobs:\n  a:\n    runs-on: x\n    steps:\n      # run: pnpm run design:contrast\n      - name: nothing\n        run: echo hi\n',
     );
@@ -100,17 +86,12 @@ describe('the workflow parser reads the job graph', () => {
 
 describe('matching a gate name is exact', () => {
   it('NEGATIVE CONTROL — `pnpm run test` does not satisfy `test:a11y` (REGRESSION)', () => {
-    // How the parser behaved when first written, and the single most dangerous
-    // bug it could have: `release.yml` DID run `pnpm run test`, so a prefix match
-    // would have reported all seven `test:*` gates covered and the nine-gate hole
-    // this whole change exists to close would have looked closed.
+    // release.yml runs `pnpm run test`, so a prefix match would report every `test:*` gate covered.
     assert.equal(runsGate('run: pnpm run test', 'test'), true);
     for (const gate of ['test:a11y', 'test:ax', 'test:csp', 'test:exhaustive']) {
       assert.equal(runsGate('run: pnpm run test', gate), false, `\`pnpm run test\` matched ${gate}`);
     }
     assert.equal(runsGate('run: pnpm run test:a11y -- --with-api', 'test:a11y'), true);
-    // And the other direction: a longer gate must not be satisfied by a prefix of
-    // itself appearing in a longer command.
     assert.equal(runsGate('run: pnpm run test:age-gate', 'test:age'), false);
   });
 
@@ -123,26 +104,10 @@ describe('matching a gate name is exact', () => {
   });
 });
 
-/**
- * The README's Quick start is the first command a new reader runs, and its gate count is joined to
- * nothing.
- *
- * It said "11 supply-chain gates" until 2026-08-27 — stale across FOUR additions
- * (`image-provenance`, `log-policy`, `keyless-signing-identity`, `pinned-action-advisories`) while
- * five other documents were kept in step, because every one of those has a join and this file does
- * not. A reader following the Quick start would have watched fifteen gates run under a comment
- * promising eleven and had no way to know which was wrong.
- *
- * Deliberately narrow: exactly the one line, matched on its own shape. A repo-wide sweep for
- * "<N> gates" would have to tell a current claim from a historical one — "it was eleven until…" is
- * correct prose that must not fail — and `readiness-report.test.mjs` already carries that
- * attribution logic for the one document that needs it. This is the single claim that actually
- * drifted, so this is the claim that gets a guard.
- */
+// The README Quick start gate count said 11 while the audit ran 15. This guards that one line only.
 describe('the README does not promise a gate count the audit does not run', () => {
   const README = readFileSync(join(REPO_ROOT, 'README.md'), 'utf8');
 
-  /** The number of gates `security:audit` really runs, read from its own array. */
   function auditGateCount() {
     const source = readFileSync(join(REPO_ROOT, 'scripts', 'supply-chain', 'audit.mjs'), 'utf8');
     const block = /const GATES = \[([\s\S]*?)\n\];/u.exec(source);
@@ -174,18 +139,12 @@ describe('the README does not promise a gate count the audit does not run', () =
     assert.equal(Number(found[1]), 11, 'the control did not actually make the count stale');
     assert.notEqual(Number(found[1]), auditGateCount());
 
-    // And the shape it cannot read is refused rather than silently passing over nothing.
     assert.equal(/pnpm run security:audit\s+#\s*(\d+)\s+supply-chain gates/u.exec('# audit'), null);
   });
 });
 
-/**
- * The README's Stack line names exact versions and was joined to nothing either. On 2026-11-11 every
- * one of the four it could have got wrong was wrong — Next.js 16.3.8, React 19.2.8, Fastify 5.12.5,
- * Biome 2.5.7 against 16.4.4, 19.3.0, 5.12.8 and 2.5.15 pinned — because a dependency bump is a
- * lockfile change and nothing sends anybody to the README to make it. Joined here to the exact pins
- * in the package.json files, which `saveExact: true` makes the only version each one can resolve to.
- */
+// The README Stack line had all four versions wrong on 2026-11-11. It is joined here to the exact
+// pins in the package.json files.
 describe('the README Stack line names the versions that are pinned', () => {
   const README = readFileSync(join(REPO_ROOT, 'README.md'), 'utf8');
   const pinned = (workspace, name) => {
@@ -200,9 +159,7 @@ describe('the README Stack line names the versions that are pinned', () => {
     ['TypeScript', pinned('.', 'typescript')],
   ];
 
-  /** The `## Stack` section's text, or null when it is not where this guard looks. */
   const stackSection = (text) => /^## Stack\n([\s\S]*?)\n---/mu.exec(text)?.[1] ?? null;
-  /** Every product it names with the version written after it. */
   const stated = (section) =>
     STACK.map(([product]) => [
       product,
@@ -254,9 +211,7 @@ describe('the real pipelines', () => {
   });
 
   it('NEGATIVE CONTROL — a gate that runs BESIDE build is not counted (REGRESSION)', () => {
-    // The whole point of walking the needs graph. Red-but-still-built is what the
-    // pipeline did before: `ci.yml` went red in a different workflow while
-    // `release.yml` built, scanned, staged and offered the artefact for signing.
+    // A gate in a job beside `build` would go red while the artefact was still built and offered for signing.
     const beside = RELEASE.replace('    needs: [tests, browser-gates]', '    needs: [tests]');
     assert.notEqual(beside, RELEASE, 'the `build` job no longer needs both; this control is stale');
     const result = coverage(parseWorkflow(beside), gatesInVerify(PKG));
@@ -273,18 +228,13 @@ describe('the real pipelines', () => {
   });
 
   it('NEGATIVE CONTROL — adding a fifteenth gate to verify fails until it is wired in', () => {
-    // The drift this guard exists for. Eight gates reached `verify` and `ci.yml`
-    // over time while `release.yml` — a separate file with a separate job graph —
-    // was never touched, and nothing said so.
     const gates = [...gatesInVerify(PKG), 'test:collision'];
     const result = coverage(parseWorkflow(RELEASE), gates);
     assert.deepEqual(result.missing, ['test:collision']);
   });
 
   it('ci.yml runs every verify gate somewhere (REGRESSION)', () => {
-    // Weaker than the release claim on purpose: ci.yml has no single sink job.
-    // `test:ax` was one of the fourteen gates for some time while
-    // `grep -n 'test:ax' .github/workflows/*.yml` matched nothing at all.
+    // Weaker than the release claim, because ci.yml has no single sink job.
     const gates = gatesInVerify(PKG);
     const jobs = parseWorkflow(CI);
     assertParserSawTheFile(jobs, 'ci.yml');

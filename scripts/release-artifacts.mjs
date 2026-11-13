@@ -1,74 +1,11 @@
 #!/usr/bin/env node
 /**
- * Builds the two release images ONCE and records their content digests.
- *
- * Invoked by `pnpm run release:artifacts`.
- *
- * ## The defect this exists for
- *
- * "Build once, deploy the same artefact everywhere" is the property that makes a
- * staging rehearsal mean anything, and nothing in this repository held it.
- * `docker-compose.yml` has `build:` sections, so `docker compose up --build`
- * produces a fresh image every time; ci.yml's `containers` job builds two more
- * that nothing else ever sees; and a deployment would have built a third pair.
- * Three builds of the same commit are three different images — the base image
- * moves, the registry serves a rebuilt transitive dependency, a lockfile install
- * lands on a different mirror — so "we tested this in staging" was a statement
- * about a build, not about the bytes that would run.
- *
- * This script is the single place an image is produced. It builds each Dockerfile
- * exactly once, records the digest BuildKit assigned, checks a handful of
- * properties of the artefact itself, and writes a machine-readable manifest.
- * `scripts/staging.mjs`, `scripts/supply-chain/container-scan.mjs` and
- * `.github/workflows/release.yml` all consume that manifest and none of them can
- * build anything. Re-running this script against a commit whose manifest is
- * already valid REFUSES rather than rebuilding, so building twice is an explicit
- * act with a flag on it (`--force`).
- *
- * ## What "digest" means here, precisely, because it is easy to overclaim
- *
- * By default nothing is pushed. The digest recorded is the one BuildKit's image
- * exporter assigns to the manifest it wrote into the local containerd image
- * store — the same value `--iidfile` emits, the same value
- * `docker image inspect --format '{{.Id}}'` reports, and the same value that
- * appears in `RepoDigests` as `prl-api@sha256:...`. It is a content address: two
- * builds that produce different bytes cannot share it, and
- * `image: prl-api@sha256:...` in a compose file resolves to exactly that image or
- * to nothing.
- *
- * What that value is NOT, on its own, is fetchable. It names bytes that exist on
- * one machine, which is why "the release images are identified only by a local
- * BuildKit digest, so they cannot be promoted across machines" sat in
- * `docs/production/final-readiness-report.md` as an open residual.
- *
- * `--push` closes that. It tags and pushes both artefacts to a registry
- * (`deploy/registry/docker-compose.registry.yml` runs one on loopback), records
- * the digest the REGISTRY returned alongside the local one, and then proves the
- * two name the same artefact instead of asserting it: the manifest bytes are
- * re-fetched from the registry over HTTP and re-hashed here, and the image is
- * pulled back BY DIGEST after every local reference to it has been removed. See
- * `scripts/registry-digest.mjs` for why `docker image inspect {{.RepoDigests}}`
- * is cross-checked rather than believed — it has been measured reporting a digest
- * the registry does not hold.
- *
- * What NEITHER digest is, is signed. No registry "vouches" for an artefact in the
- * sense people mean when they say that: a registry is content-addressed storage,
- * so what a push buys is content identity across a push/pull boundary — another
- * machine asking for `repo@sha256:X` gets those bytes or an error, never
- * different bytes. Who built them, from what source, on what machine, and whether
- * anybody stands behind them is provenance, and it needs a signing tool. That is
- * `pnpm run release:sign`, a SEPARATE command on purpose: it holds the private key
- * and this script must never learn to. Nothing in this file signs anything, so a
- * manifest written here describes UNSIGNED artefacts until that command has run and
- * `pnpm run security:image-provenance` has verified the result.
- * `pnpm run staging promote` states exactly that split rather than implying more.
- *
- * ## What this does NOT prove
- *
- * That the images work. It builds them, checks four properties of their
- * filesystem and metadata, and stops. Whether the API serves a hand correctly is
- * `pnpm run staging up`'s job (it runs the smoke test against the running stack),
- * and whether the images carry known CVEs is `pnpm run security:containers`.
+ * Builds the two release images once and records their content digests (`pnpm run release:artifacts`).
+ * This is the only place an image is built. `staging.mjs`, `container-scan.mjs` and `release.yml` read
+ * the manifest it writes, and a commit with a valid manifest is not rebuilt without `--force`.
+ * The local digest is BuildKit's content address, the same as `--iidfile` and `{{.Id}}`. `--push`
+ * also records the registry digest and proves both name the same bytes (see `registry-digest.mjs`).
+ * Nothing here signs. That is `pnpm run release:sign`, which holds the private key.
  *
  * Usage:
  *     node scripts/release-artifacts.mjs [--tag <label>] [--manifest <path>]
@@ -78,15 +15,8 @@
  * Exit codes: 0 both images built and every artefact check passed; 1 a build that
  * failed or an artefact check that did not pass. 0 for --help.
  *
- * Refusing to rebuild a commit that already has a valid manifest also exits 0, and
- * this paragraph used to claim it exited 1. The CODE is right and the sentence was
- * wrong, so the sentence was fixed: the refusal means "the artefacts you asked for
- * already exist and are still resolvable", which is the desired end state, not a
- * failure. It has to be 0 because the release path chains — `pnpm run
- * release:artifacts && pnpm run security:containers && pnpm run staging up` — and
- * an exit 1 there would stop a release for having already built what it needed,
- * teaching everybody to pass --force by reflex and destroying the build-once
- * property this whole script exists to hold. Do not "fix" it the other way.
+ * Refusing to rebuild a commit with a valid manifest also exits 0. The release path chains
+ * `release:artifacts && security:containers && staging up`, and exit 1 there would teach `--force`.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -123,21 +53,8 @@ const red = (s) => paint('31', s);
 const green = (s) => paint('32', s);
 const yellow = (s) => paint('33', s);
 
-// --- output ---------------------------------------------------------------
-
-/**
- * The run's reporter, and the list of everything that went wrong.
- *
- * Module scope rather than local to `main()` for one concrete reason: `pushAll`
- * reports through `tick` and `cross`, and it is defined up here because the
- * registry work is a section of its own. Declaring these inside `main()` would
- * put them out of that function's reach.
- *
- * `failures` is the verdict rather than decoration — `cross` appends to it, and
- * both the exit code and the decision to write a manifest are read off its
- * length. A reporter that only printed would let a failed artefact check
- * publish an image.
- */
+// Module scope so `pushAll` can reach `tick` and `cross`. `failures` decides the exit code and
+// whether a manifest is written.
 const failures = [];
 const tick = (line, detail) => {
   console.log(`${green('  ✓')} ${line}`);
@@ -153,32 +70,19 @@ const bang = (line, detail) => {
   if (detail) console.log(dim(`      ${detail}`));
 };
 
-// --- options --------------------------------------------------------------
-
 const DEFAULTS = {
-  /** Where the manifest is written. Everything downstream reads this path. */
   manifest: 'deploy/staging/release-manifest.json',
-  /**
-   * The human-readable tag. A tag is not the identity — the digest is — but an
-   * image with no tag at all is a name nobody can type, and `docker images` full
-   * of `<none>` entries is how a machine runs out of disk without anyone noticing.
-   */
+  // A tag is not the identity, but untagged `<none>` images fill a disk unnoticed.
   tag: '<git short sha>',
-  /**
-   * Where `--push` pushes. Loopback, because the registry
-   * `deploy/registry/docker-compose.registry.yml` runs has no authentication and
-   * no TLS; see that file for why the port is 5001 rather than 5000.
-   */
+  // Loopback, because the registry has no authentication and no TLS.
   registry: DEFAULT_REGISTRY,
 };
 
-/** The two artefacts. Order matters only for the output; both are always built. */
 const ARTEFACTS = [
   { service: 'api', dockerfile: 'Dockerfile.api', repository: 'prl-api' },
   { service: 'web', dockerfile: 'Dockerfile.web', repository: 'prl-web' },
 ];
 
-/** The schema string downstream consumers check before trusting the shape. */
 export const MANIFEST_SCHEMA = 'prl.release-artifacts.v1';
 
 const HELP = `
@@ -272,15 +176,11 @@ function parseArgs(argv) {
         'then letters, digits, dots, dashes and underscores, at most 128 characters',
     );
   }
-  // Parsed even when --push was not passed: a typo in --registry that is only
-  // noticed after two builds have completed is a typo that costs four minutes.
+  // Parsed even without --push, so a typo fails before two builds.
   const registry = parseRegistryHost(options.registry);
   if ('problem' in registry) throw new Error(`--registry ${registry.problem}`);
   if (options.push && !registry.loopback) {
-    // docker will refuse plain HTTP to a non-loopback host anyway, and this
-    // script sends no credentials, so a remote registry would fail late and
-    // obscurely. Saying so here is not a policy about remote registries; it is a
-    // statement about what this script has been proven to do.
+    // This script sends no credentials and talks plain HTTP, so a remote registry would fail late.
     throw new Error(
       `--registry ${registry.host} is not a loopback address. --push is written for the local ` +
         'registry in deploy/registry/docker-compose.registry.yml: it sends no credentials, and docker ' +
@@ -291,15 +191,7 @@ function parseArgs(argv) {
   return options;
 }
 
-// --- running things -------------------------------------------------------
-
-/**
- * Runs a command and returns its result rather than throwing.
- *
- * `maxBuffer` is 64 MiB because a `docker build` of the web image with BuildKit's
- * plain progress output is comfortably past Node's 1 MiB default, and the failure
- * mode of hitting it is a truncated log on the one run where the log matters.
- */
+// 64 MiB, because a web image build log passes Node's 1 MiB default.
 function run(command, args, { cwd = REPO_ROOT, stream = false, env = process.env } = {}) {
   const result = spawnSync(command, args, {
     cwd,
@@ -316,24 +208,13 @@ function run(command, args, { cwd = REPO_ROOT, stream = false, env = process.env
   };
 }
 
-/** Trimmed stdout of a command expected to succeed, or null if it did not. */
 function capture(command, args) {
   const result = run(command, args);
   if (result.status !== 0) return null;
   return result.stdout.trim();
 }
 
-// --- git and toolchain ----------------------------------------------------
-
-/**
- * What commit this artefact was built from, and whether the tree was clean.
- *
- * `dirty` is recorded rather than refused. A developer rehearsing staging on an
- * uncommitted change is the normal case and blocking it would just teach people to
- * pass a flag; but a manifest that does not say the tree was dirty is a manifest
- * that claims a commit it cannot substantiate. `release.yml` builds from a clean
- * checkout, so a dirty manifest never reaches the promotion path there.
- */
+// `dirty` is recorded rather than refused. `release.yml` builds from a clean checkout.
 function gitProvenance() {
   const sha = capture('git', ['rev-parse', 'HEAD']);
   if (sha === null) return { sha: null, shortSha: null, branch: null, dirty: null };
@@ -358,28 +239,17 @@ function dockerVersion() {
   return version;
 }
 
-// --- the digest -----------------------------------------------------------
-
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 
-/**
- * Everything known about a built image.
- *
- * Three independent readings of the digest are taken and compared, because they
- * come from three different code paths in the daemon and a disagreement between
- * them means the assumption this whole pipeline rests on — that `--iidfile` names
- * the artefact — has stopped holding on this Docker version. Better a loud
- * failure here than a promotion comparing two values that mean different things.
- */
+// Three readings of the digest from three daemon code paths must agree, or `--iidfile` no longer
+// names the artefact on this Docker version.
 function inspectImage(reference, iidDigest) {
   const raw = capture('docker', [
     'image',
     'inspect',
     reference,
     '--format',
-    // WorkingDir is read here rather than assumed by the filesystem probe. See `probeRoot`: the
-    // probe used to walk a hard-coded `/app`, which is a guess about the artefact rather than a
-    // reading of it, and a wrong guess made the probe examine nothing and pass.
+    // WorkingDir is read so `probeRoot` derives the probe root from the image.
     '{{.Id}}\t{{.Size}}\t{{.Created}}\t{{.Config.User}}\t{{.Config.WorkingDir}}\t{{json .RepoDigests}}',
   ]);
   if (raw === null) throw new Error(`docker image inspect ${reference} failed after a successful build`);
@@ -401,9 +271,7 @@ function inspectImage(reference, iidDigest) {
     const parsed = JSON.parse(repoDigestsJson ?? 'null');
     if (Array.isArray(parsed)) repoDigests = parsed.filter((entry) => typeof entry === 'string');
   } catch {
-    // A daemon that cannot render RepoDigests as JSON is not a failure worth
-    // stopping a release for: the field is recorded for a human reading the
-    // manifest, and the two digest readings above are the load-bearing part.
+    // RepoDigests is recorded for a human. The two digest readings above are what count.
     repoDigests = [];
   }
   return {
@@ -416,63 +284,24 @@ function inspectImage(reference, iidDigest) {
   };
 }
 
-// --- artefact checks ------------------------------------------------------
-
-/**
- * A short walk of the image's own filesystem, run inside the image.
- *
- * Written as `node -e` rather than `find`, because node is the one binary both
- * images are guaranteed to have — they are Node images, and everything else in
- * the runtime stage is whatever the base happens to include. That base has
- * already changed once (bookworm-slim → alpine3.24, 2026-08-25, taking the OS
- * package count from 88 to 18 and with it every `find` a Debian layout implied),
- * which is the argument for depending on node and nothing else.
- */
-/**
- * The credential shapes the probe looks for, DERIVED from `secret-scan.mjs` rather than typed
- * out here.
- *
- * ## The defect this exists for
- *
- * The probe below matched two things: a `.md` name, and a basename starting `.env`. Those cover
- * three of the nine paths in `MUST_BE_IGNORED` — `.env`, `.env.local`, `.env.staging` — and
- * miss the other six, which are the six that matter most: `deploy/signing/cosign.key` (mints
- * signatures `security:image-provenance` accepts), `deploy/backup/backup.env` (decrypts every
- * archive ever taken), `deploy/signing/signing.env`, `deploy/staging/observability/metrics-token`
- * and both staging TLS private keys. `backup.env` and `signing.env` slipped through because the
- * test was `/^\.env/` — the basename must START with `.env`, and `backup.env` does not.
- *
- * Measured, not reasoned: an image was built containing `/app/deploy/signing/cosign.key`,
- * `/app/deploy/staging/tls/staging-key.pem`, `/app/deploy/signing/signing.env` and
- * `/app/deploy/staging/observability/metrics-token`, run through this exact probe and through
- * `filesystemProblems`, and the answer was `[]` — a clean release. `.dockerignore`'s single
- * `deploy` line is the only thing standing between that image and a real one, and nothing
- * asserted that line exists.
- *
- * So the list is imported. `MUST_BE_IGNORED` supplies the exact basenames an operator is told
- * to create, `NEVER_TRACKED` supplies the shapes (`*.pem`, `*.key`, `id_rsa`, …), and a new
- * entry in either extends this probe on the same commit instead of a year later. `*.env` is
- * added on top of both, because `NEVER_TRACKED` is written for a repository — where a tracked
- * `backup.env` is the finding — while an image should carry no environment file at all,
- * whatever it is called.
- */
+// The probe runs `node -e` in the image, because node is the one binary both images are sure to have.
+//
+// Credential shapes are derived from `secret-scan.mjs`. A probe that matched only `.md` and `^\.env`
+// passed an image carrying `cosign.key`, `signing.env`, a TLS key and `metrics-token`.
+// `MUST_BE_IGNORED` gives the basenames, `NEVER_TRACKED` the shapes, and any `*.env` is added because
+// an image should carry no environment file.
 const CREDENTIAL_PATTERNS = [
   ...NEVER_TRACKED.map((rule) => rule.pattern.source),
-  // Any `*.env`, not only `.env` and `.env.<x>`: `backup.env` and `signing.env` are the two
-  // this repository already documents, and both were invisible to the old test.
+  // Any `*.env`, so `backup.env` and `signing.env` match.
   '\\.env$',
 ];
 
-/** The basenames themselves, so a rename of `metrics-token` to something shapeless still fires. */
+// The basenames too, so a shapeless rename of `metrics-token` still fires.
 const CREDENTIAL_BASENAMES = [
   ...new Set(MUST_BE_IGNORED.map((entry) => entry.path.split('/').pop()).filter((name) => name)),
 ];
 
-/**
- * A sweep of nothing is not a pass — the corollary this repository has been bitten by twice.
- * If an import ever resolves to an empty list, every image is clean by construction and this
- * check becomes decoration. Fail at module load, where it cannot be mistaken for a green run.
- */
+// An empty detector list would report every image clean, so refuse at module load.
 if (CREDENTIAL_PATTERNS.length < 4 || CREDENTIAL_BASENAMES.length < 4) {
   throw new Error(
     `the credential detectors derived from secret-scan.mjs collapsed to ${CREDENTIAL_PATTERNS.length} ` +
@@ -519,23 +348,8 @@ if (hits.exists) walk(root, 0);
 process.stdout.write(JSON.stringify(hits));
 `;
 
-/**
- * Where in the image the probe starts, derived from the image's own metadata.
- *
- * `/app` used to be written into the probe as a literal, which is the second half of the defect
- * above: a literal path is a guess, and a guess that stops being true produces a walk of nothing
- * and — before the `examined` count existed — a clean pass. `docker image inspect` reports the
- * directory the image actually uses, so a Dockerfile that moves to `/srv` moves the probe with
- * it rather than silently disabling it.
- *
- * The TOP-LEVEL ancestor of the working directory is returned, not the working directory itself,
- * and that is deliberate rather than sloppy. `Dockerfile.web`'s runtime stage ends on
- * `WORKDIR /app/apps/web` while the repository tree it must not carry is copied to `/app`; a
- * probe rooted at the literal working directory would examine one subtree and never look at its
- * siblings, which is a narrower check than the one that caught `apps/web/AGENTS.md`. Taking the
- * first path segment keeps the blast radius the images were actually built with, while still
- * being read from the artefact rather than assumed.
- */
+// The top-level ancestor of the image's WorkingDir. `Dockerfile.web` ends on `WORKDIR /app/apps/web`
+// while the tree it must not carry is at `/app`.
 export function probeRoot(workingDir) {
   if (typeof workingDir !== 'string') return null;
   const trimmed = workingDir.trim();
@@ -547,22 +361,9 @@ export function probeRoot(workingDir) {
   return first === undefined ? null : `/${first}`;
 }
 
-/**
- * The problems a probe result implies, separated from `checkArtefact` so it can be reasoned
- * about — and asserted about — without a Docker daemon.
- *
- * ## The defect this exists for
- *
- * The probe walked a hard-coded `/app` and its `readdirSync` sat inside `try { … } catch {
- * return; }`. An image whose content had moved, or whose runtime stage never received the
- * application at all, produced `{ markdown: [], dotenv: [] }` — byte-for-byte the same result as
- * a clean image — and the release passed. This is the check that exists because `AGENTS.md` and
- * `CLAUDE.md` shipped inside the published web image once already, and a check that cannot fail
- * is not a check.
- *
- * So the probe counts what it examined, and examining nothing is a failure. "Zero files under
- * the application root" is not a state any working release image can be in.
- */
+// Separate from `checkArtefact` so it can be tested without Docker. Examining zero files is a failure,
+// because an empty result looks exactly like a clean image. `AGENTS.md` and `CLAUDE.md` once shipped
+// inside the web image.
 export function filesystemProblems(hits, workingDir) {
   const problems = [];
   const root = hits?.root ?? '(unknown)';
@@ -592,18 +393,9 @@ export function filesystemProblems(hits, workingDir) {
   if (hits.dotenv.length > 0) {
     problems.push(`environment file(s) in the image: ${hits.dotenv.join(', ')} — these carry credentials`);
   }
-  /**
-   * Credential material that is not an `.env`.
-   *
-   * Separate from `dotenv` because the remedy is different and because this list is derived
-   * from `secret-scan.mjs` rather than written here — see `CREDENTIAL_PATTERNS`. The old probe
-   * saw none of it: `deploy/signing/cosign.key` inside a release image hands every puller the
-   * ability to mint signatures `security:image-provenance` accepts, and the check that was
-   * supposed to notice reported a clean pass.
-   */
+  // Credential material other than `.env`, derived from `secret-scan.mjs`.
   if (!Array.isArray(hits.credentials)) {
-    // A probe that stopped reporting the bucket is indistinguishable from a clean image, which
-    // is the exact shape of the `examined === 0` defect above. Refuse rather than assume empty.
+    // A missing bucket is refused rather than read as empty.
     problems.push(
       'the filesystem probe returned no `credentials` list, so nothing looked for key material. ' +
         'An absent result is not a clean one — see CREDENTIAL_PATTERNS',
@@ -620,43 +412,9 @@ export function filesystemProblems(hits, workingDir) {
 }
 
 /**
- * The properties a release image must have, checked against the built artefact
- * rather than against the Dockerfile that was supposed to produce it.
- *
- * Each of the three is a defect that actually shipped or is one edit away from
- * shipping:
- *
- *   * **Runs as `node`.** ci.yml already asserts this; it is repeated here so the
- *     release path does not depend on a CI job that a deployment does not run.
- *   * **No repository markdown outside node_modules** — and the probe must have
- *     LOOKED. The walk is rooted at the top of the image's own declared working
- *     directory (`probeRoot`) and reports how many files it examined; examining
- *     none is a failure. The previous version hard-coded `/app` and swallowed a
- *     missing directory, so an image whose content had moved returned an empty
- *     hit list, which is byte-for-byte what a clean image returns, and the release
- *     passed. The defect this bullet is really about: `.dockerignore` anchored
- *     `*.md` to the context root, so it matched README.md and nothing deeper, and
- *     `apps/web/AGENTS.md` and `apps/web/CLAUDE.md` — this repository's
- *     instructions to coding agents — shipped inside the published web image.
- *     Proven by `docker run prl-web:… find /app -name '*.md'` before the fix. The
- *     ignore rule and two Dockerfile prunes are the fix; this is what stops it
- *     coming back silently.
- *   * **No `.env*` anywhere.** Same class of bug, one that has not happened yet:
- *     `.env` in .dockerignore was root-anchored too, so `apps/api/.env` would have
- *     entered the context and been copied wholesale into the web image.
- *   * **No credential material anywhere**, where "credential material" is
- *     `secret-scan.mjs`'s own list rather than a second copy of it. This bullet
- *     used to be the one above and nothing else, and that covered three of the
- *     nine paths in `MUST_BE_IGNORED`: an image built for the measurement,
- *     carrying `/app/deploy/signing/cosign.key`, `/app/deploy/signing/signing.env`,
- *     `/app/deploy/staging/tls/staging-key.pem` and
- *     `/app/deploy/staging/observability/metrics-token`, produced `[]` problems.
- *     `.dockerignore`'s single `deploy` line was the whole defence, and no gate
- *     asserts that line is there.
- *
- * Dependency READMEs under node_modules are skipped, not because they are
- * desirable but because removing them would mean rewriting a third-party tree
- * inside the image, which trades a cosmetic problem for a real one.
+ * Checks the built artefact, not the Dockerfile: runs as `node`, no repository markdown outside
+ * node_modules, no `.env*`, and no credential material. `.dockerignore` once anchored `*.md` to the
+ * root and the web image shipped `apps/web/AGENTS.md`. Dependency READMEs under node_modules are skipped.
  */
 function checkArtefact(reference, meta, note) {
   const problems = [];
@@ -667,9 +425,6 @@ function checkArtefact(reference, meta, note) {
     );
   }
 
-  // Read from the artefact, never written here as a literal: a probe rooted at a path this
-  // script assumed rather than measured walks nothing the day the Dockerfile changes, and
-  // walking nothing used to be a pass.
   const root = probeRoot(meta.workingDir);
   if (root === null) {
     problems.push(
@@ -711,57 +466,19 @@ function checkArtefact(reference, meta, note) {
   return problems;
 }
 
-// --- the registry ---------------------------------------------------------
-
 /**
- * Pushes one built artefact and returns everything that can be PROVEN about the
- * copy the registry now holds.
- *
- * ## Why this is four checks and not one
- *
- * The blocker being closed is "these images are identified only by a local
- * BuildKit digest, so they cannot be promoted across machines". The fix is not
- * "we ran docker push"; it is a reference another machine can resolve to these
- * exact bytes. Every step below is one way that claim could be false, and each is
- * measured rather than assumed:
- *
- *   1. **The push reported a digest.** Read from the push output, which is the
- *      registry's answer, and not from `docker image inspect` — see
- *      `scripts/registry-digest.mjs` for the measured case where `RepoDigests`
- *      names a digest the registry has never held.
- *   2. **`RepoDigests` agrees with it.** Two readings of the same fact from two
- *      code paths; a disagreement means the push converted the artefact (the
- *      multi-platform case), and the local digest and the registry digest would
- *      then describe different things.
- *   3. **The registry serves bytes that hash to that digest, and those bytes tie
- *      back to the local build.** Done over HTTP, in this process, by hashing
- *      what came back. This is the step that makes the whole thing a measurement:
- *      everything else is docker's word for it.
- *   4. **The image pulls back BY DIGEST after every local reference to it is
- *      removed**, and the image that arrives has the identity the build recorded.
- *
- * ## What step 4 does and does not show on the building machine
- *
- * The layers are already in this machine's content store, so the pull resolves
- * without transferring them and it would be dishonest to call it proof of
- * transfer. What it proves is that the reference RESOLVES: the registry answers
- * for that digest, docker accepts the manifest as matching it, and the image that
- * comes out carries the identity the build recorded. Step 3 is what establishes
- * that the bytes are really in the registry and hash to the digest. The two
- * together are the cross-machine property — a digest pull cannot return different
- * bytes, because a registry that returned different bytes would be returning
- * bytes whose hash is not the digest that was asked for, which step 3 checks by
- * doing the hashing here. `deploy/registry/README.md` carries the cold-store
- * demonstration, on a throwaway image, where the transfer genuinely happens.
+ * Pushes one artefact and proves the registry copy: the push output gives the digest, RepoDigests
+ * agrees, the registry serves bytes that hash to it and tie to the local build, and the image pulls
+ * back by digest after every local reference is removed. On the building machine the pull reuses
+ * local layers, so it proves the reference resolves, not transfer. `deploy/registry/README.md` shows
+ * a cold-store transfer.
  */
 async function pushArtefact(image, registry) {
   const separator = image.tag.lastIndexOf(':');
   const tagLabel = separator === -1 ? 'latest' : image.tag.slice(separator + 1);
   const registryTag = registryTagReference(registry.host, image.repository, tagLabel);
 
-  // Tagged from the DIGEST reference, never from the local tag: the tag is a
-  // pointer that a concurrent build could have moved between the build and here,
-  // and the whole point is that the bytes pushed are the bytes verified.
+  // Tagged from the digest reference, because a concurrent build could move the local tag.
   const tagged = run('docker', ['tag', image.reference, registryTag]);
   if (tagged.status !== 0) {
     return { problem: `docker tag ${image.reference} ${registryTag} failed: ${tagged.stderr.trim()}` };
@@ -814,10 +531,8 @@ async function pushArtefact(image, registry) {
   if (!verified.ok) return { problem: verified.problem };
 
   const reference = registryReference(registry.host, image.repository, pushedDigest);
-  // Both local references to the registry copy are removed so the pull below has
-  // to go through the registry to resolve the digest. These are untags — the
-  // image is still tagged `prl-api:<tag>`, and a container running it is
-  // untouched — so this cannot delete the artefact out from under the stack.
+  // Untags only, so the pull must resolve through the registry. `prl-api:<tag>` and running
+  // containers are untouched.
   const untagged = [registryTag, reference].map((ref) => run('docker', ['rmi', ref]).status === 0);
   const pull = run('docker', ['pull', reference]);
   if (pull.status !== 0) {
@@ -840,9 +555,6 @@ async function pushArtefact(image, registry) {
       tag: registryTag,
       digest: pushedDigest,
       reference,
-      // How the registry's manifest was tied to the local build — see
-      // `tieManifestToLocalDigest`. Recorded so a reader of the manifest knows
-      // which check ran rather than having to infer it from the image store.
       tiedBy: verified.tie,
       pulledBackId: pulledId,
       pushedAt: new Date().toISOString(),
@@ -854,17 +566,7 @@ async function pushArtefact(image, registry) {
   };
 }
 
-// --- the manifest ---------------------------------------------------------
-
-/**
- * Reads an existing manifest and decides whether it still describes THIS commit's
- * artefacts.
- *
- * "Still" is doing real work: a manifest whose digests no longer resolve is a
- * manifest describing images somebody has since pruned, and treating that as a
- * reason not to rebuild would leave the operator with a stack that cannot start
- * and a script that told them everything was fine.
- */
+// A manifest whose digests no longer resolve describes pruned images and does not prevent a rebuild.
 function existingManifestFor(path, commitSha) {
   if (!existsSync(path)) return null;
   let manifest;
@@ -884,16 +586,7 @@ function existingManifestFor(path, commitSha) {
   return manifest;
 }
 
-/**
- * What kind of digest the manifest is recording, stated inside the artefact so
- * that nobody reading it has to find this file to learn what they are looking at.
- *
- * Two strings, because there are two genuinely different situations and a single
- * hedged sentence covering both would be a sentence that overclaims in one of
- * them. This field has been wrong in exactly that way before: it said "not
- * registry-attested: nothing is pushed" for every manifest, which stopped being
- * true the moment `--push` existed.
- */
+// Two strings, because a pushed and an unpushed manifest record different kinds of digest.
 function digestKindFor(images) {
   const everyServicePushed = ARTEFACTS.every(({ service }) => images[service]?.registry != null);
   if (!everyServicePushed) {
@@ -914,12 +607,7 @@ function digestKindFor(images) {
   );
 }
 
-/**
- * Pushes every artefact and hangs the proven registry facts off the manifest
- * entries. A service that could not be pushed is a `cross`, so no manifest is
- * written: a manifest carrying a registry reference for one image and not the
- * other is a manifest whose reader has to guess which half is promotable.
- */
+// A service that could not be pushed is a `cross`, so no half-promotable manifest is written.
 async function pushAll(images, registry) {
   console.log(bold(`\nPush → ${registry.host}`));
   for (const { service } of ARTEFACTS) {
@@ -935,26 +623,7 @@ async function pushAll(images, registry) {
   }
 }
 
-// --- run ------------------------------------------------------------------
-
-/**
- * Everything the command line does, in a function.
- *
- * ## The defect this exists for
- *
- * This block used to sit at module scope, so `import` RAN it. That made the file
- * impossible to test — `scripts/release-artifacts.test.mjs` did not exist because
- * merely importing the module to reach `probeRoot` and `filesystemProblems` would
- * `docker build` both images, push them if `--push` were in this process's argv,
- * and overwrite `deploy/staging/release-manifest.json`. It was found the hard way:
- * a one-line import written to check the filesystem probe kicked off a real image
- * build against a machine with a staging stack running on it.
- *
- * `apps/api/scripts/migrate.mjs`, `scripts/backup.mjs` and
- * `scripts/reliability-drills.mjs` all carry the same guard for the same reason.
- * The most expensive and least reversible script in the repository was the one
- * without it.
- */
+// The command line lives in `main()` so importing the module does not build and push images.
 async function main() {
   let options;
   try {
@@ -1006,11 +675,7 @@ async function main() {
       for (const { service } of ARTEFACTS) {
         console.log(`  ${green('✓')} ${service}  ${dim(existing.images[service].reference)}`);
       }
-      // `--push` on an already-built commit pushes what is there rather than
-      // refusing, and that is the whole point of the refusal: publishing an
-      // artefact must never be a reason to build a second one. Re-pushing an
-      // artefact already in the registry is a no-op on the wire and re-runs every
-      // verification, which is what makes this safe to type twice.
+      // `--push` on an already-built commit pushes what exists rather than building again.
       if (options.push) {
         await pushAll(existing.images, registry);
         if (failures.length === 0) {
@@ -1057,8 +722,7 @@ async function main() {
       if (build.status !== 0) {
         cross(`docker build failed for ${artefact.service} after ${elapsed}s`);
         if (!options.verbose) {
-          // Buffered until now precisely so that a successful build is three lines
-          // and a failed one is the whole log.
+          // Buffered so a successful build prints three lines and a failed one prints the log.
           console.error(build.stdout);
           console.error(build.stderr);
         }
@@ -1082,8 +746,6 @@ async function main() {
         repository: artefact.repository,
         tag: reference,
         digest: meta.digest,
-        // What a compose file and `docker run` take. The tag is beside it for a
-        // human; this is the identity.
         reference: `${artefact.repository}@${meta.digest}`,
         sizeBytes: meta.sizeBytes,
         createdAt: meta.createdAt,
@@ -1099,9 +761,7 @@ async function main() {
 
   const built = Object.keys(images).length;
 
-  // Only after every artefact check has passed. Pushing an image that failed a
-  // check would put it one `docker pull` away from any machine on the network,
-  // which is the opposite of what a gate is for.
+  // Only after every artefact check passed.
   if (options.push && built === ARTEFACTS.length && failures.length === 0) {
     await pushAll(images, registry);
   }
@@ -1112,8 +772,6 @@ async function main() {
       builtAt: new Date().toISOString(),
       commit: git,
       toolchain: { node: process.version, dockerServer: server },
-      // Stated in the artefact itself so that nobody reading the manifest has to
-      // find this file to learn what kind of digest they are looking at.
       digestKind: digestKindFor(images),
       images,
     };
@@ -1178,15 +836,8 @@ async function main() {
   }
 }
 
-/**
- * True when this file was started from the command line rather than imported.
- *
- * realpath on both sides, matching `scripts/reliability-drills.mjs`, so a checkout
- * reached through a symlink still recognises itself — `pnpm`'s workspace layout is
- * a farm of them. A path that cannot be resolved is treated as "not us": the cost
- * of being wrong in that direction is a script that does nothing, and the cost of
- * being wrong in the other is an unattended `docker build`.
- */
+// realpath on both sides, because pnpm reaches the checkout through symlinks. An unresolvable path
+// is "not us", so the failure is a script that does nothing rather than an unattended build.
 function startedFromCommandLine() {
   const entry = process.argv[1];
   if (entry === undefined) return false;

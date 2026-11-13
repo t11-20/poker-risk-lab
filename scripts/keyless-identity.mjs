@@ -1,118 +1,37 @@
 /**
- * The identity half of image signing: WHO signed, rather than WHICH KEY signed.
- *
- * `scripts/image-signing.mjs` binds a release digest to a key whose public half is committed. Its
- * own header states the limit that this module exists to address:
- *
- *     "It proves possession of a key, not the identity of a builder. … Keyless/OIDC signing exists
- *      precisely because that sentence is unavoidable for a long-lived local key."
- *
- * ## What keyless signing actually is, in the two sentences that matter here
- *
- * A GitHub Actions job with `id-token: write` can ask GitHub for a short-lived OIDC token that
- * describes it — repository, workflow file, ref, commit, trigger. cosign exchanges that token with
- * **Fulcio**, which issues a certificate valid for ten minutes whose SAN is a URI naming that
- * workflow, and records the exchange in **Rekor**, a public append-only log. Nothing long-lived is
- * created; there is no key to steal, and there is no key to be careless with.
- *
- * The half that is easy to get wrong, and that this module is mostly about: **a keyless signature
- * verifies against SOME Fulcio certificate.** Fulcio will issue one to anybody's GitHub Actions job.
- * A verification that checks only the cryptography accepts a signature made by a workflow in a
- * repository you have never heard of, and reports it as provenance. What makes it provenance is
- * demanding the certificate's **identity** — the exact workflow URI — and its **issuer** — the
- * exact OIDC provider. Measured, on this machine, offline, against a certificate minted for
- * `example-org` and verified against a policy naming `attacker-org` (the full harness is
- * `node scripts/supply-chain/image-provenance.mjs --negative-control`):
- *
- *     Error: no matching attestations: failed to verify certificate identity: no matching
- *     CertificateIdentity found, last error: expected SAN value
- *     "https://github.com/attacker-org/…/release-sign.yml@refs/tags/v1.0.0", got
- *     "https://github.com/example-org/…/release-sign.yml@refs/tags/v1.0.0"
- *
- * and with the identity right and the issuer wrong:
- *
- *     Error: … expected issuer value "https://gitlab.com", got
- *     "https://token.actions.githubusercontent.com"
- *
- * and with neither asserted at all, which is the state a careless verifier is in:
- *
- *     Error: --certificate-identity or --certificate-identity-regexp is required for verification
- *     in keyless mode
- *
- * cosign refuses to perform a keyless verification that asserts no identity. That refusal is worth
- * knowing about, because it means the failure mode this module guards against is not "cosign
- * silently accepted anything" — it is a verifier that asserts an identity somebody widened.
- *
- * ## Why the policy is a committed file and not a flag
- *
- * The identity is the whole claim. A `--certificate-identity` typed on a command line, or built
- * from an environment variable, is a claim whoever runs the command chose; it can be widened to
- * `.*` by an edit nobody reviews, and the run stays green. `deploy/signing/keyless-policy.json` is
- * committed, is read by the verifier, and is checked against the workflow it names by
- * `scripts/supply-chain/keyless-provenance.mjs` — so a rename that breaks the binding fails a gate
- * instead of quietly widening what is accepted.
- *
- * ## Exact identities only. No regexp.
- *
- * cosign offers `--certificate-identity-regexp`, and this repository deliberately does not use it.
- * A regexp is a licence to accept identities nobody enumerated, and the two ways it goes wrong are
- * both quiet: an unanchored pattern matches a longer string (`…/poker-risk-lab…` also matches
- * `…/poker-risk-lab-fork/…`), and `.*` in the ref position accepts a signature made from any
- * branch, including one an attacker pushed. The signing workflow is `workflow_run`-triggered, which
- * GitHub always runs on the default branch, so there is exactly ONE ref this identity can ever
- * carry and an exact string expresses it. If a future signer is tag-triggered it needs a regexp,
- * and the right time to argue about anchoring is then, in that diff.
+ * The identity half of image signing: which workflow signed, not which key.
+ * Fulcio issues a certificate to any GitHub Actions job, so a keyless signature is provenance only
+ * when verification demands the exact workflow URI and the exact OIDC issuer. Both come from the
+ * committed `deploy/signing/keyless-policy.json`, never from a flag or the environment.
+ * Exact identities only, no `--certificate-identity-regexp`. The signer is `workflow_run`-triggered,
+ * so it always runs on the default branch and has one ref. The measured cosign refusals are in
+ * `node scripts/supply-chain/image-provenance.mjs --negative-control`.
  */
 
 import { X509Certificate } from 'node:crypto';
 
-/** The committed policy. The verifier reads this and nothing else decides what identity is demanded. */
 export const KEYLESS_POLICY_PATH = 'deploy/signing/keyless-policy.json';
 
-/** The schema string the policy reader checks before trusting the shape. */
 export const KEYLESS_POLICY_SCHEMA = 'prl.keyless-identity-policy.v1';
 
-/**
- * The only OIDC issuer a GitHub Actions workload identity can have.
- *
- * Pinned as a constant rather than read from the policy alone, because the policy is checked
- * against it: an issuer that is not this one, on an identity that is a github.com workflow URI, is
- * a policy that would accept a certificate GitHub did not vouch for.
- */
+// Pinned so the policy is checked against it. A different issuer on a github.com workflow URI
+// would accept a certificate GitHub did not vouch for.
 export const GITHUB_OIDC_ISSUER = 'https://token.actions.githubusercontent.com';
 
-/**
- * Fulcio's OIDC-issuer certificate extensions.
- *
- * `1.3.6.1.4.1.57264.1.8` is "issuer (v2)" and carries a DER-encoded UTF8String;
- * `1.3.6.1.4.1.57264.1.1` is the deprecated form and carries the raw string. Both are read, v2
- * first, because a certificate that carries only the deprecated one is still a certificate cosign
- * will match an issuer against — and a parser that could not see it would report "no issuer" for a
- * certificate that has one, which is the shape of every silent pass in this repository.
- */
+// `1.3.6.1.4.1.57264.1.8` is issuer v2 (a DER UTF8String). `1.3.6.1.4.1.57264.1.1` is the
+// deprecated raw string. Both are read, v2 first, because cosign matches against either.
 const OID_ISSUER_V2 = Buffer.from('060a2b0601040183bf300108', 'hex');
 const OID_ISSUER_V1 = Buffer.from('060a2b0601040183bf300101', 'hex');
 
-/** `owner/name`, the shape `github.repository` has. */
 const REPOSITORY_SLUG = /^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9._-]+$/;
 
-/** A workflow path as GitHub writes it into a certificate SAN. */
 const WORKFLOW_PATH = /^\.github\/workflows\/[A-Za-z0-9._-]+\.ya?ml$/;
 
-/** Refs a `workflow_run`/`push`-triggered workflow can run on. Wildcards are refused; see the header. */
+// Wildcards are refused. See the header.
 const GIT_REF = /^refs\/(heads|tags)\/[A-Za-z0-9._\-/]+$/;
 
-// ---------------------------------------------------------------------------
-// The policy
-// ---------------------------------------------------------------------------
-
 /**
- * Validates the committed identity policy without touching a registry, a network or a workflow.
- *
- * Pure, so `scripts/keyless-identity.test.mjs` can drive every way a policy can be wrong — and the
- * ways that matter are not malformed JSON, they are policies that are well-formed and too wide. A
- * `*` in the ref, an issuer that is not GitHub's, a workflow path outside `.github/workflows/`:
- * each of those parses cleanly, reads as a policy, and accepts signatures nobody intended.
+ * Validates the committed policy. Pure, so tests can drive well-formed policies that are too wide.
  *
  * @param {unknown} raw
  * @returns {{policy: object|null, problems: string[]}}
@@ -217,29 +136,10 @@ export function parseKeylessPolicy(raw) {
 }
 
 /**
- * The repository slug the policy applies to, and where that answer came from.
- *
- * This repository has **no git remote**, so nothing in the tree knows its own GitHub owner, and a
- * policy that invented one would be a policy that accepts nothing (safe) while reading as though it
- * had been reviewed (not safe). So `repository: null` is a legal, named state, and it is resolved
- * from the environment — `PRL_KEYLESS_REPOSITORY`, or `GITHUB_REPOSITORY` inside Actions — for the
- * one case that needs it: the workflow verifying its own signature on the run that made it.
- *
- * Two things bound that fallback, and both matter:
- *
- *   * the resolved slug must still end in the policy's `repositoryName`, so an ambient
- *     `GITHUB_REPOSITORY` cannot point the verification at an unrelated repository;
- *   * the caller is told the source, and `supply-chain/keyless-provenance.mjs` REFUSES while a
- *     COMMITTED `release-signatures.json` is in the keyless posture and the policy's owner is still
- *     null — an outsider checking this repository offline has no environment to resolve, and a
- *     record only they cannot verify is not provenance.
- *
- * `image-provenance.mjs` WARNS rather than refusing, and that asymmetry is deliberate rather than an
- * oversight: the one legitimate use of the fallback is the signing workflow verifying its own
- * signature on the run that made it, where `GITHUB_REPOSITORY` is the answer. It is worth being
- * exact about, because an adversarial review found three places in this repository asserting that
- * `image-provenance` refuses here, and what it does is print a yellow line and exit 0. While the
- * owner is null, the identity that verifier trusts is chosen by the ENVIRONMENT it runs in.
+ * The repository has no git remote, so `repository: null` is legal and is resolved from
+ * `PRL_KEYLESS_REPOSITORY` or `GITHUB_REPOSITORY`. The resolved slug must end in `repositoryName`.
+ * `keyless-provenance.mjs` refuses a committed keyless record while the owner is null.
+ * `image-provenance.mjs` only warns, so its trusted identity then comes from the environment.
  *
  * @param {object} policy
  * @param {Record<string, string|undefined>} env
@@ -272,23 +172,13 @@ export function resolveRepository(policy, env = process.env) {
   return { repository: candidate, source: `${from} (the policy names no owner)` };
 }
 
-/**
- * The certificate SAN GitHub mints for the workflow this policy names.
- *
- * This is the string `cosign verify --certificate-identity` is given, and the string a certificate
- * read back out of the registry has to carry. One function builds both so they cannot drift.
- */
+// One function builds the `--certificate-identity` value and the string a certificate must carry.
 export function expectedCertificateIdentity(policy, repository) {
   return `https://github.com/${repository}/${policy.workflow.path}@${policy.workflow.ref}`;
 }
 
 /**
- * Judges an identity/issuer pair — from a signature record, or read out of a real certificate —
- * against the policy.
- *
- * Separate and pure so the mismatch cases can be driven without a network: another owner, another
- * repository, another workflow file, another ref, another issuer. Each of those is a signature that
- * verifies perfectly against some Fulcio certificate and means nothing about this repository.
+ * Pure, so the mismatch cases run without a network.
  *
  * @returns {string[]} problems; empty means the pair is the identity the policy demands
  */
@@ -320,24 +210,10 @@ export function identityProblems({ identity, issuer }, policy, repository) {
   return problems;
 }
 
-// ---------------------------------------------------------------------------
-// Reading the identity back out of a certificate
-// ---------------------------------------------------------------------------
-
 /**
- * The SAN URI and the OIDC issuer of an X.509 certificate, read from the DER.
- *
- * `cosign verify --certificate-identity … --certificate-oidc-issuer …` already refuses a
- * certificate that does not match — measured, and demonstrated by the negative controls. This
- * exists for the same reason `verifiedDigests` in `image-signing.mjs` exists: the gate's claim is
- * "the signature was made by THIS workflow", and reading that back out of the certificate is the
- * difference between checking the claim and trusting a tool's exit code and the flags we happened
- * to pass it.
- *
- * Node's `X509Certificate` exposes the SAN and nothing else useful here, so the issuer extension is
- * located in the raw DER. The scan asserts the OID occurs exactly once: a certificate carrying two
- * issuer extensions is ambiguous, and a parser that silently took the first would be choosing which
- * claim to believe.
+ * The SAN URI and OIDC issuer read from the DER, so the gate checks the certificate itself rather
+ * than cosign's exit code. `X509Certificate` does not expose the issuer extension, so it is found in
+ * the raw DER and must occur exactly once.
  *
  * @param {Buffer|string} certificate PEM or DER
  * @returns {{identity: string, issuer: string} | {problem: string}}
@@ -388,14 +264,8 @@ export function certificateIdentity(certificate) {
   return { identity: uris[0], issuer };
 }
 
-/**
- * The value bytes of one DER extension, located by its encoded OID.
- *
- * A byte scan rather than a full ASN.1 parser, and bounded accordingly: it requires the OID to
- * occur exactly once and to be followed by an optional critical BOOLEAN and then an OCTET STRING.
- * Anything else is reported as a problem rather than guessed at — this runs inside a security gate,
- * and a parser that recovers from surprising input is a parser that can be fed surprising input.
- */
+// A byte scan, not an ASN.1 parser. The OID must occur once, followed by an optional critical
+// BOOLEAN and an OCTET STRING. Anything else is a problem, not a guess.
 function derExtensionValue(der, oid) {
   const first = der.indexOf(oid);
   if (first === -1) return { value: null };
@@ -421,12 +291,8 @@ function derExtensionValue(der, oid) {
 }
 
 /**
- * The certificate a cosign signature bundle carries.
- *
- * Sigstore bundles put it in one of two places depending on version: `certificate.rawBytes` for a
- * single certificate, `x509CertificateChain.certificates[0].rawBytes` for a chain. Both are read,
- * because reading one and reporting "no certificate" for the other would turn a shape difference
- * into a missing check.
+ * Reads `certificate.rawBytes` or `x509CertificateChain.certificates[0].rawBytes`, which differ by
+ * bundle version.
  *
  * @param {unknown} bundle parsed bundle JSON
  * @returns {{der: Buffer} | {problem: string}}
@@ -446,18 +312,7 @@ export function bundleCertificate(bundle) {
   return { der: Buffer.from(base64, 'base64') };
 }
 
-// ---------------------------------------------------------------------------
-// The workflow, read as text
-// ---------------------------------------------------------------------------
-
-/**
- * Strips YAML comments so prose ABOUT a permission is not read as one.
- *
- * Both forms, as `ci-pinning.mjs` does: a whole-line comment, and a trailing ` # …`. The trailing
- * form matters here because this file's own headers discuss `id-token: write` in comments, and a
- * parser that read those would find grants that do not exist — which fails safe, and would still be
- * a gate nobody could keep green.
- */
+// Strips whole-line and trailing ` # …` YAML comments, so prose about a permission is not a grant.
 function uncomment(line) {
   const trimmed = line.trimStart();
   if (trimmed.startsWith('#')) return '';
@@ -466,14 +321,7 @@ function uncomment(line) {
 }
 const indentOf = (line) => line.length - line.trimStart().length;
 
-/**
- * The lines of a top-level block — `on:`, `permissions:`, `jobs:` — with the header line dropped.
- *
- * Line-based, like `ci-pinning.mjs`, and for the same reason: this repository parses its own
- * workflows with the standard library or not at all, because a YAML dependency inside a
- * supply-chain gate is a supply-chain dependency inside the thing that checks supply-chain
- * dependencies.
- */
+// Line-based, to keep a YAML dependency out of a supply-chain gate.
 function topLevelBlock(text, key) {
   const lines = text.split('\n').map(uncomment);
   const start = lines.findIndex((line) => new RegExp(`^['"]?${key}['"]?:`).test(line));
@@ -488,10 +336,8 @@ function topLevelBlock(text, key) {
   return { inline, body };
 }
 
-/** `'id-token'` and `"write"` are the same tokens as `id-token` and `write`. */
 const unquote = (value) => value.trim().replace(/^(['"])([\s\S]*)\1$/, '$2');
 
-/** `name: value` pairs at one indentation level of a block. */
 function pairsAt(body, indent) {
   const pairs = new Map();
   for (const line of body) {
@@ -503,37 +349,13 @@ function pairsAt(body, indent) {
   return pairs;
 }
 
-/**
- * The wildcard key `permissions: write-all` sets. See `permissionsFrom`.
- *
- * A key rather than a boolean because both readers of a permission map are asking the same
- * question — "can this mint an OIDC token" — and a second return value is a second thing one of
- * them can forget to look at. `grantsIdTokenWrite` is what they call, and it knows about both.
- */
+// The wildcard `permissions: write-all` sets. `grantsIdTokenWrite` checks for it.
 const ALL_SCOPES = '*';
 
 /**
- * A `permissions:` value, in every shape GitHub accepts for it.
- *
- * Found by an adversarial review, and the finding was that this parser could only see ONE of them.
- * It read a block mapping and nothing else, so all of the following declared `id-token: write` to
- * GitHub and declared nothing at all to this gate — in a file whose whole promise is that exactly
- * one job in exactly one workflow holds that grant:
- *
- *     permissions: write-all                       # the documented shorthand for every scope
- *     permissions: {contents: read, id-token: write}
- *     permissions:
- *       'id-token': write                          # a quoted key
- *       id-token: 'write'                          # a quoted value
- *
- * Measured before the fix, against `workflowsThatCanMintTokens` — the exact function the gate calls
- * — every one of the four returned an empty list. The block-mapping form was the only one seen, so
- * the rule was enforced against the spelling the repository's own workflows happen to use and no
- * other. That is the shape of a guard that has only ever been shown its own inputs.
- *
- * `write-all` cannot be expanded into a list of scope names here: the set of scopes is GitHub's and
- * changes without notice, and a list written out in this file would be one release behind the day
- * it stops being complete. It is recorded as the wildcard `*` instead, which is what it means.
+ * A `permissions:` value in every shape GitHub accepts: block mapping, flow mapping, quoted keys or
+ * values, and `write-all`. A block-only parser returned no grant for the other four shapes.
+ * `write-all` is recorded as `*`, because GitHub's scope list changes.
  *
  * @param {string} inline text after the colon on the `permissions:` line itself
  * @param {string[]} body the block's lines, when it has one
@@ -555,10 +377,7 @@ function permissionsFrom(inline, body, indent) {
 }
 
 /**
- * Can something holding these permissions mint an OIDC token?
- *
- * The one question both readers ask, in one place, so that a shape one of them learns about is a
- * shape both of them learn about. `write-all` is a yes: it grants every scope, `id-token` included.
+ * Both readers ask this one function, so they learn new shapes together.
  *
  * @param {Map<string,string>} permissions
  */
@@ -567,11 +386,7 @@ export function grantsIdTokenWrite(permissions) {
 }
 
 /**
- * The structural facts a signing workflow's identity depends on.
- *
- * Deliberately a small, named set rather than a general YAML load: every field here is one the
- * policy is checked against, and a parser that returned more would invite checks that are not
- * about identity.
+ * Only the fields the policy is checked against.
  *
  * @param {string} text
  * @returns {{triggers: string[], pushRefs: {tags: boolean, branches: boolean},
@@ -640,9 +455,7 @@ export function parseWorkflowStructure(text) {
         if (indentOf(currentBody[i]) <= jobIndent + 2) break;
         block.push(currentBody[i]);
       }
-      // `permissions: write-all` and `permissions: {id-token: write}` put the whole grant on the
-      // header line and leave an EMPTY block behind them, which the previous reader turned into a
-      // job with no permissions at all. See `permissionsFrom`.
+      // These forms put the grant on the header line and leave an empty block.
       jobs.set(current, permissionsFrom(header.slice(header.indexOf(':') + 1), block, jobIndent + 4));
     };
     for (const line of jobsBlock.body) {
@@ -662,15 +475,8 @@ export function parseWorkflowStructure(text) {
 }
 
 /**
- * The gate's core: the committed policy and the workflow's ACTUAL identity must agree.
- *
- * This is the part that is fully checkable on a laptop with no network, and it is the part that
- * matters most, because every other control here is downstream of it. If the workflow is renamed,
- * moved, retriggered on a different ref, or grows a second job that can mint an OIDC token, then
- * either the identity the policy demands is no longer an identity anything can produce (signing
- * breaks loudly — survivable), or an identity nobody enumerated can now produce signatures the
- * policy accepts (silent, and the whole point of the exercise gone). This function fails on both
- * directions.
+ * The committed policy and the workflow's actual identity must agree. A rename or retrigger makes
+ * signing fail. A second job that can mint a token would let an unlisted identity sign. Both fail here.
  *
  * @param {object} policy from `parseKeylessPolicy`
  * @param {{filename: string|null, text: string|null, declared: Iterable<string>}} workflow
@@ -708,13 +514,10 @@ export function workflowAgreementProblems(policy, { filename, text, declared }) 
     return problems;
   }
 
-  // Which ref can this workflow run on? `workflow_run` and `schedule` always run the default
-  // branch's copy of the workflow, which is the only reason an EXACT identity is expressible here.
+  // `workflow_run` and `schedule` always run the default branch's copy, so an exact ref works.
   const ref = policy.workflow.ref;
   if (structure.triggers.length === 0) {
-    // A sweep of nothing is not a pass, and this one is worse than most: `[].every(…)` is TRUE, so
-    // an `on:` block this parser could not read would sail through the default-branch check below
-    // and report a workflow that can run on any ref as pinned to one.
+    // `[].every(…)` is true, so an unread `on:` block would pass the default-branch check.
     problems.push(
       `${expectedFile} declares no trigger this gate could read. It refuses to judge the ref rather ` +
         'than assuming one: an unreadable `on:` block and a correctly restricted one must not ' +
@@ -752,7 +555,7 @@ export function workflowAgreementProblems(policy, { filename, text, declared }) 
     );
   }
 
-  // `id-token: write` — exactly one job, and never the workflow top level.
+  // `id-token: write` in exactly one job, and never at the workflow top level.
   if (grantsIdTokenWrite(structure.topLevelPermissions)) {
     problems.push(
       'id-token: write is granted at the WORKFLOW top level. Every job then inherits the ability to ' +
@@ -793,18 +596,9 @@ export function workflowAgreementProblems(policy, { filename, text, declared }) 
   return problems;
 }
 
-// ---------------------------------------------------------------------------
-// The signing side
-// ---------------------------------------------------------------------------
-
 /**
- * Refuses to attempt a keyless signature outside a job that can actually do one.
- *
- * `ACTIONS_ID_TOKEN_REQUEST_URL` and `ACTIONS_ID_TOKEN_REQUEST_TOKEN` are injected by the runner
- * ONLY into a job that declares `id-token: write`. Their absence is the exact symptom of the
- * mistake this whole file is written against — a signing job whose permission block was edited —
- * and without this check cosign would instead open an interactive browser flow or fail deep inside
- * an OAuth device-code handshake, neither of which reads as "the workflow lost its grant".
+ * The runner injects `ACTIONS_ID_TOKEN_REQUEST_URL` and `_TOKEN` only into a job with
+ * `id-token: write`. Without this check cosign would start an interactive OAuth flow instead.
  *
  * @returns {string[]}
  */

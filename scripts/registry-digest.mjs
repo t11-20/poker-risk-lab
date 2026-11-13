@@ -1,107 +1,36 @@
 /**
- * The registry half of "build once, promote the same bytes".
+ * The registry half of "build once, promote the same bytes". Pushes an image, reads the digest the
+ * registry assigned, and proves it names the same artefact as the local build by hashing the fetched
+ * manifest bytes. It gives content identity across a push/pull, not provenance or signatures.
+ * Used by `release-artifacts.mjs` (push) and `staging.mjs` (verify and promote).
  *
- * `scripts/release-artifacts.mjs` builds an image and records the digest
- * BuildKit's exporter assigned in the LOCAL image store. That is a content
- * address and it is honest, but it names bytes that exist on one machine, which
- * is why "cannot be promoted across machines" sat in
- * `docs/production/final-readiness-report.md` as an open residual. This module is
- * what turns that local digest into a fetchable one: it pushes to a registry,
- * reads back the digest the REGISTRY assigned, and then proves — rather than
- * asserts — that the two name the same artefact.
- *
- * It is a library. `release-artifacts.mjs` uses it on the push side,
- * `staging.mjs` on the verify-and-promote side, and `staging.test.mjs` drives the
- * pure functions with the exact outputs that were measured against a real
- * `registry:2`.
- *
- * ## Why the digest is fetched over HTTP here rather than asked of docker
- *
- * `docker image inspect --format '{{.RepoDigests}}'` is the obvious way to learn
- * what a push produced, and it can be wrong. Measured, 2026-08-25, pushing the
- * multi-architecture `registry:2` image to a local registry:
- *
- *     $ docker push 127.0.0.1:5099/probe:t1
- *     t1: digest: sha256:fa647fc1e5d5…f5a793 size: 1917
- *      Info -> Not all multiplatform-content is present and only the available
- *              single-platform image was pushed
- *     $ docker image inspect 127.0.0.1:5099/probe:t1 --format '{{json .RepoDigests}}'
- *     ["127.0.0.1:5099/probe@sha256:a3d8aaa63ed8…415373", …]
- *
- * The registry holds `fa647fc1…`; `RepoDigests` reports `a3d8aaa6…`, the digest of
- * the local multi-platform index, which that registry has never seen. A pipeline
- * that recorded the inspect value would have written a reference that resolves to
- * nothing on the machine it was promoted to — the exact failure a registry digest
- * is supposed to remove. So the push output is the authority, `RepoDigests` is
- * cross-checked against it, and a disagreement is a failure rather than a pick.
- *
- * And because "the registry said so" is still somebody's word, `fetchManifest`
- * pulls the manifest bytes back and the caller hashes them: a registry digest is
- * defined as the sha256 of exactly those bytes, so recomputing it locally is a
- * check nobody has to trust.
- *
- * ## What this cannot do
- *
- * Signatures. This module does not sign, verify or attest anything — that is
- * `scripts/image-signing.mjs` and `scripts/supply-chain/image-provenance.mjs`, added
- * 2026-08-25, and this paragraph used to say cosign was not installed at all.
- * What a push here buys, on its own, is CONTENT IDENTITY across a push/pull
- * boundary — the property that another machine asking for `repo@sha256:X` gets
- * those bytes or an error, never different bytes. Who built them, on what, from
- * which source, and whether anybody vouches for them are provenance questions,
- * and they need a signing tool in CI. Nothing here should be read as claiming
- * otherwise.
+ * `docker image inspect '{{.RepoDigests}}'` can be wrong. Measured 2026-08-25, a multi-platform push
+ * printed `sha256:fa647fc1…` while `RepoDigests` named `a3d8aaa6…`, an index the registry never saw.
+ * So the push output is the authority, and `RepoDigests` must agree with it.
  */
 
 import { createHash } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 
-/** An OCI content digest. */
 export const DIGEST = /^sha256:[0-9a-f]{64}$/;
 
-/**
- * A local, registry-less digest reference: `prl-api@sha256:…`. This is what
- * `release-artifacts.mjs` has always recorded and what a machine with no registry
- * still deploys.
- */
 export const LOCAL_DIGEST_REFERENCE = /^[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}$/;
 
-/**
- * A registry digest reference: `127.0.0.1:5001/prl-api@sha256:…`.
- *
- * Written as its own pattern rather than by loosening `LOCAL_DIGEST_REFERENCE`,
- * because the two mean different things downstream: one is `pull_policy: never`
- * and the other is `pull_policy: always`, and a regex that accepted both would
- * make that decision unreadable. The host part allows a port; the path part is
- * the usual lowercase repository grammar.
- */
+// A separate pattern because the two mean different things downstream, `pull_policy: never` for the
+// local one and `pull_policy: always` for this one.
 export const REGISTRY_DIGEST_REFERENCE =
   /^[a-z0-9][a-z0-9.-]*(?::[0-9]{1,5})?\/[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}$/;
 
-/**
- * Where `--push` pushes unless told otherwise, and the port
- * `deploy/registry/docker-compose.registry.yml` publishes.
- *
- * 5001 rather than the conventional 5000 because macOS AirPlay Receiver holds
- * 5000 (`lsof -nP -iTCP:5000 -sTCP:LISTEN` → ControlCenter), and a registry
- * published there fails a push with somebody else's 403.
- */
+// 5001 rather than 5000, because macOS AirPlay Receiver holds 5000 and answers a push with a 403.
 export const DEFAULT_REGISTRY = '127.0.0.1:5001';
 
-/** Hostnames docker itself treats as insecure-by-default, so plain HTTP works. */
 function isLoopbackHostname(hostname) {
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
 }
 
-/**
- * Splits `host[:port]` and says whether it is loopback.
- *
- * `loopback` is not decoration: it decides whether this module talks HTTP or
- * HTTPS, and it is the same rule docker applies when deciding whether a registry
- * may be plain HTTP. A non-loopback registry over plain HTTP is a registry
- * anybody on the path can rewrite, and neither docker nor this module will do it.
- */
+// `loopback` decides HTTP or HTTPS, the same rule docker applies. Plain HTTP to a non-loopback
+// registry lets anyone on the path rewrite it.
 export function parseRegistryHost(raw) {
   if (typeof raw !== 'string' || raw.trim() === '') return { problem: 'the registry host is empty' };
   const host = raw.trim();
@@ -116,40 +45,24 @@ export function parseRegistryHost(raw) {
   return { host, hostname, port, loopback: isLoopbackHostname(hostname) };
 }
 
-/** `127.0.0.1:5001/prl-api@sha256:…` — what compose and `docker pull` take. */
 export function registryReference(host, repository, digest) {
   return `${host}/${repository}@${digest}`;
 }
 
-/** `127.0.0.1:5001/prl-api:091d67ac39ce` — a name a human can type; never the identity. */
+// A name a human can type, never the identity.
 export function registryTagReference(host, repository, tag) {
   return `${host}/${repository}:${tag}`;
 }
 
-/**
- * The digest `docker push` reported, from its own output.
- *
- * The line is `<tag>: digest: sha256:<64 hex> size: <n>`, printed once per pushed
- * reference. The LAST one is taken: a multi-platform push prints an additional
- * informational line containing two bare digests and no `digest:` label, and
- * taking the last labelled value is what keeps the two apart. Returning null
- * rather than guessing is deliberate — the caller fails loudly, because a push
- * whose digest could not be read is a push whose result nobody knows.
- */
+// The line is `<tag>: digest: sha256:<64 hex> size: <n>`. The last labelled one is taken, because a
+// multi-platform push adds a line with two unlabelled digests. Null means the caller fails.
 export function parsePushDigest(output) {
   const matches = [...String(output ?? '').matchAll(/\bdigest:\s*(sha256:[0-9a-f]{64})\b/g)];
   const last = matches.at(-1);
   return last === undefined ? null : (last[1] ?? null);
 }
 
-/**
- * Every digest `RepoDigests` carries for one host/repository.
- *
- * Returns a list, not a value, because the answer being anything other than
- * exactly one digest is itself information the caller must act on — see the
- * module header for the measured case where it names a digest the registry does
- * not hold.
- */
+// A list, because anything other than exactly one digest is a failure the caller must report.
 export function registryRepoDigests(repoDigests, host, repository) {
   const prefix = `${host}/${repository}@`;
   const list = Array.isArray(repoDigests) ? repoDigests : [];
@@ -159,31 +72,14 @@ export function registryRepoDigests(repoDigests, host, repository) {
     .filter((digest) => DIGEST.test(digest));
 }
 
-/** The sha256 of some bytes, in `sha256:…` form. */
 export function digestOf(bytes) {
   return `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 }
 
 /**
- * Ties manifest bytes fetched from a registry to the digest the local build
- * recorded — the check that makes "the registry has the same artefact" a
- * measurement rather than a claim.
- *
- * There are two ways for it to hold, and which one applies depends on the local
- * image store rather than on anything about the artefact:
- *
- *   * **containerd image store** (what this project's machines run, and what
- *     `RepoDigests` on a never-pushed image reveals): `--iidfile` and
- *     `docker image inspect '{{.Id}}'` report the digest of the image's MANIFEST.
- *     The registry stores those same bytes, so `sha256(manifest) === localDigest`.
- *   * **classic graph driver store**: the local id is the digest of the image
- *     CONFIG blob instead. The registry manifest names that blob in
- *     `.config.digest`, so the tie is `manifest.config.digest === localDigest`.
- *
- * Both are content addresses and either is proof. What is NOT proof — and what an
- * earlier sketch of this function did — is comparing the local digest to the
- * digest the registry reported and calling equality "verified": that compares two
- * numbers docker printed, and never touches the bytes either one names.
+ * Ties fetched manifest bytes to the local build digest. With the containerd image store the local
+ * digest is the manifest's sha256. With the classic store it is the config blob, named in
+ * `.config.digest`. Comparing two digests docker printed is not proof, because neither touches the bytes.
  */
 export function tieManifestToLocalDigest(bytes, localDigest) {
   if (!DIGEST.test(String(localDigest))) return { problem: `${String(localDigest)} is not a digest` };
@@ -213,7 +109,6 @@ export function tieManifestToLocalDigest(bytes, localDigest) {
   };
 }
 
-/** Every media type a v2 registry may answer a manifest request with. */
 const MANIFEST_ACCEPT = [
   'application/vnd.oci.image.index.v1+json',
   'application/vnd.oci.image.manifest.v1+json',
@@ -222,17 +117,9 @@ const MANIFEST_ACCEPT = [
 ].join(', ');
 
 /**
- * GETs `/v2/<repository>/manifests/<reference>` and returns the RAW bytes.
- *
- * Raw, not parsed, and that is the entire point: the caller hashes them. Parsing
- * and re-serialising would change the bytes and destroy the only property being
- * checked. `node:http` rather than `fetch` for the same reason — this needs the
- * body exactly as it arrived, and a status code even when the body is an error.
- *
- * No credentials are sent. A registry that answers 401 is reported as such rather
- * than retried with a token flow this module does not implement; the caller then
- * downgrades the independent verification to "not performed" and says so, which
- * is the honest outcome and not a pass.
+ * GETs `/v2/<repository>/manifests/<reference>` and returns the raw bytes, which the caller hashes.
+ * `node:http` rather than `fetch`, to get the body exactly as it arrived. No credentials are sent;
+ * a 401 is reported, and the caller records the verification as not performed.
  */
 export function fetchManifest({ host, repository, reference, timeoutMs = 10_000 }) {
   const parsed = parseRegistryHost(host);
@@ -259,8 +146,7 @@ export function fetchManifest({ host, repository, reference, timeoutMs = 10_000 
             status: res.statusCode ?? 0,
             bytes,
             digest: digestOf(bytes),
-            // The registry's own opinion of the digest. Recorded for a reader and
-            // never trusted: `digest` above is computed from the bytes.
+            // Recorded for a reader, never trusted. `digest` is computed from the bytes.
             reportedDigest: String(res.headers['docker-content-digest'] ?? '') || null,
             contentType: String(res.headers['content-type'] ?? '') || null,
             error: null,
@@ -274,16 +160,7 @@ export function fetchManifest({ host, repository, reference, timeoutMs = 10_000 
   });
 }
 
-/**
- * The whole verification, in one call: does `host/repository@digest` exist in the
- * registry, do its bytes hash to that digest, and do they tie to `localDigest`?
- *
- * `localDigest` is optional because the two callers know different things.
- * `release-artifacts.mjs` has just built the image and can tie the manifest to
- * it; `staging.mjs promote` may be running on a machine that never had the image
- * at all, where the answerable question is only "does the registry still serve
- * these exact bytes under this exact digest".
- */
+// `localDigest` is optional because `staging.mjs promote` may run where the image was never built.
 export async function verifyRegistryDigest({ host, repository, digest, localDigest = null }) {
   if (!DIGEST.test(String(digest))) return { ok: false, problem: `${String(digest)} is not a digest` };
   const answer = await fetchManifest({ host, repository, reference: digest });

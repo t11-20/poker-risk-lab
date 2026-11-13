@@ -1,81 +1,13 @@
 #!/usr/bin/env node
 /**
- * Publishes the release images to the promotion registry and SIGNS them by digest.
- *
- * Invoked by `pnpm run release:sign`. This is the only script in the repository that touches the
- * private key, and it is separate from the verification gate for one reason that is the whole point
- * of the exercise: `pnpm run security:image-provenance` must be runnable by somebody who has only
- * `deploy/signing/cosign.pub`. If signing and verifying lived in one file, the natural thing to do
- * would be to share a key path, and the day somebody "simplified" that the gate would need the
- * private key to run — at which point every machine that can check a signature can also forge one,
- * and the control is gone. Two entry points, one direction of trust.
- *
- * ## The blocker this closes
- *
- * `docs/production/final-readiness-report.md`, residual 3: *"Images carry a registry digest but no
- * signature. `release:artifacts --push` publishes to a registry and the round trip is proven … What
- * does not exist is provenance: nothing is signed, there is no transparency log, and a local
- * registry is not a third party."*
- *
- * The round trip was real and it answered a different question. A digest proves that two parties
- * hold the same bytes; it does not say those bytes came from here. The lab registry has no
- * authentication — `deploy/registry/README.md` says so in as many words — so anything that can
- * reach 127.0.0.1:5001 could push an artefact under `prl-api`, and a deployer pulling by digest
- * would get exactly what they asked for and no way at all to tell whose it was.
- *
- * ## What this does, in order, and why each step is not the previous one
- *
- *   1. **Reads the release manifest.** The digests come from `release-artifacts.mjs`'s output and
- *      from nowhere else. This script cannot build an image and must never learn how: the moment it
- *      can, "the signed artefact is the artefact staging tested" stops being true by construction.
- *   2. **Pushes each image to the registry and proves the registry holds the same artefact.**
- *      Reusing `verifyRegistryDigest` from `scripts/registry-digest.mjs`, which re-fetches the
- *      manifest over HTTP and re-hashes it here, and refusing outright if the registry digest is
- *      not the build digest — the multi-platform conversion case that module's header documents.
- *      Signing a converted artefact would produce a signature over bytes staging never ran.
- *   3. **Signs the DIGEST reference.** Never the tag. cosign's own help says it and it is the
- *      difference between signing an artefact and signing a pointer somebody else can move.
- *   4. **Attests a CycloneDX SBOM** produced by trivy against that same digest reference, so the
- *      inventory is bound by signature to the artefact it inventories rather than sitting in a file
- *      beside it. `docs/sbom/` already holds an SBOM of the dependency graph; this one is of the
- *      IMAGE, which is the thing a deployer runs, and it is signed.
- *   5. **Writes the sidecar** `deploy/staging/release-signatures.json` — and writes it only if every
- *      step above succeeded for every image. A half-written record claiming one of two images is
- *      signed is worse than no record: the gate would pass on the half it can check.
- *
- * ## What this deliberately does NOT do
- *
- * It does not touch `deploy/staging/release-manifest.json`. `scripts/staging.mjs` switches a running
- * stack from `pull_policy: never` to `pull_policy: always` when that file grows a `registry` block,
- * so a signing step that wrote one would change how a live staging stack resolves its images.
- * Security work that silently redeploys something is not security work.
- *
- * It does not rebuild anything, and it refuses if the manifest's images are not present. A signature
- * over an image this machine cannot show you is a claim, not a check.
- *
- * ## Two postures, and which one you are in
- *
- * **Key (the default).** Signs with a long-lived key held on the release machine. That binds a
- * digest to POSSESSION OF A KEY. It does not bind it to a builder, a source tree, or a moment in
- * time, because there is no transparency log behind it (`--tlog-upload=false`, against a loopback
- * registry). It is what a release built on a workstation gets, and it is not going away: an
- * air-gapped or personal build has no workload identity to be.
- *
- * **Keyless (`--keyless`).** Signs with no key at all. Inside a GitHub Actions job holding
- * `id-token: write`, cosign exchanges the job's OIDC token with Fulcio for a ten-minute certificate
- * whose SAN names the workflow, and records it in Rekor. The claim changes from "somebody who had
- * the key" to "this workflow file, in this repository, on this ref", and there is no long-lived
- * secret in the repository to steal. This mode REFUSES outside Actions and refuses in a job that
- * does not hold the grant, rather than falling back to an interactive browser flow — see
- * `keylessPreflight` in `scripts/keyless-identity.mjs`.
- *
- * The record this script writes says which posture it was in, and
- * `scripts/supply-chain/image-provenance.mjs` verifies whichever one it finds. A record in NEITHER
- * posture is refused: an unsigned release is exactly what "neither" looks like.
- *
- * Status of the keyless half at the time of writing: **implemented and unexercised.** No run of
- * `.github/workflows/release-sign.yml` has happened, so no Fulcio certificate and no Rekor entry
- * exist for this repository. See `deploy/signing/README.md` § "What this does not prove".
+ * Publishes the release images to the promotion registry and signs them by digest (`pnpm run release:sign`).
+ * The only script that touches the private key. It is separate from `security:image-provenance` so the
+ * gate runs with only `deploy/signing/cosign.pub`, and a machine that can check cannot forge.
+ * Digests come only from the release manifest, and this script never builds. It refuses when the
+ * registry digest differs from the build digest, signs the digest reference and never the tag, attests
+ * a trivy CycloneDX SBOM of the image, and writes `release-signatures.json` only if every image passed.
+ * It never writes release-manifest.json, because `staging.mjs` switches `pull_policy` on its
+ * `registry` block. `--keyless` signs with a Fulcio certificate inside GitHub Actions and refuses elsewhere.
  *
  * Usage:
  *     node scripts/release-sign.mjs [--manifest <path>] [--out <path>] [--registry <host:port>]
@@ -243,21 +175,9 @@ function parseArgs(argv) {
   return options;
 }
 
-// ---------------------------------------------------------------------------
-// Key generation
-// ---------------------------------------------------------------------------
-
-/**
- * Creates the keypair and the passphrase file, and refuses to overwrite either.
- *
- * The refusal is the important half. Overwriting a signing key silently is how every artefact ever
- * signed with the old one becomes unverifiable at the same moment the gate starts passing again —
- * green, and describing signatures nobody can now check. Rotation is a procedure with a re-signing
- * step in it (`deploy/signing/README.md` § Rotation), not a file write.
- *
- * The passphrase is generated here rather than prompted for, because a human-chosen passphrase on a
- * key that only ever unlocks non-interactively is a passphrase that ends up being `password`.
- */
+// Refuses to overwrite a key, because that makes every earlier signature unverifiable. Rotation is
+// `deploy/signing/README.md` § Rotation. The passphrase is generated, because the key only ever
+// unlocks non-interactively.
 function generateKey(options) {
   const keyPath = resolve(REPO_ROOT, options.key);
   const publicPath = resolve(REPO_ROOT, options.publicKey);
@@ -309,21 +229,8 @@ function generateKey(options) {
   return 0;
 }
 
-// ---------------------------------------------------------------------------
-// Publishing
-// ---------------------------------------------------------------------------
-
-/**
- * Pushes one built image to the registry and returns the registry facts, or a problem.
- *
- * This is deliberately the same shape of check as `pushArtefact` in `release-artifacts.mjs`, and
- * for the same reasons — read that function's header for why `RepoDigests` is cross-checked rather
- * than believed. The one difference is what happens when the registry digest and the build digest
- * are not equal: `release-artifacts.mjs` records both and explains, this REFUSES. A signature is
- * over one digest, and if the registry holds a converted artefact then the digest a deployer pulls
- * is not the digest staging tested — signing it would put a cryptographic guarantee on the wrong
- * bytes, which is worse than not signing at all.
- */
+// The same check as `pushArtefact` in `release-artifacts.mjs`, except a registry digest that differs
+// from the build digest is refused here. Signing it would vouch for bytes staging never ran.
 async function publish(image, registry, tagLabel) {
   const localReference = image.localReference;
   if (capture(['image', 'inspect', localReference, '--format', '{{.Id}}']) === null) {
@@ -381,12 +288,8 @@ async function publish(image, registry, tagLabel) {
     digest: pushedDigest,
     localDigest: image.digest,
   });
-  // A registry that wants credentials — GHCR, where the keyless posture publishes. This module
-  // implements no token flow (see `fetchManifest`), so the independent re-fetch is NOT PERFORMED
-  // rather than performed and passed. What still holds and is what the signature is over: `docker
-  // push` reported this digest, `docker image inspect`'s RepoDigests agree with it, and it is
-  // byte-identical to the digest the build recorded — all three checked above. What is lost is the
-  // re-hash of the manifest by this process, and the record says so instead of implying otherwise.
+  // A registry that wants credentials, such as GHCR. `fetchManifest` has no token flow, so the re-fetch
+  // is recorded as not performed. The push digest, RepoDigests and build digest still agree.
   if (!verified.ok && verified.unauthenticated !== true) return { problem: verified.problem };
   return {
     registryDigest: pushedDigest,
@@ -396,25 +299,13 @@ async function publish(image, registry, tagLabel) {
   };
 }
 
-/** `docker …`, trimmed stdout, or null. Local to this file; the daemon is only used here. */
 function capture(args) {
   const result = spawnSync('docker', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   return result.status === 0 ? (result.stdout ?? '').trim() : null;
 }
 
-// ---------------------------------------------------------------------------
-// Signing and attesting
-// ---------------------------------------------------------------------------
-
-/**
- * `cosign sign`, in whichever posture this run is in.
- *
- * The two argument lists are genuinely different and the difference is the point: the key posture
- * names a key and turns Rekor off; the keyless posture names nothing and leaves the Sigstore
- * signing config — Fulcio and Rekor — switched on. `keyPath` is null in the keyless posture and
- * there is no fallback: a run that could not obtain an identity must fail, never quietly sign with
- * something else.
- */
+// The keyed posture names a key and turns Rekor off. Keyless names nothing and keeps Fulcio and
+// Rekor on. `keyPath` is null for keyless, with no fallback.
 function sign(reference, keyPath, env) {
   const args =
     keyPath === null
@@ -427,19 +318,8 @@ function sign(reference, keyPath, env) {
   return { ok: true };
 }
 
-/**
- * Produces a CycloneDX SBOM of the image with trivy and attests it against the same digest.
- *
- * trivy is already a hard dependency of `pnpm run security:containers`, which refuses rather than
- * skipping when it is absent, so requiring it here adds no new tool to the release machine. The
- * SBOM is generated from the REGISTRY reference rather than the local one so that the bytes
- * inventoried are the bytes a deployer would pull.
- *
- * The component count is returned and recorded, and the gate re-derives it from the SIGNED payload.
- * `cosign attest` will sign `{}` without complaint; an attestation over an empty predicate is a
- * perfectly valid signature over no information, and "an attestation exists" would otherwise be
- * treated as evidence that something was inventoried.
- */
+// The SBOM is made from the registry reference, so it inventories the bytes a deployer pulls. The gate
+// re-derives the component count from the signed payload, because `cosign attest` signs `{}`.
 function attest(reference, keyPath, env, scratch) {
   const sbomPath = join(scratch, 'sbom.cdx.json');
   const trivy = spawnSync(
@@ -499,10 +379,6 @@ function attest(reference, keyPath, env, scratch) {
   return { components, specVersion, predicateType: ATTESTATION_PREDICATE_TYPE };
 }
 
-// ---------------------------------------------------------------------------
-// Run
-// ---------------------------------------------------------------------------
-
 async function main() {
   let options;
   try {
@@ -539,11 +415,8 @@ async function main() {
     console.error(red(`release:sign — --registry ${registry.problem}`));
     process.exit(1);
   }
-  // A non-loopback registry is refused in the KEY posture and only there. The reason was never the
-  // registry: it is that this script sends no credentials and talks plain HTTP with a key sitting
-  // in a file on the machine. The keyless posture has no key to be careless with and reaches a real
-  // registry through docker's authenticated keychain, which is precisely the case the original
-  // refusal pointed at — "that belongs in CI with keyless signing".
+  // A non-loopback registry is refused only in the key posture, because this script sends no
+  // credentials and talks plain HTTP with a key file on disk.
   if (!registry.loopback && !options.keyless) {
     console.error(
       red(
@@ -560,9 +433,7 @@ async function main() {
   let publicKey = null;
   let keyless = null;
   if (options.keyless) {
-    // Refuse early and by name. Without this, cosign outside Actions opens an interactive OAuth
-    // flow — a hung release — and inside a job whose `id-token: write` was edited away it fails
-    // deep in a token request, which reads as a network problem rather than as a lost permission.
+    // Refuse early by name. Otherwise cosign opens an interactive OAuth flow or fails in a token request.
     const problems = keylessPreflight(process.env);
     if (problems.length > 0) {
       console.error(red('release:sign --keyless — refusing to attempt a keyless signature:'));
@@ -585,10 +456,8 @@ async function main() {
       console.error(red(`release:sign --keyless — ${resolved.problem}`));
       process.exit(1);
     }
-    // The identity this run WILL produce, computed before signing so that it is written into the
-    // record and printed even if the verification afterwards fails. It is not asserted here — the
-    // certificate is whatever Fulcio issues — which is exactly why the workflow re-verifies with
-    // `security:image-provenance` immediately afterwards, against the same committed policy.
+    // Computed before signing so it is recorded even if verification fails. The workflow re-verifies
+    // with `security:image-provenance` against the same policy.
     keyless = {
       identity: expectedCertificateIdentity(parsed.policy, resolved.repository),
       issuer: parsed.policy.issuer,
@@ -665,9 +534,7 @@ async function main() {
         cross(`${service}: the release manifest records no usable digest`);
         continue;
       }
-      // `--repository-prefix` namespaces the repository under the registry — `ghcr.io/<owner>/
-      // prl-api`. `parseRegistryHost` refuses a host containing a slash, deliberately, so the
-      // namespace is a separate argument rather than something smuggled into the host.
+      // `parseRegistryHost` refuses a slash in the host, so the namespace is its own argument.
       const repository =
         options.repositoryPrefix === null
           ? image.repository
@@ -712,9 +579,7 @@ async function main() {
       signed[service] = {
         service,
         repository: repository ?? null,
-        // The digest `release-artifacts.mjs` recorded. The gate refuses unless this is byte-identical
-        // to the manifest's digest for this service — that comparison is what ties a signature to
-        // THIS repository's build rather than to some other correctly-signed image.
+        // The gate requires this to equal the manifest's digest for the service.
         buildDigest: image.digest,
         registryDigest: published.registryDigest,
         reference: published.reference,
@@ -741,10 +606,7 @@ async function main() {
     process.exit(1);
   }
 
-  // One record, two shapes, and never both halves at once: `parseSignatureRecord` refuses a record
-  // carrying a public key AND a keyless identity, because that would let a verification that failed
-  // under one posture be reported as a pass under the other. It equally refuses a record carrying
-  // neither — which is what an unsigned release looks like.
+  // `parseSignatureRecord` refuses a record with both a public key and a keyless identity, or neither.
   const record = {
     schema: SIGNATURES_SCHEMA,
     posture: keyless === null ? 'key' : 'keyless',
