@@ -1,10 +1,6 @@
 /**
- * Shared-pool lifecycle: close/restart, crash, warmup, and `/ready` gating.
- *
- * `calc.test.ts` already covers sharding, the queue bound, the deadline, and `app.close()`
- * terminating threads. This file is the rest of the contract the production boot path
- * depends on — especially the one that used to be missing: `/ready` staying 503 until the
- * calculation threads have built their strength table, so the first live Coach is warm.
+ * Shared-pool lifecycle covering close/restart, crash, warmup, and `/ready` staying 503 until the threads
+ * have built their strength table. `calc.test.ts` covers sharding, the queue bound and the deadline.
  */
 
 import assert from 'node:assert/strict';
@@ -192,8 +188,7 @@ describe('pre-warm gates /ready and makes the first Coach warm', () => {
       assert.equal(during.ok, false);
 
       const probing = await app.inject({ method: 'GET', url: '/api/v1/ready' });
-      // Warmup is ~3s; inject is milliseconds. If a machine ever finishes first this still
-      // asserts the body shape rather than hanging the suite.
+      // Warmup is ~3s. A machine that finishes first still gets the body shape asserted.
       if (probing.statusCode === 503) {
         const body = probing.json() as {
           status: string;
@@ -220,9 +215,7 @@ describe('pre-warm gates /ready and makes the first Coach warm', () => {
       const report = await pool.runCoach(topPercentCoach(), 8_000);
       const elapsed = performance.now() - started;
       assert.ok(report.candidates.length > 0, 'the first Coach after ready must actually analyse');
-      // Historical cold path on this machine: ~3.0–3.4s to build the strength table. A warm
-      // first request is tens to hundreds of milliseconds. 2.5s is still well under cold and
-      // leaves room for a loaded CI box; a regression that skipped warmup fails this.
+      // A cold first request took ~3.0-3.4s here. 2.5s is under cold and leaves room for loaded CI.
       assert.ok(
         elapsed < 2_500,
         `first Coach after /ready took ${elapsed.toFixed(0)}ms; warmup did not keep the cold ~3s path off the first request`,

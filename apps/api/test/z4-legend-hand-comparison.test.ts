@@ -1,33 +1,8 @@
 /**
- * `GET /legends/hands/:handId/comparison` — the reader's OWN hand, and nobody else's.
- *
- * ## The defect (CHAL-P1-6)
- *
- * `/legends/hand-review` served `HAND_COMPARISON_FIXTURE` — one bundled sample — for every hand id
- * anybody asked for. The client's loader ignored its argument (`loadHandComparison(_handId)`) and
- * said why in its own comment: the API had never registered a per-hand comparison route.
- * `buildHandComparison` sat complete and tested in `@prl/poker-ai` with nothing in front of it.
- *
- * Reproduced before the fix by fetching `/legends/hand-review?hand=hand_aaaaaaaaaaaa` and
- * `?hand=hand_zzzzzzzzzzzz` from a running server: the two pages differed only in the id echoed in
- * a link. Same board, same decisions, same result.
- *
- * ## What this file proves
- *
- * Two REAL hands, dealt through the engine by `persistHand` and written to a real database, then
- * read back through the route with the real security layer in front of it. The assertions are the
- * ones the audit asked for and they are about correspondence, not shape:
- *
- *   - the comparison names the hand that was asked for;
- *   - its board is that hand's board, and the other hand's board is different;
- *   - its decisions are the actions that were actually taken, in order, by the seats that took
- *     them — so a comparison of hand A can never be a rendering of hand B;
- *   - `chipResult` is the learner's own net, and the two hands disagree about it;
- *   - the opponent is named as the strategy profile the roster records.
- *
- * And the refusals, because a fallback is what the defect was: a stranger and a nonexistent id get
- * the same 404, a hand still in progress and a hand with no modelled seat each get their own
- * `hand_not_comparable` reason, and none of them is ever a sample hand.
+ * `GET /legends/hands/:handId/comparison` returns the reader's own hand and nobody else's. The page
+ * once served one bundled sample for every id (CHAL-P1-6). Two real hands go through the route with
+ * the real security layer, and the assertions are about correspondence to each hand. The refusals
+ * never fall back to a sample.
  */
 
 import assert from 'node:assert/strict';
@@ -54,7 +29,7 @@ import {
 
 announceSkipUnlessDatabase('the Legends hand comparison route');
 
-/** The profile the bot seat plays. One the OLD schema could not name — deliberately. */
+/** One the old schema could not name. */
 const LEGEND_PROFILE = 'adaptive-exploiter';
 
 interface Fixtures {
@@ -71,17 +46,13 @@ interface Fixtures {
 let fixtures: Fixtures | null = null;
 const created: { readonly roomIds: string[]; readonly userIds: string[] } = { roomIds: [], userIds: [] };
 
-/**
- * Membership ids, numbered rather than derived from the user id: the learner is a member of two
- * rooms here, so anything keyed on the user alone collides on the primary key.
- */
+/** Numbered, because the learner is a member of two rooms and a user-keyed id would collide. */
 let memberCounter = 0;
 function nextMemberId(): string {
   memberCounter += 1;
   return `mem_z4comparison${memberCounter.toString().padStart(4, '0')}`;
 }
 
-/** A bot seat on the roster, carrying everything migration 0003 made the column able to hold. */
 async function seatBotMember(sql: Db, roomId: string, userId: string, profileId: string): Promise<void> {
   await sql`
     insert into prl.room_members
@@ -126,8 +97,6 @@ before(async () => {
   const liveHand = newHandId();
   const humanOnlyHand = newHandId();
 
-  // Hand A: the learner raises preflop and the model folds. Short, and every figure in it is
-  // decided by the two actions below rather than by anything this test asserts.
   await insertHand(
     sql,
     persistHand({
@@ -147,8 +116,6 @@ before(async () => {
     }),
   );
 
-  // Hand B: a different deal, a different board, a different line, a different result. Everything
-  // this test compares between the two is a consequence of these inputs.
   await insertHand(
     sql,
     persistHand({
@@ -176,7 +143,7 @@ before(async () => {
     }),
   );
 
-  // A hand that has not finished. Written by hand because `persistHand` settles what it deals.
+  // Written by hand because `persistHand` settles what it deals.
   const unfinished = persistHand({
     handId: liveHand,
     roomId,
@@ -194,7 +161,6 @@ before(async () => {
     update prl.hands set street = 'preflop', completed_at = null, result = null where id = ${liveHand}
   `;
 
-  // A hand at a table with no bot in it at all.
   await insertHand(
     sql,
     persistHand({
@@ -275,8 +241,6 @@ describe('the comparison is of the hand that was asked for', { skip: DB_SKIP_REA
     assert.equal(a.handNumber, 1);
     assert.equal(b.handNumber, 2);
 
-    // Hand A never saw a flop; hand B ran out five cards. This is the assertion the old page could
-    // not have passed: it rendered one bundled board for every id.
     assert.deepEqual(a.board, []);
     assert.deepEqual(b.board, ['Qh', '7h', '2c', '4d', '9s']);
   });
@@ -284,8 +248,6 @@ describe('the comparison is of the hand that was asked for', { skip: DB_SKIP_REA
   it('reports the actions that were actually taken, by the seats that took them', async () => {
     const a = await comparisonOf(live().handA);
 
-    // Two actions were played: the learner raised to 6, the model folded. `userAction` is set for
-    // the learner's own decisions and `modelAction` for the opponent's, never both.
     assert.equal(a.decisions.length, 2);
     const [first, second] = a.decisions;
     assert.ok(first !== undefined && second !== undefined);
@@ -297,8 +259,6 @@ describe('the comparison is of the hand that was asked for', { skip: DB_SKIP_REA
     assert.equal(second.userAction, null);
     assert.deepEqual(second.modelAction, { action: 'fold', to: null });
 
-    // Sequences strictly increase — `buildHandComparison` refuses otherwise, and a replay out of
-    // order would describe a hand that never happened.
     assert.ok(second.sequence > first.sequence);
   });
 
@@ -307,8 +267,7 @@ describe('the comparison is of the hand that was asked for', { skip: DB_SKIP_REA
     const streets = [...new Set(b.decisions.map((decision) => decision.street))];
     assert.deepEqual(streets, ['preflop', 'flop', 'turn', 'river']);
 
-    // The pot grows. Read off the views the replay reconstructed, so a drifting reconstruction
-    // shows up here rather than as a plausible wrong number on the page.
+    // Read off the replay's views, so a drifting reconstruction shows here.
     const pots = b.decisions.map((decision) => decision.potBefore);
     assert.ok(pots[pots.length - 1] !== undefined && pots[0] !== undefined);
     assert.ok(
@@ -326,8 +285,6 @@ describe('the comparison is of the hand that was asked for', { skip: DB_SKIP_REA
       { board: b.board, chipResult: b.chipResult, decisions: b.decisions.length },
       'two different hands produced the same comparison — this is the defect, exactly',
     );
-    // The learner won hand A uncontested and lost nothing; they cannot both be zero by accident,
-    // so the values are asserted rather than merely compared.
     assert.ok(a.chipResult > 0, `hand A took the pot, so the net is positive: ${a.chipResult}`);
   });
 
@@ -335,17 +292,15 @@ describe('the comparison is of the hand that was asked for', { skip: DB_SKIP_REA
     const a = await comparisonOf(live().handA);
     assert.equal(a.profileId, LEGEND_PROFILE, 'one of the seven ids the old schema could not store');
     assert.ok(a.disclosure.displayName.length > 0);
-    // Every Legends surface carries the disclosure, never a bare name.
     assert.ok(a.disclosure.disclaimers.length > 0);
   });
 
   it('claims nothing about why the model acted', async () => {
-    // `prl.hand_actions` records what was done, not the distribution a policy sampled from. A
-    // reconstructed reasoning would be a different hand's thinking attached to this one's action.
+    // `prl.hand_actions` records what was done, not the distribution a policy sampled from.
     const a = await comparisonOf(live().handA);
     for (const decision of a.decisions) {
       if (decision.modelAction !== null) assert.equal(decision.modelReasoning, null);
-      // And the model's own decisions are never analysed — that would leak its hole cards.
+      // Analysing the model's decisions would leak its hole cards.
       if (decision.modelAction !== null) assert.equal(decision.analysis, null);
     }
   });
@@ -393,8 +348,6 @@ describe('a comparison is refused rather than substituted', { skip: DB_SKIP_REAS
   });
 
   it('never answers with a body that could be mistaken for a hand', async () => {
-    // The point of every refusal above. A 200 carrying a bundled sample is what this route
-    // replaced, so nothing that is not the caller's own hand may come back with a comparison in it.
     for (const [handId, token] of [
       [live().handA, live().strangerToken],
       [live().liveHand, live().learnerToken],

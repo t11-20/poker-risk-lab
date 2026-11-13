@@ -1,23 +1,7 @@
 /**
- * Repository-layer tests.
- *
- * Two halves, and the split is deliberate.
- *
- * The first half needs no database at all. Id shapes, entropy, the invite-code alphabet, keyed
- * hashing, constant-time comparison, audit redaction, cursor parsing and every input rule that a
- * repository enforces before it issues a query are all pure functions, and testing them as pure
- * functions is the only way the assertions stay about the property rather than about Postgres. A
- * uniformity check over 640,000 generated characters is a sensible unit test; it would be an
- * absurd integration test.
- *
- * The second half needs Postgres, and skips with a printed reason when `DATABASE_URL` is absent or
- * the schema has not been migrated. `pnpm test` has to pass on a laptop with no database — that is
- * a house rule, and a suite that quietly passes because it silently ran nothing would break it in
- * the other direction, hence the printed reason.
- *
- * Every database case runs inside a transaction that is rolled back afterwards (see `inRollback`),
- * so the suite leaves no rows behind, can be run against a seeded development database, and cannot
- * make one case depend on another's leftovers.
+ * Repository tests. The first half is pure functions and needs no database. The second half needs
+ * a migrated Postgres, skips with a printed reason without one, and runs every case in a rolled-back
+ * transaction so it is safe against a seeded development database.
  */
 
 import assert from 'node:assert/strict';
@@ -59,32 +43,17 @@ import * as sessions from '../src/repositories/sessions.ts';
 import * as users from '../src/repositories/users.ts';
 import { databaseSkip, TEST_DATABASE_URL } from './helpers/database.ts';
 
-// ---------------------------------------------------------------------------
-// Rules copied from files that are not this one
-// ---------------------------------------------------------------------------
-
-/**
- * `prl.prefixed_id`'s domain constraint, from `db/migrations/0001_initial.sql`.
- *
- * Copied rather than imported, because that is the point of the test: if the generator and the
- * domain ever disagree, one of these two literals is wrong and the test says which.
- */
+/** `prl.prefixed_id` from `0001_initial.sql`, copied so a disagreement with the generator shows. */
 const PREFIXED_ID_DOMAIN = /^[a-z]{3,6}_[A-Za-z0-9_-]{8,64}$/;
 
-/** `ID_PATTERN` from `packages/contracts/src/schemas.ts` — the router's rule. Lowercase only. */
+/** `ID_PATTERN` from `packages/contracts/src/schemas.ts`. Lowercase only. */
 const ROUTE_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
-/** `joinRoomBodySchema.inviteCode`'s pattern, likewise copied on purpose. */
 const ROUTE_INVITE_PATTERN = /^[A-Za-z0-9-]{8,32}$/;
 
-/** `handListQuerySchema.cursor`'s pattern. */
 const ROUTE_CURSOR_PATTERN = /^[A-Za-z0-9_:.-]{1,128}$/;
 
-/**
- * Every table's id prefix, copied straight out of the migration's CHECK constraints.
- *
- * `oidc_` is the one worth staring at: `oidc_login_attempts_id_prefix` wants `^oidc_`, not `att_`.
- */
+/** Copied from the migration's CHECK constraints. Note `oidc_`, not `att_`. */
 const MIGRATION_PREFIXES: Readonly<Record<IdKind, string>> = {
   user: 'usr_',
   session: 'ses_',
@@ -107,10 +76,6 @@ const ID_KINDS = Object.keys(ID_PREFIXES) as readonly IdKind[];
 const TEST_SECRET = 'Zk7pQ2vR9tX4bN6mL1sD8gH3jF5wC0yA';
 const OTHER_SECRET = 'Qw9zX2mB7vN4kL6pR1tY8hJ3gF5dS0aC';
 
-// ---------------------------------------------------------------------------
-// ids
-// ---------------------------------------------------------------------------
-
 describe('ids — shape', () => {
   it('every kind produces an id all three rulebooks accept', () => {
     for (const kind of ID_KINDS) {
@@ -119,8 +84,7 @@ describe('ids — shape', () => {
       assert.ok(id.startsWith(expectedPrefix), `${kind} produced "${id}", expected ${expectedPrefix}...`);
       assert.match(id, GENERATED_ID_PATTERN, `${kind}: ${id}`);
       assert.match(id, PREFIXED_ID_DOMAIN, `${kind} must satisfy prl.prefixed_id: ${id}`);
-      // The strictest of the three, and the one that is easy to forget: an id reaching a route as
-      // a path parameter must be lowercase and at most 64 characters.
+      // A path parameter must be lowercase and at most 64 characters.
       assert.match(id, ROUTE_ID_PATTERN, `${kind} must satisfy the router's ID_PATTERN: ${id}`);
       assert.ok(id.length <= 64, `${kind} produced a ${id.length}-character id`);
       assert.equal(id, id.toLowerCase(), `${kind} produced a mixed-case id: ${id}`);
@@ -138,8 +102,7 @@ describe('ids — shape', () => {
     assert.equal(isIdOfKind(generateId('room'), 'user'), false);
     assert.equal(isIdOfKind('usr_notbase32!!', 'user'), false);
     assert.equal(isIdOfKind('usr_tooshort', 'user'), false);
-    // The seeded ids are legal for the domain but were not minted by this generator, and
-    // `isIdOfKind` is about the generator's output rather than about validity.
+    // Valid for the domain, but not minted by this generator.
     assert.equal(isIdOfKind('usr_devseed_alice', 'user'), false);
   });
 
@@ -157,10 +120,6 @@ describe('ids — shape', () => {
     assert.equal(seen.size, 100_000, 'a collision at 100k means the generator is not what it claims');
   });
 });
-
-// ---------------------------------------------------------------------------
-// invite codes
-// ---------------------------------------------------------------------------
 
 describe('ids — invite codes', () => {
   it('excludes every ambiguous character', () => {
@@ -199,14 +158,8 @@ describe('ids — invite codes', () => {
     assert.equal(seen.size, 40_000, 'invite codes must not repeat');
 
     /**
-     * The rejection-sampling check.
-     *
-     * 256 is not a multiple of 31, so a naive `byte % 31` gives the first eight symbols nine of the
-     * 256 byte values each and the rest eight: 9/256 against 8/256, which is 9% above uniform for
-     * a third of the alphabet. Over 640,000 characters the standard deviation of a symbol's count
-     * is about 142, so a 4% tolerance is nearly six sigma of headroom against a false failure
-     * while a 9% bias misses it by a mile. In other words: this test passes with the rejection
-     * step and fails without it.
+     * 256 is not a multiple of 31, so `byte % 31` biases a third of the alphabet 9% high. Over
+     * 640,000 characters one sigma is about 142 per symbol, so 4% catches that with wide margin.
      */
     const total = 40_000 * 16;
     const expected = total / INVITE_CODE_ALPHABET.length;
@@ -223,18 +176,13 @@ describe('ids — invite codes', () => {
   it('normalises what a person typed, and refuses what cannot be a code', () => {
     assert.equal(normaliseInviteCode('  abcd-efgh  '), 'ABCD-EFGH');
     assert.equal(normaliseInviteCode('ABCD EFGH'), 'ABCDEFGH');
-    // Hyphens survive. They are part of the code, not decoration — see the seed-compatibility
-    // test below, which is the reason.
+    // Hyphens survive, because the seed's documented code contains them.
     assert.equal(normaliseInviteCode('prl-dev-room-1'), 'PRL-DEV-ROOM-1');
     assert.equal(normaliseInviteCode(''), null);
     assert.equal(normaliseInviteCode('   '), null);
     assert.equal(normaliseInviteCode('A'.repeat(65)), null, 'over-long input is refused, not cut');
   });
 });
-
-// ---------------------------------------------------------------------------
-// hashing
-// ---------------------------------------------------------------------------
 
 describe('hashing', () => {
   it('sha256 matches the published vector and is 32 bytes', () => {
@@ -258,9 +206,7 @@ describe('hashing', () => {
   });
 
   it('an invite code hashes the way db/seeds/0001_dev_seed.sql expects', () => {
-    // The seed writes sha256(convert_to('PRL-DEV-ROOM-1','utf8')) and documents that code as the
-    // development room's. If normalisation ever starts stripping hyphens, that room becomes
-    // unjoinable by its own documented code — so the two are pinned together here.
+    // Pinned to the seed's sha256 of 'PRL-DEV-ROOM-1', so the dev room stays joinable.
     const expected = sha256('PRL-DEV-ROOM-1');
     assert.deepEqual(hashInviteCode('PRL-DEV-ROOM-1'), expected);
     assert.deepEqual(hashInviteCode('  prl-dev-room-1 '), expected, 'case and padding are forgiven');
@@ -274,13 +220,10 @@ describe('hashing', () => {
     assert.notEqual(keyed, null);
     assert.equal(keyed?.length, DIGEST_BYTES);
 
-    // Deterministic under one secret: "which sessions are mine" has to keep working.
     assert.deepEqual(hashIp(TEST_SECRET, ip), keyed);
-    // Keyed, so a database leak is not a list of addresses. This is the assertion that fails if
-    // somebody "simplifies" these to a plain sha256.
+    // Keyed, so a database leak is not a list of addresses.
     assert.notDeepEqual(hashIp(OTHER_SECRET, ip), keyed);
     assert.notDeepEqual(sha256(ip), keyed);
-    // Domain separated, so the same string in the two columns is not the same 32 bytes.
     assert.notDeepEqual(hashUserAgent(TEST_SECRET, ip), keyed);
 
     assert.equal(hashIp(TEST_SECRET, undefined), null, 'no address means the column stays NULL');
@@ -311,13 +254,11 @@ describe('hashing — timingSafeEquals', () => {
     assert.equal(timingSafeEquals(Buffer.alloc(0), long), false);
     assert.equal(timingSafeEquals(long, Buffer.alloc(0)), false);
     assert.equal(timingSafeEquals(Buffer.alloc(0), Buffer.alloc(0)), true);
-    // A prefix must not compare equal: the wrapper compares, it does not `startsWith`.
     assert.equal(timingSafeEquals(Buffer.from([1, 2, 3]), Buffer.from([1, 2, 3, 0])), false);
   });
 
   it('exists because crypto.timingSafeEqual throws on a length mismatch', () => {
-    // Documents the reason for the wrapper. Letting this throw would leak length through an error
-    // path, and in this codebase it would answer 500 where an invalid credential answers 401.
+    // A throw would leak length and answer 500 where an invalid credential answers 401.
     assert.throws(() => timingSafeEqual(Buffer.from([1]), Buffer.from([1, 2])));
   });
 
@@ -326,10 +267,6 @@ describe('hashing — timingSafeEquals', () => {
     assert.equal(timingSafeEquals(bytes, new Uint8Array(bytes)), true);
   });
 });
-
-// ---------------------------------------------------------------------------
-// users — input rules that need no database
-// ---------------------------------------------------------------------------
 
 describe('users — normaliseDisplayName', () => {
   it('trims, because the column requires a trimmed value', () => {
@@ -354,8 +291,7 @@ describe('users — normaliseDisplayName', () => {
   });
 
   it('counts characters the way Postgres char_length does', () => {
-    // 24 astral characters are 24 to the database and 48 to String.length. Counting the wrong one
-    // would reject a name the column accepts.
+    // 24 astral characters are 24 to the database and 48 to String.length.
     const astral = '\u{1F0A1}'.repeat(24);
     assert.equal(astral.length, 48);
     assert.equal(users.normaliseDisplayName(astral), astral);
@@ -369,10 +305,6 @@ describe('users — normaliseDisplayName', () => {
     assert.equal(users.normaliseDisplayName(name), name);
   });
 });
-
-// ---------------------------------------------------------------------------
-// rooms — configuration rules that need no database
-// ---------------------------------------------------------------------------
 
 describe('rooms — validateRoomConfig', () => {
   const base = {
@@ -415,10 +347,6 @@ describe('rooms — validateRoomConfig', () => {
     }
   });
 });
-
-// ---------------------------------------------------------------------------
-// hands — the guards and the cursor, without a database
-// ---------------------------------------------------------------------------
 
 describe('hands — assertRevealIsSafe', () => {
   function reveal(cardCount: number, complete: boolean) {
@@ -486,10 +414,6 @@ describe('hands — cursors', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// audit — redaction, which is the half the database CHECK cannot do
-// ---------------------------------------------------------------------------
-
 describe('audit — redactDetail', () => {
   it('drops a nested secret, which is exactly what the CHECK cannot see', () => {
     const redacted = audit.redactDetail({
@@ -522,9 +446,7 @@ describe('audit — redactDetail', () => {
     for (const key of forbidden) detail[key] = 'secret';
     const redacted = audit.redactDetail(detail);
     for (const key of forbidden) {
-      // Removed, not blanked. `audit_log_detail_has_no_forbidden_keys` uses `?|`, which tests for
-      // the key's existence and never looks at the value, so keeping the key with a marker value
-      // would fail the write just as surely as keeping the secret.
+      // Removed, not blanked. The CHECK's `?|` tests key existence, not the value.
       assert.equal(Object.hasOwn(redacted, key), false, `${key} must not survive as a key`);
     }
     assert.deepEqual(redacted['_redacted'], forbidden, 'the names are recorded as values');
@@ -532,9 +454,7 @@ describe('audit — redactDetail', () => {
   });
 
   it('covers the keys logging.ts does not, which is why there are two lists', () => {
-    // The gap that made `AUDIT_FORBIDDEN_KEYS` necessary. `logging.ts` keeps `ip` and `userAgent`
-    // out of the log through its request serializer rather than by key name, so the shared
-    // predicate says nothing about them and this table needs its own list.
+    // `logging.ts` keeps `ip` and `userAgent` out by serializer, not key name, so audit needs its own list.
     assert.equal(isSensitiveKey('userAgent'), false, 'if this becomes true, say so in audit.ts');
     assert.equal(isSensitiveKey('ip'), false);
     assert.equal(audit.isForbiddenAuditKey('userAgent'), true);
@@ -542,7 +462,6 @@ describe('audit — redactDetail', () => {
     // Case-insensitive here, unlike the CHECK's exact `?|` match.
     assert.equal(audit.isForbiddenAuditKey('UserAgent'), true);
     assert.equal(audit.isForbiddenAuditKey('IP'), true);
-    // And the families the shared pattern does catch still count.
     assert.equal(audit.isForbiddenAuditKey('refreshToken'), true);
     assert.equal(audit.isForbiddenAuditKey('roomId'), false, 'ordinary context must survive');
   });
@@ -585,17 +504,7 @@ describe('audit — redactDetail', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// The database half
-// ---------------------------------------------------------------------------
-
-/**
- * Decides whether the second half can run, and says so out loud when it cannot.
- *
- * Two separate reasons to skip, reported separately because they need different fixes: no
- * `DATABASE_URL` (set one, or accept that these do not run locally) and no schema (`pnpm
- * db:migrate`). Top-level `await` is what lets the probe happen before `describe` needs to know.
- */
+/** No `DATABASE_URL` and no schema are reported separately, because they need different fixes. */
 const databaseUrl = TEST_DATABASE_URL;
 let client: Sql | null = null;
 let skipReason: string | false = databaseSkip('the repository queries');
@@ -626,16 +535,9 @@ after(async () => {
   if (client !== null) await client.end({ timeout: 5 });
 });
 
-/** Thrown to force a rollback. A module-private instance, so it can be identified by identity. */
 const ROLLBACK = new Error('rollback: this transaction was only ever a test');
 
-/**
- * Runs `fn` in a transaction and rolls it back, whatever happened.
- *
- * The assertions live inside the callback rather than being returned out of it, which keeps the
- * helper's type trivial and — more usefully — means a failed assertion rolls back too. Nothing this
- * suite writes is ever committed, so it is safe to point at a seeded development database.
- */
+/** Assertions run inside the callback, so a failed assertion rolls back too. Nothing is ever committed. */
 async function inRollback(fn: (tx: TransactionSql) => Promise<void>): Promise<void> {
   const handle = client;
   if (handle === null) throw new Error('inRollback called without a database');
@@ -650,13 +552,8 @@ async function inRollback(fn: (tx: TransactionSql) => Promise<void>): Promise<vo
 }
 
 /**
- * Asserts that `run` rejects with `code`, inside a savepoint so the transaction survives it.
- *
- * The savepoint is the point of this helper, not a detail of it. Postgres aborts a transaction on
- * any failed statement, so a translated `seat_taken` recovers the error but not the transaction:
- * without `tx.savepoint(...)` every assertion after an expected rejection would fail with
- * "current transaction is aborted" and the test would be asserting the wrong thing. This is the
- * same reason `rooms.create` wraps its retry loop in `insideSavepoint`.
+ * Asserts a rejection inside a savepoint, because Postgres aborts the transaction on any failed
+ * statement and every later assertion would fail with "current transaction is aborted".
  */
 async function rejectsWith(
   tx: TransactionSql,
@@ -738,16 +635,8 @@ describe('users — against Postgres', dbOptions, () => {
   });
 
   it('renames an account, and reports null for one that is not there', async () => {
-    // `rename` was exported, documented and never once executed. Nothing calls it: no route, no
-    // script, and no test — the only other reference in the repository is the generated `.d.ts`.
-    // The test directly above asserts that "the identity provider does not get to undo a learner's
-    // own rename", which is a claim ABOUT this function made in a path that never reaches it.
-    //
-    // It is kept rather than deleted because the grant matrix in `db/migrations/0001_initial.sql`
-    // names this exact capability as the reason `users` holds UPDATE — "sign-up, rename, guest
-    // sweep" — and a migration is immutable, so deleting the implementation would leave the
-    // schema's own documentation pointing at nothing. What it lacked was a caller and a check; it
-    // now has the check. NO HTTP ROUTE EXPOSES IT, so no learner can rename an account today.
+    // No route exposes `rename`. It stays because the 0001 grant matrix names it as the reason
+    // `users` holds UPDATE, and migrations are immutable.
     await inRollback(async (tx) => {
       const guest = await users.createGuest(tx, { displayName: 'Alice' });
 
@@ -759,15 +648,12 @@ describe('users — against Postgres', dbOptions, () => {
       const readBack = await users.byId(tx, guest.id);
       assert.equal(readBack?.display_name, 'Alicia', 'the change is durable, not just in the return');
 
-      // Normalisation is the same one `createGuest` uses, so a name that would fail the column's
-      // own CHECK is refused here rather than reaching it.
       assert.equal((await users.rename(tx, guest.id, '  Padded  '))?.display_name, 'Padded');
       await assert.rejects(
         () => users.rename(tx, guest.id, 'x'.repeat(25)),
         (error: unknown) => error instanceof AppError && error.code === 'invalid_request',
       );
 
-      // A missing user is null, not a throw: the caller decides whether that is a 404.
       assert.equal(await users.rename(tx, generateId('user'), 'Nobody'), null);
     });
   });
@@ -781,7 +667,7 @@ describe('users — against Postgres', dbOptions, () => {
 
       const { room } = await makeRoom(tx, ownerId);
       await rooms.addMember(tx, { roomId: room.id, userId: ownerId });
-      // Seated: a membership counts only once the learner has sat at it (`users.readUnits`).
+      // A membership counts only once the learner has sat (`users.readUnits`).
       await rooms.seatMember(tx, room.id, ownerId, 0);
       const seated = await users.readUnits(tx, ownerId);
       assert.equal(seated.units, 200, 'units are the chips in front of them');
@@ -799,15 +685,7 @@ describe('users — against Postgres', dbOptions, () => {
     });
   });
 
-  /**
-   * The case the schema used to refuse outright.
-   *
-   * Before migration 0004, `prl.rooms.owner_user_id` and `prl.room_members.user_id` were both
-   * `ON DELETE RESTRICT`, so this exact learner — one who had created a table and sat at
-   * somebody else's — could not be deleted at all, and the failure arrived as a raw 23503 that
-   * nothing mapped. `test/account-deletion.test.ts` proves the whole policy table by table; this
-   * is the same fact where the rest of the users repository is tested.
-   */
+  /** Before migration 0004, ON DELETE RESTRICT refused this learner with an unmapped 23503. */
   it('deletes a learner who created a table and joined another, which RESTRICT used to refuse', async () => {
     await inRollback(async (tx) => {
       const leaverId = await makeGuest(tx, 'Leaver');
@@ -829,7 +707,6 @@ describe('users — against Postgres', dbOptions, () => {
       assert.equal(summary.roomsClosed, 1, 'a table with no owner must not be left open');
 
       assert.equal(await users.byId(tx, leaverId), null);
-      // The other learner is untouched, including their table and their seat at it.
       assert.equal((await users.byId(tx, strangerId))?.id, strangerId);
       const theirRoom = await rooms.byId(tx, theirs.room.id);
       assert.equal(theirRoom?.owner_user_id, strangerId);
@@ -844,16 +721,8 @@ describe('users — against Postgres', dbOptions, () => {
   });
 
   /**
-   * The guard, and the reason it is worth a test.
-   *
-   * `deleteAccount` issues several statements and relies on five referential actions. On the
-   * pool each one commits separately, so a failure part-way through would leave a learner whose
-   * tables are shut and whose account still exists, with nothing recording that an erasure was
-   * ever attempted. The function refuses the pool rather than trusting its caller.
-   *
-   * The id deliberately names no account, which is what makes the assertion sharp: with the
-   * guard removed, this call would find no row and answer `null`, so a rejection can only be the
-   * guard firing. Nothing is written on the pool either way.
+   * On the pool each statement commits separately, so a partial failure would shut a learner's
+   * tables and keep the account. The id names no account, so only the guard can make this reject.
    */
   it('refuses a pool handle outright, because a half-applied erasure has no acceptable state', async () => {
     assert.ok(client !== null, 'this case needs the pool handle itself, not a transaction');
@@ -914,11 +783,8 @@ describe('sessions — against Postgres', dbOptions, () => {
       assert.equal(await sessions.findValidByToken(tx, revoked.token), null);
 
       const expired = await sessions.create(tx, { userId, ipHash: null, userAgentHash: null });
-      // Both timestamps move back, and that is not arbitrary: `now()` is the transaction's start
-      // time and does not advance, so a row whose created_at is `now()` can never have an
-      // expires_at that is both in the past and after created_at (which
-      // `sessions_expires_after_creation` requires). Backdating the pair is the only way to build
-      // an expired session inside one transaction.
+      // `now()` does not advance in a transaction, so both timestamps are backdated to satisfy
+      // `sessions_expires_after_creation`.
       await tx`
         update prl.sessions
            set created_at = now() - interval '2 hours', expires_at = now() - interval '1 hour'
@@ -957,7 +823,6 @@ describe('sessions — against Postgres', dbOptions, () => {
       assert.notEqual(extended, null);
       assert.ok((extended?.getTime() ?? 0) > created.expiresAt.getTime());
 
-      // A ceiling below the current expiry cannot move it, and must not shorten it either.
       assert.equal(await sessions.extendExpiry(tx, created.sessionId, 7_200, 60), null);
       assert.equal(await sessions.extendExpiry(tx, generateId('session'), 7_200, 86_400), null);
     });
@@ -996,8 +861,6 @@ describe('sessions — against Postgres', dbOptions, () => {
       assert.deepEqual(first?.pkceVerifierHash, hashOidcSecret(verifier));
       assert.equal(first?.redirectAfter, '/lessons/pot-odds');
 
-      // The replay. One UPDATE ... WHERE consumed_at IS NULL is what makes this null rather than a
-      // second successful sign-in.
       assert.equal(await sessions.consumeLoginAttempt(tx, state), null);
       assert.equal(await sessions.consumeLoginAttempt(tx, generateOpaqueSecret()), null);
       assert.equal(await sessions.consumeLoginAttempt(tx, ''), null);
@@ -1061,7 +924,6 @@ describe('rooms — against Postgres', dbOptions, () => {
       assert.equal(found?.id, room.id, 'a code typed in lower case still works');
       assert.equal(await rooms.byInviteCode(tx, generateInviteCode()), null);
       assert.equal(await rooms.byInviteCode(tx, ''), null);
-      // The row that comes back never carries the digest onwards.
       assert.equal(Object.hasOwn(found ?? {}, 'invite_code_hash'), false);
     });
   });
@@ -1076,7 +938,6 @@ describe('rooms — against Postgres', dbOptions, () => {
       assert.equal(owner.seat, null, 'a new member is waiting, not seated');
       assert.equal(owner.stack, 200, 'the stack defaults to the room starting stack');
 
-      // The partial unique index is what stops one learner acting out of two seats.
       await rejectsWith(tx, 'already_seated', (handle) =>
         rooms.addMember(handle, { roomId: room.id, userId: ownerId }),
       );
@@ -1105,7 +966,7 @@ describe('rooms — against Postgres', dbOptions, () => {
         startingStack: 200,
       });
       await rooms.addMember(tx, { roomId: room.id, userId: ownerId });
-      // A CHECK cannot see across tables, so `seat < max_seats` is in the statement's WHERE clause.
+      // A CHECK cannot see across tables, so `seat < max_seats` is in the WHERE clause.
       await rejectsWith(tx, 'invalid_request', (handle) => rooms.seatMember(handle, room.id, ownerId, 4));
       await rejectsWith(tx, 'invalid_request', (handle) => rooms.seatMember(handle, room.id, ownerId, 9));
     });
@@ -1207,9 +1068,7 @@ describe('rooms — against Postgres', dbOptions, () => {
         bot: { profileId: 'disciplined-specialist', difficulty: 'realistic', seed: 4_294_967_295 },
       });
       assert.equal(bot.is_bot, true);
-      // The profile's own id, not a legacy range label — migration 0003. And the seed survives the
-      // full uint32 range: it is a `bigint` column precisely because a signed `int` would lose half
-      // of it, and postgres.js hands int8 back as a string, so this also pins the conversion.
+      // `bot_seed` is `bigint` for the full uint32 range, and postgres.js returns int8 as a string.
       assert.equal(bot.bot_profile, 'disciplined-specialist');
       assert.equal(bot.bot_difficulty, 'realistic');
       assert.equal(bot.bot_seed, 4_294_967_295);
@@ -1303,9 +1162,6 @@ describe('hands — against Postgres', dbOptions, () => {
     });
   });
 
-  // #########################################################################
-  // # THE HOLE-CARD TEST                                                    #
-  // #########################################################################
   it('returns hole cards only for the viewer own seat', async () => {
     await inRollback(async (tx) => {
       const { heroId, villainId, handId } = await dealtHand(tx);
@@ -1319,7 +1175,6 @@ describe('hands — against Postgres', dbOptions, () => {
       assert.equal(asVillain[0]?.holeCards, null);
       assert.deepEqual(asVillain[1]?.holeCards, ['7c', '2d']);
 
-      // A spectator, and an unauthenticated viewer, see nothing at all.
       const asStranger = await hands.seatsOf(tx, handId, await makeGuest(tx, 'Stranger'));
       assert.deepEqual(
         asStranger.map((seat) => seat.holeCards),
@@ -1332,7 +1187,6 @@ describe('hands — against Postgres', dbOptions, () => {
         'a null viewer must match no seat, including seats whose user_id is null',
       );
 
-      // Everything else about the seat is public: it has to be, for the table to render.
       assert.equal(asStranger[0]?.startingStack, 200);
       assert.equal(asStranger[0]?.displayName, 'Hero');
     });
@@ -1438,18 +1292,15 @@ describe('hands — against Postgres', dbOptions, () => {
       const first = await hands.appendAction(tx, action);
       assert.equal(first.applied, true);
 
-      // The retry. One statement decides, and it decides "already done".
       const retry = await hands.appendAction(tx, action);
       assert.equal(retry.applied, false, 'chips must not leave a stack twice');
       assert.equal(retry.id, null);
 
-      // A different decision that reused the sequence is a stale action, not a duplicate — and the
-      // named conflict target is what keeps those two apart.
+      // A reused sequence with a new id is stale, not a duplicate. The named conflict target decides.
       await rejectsWith(tx, 'stale_action_sequence', (handle) =>
         hands.appendAction(handle, { ...action, actionId: generateOpaqueSecret(12) }),
       );
 
-      // Server-generated actions carry no id, so several of them coexist.
       await hands.appendAction(tx, {
         ...action,
         sequence: 2,
@@ -1499,12 +1350,7 @@ describe('hands — against Postgres', dbOptions, () => {
     });
   });
 
-  /**
-   * Migration 0009. `was_automatic` alone could not tell a seat whose clock ran out from a player
-   * who had pressed "Stand up" holding cards, and the hand review printed "the clock ran out" for
-   * both. The reason is written with the row and read back as written, and the CHECKs are held to
-   * `AUTOMATIC_REASONS` here so the contract and the schema cannot drift apart unnoticed.
-   */
+  /** The CHECKs are held to `AUTOMATIC_REASONS` so the contract and the schema cannot drift. */
   it('records why an automatic action was taken, and only for an automatic one', async () => {
     await inRollback(async (tx) => {
       const { handId } = await dealtHand(tx);
@@ -1525,7 +1371,7 @@ describe('hands — against Postgres', dbOptions, () => {
         sequence += 1;
         await hands.appendAction(tx, { ...base, sequence, wasAutomatic: true, automaticReason: reason });
       }
-      // A row as the previous build writes it between migrate and roll: automatic, reason unknown.
+      // A row as the previous build writes it, automatic with no reason.
       sequence += 1;
       await hands.appendAction(tx, { ...base, sequence, wasAutomatic: true, automaticReason: null });
 
@@ -1535,9 +1381,7 @@ describe('hands — against Postgres', dbOptions, () => {
         [...AUTOMATIC_REASONS.map((reason) => [true, reason]), [true, null]],
       );
 
-      // A reason the contract does not know, and a reason on a decision a person made. Neither
-      // constraint maps to an `ErrorCode` (nothing a caller could do about it), so the driver's own
-      // error comes through, and it is held to the constraint that refused it.
+      // Neither constraint maps to an `ErrorCode`, so the driver's error comes through.
       const refusedBy = async (constraint: string, input: hands.AppendActionInput): Promise<void> => {
         await assert.rejects(
           tx.savepoint(async (savepoint) => {
@@ -1593,7 +1437,6 @@ describe('hands — against Postgres', dbOptions, () => {
   it('pages hand history by keyset, newest first', async () => {
     await inRollback(async (tx) => {
       const { heroId, roomId, handId } = await dealtHand(tx);
-      // Two more hands in the same room, so there is something to page through.
       for (const offset of [1, 2]) {
         const nextId = generateId('hand');
         await hands.start(tx, {
@@ -1633,15 +1476,10 @@ describe('hands — against Postgres', dbOptions, () => {
       assert.equal(second.hands[0]?.id, handId);
       assert.equal(second.nextCursor, null, 'the last page says so');
 
-      // A hand the learner had no seat in is not in their history.
       const stranger = await hands.listForUser(tx, { userId: await makeGuest(tx, 'Stranger') });
       assert.equal(stranger.hands.length, 0);
     });
   });
-
-  // #########################################################################
-  // # RESTORING THE ROTATION, AND CLOSING WHAT CANNOT FINISH                #
-  // #########################################################################
 
   it('reports the last deal, so a re-opened room does not restart the blind rotation', async () => {
     await inRollback(async (tx) => {
@@ -1659,9 +1497,7 @@ describe('hands — against Postgres', dbOptions, () => {
         { handId, handNumber: 1, buttonSeat: 0, dealtSeats: [0, 1] },
       );
 
-      // The newest hand wins even when it is still in progress: it was dealt, so it is where the
-      // rotation had got to, and a restart must carry on from there rather than from the last one
-      // that happened to finish.
+      // The newest hand wins even in progress, because it is where the rotation had got to.
       const second = generateId('hand');
       await hands.start(tx, {
         handId: second,
@@ -1707,8 +1543,6 @@ describe('hands — against Postgres', dbOptions, () => {
         [{ handId, roomId, handNumber: 1 }],
       );
 
-      // Nothing is left for the history to render as a null: the hand is complete, it has a
-      // completion time, and both blank-result constraints on `prl.hands` are satisfied.
       const rows = await tx<
         {
           street: string;
@@ -1725,8 +1559,7 @@ describe('hands — against Postgres', dbOptions, () => {
       assert.equal(row.result.endedByFold, true, 'no cards were shown, which is what the flag means');
       assert.deepEqual(row.result.showdowns, []);
       assert.deepEqual(row.result.awards, []);
-      // The deck is gone with the process, so the only honest reveal proves nothing at all — and
-      // it must still be a reveal the verifier and both CHECK constraints accept.
+      // The deck died with the process, so the reveal is empty but must still pass the verifier and CHECKs.
       assert.deepEqual(row.reveal.cards, []);
       assert.equal(row.reveal.complete, false);
       assert.deepEqual(row.reveal.commitment, {
@@ -1736,8 +1569,7 @@ describe('hands — against Postgres', dbOptions, () => {
         context: `prl-deck-v2|${handId}`,
       });
 
-      // Chips: an interrupted hand never wrote a stack back, so nobody won or lost anything, and
-      // zero is the true figure rather than a placeholder.
+      // An interrupted hand wrote no stack back, so zero is the true figure.
       const seats = await hands.seatsOf(tx, handId, heroId);
       assert.deepEqual(
         seats.map((seat) => ({ seat: seat.seat, net: seat.netResult, starting: seat.startingStack })),
@@ -1747,8 +1579,6 @@ describe('hands — against Postgres', dbOptions, () => {
         ],
       );
 
-      // And the learner's own history has something to render rather than a row of nulls, which
-      // is the whole complaint: three of these accumulated in one audit session.
       const history = await hands.listForUser(tx, { userId: heroId, roomId });
       const listed = history.hands[0];
       assert.ok(listed !== undefined);
@@ -1792,9 +1622,7 @@ describe('hands — against Postgres', dbOptions, () => {
       });
       assert.notEqual(settled.completed_at, null);
 
-      // A different room's orphan is not this room's business: the reconciliation is scoped to the
-      // room being taken over, because that is the only room this process can be sure nobody else
-      // is mid-hand in.
+      // Scoped to the room being taken over, the only room this process knows is idle.
       const otherRoom = await makeRoom(tx, villainId);
       const otherHand = generateId('hand');
       await rooms.addMember(tx, { roomId: otherRoom.room.id, userId: villainId });
@@ -1873,7 +1701,6 @@ describe('progress — against Postgres', dbOptions, () => {
         answer: { kind: 'number', value: 0.25 },
         wasCorrect: true,
       });
-      // The same question again: a learner reconsidering has not answered two questions.
       await progress.recordQuizAttempt(tx, {
         userId,
         quizId: 'foundations',
@@ -1987,7 +1814,6 @@ describe('progress — against Postgres', dbOptions, () => {
         ],
       });
 
-      // A hand in progress has not been played yet.
       assert.equal((await progress.readProgress(tx, heroId)).handsPlayed, 0);
 
       await hands.complete(tx, {
@@ -2059,8 +1885,7 @@ describe('audit — against Postgres', dbOptions, () => {
 
   it('writes a forbidden top-level key as a marker rather than tripping the CHECK', async () => {
     await inRollback(async (tx) => {
-      // Without the redaction pass this insert would be a check violation, and a check violation on
-      // an audit write takes the request it was auditing down with it.
+      // Without redaction this would be a check violation, which fails the audited request too.
       await audit.record(tx, {
         event: 'test.forbidden.keys',
         detail: { holeCards: ['Ah', 'Kh'], roomId: 'room_kept' },

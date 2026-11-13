@@ -1,18 +1,7 @@
 /**
- * Rooms: the live table's rules, and the REST surface over it.
- *
- * ## No database, and no clock
- *
- * `RoomStore` and `SessionStore` are ports, so the whole of rooms, seating, bots and the Legends
- * endpoints runs against `Map`-backed fakes in this file. The tables run on a manual clock, so a
- * thirty-second turn timer is exercised in a microsecond and nothing here depends on wall time.
- *
- * ## What is asserted, and why these things
- *
- * The interesting assertions are the ones about *refusals*: a duplicate `actionId` that must not
- * apply twice, a stale `expectedSequence` that must leave the state byte-identical, a seat that is
- * not to act, a timeout that must never call, and an invite code that must appear exactly once and
- * never again. Each of those is a place where being wrong is expensive and being wrong is quiet.
+ * The live table's rules and the REST surface over it. `RoomStore` and `SessionStore` are
+ * ports backed by `Map` fakes, and tables run on a manual clock, so nothing needs a database or wall
+ * time. The weight is on refusals, where being wrong is expensive and quiet.
  */
 
 import assert from 'node:assert/strict';
@@ -59,7 +48,6 @@ const stubDatabase: DatabaseHandle = {
   close: () => Promise.resolve(),
 };
 
-/** Readable, sequential hand ids, so a failure names the hand it happened in. */
 function incrementingHandIds(): () => string {
   let count = 0;
   return () => {
@@ -68,17 +56,7 @@ function incrementingHandIds(): () => string {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Fakes
-// ---------------------------------------------------------------------------
-
-/**
- * A session store backed by a Map, keyed by the plaintext token.
- *
- * The real store hashes inside the repository, which is what keeps a plaintext token out of every
- * query in the codebase; a fake has no query to keep it out of, so it holds the token directly and
- * the digest never comes into it.
- */
+/** Keyed by plaintext token. The real store hashes inside the repository. */
 function fakeSessionStore(): {
   readonly store: SessionStore;
   readonly signIn: (account: SessionAccount) => string;
@@ -114,20 +92,13 @@ function fakeSessionStore(): {
 }
 
 interface FakeRoomStore extends RoomStore {
-  /** The plaintext codes handed out, so a test can join with one. */
   readonly codes: Map<string, string>;
   readonly units: Map<string, number>;
   readonly rows: Map<string, RoomRow>;
-  /** Memberships by `roomId:userId`, so a test can put one in the state a hand would leave it. */
   readonly members: Map<string, RoomMemberRow>;
 }
 
-/**
- * A `Map`-backed room store.
- *
- * It enforces the two rules the real one leaves to a partial unique index — one live member per
- * seat, one membership per user — because those are the two a test needs to be able to trip.
- */
+/** Enforces one live member per seat and one membership per user, the two indexes a test trips. */
 function fakeRoomStore(): FakeRoomStore {
   const rows = new Map<string, RoomRow>();
   const members = new Map<string, RoomMemberRow>();
@@ -214,7 +185,6 @@ function fakeRoomStore(): FakeRoomStore {
       if (member !== undefined) members.set(key(roomId, userId), { ...member, seat: null });
       return Promise.resolve();
     },
-    // By id, as the real statement is: a membership removed since its seat was taken is not found.
     recordFirstSit: (memberId) => Promise.resolve([...members.values()].some((m) => m.id === memberId)),
     removeMember: (roomId, userId) => {
       members.delete(key(roomId, userId));
@@ -226,7 +196,6 @@ function fakeRoomStore(): FakeRoomStore {
       rows.set(roomId, { ...row, status: 'closed', closed_at: new Date() });
       return Promise.resolve(true);
     },
-    // `rooms.closePracticeTable`: refused while another person is a member at the moment of closing.
     closePracticeTable: (roomId, ownerUserId) => {
       const row = rows.get(roomId);
       if (row === undefined || row.status === 'closed' || row.owner_user_id !== ownerUserId) {
@@ -255,7 +224,6 @@ interface Harness {
   readonly clock: ManualClock;
 }
 
-/** The one route this file adds: a CSRF token to send with the mutating requests. */
 const CSRF_ROUTE = '/api/v1/test-csrf-rooms';
 
 async function harness(overrides: { readonly config?: AppConfig } = {}): Promise<Harness> {
@@ -278,7 +246,6 @@ async function harness(overrides: { readonly config?: AppConfig } = {}): Promise
   return { app, store, registry, sessions, clock };
 }
 
-/** A signed-in caller: the signed cookie a browser would send. */
 function caller(
   harnessed: Harness,
   account: Partial<SessionAccount> & { readonly id: string },
@@ -293,13 +260,7 @@ function caller(
   return { cookies: { prl_session: harnessed.app.signCookie(token) } };
 }
 
-/**
- * A CSRF token and its cookie, minted through the real plugin.
- *
- * Every mutating request in this file carries them, so these tests take exactly the path a
- * browser's would — including the check that would reject them if the security layer's hook order
- * ever changed.
- */
+/** Minted through the real plugin, so a change in hook order would fail these tests. */
 async function csrfPair(app: FastifyInstance): Promise<{ token: string; cookie: string }> {
   const response = await app.inject({ method: 'GET', url: CSRF_ROUTE });
   const body: unknown = response.json();
@@ -309,10 +270,6 @@ async function csrfPair(app: FastifyInstance): Promise<{ token: string; cookie: 
   assert.ok(cookie !== undefined);
   return { token: String(payload.token), cookie: cookie.value };
 }
-
-// ---------------------------------------------------------------------------
-// Timers
-// ---------------------------------------------------------------------------
 
 describe('turn timers', () => {
   it('fires at an absolute deadline and not before', () => {
@@ -359,17 +316,12 @@ describe('turn timers', () => {
         fired += 1;
       },
     });
-    // A deadline in the past fires on the next turn of the loop rather than synchronously.
     timer.arm({ handId: 'hand_1', seat: 1, deadlineMs: clock.now() - 5 });
     assert.equal(fired, 0, 'arming must not fire inline');
     clock.advance(0);
     assert.equal(fired, 1);
   });
 });
-
-// ---------------------------------------------------------------------------
-// The live table
-// ---------------------------------------------------------------------------
 
 interface TableHarness {
   readonly table: LiveTable;
@@ -390,7 +342,6 @@ async function headsUp(): Promise<TableHarness> {
   return { table, clock };
 }
 
-/** Whoever the engine says is to act, as a user id. */
 function actorOf(table: LiveTable): string {
   const view = table.viewFor('usr_a');
   assert.ok(view !== null);
@@ -419,7 +370,6 @@ describe('the live table', () => {
     const sequenceAfterFirst = afterFirst.actionSequence;
     const potAfterFirst = afterFirst.potTotal;
 
-    // The retry a dropped response would produce: same actionId, same (now stale) sequence.
     const retry = await table.submitAction(actor, {
       action: { type: 'call' },
       actionId: 'action-0001',
@@ -476,7 +426,7 @@ describe('the live table', () => {
     const { table, clock } = await headsUp();
     await table.startHand();
 
-    // Preflop heads-up the small blind is facing the big blind, so the timeout must fold.
+    // Preflop heads-up the small blind faces the big blind, so the timeout must fold.
     const actor = actorOf(table);
     const seat = table.seatOf(actor);
     clock.advance(30_001);
@@ -531,11 +481,8 @@ describe('the live table', () => {
   });
 
   /**
-   * Both of the table's automatic paths wrote `wasAutomatic: true` and nothing else, so the archive
-   * could not tell them apart and the hand review printed "The clock ran out and the server acted"
-   * beside the fold of a reader who had pressed "Stand up". The reason is what the archive writes
-   * to `hand_actions.automatic_reason` (migration 0009), so it is asserted on the notice the
-   * archive reads, not on the view.
+   * The reason is what the archive writes to `hand_actions.automatic_reason` (migration 0009), so it
+   * is asserted on the notice the archive reads.
    */
   it('tells the archive WHY it acted: the clock, or a player who had already stood up', async () => {
     const archived = async (
@@ -560,15 +507,13 @@ describe('the live table', () => {
     });
     assert.deepEqual(reasons(timedOut), [['fold', true, 'timeout']]);
 
-    // The seat to act stands up: it folds at once, and no clock was involved.
     const stoodUp = await archived(async (table) => {
       await table.stand(actorOf(table));
     });
     assert.deepEqual(reasons(stoodUp), [['fold', true, 'departed']]);
 
-    // The WAITING seat stands up, the other one calls, and the fold comes when the action reaches
-    // the departed seat — inside the call's own mutation, which is the path that must not borrow the
-    // submitted action's reason (null) or the timer's.
+    // The waiting seat stands. Its fold happens inside the call's mutation and must not borrow the
+    // call's reason (null) or the timer's.
     const stoodUpWaiting = await archived(async (table) => {
       const actor = actorOf(table);
       await table.stand(actor === 'usr_a' ? 'usr_b' : 'usr_a');
@@ -595,10 +540,6 @@ describe('the live table', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Bot naming and profile mapping
-// ---------------------------------------------------------------------------
-
 describe('bot profiles', () => {
   it('maps the contract’s five legacy names onto strategy profiles', () => {
     for (const legacy of ['nit', 'tight-aggressive', 'loose-aggressive', 'calling-station', 'maniac']) {
@@ -611,17 +552,7 @@ describe('bot profiles', () => {
     );
   });
 
-  /**
-   * Rewritten, not adjusted. It used to read:
-   *
-   *     assert.equal(persistableProfile('adaptive-exploiter'), 'unknown');
-   *
-   * which asserted the defect. `room_members.bot_profile` was CHECK-constrained to five scenario
-   * range labels, so a Legends seat was written as the literal string `unknown` and the learner's
-   * chosen opponent was destroyed at write time. Migration 0003 widened the column; the write path
-   * now refuses an id it cannot name instead of flattening it, so the old expectation is not a
-   * behaviour to preserve — it is the bug.
-   */
+  /** `persistableProfile` once wrote a Legends seat as `unknown`. It now refuses an id it cannot name. */
   it('persists every strategy profile under its own id, and refuses one it does not know', () => {
     for (const profile of PROFILES) {
       assert.equal(durableProfile(profile.naming.id), profile.naming.id);
@@ -661,10 +592,6 @@ describe('bot profiles', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// REST
-// ---------------------------------------------------------------------------
-
 describe('POST /rooms', () => {
   it('creates a room and returns the invite code exactly once', async () => {
     const test = await harness();
@@ -695,7 +622,7 @@ describe('POST /rooms', () => {
     assert.ok(typeof room === 'object' && room !== null && 'id' in room);
     const roomId = String((room as { readonly id: unknown }).id);
 
-    // The one place the code appears. Every later read of the same room must not carry it.
+    // The only response that carries the code.
     const read = await test.app.inject({
       method: 'GET',
       url: `/api/v1/rooms/${roomId}`,
@@ -850,7 +777,6 @@ describe('joining and sitting', () => {
     });
     assert.equal(sat.statusCode, 200, sat.payload);
 
-    // A second learner joins by code, then tries the same seat.
     const guest = caller(test, { id: 'usr_guest' });
     const joined = await test.app.inject({
       method: 'POST',
@@ -871,10 +797,7 @@ describe('joining and sitting', () => {
     assert.equal(clash.statusCode, 409);
     assert.equal((clash.json() as { error: { code: string } }).error.code, 'seat_taken');
 
-    // The same learner, busted here and short of units for a rebuy. Their membership has to hold 0
-    // for this to be reachable: a membership with chips in it is sat down with its own, which is
-    // what the real `readUnits` always implied (it used to include this membership's stack, so the
-    // comparison could not refuse it) and what `sitAtTable` now says outright.
+    // The membership must hold 0, because one with chips is sat down with its own.
     const membership = test.store.members.get(`${roomId}:usr_guest`);
     assert.ok(membership !== undefined);
     test.store.members.set(`${roomId}:usr_guest`, { ...membership, stack: 0 });
@@ -998,7 +921,6 @@ describe('the Legends endpoints', () => {
       assert.ok(seat.disclosure.displayName.length > 0);
     }
 
-    // The room is real: the learner can read it and the bots are members of it.
     const read = await test.app.inject({
       method: 'GET',
       url: `/api/v1/rooms/${body.roomId}`,
@@ -1008,10 +930,8 @@ describe('the Legends endpoints', () => {
     const summary = read.json() as { room: { members: readonly { isBot: boolean }[] } };
     assert.equal(summary.room.members.filter((member) => member.isBot).length, 2);
 
-    // A second match retires the first: a learner holds one practice table at a time, and every
-    // match used to leave the previous one open with a stack in it. See `retirePracticeTables`.
-    // The hub closes the old match's sockets off this notification; without it a second tab would
-    // sit on a table that never sends another frame.
+    // A learner holds one practice table at a time. The hub closes the old match's sockets off this
+    // notification.
     const notified: string[] = [];
     test.registry.onRetirement((roomId) => notified.push(roomId));
     const expert = await test.app.inject({
@@ -1097,19 +1017,10 @@ describe('the Legends endpoints', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// A room re-opened after a restart
-// ---------------------------------------------------------------------------
-
 /**
- * The two things a restart used to lose, and the two the registry now recovers.
- *
- * A live hand cannot survive a restart — the deck and the salts are never persisted, deliberately
- * (`db/migrations/0001_initial.sql`) — but the two things around it can. `prl.hands.button_seat`
- * was already being written and simply never read back, so the blind rotation restarted under the
- * players and somebody paid a second consecutive big blind; and the interrupted hand row was left
- * at `completed_at IS NULL` forever, turning up in the learner's own history with null fields.
- * Three of those accumulated in a single audit session.
+ * A live hand cannot survive a restart, but the button and the interrupted hand row can be
+ * recovered. Without that, somebody paid a second consecutive big blind and the history showed
+ * null rows.
  */
 describe('a room re-opened after a restart', () => {
   const RESTART_CONFIG = { smallBlind: 5, bigBlind: 10, ante: 0, maxSeats: 6, actionTimeoutSeconds: 30 };
@@ -1126,7 +1037,6 @@ describe('a room re-opened after a restart', () => {
     };
   }
 
-  /** An archive that remembers the last deal, and records what was asked of it. */
   function replayingArchive(): { readonly archive: HandArchive; readonly abandonedFor: string[] } {
     const abandonedFor: string[] = [];
     return {
@@ -1164,13 +1074,11 @@ describe('a room re-opened after a restart', () => {
       blindsFromLastHand({ handId: 'h', handNumber: 4, buttonSeat: 1, dealtSeats: [0, 1, 3] }, 6),
       { buttonSeat: 1, smallBlindSeat: 3, bigBlindSeat: 0 },
     );
-    // Heads-up the button posted the small blind, so both positions are its seat. Walking the
-    // table instead would put the big blind back on the button at the end of its lap.
+    // Heads-up the button posted the small blind, so both positions are its seat.
     assert.deepEqual(
       blindsFromLastHand({ handId: 'h', handNumber: 4, buttonSeat: 2, dealtSeats: [0, 2] }, 6),
       { buttonSeat: 2, smallBlindSeat: 2, bigBlindSeat: 0 },
     );
-    // A dead button — nobody was playing from seat 2 — still names where the rotation was.
     assert.deepEqual(
       blindsFromLastHand({ handId: 'h', handNumber: 4, buttonSeat: 2, dealtSeats: [0, 1, 3] }, 6),
       { buttonSeat: 2, smallBlindSeat: 3, bigBlindSeat: 0 },
@@ -1206,8 +1114,6 @@ describe('a room re-opened after a restart', () => {
     assert.ok(view !== null);
     assert.equal(view.handNumber, 5);
     const posted = new Map(view.forcedBets.map((bet) => [bet.kind, bet.seat]));
-    // Seat 0 posted the big blind in hand 4. Restarting the rotation from the first player to sit
-    // down would have dealt BTN 1 / SB 3 / BB 0 all over again and charged them twice.
     assert.notEqual(posted.get('bigBlind'), 0, 'seat 0 must not pay the big blind twice');
     assert.equal(posted.get('bigBlind'), 1, 'the big blind advances one live player from seat 0');
     assert.equal(posted.get('smallBlind'), 0, 'the small blind falls where the big blind was');
@@ -1221,8 +1127,7 @@ describe('a room re-opened after a restart', () => {
     const room = await registry.open({ record: restartedRecord() });
     assert.deepEqual(abandonedFor, ['room_restart'], 'reconciled exactly once, as the room opened');
 
-    // Opening again returns the live room and must NOT reconcile: this process is now mid-hand in
-    // it, and closing a hand it is playing would be worse than the orphan.
+    // Must not reconcile, because this process is now mid-hand in the room.
     await registry.open({ record: restartedRecord() });
     assert.deepEqual(abandonedFor, ['room_restart']);
     assert.equal(await registry.reconcileInterruptedHands('room_restart'), 0, 'refused while live');
@@ -1247,8 +1152,7 @@ describe('a room re-opened after a restart', () => {
       onProblem: (message) => problems.push(message),
     });
 
-    // A history row that could not be tidied is a reporting problem. Refusing to open the room
-    // would turn it into a gameplay one.
+    // A history row that could not be tidied must not stop the room opening.
     const room = await registry.open({ record: restartedRecord() });
     assert.ok(room.table.snapshot().seats.length === 0);
     assert.ok(
@@ -1260,23 +1164,9 @@ describe('a room re-opened after a restart', () => {
 
 describe('RoomRegistry.open is deduplicated across concurrent first-touches', () => {
   /**
-   * The regression: `open()` was a check-then-act across four `await`s, so two callers arriving
-   * while a room was cold both built a `LiveTable` and the second `this.rooms.set` silently
-   * replaced the first.
-   *
-   * It is not a narrow window. Both entry points — `openRoomFor` in `routes/rooms.ts` and
-   * `reopenFor` in `ws/router.ts` — await a database round trip before calling it, and
-   * `ensureOpen` adds two more, so it is several Postgres round trips wide and opens on the
-   * ordinary page-load sequence: a `GET /rooms/:id` racing the WebSocket `hello`, or two tabs.
-   *
-   * Three consequences were reproduced against the unfixed code: a table that answers `ack` and
-   * then never emits a `state` frame again (the router caches one subscription per room id and
-   * had attached to the replaced room); a learner who joins by invite code, is added to the
-   * orphan, and is then refused by `require()` forever; and a `LiveTable`/`TurnTimer`/`BotRunner`
-   * unreachable from `closeAll()`.
-   *
-   * The slow archive read below is what makes the window observable in a test — in production it
-   * is a real query. Without the fix this fails on the first assertion with two distinct rooms.
+   * `open()` was a check-then-act across several awaits, so two cold callers (a `GET /rooms/:id`
+   * racing the WebSocket `hello`, or two tabs) each built a `LiveTable` and the second replaced the
+   * first. The slow archive read below opens the window.
    */
   it('builds one LiveRoom for two simultaneous ensureOpen calls', async () => {
     const { store } = await harness();
@@ -1294,8 +1184,6 @@ describe('RoomRegistry.open is deduplicated across concurrent first-touches', ()
       ...noopArchive,
       nextHandNumber: async () => {
         handNumberReads += 1;
-        // One turn of the event loop is enough: the point is that ANY suspension between the
-        // `rooms.get` and the `rooms.set` used to be enough.
         await new Promise((resolve) => setTimeout(resolve, 5));
         return 1;
       },
@@ -1313,15 +1201,13 @@ describe('RoomRegistry.open is deduplicated across concurrent first-touches', ()
     assert.equal(first, second, 'two concurrent opens built two independent LiveRooms for one room id');
     assert.equal(racing.get(room.id), first, 'the room in the map is not the one the callers were handed');
     assert.equal(racing.size, 1);
-    // The positive control: without this, the assertions above would also hold if `ensureOpen`
-    // had simply failed to open anything at all.
+    // The positive control, so the assertions above cannot pass on opening nothing.
     assert.equal(handNumberReads, 1, 'the room was built more than once');
     racing.closeAll();
   });
 
   it('does not leave a failed open cached, so the next attempt can still succeed', async () => {
-    // The in-flight entry is removed when the build settles, including on rejection. Without
-    // that, one database blip during an open would make the room permanently unopenable.
+    // Without removal on rejection, one database blip would make the room permanently unopenable.
     const { store } = await harness();
     const { room } = await store.create({
       name: 'Blip',
@@ -1350,9 +1236,7 @@ describe('RoomRegistry.open is deduplicated across concurrent first-touches', ()
       nextHandId: incrementingHandIds(),
     });
 
-    // `open` reads the hand count inside a try/catch that fails soft, so the first open succeeds
-    // with a fresh rotation rather than rejecting — which is the documented behaviour. What this
-    // asserts is that the second call is served and the map holds exactly one room either way.
+    // `open` reads the hand count fail-soft, so the first open succeeds with a fresh rotation.
     const first = await registry.ensureOpen(room.id);
     const second = await registry.ensureOpen(room.id);
     assert.equal(first, second);

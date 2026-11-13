@@ -1,29 +1,8 @@
 /**
- * No profile folds a hand it has already won.
- *
- * ## The failure this is written against
- *
- * `policy.ts` mixes a noise floor over the actions it considers plausible:
- *
- *     p_final(a) = (1 - noise) x p_score(a) + noise / plausibleCount
- *
- * and its module comment says why: the floor exists "to keep a style unpredictable, not to make it
- * play worse than any style plays". It excluded exactly one thing — a fold when checking is free.
- *
- * The justification reached further than the exclusion. Facing a BET holding the effective nuts,
- * the score-driven share of a fold is ~0, so the floor became the whole fold probability and every
- * profile folded made hands at `noise / plausibleCount`. Measured before the fix, nut flush
- * (Ah5h on Kh 9h 2h) facing half pot, 40 trials x 12 profiles:
- *
- *     realistic    P(fold) up to 0.075, 10 of 12 profiles folded it at least once
- *     educational  P(fold) up to 0.125, 12 of 12
- *
- * `educational` is the default every Legends page uses and the setting aimed at beginners. The
- * spread across twelve profiles whose `foldToPressure` spans 0.14-0.76 was 0.002 — the trait had no
- * effect and the floor was the number.
- *
- * The second test is the half that stops this becoming a bot that never folds, which would be a
- * worse teaching lie than the first.
+ * No profile folds a hand it has already won. `policy.ts` mixes a noise floor over plausible
+ * actions, so facing a bet with the nuts the floor became the whole fold probability. Measured
+ * before the fix, `educational` (the Legends default) folded a nut flush up to 0.125 on all 12
+ * profiles. The second test keeps the bot from never folding.
  */
 
 import assert from 'node:assert/strict';
@@ -81,7 +60,6 @@ describe('the noise floor does not fund a fold no style would make', () => {
   });
 
   it('still folds a hand that deserves folding, at both difficulties', () => {
-    // Without this, "never folds a lock" is satisfied by a policy that never folds anything.
     for (const difficulty of ['realistic', 'educational'] as const) {
       const rows = foldProbabilities('8c 7d', 'Ah Kd 3s', difficulty);
       const folding = rows.filter((row) => row.fold > 0.2);

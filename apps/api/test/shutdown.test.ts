@@ -1,74 +1,9 @@
 /**
- * Graceful shutdown, against a real process holding a real socket — keep-alive HTTP, and WebSocket.
- *
- * ## The third defect, and why this file did not catch it either
- *
- * The WebSocket section below was added when the second defect was found, and the suite stopped
- * there. It therefore proved that every *upgraded* connection drains, and said nothing at all about
- * a connection that never became a request — which was still the original bug, untouched. Measured
- * on the build that had just been declared fixed:
- *
- *     idle websocket                        0.010 s / exit 0
- *     websocket mid-hand                    0.044 s / exit 0
- *     peer ignores the close frame          1.014 s / exit 0
- *     a TCP connection that sends nothing  10.022 s / exit 1
- *
- * `closeIdleConnections()` only drops a connection that has FINISHED a request; one that never
- * started one is invisible to it, and `server.close()` waits for it anyway. So a load balancer's
- * TCP health probe, a port scanner, a stalled TLS handshake, or any client that connects a moment
- * before it is ready to speak was enough to turn every deploy back into a hard kill — the exact
- * failure the first two fixes were for, reached by a connection that is easier to produce than
- * either of them.
- *
- * `SIGTERM with a connection that never became a request` below is that coverage. All three of its
- * tests fail against the old behaviour with code 1 after the full grace.
- *
- * ## The second defect, and why this file did not catch it
- *
- * This suite passed 3/3 while graceful shutdown was broken for **every WebSocket connection**,
- * because it contained no WebSocket: it locked in the keep-alive fix described below and never
- * touched an upgraded connection. `ws/hub.ts` registered `@fastify/websocket` with
- * `clientTracking: false`, and the library's `defaultPreClose` closes sockets inside
- * `if (server.clients)` — a Set `ws` only builds when tracking is on. So the close loop silently
- * did nothing, `server.close()` waited forever on the upgraded socket, `app.close()` never
- * resolved, and the grace deadline fired `process.exit(1)`. Measured on the same build, with only
- * the connection state differing:
- *
- *     idle                                 0.012 s / exit 0
- *     one socket at a table               10.012 s / exit 1, and the client saw 1006
- *     one socket that had not said hello   5.061 s / exit 0, and the client saw 4408
- *
- * One socket. No load. Every deploy while a learner had a table open was a hard kill, on the one
- * connection type this product is built on — and the client could not tell it from a lost network,
- * so `apps/web/src/lib/table-socket.ts`'s "the server is restarting" state was unreachable.
- *
- * `SIGTERM with a WebSocket open` below is the coverage that was missing. Both of its tests fail
- * against the old behaviour — the first with code 1 after the full grace and close code 1006, the
- * second with code 1 after the full grace.
- *
- * ## The first defect this exists for
- *
- * `forceCloseConnections: 'idle'` makes Fastify call `closeIdleConnections()` exactly once, when
- * `app.close()` is invoked. A keep-alive socket that is mid-request at that moment is not idle, is
- * never revisited, and then sits until `keepAliveTimeout` (72 s) expires. `server.close()` waits for
- * every connection, so `app.close()` never resolved, the `onClose` hooks never ran, the four
- * calculation threads were never terminated, and the 10 s deadline fired with `process.exit(1)` —
- * *after* the in-flight request had been answered 200. Browsers always use keep-alive, so that was
- * the ordinary deploy case, and adding `Connection: close` to the client made it pass, which is
- * exactly why it survived review.
- *
- * ## Why these tests are shaped the way they are
- *
- * Both hold a real request open across the signal, because that is the only state in which the bug
- * appears. The first does it deterministically — the request headers are sent, the body is not, so
- * the socket is unambiguously mid-request at SIGTERM whatever the machine's speed — and the second
- * does it the way a user would, with a Monte Carlo request that is genuinely computing on a worker
- * thread. The second asserts *that the response had not arrived yet* before it signals; if the
- * machine were fast enough to finish first the test fails rather than passing for the wrong reason.
- *
- * Neither test is allowed to pass on a timeout: each asserts exit code 0 and an elapsed time well
- * inside the grace, and asserts the process logged `shutdown complete` and never logged
- * `shutdown timed out`. With the fix reverted, both fail with code 1 after the full grace.
+ * Graceful shutdown against a real process holding a real socket, over keep-alive HTTP, WebSocket, and
+ * connections that never became a request. Each shape hung `app.close()` until the grace deadline
+ * fired `process.exit(1)` before its fix, and each test fails that way against the old code.
+ * No test may pass on a timeout. Each asserts exit 0, an elapsed time well inside the grace,
+ * `shutdown complete` in the log, and no `shutdown timed out`.
  */
 
 import assert from 'node:assert/strict';
@@ -88,41 +23,24 @@ const API_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const REPO_ROOT = join(API_DIR, '..', '..');
 const ENTRY = join(API_DIR, 'src', 'server.ts');
 
-/**
- * Short enough that a hung drain is obvious rather than tedious, long enough that a clean drain has
- * room. The whole point is to finish far inside it: the assertions below allow a third of it.
- */
+/** A clean drain must finish far inside this. The assertions allow a third of it. */
 const GRACE_MS = 4_500;
 
 /**
- * The grace for the test that holds a real Monte Carlo calculation open across the signal.
- *
- * Deliberately far larger than that calculation takes, and it is worth saying why rather than
- * tuning it silently. A correct drain MUST wait for an in-flight response, so the elapsed time
- * legitimately includes however long the calculation had left to run — which is a function of how
- * loaded the machine is. At the shared 4.5 s grace this test failed on a busy machine by exiting
- * hard mid-request: a real drain, correctly waiting, ruled a timeout. That would be a flaky test
- * reporting a defect that is not there, and the honest fix is to stop making the machine's speed
- * part of the assertion. Nothing is weakened by it: a drain that HANGS still hits this grace and
- * still fails, and the promptness that matters — the gap between the last response and the process
- * exiting — is asserted separately and tightly.
+ * Grace for the Monte Carlo test. A correct drain waits for the in-flight response, so elapsed time
+ * depends on machine load, and at 4.5 s a busy machine failed a correct drain. A hung drain still
+ * fails here, and the gap from last response to exit is asserted tightly on its own.
  */
 const COMPUTE_GRACE_MS = 25_000;
 const WEB_ORIGIN = 'http://localhost:3000';
 
-/**
- * What `spawn` returns for `stdio: ['ignore', 'pipe', 'pipe']`.
- *
- * Named rather than cast: `ChildProcessWithoutNullStreams` claims a writable `stdin` this child does
- * not have, and asserting it with `as` would be a lie the compiler correctly refuses.
- */
+/** `ChildProcessWithoutNullStreams` would claim a `stdin` this child does not have. */
 type PipedChild = ChildProcessByStdio<null, Readable, Readable>;
 
 interface RunningServer {
   readonly child: PipedChild;
   readonly port: number;
   readonly output: () => string;
-  /** The grace this server was started with, so its own assertions can be scaled to it. */
   readonly graceMs: number;
 }
 
@@ -132,15 +50,7 @@ after(() => {
   for (const child of running) if (child.exitCode === null) child.kill('SIGKILL');
 });
 
-/**
- * A port the kernel has just told us is free.
- *
- * `config.ts` refuses `PORT=0` (a deliberate check: a server that binds an arbitrary port is
- * almost always a mistake), so the port has to be chosen here. The window between closing this
- * listener and the child binding is a race in principle; in practice the kernel does not hand the
- * same ephemeral port to two consecutive `listen(0)` calls, and a collision would surface as a
- * loud EADDRINUSE rather than as a wrong result.
- */
+/** `config.ts` refuses `PORT=0`, so the port is chosen here. A collision fails loudly with EADDRINUSE. */
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const probe = createServer();
@@ -159,13 +69,8 @@ function freePort(): Promise<number> {
 }
 
 /**
- * Starts the real entry point and waits for its own `listening` line.
- *
- * `NODE_ENV=development` is needed only because `logging.ts` switches the logger off entirely under
- * `test`, and the log is what proves the process reached `listening` and later `shutdown complete`.
- *
- * Values passed here win over `.env`: node's `--env-file` never overrides a variable that is
- * already in the environment.
+ * `NODE_ENV=development` because `logging.ts` turns the logger off under `test`, and the log is the
+ * evidence. Values passed here win over `.env`, since `--env-file` never overrides the environment.
  */
 async function startServer(
   graceMs: number = GRACE_MS,
@@ -201,7 +106,6 @@ async function startServer(
     }, 20_000);
     timer.unref();
     const check = (): void => {
-      // The `listening` line carries the resolved address, which is where the ephemeral port is.
       const match = /"address":"http:\/\/127\.0\.0\.1:(\d+)"/.exec(text);
       if (match?.[1] === undefined) return;
       clearTimeout(timer);
@@ -218,15 +122,7 @@ async function startServer(
   return { child, port, output: () => text, graceMs };
 }
 
-/**
- * Waits until `/ready` is 200.
- *
- * Production pre-warms the calculation threads after listen, and `/ready` stays 503 until they
- * are usable. A test that sends Coach or equity traffic the instant the process binds a port
- * is not modelling a load balancer — it is racing the warmup and then blaming the drain for
- * the wait. The first SIGTERM-with-in-flight-request case failed at 3084ms against a 1500ms
- * budget for exactly that: the equity request queued behind two warmup tasks.
- */
+/** Traffic before `/ready` queues behind the thread warmup and is then blamed on the drain. */
 async function waitUntilReady(port: number, timeoutMs = 20_000): Promise<void> {
   const deadline = performance.now() + timeoutMs;
   let last = 'never reached';
@@ -248,11 +144,9 @@ interface Exit {
   readonly code: number | null;
   readonly signal: NodeJS.Signals | null;
   readonly elapsedMs: number;
-  /** `performance.now()` at exit, for measuring the gap after a response was delivered. */
   readonly at: number;
 }
 
-/** Sends SIGTERM and waits for the process to go, timing it. */
 function terminate(server: RunningServer): Promise<Exit> {
   const startedAt = performance.now();
   return new Promise<Exit>((resolve, reject) => {
@@ -272,7 +166,6 @@ function terminate(server: RunningServer): Promise<Exit> {
   });
 }
 
-/** A CSRF token and the cookies that go with it, since every mutating route needs both. */
 async function csrfCredentials(port: number): Promise<{ readonly cookie: string; readonly token: string }> {
   const response = await fetch(`http://127.0.0.1:${port}/api/v1/auth/session`, {
     headers: { origin: WEB_ORIGIN, accept: 'application/json' },
@@ -290,15 +183,6 @@ async function csrfCredentials(port: number): Promise<{ readonly cookie: string;
   return { cookie, token: String(token) };
 }
 
-/**
- * Asserts a shutdown was clean, quick, and said so.
- *
- * `budgetMs` is the time the drain itself is allowed, and it is not the whole story when the
- * in-flight request is genuinely computing: the process must not exit before that response is
- * delivered, so the elapsed time legitimately includes however long the calculation had left. Each
- * caller therefore states its own budget and, where relevant, measures the gap between the response
- * arriving and the process going — which is the part that must be prompt.
- */
 function assertCleanExit(
   exit: Exit,
   output: string,
@@ -326,10 +210,7 @@ describe('SIGTERM with a request in flight on a keep-alive socket', () => {
     await waitUntilReady(server.port);
     const { cookie, token } = await csrfCredentials(server.port);
 
-    // Sent by hand rather than with fetch, because the defect is about a socket that is mid-request
-    // at the instant of the signal and this is the only way to hold one there deterministically:
-    // the headers and part of the body go now, the rest goes after SIGTERM. No timing assumption,
-    // no dependence on how fast this machine computes anything.
+    // Half the body before SIGTERM and half after holds the socket mid-request deterministically.
     const body = JSON.stringify({ heroCards: 'AhAd', opponents: ['KsKc'], samples: 20_000 });
     const split = Math.floor(body.length / 2);
     const socket = connect(server.port, '127.0.0.1');
@@ -353,13 +234,10 @@ describe('SIGTERM with a request in flight on a keep-alive socket', () => {
         'connection: keep-alive\r\n\r\n' +
         body.slice(0, split),
     );
-    // Give the server time to read the headers and start the request. Nothing is being asserted on
-    // this delay: the request cannot complete until the rest of the body arrives below.
     await new Promise((resolve) => setTimeout(resolve, 200));
     assert.equal(received, '', 'the request cannot have been answered: half its body is unsent');
 
     const exiting = terminate(server);
-    // Still nothing sent; the socket is unambiguously mid-request while the process drains.
     await new Promise((resolve) => setTimeout(resolve, 150));
     socket.write(body.slice(split));
 
@@ -380,9 +258,7 @@ describe('SIGTERM with a request in flight on a keep-alive socket', () => {
     await waitUntilReady(server.port);
     const { cookie, token } = await csrfCredentials(server.port);
 
-    // A real Monte Carlo request on the worker pool: this is the path on which the four threads
-    // were still alive at the deadline. `keepalive: true` is the point — undici reuses the
-    // connection, which is what a browser does and what made this bug the normal deploy case.
+    // `keepalive: true` reuses the connection as a browser does, which made this the normal deploy case.
     let answeredBeforeSignal = false;
     const inFlight = fetch(`http://127.0.0.1:${server.port}/api/v1/math/equity`, {
       method: 'POST',
@@ -396,9 +272,7 @@ describe('SIGTERM with a request in flight on a keep-alive socket', () => {
       body: JSON.stringify({
         heroCards: 'AhAd',
         board: '2s7dQh',
-        // Four ranges make this the largest sampled request the production work ceiling accepts
-        // (200,000 × five players = 1,000,000 evaluations), while the flop keeps each trial
-        // materially more expensive than the preflop smoke case.
+        // The largest sampled request the work ceiling accepts (200,000 x 5 players = 1,000,000).
         opponents: ['top:40', 'top:40', 'top:40', 'top:40'],
         samples: 200_000,
       }),
@@ -410,9 +284,7 @@ describe('SIGTERM with a request in flight on a keep-alive socket', () => {
       answeredBeforeSignal = true;
     });
 
-    // Do not sleep a guessed number of milliseconds. After pre-warm a sampled run can finish
-    // inside 120ms, and a request the planner refuses finishes in one. Wait until the process's
-    // own gauges say a thread is busy, which is the state this test is about.
+    // A warmed run can finish inside 120ms, so wait on the busy gauge instead of a fixed sleep.
     const busyDeadline = performance.now() + 5_000;
     let sawBusy = false;
     while (performance.now() < busyDeadline) {
@@ -446,10 +318,8 @@ describe('SIGTERM with a request in flight on a keep-alive socket', () => {
       200,
       `the in-flight calculation must complete: ${answered.text.slice(0, 200)}`,
     );
-    // The whole grace is the budget here, because the process is not allowed to exit before the
-    // calculation it is still running has been delivered — the drain waiting for that is the
-    // correct behaviour, and it is what the deadline is for. What must be prompt is the part after:
-    // once the last response is out, the socket is idle and nothing may hold the process open.
+    // The drain must wait for the calculation, so the budget is the whole grace. The exit after the
+    // last response is what must be prompt.
     assertCleanExit(exit, server.output(), COMPUTE_GRACE_MS, COMPUTE_GRACE_MS);
     const trailingMs = exit.at - answeredAt;
     assert.ok(
@@ -460,8 +330,7 @@ describe('SIGTERM with a request in flight on a keep-alive socket', () => {
   });
 
   it('exits 0 with nothing in flight at all', async () => {
-    // The control. It passed before the fix too, which is precisely why the bug was invisible:
-    // every shutdown that happened to have no request open looked perfect.
+    // The control. It passed before the fix too.
     const server = await startServer();
     const health = await fetch(`http://127.0.0.1:${server.port}/api/v1/health`);
     assert.equal(health.status, 200);
@@ -472,14 +341,6 @@ describe('SIGTERM with a request in flight on a keep-alive socket', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// WebSockets
-//
-// Everything below exists because the suite above proved a shutdown correct without ever opening
-// the connection this product runs on. See the second section of this file's header.
-// ---------------------------------------------------------------------------
-
-/** A cookie jar as one header value, with a response's `Set-Cookie` folded in. */
 function mergeCookies(existing: string, response: Response): string {
   const jar = new Map<string, string>();
   const remember = (pair: string): void => {
@@ -491,13 +352,7 @@ function mergeCookies(existing: string, response: Response): string {
   return [...jar.values()].join('; ');
 }
 
-/**
- * A guest account, and the cookies that authenticate its WebSocket upgrade.
- *
- * The socket carries no credential of its own — `ws/hub.ts` reads the session from the same signed
- * cookie every REST route uses — so a real upgrade needs a real sign-in, and that needs the
- * database. Hence the `databaseSkip` on the test that calls this.
- */
+/** The upgrade reads the same session cookie as REST, so a real upgrade needs a real sign-in. */
 async function guestSession(port: number): Promise<{ readonly cookie: string; readonly token: string }> {
   const { cookie, token } = await csrfCredentials(port);
   const created = await fetch(`http://127.0.0.1:${port}/api/v1/auth/guest`, {
@@ -515,7 +370,6 @@ async function guestSession(port: number): Promise<{ readonly cookie: string; re
   return { cookie: mergeCookies(cookie, created), token };
 }
 
-/** A room for the socket to join, so one of the two sockets is in the state a learner's is. */
 async function createRoom(
   port: number,
   credentials: { readonly cookie: string; readonly token: string },
@@ -543,7 +397,6 @@ async function createRoom(
   return String(id);
 }
 
-/** Opens a real socket over loopback, rejecting with the close code if the upgrade is refused. */
 function openSocket(port: number, cookie: string): Promise<WebSocket> {
   const socket = new WebSocket(`ws://127.0.0.1:${port}/api/v1/ws`, {
     headers: { origin: WEB_ORIGIN, cookie },
@@ -557,7 +410,6 @@ function openSocket(port: number, cookie: string): Promise<WebSocket> {
   });
 }
 
-/** Sends `hello` and settles when the server has welcomed the socket into the room. */
 function joinRoom(socket: WebSocket, roomId: string): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('no welcome frame within 10s')), 10_000);
@@ -579,7 +431,6 @@ function joinRoom(socket: WebSocket, roomId: string): Promise<void> {
         type: 'hello',
         protocolVersion: WS_PROTOCOL_VERSION,
         roomId,
-        // 12 base64url characters, which is inside the contract's 8..64 for a request id.
         clientNonce: randomBytes(9).toString('base64url'),
       }),
     );
@@ -591,7 +442,6 @@ interface ObservedClose {
   readonly reason: string;
 }
 
-/** What the client saw when the socket ended, which is the half of this the server cannot assert. */
 function closeOf(socket: WebSocket): Promise<ObservedClose> {
   return new Promise<ObservedClose>((resolve) => {
     socket.once('close', (code: number, reason: Buffer) => {
@@ -601,13 +451,8 @@ function closeOf(socket: WebSocket): Promise<ObservedClose> {
 }
 
 /**
- * Completes a WebSocket upgrade by hand, and then never says another word.
- *
- * Written on a raw TCP socket precisely because a `ws` client is well behaved: it answers a close
- * frame, and the failure being tested is what happens when nothing does. No cookie is sent, so the
- * hub refuses the upgrade — but only *after* the protocol-level upgrade has completed, which is the
- * point: this is a real WebSocket that `http.Server#close()` counts, and any client on the internet
- * can open one without a session.
+ * Completes an upgrade on raw TCP and then never answers a close frame, which a `ws` client would.
+ * With no cookie the hub refuses only after the upgrade, so any client can open one of these.
  */
 async function muteSocket(port: number): Promise<{ readonly socket: Socket; readonly reply: string }> {
   const socket = connect(port, '127.0.0.1');
@@ -651,18 +496,13 @@ describe('SIGTERM with a WebSocket open', () => {
     skip: databaseSkip('a real WebSocket upgrade, which needs a signed-in session'),
   }, async () => {
     const server = await startServer(GRACE_MS, {
-      // The database the availability guard probed, so this test and that one agree on which
-      // schema they are talking about even when `.env` names another.
       ...(TEST_DATABASE_URL === undefined ? {} : { DATABASE_URL: TEST_DATABASE_URL }),
     });
     await waitUntilReady(server.port);
     const credentials = await guestSession(server.port);
     const roomId = await createRoom(server.port, credentials);
 
-    // Two sockets, in the two states a socket can be in, because they are closed by different
-    // code. `atTable` is in a room and so is indexed by `WsRouter`; `connecting` has not sent
-    // `hello`, is in no room, and is therefore invisible to `router.closeAll` — it is only
-    // reachable through the hub's own `live` map, which is why the drain reads that instead.
+    // `connecting` has sent no `hello`, so `router.closeAll` cannot see it. Only the hub's `live` map can.
     const atTable = await openSocket(server.port, credentials.cookie);
     await joinRoom(atTable, roomId);
     const connecting = await openSocket(server.port, credentials.cookie);
@@ -673,10 +513,7 @@ describe('SIGTERM with a WebSocket open', () => {
     const exit = await terminate(server);
     const [tableClose, connectingClose] = await closes;
 
-    // The close code is the assertion that matters as much as the exit code. A client cannot tell
-    // a deploy from a lost network unless the server says so, and 1006 — no close frame at all,
-    // which is what `process.exit` leaves behind — is exactly "lost network" to
-    // `apps/web/src/lib/table-socket.ts`.
+    // 1006, which `process.exit` leaves, reads as a lost network to `apps/web/src/lib/table-socket.ts`.
     assert.equal(
       tableClose.code,
       WS_CLOSE.serverShuttingDown,
@@ -690,21 +527,15 @@ describe('SIGTERM with a WebSocket open', () => {
         `${connectingClose.reason}`,
     );
     assertCleanExit(exit, server.output());
-    // The hub's own cleanup hangs off `onClose`, which only runs once `app.close()` resolves —
-    // the very thing that did not happen. Asserting the line proves the cleanup ran rather than
-    // inferring it from the exit code.
+    // `onClose` runs only once `app.close()` resolves, which is what used to hang.
     assert.match(server.output(), /websocket hub closed/, 'the hub onClose cleanup must run');
   });
 
   it('is not held open by a client that never answers the close frame', {
     skip: databaseSkip('a completed upgrade, which needs a verified schema'),
   }, async () => {
-    // No SQL on the upgrade itself: one with no cookie is refused before a query is issued
-    // (`resolveSession` short-circuits on a missing cookie). It used to run against a placeholder
-    // DSN for that reason. Since PR #38's feature gate, an API that has not verified its schema
-    // answers the upgrade with a 503 and closes the socket itself, so the refusal under test — the
-    // hub's close frame AFTER a completed upgrade — is only reachable with a database whose schema
-    // checks out. The no-database half is the next case.
+    // The feature gate answers 503 until the schema is verified, so a close frame after a completed
+    // upgrade needs a real database. The no-database half is the next case.
     const server = await startServer(GRACE_MS, {
       ...(TEST_DATABASE_URL === undefined ? {} : { DATABASE_URL: TEST_DATABASE_URL }),
     });
@@ -714,20 +545,15 @@ describe('SIGTERM with a WebSocket open', () => {
     const exit = await terminate(server);
     socket.destroy();
 
-    // Before the fix this exited 1 after the whole grace: the hub refuses the upgrade with a close
-    // frame, this client ignores it, and `ws`'s own fallback is a 30 s `closeTimeout` — three times
-    // the default grace. One socket, no session, any origin.
+    // `ws` falls back to a 30 s `closeTimeout`, three times the default grace.
     assertCleanExit(exit, server.output());
   });
 });
 
 describe('SIGTERM with an upgrade refused by the feature gate', () => {
   it('is not held open by an upgrade answered 503 before the schema was verified', async () => {
-    // A placeholder DSN, so the schema is never verified and the gate stays shut (`app.ts`). The
-    // gate answers in a hook that runs before `@fastify/websocket` has flagged the request, which
-    // skips the plugin's own socket cleanup: measured before the gate destroyed the socket itself,
-    // the 503 arrived and the connection stayed open — and the drain waits for an upgraded
-    // connection, so one of these, from anybody, would cost every deploy its grace.
+    // The gate answers before `@fastify/websocket` flags the request, which skips the plugin's socket
+    // cleanup. Until the gate destroyed the socket itself, the connection stayed open after the 503.
     const server = await startServer(GRACE_MS, {
       DATABASE_URL: 'postgresql://unused:unused@127.0.0.1:5432/unused',
     });
@@ -741,22 +567,7 @@ describe('SIGTERM with an upgrade refused by the feature gate', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Connections that never became a request
-//
-// See the first section of this file's header. Everything above holds a request or a WebSocket
-// open across the signal; none of it opens a connection that does less than that, which is the
-// cheapest thing a client can do and was still enough to hang the drain.
-// ---------------------------------------------------------------------------
-
-/**
- * Opens a TCP connection to the API and sends exactly what it is given — including nothing at all.
- *
- * Raw rather than through a client library on purpose: no HTTP client will hold a connection in
- * these states, because they are all states a correct client never enters. That is not a reason to
- * ignore them — nothing stops a peer on the network from producing them, and several kinds of
- * ordinary infrastructure do so by design.
- */
+/** Raw TCP, because no HTTP client enters these states. Health probes and scanners do. */
 async function rawConnection(
   port: number,
   prelude = '',
@@ -771,21 +582,16 @@ async function rawConnection(
     socket.once('connect', resolve);
     socket.once('error', reject);
   });
-  // The drain is *supposed* to destroy these, so ECONNRESET on this end is the expected outcome
-  // rather than a failure — and an unhandled 'error' would take the test process down with it.
+  // The drain is meant to destroy these, and an unhandled ECONNRESET would kill the test process.
   socket.on('error', () => undefined);
   if (prelude !== '') socket.write(prelude);
-  // Long enough for the server to have accepted the connection and parsed whatever was sent, so
-  // the state under test is the state the process is really in when the signal lands.
   await new Promise((resolve) => setTimeout(resolve, 200));
   return { socket, received: () => received };
 }
 
 describe('SIGTERM with a connection that never became a request', () => {
-  // The first two never reach a route, let alone a query, so a placeholder DSN is honest and they
-  // run under `test:without-database` too — where they belong, because a connection that hangs a
-  // deploy has nothing to do with the schema. The third needs a session and a feature route, which
-  // the feature gate (PR #38) keeps shut until the schema is verified, so it needs the database.
+  // The first two never reach a route, so they run without a database. The third needs a feature
+  // route, which the feature gate keeps shut until the schema is verified.
   const noDatabase = { DATABASE_URL: 'postgresql://unused:unused@127.0.0.1:5432/unused' };
 
   it('is not held open by a TCP connection that sends nothing', async () => {
@@ -796,17 +602,12 @@ describe('SIGTERM with a connection that never became a request', () => {
     const exit = await terminate(server);
     socket.destroy();
 
-    // The whole original defect in its simplest form. A connection with no request on it can never
-    // be owed an answer, so there is nothing for the drain to wait for and no reason to be slower
-    // than the sweep interval.
     assertCleanExit(exit, server.output());
   });
 
   it('is not held open by a request whose headers never end', async () => {
     const server = await startServer(GRACE_MS, noDatabase);
-    // A request line and one header, and no blank line — so the parser has a message started and
-    // never completed, and Fastify has never been handed a request at all. This is what a client
-    // that dies mid-write leaves behind, and what a slowloris does on purpose.
+    // No blank line, so Fastify never receives a request. A slowloris does this on purpose.
     const { socket } = await rawConnection(
       server.port,
       `GET /api/v1/health HTTP/1.1\r\nhost: 127.0.0.1:${server.port}\r\n`,
@@ -826,12 +627,8 @@ describe('SIGTERM with a connection that never became a request', () => {
     });
     const { cookie, token } = await csrfCredentials(server.port);
 
-    // The hardest of the three, and the one that says what "in flight" has to mean. The headers are
-    // complete and announce a body, so Fastify HAS been handed a request and is waiting for it —
-    // byte for byte the state the first test in this file requires the drain to wait for. The only
-    // difference is that this client never sends the rest, and the drain cannot know that in
-    // advance. So it waits for the client's half of the exchange for a bounded slice of the grace
-    // and then drops the connection, rather than waiting out the deadline and exiting 1.
+    // Byte for byte the state the first test requires the drain to wait for. The drain waits a
+    // bounded slice of the grace for the body, then drops the connection.
     const body = JSON.stringify({ heroCards: 'AhAd', opponents: ['KsKc'], samples: 20_000 });
     const { socket, received } = await rawConnection(
       server.port,
@@ -849,9 +646,7 @@ describe('SIGTERM with a connection that never became a request', () => {
     const exit = await terminate(server);
     socket.destroy();
 
-    // Half the grace rather than the usual third: this one legitimately spends the send grace
-    // waiting to find out whether the client is merely slow, and that wait is the point. What must
-    // not happen — and did — is spending the whole grace and then exiting 1.
+    // Half the grace, because this case spends the send grace waiting for a slow client.
     assertCleanExit(exit, server.output(), GRACE_MS / 2);
   });
 });

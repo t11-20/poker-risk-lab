@@ -1,50 +1,9 @@
 /**
- * An API restart must not strand an open table, and reopening one must not tell a stranger it
- * exists.
- *
- * ## The defect
- *
- * Room state is in memory by design (ADR 0009): the `prl.rooms` row and its roster are durable,
- * the `LiveRoom` is not. The REST path has always known that — `openRoomFor` in
- * `routes/rooms.ts` calls `registry.ensureOpen` before `registry.require` — but the socket's
- * `hello` handler called `registry.require` alone. So the first `hello` after a restart found an
- * empty registry, threw `room_not_found_or_not_permitted`, and the client showed a member of their
- * own table:
- *
- *   > **Not your table.** The server refused this room: either it does not exist or this session
- *   > is not a member of it. Rooms here are invite-only, so there is no list to browse — start
- *   > your own table instead.
- *
- * Every word of which was false. Reopening from the database was already implemented, already
- * tested, and already used by the other transport; the socket simply did not call it.
- *
- * ## Why the refusal half is tested just as hard
- *
- * Fixing a refusal that fires too often is one keystroke away from removing a refusal that has to
- * fire. A room that genuinely is not yours must still be refused, must still be refused with the
- * one code that does not distinguish "no such room" from "not yours", and — the part a naive fix
- * loses — must still be refused *before* this process builds a table for the caller. Opening first
- * and checking afterwards would let anybody who guessed a room id make the server construct a
- * `HandState`, a turn timer and a bot runner on their behalf. `registry.size` is how that is
- * asserted here: it is the count of live tables, and a refused stranger must leave it at zero.
- *
- * ## And a refusal that has to be told apart from a fault
- *
- * The same catch block later grew a second defect of exactly the opposite shape. Nothing on the
- * `reopenFor` path is wrapped — `store.byId`, `store.memberOf` and `ensureOpen`'s `membersOfRooms`
- * all reach Postgres directly — so a connection blip was caught here, correctly reported as
- * `internal_error` in the frame, and then closed with a hard-coded 4403 anyway. 4403 is
- * `retryable: false` in the client's `describeClose`, so a member of their own table was shown
- * "Not your table" for a fault that would have cleared on the next attempt, and the socket never
- * retried. The last block in this file holds both halves of that: a fault closes with a code the
- * client reconnects from, and a genuine refusal still closes 4403.
- *
- * ## No socket, no port, no timing
- *
- * `SocketSink` is two methods and the clock is manual, exactly as in `test/ws-router.test.ts`. The
- * store is local to this file rather than borrowed from `test/helpers/live-room.ts`: that fake
- * answers `byId` with null, which is precisely the "this process has never seen the room" case, so
- * a fake that can also produce a durable row is what this file needs.
+ * After an API restart the socket's `hello` must reopen a member's table from the database, as the
+ * REST path's `ensureOpen` does. A stranger must still get the one refusal code that does not tell
+ * "no such room" from "not yours", before any table is built (`registry.size` stays zero). A
+ * database fault must close with a code the client retries, not 4403. The store is local because
+ * `test/helpers/live-room.ts` answers `byId` with null.
  */
 
 import assert from 'node:assert/strict';
@@ -86,7 +45,6 @@ const stubDatabase: DatabaseHandle = {
   close: () => Promise.resolve(),
 };
 
-/** A schema-carrying route, so Fastify compiles the Ajv instance the frame validator borrows. */
 async function appWithValidator(): Promise<FastifyInstance> {
   const app = await buildApp({ config: testConfig(), database: stubDatabase });
   app.get(
@@ -134,28 +92,15 @@ function memberRow(userId: string, displayName: string, seat: number | null): Ro
 }
 
 interface Reads {
-  /** Every call that reached the durable rows, in order. Proves what ran before what. */
   readonly calls: string[];
 }
 
-/**
- * The durable half of a room that outlived the process that was serving it.
- *
- * `status` is a parameter because a closed room and an open one have to be told apart by the code
- * under test rather than by this fake: a closed room's row still exists and still lists its
- * members, and reopening one would resurrect a table somebody deliberately ended.
- */
+/** `status` is a parameter so the code under test, not the fake, refuses to reopen a closed room. */
 function persistedStore(
   reads: Reads,
   options: {
     readonly status?: RoomRow['status'];
-    /**
-     * Makes `byId` reject with this, rather than answer.
-     *
-     * A plain `Error`, never an `AppError`: the point of the fixture is the path where the
-     * database itself failed — `postgres` rejects with its own error type, which carries no
-     * `code` this server understands. See the "a database blip is not a refusal" block below.
-     */
+    /** A plain `Error`, as `postgres` rejects with no `code` this server understands. */
     readonly byIdRejectsWith?: Error;
   } = {},
 ): RoomStore {
@@ -237,12 +182,7 @@ interface Restarted {
   readonly reads: Reads;
 }
 
-/**
- * A process that has just started: durable rows, and an empty registry.
- *
- * Nothing here calls `registry.open`. That absence IS the restart — it is the whole of what a
- * restart does to this server — and it is why no fixture needs to kill anything.
- */
+/** Nothing calls `registry.open`. That absence is the restart. */
 async function afterRestart(
   options: { readonly status?: RoomRow['status']; readonly byIdRejectsWith?: Error } = {},
 ): Promise<Restarted> {
@@ -265,7 +205,6 @@ async function afterRestart(
   return { app, router, registry, clock, reads };
 }
 
-/** Sends `hello` and lets the database reads the handler now makes settle. */
 async function sayHello(
   test: Restarted,
   userId: string,
@@ -282,15 +221,9 @@ async function sayHello(
     connection,
     JSON.stringify({ type: 'hello', protocolVersion: 1, roomId, clientNonce: `nonce-${userId}` }),
   );
-  // `onHello` is dispatched with `void` and now awaits the store, so the assertions have to wait
-  // for the same turns of the loop the handler does.
   for (let turn = 0; turn < 8; turn += 1) await new Promise((resolve) => setImmediate(resolve));
   return recorded;
 }
-
-// ---------------------------------------------------------------------------
-// The table that survives
-// ---------------------------------------------------------------------------
 
 describe('a socket reopens a room this process has never seen', () => {
   it('welcomes a member back to their own table after a restart', async () => {
@@ -298,8 +231,6 @@ describe('a socket reopens a room this process has never seen', () => {
     try {
       const recorded = await sayHello(test, MEMBER, 'Bo');
 
-      // Before the fix this was an `error` frame carrying `room_not_found_or_not_permitted`,
-      // followed by a 4403 close — "Not your table" — for a table that was theirs.
       assert.deepEqual(
         recorded.closes,
         [],
@@ -311,8 +242,6 @@ describe('a socket reopens a room this process has never seen', () => {
       const welcome = firstOf(recorded, 'welcome');
       assert.ok(welcome !== null, 'hello is answered with a welcome');
       assert.equal(welcome['userId'], MEMBER);
-      // The roster is rebuilt from the durable rows, so the seat the database records is the seat
-      // the learner comes back to rather than an empty table with their name missing.
       assert.equal(welcome['seat'], 1, 'the recorded seat is re-taken, not lost with the process');
       assert.ok(firstOf(recorded, 'state') !== null, 'the welcome is followed by the current view');
 
@@ -323,9 +252,6 @@ describe('a socket reopens a room this process has never seen', () => {
   });
 
   it('welcomes the owner too, who has no membership row to be found by id', async () => {
-    // `memberOf` is the check that passes for a member; an owner is covered by the row's
-    // `owner_user_id`. Both are in the store here, so this is really asserting the owner path is
-    // not accidentally the only one that works — or the only one that does not.
     const test = await afterRestart();
     try {
       const recorded = await sayHello(test, OWNER, 'Ada');
@@ -357,10 +283,6 @@ describe('a socket reopens a room this process has never seen', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// The refusal that has to survive the fix
-// ---------------------------------------------------------------------------
-
 describe('reopening does not become a way in', () => {
   it('refuses a stranger with the code that does not confirm the room exists', async () => {
     const test = await afterRestart();
@@ -378,8 +300,7 @@ describe('reopening does not become a way in', () => {
       );
       assert.equal(recorded.closes.at(0)?.code, WS_CLOSE.forbidden);
 
-      // The same answer, byte for byte, as a room id that was never real. A refusal a stranger can
-      // tell apart from "no such room" is a free way to confirm somebody else's room id.
+      // A refusal distinguishable from "no such room" would confirm somebody else's room id.
       const unknown = await sayHello(test, STRANGER, 'Mallory', 'room_y2neverexisted');
       assert.deepEqual(
         framesOf(unknown),
@@ -393,10 +314,7 @@ describe('reopening does not become a way in', () => {
   });
 
   it('refuses a stranger without building a table for them', async () => {
-    // The order of the two checks is the security property: membership is read from the durable
-    // rows BEFORE anything is opened. Opening first would be shorter and would let anybody who
-    // guessed a room id make this process build a `HandState`, a turn timer and a bot runner
-    // before being told no.
+    // Membership is read before anything is opened, so a guessed id builds nothing.
     const test = await afterRestart();
     try {
       await sayHello(test, STRANGER, 'Mallory');
@@ -428,10 +346,8 @@ describe('reopening does not become a way in', () => {
   });
 
   it('joins a socket to a room once, however many hellos race the database read', async () => {
-    // `roomId` is set after the store read, so two `hello` frames delivered in one tick both used
-    // to pass the "already in a room?" guard, both join, and `noteSocket` ends one increment over
-    // — a member who has closed their tab still showing as connected at the table, permanently.
-    // `connection.joining` is set synchronously, before anything can suspend.
+    // `roomId` is set after the store read, so two hellos in one tick both joined and left
+    // `noteSocket` one over. `connection.joining` is set synchronously.
     const test = await afterRestart();
     try {
       const recorded = recorder();
@@ -459,9 +375,7 @@ describe('reopening does not become a way in', () => {
       const errors = framesOf(recorded).filter((frame) => frame.type === 'error');
       assert.equal(errors.length, 1, 'the duplicate hello is refused rather than ignored');
 
-      // `sockets` is what `RoomMember.connected` is derived from, so it is the observable
-      // consequence of a double `noteSocket`: closing the one socket must leave the count at zero,
-      // not at one. A stuck count is a member who has closed their tab and still shows as here.
+      // `RoomMember.connected` is derived from `sockets`, so it must return to zero.
       test.router.handleClose(connection);
       const room = test.registry.get(ROOM_ID);
       assert.ok(room !== null);
@@ -473,18 +387,7 @@ describe('reopening does not become a way in', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// A database blip is not a refusal
-// ---------------------------------------------------------------------------
-
-/**
- * The source of the client's close-code table, read as text.
- *
- * `apps/web` is a separate TypeScript program that cannot be imported from here — the same
- * constraint `web-api-paths.test.ts` and `legend-fixture-figures.test.ts` work around — so the
- * property this file depends on ("the client retries this code and not that one") is asserted
- * against the real file rather than against a copy of it that could drift.
- */
+/** `apps/web` cannot be imported from here, so the client's close-code table is read as text. */
 const TABLE_SOCKET_SOURCE = resolve(
   dirname(fileURLToPath(import.meta.url)),
   '..',
@@ -495,12 +398,6 @@ const TABLE_SOCKET_SOURCE = resolve(
   'table-socket.ts',
 );
 
-/**
- * Whether `describeClose` marks one close code retryable, read out of the web client's source.
- *
- * The block for a `case` runs to the next `case`, which is enough structure to read a
- * single-property answer out of a file that is deliberately written as a flat table.
- */
 function clientRetries(caseLabel: string): boolean {
   const source = readFileSync(TABLE_SOCKET_SOURCE, 'utf8');
   const start = source.indexOf(`case ${caseLabel}:`);
@@ -514,8 +411,6 @@ function clientRetries(caseLabel: string): boolean {
 
 describe('a transient database fault during hello is not reported as a permanent refusal', () => {
   it('closes with a code the client retries, not with 4403', async () => {
-    // The reproduction, exactly: nothing on the `reopenFor` path is wrapped, so a Postgres blip
-    // arrives here as a plain `Error` with no `code` this server understands.
     const blip = new Error('connection terminated unexpectedly');
     const test = await afterRestart({ byIdRejectsWith: blip });
     try {
@@ -534,21 +429,16 @@ describe('a transient database fault during hello is not reported as a permanent
       const close = recorded.closes.at(0);
       assert.ok(close !== undefined, 'the socket is still closed; a half-joined socket must not linger');
 
-      // MEASURED BEFORE: `closes: [{ code: 4403, reason: 'not permitted' }]`, because the catch
-      // block derived the frame code from the error and then closed with a hard-coded
-      // `WS_CLOSE.forbidden`. The old expression, written out so this assertion is against the
-      // behaviour and not against a constant that moved:
+      // Measured before the fix it was 4403, because the catch block closed with a hard-coded
+      // `WS_CLOSE.forbidden`.
       const oldCloseCode = WS_CLOSE.forbidden;
       assert.notEqual(
         close.code,
         oldCloseCode,
         'a database blip must not close 4403 — that is the code for "not your table"',
       );
-      // MEASURED AFTER: `closes: [{ code: 4503, reason: 'handshake failed' }]`.
       assert.equal(close.code, WS_CLOSE.serverShuttingDown);
 
-      // The consequence, which is the whole reason the code matters. Both halves are asserted:
-      // without the second, this would also pass on a client that retried everything.
       assert.equal(
         clientRetries('WS_CLOSE.serverShuttingDown'),
         true,
@@ -565,9 +455,7 @@ describe('a transient database fault during hello is not reported as a permanent
   });
 
   it('still closes a genuine refusal with 4403, blip fixture and all', async () => {
-    // The negative control for the fix itself. A change that routed every handshake failure to a
-    // retryable code would pass the test above and quietly turn "not your table" into an infinite
-    // reconnect loop against a room the caller will never be allowed into.
+    // Routing every failure to a retryable code would reconnect for ever to a room the caller cannot enter.
     const test = await afterRestart();
     try {
       const recorded = await sayHello(test, STRANGER, 'Mallory');

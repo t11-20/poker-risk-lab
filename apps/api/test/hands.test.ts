@@ -1,18 +1,7 @@
 /**
- * Hand history and hand review.
- *
- * Two halves, split by what each needs.
- *
- * The first half tests `src/review/build-review.ts` directly, with rows produced from a real
- * engine hand (`test/helpers/hand-rows.ts`). No Postgres, no Fastify, no network — the review is a
- * pure function of the persisted rows plus the id of the user asking, which is what makes the
- * interesting rules (whose cards, whose analysis, what an empty reveal means) provable at all.
- *
- * The second half drives the routes through `app.inject()` against a real database, because
- * "scoped to the caller's own hands" is a SQL predicate and a predicate can only be tested against
- * a query planner. Those tests SKIP, with a printed reason, when `DATABASE_URL` is absent — the
- * suite has to pass without a database, and a test that silently passes because it never ran is
- * worse than one that says it was skipped.
+ * Hand history and hand review. The first half tests `src/review/build-review.ts` as a pure function
+ * of rows from a real engine hand. The second half drives the routes against a real database,
+ * because caller scoping is a SQL predicate, and skips with a printed reason without one.
  */
 
 import assert from 'node:assert/strict';
@@ -45,20 +34,10 @@ const ALICE = 'usr_reviewaliceaaaaaaaaaaaa';
 const BORYS = 'usr_reviewborysbbbbbbbbbbb';
 const CARLA = 'usr_reviewcarlaccccccccccc';
 
-/** Small sample count: these tests assert structure, not the third digit of an equity. */
+/** These tests assert structure, not the third digit of an equity. */
 const TEST_SAMPLES = 2_000;
 
-// ---------------------------------------------------------------------------
-// Fixtures
-// ---------------------------------------------------------------------------
-
-/**
- * Heads-up, and the button folds preflop.
- *
- * The shape that matters most: no board is dealt and nobody shows, so the reveal is empty and the
- * winner's two cards stay sealed for ever. Everything about how this hand is reported has to say
- * "correct", never "unverified".
- */
+/** Heads-up, the button folds preflop. The reveal is empty and must still report "correct". */
 function foldOutHand(handId = 'hand_reviewfoldoutaaaaaaaaa'): PersistedHand {
   return persistHand({
     handId,
@@ -72,12 +51,6 @@ function foldOutHand(handId = 'hand_reviewfoldoutaaaaaaaaa'): PersistedHand {
   });
 }
 
-/**
- * Three-handed, one seat folds preflop and the other two check it down to a showdown.
- *
- * Gives every visibility case in one hand: a folder whose cards nobody may see, two seats whose
- * cards became public because they showed, and four decisions belonging to the same player.
- */
 function showdownHand(handId = 'hand_reviewshowdownaaaaaaa'): PersistedHand {
   return persistHand({
     handId,
@@ -103,12 +76,7 @@ function showdownHand(handId = 'hand_reviewshowdownaaaaaaa'): PersistedHand {
   });
 }
 
-/**
- * Heads-up, both all-in preflop, and the board runs itself out.
- *
- * The only shape where the stored board is longer than the street the decisions were made on, and
- * therefore the case that proves the per-street board prefix is taken rather than the whole array.
- */
+/** Both all-in preflop, so the stored board is longer than the decision street needs. */
 function allInPreflopHand(handId = 'hand_reviewallinaaaaaaaaaaa'): PersistedHand {
   return persistHand({
     handId,
@@ -172,10 +140,6 @@ function analysisAt(review: HandReviewResponse, sequence: number): CoachReport {
   return decision.analysis;
 }
 
-// ---------------------------------------------------------------------------
-// Reconstructing the hand without the deck
-// ---------------------------------------------------------------------------
-
 describe('the review replays a hand from its rows, with no deck anywhere', () => {
   it('reconstructs the pot and the price from the action log and the recovered blinds', () => {
     const fixture = foldOutHand();
@@ -184,18 +148,15 @@ describe('the review replays a hand from its rows, with no deck anywhere', () =>
     const fold = review.decisions[0];
     assert.ok(fold !== undefined);
     assert.equal(review.decisions.length, 1);
-    // Small blind 1 plus big blind 2. Neither is an action row, so both were recovered from what
-    // the hand recorded — who opened the action, and the engine's own pot before they did. NOT
-    // from `button_seat`: the dead-button rule means the button no longer determines the blinds,
-    // and `test/x3-dead-blind-review.test.ts` covers the hands where the difference shows.
+    // The blinds are recovered from who opened the action and the pot before it, not from
+    // `button_seat`. `test/x3-dead-blind-review.test.ts` covers the dead-button cases.
     assert.equal(fold.potBefore, 3);
 
     const analysis = analysisAt(review, 1);
     assert.equal(analysis.street, 'preflop');
     assert.equal(analysis.potTotal, 3, 'the pot the decision faced');
     assert.equal(analysis.toCall, 1, 'the button had posted the small blind, so it owed one more');
-    // The button has 199 behind and the big blind 198, so the effective stack is the smaller of
-    // the two. Getting the blinds the wrong way round would show up here as 199.
+    // Blinds the wrong way round would show as 199.
     assert.equal(analysis.stackContext.effectiveStack, 198);
   });
 
@@ -203,7 +164,6 @@ describe('the review replays a hand from its rows, with no deck anywhere', () =>
     const fixture = showdownHand();
     const review = reviewAs(fixture, ALICE, { maxAnalysedDecisions: 0 });
 
-    // `pot_after` is the engine's own running total. Every `potBefore` must be the previous one.
     let expected =
       fixture.actions[0] === undefined ? 0 : fixture.actions[0].pot_after - fixture.actions[0].amount_paid;
     for (const [index, decision] of review.decisions.entries()) {
@@ -231,9 +191,8 @@ describe('the review replays a hand from its rows, with no deck anywhere', () =>
     }
   });
 
-  // Migration 0009. The review used to have only `wasAutomatic`, and the web printed "the clock ran
-  // out" for all of it. The reason is passed through as recorded — and a row archived before the
-  // reason existed stays null, because inventing `timeout` from `was_automatic` is that same guess.
+  // A row archived before migration 0009 stays null, because inferring `timeout` from
+  // `was_automatic` is the guess the reason replaced.
   it('carries why the server acted, and invents no reason for a row that recorded none', () => {
     const fixture = showdownHand();
     assert.ok(fixture.actions.length >= 3, 'a sweep of nothing is not a pass');
@@ -258,23 +217,16 @@ describe('the review replays a hand from its rows, with no deck anywhere', () =>
   it('reconstructs the board for each street from the stored board alone', () => {
     const fixture = showdownHand();
     const review = reviewAs(fixture, ALICE);
-    // Alice acts on all four streets. Each report's own street must line up with a board of the
-    // right length, which only works if the prefix of `hands.board` was taken per street.
     const streets = review.decisions
       .filter((decision) => decision.analysis !== null)
       .map((decision) => decision.analysis?.street);
     assert.deepEqual(streets, ['preflop', 'flop', 'turn', 'river']);
-    // On the river every card is out, so equity is exact rather than sampled: proof the board
-    // really was five cards by then and not a truncated prefix.
     const river = review.decisions.at(-2);
     assert.equal(river?.analysis?.equity.method, 'exact-enumeration');
   });
 
   it('analyses a preflop all-in against an empty board, not the board that ran out after it', () => {
-    // The one case where the stored board is longer than the acting street implies: both players
-    // are all-in preflop, so `advanceStreets` deals five cards with no further action. A review
-    // that handed the whole stored board to a preflop decision would be analysing a spot that
-    // never existed — and `buildCoachReport` would refuse it, so this would surface as a null.
+    // Handing the whole stored board to a preflop decision would make `buildCoachReport` refuse it.
     const fixture = allInPreflopHand();
     assert.equal(fixture.actions.length, 2, 'a raise and a call, then the board runs itself out');
     const board = fixture.hand.board;
@@ -292,7 +244,6 @@ describe('the review replays a hand from its rows, with no deck anywhere', () =>
   it('refuses to analyse when the replay disagrees with the persisted pot', () => {
     const fixture = foldOutHand();
     const skipped: SkippedAnalysis[] = [];
-    // A tampered row: the pot no longer follows from the blinds and the action.
     const tampered = {
       ...fixture,
       actions: fixture.actions.map((action) => ({ ...action, pot_after: 999 })),
@@ -305,10 +256,6 @@ describe('the review replays a hand from its rows, with no deck anywhere', () =>
     );
   });
 });
-
-// ---------------------------------------------------------------------------
-// Hole-card visibility
-// ---------------------------------------------------------------------------
 
 describe('hole cards follow the rule on prl.hand_seats.hole_cards', () => {
   it('shows the viewer their own cards and nobody else in a fold-out hand', () => {
@@ -351,8 +298,7 @@ describe('hole cards follow the rule on prl.hand_seats.hole_cards', () => {
 
   it('shows nothing to a user with no seat in the hand', () => {
     const fixture = showdownHand();
-    // Not reachable through the route — it answers `hand_not_found` first — but the builder must
-    // fail closed on its own, because it is the layer that decides what a card is attached to.
+    // Unreachable through the route, but the builder must fail closed on its own.
     const review = buildHandReview(
       {
         hand: fixture.hand,
@@ -385,10 +331,6 @@ describe('hole cards follow the rule on prl.hand_seats.hole_cards', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Per-decision analysis
-// ---------------------------------------------------------------------------
-
 describe('analysis is computed for the viewer’s own decisions and nobody else’s', () => {
   it('analyses only the requesting user’s decisions', () => {
     const fixture = showdownHand();
@@ -401,10 +343,7 @@ describe('analysis is computed for the viewer’s own decisions and nobody else�
   });
 
   it('still refuses to analyse an opponent’s decision after they showed down', () => {
-    // Seat 2's cards are public in this hand, so an analysis would be *possible*. It is still not
-    // produced: the review reports on the decisions of the person asking, and a report that
-    // appeared only for hands that happened to reach a showdown would be a review that told you
-    // more about other people the more they had shown.
+    // The review covers the asker's decisions only, whether or not the opponent showed.
     const fixture = showdownHand();
     const forAlice = reviewAs(fixture, ALICE);
     const seatTwo = forAlice.decisions.filter((decision) => decision.seat === 2);
@@ -459,7 +398,6 @@ describe('analysis is computed for the viewer’s own decisions and nobody else�
   it('stops when the budget is exhausted and records why', () => {
     const fixture = showdownHand();
     const skipped: SkippedAnalysis[] = [];
-    // A clock that has already run past the deadline by the first decision.
     let calls = 0;
     const now = (): number => {
       calls += 1;
@@ -474,10 +412,6 @@ describe('analysis is computed for the viewer’s own decisions and nobody else�
   });
 });
 
-// ---------------------------------------------------------------------------
-// The commitment
-// ---------------------------------------------------------------------------
-
 describe('the reveal is verified, and an empty one is a pass', () => {
   it('reports a fold-out hand as verified with nothing to prove', () => {
     const review = reviewAs(foldOutHand(), ALICE, { maxAnalysedDecisions: 0 });
@@ -490,30 +424,20 @@ describe('the reveal is verified, and an empty one is a pass', () => {
   it('verifies every position a showdown made public', () => {
     const review = reviewAs(showdownHand(), ALICE, { maxAnalysedDecisions: 0 });
     assert.equal(review.verification.ok, true, review.verification.reason);
-    // Five board cards plus two hole cards for each of the two seats that showed.
     assert.equal(review.verification.verifiedPositions, 9);
     assert.equal(review.verification.reason, undefined);
   });
 
   it('proves only the cards that legitimately became public (REGRESSION)', () => {
-    // THIS ASSERTION USED TO BE UNFALSIFIABLE. It searched `JSON.stringify(review.reveal)` for the
-    // folder's cards in NOTATION — `"7c"` — while a reveal serialises each card as its deck index,
-    // `"card":51`. The needle could not appear in the haystack under any input, so the check passed
-    // over a reveal deliberately built to carry a folded seat's hole cards.
-    //
-    // It compares the deck indices now, and asserts the proved SET rather than a substring: the
-    // count alone is what the neighbouring test pins, and a count cannot tell a board card from a
-    // folder's hole card.
+    // A reveal serialises cards as deck indices, so the old substring search for notation like `"7c"`
+    // could never match. It compares the proved set of indices now.
     const fixture = showdownHand();
     const review = reviewAs(fixture, ALICE, { maxAnalysedDecisions: 0 });
     assert.ok(review.reveal !== null, 'a showdown hand has a reveal to check');
     const serialised = JSON.stringify(review.reveal);
     assert.ok(serialised.includes('"saltHex"'), 'a proof carries the salt for a card already public');
 
-    // `HandReviewResponse.reveal` is deliberately `unknown` — it is an opaque proof payload the
-    // route passes through. Narrowed here rather than cast past, so the shape this guard depends on
-    // is itself asserted: if the encoding ever changes from a deck index, this fails loudly instead
-    // of silently comparing nothing, which is the failure being fixed.
+    // `reveal` is `unknown`, so its shape is narrowed and asserted rather than cast past.
     const revealed = review.reveal as { readonly cards?: readonly { readonly card?: unknown }[] };
     const indices = (revealed.cards ?? []).map((entry) => entry.card);
     assert.ok(
@@ -531,8 +455,7 @@ describe('the reveal is verified, and an empty one is a pass', () => {
       );
     }
 
-    // And the positive half, so the guard cannot be satisfied by an empty or truncated reveal:
-    // every seat that showed down has both its cards proved.
+    // The positive half, so an empty or truncated reveal cannot satisfy the guard.
     for (const seat of fixture.state.seats) {
       if (seat.seat === 0 || seat.holeCards === null || seat.holeCards === undefined) continue;
       for (const card of seat.holeCards) {
@@ -578,8 +501,6 @@ describe('the reveal is verified, and an empty one is a pass', () => {
   });
 
   it('falls back to the reveal inside the result when the column is null', () => {
-    // Both places hold it: `hands.reveal` and `hands.result.reveal`, each with its own CHECK
-    // constraints. A row written by a path that filled only one of them still verifies.
     const fixture = showdownHand();
     const review = reviewAs({ ...fixture, hand: { ...fixture.hand, reveal: null } }, ALICE, {
       maxAnalysedDecisions: 0,
@@ -614,10 +535,6 @@ describe('the reveal is verified, and an empty one is a pass', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// The summary, and the cursor
-// ---------------------------------------------------------------------------
-
 describe('the hand summary', () => {
   const bareHand: HandRow = {
     id: 'hand_summarybareaaaaaaaaaa',
@@ -647,8 +564,7 @@ describe('the hand summary', () => {
   });
 
   it('falls back to the settled pot layers for a hand with no actions', () => {
-    // Everyone all-in from the blinds: there is no action row, so `max(pot_after)` is null and the
-    // only other place the figure exists is the settled result.
+    // No action rows, so the only source of the figure is the settled result.
     const summary = toHandSummary({ hand: bareHand, heroNet: null, maxPotAfter: null });
     assert.equal(summary.potTotal, 12);
     assert.equal(summary.heroNet, null);
@@ -676,13 +592,8 @@ describe('the hand summary', () => {
 
 describe('the review route is rate limited as an expensive one', () => {
   /**
-   * No database needed, and that is the point.
-   *
-   * `@fastify/rate-limit` attaches itself per route in `onRequest`, which runs before the session
-   * `preHandler` and long before any query. So two refused requests are enough to prove which
-   * bucket each route is in — and the claim being checked is a real one: without
-   * `config: app.expensiveRateLimit` a single session could ask for three hundred Monte Carlo runs
-   * a minute under the global limit.
+   * The limiter runs in `onRequest`, before the session `preHandler`, so no database is needed.
+   * Without `expensiveRateLimit` one session could ask for 300 Monte Carlo runs a minute.
    */
   it('limits the review long before the list', async () => {
     const harness = await buildHandsApp({
@@ -697,7 +608,6 @@ describe('the review route is rate limited as an expensive one', () => {
       assert.equal(second.statusCode, 429);
       assert.equal(errorCodeOf(second.payload), 'rate_limited');
 
-      // The list is a cheap read and keeps the global limit, so it is still answering.
       const list = await harness.app.inject({ method: 'GET', url: '/api/v1/hands' });
       assert.equal(list.statusCode, 401);
       assert.equal(errorCodeOf(list.payload), 'not_authenticated');
@@ -738,10 +648,6 @@ describe('the list cursor', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// The routes, against a real database
-// ---------------------------------------------------------------------------
-
 announceSkipUnlessDatabase('the hand route tests');
 
 interface Fixtures {
@@ -759,13 +665,7 @@ interface Fixtures {
 
 let fixtures: Fixtures | null = null;
 
-/**
- * What to delete afterwards, recorded before anything is written.
- *
- * Separate from `fixtures` on purpose: a `before` hook that throws halfway — a constraint the
- * fixture violates, say — would never assign `fixtures`, and a cleanup keyed on that would leave
- * rows behind in a shared development database for every future run to trip over.
- */
+/** Recorded before anything is written, so a `before` hook that throws halfway still cleans up. */
 const created: { readonly roomIds: string[]; readonly userIds: string[] } = { roomIds: [], userIds: [] };
 
 before(async () => {
@@ -787,7 +687,6 @@ before(async () => {
   await insertGuest(sql, botId, 'Rock');
   await insertRoom(sql, roomId, aliceId);
 
-  // Alice alone with a bot: Borys must never see this one.
   await insertHand(
     sql,
     persistHand({
@@ -803,7 +702,6 @@ before(async () => {
       startedAt: new Date('2026-08-17T10:00:00.111111Z'),
     }),
   );
-  // Alice and Borys together, later, so it sorts first.
   await insertHand(
     sql,
     persistHand({
