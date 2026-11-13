@@ -47,7 +47,10 @@ import { recordApiError } from './observability/metrics.ts';
 export interface AppErrorDetail {
   /** Field-level messages. Only meaningful for `invalid_request`. */
   readonly fields?: Readonly<Record<string, string>>;
-  /** Seconds until a retry may succeed. Only meaningful for `rate_limited`. */
+  /**
+   * Seconds until a retry may succeed: `rate_limited`, and `service_unavailable` from the feature
+   * gate in `app.ts`, whose next re-check is a known interval away.
+   */
   readonly retryAfterSeconds?: number;
   /**
    * Server-side only: what actually happened, for the log line. Never sent to a

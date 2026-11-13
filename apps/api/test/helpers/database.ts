@@ -35,6 +35,7 @@
 
 import { loadConfig } from '../../src/config.ts';
 import { createDatabaseClient, type Sql } from '../../src/db.ts';
+import { readLedger, readShippedMigrations, verifySchema } from '../../src/schema-guard.ts';
 
 /** `DATABASE_URL`, or undefined when it is absent or blank. Blank is absent, not a URL. */
 export const TEST_DATABASE_URL = ((): string | undefined => {
@@ -166,6 +167,11 @@ export interface SchemaProbe {
  * A URL that points at nothing, a database with no migrations applied and a typo in the variable
  * name all have to be distinguishable from a healthy connection, because they need different
  * fixes and because the first two are exactly how this suite could go back to proving nothing.
+ *
+ * Then the same comparison the server makes at boot (`src/schema-guard.ts`). A database one
+ * migration behind this working tree used to pass this probe — `prl.users` was there — and the whole
+ * API test file then failed on `column "automatic_reason" does not exist`, a column name rather
+ * than a cause. Now this file fails first, naming the pending migration and `pnpm run db:migrate`.
  */
 export async function probeSchema(): Promise<SchemaProbe> {
   if (TEST_DATABASE_URL === undefined) {
@@ -174,6 +180,16 @@ export async function probeSchema(): Promise<SchemaProbe> {
   const client = testClientFor(TEST_DATABASE_URL);
   try {
     await client`select 1 from prl.users limit 1`;
+    const verdict = await verifySchema(
+      async () => (await readLedger(client)).rows,
+      () => readShippedMigrations(),
+    );
+    if (verdict.kind === 'refused') {
+      return { ok: false, problem: `${verdict.problems.join('; ')}. ${verdict.fix}` };
+    }
+    if (verdict.kind === 'unverified') {
+      return { ok: false, problem: `DATABASE_URL answered, but ${verdict.reason}. ${DATABASE_FIX_HINT}` };
+    }
     return { ok: true };
   } catch (error) {
     const name = error instanceof Error ? `${error.name}: ${error.message}` : String(error);

@@ -539,8 +539,9 @@ schema verification
 
 **Why 120 and 12 here, when the same script reports 123 and 13 against the development
 database.** `information_schema` is filtered by privilege: it shows only what the connecting
-role may touch. This run connected as `prl_api`, which is granted nothing on
-`prl.schema_migrations` (3 columns), so it cannot see that table and does not count it. A run as
+role may touch. This run connected as `prl_api`, which was granted nothing on
+`prl.schema_migrations` (3 columns) until migration 0010 granted it SELECT, so it could not see that
+table and did not count it. A run as
 the schema owner sees both. Neither number is wrong and neither database is missing anything —
 which is exactly why `verify-schema.mjs` now prints the role beside the counts, so two
 transcripts can be compared at all.

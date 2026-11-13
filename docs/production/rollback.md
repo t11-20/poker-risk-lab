@@ -66,7 +66,7 @@ Roll back when **any** of these is true. These are the criteria the `rollback-pl
 
 ### When to fix forward instead
 
-- **Configuration (exit 78).** The process printed every problem at once and never listened. Fix the variable and redeploy. Nothing is wrong with the artefact, and rolling back hides a misconfiguration that will recur. Do **not** "temporarily" satisfy a refused check with a placeholder — every one of those checks exists because a placeholder in production caused an incident once already.
+- **Configuration (exit 78).** The process printed every problem at once and never listened. Fix the variable and redeploy. Nothing is wrong with the artefact, and rolling back hides a misconfiguration that will recur. The same holds when exit 78 says `the database schema does not match this build`: run the migrations it names (`../RUNBOOK.md` §11.3) and start it again. Do **not** "temporarily" satisfy a refused check with a placeholder — every one of those checks exists because a placeholder in production caused an incident once already.
 - **A defect in a path nobody is hitting.** A rollback restarts the API and drops live hands; that cost has to be worth paying.
 - **The release contains an irreversible migration.** Then there is no rollback to choose — §5.
 - **The database is the problem, not the release.** [`runbooks/db-unavailable.md`](runbooks/db-unavailable.md) and [`runbooks/db-saturation.md`](runbooks/db-saturation.md) first. Rolling back an application because its database is unhappy changes nothing and costs every hand in progress.

@@ -31,10 +31,18 @@ import { pathToFileURL } from 'node:url';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from './app.ts';
 import { type AppConfig, ConfigError, getConfig } from './config.ts';
-import { closeDatabase, configureDatabase, getSql } from './db.ts';
+import {
+  closeDatabase,
+  configureDatabase,
+  type DbCheck,
+  getSql,
+  PROBE_QUERY_DEADLINE_MS,
+  ping,
+} from './db.ts';
 import { startRetentionSweep } from './maintenance/retention-sweep.ts';
 import { appMetrics } from './observability/metrics.ts';
 import { API_ROUTE_MODULES, registerApiRoutes } from './routes/index.ts';
+import { createSchemaGate, describeRefusal, readLedger } from './schema-guard.ts';
 import { beginSharedPoolWarmup, closeSharedPool } from './workers/pool.ts';
 
 /** Exit codes, so a supervisor's logs mean something. */
@@ -58,6 +66,25 @@ let shuttingDown = false;
  * is why every use is optional — a process that failed to start has no sweep to stop.
  */
 let retention: { stop: () => void } | undefined;
+
+/**
+ * How often the schema gate is re-checked by this process itself, whether or not anything probes
+ * `/ready`.
+ *
+ * ## Why the process polls its own readiness
+ *
+ * The feature gate (`app.ts`) opens only when the schema guard holds a verdict for the database
+ * in front of it, and before this timer the only thing that ever asked was a `/ready` probe. A
+ * deployment with no readiness probe — a bare `docker run`, a process manager — would then keep
+ * every feature route shut for ever after a degraded boot, and would never notice a database
+ * swapped behind the DSN. Five seconds: one identity read per tick, the same single cheap query a
+ * probe makes, and short enough that `Retry-After` can promise it. During an outage `ping()`'s
+ * latch keeps it to one stranded connection however long the outage lasts.
+ */
+const SCHEMA_RECHECK_INTERVAL_MS = 5_000;
+
+/** The re-check's timer, stopped by `shutdown` for the same reason `retention` is. */
+let schemaRecheck: NodeJS.Timeout | undefined;
 
 /**
  * How often, during a drain, to drop sockets that are no longer holding work of ours.
@@ -262,6 +289,9 @@ async function shutdown(
   // no claim on the shutdown grace, and a sweep starting mid-drain would hold a pooled connection
   // that `closeDatabase` is about to wait for.
   retention?.stop();
+  // And the schema re-check, which would otherwise ask the pool for a connection `closeDatabase` is
+  // about to close.
+  if (schemaRecheck !== undefined) clearInterval(schemaRecheck);
 
   const stopDraining = drainIdleConnections(app, connections, config.shutdownGraceMs);
   try {
@@ -330,7 +360,36 @@ async function main(): Promise<void> {
     process.exit(EXIT_CONFIG_INVALID);
   }
 
-  const app = await buildApp({ config });
+  // The readiness probe's database handle and the feature gate, both on the schema. Wired here and
+  // not as `buildApp`'s defaults because `buildApp` is the seam every test builds an app through,
+  // with a stub handle or none; this is the one process that serves traffic. See `schema-guard.ts`.
+  // The callbacks reach the logger through `app`, which exists by the time any probe can run.
+  const schema = createSchemaGate({
+    readLedger: () => readLedger(getSql()),
+    probeDeadlineMs: PROBE_QUERY_DEADLINE_MS,
+    onDatabaseChanged: () => {
+      app.log.warn(
+        'a different database is answering DATABASE_URL; feature routes answer 503 until its schema is verified',
+      );
+    },
+    onVerdictChanged: (verdict) => {
+      if (verdict.kind === 'current') {
+        app.log.info({ applied: verdict.applied, ahead: verdict.ahead }, 'database schema verified; serving');
+      } else if (verdict.kind === 'refused') {
+        // `error`: unlike at boot this does not exit (see `schema-guard.ts`), so this line and the
+        // 503s are the whole of what an operator gets.
+        app.log.error({ problems: verdict.problems, fix: verdict.fix }, verdict.summary);
+      } else {
+        app.log.warn({ reason: verdict.reason }, 'database schema not verified');
+      }
+    },
+  });
+  const probeDatabase = async (): Promise<DbCheck> => schema.readiness(await ping());
+  const app = await buildApp({
+    config,
+    database: { ping: probeDatabase, close: closeDatabase },
+    featureGate: { admits: schema.admits, retryAfterSeconds: SCHEMA_RECHECK_INTERVAL_MS / 1_000 },
+  });
   // Before `listen()`, so that no connection can be accepted that the drain cannot see.
   const connections = trackConnections(app);
   installProcessHandlers(app, config, connections);
@@ -347,6 +406,42 @@ async function main(): Promise<void> {
       app.log.warn({ notice: message }, 'postgres notice');
     },
   });
+
+  // Before any route exists. Two PRs in one day added a migration that the development database did
+  // not have, and the API booted green against it; the first sign was `column "automatic_reason"
+  // does not exist` from an archive write, and units silently stopped moving. A database that
+  // ANSWERS with a schema behind this build is refused here, with the files and the command named.
+  // One that does not answer at all is not: that is `db-unavailable.md`'s designed posture, and
+  // `/ready` stays degraded until it can ask. `console.error` and not the logger: `logging.ts`
+  // switches the logger off under `test`, and a refusal nobody can read is a silent exit 78.
+  const verdict = await schema.verify();
+  if (verdict.kind === 'refused') {
+    console.error(describeRefusal(verdict));
+    await closeDatabase(1_000);
+    process.exit(EXIT_CONFIG_INVALID);
+  }
+  if (verdict.kind === 'unverified') {
+    app.log.warn(
+      { reason: verdict.reason },
+      'database schema not verified at boot; /ready reports degraded until the migration ledger answers',
+    );
+  } else if (verdict.ahead.length > 0) {
+    // Expected during a deploy (migrate, then roll) and after an image rollback. Loud because it is
+    // also what pointing an old build at somebody else's database looks like.
+    app.log.warn(
+      { applied: verdict.applied, ahead: verdict.ahead },
+      'database schema is ahead of this build: a newer build migrated it; serving, since migrations are additive',
+    );
+  } else {
+    app.log.info({ applied: verdict.applied }, 'database schema matches this build');
+  }
+  // `readiness` never rejects; the `catch` is so that a future one that does cannot become an
+  // unhandled rejection, which this process treats as a crash. `unref`, so the timer alone never
+  // holds a stopping process open.
+  schemaRecheck = setInterval(() => {
+    probeDatabase().catch(() => undefined);
+  }, SCHEMA_RECHECK_INTERVAL_MS);
+  schemaRecheck.unref();
 
   try {
     // Registers every route module under `API_PREFIX`, and the process-wide state more than one of

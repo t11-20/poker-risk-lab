@@ -34,7 +34,13 @@
 import { timingSafeEqual } from 'node:crypto';
 import type { HealthResponse, ReadinessResponse } from '@prl/contracts';
 import { ALL_SCHEMAS, PROTOCOL_VERSION } from '@prl/contracts';
-import type { FastifyInstance, FastifyPluginAsync, FastifyRequest, FastifyServerOptions } from 'fastify';
+import type {
+  FastifyInstance,
+  FastifyPluginAsync,
+  FastifyReply,
+  FastifyRequest,
+  FastifyServerOptions,
+} from 'fastify';
 import Fastify from 'fastify';
 import { type AppConfig, getConfig } from './config.ts';
 import {
@@ -43,7 +49,7 @@ import {
   database as defaultDatabase,
   READINESS_DEADLINE_MS,
 } from './db.ts';
-import { apiErrorBody, registerErrorHandlers } from './errors.ts';
+import { AppError, apiErrorBody, registerErrorHandlers } from './errors.ts';
 import { buildLoggerOptions } from './logging.ts';
 import { type AppMetrics, appMetrics, METRICS_CONTENT_TYPE, metricsPlugin } from './observability/metrics.ts';
 import { generateRequestId, requestContextPlugin } from './plugins/request-context.ts';
@@ -109,6 +115,99 @@ export interface BuildAppOptions {
    * accumulate across cases built in one process.
    */
   readonly metrics?: AppMetrics;
+  /**
+   * Refuses every request except `UNGATED_ROUTES` while `admits()` says no. Absent by default, so
+   * every test that builds an app is ungated; `server.ts` passes the schema guard's. See
+   * `featureGateHook`.
+   */
+  readonly featureGate?: FeatureGate;
+}
+
+/** What `server.ts` wires the schema guard in through. */
+export interface FeatureGate {
+  /** Synchronous and database-free: it runs on every request. `detail` is logged, never sent. */
+  readonly admits: () => { readonly ok: boolean; readonly detail?: string };
+  /** Sent as `Retry-After` and `retryAfterSeconds` on the refusal. */
+  readonly retryAfterSeconds: number;
+}
+
+/**
+ * The routes a closed feature gate still answers: liveness, readiness and metrics.
+ *
+ * By route PATTERN, not by registration order. The obvious alternative — add the hook after these
+ * three exist, so they "predate" it — does not work: measured on Fastify 5.12.8, an instance hook
+ * added after `app.get('/before')` still runs for `/before`, because a route's hooks are collected
+ * when the instance becomes ready, not when the route is declared. An exemption that depended on
+ * ordering would have gated `/ready` itself and turned a degraded instance into one that cannot
+ * say so. None of the three reads a table; `/ready` reports the gate's own state, and `/metrics`
+ * is what an operator reads during exactly this incident.
+ */
+const UNGATED_ROUTES: ReadonlySet<string> = new Set([
+  `${API_PREFIX}/health`,
+  `${API_PREFIX}/ready`,
+  '/metrics',
+]);
+
+/**
+ * The feature gate, as an instance `onRequest` hook.
+ *
+ * ## The incident
+ *
+ * PR #38's review (Devin): an API that boots while its database is down comes up degraded by
+ * design (`docs/production/runbooks/db-unavailable.md`) and lets `/ready` report it. But only
+ * something that routes on `/ready` withholds traffic, and the staging proxy does not — so when
+ * the database came back BEHIND this build, learners reached routes whose writes failed on columns
+ * that did not exist, which is the original incident with the boot check stepped around.
+ *
+ * ## Why here, and why a throw
+ *
+ * One instance hook covers every route module, registered or not yet written, and the WebSocket
+ * upgrade: `@fastify/websocket` dispatches the upgrade through `fastify.routing`, so this answers
+ * it with an HTTP 503 before the hub's handler can complete a handshake, and the plugin's own
+ * `onResponse` hook destroys the socket. Registered after the security plugin, so CORS preflights,
+ * the limiter and the security headers still apply, and before the route modules' session hook,
+ * so a refused request costs no session lookup.
+ *
+ * Thrown as an `AppError` rather than answered in place so that the body, `Retry-After`, the
+ * `no-store` header and the error counter all come from `errors.ts`, the one place every contract
+ * error leaves. It logs at `error`, once per refused request, as every deliberate 5xx does: an
+ * instance refusing real traffic is an incident, and the count of those lines is its size.
+ *
+ * Counted by the limiter first, the way the CORS hook in `plugins/security.ts` counts what it
+ * answers: an instance hook runs before every route-level one, so without the call a closed gate
+ * would answer an unlimited number of requests that the limiter never saw. Only on the refusal
+ * path, because counting on the pass path would spend the global limiter's turn and quietly
+ * disable every stricter per-route limit (that hook's comment has the detail).
+ *
+ * An unknown path is refused too (`routeOptions.url` is undefined for the 404 route): 503 rather
+ * than 404 while closed, which tells a client nothing it could not learn from the next request.
+ *
+ * ## A refused upgrade must also close its socket
+ *
+ * The plugin destroys an upgrade's socket after an HTTP answer only when ITS `onRequest` hook has
+ * flagged the request as a WebSocket, and that hook lives in the hub's context, which runs after
+ * this one — so a throw here skips it. Measured with a `ws` client that did not hang up itself:
+ * the 503 arrived and the TCP connection stayed open, and `app.close()` never resolved. That is
+ * the deploy-killing socket `server.ts` describes (`trackConnections` marks it upgraded, and the
+ * drain waits for upgraded connections), handed to anybody who connects while the gate is closed.
+ * So the socket is destroyed once the 503 has been written, as the plugin itself would have.
+ */
+function featureGateHook(app: FastifyInstance, gate: FeatureGate) {
+  const countRequest = app.rateLimit();
+  return async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    if (UNGATED_ROUTES.has(request.routeOptions.url ?? '')) return;
+    const answer = gate.admits();
+    if (answer.ok) return;
+    await countRequest.call(app, request, reply);
+    if (request.headers.upgrade !== undefined) {
+      const socket = request.raw.socket;
+      reply.raw.once('finish', () => socket.destroy());
+    }
+    throw new AppError('service_unavailable', {
+      retryAfterSeconds: gate.retryAfterSeconds,
+      logDetail: `feature gate closed: ${answer.detail ?? 'no reason given'}`,
+    });
+  };
 }
 
 /**
@@ -260,6 +359,11 @@ export async function buildApp(overrides: BuildAppOptions = {}): Promise<Fastify
   // and both should be counted. Before the routes, so no route can escape it.
   await app.register(metricsPlugin, { metrics });
   metrics.dbPoolMax.set({}, config.database.poolMax);
+  // After security and metrics, so a refusal is counted and carries the security headers; before
+  // any route module's hooks. See `featureGateHook`.
+  if (overrides.featureGate !== undefined) {
+    app.addHook('onRequest', featureGateHook(app, overrides.featureGate));
+  }
 
   // One registration for every shared schema, so route modules refer to them by `$id`
   // (`{ body: { $ref: 'prl:createRoomBody#' } }`) and no schema is defined twice.

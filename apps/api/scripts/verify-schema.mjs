@@ -205,9 +205,11 @@ const APP_TABLE_GRANTS = [
   ],
   [
     'schema_migrations',
-    '',
-    'nothing at all, on purpose: the runtime has no business reading, let alone editing, the ' +
-      'migration ledger',
+    'SELECT',
+    'read-only, since migration 0010: the API compares the ledger with the migrations it shipped and ' +
+      'refuses to boot against a schema behind them (apps/api/src/schema-guard.ts), because an API ' +
+      'that booted green against a missing column lost archive writes in silence. 0001 granted ' +
+      'nothing here; never a write, or the request path could mark a migration applied that is not',
   ],
 ];
 
@@ -308,11 +310,12 @@ try {
   `;
   note(`${columns.length} columns across the ${SCHEMA} schema, read from pg_catalog as ${role}`);
 
-  // How much this run would have missed had it kept reading `information_schema`. Not a failure:
-  // a runtime role that cannot see `prl.schema_migrations` is the privilege model working, and on
-  // a correctly granted database this note reports the three columns of that one table. It is
-  // here so the number above can never quietly become the smaller number again without somebody
-  // noticing that the gap moved.
+  // How much this run would have missed had it kept reading `information_schema`. Not a failure,
+  // and on a correctly granted database it reports nothing: until migration 0010 it reported the
+  // three columns of `prl.schema_migrations`, which the runtime role could not see, and since 0010
+  // granted that role SELECT on the ledger every table here is visible to it. It is here so the
+  // number above can never quietly become the smaller number again without somebody noticing
+  // that the gap moved.
   const [visible] = await sql`
     select count(*)::int as count from information_schema.columns where table_schema = ${SCHEMA}
   `;

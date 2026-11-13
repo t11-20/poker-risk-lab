@@ -696,13 +696,17 @@ describe('SIGTERM with a WebSocket open', () => {
     assert.match(server.output(), /websocket hub closed/, 'the hub onClose cleanup must run');
   });
 
-  it('is not held open by a client that never answers the close frame', async () => {
-    // No SQL anywhere on this path: an upgrade with no cookie is refused before a query is issued
-    // (`resolveSession` short-circuits on a missing cookie), so a placeholder URL is honest and
-    // this test runs in `test:without-database` too — where it belongs, because a socket that will
-    // not close has nothing to do with the schema.
+  it('is not held open by a client that never answers the close frame', {
+    skip: databaseSkip('a completed upgrade, which needs a verified schema'),
+  }, async () => {
+    // No SQL on the upgrade itself: one with no cookie is refused before a query is issued
+    // (`resolveSession` short-circuits on a missing cookie). It used to run against a placeholder
+    // DSN for that reason. Since PR #38's feature gate, an API that has not verified its schema
+    // answers the upgrade with a 503 and closes the socket itself, so the refusal under test — the
+    // hub's close frame AFTER a completed upgrade — is only reachable with a database whose schema
+    // checks out. The no-database half is the next case.
     const server = await startServer(GRACE_MS, {
-      DATABASE_URL: 'postgresql://unused:unused@127.0.0.1:5432/unused',
+      ...(TEST_DATABASE_URL === undefined ? {} : { DATABASE_URL: TEST_DATABASE_URL }),
     });
     const { socket, reply } = await muteSocket(server.port);
     assert.match(reply, /^HTTP\/1\.1 101 /, `the upgrade must complete before it is refused: ${reply}`);
@@ -713,6 +717,26 @@ describe('SIGTERM with a WebSocket open', () => {
     // Before the fix this exited 1 after the whole grace: the hub refuses the upgrade with a close
     // frame, this client ignores it, and `ws`'s own fallback is a 30 s `closeTimeout` — three times
     // the default grace. One socket, no session, any origin.
+    assertCleanExit(exit, server.output());
+  });
+});
+
+describe('SIGTERM with an upgrade refused by the feature gate', () => {
+  it('is not held open by an upgrade answered 503 before the schema was verified', async () => {
+    // A placeholder DSN, so the schema is never verified and the gate stays shut (`app.ts`). The
+    // gate answers in a hook that runs before `@fastify/websocket` has flagged the request, which
+    // skips the plugin's own socket cleanup: measured before the gate destroyed the socket itself,
+    // the 503 arrived and the connection stayed open — and the drain waits for an upgraded
+    // connection, so one of these, from anybody, would cost every deploy its grace.
+    const server = await startServer(GRACE_MS, {
+      DATABASE_URL: 'postgresql://unused:unused@127.0.0.1:5432/unused',
+    });
+    const { socket, reply } = await muteSocket(server.port);
+    assert.match(reply, /^HTTP\/1\.1 503 /, `an unverified schema must refuse the upgrade: ${reply}`);
+
+    const exit = await terminate(server);
+    socket.destroy();
+
     assertCleanExit(exit, server.output());
   });
 });
@@ -758,9 +782,10 @@ async function rawConnection(
 }
 
 describe('SIGTERM with a connection that never became a request', () => {
-  // None of these three reaches a route, let alone a query, so a placeholder DSN is honest and they
+  // The first two never reach a route, let alone a query, so a placeholder DSN is honest and they
   // run under `test:without-database` too — where they belong, because a connection that hangs a
-  // deploy has nothing to do with the schema.
+  // deploy has nothing to do with the schema. The third needs a session and a feature route, which
+  // the feature gate (PR #38) keeps shut until the schema is verified, so it needs the database.
   const noDatabase = { DATABASE_URL: 'postgresql://unused:unused@127.0.0.1:5432/unused' };
 
   it('is not held open by a TCP connection that sends nothing', async () => {
@@ -793,8 +818,12 @@ describe('SIGTERM with a connection that never became a request', () => {
     assertCleanExit(exit, server.output());
   });
 
-  it('is not held open by a Content-Length whose body never arrives', async () => {
-    const server = await startServer(GRACE_MS, noDatabase);
+  it('is not held open by a Content-Length whose body never arrives', {
+    skip: databaseSkip('a session and a feature route, which wait for a verified schema'),
+  }, async () => {
+    const server = await startServer(GRACE_MS, {
+      ...(TEST_DATABASE_URL === undefined ? {} : { DATABASE_URL: TEST_DATABASE_URL }),
+    });
     const { cookie, token } = await csrfCredentials(server.port);
 
     // The hardest of the three, and the one that says what "in flight" has to mean. The headers are

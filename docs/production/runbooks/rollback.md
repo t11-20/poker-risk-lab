@@ -39,7 +39,7 @@ docker inspect <container> --format '{{.Image}}'
 | --- | --- | --- |
 | 200 | 503 | the database, not the release → [db-unavailable.md](db-unavailable.md) |
 | 200 | 200, errors high | the release is serving and getting it wrong → roll back |
-| no answer | no answer | the new image is not starting → [failed-deployment.md](failed-deployment.md) first; exit 78 is configuration, not a rollback |
+| no answer | no answer | the new image is not starting → [failed-deployment.md](failed-deployment.md) first; exit 78 is configuration (or migrations it names), not a rollback |
 
 `prl_archive_failures_total` rising while play continues is the database degrading *history*, not gameplay → [db-saturation.md](db-saturation.md). Nothing is broken for the learner yet and a rollback would cost every live hand for no gain.
 
@@ -70,7 +70,7 @@ Three questions, in this order. Getting them out of order is how a rollback make
 
 Roll back a release. Do not roll back a database problem, a saturated worker pool, or an orchestrator grace period. The table in *Detection* separates these; [api-unhealthy.md](api-unhealthy.md) separates them further.
 
-**Configuration is a fix-forward, not a rollback.** Exit 78 means the process printed every configuration problem at once and never listened; the artefact is fine. Rolling back hides a misconfiguration that will recur on the next deploy. Fix the variable and redeploy — and never "temporarily" satisfy a refused check with a placeholder, because every one of those checks exists because a placeholder in production caused an incident once already.
+**Configuration is a fix-forward, not a rollback.** Exit 78 means the process printed every configuration problem at once and never listened; the artefact is fine. Rolling back hides a misconfiguration that will recur on the next deploy. Fix the variable and redeploy; if the message names migrations instead, run them (`../../RUNBOOK.md` §11.3) — and never "temporarily" satisfy a refused check with a placeholder, because every one of those checks exists because a placeholder in production caused an incident once already.
 
 ### 2. Does the schema permit it?
 

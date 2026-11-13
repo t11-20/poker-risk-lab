@@ -236,9 +236,12 @@ unknown, and unknown is not clean.
 — the runtime identity, DML only. `DATABASE_MIGRATION_URL` names the migrating identity
 (`poker` locally, `prl_deployer` in a deployment), and `apps/api/scripts/*.mjs` read it in
 preference to `DATABASE_URL`. Point `DATABASE_MIGRATION_URL` at `prl_api` and
-`db:migrate:status` answers `permission denied for table schema_migrations` — measured
-2026-08-19 — because the ledger is deliberately not readable by the runtime role. That is the
-privilege boundary working, not a broken command.
+`db:migrate:status` answered `permission denied for table schema_migrations` — measured
+2026-08-19 — because the ledger was not readable by the runtime role. Since migration 0010 it
+is readable (the API compares it with its build at boot, §5), so `status` now works as `prl_api`
+and `db:migrate` fails instead, at the first pending file it has no right to apply: the runtime
+role can read the ledger and still cannot write it or change the schema. That is the privilege
+boundary working, not a broken command.
 
 ### The one command before a release
 
@@ -392,6 +395,60 @@ developer to meet the problem as a permission error at request time.
 >
 > The fix is **`pnpm run db:seed`**, not a superuser in `DATABASE_URL`. Editing `DATABASE_URL`
 > back to `poker` makes the symptom disappear and quietly restores the defect above.
+
+### The API refuses a schema behind its build
+
+The API reads `prl.schema_migrations` at boot and compares it with the files in `db/migrations`
+that shipped with it (the image copies that directory in for this; it still cannot migrate). It
+did not, until 2026-11-13: twice that day a new migration landed, the development database stayed
+behind it, and the API booted green. `/ready` said 200, and the only symptom was archive writes
+failing with `column "automatic_reason" does not exist` while units silently stopped moving.
+
+```text
+Refusing to start: the database schema does not match this build.
+  - 1 migration(s) this build expects are not applied: 0010_schema_migrations_readable.sql
+
+Apply them with `pnpm run db:migrate` ... Then start the API again.
+```
+
+Exit **78**. It means what it says: the database is behind the code. The fix is to migrate, not
+to roll back and not to restart — `pnpm run db:migrate` in development, and in a deployment
+`migrate.mjs up` from a checkout of the release commit with `DATABASE_MIGRATION_URL` naming
+`prl_deployer` (§11.3). The same comparison refuses an **edited** applied migration (the fix is
+to restore the file; `up` refuses it too) and a ledger the API's role may not read, which means
+`0010_schema_migrations_readable.sql` — the migration that grants `prl_app` SELECT on the ledger,
+and nothing more — has not run yet. When the ledger is behind *and* holds a file this build does
+not know (a development database last migrated from another branch), the message says so as well,
+because `up` refuses that too unless run with `--allow-missing`.
+
+Two cases are deliberately **not** refused:
+
+* **A schema ahead of the build** — the ledger has a file this build does not know. That is the
+  outgoing build during every migrate-then-roll deploy and the previous build after an image
+  rollback, and migrations are additive by policy (§11.3). The API serves and logs
+  `database schema is ahead of this build` with the unknown files.
+* **A database that does not answer at boot.** The API comes up degraded, exactly as for an
+  outage that began after boot ([db-unavailable.md](production/runbooks/db-unavailable.md)), and
+  `/ready` stays 503 — `checks.database.detail` reading `schema not yet verified: ...` once Postgres
+  answers but before the ledger has been read — until a probe gets the ledger. If that answer is a
+  refusal, `/ready` says so in the same field and keeps asking, so migrating then makes the
+  instance ready without a restart.
+
+Until a verdict of current (or ahead) is held, **every route except `/api/v1/health`,
+`/api/v1/ready` and `/metrics` answers 503 `service_unavailable` with `Retry-After: 5`**, and the
+WebSocket upgrade is refused with the same 503 — `/ready` alone withholds traffic only where
+something routes on it, and the staging proxy does not (PR #38's review). The process re-checks on
+its own every five seconds, so it recovers whether or not anything probes `/ready`.
+
+The verdict belongs to the database it was reached against, not to the process. Every probe reads
+which database is answering (its oid, the postmaster's start time and the ledger table's oid, in the
+probe's one query); when that changes — a restore into a recreated database, a failover, a DSN
+that now reaches a different container — the API logs `a different database is answering
+DATABASE_URL`, closes the feature routes, and reads the ledger again. A plain Postgres restart
+trips it too, and costs one ledger read.
+
+The test suite makes the same comparison: `test/database-availability.test.ts` fails first, naming
+the pending file and the command, instead of the rest of the run failing on a missing column.
 
 ## 6. Containers
 
@@ -676,7 +733,12 @@ production.
 **`permission denied for table schema_migrations`.** Something migration-shaped is connecting as
 `prl_api`. `apps/api/scripts/*.mjs` read `DATABASE_MIGRATION_URL` in preference to
 `DATABASE_URL`; set it to the cluster owner locally, or `prl_deployer` in a deployment (§5). The
-runtime role not being able to read the ledger is the privilege boundary working.
+runtime role being able to read the ledger (0010) and not write it is the privilege boundary
+working.
+
+**`Refusing to start: the database schema does not match this build`.** The database is behind the
+code (or an applied migration was edited). Migrate; do not roll back. §5, "The API refuses a schema
+behind its build".
 
 **`pending migration(s) destroy something and do not say so`.** `up` refuses a destructive or
 renaming statement in a pending file. Make the change additive and ship the removal in a later
@@ -702,7 +764,8 @@ exist`. `db:migrate` is not the check: it prefers `DATABASE_MIGRATION_URL`, whic
 `DATABASE_URL` is wrong.
 
 **The API refuses to boot.** Read the message — config validation lists every problem at
-once. The usual cause is a missing or too-short `SESSION_COOKIE_SECRET`.
+once. The usual cause is a missing or too-short `SESSION_COOKIE_SECRET`. If it names migrations
+instead, the database is behind the build: `pnpm run db:migrate` (§5).
 
 **`docker compose up` stops with "required variable SESSION_COOKIE_SECRET is missing".** Working
 as intended: there is no default. §6, step two.
@@ -1024,9 +1087,10 @@ pnpm run db:migrate:status
 >   join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'prl' group by 1;
 > -- must be prl_migrator and nothing else
 > ```
-* **`db:migrate:status` reads `DATABASE_MIGRATION_URL`, not `DATABASE_URL`.** Point it at
-  `prl_api` and it answers `permission denied for table schema_migrations`, because the ledger
-  is deliberately not readable by the runtime role. Give it the migration identity.
+* **`db:migrate:status` reads `DATABASE_MIGRATION_URL`, not `DATABASE_URL`.** Pointed at
+  `prl_api` it answered `permission denied for table schema_migrations` until migration 0010
+  made the ledger readable by the runtime role; `up` as `prl_api` still fails at the first file
+  it would apply. Give both the migration identity.
 
 Rehearsed end to end on 2026-08-19 against a migrated and seeded database — dump, `roles`,
 `pg_restore --exit-on-error`, then `db:verify` and `db:migrate:status`, both exit 0.
@@ -1136,7 +1200,9 @@ log driver, or a sidecar. Points that matter when you configure it:
 
 * `GET /api/v1/health` — liveness. Cheap, no database.
 * `GET /api/v1/ready` — readiness. Checks the database, 503 while degraded. This is the one a load
-  balancer should use.
+  balancer should use. Until the process has compared the migration ledger with its build (§5) it
+  is not ready either, and its feature routes answer 503; once it has, the check is one cheap query
+  again, which also notices a different database behind the DSN.
 * Web has no health route; `GET /` renders the home page and that is the honest check.
 * Both container `HEALTHCHECK`s probe the container's own network address, so "healthy" means
   "reachable", not "a process exists".
