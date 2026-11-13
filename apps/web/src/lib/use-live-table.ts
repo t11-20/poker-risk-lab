@@ -1,66 +1,15 @@
 'use client';
 
 /**
- * The live table as React state: one reducer over the server's frames, and the five verbs a reader
- * has.
- *
- * ## The rule this module exists to keep
- *
- * **Everything on screen came from a frame.** No cards, no stacks, no pot, no turn order and no
- * legality is computed here. When the reader clicks Call, this sends an `action` frame and waits;
- * it does not move a chip. That is not caution, it is the only way a client can be correct: a
- * client that guessed the result of its own action would disagree with the table it is drawing the
- * first time the server saw the spot differently — a timed-out seat, a side pot, a raise that came
- * in while the click was in flight.
- *
- * The one thing derived rather than received is which buttons are *enabled*, and it is derived from
- * `view.legalActions` — the server's own list, with the server's own bounds. `ActionBar` clamps
- * every size into those bounds, so no control here can propose an amount the server did not offer.
- *
- * ## Idempotency: one id per decision, not one per attempt
- *
- * A decision mints exactly one `actionId` and keeps it. If the socket drops between `action` and
- * `ack`, the reconnect replays the *same* frame — same `actionId`, same `expectedSequence`, same
- * `requestId` — and the server answers `ack { deduplicated: true }` with the original outcome
- * standing. Minting a fresh id on retry would turn a dropped response into a second bet, which is
- * the exact failure `actionId` exists to prevent.
- *
- * ## Sequencing: the spot you saw, or nothing
- *
- * `expectedSequence` is the `actionSequence` of the view the button was drawn from. If the hand
- * moved on — a turn timer fired, another seat acted — the server answers `stale_action_sequence`
- * and applies nothing. The reader is told the spot changed rather than having their fold land on a
- * street they never saw.
- *
- * ## "Not sent" is three different sentences, and saying the wrong one is a defect
- *
- * A decision can fail to leave the browser for reasons that mean opposite things to the reader: the
- * connection is down and the decision is held and replayed, or this page's own rate limiter refused
- * it and nothing will send it. `sendRaw` used to answer both with `false`, so this file reported the
- * rate limit for a decision that was refused because there was no socket — while the panel beside it
- * said "Decision sent". `SendOutcome` is what that `false` became; `SUBMISSION_FOR` is the sentence
- * per outcome, and `act` dispatches the outcome rather than assuming one.
- *
- * ## Reconnect is "render the current view"
- *
- * State is sent whole, so there is no catch-up protocol and nothing to resynchronise: the socket
- * reconnects, `hello` goes out, `welcome` and a full `state` come back, and the table is right
- * again. `revision` is monotonic per socket, so a frame that arrives out of order is dropped; it
- * restarts at zero on each new socket, which is why `welcome` resets it here.
- *
- * ## Announcements are diffed here, because here is the only place the PREVIOUS frame exists
- *
- * ADR 0009 sends state whole: every `state` frame carries the entire table, changed or not. A live
- * region fed from a whole-state frame therefore fires on every frame, and a screen reader that says
- * "pot 300 units, your stack 950 units" four times a second is worse than one that says nothing —
- * the reader turns it off, and then the announcements that mattered are gone too.
- *
- * So what is announced is computed by comparing the incoming frame with the state it replaces, and
- * the reducer is the only place both exist at once. `turnAnnouncement` is the case that made this
- * necessary: whose decision it is, is the single most important fact at a table (`Seat.tsx` marks it
- * three ways visually) and it was announced by nothing at all. It is set on the EDGE — the frame
- * where the decision becomes the reader's — and carried unchanged for as long as it stays theirs, so
- * the region speaks once per turn rather than once per frame.
+ * The live table as React state: one reducer over the server's frames, and the reader's verbs.
+ * Everything on screen came from a frame. Nothing here moves a chip on a click, and enabled buttons
+ * come only from `view.legalActions`.
+ * One `actionId` per decision, replayed unchanged with the same `expectedSequence` across a reconnect,
+ * so a dropped response cannot become a second bet. A stale sequence is refused and applies nothing.
+ * State is sent whole (ADR 0009), so reconnect just renders the next view. `revision` is monotonic
+ * per socket and resets on `welcome`.
+ * Announcements are diffed in the reducer, the only place the previous frame exists, so whole-state
+ * frames do not make the live region speak on every frame.
  */
 
 import {
@@ -101,7 +50,7 @@ import {
   tableSocketUrl,
 } from './table-socket.ts';
 
-/** When the header re-reads the session after a hand settles; see `settledHand` in the hook. */
+/** When the header re-reads the session after a hand settles. */
 export const SETTLED_ASK_MS = 1_000;
 export const SETTLED_RETRY_MS = 5_000;
 
@@ -114,7 +63,7 @@ function rememberRoom(roomId: string | null): void {
     if (roomId === null) window.sessionStorage.removeItem(ROOM_STORAGE_KEY);
     else window.sessionStorage.setItem(ROOM_STORAGE_KEY, roomId);
   } catch {
-    // Storage can be disabled or full. Losing the memory costs one extra room, not correctness.
+    // Storage can be disabled or full. Losing it costs one extra room, not correctness.
   }
 }
 
@@ -127,11 +76,7 @@ function rememberedRoom(): string | null {
   }
 }
 
-// ---------------------------------------------------------------------------
-// The reducer
-// ---------------------------------------------------------------------------
-
-/** A decision that has been sent and not yet answered. Replayed unchanged across a reconnect. */
+/** Replayed unchanged across a reconnect. */
 export interface PendingDecision {
   readonly action: TableAction;
   readonly actionId: string;
@@ -143,163 +88,70 @@ export interface TableState {
   readonly room: RoomSummary | null;
   readonly userId: string | null;
   readonly seat: number | null;
-  /** The last view the server sent. Kept between hands so a finished hand stays readable. */
+  /** Kept between hands so a finished hand stays readable. */
   readonly view: PlayerView | null;
-  /** True when the most recent `state` carried `view: null` — no hand is in progress. */
+  /** The most recent `state` carried `view: null`. */
   readonly betweenHands: boolean;
   readonly deadlineMs: number | null;
   readonly serverTimeMs: number;
   /**
-   * How long the server gave THIS turn, in milliseconds: `deadlineMs - serverTimeMs` read off the
-   * first frame that carried this deadline, and carried unchanged while the deadline stays the same.
-   *
-   * ## The defect this exists for
-   *
-   * The ring used to be told the turn lasted `room.actionTimeoutSeconds` — 60 at the bot table —
-   * and `TurnTimer` clamps what is left to the budget it is given. But the server does not always
-   * use the room's clock: `LiveTable.turnSecondsFor` in `apps/api/src/rooms/table.ts` gives a
-   * person alone with bots `max(room clock, learnerTurnSeconds)`, 240 by default. Measured against
-   * the running stack: the first `state` frame of the reader's turn carried
-   * `deadlineMs - serverTimeMs = 239999`; the ring said 60s, reached 0s a minute later and then sat
-   * at 0s for three more minutes before the server folded the hand — a clock that told the reader
-   * they had run out of time three minutes before they had.
-   *
-   * The deadline is the server's statement of the budget, so the budget is read off it. A page that
-   * arrives mid-turn (a reload, a reconnect) can only see what is LEFT, which is why the room's
-   * clock stays a floor in `turnClockFor`: a bot's 60-second turn seen 15 seconds in is still drawn
-   * as a 60-second ring.
+   * This turn's budget, `deadlineMs - serverTimeMs` from the first frame with this deadline. The server
+   * gives a person alone with bots 240s, not the room's 60s, so the room clock is only a floor (see
+   * `turnClockFor`).
    */
   readonly turnBudgetMs: number | null;
   /**
-   * Set when the server acted for the reader because their clock ran out; null otherwise.
-   *
-   * The polite table region already says it ("… (the clock ran out, so the server acted)"), but
-   * that sentence lives in a 1x1 live region and the `submission` panel cannot carry it — the
-   * reader never submitted anything, and the `state` frame that follows the timeout moves the spot
-   * on. So a sighted reader came back to a folded hand with nothing on screen saying why. Cleared
-   * when the next hand is dealt.
-   *
-   * Only for a clock that really ran out, which `wasAutomatic` alone cannot say: the server also
-   * folds automatically for a seat whose player stood up mid-hand (`runAutomaticActions` in
-   * `apps/api/src/rooms/table.ts`), and this used to tell a reader who pressed "Stand up" that their
-   * clock had run out. Found in review on PR #27. See `clockExpiredSeat`.
+   * Set when the server acted because the reader's clock ran out, until the next deal. `wasAutomatic`
+   * alone also covers a seat that stood up mid-hand, so this needs `clockExpiredSeat`.
    */
   readonly autoActed: string | null;
   /**
-   * The seat a `seatTimedOut` event has just named, until the automatic action it announces arrives.
-   *
-   * The one thing in the frames that tells a clock expiry from a stand-up. `applyTimeout` sends
-   * `seatTimedOut` immediately before the action it applied, in the same notice (`extraEvents` are
-   * pushed ahead of the engine's own in `LiveTable.apply`); the fold for a seat that stood up comes
-   * with no `seatTimedOut` at all. An automatic action is therefore a timeout exactly when the event
-   * before it named its seat. Unknown is never reported as a timeout — the safe direction, because
-   * a reader told they were too slow when they chose to leave is told something false about
-   * themselves.
+   * The seat a `seatTimedOut` just named, until its automatic action arrives. The server sends that
+   * event immediately before the action. A stand-up fold has none. Unknown is never reported as a
+   * timeout.
    */
   readonly clockExpiredSeat: number | null;
-  /** Monotonic per socket; resets on `welcome`. */
+  /** Resets on `welcome`. */
   readonly revision: number;
   readonly announcement: string;
   /**
-   * A sentence that has been produced and deliberately not written into the region yet, because the
-   * event that produced it arrives in the same table notice as the one after it.
-   *
-   * Empty except between `handStarted` and the forced bets that always follow it in the same table
-   * notice, which is microseconds. See `onEventFrame` for the measurement this exists because of:
-   * two writes into one atomic polite region for one notice are one announcement, and it is the
-   * second one, so the first is never spoken at all.
+   * The deal sentence held back until the forced bets of the same notice. Two writes into one atomic
+   * polite region are one announcement. See `onEventFrame`.
    */
   readonly carried: string;
   /**
-   * One sentence for the region that announces the reader's OWN decision being due.
-   *
-   * Separate from `announcement`, which narrates the table, because the two are different kinds of
-   * news and they race: a `state` frame and the `event` frame describing the same change arrive back
-   * to back, in an order this client does not control, so a single field would let "seat 3 called 50
-   * units" overwrite "your turn" — or the reverse — depending on which landed second. Empty whenever
-   * it is not this seat's decision, which is what lets the same sentence be announced again next time
-   * round.
+   * The reader's own turn, separate from `announcement` because `state` and `event` frames for one
+   * change race, and one field would let either overwrite the other. Empty when not their turn, so
+   * the next turn re-announces.
    */
   readonly turnAnnouncement: string;
   readonly summary: readonly string[];
-  /**
-   * The report, with the decision it was computed for. Never rendered against a different one.
-   *
-   * `key` is the spot the request was SENT for, carried through the round trip in `coachRequest`
-   * below — not the spot on screen when the answer landed. Those are routinely different, and the
-   * difference is the whole reason this field is a pair rather than a report: see `onCoachFrame`.
-   */
+  /** `key` is the spot the request was SENT for, not the one on screen. See `onCoachFrame`. */
   readonly coach: { readonly key: string; readonly report: CoachReport } | null;
-  /**
-   * The outstanding request: its id, and the decision it asked about.
-   *
-   * One object rather than two fields, because the two must never be apart. A `coach` frame carries
-   * a `requestId` and nothing else — no hand id, no sequence — so the only record of what the
-   * server is computing is the one this client kept when it asked.
-   */
+  /** A `coach` frame carries only a `requestId`, so this is the only record of its spot. */
   readonly coachRequest: { readonly requestId: string; readonly key: string } | null;
   /** Why there is no analysis, when the reason is something other than "none was asked for". */
   readonly coachProblem: string | null;
-  /**
-   * False when this table has turned live Coach off (Expert Legends, or a `coach_not_available`
-   * refusal). Default true: private tables and educational/realistic matches keep the panel.
-   */
+  /** False after Expert Legends or a `coach_not_available` refusal. */
   readonly coachDuringHand: boolean;
   /**
-   * The server's OWN wording for a `coach_not_available` refusal, kept rather than thrown away.
-   *
-   * ## The defect this exists for
-   *
-   * `coachDuringHand` records THAT live Coach is off and says nothing about why, and the two ways
-   * it goes false are not the same fact:
-   *
-   *   - this page opened an Expert Legends match, so the client chose the difficulty itself and
-   *     knows it — `options.legendMatch.difficulty`;
-   *   - the server refused a request with `coach_not_available`, which is a statement about the
-   *     table the reader is at and carries no difficulty the client can read.
-   *
-   * The panel printed one sentence for both — "Expert keeps the analysis off the table so the
-   * style is the thing you are reading" — a claim about a difficulty this page never observed.
-   * Measured in Chrome 151 against the built app: play a hand at
-   * `/play?profile=vocal-aggressor&difficulty=expert`, then open plain `/play`. `chooseRoom` reuses
-   * the room the reader already owns, so the second page is headed "Six-handed table", passed no
-   * `legendMatch` at all, and printed the identical Expert sentence — the only thing it had
-   * actually learned being the refusal, whose own wording it had discarded.
-   *
-   * Null while live Coach is on, and null when it is off for a reason the client established
-   * itself. `app/play/LiveTable.tsx` is where the two become sentences.
+   * The server's own wording for `coach_not_available`, so the panel does not claim an Expert
+   * difficulty it never saw (a reused room on plain `/play` printed the Expert sentence). Null while
+   * Coach is on or when this page chose Expert itself.
    */
   readonly coachRefusal: string | null;
   readonly pending: PendingDecision | null;
   readonly submission: TableSubmission | null;
-  /** The server's own wording for the last refusal that was not about a decision. */
+  /** The server's wording for the last refusal that was not about a decision. */
   readonly notice: string | null;
   /**
-   * The contract code that refusal came with, so the UI can say more than "the server refused
-   * something" when it has something more to say.
-   *
-   * Kept beside `notice` rather than parsed back out of it. `notice` is prose meant for a person
-   * and its wording is allowed to change; the code is the contract, and a screen that branches on
-   * a substring of a sentence breaks the first time somebody improves the sentence.
-   *
-   * Exactly one branch reads it today — `enrolment_required`, which needs a heading and a next
-   * step rather than a generic refusal panel (see `ConnectionNotices` in `app/play/LiveTable.tsx`).
-   * Every other code keeps the general treatment, which is right: a seat somebody else took a
-   * moment ago needs no explanation beyond the sentence.
+   * The contract code beside `notice`, so the UI branches on the code and never on prose. Only
+   * `enrolment_required` gets its own treatment today.
    */
   readonly noticeCode: ErrorCode | null;
   /**
-   * Set when this client refused a `state` frame because it carried hole cards the reader was not
-   * entitled to. Null in every other case, including every ordinary refusal.
-   *
-   * Separate from `notice`, which is *the server's own wording* for something it declined to do,
-   * and whose panel is headed "The server refused something". This is the opposite direction — the
-   * server did something it should not have and this page declined to draw it — and putting the two
-   * under one heading would tell a reader that their own request was rejected when it was not.
-   *
-   * It is deliberately sticky: nothing clears it but a `reset`. A server that leaked once will send
-   * the same view again a second later, so a field that cleared on the next good frame would flicker
-   * a warning about the most serious defect this system can have.
+   * Set when this client refused a `state` frame for unentitled hole cards. Not `notice`, whose panel
+   * says the server refused something. Sticky until `reset`, because a leaking server resends the view.
    */
   readonly dataRefusal: string | null;
 }
@@ -334,48 +186,28 @@ export const EMPTY_TABLE_STATE: TableState = {
 
 export type TableEvent =
   | { readonly kind: 'frame'; readonly frame: WsServerMessage }
-  /**
-   * A decision the reader made, with what the socket did with it.
-   *
-   * `delivery` is not optional and has no default on purpose: it is the answer to "did this
-   * actually go out", and the caller is the only one who knows. A default would restore the
-   * assumption the old code made — that dispatching this means the frame was sent — which is the
-   * defect `SUBMISSION_FOR` is written against.
-   */
+  /** `delivery` has no default. Only the caller knows whether the frame went out. */
   | { readonly kind: 'submit'; readonly pending: PendingDecision; readonly delivery: SendOutcome }
   | { readonly kind: 'coachRequested'; readonly requestId: string; readonly key: string }
   | { readonly kind: 'coachFailed'; readonly reason: string }
   | { readonly kind: 'notice'; readonly message: string | null; readonly code?: ErrorCode | null }
-  /**
-   * A `state` frame was refused for carrying hole cards this reader was not entitled to.
-   *
-   * Carries the seats rather than a finished sentence so the reducer owns the wording, which is
-   * what lets `test/live-regions.test.ts`-style tests drive it without importing the socket module.
-   */
+  /** Seats, not a sentence, so the reducer owns the wording. */
   | { readonly kind: 'dataRefused'; readonly seats: readonly number[] }
   | { readonly kind: 'reset' };
 
-/** Identifies one decision: a hand, and the point in it the view was drawn at. */
 export function decisionKey(view: PlayerView | null): string {
   return view === null ? '' : `${view.handId}:${String(view.actionSequence)}`;
 }
 
-/** The seat the server says this user holds, read from the room roster rather than remembered. */
+/** Read from the roster, not remembered. */
 function seatFrom(room: RoomSummary, userId: string | null): number | null {
   if (userId === null) return null;
   return room.members.find((member) => member.userId === userId)?.seat ?? null;
 }
 
 /**
- * Is the decision in this view the reader's?
- *
- * Exported and pure so the reducer, the hook and a test all decide it the same way. It used to be
- * written out inline in the hook only, which is why the reducer had no way to notice the moment it
- * became true — and that moment is the one thing a screen-reader user most needs to be told.
- *
- * `legalActions.length > 0` is part of the definition rather than a belt-and-braces extra: the
- * server empties that list for everybody it is not currently asking, so a view where it is empty is
- * a view with no decision in it whatever `toAct` says.
+ * Exported and pure so the reducer, hook and tests agree. The server empties `legalActions` for
+ * everybody it is not asking, so an empty list means no decision whatever `toAct` says.
  */
 export function isViewersTurn(view: PlayerView | null, betweenHands: boolean): boolean {
   if (view === null || betweenHands) return false;
@@ -383,34 +215,21 @@ export function isViewersTurn(view: PlayerView | null, betweenHands: boolean): b
 }
 
 /**
- * A number of units, as it should be read aloud.
- *
- * A local formatter and not `formatUnits` from `@prl/ui`, and the reason is mechanical rather than
- * stylistic: `@prl/ui` is consumed as SOURCE (its `exports` map points at `src/index.ts`, there is
- * no build output) and that entry re-exports every component, including `.tsx` files. Node's
- * type-stripping handles `.ts` and not `.tsx`, so one runtime import of `@prl/ui` anywhere in this
- * module's graph makes the whole module unloadable under `node --test` with
- * `ERR_UNKNOWN_FILE_EXTENSION`. `tableReducer` is driven for real by `test/live-regions.test.ts`,
- * and a reducer that cannot be imported cannot be tested — which is a worse outcome than four lines
- * of formatting living here.
- *
- * It is deliberately NOT a promise of byte-identical output with the panel's figures. What it owes
- * is that the sentence reads correctly: a thousands separator so "1505" is not read as a digit
- * string, and the singular where the plural would be wrong.
+ * Not `formatUnits` from `@prl/ui`. That package is consumed as source and re-exports `.tsx`, so a
+ * runtime import makes this module unloadable under `node --test` (`ERR_UNKNOWN_FILE_EXTENSION`).
  */
 function units(value: number): string {
   const whole = Math.round(value);
   return `${new Intl.NumberFormat('en-GB').format(whole)} ${Math.abs(whole) === 1 ? 'unit' : 'units'}`;
 }
 
-/** "fold, call or raise". No Oxford comma, because this is read aloud rather than printed. */
+/** No Oxford comma, because this is read aloud. */
 function listActions(names: readonly string[]): string {
   if (names.length === 0) return '';
   if (names.length === 1) return names[0] ?? '';
   return `${names.slice(0, -1).join(', ')} or ${names[names.length - 1] ?? ''}`;
 }
 
-/** How to name the street in a sentence. `preflop` is an adverb; the rest take an article. */
 function streetPhrase(street: PlayerView['street']): string {
   if (street === 'preflop') return 'preflop';
   if (street === 'showdown' || street === 'complete') return 'at the end of the hand';
@@ -418,23 +237,8 @@ function streetPhrase(street: PlayerView['street']): string {
 }
 
 /**
- * What the reader is told, once, when the decision becomes theirs.
- *
- * ## Why one sentence and not four regions
- *
- * What a screen-reader user needs at this moment is what the layout guarantees a sighted one
- * (`TableStage`'s module comment, guarantees 1 to 4): the pot, the price, what they have behind, and
- * what they may do. Four live regions for four figures would announce them in whatever order the
- * regions happened to update, interleaved with the table's narration. One sentence, fired on the
- * edge, arrives in the order a decision is actually made in.
- *
- * It deliberately does NOT include the hole cards. They are already in the accessibility tree with
- * their full names, on the seat plate and in the decision band's own readout, and repeating them
- * every turn makes the sentence long enough that a reader starts talking over it. The figures are
- * what change from turn to turn; the cards are not.
- *
- * No equity figure either, for the reason given in the `coach` case of `onFrame`: a number read out
- * of the Coach panel has left the assumptions it rests on behind.
+ * One sentence on the edge, in decision order, instead of four regions racing. No hole cards (already
+ * in the accessibility tree) and no equity figure.
  */
 export function turnAnnouncementFor(view: PlayerView): string {
   const hero = view.seats.find((seat) => seat.isSelf) ?? null;
@@ -446,14 +250,8 @@ export function turnAnnouncementFor(view: PlayerView): string {
 }
 
 /**
- * The echo of the reader's own decision, for the table's polite region.
- *
- * It belongs in the reducer rather than beside the markup, and that is a fix rather than a tidy-up.
- * `TableStage` used to PREFIX this phrase onto every announcement it passed down, so the region's
- * text stayed "You chose to fold. …" for as long as the submission was on screen — and because
- * `role="status"` is atomic, every subsequent table event was then read out with "You chose to
- * fold." stapled to the front of it. Announced as a state change here, it is said once and replaced
- * by whatever the table says next.
+ * Announced once as a state change. Prefixed onto every announcement in `TableStage`, it stuck to the
+ * front of every later event, since `role="status"` is atomic.
  */
 export function spokenDecision(action: TableAction): string {
   if (action.type === 'bet' || action.type === 'raise') {
@@ -463,40 +261,20 @@ export function spokenDecision(action: TableAction): string {
 }
 
 /**
- * The two sentences the Coach contributes to the table's polite live region.
- *
- * Exported so a test can assert the reducer produces exactly these, rather than asserting a string
- * literal it has copied — a test that carries its own copy of the text passes after somebody
- * deletes the announcement and pastes the sentence into the test.
- *
- * Neither one carries a number. See `onCoachFrame` for why.
- */
-/*
- * The ready sentence used to end "below the table on a narrow screen", which is true between 600px
- * and 900px and false on a phone, where `styles/play.css` makes the panel a bottom sheet that starts
- * collapsed behind its handle. It now names the handle, whose label is the same at every width, and
- * still says where rather than what — no figure (assertion J3.11 in `scripts/ax-assertions.mjs`
- * keys on the opening words, which are unchanged).
+ * Exported so tests assert the reducer's output rather than a copied literal. No figures. J3.11 in
+ * `scripts/ax-assertions.mjs` keys on the ready sentence's opening words. It names the phone handle,
+ * since the panel is a collapsed bottom sheet there.
  */
 export const COACH_READY_ANNOUNCEMENT =
   'The analysis of this decision is ready in the Coach panel. On a phone it opens from “Show the analysis”.';
 export const COACH_FAILED_ANNOUNCEMENT = 'The analysis could not be shown.';
 
 /**
- * What the reader is told when this client refuses a frame for leaking hole cards.
- *
- * Exported and built here rather than written into the panel, for the reason above: a sentence a
- * test carries its own copy of is a sentence a test keeps passing about after somebody deletes it.
- *
- * Three things it must say and one it must not. It must say the table has stopped, because it has;
- * it must say nothing was staked, because the reader's first fear at a table that freezes is their
- * stack; and it must say what happened plainly, because "an unexpected error occurred" about a
- * hole-card leak is the product lying to the person it leaked to. What it must not do is claim the
- * cards were kept from anybody: they arrived in this browser and this page declined to draw them,
- * which is a smaller and truer statement. See `lib/hole-card-entitlement.ts`.
+ * Must say the table stopped and nothing was staked. Must not claim the cards were kept from anybody,
+ * since they reached this browser. See `hole-card-entitlement.ts`.
  */
 export function dataRefusalSentence(seats: readonly number[]): string {
-  // 1-based, matching every other seat number this page prints to a reader.
+  // 1-based, like every other seat number shown to the reader.
   const named = seats.map((seat) => (seat < 0 ? 'an unnumbered seat' : `seat ${String(seat + 1)}`));
   const one = named.length === 1;
   const list = one ? named[0] : `${named.slice(0, -1).join(', ')} and ${named[named.length - 1]}`;
@@ -509,14 +287,7 @@ export function dataRefusalSentence(seats: readonly number[]): string {
   );
 }
 
-/**
- * Why an analysis never left this browser, per refusal — and never "the server said no".
- *
- * The same rule as `SUBMISSION_FOR` below, applied to the other frame a reader waits for. A Coach
- * request that `sendRaw` refuses is refused HERE, by this page, and saying nothing at all leaves a
- * panel that will never fill beside a table that is working perfectly. Neither of these is retried
- * automatically: nothing is holding the request, so the sentence has to say what the reader can do.
- */
+/** Refused by this page, not the server. Nothing retries it, so the sentence says what to do. */
 const COACH_NOT_SENT: Readonly<Record<'rate-limited' | 'undeliverable', string>> = {
   'rate-limited':
     'This page refused to exceed the rate limit the protocol sets for one socket, so the request ' +
@@ -526,25 +297,13 @@ const COACH_NOT_SENT: Readonly<Record<'rate-limited' | 'undeliverable', string>>
     'holding it — ask again, and if it happens twice the connection itself is the thing to reload.',
 };
 
-/**
- * What a reader is told when a hand starts, and it is not announced on its own.
- *
- * Exported so a test asserts the sentence the reducer produces rather than carrying its own copy —
- * the same reason `COACH_READY_ANNOUNCEMENT` is exported.
- */
 export const DEAL_ANNOUNCEMENT = 'A new hand was dealt.';
 
 type WireEvent = Extract<WsServerMessage, { type: 'event' }>['event'];
 
 /**
- * The reader's seat in the hand the next event is about, or null when they were not dealt into it.
- *
- * Events are written into the socket BEFORE the state frame of the same notice
- * (`apps/api/src/ws/router.ts`), so while a hand is in progress `view` is that hand and `viewerSeat`
- * is the answer — resolved by the server from the dealt roster, so null means "not in this hand"
- * and must stay null. Falling through to `state.seat` there would make a reader who sat down mid-hand
- * into whoever was dealt the chair before them. Only between hands, when the next event is the new
- * hand's forced bets and the view is the last hand's, is the chair the best there is.
+ * Events arrive before the same notice's `state` frame, so mid-hand `viewerSeat` is right and null
+ * means not dealt in. Falling back to `state.seat` would make a mid-hand sitter the previous occupant.
  */
 function readersSeat(state: TableState): number | null {
   const view = state.view;
@@ -553,24 +312,9 @@ function readersSeat(state: TableState): number | null {
 }
 
 /**
- * Whether a sentence that opens on `name` can only be about the reader.
- *
- * Review on PR #33 (Devin): display names are not unique — `createGuest` takes any name, and seats
- * are by user id — so matching on the name alone told one Alex that the other Alex's fold was
- * theirs ("You fold"), told a spectator named Alex that every Alex's blind was theirs, and read "Dr.
- * Alex posts the small blind" as "Dr. You post the small blind", because `inSecondPerson` opens a
- * sentence after any ". ". The forced bets, the showdown and the awards carry no seat, so the name is
- * all there is, and it is only enough when nobody else at the table could be the one it names:
- *
- *   - the reader holds a seat in this hand;
- *   - no other member's name contains the reader's as a whole word. EVERY member, seated or not: a
- *     player who was dealt in and then stood up is narrated under that name with `seat: null`.
- *     Whole-word rather than equal, which is the "Dr. Alex" case; "Patient Technician 12" does not
- *     contain "Patient Technician 1" as a word, and the verb after the name already keeps them apart;
- *   - every player dealt into the view is a member, so no dealt name is one this page cannot see.
- *
- * Any doubt leaves the server's sentence, which is true. A rename mid-hand is not chased: the dealt
- * name then no longer opens on the roster's, nothing matches, and the sentence is left alone.
+ * Seatless sentences (blinds, showdown, awards) carry only a name, and names are not unique (Devin on
+ * PR #33). Rewrite only when the reader holds a seat, no other member's name contains theirs as a
+ * whole word, and every dealt player is a member. Any doubt leaves the server's sentence.
  */
 function onlyTheReaderIsNamed(state: TableState, name: string): boolean {
   if (readersSeat(state) === null) return false;
@@ -587,18 +331,8 @@ function escapedName(text: string): string {
 }
 
 /**
- * The event as the reader should hear it: their own sentences in the second person.
- *
- * Every socket in the room receives the same sentences, written with the name each seat was dealt in
- * under, so the reader's own hand used to come back to them as "Guest 12D91B posts the big blind,
- * 10." and, under the table, "Guest 12D91B wins 1529 from the pot." (audit at 308fadf). The name is
- * the reader's roster entry — the same string the server dealt them in under — and the rewrite is
- * `inSecondPerson`, which reads the verbs from the table the API writes them from. A sentence it
- * does not recognise is left exactly as the server wrote it, which is still true.
- *
- * WHOSE sentence is decided here, not by the name: an action carries its seat, and is the reader's
- * exactly when that is the reader's seat in this hand; the rest carry none, and are rewritten only
- * when `onlyTheReaderIsNamed`.
+ * The reader's own sentences in the second person (audit at 308fadf). Actions are matched by seat;
+ * seatless events only when `onlyTheReaderIsNamed`. Unrecognised sentences are left as written.
  */
 function inReadersWords(event: WireEvent, state: TableState): WireEvent {
   const name = state.room?.members.find((member) => member.userId === state.userId)?.displayName ?? null;
@@ -620,15 +354,8 @@ function inReadersWords(event: WireEvent, state: TableState): WireEvent {
 }
 
 /**
- * One sentence for the table's single polite live region.
- *
- * `clockExpired` says whether the `seatTimedOut` just before this event named its seat — see
- * `clockExpiredSeat` on `TableState`. Without it an automatic action is the server folding for a
- * player who stood up, and the sentence says the server acted without naming a cause.
- *
- * `ownSeat` is the reader's seat in this hand, so the two sentences this page writes about a seat by
- * number say "you" about the reader's: "Seat 1 ran out of time and the server acted for it" was the
- * reader being told about themselves as a chair.
+ * `clockExpired` says the preceding `seatTimedOut` named this seat. `ownSeat` lets seat-numbered
+ * sentences say "you" to the reader.
  */
 function announce(event: WireEvent, clockExpired = false, ownSeat: number | null = null): string {
   const own = ownSeat !== null && 'seat' in event && event.seat === ownSeat;
@@ -664,49 +391,17 @@ function announce(event: WireEvent, clockExpired = false, ownSeat: number | null
 }
 
 /**
- * ## Why the deal does not take the region on its own
- *
- * `handStarted` and `forcedBets` are two events of ONE table notice: `apps/api/src/ws/router.ts`
- * writes every event of a notice back to back into the same socket, and `packages/poker-engine`'s
- * `machine.ts` pushes `forcedBetsPosted` unconditionally in the same `startHand` call that pushes
- * `handStarted`. So the deal sentence and the blinds sentence are always produced microseconds
- * apart into one atomic polite region — and a polite region is read when the platform services its
- * notification, not when the write happens. Two writes for one notice are one announcement, and it
- * is the second one.
- *
- * "A new hand was dealt." was therefore never heard. That is assertion 3.3 of
- * `docs/production/accessibility-certification.md`, filed there as something only a person could
- * judge, and it is a defect. Measured in Chrome 151 by `scripts/ax-assertions.mjs`, on a hand
- * played through the product's own screens:
- *
- *   - before the region moved out of `PokerTable`, the table had no narration region at all at the
- *     moment "Deal the next hand" was pressed, so the sentence arrived inside the node that held
- *     it and nothing was notified of anything;
- *   - with the region mounted but the deal still writing on its own, the region took two writes for
- *     the one notice — "A new hand was dealt.", then "smallBlind 5 from seat 3, bigBlind 10 from
- *     seat 4" — the same loss, now visible to a probe;
- *   - as it stands, one write: "A new hand was dealt. smallBlind 5 from seat 3, bigBlind 10 from
- *     seat 4."
- *
- * So `handStarted` writes no sentence of its own. It leaves one to be CARRIED onto the front of the
- * first thing the hand says, which is the forced bets.
- *
- * Carrying rather than writing-then-appending is the whole point, and it is what keeps this from
- * becoming the opposite defect: an implementation that wrote the deal and then appended the blinds
- * would say the deal twice whenever the two frames landed in separate commits. This one produces
- * exactly one write however they arrive, so there is no timing under which a reader hears it twice.
- * `role="status"` is atomic, and 3.17 is the assertion that catches a sentence left stapled to the
- * front of everything after it.
+ * `handStarted` and `forcedBets` are written back to back in one notice, and two writes into one
+ * atomic polite region are heard as only the second. So `handStarted` writes nothing and leaves the
+ * deal sentence carried onto the forced bets, one write however the frames arrive. Measured by
+ * assertion 3.3 in `scripts/ax-assertions.mjs`. 3.17 catches a sentence left stapled to later ones.
  */
 function onEventFrame(state: TableState, frame: Extract<WsServerMessage, { type: 'event' }>): TableState {
   if (frame.event.kind === 'handStarted') {
-    // No `announcement` here on purpose: leaving the region exactly as it is means this dispatch
-    // mutates nothing, so a `handStarted` that did arrive in a commit of its own cannot re-announce
-    // the previous hand's last sentence either.
+    // No `announcement`, so a `handStarted` in its own commit cannot re-announce the last sentence.
     return { ...state, carried: announce(frame.event), summary: [], autoActed: null, clockExpiredSeat: null };
   }
-  // Consumed by the very next event, whatever it is: `seatTimedOut` and its action are adjacent in
-  // one notice, so a marker that outlived the event after it could only ever describe something else.
+  // Consumed by the very next event, since `seatTimedOut` and its action are adjacent in one notice.
   const clockExpired =
     frame.event.kind === 'action' && frame.event.wasAutomatic && frame.event.seat === state.clockExpiredSeat;
   const clockExpiredSeat = frame.event.kind === 'seatTimedOut' ? frame.event.seat : null;
@@ -718,16 +413,11 @@ function onEventFrame(state: TableState, frame: Extract<WsServerMessage, { type:
     return { ...next, summary: event.summaries };
   }
   if (event.kind === 'handComplete') {
-    // APPENDED to the showdown's lines, never written over them. Both events arrive at the end of
-    // a contested hand and each carries different sentences: `showdown` says what each seat showed
-    // ("Patient Technician 1 shows three of a kind, sixes"), `handComplete` who was paid. This used
-    // to assign `summaries` for both, so the second always replaced the first and "How the hand
-    // ended" listed a winner with no word of what they won with. `handStarted` empties the list,
-    // so nothing carries into the next hand.
+    // Appended to the showdown's lines, never written over them. `showdown` says what was shown and
+    // `handComplete` who was paid. `handStarted` empties the list.
     return { ...next, summary: [...state.summary, ...event.summaries] };
   }
-  // A clock expiry at the reader's own seat, and nothing else: an automatic fold after "Stand up"
-  // is the reader's own choice and has no `seatTimedOut` before it.
+  // Only a clock expiry at the reader's seat. A fold after "Stand up" has no `seatTimedOut`.
   if (clockExpired && frame.event.kind === 'action' && frame.event.seat === state.seat) {
     return { ...next, autoActed: AUTO_ACTED_NOTICE };
   }
@@ -735,48 +425,32 @@ function onEventFrame(state: TableState, frame: Extract<WsServerMessage, { type:
 }
 
 /**
- * What the reader is shown when the server acted for them. See `autoActed` on `TableState`.
- *
- * The rule rather than the action: the event carries the server's prose ("Guest 12D91B folds") and
- * no structured verb, and parsing a sentence meant for a person is how a client breaks the first
- * time somebody rewords it. The rule is `timeoutAction` in `packages/poker-engine`, and it is short.
+ * States the rule (`timeoutAction` in `packages/poker-engine`), because the event carries prose, not a
+ * verb, and parsing prose breaks when it is reworded.
  */
 export const AUTO_ACTED_NOTICE =
   'Your clock ran out, so the server acted for you. A seat whose time runs out checks when checking ' +
   'is free and folds otherwise — it never puts more units in.';
 
 function onStateFrame(state: TableState, frame: Extract<WsServerMessage, { type: 'state' }>): TableState {
-  // Monotonic per socket. A frame that arrived out of order describes a table that has already
-  // moved on, and applying it would draw the past over the present.
+  // An out-of-order frame would draw the past over the present.
   if (frame.revision <= state.revision) return state;
 
   const view = frame.view ?? state.view;
   const key = decisionKey(view);
   const movedOn = key !== decisionKey(state.view);
-  // The server's own rule, mirrored exactly: `LiveTable.handInProgress` in `rooms/table.ts` is
-  // `street !== undefined && street !== 'complete'`. Reading it as "the frame carried no view"
-  // instead is wrong and was a real defect: a finished hand is still sent — with its cards, its
-  // pot and its result — so `view` stays non-null after the hand is over, and "Deal the next
-  // hand" stayed disabled forever from the first completed hand onwards.
+  // Mirrors `LiveTable.handInProgress` in `rooms/table.ts`. A finished hand still carries a view, so
+  // "no view" alone left "Deal the next hand" disabled forever.
   const betweenHands = frame.view === null || frame.view.street === 'complete';
-  // The edge, not the level. Carried unchanged while the decision stays the reader's, so a burst of
-  // whole-state frames cannot re-announce a turn they are already in the middle of.
-  //
-  // "The same decision" is the decision key, not "it was the reader's turn on the last frame too".
-  // That was the rule, and it carried a dead sentence onto a new spot: a call that closes the
-  // preflop betting, from a seat that is first to act on the flop, goes straight from one of the
-  // reader's decisions to the next with no frame in between where it is anybody else's. The audit
-  // at 308fadf heard "Your turn preflop. 74 units to call" read out after "Decision applied" while
-  // the buttons were Check and Bet on the flop — and the flop decision itself was never announced,
-  // because the region's text did not change. A refused decision leaves the key as it was, so that
-  // sentence is still carried and still not said twice.
+  // The edge, not the level, keyed on the decision key. Two consecutive decisions of the reader's
+  // (closing preflop, first to act on the flop) have no frame between them, and "was their turn last
+  // frame" re-spoke the dead sentence (audit at 308fadf).
   const wasTurn = isViewersTurn(state.view, state.betweenHands);
   const nowTurn = isViewersTurn(view, betweenHands);
   const sameTurn = wasTurn && !movedOn;
   const turnAnnouncement =
     nowTurn && view !== null ? (sameTurn ? state.turnAnnouncement : turnAnnouncementFor(view)) : '';
-  // A new deadline is a new turn, and the first frame that carries it says how long the server
-  // gave it. See `turnBudgetMs` on `TableState`.
+  // A new deadline is a new turn. See `turnBudgetMs`.
   const turnBudgetMs =
     frame.deadlineMs === null
       ? null
@@ -794,19 +468,11 @@ function onStateFrame(state: TableState, frame: Extract<WsServerMessage, { type:
     deadlineMs: frame.deadlineMs,
     serverTimeMs: frame.serverTimeMs,
     turnBudgetMs,
-    // An analysis belongs to the spot it was computed for. The moment the spot changes it is
-    // dropped rather than left on screen beside different numbers — and so is the reason the last
-    // one could not be shown, which described a different spot too.
+    // An analysis belongs to its spot, so it and its failure reason drop when the spot changes.
     coach: state.coach !== null && state.coach.key === key ? state.coach : null,
     coachProblem: movedOn ? null : state.coachProblem,
-    // The request goes with the spot, and this line is half of a real defect's fix.
-    //
-    // Dropping the report above was never enough on its own: it runs when the frame that MOVES the
-    // spot arrives, and the analysis of the spot just left is still being computed at that moment
-    // — on a worker thread, with a three-second budget. It lands afterwards, against a table that
-    // has moved on. Leaving the request open let that late frame in, and `onFrame` then filed it
-    // under whatever was on screen. Closing the request here means a late answer is discarded for
-    // the same reason an answer to a request nobody made is: nothing is waiting for it.
+    // The request closes with the spot too, so a late answer from the worker is discarded rather than
+    // filed under the new spot.
     coachRequest: movedOn ? null : state.coachRequest,
     // A finished decision stops disabling the controls once the hand has actually moved.
     submission: movedOn && state.pending === null ? null : state.submission,
@@ -818,10 +484,7 @@ function onAckFrame(state: TableState, frame: Extract<WsServerMessage, { type: '
   if (pending === null || pending.requestId !== frame.requestId) {
     return { ...state, notice: null, noticeCode: null };
   }
-  // No sequence number in the sentence. It read "The server applied it at sequence 11", which is
-  // the protocol's bookkeeping (`expectedSequence`, the idempotency check) reported to a person who
-  // has no use for it and no way to read it. What they need is that it counted, and what happens
-  // next; the number stays on the wire, where it does its job.
+  // No sequence number in the sentence; it means nothing to a person.
   const detail =
     frame.deduplicated === true
       ? 'This decision had already been applied, so the server counted the retry as the same one. ' +
@@ -843,8 +506,7 @@ function onErrorFrame(state: TableState, frame: Extract<WsServerMessage, { type:
       coach: null,
       coachProblem: reviewOnly ? null : frame.error.message,
       coachDuringHand: reviewOnly ? false : state.coachDuringHand,
-      // The server's own wording, kept. It is the only thing this client actually learns about
-      // why the analysis is off at this table — see `coachRefusal` on `TableState`.
+      // The only thing this client learns about why Coach is off. See `coachRefusal`.
       coachRefusal: reviewOnly ? frame.error.message : state.coachRefusal,
       announcement: reviewOnly
         ? 'The Coach is off during this hand. It is available in review afterwards.'
@@ -852,9 +514,7 @@ function onErrorFrame(state: TableState, frame: Extract<WsServerMessage, { type:
     };
   }
   const pending = state.pending;
-  // The server's sentence and nothing after it. These read "…(insufficient_units)" and "…(not_your_turn).
-  // Nothing was applied." (audit at 308fadf): a contract token after a sentence that had already said
-  // everything a person can use. The code is kept, in `noticeCode`, for the one screen that branches on it.
+  // The server's sentence only, no trailing contract token (audit at 308fadf). The code goes in `noticeCode`.
   if (pending === null || pending.requestId !== frame.requestId) {
     return { ...state, notice: frame.error.message, noticeCode: frame.error.code };
   }
@@ -882,18 +542,10 @@ function onFrame(state: TableState, frame: WsServerMessage): TableState {
         room: frame.room,
         seat: frame.seat,
         serverTimeMs: frame.serverTimeMs,
-        // Per socket, so a reconnect starts the ordering again from zero.
         revision: 0,
         notice: null,
-        // An outstanding analysis belonged to the socket that has just been replaced, and no
-        // answer to it is ever coming: the `requestId` was minted by this client and matched by
-        // the server against the connection it arrived on. Leaving the request open was half of a
-        // real defect — see the `welcome` note in `useLiveTable`'s `onFrame` for the other half
-        // and for the frame log that measured it.
-        //
-        // `coach` is deliberately NOT cleared. A report already on screen still describes the spot
-        // it was computed for, and that spot is unchanged by the socket going away; `onStateFrame`
-        // drops it the moment the spot actually moves.
+        // The request died with the old socket, since the server matches `requestId` per connection.
+        // `coach` stays, because its spot has not changed; `onStateFrame` drops it when it does.
         coachRequest: null,
       };
     case 'state':
@@ -914,77 +566,31 @@ function onFrame(state: TableState, frame: WsServerMessage): TableState {
 }
 
 /**
- * Files an analysis under the decision it was COMPUTED for, or drops it.
- *
- * ## The defect this is written against
- *
- * This used to key the report on `decisionKey(state.view)` — the spot on screen at the moment the
- * frame arrived — while the key that was actually asked about travelled in the `coachRequested`
- * action and was read by nothing. The two are routinely different: the server computes on a worker
- * thread with a three-second budget, and a `coach` frame carries a `requestId` and nothing else, so
- * there is no hand id and no sequence in the answer to re-derive it from.
- *
- * What that cost a reader: the turn opens at `hand-1:7` and the effect below asks automatically;
- * the reader folds; the hand ends; the last `state` frame of the hand lands at `hand-1:11`; the
- * analysis arrives after it and was keyed `hand-1:11`. `CoachPanel` then printed "flop · 100 units
- * in the pot · 35 to call" beside a finished hand whose pot was 1,505 and whose price to call was
- * 0 — and since no further `state` frame arrives until the reader deals again, it stayed there. The
- * hook's `coach.key === decisionKey(view)` guard could not catch it, because the key had already
- * been rewritten to the value that guard compares against.
- *
- * Two guards now, and they are not redundant: `onStateFrame` closes the request the moment the spot
- * changes, so a late frame is usually discarded before it gets here; and if one arrives against a
- * spot that changed without a `state` frame, it is refused here rather than re-keyed. Dropping it
- * is the honest outcome — nothing is on screen to describe, and the reader is between hands.
+ * Files an analysis under the spot it was REQUESTED for, or drops it. A `coach` frame carries only a
+ * `requestId`, and keying on the spot on screen at arrival once printed a flop analysis beside a
+ * finished hand. `onStateFrame` closes the request when the spot moves, and this refuses any late
+ * frame that slips past.
  */
 function onCoachFrame(state: TableState, frame: Extract<WsServerMessage, { type: 'coach' }>): TableState {
   const request = state.coachRequest;
   if (request === null || request.requestId !== frame.requestId) return state;
-  // Closed either way: this request has been answered, and no second answer is coming for it.
+  // Closed either way; no second answer is coming.
   if (request.key !== decisionKey(state.view)) return { ...state, coachRequest: null };
   return {
     ...state,
     coach: { key: request.key, report: frame.report },
     coachRequest: null,
     coachProblem: null,
-    // The analysis ARRIVING is news, and it was silent. The panel fills in beside the
-    // buttons with no announcement at all, and below 600px it is not even on screen —
-    // `styles/play.css` makes it a bottom sheet that starts collapsed, so a reader who
-    // cannot see the panel had no way to learn the thing they are waiting for is there.
-    //
-    // The same event is already announced correctly one screen away, in
-    // `ScenarioStage.tsx`'s reveal region, and this is that pattern rather than a new one:
-    // one short sentence, in the polite region the table already owns, saying WHERE the
-    // analysis is rather than what it says. It must not carry a figure — a number read out
-    // of the panel it came from has lost the assumptions it rests on, which is the one
-    // thing this product refuses to do with a number.
-    //
-    // Only on the path that actually fills the panel. A report that is dropped above changes
-    // nothing on screen, and announcing it would send a reader to look for a panel that never
-    // filled.
+    // Announce where the analysis is, never a figure, as `ScenarioStage.tsx` does. Below 600px the
+    // panel is a collapsed sheet. Only on this path, since a dropped report fills nothing.
     announcement: COACH_READY_ANNOUNCEMENT,
   };
 }
 
 /**
- * What became of a decision, as one sentence per fate — and only one.
- *
- * ## The defect this table exists for
- *
- * There used to be a single sentence here, "Sent. The server is the only authority…", written on
- * the assumption that dispatching `submit` meant the frame had gone out. It did not. `sendRaw`
- * refuses a frame when the client's own token bucket is empty AND when there is no socket at all,
- * and `socket` is null for the whole reconnect backoff — up to fifteen seconds — during which
- * `stageStatusOf` still reports `ready`, so the controls are live and a reader does press Fold.
- * They were then told their decision had been sent, and simultaneously, in a `role="alert"`, that
- * "this page is refusing to exceed the socket rate limit" — a cause that was not the cause, beside
- * a conclusion that was not true either, because the decision was replayed on reconnect and
- * applied.
- *
- * Four fates, four sentences, and each says what the reader can do about it. `held` is the one
- * worth reading twice: nothing has been sent, but the decision is not lost — `onFrame` replays it
- * on the next `welcome` with the same `actionId`, so the server applies it once or answers
- * `deduplicated`, and there is nothing for the reader to do but wait.
+ * One sentence per send outcome, each saying what the reader can do. A single "Sent." sentence once
+ * claimed delivery during a reconnect while an alert blamed the rate limit. `held` is not lost.
+ * `onFrame` replays it on the next `welcome` with the same `actionId`.
  */
 const SUBMISSION_FOR: Readonly<Record<SendOutcome, (action: TableAction) => TableSubmission>> = {
   sent: (action) => ({
@@ -1022,11 +628,8 @@ const SUBMISSION_FOR: Readonly<Record<SendOutcome, (action: TableAction) => Tabl
 };
 
 /**
- * The fates a decision is still going to be sent under.
- *
- * `pending` is what the reconnect replays and what disables the controls, so it is kept for exactly
- * these two and dropped for the rest. Keeping it after a refusal nothing will retry leaves the
- * table disabled forever against a decision that is never coming back.
+ * `pending` disables the controls and is what the reconnect replays, so it is kept only for these.
+ * Kept after a refusal nothing retries, it would disable the table forever.
  */
 const WILL_STILL_BE_SENT: ReadonlySet<SendOutcome> = new Set<SendOutcome>(['sent', 'disconnected']);
 
@@ -1037,33 +640,18 @@ export function tableReducer(state: TableState, event: TableEvent): TableState {
     case 'submit':
       return {
         ...state,
-        // Kept only while something is still going to send it. See `SUBMISSION_FOR`.
         pending: WILL_STILL_BE_SENT.has(event.delivery) ? event.pending : null,
-        // The echo, as a state change rather than a prefix. See `spokenDecision`.
-        //
-        // Said whatever became of the frame, because it describes the reader's own choice rather
-        // than the table's response to it — and the response is in `submission`, one region over.
-        //
-        // `turnAnnouncement` is deliberately left alone. Clearing it here would look tidy and would
-        // cost the reader the one case that matters: a decision the server REFUSES leaves the spot
-        // exactly as it was, and an emptied region has nothing left to re-announce it with. Carried
-        // as it is, the sentence does not change, so nothing is said twice either.
+        // Said whatever became of the frame, since it echoes the reader's own choice. `turnAnnouncement`
+        // is left alone, so a refused decision still has its spot's sentence and nothing is said twice.
         announcement: spokenDecision(event.pending.action),
         submission: SUBMISSION_FOR[event.delivery](event.pending.action),
-        // The refusal is the submission, and only the submission.
-        //
-        // This is the second half of a real defect. `act` used to dispatch a `notice` as well, so a
-        // reader who pressed Fold during a reconnect got a polite "Decision sent — the server is the
-        // only authority…" and, at the same moment, a `role="alert"` saying "The decision was not
-        // sent". `notice` is for the server refusing something that was not a decision (a seat that
-        // had gone, a hand somebody else started); a decision's fate belongs to the region that is
-        // labelled "What happened to your decision", where there is exactly one of it.
+        // The refusal belongs to `submission` only. Also dispatching a `notice` once showed "Decision
+        // sent" beside an alert saying it was not.
         notice: null,
         noticeCode: null,
       };
     case 'coachRequested':
-      // The key is kept, not just the id. It is the only record of which decision the answer will
-      // be about, because the answer itself carries no hand and no sequence. See `onCoachFrame`.
+      // The key is the only record of which decision the answer will be about. See `onCoachFrame`.
       return {
         ...state,
         coachRequest: { requestId: event.requestId, key: event.key },
@@ -1071,12 +659,8 @@ export function tableReducer(state: TableState, event: TableEvent): TableState {
         coachProblem: null,
       };
     case 'coachFailed':
-      // The request is over: no second answer is coming for it, so the outstanding id is cleared
-      // and the reason takes the place of the analysis rather than sitting beside a stale one.
-      //
-      // Announced for the same reason the success is: a reader who asked for the analysis is
-      // waiting for it, and silence is indistinguishable from "still working". The reason is
-      // included because, unlike a figure, it is complete on its own.
+      // The request is over. Announced, since silence reads as "still working", and a reason is
+      // complete on its own where a figure is not.
       return {
         ...state,
         coachRequest: null,
@@ -1087,9 +671,7 @@ export function tableReducer(state: TableState, event: TableEvent): TableState {
     case 'notice':
       return { ...state, notice: event.message, noticeCode: event.code ?? null };
     case 'dataRefused':
-      // The view is left exactly as it was. The last frame this client accepted is the last frame
-      // it could vouch for, and blanking the table would take the record of the hand away from the
-      // one person in a position to report what happened.
+      // The view stays as the last frame this client could vouch for, so the reader can report the hand.
       return { ...state, dataRefusal: dataRefusalSentence(event.seats) };
     case 'reset':
       return EMPTY_TABLE_STATE;
@@ -1099,17 +681,8 @@ export function tableReducer(state: TableState, event: TableEvent): TableState {
 }
 
 /**
- * The clock the ring draws, from the deadline the server actually set for this turn.
- *
- * `budgetSeconds` is the server's own budget for the turn — `turnBudgetMs`, read off the frame that
- * started it — and never the room's `actionTimeoutSeconds` alone, which is what it used to be and
- * is only right for a seat the server does not give a learner's clock to. See `turnBudgetMs` on
- * `TableState` for the measurement. The room's clock stays as a floor for a page that arrived
- * mid-turn and can only see what was left. Whole seconds, rounded UP: the server arms
- * `now + 240 * 1000` and the first frame is a millisecond later, so the figure that reaches here
- * is 239,999 — and "239.999 seconds to act" is not a sentence anybody should be read.
- *
- * Exported and pure so a test drives it with the frame the auditor captured, rather than a copy.
+ * `budgetSeconds` comes from `turnBudgetMs`, with the room's clock as a floor for a page that arrived
+ * mid-turn. Rounded UP, because the first frame reads 239,999ms of a 240s turn.
  */
 export function turnClockFor(
   state: Pick<TableState, 'deadlineMs' | 'serverTimeMs' | 'turnBudgetMs' | 'room' | 'betweenHands'>,
@@ -1128,50 +701,24 @@ export function turnClockFor(
 // ---------------------------------------------------------------------------
 
 export type SetupPhase =
-  /** Nothing has been asked for yet. The reader has not opted in. */
+  /** The reader has not opted in. */
   | 'idle'
-  /** Reading the session, creating a guest if needed, finding or creating the room. */
   | 'preparing'
-  /** A room id is in hand and the socket owns what happens next. */
+  /** The socket owns what happens next. */
   | 'ready'
-  /** Setup failed for a reason the reader is told about. */
   | 'failed';
 
 /**
- * How far "Deal me in" has got: the seat and the first deal, asked for on the reader's behalf.
- *
- * ## Why this exists
- *
- * Reaching a first decision took three presses — "Open the table", "Take seat 1", "Deal the next
- * hand" — with an empty "Waiting for the table." block between each, and the second and third are
- * not choices at the bot table this page builds: seat 1 is the one `BOT_TABLE_REQUEST` leaves free
- * and nobody else can deal there. So `start` asks for both, once each, each only after the server
- * has confirmed the step before it.
- *
- * ## Why a sent step is a state of its own
- *
- * `wantSeat` and `sitSent` differ only in whether the frame has left, and that difference is the
- * whole guarantee: every render, every whole-state frame and every reconnect `welcome` re-runs the
- * effect that reads this, so "seat is null, ask for it" would ask again on each one. A step is sent
- * on the transition OUT of `wantSeat`, so it can be sent at most once per press.
- *
- * ## Every in-flight state has an exit, and every exit is towards the manual buttons
- *
- * While this is not `off` the manual "Take seat" and "Deal the next hand" are hidden, so a state
- * that could wait for ever would leave a reader with no control at all. A refusal (`notice`), a
- * send that did not go out, and the socket leaving `live` mid-chain all end it at `off`. A reconnect
- * therefore never re-sends: the chain stops and the reader finishes by hand.
- *
- * Only `start` sets it. A table reached by invite code, or one built for friends, is somebody's to
- * sit down at and deal on purpose, so those keep the manual steps.
+ * "Deal me in" takes the seat and asks for the first deal, each only after the server confirmed the
+ * step before. A step is sent on the transition OUT of `wantSeat`, so re-runs on every frame and
+ * `welcome` send it at most once per press. Every in-flight state exits to `off` (a refusal, a failed
+ * send, the socket leaving `live`), so the manual buttons always come back. Only `start` sets it.
  */
 export type DealIn = 'off' | 'wantSeat' | 'sitSent' | 'dealSent';
 
-/** What the next step of "Deal me in" depends on, as the hook last saw it. */
 export interface DealInSnapshot {
-  /** Setup is `ready` and the socket is `live`. */
   readonly live: boolean;
-  /** The reducer's state. `notice` set means the server refused something that was not a decision. */
+  /** `notice` set means the server refused something that was not a decision. */
   readonly table: Pick<TableState, 'seat' | 'betweenHands' | 'notice' | 'revision' | 'room' | 'userId'>;
   readonly readerSeat: number | null;
 }
@@ -1181,12 +728,8 @@ export type DealInSend = { readonly kind: 'sit'; readonly seat: number } | { rea
 const STAY = (next: DealIn): { readonly next: DealIn; readonly send: DealInSend } => ({ next, send: null });
 
 /**
- * One step of "Deal me in". Pure, so `test/deal-me-in.test.ts` drives it through the reducer's real
- * frames: there is no renderer in this repository (ADR 0008) to drive the hook with.
- *
- * A seat the reader already holds is a seat taken — `chooseRoom` can hand back a room they are
- * sitting at — and a hand already in progress is a hand dealt. Both converge on the same end state
- * as a fresh table, without sending anything.
+ * Pure, so `test/deal-me-in.test.ts` drives it with real frames (no renderer, ADR 0008). A seat
+ * already held or a hand already in progress converge on the same end state without sending.
  */
 export function dealInStep(
   step: DealIn,
@@ -1195,24 +738,16 @@ export function dealInStep(
   const { table } = seen;
   if (step === 'off') return STAY('off');
   if (table.notice !== null) return STAY('off');
-  // Never a deal for a reader the latest roster shows with nothing in front of them: the server
-  // deals them out, so all it would deal is a hand between the bots. Worse than useless on a server
-  // without PR #25, which leaves a live seat at 0 after a units reset: a reader who reset on /record
-  // and came back to "Deal me in" (which reuses the room they sit at) would have this deal into it,
-  // and that bots-only hand settling the 0 back over the reset is the clobber PR #25's
-  // `restackForUnitsReset` header measured — after it, the stand-and-sit that would have bought them
-  // in at the reset figure is refused with `insufficient_units`. Read off the same frame as the seat,
-  // so a restack the server has published lets the chain deal as usual. Ends at `off`, which brings
-  // back the manual buttons and the out-of-units notice beside them.
+  // Never deal for a reader the roster shows at stack 0. The server deals them out, and on a server
+  // without PR #25 the bots-only hand would settle 0 back over a units reset. Ends at `off`, which
+  // brings back the manual buttons and the out-of-units notice.
   const deal: ReturnType<typeof STAY> = outOfUnits(table)
     ? STAY('off')
     : { next: 'dealSent', send: { kind: 'deal' } };
   if (step === 'wantSeat') {
     if (!seen.live) return STAY('wantSeat');
-    // `welcome` carries the seat and no view, so until a `state` frame lands on this socket
-    // (`revision` restarts at zero on every `welcome`) `betweenHands` is whatever `reset` left —
-    // true. Read then, a reused room where the reader is mid-hand looked like "seated, nothing
-    // dealt", and `test/deal-me-in.test.ts` caught this sending a deal into a hand in progress.
+    // `welcome` carries no view, so `betweenHands` is stale until a `state` frame (revision > 0).
+    // Reading it earlier sent a deal into a hand in progress.
     if (table.revision === 0) return STAY('wantSeat');
     if (table.seat === null) {
       return seen.readerSeat === null
@@ -1230,18 +765,8 @@ export function dealInStep(
 }
 
 /**
- * The reader holds a seat with nothing in front of it.
- *
- * ## The defect this exists for
- *
- * At stack 0 the server deals the reader out — `PlayerView.seats` holds only the seats dealt in —
- * and keeps them seated. Nothing on the page said so: the hero's plate simply vanished from the
- * table, the connection panel went on saying "Your seat: seat 1", and "Deal the next hand" stayed
- * enabled and dealt hands between five bots, one after another, with no word about why the reader
- * was not in any of them. Measured on the live table after an all-in loss.
- *
- * Read off the room roster rather than inferred from the hero's absence in the view: a seat waiting
- * for the big blind is also absent from the view, with chips, and is not out of anything.
+ * At stack 0 the server deals the reader out but keeps them seated, and nothing said so. Read off the
+ * roster, because a seat waiting for the big blind is also absent from the view.
  */
 export function outOfUnits(table: Pick<TableState, 'room' | 'userId' | 'seat'>): boolean {
   if (table.room === null || table.userId === null || table.seat === null) return false;
@@ -1249,97 +774,60 @@ export function outOfUnits(table: Pick<TableState, 'room' | 'userId' | 'seat'>):
   return me !== undefined && me.seat !== null && me.stack <= 0;
 }
 
-/** Where a join-by-invite-code attempt has got to. */
 export type JoinPhase =
   | { readonly state: 'idle' }
   | { readonly state: 'joining' }
-  /** The server refused, in its own words. The field keeps what was typed so it can be corrected. */
+  /** The field keeps what was typed so it can be corrected. */
   | { readonly state: 'refused'; readonly message: string }
   | { readonly state: 'joined'; readonly roomName: string };
 
-/**
- * Why the Coach panel is not analysing this hand, when it is not — and by what evidence.
- *
- * Two members rather than a boolean, because the panel used to have only a boolean and printed the
- * FIRST member's sentence whenever either held. See `coachRefusal` on `TableState` above for the
- * measurement, and `app/play/LiveTable.tsx` for the two sentences.
- */
+/** Two kinds, not a boolean, so the panel never states Expert for a server refusal. */
 export type CoachOff =
-  /**
-   * This page asked for an Expert Legends match, so the difficulty is the page's own parameter and
-   * "Expert keeps the analysis off the table" is a thing it knows rather than a thing it inferred.
-   */
+  /** This page opened an Expert Legends match itself. */
   | { readonly kind: 'expertLegends' }
   /**
-   * The server refused with `coach_not_available`. That is a fact about the table the reader is at
-   * — which they may have reached by invite code, or by `chooseRoom` reusing a room they own — and
-   * it carries no difficulty this client can read. `serverReason` is the API's own wording, which
-   * is the most this page can honestly say.
+   * The server refused with `coach_not_available`, which carries no difficulty. `serverReason` is the
+   * API's own wording.
    */
   | { readonly kind: 'refusedByServer'; readonly serverReason: string };
 
 export interface LiveTable {
   readonly phase: SetupPhase;
-  /**
-   * True while the page is reconnecting, on load, to the table this tab was at. `phase` stays `idle`
-   * meanwhile, because nothing has been asked for on this visit; this is what lets the status line
-   * say "reconnecting" rather than "not connected yet". See `resumeRememberedTable`.
-   */
+  /** Reconnecting on load to this tab's table, while `phase` stays `idle`. See `resumeRememberedTable`. */
   readonly resuming: boolean;
   readonly status: TableSocketStatus | null;
   readonly closed: CloseMeaning | null;
   readonly setupError: string | null;
   readonly displayName: string | null;
   /**
-   * The invite code of a room THIS page just created, and only that.
-   *
-   * Null at every other moment, and that is the contract rather than an implementation detail: the
-   * server stores `sha256(code)` and nothing else, so the code exists exactly once, in the response
-   * to `POST /rooms`. It is held in React state for the life of this component and written nowhere
-   * — not `sessionStorage`, not `localStorage`, not the URL. A reload does not bring it back, which
-   * is the honest behaviour: the room's owner shares it now or creates another room.
-   *
-   * Null also when an EXISTING room was reused (`chooseRoom`), because no code was issued for that
-   * request and there is no way to recover the one issued for the original.
+   * Only for a room THIS page just created. The server stores only `sha256(code)`, so it is held in
+   * React state and written nowhere (no storage, no URL). Null when a room was reused.
    */
   readonly inviteCode: string | null;
   readonly join: JoinPhase;
   readonly table: TableState;
   readonly turn: TurnClock | null;
   readonly report: CoachReport | null;
-  /** Why the Coach panel is empty, when it is empty for a reason worth naming. */
   readonly coachProblem: string | null;
-  /**
-   * Why live Coach is off at this table, or null while it is on.
-   *
-   * A discriminated pair rather than a boolean, because the two ways it goes off are two different
-   * facts and the panel used to state the first one for both. See `coachRefusal` on `TableState`
-   * for the measurement; the wording lives in `app/play/LiveTable.tsx`, which is the right place
-   * for copy, and this is the right place for what was actually established.
-   */
+  /** Null while live Coach is on. The copy lives in `app/play/LiveTable.tsx`. */
   readonly coachOff: CoachOff | null;
   readonly seatNames: Readonly<Record<number, string>>;
   readonly highlightedCards: readonly number[];
   readonly isMyTurn: boolean;
   /** The seat `sit()` will ask for, or null when every seat is taken. */
   readonly readerSeat: number | null;
-  /** True while "Deal me in" is still taking the seat or dealing on the reader's behalf. */
   readonly dealingIn: boolean;
-  /** Seated with a stack of zero, so the server will deal every hand without the reader. */
+  /** Seated at stack 0, so the server deals every hand without the reader. */
   readonly outOfUnits: boolean;
-  /** Opts in: session, room, socket, then the seat and the first deal. Safe to call twice. */
+  /** Session, room, socket, then the seat and the first deal. Safe to call twice. */
   readonly start: () => void;
   /** Abandons the remembered room and builds a fresh bot table. */
   readonly startFreshTable: () => void;
   /**
-   * Builds a private table with seats free for other people, and surfaces its invite code.
-   *
-   * Separate from `startFreshTable` because the bot table is FULL by construction — six seats, five
-   * bots, the owner in the sixth — so its invite code is a code to a table the server will refuse
-   * anybody at with `room_full`. An invite code nobody can use is not the feature.
+   * Separate from `startFreshTable` because the bot table is full by construction, so its code would
+   * only earn a `room_full`.
    */
   readonly startPrivateTable: () => void;
-  /** Joins somebody else's private room with the code they shared, then opens a socket to it. */
   readonly joinByInviteCode: (code: string) => void;
   readonly sit: () => void;
   readonly stand: () => void;
@@ -1349,7 +837,7 @@ export interface LiveTable {
 }
 
 export interface UseLiveTableOptions {
-  /** Test seams. The browser supplies neither. */
+  /** Test seams. The browser supplies none of these. */
   readonly socketFactory?: RawSocketFactory;
   readonly scheduler?: Scheduler;
   readonly url?: string;
@@ -1360,7 +848,7 @@ export interface UseLiveTableOptions {
   };
 }
 
-/** Display names by seat, from the room roster. Bots are named by the server, never invented here. */
+/** Bots are named by the server, never here. */
 function namesFor(room: RoomSummary | null): Readonly<Record<number, string>> {
   if (room === null) return {};
   const names: Record<number, string> = {};
@@ -1370,7 +858,7 @@ function namesFor(room: RoomSummary | null): Readonly<Record<number, string>> {
   return names;
 }
 
-/** The five cards that won, for the ring the table draws. Empty unless the hand reached showdown. */
+/** Empty unless the hand reached showdown. */
 function winningCards(view: PlayerView | null): readonly number[] {
   const result = view?.result ?? null;
   if (result === null) return [];
@@ -1378,15 +866,7 @@ function winningCards(view: PlayerView | null): readonly number[] {
   return result.showdowns.filter((showdown) => winners.has(showdown.seat)).flatMap((s) => [...s.bestFive]);
 }
 
-/**
- * A refusal as the sentence a reader is shown: the server's own wording, without its contract code.
- *
- * This used to append the code — "(invite_code_invalid)", "(insufficient_units)" — on the theory that
- * a reader might quote it to support. Nobody reading a play-money table is going to, and it was the one
- * machine token on a screen otherwise written for a person (audit at 308fadf). The join field dropped it
- * first, as a `joinRefusalOf` beside this; the setup path and the socket's refusals now drop it too, so there is one
- * rule and one function.
- */
+/** The server's own wording, without its contract code (audit at 308fadf). */
 export function refusalSentence(cause: unknown): string {
   if (cause instanceof Error) return cause.message;
   return 'the table could not be prepared';
@@ -1427,12 +907,8 @@ async function openPracticeRoom(
 }
 
 /**
- * Opens a live table and keeps it open for the life of the component.
- *
- * Everything it owns is released on unmount: the socket is closed, every timer is cancelled and the
- * in-flight setup request is aborted. That is not tidiness — a socket leaked per navigation reaches
- * `maxSocketsPerSession` (four) in four page views and locks the reader out of their own table with
- * a `4429`.
+ * Unmount closes the socket, cancels every timer and aborts setup. A socket leaked per navigation hits
+ * `maxSocketsPerSession` (four) and locks the reader out with a `4429`.
  */
 export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
   const [table, dispatch] = useReducer(tableReducer, EMPTY_TABLE_STATE);
@@ -1451,7 +927,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
   const pendingRef = useRef<PendingDecision | null>(null);
   const viewRef = useRef<PlayerView | null>(null);
   const coachAskedRef = useRef<string | null>(null);
-  /** The outstanding Coach request, readable from a frame callback. See the `welcome` case below. */
+  /** Readable from a frame callback. See the `welcome` case below. */
   const coachRequestRef = useRef<TableState['coachRequest']>(null);
   const setupRef = useRef<AbortController | null>(null);
 
@@ -1462,10 +938,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
   const { socketFactory, scheduler, url, legendMatch } = options;
 
   /**
-   * Session, then room. One abortable pass; a second click while it runs is ignored.
-   *
-   * The controller is kept so unmount can abort it. Without that, a reader who navigates away
-   * mid-setup leaves a `POST /rooms` in flight that creates a table nobody will ever sit at.
+   * One abortable pass. Unmount aborts it, or a `POST /rooms` left in flight creates an orphan table.
    */
   const prepare = useCallback(
     (fresh: boolean, request: CreateRoomRequest = BOT_TABLE_REQUEST) => {
@@ -1497,26 +970,13 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
     [legendMatch],
   );
 
-  /** Whatever setup pass is still running when the component goes away. */
   useEffect(() => () => setupRef.current?.abort(), []);
 
   /**
-   * Back at the table this tab was at, when the reader returns to `/play`.
-   *
-   * Navigating away unmounts this hook and closes the socket, and the server keeps the seat; coming
-   * back used to land on "Not connected yet" with a button whose sentence promised a new room (UI
-   * audit of 308fadf, item 15). `resumeRememberedTable` decides, and only ever reconnects: no
-   * guest is minted, no room is created or chosen in place of the remembered one. Anything else
-   * leaves the page exactly where a first visit starts.
-   *
-   * Never for a Legends page: `/play?profile=…` is a request for a new match by its URL, and the
-   * match is opened by the press there, as it always was.
-   *
-   * Read in an effect, not during render: `sessionStorage` does not exist on the server, and a first
-   * render that differed between the two would be a hydration mismatch.
-   *
-   * `dealIn` stays `off`. Reconnecting is not being dealt in — the reader may be mid-hand, or have
-   * stood up before leaving — so the manual controls appear and nothing is sent on their behalf.
+   * Reconnects on return to `/play` (UI audit of 308fadf, item 15). It only reconnects. No guest is
+   * minted and no other room is created or chosen. Never on a Legends page, where the press opens the
+   * match. Runs in an effect because `sessionStorage` is absent on the server and would mismatch
+   * hydration. `dealIn` stays `off`, since the reader may be mid-hand.
    */
   useEffect(() => {
     if (legendMatch !== undefined) return;
@@ -1530,8 +990,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
         const resumed = await resumeRememberedTable(remembered, controller.signal);
         if (controller.signal.aborted) return;
         if (resumed === null) {
-          // The tab's memory names a table this account can no longer reach — closed, left, or a
-          // different session. Forgotten, so the next press of "Deal me in" does not aim at it.
+          // The remembered table is unreachable now. Forget it so the next press does not aim at it.
           rememberRoom(null);
           return;
         }
@@ -1542,12 +1001,10 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
         setRoomId(resumed.room.id);
         setPhase('ready');
       } catch {
-        // A failed reconnect is the page a first visit gets, which still works: "Deal me in" reads
-        // the same memory and tries again, with its own error reporting.
+        // A failed reconnect leaves the first-visit page, and "Deal me in" retries with its own errors.
       } finally {
-        // Only this pass's own flag. A press of "Deal me in" meanwhile aborted it and cleared the
-        // flag itself, and React's development double-mount starts a second pass before the first
-        // one's `finally` has run.
+        // Only this pass's flag. A press meanwhile cleared it, and the dev double-mount runs a second
+        // pass before the first one's `finally`.
         if (setupRef.current === controller) setResuming(false);
       }
     })();
@@ -1560,7 +1017,6 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
     prepare(false);
   }, [phase, prepare]);
 
-  /** Abandons whatever room is open and builds a new one to `request`. */
   const buildFresh = useCallback(
     (request: CreateRoomRequest): void => {
       socketRef.current?.dispose();
@@ -1579,35 +1035,18 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
 
   const startFreshTable = useCallback((): void => buildFresh(BOT_TABLE_REQUEST), [buildFresh]);
 
-  /**
-   * Creates a table for people, always fresh.
-   *
-   * Never reuses an existing room, unlike `start`. "Make me a private table to invite somebody to"
-   * is an explicit act with an answer the reader is waiting for — the invite code — and a version
-   * of it that quietly handed back a room they made yesterday would hand back a room whose code was
-   * issued once and is gone. Only a creation produces a code.
-   */
+  /** Never reuses a room, because a code is issued once, only on creation. */
   const startPrivateTable = useCallback(() => buildFresh(FRIENDS_TABLE_REQUEST), [buildFresh]);
 
   /**
-   * Joins somebody else's private room, then opens a socket to it.
-   *
-   * The same ordered set of HTTP calls `prepare` makes, with the room supplied instead of found: a
-   * session (a guest one if there is none — the joiner is usually a second person who has never
-   * been here), then `POST /rooms/join`, then the socket. It uses the same `setupRef` controller,
-   * so a join and a "start a fresh table" cannot both be in flight; the later one wins.
-   *
-   * A refusal is a value, not an error page. `invite_code_invalid` is the ordinary answer to a
-   * mistyped code and the server's own wording for it is what the reader sees, because a client
-   * that rewrote it would be guessing at which of several refusals it had received. The socket is
-   * not touched until the join has succeeded, so a bad code leaves whatever table is already open
-   * exactly as it was.
+   * Session (often a new guest), then `POST /rooms/join`, then the socket. Shares `setupRef`, so the
+   * later of a join and a fresh table wins. A refusal shows the server's own words, and the open
+   * socket is untouched until the join succeeds.
    */
   const joinByInviteCode = useCallback((code: string): void => {
     const normalised = normaliseInviteCode(code);
     if (normalised === null) {
-      // Refused here rather than sent: below eight characters there is nothing the server could
-      // match, and spending a rate-limit token to be told so helps nobody.
+      // Below eight characters nothing could match, so spend no rate-limit token.
       setJoin({
         state: 'refused',
         message:
@@ -1635,7 +1074,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
         socketRef.current = null;
         setStatus(null);
         setClosed(null);
-        // Not this session's code to show: it was issued to whoever created the room.
+        // Not this session's code; it was issued to the room's creator.
         setInviteCode(null);
         rememberRoom(room.id);
         dispatch({ kind: 'reset' });
@@ -1644,9 +1083,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
         setPhase('ready');
       } catch (cause) {
         if (controller.signal.aborted) return;
-        // `phase` goes back to whatever the socket can still support rather than to `failed`: a
-        // wrong code is not a broken page, and turning the whole screen into an error state would
-        // throw away a table the reader may already be sitting at.
+        // Not `failed`. A wrong code must not throw away a table the reader may be sitting at.
         setPhase(socketRef.current === null ? 'idle' : 'ready');
         setJoin({ state: 'refused', message: refusalSentence(cause) });
       }
@@ -1654,12 +1091,8 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
   }, []);
 
   /**
-   * The socket's whole lifetime, tied to one room id.
-   *
-   * The cleanup disposes it, which closes the underlying socket and cancels the reconnect timer.
-   * React's strict mode runs this twice in development on purpose, and that is the point: a version
-   * of this that leaked would show up here as a second socket rather than in production as a
-   * locked-out reader.
+   * The socket's lifetime, tied to one room id. Strict mode's double run in development is what
+   * would expose a leak as a second socket.
    */
   useEffect(() => {
     if (roomId === null) return;
@@ -1671,19 +1104,9 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
       onClose: setClosed,
       onProblem: (message) => console.warn(`[table-socket] ${message}`),
       /**
-       * A dropped frame is usually invisible on purpose — `state` arrives whole on every change, so
-       * the next one repairs whatever the last one lost. Two are not.
-       *
-       * A `coach` frame is asked for once and answered once, so dropping it silently leaves a panel
-       * that will never fill and a reader with no idea why.
-       *
-       * A `state` frame refused for carrying hole cards this recipient was not entitled to is the
-       * loud one, and it is the whole point of that check. `console.error` and not `console.warn`,
-       * and not fenced behind `NODE_ENV` the way `lib/api.ts` fences its 404 line: that one fires
-       * on every mistyped URL a reader visits, and this one fires when the server has contradicted
-       * the single promise this product cannot afford to break. It should be findable in a support
-       * screenshot. `dataRefusal` is the same fact for the person at the table, who is otherwise
-       * looking at a table that has simply stopped moving.
+       * Most dropped frames are repaired by the next whole `state`. A dropped `coach` frame is not.
+       * A hole-card refusal is logged with `console.error`, unfenced by `NODE_ENV`, so it shows in a
+       * support screenshot, and `dataRefusal` tells the person at the table.
        */
       onRejected: (rejection) => {
         const unentitled = rejection.unentitledSeats;
@@ -1697,41 +1120,16 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
       },
       onFrame: (frame) => {
         dispatch({ kind: 'frame', frame });
-        // A reconnect replays an unanswered decision, unchanged. The server dedupes by `actionId`,
-        // so this is either applied once or answered `deduplicated` — never twice.
+        // A reconnect replays an unanswered decision unchanged; the server dedupes by `actionId`.
         if (frame.type === 'welcome') {
           const replay = pendingRef.current;
           if (replay !== null) handle.action(replay);
           /**
-           * A Coach request does NOT survive its socket, so the memo of having asked is dropped.
-           *
-           * ## The defect this is the second half of
-           *
-           * A `coach` frame is asked for once and answered once, and the `requestId` is matched by
-           * the server against the connection the request arrived on. So a request that was
-           * outstanding when the socket went away is never answered — and `coachAskedRef` still
-           * held the key of that spot, so the effect below refused to ask again for it. Nothing
-           * else in this file asks either: `onStateFrame` only closes the request when the spot
-           * MOVES, and after a reconnect the spot is usually exactly where it was.
-           *
-           * Measured in Chrome 151 against a live table, by swallowing one inbound `coach` frame
-           * and then closing the socket from the page. The frame log, in order:
-           *
-           *     6683ms out      requestCoach
-           *     8035ms DROPPED  coach
-           *    12750ms close    4999
-           *    13314ms out      hello
-           *    13315ms in       welcome
-           *    13316ms in       state
-           *
-           * No second `requestCoach` was ever sent. The table came back live, it was still the
-           * reader's turn, and the Coach panel sat on "No analysis" for as long as the page was
-           * open — beside a fully drawn table, saying there was no table state to price.
-           *
-           * Read BEFORE the dispatch above commits: `coachRequestRef` is assigned during render,
-           * so it still holds the pre-`welcome` value here — the same arrangement `pendingRef`
-           * uses one line up. It is guarded rather than unconditional so that a reconnect with
-           * nothing outstanding does not re-ask for an analysis that is already on screen.
+           * A Coach request dies with its socket, since the server matches `requestId` per connection.
+           * Without dropping the memo, the panel sat on "No analysis" forever after a reconnect
+           * (measured in Chrome 151 by dropping one `coach` frame and closing the socket).
+           * `coachRequestRef` still holds the pre-`welcome` value here because refs are assigned in
+           * render. Guarded so a reconnect does not re-ask for an analysis already on screen.
            */
           if (coachRequestRef.current !== null) coachAskedRef.current = null;
         }
@@ -1747,13 +1145,8 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
   }, [roomId, url, socketFactory, scheduler]);
 
   /**
-   * The seat `sit()` will ask for: the one this reader already holds, or the first free one.
-   *
-   * `READER_SEAT` alone was right for exactly one table — the bot table this page creates, where
-   * `seatRequestedBots` fills from seat 1 upwards specifically to leave seat 0 free. It was wrong
-   * for every room reached by invite code, because seat 0 is where the room's owner is sitting, so
-   * the second person to arrive at a private table could only ever ask for a taken seat. Null means
-   * the table is full, and the control that offers it is hidden rather than offering a refusal.
+   * The seat already held, or the first free one. Seat 0 is the owner's at an invited table. Null
+   * means full, and the control is hidden.
    */
   const readerSeat = useMemo<number | null>(() => {
     if (table.room === null || table.userId === null) return READER_SEAT;
@@ -1776,12 +1169,8 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
   const dealInLive = phase === 'ready' && status === 'live';
   const { seat: dealInSeat, betweenHands, notice, revision, room: dealInRoom, userId: dealInUser } = table;
   /**
-   * Advances "Deal me in" one step per commit. See `DealIn` for why each step is sent at most once
-   * and why every way out lands on the manual buttons.
-   *
-   * The send's own outcome is read, not assumed: a seat request this page refused to put on the
-   * wire (`rate-limited`, `undeliverable`, no socket) is never going to be confirmed, and waiting for
-   * it would hide the manual buttons for good.
+   * One step per commit (see `DealIn`). The send's outcome is read, not assumed, because a send that
+   * did not go out will never be confirmed and would hide the manual buttons for good.
    */
   useEffect(() => {
     const { next, send } = dealInStep(dealIn, {
@@ -1807,27 +1196,20 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
     const view = viewRef.current;
     const handle = socketRef.current;
     if (view === null || handle === null) return;
-    // One id for this decision, minted once and kept. See the module comment: a retry that mints a
-    // new one is a second bet.
+    // One id per decision, minted once. A retry with a new id is a second bet.
     const pending: PendingDecision = {
       action,
       actionId: newRequestId('act'),
       expectedSequence: view.actionSequence,
       requestId: newRequestId('req'),
     };
-    // Sent BEFORE the state change, and the state change carries what happened to it.
-    //
-    // The order is the fix. This used to dispatch `submit` — whose one message said "Sent." — and
-    // then, if the send had failed, a separate `notice` saying it had not been sent and blaming the
-    // rate limiter. Two regions, two claims, and during a reconnect both were wrong: the socket was
-    // null rather than throttled, and the decision was replayed on the next `welcome` and applied.
-    // `sendRaw` cannot be asked afterwards which it was, so the answer travels with the event.
+    // Sent BEFORE the dispatch, which carries the outcome, because `sendRaw` cannot be asked later
+    // whether the socket was null or throttled.
     dispatch({ kind: 'submit', pending, delivery: handle.action(pending) });
   }, []);
 
   const view = table.view;
-  // The same predicate the reducer diffs on, so "the buttons are live" and "the reader was told it
-  // is their turn" can never disagree.
+  // The reducer's own predicate, so live buttons and the turn announcement never disagree.
   const isMyTurn = isViewersTurn(view, table.betweenHands);
   const key = decisionKey(view);
 
@@ -1836,39 +1218,19 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
     if (handle === null) return;
     const requestId = newRequestId('coach');
     const asked = decisionKey(viewRef.current);
-    // Sent BEFORE the state change, and the state change carries what happened to it — the same
-    // order, for the same reason, as `act` above. `requestCoach` used to be called last and its
-    // answer thrown away, so a request this page had REFUSED to send still opened a pending
-    // request in the reducer: the report on screen was cleared, the panel fell back to its empty
-    // state, and nothing on the page said why or that nothing was coming.
+    // Sent before the dispatch, as in `act`, so a refused request does not open a pending one.
     const delivery = handle.requestCoach(requestId);
     coachAskedRef.current = asked;
     if (delivery === 'rate-limited' || delivery === 'undeliverable') {
-      // No automatic retry, deliberately: nothing is holding the request, so a silent re-ask would
-      // spend another token against the same limit. The sentence and the "Refresh the analysis"
-      // control are the affordance, exactly as `not-sent` is for a decision.
+      // No automatic retry. Nothing holds the request, and a re-ask would spend another token.
       dispatch({ kind: 'coachFailed', reason: COACH_NOT_SENT[delivery] });
       return;
     }
-    // `disconnected` keeps the request open on purpose. It never went out either, but a reconnect
-    // IS coming, and the `welcome` handler above drops `coachAskedRef` so the effect asks again.
+    // `disconnected` stays open, since the `welcome` handler drops `coachAskedRef` and the effect asks again.
     dispatch({ kind: 'coachRequested', requestId, key: asked });
   }, []);
 
-  /**
-   * The analysis is asked for once per decision, when the decision becomes the reader's.
-   *
-   * Keyed on the spot rather than on a render, so a re-render does not spend another of the thirty
-   * Coach requests a minute the server allows. Asking before it is the reader's turn would price a
-   * decision nobody is being asked to make.
-   */
-  /**
-   * Why live Coach is off, and by what evidence — see `CoachOff`.
-   *
-   * The Legends branch is checked FIRST because it is the stronger claim: this page opened the
-   * match itself, so the difficulty is its own parameter rather than something read off a refusal.
-   * A refusal that arrives at such a table adds nothing the page did not already know.
-   */
+  /** Legends Expert is checked first, since this page chose that difficulty itself. See `CoachOff`. */
   const coachOff: CoachOff | null =
     options.legendMatch?.difficulty === 'expert'
       ? { kind: 'expertLegends' }
@@ -1878,16 +1240,9 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
   const coachDuringHand = coachOff === null && table.coachDuringHand;
 
   /**
-   * Whether an analysis is outstanding, as a dependency rather than a ref read.
-   *
-   * It is what re-runs this effect after a reconnect. `welcome` clears the request the dead socket
-   * was carrying, so this flips true → false in the same commit that drops `coachAskedRef` — and
-   * without it the effect would never run again, because `isMyTurn` and `key` are both unchanged
-   * by a reconnect that lands the reader back in the spot they were already in.
-   *
-   * It also stops two requests overlapping on the ordinary path: `coachRequested` sets it, so a
-   * re-render between the ask and the answer cannot spend a second one of the thirty Coach
-   * requests a minute the server allows.
+   * A dependency, not a ref read, so the effect re-runs after a reconnect clears the dead request
+   * while `isMyTurn` and `key` are unchanged. It also stops overlapping asks against the server's
+   * thirty Coach requests a minute. The effect asks once per decision, keyed on the spot.
    */
   const coachOutstanding = table.coachRequest !== null;
 
@@ -1906,28 +1261,14 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
   );
 
   /**
-   * A hand the reader was dealt into has settled, so the units the header shows may have moved.
-   *
-   * Once per hand, keyed on the frame that completes it, so a re-render of the same finished hand
-   * does not re-ask. See `notifySessionChanged` in `lib/api.ts` for why the header is told to ask
-   * rather than told a figure.
-   *
-   * ## Why not at once
-   *
-   * The units are the seat's stack as the DATABASE holds it, and the API writes it on its archive
-   * queue AFTER it has broadcast the frame that ends the hand (`RoomRegistry`'s `stacksSettled`).
-   * Asked at once, the session answers the stack from before the hand: measured on the live table,
-   * the pill trailed by exactly one hand on 4 of 4 hands (1,000 beside a stack of 1,162; then 1,162
-   * beside 1,260). Polled from the frame's arrival every 10ms, the new figure was there 12-34ms
-   * later on 8 of 8 hands. So the header is asked at `SETTLED_ASK_MS`, thirty times the slowest of
-   * those, and once more at `SETTLED_RETRY_MS` for an archive queue running behind; an answer that
-   * is still stale fails safe, as the stale figure the pill already showed.
+   * Once per settled hand the reader was dealt into, the header is told to re-read the session.
+   * The API writes stacks on its archive queue after broadcasting the final frame, measured 12-34ms
+   * later, so an immediate ask trailed by one hand. Hence `SETTLED_ASK_MS`, plus a retry for a slow
+   * queue. A still-stale answer just keeps the figure the pill already showed.
    */
   const settledHand =
     view !== null && view.street === 'complete' && view.viewerSeat !== null ? view.handId : null;
-  //
-  // The timers outlive the hand on purpose: a reader who presses Deal inside the second must not
-  // cancel the re-read of the hand that just paid them. Only leaving the page clears them.
+  // The timers outlive the hand, so pressing Deal does not cancel the re-read. Only unmount clears them.
   const settleTimers = useRef<number[]>([]);
   useEffect(() => {
     if (settledHand === null || typeof window === 'undefined') return;
