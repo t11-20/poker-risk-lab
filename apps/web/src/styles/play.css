@@ -201,9 +201,9 @@
   position: relative;
   display: grid;
   place-items: center;
-  min-height: calc(var(--prl-space-14) * 3);
-  aspect-ratio: 9 / 4;
-  max-height: 26rem;
+  /* A height that follows the width rather than an `aspect-ratio`: with a min-height, an aspect
+     ratio also sets a minimum WIDTH, and at 360px that pushed the page to 718px (test:layout). */
+  block-size: clamp(16rem, 42vw, 26rem);
   padding: var(--prl-space-11) var(--prl-space-9);
 }
 
