@@ -1,13 +1,6 @@
 /**
- * An intentionally naive reference evaluator, for cross-checking the fast one.
- *
- * This is written with a deliberately *different* algorithm: sort the ranks,
- * count runs with plain arrays, and compare with tuples of numbers. If both
- * implementations agree across every 5-card hand in the deck, an error would have
- * to exist in both, in the same place, in the same direction — which two
- * unrelated algorithms are very unlikely to do.
- *
- * Test-only. Not exported from the package.
+ * A naive reference evaluator with a different algorithm (sorted ranks, plain arrays, tuple
+ * comparison), so agreement over every 5-card hand means a bug would have to exist in both. Test-only.
  */
 
 import { type Card, rankIndexOf, suitIndexOf } from '../src/cards.ts';
@@ -19,7 +12,6 @@ export interface ReferenceHand {
   ranks: number[];
 }
 
-/** Every k-sized combination of `items`, as arrays. */
 export function combinations<T>(items: readonly T[], k: number): T[][] {
   const out: T[][] = [];
   const current: T[] = [];
@@ -48,7 +40,6 @@ export function referenceEvaluate5(cards: readonly Card[]): ReferenceHand {
   const suits = cards.map(suitIndexOf);
   const isFlush = suits.every((s) => s === suits[0]);
 
-  // Group ranks by multiplicity, then order by (count desc, rank desc).
   const counts = new Map<number, number>();
   for (const r of ranks) counts.set(r, (counts.get(r) ?? 0) + 1);
   const groups = [...counts.entries()]
@@ -57,7 +48,6 @@ export function referenceEvaluate5(cards: readonly Card[]): ReferenceHand {
   const shape = groups.map((g) => g.count).join('');
   const byShape = groups.map((g) => g.rank);
 
-  // Straight detection on the distinct sorted ranks.
   const distinct = [...new Set(ranks)].sort((a, b) => b - a);
   let straightTop = -1;
   if (distinct.length === 5) {

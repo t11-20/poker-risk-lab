@@ -1,18 +1,7 @@
 /**
- * Randomised whole-hand invariant testing.
- *
- * Plays thousands of complete hands with random stacks, seat counts, button
- * positions, blind structures and action choices, asserting after every single
- * action that the state is internally consistent.
- *
- * The value of this is finding the states nobody thinks to write a test for:
- * a short all-in from the small blind that leaves one player able to act, a
- * three-way all-in where two players are covered by the same amount, a hand where
- * everyone is all-in before the flop. Those paths are where engines break, and
- * they are tedious to enumerate by hand.
- *
- * Every invariant below is a property that must hold for *any* legal sequence of
- * actions, not for one particular scripted hand.
+ * Randomised whole-hand invariants. Thousands of hands with random stacks, seats, buttons, blinds
+ * and actions, asserting consistency after every action. It reaches the shapes nobody scripts, such
+ * as a short all-in from the small blind or a three-way all-in before the flop.
  */
 
 import assert from 'node:assert/strict';
@@ -24,11 +13,9 @@ import { assertPotsBalance, buildPotLayers, contestablePotFor } from '../src/pot
 import { createDeterministicRandomForTests } from '../src/rng.ts';
 import type { Action, HandState, SeatIndex } from '../src/types.ts';
 
-/** Everything that must be true of a hand state at all times. */
 function assertInvariants(state: HandState, chipsAtStart: number, context: string): void {
   const where = `${context} [street=${state.street} seq=${state.actionSequence}]`;
 
-  // --- chip conservation ---
   const inStacks = state.seats.reduce((sum, seat) => sum + seat.stack, 0);
   const committed = state.seats.reduce((sum, seat) => sum + seat.committedTotal, 0);
   if (state.street === 'complete') {
@@ -37,7 +24,6 @@ function assertInvariants(state: HandState, chipsAtStart: number, context: strin
     assert.equal(inStacks + committed, chipsAtStart, `${where}: chips created or destroyed`);
   }
 
-  // --- per-seat sanity ---
   for (const seat of state.seats) {
     assert.ok(seat.stack >= 0, `${where}: seat ${seat.seat} has a negative stack`);
     assert.ok(Number.isInteger(seat.stack), `${where}: seat ${seat.seat} stack is not an integer`);
@@ -46,15 +32,11 @@ function assertInvariants(state: HandState, chipsAtStart: number, context: strin
       seat.committedThisStreet <= seat.committedTotal,
       `${where}: seat ${seat.seat} street commitment exceeds its total`,
     );
-    // Only while the hand is live. Seat statuses describe the hand *as played* and
-    // are deliberately not reset at settlement, because hand review needs to show
-    // who folded and who was all-in — so a winner who was all-in ends the hand
-    // with status 'allIn' and a stack full of the pot it just won.
+    // Statuses are not reset at settlement, because hand review shows who folded and who was all-in.
     if (seat.status === 'allIn' && state.street !== 'complete') {
       assert.equal(seat.stack, 0, `${where}: an all-in seat must have no chips behind`);
     }
     if (seat.status === 'active' && state.street !== 'complete') {
-      // An active seat with no chips should have been marked all-in.
       assert.ok(seat.stack > 0, `${where}: seat ${seat.seat} is active with an empty stack`);
     }
     if (seat.status !== 'sittingOut' && state.street !== 'complete') {
@@ -62,20 +44,8 @@ function assertInvariants(state: HandState, chipsAtStart: number, context: strin
     }
   }
 
-  // --- bet level consistency ---
-  //
-  // This assertion used to read `betLevel === highestCommitment`, which encoded the
-  // short-blind defect rather than the rule. The bet level is the largest FULL wager
-  // in force, and preflop that starts at the big blind whether or not the player who
-  // posted it could cover it: a big blind who is all-in for less than a big blind
-  // does not lower the price of playing for everyone else. So with 5/10 blinds and a
-  // big blind all-in for 3, the largest commitment on the table is 5 (the small
-  // blind) while the bet level is — correctly — 10. The old equality was only ever
-  // true because `startHand` derived the level from the commitments, and it made the
-  // engine under-charge callers and accept sub-minimum raises.
-  //
-  // What is true in general is that the level is never below what somebody has
-  // already put in, and never above the opening level for the street.
+  // The bet level is never below any commitment and never above the street's opening level. It is
+  // not the largest commitment (a short big blind does not lower it), see short-blinds.test.ts.
   const highestCommitment = state.seats.reduce((high, seat) => Math.max(high, seat.committedThisStreet), 0);
   const openingLevel = state.street === 'preflop' ? state.config.bigBlind : 0;
   assert.equal(
@@ -84,19 +54,16 @@ function assertInvariants(state: HandState, chipsAtStart: number, context: strin
     `${where}: betLevel disagrees with the opening level and the seat commitments`,
   );
 
-  // --- board size matches street ---
   const expectedBoard = { preflop: 0, flop: 3, turn: 4, river: 5, showdown: 5, complete: state.board.length };
   if (state.street !== 'complete') {
     assert.equal(state.board.length, expectedBoard[state.street], `${where}: wrong board size`);
   }
   assert.equal(new Set(state.board).size, state.board.length, `${where}: duplicate board card`);
 
-  // --- no card is dealt twice ---
   const dealt = [...state.board];
   for (const seat of state.seats) if (seat.holeCards !== null) dealt.push(...seat.holeCards);
   assert.equal(new Set(dealt).size, dealt.length, `${where}: a card was dealt to two places`);
 
-  // --- whose turn it is ---
   if (state.street === 'complete' || state.street === 'showdown') {
     assert.equal(state.toAct, null, `${where}: someone is to act in a terminal phase`);
   } else {
@@ -108,7 +75,6 @@ function assertInvariants(state: HandState, chipsAtStart: number, context: strin
     }
   }
 
-  // --- pots always balance ---
   assertPotsBalance(state.seats, buildPotLayers(state.seats));
   assert.equal(
     totalPot(state),
@@ -116,7 +82,6 @@ function assertInvariants(state: HandState, chipsAtStart: number, context: strin
     `${where}: totalPot disagrees with its parts`,
   );
 
-  // --- completion ---
   if (state.street === 'complete') {
     const result = state.result;
     assert.ok(result !== null, `${where}: a complete hand must have a result`);
@@ -127,18 +92,15 @@ function assertInvariants(state: HandState, chipsAtStart: number, context: strin
       seatsInHand(state).length >= 1,
       `${where}: a complete hand must have at least one player holding cards`,
     );
-    // Every reveal a hand publishes must actually verify.
     const verification = verifyDeckReveal(result.reveal);
     assert.equal(
       verification.ok,
       true,
       `${where}: the hand's own reveal failed to verify: ${verification.reason}`,
     );
-    // A fold-out hand must reveal no hole cards.
     if (result.endedByFold) {
       assert.equal(result.showdowns.length, 0, `${where}: a fold-out hand must not show hands`);
     }
-    // Nobody may finish with a negative net beyond what they put in.
     for (const seat of state.seats) {
       const net = result.netBySeat[seat.seat] ?? 0;
       assert.ok(net >= -seat.committedTotal, `${where}: seat ${seat.seat} lost more than it committed`);
@@ -147,25 +109,10 @@ function assertInvariants(state: HandState, chipsAtStart: number, context: strin
 }
 
 /**
- * Checks the pot a seat about to act could actually win, and reports whether the engine capped
- * its call.
- *
- * ## Why this is here rather than in a unit test
- *
- * `contestablePotFor` exists because the Coach priced a call that was capped at hero's stack
- * against the WHOLE middle — the excess of the bet above that stack is a side pot hero is not in.
- * Measured heads-up at 5/10 with hero holding 40 against a 310 shove, the Coach quoted "10.7 to 1,
- * you need 8.6%" where the answer is 1.67 to 1 and 37.5%, and headlined a losing call at +82.8
- * chips. A hand-written example proves one spot; this proves the rule over every shape the fuzz
- * reaches, which is where the multiway two-side-pot cases live.
- *
- * ## The oracle is a different derivation, deliberately
- *
- * `contestablePotFor` layers THIS STREET's commitments and adds the carried-in pot back whole,
- * because that is all a hand review or a scenario can supply. The oracle below sums
- * `min(committedTotal, hero's cap)` over whole-hand totals. They agree only if a seat still to
- * act has matched the closing level of every completed street — which is the argument that
- * function's doc rests on, and this is what tests it rather than trusting it.
+ * Checks the pot a seat about to act could win, over every shape the fuzz reaches (including
+ * multiway two-side-pot cases). The oracle sums `min(committedTotal, hero's cap)` over whole-hand
+ * totals, a different derivation from `contestablePotFor`'s street-only layering. They agree only if
+ * a seat to act has matched every completed street, which is what this tests.
  *
  * @returns 1 when the engine capped this seat's call, 0 otherwise
  */
@@ -195,9 +142,7 @@ function assertContestablePot(state: HandState, seat: SeatIndex, where: string):
 
   const capped = call > 0 && state.betLevel - actor.committedThisStreet > actor.stack;
   if (!capped) {
-    // The negative control, asserted rather than assumed: a seat that can cover the bet leaves
-    // nothing above its reach, so the contestable pot is the whole middle and the Coach's figures
-    // for every ordinary spot are unmoved by this fix.
+    // Negative control. A seat that covers the bet has nothing above its reach.
     assert.equal(
       share.contestable,
       pot,
@@ -208,7 +153,6 @@ function assertContestablePot(state: HandState, seat: SeatIndex, where: string):
   return capped ? 1 : 0;
 }
 
-/** Picks a legal action, weighted so that aggression and all-ins actually occur. */
 function chooseAction(state: HandState, nextInt: (bound: number) => number): Action {
   const seat = state.toAct;
   if (seat === null) throw new Error('no one to act');
@@ -218,7 +162,6 @@ function chooseAction(state: HandState, nextInt: (bound: number) => number): Act
   const roll = nextInt(100);
   const aggressive = legal.find((entry) => entry.type === 'bet' || entry.type === 'raise');
 
-  // 25% aggression when available, and when aggressive, sometimes shove.
   if (aggressive !== undefined && roll < 25) {
     const minTo = aggressive.minTo ?? 0;
     const maxTo = aggressive.maxTo ?? minTo;
@@ -227,7 +170,6 @@ function chooseAction(state: HandState, nextInt: (bound: number) => number): Act
     return aggressive.type === 'bet' ? { type: 'bet', to: clamped } : { type: 'raise', to: clamped };
   }
   if (legal.some((entry) => entry.type === 'check')) return { type: 'check' };
-  // Fold sometimes rather than always calling, so fold-out paths get exercised.
   if (roll < 45 && legal.some((entry) => entry.type === 'fold')) return { type: 'fold' };
   if (legal.some((entry) => entry.type === 'call')) return { type: 'call' };
   return { type: 'fold' };
@@ -255,8 +197,7 @@ test('FUZZ: 4000 random hands satisfy every invariant after every action', () =>
     const smallBlind = Math.max(1, Math.floor(bigBlind / 2));
     const ante = nextInt(4) === 0 ? Math.max(1, Math.floor(bigBlind / 4)) : 0;
     const stacks = Array.from({ length: playerCount }, () => {
-      // Deliberately include stacks far smaller than the blinds, so short
-      // all-in-from-the-blind paths are exercised rather than avoided.
+      // Include stacks far below the blinds, so short all-ins from the blinds occur.
       const scale = nextInt(4);
       if (scale === 0) return 1 + nextInt(bigBlind);
       if (scale === 1) return bigBlind + nextInt(bigBlind * 5);
@@ -278,8 +219,7 @@ test('FUZZ: 4000 random hands satisfy every invariant after every action', () =>
         random,
       });
     } catch (error) {
-      // startHand legitimately refuses some shapes (fewer than two players with
-      // chips). Those are rejections, not failures.
+      // `startHand` refuses some shapes (fewer than two players with chips).
       const message = error instanceof Error ? error.message : String(error);
       assert.match(
         message,
@@ -315,9 +255,7 @@ test('FUZZ: 4000 random hands satisfy every invariant after every action', () =>
         });
         if (share.uncontestable > 0) {
           cappedWithASidePot += 1;
-          // How much the whole middle understated the equity a call needs, which is the figure the
-          // learner was misled by. Reported so the fuzz says what it found rather than only that it
-          // found something.
+          // How much the whole middle understated the equity a call needs.
           const honest = call / (share.contestable + call);
           const misleading = call / (pot + call);
           worstUnderstatement = Math.max(worstUnderstatement, honest / misleading);
@@ -338,14 +276,12 @@ test('FUZZ: 4000 random hands satisfy every invariant after every action', () =>
     if (result.pots.length > 1) sawSidePots += 1;
   }
 
-  // Coverage assertions: a fuzz run that never reaches the interesting states is
-  // not testing anything, so fail if the generator degenerated.
+  // A fuzz that never reaches the interesting states tests nothing.
   assert.equal(handsPlayed > HANDS * 0.9, true, `only ${handsPlayed} of ${HANDS} hands were playable`);
   assert.ok(reachedShowdown > 200, `only ${reachedShowdown} hands reached showdown`);
   assert.ok(endedByFold > 200, `only ${endedByFold} hands ended by folding`);
   assert.ok(sawSidePots > 100, `only ${sawSidePots} hands produced side pots`);
-  // A sweep of nothing is not a pass: if the generator stops producing short stacks, every
-  // assertion above about the capped case becomes a green check over zero cases.
+  // Without short stacks the capped-case assertions would pass over zero cases.
   assert.ok(cappedCalls > 200, `only ${cappedCalls} decision points had a call capped at the stack`);
   assert.ok(
     cappedWithASidePot > 100,
@@ -363,8 +299,6 @@ test('FUZZ: 4000 random hands satisfy every invariant after every action', () =>
 });
 
 test('FUZZ: replaying the same seed reproduces the hand exactly', () => {
-  // Determinism is what makes hand review and bug reports possible: the same seed
-  // and the same actions must give the same result, every time.
   const runOnce = (): HandState => {
     const random = createDeterministicRandomForTests(9999);
     let state = startHand({
@@ -396,8 +330,7 @@ test('FUZZ: replaying the same seed reproduces the hand exactly', () => {
 });
 
 test('FUZZ: an illegal action is always rejected, never silently applied', () => {
-  // Every rejected action must leave the state completely untouched, or a client
-  // could nudge the hand forward with a malformed request.
+  // A rejected action must leave the state untouched, or a malformed request could move the hand.
   const random = createDeterministicRandomForTests(7);
   const state = startHand({
     handId: 'reject',

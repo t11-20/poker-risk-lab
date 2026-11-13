@@ -1,19 +1,8 @@
 /**
- * Randomness and shuffling.
- *
- * Two rules hold everywhere in this package:
- *
- *   1. Cards are only ever dealt from a CSPRNG. `Math.random` is not used, and
- *      `test/rng.test.ts` asserts the call does not appear in `src/`.
- *   2. Index selection is unbiased. Taking `x % n` of a uniform 32-bit draw is
- *      *not* uniform unless n divides 2^32 — for a 52-card deck the low indices
- *      would be very slightly favoured. Rejection sampling removes the bias
- *      exactly rather than approximately.
- *
- * The deck commitment itself lives in commitment.ts.
- *
- * The deterministic generator at the bottom exists for tests and for reproducible
- * teaching scenarios. It refuses to run in production and no dealing path reaches it.
+ * Randomness and shuffling. Cards are dealt only from a CSPRNG, and `test/rng.test.ts` asserts
+ * `Math.random` does not appear in `src/`. Index selection uses rejection sampling, because
+ * `x % n` of a 32-bit draw favours low indices unless n divides 2^32. The deck commitment lives in
+ * commitment.ts. The deterministic generators below never deal.
  */
 
 import { randomFillSync } from 'node:crypto';
@@ -27,23 +16,14 @@ export class RandomnessError extends Error {
 export interface RandomSource {
   /** A uniformly distributed integer in [0, boundExclusive). */
   nextInt(boundExclusive: number): number;
-  /** `count` random bytes. */
   bytes(count: number): Uint8Array;
-  /**
-   * Describes the source, recorded in each hand's audit trail.
-   *
-   * `deterministic-sampling` is the one value that may NOT deal: `shuffledDeck` refuses it.
-   * See `createSamplingRandom` for why a third value exists at all.
-   */
+  /** Recorded in each hand's audit trail. `shuffledDeck` refuses `deterministic-sampling`. */
   readonly kind: 'csprng' | 'deterministic-test-only' | 'deterministic-sampling';
 }
 
 const POOL_WORDS = 256;
 
-/**
- * The production random source: Node's CSPRNG, buffered so that dealing a hand
- * costs one syscall rather than fifty-two.
- */
+/** The production source: Node's CSPRNG, buffered so a hand costs one syscall rather than 52. */
 export function createSecureRandom(): RandomSource {
   const pool = new Uint32Array(POOL_WORDS);
   let cursor = POOL_WORDS;
@@ -74,12 +54,8 @@ export function createSecureRandom(): RandomSource {
 }
 
 /**
- * Rejection sampling: discard draws that fall in the final, short "wrap" region of
- * the 32-bit range, so every residue class is equally likely.
- *
- * With bound 52 the rejection probability is (2^32 mod 52) / 2^32 ≈ 1.1e-8, so the
- * loop effectively never iterates — but the guarantee is exact rather than
- * approximate, which is the entire point of doing it this way.
+ * Rejection sampling over the 32-bit range, so every residue is equally likely. For bound 52 the
+ * rejection chance is about 1.1e-8, but the guarantee is exact.
  */
 export function unbiasedInt(nextUint32: () => number, boundExclusive: number): number {
   if (!Number.isInteger(boundExclusive) || boundExclusive <= 0) {
@@ -92,17 +68,13 @@ export function unbiasedInt(nextUint32: () => number, boundExclusive: number): n
     const draw = nextUint32();
     if (draw < limit) return draw % boundExclusive;
   }
-  // Reaching here means the generator is broken (e.g. stuck in the rejection
-  // region). Failing loudly beats dealing a biased deck.
+  // A generator stuck in the rejection region is broken. Failing beats dealing a biased deck.
   throw new RandomnessError('rejection sampling failed 1000 times — the random source is not uniform');
 }
 
 /**
- * Fisher–Yates, descending.
- *
- * Each iteration picks uniformly from the *unshuffled* prefix `[0, i]` inclusive,
- * which is what makes every one of the n! orderings equally likely. Picking from
- * `[0, n)` instead — the classic bug — does not, and biases the result measurably.
+ * Fisher-Yates, descending. Each step picks from the unshuffled prefix `[0, i]`. Picking from
+ * `[0, n)` is the classic bug and biases the result.
  */
 export function shuffleInPlace<T>(items: T[], random: RandomSource): void {
   for (let i = items.length - 1; i > 0; i--) {
@@ -116,13 +88,8 @@ export function shuffleInPlace<T>(items: T[], random: RandomSource): void {
 }
 
 /**
- * A freshly shuffled 52-card deck.
- *
- * This is the single place a deck order comes into existence, which is why the refusal below
- * is here and not spread across the callers. A `deterministic-sampling` source exists so that
- * Monte Carlo estimation can be reproducible (see `createSamplingRandom`); a deck ordered from
- * one would be a hand whose cards a client could predict from a seed it can guess. The two uses
- * are separated by type, so the mistake is not available rather than merely discouraged.
+ * A freshly shuffled 52-card deck, the one place a deck order is created. A `deterministic-sampling`
+ * deck would be predictable from a guessable seed, so it is refused here.
  */
 export function shuffledDeck(random: RandomSource): Card[] {
   if (random.kind === 'deterministic-sampling') {
@@ -143,13 +110,8 @@ export function commitToDeck(context: string, random: RandomSource): CommittedDe
 }
 
 /**
- * Commits to a deck that is already fixed, rather than shuffling one.
- *
- * Used by the Scenario Lab, where a teaching hand must deal identical cards to
- * every learner. The commitment is produced by the same code as a shuffled hand,
- * so the verification a player runs is identical — there is no second, weaker path
- * for scenario hands. The hand is separately labelled `fixed-deck-scenario` so it
- * cannot be mistaken for a fairly dealt one.
+ * Commits to a fixed deck, for Scenario Lab hands that deal the same cards to every learner. Same
+ * commitment code as a shuffled hand. The hand is labelled `fixed-deck-scenario`.
  */
 export function commitToKnownDeck(
   context: string,
@@ -166,13 +128,9 @@ export function commitToKnownDeck(
 }
 
 /**
- * A deterministic generator, for tests and for Scenario Lab hands that must
- * reproduce identically for every learner.
- *
- * NOT for dealing a real hand. It throws if `NODE_ENV === 'production'`, and
- * `apps/api/test/server-randomness.test.ts` asserts that no server source file
- * imports it. Its `kind` is recorded in the hand's audit record, so a hand dealt
- * this way is permanently and visibly labelled.
+ * A deterministic generator for tests and reproducible scenarios. Never deals a real hand. It throws
+ * when `NODE_ENV === 'production'`, and `apps/api/test/server-randomness.test.ts` asserts no server
+ * source imports it.
  */
 export function createDeterministicRandomForTests(seed: number): RandomSource {
   if (process.env['NODE_ENV'] === 'production') {
@@ -182,55 +140,19 @@ export function createDeterministicRandomForTests(seed: number): RandomSource {
 }
 
 /**
- * A deterministic generator for STATISTICAL SAMPLING. Legal in production; may never deal.
+ * A deterministic generator for Monte Carlo sampling. Legal in production, never deals.
  *
- * ## The incident this exists to close
- *
- * `monteCarloEquity` used `createDeterministicRandomForTests`. That function throws when
- * `NODE_ENV === 'production'`, so every sampled equity estimate failed on a production server —
- * which meant the Coach could not answer and, worse, a bot whose policy needed a sampled
- * estimate never produced an action, so the hand never completed and the table simply stopped.
- * It was invisible for three reasons worth naming, because each one is a lesson:
- *
- *   - every test suite runs with `NODE_ENV` set to `test` or `development`;
- *   - the *exact* enumeration path is unaffected, so the smoke test's equity check passed
- *     while a real hand did not;
- *   - the source scan that forbids the test-only generator (`server-randomness.test.ts`)
- *     scanned `apps/api/src` only, and the call was in `packages/poker-math`.
- *
- * It was found by playing a hand in a production-configured staging stack, which is the only
- * thing that could have found it.
- *
- * ## Why sampling deserves a deterministic source at all
- *
- * Monte Carlo equity is documented as reproducible for a given seed, and that property is
- * load-bearing rather than cosmetic: the worker pool shards one estimate across threads by
- * seed and combines the results, and a learner who re-opens the same analysis must not be
- * shown a different number. Sampling is estimation over a known distribution — it decides
- * nothing about what cards exist — so a predictable stream is not a weakness there.
- *
- * ## Why it is a separate function rather than a flag
- *
- * The two uses have opposite safety requirements, and a boolean parameter would put them one
- * typo apart. Instead they differ by *type*: this source reports `kind: 'deterministic-sampling'`
- * and `shuffledDeck` refuses that kind outright, so a deck can never be ordered from it. The
- * mistake is unavailable rather than discouraged, and `kind` is recorded in the hand's audit
- * trail, so a hand could not be silently mislabelled either.
- *
- * The algorithm is identical to the test-only generator's — same SplitMix32, same stream for a
- * given seed — so no existing expected value changes.
+ * `monteCarloEquity` once used the test-only generator, which throws in production, so sampled
+ * equity failed and bot hands stalled. Tests never run with `NODE_ENV=production`, which hid it.
+ * Sampling needs a seeded stream because the worker pool shards one estimate by seed and a reopened
+ * analysis must show the same number. It is a separate `kind` rather than a flag, so `shuffledDeck`
+ * can refuse it by type. Same SplitMix32 stream as the test-only generator.
  */
 export function createSamplingRandom(seed: number): RandomSource {
   return splitMix32(seed, 'deterministic-sampling');
 }
 
-/**
- * SplitMix32, shared by the two deterministic sources above.
- *
- * Small, well-distributed, counter-based. Not secure, and not claimed to be. Factored out so
- * that the two callers cannot drift into producing different streams for the same seed — which
- * would be a silent change to every recorded equity figure.
- */
+/** SplitMix32, shared so the two deterministic sources cannot drift apart. Not secure. */
 function splitMix32(seed: number, kind: RandomSource['kind']): RandomSource {
   if (!Number.isInteger(seed)) throw new RandomnessError('seed must be an integer');
   let state = seed >>> 0;

@@ -1,28 +1,8 @@
 /**
- * Entitlement belongs to a person, never to a chair.
- *
- * ## The bug this file exists because of
- *
- * `redactFor` used to decide "is this seat the recipient's" by comparing seat *indices*. That is
- * correct for exactly as long as a `HandState` and the seating that produced it agree about who
- * sits where — and a server keeps a finished hand alive after the hand is over, precisely when
- * they stop agreeing. A player stood up, somebody else took the chair, and the new occupant was
- * handed the previous occupant's unshown hole cards with `isSelf: true`.
- *
- * `HandState.seats[].playerId` is the fix: `startHand` writes it once and `applyAction` never
- * touches it, so it is the roster **as at the moment of the deal**, frozen inside the state that
- * carries the cards. Nothing that happens to the table afterwards can move it.
- *
- * ## What is asserted here, and why in this shape
- *
- * These tests deliberately give the seats player ids that do NOT match their indices
- * (`seat 0 -> usr_c`, `seat 1 -> usr_a`, ...). A test whose ids are `p0, p1, p2` cannot tell an
- * identity check from a position check, because in that state the two agree — which is exactly why
- * the original bug survived a suite that already scanned every view for leaked cards.
- *
- * The assertions are properties, not implementation: `isSelf` holds for a seat iff that seat's
- * `playerId` IS the recipient, and hole cards are visible iff `isSelf` or that seat showed down.
- * Any rewrite that keys off a seat index fails them the moment index and identity diverge.
+ * Entitlement belongs to a person, never a chair. `redactFor` once compared seat indices, so after
+ * a player stood up the next occupant of the chair saw their unshown cards with `isSelf: true`.
+ * Player ids here deliberately differ from seat indices (`seat 0 -> usr_c`), because with ids like
+ * `p0, p1` an identity check and a position check agree, which is how the bug survived.
  */
 
 import assert from 'node:assert/strict';
@@ -42,13 +22,7 @@ const CONFIG: TableConfig = {
   actionTimeoutSeconds: 30,
 };
 
-/**
- * Deals a hand in which seat index and player id are deliberately unrelated.
- *
- * `ids[i]` is the player in seat `i`, so a caller can permute the people around the table without
- * moving a single card: the same `fixedDeck` deals the same cards to the same *seats*, and the
- * question every test here asks is which *person* is then allowed to see them.
- */
+/** Deals a hand where seat index and player id are unrelated. `ids[i]` is the player in seat `i`. */
 function dealWithIdentities(ids: readonly string[], fixedDeck?: readonly number[]): HandState {
   const seats: SeatSetup[] = ids.map((playerId, seat) => ({ seat, playerId, stack: 1_000 }));
   return startHand({
@@ -98,10 +72,8 @@ function cardsIn(view: PlayerView): Set<Card> {
 }
 
 /**
- * The property, asserted directly: who you are decides what you see.
- *
- * Applied to every recipient a state has, plus a stranger and a spectator, so the check covers the
- * "not in this hand at all" case that a seat index cannot even express.
+ * Who you are decides what you see. Checked for every recipient, plus a stranger and a spectator,
+ * which covers the "not in this hand" case a seat index cannot express.
  */
 function assertEntitlementFollowsIdentity(state: HandState, viewerPlayerId: string | null): void {
   const view = redactFor(state, { viewerPlayerId });
@@ -131,7 +103,7 @@ function assertEntitlementFollowsIdentity(state: HandState, viewerPlayerId: stri
     );
   }
 
-  // And against ground truth read from the state, so a leak cannot widen its own expectation.
+  // Also against ground truth from the state, so a leak cannot widen its own expectation.
   const hidden = new Set(cardsHiddenFrom(state, { viewerPlayerId }));
   const leaked = [...cardsIn(view)].filter((card) => hidden.has(card)).map(cardToString);
   assert.deepEqual(leaked, [], `${String(viewerPlayerId)} received sealed cards: ${leaked.join(', ')}`);
@@ -155,13 +127,11 @@ test('a view is built for the person named, whatever chair that person is in', (
 });
 
 test('the same deal with the players moved round gives each person the SAME two cards', () => {
-  // One deck, two seatings. The cards belong to the seats; the entitlement belongs to the people.
   const deck = stackedDeck({ 1: 'AhAd', 2: 'KhKd', 0: '7c8d' }, [1, 2, 0], 'Qh 5s 2c');
 
   const first = dealWithIdentities(['usr_a', 'usr_b', 'usr_c'], deck);
   const second = dealWithIdentities(['usr_c', 'usr_a', 'usr_b'], deck);
 
-  // usr_a is in seat 0 of the first deal and seat 1 of the second. Its own cards must follow it.
   const inFirst = redactFor(first, { viewerPlayerId: 'usr_a' });
   const inSecond = redactFor(second, { viewerPlayerId: 'usr_a' });
   assert.equal(inFirst.viewerSeat, 0);
@@ -174,9 +144,7 @@ test('the same deal with the players moved round gives each person the SAME two 
     assert.equal(seat.playerId, 'usr_a', 'isSelf must be the recipient, not a chair');
     return seat.holeCards;
   };
-  // Seat 0 holds 7c8d in both deals; seat 1 holds AhAd in both. usr_a moved, so its cards changed —
-  // which is the point: the view followed the SEAT usr_a actually occupies in each state, and was
-  // not derived from a remembered index of 0.
+  // usr_a moved seats, so its cards changed. The view followed the seat it occupies in each state.
   assert.deepEqual(ownOf(inFirst).map(cardToString).sort(), ['7c', '8d']);
   assert.deepEqual(ownOf(inSecond).map(cardToString).sort(), ['Ad', 'Ah']);
 });
@@ -184,8 +152,7 @@ test('the same deal with the players moved round gives each person the SAME two 
 test('a player who is not in the hand gets the spectator view, not the chair’s cards', () => {
   const state = dealWithIdentities(['usr_c', 'usr_a', 'usr_b']);
 
-  // usr_newcomer holds no seat in this hand. Under a positional check they would have had to be
-  // translated into an index first, and any index at all would have handed them somebody's cards.
+  // usr_newcomer holds no seat. A positional check would map them to some index and leak its cards.
   const view = redactFor(state, { viewerPlayerId: 'usr_newcomer' });
   assert.equal(view.viewerSeat, null, 'a stranger is a spectator');
   assert.deepEqual(
@@ -200,8 +167,7 @@ test('a player who is not in the hand gets the spectator view, not the chair’s
 });
 
 test('a completed fold-out kept in memory shows the newcomer nothing at all', () => {
-  // The reported defect, at the layer it was fixed in: the hand is over, the cards were never
-  // shown, and the state is still around. Whoever asks next is somebody the hand never heard of.
+  // The reported defect. The hand is over, the cards were never shown, and a stranger asks.
   const finished = foldToCompletion(dealWithIdentities(['usr_c', 'usr_a', 'usr_b']));
   assert.equal(finished.result?.showdowns.length, 0, 'a fold-out shows nobody');
 
@@ -217,7 +183,6 @@ test('a completed fold-out kept in memory shows the newcomer nothing at all', ()
   const leaked = dealt.filter((card) => seen.has(card)).map(cardToString);
   assert.deepEqual(leaked, [], `the newcomer received ${leaked.join(', ')} from a hand they never played`);
 
-  // Meanwhile the people who WERE in it keep their own cards, before and after the hand ended.
   for (const player of ['usr_a', 'usr_b', 'usr_c']) {
     const own = redactFor(finished, { viewerPlayerId: player }).seats.find((seat) => seat.isSelf);
     assert.equal(own?.playerId, player);
@@ -247,10 +212,7 @@ test('entitlement is playerId equality, at every point of a hand and for every r
 });
 
 test('an ambiguous recipient fails closed rather than picking a seat', () => {
-  // One id in two chairs cannot happen through `LiveTable.sit`, which refuses a second seat to a
-  // user who already holds one. It is asserted anyway because "cannot happen" is not a guarantee,
-  // and the safe answer to an ambiguous question is the spectator view — never a guess at which of
-  // the two hands the asker meant.
+  // `LiveTable.sit` refuses a second seat to one user. The ambiguous case still gets the spectator view.
   const state = dealWithIdentities(['usr_twin', 'usr_twin', 'usr_b']);
   const view = redactFor(state, { viewerPlayerId: 'usr_twin' });
   assert.equal(view.viewerSeat, null, 'an ambiguous identity resolves to nobody');
@@ -269,9 +231,7 @@ test('an ambiguous recipient fails closed rather than picking a seat', () => {
 test('the positional form resolves through the state, so an unknown index is a spectator', () => {
   const state = dealWithIdentities(['usr_c', 'usr_a', 'usr_b']);
 
-  // The seat form is only ever valid for an index read out of this same state. Handed one that is
-  // not in it — the shape a remembered or externally-supplied index has — it must not invent a
-  // recipient, and `viewerSeat` must report what the view was actually built for.
+  // A seat index not in this state must not invent a recipient.
   const stray: SeatIndex = 5;
   const view = redactFor(state, { viewerSeat: stray });
   assert.equal(view.viewerSeat, null, 'an index this hand does not have belongs to nobody');
@@ -280,8 +240,6 @@ test('the positional form resolves through the state, so an unknown index is a s
     assert.equal(seat.holeCards, null);
   }
 
-  // And for an index that IS in the state, the two forms agree exactly — which is what makes the
-  // positional form safe for the engine's own callers, who are iterating this state's own seats.
   for (const seat of state.seats) {
     assert.equal(
       JSON.stringify(redactFor(state, { viewerSeat: seat.seat })),

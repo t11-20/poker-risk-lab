@@ -1,15 +1,6 @@
 /**
- * The shape of a hand of No-Limit Hold'em.
- *
- * Everything here is data. The engine is a pure function of (state, action) →
- * (state, events); it never reads a clock, never reads the network, and never
- * mutates its input. That is what makes it testable to the degree this project
- * needs, and what lets the server treat it as the single authority on what is
- * legal.
- *
- * Chips are integers throughout. "Units" is the user-facing word — they are free,
- * resettable and valueless, and nothing in this codebase converts them to or from
- * money.
+ * The shape of a hand of No-Limit Hold'em. The engine is a pure function of (state, action) to
+ * (state, events). Chips are integers. The user-facing word is "units", and they are valueless.
  */
 
 import type { Card } from './cards.ts';
@@ -18,7 +9,6 @@ import type { HandScore } from './evaluate.ts';
 
 export type SeatIndex = number;
 
-/** Betting rounds, plus the two terminal phases. */
 export type Street = 'preflop' | 'flop' | 'turn' | 'river' | 'showdown' | 'complete';
 
 export const BETTING_STREETS = ['preflop', 'flop', 'turn', 'river'] as const;
@@ -27,11 +17,9 @@ export type BettingStreet = (typeof BETTING_STREETS)[number];
 export type SeatStatus =
   /** Holds cards and has chips behind; may still act. */
   | 'active'
-  /** Has folded this hand. */
   | 'folded'
   /** Holds cards but has no chips behind; cannot act, can still win. */
   | 'allIn'
-  /** Not dealt into this hand. */
   | 'sittingOut';
 
 export interface TableConfig {
@@ -41,11 +29,7 @@ export interface TableConfig {
   readonly ante: number;
   /** 2..6. Heads-up (2) uses the reversed blind and action order. */
   readonly maxSeats: number;
-  /**
-   * Seconds a player has to act before the server takes the default action
-   * (check if legal, otherwise fold). Enforced by the server, recorded here so
-   * the engine's legal-action output can carry it to the client.
-   */
+  /** Seconds to act before the server checks or folds. The server enforces it. */
   readonly actionTimeoutSeconds: number;
 }
 
@@ -54,7 +38,6 @@ export interface SeatState {
   readonly playerId: string;
   /** Chips behind, i.e. not yet committed. */
   readonly stack: number;
-  /** Chips pushed forward on the current street. */
   readonly committedThisStreet: number;
   /** Chips pushed forward across the whole hand, including antes and blinds. */
   readonly committedTotal: number;
@@ -62,24 +45,19 @@ export interface SeatState {
   readonly holeCards: readonly [Card, Card] | null;
   readonly status: SeatStatus;
   /**
-   * The bet level (`currentBet`) in force when this seat last acted on this
-   * street, or null if it has not acted yet. This one field implements both
-   * "who still needs to act" and "who may still raise" — see betting.ts.
+   * The bet level when this seat last acted this street, or null. Drives both "who still acts" and
+   * "who may raise". See betting.ts.
    */
   readonly lastActedAtBetLevel: number | null;
-  /** True once the seat has voluntarily put chips in on this street. */
+  /** True once the seat has gone all-in this hand. */
   readonly isAllInThisHand: boolean;
 }
 
 export type ActionType = 'fold' | 'check' | 'call' | 'bet' | 'raise';
 
 /**
- * A player's decision.
- *
- * `to` uses "raise to" semantics: it is the seat's TOTAL commitment for the
- * street after the action, not the increment. "Raise to 300" is unambiguous;
- * "raise 300" is not, and the ambiguity is a classic source of both UI bugs and
- * player disputes.
+ * A player's decision. `to` is "raise to", the seat's TOTAL street commitment after the action,
+ * not the increment.
  */
 export type Action =
   | { readonly type: 'fold' }
@@ -88,16 +66,11 @@ export type Action =
   | { readonly type: 'bet'; readonly to: number }
   | { readonly type: 'raise'; readonly to: number };
 
-/** An action as submitted by a client, with the fields the server needs. */
 export interface SubmittedAction {
   readonly action: Action;
   /** Client-generated, stable across retries. Used for idempotency. */
   readonly actionId: string;
-  /**
-   * The `actionSequence` the client believed was current. A mismatch means the
-   * client acted on a stale view, and the action is rejected rather than applied
-   * to a different situation than the player saw.
-   */
+  /** The `actionSequence` the client saw. A mismatch rejects the action as stale. */
   readonly expectedSequence: number;
 }
 
@@ -109,37 +82,30 @@ export interface LoggedAction {
   readonly action: Action;
   /** Chips actually moved from stack to pot by this action. */
   readonly amountPaid: number;
-  /** Bet level after the action. */
   readonly betLevelAfter: number;
   /** Total pot after the action, including all previous streets. */
   readonly potAfter: number;
   /**
-   * True when the server acted for the seat rather than its player: its clock ran out, or the player
-   * had already stood up holding cards. The engine is told only that; which of the two it was is the
-   * live table's (`ArchivedAction.automaticReason` in `apps/api/src/rooms/table.ts`).
+   * True when the server acted for the seat (clock ran out, or the player stood up holding cards).
+   * See `ArchivedAction.automaticReason` in `apps/api/src/rooms/table.ts`.
    */
   readonly wasAutomatic: boolean;
   readonly actionId: string | null;
 }
 
-/** A blind, ante or straddle — money in before anyone chooses anything. */
+/** A blind or ante, posted before anyone chooses anything. */
 export interface ForcedBet {
   readonly kind: 'ante' | 'smallBlind' | 'bigBlind';
   readonly seat: SeatIndex;
   readonly amount: number;
-  /** True when the seat could not cover the forced bet in full. */
   readonly wasShort: boolean;
 }
 
 export interface Pot {
-  /** Chips in this pot. */
   readonly amount: number;
-  /** Seats eligible to win it — still in the hand and committed to this level. */
+  /** Seats eligible to win it, still in the hand and committed to this level. */
   readonly eligibleSeats: readonly SeatIndex[];
-  /**
-   * Per-seat total commitment that defines this layer. The main pot has the
-   * lowest cap; each side pot caps higher.
-   */
+  /** Per-seat total commitment that caps this layer. The main pot has the lowest. */
   readonly capPerSeat: number;
   /** 0 for the main pot, 1.. for side pots in ascending cap order. */
   readonly index: number;
@@ -151,7 +117,6 @@ export interface SeatShowdown {
   readonly holeCards: readonly [Card, Card];
   readonly score: HandScore;
   readonly description: string;
-  /** The five cards that make the hand, for highlighting in review. */
   readonly bestFive: readonly Card[];
 }
 
@@ -160,7 +125,6 @@ export interface PotAward {
   readonly amount: number;
   readonly seat: SeatIndex;
   readonly playerId: string;
-  /** True when this seat shared the pot with others. */
   readonly wasSplit: boolean;
   /** Extra chip(s) given to resolve an indivisible split. */
   readonly oddChips: number;
@@ -173,13 +137,10 @@ export interface HandResult {
   readonly awards: readonly PotAward[];
   /** Net chip change per seat across the hand, keyed by seat index. */
   readonly netBySeat: Readonly<Record<number, number>>;
-  /** True if the hand ended without cards being shown. */
   readonly endedByFold: boolean;
   /**
-   * Merkle proofs for exactly the cards that legitimately became public: every
-   * board card, plus the hole cards of seats that actually showed at showdown.
-   * Cards nobody was entitled to see stay sealed — see commitment.ts for why
-   * revealing the whole deck here would be a serious information leak.
+   * Merkle proofs for exactly the cards that became public, the board and the hole cards of seats
+   * that showed. Everything else stays sealed. See commitment.ts.
    */
   readonly reveal: DeckReveal;
 }
@@ -190,14 +151,8 @@ export interface HandState {
   readonly handNumber: number;
   readonly config: TableConfig;
   /**
-   * Where the button sat for this hand.
-   *
-   * Under the dead-button rule this is a POSITION, and it is not necessarily a
-   * seat that was dealt in: when the player who was the small blind leaves, the
-   * button falls on their empty chair for one hand rather than moving forward
-   * and dragging the blinds onto players who have already paid. Nothing derives
-   * the blinds from it — `smallBlindSeat` and `bigBlindSeat` below are the
-   * record of where they actually fell.
+   * Where the button sat. Under the dead-button rule it may be an empty chair. Nothing derives the
+   * blinds from it, `smallBlindSeat` and `bigBlindSeat` record where they fell.
    */
   readonly buttonSeat: SeatIndex;
   /** Who posted the small blind, or null when it was dead and nobody did. */
@@ -208,48 +163,34 @@ export interface HandState {
   readonly board: readonly Card[];
   readonly street: Street;
   /**
-   * The shuffled deck, the read cursor and the commitment salt.
-   *
-   * These three fields are the hand's secrets: together they reveal every undealt
-   * card. `redactFor()` in redact.ts strips all three, and
-   * `test/hidden-information.test.ts` asserts that no redacted view can contain
-   * them. Nothing outside this package should ever read them.
+   * The hand's secrets. Deck, cursor and salts reveal every undealt card. `redactFor()` strips them
+   * and `test/hidden-information.test.ts` asserts it. Nothing outside this package reads them.
    */
   readonly deck: readonly Card[];
   readonly deckCursor: number;
   /** One 32-byte Merkle salt per deck position: 52 × 32 bytes. */
   readonly deckSalts: Uint8Array;
   readonly commitment: DeckCommitment;
-  /** Whose turn it is, or null when no one may act. */
   readonly toAct: SeatIndex | null;
   /** Highest `committedThisStreet` among all seats. */
   readonly betLevel: number;
   /**
-   * The bet level created by the most recent COMPLETE bet or raise this street.
-   * A short all-in raises `betLevel` without moving this, which is exactly what
-   * stops it from reopening the action. See betting.ts.
+   * The bet level set by the last COMPLETE bet or raise this street. A short all-in raises `betLevel`
+   * without moving this, so it does not reopen the action.
    */
   readonly lastFullRaiseBetLevel: number;
   /** Size of the last complete bet or raise increment, for the min-raise rule. */
   readonly lastFullRaiseIncrement: number;
-  /** Chips already collected from completed streets. */
   readonly potFromPreviousStreets: number;
   readonly forcedBets: readonly ForcedBet[];
   readonly actions: readonly LoggedAction[];
   /** Increments on every applied action; used for optimistic concurrency. */
   readonly actionSequence: number;
   readonly result: HandResult | null;
-  /**
-   * How this hand's deck was produced, recorded permanently so a hand can never
-   * silently look like a fairly dealt one when it was not.
-   */
+  /** How the deck was produced, recorded so an unfair deal never looks like a fair one. */
   readonly randomSourceKind: 'csprng' | 'deterministic-test-only' | 'fixed-deck-scenario';
 
-  /**
-   * Deck positions each seat's hole cards came from, and the positions of the
-   * board cards dealt so far. Kept so that settlement can build Merkle proofs for
-   * exactly the cards that became public. Secret, like the deck itself.
-   */
+  /** Deck positions of each seat's hole cards and of the board so far, for settlement proofs. Secret. */
   readonly holeCardPositions: Readonly<Record<number, readonly number[]>>;
   readonly boardPositions: readonly number[];
 }

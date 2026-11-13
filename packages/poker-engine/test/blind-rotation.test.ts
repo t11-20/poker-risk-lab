@@ -1,23 +1,8 @@
 /**
- * The dead-button rule, and hands dealt under it.
- *
- * ## The gap this closes
- *
- * Every other test in this package deals to a roster fixed before the first hand: `deal()` in
- * `helpers.ts` takes an array of stacks and a button, and nothing ever moves. That exercises the
- * blinds thoroughly for ONE hand and never once for a sequence of them, which is why a rotation
- * that charged six players the big blind twice in a row over forty hands could sit in the tree
- * with 119 green engine tests above it (`docs/audit/poker-correctness.md`, P1-1: "no test in the
- * repo varies the roster between hands").
- *
- * ## The rule, stated once
- *
- *   1. The big blind advances by exactly ONE live player per hand. It is the anchor.
- *   2. The small blind falls where the big blind was — and is DEAD if nobody in the hand is there.
- *   3. The button falls where the small blind was — and is DEAD if nobody in the hand is there.
- *
- * Rule 1 is the property everything else exists to protect, and it is what the soak at the bottom
- * asserts hand by hand over a roster that changes underneath it.
+ * The dead-button rule across a changing roster. Every other test deals to a fixed roster, which is
+ * how a rotation that charged six players two big blinds in 40 hands passed 119 engine tests
+ * (`docs/audit/poker-correctness.md`, P1-1). The big blind advances one live player per hand. The
+ * small blind and button follow and may be dead. The soak at the bottom asserts this hand by hand.
  */
 
 import assert from 'node:assert/strict';
@@ -37,7 +22,6 @@ import { chipsInSystem, config, testRandom } from './helpers.ts';
 
 const MAX_SEATS = 6;
 
-/** `advanceBlindRotation` for a six-max table, with the boilerplate out of the way. */
 function advance(
   previous: BlindPositions,
   entrants: readonly SeatIndex[],
@@ -58,9 +42,8 @@ describe('the dead-button rotation', () => {
   });
 
   it('moves the big blind one seat on and drags the other two positions behind it', () => {
-    // The audit's minimal repro, as a rotation: seats 0/1/3 deal BTN 1 / SB 3 / BB 0, then
-    // somebody takes seat 2. The old rule moved the BUTTON to seat 2 and re-derived the blinds
-    // onto seats 3 and 0, charging seat 0 a second consecutive big blind.
+    // The audit's repro. Seats 0/1/3 deal BTN 1 / SB 3 / BB 0, then someone takes seat 2. The old
+    // rule moved the button to seat 2 and charged seat 0 a second big blind.
     const first = seedBlindRotation(1, MAX_SEATS, [0, 1, 3]);
     const second = advance(first.positions, [0, 1, 2, 3]);
     assert.deepEqual(
@@ -74,9 +57,8 @@ describe('the dead-button rotation', () => {
     const first = seedBlindRotation(1, MAX_SEATS, [0, 1, 2, 3]);
     assert.deepEqual({ small: first.smallBlindSeat, big: first.bigBlindSeat }, { small: 2, big: 3 });
 
-    // The big blind leaves. Their seat is where the small blind belongs next hand, and there is
-    // nobody in it. Seat 0 is next in line — and has just paid the big blind, so moving the small
-    // blind onto them would be the same charge-twice defect wearing a different hat.
+    // The big blind leaves, so the small blind's seat is empty. Seat 0 just paid the big blind and
+    // must not be moved into the small blind.
     const second = advance(first.positions, [0, 1, 2]);
     assert.deepEqual(
       { button: second.buttonSeat, small: second.smallBlindSeat, big: second.bigBlindSeat },
@@ -87,7 +69,6 @@ describe('the dead-button rotation', () => {
 
   it('leaves the button dead rather than moving it onto a live seat', () => {
     const first = seedBlindRotation(1, MAX_SEATS, [0, 1, 2, 3]);
-    // The small blind leaves. The button belongs on their seat next hand and nobody is there.
     const second = advance(first.positions, [0, 1, 3]);
     assert.deepEqual(
       { button: second.buttonSeat, small: second.smallBlindSeat, big: second.bigBlindSeat },
@@ -98,9 +79,8 @@ describe('the dead-button rotation', () => {
   });
 
   it('keeps a dead position in the rotation so the next hand still knows where it was', () => {
-    // Two departures in a row. The button position for hand three comes from the small blind
-    // position of hand two, which was itself dead — a rotation that only remembered occupied
-    // seats would have lost its place here and restarted from the wrong seat.
+    // Two departures in a row. Hand three's button comes from hand two's dead small blind, so a
+    // rotation that only remembered occupied seats would lose its place.
     const first = seedBlindRotation(1, MAX_SEATS, [0, 1, 2, 3]);
     const second = advance(first.positions, [0, 1, 3]);
     assert.equal(second.positions.buttonSeat, 2, 'the dead button is still recorded');
@@ -112,9 +92,8 @@ describe('the dead-button rotation', () => {
   });
 
   it('gives the non-big-blind seat both positions heads-up, however the table got there', () => {
-    // Three handed down to two. The big blind still advances by one live player, and the other
-    // seat takes both the button and the small blind — which is the heads-up rule, and is NOT
-    // what a blind shift of the three positions would produce.
+    // Three handed to two. The big blind advances one and the other seat takes button and small
+    // blind, which a plain shift of the three positions would not produce.
     const threeHanded = seedBlindRotation(0, MAX_SEATS, [0, 1, 2]);
     assert.deepEqual(
       { small: threeHanded.smallBlindSeat, big: threeHanded.bigBlindSeat },
@@ -133,8 +112,8 @@ describe('the dead-button rotation', () => {
   });
 
   it('deals a waiting seat in exactly when the big blind reaches it', () => {
-    // Seats 0/1/2 deal BTN 1 / SB 2 / BB 0, then seat 4 sits down owing a blind. Seat 4 is three
-    // places behind the big blind, so it sits out two hands and enters on the third.
+    // Seats 0/1/2 deal BTN 1 / SB 2 / BB 0, then seat 4 sits down owing a blind. It is three places
+    // behind the big blind, so it sits out two hands and enters on the third.
     const first = seedBlindRotation(1, MAX_SEATS, [0, 1, 2]);
     assert.deepEqual({ small: first.smallBlindSeat, big: first.bigBlindSeat }, { small: 2, big: 0 });
     const entrants = [0, 1, 2, 4];
@@ -150,8 +129,7 @@ describe('the dead-button rotation', () => {
     const fourth = advance(third.positions, entrants, [4]);
     assert.equal(fourth.bigBlindSeat, 4, 'the big blind reaches the waiting seat');
     assert.ok(fourth.dealtIn.includes(4), 'and posting it is what deals them in');
-    // The rotation walks EVERY entrant, waiting or not: a seat that is skipped for the deal is
-    // still skipped over by the big blind, or it would never be reached at all.
+    // The big blind walks every entrant, waiting or not, or a waiting seat is never reached.
     assert.deepEqual([...fourth.dealtIn], [0, 1, 2, 4]);
   });
 
@@ -199,7 +177,6 @@ describe('a hand dealt with a dead button', () => {
     const state = deadButtonHand();
     assert.equal(state.toAct, 1, 'under the gun is the seat after the big blind');
 
-    // Everyone calls, so the hand reaches a flop with all three still in.
     let current = state;
     current = applyAction(current, 1, { type: 'call' }).state;
     current = applyAction(current, 3, { type: 'call' }).state;
@@ -219,8 +196,7 @@ describe('a hand dealt with a dead button', () => {
     assert.equal(labels.get(2), undefined, 'a dead button seat gets no label: nobody is on it');
     assert.ok(![...labels.values()].includes('BTN'), 'and nobody else is given the button either');
 
-    // `redactFor` labels from the state's own blinds; deriving them from a dead button would
-    // throw, which would take every view of the hand with it.
+    // Deriving labels from a dead button would throw and take every view of the hand with it.
     const view = redactFor(state, { viewerPlayerId: 'p1' });
     assert.equal(view.seats.find((seat) => seat.seat === 0)?.position, 'BB');
     assert.ok(
@@ -275,7 +251,6 @@ describe('a hand dealt with a dead small blind', () => {
     current = applyAction(current, 2, { type: 'fold' }).state;
     assert.equal(current.street, 'complete');
     assert.equal(chipsInSystem(current), before);
-    // Nothing but the big blind was ever at risk, and it comes straight back.
     assert.equal(current.seats.find((seat) => seat.seat === 0)?.stack, 500);
   });
 
@@ -332,14 +307,10 @@ describe('SOAK: the blinds over a roster that changes every hand', () => {
     let chipsBoughtIn = 6_000;
     let handsPlayed = 0;
 
-    // A deterministic pseudo-random schedule: every hand, one seat may leave and one may arrive.
-    // Deterministic so a failure is reproducible, and driven off the engine's own test generator
-    // so there is no second source of randomness to keep honest.
+    // A seeded schedule where each hand one seat may leave and one may arrive, so failures reproduce.
     const roll = (bound: number): number => random.nextInt(bound);
 
     for (let hand = 1; hand <= 400; hand += 1) {
-      // Departures and arrivals, before the deal. Never below two seats: a table that cannot deal
-      // is not what this soak is about.
       if (stacks.size > 2 && roll(4) === 0) {
         const seats = [...stacks.keys()];
         const leaving = seats[roll(seats.length)];
@@ -358,11 +329,9 @@ describe('SOAK: the blinds over a roster that changes every hand', () => {
       }
 
       const entrants = [...stacks.keys()].sort((a, b) => a - b);
-      // No blind obligations here: this soak is about the ROTATION, and mixing the entry rule in
-      // would make a failure ambiguous between the two. `apps/api/test/table-blinds.test.ts`
-      // covers obligations against the live table, which is where they live.
-      // Annotated rather than inferred: `positions` is written from `rotation.positions` at the
-      // bottom of the loop, so without it the two infer through each other and land on `any`.
+      // No blind obligations, so a failure points at the rotation alone. The live table's
+      // obligations are covered by `apps/api/test/table-blinds.test.ts`.
+      // Annotated because `positions` and `rotation.positions` would otherwise infer to `any`.
       const rotation: BlindRotation =
         positions === null
           ? seedBlindRotation(entrants[0] ?? 0, MAX_SEATS, entrants)
@@ -397,7 +366,6 @@ describe('SOAK: the blinds over a roster that changes every hand', () => {
         random,
       });
 
-      // The small blind is dead exactly when its seat is not in the hand, and never otherwise.
       const posted = new Set(started.state.forcedBets.map((bet) => bet.kind));
       assert.equal(
         posted.has('smallBlind'),

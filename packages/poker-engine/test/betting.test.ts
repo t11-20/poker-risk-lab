@@ -96,25 +96,17 @@ test('a player who raises cannot raise again until someone else raises', () => {
 
 test('TWO short all-ins DO reopen the action when their increments add to a full raise', () => {
   /**
-   * The half of TDA 43-C that `mayRaise` used to be missing.
+   * TDA 43-C. A player who has acted may re-raise when facing at least a full raise, and two short
+   * all-ins can add up to one.
    *
-   * The rule is not "a short all-in never reopens". It is that an all-in of less than a full
-   * raise does not reopen the betting to a player who has already acted **and is not facing at
-   * least a full raise when the action returns to him**. One short all-in cannot clear that bar,
-   * which is what the test above pins down and why keying only on `lastFullRaiseBetLevel` looked
-   * complete. Two consecutive short all-ins can, because their increments add.
-   *
-   * Seats: 0 BTN (1000), 1 SB (150 — short), 2 BB (220 — short), 3 UTG (1000).
+   * Seats: 0 BTN (1000), 1 SB (150, short), 2 BB (220, short), 3 UTG (1000).
    *   UTG raises to 100   → complete. Increment 98, so a full re-raise must reach 198.
-   *   BTN calls 100       → has now acted at the full-raise level.
-   *   SB shoves to 150    → +50, short of 198. Not a complete raise.
-   *   BB shoves to 220    → +70, short of 248. Also not a complete raise.
-   *   Back to UTG         → acted at 100, now facing 220. The increase is 120, against a full
-   *                         raise of 98. It IS facing a full raise, so it may re-raise.
+   *   BTN calls 100.
+   *   SB shoves to 150    → +50, not complete.
+   *   BB shoves to 220    → +70, not complete.
+   *   Back to UTG         → faces +120 against a full raise of 98, so it may re-raise.
    *
-   * Against the unfixed code both UTG and BTN were offered only call and fold, with a live
-   * opponent still holding 780 behind. A 30,000-hand fuzz put the rate at 44 wrongly-denied
-   * raises across 34 hands.
+   * The unfixed code offered only call and fold (44 wrongly denied raises in a 30,000-hand fuzz).
    */
   const { state } = deal({ stacks: [1000, 150, 220, 1000], buttonSeat: 0, config: { maxSeats: 4 } });
   let current = play(state, [raise(3, 100), call(0)]);
@@ -136,13 +128,11 @@ test('TWO short all-ins DO reopen the action when their increments add to a full
     utgOptions.some((entry) => entry.type === 'raise'),
     'two short all-ins together are a full raise, so the action is reopened',
   );
-  // And the reopened minimum is the ordinary one, measured from the current level.
   assert.equal(minimumRaiseTo(current), 318);
   const raised = applyAction(current, 3, { type: 'raise', to: 318 });
   assert.equal(raised.state.betLevel, 318);
 
-  // The negative control that keeps this honest: a seat facing LESS than a full raise since it
-  // acted is still refused. Same shape, one short all-in short of the bar.
+  // Negative control. One short all-in alone stays short of the bar.
   const { state: near } = deal({ stacks: [1000, 150, 200, 1000], buttonSeat: 0, config: { maxSeats: 4 } });
   let short = play(near, [raise(3, 100), call(0)]);
   short = applyAction(short, 1, { type: 'raise', to: 150 }).state;
@@ -163,16 +153,12 @@ test('TWO short all-ins DO reopen the action when their increments add to a full
 });
 
 test('a short all-in raise does NOT reopen the action for a player who already acted', () => {
-  // Seats: 0 BTN (200), 1 SB (30 — the short stack), 2 BB (200), 3 UTG (200).
-  //
-  // The sequence that isolates the rule:
-  //   UTG raises to 20  → a complete raise. Increment 18, so a full re-raise
-  //                       would have to reach 38.
-  //   BTN calls 20      → BTN has now acted AT the current full-raise level.
-  //   SB shoves to 30   → only +10, short of 38. It lifts the bet level but is
-  //                       NOT a complete raise.
-  //   BB (yet to act)   → its right to raise is untouched.
-  //   BTN and UTG       → owe the extra 10, but must NOT be offered a raise.
+  // Seats: 0 BTN (200), 1 SB (30, short), 2 BB (200), 3 UTG (200).
+  //   UTG raises to 20  → complete. Increment 18, a full re-raise must reach 38.
+  //   BTN calls 20.
+  //   SB shoves to 30   → +10, not complete.
+  //   BB (yet to act)   → may still raise.
+  //   BTN and UTG       → owe 10 and must NOT be offered a raise.
   const { state } = deal({ stacks: [200, 30, 200, 200], buttonSeat: 0, config: { maxSeats: 4 } });
   let current = play(state, [raise(3, 20), call(0)]);
   assert.equal(current.lastFullRaiseBetLevel, 20);
@@ -184,7 +170,6 @@ test('a short all-in raise does NOT reopen the action for a player who already a
   assert.equal(current.lastFullRaiseBetLevel, 20, 'but a short all-in is not a complete raise');
   assert.equal(current.seats.find((s) => s.seat === 1)?.status, 'allIn');
 
-  // The big blind has not acted this street, so its right to raise is intact.
   assert.equal(current.toAct, 2);
   assert.ok(
     legalActions(current, 2).some((entry) => entry.type === 'raise'),
@@ -192,7 +177,6 @@ test('a short all-in raise does NOT reopen the action for a player who already a
   );
   current = play(current, [call(2)]);
 
-  // Back to UTG, which acted at level 20 — the current full-raise level.
   assert.equal(current.toAct, 3);
   const utgOptions = legalActions(current, 3);
   assert.ok(
@@ -209,7 +193,6 @@ test('a short all-in raise does NOT reopen the action for a player who already a
   );
   assert.throws(() => applyAction(current, 3, { type: 'raise', to: 100 }), /may not raise/);
 
-  // The button acted at level 20 too, so it is in the same position.
   const afterUtgCalls = play(current, [call(3)]);
   assert.equal(afterUtgCalls.toAct, 0);
   assert.ok(
@@ -222,8 +205,7 @@ test('a later COMPLETE raise reopens the action to everyone again', () => {
   const { state } = deal({ stacks: [200, 30, 200, 200], buttonSeat: 0, config: { maxSeats: 4 } });
   let current = play(state, [raise(3, 20), call(0)]);
   current = applyAction(current, 1, { type: 'raise', to: 30 }).state; // short all-in
-  // The BB makes a complete raise to 60: increment 30, comfortably over the 18
-  // required, so this one does reopen the action.
+  // The BB raises to 60, increment 30, over the 18 required, so this one reopens the action.
   current = applyAction(current, 2, { type: 'raise', to: 60 }).state;
   assert.equal(current.lastFullRaiseBetLevel, 60);
   assert.equal(current.toAct, 3);
@@ -234,11 +216,9 @@ test('a later COMPLETE raise reopens the action to everyone again', () => {
 });
 
 test('a player may shove below the minimum raise when that is all they have', () => {
-  // Seat 3 raises to 20 out of a 25 stack, leaving 5 behind. Facing 60 it can
-  // only reach 25 in total, which is a legal short all-in.
+  // Seat 3 raises to 20 from 25. Facing 60 it can reach only 25, a legal short all-in.
   const { state } = deal({ stacks: [200, 200, 200, 25], buttonSeat: 0, config: { maxSeats: 4 } });
   let current = play(state, [raise(3, 20), raise(0, 60)]);
-  // Action passes the blinds before returning to seat 3.
   current = play(current, [fold(1), fold(2)]);
   assert.equal(current.toAct, 3);
 
@@ -250,14 +230,12 @@ test('a player may shove below the minimum raise when that is all they have', ()
   assert.equal(callOption?.costAtMin, 5, 'calling is capped at the remaining stack');
   assert.equal(callOption?.allInAtMax, true);
 
-  // The raise option, if offered, must be capped at the stack — a shove for 25.
   const raiseOption = options.find((entry) => entry.type === 'raise');
   if (raiseOption !== undefined) {
     assert.equal(raiseOption.maxTo, 25, 'a shove reaches exactly the stack');
     assert.equal(raiseOption.minTo, 25, 'the minimum collapses to the shove when the stack cannot reach it');
   }
 
-  // Calling all-in for less than the bet is legal and leaves the seat all-in.
   const after = applyAction(current, 3, { type: 'call' }).state;
   assert.equal(after.seats.find((s) => s.seat === 3)?.status, 'allIn');
   assert.equal(after.seats.find((s) => s.seat === 3)?.committedTotal, 25);
@@ -310,7 +288,6 @@ test('chips are conserved through an entire hand', () => {
   const { state } = deal({ stacks: [100, 100, 100], buttonSeat: 0, config: { maxSeats: 3 } });
   const before = chipsInSystem(state);
   const finished = play(state, [call(0), call(1), check(2), check(1), check(2), check(0)]);
-  // Turn and river checks.
   let current = finished;
   while (current.street !== 'complete') {
     const seat = current.toAct;
@@ -344,7 +321,6 @@ test('a raise reopens the action so a player who already called must act again',
   let current = play(state, [call(3), call(0)]);
   assert.equal(current.toAct, 1, 'small blind acts next');
   current = play(current, [raise(1, 12)]);
-  // Everyone who called at level 2 now owes an action again.
   assert.equal(current.toAct, 2);
   current = play(current, [call(2)]);
   assert.equal(current.toAct, 3, 'the original limper must act again after the raise');

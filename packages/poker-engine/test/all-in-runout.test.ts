@@ -1,25 +1,11 @@
 /**
- * All-in run-outs.
+ * All-in run-outs. Betting ends once at most one seat has chips behind and that seat owes nothing.
+ * The board then runs out with no action, and no fold, since folding a fully paid pot is not legal.
  *
- * The rule being tested: betting is over for the hand as soon as no further
- * wagering is possible. That is the case when at most one seat has chips behind AND
- * that seat has nothing left to call. The remaining streets are then dealt with no
- * action at all and the hands are tabled — nobody is asked to check, and nobody is
- * offered a fold, because a seat that is fully paid up and cannot be raised has
- * nothing to give up. Folding there is not a legal action in No-Limit Hold'em.
+ *   lone chipped seat owes NOTHING  → closed, board runs out.
+ *   lone chipped seat still OWES    → open, call or fold, but no raise (nobody could call it).
  *
- * The boundary matters in both directions, so both sides of it are tested here:
- *
- *   lone chipped seat owes NOTHING  → closed. No action requested, board runs out.
- *   lone chipped seat still OWES    → open.  It must be asked, and fold IS legal
- *                                            (it can also call, all-in for less if
- *                                            that is all it has), but it may not
- *                                            raise, because nobody could call.
- *
- * Expected chip movements below are worked out from the pot-layer rules by hand in
- * the comments, not read back from the engine, and every scenario asserts exact
- * chip conservation: the chips on the table before the hand must equal the chips in
- * the stacks after it, to the chip.
+ * Expected chips are worked by hand, and every scenario asserts exact chip conservation.
  */
 
 import assert from 'node:assert/strict';
@@ -31,13 +17,7 @@ import { createDeterministicRandomForTests } from '../src/rng.ts';
 import type { Action, HandState, Pot, SeatIndex, SeatState } from '../src/types.ts';
 import { call, check, deal, play, raise, stackedDeck } from './helpers.ts';
 
-/**
- * Every chip in the game.
- *
- * While a hand is live the chips are split between stacks and the middle, so both
- * are counted. Once the hand is complete the pot has been paid into the stacks, so
- * the stacks alone are the total — adding commitments then would double-count.
- */
+/** Every chip in the game. A complete hand has paid the pot into stacks, so count stacks alone. */
 function totalChips(state: HandState): number {
   const inStacks = state.seats.reduce((sum, seat) => sum + seat.stack, 0);
   if (state.street === 'complete') return inStacks;
@@ -52,15 +32,11 @@ function assertNobodyCanAct(state: HandState, where: string): void {
   }
 }
 
-/** The action types on offer, in the order the engine offers them. */
 function offered(state: HandState, seat: number): string[] {
   return legalActions(state, seat).map((entry) => entry.type);
 }
 
-/**
- * Every chip awarded must go to a seat the pot layer says is eligible, and when the
- * hand was shown down, to a best hand among that layer's eligible seats.
- */
+/** Every awarded chip goes to an eligible seat, and at showdown to a best hand among them. */
 function assertAwardsGoToEntitledSeats(state: HandState, where: string): void {
   const result = state.result;
   assert.ok(result !== null, `${where}: a complete hand must have a result`);
@@ -87,8 +63,6 @@ function assertAwardsGoToEntitledSeats(state: HandState, where: string): void {
   }
 }
 
-// Aces against kings, board bricks: seat 0 must win, and no legal action exists
-// that could change it once both players are all-in.
 const AA_VS_KK_HEADS_UP = stackedDeck({ 0: 'AhAd', 1: 'KsKc' }, [1, 0], 'Qh 8s 2c 4d 9h');
 
 test('heads-up: a call that puts the last opponent all-in runs the board out with no further action', () => {
@@ -102,10 +76,8 @@ test('heads-up: a call that puts the last opponent all-in runs the board out wit
   const chipsBefore = totalChips(state);
   assert.equal(chipsBefore, 1200);
 
-  // Button raises to 200; the big blind calls for its whole 200.
   const finished = play(state, [raise(0, 200), call(1)]);
 
-  // One action each and the hand is over: no check, no fold, no third street asked.
   assert.equal(finished.actions.length, 2, 'exactly the two actions that were taken');
   assert.equal(finished.street, 'complete');
   assert.equal(finished.board.length, 5, 'flop, turn and river are all dealt');
@@ -113,7 +85,6 @@ test('heads-up: a call that puts the last opponent all-in runs the board out wit
   assert.equal(finished.result?.endedByFold, false, 'an all-in is not a fold-out');
   assert.equal(finished.result?.showdowns.length, 2, 'both hands are tabled');
 
-  // Aces hold: seat 0 wins the 400 pot, so it is up 200 and seat 1 is down 200.
   assert.equal(finished.result?.netBySeat[0], 200);
   assert.equal(finished.result?.netBySeat[1], -200);
   assert.equal(finished.seats.find((seat) => seat.seat === 0)?.stack, 1200);
@@ -123,8 +94,7 @@ test('heads-up: a call that puts the last opponent all-in runs the board out wit
 });
 
 test('a seat that still owes chips to an all-in IS asked to act, and may call or fold but not raise', () => {
-  // Seat 0 = BTN/SB with 1000, seat 1 = BB with 200. Seat 0 limps, seat 1 shoves,
-  // so seat 0 owes 190 with 990 behind: a genuine live decision.
+  // Seat 0 (BTN/SB, 1000) limps, seat 1 (BB, 200) shoves. Seat 0 owes 190, a live decision.
   const setup = deal({
     stacks: [1000, 200],
     buttonSeat: 0,
@@ -152,17 +122,14 @@ test('a seat that still owes chips to an all-in IS asked to act, and may call or
     'raising into a table with no chips behind it is rejected',
   );
 
-  // Folding is legal here and costs seat 0 the 10 it limped for.
   const folded = applyAction(facingTheShove, 0, { type: 'fold' }).state;
   assert.equal(folded.street, 'complete');
   assert.equal(folded.result?.endedByFold, true);
-  // Seat 1's own 200 is uncontested above seat 0's 10, so the pot it wins is
-  // 10 + 200 = 210 and it keeps everything it put in.
+  // Seat 1's 200 is uncontested above seat 0's 10, so it wins 210 and keeps its own chips.
   assert.equal(folded.seats.find((seat) => seat.seat === 0)?.stack, 990);
   assert.equal(folded.seats.find((seat) => seat.seat === 1)?.stack, 210);
   assert.equal(totalChips(folded), chipsBefore, 'chips conserved exactly');
 
-  // Calling instead closes the betting and runs the board out in one pass.
   const called = applyAction(facingTheShove, 0, { type: 'call' }).state;
   assert.equal(called.street, 'complete');
   assert.equal(called.board.length, 5);
@@ -173,8 +140,7 @@ test('a seat that still owes chips to an all-in IS asked to act, and may call or
 });
 
 test('betting closing on the flop deals the turn and river with no action', () => {
-  // Seat 0 = BTN/SB with 1000, seat 1 = BB with 200. Limp, check, then the big
-  // blind shoves its remaining 190 on the flop and is called.
+  // Seat 0 (BTN/SB, 1000), seat 1 (BB, 200). Limp, check, the BB shoves 190 on the flop and is called.
   const { state } = deal({
     stacks: [1000, 200],
     buttonSeat: 0,
@@ -201,8 +167,7 @@ test('betting closing on the flop deals the turn and river with no action', () =
 });
 
 test('simultaneous all-ins: three equal stacks shove and the board runs out once', () => {
-  // Equal stacks of 100, blinds 5/10, button on seat 0. Three-handed the button
-  // acts first preflop. Seat 2 has the best hand, so it must win the single pot.
+  // Stacks of 100, blinds 5/10, button 0. Three-handed the button acts first preflop.
   const deck = stackedDeck({ 1: '7c8d', 2: 'AhAd', 0: 'KsKc' }, [1, 2, 0], 'Qh 8s 2c 4d 9h');
   const { state } = deal({
     stacks: [100, 100, 100],
@@ -214,8 +179,7 @@ test('simultaneous all-ins: three equal stacks shove and the board runs out once
   assert.equal(chipsBefore, 300);
 
   const afterTwoShoves = play(state, [raise(0, 100), call(1)]);
-  // Seats 0 and 1 are now all-in; seat 2 has chips but still owes 90, so it must
-  // be asked — and must not be offered a raise nobody could call.
+  // Seats 0 and 1 are all-in and seat 2 owes 90. It must be asked, with no raise on offer.
   assert.equal(afterTwoShoves.toAct, 2);
   assert.equal(isBettingClosedForHand(afterTwoShoves), false);
   assert.deepEqual(offered(afterTwoShoves, 2), ['fold', 'call']);
@@ -225,7 +189,6 @@ test('simultaneous all-ins: three equal stacks shove and the board runs out once
   assert.equal(finished.board.length, 5);
   assertNobodyCanAct(finished, 'after the third shove');
   assert.equal(finished.result?.showdowns.length, 3);
-  // Equal contributions mean one undivided pot of 300.
   assert.equal(finished.result?.pots.length, 1);
   assert.equal(finished.result?.pots[0]?.amount, 300);
   assert.equal(finished.seats.find((seat) => seat.seat === 2)?.stack, 300, 'aces take the lot');
@@ -234,13 +197,9 @@ test('simultaneous all-ins: three equal stacks shove and the board runs out once
 });
 
 test('unequal stacks: the covering seat is never asked once it has matched the largest all-in', () => {
-  // Seat 0 = BTN with 1000, seat 1 = SB with 50, seat 2 = BB with 120. Blinds 5/10.
-  // Seat 0 raises to 120, both blinds call all-in.
-  //
-  // Layers from the totals (0: 120, 1: 50, 2: 120), all three still holding cards:
-  //   cap 50   → 50 x 3 = 150, contested by seats 0, 1 and 2
-  //   cap 120  → 70 x 2 = 140, contested by seats 0 and 2
-  // Seat 1 has the best hand and takes the 150; seat 2 is second and takes the 140.
+  // Seat 0 (BTN, 1000) raises to 120, SB (50) and BB (120) call all-in.
+  //   cap 50   → 50 x 3 = 150, seats 0, 1, 2   (seat 1 wins)
+  //   cap 120  → 70 x 2 = 140, seats 0 and 2   (seat 2 wins)
   const deck = stackedDeck({ 1: 'AhAd', 2: 'KhKd', 0: '3s5c' }, [1, 2, 0], 'Qh 8s 2c 4d 9h');
   const { state } = deal({
     stacks: [1000, 50, 120],
@@ -269,10 +228,8 @@ test('unequal stacks: the covering seat is never asked once it has matched the l
 });
 
 test('the lone chipped seat may be all-in for LESS than an opponent, and still gets its decision', () => {
-  // Seat 0 = BTN with 1000, seat 1 = SB with 500, seat 2 = BB with 40. Blinds 5/10.
-  // Seat 0 shoves 1000, seat 1 calls all-in for 500. Seat 2 now has chips behind but
-  // only 30 of them, against a bet level of 1000: it can call all-in for 40 total or
-  // fold, and nothing else.
+  // Seat 0 (BTN) shoves 1000, seat 1 (SB) calls all-in for 500. Seat 2 (BB, 40) can call all-in or
+  // fold, nothing else.
   const deck = stackedDeck({ 1: 'AhAd', 2: 'KhKd', 0: '3s5c' }, [1, 2, 0], 'Qh 8s 2c 4d 9h');
   const setup = deal({
     stacks: [1000, 500, 40],
@@ -292,12 +249,10 @@ test('the lone chipped seat may be all-in for LESS than an opponent, and still g
   assert.equal(callOption?.minTo, 40, 'which reaches 40 for the street, not the 1000 bet level');
   assert.equal(callOption?.allInAtMax, true);
 
-  // Calling: everyone is all-in, so the board runs out.
-  //
-  // Layers from the totals (0: 1000, 1: 500, 2: 40):
-  //   cap 40    → 40 x 3 = 120, contested by seats 0, 1 and 2   (seat 1's aces win)
-  //   cap 500   → 460 x 2 = 920, contested by seats 0 and 1      (seat 1's aces win)
-  //   cap 1000  → 500, seat 0 only: its own uncalled money back
+  // Calling runs the board out.
+  //   cap 40    → 40 x 3 = 120, seats 0, 1, 2   (seat 1's aces)
+  //   cap 500   → 460 x 2 = 920, seats 0 and 1  (seat 1's aces)
+  //   cap 1000  → 500, seat 0 only, its uncalled chips back
   const called = applyAction(facingTheShove, 2, { type: 'call' }).state;
   assert.equal(called.street, 'complete');
   assert.equal(called.board.length, 5);
@@ -309,15 +264,13 @@ test('the lone chipped seat may be all-in for LESS than an opponent, and still g
   assertAwardsGoToEntitledSeats(called, 'short call against two bigger all-ins');
   assert.equal(totalChips(called), chipsBefore, 'chips conserved exactly');
 
-  // Folding is equally legal, and the two seats already all-in must still show down.
   const folded = applyAction(facingTheShove, 2, { type: 'fold' }).state;
   assert.equal(folded.street, 'complete');
   assert.equal(folded.board.length, 5, 'the remaining all-in players are still owed a run-out');
   assert.equal(folded.result?.endedByFold, false, 'two players are still contesting the pot');
   assert.equal(folded.result?.showdowns.length, 2);
   assertNobodyCanAct(folded, 'after the short fold');
-  // Seat 2 keeps the 30 it did not commit; its 10 blind stays in the pot. Seat 1's
-  // aces win everything up to 500 each, and seat 0 gets its uncalled 500 back.
+  // Seat 2 keeps its uncommitted 30 and loses its 10 blind. Seat 0 gets its uncalled 500 back.
   assert.equal(folded.seats.find((seat) => seat.seat === 2)?.stack, 30);
   assert.equal(folded.seats.find((seat) => seat.seat === 1)?.stack, 1010);
   assert.equal(folded.seats.find((seat) => seat.seat === 0)?.stack, 500);
@@ -326,10 +279,8 @@ test('the lone chipped seat may be all-in for LESS than an opponent, and still g
 });
 
 test('a call that leaves one seat fully paid up closes the betting mid-preflop', () => {
-  // Seat 0 = BTN with 8, seat 1 = SB all-in for its whole 5, seat 2 = BB with 1000.
-  // Blinds 5/10, so the big blind's 10 is already the bet level. Seat 0 calls all-in
-  // for 8, and now only seat 2 has chips — with nothing to call. It must never be
-  // asked to act: there is nobody left to bet into and nothing to fold to.
+  // Seat 0 (BTN, 8) calls all-in, seat 1 (SB) is all-in for 5, and seat 2 (BB, 1000) has nothing to
+  // call. Seat 2 must never be asked to act.
   const deck = stackedDeck({ 1: 'AhAd', 2: 'KhKd', 0: '3s5c' }, [1, 2, 0], 'Qh 8s 2c 4d 9h');
   const { state } = deal({
     stacks: [8, 5, 1000],
@@ -350,10 +301,9 @@ test('a call that leaves one seat fully paid up closes the betting mid-preflop',
   assertNobodyCanAct(finished, 'after the short call');
   assert.equal(finished.result?.showdowns.length, 3);
 
-  // Layers from the totals (0: 8, 1: 5, 2: 10):
-  //   cap 5  → 5 x 3 = 15, contested by all three   (seat 1's aces win)
-  //   cap 8  → 3 x 2 = 6, contested by seats 0 and 2 (seat 2's kings win)
-  //   cap 10 → 2, seat 2 only: its own uncalled money back
+  //   cap 5  → 5 x 3 = 15, all three          (seat 1's aces)
+  //   cap 8  → 3 x 2 = 6, seats 0 and 2       (seat 2's kings)
+  //   cap 10 → 2, seat 2 only, its uncalled chips back
   assert.equal(finished.seats.find((seat) => seat.seat === 1)?.stack, 15, 'the aces win the main pot');
   assert.equal(finished.seats.find((seat) => seat.seat === 2)?.stack, 998, '990 behind + 6 + 2 back');
   assert.equal(finished.seats.find((seat) => seat.seat === 0)?.stack, 0);
@@ -362,9 +312,7 @@ test('a call that leaves one seat fully paid up closes the betting mid-preflop',
 });
 
 test('the blinds alone can close the betting: a small blind all-in for less than the big blind', () => {
-  // Heads-up, seat 0 = BTN/SB with a stack of exactly 5 against a 5/10 blind, so
-  // posting the small blind puts it all-in. Seat 1 posts 10 and has nothing to call.
-  // No action is possible at any point, so `startHand` itself must run the board out.
+  // Heads-up, seat 0 (BTN/SB) has exactly 5, so posting puts it all-in. `startHand` runs the board out.
   const { state } = deal({
     stacks: [5, 1000],
     buttonSeat: 0,
@@ -378,8 +326,7 @@ test('the blinds alone can close the betting: a small blind all-in for less than
   assertNobodyCanAct(state, 'after the blinds alone closed the betting');
   assert.equal(state.result?.endedByFold, false);
   assert.equal(state.result?.showdowns.length, 2);
-  // Only 5 of the big blind's 10 can be contested; the other 5 comes straight back.
-  // Seat 0's aces win the 10 that was matched.
+  // Only 5 of the BB's 10 is contested. The other 5 comes back.
   assert.equal(state.seats.find((seat) => seat.seat === 0)?.stack, 10);
   assert.equal(state.seats.find((seat) => seat.seat === 1)?.stack, 995);
   assertAwardsGoToEntitledSeats(state, 'blinds-only run-out');
@@ -387,9 +334,8 @@ test('the blinds alone can close the betting: a small blind all-in for less than
 });
 
 test('a fully committed seat with no opponent able to act is offered nothing at all — not even a fold', () => {
-  // The state the engine must never produce, assembled by hand so the guard is
-  // tested directly rather than through whatever path happens to reach it: flop,
-  // seat 1 all-in, seat 0 covering with 800 behind, nothing to call.
+  // A state the engine never produces, built by hand to test the guard directly. Flop, seat 1
+  // all-in, seat 0 covering with 800 behind, nothing to call.
   const { state } = deal({
     stacks: [1000, 200],
     buttonSeat: 0,
@@ -420,8 +366,7 @@ test('a fully committed seat with no opponent able to act is offered nothing at 
   assert.throws(() => applyAction(closed, 0, { type: 'check' }), /cannot check here/);
   assert.throws(() => applyAction(closed, 0, { type: 'bet', to: 100 }), /nobody to call it/);
 
-  // And the same hand played for real never reaches it: the engine deals the board
-  // out instead of asking.
+  // Played for real, the engine runs the board out instead.
   const played = play(state, [raise(0, 200), call(1)]);
   assert.equal(played.street, 'complete');
   assert.equal(played.actions.length, 2);
@@ -441,7 +386,6 @@ function shoveHappyAction(state: HandState, nextInt: (bound: number) => number):
     const maxTo = aggressive.maxTo ?? aggressive.minTo ?? 0;
     return aggressive.type === 'bet' ? { type: 'bet', to: maxTo } : { type: 'raise', to: maxTo };
   }
-  // A slice of real folds, so fold-out settlement is exercised too.
   if (roll >= 94 && legal.some((entry) => entry.type === 'fold')) return { type: 'fold' };
   if (roll < 85 && legal.some((entry) => entry.type === 'call')) return { type: 'call' };
   if (legal.some((entry) => entry.type === 'check')) return { type: 'check' };
@@ -492,9 +436,8 @@ test('SOAK: 1500 shove-heavy hands conserve chips and never ask an impossible de
     const players = 2 + nextInt(5);
     const bigBlind = [2, 10, 20][nextInt(3)] ?? 10;
     const smallBlind = Math.max(1, Math.floor(bigBlind / 2));
-    // A deliberately lumpy stack distribution: stacks below the blinds force
-    // short all-ins from the blinds, and one very deep stack makes the
-    // "one seat still has chips" shape the common case rather than a rarity.
+    // Stacks below the blinds force short all-ins, and one deep stack makes "one seat still has
+    // chips" the common case.
     const stacks = Array.from({ length: players }, () => {
       const scale = nextInt(3);
       if (scale === 0) return 1 + nextInt(bigBlind * 2);
@@ -520,7 +463,7 @@ test('SOAK: 1500 shove-heavy hands conserve chips and never ask an impossible de
 
     let guard = 0;
     while (state.street !== 'complete') {
-      // Annotated for the same reason as `state`: inferring it here would be circular.
+      // Annotated because inferring it here would be circular.
       const seat: SeatIndex | null = state.toAct;
       assert.notEqual(seat, null, `hand ${handIndex} stalled on ${state.street} with nobody to act`);
       if (seat === null) break;

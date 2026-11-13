@@ -1,13 +1,6 @@
 /**
- * Hand evaluation.
- *
- * `evaluate()` takes any 5, 6 or 7 card set and returns a single integer score
- * where a larger score is a strictly better hand, and two equal scores are a
- * genuine tie (a chop). One function serves the 7-card game path, the 5-card
- * enumeration used in tests, and the 6-card case that shows up when a scenario
- * fixes a turn card.
- *
- * ## How the score is packed
+ * Hand evaluation. `evaluate()` takes 5, 6 or 7 cards and returns an integer score. Larger is
+ * strictly better and equal scores are a chop.
  *
  *     bits 20..23   category  (0 high card .. 8 straight flush)
  *     bits 16..19   first  significant rank
@@ -16,18 +9,9 @@
  *     bits  4.. 7   fourth
  *     bits  0.. 3   fifth
  *
- * The five rank nibbles are the hand's ranks in order of significance, so a
- * plain integer comparison implements the full comparison rules including
- * kickers. Unused nibbles are zero, which is safe because rank index 0 means
- * "deuce" and a deuce only ever appears in a nibble that is actually used.
- *
- * ## Why no arrays
- *
- * Rank counts are kept in four 13-bit "lanes" (`atLeast1..atLeast4`) rather than
- * a `count[13]` array. Bit r of `atLeast3` means "rank r appears at least three
- * times". This is both faster in the Monte Carlo inner loop and avoids indexed
- * array reads, which under this repo's `noUncheckedIndexedAccess` would each need
- * an undefined check.
+ * Ranks are in order of significance, so integer comparison covers kickers. Unused nibbles are zero.
+ * Rank counts live in four 13-bit lanes (bit r of `atLeast3` means rank r appears three or more
+ * times) instead of an array, which is faster and avoids `noUncheckedIndexedAccess` checks.
  */
 
 import { type Card, NUM_RANKS, rankIndexOf, rankName, suitIndexOf } from './cards.ts';
@@ -67,13 +51,7 @@ export class HandEvaluationError extends Error {
   override readonly name = 'HandEvaluationError';
 }
 
-/**
- * Number of set bits in a 13-bit rank mask.
- *
- * The canonical 32-bit SWAR popcount, applied to the masked value. Deliberately
- * not a "13-bit optimised" variant with truncated constants — the standard
- * constants are provably correct and the saving would be unmeasurable.
- */
+/** Set bits in a 13-bit rank mask (standard 32-bit SWAR popcount). */
 export function popCount13(mask: number): number {
   let m = mask & 0x1fff;
   m = m - ((m >> 1) & 0x55555555);
@@ -89,14 +67,11 @@ export function highestRank(mask: number): number {
 }
 
 /**
- * Top rank of the best straight in `mask`, or -1 if there is none.
- *
- * The wheel (A-2-3-4-5) reports a top rank of 3 (the five), which is exactly
- * what makes it compare below every other straight — a 6-high straight reports 4.
+ * Top rank of the best straight in `mask`, or -1. The wheel reports 3 (the five), so it ranks below
+ * a 6-high straight (4).
  */
 export function straightHigh(mask: number): number {
   const m = mask & 0x1fff;
-  // Five consecutive ranks, scanning from the top so the first hit is the best.
   for (let high = NUM_RANKS - 1; high >= 4; high--) {
     const window = 0b11111 << (high - 4);
     if ((m & window) === window) return high;
@@ -132,11 +107,10 @@ function packTop(category: HandCategory, mask: number, count: number, prefix: nu
 }
 
 /**
- * Evaluates the best five-card hand available in `cards`.
+ * Evaluates the best five-card hand in `cards`.
  *
- * @param cards 5, 6 or 7 distinct cards. Duplicates are NOT checked here — that
- *   is enforced at the engine boundary by `assertDistinctCards`, because this
- *   function sits in the Monte Carlo inner loop and must stay allocation-free.
+ * @param cards 5, 6 or 7 distinct cards. Not checked for duplicates, because this runs in the Monte
+ *   Carlo inner loop. `assertDistinctCards` checks at the engine boundary.
  */
 export function evaluate(cards: readonly Card[]): HandScore {
   if (cards.length < 5 || cards.length > 7) {
@@ -148,16 +122,14 @@ export function evaluate(cards: readonly Card[]): HandScore {
   let atLeast2 = 0;
   let atLeast3 = 0;
   let atLeast4 = 0;
-  // One 13-bit rank mask per suit.
   let suitC = 0;
   let suitD = 0;
   let suitH = 0;
   let suitS = 0;
 
-  // Iterating (rather than indexing) keeps every read typed as Card.
   for (const card of cards) {
     const bit = 1 << rankIndexOf(card);
-    // Order matters: promote from the top lane downwards.
+    // Promote from the top lane down.
     atLeast4 |= atLeast3 & bit;
     atLeast3 |= atLeast2 & bit;
     atLeast2 |= atLeast1 & bit;
@@ -178,7 +150,6 @@ export function evaluate(cards: readonly Card[]): HandScore {
     }
   }
 
-  // --- flush and straight flush ---
   let flushMask = 0;
   if (popCount13(suitC) >= 5) flushMask = suitC;
   else if (popCount13(suitD) >= 5) flushMask = suitD;
@@ -190,15 +161,13 @@ export function evaluate(cards: readonly Card[]): HandScore {
     if (sfHigh >= 0) return pack(HAND_CATEGORY.straightFlush, sfHigh);
   }
 
-  // --- four of a kind ---
   if (atLeast4 !== 0) {
     const quad = highestRank(atLeast4);
     const kicker = highestRank(atLeast1 & ~(1 << quad));
     return pack(HAND_CATEGORY.fourOfAKind, quad, kicker < 0 ? 0 : kicker);
   }
 
-  // --- full house ---
-  // With seven cards there can be two trips; the lower trip then plays as the pair.
+  // Seven cards can hold two trips. The lower one then plays as the pair.
   const trips = atLeast3;
   if (trips !== 0) {
     const topTrip = highestRank(trips);
@@ -209,20 +178,16 @@ export function evaluate(cards: readonly Card[]): HandScore {
     }
   }
 
-  // --- flush ---
   if (flushMask !== 0) return packTop(HAND_CATEGORY.flush, flushMask, 5);
 
-  // --- straight ---
   const sHigh = straightHigh(atLeast1);
   if (sHigh >= 0) return pack(HAND_CATEGORY.straight, sHigh);
 
-  // --- three of a kind ---
   if (trips !== 0) {
     const trip = highestRank(trips);
     return packTop(HAND_CATEGORY.threeOfAKind, atLeast1 & ~(1 << trip), 2, [trip]);
   }
 
-  // --- two pair ---
   const pairs = atLeast2 & 0x1fff;
   const pairCount = popCount13(pairs);
   if (pairCount >= 2) {
@@ -232,13 +197,11 @@ export function evaluate(cards: readonly Card[]): HandScore {
     return packTop(HAND_CATEGORY.twoPair, kickers, 1, [high, low]);
   }
 
-  // --- one pair ---
   if (pairCount === 1) {
     const pair = highestRank(pairs);
     return packTop(HAND_CATEGORY.pair, atLeast1 & ~(1 << pair), 3, [pair]);
   }
 
-  // --- high card ---
   return packTop(HAND_CATEGORY.highCard, atLeast1, 5);
 }
 
@@ -257,11 +220,7 @@ export function significantRanks(score: HandScore): number[] {
   return [(score >> 16) & 0xf, (score >> 12) & 0xf, (score >> 8) & 0xf, (score >> 4) & 0xf, score & 0xf];
 }
 
-/**
- * A readable description, e.g. "flush, ace high" or "two pair, kings and threes".
- * Used in hand review and Coach explanations, so it names the hand the way a
- * player would say it rather than dumping the packed score.
- */
+/** A spoken description, e.g. "flush, ace high" or "two pair, kings and threes". */
 export function describeScore(score: HandScore): string {
   const category = categoryOf(score);
   const [r1 = 0, r2 = 0, r3 = 0] = significantRanks(score);

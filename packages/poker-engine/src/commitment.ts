@@ -1,59 +1,17 @@
 /**
- * Deck commitment: a per-card Merkle tree.
- *
- * ## Why not simply hash the deck?
- *
- * The obvious scheme is `commitment = SHA256(salt || deck)`, published before the
- * deal and revealed afterwards so anyone can recompute it. It was the first design
- * here, and a hidden-information test killed it: revealing the deck reveals *all
- * 52 cards*, including the hole cards of players who folded and never showed.
- * Whether an opponent folded a bluff or a monster is exactly the information poker
- * is played over, and handing it out at the end of every hand would be a far worse
- * leak than the one the commitment was added to prevent.
- *
- * ## The scheme
- *
- * Each of the 52 deck positions becomes one Merkle leaf:
+ * Deck commitment as a per-card Merkle tree. Hashing the whole deck would reveal all 52 cards at the
+ * end, including folded hands, so each position is its own leaf and only public cards are revealed.
  *
  *     leaf(i) = SHA256( 0x00 ‖ domain ‖ len(context) ‖ context ‖ i ‖ salt_i ‖ card_i )
+ *     node    = SHA256( 0x01 ‖ left ‖ right )
  *
- * with an independent 32-byte random `salt_i` per position. The tree is padded to
- * 64 leaves with card-free padding leaves, and internal nodes are
+ * 52 leaves are padded to 64 with card-free leaves. The root is published before any action. After
+ * the hand each public card is revealed with its salt and six sibling hashes. This proves each
+ * revealed card sat at that position before the first action. It does not prove the deck was chosen
+ * fairly, since the server could grind decks (accepted risk, docs/THREAT-MODEL.md).
  *
- *     node = SHA256( 0x01 ‖ left ‖ right )
- *
- * The Merkle **root** is published before any player acts. Afterwards the server
- * reveals a leaf — position, card, salt and the six sibling hashes — for each card
- * that legitimately became public: every board card, and the hole cards of players
- * who actually showed at showdown. Every other leaf stays sealed.
- *
- * ## What this proves
- *
- * For each revealed card: it sat at that exact deck position, and it was fixed
- * before the first action. A server that re-ordered undealt cards mid-hand to hit
- * a draw, break a cooler, or protect a bot could not produce a valid proof.
- *
- * ## What it does not prove
- *
- * That the deck was *chosen* fairly. The server generates both deck and salts, so
- * a dishonest one could grind candidate decks and commit to a favourable one
- * before dealing. Ruling that out needs entropy the server cannot predict — a
- * multi-party commit-reveal where each player contributes a committed nonce. That
- * is out of scope and recorded as an accepted risk in docs/THREAT-MODEL.md rather
- * than papered over.
- *
- * ## Why the per-card salt is load-bearing
- *
- * A card is one of 52 values. Without a salt, `SHA256(i ‖ card)` has 52 possible
- * values per position and is trivially brute-forced, so an unrevealed leaf would
- * leak its card to anyone with the root. The 32-byte salt makes each leaf
- * preimage-infeasible.
- *
- * ## Why leaf and node hashes are domain-separated
- *
- * Prefixing leaves with `0x00` and internal nodes with `0x01` prevents a
- * second-preimage attack in which an internal node is passed off as a leaf, which
- * is a known weakness of naive Merkle constructions.
+ * The 32-byte per-card salt stops brute-forcing a leaf's 52 possible values. The 0x00/0x01 prefixes
+ * stop an internal node passing as a leaf (second-preimage attack).
  */
 
 import { createHash } from 'node:crypto';
@@ -73,7 +31,6 @@ const LEAF_TAG = 0x00;
 const NODE_TAG = 0x01;
 const PAD_TAG = 0x02;
 
-/** Published before the first action of the hand. */
 export interface DeckCommitment {
   readonly algorithm: 'sha256';
   readonly version: typeof COMMITMENT_VERSION;
@@ -83,7 +40,7 @@ export interface DeckCommitment {
   readonly context: string;
 }
 
-/** Server-side only. Never leaves the process; redaction strips it. */
+/** Server-side only. Redaction strips it. */
 export interface DeckSecret {
   readonly deck: readonly Card[];
   /** One 32-byte salt per deck position, concatenated: 52 × 32 bytes. */
@@ -104,10 +61,7 @@ export interface RevealedCard {
 export interface DeckReveal {
   readonly commitment: DeckCommitment;
   readonly cards: readonly RevealedCard[];
-  /**
-   * True when every deck position was revealed. Only ever set by an explicit
-   * end-of-session full reveal, never by a hand result.
-   */
+  /** True only for an explicit end-of-session full reveal, never a hand result. */
   readonly complete: boolean;
 }
 
@@ -246,12 +200,7 @@ export function commitToDeckOrder(context: string, deck: readonly Card[], salts:
   };
 }
 
-/**
- * Builds a reveal for exactly the deck positions given.
- *
- * The caller decides which positions are public — see `machine.ts`, which reveals
- * board cards and the hole cards of seats that showed, and nothing else.
- */
+/** Builds a reveal for exactly the given positions. `machine.ts` decides which are public. */
 export function revealPositions(
   commitment: DeckCommitment,
   secret: DeckSecret,
@@ -284,11 +233,7 @@ export function revealEverything(commitment: DeckCommitment, secret: DeckSecret)
   );
 }
 
-/**
- * Verifies a reveal against its published root. This is the client side of the
- * protocol: the web app runs exactly this function so a player can check the deal
- * themselves rather than taking the server's word for it.
- */
+/** Verifies a reveal against its published root. The web app runs this so a player can check the deal. */
 export function verifyDeckReveal(reveal: DeckReveal): RevealVerification {
   const { commitment } = reveal;
   if (commitment.version !== COMMITMENT_VERSION) {
@@ -317,8 +262,7 @@ export function verifyDeckReveal(reveal: DeckReveal): RevealVerification {
     if (!Number.isInteger(entry.card) || entry.card < 0 || entry.card >= DECK_SIZE) {
       return { ok: false, reason: `invalid card id ${entry.card}`, verifiedIndices: verified };
     }
-    // A deck cannot contain the same card twice, so a reveal that claims it does is
-    // invalid regardless of whether the hashes happen to check out.
+    // A reveal that shows one card at two positions is invalid whatever the hashes say.
     if (seenCards.has(entry.card)) {
       return { ok: false, reason: `card ${entry.card} revealed at two positions`, verifiedIndices: verified };
     }

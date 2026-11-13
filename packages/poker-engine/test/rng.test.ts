@@ -15,19 +15,10 @@ import {
 const SRC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 
 /**
- * Removes block and line comments so that a prose mention of a banned API is not
- * mistaken for a use of it. Not a full parser — a `//` or `/*` inside a string
- * literal would confuse it — but the engine source contains no such string, and
- * the alternative (matching the raw text) produces a false positive on the very
- * comment that documents the rule.
+ * Removes block and line comments so a prose mention of a banned API is not read as a use. Not a
+ * full parser, since a `//` or `/*` inside a string would confuse it, and the engine has none.
  */
-/**
- * Every `.ts` file under `src/`, RECURSIVELY.
- *
- * This used to read one level with `readdirSync(SRC_DIR)`, so a future `packages/poker-engine/src/
- * <subdir>/` would have been skipped in silence — the scan would still have passed, over fewer
- * files than it claimed to cover. `src/` is flat today; the point is that it may not stay so.
- */
+/** Every `.ts` file under `src/`, recursively, so a future subdirectory is not skipped in silence. */
 function sourceFiles(dir: string = SRC_DIR): string[] {
   const found: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -46,13 +37,9 @@ function stripComments(source: string): string {
 }
 
 test('src/ never uses Math.random in code', () => {
-  // The guardrail is that cards come only from a CSPRNG. A source scan is a blunt
-  // check, but it is the one that catches the mistake being introduced later, when
-  // someone reaches for the convenient thing in a hurry.
   const offenders: string[] = [];
   const files = sourceFiles();
-  // A walker that silently matched nothing would pass for ever, which is the most likely way this
-  // quietly stops working.
+  // A walker that matched nothing would pass for ever.
   assert.ok(files.length > 5, `expected the engine source under src/, found ${files.length} files`);
   for (const file of files) {
     const code = stripComments(readFileSync(file, 'utf8'));
@@ -62,7 +49,7 @@ test('src/ never uses Math.random in code', () => {
 });
 
 test('the Math.random scan would actually catch a violation', () => {
-  // A guard test is worthless if it cannot fail. Prove the detector fires.
+  // A guard test is worthless if it cannot fail.
   assert.ok(stripComments('const x = Math.random();').includes('Math.random'));
   assert.ok(!stripComments('// mentions Math.random in prose').includes('Math.random'));
   assert.ok(!stripComments('/* mentions Math.random in a block */').includes('Math.random'));
@@ -77,8 +64,7 @@ test('unbiasedInt rejects invalid bounds and handles bound 1', () => {
 });
 
 test('unbiasedInt discards draws in the wrap region rather than folding them', () => {
-  // With bound 3, limit = floor(2^32 / 3) * 3 = 4294967295. The single value
-  // 4294967295 must be rejected, not mapped to 0.
+  // With bound 3, limit = floor(2^32 / 3) * 3 = 4294967295. The value 4294967295 must be rejected.
   const draws = [4_294_967_295, 7];
   let index = 0;
   const source = (): number => {
@@ -106,9 +92,8 @@ test('unbiasedInt is close to uniform over a large sample', () => {
     counts[value] = (counts[value] ?? 0) + 1;
   }
   const expected = samples / bound;
-  // Chi-squared goodness of fit. With 51 degrees of freedom the 99.9th percentile
-  // is about 99.6; a correct generator sits far below that. This is a smoke test
-  // for gross bias (e.g. modulo folding), not a certification of the CSPRNG.
+  // Chi-squared with 51 degrees of freedom, 99.9th percentile about 99.6. A smoke test for gross
+  // bias such as modulo folding, not a certification of the CSPRNG.
   let chiSquared = 0;
   for (let value = 0; value < bound; value++) {
     const observed = counts[value] ?? 0;
@@ -129,9 +114,7 @@ test('shuffleInPlace produces a permutation and touches every position', () => {
 });
 
 test('shuffleInPlace reaches every permutation of three items roughly equally', () => {
-  // Fisher–Yates picking from [0, i] gives each of the 3! = 6 orderings equal
-  // probability. The classic bug — picking from [0, n) — does not, and shows up
-  // here as a lopsided distribution.
+  // Fisher-Yates from [0, i] gives each of the 6 orderings equal odds. Picking from [0, n) does not.
   const random = createSecureRandom();
   const seen = new Map<string, number>();
   const trials = 120_000;

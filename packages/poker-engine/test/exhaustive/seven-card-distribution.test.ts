@@ -1,28 +1,10 @@
 /**
- * The strongest single check on the hand evaluator: enumerate every one of the
- * 133,784,560 seven-card hands in a 52-card deck and confirm that the resulting
- * category frequencies match the published combinatorial result exactly.
+ * Enumerates all 133,784,560 seven-card hands and checks category counts against the published
+ * combinatorial result. One misclassified hand moves at least two counters.
  *
- * This is not a self-consistency test. The expected numbers below are a known
- * mathematical result about 7-card poker hands, derived independently of this
- * code. A single misclassified hand — one straight counted as a flush, one wheel
- * missed, one kicker mis-ranked in a way that changes the category — moves at
- * least two of these nine counters and fails the test.
- *
- * It is kept out of the default suite because it takes seconds rather than milliseconds:
- *
- *     pnpm run test:exhaustive
- *
- * HOW the exclusion actually works, because this is easy to break: the package's `test`
- * script globs `test/*.test.ts` — ONE level deep. Node's `--test` expands a doubled star
- * across directories, so a recursive glob would match this file and run 133 million hands on
- * every `pnpm test`. Living in a subdirectory is NOT by itself what excludes it; the one-level
- * glob is. If someone "fixes" that glob to be recursive, this test silently rejoins the
- * default suite and `pnpm run test:all` runs it twice.
- *
- * (The recursive glob is described in words rather than written out because the character pair
- * it needs would close this very comment. That is not a joke at the reader's expense — it is
- * how this file came to have a parse error the first time the note was added.)
+ * Run with `pnpm run test:exhaustive`. It stays out of `pnpm test` only because that script's glob
+ * is one level deep (`test/*.test.ts`). A recursive glob would run it on every test run, and twice
+ * under `test:all`.
  */
 
 import assert from 'node:assert/strict';
@@ -30,10 +12,7 @@ import { test } from 'node:test';
 import { DECK_SIZE } from '../../src/cards.ts';
 import { categoryOf, evaluate, HAND_CATEGORY, HAND_CATEGORY_NAMES } from '../../src/evaluate.ts';
 
-/**
- * Published frequencies for 7-card hands (best five of seven), out of
- * C(52,7) = 133,784,560. These sum exactly to C(52,7), which is itself checked.
- */
+/** Published 7-card frequencies, out of C(52,7) = 133,784,560. Their sum is checked too. */
 const EXPECTED: ReadonlyArray<readonly [number, number]> = [
   [HAND_CATEGORY.highCard, 23_294_460],
   [HAND_CATEGORY.pair, 58_627_800],
