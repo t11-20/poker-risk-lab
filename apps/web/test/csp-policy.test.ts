@@ -111,12 +111,17 @@ describe('the development Content-Security-Policy', () => {
   const development = contentSecurityPolicy({ nonce: NONCE, development: true });
   const production = contentSecurityPolicy({ nonce: NONCE });
 
-  it('adds exactly the two things next dev cannot run without', () => {
+  it('adds to script-src and connect-src only what next dev cannot run without', () => {
     const script = directive(development, 'script-src');
     assert.ok(script !== null);
     assert.ok(script.includes("'unsafe-eval'"), 'React Refresh compiles modules at runtime');
     assert.ok(!script.includes("'unsafe-inline'"), 'even development never needs unsafe-inline');
     assert.match(directive(development, 'connect-src') ?? '', /ws:\/\/localhost:3000/);
+  });
+
+  it("lets next dev's overlay style itself, and only in development", () => {
+    assert.equal(directive(development, 'style-src'), "style-src 'self' 'unsafe-inline'");
+    assert.equal(directive(production, 'style-src'), "style-src 'self'");
   });
 
   it('drops upgrade-insecure-requests, which would break an http dev host', () => {

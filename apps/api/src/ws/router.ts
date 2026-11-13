@@ -858,6 +858,7 @@ export class WsRouter {
     // only built once the answer is known to be worth computing.
     const task = coachTaskForView(view, {
       samples: this.coachSamples,
+      names: room.table.dealtNames(),
       ...(message.opponentRange === undefined ? {} : { opponentRange: message.opponentRange }),
     });
     // Timed and counted like the REST analyses. `scripts/load-test.mjs` states in its own header
@@ -1093,6 +1094,11 @@ function requestIdOf(message: WsClientMessage): string | null {
 export interface CoachForViewOptions {
   readonly samples: number;
   readonly opponentRange?: string;
+  /**
+   * The names the table dealt in, so the Coach names opponents the way the seat plates do. Absent,
+   * opponents are `seat N` — which `test/coach-task-pin.test.ts` holds to the byte.
+   */
+  readonly names?: ReadonlyMap<number, string>;
 }
 
 /**
@@ -1115,7 +1121,12 @@ export function coachTaskForView(view: PlayerView, options: CoachForViewOptions)
     options.opponentRange === undefined
       ? LIVE_COACH_POLICY.range
       : opponentRangeOption(options.opponentRange);
-  const reading = coachSpotForView(view, { ...LIVE_COACH_POLICY, range, samples: options.samples });
+  const names = options.names;
+  const reading = coachSpotForView(
+    view,
+    { ...LIVE_COACH_POLICY, range, samples: options.samples },
+    names === undefined ? undefined : (seat) => names.get(seat),
+  );
   if (reading.kind === 'refused') throw refusalError(reading.refusal);
   const { spot } = reading;
   if (range.kind === 'notation') assumedRange(range, [...spot.heroCards, ...spot.board]);

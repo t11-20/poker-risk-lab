@@ -130,3 +130,44 @@ test('refuses a view with no live opponent, and one after the betting', () => {
     refusal: { kind: 'hand-over', street: 'showdown' },
   });
 });
+
+// Audit at 308fadf: the live Coach listed "seat 2 / seat 3 / seat 6" under "Equity by player" and
+// "Seat 2 holds any of 518 combinations…" in its assumptions, beside seat plates that show a name and
+// a position and no number. The API now passes the names it dealt in.
+test('names each opponent the way the caller names the seat, and says so in the assumptions', () => {
+  const { view } = pinnedAt('preflop');
+  const names = new Map(view.seats.map((seat) => [seat.seat, `Player at ${String(seat.seat)}`]));
+  const reading = coachSpotForView(view, LIVE_COACH_POLICY, (seat) => names.get(seat));
+  assert.ok(reading.kind === 'spot');
+  const labels = reading.spot.opponents.map((opponent) => opponent.label);
+  assert.ok(labels.length >= 2, `a sweep of nothing is not a pass: ${JSON.stringify(labels)}`);
+  for (const label of labels) assert.match(label, /^Player at \d$/u);
+
+  const report = buildCoachReport(coachInputFor({ ...reading.spot, samples: 50 }));
+  const named = report.equity.perPlayer.slice(1).map((player) => player.label);
+  assert.deepEqual(named, labels);
+  for (const label of labels) {
+    assert.ok(
+      report.assumptions.some((line) => line.startsWith(`${label} holds any of`)),
+      `no assumption names ${label}`,
+    );
+  }
+});
+
+test('falls back to the seat number for a seat with no usable name, and never to "you"', () => {
+  const { view } = pinnedAt('preflop');
+  const opponents = view.seats.filter((seat) => !seat.isSelf && seat.status === 'active');
+  const [first, second, third] = opponents;
+  assert.ok(first !== undefined && second !== undefined && third !== undefined);
+  // "You" would be read as the reader by `holdsClause` and written up as "You hold any of…".
+  const names = new Map([
+    [first.seat, 'You'],
+    [second.seat, '   '],
+  ]);
+  const reading = coachSpotForView(view, LIVE_COACH_POLICY, (seat) => names.get(seat));
+  assert.ok(reading.kind === 'spot');
+  const bySeat = new Map(opponents.map((seat, index) => [seat.seat, reading.spot.opponents[index]?.label]));
+  assert.equal(bySeat.get(first.seat), `seat ${String(first.seat + 1)}`);
+  assert.equal(bySeat.get(second.seat), `seat ${String(second.seat + 1)}`);
+  assert.equal(bySeat.get(third.seat), `seat ${String(third.seat + 1)}`, 'a seat the caller has no name for');
+});

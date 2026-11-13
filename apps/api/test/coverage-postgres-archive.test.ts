@@ -21,7 +21,7 @@
  * ## What "faithful" is asserted against
  *
  * The archive's own inputs. The tap below wraps the real `postgresArchive`, delegates every call
- * to it unchanged, and keeps a copy of what went in: the `ArchivedDeal`, the `LoggedAction`s and
+ * to it unchanged, and keeps a copy of what went in: the `ArchivedDeal`, the `ArchivedAction`s and
  * the `ArchivedResult`. The rows are then compared against those, so a binding that dropped a
  * field, transposed two arguments or swallowed a rejection fails here. Nothing is stubbed — the
  * tap adds an observation and changes no behaviour.
@@ -50,7 +50,7 @@
 
 import assert from 'node:assert/strict';
 import { after, describe, it } from 'node:test';
-import type { Card, LoggedAction } from '@prl/poker-engine';
+import type { Card } from '@prl/poker-engine';
 import { cardToString, createSecureRandom } from '@prl/poker-engine';
 import { loadConfig } from '../src/config.ts';
 import { createDatabaseClient, type Sql, type TransactionSql } from '../src/db.ts';
@@ -59,6 +59,7 @@ import { MAX_PUBLIC_REVEALED_CARDS } from '../src/repositories/hands.ts';
 import * as usersRepository from '../src/repositories/users.ts';
 import { type HandArchive, postgresArchive, postgresRoomStore, RoomRegistry } from '../src/rooms/registry.ts';
 import type {
+  ArchivedAction,
   ArchivedDeal,
   ArchivedDealSeat,
   ArchivedResult,
@@ -135,8 +136,8 @@ interface ArchiveTap {
   readonly noteProblem: (message: string) => void;
   readonly deals: ArchivedDeal[];
   readonly results: ArchivedResult[];
-  /** Every `LoggedAction` handed to the archive, by hand id, in the order it arrived. */
-  readonly actions: Map<string, LoggedAction[]>;
+  /** Every `ArchivedAction` handed to the archive, by hand id, in the order it arrived. */
+  readonly actions: Map<string, ArchivedAction[]>;
   readonly problems: string[];
 }
 
@@ -151,7 +152,7 @@ function tapArchive(inner: HandArchive): ArchiveTap {
   const facts = new Set<string>();
   const waiters = new Map<string, { resolve: () => void; reject: (error: Error) => void }[]>();
   const problems: string[] = [];
-  const actions = new Map<string, LoggedAction[]>();
+  const actions = new Map<string, ArchivedAction[]>();
 
   const record = (fact: string): void => {
     facts.add(fact);
@@ -547,6 +548,7 @@ describe('postgresArchive — a played hand is durable and faithful', dbOptions,
           assert.equal(persisted.bet_level_after, action.betLevelAfter);
           assert.equal(persisted.pot_after, action.potAfter);
           assert.equal(persisted.was_automatic, action.wasAutomatic);
+          assert.equal(persisted.automatic_reason, action.automaticReason);
           const sized = action.action.type === 'bet' || action.action.type === 'raise';
           assert.equal(
             persisted.action_to,
@@ -568,6 +570,31 @@ describe('postgresArchive — a played hand is durable and faithful', dbOptions,
           select status from prl.rooms where id = ${fixture.roomId}
         `;
         assert.equal(room[0]?.status, 'open', 'a room that is not mid-hand reads as open again');
+      } finally {
+        fixture.registry.closeAll();
+      }
+    });
+  });
+
+  // Migration 0009. Before it, this fold was written `was_automatic = true` exactly like a clock
+  // running out, and the hand review read it back as "The clock ran out and the server acted".
+  it('writes down that a fold for a player who stood up was a departure, not a timeout', async () => {
+    await inRollback(async (tx) => {
+      const fixture = await seatTwo(tx, ['Alice', 'Bob']);
+      try {
+        const started = await fixture.table.startHand();
+        await fixture.tap.waitFor(`status:${fixture.roomId}:playing`);
+        const next = toAct(fixture.table, fixture.alice.userId);
+        assert.ok(next !== null, 'somebody is to act preflop');
+        await fixture.registry.standFromTable(fixture.roomId, next.userId);
+        await fixture.tap.waitFor(`completed:${started.handId}`);
+        assert.deepEqual(fixture.tap.problems, [], 'no archive write may fail');
+
+        const persisted = await handsRepository.actionsOf(tx, started.handId);
+        assert.deepEqual(
+          persisted.map((row) => [row.action_type, row.was_automatic, row.automatic_reason]),
+          [['fold', true, 'departed']],
+        );
       } finally {
         fixture.registry.closeAll();
       }

@@ -490,7 +490,8 @@ async function actionsOfHand(sql: Db, handId: string): Promise<HandActionRow[]> 
            a.amount_paid,
            a.bet_level_after,
            a.pot_after,
-           a.was_automatic
+           a.was_automatic,
+           a.automatic_reason
       from prl.hand_actions a
      where a.hand_id = ${handId}
      order by a.sequence
