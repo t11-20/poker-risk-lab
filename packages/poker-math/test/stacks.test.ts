@@ -1,26 +1,8 @@
 /**
- * Tests for src/stacks.ts.
- *
- * ## Where the expected values come from
- *
- * Every expectation is hand arithmetic shown in a comment, a closed-form identity
- * re-derived in this file rather than copied from the source, or a structural
- * property that holds whatever the implementation is (monotonicity across the sizing
- * ladder, band boundaries, the SPR-4 commitment identity).
- *
- * The ladder's two prices are checked twice over. `src/stacks.ts` gets them from
- * `src/odds.ts` rather than working them out itself, so the ladder is cross-checked
- * against `priceLaidByBet` and `defenceFrequency` to pin that wiring; and both are
- * ALSO checked against `priceByHand` and `mdfByHand` below, re-derived here from the
- * definition of a call. The second check is what makes the first mean anything —
- * agreement between two modules that share a formula only proves they share it.
- *
- * ## The guardrail test
- *
- * `no SPR implication tells the reader what to do` is not a maths test. It is a
- * product guardrail with teeth: SPR describes the shape of a decision and nothing
- * more, and the moment one of those strings starts giving instructions the app is
- * claiming an authority it does not have. Cheaper to catch here than in review.
+ * Tests for src/stacks.ts. Expectations are hand arithmetic, closed forms re-derived here, or
+ * structural properties. The ladder's prices come from `src/odds.ts`, so they are checked against
+ * odds.ts (the wiring) and against `priceByHand` and `mdfByHand` (the formula).
+ * SPR implications describe a situation and must never tell the reader what to do.
  */
 
 import assert from 'node:assert/strict';
@@ -45,11 +27,7 @@ function closeTo(actual: number, expected: number, message: string, tolerance = 
 }
 
 /**
- * The equity a caller needs against a bet of `b` into a pot of `pot`, derived here
- * from the definition of a call and not from the source.
- *
- * They put in `b` to play for a pot that will hold `pot + b + b`. Break-even is where
- * the average return equals the cost:
+ * The equity a caller needs against a bet of `b` into `pot`, from the definition of a call.
  *
  *     e x (pot + 2b) = b
  *     e = b / (pot + 2b)
@@ -59,11 +37,7 @@ function priceByHand(pot: number, betSize: number): number {
 }
 
 /**
- * Minimum defence frequency, derived from the bluffer's side.
- *
- * A bluff of `b` into `pot` breaks even when it works `b / (pot + b)` of the time —
- * risk over the eventual total. So the defender has to continue with the complement
- * of that for bluffs not to be free money:
+ * Minimum defence frequency, from the bluffer's side. A bluff breaks even at `b / (pot + b)`.
  *
  *     MDF = 1 - b / (pot + b) = pot / (pot + b)
  */
@@ -71,8 +45,7 @@ function mdfByHand(pot: number, betSize: number): number {
   return pot / (pot + betSize);
 }
 
-// Language that would turn a description of the situation into an instruction about
-// how to play it. Checked against every SPR implication string.
+// Phrases that turn a description into an instruction.
 const PRESCRIPTIVE_PHRASES = [
   'you should',
   'always',
@@ -88,14 +61,8 @@ const PRESCRIPTIVE_PHRASES = [
   'you have to fold',
 ];
 
-// ---------------------------------------------------------------------------
-// Effective stack
-// ---------------------------------------------------------------------------
-
 test('the effective stack is the smaller of yours and the deepest opponent', () => {
-  // Hand-worked, one opponent up to five, mixed sizes. The rule is
-  // min(hero, max(opponents)), so the deepest opponent sets the ceiling and hero's
-  // own stack caps it.
+  // min(hero, max(opponents)).
   const cases: { hero: number; opponents: number[]; expected: number; why: string }[] = [
     { hero: 100, opponents: [100], expected: 100, why: 'equal stacks' },
     { hero: 100, opponents: [40], expected: 40, why: 'one short opponent caps it' },
@@ -124,14 +91,12 @@ test('the effective stack explanation names the stack doing the limiting', () =>
   assert.ok(opponentIsShort.explanation.includes('80'));
   assert.ok(opponentIsShort.explanation.includes('120'), 'the 120 that is not in play must be named');
 
-  // Multiway, one figure is not the whole story and the string has to say so.
   const multiway = effectiveStack(200, [80, 150]);
   assert.ok(multiway.explanation.includes('its own effective stack'), 'the per-opponent caveat');
 });
 
 test('the effective stack never exceeds either side, over a wide sweep', () => {
-  // The property that makes the figure safe to use: it can never claim more can
-  // change hands than one of the two players can actually pay.
+  // The figure never claims more can change hands than either player can pay.
   for (const hero of [0, 1, 17, 100, 999]) {
     for (const a of [0, 1, 17, 100, 999]) {
       for (const b of [0, 1, 17, 100, 999]) {
@@ -152,10 +117,6 @@ test('an effective stack with nobody to play against is refused', () => {
   assert.throws(() => effectiveStack(Number.POSITIVE_INFINITY, [100]), /must be a finite number/);
 });
 
-// ---------------------------------------------------------------------------
-// Stack-to-pot ratio
-// ---------------------------------------------------------------------------
-
 test('SPR is the effective stack divided by the pot', () => {
   // 400 / 100 = 4. 150 / 200 = 0.75. 2600 / 200 = 13.
   closeTo(stackToPotRatio(400, 100).spr, 4, 'four pots behind');
@@ -169,9 +130,8 @@ test('SPR is the effective stack divided by the pot', () => {
 });
 
 test('the SPR bands land exactly where they are documented', () => {
-  // Documented convention: lower-inclusive, upper-exclusive, with the top band
-  // opening strictly above 13. Every edge is pinned from both sides, using a pot of
-  // 100 so the effective stack IS the SPR x 100 and the arithmetic is obvious.
+  // Lower-inclusive, upper-exclusive, with the top band strictly above 13. Every edge is pinned from
+  // both sides at a pot of 100, so the stack is SPR x 100.
   const edges: { stack: number; band: string; why: string }[] = [
     { stack: 0, band: 'very-low', why: 'nothing behind' },
     { stack: 99.9, band: 'very-low', why: 'just under 1' },
@@ -190,9 +150,7 @@ test('the SPR bands land exactly where they are documented', () => {
 });
 
 test('every SPR lands in exactly one band, and the bands only ever climb', () => {
-  // A sweep across the whole range: the band must be a non-decreasing function of
-  // the ratio, and every ratio must get one. A gap or an overlap in the chain of
-  // comparisons would show up as a band going backwards or as an undefined band.
+  // The band must be non-decreasing in the ratio, and every ratio must get one.
   const order = ['very-low', 'low', 'medium', 'high', 'very-high'];
   let lowestSeen = 0;
   for (let stack = 0; stack <= 3000; stack += 7) {
@@ -206,8 +164,7 @@ test('every SPR lands in exactly one band, and the bands only ever climb', () =>
 });
 
 test('an SPR against an empty pot throws instead of dividing by zero', () => {
-  // Without this the function returns Infinity for a stack over nothing, and a UI
-  // renders "Infinity pots behind" as though it were a measurement.
+  // Otherwise a stack over nothing returns Infinity and renders as a measurement.
   assert.throws(() => stackToPotRatio(100, 0), /pot must be more than 0 chips/);
   assert.throws(() => stackToPotRatio(100, -50), /pot must be more than 0 chips/);
   assert.throws(() => stackToPotRatio(-1, 100), /effectiveStack must be 0 or more chips/);
@@ -216,9 +173,7 @@ test('an SPR against an empty pot throws instead of dividing by zero', () => {
 });
 
 test('no SPR implication tells the reader what to do', () => {
-  // The product guardrail. Each implication must describe the situation — when the
-  // commitment decision arrives, what room is left — without naming an action or
-  // claiming a universally right answer.
+  // Each implication describes the situation without naming an action or a universally right answer.
   for (let stack = 0; stack <= 4000; stack += 13) {
     const { band, implication } = stackToPotRatio(stack, 100);
     assert.ok(implication.length > 40, `band ${band}: an implication this short says nothing concrete`);
@@ -234,8 +189,7 @@ test('no SPR implication tells the reader what to do', () => {
 });
 
 test('each SPR band says something different and concrete about the depth', () => {
-  // Five bands, five distinct strings. Identical text across bands would mean the
-  // band is decorative.
+  // Five bands, five distinct strings.
   const texts = new Set<string>();
   for (const stack of [50, 200, 400, 900, 5000]) {
     const result = stackToPotRatio(stack, 100);
@@ -244,13 +198,8 @@ test('each SPR band says something different and concrete about the depth', () =
   assert.equal(texts.size, 5, 'each band has its own implication');
 });
 
-// ---------------------------------------------------------------------------
-// Sizing ladder
-// ---------------------------------------------------------------------------
-
 test('a pot-sized bet lays the caller exactly one third and demands exactly half', () => {
-  // The two anchor identities. Bet b = pot: the caller pays b to play for pot + 2b =
-  // 3b, so they need b/3b = 1/3. And MDF = pot / (pot + pot) = 1/2.
+  // Bet b = pot. The caller pays b to play for 3b, so needs 1/3. MDF = pot / (pot + pot) = 1/2.
   const ladder = sizingLadder(100, 1000);
   const potSized = ladder.find((option) => option.label === 'pot');
   assert.ok(potSized !== undefined, 'a pot-sized bet is on the ladder');
@@ -258,8 +207,7 @@ test('a pot-sized bet lays the caller exactly one third and demands exactly half
   closeTo(potSized.priceLaidToCaller, 1 / 3, 'a pot-sized bet lays 1/3');
   closeTo(potSized.minimumDefenceFrequency, 0.5, 'and demands half the range');
 
-  // Hand-worked second anchor: half pot. b = 50 into 100 gives 50/200 = 1/4, and
-  // MDF = 100/150 = 2/3.
+  // Half pot: b = 50 into 100 gives 50/200 = 1/4, and MDF = 100/150 = 2/3.
   const halfPot = ladder.find((option) => option.label === 'half pot');
   assert.ok(halfPot !== undefined);
   closeTo(halfPot.priceLaidToCaller, 0.25, 'a half-pot bet lays 1/4');
@@ -267,11 +215,8 @@ test('a pot-sized bet lays the caller exactly one third and demands exactly half
 });
 
 test("every rung's price and defence frequency agree with odds.ts and with hand arithmetic", () => {
-  // The cross-check the brief asks for, run against both odds.ts (which is where
-  // stacks.ts gets these figures, so this pins the wiring) and the derivations at the
-  // top of this file (which is what makes the agreement evidence rather than
-  // tautology). Also pins the two prices to each other: MDF is the complement of the
-  // break-even bluff frequency, so MDF + alpha must be exactly 1.
+  // Against odds.ts and the hand derivations. MDF is the complement of the break-even bluff
+  // frequency, so MDF + alpha must be exactly 1.
   let rungs = 0;
   for (const pot of [1, 7, 40, 100, 333, 5000]) {
     for (const maxBet of [1, 9, 50, 100, 400, 10_000]) {
@@ -292,12 +237,9 @@ test("every rung's price and defence frequency agree with odds.ts and with hand 
         const alpha = option.amount / (pot + option.amount);
         closeTo(fromOdds.alpha, alpha, `${option.label}: alpha vs the hand derivation`);
         closeTo(option.minimumDefenceFrequency + alpha, 1, `${option.label}: MDF is 1 - alpha`);
-        // Whole chips only: the engine rejects a fractional bet, so a rung that is not
-        // an integer is not an action anybody could submit.
+        // The engine rejects a fractional bet.
         assert.ok(Number.isInteger(option.amount), `${option.label}: ${option.amount} is not whole chips`);
-        // A caller can never need more than half the pot's worth of equity: even an
-        // enormous bet approaches 1/2 from below, because their own call inflates
-        // the pot they are buying into.
+        // A caller never needs half the pot's equity or more. A huge bet approaches 1/2 from below.
         assert.ok(
           option.priceLaidToCaller > 0 && option.priceLaidToCaller < 0.5,
           `${option.label}: price range`,
@@ -314,7 +256,7 @@ test("every rung's price and defence frequency agree with odds.ts and with hand 
 });
 
 test('the ladder holds the sizes it should, skips what the stack cannot pay, and always offers the all-in', () => {
-  // Deep: all seven fractions of a 100 pot fit under a 1000 cap, then the all-in.
+  // All seven fractions of a 100 pot fit under a 1000 cap, then the all-in.
   // Rounded down to whole chips: 25, 33, 50, 66, 75, 100, 150.
   const deep = sizingLadder(100, 1000);
   assert.deepEqual(
@@ -349,14 +291,12 @@ test('the ladder holds the sizes it should, skips what the stack cannot pay, and
     [25, 33, 40],
   );
 
-  // Capped below every fraction: the all-in is the only size, which is itself the
-  // useful message — there is no sizing decision left.
+  // Capped below every fraction, the all-in is the only size.
   const shove = sizingLadder(100, 10);
   assert.equal(shove.length, 1);
   assert.equal(shove[0]?.label, 'all-in');
   assert.equal(shove[0]?.amount, 10);
 
-  // No rung ever exceeds the cap.
   for (const pot of [3, 100, 777]) {
     for (const maxBet of [1, 4, 60, 250, 9000]) {
       for (const option of sizingLadder(pot, maxBet)) {
@@ -368,9 +308,7 @@ test('the ladder holds the sizes it should, skips what the stack cannot pay, and
 });
 
 test('an all-in that lands on a fraction is listed once, with a note that it is all-in', () => {
-  // Exactly one pot behind: the pot-sized rung and the all-in are the same bet, so
-  // the ladder must not offer it twice. The learner still needs to know the size is
-  // a shove, so it goes in the note.
+  // With one pot behind, the pot-sized rung and the all-in are the same bet, offered once with a note.
   const ladder = sizingLadder(100, 100);
   assert.deepEqual(
     ladder.map((option) => option.label),
@@ -380,8 +318,8 @@ test('an all-in that lands on a fraction is listed once, with a note that it is 
   assert.equal(last?.amount, 100);
   assert.ok(last?.note.includes('also an all-in'), 'the coincidence has to be stated somewhere');
 
-  // Amounts are distinct throughout, at every cap that could collide with a rung and
-  // in the small pots where two fractions round onto the same whole number.
+  // Amounts are distinct at every cap that could collide with a rung, and in small pots where
+  // fractions round to the same chip.
   for (const maxBet of [25, 33, 50, 66, 75, 100, 150, 1000]) {
     const amounts = sizingLadder(100, maxBet).map((option) => option.amount);
     assert.equal(new Set(amounts).size, amounts.length, `cap ${maxBet} produced a duplicated size`);
@@ -396,11 +334,8 @@ test('an all-in that lands on a fraction is listed once, with a note that it is 
 });
 
 test('a pot too small to split still offers the sizes that exist', () => {
-  // A 3-chip pot, walked through by hand: a quarter is floor(0.75) = 0 and is not a
-  // bet; a third is floor(1) = 1; a half is floor(1.5) = 1, the same bet again, so it
-  // is dropped; two thirds is floor(2) = 2; three quarters is floor(2.25) = 2, dropped
-  // as a duplicate; the pot is 3; and one and a half pots is floor(4.5) = 4. Nothing
-  // here is a fractional chip and nothing is a bet of nothing.
+  // A 3-chip pot: a quarter is floor(0.75) = 0 and is not a bet; a third is 1; a half is 1 again and
+  // dropped; two thirds is 2; three quarters is 2 and dropped; the pot is 3; one and a half pots is 4.
   const tiny = sizingLadder(3, 100);
   assert.deepEqual(
     tiny.map((option) => [option.label, option.amount]),
@@ -425,8 +360,7 @@ test('a pot too small to split still offers the sizes that exist', () => {
 });
 
 test('a bigger bet lays the caller a better price and demands less defence', () => {
-  // Monotonicity across the ladder, which is the relationship the whole table exists
-  // to show: b/(pot + 2b) climbs with b, pot/(pot + b) falls with it.
+  // b/(pot + 2b) climbs with b, and pot/(pot + b) falls with it.
   for (const pot of [10, 100, 2500]) {
     const ladder = sizingLadder(pot, pot * 20);
     let previousAmount = 0;
@@ -452,13 +386,8 @@ test('a sizing ladder needs a real pot and a real stack', () => {
   assert.throws(() => sizingLadder(100, Number.POSITIVE_INFINITY), /must be a finite number/);
 });
 
-// ---------------------------------------------------------------------------
-// Commitment
-// ---------------------------------------------------------------------------
-
 test('after a pot-sized bet is called, the pot has trebled and the rest is behind', () => {
-  // Hand-worked. Bet the pot and get called: pot becomes 3 x pot, behind becomes
-  // stack - pot, so SPR after = (stack - pot) / (3 x pot).
+  // Bet the pot and get called: SPR after = (stack - pot) / (3 x pot).
   //   stack 400, pot 100 -> 300 / 300 = 1
   //   stack 700, pot 100 -> 600 / 300 = 2
   //   stack 250, pot 100 -> 150 / 300 = 0.5
@@ -470,16 +399,12 @@ test('after a pot-sized bet is called, the pot has trebled and the rest is behin
 });
 
 test('an SPR of 4 is exactly the depth where two called pot-sized bets commit the stack', () => {
-  // The identity, at any pot: starting at SPR 4 the stack is 4 x pot, so after one
-  // pot-sized bet and call it is (4p - p) / 3p = 1 — and an SPR of 1 is precisely
-  // the depth at which the next pot-sized bet IS the whole stack. That is where the
-  // "SPR 4 is a commitment threshold" idea comes from, and it is arithmetic rather
-  // than received wisdom.
+  // At SPR 4, one pot-sized bet and call leaves (4p - p) / 3p = 1, the depth where the next pot-sized
+  // bet is the whole stack. That is the SPR-4 commitment threshold.
   for (const pot of [1, 5, 40, 100, 999, 12_345]) {
     const first = commitmentThreshold({ effectiveStack: 4 * pot, pot });
     closeTo(first.sprAfterPotSizedBet, 1, `pot ${pot}: SPR 4 leaves exactly SPR 1`);
 
-    // And the next street confirms it: with SPR 1 the pot-sized bet is the stack.
     const behind = 4 * pot - pot;
     const potAfter = 3 * pot;
     closeTo(behind, potAfter, `pot ${pot}: at SPR 1 the pot-sized bet is the whole stack`);
@@ -490,21 +415,19 @@ test('an SPR of 4 is exactly the depth where two called pot-sized bets commit th
 });
 
 test('when a pot-sized bet is more than the stack, nothing is behind and the note says why', () => {
-  // Not a silent clamp: a negative SPR would be nonsense, so the figure is 0 and the
-  // reason travels with it.
+  // A negative SPR is meaningless, so the figure is 0 and the reason is in the text.
   const short = commitmentThreshold({ effectiveStack: 80, pot: 100 });
   assert.equal(short.sprAfterPotSizedBet, 0);
   assert.ok(short.note.includes('80'), 'the stack that could not cover the bet is named');
   assert.ok(short.note.includes('100'), 'and the bet it could not cover');
   assert.ok(short.note.includes('betting everything'));
 
-  // The boundary: stack exactly equal to the pot is still an all-in, not an SPR of 0
-  // that happens to be arrived at by division.
+  // A stack equal to the pot is an all-in, not an SPR of 0 reached by division.
   const exact = commitmentThreshold({ effectiveStack: 100, pot: 100 });
   assert.equal(exact.sprAfterPotSizedBet, 0);
   assert.ok(exact.note.includes('betting everything'));
 
-  // Just above it is a real ratio again: (100.01 - 100) / 300.
+  // (100.01 - 100) / 300.
   const justOver = commitmentThreshold({ effectiveStack: 100.01, pot: 100 });
   closeTo(justOver.sprAfterPotSizedBet, 0.01 / 300, 'a sliver behind');
 });
@@ -528,10 +451,6 @@ test('the commitment figure never goes negative and always states its assumption
   assert.throws(() => commitmentThreshold({ effectiveStack: 100, pot: Number.NaN }), /finite number/);
 });
 
-// ---------------------------------------------------------------------------
-// Big blinds
-// ---------------------------------------------------------------------------
-
 test('stack depth in big blinds is the stack over the big blind', () => {
   // 2000 / 50 = 40. 1500 / 100 = 15. 75 / 50 = 1.5.
   closeTo(stackInBigBlinds(2000, 50).bb, 40, '40 big blinds');
@@ -540,7 +459,7 @@ test('stack depth in big blinds is the stack over the big blind', () => {
   closeTo(stackInBigBlinds(0, 50).bb, 0, 'no chips is no big blinds');
   assert.ok(stackInBigBlinds(2000, 50).note.includes('40'));
 
-  // The same chips get shallower as the blinds climb — the reason the unit exists.
+  // The same chips get shallower as the blinds climb.
   let previous = Number.POSITIVE_INFINITY;
   for (const bigBlind of [20, 50, 100, 400]) {
     const { bb } = stackInBigBlinds(2000, bigBlind);
@@ -556,12 +475,8 @@ test('a big blind of nothing is refused rather than dividing by zero', () => {
   assert.throws(() => stackInBigBlinds(Number.NaN, 50), /finite number/);
 });
 
-// ---------------------------------------------------------------------------
-// M-ratio
-// ---------------------------------------------------------------------------
-
 test('M is the stack over one orbit of forced bets', () => {
-  // Hand-worked, no ante: one orbit costs 25 + 50 = 75, so 3000 / 75 = 40.
+  // No ante: one orbit costs 25 + 50 = 75, so 3000 / 75 = 40.
   closeTo(mRatio({ stack: 3000, smallBlind: 25, bigBlind: 50 }).m, 40, 'no ante');
   // Traditional ante, nine-handed: 25 + 50 + 9 x 5 = 120, so 3000 / 120 = 25.
   closeTo(
@@ -596,9 +511,7 @@ test('M explains the arithmetic and which ante convention it used', () => {
 });
 
 test('an ante with no player count is refused instead of guessed', () => {
-  // The two conventions differ by a factor of the table size. Picking one silently
-  // would move every M in the app by up to 9x, so this is a hard error with the
-  // reason in the message.
+  // The two ante conventions differ by a factor of the table size, up to 9x, so ambiguity is an error.
   assert.throws(
     () => mRatio({ stack: 3000, smallBlind: 25, bigBlind: 50, ante: 5 }),
     /an ante of 5 was given without playersAtTable/,
@@ -607,7 +520,6 @@ test('an ante with no player count is refused instead of guessed', () => {
     () => mRatio({ stack: 3000, smallBlind: 25, bigBlind: 50, ante: 5 }),
     /big-blind ante by one player for the table/,
   );
-  // And the difference it would have made, so the refusal is obviously worth it:
   // 3000 / (75 + 5) = 37.5 one way, 3000 / (75 + 45) = 25 the other.
   closeTo(
     mRatio({ stack: 3000, smallBlind: 25, bigBlind: 50, ante: 5, playersAtTable: 1 }).m,
@@ -622,7 +534,7 @@ test('an ante with no player count is refused instead of guessed', () => {
 });
 
 test('M falls as the blinds rise even though the stack has not moved', () => {
-  // The whole point of the measure: the same chips buy less time at every level.
+  // The same chips buy less time at every level.
   let previous = Number.POSITIVE_INFINITY;
   for (const [smallBlind, bigBlind] of [
     [25, 50],
@@ -635,7 +547,7 @@ test('M falls as the blinds rise even though the stack has not moved', () => {
     assert.ok(m < previous, `level ${smallBlind}/${bigBlind}: M did not fall`);
     previous = m;
   }
-  // And it falls when an ante is added at the same level: 3000/75 = 40 down to 25.
+  // An ante at the same level: 3000/75 = 40 down to 25.
   const withoutAnte = mRatio({ stack: 3000, smallBlind: 25, bigBlind: 50 }).m;
   const withAnte = mRatio({ stack: 3000, smallBlind: 25, bigBlind: 50, ante: 5, playersAtTable: 9 }).m;
   assert.ok(withAnte < withoutAnte, 'antes cost time too');
@@ -679,21 +591,16 @@ test('M rejects inputs that would make it meaningless', () => {
       }),
     /finite number/,
   );
-  // A zero stack is legal and gives M = 0: there is no orbit left, which is a real
-  // thing to be able to say.
+  // A zero stack gives M = 0.
   assert.equal(mRatio({ stack: 0, smallBlind: 25, bigBlind: 50 }).m, 0);
 });
 
 test('an all-in opponent does not make the Coach say nothing can change hands (REGRESSION)', () => {
-  // With every opponent all in, `deepest` is 0 and the general sentence rendered "at most 0 can
-  // change hands even though you have 260. The 260 above that is not in play this hand — nobody
-  // can pay you for it and nobody can take it." The Coach printed that while pricing a call of 170
-  // out of that same 260, and on one Lab scenario where the call was hero's whole stack. What is
-  // finished is the betting, not the movement of chips, and those are different claims.
+  // With every opponent all in, the betting is finished but chips still move. The sentence must not
+  // say nothing can change hands while the Coach prices a call out of the same stack.
   const { effective, explanation } = effectiveStack(260, [0]);
 
-  // The NUMBER is still zero and deliberately so: there is no future street to size against, and
-  // SPR is computed from it. Only the sentence was wrong.
+  // The number stays 0. There is no future street to size against, and SPR uses it.
   assert.equal(effective, 0);
 
   assert.ok(
@@ -706,8 +613,7 @@ test('an all-in opponent does not make the Coach say nothing can change hands (R
   );
   assert.match(explanation, /no more betting/u);
 
-  // And the ordinary shallow-opponent case must keep its sentence, so the branch above has not
-  // swallowed the one it sits in front of.
+  // The ordinary shallow-opponent case keeps its sentence.
   const shallow = effectiveStack(260, [90]);
   assert.equal(shallow.effective, 90);
   assert.match(shallow.explanation, /at most .* can change hands/u);

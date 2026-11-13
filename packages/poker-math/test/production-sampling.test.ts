@@ -1,45 +1,9 @@
 /**
- * Regression test: the sampled equity path must work when `NODE_ENV` is `production`.
- *
- * ## The defect
- *
- * `monteCarloEquity` created its generator with `createDeterministicRandomForTests`, and that
- * function throws outright when `NODE_ENV === 'production'` — correctly, because a hand dealt
- * from a seeded stream would be predictable. The consequence was that on a production server
- * every sampled equity estimate threw. The Coach could not answer, and a bot whose policy needed
- * a sampled estimate never produced an action, so the hand never completed and the table stopped.
- *
- * ## Why nothing caught it, which is the part worth keeping
- *
- * Three independent reasons, each of which this file is built to defeat:
- *
- *   1. Every suite in this repository runs with `NODE_ENV` set to `test` or `development`, so
- *      the guard that fired in production never fired anywhere it could be seen. **This file
- *      therefore sets `NODE_ENV` to `production` for the duration of each case.**
- *   2. The *exact* enumeration path is unaffected, and `equity()` chooses exact for small
- *      matchups. So the smoke test's equity check passed while a real hand did not. **The cases
- *      below call `monteCarloEquity` directly rather than through `equity()`**, so the choice
- *      cannot route around the thing under test.
- *   3. The source scan that forbids the test-only generator on a request path
- *      (`apps/api/test/server-randomness.test.ts`) scanned `apps/api/src` only, and the call was
- *      in `packages/poker-math`. That scan has since been widened; this file is the behavioural
- *      half of the same fix, and the behavioural half is the one that would have failed.
- *
- * It was found by playing a hand in a production-configured staging stack — the only thing that
- * could have found it — which is why a production-shaped assertion now lives in the unit suite.
- *
- * ## Would this fail if the behaviour broke?
- *
- * Yes. Reverting `equity.ts` to `createDeterministicRandomForTests` fails 4 of the 6 cases below
- * with `RandomnessError: createDeterministicRandomForTests must never be used in production`.
- * That was run, not assumed.
- *
- * ## Why `NODE_ENV` is restored in a `finally`
- *
- * The runner shares one process across files (`--test-concurrency=1`), and a leaked
- * `NODE_ENV=production` would silently change the behaviour of every later file — including
- * config parsing, which refuses several development settings in production. A test that breaks
- * unrelated tests is worse than the bug it guards.
+ * The sampled equity path must work under `NODE_ENV=production`, where
+ * `createDeterministicRandomForTests` throws. Every other suite runs as `test` or `development`, so
+ * each case here sets `production`. The cases call `monteCarloEquity` directly, because `equity()`
+ * picks the exact path for small matchups. Reverting `equity.ts` to the test generator fails 4 of 6.
+ * `NODE_ENV` is restored in a `finally` because the runner shares one process across files.
  */
 
 import assert from 'node:assert/strict';
@@ -61,11 +25,8 @@ function withNodeEnv<T>(value: string, fn: () => T): T {
 }
 
 /**
- * A matchup wide enough that nobody could mistake it for the exact path.
- *
- * A known hand against a wide pre-flop range, with no board — far past the point where
- * enumeration is practical, which is exactly the case a live bot hits and the case that was
- * broken. Built fresh per call, matching `equity.test.ts`, so no case can mutate another's spec.
+ * A known hand against a wide pre-flop range with no board, far past where enumeration is
+ * practical. Built fresh per call so no case can mutate another's spec.
  */
 function spec(): EquitySpec {
   const hero = parseCards('Ah Kh');
@@ -94,9 +55,8 @@ describe('sampled equity under a production NODE_ENV', () => {
   });
 
   it('gives the same answer in production as it does in development, for the same seed', () => {
-    // The two generators share one SplitMix32 implementation, so the fix must not have moved any
-    // number. If this ever diverges, every recorded equity figure and every fixture built from
-    // one has silently changed.
+    // Both generators share one SplitMix32, so no number may move. A divergence would change every
+    // recorded equity figure and fixture.
     const development = withNodeEnv('development', () =>
       monteCarloEquity(spec(), { samples: 2_000, seed: 7 }),
     );
@@ -112,9 +72,7 @@ describe('sampled equity under a production NODE_ENV', () => {
   it('is still reproducible for a seed, which is what the worker pool shards on', () => {
     const first = withNodeEnv('production', () => monteCarloEquity(spec(), { samples: 1_000, seed: 11 }));
     const second = withNodeEnv('production', () => monteCarloEquity(spec(), { samples: 1_000, seed: 11 }));
-    // The numbers, not the whole result: `elapsedMs` is wall-clock and differs between two
-    // identical runs, so comparing the objects would assert that the machine is deterministic
-    // rather than that the sampler is.
+    // `elapsedMs` is wall-clock, so only the numbers are compared.
     assert.deepEqual(
       second.players.map((player) => [player.label, player.win, player.tie, player.equity]),
       first.players.map((player) => [player.label, player.win, player.tie, player.equity]),
@@ -124,7 +82,7 @@ describe('sampled equity under a production NODE_ENV', () => {
   });
 
   it('and a different seed genuinely moves the estimate, so the seed is not being ignored', () => {
-    // Without this, a generator that returned a constant stream would pass every case above.
+    // Without this, a constant stream would pass every case above.
     const a = withNodeEnv('production', () => monteCarloEquity(spec(), { samples: 1_000, seed: 11 }));
     const b = withNodeEnv('production', () => monteCarloEquity(spec(), { samples: 1_000, seed: 12 }));
     assert.notDeepEqual(b.players[0]?.equity, a.players[0]?.equity, 'the seed must be used');

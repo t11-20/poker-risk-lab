@@ -1,26 +1,9 @@
 /**
- * Tests for src/ev.ts.
- *
- * ## Where the expected values come from
- *
- * Nothing here compares ev.ts against ev.ts. Every expectation is one of:
- *
- *   * arithmetic done by hand in a comment above the assertion;
- *   * a closed-form identity derived independently in this file — chiefly
- *     `breakEvenEquityByHand` and `breakEvenBluffFrequencyByHand` below, each
- *     re-derived from the definition of EV rather than copied from the source;
- *   * a structural property that must hold whatever the formula is (probabilities
- *     summing to 1, contributions summing to the total, monotonicity, linearity,
- *     round-tripping a solved root back through the function it was solved from).
- *
- * ## The pot-odds cross-check
- *
- * The most valuable test in this file is the break-even identity: at exactly the
- * pot-odds break-even equity, calling is worth exactly nothing. It is run three ways
- * on the same grid — the price as `odds.ts` computes it, the price as derived by hand
- * here, and the EV as `ev.ts` computes it — so the test fails if any one of the three
- * drifts. Pricing lives in odds.ts and EV lives in ev.ts; this is the seam between
- * them, and a seam is exactly where a test earns its keep.
+ * Tests for src/ev.ts. No expectation comes from ev.ts itself. Each is hand arithmetic in a comment,
+ * a closed form re-derived in this file, or a structural property (probabilities sum to 1,
+ * contributions sum to the total, monotonicity, linearity, round trips).
+ * The break-even identity ties odds.ts's price, the hand derivation and ev.ts's EV together, so it
+ * fails if any one of the three drifts.
  */
 
 import assert from 'node:assert/strict';
@@ -47,30 +30,19 @@ function closeTo(actual: number, expected: number, message: string, tolerance = 
 }
 
 /**
- * The equity a call needs to break even, derived here from the definition of EV and
- * NOT from ev.ts.
- *
- * You put in `toCall` to play for a pot that will hold `pot + toCall`. Win a share
- * `e` of the time and the average return is `e x (pot + toCall)`; the cost is
- * `toCall` every time. Setting return equal to cost:
+ * The equity a call needs to break even, derived from the definition of EV, not from ev.ts.
  *
  *     e x (pot + toCall) = toCall
  *     e = toCall / (pot + toCall)
- *
- * which is the pot-odds price expressed as a required win frequency.
  */
 function breakEvenEquityByHand(pot: number, toCall: number): number {
   return toCall / (pot + toCall);
 }
 
 /**
- * How often a pure bluff must work, derived here by balancing the two branches
- * rather than by reusing the source's formula.
- *
- * When it works you are `pot` up; when it does not you are `betSize` down. Balance:
+ * How often a pure bluff must work, by balancing the two branches.
  *
  *     f x pot = (1 - f) x betSize
- *     f x pot + f x betSize = betSize
  *     f = betSize / (pot + betSize)
  */
 function breakEvenBluffFrequencyByHand(pot: number, betSize: number): number {
@@ -83,15 +55,10 @@ function sum(values: readonly number[]): number {
   return total;
 }
 
-// A spread of shapes to run the identities over: tiny pots, huge pots, pots smaller
-// than the bet, and the empty pot that is the interesting boundary case.
+// Includes pots smaller than the bet and the empty pot, the boundary case.
 const POTS = [0, 1, 3, 10, 40, 100, 250, 1000, 7777];
 const BETS = [1, 2, 7, 25, 50, 100, 333, 2500];
 const EQUITIES = [0, 0.01, 0.1, 0.25, 1 / 3, 0.5, 0.618, 0.75, 0.9, 1];
-
-// ---------------------------------------------------------------------------
-// Fold
-// ---------------------------------------------------------------------------
 
 test('folding is exactly the zero point, and says why', () => {
   const fold = evOfFold();
@@ -105,20 +72,11 @@ test('folding is exactly the zero point, and says why', () => {
   );
 });
 
-// ---------------------------------------------------------------------------
-// Call
-// ---------------------------------------------------------------------------
-
 test('calling at exactly the pot-odds break-even equity is worth exactly nothing', () => {
-  // The identity this whole file hangs on. Worked by hand for one case first:
-  // pot 100, toCall 50 -> break-even equity 50/150 = 1/3, and
-  // (1/3) x (100 + 50) - 50 = 50 - 50 = 0.
+  // Worked case: pot 100, toCall 50, break-even 50/150 = 1/3, and (1/3) x (100 + 50) - 50 = 0.
   closeTo(evOfCall({ pot: 100, toCall: 50, equity: 1 / 3 }).ev, 0, 'the worked case');
 
-  // Then across the grid, tying three things together: odds.ts's price, the hand
-  // derivation at the top of this file, and ev.ts's EV. Feeding the price odds.ts
-  // quotes into the EV ev.ts computes must land on exactly zero, or the two modules
-  // disagree about what break-even means.
+  // Across the grid, odds.ts's price fed into ev.ts's EV must land on exactly zero.
   let checked = 0;
   for (const pot of POTS) {
     for (const toCall of BETS) {
@@ -134,12 +92,8 @@ test('calling at exactly the pot-odds break-even equity is worth exactly nothing
 });
 
 test('a hair above the break-even equity makes the call profitable, a hair below makes it lose', () => {
-  // The identity above pins one point on the line; this pins its direction, which is
-  // what makes the point meaningful rather than a coincidence.
-  //
-  // An empty pot is the one shape with no "above": break-even equity is
-  // toCall / (0 + toCall) = 1, so there is nothing better than break-even to test
-  // and calling into nothing is a wash at best. Asserted rather than skipped.
+  // This pins the direction around the break-even point. With an empty pot break-even equity is 1,
+  // so there is nothing above it to test.
   for (const pot of POTS) {
     for (const toCall of BETS) {
       const breakEven = breakEvenEquityByHand(pot, toCall);
@@ -157,8 +111,7 @@ test('a hair above the break-even equity makes the call profitable, a hair below
 });
 
 test('calling with no equity loses exactly the call; calling with all of it wins exactly the pot', () => {
-  // Integer inputs so these are exact, not approximate: e = 0 leaves -toCall, and
-  // e = 1 leaves (pot + toCall) - toCall, which is exact for integers.
+  // Integer inputs, so these are exact.
   for (const pot of POTS) {
     for (const toCall of BETS) {
       assert.equal(evOfCall({ pot, toCall, equity: 0 }).ev, -toCall, `pot ${pot}, toCall ${toCall}`);
@@ -168,8 +121,7 @@ test('calling with no equity loses exactly the call; calling with all of it wins
 });
 
 test('EV of a call rises strictly with equity, by (pot + toCall) per unit', () => {
-  // The formula is a straight line in equity with slope (pot + toCall), which is
-  // strictly positive whenever there is anything to call. Both facts are checked.
+  // A straight line in equity with slope (pot + toCall), strictly positive whenever there is a call.
   for (const pot of POTS) {
     for (const toCall of BETS) {
       let previous = Number.NEGATIVE_INFINITY;
@@ -224,13 +176,8 @@ test('a call always states the pot it was priced against and that nothing follow
   );
 });
 
-// ---------------------------------------------------------------------------
-// Bet
-// ---------------------------------------------------------------------------
-
 test('a bet they always fold to is worth exactly the pot', () => {
-  // f = 1 collapses the formula to 1 x pot: nothing is risked because nothing is
-  // ever called. Exact, not approximate.
+  // f = 1 collapses the formula to pot. Exact.
   for (const pot of POTS) {
     for (const betSize of BETS) {
       for (const equityWhenCalled of EQUITIES) {
@@ -242,17 +189,14 @@ test('a bet they always fold to is worth exactly the pot', () => {
 });
 
 test('a bet they never fold to is worth exactly what calling that bet into the bigger pot is worth', () => {
-  // f = 0 leaves e x (pot + 2b) - b. That is EV(call) for someone facing a bet of b
-  // into a pot of (pot + b): e x ((pot + b) + b) - b. Betting and being called costs
-  // and pays what calling costs and pays, which is why the two functions must agree
-  // here to the last decimal place.
+  // f = 0 leaves e x (pot + 2b) - b, which is EV(call) facing b into a pot of (pot + b), so the two
+  // functions must agree exactly.
   for (const pot of POTS) {
     for (const betSize of BETS) {
       for (const equityWhenCalled of EQUITIES) {
         const bet = evOfBet({ pot, betSize, foldProbability: 0, equityWhenCalled }).ev;
         const call = evOfCall({ pot: pot + betSize, toCall: betSize, equity: equityWhenCalled }).ev;
         closeTo(bet, call, `pot ${pot}, bet ${betSize}, equity ${equityWhenCalled}`);
-        // And against arithmetic that mentions neither function.
         closeTo(bet, equityWhenCalled * (pot + 2 * betSize) - betSize, 'closed form');
       }
     }
@@ -260,9 +204,8 @@ test('a bet they never fold to is worth exactly what calling that bet into the b
 });
 
 test('EV of a bet is a straight line in the fold frequency', () => {
-  // The two branches do not interact, so the midpoint of the endpoints is the value
-  // at the midpoint. That linearity is what makes requiredFoldEquity a closed form,
-  // so it is worth pinning independently.
+  // The branches do not interact, so the value is linear in f. That is what makes
+  // requiredFoldEquity a closed form.
   for (const pot of [0, 25, 100, 900]) {
     for (const betSize of [5, 60, 400]) {
       for (const equityWhenCalled of [0, 0.2, 0.5, 0.95]) {
@@ -282,8 +225,7 @@ test('EV of a bet matches arithmetic done by hand', () => {
   closeTo(evOfBet({ pot: 100, betSize: 50, foldProbability: 0.4, equityWhenCalled: 0.25 }).ev, 40, 'A');
   // 0.2 x 100 + 0.8 x [0.1 x 200 - 50] = 20 + 0.8 x (-30) = 20 - 24 = -4.
   closeTo(evOfBet({ pot: 100, betSize: 50, foldProbability: 0.2, equityWhenCalled: 0.1 }).ev, -4, 'B');
-  // A pot-sized bet with nothing: 0.5 x 100 + 0.5 x [0 x 300 - 100] = 50 - 50 = 0,
-  // which is why a pot-sized bluff has to work half the time.
+  // A pot-sized bet with nothing: 0.5 x 100 + 0.5 x [0 x 300 - 100] = 50 - 50 = 0.
   closeTo(evOfBet({ pot: 100, betSize: 100, foldProbability: 0.5, equityWhenCalled: 0 }).ev, 0, 'C');
 });
 
@@ -322,19 +264,11 @@ test('callerCanRaise changes no number and adds exactly one warning', () => {
   assert.equal(evOfBet({ ...base, callerCanRaise: false }).assumptions.length, quiet.assumptions.length);
 });
 
-// ---------------------------------------------------------------------------
-// Required fold equity
-// ---------------------------------------------------------------------------
-
 test('the required fold equity, fed back into the bet, gives exactly break-even', () => {
-  // The round trip: solve EV(bet) = 0 for f, then evaluate EV(bet) at that f. Any
-  // algebra slip in the closed form shows up here immediately.
+  // Round trip. Solve EV(bet) = 0 for f, then evaluate EV(bet) at that f.
   let roundTripped = 0;
-  // Counted here from the sign of the called branch, which is what decides whether a
-  // fold frequency is needed at all. If the two counts ever diverge, the source has
-  // started reporting 0 (or something above 1) for a case that really does have a
-  // break-even point inside the range, and the round trip above would be quietly
-  // skipping it rather than failing.
+  // Counted from the sign of the called branch, so a case wrongly reported as 0 or above 1 fails
+  // instead of being skipped by the round trip.
   let expectedRoundTrips = 0;
   for (const pot of POTS) {
     for (const betSize of BETS) {
@@ -357,11 +291,8 @@ test('the required fold equity, fed back into the bet, gives exactly break-even'
 });
 
 test('required fold equity with no equity is exactly the break-even bluff frequency', () => {
-  // Two closed forms reached from opposite ends. `requiredFoldEquity` solves the EV
-  // line, f* = -S/(pot - S); with S = -b that collapses to b/(pot + b), which is what
-  // alpha is, and alpha comes from odds.ts. So this compares a root solved out of the
-  // EV formula against a price computed in a different module, plus the hand
-  // derivation at the top of this file — three routes to one number.
+  // `requiredFoldEquity` solves f* = -S/(pot - S). With S = -b that is b/(pot + b), which is alpha
+  // from odds.ts and the hand derivation. Three routes to one number.
   for (const pot of POTS) {
     for (const betSize of BETS) {
       const solved = requiredFoldEquity({ pot, betSize, equityWhenCalled: 0 }).foldEquityNeeded;
@@ -369,19 +300,15 @@ test('required fold equity with no equity is exactly the break-even bluff freque
       closeTo(solved, alpha, `pot ${pot}, bet ${betSize}: solved root vs alpha`);
       closeTo(solved, breakEvenBluffFrequencyByHand(pot, betSize), 'and vs the hand derivation');
       closeTo(alpha, defenceFrequency(pot, betSize).alpha, 'and vs alpha straight from odds.ts');
-      // Alpha and minimum defence frequency are complements, which is the property
-      // that makes "how often must a bluff work" and "how often must they continue"
-      // two readings of one number.
+      // Alpha and minimum defence frequency are complements.
       closeTo(alpha + defenceFrequency(pot, betSize).minimumDefenceFrequency, 1, 'alpha + MDF = 1');
     }
   }
 });
 
 test('a bet that already breaks even when called needs no fold equity at all', () => {
-  // Degenerate branch one. The called branch is worth e x (pot + 2b) - b, which is
-  // zero exactly when e = b / (pot + 2b) — the price the bet lays a caller. At or
-  // above that equity the answer is 0 folds needed.
-  // 50 into 100 lays 50/200 = 0.25, so equity 0.25 is the exact hinge.
+  // The called branch e x (pot + 2b) - b is zero at e = b / (pot + 2b). At or above that equity no
+  // folds are needed. 50 into 100 lays 50/200 = 0.25, so 0.25 is the hinge.
   const hinge = requiredFoldEquity({ pot: 100, betSize: 50, equityWhenCalled: 0.25 });
   assert.equal(hinge.foldEquityNeeded, 0, 'at the hinge the bet breaks even with no folds');
   assert.ok(hinge.explanation.includes('no fold equity'));
@@ -390,9 +317,7 @@ test('a bet that already breaks even when called needs no fold equity at all', (
   assert.equal(comfortable.foldEquityNeeded, 0);
   assert.ok(comfortable.explanation.includes('no fold equity'));
 
-  // And across the grid: never negative, and exactly 0 whenever the called branch is
-  // not losing. Returning a negative "required" frequency would be nonsense that a
-  // UI would happily render.
+  // Never negative, and exactly 0 whenever the called branch is not losing.
   for (const pot of POTS) {
     for (const betSize of BETS) {
       for (const equityWhenCalled of EQUITIES) {
@@ -410,39 +335,28 @@ test('a bet that already breaks even when called needs no fold equity at all', (
 });
 
 test('a bet whose called branch beats the pot itself reports 0 and says folds cost value', () => {
-  // The other half of degenerate branch one, and the trap in the algebra. With
-  // pot 100, b 50, e 0.9 the called branch is worth 0.9 x 200 - 50 = 130, which is
-  // more than the 100 a fold wins. The line EV(f) = S + f x (pot - S) then SLOPES
-  // DOWN, and the naive root (b - e(pot + 2b)) / (pot + b - e(pot + 2b))
-  //   = (50 - 180) / (150 - 180) = -130 / -30 = 4.33
-  // is above 1 — for the most profitable bet in the model. Reporting that as
-  // "impossible" would be exactly backwards, so the source branches on the sign of
-  // the called branch instead, and this test pins that.
+  // Pot 100, b 50, e 0.9: the called branch is worth 0.9 x 200 - 50 = 130, more than a fold wins.
+  // EV(f) slopes down, and the naive root (50 - 180) / (150 - 180) = 4.33 is above 1 for the most
+  // profitable bet in the model. The source branches on the sign of the called branch instead.
   const result = requiredFoldEquity({ pot: 100, betSize: 50, equityWhenCalled: 0.9 });
   assert.equal(result.foldEquityNeeded, 0);
   assert.ok(result.explanation.includes('cost you value'), 'the direction of the effect must be stated');
   assert.ok(evOfBet({ pot: 100, betSize: 50, foldProbability: 0, equityWhenCalled: 0.9 }).ev > 0);
-  // Folds really do cost value here: more folding is worse.
+  // More folding is worse here.
   const noFolds = evOfBet({ pot: 100, betSize: 50, foldProbability: 0, equityWhenCalled: 0.9 }).ev;
   const allFolds = evOfBet({ pot: 100, betSize: 50, foldProbability: 1, equityWhenCalled: 0.9 }).ev;
   assert.ok(noFolds > allFolds, 'a call is the branch you want with equity this high');
 });
 
 test('with an empty pot the bet needs a certain fold, and even then only breaks even', () => {
-  // Degenerate branch two, at its boundary. Pot 0, bet 50, no equity:
-  // EV(f) = f x 0 + (1 - f) x (0 - 50) = -50 x (1 - f), which is zero only at f = 1.
+  // Pot 0, bet 50, no equity: EV(f) = -50 x (1 - f), zero only at f = 1.
   const result = requiredFoldEquity({ pot: 0, betSize: 50, equityWhenCalled: 0 });
   assert.equal(result.foldEquityNeeded, 1, 'exactly 1, not clamped from something larger');
   assert.ok(result.explanation.includes('certainty'), 'the reader must be told this is unachievable');
   closeTo(evOfBet({ pot: 0, betSize: 50, foldProbability: 1, equityWhenCalled: 0 }).ev, 0, 'round trip');
 
-  // And the general statement, which is stronger than the brief asked for: while the
-  // pot is not negative, the required fold frequency can never EXCEED 1, because a
-  // fold hands you the whole pot at no risk, so EV(f = 1) = pot >= 0 always. It
-  // reaches 1 only when the pot is empty. So "this bet cannot break even at any fold
-  // frequency" is unreachable here by construction — the honest teaching point is
-  // that the question is never whether enough folds would rescue a bet, but whether
-  // that many folds are plausible.
+  // With a non-negative pot the required fold frequency never exceeds 1, because EV(f = 1) = pot >= 0.
+  // It reaches 1 only when the pot is empty.
   for (const pot of POTS) {
     for (const betSize of BETS) {
       for (const equityWhenCalled of EQUITIES) {
@@ -457,8 +371,7 @@ test('with an empty pot the bet needs a certain fold, and even then only breaks 
 });
 
 test('required fold equity rises with the bet size and falls with equity', () => {
-  // Both directions are forced by the formula and are what a learner should take
-  // away: bigger bets need more folds, better hands need fewer.
+  // Bigger bets need more folds, better hands need fewer.
   let previous = -1;
   for (const betSize of [10, 25, 50, 100, 200, 400]) {
     const needed = requiredFoldEquity({ pot: 100, betSize, equityWhenCalled: 0 }).foldEquityNeeded;
@@ -473,12 +386,8 @@ test('required fold equity rises with the bet size and falls with equity', () =>
   }
 });
 
-// ---------------------------------------------------------------------------
-// Break-even bluff frequency
-// ---------------------------------------------------------------------------
-
 test('the break-even bluff frequency is the risk over what you end up with', () => {
-  // Hand-derived: 50 to win 100 means 50 / 150 = 1/3.
+  // 50 to win 100: 50 / 150 = 1/3.
   assert.equal(
     breakEvenBluffFrequency(100, 50).frequency,
     1 / 3,
@@ -503,8 +412,7 @@ test('the break-even bluff frequency is the risk over what you end up with', () 
 });
 
 test('a pure bluff at exactly its break-even frequency is worth exactly nothing', () => {
-  // Ties the frequency back to the EV it came from: alpha is meaningless unless
-  // betting at alpha with no equity really is a wash.
+  // Betting at alpha with no equity must be a wash.
   for (const pot of POTS) {
     for (const betSize of BETS) {
       const { frequency } = breakEvenBluffFrequency(pot, betSize);
@@ -514,13 +422,7 @@ test('a pure bluff at exactly its break-even frequency is worth exactly nothing'
   }
 });
 
-// ---------------------------------------------------------------------------
-// Semi-bluff
-// ---------------------------------------------------------------------------
-
 test('the two halves of a semi-bluff sum to its EV', () => {
-  // The decomposition is the reason the function exists, so it is checked over the
-  // whole grid rather than on one example.
   let checked = 0;
   for (const pot of POTS) {
     for (const betSize of BETS) {
@@ -528,7 +430,7 @@ test('the two halves of a semi-bluff sum to its EV', () => {
         for (const foldProbability of [0, 0.1, 0.33, 0.5, 0.9, 1]) {
           const result = evOfSemiBluff({ pot, betSize, foldProbability, equityWhenCalled });
           closeTo(result.foldEquityShare + result.showdownShare, result.ev, 'the split must be exhaustive');
-          // And it is the same model as evOfBet, not a second one that could drift.
+          // Same model as evOfBet.
           closeTo(result.ev, evOfBet({ pot, betSize, foldProbability, equityWhenCalled }).ev, 'same model');
           checked += 1;
         }
@@ -562,14 +464,11 @@ test('a pure bluff has all of its value in the fold half, and pays for the calls
 });
 
 test('the showdown half turns positive exactly when equity clears the price the bet lays', () => {
-  // The called branch is e x (pot + 2b) - b, zero at e = b / (pot + 2b). So the sign
-  // of the showdown half is decided by that price and nothing else — which is the
-  // link between sizing and how much of a draw you need.
+  // The called branch is zero at e = b / (pot + 2b), so that price alone decides the sign of the
+  // showdown half.
   for (const pot of [40, 100, 333]) {
     for (const betSize of [10, 50, 100, 250]) {
-      // The price comes from odds.ts, and is checked against the hand derivation, so
-      // this test is also a check that the sign of a semi-bluff's showdown half is
-      // governed by the price the app quotes elsewhere.
+      // The price comes from odds.ts and is checked against the hand derivation.
       const price = priceLaidByBet(pot, betSize).breakEvenEquity;
       closeTo(price, betSize / (pot + 2 * betSize), `pot ${pot}, bet ${betSize}: the price odds.ts quotes`);
       for (const delta of [-0.05, -0.001, 0.001, 0.05]) {
@@ -599,10 +498,6 @@ test('a semi-bluff explains both halves and the draw assumption', () => {
     'confusing equity with the chance of hitting is the classic error and must be headed off',
   );
 });
-
-// ---------------------------------------------------------------------------
-// Validation
-// ---------------------------------------------------------------------------
 
 test('negative chip amounts are rejected, with the expectation stated', () => {
   assert.throws(() => evOfCall({ pot: -1, toCall: 50, equity: 0.5 }), /pot must be 0 or more chips/);
@@ -662,7 +557,7 @@ test('probabilities outside 0..1 are rejected rather than clamped', () => {
 });
 
 test('non-finite inputs are rejected instead of producing NaN', () => {
-  // Returning NaN would flow into the Coach report and be rendered as a figure.
+  // NaN would flow into the Coach report and render as a figure.
   assert.throws(() => evOfCall({ pot: Number.NaN, toCall: 50, equity: 0.5 }), /pot must be a finite number/);
   assert.throws(
     () => evOfCall({ pot: 100, toCall: Number.NaN, equity: 0.5 }),
@@ -704,8 +599,7 @@ test('errors are named so a caller can tell a bad input from a bug', () => {
 });
 
 test('no result ever contains a NaN or an unexplained figure', () => {
-  // A sweep over every function, asserting the two things that must never reach the
-  // UI: a non-finite number, and a figure with no words attached.
+  // No function may return a non-finite number or a figure without words.
   for (const pot of POTS) {
     for (const betSize of BETS) {
       for (const equityWhenCalled of EQUITIES) {
@@ -736,24 +630,10 @@ test('no result ever contains a NaN or an unexplained figure', () => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// Raise
-// ---------------------------------------------------------------------------
-
 /**
- * The EV of raising, derived here from the definitions and NOT from `ev.ts`.
- *
- * Facing `c` with `pot` in the middle (the `c` they bet is already part of `pot`) and
- * raising by `r`:
- *
- *   * they fold, probability `f`: you win what is there, `pot`. Your own `c + r` comes
- *     straight back out of the pot you take down, so the net swing is `pot`.
- *   * they call, probability `1 - f`: they add `r` and nothing else, because their `c`
- *     is already in. The pot at showdown is `pot + (c + r) + r`, of which `c + r` was
- *     yours. Win a share `e` of it and the net is `pot + r`; otherwise you are out the
- *     `c + r` you put in.
- *
- * so
+ * The EV of raising, derived from the definitions, not from `ev.ts`. Facing `c` (already in `pot`)
+ * and raising by `r`: on a fold you net `pot`. On a call they add only `r`, the showdown pot is
+ * `pot + (c + r) + r`, and you risk `c + r`.
  *
  *     EV = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ]
  */
@@ -762,12 +642,8 @@ function evOfRaiseByHand(pot: number, toCall: number, raiseBy: number, f: number
 }
 
 test('EV of a raise matches arithmetic done by hand', () => {
-  // 400 in the middle, 300 to call, raising by 350. Risk is 300 + 350 = 650 and the pot
-  // at showdown is 400 + 300 + 700 = 1400.
-  //
-  //   EV = 0.35 x 400 + 0.65 x [ 0.2 x 1400 - 650 ]
-  //      = 140 + 0.65 x (280 - 650)
-  //      = 140 + 0.65 x (-370) = 140 - 240.5 = -100.5
+  // 400 in the middle, 300 to call, raising by 350. Risk 650, showdown pot 1400.
+  //   EV = 0.35 x 400 + 0.65 x [ 0.2 x 1400 - 650 ] = 140 + 0.65 x (-370) = -100.5
   const raise = evOfRaise({
     pot: 400,
     toCall: 300,
@@ -781,9 +657,7 @@ test('EV of a raise matches arithmetic done by hand', () => {
 });
 
 test('a raise with nothing to call is exactly a bet, and the two agree everywhere', () => {
-  // The reason there is one function per action rather than one function pretending to
-  // cover both: with c = 0 the raise formula collapses onto the bet formula, so the
-  // difference between them is entirely the call — which is the term that went missing.
+  // With c = 0 the raise formula collapses onto the bet formula. The difference is entirely the call.
   for (const pot of POTS) {
     for (const betSize of BETS) {
       for (const equityWhenCalled of EQUITIES) {
@@ -805,10 +679,8 @@ test('a raise with nothing to call is exactly a bet, and the two agree everywher
 });
 
 test('charging the call is worth exactly (1 - f) x c x (1 - e), and always costs the raiser', () => {
-  // The size of the defect this function exists to remove, as an identity rather than a
-  // single number. Pricing a raise with the bet formula overstates it by this much: it is
-  // never negative, it grows with the bet faced, and it grows as equity FALLS — so the
-  // figure was most wrong exactly where a learner most needs it right.
+  // The bet formula overstates a raise by this identity. It is never negative, grows with the bet
+  // faced, and grows as equity falls.
   for (const pot of POTS) {
     for (const toCall of [1, 25, 100, 333]) {
       for (const raiseBy of [1, 50, 250]) {
@@ -836,10 +708,8 @@ test('charging the call is worth exactly (1 - f) x c x (1 - e), and always costs
 });
 
 test('a raise is worth less than a bet risking the same chips, by (1 - f) x e x c', () => {
-  // Why the two are different actions and not two names for one: part of a raiser's risk
-  // is money the opponent does not have to match, so the pot it plays for is smaller than
-  // the pot a bet of the same size plays for. The gap vanishes at zero equity — with
-  // nothing to win at showdown, only the fold branch matters — and grows with it.
+  // Part of a raiser's risk is chips the opponent need not match, so a raise plays for a smaller pot
+  // than a bet of the same size. The gap is zero at zero equity and grows with it.
   for (const pot of [40, 100, 1000]) {
     for (const risk of [100, 400]) {
       for (const toCall of [10, 50, 99]) {
@@ -871,11 +741,11 @@ test('the raise endpoints hold: always folding wins the pot, never folding is a 
   const raiseBy = 120;
   const equityWhenCalled = 0.42;
 
-  // f = 1: they always fold. You win what is in the middle and your own chips come back.
+  // f = 1: you win what is in the middle.
   const alwaysFolds = evOfRaise({ pot, toCall, raiseBy, foldProbability: 1, equityWhenCalled });
   closeTo(alwaysFolds.ev, pot, 'a raise nobody ever calls is worth exactly the pot');
 
-  // f = 0: they always call, which is a call of `c + r` into a pot of `pot + r`.
+  // f = 0: a call of `c + r` into a pot of `pot + r`.
   const neverFolds = evOfRaise({ pot, toCall, raiseBy, foldProbability: 0, equityWhenCalled });
   const asCall = evOfCall({ pot: pot + raiseBy, toCall: toCall + raiseBy, equity: equityWhenCalled });
   closeTo(neverFolds.ev, asCall.ev, 'a raise that always gets called is a call into the bigger pot');
@@ -924,17 +794,9 @@ test('a raise rejects the inputs that would make it meaningless', () => {
   assert.throws(() => evOfRaise({ ...base, equityWhenCalled: -0.1 }), /probability from 0 to 1/);
 });
 
-// ---------------------------------------------------------------------------
-// Check
-// ---------------------------------------------------------------------------
-
 test('a check is worth e x pot, which is never below a fold and only ever ties it at zero', () => {
-  // Folding is the zero point. Checking is not: it costs nothing AND keeps the hand, so
-  // it keeps a claim on what is already in the middle. Pricing it at a literal 0 — which
-  // the Coach did — makes the two look identical and lets a tool recommend giving up a
-  // hand it could see for free.
-  //
-  // Worked by hand: 39.49% of a 100 pot is 39.49 chips. Every figure below is that shape.
+  // A check costs nothing and keeps the hand, so it keeps a claim on the pot. Pricing it at 0 lets a
+  // tool recommend folding a hand it could see for free. 39.49% of a 100 pot is 39.49 chips.
   for (const [pot, equity, expected] of [
     [100, 0.3949, 39.49],
     [140, 0, 0],
@@ -944,16 +806,14 @@ test('a check is worth e x pot, which is never below a fold and only ever ties i
     const check = evOfCheck({ pot, equity });
     closeTo(check.ev, expected, `EV(check) with pot ${pot} at ${equity}`);
 
-    // A check is a call priced at nothing, so the two must agree exactly rather than
-    // approximately: there is one formula, and `evOfCheck` delegates to it.
+    // `evOfCheck` delegates to the call formula, so the two agree exactly.
     assert.equal(check.ev, evOfCall({ pot, toCall: 0, equity }).ev, 'a check is a free call');
 
-    // Never worse than folding, and equal only when there is nothing to keep a claim on.
+    // Equal to a fold only when there is nothing to keep a claim on.
     assert.ok(check.ev >= evOfFold().ev, 'a check is never worth less than a fold');
     assert.equal(check.ev === 0, pot === 0 || equity === 0);
 
-    // The terms regroup into the same figure, and the losing branch costs nothing —
-    // which is the whole difference between this and a call.
+    // The terms regroup into the same figure, and the losing branch costs nothing.
     const summed = check.terms.reduce((total, term) => total + term.contribution, 0);
     closeTo(summed, check.ev, 'the terms sum to the EV');
     assert.equal(check.terms[1]?.value, 0, 'losing a checked pot costs no further chips');

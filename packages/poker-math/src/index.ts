@@ -1,43 +1,11 @@
 /**
- * `@prl/poker-math` — pure poker probability and decision maths.
+ * `@prl/poker-math`, pure poker probability and decision maths. No I/O, no clock, no global mutable
+ * state, and only seeded randomness, so the API can shard a calculation and a lesson's figure
+ * reproduces exactly.
  *
- * Outs, equity (exact when it fits, bounded Monte Carlo when it does not), the price
- * of a call, expected value, stack depth, variance and tournament equity. No I/O, no
- * clock, no global mutable state, and no randomness that is not seeded and stated —
- * which is what lets the API shard a calculation across workers and lets a lesson
- * quote a figure that every learner reproduces exactly.
- *
- * ## Why every export is named here rather than `export *`
- *
- * This file is the package's contract, and a contract has to be reviewable. Ten
- * `export *` lines would be shorter and would hide three things worth seeing: what
- * the surface actually is, that nothing internal leaks into it, and that no two
- * modules export the same name. Written out, adding an export is a visible change in
- * a diff and a helper that was meant to stay private cannot escape by accident.
- *
- * The package's `exports` map publishes this entry point only, so this list is the
- * whole of what any other package can reach — a deep import of `dist/odds.js` is
- * blocked. Anything missing from here is unreachable, however public it looks in its
- * own file.
- *
- * ## What is deliberately NOT exported
- *
- * `src/format.ts`. It turns numbers into the sentences a learner reads, which is a
- * presentation detail of the explanation strings and not something another package
- * should build a figure on.
- *
- * ## Every error class is exported
- *
- * `OddsError`, `EquityError`, `OutsError` and the rest are part of the API, not
- * implementation detail. A caller that has to match on a message string instead of a
- * class has been handed a contract that breaks the next time someone improves the
- * wording — and these messages get improved often, because they are teaching text.
- *
- * ## Ordering
- *
- * Modules in alphabetical order, names alphabetical within each module, exactly as
- * `@prl/poker-engine` does it. The order carries no meaning; keeping it mechanical is
- * what stops a merge from producing two of anything.
+ * Every export is named, because `exports` publishes only this entry point and the list is the whole
+ * contract. `format.ts` is not exported. Every error class is, so callers match on a class, not on
+ * teaching text. Modules and names are alphabetical, as in `@prl/poker-engine`.
  */
 
 export {

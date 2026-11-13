@@ -1,25 +1,9 @@
 /**
- * The Coach is the product, and it was the one module with no test. This closes that.
- *
- * Two kinds of test live here, and the second kind was missing for a long time at real
- * cost — see below.
- *
- * **Promises the type system cannot express.** A figure never appears without its
- * assumptions; a sampled figure never appears without its interval; nothing is ever
- * labelled correct or optimal; a bet amount is always a whole number of chips; the same
- * input gives the same report. Each is a thing a well-meaning refactor could quietly
- * break while every other test in the package still passed.
- *
- * **Numbers, against ground truth derived outside this module.** The original suite
- * asserted only structural and relative properties, on the reasoning that equity, odds
- * and EV each have their own suites and the Coach merely composes them. That reasoning
- * had a hole in it: composing them *wrongly* is not covered by any of those suites, and
- * for a while the Coach priced every raise with the bet formula — charging hero the
- * raise but never the call — so every raise EV was overstated and its recommendation
- * was frequently wrong. Fifteen passing tests said nothing about it. The tests named
- * "against figures computed by hand" below close that hole: they fix a spot whose equity
- * is a countable fraction, work the closed forms out longhand in the comment, and assert
- * the literals. Nothing in them is computed by the code under test.
+ * Coach tests of two kinds. First, promises the types cannot express. Every figure carries its
+ * assumptions, every sampled figure its interval, nothing is labelled correct or optimal, bets are
+ * whole chips, and the same input gives the same report. Second, numbers against ground truth worked
+ * out by hand in the comments, because composing equity, odds and EV wrongly is not covered by their
+ * own suites.
  */
 
 import assert from 'node:assert/strict';
@@ -42,17 +26,14 @@ function flushDrawVsSet(overrides: Partial<CoachInput> = {}): CoachInput {
     opponentStacks: [400],
     bigBlind: 10,
     ...overrides,
-    // Stated after the spread, and derived from whatever `pot` ended up being: these spots all
-    // have hero covering the bet from a deep stack, so the pot hero can win is the whole middle.
-    // A test that means to describe a hero all-in for less overrides it and says so.
+    // Hero covers the bet from a deep stack, so the whole pot is contestable. An all-in-for-less
+    // test overrides this.
     contestablePot: overrides.contestablePot ?? overrides.pot ?? 100,
   };
 }
 
 test('a report never presents a figure without its assumptions', () => {
-  // PRODUCT-GUARDRAILS §3: a number without its assumptions is a guess dressed as a fact.
-  // The Coach is documented as throwing rather than returning an empty list, so this
-  // asserts the property across a range of spots rather than trusting one path.
+  // PRODUCT-GUARDRAILS §3. Checked across many spots, not one path.
   const spots: CoachInput[] = [
     flushDrawVsSet(),
     flushDrawVsSet({ toCall: 0 }),
@@ -141,8 +122,7 @@ test('a sampled figure always carries its interval; an exact one reports null ra
 });
 
 test('nothing in a report is ever labelled correct or optimal', () => {
-  // The type has no field for it, so this checks the STRINGS — which is where the claim
-  // would actually leak back in.
+  // The type has no field for it, so this checks the strings.
   const banned = /\b(?:correct|optimal|solved|guaranteed|always right|the right play|GTO)\b/i;
   const spots = [flushDrawVsSet(), flushDrawVsSet({ toCall: 0 }), flushDrawVsSet({ toCall: 400 })];
 
@@ -176,9 +156,7 @@ test('the suggestion always says what would change it, and may be low confidence
 });
 
 test('every candidate bet amount is a whole number of chips', () => {
-  // The engine rejects a fractional bet, so a Coach that suggests 83.33 is suggesting an
-  // action the player cannot take. This caught a real defect: the sizing ladder was
-  // returning exact pot fractions.
+  // The engine rejects a fractional bet, so a fractional suggestion is an action the player cannot take.
   for (const pot of [7, 13, 100, 101, 250, 999]) {
     for (const toCall of [0, 5, 50]) {
       const report = buildCoachReport(flushDrawVsSet({ pot, toCall, heroStack: 1_000 }));
@@ -251,16 +229,8 @@ test('the same input produces the same report', () => {
 });
 
 test('the price drives the decision: the same draw flips from raise to fold as the bet grows', () => {
-  // The single most important teaching property in the app. Same cards, same equity,
-  // opposite decision — because the price changed and nothing else did.
-  //
-  // The expensive spot used to be `{ pot: 100, toCall: 400, heroStack: 400 }`, and that
-  // made this test a lie by omission rather than a wrong expectation: with 400 behind and
-  // 400 to call there is nothing left to raise WITH, so the candidate list was exactly
-  // ["fold", "call"] and the test never exercised the raise path its own name claims to
-  // cover. A deeper stack keeps the raise on offer, which is the only way "flips from
-  // raise to fold" can be tested at all — so the spot now leaves 1,000 behind, and the
-  // assertion below checks the raise really is available before checking it is rejected.
+  // Same cards, same equity, opposite decision, because only the price changed. The expensive spot
+  // leaves 1,000 behind so a raise is still on offer and the raise path is really exercised.
   const cheap = buildCoachReport(flushDrawVsSet({ pot: 100, toCall: 20 }));
   const expensive = buildCoachReport(flushDrawVsSet({ pot: 100, toCall: 400, heroStack: 1_000 }));
 
@@ -304,17 +274,13 @@ test('stack context reports the effective stack and an SPR consistent with it', 
   const report = buildCoachReport(flushDrawVsSet({ heroStack: 400, opponentStacks: [150], pot: 100 }));
   assert.equal(report.stackContext.effectiveStack, 150, 'capped by the shorter stack');
   assert.ok(Math.abs(report.stackContext.spr - 1.5) < 1e-9);
-  // A pot-sized bet lays the caller exactly 1/3 — the anchor identity from odds.ts.
+  // A pot-sized bet lays the caller exactly 1/3.
   assert.ok(Math.abs(report.stackContext.potOddsOfferedByPotSizedBet - 1 / 3) < 1e-9);
 });
 
 /**
- * A genuine nine-out flush draw: hero Th 9h on Kh 7h 2c against exactly Ks Qd.
- *
- * Chosen because every figure it produces is countable on paper. Hero has 39.49% equity,
- * so hero is behind and really is drawing; the nine remaining hearts are all clean (the
- * opponent's top pair cannot outdraw a flush without the board pairing twice) and there
- * is not one dirty out to argue about.
+ * A nine-out flush draw: hero Th 9h on Kh 7h 2c against exactly Ks Qd. Hero has 39.49% equity, and
+ * all nine hearts are clean (top pair cannot outdraw a flush without the board pairing twice).
  */
 function nineOutFlushDraw(overrides: Partial<CoachInput> = {}): CoachInput {
   return {
@@ -329,30 +295,13 @@ function nineOutFlushDraw(overrides: Partial<CoachInput> = {}): CoachInput {
     opponentStacks: [400],
     bigBlind: 10,
     ...overrides,
-    // Stated after the spread, and derived from whatever `pot` ended up being: these spots all
-    // have hero covering the bet from a deep stack, so the pot hero can win is the whole middle.
-    // A test that means to describe a hero all-in for less overrides it and says so.
     contestablePot: overrides.contestablePot ?? overrides.pot ?? 100,
   };
 }
 
 test('the rule of 2/4 is published as a fraction, from clean outs, with its real error', () => {
-  // This test replaces one that asserted three things that were all wrong, and each was
-  // wrong in a way that shipped:
-  //
-  //   1. `assert.equal(thumb.estimate, report.outs.total * 4)` — TOTAL outs, clean plus
-  //      dirty, on a shortcut whose own printed explanation says "count clean outs
-  //      only". The Coach contradicted the sentence directly beneath it.
-  //   2. It compared the shortcut against `report.equity.heroEquity`, so `errorPoints`
-  //      was the shortcut's error PLUS the gap between hitting and winning, reported as
-  //      though the shortcut were responsible for all of it.
-  //   3. It asserted the estimate against the code's own output (`outs.total * 4`)
-  //      rather than a literal, so it could not have caught the unit: `estimate` was in
-  //      percentage points, `@prl/ui` rendered it with `formatPercent`, and the panel
-  //      said "3,600.0%".
-  //
-  // Everything below is a literal derived by hand from the cards, and none of it is
-  // computed by the code under test.
+  // Every expectation below is a literal derived by hand from the cards, not from the code under test.
+  // The shortcut counts clean outs only and is compared against the hit chance, not hero's equity.
   const report = buildCoachReport(nineOutFlushDraw());
   const outs = report.outs;
   assert.ok(outs !== null, 'a flop spot against one opponent has an outs breakdown');
@@ -362,27 +311,14 @@ test('the rule of 2/4 is published as a fraction, from clean outs, with its real
   const thumb = report.equity.ruleOfThumb;
   assert.ok(thumb !== null, 'a real draw with clean outs should show the shortcut');
 
-  // 9 clean outs x 4 = 36 percentage points = 0.36 as the fraction this contract carries.
+  // 9 clean outs x 4 = 36 points, carried as the fraction 0.36.
   assert.equal(thumb.estimate, 0.36, 'published as a FRACTION, so @prl/ui renders 36.0% and not 3,600.0%');
   assert.ok(thumb.estimate <= 1, 'a probability is never above 1');
 
-  // The exact chance of one of those nine arriving, by complementary counting, with the
-  // turn and the river to come.
-  //
-  // The denominator is 45, not 47. The opponent is `exactRange(Ks Qd)` — a KNOWN hand —
-  // so the king of spades and the queen of diamonds are face down in front of them and
-  // cannot come off the deck. `computeOuts` already works this way: its own sentence for
-  // this spot reads "Of the 45 cards that can come next, 9 are clean". Nine hearts among
-  // 45 leaves 36 misses:
+  // Exact chance of one of nine arriving over turn and river. The denominator is 45, not 47, because
+  // the opponent holds the known Ks Qd, which cannot come off the deck. `computeOuts` counts the same 45.
   //     1 - (36/45) x (35/44) = 1 - 1260/1980 = 1 - 7/11 = 4/11 = 0.363636363636...
-  // so the shortcut UNDERSTATES by 36 - 36.3636363636 = -0.3636363636 points.
-  //
-  // This assertion used to read 47, 38, 37 and "+1.0324, the x4 form overstates". Those
-  // literals were correct arithmetic for a denominator this spot does not have, and they
-  // passed only because `buildRuleOfThumb` was re-deriving 47 from the street instead of
-  // using the card set the outs were counted from. Fed `nineOutFlushDraw()` the old code
-  // returned errorPoints +1.0324 and a note quoting "47 cards unseen" beside an outs
-  // paragraph quoting 45; it now returns -0.3636 and quotes 45 in both places.
+  // so the shortcut understates by 36 - 36.3636363636 = -0.3636363636 points.
   const exactHitPercent = (1 - (36 / 45) * (35 / 44)) * 100;
   assert.ok(Math.abs(exactHitPercent - (4 / 11) * 100) < 1e-12, 'the hand-derived exact figure, 4/11');
   assert.ok(Math.abs(exactHitPercent - 36.363636363636) < 1e-9, 'stated as a decimal too');
@@ -395,32 +331,16 @@ test('the rule of 2/4 is published as a fraction, from clean outs, with its real
     'x4 understates here: nine outs among 45 is worth more per out than nine among 47',
   );
   assert.ok(thumb.note.length > 0);
-  // The note carries the derivation, and the derivation names the denominator. If it
-  // ever says 47 again the report is contradicting its own outs paragraph.
+  // The note must quote the same denominator as the outs paragraph.
   assert.match(thumb.note, /45 cards unseen/, 'the derivation must quote the same 45 the outs came from');
   assert.doesNotMatch(thumb.note, /47 cards unseen/);
 });
 
 /**
- * The denominator the shortcut is measured against is the one the outs were counted
- * from — the defect this pins, and the sign of the error is what it got wrong.
- *
- * `buildRuleOfThumb` used to compute the unseen count as `52 - 2 - (5 - cardsToCome)`,
- * which is 47 on the flop whatever the spot is, while `computeOuts` had counted the
- * outs out of `cardsConsidered`. Those two agree for a notation range and disagree by
- * two cards for a known opponent hand, so one report carried both numbers for one
- * event: "Of the 45 cards that can come next, 8 are clean" three paragraphs above "Two
- * cards to come, 8 outs, 47 cards unseen … = 31.5%".
- *
- * `errorPoints` is documented as "the shortcut's error and nothing else". It was
- * carrying a denominator mismatch larger than the error it reported, and — the part
- * that reaches a learner — pointing the wrong way.
- *
- * The two spots below are the same hero hand, the same board and the same 8 clean outs,
- * differing only in whether the opponent is a known hand or a range. That is the whole
- * variable, and the true error points in opposite directions across it, which is why
- * both are here and why both assert a SIGN and not just a magnitude. Every literal is
- * worked out longhand in the comments and nothing is taken from the code under test.
+ * The shortcut is measured against the denominator the outs were counted from, never one re-derived
+ * from the street. The two spots below share hero hand, board and 8 clean outs, and differ only in
+ * whether the opponent is a known hand or a range. The true error changes sign across them, so both
+ * assert a sign. Every literal is worked out in the comments.
  */
 function eightOutStraightDraw(overrides: Partial<CoachInput> = {}): CoachInput {
   return {
@@ -435,28 +355,15 @@ function eightOutStraightDraw(overrides: Partial<CoachInput> = {}): CoachInput {
     opponentStacks: [400],
     bigBlind: 10,
     ...overrides,
-    // Stated after the spread, and derived from whatever `pot` ended up being: these spots all
-    // have hero covering the bet from a deep stack, so the pot hero can win is the whole middle.
-    // A test that means to describe a hero all-in for less overrides it and says so.
     contestablePot: overrides.contestablePot ?? overrides.pot ?? 100,
   };
 }
 
 test('errorPoints is measured against the cards the outs were counted from, sign included', () => {
-  // ---- Case 1: a KNOWN opponent hand, so 45 cards can come, not 47. ----
-  //
-  // Hero 9s8s on 7s6d2c against exactly AhAd: an open-ended straight draw, and
-  // `computeOuts` reports cleanCount 8, cardsConsidered 45, equityNow 36.87%, no
-  // refusal. The two aces are behind the opponent and cannot arrive.
-  //
-  // 8 outs among 45, two cards to come, 37 misses:
+  // Case 1. A known opponent hand, so 45 cards can come, not 47.
+  // Hero 9s8s on 7s6d2c against exactly AhAd: 8 clean outs out of 45, equityNow 36.87%.
   //     1 - (37/45) x (36/44) = 1 - 1332/1980 = 1 - 37/55 = 18/55 = 0.327272727272...
-  // The shortcut says 8 x 4 = 32%, so it UNDERSTATES by 32 - 32.727272727 = -0.727272727.
-  //
-  // Fed exactly this input, the old code published estimate 0.32, errorPoints +0.5476
-  // and a note reading "overstating … by 0.5 points" — it had divided by 47. The
-  // published 31.45% was 1.28 points below the truth and the direction was inverted.
-  // It now returns errorPoints -0.7273 and says "understates".
+  // The shortcut says 8 x 4 = 32%, so it understates by 32 - 32.727272727 = -0.727272727.
   const known = buildCoachReport(eightOutStraightDraw());
   const knownOuts = known.outs;
   assert.ok(knownOuts !== null);
@@ -488,18 +395,10 @@ test('errorPoints is measured against the cards the outs were counted from, sign
   assert.match(knownThumb.note, /45 cards unseen/, 'one denominator in the whole report, not two');
   assert.doesNotMatch(knownThumb.note, /47 cards unseen/);
 
-  // ---- Case 2: an ordinary notation range, where 47 is correct and must stay. ----
-  //
-  // Same hero hand and board against "QQ+, AKs". The range holds more than one
-  // combination, so no specific two cards are removed from the deck and `computeOuts`
-  // reports cleanCount 8 out of cardsConsidered 47. The fix must not move this figure:
-  // it is a regression guard against "correcting" the denominator into a different
-  // wrong constant.
-  //
-  // 8 outs among 47, two cards to come, 39 misses:
+  // Case 2. A notation range, where 47 is correct and must stay. This guards against "correcting"
+  // the denominator into a different wrong constant.
   //     1 - (39/47) x (38/46) = 1 - 1482/2162 = 1 - 741/1081 = 0.3145235892691952...
-  // The shortcut's 32% OVERSTATES by 32 - 31.45235892691952 = +0.54764107308048 —
-  // the identical number the old code wrongly attached to case 1.
+  // The shortcut's 32% overstates by 32 - 31.45235892691952 = +0.54764107308048.
   const dead = parseCards('9s 8s 7s 6d 2c');
   const ranged = buildCoachReport(
     eightOutStraightDraw({ opponents: [{ label: 'a strong range', range: parseRange('QQ+, AKs', dead) }] }),
@@ -526,8 +425,7 @@ test('errorPoints is measured against the cards the outs were counted from, sign
   assert.ok(rangedThumb.errorPoints > 0, 'and here the x4 form really does overstate');
   assert.match(rangedThumb.note, /47 cards unseen/);
 
-  // The same 8 outs, the same 32% shortcut, and an error that changes SIGN with the card
-  // set. That is the whole reason the denominator cannot be re-derived from the street.
+  // Same 8 outs, same 32%, and the error changes sign with the card set.
   assert.ok(
     knownThumb.errorPoints < 0 && rangedThumb.errorPoints > 0,
     'the sign is a property of the spot, not of the street',
@@ -535,14 +433,11 @@ test('errorPoints is measured against the cards the outs were counted from, sign
 });
 
 test('the shortcut is withheld where it cannot mean anything, and says why', () => {
-  // The rule of 2 and 4 is a shortcut for a draw with clean outs still to come. Each
-  // spot below breaks one of those words, and each used to publish a number anyway —
-  // including "180%", which is not a bad estimate of a probability but not a
-  // probability at all.
+  // The rule of 2 and 4 is for a draw with clean outs still to come. Each spot breaks one of those
+  // words. A shortcut figure here would not be a probability (the first one gives 180%).
   const cases: readonly [string, CoachInput, RegExp][] = [
     [
-      // Hero flops a set against ace-high: 100% equity, 45 cards classified as "outs"
-      // because almost anything keeps hero in front. 45 x 4 = 180.
+      // Hero's set against ace-high: 100% equity and 45 cards counted as outs. 45 x 4 = 180.
       'a made hand that is already miles ahead',
       {
         heroCards: parseCards('7s 7d'),
@@ -560,8 +455,7 @@ test('the shortcut is withheld where it cannot mean anything, and says why', () 
       /already ahead/i,
     ],
     [
-      // The nut flush draw against a set: eight outs, every one of them dirty, because
-      // the board can still pair and fill the set up.
+      // The nut flush draw against a set. Every out is dirty because the board can pair.
       'a draw whose every out is dirty',
       flushDrawVsSet(),
       /clean/i,
@@ -582,8 +476,7 @@ test('the shortcut is withheld where it cannot mean anything, and says why', () 
         opponentStacks: [300],
         bigBlind: 10,
       },
-      // No note is owed here: with no cards to come the panel shows no outs section
-      // either, so there is nothing for a learner to wonder about.
+      // No note is owed. With no cards to come the panel shows no outs section either.
       /(?:)/,
     ],
   ];
@@ -612,10 +505,8 @@ test('invalid input is rejected with a message that says what was expected', () 
     [{ heroCards: parseCards('Qh 7h') }, /duplicate/],
     [{ heroCommittedThisStreet: -5 }, /non-negative integers/],
     [{ heroCommittedThisStreet: 2.5 }, /non-negative integers/],
-    // A total, not an increment. The fixture faces 50 with nothing out, so the level is
-    // 50 and any legal raise total is above it; 40 and 50 are both a different quantity
-    // wearing this field's name, and accepting either would put every published size
-    // back below the minimum.
+    // A total, not an increment. The fixture faces 50 with nothing out, so any legal raise total is
+    // above 50. Accepting 40 or 50 would put every published size back below the minimum.
     [{ minimumRaiseTo: 50 }, /above the current bet level of 50/],
     [{ minimumRaiseTo: 40 }, /above the current bet level of 50/],
     [{ minimumRaiseTo: 100.5 }, /whole number of chips/],
@@ -635,35 +526,17 @@ test('the summary line always names the method and never claims certainty', () =
   }
 });
 
-// ---------------------------------------------------------------------------
-// Numbers, against ground truth derived by hand
-// ---------------------------------------------------------------------------
-
 /**
- * A turn spot whose equity is a fraction that can be counted on paper.
+ * A turn spot whose equity is a countable fraction. Hero Ah Kh, board Qh 7h 2c 3d, opponent exactly
+ * Qs Qd (a set). 44 unseen cards. Hero wins only by making a flush that does not fill the opponent up:
  *
- * Hero holds Ah Kh. The board is Qh 7h 2c 3d. The opponent holds exactly Qs Qd — a set
- * of queens — so nothing is assumed about a range and the equity is a pure count.
- *
- * 52 - 4 board - 2 hero - 2 opponent = **44 unseen cards**, each equally likely to be
- * the river.
- *
- * Hero cannot win a showdown as things stand (ace high against three queens) and cannot
- * make a straight or a better made hand, so hero wins if and only if the river completes
- * the flush *and* does not fill the opponent up:
- *
- *   * 13 hearts exist. Qh and 7h are on the board, Ah and Kh are in hero's hand, so 9
- *     hearts are unseen: 2h 3h 4h 5h 6h 8h 9h Th Jh.
- *   * 2h pairs the 2c and 3h pairs the 3d, either of which gives the opponent a full
- *     house — which beats a flush. Both are losers, not winners.
- *   * That leaves 4h 5h 6h 8h 9h Th Jh: **7 winners**.
- *
- * A tie is impossible (the opponent always holds at least three queens), so
+ *   * 9 hearts are unseen: 2h 3h 4h 5h 6h 8h 9h Th Jh.
+ *   * 2h and 3h pair the board and give the opponent a full house.
+ *   * That leaves 7 winners. A tie is impossible.
  *
  *     e = 7 / 44 = 0.15909090909...
  *
- * Every figure asserted below is worked out from that fraction longhand in a comment and
- * written into the test as a literal. Nothing here calls the code it is checking.
+ * Every figure below is worked out from that fraction in a comment. Nothing calls the code under test.
  */
 const COUNTED_EQUITY = 7 / 44;
 
@@ -679,13 +552,9 @@ function countedTurn(overrides: Partial<CoachInput> = {}): CoachInput {
     heroStack: 2_000,
     opponentStacks: [2_000],
     bigBlind: 10,
-    // Stated rather than defaulted: every figure below depends on it, and a default that
-    // moved would make this test fail for a reason that has nothing to do with it.
+    // Stated, not defaulted, so a moved default cannot break this test.
     assumedFoldEquity: 0.35,
     ...overrides,
-    // Stated after the spread, and derived from whatever `pot` ended up being: these spots all
-    // have hero covering the bet from a deep stack, so the pot hero can win is the whole middle.
-    // A test that means to describe a hero all-in for less overrides it and says so.
     contestablePot: overrides.contestablePot ?? overrides.pot ?? 400,
   };
 }
@@ -701,8 +570,7 @@ function assertChips(actual: number, expected: number, what: string): void {
 test('facing a bet: every candidate EV matches a figure computed by hand', () => {
   const report = buildCoachReport(countedTurn());
 
-  // Ground truth for the equity itself, before anything is derived from it. Exact
-  // enumeration, so this is an identity and not an approximation.
+  // Exact enumeration, so the equity is an identity, not an approximation.
   assert.equal(report.equity.method, 'exact-enumeration');
   assertChips(report.equity.heroEquity, COUNTED_EQUITY, 'hero equity should be exactly 7/44');
 
@@ -711,7 +579,6 @@ test('facing a bet: every candidate EV matches a figure computed by hand', () =>
       (candidate) => candidate.action === action && (to === undefined || candidate.to === to),
     );
 
-  // EV(fold) = 0, by definition.
   assertChips(byAction('fold')?.ev ?? Number.NaN, 0, 'folding is the zero point');
 
   // EV(call) = e x (pot + toCall) - toCall
@@ -719,12 +586,10 @@ test('facing a bet: every candidate EV matches a figure computed by hand', () =>
   //          = 4900/44 - 300 = 111.3636364 - 300 = -188.6363636
   assertChips(byAction('call')?.ev ?? Number.NaN, -188.63636364, 'EV of calling 300 into 400');
 
-  // The raise sizes are the ones the table's bar offers: its default, the floor, and the ⅓, ½,
-  // ⅔, pot and all-in presets, each `betLevel + round(fraction x potAfterCall)` clamped into the
-  // legal range (`offeredSizes`). Hero has nothing out on this street, so the level is the 300
-  // being faced; the floor is 300 + max(300, bigBlind 10) = 600; the pot after the call is 700.
-  // So ⅓ is 300 + 233 = 533, below the floor and clamped onto it; ½ is 650; ⅔ is 300 + 467 = 767;
-  // pot is 1000; and the shove is 2000. Each is priced as a raise by r = to - 300:
+  // The raise sizes are the bar's (`offeredSizes`): its default, the floor, and the ⅓, ½, ⅔, pot and
+  // all-in presets, each `betLevel + round(fraction x potAfterCall)` clamped into the legal range. The
+  // level is 300, the floor 300 + max(300, 10) = 600, and the pot after the call 700. So ⅓ = 533 clamps
+  // to 600, ½ = 650, ⅔ = 767, pot = 1000, all-in = 2000. Each is a raise by r = to - 300:
   //
   //     EV = 0.35 x 400 + 0.65 x [ (7/44) x (400 + 300 + 2r) - (300 + r) ]
   //
@@ -733,9 +598,6 @@ test('facing a bet: every candidate EV matches a figure computed by hand', () =>
   //   to  767, r =  467: 140 + 0.65 x [ (7/44) x 1634 - 767 ]  = -189.5795455
   //   to 1000, r =  700: 140 + 0.65 x [ (7/44) x 2100 - 1000 ] = -292.8409091
   //   to 2000, r = 1700: 140 + 0.65 x [ (7/44) x 4100 - 2000 ] = -736.0227273
-  //
-  // These used to be three rungs of the sizing ladder, rounded down — 650, 825 and 2000 — and
-  // the bar's default of 600 was not among them, which is the defect `table-sizing.ts` records.
   const expectedRaises: readonly [number, number, number][] = [
     // [to, cost, ev]
     [600, 600, -115.56818182],
@@ -753,33 +615,19 @@ test('facing a bet: every candidate EV matches a figure computed by hand', () =>
     assertChips(candidate?.ev ?? Number.NaN, ev, `raise to ${to}`);
   }
 
-  // Every raise here is worse than folding, so the suggestion is a fold. Under the old
-  // bet-shaped arithmetic the smallest raise came out at +26.25 (see the test below) and
-  // this spot recommended raising a hand with 15.9% equity against a set.
+  // Every raise is worse than folding. Bet-shaped arithmetic priced the smallest raise at +26.25.
   assert.equal(report.suggestion.action, 'fold');
   assert.equal(report.suggestion.sizeRange, undefined, 'a fold has no size');
 });
 
 test('checked to: every candidate EV matches a figure computed by hand', () => {
-  // Same cards, same 7/44, nothing to call. Now the aggressive action really is an
-  // opening bet, and the bet formula is the right one — which is what localises the old
-  // defect to the raise path rather than to `evOfBet`.
+  // Same cards, nothing to call. Here the bet formula is the right one, which confines the old
+  // defect to the raise path.
   const report = buildCoachReport(countedTurn({ toCall: 0 }));
   assertChips(report.equity.heroEquity, COUNTED_EQUITY, 'hero equity should be exactly 7/44');
 
-  // EV(check) = e x pot = (7/44) x 400 = 2800/44 = 63.6363636.
-  //
-  // This assertion used to read `0`, with the comment "checking is worth the same as
-  // folding right now". That was the defect written down as an expectation: a check is
-  // NOT worth what a fold is worth. Folding surrenders every claim on the 400 already in
-  // the middle; checking keeps the hand and therefore keeps 7/44 of that 400, for free.
-  // Pricing the two the same is what let the Coach rank a fold above a free check — the
-  // one line the engine, the lessons and the scenarios all agree is never right.
-  //
-  // It is the same number `evOfCall` gives at `toCall = 0`, which is the point: a check
-  // is a call priced at nothing, and `ev.ts` has said so in its own doc comment all
-  // along ("a free showdown is worth e x pot, which is why giving up a hand you could
-  // see for free is never right"). The Coach simply was not asking it.
+  // EV(check) = e x pot = (7/44) x 400 = 2800/44 = 63.6363636. A check keeps the hand's share of
+  // the pot, so it is never worth what a fold is worth. It equals `evOfCall` at `toCall = 0`.
   const check = report.candidates.find((candidate) => candidate.action === 'check');
   assertChips(check?.ev ?? Number.NaN, 2800 / 44, 'a free check keeps 7/44 of the 400 already in the middle');
   const fold = report.candidates.find((candidate) => candidate.action === 'fold');
@@ -788,9 +636,8 @@ test('checked to: every candidate EV matches a figure computed by hand', () => {
     'a free check must be worth strictly more than folding whenever the hand has any equity at all',
   );
 
-  // The bar's sizes against the 400 pot: the one-big-blind floor of 10, then ⅓ = 133, ½ = 200,
-  // ⅔ = 267 (266.67 rounded to the nearest chip, as the bar rounds it) and pot = 400, and the 2000
-  // all-in.
+  // The bar's sizes against the 400 pot: the floor of 10, then ⅓ = 133, ½ = 200, ⅔ = 267 (266.67
+  // rounded to the nearest chip) and pot = 400, and the 2000 all-in.
   //
   //   b =   10:  EV = 0.35 x 400 + 0.65 x [ (7/44) x (400 + 20) - 10 ]   = 176.9318182
   //   b =  133:  EV = 140 + 0.65 x [ (7/44) x (400 + 266) - 133 ]         = 122.4204545
@@ -817,23 +664,16 @@ test('checked to: every candidate EV matches a figure computed by hand', () => {
 });
 
 test('a raise is charged for the call inside it; an opening bet is not', () => {
-  // The regression test for the defect this file's header describes, written as the
-  // arithmetic distinction itself rather than as a fixed number, so it holds at every
-  // size the ladder can produce.
-  //
-  // Both closed forms are written out here from the definitions, NOT taken from `ev.ts`:
+  // The raise-versus-bet distinction as arithmetic, so it holds at every size. Both closed forms are
+  // written from the definitions, not taken from `ev.ts`:
   //
   //   EV(bet   b)      = f x pot + (1 - f) x [ e x (pot + 2b) - b ]
   //   EV(raise c by r) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ]
   //
-  // and the two identities that separate them:
-  //
   //   at the same increment r, EV(raise) = EV(bet r) - (1 - f) x c x (1 - e)
   //   at the same total risk b = c + r, EV(raise) = EV(bet b) - (1 - f) x e x c
   //
-  // The first is the size of the old overstatement. The second is why a raise can never
-  // beat a bet that risks the same chips into the same pot: part of what a raiser puts
-  // in was already owed, so the opponent does not match it.
+  // The second is why a raise never beats a bet that risks the same chips. Part of the raise was owed.
   const input = countedTurn();
   const report = buildCoachReport(input);
   const { pot, toCall } = input;
@@ -861,11 +701,9 @@ test('a raise is charged for the call inside it; an opening bet is not', () => {
       'to is a street total, not an increment',
     );
 
-    // The EV is the raise formula...
     assertChips(candidate.ev, evRaiseByHand(toCall, increment), `raise to ${to}`);
 
-    // ...and is strictly below the bet formula at the same increment, by exactly the
-    // amount the old code overstated it by.
+    // Strictly below the bet formula at the same increment.
     const asOpeningBet = evBetByHand(increment);
     assertChips(
       asOpeningBet - candidate.ev,
@@ -885,8 +723,7 @@ test('a raise is charged for the call inside it; an opening bet is not', () => {
       `raise to ${to} against a bet risking the same ${candidate.cost}`,
     );
 
-    // The derivation a learner reads must state the real risk. The old string said
-    // "Risks 133 to win 400" for a raise that risked 433.
+    // The derivation a learner reads must state the real risk, the call plus the raise.
     assert.match(
       candidate.derivation,
       new RegExp(`Risks ${candidate.cost} to win ${pot}`),
@@ -895,20 +732,16 @@ test('a raise is charged for the call inside it; an opening bet is not', () => {
     assert.match(candidate.derivation, /EV\(raise\)/, 'a raise is labelled as a raise');
   }
 
-  // The specific figure from the review, spelled out: at a 350 raise over a 300 bet the
-  // bet formula gives 140 + 0.65 x [ (7/44) x 1100 - 350 ] = 140 + 0.65 x (175 - 350)
-  // = 26.25 — a positive number that made "raise" the recommendation. The raise formula
-  // gives -137.7272727. The gap is 0.65 x 300 x (1 - 7/44) = 163.9772727.
+  // At a 350 raise over a 300 bet the bet formula gives 140 + 0.65 x (175 - 350) = 26.25, a positive
+  // figure. The raise formula gives -137.7272727. The gap is 0.65 x 300 x (1 - 7/44) = 163.9772727.
   assertChips(evBetByHand(350), 26.25, 'the bet formula at the same increment');
   assertChips(evRaiseByHand(300, 350), -137.72727273, 'the raise formula');
   assertChips(evBetByHand(350) - evRaiseByHand(300, 350), 163.97727273, 'the overstatement');
 });
 
 test('a total is a street commitment: the same spot from the big blind shifts totals, not values', () => {
-  // Identical spot except that hero has 10 out there already. Every EV is a function of
-  // chips still to be risked, so nothing about the values moves; every `to` is a street
-  // total, so all of them move by exactly 10. Getting this wrong is what published
-  // raises the table refuses.
+  // Hero has 10 out already. EVs depend on chips still to be risked, so they do not move. Every `to`
+  // is a street total, so each moves by exactly 10.
   const flat = buildCoachReport(countedTurn());
   const fromBlind = buildCoachReport(countedTurn({ heroCommittedThisStreet: 10 }));
 
@@ -930,17 +763,14 @@ test('a total is a street commitment: the same spot from the big blind shifts to
 });
 
 test('a hand that is drawing dead is priced as a pure bluff, with no equity credited', () => {
-  // Hero holds 7c 2d on Ah Kd Qs 9c 4h against exactly Kh Kc. Three kings against seven
-  // high with no cards to come: hero's equity is exactly 0 and a tie is impossible, so
-  // every figure here is pure arithmetic on the price.
+  // Hero 7c 2d on Ah Kd Qs 9c 4h against exactly Kh Kc, river. Equity is exactly 0.
   //
-  //   EV(call)  = 0 x (140 + 45) - 45 = -45, the money handed over.
-  //   EV(raise) = f x pot - (1 - f) x risk = 0.35 x 140 - 0.65 x risk = 49 - 0.65 x risk.
+  //   EV(call)  = 0 x (140 + 45) - 45 = -45
+  //   EV(raise) = 0.35 x 140 - 0.65 x risk = 49 - 0.65 x risk
   //
-  // The level is 45 and the minimum legal total is 45 + max(45, 10) = 90. The sizes are the bar's
-  // (`offeredSizes`), against the 185 that would be in the middle after the call: the floor of 90,
-  // ⅓ = 45 + 62 = 107, ½ = 45 + 93 = 138 (92.5 rounds up), ⅔ = 45 + 123 = 168, pot = 230, and
-  // the 500 all-in. With nothing out there the risk is the total, so EV = 49 - 0.65 x to:
+  // The floor is 45 + max(45, 10) = 90. The bar's sizes against the 185 after the call are 90,
+  // ⅓ = 107, ½ = 138 (92.5 rounds up), ⅔ = 168, pot = 230 and the 500 all-in. Nothing is out
+  // yet, so the risk is the total:
   //
   //   to =  90:  49 -  58.50 =   -9.50
   //   to = 107:  49 -  69.55 =  -20.55
@@ -982,23 +812,14 @@ test('a hand that is drawing dead is priced as a pure bluff, with no equity cred
     assertChips(raises[index]?.ev ?? Number.NaN, ev, `raise to ${to} with no equity`);
   }
 
-  // Every action loses money, so folding wins. The review found this spot
-  // (fl-top-pair-weak-kicker-river, the same shape) recommending a raise at +19.1 chips
-  // and marking a learner's fold as inconsistent with the analysis.
+  // Every action loses chips, so folding wins.
   assert.equal(report.suggestion.action, 'fold');
 });
 
 test('the suggested size range holds only sizes priced within a big blind of the best', () => {
-  // A spot where the smallest legal raise is clearly best and the all-in is clearly not:
-  // facing 100 into 400 with 2,000 behind, the raises come out at roughly +71, -21 and
-  // -715 chips. The range used to span the whole ladder, so its upper end was a size the
-  // Coach itself priced 786 chips below its lower end — printed to a learner as
-  // "Raise — 225 to 2000", which reads as "anything in here is fine".
-  //
-  // The property asserted is the definition itself, both ways round: a size is inside the
-  // published range if and only if it is priced within one big blind of the best
-  // candidate. A range that spans everything fails the "only if" half; a range that
-  // dropped a genuinely near-indifferent size would fail the "if" half.
+  // Facing 100 into 400 with 2,000 behind, the raises come out at roughly +71, -21 and -715 chips.
+  // A size is inside the published range if and only if it is priced within one big blind of the
+  // best candidate. Both directions are asserted.
   for (const bigBlind of [10, 100]) {
     const report = buildCoachReport(countedTurn({ toCall: 100, bigBlind }));
     const ranked = [...report.candidates].sort((a, b) => b.ev - a.ev);
@@ -1024,8 +845,7 @@ test('the suggested size range holds only sizes priced within a big blind of the
       );
     }
 
-    // The all-in exists in both reports and is hundreds of chips worse than the best, so
-    // it must never be the upper end. It always was.
+    // The all-in is hundreds of chips worse than the best, so it is never the upper end.
     const shove = report.candidates.find(
       (candidate) => candidate.action === 'raise' && candidate.to === 2_000,
     );
@@ -1037,31 +857,17 @@ test('the suggested size range holds only sizes priced within a big blind of the
     );
   }
 
-  // At one big blind exactly one size qualifies, so the range is that single size stated
-  // twice rather than a span. At a hundred, two sizes are near-indifferent and the range
-  // widens to a real span — which is the only shape in which the field carries
-  // information.
+  // At one big blind exactly one size qualifies, so the range is a single size. At a hundred, two
+  // sizes are near-indifferent and the range is a real span.
   const atTen = buildCoachReport(countedTurn({ toCall: 100, bigBlind: 10 })).suggestion.sizeRange;
   const atHundred = buildCoachReport(countedTurn({ toCall: 100, bigBlind: 100 })).suggestion.sizeRange;
   assert.equal(atTen?.min, atTen?.max);
   assert.ok((atHundred?.min ?? 0) < (atHundred?.max ?? 0));
 });
 
-// ---------------------------------------------------------------------------
-// Folding when checking is free
-// ---------------------------------------------------------------------------
-
 test('with nothing to call, fold is never ranked above check', () => {
-  // The one line the engine, the lessons and the scenarios all agree can never be right.
-  // `legalActions` says as much in the note it attaches to a free fold ("Legal, but
-  // checking costs nothing"), and the Coach used to recommend it anyway: a check was
-  // hard-coded at EV 0, a fold is 0 by definition, and a stable descending sort with fold
-  // pushed first put fold on top of the tie.
-  //
-  // The spots below are chosen to be adversarial rather than typical. Hero is drawing
-  // stone dead in two of them — equity exactly 0 — which is the only case where the two
-  // figures can still tie, and it is where a "check is worth 0" implementation looked
-  // most defensible.
+  // With nothing to call, a fold never outranks a check. Two spots are drawing dead (equity exactly 0),
+  // the only case where the two can still tie.
   const spots: readonly (readonly [string, CoachInput])[] = [
     [
       // Equity exactly 0 (three kings against seven high, board complete) and no chips
@@ -1100,8 +906,7 @@ test('with nothing to call, fold is never ranked above check', () => {
       },
     ],
     [
-      // An empty pot: `equity x pot` is 0 for every hand, so every candidate ties at zero
-      // and only the tiebreak separates them.
+      // In an empty pot every candidate ties at zero and only the tiebreak separates them.
       'an empty pot, where every free action is worth exactly zero',
       {
         heroCards: parseCards('Th 9h'),
@@ -1130,20 +935,17 @@ test('with nothing to call, fold is never ranked above check', () => {
     assert.ok(check !== undefined, `${label}: a free spot must offer a check`);
     assert.ok(fold !== undefined, `${label}: a free spot still offers a fold`);
 
-    // The arithmetic, first: a check is `equity x pot`, which is never negative, so it
-    // can never be below a fold's zero. Asserting the inequality rather than the number
-    // keeps this true for every spot rather than for these five.
+    // A check is `equity x pot`, never negative, so it is never below a fold's zero.
     assert.ok(check.ev >= fold.ev, `${label}: check priced at ${check.ev} against a fold at ${fold.ev}`);
     assert.ok(
       Math.abs(check.ev - report.equity.heroEquity * spot.pot) < 1e-9,
       `${label}: EV(check) = e x pot`,
     );
 
-    // Then the ranking, which is the thing a learner actually reads. Ties are broken
-    // against giving up the hand, so a fold cannot win one.
+    // Ties are broken against giving up the hand, so a fold cannot win one.
     assert.notEqual(report.suggestion.action, 'fold', `${label}: the Coach suggested folding for free`);
 
-    // And the ordering explicitly, in case a future candidate is added between them.
+    // The ordering explicitly, in case a candidate is added between them.
     const ranked = [...report.candidates].sort((a, b) => b.ev - a.ev);
     const foldRank = ranked.findIndex((candidate) => candidate.action === 'fold');
     const checkRank = ranked.findIndex((candidate) => candidate.action === 'check');
@@ -1155,15 +957,9 @@ test('with nothing to call, fold is never ranked above check', () => {
 });
 
 test('no figure a report publishes, in a number or in a sentence, is a probability above 100%', () => {
-  // The whole class of defect in one assertion, on the producing side. `@prl/ui` renders
-  // every probability on this contract by multiplying by 100, so a field that is not a
-  // fraction becomes a four-figure percentage on the panel; and a sentence built here can
-  // state an impossible figure without any field being wrong at all — which is what
-  // "The rule of 2 and 4 gives 180% here" was.
-  //
-  // The spots are chosen to be the ones that used to break it: a made hand miles ahead
-  // (45 cards classified as outs), a draw whose every out is dirty, a hand drawing stone
-  // dead, and one real draw so the scan is not passing on empty reports.
+  // `@prl/ui` multiplies every probability on this contract by 100, so each field must be a fraction,
+  // and no sentence may state an impossible figure. The spots are the ones that once broke it, plus
+  // one real draw so the scan does not pass on empty reports.
   const spots: readonly (readonly [string, CoachInput])[] = [
     [
       'a flopped set, 100% to win',
@@ -1224,7 +1020,7 @@ test('no figure a report publishes, in a number or in a sentence, is a probabili
       assert.ok(value >= 0 && value <= 1, `${label}: ${field} is ${value}, which is not a fraction in 0..1`);
     }
 
-    // And every sentence, because a string can be wrong while every field is right.
+    // Every sentence too, because a string can be wrong while every field is right.
     const sentences: readonly string[] = [
       report.suggestion.reason,
       ...report.suggestion.whatWouldChangeIt,
@@ -1252,23 +1048,10 @@ test('no figure a report publishes, in a number or in a sentence, is a probabili
 
 test('a raise states the defence frequency for a RAISE, not for a bet of the same size', () => {
   /**
-   * `sizingLadder` builds its options with `defenceFrequency(potAfterCall, raiseBy)`, which
-   * returns `pot / (pot + bet)` — correct for a BET, where the aggressor risks `bet` to win
-   * `pot`. A raise is a different shape: raising by `r` while facing `c` risks `c + r` to win the
-   * pot as it stood BEFORE hero called. Reading the ladder's figure into a raise's note therefore
-   * counted hero's own call as money hero wins when the opponent folds, and overstated every
-   * raise's minimum defence frequency.
-   *
-   * Measured before the fix, at pot 100 / toCall 50: a raise of 50 published 75.0% where the
-   * answer is 50.0%. The published sentence is "…has to continue with X% of their range for a
-   * raise of this size not to print automatically", so an overstated X tells the learner to
-   * defend far wider than the arithmetic supports — in a product whose whole purpose is the
-   * arithmetic.
-   *
-   * This asserts the closed form `pot / (pot + toCall + raiseBy)` against every raise the report
-   * publishes, so it cannot be satisfied by a single hard-coded number. `priceLaidToCaller` in
-   * the same sentence was always right, and is checked here too so a future edit cannot fix one
-   * by breaking the other.
+   * A raise by `r` facing `c` risks `c + r` to win the pot as it stood before hero called, so its
+   * minimum defence frequency is `pot / (pot + toCall + raiseBy)`, not the bet formula
+   * `pot / (pot + bet)`. At pot 100 / toCall 50 a raise of 50 must read 50.0%, not 75.0%.
+   * `priceLaidToCaller` is checked too so a fix to one cannot break the other.
    */
   const input = flushDrawVsSet();
   const report = buildCoachReport(input);
@@ -1290,8 +1073,7 @@ test('a raise states the defence frequency for a RAISE, not for a bet of the sam
       `raise of ${raiseBy}: published MDF ${defence[1]}%, correct ${expectedDefence.toFixed(1)}%`,
     );
 
-    // The caller's price is measured against the pot after they call the raise, which includes
-    // hero's call and the raise twice — this one the ladder gets right.
+    // The caller's price is against the pot after they call, which includes hero's call and the raise twice.
     const expectedPrice = (100 * raiseBy) / (input.pot + input.toCall + 2 * raiseBy);
     assert.ok(
       Math.abs(Number(price[1]) - expectedPrice) < 0.6,
@@ -1301,14 +1083,8 @@ test('a raise states the defence frequency for a RAISE, not for a bet of the sam
 });
 
 test('the price sentence is chosen, not appended — a hero who misses the price is told so (REGRESSION)', () => {
-  // The sentence used to be one template with only its final word conditional:
-  // "You clear that with X% equity, a Y point ${ok ? 'surplus' : 'shortfall'}". Neither the lead
-  // clause nor the sign of Y was conditional, so a hero with no equity at all read
-  //
-  //     "You clear that with 0.0% equity, a -24.3 point shortfall."
-  //
-  // Twelve of the thirty-six Lab scenarios rendered that, and every gate was green: nothing
-  // asserted on the prose the panel prints, only on the numbers behind it.
+  // The sentence's lead clause and the sign of the gap must both depend on whether hero clears the
+  // price. A hero with no equity once read "You clear that with 0.0% equity, a -24.3 point shortfall."
   const board = parseCards('Ks 9h 4c 2d 8s');
   const base = {
     board,
@@ -1354,9 +1130,8 @@ test('the price sentence is chosen, not appended — a hero who misses the price
 });
 
 test('"loses more often than it wins" is keyed to hero equity, not to the price (REGRESSION)', () => {
-  // Keyed to `equitySurplus > 0` alone this note fired on 23 of the 36 Lab scenarios and was false
-  // on 15, including one whose own reasoning reads "hero's hand wins this showdown outright".
-  // A profitable call CAN lose more often than it wins — only when hero is under 50%.
+  // A profitable call can lose more often than it wins only when hero is under 50%, so the note keys
+  // on that, not on `equitySurplus > 0` alone.
   const winning: CoachInput = {
     heroCards: parseCards('Kh Qd'),
     board: parseCards('Ks 9h 4c 2d 8s'),
@@ -1382,13 +1157,10 @@ test('"loses more often than it wins" is keyed to hero equity, not to the price 
 });
 
 test('confidence measures the gap to the next-best ACTION, not to a neighbouring size of the same one', () => {
-  // Facing 100 into 210 at a big blind of 20, Qh Jh against exactly Ac Kd on Th 9s 2c 3d. The
-  // Coach prices the bar's sizes, and the floor (200) and the ⅓-pot preset (203) are three chips
-  // apart, so they come out within a chip of each other: 41.44 and 40.65. Measured against
-  // `ranked[1]` that is a 0.04-big-blind margin, and the suggestion read "Raise comes out
-  // marginally ahead here, but only just — treat this as close to indifferent", while the best
-  // line that is not a raise — folding, at 0 — is 41.4 units, two big blinds, behind. Size
-  // near-ties are what `sizeRange` is for; the confidence is about which action.
+  // Facing 100 into 210 at a big blind of 20, Qh Jh against exactly Ac Kd on Th 9s 2c 3d. The floor
+  // (200) and the ⅓-pot preset (203) price within a chip of each other (41.44 and 40.65). Confidence
+  // is measured against the best line that is not a raise (fold, at 0, two big blinds behind). Size
+  // near-ties are what `sizeRange` is for.
   const report = buildCoachReport({
     heroCards: parseCards('Qh Jh'),
     board: parseCards('Th 9s 2c 3d'),
@@ -1410,6 +1182,6 @@ test('confidence measures the gap to the next-best ACTION, not to a neighbouring
   assert.equal(report.suggestion.action, 'raise');
   assert.equal(report.suggestion.confidence, 'reasonable');
   assert.match(report.suggestion.reason, /by 41\.4 units over the next-best action/u);
-  // 255 (½ pot) is 26.82, inside one big blind of the best, so it belongs in the range too.
+  // 255 (½ pot) is 26.82, within one big blind of the best, so it is in the range too.
   assert.deepEqual(report.suggestion.sizeRange, { min: 200, max: 255 }, 'the near-tie is the size range');
 });

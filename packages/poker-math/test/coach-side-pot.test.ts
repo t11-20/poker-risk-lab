@@ -1,49 +1,11 @@
 /**
- * A learner all-in for less than the bet is priced against the pot they can win.
- *
- * ## The defect, measured through the real engine before it was fixed
- *
- * Heads-up, 5/10, hero holding 40 and villain shoving 310. The engine's own view:
- *
- *     PlayerView          potTotal 320   amountToCall 30   legalActions fold, call
- *     pot layers (post-call)             80 chips eligible [0,1]   270 chips eligible [1]
- *
- * Hero can win 80, of which 30 is hero's own call, so the price is 30 into 50 — 1.67 to 1,
- * 37.5% to break even. What the Coach published:
- *
- *     "The pot is laying you 10.7 to 1, so you need 8.6% to break even on a call"
- *     EV(call) = +82.76        suggestion: call        (at 32.2% equity)
- *
- * The requirement was understated 4.4x and a call worth **-4.23 chips** was headlined as the
- * recommendation. `toCall` was already capped at hero's stack — the bug was never the price hero
- * pays, it was the pot hero was told they were paying it into.
- *
- * It corrupted grading with it. `judgeConsistency` on that same report, for a learner who folds —
- * the correct action — returned `consistent: false` with `shortfallUnits: 82.76` and
- * `supportedActions: ['call']`, and `matched_expected: false` went to `scenario_attempts`. A
- * learner who played correctly was recorded as wrong, which is the exact failure `consistency.ts`
- * says in its own header that it exists to prevent.
- *
- * Over 4,000 fuzzed hands at mixed depths and 2-6 seats, 5,793 decision points had a call the
- * engine capped and 5,650 of those left chips beyond hero's reach; the worst understated the
- * equity a call needs by 271x. `packages/poker-engine/test/invariants.test.ts` is where that
- * sweep lives and where it is asserted to be non-empty.
- *
- * ## Why these tests build hands rather than object literals
- *
- * Every figure below comes from `startHand` / `applyAction` / `redactFor`, because the defect was
- * a disagreement between what the engine knew and what the Coach was told. A test that hand-writes
- * both sides of that boundary can only ever confirm its own arithmetic. The one thing written by
- * hand is the price — `30 / (50 + 30) = 37.5%` is arithmetic a reader can check without running
- * anything, and it is asserted as a literal.
- *
- * ## The old behaviour is exercised here, not just described
- *
- * `contestablePot` is a required input, and in a capped spot `toCall === heroStack`, so passing
- * the whole middle is a thing a caller could still do. Each case below builds the same report
- * both ways and asserts the pair, so the defect is a live comparison rather than a comment about
- * one. (`validate` refuses that same substitution wherever hero *can* cover the bet — see the last
- * test, which is the guard against a caller subtracting a side pot that does not exist.)
+ * A learner all-in for less than the bet is priced against the pot they can win, not the whole
+ * middle. Heads-up 5/10, hero 40, villain shoving 310: hero can win 80, 30 of it hero's own call,
+ * so the price is 30 into 50 (37.5% to break even). Priced against the whole middle the Coach
+ * published 8.6% and recommended a call worth -4.23 chips, and `judgeConsistency` graded the
+ * correct fold as wrong. `packages/poker-engine/test/invariants.test.ts` holds the fuzz sweep.
+ * Spots are built through `startHand` / `applyAction` / `redactFor`, because the defect sat at the
+ * engine-to-Coach boundary. Each case also builds the whole-middle report and asserts the pair.
  */
 
 import assert from 'node:assert/strict';
@@ -77,10 +39,8 @@ interface Spot {
 }
 
 /**
- * Deals one hand, applies the given actions, and returns hero's own redacted view.
- *
- * The view is the boundary the live Coach reads: `potTotal`, `amountToCall`, every seat's street
- * commitment and status, and the engine's own `legalActions`.
+ * Deals one hand, applies the actions, and returns hero's redacted view, the boundary the live
+ * Coach reads.
  */
 function spotFrom(
   stacks: readonly number[],
@@ -128,10 +88,8 @@ function spotFrom(
 }
 
 /**
- * The Coach input the socket builds from a view, with the contestable pot as a parameter.
- *
- * `contestablePot` is passed in rather than computed here so that one call site can produce both
- * the honest report and the one the defect produced, from the same view and the same seed.
+ * The Coach input the socket builds from a view. `contestablePot` is a parameter so one view can
+ * produce both the honest report and the whole-middle one.
  */
 function inputFor(spot: Spot, contestablePot: number): CoachInput {
   const blockers = [...(spot.own.holeCards ?? []), ...spot.view.board];
@@ -176,10 +134,6 @@ function evOf(
   return candidate.ev;
 }
 
-// ---------------------------------------------------------------------------
-// Heads-up: the spot the defect was reproduced on
-// ---------------------------------------------------------------------------
-
 /** Hero 40 in the big blind, villain shoving 310. The reproduction, rebuilt. */
 function headsUpAllInForLess(): Spot {
   // Heads-up the button is the small blind and acts first, so seat 0 shoves into hero's blind.
@@ -189,8 +143,7 @@ function headsUpAllInForLess(): Spot {
 test('a hero all-in for less is priced against the pot they can win, not the whole middle', () => {
   const spot = headsUpAllInForLess();
 
-  // What the engine says, first, so the rest is a claim about a real spot rather than about
-  // numbers this file invented.
+  // What the engine says first, so the rest is about a real spot.
   assert.equal(spot.view.potTotal, 320, 'the middle');
   assert.equal(spot.view.amountToCall, 30, 'the call, already capped at the stack by the engine');
   assert.deepEqual(
@@ -205,7 +158,7 @@ test('a hero all-in for less is priced against the pot they can win, not the who
 
   const report = buildCoachReport(inputFor(spot, share.contestable));
 
-  // 30 to win 50. Worked out by hand: 50 / 30 = 1.666..., and 30 / (50 + 30) = 0.375.
+  // 30 to win 50: 50 / 30 = 1.666..., and 30 / (50 + 30) = 0.375.
   assert.equal(report.potOdds.pot, 50, 'the price is quoted against the pot hero can win');
   assert.equal(report.potOdds.breakEvenEquity, 0.375);
   assert.equal(report.potOdds.oddsRatio, 5 / 3);
@@ -215,8 +168,7 @@ test('a hero all-in for less is priced against the pot they can win, not the who
   const equity = report.equity.heroEquity;
   assert.ok(Math.abs(evOf(report, 'call') - (equity * 50 - (1 - equity) * 30)) < 1e-9);
 
-  // The prose moves with the number, and names the side pot rather than leaving a reader to
-  // reconcile "50 in the middle" with the 320 in front of them.
+  // The prose names the side pot, so a reader can reconcile 50 with the 320 in front of them.
   const prose = [report.potOdds.explanation, ...report.teachingNotes].join(' ');
   assert.match(prose, /1\.67 to 1/);
   assert.match(prose, /37\.5%/);
@@ -224,7 +176,7 @@ test('a hero all-in for less is priced against the pot they can win, not the who
   assert.match(prose, /270/);
   assert.match(prose, /320/);
 
-  // ---- and the same report built the old way, which is what the numbers above replace ----
+  // The same report built against the whole middle, for comparison.
   const asItWas = buildCoachReport(inputFor(spot, spot.view.potTotal));
   assert.equal(asItWas.potOdds.pot, 320);
   assert.equal(asItWas.potOdds.breakEvenEquity, 30 / 350, 'the defect: 8.57%, understating 37.5% by 4.4x');
@@ -239,9 +191,8 @@ test('a hero all-in for less is priced against the pot they can win, not the who
 });
 
 test('a correct fold is no longer graded as a large error', () => {
-  // `judgeConsistency` is what writes `scenario_attempts.matched_expected`. Its verdict is a
-  // function of the report's candidate table, so a mispriced call becomes a wrong answer recorded
-  // against a learner who played correctly.
+  // `judgeConsistency` writes `scenario_attempts.matched_expected` from the candidate table, so a
+  // mispriced call records a correct fold as wrong.
   const spot = headsUpAllInForLess();
   const share = shareOf(spot);
 
@@ -264,17 +215,10 @@ test('a correct fold is no longer graded as a large error', () => {
   assert.deepEqual(asItWas.supportedActions, ['call']);
 });
 
-// ---------------------------------------------------------------------------
-// Multiway: the excess is a sum over opponents, not one subtraction
-// ---------------------------------------------------------------------------
-
 test('multiway, every opponent beyond reach is subtracted, not just the largest', () => {
-  // Three-handed, 5/10. Seat 0 has 300 and shoves, seat 1 has 100 and calls all-in, hero has 40 in
-  // the big blind. That is two side pots: 120 for seats 0 and 1, and 200 for seat 0 alone.
-  //
-  // Subtracting only seat 0's excess above hero's 40 would leave seat 1's 60 in the pot and quote
-  // a price against 150 rather than 90 — which is why this case exists and why the arithmetic is
-  // a sum rather than one `pot - (toCall - heroStack)`.
+  // Three-handed, 5/10. Seat 0 shoves 300, seat 1 calls all-in for 100, hero has 40 in the big blind.
+  // Side pots of 120 (seats 0, 1) and 200 (seat 0). Subtracting only seat 0's excess would quote the
+  // price against 150, not 90, so the excess is a sum over opponents.
   const spot = spotFrom(
     [300, 100, 40],
     [
@@ -303,20 +247,14 @@ test('multiway, every opponent beyond reach is subtracted, not just the largest'
   const asItWas = buildCoachReport(inputFor(spot, spot.view.potTotal));
   assert.equal(asItWas.potOdds.breakEvenEquity, 30 / 440, 'the defect: 6.8%, understating 25% by 3.7x');
 
-  // The "one subtraction" answer a heads-up-only fix would have produced, stated so that a future
-  // simplification to `pot - (toCall - heroStack)` fails here instead of shipping. Hero's stack is
-  // 30 and the bet is 300, so that reading leaves 110 in the pot, not 90.
+  // The single-subtraction reading, `pot - (toCall - heroStack)`, leaves 110, not 90.
   const singleSubtraction = spot.view.potTotal - (300 - spot.own.committedThisStreet - spot.own.stack);
   assert.notEqual(singleSubtraction, share.contestable);
 });
 
-// ---------------------------------------------------------------------------
-// The ordinary spot: nothing moves
-// ---------------------------------------------------------------------------
-
 test('a hero who covers the bet sees no change at all, and none can be introduced', () => {
-  // Heads-up, both 1000 deep, seat 0 raising to 100 preflop. Hero owes 90 out of 990 behind, so
-  // every chip in the middle is one hero can win and every figure is what it always was.
+  // Heads-up, both 1000 deep, seat 0 raising to 100. Hero covers, so every chip in the middle is
+  // winnable.
   const spot = spotFrom([1_000, 1_000], [{ seat: 0, action: 'raise', to: 100 }], 'hero', 3);
   assert.equal(spot.view.potTotal, 110);
   assert.equal(spot.view.amountToCall, 90);
@@ -338,10 +276,8 @@ test('a hero who covers the bet sees no change at all, and none can be introduce
     'there is no side pot here, so nothing may say there is',
   );
 
-  // The guard: a caller that subtracts a side pot in a spot that has none is refused rather than
-  // quietly publishing a price against a smaller pot. This is the direction the fix could have
-  // gone wrong in, and it is the one nothing else would have caught — a too-small pot overstates
-  // the equity a call needs, and looks conservative rather than broken.
+  // A caller that subtracts a side pot where there is none is refused. A too-small pot overstates
+  // the equity a call needs and looks conservative, so nothing else would catch it.
   assert.throws(
     () => buildCoachReport(inputFor(spot, share.contestable - 1)),
     /cover the 90 owed out of 990 behind/,
