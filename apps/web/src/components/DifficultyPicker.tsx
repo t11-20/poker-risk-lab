@@ -13,7 +13,8 @@
  *  - **It does not hold the value in React state.** There is nothing to hold: the current setting
  *    arrives as a prop from the URL, and the server render is the source of truth. What is ticked
  *    but not yet applied is read by `LegendDifficultyScope` where a page wraps the picker in one,
- *    so the page's Play links can start the match the reader picked without a navigation here.
+ *    so the page's Play links and its "Start a match" form can start the match the reader picked
+ *    without a navigation here.
  *
  * ## What each option has to say
  *

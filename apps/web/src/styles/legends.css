@@ -312,6 +312,12 @@
   box-shadow: var(--prl-elevation-0);
 }
 
+/**
+ * An `h2` in the outline, set at panel-title size. It is the same level as "The profiles" because it
+ * is a sibling section of the page, not a part of the head; it is smaller because it titles a single
+ * control group, which is what `--prl-type-heading` is for, and at the default `h2` size it was a
+ * second masthead competing with the `h1` one rule above it.
+ */
 .prl-legend-quick__title {
   margin: 0;
   font-size: var(--prl-type-heading);

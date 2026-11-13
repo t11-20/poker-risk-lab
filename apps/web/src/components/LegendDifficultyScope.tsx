@@ -1,7 +1,9 @@
 'use client';
 
 /**
- * The difficulty a reader has TICKED, carried to every Play link on the page before they submit.
+ * The difficulty a reader has TICKED, carried to every Play link on the page before they submit —
+ * and to "Start a match" above the picker (`LegendQuickStart.tsx`), whose hidden field and setting
+ * sentence follow it the same way.
  *
  * ## The defect
  *
