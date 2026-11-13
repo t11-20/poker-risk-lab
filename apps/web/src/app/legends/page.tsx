@@ -97,10 +97,15 @@ export default async function LegendsPage({
           04
         </span>
         <h1 className="prl-legend-head__title prl-display-2">AI Legends: opponent profiles</h1>
+        {/*
+          It used to end "chosen to contrast with the others so you can feel the difference between
+          styles rather than read about it" — the universal disclaimer's own clause, word for word, which
+          the framing block prints a screen later. At 375px the repeat was two of the standfirst's six
+          lines standing between the head and "Start a match". The contrast is the framing's to state.
+        */}
         <p className="prl-legend-head__standfirst">
-          Each profile is a set of sixteen trait values — how many hands it plays, how hard it bets, how much
-          it cares about position — chosen to contrast with the others so you can feel the difference between
-          styles rather than read about it.
+          Each opponent is sixteen trait values — how many hands it plays, how hard it bets, how much it cares
+          about position — and no two are set alike.
         </p>
         <div className="prl-legend-head__meta">
           <Chip>{pluralise(profiles.data.profiles.length, 'profile')}</Chip>
