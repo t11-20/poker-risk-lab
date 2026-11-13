@@ -45,6 +45,8 @@ const read = (...parts: readonly string[]): string => readFileSync(join(SRC, ...
 
 const HOME = read('app', 'page.tsx');
 const LEARN = read('app', 'learn', 'page.tsx');
+// The evidence list moved off the home page to `/checks` in the 4.0 re-identity; its counts moved with it.
+const CHECKS = read('lib', 'checks.ts');
 
 interface StatedCount {
   /** The sentence the page shows, with the figure in it. */
@@ -90,8 +92,8 @@ const STATED_COUNTS: readonly StatedCount[] = [
     computed: () => stats.scenarios,
   },
   {
-    where: 'home page — every scenario carries a claim',
-    page: HOME,
+    where: '/checks — every scenario carries a claim',
+    page: CHECKS,
     phrase: (n) => `All ${n} scenarios carry qualitative claims`,
     computed: () => {
       const carrying = bundle.scenarios.filter((one) => one.expectedInsight.length > 0).length;
@@ -100,8 +102,8 @@ const STATED_COUNTS: readonly StatedCount[] = [
     },
   },
   {
-    where: 'home page — how many claims in total',
-    page: HOME,
+    where: '/checks — how many claims in total',
+    page: CHECKS,
     phrase: (n) => `qualitative claims — ${n} of them`,
     computed: () => bundle.scenarios.reduce((sum, one) => sum + one.expectedInsight.length, 0),
   },

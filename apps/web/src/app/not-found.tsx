@@ -62,10 +62,10 @@
  * A server component: nothing here needs the browser.
  */
 
-import { formatIndex } from '@prl/ui';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import type { ReactElement } from 'react';
+import { SuitMark } from '@/components/SuitMark.tsx';
 import { NAV_DESTINATIONS, RECORD_DESTINATION } from '@/lib/nav.ts';
 
 export const metadata: Metadata = {
@@ -85,21 +85,19 @@ export function NotFoundBody(): ReactElement {
 
       <nav aria-label="All sections">
         <ul className="prl-footer__list">
-          {NAV_DESTINATIONS.map((destination, position) => (
+          {NAV_DESTINATIONS.map((destination) => (
             <li className="prl-footer__item" key={destination.href}>
               <Link className="prl-footer__link" href={destination.href}>
-                <span aria-hidden="true" className="prl-index">
-                  {formatIndex(position + 1)}
-                </span>
+                <SuitMark area={destination.area ?? null} />
                 <span className="prl-footer__link-label">{destination.label}</span>
               </Link>
               <span className="prl-footer__summary">{destination.summary}</span>
             </li>
           ))}
-          {/* After the five and unnumbered: see `RECORD_DESTINATION`. */}
+          {/* After the five and unmarked: see `RECORD_DESTINATION`. */}
           <li className="prl-footer__item">
             <Link className="prl-footer__link" href={RECORD_DESTINATION.href}>
-              <span aria-hidden="true" className="prl-index prl-index--blank" />
+              <SuitMark area={null} />
               <span className="prl-footer__link-label">{RECORD_DESTINATION.label}</span>
             </Link>
             <span className="prl-footer__summary">{RECORD_DESTINATION.summary}</span>

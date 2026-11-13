@@ -696,6 +696,8 @@ const PAINTED_ROUTES = [
   '/terms',
   '/privacy',
   '/responsible-use',
+  // The evidence behind the home page's figures, moved off the home page in the 4.0 re-identity.
+  '/checks',
 ];
 
 /**

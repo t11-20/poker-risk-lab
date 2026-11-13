@@ -64,8 +64,8 @@ describe('the reader’s record is in the navigation', () => {
       assert.ok(five >= 0, `${path} no longer renders the five; this assertion needs updating`);
       assert.ok(record > five, `${path} does not link RECORD_DESTINATION after the five`);
       assert.match(source, /\{RECORD_DESTINATION\.label\}/u);
-      // Unnumbered: the slot is there for alignment and holds no figure.
-      assert.match(source, /className="[^"]*prl-index prl-index--blank" \/>/u);
+      // Unmarked: the slot is there for alignment and holds no suit (4.0; it was a blank index).
+      assert.match(source, /<SuitMark area=\{null\}/u);
     });
   }
 });
