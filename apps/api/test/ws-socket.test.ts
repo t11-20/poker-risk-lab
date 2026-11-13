@@ -987,7 +987,7 @@ describe('a chair that changes owner over a live socket', () => {
       'the new occupant',
     );
 
-    // The scan is proved live: the same cards ARE detected in Ada's own frames.
+    // The scan is proved live, because the same cards ARE detected in Ada's own frames.
     const adaSeen = new Set<Card>();
     for (const frame of reconnected.frames) collectCards(frame, adaSeen);
     assert.deepEqual(

@@ -1,7 +1,7 @@
 /**
  * Thirty learners behind one address signing in at once. These routes are keyed on the hashed client
  * address because a route that issues a session cannot be limited by that session. Before the fix, 15
- * of 30 OIDC sign-ins completed. Asserted here: a cohort gets through, a script that cannot complete is
+ * of 30 OIDC sign-ins completed. This asserts that a cohort gets through, a script that cannot complete is
  * refused sooner, guests stay at 10 and forced token exchanges at 15 per window, and boot refuses limits
  * that cannot serve a declared cohort. No database or network, so this runs under `test:without-database`.
  */

@@ -3,7 +3,7 @@
  * seat that was not dealt in, so without this field the client shows a seated player who silently
  * gets no cards. Every assertion pins the field to the table's own answer (`owesBlind`,
  * `snapshot().awaitingBigBlind`), not a constant, so a second derivation cannot drift unnoticed.
- * No database: seating-only store and no-op archive, as in ws-router.test.ts.
+ * No database. It uses a seating-only store and a no-op archive, as in ws-router.test.ts.
  */
 
 import assert from 'node:assert/strict';

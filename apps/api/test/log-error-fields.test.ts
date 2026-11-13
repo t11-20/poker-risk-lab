@@ -43,7 +43,7 @@ describe('a database error does not carry the failing row into the log', () => {
     for (const fragment of ['Ah', 'Ks', 'Failing row', 'hole_cards', 'insert into']) {
       assert.ok(!text.includes(fragment), `"${fragment}" reached the serialised error: ${text}`);
     }
-    // Control: the input really carries the fragments.
+    // Control. The input really carries the fragments.
     const raw = postgresErrorLike();
     assert.ok(String(raw.detail).includes('"Ah"'), 'the fixture no longer carries a card');
   });

@@ -1,7 +1,7 @@
 /**
  * `LiveTable.sit` has exactly three call sites in `rooms/registry.ts`, and the two that seat a
  * person name their entitlement gate first. This is what `PRL_ENROLMENT_REQUIRED` rests on.
- * A structural read on purpose: an ungated fourth call site that no test exercises is invisible at
+ * A structural read on purpose, because an ungated fourth call site that no test exercises is invisible at
  * runtime (an ungated `reseatForRematch` left the three runtime suites at 77 passing, 0 failing).
  * Gate correctness is tested in seat-entitlement.test.ts and enrolments-database.test.ts.
  */

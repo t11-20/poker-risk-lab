@@ -1,6 +1,6 @@
 /**
  * Assembles the whole app as `src/server.ts` does (`buildApp`, then `registerApiRoutes`) to catch
- * wiring bugs no per-module harness can see: a listed module that is not registered, the session
+ * wiring bugs no per-module harness can see. Examples are a listed module that is not registered, the session
  * decorator not reaching a module's child scope (`/hands` then answers 500), and the probes dying
  * with a module that throws during registration.
  * No database: a stub handle answers `/ready`, and postgres.js opens no connection until a query.

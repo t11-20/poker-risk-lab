@@ -186,7 +186,8 @@ describe('a settled hand whose stacks did not move', () => {
       'settlement wrote the same figures back to the seating',
     );
 
-    // The replacement checks: blinds committed, every pot paid out, each stack equals start plus net.
+    // The replacement checks that blinds are committed, every pot is paid out, and each stack equals
+    // start plus net.
     const committed = view.seats.reduce((total, seat) => total + seat.committedTotal, 0);
     assert.ok(
       committed >= CONFIG.smallBlind + CONFIG.bigBlind,

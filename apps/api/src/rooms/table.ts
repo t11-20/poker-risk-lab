@@ -372,7 +372,7 @@ export class LiveTable {
     return this.hand?.names ?? new Map();
   }
 
-  /** By user id: the obligation survives standing up and changing chairs. */
+  /** Keyed by user id, so the obligation survives standing up and changing chairs. */
   owesBlind(userId: string): boolean {
     return this.blindDebts.has(userId);
   }
@@ -433,7 +433,7 @@ export class LiveTable {
 
   /**
    * Enforces only what the table knows. Membership and units are the registry's business.
-   * Joining a running rotation incurs a blind debt: dealt in when the big blind reaches the seat.
+   * Joining a running rotation incurs a blind debt, dealt in when the big blind reaches the seat.
    */
   sit(request: {
     readonly userId: string;
@@ -561,7 +561,7 @@ export class LiveTable {
         handNumber: this.handNumber,
         config: this.config,
         buttonSeat: rotation.buttonSeat,
-        // Handed over: a dead button or dead small blind is not a seat the engine could derive.
+        // Handed over, because a dead button or dead small blind is not a seat the engine could derive.
         blinds: { smallBlindSeat: rotation.smallBlindSeat, bigBlindSeat: rotation.bigBlindSeat },
         seats: playable.map((seat) => ({ seat: seat.seat, playerId: seat.userId, stack: seat.stack })),
         random: this.random,
@@ -763,7 +763,7 @@ export class LiveTable {
     if (this.settledHandId === live.state.handId) return null;
     this.settledHandId = live.state.handId;
 
-    // Keyed by player id: chips belong to people, not chairs.
+    // Keyed by player id, because chips belong to people, not chairs.
     const finalStacks = new Map(live.state.seats.map((seat) => [seat.playerId, seat.stack]));
     this.seats = this.seats.map((seat) => {
       // A reset made during the hand wins over the hand's result. See `restack`.
@@ -794,7 +794,7 @@ export class LiveTable {
    */
   private turnSecondsFor(toAct: SeatIndex): number {
     const configured = this.config.actionTimeoutSeconds;
-    // Resolved by person: the hand's seat yields an id, and the id is looked up in the seating.
+    // Resolved by person. The hand's seat yields an id, and the id is looked up in the seating.
     const dealt = this.hand?.state.seats.find((seat) => seat.seat === toAct);
     if (dealt === undefined) return configured;
     const actorId = dealt.playerId;
@@ -891,7 +891,7 @@ export class LiveTable {
   }
 
   /**
-   * The dead-button rule, plus one table policy: if honouring debts would leave fewer than two in the
+   * The dead-button rule, plus one table policy. If honouring debts would leave fewer than two in the
    * hand, the game restarts with every debt discharged. Otherwise the table could never deal again.
    */
   private nextRotation(entrants: readonly TableSeat[]): BlindRotation {
@@ -1007,7 +1007,7 @@ export class LiveTable {
           });
           break;
         }
-        // No wire event: one would announce hidden information, and pots are in every view.
+        // No wire event. One would announce hidden information, and pots are in every view.
         case 'holeCardsDealt':
         case 'potsFormed':
           break;

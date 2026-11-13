@@ -1,5 +1,5 @@
 /**
- * The room lease: which API process may be authoritative for a room. A live hand exists only in one
+ * The room lease decides which API process is authoritative for a room. A live hand exists only in one
  * heap, so two processes serving a room deal two hands and overwrite each other's `room_members.stack`.
  * Opening a room takes the lease or is refused. A heartbeat renews every held lease, and a renewal
  * that updates no row means this process was fenced and must drop the room at once.

@@ -583,7 +583,7 @@ export class RoomRegistry {
   private async buildRoom(request: OpenRoomRequest): Promise<LiveRoom> {
     // THE LEASE IS TAKEN FIRST. NOTHING ABOVE THIS LINE, EVER.
     // `reconcileInterruptedHands` closes open hand rows, which would destroy a hand another process
-    // is still playing. Fail closed: if the lease cannot be read, the room does not open.
+    // is still playing. It fails closed. If the lease cannot be read, the room does not open.
     await this.acquireLease(request.record.id);
     try {
       return await this.buildOwnedRoom(request);
@@ -595,7 +595,7 @@ export class RoomRegistry {
   }
 
   private async buildOwnedRoom(request: OpenRoomRequest): Promise<LiveRoom> {
-    // Re-read under the lease, because the read that decided to open may be stale. Measured: a
+    // Re-read under the lease, because the read that decided to open may be stale. Measured, a
     // retire closed the row mid-open and this published a live table for a closed room. A later
     // closer waits on `opening` (see `retire`). `createRoom` just wrote the row, so it skips this.
     if (request.recheckClosed === true && (await this.store.byId(request.record.id))?.status === 'closed') {
@@ -924,8 +924,8 @@ export class RoomRegistry {
   }
 
   /**
-   * Does not fail a sit that already happened. A missed record errs safe: units read low, never
-   * high. Reported, because a quiet gap here is what migration 0008 closed.
+   * Does not fail a sit that already happened. A missed record errs safe, because units read low and
+   * never high. Reported, because a quiet gap here is what migration 0008 closed.
    */
   private async recordFirstSit(roomId: string, userId: string, memberId: string): Promise<void> {
     try {
@@ -1016,7 +1016,7 @@ export class RoomRegistry {
   /**
    * Retires the learner's practice tables and then runs `create`, one learner's calls at a time.
    * `create` must build the room AND its bots, as a half-built table is not yet a practice table.
-   * Measured without this: two tabs each retired the old match and both new rooms stayed open.
+   * Without this, two tabs each retired the old match and both new rooms stayed open (measured).
    * In-process is enough under `replicas: 1`. A failed turn does not block the next.
    */
   replacePracticeTable<T>(userId: string, create: () => Promise<T>): Promise<T> {
@@ -1331,7 +1331,7 @@ export class RoomRegistry {
 
   /**
    * `onProblem` for paths where the safety action already happened (an eviction, a lease release).
-   * Not a blanket replacement: elsewhere a throwing hook is a fault the caller should see, and
+   * It is not a blanket replacement. Elsewhere a throwing hook is a fault the caller should see, and
    * `buildRoom` relies on that.
    */
   private report(...args: Parameters<ProblemHook>): void {
@@ -1359,7 +1359,7 @@ export class RoomRegistry {
     this.releaseQueue = this.releaseQueue
       .then(async () => {
         // Also skipped if the room is back in `this.leases`, because the fence restarts at 1 after a
-        // delete and a stale generation 1 can match a fresh one. Still open: a DELETE stalled past
+        // delete and a stale generation 1 can match a fresh one. Still open is a DELETE stalled past
         // `LEASE_TTL_MS` while a neighbour took and released the room. Closing that would mean not
         // deleting, which costs every deploy a TTL of refusals (`db/migrations/0005`).
         if (this.leases.has(roomId)) return;

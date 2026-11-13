@@ -359,7 +359,8 @@ describe('POST /content/quizzes/:id/attempt', () => {
           checked += 1;
           const probe = await attempt(quiz.id, question.id, 0);
           const value = Number(objectAt(probe.body, 'expected')['value']);
-          // Typed to six decimals, rounded toward the value. Rounding 30.769230… + 2 outward leaves the band.
+          // Typed to six decimals, rounded toward the value.
+          // Rounding 30.769230… + 2 outward leaves the band.
           const typed = (x: number): number => {
             const rounded = Number(x.toFixed(6));
             if (Math.abs(rounded - value) <= Math.abs(x - value)) return rounded;
