@@ -1,93 +1,33 @@
 /**
- * The driver seam every repository shares: the handle type they take as a first argument,
- * and the translation from a PostgreSQL integrity error into an `ErrorCode`.
- *
- * ## Why the handle is a parameter and never an import
- *
- * `postgres.Sql` and `postgres.TransactionSql` are siblings in the driver's types — the
- * transaction handle does NOT extend the pool handle — so a repository that wanted to work
- * both inside and outside `withTransaction` would otherwise need two overloads each. `Db`
- * is the union, declared once, and every repository function takes it first. That is the
- * whole reason any of them composes inside `withTransaction(tx => ...)`.
- *
- * ## Why violations are translated rather than prevented
- *
- * Two players tapping "sit in seat 3" at the same instant both pass every application-level
- * check: the check and the write are two statements and the race lives between them. The
- * partial unique indexes in `db/migrations/0002_indexes_and_constraints.sql` close that
- * window in one statement, which means the loser learns about it as a thrown Postgres error.
- * Letting that error reach the generic handler would answer a perfectly ordinary race with
- * `internal_error` and a 500. Translating it here answers `seat_taken` with a 409, which is
- * both true and actionable.
- *
- * The map is deliberately short. A constraint that is not in it is one nobody has reasoned
- * about, and the right answer for that is a loud 500 with the whole error in the log — not a
- * plausible-looking 4xx that hides a bug.
- *
- * ## Why the error is read structurally instead of with `instanceof`
- *
- * `postgres.PostgresError` is a class exported by the driver. In a pnpm workspace it is
- * entirely possible to end up with two resolved copies of `postgres`, at which point
- * `instanceof` silently stops matching and every 409 in this file quietly becomes a 500.
- * Reading `code` and `constraint_name` off an unknown object cannot break that way.
+ * The handle type every repository takes first, and the translation from a PostgreSQL integrity error
+ * into an `ErrorCode`. `Db` is a union because the driver's transaction handle does not extend the
+ * pool handle. A race that passes every application check is closed by a unique index, and the loser
+ * gets a 409 here instead of a 500. Errors are read structurally, not with `instanceof`, because two
+ * resolved copies of `postgres` in the workspace would make `instanceof` silently stop matching.
  */
 
 import type { ErrorCode } from '@prl/contracts';
 import type { Sql, TransactionSql } from '../db.ts';
 import { AppError } from '../errors.ts';
 
-/**
- * The handle a repository function takes as its first argument: the pool, or a transaction.
- *
- * Repositories never call `getSql()` themselves. Passing the handle in is what lets a route
- * compose several of them into one atomic unit, and what lets a test run each case inside a
- * transaction it rolls back afterwards.
- */
+/** The pool or a transaction. Repositories never call `getSql()`, so a route can compose them atomically. */
 export type Db = Sql | TransactionSql;
 
 /**
- * Runs `fn` so that a failing statement inside it does not poison an enclosing transaction.
+ * Runs `fn` in a savepoint so a failing statement does not abort an enclosing transaction.
  *
- * ############################################################################
- * ## A TRANSLATED VIOLATION STILL LEAVES THE TRANSACTION ABORTED            ##
- * ############################################################################
- *
- * This is the one thing about `violationError` that is not obvious and will bite somebody. Catching
- * a unique violation and turning it into `seat_taken` recovers the *error*; it does not recover the
- * *transaction*. Postgres aborts a transaction on any failed statement, and every statement after
- * it answers `25P02 current transaction is aborted, commands ignored until end of transaction
- * block`. So this, inside `withTransaction`, does not work:
- *
- * ```ts
- * for (const bot of bots) {
- *   try { await rooms.addMember(tx, bot); } catch { continue; }   // BROKEN
- * }
- * ```
- *
- * The first conflict kills the transaction and every later statement fails for an unrelated reason.
- *
- * Most callers do not care, and that is why this is not applied everywhere: a route that catches
- * `seat_taken` answers 409 and abandons the transaction anyway, and a savepoint per statement would
- * be a wasted round trip on the hot path. It matters only where the code genuinely intends to
- * continue — the invite-code retry in `rooms.create` — and there it is mandatory.
- *
- * `'savepoint' in handle` narrows the union: `TransactionSql` declares it and `Sql` does not. On the
- * pool there is no transaction to protect and `fn` runs directly, which is both correct and one
- * fewer round trip.
+ * Translating a violation recovers the error, not the transaction. After any failed statement
+ * Postgres answers `25P02` to everything else in the transaction. Use this wherever code catches a
+ * violation and continues (the invite-code retry in `rooms.create`). A route that answers 409 abandons
+ * the transaction anyway and does not need it. On the pool there is no transaction, so `fn` runs directly.
  */
 export async function insideSavepoint<T>(handle: Db, fn: (handle: Db) => Promise<T>): Promise<T> {
   if (!('savepoint' in handle)) return fn(handle);
-  // Boxed for the same reason `withTransaction` in `db.ts` boxes: postgres.js types `savepoint` as
-  // `UnwrapPromiseArray<T>`, so a callback returning an array would come back with a different type
-  // from one returning a row. Wrapping makes the return type unconditionally `T`.
+  // Boxed because postgres.js types `savepoint` as `UnwrapPromiseArray<T>`, as in `withTransaction`.
   const boxed = await handle.savepoint(async (sp) => ({ value: await fn(sp) }));
   return boxed.value;
 }
 
-/**
- * SQLSTATE classes this layer reacts to. Spelled out rather than inlined so a query that
- * catches "unique violation" says so in words.
- */
 export const SQL_STATE = {
   notNullViolation: '23502',
   foreignKeyViolation: '23503',
@@ -96,7 +36,6 @@ export const SQL_STATE = {
   exclusionViolation: '23P01',
 } as const;
 
-/** The fields of a Postgres error this module reads. Everything else stays in the log. */
 export interface SqlViolation {
   readonly sqlState: string;
   /** The constraint or index name, or `''` when the server did not name one. */
@@ -109,18 +48,11 @@ function stringField(source: object, key: string): string {
   return typeof value === 'string' ? value : '';
 }
 
-/**
- * Reads the integrity-error fields off whatever was thrown, or null when it is not one.
- *
- * `Reflect.get` rather than a cast: these properties are assigned onto the error by the
- * driver (`Object.assign(this, x)` in its `errors.js`), so they genuinely are own
- * properties of an object of unknown shape, and reading them that way needs no `any`.
- */
+/** The integrity-error fields of whatever was thrown, or null when it is not an integrity error. */
 export function sqlViolation(error: unknown): SqlViolation | null {
   if (typeof error !== 'object' || error === null) return null;
   const sqlState = stringField(error, 'code');
-  // Every integrity violation is in class 23. Connection failures, syntax errors and the
-  // driver's own generic errors also carry a `code`, and none of them belongs here.
+  // Integrity violations are class 23. Connection and syntax errors also carry a `code`.
   if (!sqlState.startsWith('23')) return null;
   return {
     sqlState,
@@ -129,14 +61,12 @@ export function sqlViolation(error: unknown): SqlViolation | null {
   };
 }
 
-/** True when `error` is a unique violation, optionally of one named index. */
 export function isUniqueViolation(error: unknown, constraint?: string): boolean {
   const violation = sqlViolation(error);
   if (violation === null || violation.sqlState !== SQL_STATE.uniqueViolation) return false;
   return constraint === undefined || violation.constraint === constraint;
 }
 
-/** True when `error` is a check violation, optionally of one named constraint. */
 export function isCheckViolation(error: unknown, constraint?: string): boolean {
   const violation = sqlViolation(error);
   if (violation === null || violation.sqlState !== SQL_STATE.checkViolation) return false;
@@ -144,17 +74,9 @@ export function isCheckViolation(error: unknown, constraint?: string): boolean {
 }
 
 /**
- * True when `error` is a foreign-key violation, optionally of one named constraint.
- *
- * The predicate a caller needs because `VIOLATION_CODES` deliberately carries no foreign key:
- * see the note above it. The statement that raised the error is what decides what the violation
- * means, and only the call site knows the statement.
- *
- * The concrete case this exists for: `deleteAccount` in `users.ts`. Nine foreign keys reference
- * `prl.users`, and two of them were `ON DELETE RESTRICT` before migration 0004 — so on a database
- * that has not had it applied, deleting an account raises 23503 and the honest answer is
- * `account_deletion_blocked` rather than a 500 that leaves a learner unable to tell whether their
- * record still exists.
+ * Foreign keys are decided at the call site because `VIOLATION_CODES` cannot map them (see there).
+ * `deleteAccount` in `users.ts` uses this to answer `account_deletion_blocked` on a database
+ * without migration 0004.
  */
 export function isForeignKeyViolation(error: unknown, constraint?: string): boolean {
   const violation = sqlViolation(error);
@@ -163,39 +85,16 @@ export function isForeignKeyViolation(error: unknown, constraint?: string): bool
 }
 
 /**
- * Serialises a value for a `jsonb` parameter, refusing the one thing `jsonb` cannot hold.
+ * Serialises a value for a `jsonb` parameter, refusing a NUL.
  *
- * ############################################################################
- * ## ALWAYS WRITE `${jsonbText(x, 'field')}::text::jsonb`. NOT `::jsonb`.   ##
- * ############################################################################
+ * ALWAYS WRITE `${jsonbText(x, 'field')}::text::jsonb`, NOT `::jsonb`. postgres.js uses the cast after
+ * a placeholder to type the parameter, so `::jsonb` JSON-encodes the string again and silently stores
+ * a jsonb string instead of an object. `::text` makes the server parse it.
  *
- * The double cast is not redundant, and getting it wrong does not fail — it writes the wrong data.
- * postgres.js reads the `::type` suffix that follows a placeholder and uses it to **type the
- * parameter**, so `${'{"a":1}'}::jsonb` tells the driver "this parameter is jsonb", and the driver
- * JSON-encodes the JavaScript string it was given. The row ends up holding the jsonb *string*
- * `"{\"a\":1}"` rather than the object `{"a": 1}`:
- *
- *     select jsonb_typeof(${text}::jsonb)          -- 'string'   WRONG, and silent
- *     select jsonb_typeof(${text}::json::jsonb)    -- 'string'   also wrong
- *     select jsonb_typeof(${text}::text::jsonb)    -- 'object'   correct
- *
- * `::text` first types the parameter as text, so the server parses it. This was found by a test —
- * every `jsonb_typeof(...) = 'object'` CHECK in the schema rejected the write — and those CHECKs
- * are the only reason it was found at all. On `prl.hands.board`, which has no type CHECK, the same
- * mistake would have written a string into a card array and been discovered by whatever tried to
- * read it back weeks later.
- *
- * The other reason to serialise here rather than call the driver's `sql.json()`: `jsonb` cannot
- * store a NUL character. Postgres raises "unsupported Unicode escape sequence" for one inside a
- * string, and the failure surfaces as an opaque 500 from whatever wrote it. `JSON.stringify`
- * renders a NUL as the six-character escape backslash-u-0-0-0-0, so it is cheap to find and refuse
- * here, with a message naming the field. (The escape is spelled out in words on purpose: `pnpm run
- * security:hygiene` rejects a literal control character in source, which is the same problem one
- * step earlier.)
- *
- * Throws `invalid_request` rather than `internal_error`, because for the two callers that pass
- * caller-influenced data — a quiz answer, an audit detail — a NUL in the input is a bad request
- * and not a server fault.
+ * `jsonb` cannot store a NUL, and `JSON.stringify` renders one as the escape backslash-u-0-0-0-0, so it
+ * is refused here with the field named. The escape is spelled in words because `security:hygiene`
+ * rejects a literal control character in source. A NUL comes from caller data, so this throws
+ * `invalid_request`.
  */
 export function jsonbText(value: unknown, field: string): string {
   const text = JSON.stringify(value);
@@ -215,47 +114,18 @@ export function jsonbText(value: unknown, field: string): string {
 }
 
 /**
- * Constraint name to wire code.
+ * Maps the constraints of races and mistakes the API has an honest answer for to wire codes. An unmapped
+ * constraint is one nobody has reasoned about and must reach the handler as a 500.
  *
- * Read this as a list of races and mistakes the API has an honest answer for:
+ * `hands_room_hand_number_key` is two deals racing for one hand number, so the loser's table moved on.
+ * The `rooms_*` and name checks are validated before writing, so reaching one is a caller bug.
  *
- * - `room_members_live_seat_key` — somebody else took the seat between the check and the
- *   write. `seat_taken`, 409.
- * - `room_members_live_user_key` — a double-tapped join. `already_seated`, 409, and
- *   emphatically not a duplicate row: one learner acting out of two seats is a cheat.
- * - `hand_actions_hand_sequence_key` — two actions claimed the same sequence, so one of
- *   them was decided against a view of the hand that no longer exists.
- * - `hands_room_hand_number_key` — two deals raced for the same hand number in one room.
- *   From the loser's point of view the table moved on while they were asking, which is
- *   exactly what `stale_action_sequence` says.
- * - `room_members_stack_non_negative` — an adjustment tried to take a seat below zero.
- *   `insufficient_units`, which is also the only place in this product where a chip count
- *   can refuse anything.
- * - the `rooms_*` and `users_display_name_shape` checks — a table configuration or a name
- *   the schema refuses. The repositories validate these before writing, so reaching one is
- *   a caller bug; `invalid_request` still beats a 500, and the log line names the
- *   constraint.
- *
- * ## No foreign key is in this table, and that is not an oversight
- *
- * A constraint name is enough to decide the answer for a unique or a check violation: there
- * is one way to break `room_members_live_seat_key`, and it means one thing. A foreign key is
- * not like that, because the SAME constraint fires from both ends. `room_members_user_id_fkey`
- * refuses an INSERT naming a user who does not exist — a caller bug, and a loud 500 — and it
- * also refuses a DELETE of a user who still has a seat, which under `ON DELETE RESTRICT` is
- * `account_deletion_blocked`. One name, two truthful answers, and this table can only give
- * one. Mapping it here would make every mis-wired insert tell the caller their account could
- * not be deleted, which is the wrong-reason failure this file exists to prevent.
- *
- * So foreign keys are decided at the call site, where the statement is known, with
- * `isForeignKeyViolation` below. `repositories/users.ts` is the only caller today.
- *
- * Deliberately absent: `sessions_token_hash_key`, `rooms_invite_code_hash_key` and
- * `hand_seats_hand_seat_key`. A digest collision on a freshly generated 256-bit token means
- * the random source is broken, and the migration is explicit that it must fail loudly
- * rather than be smoothed over. `rooms_invite_code_hash_key` is retried by `rooms.create`
- * instead. Also absent: `hand_actions_client_action_id_key`, which is not a failure at all
- * — it is the idempotency guarantee, and `hands.appendAction` reports it as "not applied".
+ * No foreign key is mapped. One FK fires on an INSERT of a missing user (a bug, 500) and on a DELETE
+ * under `ON DELETE RESTRICT` (`account_deletion_blocked`), so the call site decides with
+ * `isForeignKeyViolation`. Also absent: `sessions_token_hash_key` and `hand_seats_hand_seat_key` (a
+ * collision means the random source is broken and must fail loudly), `rooms_invite_code_hash_key`
+ * (retried by `rooms.create`), and `hand_actions_client_action_id_key` (the idempotency guarantee,
+ * reported by `hands.appendAction` as not applied).
  */
 const VIOLATION_CODES: Readonly<Record<string, ErrorCode>> = {
   room_members_live_seat_key: 'seat_taken',
@@ -277,13 +147,7 @@ const VIOLATION_CODES: Readonly<Record<string, ErrorCode>> = {
   users_display_name_shape: 'invalid_request',
 };
 
-/**
- * The wire code for a violation, or null when nothing in the map covers it.
- *
- * Null is the important half of the return type: it means "let this reach the error handler
- * as `internal_error`", which is the correct answer for a constraint nobody has thought
- * about yet.
- */
+/** Null means the error reaches the handler as `internal_error`. */
 export function violationCode(error: unknown): ErrorCode | null {
   const violation = sqlViolation(error);
   if (violation === null || violation.constraint === '') return null;
@@ -291,28 +155,9 @@ export function violationCode(error: unknown): ErrorCode | null {
 }
 
 /**
- * The `AppError` for a violation, or null when there is no mapping.
- *
- * Every repository catch block in this directory reads:
- *
- * ```ts
- * } catch (error) {
- *   const mapped = violationError(error, 'seating a member');
- *   if (mapped !== null) throw mapped;
- *   throw error;
- * }
- * ```
- *
- * Three lines rather than a one-line `throw translate(error)`, because the untouched rethrow
- * has to be visible. A helper that returned "something to throw" for every input would make
- * it impossible to see, at the call site, that an unrecognised error keeps its identity all
- * the way to the handler in `errors.ts` — which is what gets it logged in full instead of
- * quietly relabelled as a plausible 409.
- *
- * `what` goes to `logDetail`, so the log line says which operation the constraint refused
- * while the client still gets only the contract's message. The constraint name itself reaches
- * the log through `cause`, never through the response: a body naming
- * `room_members_live_seat_key` would be a free schema diagram.
+ * The `AppError` for a violation, or null. Callers write `if (mapped !== null) throw mapped; throw error;`
+ * so the untouched rethrow stays visible and an unrecognised error is logged in full. The constraint
+ * name reaches the log through `cause`, never the response, which would otherwise expose the schema.
  */
 export function violationError(error: unknown, what: string): AppError | null {
   const code = violationCode(error);

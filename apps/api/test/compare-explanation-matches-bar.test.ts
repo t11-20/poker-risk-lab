@@ -1,22 +1,7 @@
 /**
- * The compare page's explanation must describe the action its own bar marks.
- *
- * ## The failure this is written against
- *
- * `compareProfilesOnSpot` runs each profile through the same spot `trials` times and reports the
- * DISTRIBUTION — that is the point of the page, because these styles are probabilistic. But
- * `reasoning` was taken from `last`, whatever the final trial happened to draw, while
- * `modalAction` and `actionDistribution` aggregate all forty. They disagree constantly.
- *
- * `/legends/compare` renders the bar and then, directly beneath it, the heading "Why this model
- * prefers that" over `reasoning.modelPreference`. So a reader saw a bar marked `raise` above a
- * sentence beginning "This model prefers to fold here, with 3.3% of its weight" — about a set of
- * sevens. Measured over 12 profiles x 33 spots: 161 of 396 columns. On the page's own default
- * spot, 6 of 12.
- *
- * `drivingTraits` and `whatChangedIt` came from the same trial, so the three parts of the
- * explanation agreed with each other and only the bar was left contradicting them, which is why
- * reading the page did not reveal it.
+ * The compare page's explanation must describe the action its bar marks. `reasoning` came from the
+ * last trial while the bar aggregates all of them, and they disagreed in 161 of 396 columns
+ * (12 profiles x 33 spots).
  */
 
 import assert from 'node:assert/strict';
@@ -29,7 +14,7 @@ const PROFILE_IDS = (PROFILES as readonly { readonly naming: { readonly id: stri
   (profile) => profile.naming.id,
 );
 
-/** Boards and hands chosen to share no card, because the builder refuses a duplicate. */
+/** No shared cards, because the builder refuses a duplicate. */
 const SPOTS: readonly (readonly [string, string])[] = [
   ['Kd 7h 2h', 'Ah Jh'],
   ['Kd 7h 2h', '7s 7d'],
@@ -73,9 +58,7 @@ describe('the compare page explains the action it marks', () => {
       }
     }
 
-    // 72 columns at a measured 40.7% defect rate is ~29 expected disagreements, so the trimmed
-    // grid still fails loudly against the old code. Kept small on purpose: this runs 2,880 policy
-    // decisions and the `test` gate is already the longest in `verify`.
+    // At the measured 40.7% defect rate, 72 columns expect about 29 failures on the old code.
     assert.ok(columns >= 60, `only ${columns} column(s) compared; a sweep of nothing is not a pass`);
     assert.deepEqual(
       disagreements,
@@ -85,8 +68,7 @@ describe('the compare page explains the action it marks', () => {
   });
 
   it('still reports a real distribution, so the fix did not collapse the page to one action', () => {
-    // A `reasoning` block that always matched because every column had become deterministic would
-    // satisfy the check above and destroy what the page is for.
+    // Columns must stay probabilistic, or the check above passes while the page loses its point.
     const response = compareProfilesOnSpot({
       spot: {
         heroCards: parseCards('Ah Jh'),

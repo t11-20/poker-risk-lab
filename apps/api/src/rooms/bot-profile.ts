@@ -1,68 +1,19 @@
 /**
- * What a bot seat has to write down so that a *different process* can put the same opponent back.
- *
- * ## The defect this module exists to close
- *
- * `room_members.bot_profile` used to be CHECK-constrained to the contract's five
- * `OPPONENT_PROFILES` — `nit`, `tight-aggressive`, `loose-aggressive`, `calling-station`,
- * `maniac` — which are *scenario range labels*, not the twelve strategy profiles
- * `@prl/poker-ai` actually plays. A Legends seat was therefore persisted through a lossy
- * mapping that returned the literal string `unknown` for anything the five names could not
- * express: seven of the twelve. The live registry held the truth and the durable row did not,
- * so the truth lived exactly as long as the process did.
- *
- * Restarting the API then produced a table that looked right and was not. `ensureOpen` re-took
- * every recorded seat and re-registered no bots at all, on the stated reasoning that an inert
- * seat which times out is more honest than one playing a different style. That reasoning is
- * sound about *strategy substitution* and wrong about the remedy: the fix for "the row cannot
- * name the opponent" is to make the row name the opponent, not to stop putting opponents back.
- *
- * ## Three facts, because a profile id alone does not reproduce a seat
- *
- * A bot seat is `(profile, difficulty, seed)` and all three change how it plays:
- *
- *   - `profileId`   which of the twelve strategies. Now stored verbatim.
- *   - `difficulty`  `expressTraits` scales every trait by it, so the same profile at
- *                   `educational` and at `expert` are different opponents.
- *   - `seed`        fixes the decision stream. `seedFor(roomId, seat, base)` is stable across
- *                   restarts for a given base, but the *base* was a request field that nothing
- *                   persisted, so a seeded Legends match could not be resumed reproducibly.
- *
- * Storing the resolved seed rather than the base is deliberate: it is the value the runner was
- * actually given, so a rehydrated seat reproduces the stream even if `seedFor` is ever changed.
- *
- * ## What `unknown` means now, and why it is still permitted
- *
- * It is no longer a fallback — nothing writes it. It is the residue of rows written before
- * migration `0003`, whose true profile was destroyed at write time and cannot be recovered by
- * any amount of later cleverness. Such a seat is re-taken as an ordinary occupied seat and is
- * NOT registered with the bot runner, and the reason is logged. That is the one honest outcome:
- * substituting a strategy would be inventing an opponent, and refusing the whole room would
- * strand a table over a seat.
- *
- * The same refusal covers a profile id this build no longer carries — a retired Legend. Failing
- * explicitly is the requirement; guessing the nearest surviving style is the bug.
+ * What a bot seat writes down so a different process can put the same opponent back.
+ * A seat is `(profileId, difficulty, seed)`, and all three change how it plays. The seed stored is
+ * the resolved one the runner was given, so a rehydrated seat replays the stream even if `seedFor` changes.
+ * `unknown` marks rows from before migration `0003`, whose profile was lost. Such a seat, or one
+ * naming a retired profile, is re-taken as an ordinary seat with no bot, and the reason is logged.
+ * Never substitute the nearest style.
  */
 
 import { DIFFICULTIES, type Difficulty, PROFILES, type StrategyProfile } from '@prl/poker-ai';
 import { AppError } from '../errors.ts';
 
-/**
- * The value stored for a bot seat whose true profile is not recoverable.
- *
- * Never written by this build. Retained so migration `0003` has something to leave in the rows
- * it cannot repair, and so the CHECK constraint accepts them.
- */
+/** Never written by this build. Kept so the CHECK admits the pre-`0003` rows. */
 export const UNRECOVERABLE_BOT_PROFILE = 'unknown';
 
-/**
- * Every value `room_members.bot_profile` may hold.
- *
- * Derived from `PROFILES` rather than written out, so adding or retiring a strategy moves this
- * list automatically. `apps/api/scripts/verify-schema.mjs` asserts the database CHECK admits
- * exactly this set, which is what stops the schema and the runtime drifting apart again — the
- * drift being the whole of the original defect.
- */
+/** `scripts/verify-schema.mjs` asserts the database CHECK admits exactly this set. */
 export const PERSISTABLE_BOT_PROFILES: readonly string[] = Object.freeze([
   ...PROFILES.map((profile) => profile.naming.id),
   UNRECOVERABLE_BOT_PROFILE,
@@ -80,11 +31,8 @@ export interface DurableBotSeat {
 export const MAX_BOT_SEED = 0xffffffff;
 
 /**
- * The durable name for a strategy profile, or a refusal.
- *
- * Throws rather than substituting, because every caller here is seating a bot it has *already*
- * resolved through `resolveProfile` — so an unknown id at this point is a programming error, and
- * writing a row that names the wrong opponent is worse than a 500.
+ * Throws rather than substituting. Every caller already resolved the profile, so an unknown id is
+ * a programming error, and a row naming the wrong opponent is worse than a 500.
  */
 export function durableProfile(profileId: string): string {
   if (!PROFILES.some((profile) => profile.naming.id === profileId)) {
@@ -115,12 +63,7 @@ export type Rehydration =
   | { readonly ok: true; readonly seat: DurableBotSeat; readonly profile: StrategyProfile }
   | { readonly ok: false; readonly refusal: RehydrationRefusal };
 
-/**
- * Turns three persisted columns back into a bot seat, or says exactly why it will not.
- *
- * Total and non-throwing: `ensureOpen` calls this once per seat while opening a room, and one
- * unrepairable row must not take the room down with it.
- */
+/** Non-throwing: `ensureOpen` calls this per seat, and one bad row must not take the room down. */
 export function rehydrateBotSeat(row: {
   readonly botProfile: string | null;
   readonly botDifficulty: string | null;

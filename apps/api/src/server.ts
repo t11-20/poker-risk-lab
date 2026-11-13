@@ -1,28 +1,8 @@
 /**
- * The process entry point: boot, listen, and stop cleanly.
- *
- * ## Why shutdown gets this much code
- *
- * A play-money poker table is stateful. When this process goes away mid-hand, every
- * connected client is holding a view of a hand that will never advance. The difference
- * between a good deploy and a bad one is whether in-flight requests were allowed to finish
- * and sockets were told to reconnect, or whether the socket simply died. So:
- *
- *   1. Stop accepting new connections and let in-flight requests finish (`app.close()`,
- *      which also runs every `onClose` hook — that is where the WebSocket hub will send its
- *      `serverShuttingDown` close frames).
- *   2. Close the database pool, so no connection is left half-open against Postgres.
- *   3. Give the whole thing a deadline. A shutdown that hangs is worse than one that is
- *      abrupt, because an orchestrator will eventually SIGKILL anyway — with no log line
- *      saying why.
- *
- * ## Why a crash exits instead of continuing
- *
- * `uncaughtException` and `unhandledRejection` mean some part of the process is in a state
- * nobody designed. For a server holding authoritative game state, "carry on and hope" is the
- * worst option: the next request could be served from half-updated state, and the bug
- * becomes a wrong pot rather than a stack trace. Log everything, then exit non-zero and let
- * the supervisor start a clean process.
+ * The process entry point. Shutdown stops accepting, lets in-flight requests finish, lets the hub
+ * send `serverShuttingDown` (`onClose`), closes the pool, all under a deadline. A crash
+ * (`uncaughtException`, `unhandledRejection`) exits non-zero, because continuing could serve
+ * authoritative game state that is half updated.
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -45,128 +25,55 @@ import { API_ROUTE_MODULES, registerApiRoutes } from './routes/index.ts';
 import { createSchemaGate, describeRefusal, readLedger } from './schema-guard.ts';
 import { beginSharedPoolWarmup, closeSharedPool } from './workers/pool.ts';
 
-/** Exit codes, so a supervisor's logs mean something. */
 const EXIT_CONFIG_INVALID = 78; // sysexits.h EX_CONFIG
 const EXIT_STARTUP_FAILED = 1;
 const EXIT_SHUTDOWN_FAILED = 1;
 const EXIT_CRASHED = 1;
 
-/**
- * Runs once, whatever arrives. Two SIGTERMs in quick succession are normal (a supervisor
- * retrying), and a second shutdown starting while the first is still closing sockets is how
- * a clean stop turns into a half-closed pool.
- */
+/** A second SIGTERM must not start a second shutdown and half-close the pool. */
 let shuttingDown = false;
 
-/**
- * The retention sweep's handle, so `shutdown` can stop it.
- *
- * Module scope for the same reason `shuttingDown` is: `shutdown` is registered as a signal
- * handler and cannot be handed anything `main` created. Undefined until `listen` succeeds, which
- * is why every use is optional — a process that failed to start has no sweep to stop.
- */
+/** Module scope, because `shutdown` is a signal handler. Undefined until `listen` succeeds. */
 let retention: { stop: () => void } | undefined;
 
 /**
- * How often the schema gate is re-checked by this process itself, whether or not anything probes
- * `/ready`.
- *
- * ## Why the process polls its own readiness
- *
- * The feature gate (`app.ts`) opens only when the schema guard holds a verdict for the database
- * in front of it, and before this timer the only thing that ever asked was a `/ready` probe. A
- * deployment with no readiness probe — a bare `docker run`, a process manager — would then keep
- * every feature route shut for ever after a degraded boot, and would never notice a database
- * swapped behind the DSN. Five seconds: one identity read per tick, the same single cheap query a
- * probe makes, and short enough that `Retry-After` can promise it. During an outage `ping()`'s
- * latch keeps it to one stranded connection however long the outage lasts.
+ * The process re-checks the schema gate itself, so a deployment with no readiness probe still
+ * reopens after a degraded boot and notices a database swapped behind the DSN. One identity read
+ * per tick, and short enough for `Retry-After` to promise.
  */
 const SCHEMA_RECHECK_INTERVAL_MS = 5_000;
 
-/** The re-check's timer, stopped by `shutdown` for the same reason `retention` is. */
 let schemaRecheck: NodeJS.Timeout | undefined;
 
 /**
- * How often, during a drain, to drop sockets that are no longer holding work of ours.
- *
- * ## Why a repeating sweep is needed at all
- *
- * `forceCloseConnections: 'idle'` (see `plugins/security.ts`) makes Fastify call Node's
- * `closeIdleConnections()` ONCE, at the moment `app.close()` is invoked. A keep-alive socket that
- * was *mid-request* when SIGTERM arrived is not idle at that moment, so it is not dropped — and it
- * is never revisited. When its response finishes, the socket goes idle and then simply sits there
- * until `keepAliveTimeout` (72 s) expires, which is far beyond any deploy grace. `server.close()`
- * waits for every connection to end, so `app.close()` never resolves: the `onClose` hooks never
- * run, the worker threads are never terminated, and the deadline below fires and exits 1 — with the
- * in-flight request having been answered 200. Browsers always use keep-alive, so that was the
- * normal deploy case, and a `Connection: close` client hid it completely.
- *
- * So the sweep runs for the duration of the drain and drops each socket as soon as it stops being
- * one the drain owes anything. 25 ms is short enough that a finished request is dropped promptly
- * and long enough to be free.
+ * `forceCloseConnections: 'idle'` closes idle sockets only once, at `app.close()`. A keep-alive
+ * socket that was mid-request then sat for `keepAliveTimeout` (72 s), `app.close()` never resolved
+ * and every browser-driven deploy exited 1. So the drain sweeps repeatedly.
  */
 const IDLE_SWEEP_INTERVAL_MS = 25;
 
 /**
- * How long, once a drain has begun, a client that is still *sending* a request may take to finish
- * sending it before its connection is dropped anyway.
- *
- * ## Why waiting for a client has to be bounded separately from waiting for ourselves
- *
- * A drain owes an answer to every request it has actually received. It owes nothing to a client
- * that has announced a request and then gone quiet — and it cannot tell the two apart except by
- * waiting, because at the instant of the signal "half the body sent, rest coming" and "headers sent,
- * body never coming" are the same socket in the same state. So the two halves get different
- * budgets: a request we hold in full may use the whole grace to be computed and delivered, while a
- * request still arriving gets this much and no more.
- *
- * Capped at a second so it can never be a large share of any grace — the same ceiling `ws/hub.ts`
- * puts on waiting for a close handshake, for the same reason — and derived from the grace rather
- * than fixed so a deliberately short grace shortens it too. A quarter is generous next to the round
- * trip it has to cover: the sole legitimate client here is one whose body is mid-flight on an
- * already-open socket, and `bodyLimitBytes` caps that at 64 KiB.
- *
- * Measured from the moment the drain begins, and deliberately NOT refreshed when more of the body
- * arrives. Refreshing would be kinder to a genuinely slow uploader, and it would also hand a client
- * that trickles one byte at a time the power to hold a deploy open until the deadline — which is
- * the defect this whole file exists to close, reintroduced through the door marked "fairness". An
- * absolute bound means the drain stops waiting for clients at a known instant, whatever they do.
- * The cost is that a very slow upload loses its request during a deploy and has to retry, which is
- * a far smaller thing than a deploy that cannot finish.
+ * How long a client still sending its request may take once the drain begins. A request held in
+ * full may use the whole grace, one still arriving gets this. Capped at 1 s (as `ws/hub.ts` caps
+ * its close wait) and not refreshed as bytes arrive, so a trickling client cannot hold a deploy open.
  */
 function clientSendGraceMs(shutdownGraceMs: number): number {
   return Math.min(1_000, Math.ceil(shutdownGraceMs / 4));
 }
 
-/** What the drain needs to know about one connection that Node is still counting. */
 interface TrackedConnection {
-  /** Requests handed to the application on this connection whose response has not finished. */
+  /** Requests on this connection whose response has not finished. */
   readonly open: Set<IncomingMessage>;
-  /** Set once the connection has left HTTP for the WebSocket protocol; see `isDrainBlocking`. */
   upgraded: boolean;
 }
 
-/** Every connection currently open, keyed by its socket. Kept by `trackConnections` below. */
 type ConnectionRegistry = ReadonlyMap<Duplex, TrackedConnection>;
 
 /**
- * Records what each open connection is doing, from before the first one is accepted.
- *
- * ## Why this bookkeeping has to exist
- *
- * Node's `closeIdleConnections()` only drops a connection that has **finished** a request and is
- * sitting between requests. A connection that never started one is invisible to it — and to
- * `server.close()`, which counts it and waits for it regardless. So a TCP connection that connects
- * and says nothing at all held the drain open for the entire grace and turned every deploy into
- * `process.exit(1)`, exactly as the mid-request keep-alive socket above once did. That is not an
- * exotic client: a load balancer's TCP health probe, a port scanner, a TLS handshake that stalls,
- * or any client that opens a connection slightly before it is ready to use it produces one, and a
- * busy service always has some.
- *
- * There is no public API that enumerates a Node server's connections, so the drain cannot ask after
- * the fact — hence a registry built as connections arrive. It is installed before `listen()` so no
- * connection can predate it, and it is three event listeners and a `Map`, which costs nothing
- * measurable next to serving the request itself.
+ * `closeIdleConnections()` never drops a connection that has not started a request, and
+ * `server.close()` waits for it. A silent TCP connection (a health probe, a scanner) held every
+ * drain for the whole grace. Node exposes no connection list, so this registry is installed before
+ * `listen()`.
  */
 function trackConnections(app: FastifyInstance): ConnectionRegistry {
   const server = app.server;
@@ -181,16 +88,13 @@ function trackConnections(app: FastifyInstance): ConnectionRegistry {
 
   server.on('request', (request: IncomingMessage, response: ServerResponse) => {
     const connection = tracked.get(request.socket);
-    // A connection this registry never saw cannot happen once it is installed before `listen()`.
-    // Returning rather than throwing is still the right answer: the cost of being wrong is one
-    // connection the sweep treats as Node's `closeIdleConnections()` already treats it.
+    // Cannot happen once installed before `listen()`. If it does, Node's own sweep still applies.
     if (connection === undefined) return;
     connection.open.add(request);
     const forget = (): void => {
       connection.open.delete(request);
     };
-    // `finish` for a response that was delivered, `close` for one whose socket died first. Both,
-    // because a request left in this set after its response is gone would block the drain forever.
+    // Both, or a request whose socket died first would block the drain forever.
     response.once('finish', forget);
     response.once('close', forget);
   });
@@ -203,38 +107,21 @@ function trackConnections(app: FastifyInstance): ConnectionRegistry {
   return tracked;
 }
 
-/**
- * Whether a connection is a legitimate reason for the drain to still be waiting.
- *
- * Everything else is dropped. The three cases that are NOT dropped are the whole point of the
- * distinction — get it wrong in one direction and a deploy hangs, in the other and a learner's
- * request is cut off mid-answer.
- */
+/** Wrong one way and a deploy hangs, wrong the other and a learner's answer is cut off. */
 function isDrainBlocking(connection: TrackedConnection, mayStillBeSending: boolean): boolean {
-  // A WebSocket belongs to the hub, which closes it with `WS_CLOSE.serverShuttingDown` in its
-  // `preClose` hook and terminates it if the peer does not answer (`ws/hub.ts`). Destroying it here
-  // would beat that close frame to the socket and hand every client a 1006 — indistinguishable from
-  // a lost network, which is precisely the failure that hook exists to prevent.
+  // The hub closes WebSockets with `serverShuttingDown` (`ws/hub.ts`). Destroying one here would
+  // beat that frame and hand the client a 1006.
   if (connection.upgraded) return true;
   for (const request of connection.open) {
-    // We hold this request in full, so we owe an answer to it and the grace is what that is for.
     if (request.complete) return true;
-    // It is still arriving. Wait, but only until the send grace is up: a stalled client must not be
-    // able to hold a deploy open, and one whose body is genuinely in flight lands well inside it.
     if (mayStillBeSending) return true;
   }
   return false;
 }
 
 /**
- * Drops connections as they stop blocking the drain, until the returned function is called.
- *
- * "Idle" in the name is Node's word, and this is wider than Node's meaning of it: see
- * `isDrainBlocking`. The name is kept because `plugins/security.ts` points at this function by it.
- *
- * `keepAliveTimeout` is also collapsed for the duration: it is what tells Node how long to hold a
- * finished keep-alive socket open, and during a shutdown the answer is "not at all". Both together
- * mean a socket cannot outlive the request it was serving.
+ * Drops connections as they stop blocking the drain, per `isDrainBlocking`. The name is referenced
+ * by `plugins/security.ts`. `keepAliveTimeout` is collapsed so no socket outlives its request.
  */
 function drainIdleConnections(
   app: FastifyInstance,
@@ -246,20 +133,15 @@ function drainIdleConnections(
   server.keepAliveTimeout = 1;
   const sendGraceEndsAt = Date.now() + clientSendGraceMs(shutdownGraceMs);
   const sweep = setInterval(() => {
-    // Node's own narrow sweep first. It is redundant with the loop below by construction and kept
-    // deliberately: it is the documented behaviour of `forceCloseConnections: 'idle'`, and if the
-    // registry ever missed a connection it still drops the ordinary keep-alive case.
+    // Redundant with the loop below, kept in case the registry ever misses a connection.
     server.closeIdleConnections();
     const mayStillBeSending = Date.now() < sendGraceEndsAt;
     for (const [socket, connection] of connections) {
       if (isDrainBlocking(connection, mayStillBeSending)) continue;
-      // Destroyed rather than answered: a connection that has sent nothing, or half a request, has
-      // no complete message to reply to, and one Fastify has already dispatched owns a response
-      // object we must not write around. `server.close()` stops counting it once it is gone.
+      // Destroyed, not answered. There is no complete message to reply to.
       socket.destroy();
     }
   }, IDLE_SWEEP_INTERVAL_MS);
-  // So the sweep alone can never be the reason the process stays alive.
   sweep.unref();
   return () => {
     clearInterval(sweep);
@@ -277,34 +159,22 @@ async function shutdown(
   shuttingDown = true;
   app.log.info({ reason }, 'shutting down');
 
-  // The deadline. `unref()` so this timer alone cannot keep the process alive if everything
-  // else finishes first.
   const deadline = setTimeout(() => {
     app.log.error({ reason, graceMs: config.shutdownGraceMs }, 'shutdown timed out; exiting hard');
     process.exit(EXIT_SHUTDOWN_FAILED);
   }, config.shutdownGraceMs);
   deadline.unref();
 
-  // Stopped before anything else: it is the one piece of work that is pure maintenance, so it has
-  // no claim on the shutdown grace, and a sweep starting mid-drain would hold a pooled connection
-  // that `closeDatabase` is about to wait for.
+  // Both would otherwise hold a pooled connection that `closeDatabase` is about to wait for.
   retention?.stop();
-  // And the schema re-check, which would otherwise ask the pool for a connection `closeDatabase` is
-  // about to close.
   if (schemaRecheck !== undefined) clearInterval(schemaRecheck);
 
   const stopDraining = drainIdleConnections(app, connections, config.shutdownGraceMs);
   try {
     await app.close();
-    // Half the remaining grace for the pool: a query that has not finished by now is not
-    // going to, and holding the process open for it only delays the SIGKILL.
     await closeDatabase(Math.floor(config.shutdownGraceMs / 2));
-    // Belt and braces. `routes/calc.ts` registers an `onClose` hook that closes the pool, so this
-    // is normally a no-op (`closeSharedPool` is idempotent). It is here anyway because the failure
-    // it guards against is silent and expensive: if that module is ever not registered, or its hook
-    // ordering changes, the process would exit with four live worker threads and the only symptom
-    // would be a deploy that hangs. Closing the pool on the shutdown path itself does not depend on
-    // any route module having been wired.
+    // Normally a no-op after `routes/calc.ts`'s `onClose` hook. Here so live threads never depend
+    // on a route module being wired.
     await closeSharedPool();
     clearTimeout(deadline);
     app.log.info({ reason }, 'shutdown complete');
@@ -312,7 +182,6 @@ async function shutdown(
   } catch (error) {
     clearTimeout(deadline);
     app.log.error({ err: error, reason }, 'shutdown failed');
-    // The threads outlive a failed drain otherwise, and this is the last code that runs.
     await closeSharedPool().catch(() => undefined);
     process.exit(EXIT_SHUTDOWN_FAILED);
   } finally {
@@ -333,8 +202,7 @@ function installProcessHandlers(
 
   process.on('uncaughtException', (error) => {
     app.log.fatal({ err: error }, 'uncaught exception; exiting');
-    // No graceful shutdown here on purpose: the process is already in an unknown state, and
-    // running more of our own code through it can make things worse. Flush and go.
+    // No graceful shutdown. The process is in an unknown state.
     process.exit(EXIT_CRASHED);
   });
 
@@ -349,9 +217,7 @@ async function main(): Promise<void> {
   try {
     config = getConfig();
   } catch (error) {
-    // No logger yet — this is the one place a bare console write is the right answer, because
-    // the alternative is a process that dies silently. `ConfigError.message` already lists
-    // every problem.
+    // No logger yet. `ConfigError.message` lists every problem.
     if (error instanceof ConfigError) {
       console.error(error.message);
       process.exit(EXIT_CONFIG_INVALID);
@@ -360,10 +226,8 @@ async function main(): Promise<void> {
     process.exit(EXIT_CONFIG_INVALID);
   }
 
-  // The readiness probe's database handle and the feature gate, both on the schema. Wired here and
-  // not as `buildApp`'s defaults because `buildApp` is the seam every test builds an app through,
-  // with a stub handle or none; this is the one process that serves traffic. See `schema-guard.ts`.
-  // The callbacks reach the logger through `app`, which exists by the time any probe can run.
+  // Wired here, not as `buildApp` defaults, because every test builds through `buildApp`.
+  // See `schema-guard.ts`.
   const schema = createSchemaGate({
     readLedger: () => readLedger(getSql()),
     probeDeadlineMs: PROBE_QUERY_DEADLINE_MS,
@@ -376,8 +240,7 @@ async function main(): Promise<void> {
       if (verdict.kind === 'current') {
         app.log.info({ applied: verdict.applied, ahead: verdict.ahead }, 'database schema verified; serving');
       } else if (verdict.kind === 'refused') {
-        // `error`: unlike at boot this does not exit (see `schema-guard.ts`), so this line and the
-        // 503s are the whole of what an operator gets.
+        // After boot this does not exit, so this line and the 503s are all an operator gets.
         app.log.error({ problems: verdict.problems, fix: verdict.fix }, verdict.summary);
       } else {
         app.log.warn({ reason: verdict.reason }, 'database schema not verified');
@@ -390,7 +253,6 @@ async function main(): Promise<void> {
     database: { ping: probeDatabase, close: closeDatabase },
     featureGate: { admits: schema.admits, retryAfterSeconds: SCHEMA_RECHECK_INTERVAL_MS / 1_000 },
   });
-  // Before `listen()`, so that no connection can be accepted that the drain cannot see.
   const connections = trackConnections(app);
   installProcessHandlers(app, config, connections);
 
@@ -398,22 +260,16 @@ async function main(): Promise<void> {
     app.log.warn({ warning }, 'configuration warning');
   }
 
-  // Created here, once, with the logger attached — so Postgres notices go through the
-  // redaction in `logging.ts` instead of to stdout. Everything else in the codebase reaches
-  // this same pool through `getSql()`.
+  // With the logger attached, so Postgres notices go through the redaction in `logging.ts`.
   configureDatabase(config, {
     onNotice: (message) => {
       app.log.warn({ notice: message }, 'postgres notice');
     },
   });
 
-  // Before any route exists. Two PRs in one day added a migration that the development database did
-  // not have, and the API booted green against it; the first sign was `column "automatic_reason"
-  // does not exist` from an archive write, and units silently stopped moving. A database that
-  // ANSWERS with a schema behind this build is refused here, with the files and the command named.
-  // One that does not answer at all is not: that is `db-unavailable.md`'s designed posture, and
-  // `/ready` stays degraded until it can ask. `console.error` and not the logger: `logging.ts`
-  // switches the logger off under `test`, and a refusal nobody can read is a silent exit 78.
+  // A database that answers with a schema behind this build is refused before any route exists.
+  // One that does not answer is served degraded (`db-unavailable.md`). `console.error`, because the
+  // logger is off under `test` and a refusal nobody can read is a silent exit 78.
   const verdict = await schema.verify();
   if (verdict.kind === 'refused') {
     console.error(describeRefusal(verdict));
@@ -426,8 +282,7 @@ async function main(): Promise<void> {
       'database schema not verified at boot; /ready reports degraded until the migration ledger answers',
     );
   } else if (verdict.ahead.length > 0) {
-    // Expected during a deploy (migrate, then roll) and after an image rollback. Loud because it is
-    // also what pointing an old build at somebody else's database looks like.
+    // Normal during a deploy or rollback, and also what an old build on someone else's database looks like.
     app.log.warn(
       { applied: verdict.applied, ahead: verdict.ahead },
       'database schema is ahead of this build: a newer build migrated it; serving, since migrations are additive',
@@ -435,26 +290,17 @@ async function main(): Promise<void> {
   } else {
     app.log.info({ applied: verdict.applied }, 'database schema matches this build');
   }
-  // `readiness` never rejects; the `catch` is so that a future one that does cannot become an
-  // unhandled rejection, which this process treats as a crash. `unref`, so the timer alone never
-  // holds a stopping process open.
+  // The `catch` keeps a future rejecting `readiness` from becoming a fatal unhandled rejection.
   schemaRecheck = setInterval(() => {
     probeDatabase().catch(() => undefined);
   }, SCHEMA_RECHECK_INTERVAL_MS);
   schemaRecheck.unref();
 
   try {
-    // Registers every route module under `API_PREFIX`, and the process-wide state more than one of
-    // them expects: the session plugin on the root instance, and the room registry bound to the
-    // Postgres archive. See `src/routes/index.ts` for why neither can be done per module. It has to
-    // run after `configureDatabase` above, because the session store needs the pool.
+    // After `configureDatabase`, because the session store needs the pool.
     await registerApiRoutes(app);
-    // Complete the pre-warm before accepting application traffic. Starting to listen while every
-    // worker is occupied building its strength table creates a queue-time race: a calculation
-    // arriving in that window can consume its whole budget before a thread is available. The
-    // measured four-thread warmup is about 3.3s on the reference host, which is a bounded startup
-    // cost and buys a warm first Coach for every request after `listening`. `/ready` still reports
-    // degraded while this promise is pending for embedders/tests that begin it themselves.
+    // Warmed before `listen`, or a request arriving during the table build could spend its whole
+    // budget queued. About 3.3 s for four threads on the reference host.
     await beginSharedPoolWarmup(config, {
       onWarn: (warning) => {
         app.log.warn({ poolEvent: warning.event, poolDetail: warning.detail }, 'calculation pool');
@@ -462,25 +308,11 @@ async function main(): Promise<void> {
     });
     const address = await app.listen({ port: config.port, host: config.host });
 
-    /**
-     * Expired rows are removed from here on, and until now nothing removed them at all.
-     *
-     * `deleteExpired` and `deleteExpiredLoginAttempts` have been implemented and tested since
-     * sessions existed and had no caller outside the test suite, so `prl.sessions` and
-     * `prl.oidc_login_attempts` only ever grew and the retention paragraph on `/privacy` was
-     * honest only because it said the sweep did not run
-     * (`docs/production/legal-review-requirements.md` §7). See `maintenance/retention-sweep.ts`
-     * for why this lives in the process rather than in a systemd unit like the backups do.
-     *
-     * Started AFTER `listen` deliberately: a sweep must never be a reason the process is slow to
-     * accept traffic, and there is nothing about an expired row that cannot wait one more tick.
-     */
+    // After `listen`, so a sweep never delays accepting traffic. See `maintenance/retention-sweep.ts`.
     retention = startRetentionSweep({
       sql: getSql,
       onSwept: (result) => {
-        // `info`, not `debug`: four lines a day that say a retention promise is being kept is the
-        // evidence an operator needs when somebody asks, and it is the only place that evidence
-        // exists.
+        // `info`, because this line is the evidence that the retention promise is kept.
         app.log.info(
           {
             sweptSessions: result.sessions,
@@ -492,22 +324,15 @@ async function main(): Promise<void> {
           },
           'retention sweep',
         );
-        // A log line is evidence only for somebody reading logs. The counter is what a dashboard
-        // reads and the age gauge is what the alert reads — and the age gauge is the whole answer
-        // to "a sweep that silently stops running looks exactly like one with nothing to do".
-        // Only a sweep that FINISHED gets here; `onProblem` deliberately does not touch it.
+        // Only a finished sweep reaches this, which is what the age gauge's alert relies on.
         appMetrics().markRetentionSweep(result);
       },
       onGuestBlocked: (userId, error) => {
-        // One account the schema would not let go of, while the rest of the batch went. `warn`
-        // rather than `error` because nothing is broken for anybody right now, and with the id,
-        // because "one guest could not be erased" is unactionable without knowing which — the id
-        // is a log field precisely so it never becomes a metric label.
+        // The id is a log field so it never becomes a metric label.
         app.log.warn({ err: error, userId }, 'retention sweep could not erase a guest account');
       },
       onProblem: (error) => {
-        // Never fatal. A sweep is on no request path and nobody is waiting for it; the next tick
-        // tries again. A database that is down is already `/ready`'s problem to report.
+        // Never fatal. The next tick tries again.
         app.log.warn({ err: error }, 'retention sweep failed');
       },
     });
@@ -529,12 +354,7 @@ async function main(): Promise<void> {
   }
 }
 
-/**
- * Only boot when this file is the process entry point.
- *
- * Without the guard, importing anything from here — a test reaching for `shutdown`, a script
- * reusing a constant — would start listening on a port as a side effect of the import.
- */
+/** Boot only as the entry point, so importing this file never opens a port. */
 const entry = process.argv[1];
 if (entry !== undefined && import.meta.url === pathToFileURL(entry).href) {
   await main();

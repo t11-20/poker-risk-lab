@@ -1,29 +1,8 @@
 /**
- * The audit log's two forbidden-key lists must not drift, and until today nothing held them.
- *
- * `apps/api/src/repositories/audit.ts` carries `AUDIT_FORBIDDEN_KEYS`, a lower-cased copy of the
- * array inside `audit_log_detail_has_no_forbidden_keys`, and its comment said the copy existed
- * "so that a key added to the CHECK and not added here fails a test instead of failing a live audit
- * write". **There was no such test.** Nothing in the repository compared the two, so the sentence
- * described a guarantee that did not exist — the same shape as the several other claims this branch
- * found asserted only in prose.
- *
- * ## Why it reads the database and not the migration
- *
- * A parser over `db/migrations/0001_initial.sql` would have to know that `0007` redefines the
- * constraint, and the next one after that, and would be asserting against the file rather than
- * against what is enforced. `pg_get_constraintdef` is the effective answer: it is what PostgreSQL
- * will actually apply to the next INSERT, after every migration that has run. That also makes the
- * check immune to a migration that lands in the tree but not in the database, which is a state this
- * repository can reach — `migrate.mjs` is roll-forward only and a deployment can be behind.
- *
- * ## The direction that matters
- *
- * The app layer must be at least as strict as the database. Stricter is fine and is the point of
- * the lower-casing: `?|` is byte-exact, so `UserAgent` satisfies PostgreSQL and is still the thing
- * the product promised not to store. Looser is a key that reaches a live write and fails it with a
- * constraint violation in front of a learner, which is why this asserts one direction and not
- * equality.
+ * `AUDIT_FORBIDDEN_KEYS` in `repositories/audit.ts` must be at least as strict as the database's
+ * `?|` CHECKs. Looser fails a live write, and stricter is the point of lower-casing because `?|` is
+ * byte-exact. It reads `pg_get_constraintdef`, the constraint actually enforced after every
+ * migration, not the migration files.
  */
 
 import assert from 'node:assert/strict';
@@ -55,23 +34,15 @@ after(async () => {
   await client?.end({ timeout: 5 });
 });
 
-/** The literal keys inside the CHECK's `array[...]`, exactly as PostgreSQL holds them. */
 function keysIn(definition: string): string[] {
   const array = /array\[([\s\S]*?)\]/iu.exec(definition);
   if (array === null) return [];
-  // `?? ''` for `noUncheckedIndexedAccess`: a capture group is `string | undefined` to the compiler
-  // even where the pattern cannot match without it.
   return [...(array[1] ?? '').matchAll(/'([^']+)'/gu)].map((match) => match[1] ?? '');
 }
 
 /**
- * Every key refused by ANY `?|` CHECK on `prl.audit_log`, unioned.
- *
- * There are two constraints, not one: 0007 added `audit_log_detail_has_no_card_keys` BESIDE 0001's
- * rather than rewriting it, because a rewrite means a DROP, and roll-forward-only means a drop that
- * half-succeeds cannot be undone by anything but a restore — `migrate.mjs` refuses one without an
- * irreversibility marker, and it was right to. A test that read only the original name would have
- * gone quiet about the newer list, which is the failure mode this whole file exists to prevent.
+ * Unioned over every `?|` CHECK, because 0007 added `audit_log_detail_has_no_card_keys` beside
+ * 0001's constraint instead of dropping and rewriting it.
  */
 async function forbiddenKeys(): Promise<string[]> {
   const rows = await sql()<{ conname: string; definition: string }[]>`
@@ -112,9 +83,7 @@ describe('the audit log forbids the same keys in both layers', { skip: SKIP }, (
   });
 
   it('covers the card spellings this codebase actually uses (REGRESSION)', () => {
-    // The measurement that produced migration 0007: the 0001 list was written in the spelling the
-    // API used at the time, and `hole_cards` — the column name in `prl.hand_seats` — passed it, as
-    // did the four fields `poker-engine` calls the hand's secrets.
+    // The 0001 list missed `hole_cards` and the engine's secret field names, which produced 0007.
     for (const key of [
       'hole_cards',
       'holeCards',
@@ -130,15 +99,13 @@ describe('the audit log forbids the same keys in both layers', { skip: SKIP }, (
   });
 
   it('the case-insensitive half still works, since the database half cannot be', () => {
-    // `?|` is byte-exact, so this is the layer that catches a spelling PostgreSQL would accept.
     assert.ok(isForbiddenAuditKey('UserAgent'));
     assert.ok(isForbiddenAuditKey('HOLE_CARDS'));
     assert.ok(isForbiddenAuditKey('DeckSalts'));
   });
 
   it('NEGATIVE CONTROL — it does not refuse the keys the audit log legitimately carries', () => {
-    // The other direction, and the reason this is not simply "refuse everything": these are the
-    // distinct detail keys in use on the development database, 49 rows with a detail object.
+    // The distinct detail keys in use on the development database (49 rows).
     for (const key of [
       'by',
       'cohortId',
@@ -162,15 +129,8 @@ describe('the audit log forbids the same keys in both layers', { skip: SKIP }, (
   });
 
   it('is covered by TWO app-layer mechanisms, and the check spans both', () => {
-    // Worth knowing when this fails. `isForbiddenAuditKey` is
-    // `isSensitiveKey(key) || AUDIT_FORBIDDEN_KEYS.has(key.toLowerCase())`, and `isSensitiveKey` is
-    // `logging.ts`'s project-wide substring pattern — which since 2026-08-27 contains
-    // `deck|salt|hole_?card`. So removing `hole_cards` from the audit set changes NOTHING: the
-    // pattern still catches it. Measured, when this control was first written the wrong way round.
-    //
-    // Keys like `cards`, `board` and `reveal` are carried by the audit set ALONE, which is what
-    // makes them the honest thing to break in a control — and what makes the set still worth
-    // having beside the pattern.
+    // `isSensitiveKey` already catches `hole_cards` through `deck|salt|hole_?card`, so the control
+    // breaks `cards`, `board` and `reveal`, which only the audit set carries.
     assert.ok(isForbiddenAuditKey('hole_cards'), 'the pattern half stopped covering the card names');
     for (const key of ['cards', 'board', 'reveal']) {
       assert.ok(isForbiddenAuditKey(key), `"${key}" is carried by the audit set alone and is gone`);

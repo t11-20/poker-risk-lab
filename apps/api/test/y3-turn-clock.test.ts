@@ -1,44 +1,9 @@
 /**
- * The turn clock a learner alone at a table of bots gets, against the one everybody else gets.
- *
- * ## The defect
- *
- * A browser-level verification pass lost two hands to `prl.hand_actions` rows reading
- * `seat 0 | fold | was_automatic = t`, both times while the learner was reading the Coach
- * panel. The room's `action_timeout_seconds` was 60. Nothing was hidden — the countdown is
- * on screen and folding rather than calling on expiry is the correct rule — but the panel a
- * learner is *meant to read at that moment* runs to thousands of characters plus a five-row
- * EV table and a card-by-card table with one row per unseen card. The product's two headline
- * features were in direct tension: you could read the analysis or you could act, not both.
- *
- * `LiveTable.turnSecondsFor` now takes the longer of the room's clock and
- * `learnerTurnSeconds` for a person with no other person waiting on them, and leaves every
- * other seat on the room's clock. That method sets out the three conditions and why each one
- * is there; `DEFAULT_LEARNER_TURN_SECONDS` in `src/config.ts` carries the number.
- *
- * ## Would these fail if the behaviour broke? Yes — checked, by reverting
- *
- * With `turnSecondsFor` reduced to `return this.config.actionTimeoutSeconds`, three of the
- * seven tests below fail: the deadline lands 60 seconds out rather than 240, the automatic
- * fold arrives at 61 seconds, and the per-table override is not honoured because there is no
- * floor left to configure. The other four pass either way, on purpose, and each is a
- * guarantee the fix must not trade away rather than a test of the fix — the bot clock, the
- * clock at a table with a second person in it, the abandoned seat that still gets folded, and
- * the room that already allows longer than the floor (`Math.max(300, 240)` is 300 whichever
- * side of the change you are on).
- *
- * ## Nothing here is assumed about the seating
- *
- * Who acts first is the engine's business (the button posts the small blind and acts first
- * heads-up, and the button is seeded from the first player to sit). Every test reads the
- * acting seat out of the table rather than asserting a seat index, so a change in the
- * rotation shows up as a different clock, not as a mysteriously failing helper.
- *
- * ## No database
- *
- * A `LiveTable` is constructed directly, as `table-concurrency.test.ts` does. The clock is
- * the manual one from `src/rooms/timers.ts`, so a four-minute timeout runs in microseconds
- * and nothing here depends on wall time.
+ * A learner alone with bots gets `learnerTurnSeconds` or the room's clock, whichever is longer,
+ * because a 60 s clock folded hands while the learner read the Coach panel. Every other seat keeps
+ * the room's clock (`LiveTable.turnSecondsFor`). Three tests fail if that reverts to the room clock.
+ * The other four are guarantees the fix must not trade away. The acting seat is always read from
+ * the table, never assumed.
  */
 
 import assert from 'node:assert/strict';
@@ -48,7 +13,6 @@ import { DEFAULT_LEARNER_TURN_SECONDS, loadConfig } from '../src/config.ts';
 import { LiveTable } from '../src/rooms/table.ts';
 import { createManualClock, type ManualClock } from '../src/rooms/timers.ts';
 
-/** The clock the audited room was running: one minute to read the panel and act. */
 const ROOM_SECONDS = 60;
 
 interface Fixture {
@@ -57,14 +21,7 @@ interface Fixture {
   readonly problems: string[];
 }
 
-/**
- * A hand in progress: the learner in seat 0, a bot in seat 1, and optionally a second person
- * in seat 2.
- *
- * The bot is always there because the audited table is a learner against bots, and because a
- * seat that is not the learner's has to be able to act for the turn to move on. The second
- * person is the switch that turns the floor off.
- */
+/** The bot lets the turn move on. A second person turns the floor off. */
 async function tableWithHand(options: {
   readonly withSecondPerson: boolean;
   readonly roomSeconds?: number;
@@ -108,13 +65,8 @@ async function tableWithHand(options: {
 }
 
 /**
- * Lets the table's queue drain.
- *
- * `ManualClock.advance` runs the due callback synchronously, but the callback only *enqueues*
- * the timeout (`this.enqueue(() => this.applyTimeout(expiry))`, deliberately — see the queue
- * banner in `table.ts`), so the fold lands a turn of the loop later. Without this, a test
- * asserting straight after `advance` reads the state as it was before the timer did anything
- * and passes for the wrong reason.
+ * `ManualClock.advance` runs the callback synchronously, but it only enqueues the timeout, so the
+ * fold lands a turn of the loop later.
  */
 function settle(): Promise<void> {
   return new Promise((resolve) => {
@@ -122,7 +74,6 @@ function settle(): Promise<void> {
   });
 }
 
-/** The user id of the seat currently being asked to act. Read from the table, never assumed. */
 function actorId(table: LiveTable): string {
   const view = table.viewFor('usr_learner');
   assert.ok(view !== null, 'no hand in progress');
@@ -132,14 +83,12 @@ function actorId(table: LiveTable): string {
   return seat.playerId;
 }
 
-/** Seconds between now and the armed deadline. */
 function secondsOnTheClock(fixture: Fixture): number {
   const deadline = fixture.table.snapshot().deadlineMs;
   assert.ok(deadline !== null, 'no deadline is armed');
   return (deadline - fixture.clock.now()) / 1_000;
 }
 
-/** Moves the action round to `userId`, calling for everyone asked before them. */
 async function passTheTurnTo(fixture: Fixture, userId: string): Promise<void> {
   for (let step = 0; step < 4; step++) {
     const acting = actorId(fixture.table);
@@ -176,7 +125,6 @@ test('the learner is not folded at the old sixty seconds', async () => {
   const before = fixture.table.viewFor('usr_learner');
   assert.ok(before !== null);
 
-  // One second past the clock that folded two hands during verification.
   fixture.clock.advance((ROOM_SECONDS + 1) * 1_000);
   await settle();
 
@@ -188,8 +136,7 @@ test('the learner is not folded at the old sixty seconds', async () => {
 });
 
 test('an abandoned seat is still folded — the mechanism is longer, not gone', async () => {
-  // The half of this that must not regress. A clock that never expires lets one absent
-  // player stall a table forever, which is a worse failure than the one being fixed.
+  // A clock that never expires lets one absent player stall a table for ever.
   const fixture = await tableWithHand({ withSecondPerson: false });
   await passTheTurnTo(fixture, 'usr_learner');
   const before = fixture.table.viewFor('usr_learner');
@@ -202,10 +149,7 @@ test('an abandoned seat is still folded — the mechanism is longer, not gone', 
   assert.ok(view !== null);
   assert.notEqual(view.actionSequence, before.actionSequence, 'the timeout still applies an action');
 
-  // Which action it is, is `timeoutAction`'s business and not this test's: it checks where that
-  // is free and folds where it is not, and asserting one of the two here would be asserting
-  // which seat the deal happened to put the learner in. What this test owns is that the seat
-  // was acted for automatically, and that being acted for never costs a chip.
+  // Fold or check is `timeoutAction`'s choice. This test owns that the seat was acted for and lost no chip.
   const learnerSeat = view.seats.find((seat) => seat.playerId === 'usr_learner')?.seat;
   assert.ok(learnerSeat !== undefined, 'the learner is in the hand');
   const automatic = view.actions.filter((action) => action.seat === learnerSeat && action.wasAutomatic);
@@ -218,9 +162,7 @@ test('an abandoned seat is still folded — the mechanism is longer, not gone', 
 });
 
 test('a bot keeps the room clock — the extra time is for reading, and a bot reads nothing', async () => {
-  // A control. "Give every seat four minutes" would pass the three tests above and would be a
-  // different change: for a bot the timer is a safety net against a policy that threw, and four
-  // minutes is four minutes of frozen table before the net catches anything.
+  // For a bot the timer is a safety net, and four minutes is four minutes of frozen table.
   const fixture = await tableWithHand({ withSecondPerson: false });
   await passTheTurnTo(fixture, 'usr_bot');
 
@@ -228,10 +170,7 @@ test('a bot keeps the room clock — the extra time is for reading, and a bot re
 });
 
 test('a second person at the table restores the room clock for everybody', async () => {
-  // The other control, and the clause that keeps the extra time free. Against bots a long clock
-  // costs nobody anything. With another human in the room it costs them their evening, and the
-  // room's `action_timeout_seconds` is the pace they all agreed to — that room can configure up
-  // to 300 seconds for itself if it wants them.
+  // With another human present the room's `action_timeout_seconds` is the agreed pace.
   const fixture = await tableWithHand({ withSecondPerson: true });
   await passTheTurnTo(fixture, 'usr_learner');
 
@@ -239,8 +178,6 @@ test('a second person at the table restores the room clock for everybody', async
 });
 
 test('a room configured longer than the floor keeps its own clock', async () => {
-  // `Math.max`, not a replacement. A room that deliberately allows five minutes is not
-  // shortened to four by a floor whose whole job is to lengthen short clocks.
   const fixture = await tableWithHand({ withSecondPerson: false, roomSeconds: 300 });
   await passTheTurnTo(fixture, 'usr_learner');
 
@@ -248,13 +185,10 @@ test('a room configured longer than the floor keeps its own clock', async () => 
 });
 
 test('the floor is configurable, and LEARNER_TURN_SECONDS is what configures it', async () => {
-  // Per table, for a deployment that wires it through.
   const fixture = await tableWithHand({ withSecondPerson: false, learnerTurnSeconds: 120 });
   await passTheTurnTo(fixture, 'usr_learner');
   assert.equal(secondsOnTheClock(fixture), 120);
 
-  // And in the environment, where an operator sets it. `loadConfig` is pure, so this needs no
-  // process environment and no server.
   const base = {
     NODE_ENV: 'test',
     DATABASE_URL: 'postgresql://poker:poker-dev-only@127.0.0.1:5432/prl_fix_y3',
@@ -264,7 +198,7 @@ test('the floor is configurable, and LEARNER_TURN_SECONDS is what configures it'
   assert.equal(loadConfig(base).learnerTurnSeconds, DEFAULT_LEARNER_TURN_SECONDS);
   assert.equal(loadConfig({ ...base, LEARNER_TURN_SECONDS: '90' }).learnerTurnSeconds, 90);
 
-  // Out of bounds is reported rather than silently clamped, like every other read in `config.ts`.
+  // Out of bounds is reported, not clamped, like every other read in `config.ts`.
   assert.throws(() => loadConfig({ ...base, LEARNER_TURN_SECONDS: '4' }), /LEARNER_TURN_SECONDS/);
   assert.throws(() => loadConfig({ ...base, LEARNER_TURN_SECONDS: '901' }), /LEARNER_TURN_SECONDS/);
 });

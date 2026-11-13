@@ -1,29 +1,9 @@
 /**
- * The schema guard against a ledger the real migration runner wrote, and through the real boot path.
- *
- * ## Why this needs its own database
- *
- * The incident: two PRs in one day added a migration the development database did not have, the
- * API booted green against it, and the first sign was `column "automatic_reason" does not exist`
- * from an archive write. Proving the guard catches that means making a database behind, ahead and
- * drifted on purpose — deleting, adding and corrupting ledger rows — and none of that may happen
- * in the suite's own database or anybody's development one. So this file creates
- * `prl_schema_guard_scratch` on the same cluster, migrates it from EMPTY with `migrate.mjs up`, and
- * drops it at the end however the run ended.
- *
- * From empty matters, and is the negative control for 0010's own header: on a fresh database the
- * ledger belongs to the connecting identity while the files run, and only afterwards to
- * prl_migrator. A grant made the wrong way round passes against a copy of a long-lived database
- * and fails here.
- *
- * ## What it proves that `schema-guard.test.ts` cannot
- *
- *   * The checksum this build computes is the one `migrate.mjs` records — every row matches.
- *   * The runtime role can read the ledger: every read below is made as `prl_app`, through the
- *     `options=-c role=prl_app` startup parameter `coverage-verify-schema.test.ts` explains.
- *   * `src/server.ts` actually consults the guard: a spawned server exits 78 against a ledger one
- *     file behind, serves against a current one, and against a database that does not answer
- *     comes up degraded instead of exiting. A rule the boot path never reaches is no rule.
+ * The schema guard against a ledger the real `migrate.mjs up` wrote, and through the real boot path.
+ * It corrupts ledger rows on purpose, so it uses its own scratch databases and drops them at the end.
+ * Migrating from empty is the negative control for 0010: on a fresh database the ledger changes owner
+ * after the files run, so a grant made in the wrong order fails here. Reads run as `prl_app`, and a
+ * spawned server must exit 78 when behind, serve when current, and come up degraded when unreachable.
  */
 
 import assert from 'node:assert/strict';
@@ -54,7 +34,6 @@ const REPO_ROOT = join(API_DIR, '..', '..');
 const MIGRATE = join(API_DIR, 'scripts', 'migrate.mjs');
 const SERVER = join(API_DIR, 'src', 'server.ts');
 const SCRATCH = 'prl_schema_guard_scratch';
-/** The swap case's databases: the one a server verified, and the older one that takes its name. */
 const SERVED = 'prl_schema_guard_served';
 const OLDER = 'prl_schema_guard_older';
 const REPLACED = 'prl_schema_guard_replaced';
@@ -71,7 +50,6 @@ function withDatabase(url: string, database: string): string {
   return parsed.toString();
 }
 
-/** The same DSN, connected as the runtime role. See the header. */
 function asRuntimeRole(url: string): string {
   const parsed = new URL(url);
   parsed.searchParams.set('options', '-c role=prl_app');
@@ -79,11 +57,8 @@ function asRuntimeRole(url: string): string {
 }
 
 /**
- * The environment a child gets: this process's, minus every connection string.
- *
- * `migrate.mjs` reads DATABASE_MIGRATION_URL in preference to DATABASE_URL, and the test command
- * loads the repository's `.env`, so inheriting it would send `up` to whatever database it names
- * instead of the scratch one. Dropped always, and DATABASE_URL re-added explicitly by the caller.
+ * This process's environment minus every connection string. `migrate.mjs` prefers
+ * DATABASE_MIGRATION_URL, so an inherited `.env` value would migrate that database, not the scratch one.
  */
 function childEnv(extra: Readonly<Record<string, string>>): Record<string, string> {
   const dropped = new Set(['DATABASE_URL', 'DATABASE_MIGRATION_URL', 'DATABASE_URL_ADMIN']);
@@ -126,11 +101,8 @@ before(async () => {
   }
   const url = adminDatabaseUrl();
   assert.ok(url !== undefined);
-  // Not a skip when this fails. DATABASE_URL is set, so the database is required, and a cluster
-  // that will not let this file make a scratch database is a failure with the reason attached.
+  // Not a skip on failure: DATABASE_URL is set, so a cluster that refuses a scratch database fails.
   maintenance = testClientFor(withDatabase(url, 'postgres'));
-  // A run killed half-way leaves the scratch database behind; `with (force)` and `if exists` mean
-  // the next run starts clean rather than tripping over it.
   await maintenance`drop database if exists ${maintenance(SCRATCH)} with (force)`;
   await maintenance`create database ${maintenance(SCRATCH)}`;
   scratchUrl = withDatabase(url, SCRATCH);
@@ -141,11 +113,10 @@ before(async () => {
   }).catch((error: { stdout?: string; stderr?: string }) => {
     assert.fail(`migrate.mjs up failed on the scratch database:\n${error.stdout ?? ''}${error.stderr ?? ''}`);
   });
-  // From empty: every shipped file, including 0010, ran against this database just now.
   assert.match(migrated.stdout, new RegExp(`Applying ${SHIPPED.length} migration`));
 
-  // Two copies for the swap case, made now because `template` refuses a source with a session open
-  // on it, and nothing is connected to the scratch database yet. OLDER is one migration behind.
+  // Copies for the swap case, made now because `template` refuses a source with a session open.
+  // OLDER is one migration behind.
   for (const copy of [SERVED, OLDER, REPLACED]) {
     await maintenance`drop database if exists ${maintenance(copy)} with (force)`;
   }
@@ -173,7 +144,7 @@ after(async () => {
   }
 });
 
-/** Runs `change`, then `use`, then `revert`, so one case cannot leave the ledger broken for the next. */
+/** Applies `change`, runs `use`, then restores the ledger and its grant for the next case. */
 async function withLedger(change: string, use: () => Promise<void>): Promise<void> {
   const sql = adminSql();
   const saved = await sql<{ version: string; checksum: string; applied_at: Date }[]>`
@@ -198,9 +169,7 @@ async function withLedger(change: string, use: () => Promise<void>): Promise<voi
     }
     await use();
   } finally {
-    // The grant goes back to what it WAS, not to what 0010 makes it. An unconditional re-grant here
-    // once made every later case pass against a database that had never applied 0010 — found by
-    // removing 0010 and watching the boot case still serve.
+    // Restore the grant as it WAS. An unconditional re-grant let later cases pass without 0010.
     if (acl?.readable === true) await sql`grant select on prl.schema_migrations to prl_app`;
     else await sql`revoke select on prl.schema_migrations from prl_app`;
     await sql`delete from prl.schema_migrations`;
@@ -216,7 +185,7 @@ async function withLedger(change: string, use: () => Promise<void>): Promise<voi
 describe('schema guard — a ledger the real runner wrote, read as prl_app', dbOptions, () => {
   it('finds a freshly migrated database current, matching every checksum migrate.mjs recorded', async () => {
     assert.deepEqual(await verifyAsRuntime(), { kind: 'current', applied: SHIPPED.length, ahead: [] });
-    // The grant 0010 made survived the ledger being handed to prl_migrator after the files ran.
+    // 0010's grant survives the ledger being handed to prl_migrator after the files ran.
     const [state] = await adminSql()<{ owner: string; readable: boolean; writable: boolean }[]>`
       select pg_catalog.pg_get_userbyid(c.relowner) as owner,
              has_table_privilege('prl_app', 'prl.schema_migrations', 'SELECT') as readable,
@@ -254,8 +223,7 @@ describe('schema guard — a ledger the real runner wrote, read as prl_app', dbO
   });
 
   it('refuses when the runtime role cannot read the ledger, naming the migration that grants it', async () => {
-    // The state of every database that has not applied 0010 — and the negative control for it:
-    // without the grant, the guard cannot run as the API at all.
+    // The state of a database without 0010, and the negative control for its grant.
     await withLedger('revoke-read', async () => {
       const verdict = await verifyAsRuntime();
       assert.equal(verdict.kind, 'refused');
@@ -269,22 +237,17 @@ describe('schema guard — a ledger the real runner wrote, read as prl_app', dbO
       shipped: () => SHIPPED,
       probeDeadlineMs: 2_000,
     });
-    // The probe names the database it reached, as `ping()` does: a "current" verdict is only an
-    // answer for the database whose ledger gave it.
+    // A "current" verdict holds only for the database identity whose ledger gave it.
     const probe = { ok: true, identity: (await readLedger(runtimeSql())).identity };
     await withLedger('drop-newest', async () => {
       const degraded = await gate.readiness(probe);
       assert.equal(degraded.ok, false);
       assert.ok((degraded.detail ?? '').includes(NEWEST.version), degraded.detail);
     });
-    // `withLedger` put the row back: somebody ran `migrate up` while the instance was degraded.
+    // `withLedger` put the row back, as `migrate up` would while degraded.
     assert.deepEqual(await gate.readiness(probe), probe);
   });
 });
-
-// ---------------------------------------------------------------------------
-// The boot path
-// ---------------------------------------------------------------------------
 
 async function freePort(): Promise<number> {
   return await new Promise((resolve, reject) => {
@@ -305,8 +268,7 @@ interface Booted {
 }
 
 function boot(databaseUrl: string, port: number): Booted {
-  // `development`, because `logging.ts` silences the logger under `test` and the log lines are
-  // half of what is asserted. Values here beat `.env`, which is not loaded at all.
+  // `development`, because `logging.ts` silences the logger under `test` and the log lines are asserted.
   const child = spawn(process.execPath, [SERVER], {
     cwd: REPO_ROOT,
     env: childEnv({
@@ -334,12 +296,8 @@ function boot(databaseUrl: string, port: number): Booted {
 }
 
 /**
- * Every server this file started, killed in `after` as well as in each case's `finally`.
- *
- * A case that hits the runner's timeout is cancelled without running its `finally`. Measured with
- * `src/server.ts` reverted to before the guard: the "exits 78" case waited out the timeout, its
- * server — which had booted, being unguarded — kept the test process alive holding a port and a
- * pool, and the run never finished until it was killed by hand.
+ * Every server this file started, also killed in `after`. A case cancelled by the runner's timeout
+ * skips its `finally`, and against an unguarded server that left the run hanging on a live child.
  */
 const spawned = new Set<ChildProcess>();
 
@@ -347,7 +305,6 @@ after(() => {
   for (const child of spawned) if (child.exitCode === null) child.kill('SIGKILL');
 });
 
-/** The exit code, or `undefined` if the child is still running after `timeoutMs`. */
 async function exitWithin(booted: Booted, timeoutMs: number): Promise<number | null | undefined> {
   let timer: NodeJS.Timeout | null = null;
   const late = new Promise<undefined>((resolve) => {
@@ -360,7 +317,6 @@ async function exitWithin(booted: Booted, timeoutMs: number): Promise<number | n
   }
 }
 
-/** Resolves when the output matches, or rejects with the output when the child exits first. */
 async function waitFor(booted: Booted, pattern: RegExp, timeoutMs = 30_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   let gone = false;
@@ -385,8 +341,7 @@ describe('schema guard — src/server.ts consults it at boot', dbOptions, () => 
     await withLedger('drop-newest', async () => {
       const booted = boot(asRuntimeRole(scratchUrl), await freePort());
       try {
-        // Bounded, so the unguarded server — which boots and listens — fails this as an
-        // assertion rather than as a runner timeout.
+        // Bounded, so an unguarded server that listens fails as an assertion, not a runner timeout.
         const code = await exitWithin(booted, 20_000);
         assert.equal(
           code,
@@ -434,22 +389,14 @@ describe('schema guard — src/server.ts consults it at boot', dbOptions, () => 
   });
 });
 
-// ---------------------------------------------------------------------------
-// After boot: the feature gate, and a database replaced behind the DSN
-// ---------------------------------------------------------------------------
-
 /**
- * A TCP forwarder to the test cluster that can refuse, and can drop every connection it carries.
- *
- * It is what lets one spawned server see its database be unreachable, come back, and be replaced,
- * all behind ONE unchanging `DATABASE_URL` — the property both review findings are about. Refusing
- * is a connection destroyed on accept, which the driver reports the way it reports a database that
- * is down.
+ * A TCP forwarder that can refuse or drop every connection, so one server sees its database go away,
+ * return and be replaced behind ONE unchanging `DATABASE_URL`. A refusal looks to the driver like a
+ * database that is down.
  */
 interface Forwarder {
   readonly port: number;
   open: () => void;
-  /** Stops forwarding and destroys every connection in flight, so the pool must reconnect. */
   shut: () => void;
   end: () => Promise<void>;
 }
@@ -499,7 +446,6 @@ async function forwarder(target: URL): Promise<Forwarder> {
   };
 }
 
-/** The runtime role's DSN for `database`, through the forwarder rather than straight to the cluster. */
 function throughForwarder(via: Forwarder, database: string): string {
   const parsed = new URL(asRuntimeRole(withDatabase(scratchUrl, database)));
   parsed.hostname = '127.0.0.1';
@@ -516,7 +462,6 @@ async function statusOf(booted: Booted, path: string): Promise<number> {
   return response.status;
 }
 
-/** Polls until `path` answers `status`, failing with the server's output if it never does. */
 async function untilStatus(booted: Booted, path: string, status: number, timeoutMs = 30_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   let last = 0;
@@ -530,7 +475,6 @@ async function untilStatus(booted: Booted, path: string, status: number, timeout
   );
 }
 
-/** The WebSocket upgrade's answer: an HTTP status, or 101 when the handshake completed. */
 async function upgradeStatus(booted: Booted): Promise<number> {
   return await new Promise<number>((resolve, reject) => {
     const socket = new WebSocket(`ws://127.0.0.1:${booted.port}/api/v1/ws`, {
@@ -550,7 +494,6 @@ async function upgradeStatus(booted: Booted): Promise<number> {
   });
 }
 
-/** Ends every session on `names`, retrying until they are gone, so the databases can be renamed. */
 async function emptied(names: readonly string[]): Promise<void> {
   const sql = maintenance;
   assert.ok(sql !== null);
@@ -597,9 +540,7 @@ describe(
   dbOptions,
   () => {
     it('boots degraded, refuses features while the returning database is behind, serves once migrated', async () => {
-      // Devin's first finding on PR #38: degraded boot used to leave every feature route open, so a
-      // database that came back BEHIND was served — the original incident, with the boot check
-      // stepped around.
+      // A degraded boot must not leave feature routes open to a database that returns behind.
       const via = await forwarder(new URL(scratchUrl));
       const booted = boot(throughForwarder(via, SCRATCH), await freePort());
       try {
@@ -617,7 +558,6 @@ describe(
 
         await withLedger('drop-newest', async () => {
           via.open();
-          // The database answers now, one migration behind. `/ready` names the file...
           const deadline = Date.now() + 20_000;
           let detail = '';
           while (!detail.includes(NEWEST.version) && Date.now() < deadline) {
@@ -627,13 +567,11 @@ describe(
             await new Promise((resolve) => setTimeout(resolve, 250));
           }
           assert.ok(detail.includes(NEWEST.version), `readiness never named the pending file: ${detail}`);
-          // ...and the features stay shut against it.
           assert.equal(await statusOf(booted, FEATURE), 503);
           assert.equal(await upgradeStatus(booted), 503);
         });
 
-        // `withLedger` put the row back: `migrate up` ran. Nothing probes `/ready` from here, so the
-        // recovery below is the server's own re-check, not a probe's side effect.
+        // Nothing probes `/ready` from here, so recovery must come from the server's own re-check.
         await untilStatus(booted, FEATURE, 200);
         assert.equal(await statusOf(booted, '/api/v1/ready'), 200);
         assert.equal(await upgradeStatus(booted), 101, 'the upgrade completes once the schema is verified');
@@ -645,10 +583,8 @@ describe(
     });
 
     it('re-verifies when an older database replaces the verified one behind the same DSN', async () => {
-      // Devin's second finding on PR #38: a verdict was trusted for the life of the process, so a
-      // database restored, failed over or recreated behind the DSN was served on the strength of a
-      // check made against a different one. Here a real swap: the verified database is renamed away
-      // and one a migration behind takes its name, so the DSN is byte-for-byte unchanged.
+      // A verdict holds for one database. The verified one is renamed away and an older one takes its
+      // name, so the DSN is byte-for-byte unchanged.
       const via = await forwarder(new URL(scratchUrl));
       via.open();
       const booted = boot(throughForwarder(via, SERVED), await freePort());
@@ -673,7 +609,7 @@ describe(
         assert.equal(ready.status, 503);
         assert.ok(JSON.stringify(await ready.json()).includes(NEWEST.version));
 
-        // Migrated in place — the same database, now current — and it serves again without a restart.
+        // Migrated in place, it serves again without a restart.
         const swapped = testClientFor(withDatabase(scratchUrl, SERVED));
         try {
           await swapped`

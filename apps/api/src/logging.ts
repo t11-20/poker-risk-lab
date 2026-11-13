@@ -1,119 +1,40 @@
 /**
- * Logging: enough to debug a hand, never enough to replay a session.
- *
- * A log pipeline is a copy of production data with weaker access control and a longer
- * retention period than the database. Everything in this file exists because of that
- * one sentence.
- *
- * ## Three layers, deliberately overlapping
- *
- * 1. **Serializers** for `req`, `res` and `err` replace the whole object with a chosen
- *    subset. Fastify's default `req` serializer logs `url` and `remoteAddress`; the
- *    first carries the OIDC `code` on the callback route and the second is an IP
- *    address, so both are replaced here rather than filtered later.
- * 2. **A recursive scrub** (`formatters.log`) walks every other merged object and
- *    censors any key whose *name* looks sensitive. This is the layer that catches the
- *    object nobody thought about — a repository logging a row, a plugin logging its own
- *    options.
- * 3. **Pino's `redact` paths** run last, over the serialized output, as the net under
- *    layers 1 and 2.
- *
- * Three layers is not paranoia. Layer 1 only covers keys we predicted, layer 2 only
- * covers key *names* (not a token stuffed into a field called `note`), and layer 3 only
- * covers fixed paths. A leak has to get past all three.
- *
- * ## What is deliberately not logged
- *
- * - Raw IP addresses. A keyed hash goes out instead; see `plugins/request-context.ts`.
- * - Query string *values*. The parameter names are logged, which is enough to know that
- *   an OIDC callback happened without logging the authorization code.
- * - `displayName`, and anything else a user typed. User-supplied text in a log line is
- *   how a log viewer ends up rendering someone else's markup, and it is personal data
- *   we have no reason to keep.
- * - Hole cards, decks and commitment salts. Hidden state must not leave the server, and
- *   a log file is a way out.
+ * Logging. A log pipeline is a copy of production data with weaker access control and longer
+ * retention, so three overlapping layers keep secrets out. Serializers replace `req`, `res`, `err`
+ * with an allowlist. A recursive scrub censors sensitive key names. Pino `redact` paths are the net.
+ * Never logged are raw IPs (a keyed hash instead), query values, user-typed text such as
+ * `displayName`, and hole cards, decks or commitment salts.
  */
 
 import type { FastifyRequest, FastifyServerOptions } from 'fastify';
 import type { AppConfig } from './config.ts';
 import { clientKeyFor } from './plugins/request-context.ts';
 
-/**
- * Fastify's logger option, minus the `boolean` shorthand.
- *
- * Derived from `FastifyServerOptions` rather than imported from pino, because `pino` is a
- * transitive dependency of Fastify and not a declared dependency of this app — importing
- * it directly would be an undeclared dependency (which the linter rejects, correctly:
- * today's transitive dependency is tomorrow's removed one).
- */
+/** From `FastifyServerOptions`, because `pino` is only a transitive dependency. */
 type LoggerOptions = Exclude<NonNullable<FastifyServerOptions['logger']>, boolean>;
 
-/** What replaces a censored value. Fixed string, so it is greppable. */
 export const CENSOR = '[redacted]';
 
 /**
- * Key names that are censored wherever they appear.
- *
- * Written as one case-insensitive pattern rather than a list of exact names because the
- * things that need censoring get invented constantly (`idToken`, `access_token`,
- * `refreshToken`, `oidcCodeVerifier`) and an exact-match list is always one commit out of
- * date. No `g` flag: a global regex keeps `lastIndex` between `.test()` calls and starts
- * silently returning false.
+ * A substring pattern, because new sensitive names (`idToken`, `deckSalts`, `holeCardPositions`)
+ * appear constantly. No `g` flag, since a global regex keeps `lastIndex` between `.test()` calls.
+ * `deck`, `salt` and `hole_?card` are substrings because an exact list once matched only `deck` of
+ * five secret `HandState` fields, and two 32-byte salts reached a log verbatim (measured 2026-08-27).
  */
 export const SENSITIVE_KEY_PATTERN =
   /token|secret|password|passwd|cookie|authorization|invite|credential|bearer|assertion|signature|apikey|api_key|privatekey|private_key|databaseurl|database_url|connectionstring|connection_string|dsn|deck|salt|hole_?card/i;
 
-/**
- * Key names censored by exact match, where the name gives no hint that the value is
- * sensitive.
- *
- * `displayName` is user-supplied text. The rest is hidden game state that the server
- * authority rules say never leaves this process — see `redactFor()` in the engine. A log
- * line is an exit this project has to close explicitly.
- *
- * ## `deck`, `salt` and `holecard` moved to the pattern above, and why
- *
- * This list used to carry `deck`, `deckorder`, `salt`, `salts`, `commitmentsalt`, `holecards`
- * and `holecard`. `SeatState.holeCards` and `HandState.deck` are real; `deckOrder`,
- * `commitmentSalt`, `salt` and `salts` are names nothing in this repository has ever used. The
- * fields that actually hold a hand's secrets are `deck`, `deckCursor`, `deckSalts`,
- * `holeCardPositions` and `boardPositions`, and an exact-match list matched one of the five.
- * Measured on 2026-08-27 by handing a real dealt `HandState` to `scrubLogObject`:
- *
- *     deck=REDACTED  deckCursor=present  deckSalts=present  holeCardPositions=present
- *     deckSalts logged: {"0":208,"1":81,"2":117,...}  — identical to the real bytes
- *
- * `deckSalts` is a `Uint8Array`, so the recursive scrub walks it as an object and emits the
- * first `MAX_KEYS_PER_OBJECT` bytes: two complete 32-byte commitment salts, verbatim. The
- * header of this file promises "hole cards, decks and commitment salts" never reach a log. Hole
- * cards and the deck were censored; the salts — the third of the three, and the one `types.ts`
- * groups with the deck and the cursor as "the hand's secrets" — were not, and neither were the
- * cursor or the hole-card positions.
- *
- * So the three hidden-state families are substrings in the pattern above, for exactly the
- * reason that comment already gives: they get invented constantly (`deckCursor`, `deckSalts`,
- * `holeCardPositions`, `saltHex`) and an exact list is always one commit behind. `hole_?card`
- * covers `holeCardPositions` and the snake_case column name `hole_cards` that a row logged
- * straight out of the database would carry; `boardPositions` is the one remaining secret field
- * whose name contains none of the three, and it stays here.
- *
- * No production call site logs a `HandState` today. This is the layer that would have to
- * hold if one ever did, which is the whole reason it exists.
- */
+/** Names that give no hint. `boardPositions` is the one secret field the pattern misses. */
 export const EXPLICIT_SENSITIVE_KEYS: ReadonlySet<string> = new Set([
   'displayname',
   'boardpositions',
   'csrf',
 ]);
 
-/**
- * Top-level keys pino has a serializer for. The recursive scrub steps over them so it
- * does not deep-copy a Fastify request or flatten an Error before the serializer that
- * knows how to shrink them safely gets a look.
- */
+/** Left for their serializers, so the scrub does not deep-copy a request or flatten an Error. */
 const SERIALIZED_KEYS: ReadonlySet<string> = new Set(['req', 'res', 'err']);
 
-/** Recursion limits, so a cyclic or enormous object cannot turn one log line into a stall. */
+/** So a cyclic or huge object cannot stall a log line. */
 const MAX_SCRUB_DEPTH = 6;
 const MAX_SCRUB_NODES = 400;
 const MAX_KEYS_PER_OBJECT = 64;
@@ -127,13 +48,8 @@ export function isSensitiveKey(key: string): boolean {
 }
 
 /**
- * Replaces C0 control characters and DEL with spaces.
- *
- * Exported because both this file and `errors.ts` need it: a control character in a log
- * line can forge a second line, and one in an error body can do the same in whatever
- * reads it. Implemented by code point rather than by regex so that no control character
- * has to be typed into this repository — the hygiene gate rejects them in source, for
- * exactly the reason we are stripping them here.
+ * A control character can forge a second log line. Matched by code point so none has to appear in
+ * source, which the hygiene gate forbids. Also used by `errors.ts`.
  */
 export function withoutControlCharacters(value: string): string {
   let out = '';
@@ -144,7 +60,6 @@ export function withoutControlCharacters(value: string): string {
   return out;
 }
 
-/** The path part of a URL, with the query string dropped. Never throws. */
 export function pathOf(url: unknown): string {
   if (typeof url !== 'string') return '';
   const queryAt = url.indexOf('?');
@@ -152,13 +67,7 @@ export function pathOf(url: unknown): string {
   return withoutControlCharacters(path).slice(0, MAX_LOGGED_PATH_LENGTH);
 }
 
-/**
- * The *names* of the query parameters, with no values.
- *
- * This is the compromise that keeps the OIDC callback debuggable: `["code","state"]`
- * tells an operator the provider came back with what it should have, while the values —
- * an authorization code that can be exchanged for a session — stay out of the log.
- */
+/** Names only, so an OIDC callback shows `["code","state"]` without the exchangeable code. */
 export function queryKeysOf(url: unknown): readonly string[] {
   if (typeof url !== 'string') return [];
   const queryAt = url.indexOf('?');
@@ -167,17 +76,12 @@ export function queryKeysOf(url: unknown): readonly string[] {
   for (const pair of url.slice(queryAt + 1).split('&')) {
     if (keys.length >= MAX_LOGGED_QUERY_KEYS) break;
     const [rawKey = ''] = pair.split('=');
-    // Parameter names are caller-controlled, so they are filtered to a safe alphabet
-    // rather than trusted.
+    // Caller-controlled, so filtered to a safe alphabet.
     const key = rawKey.replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 32);
     if (key !== '' && !keys.includes(key)) keys.push(key);
   }
   return keys;
 }
-
-// ---------------------------------------------------------------------------
-// The recursive scrub
-// ---------------------------------------------------------------------------
 
 interface ScrubState {
   nodes: number;
@@ -188,8 +92,6 @@ function scrubValue(value: unknown, depth: number, state: ScrubState): unknown {
   if (value === null || typeof value !== 'object') return value;
   state.nodes += 1;
   if (depth >= MAX_SCRUB_DEPTH || state.nodes > MAX_SCRUB_NODES) return '[truncated]';
-  // A cycle would otherwise recurse until the stack ends. Reporting it is more useful
-  // than pino's own circular handling, because it names the place it happened.
   if (state.seen.has(value)) return '[circular]';
   state.seen.add(value);
 
@@ -200,8 +102,7 @@ function scrubValue(value: unknown, depth: number, state: ScrubState): unknown {
       if (next !== entry) changed = true;
       return next;
     });
-    // Copy-on-write: returning the original array when nothing was censored keeps the
-    // common case allocation-free.
+    // Copy-on-write keeps the common case allocation-free.
     return changed ? out : value;
   }
 
@@ -230,13 +131,7 @@ function scrubRecord(value: object, depth: number, state: ScrubState): unknown {
   return changed ? out : value;
 }
 
-/**
- * Scrubs one merged log object.
- *
- * Exported so the redaction rules can be tested directly rather than by parsing log
- * output, which is the only way to be sure a rule still works after someone edits the
- * pattern above.
- */
+/** Exported so the rules are tested directly rather than by parsing log output. */
 export function scrubLogObject(object: unknown): Record<string, unknown> {
   if (object === null || typeof object !== 'object') return {};
   const state: ScrubState = { nodes: 0, seen: new WeakSet<object>() };
@@ -251,19 +146,9 @@ export function scrubLogObject(object: unknown): Record<string, unknown> {
   return out;
 }
 
-// ---------------------------------------------------------------------------
-// Serializers
-// ---------------------------------------------------------------------------
-
 /**
- * Reads one property from an object of unknown shape.
- *
- * `Reflect.get` rather than an index signature or a cast: the values these serializers
- * want (`request.method`, `request.ip`) are accessor properties on Fastify's prototypes,
- * so `Object.getOwnPropertyDescriptor` would return nothing, and spreading the object to
- * get an index signature would copy every property of a Fastify request on every log
- * line. Assigning straight into an `unknown` binding contains `Reflect.get`'s loose
- * return type at the boundary instead of letting it spread through the file.
+ * `Reflect.get`, because `method` and `ip` are prototype accessors and spreading a request would
+ * copy every property per line.
  */
 function fieldOf(source: object, key: string): unknown {
   const value: unknown = Reflect.get(source, key);
@@ -271,17 +156,8 @@ function fieldOf(source: object, key: string): unknown {
 }
 
 /**
- * What the `req` serializer emits. Every field here is a decision:
- *
- * - `path` and not `url`, so the query string cannot ride along.
- * - `queryKeys` and not the query itself.
- * - `routePattern` rather than the concrete path, so log searches group and no real room
- *   or hand id is stored.
- * - `clientKey` and not `remoteAddress`.
- *
- * Fastify's own serializer emits `url` and `remoteAddress`; this replaces it wholesale
- * rather than filtering it, because a filter would have to be updated every time Fastify
- * adds a field and an allowlist does not.
+ * An allowlist replacing Fastify's serializer, which emits `url` and `remoteAddress`. `path` drops
+ * the query, `routePattern` stores no real ids, `clientKey` replaces the IP.
  */
 type SerializedRequest = {
   method: string;
@@ -297,17 +173,12 @@ function serializeRequest(request: FastifyRequest, secret: string): SerializedRe
     path: pathOf(request.url),
     queryKeys: queryKeysOf(request.url),
     routePattern: request.routeOptions.url ?? null,
-    // `clientKey` is set by the request-context hook, which runs *after* Fastify logs
-    // "incoming request". Recomputing here costs one HMAC and means the very first line of
-    // a request already carries the caller's bucket.
+    // The request-context hook runs after Fastify logs "incoming request", so compute it here.
     clientKey: request.clientKey === '' ? clientKeyFor(secret, request.ip) : request.clientKey,
   };
 }
 
-/**
- * What the `err` serializer emits. `type`, `message` and `stack` are required because
- * Fastify's logger option requires them; the rest is ours.
- */
+/** `type`, `message` and `stack` are required by Fastify's logger option. */
 type SerializedError = {
   type: string;
   message: string;
@@ -317,21 +188,8 @@ type SerializedError = {
 };
 
 /**
- * Error serializer.
- *
- * Written out rather than reusing pino's, for two reasons: the stack is capped (an
- * unbounded stack on every 500 is a lot of bytes for the same information), and `cause`
- * is followed to a fixed depth — which is where the real reason usually lives once an
- * error has been wrapped twice.
- *
- * Typed to take `unknown` because that is what it is really handed: Fastify types the
- * argument as `FastifyError`, but anything at all can be thrown, and a serializer that
- * assumes otherwise crashes inside the logger — which is the worst possible place.
- */
-/**
- * Exported for `log-error-fields.test.ts`, for the reason `scrubLogObject` is: the safety here is a
- * property of WHICH FIELDS this reads, and a test that drives it through pino would be asserting
- * pino's behaviour as much as this function's.
+ * Caps the stack and follows `cause` to depth 3. Takes `unknown` because anything can be thrown,
+ * and a crash inside the logger is the worst place for one. Exported for `log-error-fields.test.ts`.
  */
 export function serializeError(value: unknown, depth = 0): SerializedError {
   if (value === null || typeof value !== 'object') {
@@ -350,17 +208,7 @@ export function serializeError(value: unknown, depth = 0): SerializedError {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Redaction paths (the net under the two layers above)
-// ---------------------------------------------------------------------------
-
-/**
- * Fixed paths pino censors in the serialized output.
- *
- * Bracket notation is required for any key containing a dash — `req.headers.x-csrf-token`
- * parses as arithmetic and silently matches nothing, which is the classic way a redact
- * list looks complete and is not.
- */
+/** Dashed keys need bracket notation, or the path parses as arithmetic and matches nothing. */
 export const REDACT_PATHS: readonly string[] = [
   'req.headers.cookie',
   'req.headers.authorization',
@@ -396,9 +244,7 @@ export const REDACT_PATHS: readonly string[] = [
   'config.sessionCookieSecret',
   'oidc.clientSecret',
   'err.cookies',
-  // One level of wildcard, for the common `{ something: { token: ... } }` shape. Pino's
-  // `*` matches exactly one level, so these do not replace the recursive scrub — they
-  // back it up.
+  // Pino's `*` matches one level only, so these back up the recursive scrub.
   '*.token',
   '*.secret',
   '*.password',
@@ -410,18 +256,7 @@ export const REDACT_PATHS: readonly string[] = [
   '*.clientSecret',
 ];
 
-// ---------------------------------------------------------------------------
-// Assembly
-// ---------------------------------------------------------------------------
-
-/**
- * Builds the value for Fastify's `logger` option.
- *
- * In test the logger is switched off entirely rather than merely set to `silent`. A
- * silent pino still formats and serializes every line, which makes the test suite slower
- * for output nobody reads; `false` gives Fastify a no-op logger. The redaction rules stay
- * testable because `scrubLogObject` is exported and tested directly.
- */
+/** Off in test, because a silent pino still serializes every line. */
 export function buildLoggerOptions(config: AppConfig): NonNullable<FastifyServerOptions['logger']> {
   if (config.isTest || config.logLevel === 'silent') return false;
 
@@ -429,8 +264,6 @@ export function buildLoggerOptions(config: AppConfig): NonNullable<FastifyServer
     level: config.logLevel,
     redact: { paths: [...REDACT_PATHS], censor: CENSOR },
     formatters: {
-      // Runs before the serializers below, so `req`/`res`/`err` are stepped over here
-      // and shrunk there.
       log: (object) => scrubLogObject(object),
     },
     serializers: {

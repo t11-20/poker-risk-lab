@@ -1,29 +1,9 @@
 /**
- * The two calculation endpoints: `POST /math/equity` and `POST /math/coach`.
- *
- * Both are thin. That is the design: the request is validated and costed by `calc/parse.ts`,
- * the arithmetic happens on a thread from `workers/pool.ts`, and the only work this file does
- * is turn a plan into a contract response and a failure into an `ErrorCode`. There is no
- * calculation here, and there must not be — anything computed on this thread is time no table
- * gets to act in.
- *
- * ## Why both endpoints carry the stricter rate limit
- *
- * They are the two places where a small request buys real CPU, and CPU is the one resource a
- * rate limit denominated in requests does not naturally protect. `app.expensiveRateLimit`
- * (twenty per minute by default, against the global three hundred) is what stops one caller
- * with a loop from occupying the pool while everybody else's Coach request queues behind it.
- * The bounded queue in the pool is the second line: it answers `service_unavailable`
- * immediately rather than accepting work it cannot start.
- *
- * ## What the responses always carry
- *
- * The method, and — for a sampled figure — the interval. A bare percentage is the thing this
- * whole product exists to argue against, so `EquitySummary.method` and
- * `confidenceHalfWidthPoints` are populated straight from the maths and never patched: an exact
- * result reports `null` for the interval because it has no sampling error, which is a different
- * claim from an interval of zero. The Coach report additionally carries its assumptions, and
- * this file refuses to return one without them.
+ * `POST /math/equity` and `POST /math/coach`. No arithmetic runs on this thread.
+ * `calc/parse.ts` validates and costs the request, and `workers/pool.ts` does the work.
+ * Both use `app.expensiveRateLimit` because a small request buys real CPU.
+ * Responses always carry the method, and a sampled figure carries its interval. An exact figure
+ * reports `null`, which is a different claim from an interval of zero.
  */
 
 import type {
@@ -55,14 +35,7 @@ import {
   type WorkerPool,
 } from '../workers/pool.ts';
 
-/**
- * A note appended to a sampled figure's assumptions.
- *
- * The maths states how many run-outs were sampled; what it cannot know is that this API seeds
- * them deterministically. Without that sentence a learner who reloads and sees the same number
- * twice could reasonably conclude the interval is an error bar on a fresh measurement each
- * time, which is a different — and much stronger — claim than the one being made.
- */
+/** Tells a learner the sampling is seeded, so a repeated figure is not read as a fresh measurement. */
 const REPRODUCIBILITY_NOTE =
   'Sampling here is seeded, so the same request returns the same figure every time. The interval ' +
   'is the sampling error of this one run, not the spread of answers you would get by repeating it.';
@@ -76,12 +49,8 @@ function summarise(result: EquityResult): EquitySummary {
     heroEquity: hero.equity,
     method: result.method,
     trials: result.trials,
-    // Present for a sampled figure, null for an exact one. Straight from the maths: the
-    // difference between "no sampling error" and "an error of zero" is the whole point.
     confidenceHalfWidthPoints: result.confidence?.halfWidthPoints ?? null,
-    // The rule of 2 and 4 needs an out count, and outs need a single opponent and cards still
-    // to come. This endpoint answers an equity question and does not compute outs, so the
-    // teaching aid belongs to the Coach — where the report has the outs to compare it against.
+    // Outs need a single opponent, so the rule of 2 and 4 belongs to the Coach report.
     ruleOfThumb: null,
     perPlayer: result.players.map((player) => ({
       label: player.label,
@@ -92,89 +61,37 @@ function summarise(result: EquityResult): EquitySummary {
   };
 }
 
-/**
- * The route module.
- *
- * Written as a plain function returning a resolved promise rather than as an `async` function
- * with no `await` in it. `registerRoutes` types a route module as `FastifyPluginAsync`, and the
- * linter rejects `async` without `await` — rightly, because that shape usually means a missing
- * one. Here there is genuinely nothing to wait for: every route is attached synchronously.
- */
 const calcRoutes: FastifyPluginAsync = (app) => {
   const config = app.appConfig;
-  // The process-wide instance, as in `errors.ts` and `plugins/security.ts`. A route module has no
-  // way to be handed one — `buildApp`'s `metrics` option reaches the HTTP hook and the `/metrics`
-  // route, not the modules registered afterwards — and two instruments reading different
-  // registries would be worse than one reading the shared one.
   const metrics = app.appMetrics;
   const limits: WorkLimits = { ...DEFAULT_WORK_LIMITS, maxSamplesPerRequest: config.monteCarloMaxSamples };
-  /**
-   * The wall-clock budget for one request.
-   *
-   * `coachTimeoutMs` for everything, plus the one-time allowance a `top:NN` range needs while
-   * the thread serving it has yet to compute the preflop strength ordering. `calc/parse.ts`
-   * decides when that applies and says why.
-   */
+  /** `coachTimeoutMs` plus the one-time `top:NN` ordering allowance decided in `calc/parse.ts`. */
   const budgetFor = (allowanceMs: number): number => config.coachTimeoutMs + allowanceMs;
 
   const poolHooks = {
     onWarn: (warning: PoolWarning) => {
-      // The pool cannot log for itself — it must not import the logger, because the worker it
-      // manages must not either. So it reports and this file logs.
+      // The pool must not import the logger, because its worker must not.
       app.log.warn({ poolEvent: warning.event, poolDetail: warning.detail }, 'calculation pool');
-      // And counts. `warning.event` is the pool's own four-value union, mapped to the counter's
-      // outcome vocabulary rather than used as a label directly, so the two can be reworded
-      // independently. `outcome="completed"` never arrives here: the pool warns only about
-      // failures, and the successes are in `prl_analysis_total` — see `workerTaskOutcomeFor`.
+      // Successes are counted in `prl_analysis_total`, so only failures arrive here.
       metrics.workerTasks.inc({ outcome: workerTaskOutcomeFor(warning.event) });
     },
   };
 
   /**
-   * The pool, looked up per request rather than held from registration.
-   *
-   * `closeSharedPool()` closes the process-wide pool AND drops the memo, so the next
-   * `getSharedPool` builds a fresh one. A module that captured the instance at registration keeps
-   * a reference to the CLOSED one, and every task it submits afterwards is refused with
-   * `service_unavailable` for the life of the process. That is not hypothetical — one Fastify
-   * instance closing while another is still serving is what `test/hands.test.ts` does, and it
-   * turned every analysis in the surviving app into a refusal. `routes/hands.ts` hit it first;
-   * this is the same fix, because this module had the same bug.
-   *
-   * Asking the memo each time costs a property read and cannot go stale.
+   * Looked up per request. `closeSharedPool()` drops the memo, and a captured instance would stay
+   * closed and refuse every task (seen in `test/hands.test.ts`).
    */
   const currentPool = (): WorkerPool => getSharedPool(config, poolHooks);
 
-  /**
-   * The pool's depth gauges, read at scrape time.
-   *
-   * `WorkerPool.stats()` was fully implemented and had no production reader, so the one number
-   * that says whether the Coach is slow because of queueing or because of the work — `queued`
-   * against `busy` against `size` — existed and was visible to nobody. Idempotent, because
-   * `routes/content.ts` takes the same shared pool and binds it too, for the same reason both
-   * modules register the `onClose` hook below: whichever modules a deployment registers, the
-   * instrumentation still exists.
-   */
+  /** Idempotent. `routes/content.ts` binds the same shared pool. */
   bindCalculationPoolMetrics(peekSharedPool, metrics);
 
-  /**
-   * Every thread is terminated when the instance closes.
-   *
-   * `onClose` runs inside `app.close()`, which `server.ts` awaits before it closes the database
-   * and exits — so a deploy does not leave worker threads behind. `closeSharedPool` is
-   * idempotent, so another route module registering the same hook is harmless.
-   */
+  /** `server.ts` awaits `app.close()` before exit, so no worker thread outlives a deploy. Idempotent. */
   app.addHook('onClose', async () => {
     await closeSharedPool();
   });
 
-  /**
-   * Ad-hoc equity.
-   *
-   * Exact when the plan says it fits, sampled and sharded otherwise, and the response says
-   * which. `elapsedMs` is measured here rather than taken from the worker's own figure, because
-   * what a caller waited for includes queueing and the thread hand-off.
-   */
+  /** `elapsedMs` is measured here so it includes queueing and the thread hand-off. */
   app.post<{ Body: EquityRequest }>(
     '/math/equity',
     { config: app.expensiveRateLimit, schema: { body: { $ref: 'prl:equityBody#' } } },
@@ -207,15 +124,7 @@ const calcRoutes: FastifyPluginAsync = (app) => {
     },
   );
 
-  /**
-   * The Coach.
-   *
-   * One worker task, never sharded. The assertion below is not defensive programming for its
-   * own sake: `assumptions` is the difference between a figure and a claim, and
-   * `buildCoachReport` promises never to return an empty list. If that promise is ever broken by
-   * a refactor, this endpoint must fail loudly rather than quietly serve a number that presents
-   * itself as unconditional fact.
-   */
+  /** One task, never sharded. A report with no assumptions is refused rather than served as fact. */
   app.post<{ Body: CoachRequest }>(
     '/math/coach',
     { config: app.expensiveRateLimit, schema: { body: { $ref: 'prl:coachBody#' } } },

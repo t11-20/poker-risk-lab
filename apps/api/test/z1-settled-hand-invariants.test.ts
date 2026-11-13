@@ -1,44 +1,9 @@
 /**
- * What a settled hand guarantees — and the one thing it very much does not.
- *
- * ## The defect this file closes
- *
- * `test/ws-socket.test.ts`'s journey test ("sits, plays to completion against a bot, and reports a
- * settled terminal state") closed on this:
- *
- * ```ts
- * const stacks = view.seats.map((seat) => seat.stack);
- * assert.ok(stacks.some((stack) => stack !== 1_000), `no stack changed across the hand: ...`);
- * ```
- *
- * with the comment "somebody's stack moved — a completed hand in which no chips changed hands
- * would mean the blinds were never posted". The intent was right and the check was not: *somebody
- * won* is not a property of a settled hand. A CHOPPED pot pays every seat back exactly what it put
- * in, so a completely normal hand closes with both seats on the stack they started with.
- *
- * That table is dealt from the CSPRNG, so the gate failed whenever the deal happened to chop —
- * measured at 2 of 40 runs of that file in isolation, and 15 of 400 hands of the same line-up
- * driven straight through the table. A release gate that fails nondeterministically cannot tell a
- * regression from noise, which is an audit finding in its own right (CHAL-C).
- *
- * The first test below is the counterexample, made deterministic: a real `LiveTable`, real blinds,
- * real actions, a real showdown — and every seat closing on precisely the 1,000 it sat down with.
- * Had it existed next to the journey test, the assertion above could not have been written. It
- * also pins the three checks that replaced it, on the same view, so the two files cannot drift:
- * the blinds were posted, every chip in every pot was awarded, and each seat closed on its
- * starting stack plus its net.
- *
- * ## The hypothesis this file also rules out
- *
- * The other way a hand could report `[1000, 1000]` would be a genuine defect: a hand dealt to ONE
- * live seat, which wins its own blind back for a net of zero. It cannot happen, and the second
- * suite here says so at the level that decides it. Three independent guards stand in the way —
- * `LiveTable.startHand` needs two entrants with chips, `LiveTable.nextRotation` restarts the game
- * rather than deal a hand the blind obligations would leave one-handed, and the engine's
- * `validateSeats` refuses fewer than two players outright (covered by `poker-engine`'s
- * `betting.test.ts` and `blind-rotation.test.ts`). The middle one — the deadlock guard, where a
- * two-handed table would otherwise be left with one live seat and one seat waiting for a big blind
- * that can never arrive — is the one this file drives directly.
+ * A settled hand need not move any stack. A chopped pot pays every seat back what it put in.
+ * The socket journey test once asserted "somebody's stack moved" and failed on CSPRNG chops
+ * (2 of 40 runs), so this pins the counterexample deterministically plus the checks that replaced it.
+ * It also drives the deadlock guard in `LiveTable.nextRotation`, which restarts the game rather than
+ * deal a hand to one live seat.
  */
 
 import assert from 'node:assert/strict';
@@ -63,23 +28,12 @@ const BO = 'usr_z1_bo';
 const CY = 'usr_z1_cy';
 
 /**
- * A board that plays for every possible pair of hole cards, so the chop is a fact rather than a
- * coincidence of the deal order.
- *
- * `As Ks Qd Jc Th` is broadway in three suits. Nothing can beat it from two hole cards: a flush
- * needs five of a suit and the board offers two, a full house needs a pair on the board and there
- * is none, and the only straight the ranks allow is the one already lying there. So both seats
- * show down the board itself, whichever two of the four leading cards each of them was dealt —
- * which means this test does not depend on the deal order the engine happens to use.
+ * Broadway in three suits with no pair on the board. No two hole cards can beat it, so both seats
+ * play the board and the chop does not depend on the engine's deal order.
  */
 const CHOPPING_DECK = '2c 3d 4h 5s As Ks Qd Jc Th';
 
-/**
- * A whole deck that begins with `prefix`, the rest following in ordered-deck order.
- *
- * The first four cards become the hole cards and the next five the board — see `machine.ts`, which
- * deals one card at a time twice round the table and then burns nothing.
- */
+/** The first four cards are the hole cards and the next five the board (`machine.ts` burns nothing). */
 function deckStartingWith(prefix: string): Card[] {
   const front = parseCards(prefix);
   const used = new Set(front);
@@ -88,15 +42,9 @@ function deckStartingWith(prefix: string): Card[] {
 }
 
 /**
- * A `RandomSource` whose shuffle lands one chosen deck, every hand.
- *
- * `LiveTable` deliberately has no fixed-deck seam — `startHand`'s `fixedDeck` belongs to the
- * Scenario Lab, and a live table must deal from the CSPRNG — but the source itself is injected, so
- * this inverts the engine's shuffle instead of bypassing it. `shuffleInPlace` walks `i` from 51
- * down to 1 and swaps `items[i]` with `items[nextInt(i + 1)]`, which means the card at `i` is
- * final once that swap is done. Replaying that over the ordered deck and asking, at each `i`,
- * "where is the card that has to end up here?" gives the draw the shuffle must have made. The
- * script then repeats, so a second hand at the same table is dealt identically.
+ * A `RandomSource` whose shuffle lands one chosen deck, every hand. `LiveTable` has no fixed-deck
+ * seam by design, so this inverts the engine's Fisher-Yates (`i` from 51 down, card at `i` final
+ * after its swap) to find the draws that produce `deck`.
  */
 function scriptedRandom(deck: readonly Card[]): RandomSource {
   assert.equal(deck.length, DECK_SIZE, 'a scripted deck is a whole deck');
@@ -128,8 +76,7 @@ function scriptedRandom(deck: readonly Card[]): RandomSource {
       return draw;
     },
     bytes(count: number): Uint8Array {
-      // Commitment salts. They only have to be reproducible and distinct — the proofs themselves
-      // are the engine's `commitment.test.ts` business, and nothing here reads one.
+      // Commitment salts. Nothing here reads them.
       const out = new Uint8Array(count);
       for (let index = 0; index < count; index += 1) {
         salt = (salt * 1_103_515_245 + 12_345) % 2_147_483_648;
@@ -160,19 +107,13 @@ function tableWith(random: RandomSource): LiveTable {
   });
 }
 
-/** Any seated user will do to read the public facts: the spectator view carries all of them. */
 function viewOf(table: LiveTable, userId: string): PlayerView {
   const view = table.viewFor(userId);
   assert.ok(view !== null, `${userId} sees no hand`);
   return view;
 }
 
-/**
- * Checks when it is free and calls when it is not, until the hand is over.
- *
- * The same policy the journey test's `PASSIVE` drives over the socket, and for the same reason: it
- * never folds, so the hand is played out to a showdown rather than ended early.
- */
+/** Never folds, so the hand reaches a showdown. */
 async function checkOrCallToShowdown(table: LiveTable, observer: string): Promise<void> {
   for (let guard = 0; guard <= 64; guard += 1) {
     const view = viewOf(table, observer);
@@ -191,7 +132,6 @@ async function checkOrCallToShowdown(table: LiveTable, observer: string): Promis
   assert.fail('a checked-down hand did not finish');
 }
 
-/** Folds every decision away, for a hand whose result is beside the point. */
 async function foldItOut(table: LiveTable, observer: string): Promise<void> {
   for (let guard = 0; guard <= 64; guard += 1) {
     const view = viewOf(table, observer);
@@ -207,10 +147,6 @@ async function foldItOut(table: LiveTable, observer: string): Promise<void> {
   assert.fail('a folded hand did not finish');
 }
 
-// ---------------------------------------------------------------------------
-// The counterexample
-// ---------------------------------------------------------------------------
-
 describe('a settled hand whose stacks did not move', () => {
   it('chops the pot and returns every seat to exactly the stack it started with', async () => {
     const table = tableWith(scriptedRandom(deckStartingWith(CHOPPING_DECK)));
@@ -224,8 +160,6 @@ describe('a settled hand whose stacks did not move', () => {
     const result = view.result;
     assert.ok(result !== null, 'a completed hand carries a result');
 
-    // The hand was entirely ordinary. Both blinds were posted, both seats acted, both showed down,
-    // and the pot was split because neither pair of hole cards could beat the board.
     const kinds = view.forcedBets.map((bet) => bet.kind).sort();
     assert.deepEqual(kinds, ['bigBlind', 'smallBlind'], 'both blinds were posted');
     assert.equal(result.endedByFold, false, 'nobody folded');
@@ -240,13 +174,7 @@ describe('a settled hand whose stacks did not move', () => {
     );
     assert.ok(view.actions.length >= 4, 'the seats really played the hand out');
 
-    // ## The counterexample itself
-    //
-    // This is the state `assert.ok(stacks.some((stack) => stack !== 1_000))` called a hand whose
-    // blinds were never posted. Asserted the way round that documents it: after a legal, settled,
-    // fully played hand, EVERY stack is untouched. Any future edit that reintroduces "somebody's
-    // stack moved" as a proxy for "the hand really happened" fails right here, deterministically,
-    // instead of once every twenty-odd runs of a CSPRNG-dealt gate.
+    // "Somebody's stack moved" is not a proxy for "the hand happened". Every stack is untouched here.
     assert.deepEqual(
       view.seats.map((seat) => seat.stack),
       view.seats.map(() => BUY_IN),
@@ -258,11 +186,8 @@ describe('a settled hand whose stacks did not move', () => {
       'settlement wrote the same figures back to the seating',
     );
 
-    // ## And the checks that replaced it, on the same view
-    //
-    // Each one is strictly stronger than "somebody's stack moved": a hand that never posted its
-    // blinds commits nothing and fails the first, a pot that is formed and then not paid out fails
-    // the second, and a settlement that pays the wrong seat fails the third.
+    // The replacement checks that blinds are committed, every pot is paid out, and each stack equals
+    // start plus net.
     const committed = view.seats.reduce((total, seat) => total + seat.committedTotal, 0);
     assert.ok(
       committed >= CONFIG.smallBlind + CONFIG.bigBlind,
@@ -280,10 +205,6 @@ describe('a settled hand whose stacks did not move', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// The hypothesis: could a hand ever be dealt to one live seat?
-// ---------------------------------------------------------------------------
-
 describe('a hand is never dealt to one live seat', () => {
   it('refuses to deal when only one seat could play', async () => {
     const table = tableWith(createSecureRandom());
@@ -294,8 +215,6 @@ describe('a hand is never dealt to one live seat', () => {
       'one seated player is not a hand',
     );
 
-    // A seat with no chips is not an entrant either — it cannot post, so dealing it in would put a
-    // player in a hand they can take no part in.
     await table.sit({ userId: BO, displayName: 'Bo', seat: 1, stack: 0 });
     await assert.rejects(
       table.startHand(),
@@ -311,10 +230,7 @@ describe('a hand is never dealt to one live seat', () => {
     await table.sit({ userId: BO, displayName: 'Bo', seat: 1, stack: BUY_IN });
     await table.startHand();
 
-    // Whoever posted the big blind, the next one goes to the other seat. Replacing *that* player is
-    // what leaves a newcomer owing a blind they cannot be charged for two hands running, and it is
-    // the shape that would deadlock a two-handed table: one seat live, one waiting, and no hand to
-    // advance the rotation that would end the wait.
+    // Replacing the big blind leaves a newcomer owing a blind, which would deadlock a two-handed table.
     const dealt = viewOf(table, ADA);
     const bigBlind = dealt.forcedBets.find((bet) => bet.kind === 'bigBlind');
     assert.ok(bigBlind !== undefined, 'every hand posts a big blind');
@@ -322,9 +238,7 @@ describe('a hand is never dealt to one live seat', () => {
     assert.ok(leavingUserId !== undefined, 'the big blind belongs to a dealt seat');
     await foldItOut(table, ADA);
 
-    // Banked before they leave: a player who stands up takes their chips off the table, so a
-    // conservation check that only added up the seating would report every departure as chips
-    // destroyed.
+    // Read before standing, because a player who stands takes their chips off the table.
     const banked = table.snapshot().seats.find((seat) => seat.userId === leavingUserId)?.stack;
     assert.ok(banked !== undefined, 'the departing player holds a stack');
     await table.stand(leavingUserId);
@@ -336,10 +250,7 @@ describe('a hand is never dealt to one live seat', () => {
       'and the table reports it, because a seated player receiving no cards needs explaining',
     );
 
-    // The deadlock guard: honouring that obligation would leave one seat in the hand, so the game
-    // restarts — every debt discharged, the rotation re-seeded, everybody posting normally. What it
-    // must never do is deal the hand anyway with a single live seat, which would award that seat
-    // its own blind back for a net of zero and read exactly like a hand that never happened.
+    // The guard restarts the game. Dealing to one live seat would return its own blind for a net of zero.
     await table.startHand();
     const restarted = viewOf(table, CY);
     const playing = restarted.seats.filter((seat) => seat.status !== 'sittingOut');

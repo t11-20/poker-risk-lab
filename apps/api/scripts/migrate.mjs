@@ -1,112 +1,13 @@
 #!/usr/bin/env node
 /**
- * migrate.mjs — the migration runner for Poker Risk Lab.
- *
- *   node apps/api/scripts/migrate.mjs up [--allow-missing]
- *   node apps/api/scripts/migrate.mjs status
- *   node apps/api/scripts/migrate.mjs down
- *   node apps/api/scripts/migrate.mjs roles
- *   node apps/api/scripts/migrate.mjs seed
- *   node apps/api/scripts/migrate.mjs reset --confirm-database <name>
- *
- * Dependency-free apart from `postgres` (porsager/postgres), which the API already
- * depends on. A migration runner that pulls in a framework to move some SQL
- * around is a second thing that can break on the day the first one does.
- *
- * ## Rollback: there is none, and that is a decision rather than an omission
- *
- * **This project is roll-forward only.** There are no `*.down.sql` files, `down`
- * exists solely to say so, and nothing in this runner will ever undo an applied
- * migration. The reasoning is the same one that makes an applied migration
- * immutable: a `down` script is code that has, by construction, never run against
- * the database it is one day asked to save, and the first time anybody executes it
- * is the worst possible moment to find out it was wrong. A rollback also cannot
- * restore data a forward migration dropped, so the rollback that operators
- * actually need in that case is a restore from backup, not a `down` file that
- * recreates an empty column.
- *
- * A policy is only real if something enforces it, so two things do:
- *
- *   * `down` is a **first-class command that refuses**, with the policy and the
- *     alternatives in the message. A deploy pipeline that asks for a rollback gets
- *     an answer, not `Unknown command "down"`, which reads like a version skew and
- *     sends the operator looking for the wrong problem.
- *   * `up` **refuses to apply a migration containing a destructive statement**
- *     unless that file declares itself irreversible in as many words — see
- *     `findIrreversibleStatements` below. Roll-forward-only is safe exactly as long
- *     as migrations are additive; the day one is not, the person writing it has to
- *     say so, which is when the two-release plan in docs/RUNBOOK.md §11.3 gets
- *     thought about rather than discovered.
- *
- * ## Design decisions
- *
- * **A checksum mismatch aborts; it never reapplies.** Every applied migration is
- * recorded with the sha256 of its contents. If a file that has already run no
- * longer hashes to what the ledger says, this runner stops and says so. The
- * alternative — reapply, or shrug and continue — means production and the
- * repository disagree about the schema and nobody finds out until a query fails
- * at 3am. Migrations are immutable once applied, contents *and* filename: to
- * change something already shipped, write the next migration.
- *
- * The hash is taken with CRLF collapsed to LF and any BOM stripped, so a checkout
- * on a machine that rewrites line endings is not mistaken for a tampered file.
- * Anything that actually changes the SQL still changes the hash.
- *
- * **Out-of-order migrations abort too.** Two branches that each add 0007 merge
- * cleanly in git and diverge in the database, so a pending file numbered below the
- * highest applied one is refused rather than silently slotted in behind it.
- *
- * **One transaction per file.** A migration either happened or it did not.
- * PostgreSQL's transactional DDL is the reason this runner can be this small.
- * A `lock_timeout` is set inside each transaction so a migration queued behind a
- * long-running query fails in seconds instead of holding an exclusive lock and
- * blocking every request in the meantime. The trade-off: `CREATE INDEX
- * CONCURRENTLY` cannot be used inside a transaction, so it is not available here —
- * see the note at the top of 0002.
- *
- * **A session advisory lock, on a single connection.** Two deploys racing would
- * otherwise both read "0007 is pending" and both apply it. The pool is capped at
- * `max: 1` precisely because `pg_advisory_lock` is session-scoped: on a larger
- * pool the lock could be taken on one connection and the migration run on
- * another, which is a lock that looks like it works. Acquisition uses
- * `pg_try_advisory_lock` in a bounded retry loop rather than blocking forever, so
- * a stuck deploy fails with an explanation instead of hanging a pipeline.
- *
- * **Values are always parameterised.** Whole SQL files go through `.unsafe()`
- * because DDL cannot be parameterised, but every *value* this script sends —
- * version, checksum, lock key, timeout — travels as a bind parameter. That
- * includes `SET`, which takes no parameters, so it is done with
- * `select set_config($1, $2, true)` rather than by concatenating a string.
- *
- * **Nothing secret is ever printed.** The connection string is read from the
- * environment, never echoed, and every message this script prints (including
- * errors thrown from inside the driver) is passed through a redactor that strips
- * anything shaped like a connection URL or a password parameter first.
- *
- * **`seed` and `reset` refuse to run when NODE_ENV=production, and `reset` also
- * refuses unless it is told which database it is emptying.** `seed` writes fixture
- * rows; `reset` drops the schema. Neither has any business near real learner data,
- * and NODE_ENV alone does not keep them away from it — see `refuseUnconfirmedReset`
- * for why, and for the measurement. `reset` leaves the cluster-wide roles alone — they may be shared
- * with other databases, and dropping them is not this script's decision.
- *
- * Seed files are deliberately *not* recorded in the ledger. They are fixtures,
- * they are written to be idempotent, and being able to re-run them after poking
- * at the dev database by hand is the point.
- *
- * The migrating identity needs CREATE on the target database (it creates schema
- * `prl` and the ledger table) and enough authority to create roles the first time
- * 0001 runs. The runtime role, `prl_app`, needs none of that — see the privilege
- * matrix at the bottom of 0001.
- *
- * **`roles` exists for the one path where no migration will run: a restore.**
- * `prl_migrator` and `prl_app` are cluster-wide objects, and `pg_dump` of a single
- * database does not contain them — only `pg_dumpall --globals-only` does. A dump
- * that kept its ownership and its ACLs (which it must, or the restored database
- * grants the runtime role nothing) therefore fails on a fresh cluster with "role
- * prl_migrator does not exist". `roles` applies db/roles/*.sql, which creates just
- * those two roles, so the restore has somewhere to attach its owners and grants.
- * It is not recorded in the ledger: it describes the cluster, not the schema.
+ * Migration runner. Commands are up [--allow-missing], status, down, roles, seed, and
+ * reset --confirm-database <name>.
+ * Roll-forward only. `down` refuses with the policy, and `up` refuses a destructive statement unless
+ * the file carries a `prl:irreversible` reason (docs/RUNBOOK.md §11.3).
+ * Applied files are immutable. A checksum mismatch or an out-of-order pending file aborts the run.
+ * One transaction per file, under a session advisory lock on one connection.
+ * Every line printed is redacted.
+ * `roles` creates the cluster-wide roles a single-database pg_dump restore needs and pg_dump omits.
  */
 
 import { createHash } from 'node:crypto';
@@ -122,25 +23,15 @@ const MIGRATIONS_DIR = join(REPO_ROOT, 'db', 'migrations');
 const SEEDS_DIR = join(REPO_ROOT, 'db', 'seeds');
 const ROLES_DIR = join(REPO_ROOT, 'db', 'roles');
 
-/** NNNN_lower_snake_case.sql — anything else is a naming mistake, not a migration. */
 const FILE_NAME_PATTERN = /^(\d{4})_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$/;
 
-/** Namespaces the advisory lock so it cannot collide with another app's key. */
 const LOCK_NAMESPACE = 'poker-risk-lab/db/migrations';
 const DEFAULT_LOCK_WAIT_MS = 30_000;
-/** How long a migration waits for a table lock before giving up. */
 const STATEMENT_LOCK_TIMEOUT = '10s';
-/**
- * A custom GUC (the dot is what makes it settable without a prior definition) used as a
- * transaction-local witness that a file did not close the transaction under us. See `applyFile`.
- */
+// The dot makes this custom GUC settable without a prior definition. See `applyFile`.
 const TRANSACTION_WITNESS = 'prl.migration_transaction';
 
 const COMMANDS = ['up', 'down', 'status', 'roles', 'seed', 'reset'];
-
-// ---------------------------------------------------------------------------
-// Output. Colour only when a human is watching.
-// ---------------------------------------------------------------------------
 
 const NO_COLOR = process.env.NO_COLOR !== undefined || !process.stdout.isTTY;
 const paint = (code, text) => (NO_COLOR ? text : `\x1b[${code}m${text}\x1b[0m`);
@@ -150,11 +41,7 @@ const yellow = (text) => paint('33', text);
 const dim = (text) => paint('2', text);
 const bold = (text) => paint('1', text);
 
-/**
- * Strips anything that could be a credential from a string before it is printed.
- * Driver errors and PostgreSQL notices are written by code this script does not
- * own, so they go through here too rather than being trusted.
- */
+// Driver errors and PostgreSQL notices go through this too, since this script does not write them.
 function redact(value) {
   return String(value ?? '')
     .replace(/\b(?:postgres|postgresql):\/\/\S*/gi, 'postgres://[redacted]')
@@ -162,15 +49,8 @@ function redact(value) {
 }
 
 /**
- * The diagnostic fields of a driver error, as a plain string so it can be
- * redacted before it is printed.
- *
- * Deliberately field-by-field rather than `util.inspect(error)`: a postgres.js
- * error also carries `query` and `parameters`, i.e. the statement that failed
- * and every value bound into it. None of the values this script binds is a
- * secret today, but printing a whole error object is a promise that whoever
- * adds the next parameter has to remember to keep. Listing the fields means the
- * default is to say nothing.
+ * Field by field, not `util.inspect(error)`. A postgres.js error also carries `query` and
+ * `parameters`, so dumping the whole object would print every bound value.
  */
 function inspectError(error) {
   if (error === null || typeof error !== 'object') return `  ${String(error)}`;
@@ -201,24 +81,14 @@ const note = (text) => line(`${dim('  ·')} ${text}`);
 const ok = (text) => line(`${green('  ✓')} ${text}`);
 const warn = (text) => line(`${yellow('  !')} ${text}`);
 
-/** An error with a message meant for a human, printed without a stack trace. */
 class MigrateError extends Error {
   name = 'MigrateError';
 }
 
-// ---------------------------------------------------------------------------
-// Environment and connection.
-// ---------------------------------------------------------------------------
-
 /**
- * The connection string, preferring the migration identity over the runtime one.
- *
- * `DATABASE_URL` is the API's connection, and after the least-privilege change it
- * names a member of `prl_app`: DML only, no CREATE, and no grant at all on
- * prl.schema_migrations. Migrating as that identity cannot work, and the failure
- * would be a permission error four statements into 0001 rather than a sentence.
- * `DATABASE_MIGRATION_URL` is therefore read first, and DATABASE_URL remains the
- * fallback so a deployment that has only ever set one variable keeps working.
+ * `DATABASE_MIGRATION_URL` comes first because `DATABASE_URL` names a `prl_app` member, which has
+ * no CREATE and no grant on prl.schema_migrations. DATABASE_URL stays as the fallback for
+ * deployments that set only one variable.
  */
 function databaseUrl() {
   const migrationUrl = process.env.DATABASE_MIGRATION_URL;
@@ -227,9 +97,7 @@ function databaseUrl() {
   const url = process.env.DATABASE_URL;
   if (typeof url !== 'string' || url.trim() === '') {
     throw new MigrateError(
-      // Written without a literal example URL on purpose: every line this script
-      // prints goes through redact(), which would replace one with [redacted] and
-      // leave the reader worse off than a description does.
+      // No literal example URL, because redact() would print it as [redacted].
       [
         'Neither DATABASE_MIGRATION_URL nor DATABASE_URL is set, so there is nothing to migrate.',
         '',
@@ -245,16 +113,12 @@ function databaseUrl() {
   return url;
 }
 
-/**
- * PostgreSQL notices worth showing (a role being created, say) and the two that
- * are just `IF NOT EXISTS` doing its job on every single run.
- */
+// `IF NOT EXISTS` raises these two on every run.
 const BORING_NOTICE_CODES = new Set(['42P06', '42P07']);
 
 function connect(url) {
   return postgres(url, {
-    // One connection, deliberately: pg_advisory_lock is session-scoped, and the
-    // lock has to live on the same session that runs the migrations.
+    // pg_advisory_lock is session-scoped, so the lock and the migrations must share one session.
     max: 1,
     connect_timeout: 15,
     connection: { application_name: 'prl-migrate' },
@@ -266,10 +130,6 @@ function connect(url) {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Files on disk.
-// ---------------------------------------------------------------------------
-
 function checksumOf(contents) {
   const normalized = contents.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n');
   return `sha256:${createHash('sha256').update(normalized, 'utf8').digest('hex')}`;
@@ -280,11 +140,7 @@ const shortChecksum = (checksum) =>
     .replace(/^sha256:/, '')
     .slice(0, 12);
 
-/**
- * Every .sql file in `dir`, in filename order, with contents and checksum.
- * A file this runner cannot order is refused rather than skipped: skipping is how
- * a migration goes missing from an environment without anyone noticing.
- */
+// A file this runner cannot order is refused, not skipped, so no migration goes missing unnoticed.
 async function readSqlDir(dir, label) {
   let entries;
   try {
@@ -328,39 +184,16 @@ async function readSqlDir(dir, label) {
   return files;
 }
 
-// ---------------------------------------------------------------------------
-// Roll-forward-only enforcement.
-//
-// See the policy at the top of this file. `up` will not apply a migration that
-// destroys data or renames something out from under a running process unless the
-// file declares itself irreversible, because those are exactly the migrations for
-// which "we can always roll back" is false and somebody needs to have noticed.
-// ---------------------------------------------------------------------------
-
 /**
- * The acknowledgement a genuinely irreversible migration has to carry, as a
- * comment anywhere in the file:
- *
- *   -- prl:irreversible: the invite_code column has been unused since 0014 and
- *   -- the values are not recoverable; restoring them means restoring a backup.
- *
- * A reason is required rather than a bare marker. The point of the gate is to
- * make somebody write down what cannot be undone, and a marker with no sentence
- * after it is a checkbox, not a decision.
+ * A SQL comment such as `-- prl:irreversible: <what is lost>`. A bare marker with no reason fails.
+ * The reason must start on the marker's own line. A plain \s* would cross the newline and read
+ * the next SQL statement as the reason.
  */
-// The reason has to start on the marker's own line, so the horizontal-whitespace
-// classes are deliberate: a plain \s* would cross the newline and read the next
-// SQL statement as the justification for deleting the thing it operates on.
 const IRREVERSIBLE_MARKER = /--[^\S\n]*prl:irreversible[^\S\n]*:[^\S\n]*(\S[^\n]*)/i;
 
 /**
- * Statements that a later migration cannot put back.
- *
- * Deliberately narrow. `DROP INDEX`, `REVOKE` and `ALTER ... SET DEFAULT` are all
- * absent because a following migration really can restore them — the gate is about
- * data and about names the running application still holds, not about every
- * statement that changes something. A gate that fires on ordinary DDL is a gate
- * that gets a blanket marker pasted into every file, which is worse than no gate.
+ * Only statements a later migration cannot put back. `DROP INDEX`, `REVOKE` and `SET DEFAULT` are
+ * left out on purpose, because a gate that fires on ordinary DDL gets a marker pasted into every file.
  */
 const DESTRUCTIVE_STATEMENTS = [
   {
@@ -377,18 +210,9 @@ const DESTRUCTIVE_STATEMENTS = [
 ];
 
 /**
- * The SQL with comments removed and quoted *values* blanked, so the scan above
- * reads code and only code.
- *
- * Both halves matter and both were needed by the files already in db/migrations.
- * 0001's prose explains at length that the runtime role holds no DROP and no
- * TRUNCATE, so a scan of the raw text flags a migration that does neither. And a
- * `RAISE NOTICE 'dropping ...'` is a message, not a statement.
- *
- * Dollar-quoted bodies are deliberately treated as CODE rather than as strings:
- * `DO $$ ... $$` and a PL/pgSQL function body are the two places a real DROP can
- * hide, and PL/pgSQL applies the same comment syntax inside them. Single- and
- * double-quoted runs are treated as data, which is what they are.
+ * Blanks comments and quoted values so the scan reads only code. 0001's comments mention DROP and
+ * TRUNCATE, and a `RAISE NOTICE 'dropping ...'` is a message.
+ * Dollar-quoted bodies stay as code, because `DO $$ ... $$` and function bodies can hold a real DROP.
  */
 export function stripSqlComments(sql) {
   const out = [];
@@ -402,20 +226,15 @@ export function stripSqlComments(sql) {
   return out.join('');
 }
 
-/** Comment and string content become spaces; newlines survive so offsets and lines do. */
+// Newlines survive so offsets and line numbers still match the file.
 function blankOut(sql, index, run) {
   const keep = run.kind === 'quoted' ? 1 : 0;
   return sql.slice(index, index + keep) + sql.slice(index + keep, index + run.length).replace(/[^\n]/g, ' ');
 }
 
-/** A dollar-quote delimiter — `$$` or `$tag$` — anchored at the scan position. */
 const DOLLAR_TAG = /\$[A-Za-z_][A-Za-z0-9_]*\$|\$\$/y;
 
-/**
- * Classifies the run starting at `index`.
- *
- * @returns {{kind: 'code' | 'comment' | 'quoted', length: number}}
- */
+/** @returns {{kind: 'code' | 'comment' | 'quoted', length: number}} */
 function runAt(sql, index) {
   if (sql.startsWith('--', index)) {
     const newline = sql.indexOf('\n', index);
@@ -430,23 +249,15 @@ function runAt(sql, index) {
   }
   DOLLAR_TAG.lastIndex = index;
   const tag = DOLLAR_TAG.exec(sql);
-  // A dollar-quoted body is passed through as code, and the loop then walks into
-  // it, so the comments and strings inside are classified by the branches above.
+  // Only the delimiter is consumed, so the loop then classifies comments and strings inside the body.
   if (tag !== null) return { kind: 'code', length: tag[0].length };
   return { kind: 'code', length: 1 };
 }
 
 /**
- * PostgreSQL block comments nest, so this counts depth rather than searching for the first
- * closing delimiter. Opening two comments and closing them both is ONE comment in SQL, not one
- * and a half — searching for the first close would end it early and treat the remainder as
- * statements, which is how a scanner comes to see a DROP that is really prose.
- *
- * (The delimiters are deliberately described rather than written out: this is a JavaScript block
- * comment, and a literal close sequence inside it would end this comment here. That is not a
- * hypothetical — this file previously kept the illustration parseable with zero-width spaces
- * wedged into the delimiters, which `repo-hygiene.mjs` rejects as hidden characters, and removing
- * them turned the comment into a syntax error.)
+ * PostgreSQL block comments nest, so this counts depth. Stopping at the first close would read the
+ * rest of an outer comment as statements.
+ * Do not write a literal close delimiter in this JS comment. It would end the comment.
  */
 function blockCommentLength(sql, index) {
   let depth = 0;
@@ -467,10 +278,8 @@ function blockCommentLength(sql, index) {
 }
 
 /**
- * An E'' string honours backslash escapes; a plain one does not, under the
- * standard_conforming_strings default this project relies on. Doubling ('' inside
- * '') closes and immediately reopens, which blanks the same characters either way,
- * so it needs no special case.
+ * Only an E'' string honours backslash escapes, under standard_conforming_strings. A doubled quote
+ * closes and reopens, which blanks the same characters, so it needs no special case.
  */
 function quotedRunLength(sql, index) {
   const quote = sql[index];
@@ -491,9 +300,7 @@ function quotedRunLength(sql, index) {
   return cursor - index;
 }
 
-/**
- * @returns {{why: string, snippet: string}[]} destructive statements found in `sql`
- */
+/** @returns {{why: string, snippet: string}[]} */
 export function findIrreversibleStatements(sql) {
   const code = stripSqlComments(sql);
   const found = [];
@@ -505,16 +312,12 @@ export function findIrreversibleStatements(sql) {
   return found;
 }
 
-/** True when the file acknowledges, with a reason, that it cannot be undone. */
 export function declaresIrreversible(sql) {
   const match = IRREVERSIBLE_MARKER.exec(sql);
   return match !== null && match[1].trim().length > 0;
 }
 
-/**
- * Refuses any pending migration that destroys something without saying so.
- * Called with the whole pending set so one run reports every offending file.
- */
+// Takes the whole pending set so one run reports every offending file.
 function refuseUndeclaredIrreversible(pending) {
   const offenders = [];
   for (const file of pending) {
@@ -538,10 +341,6 @@ function refuseUndeclaredIrreversible(pending) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// The ledger.
-// ---------------------------------------------------------------------------
-
 async function ledgerExists(sql) {
   const [row] = await sql`select to_regclass('prl.schema_migrations') is not null as present`;
   return row?.present === true;
@@ -553,20 +352,10 @@ async function ensureLedger(sql) {
            to_regclass('prl.schema_migrations') is not null    as ledger_present
   `;
 
-  // Fixed DDL, no interpolation. The schema is created here so the very first
-  // migration has somewhere to record itself; 0001 then hands ownership of the
-  // schema to prl_migrator. prl_app is granted SELECT on the ledger by migration
-  // 0010 and never a write: the API reads it to refuse a schema behind its build
-  // (apps/api/src/schema-guard.ts), and this script stays its only writer.
-  //
-  // Each statement is issued only when it has work to do, which is a privilege
-  // decision rather than an optimisation. PostgreSQL checks CREATE on the DATABASE
-  // before it checks the `if not exists`, so running `create schema if not exists
-  // prl` unconditionally makes every deploy require a privilege that is genuinely
-  // needed exactly once — on the first one. With this, a steady-state deploy as
-  // prl_deployer needs nothing beyond what owning the schema already gives it.
-  // `if not exists` is kept on both because this runs inside the advisory lock and
-  // the belt-and-braces form costs nothing.
+  // Fixed DDL, no interpolation. This script is the only writer of the ledger. 0010 grants prl_app
+  // SELECT for apps/api/src/schema-guard.ts.
+  // Each statement runs only when needed. PostgreSQL checks CREATE on the database before
+  // `if not exists`, so running it every time would make every deploy need CREATE, not just the first.
   if (present?.schema_present !== true) {
     await sql.unsafe('create schema if not exists prl');
   }
@@ -584,24 +373,10 @@ async function ensureLedger(sql) {
 }
 
 /**
- * Hands the ledger to prl_migrator, if it is not already there.
- *
- * The ledger is created by this script rather than by a migration, so without
- * this it belongs to whichever identity happened to run `up` first — and nobody
- * else can read it. That is a defect with a delayed and very confusing symptom:
- * the first deploy works because it was bootstrapped by a superuser, and the
- * SECOND one, as the `prl_deployer` role docs/RUNBOOK.md §5 documents, fails with
- * `permission denied for table schema_migrations` before it has planned anything.
- * The same thing happens after a restore, where the ledger arrives owned by
- * whoever ran pg_restore.
- *
- * prl_migrator owns everything else in the schema, so the ledger belongs to it
- * too. Called after the pending files have been applied, because on a virgin
- * database prl_migrator does not exist until 0001 has created it.
- *
- * Silent when it cannot: an identity that is not a member of prl_migrator cannot
- * give an object away, and that is a privilege decision for a DBA rather than
- * something a migration runner should force or fail over.
+ * The ledger otherwise belongs to whoever ran `up` first (or pg_restore), and the next deploy as
+ * `prl_deployer` (docs/RUNBOOK.md §5) fails with `permission denied for table schema_migrations`.
+ * Runs after applying, because prl_migrator does not exist until 0001 creates it.
+ * An identity outside prl_migrator only warns. Changing that is a DBA decision.
  */
 async function alignLedgerOwnership(sql) {
   const [state] = await sql`
@@ -622,7 +397,7 @@ async function alignLedgerOwnership(sql) {
     );
     return;
   }
-  // Fixed DDL: both names are literals in this file, nothing is interpolated.
+  // Fixed DDL, nothing interpolated.
   await sql.unsafe('alter table prl.schema_migrations owner to prl_migrator');
   note(`ledger ownership moved from "${state.owner}" to prl_migrator`);
 }
@@ -632,11 +407,7 @@ async function appliedMigrations(sql) {
   return [...rows].sort((a, b) => (a.version < b.version ? -1 : a.version > b.version ? 1 : 0));
 }
 
-// ---------------------------------------------------------------------------
-// The advisory lock.
-// ---------------------------------------------------------------------------
-
-/** A stable signed 64-bit key from a namespace string, as pg_advisory_lock wants. */
+// pg_advisory_lock takes a signed 64-bit key.
 function advisoryLockKey(namespace) {
   return createHash('sha256').update(namespace).digest().readBigInt64BE(0).toString();
 }
@@ -668,12 +439,8 @@ async function withLock(sql, waitMs, run) {
   try {
     return await run();
   } finally {
-    // Releasing must not be able to replace the reason we are unwinding. If the
-    // body failed because the connection died or the transaction aborted, the
-    // unlock fails too, and a `finally` that throws would discard the original
-    // error and report the symptom instead of the cause. The lock is
-    // session-scoped, so PostgreSQL drops it when this connection closes a
-    // moment later either way.
+    // A failed unlock must not replace the original error. The lock is session-scoped, so it
+    // goes when the connection closes anyway.
     try {
       await releaseLock(sql, key);
     } catch (error) {
@@ -681,10 +448,6 @@ async function withLock(sql, waitMs, run) {
     }
   }
 }
-
-// ---------------------------------------------------------------------------
-// Planning: what to apply, and what to refuse.
-// ---------------------------------------------------------------------------
 
 function describeDrift(drifted) {
   const details = drifted
@@ -704,9 +467,7 @@ function describeDrift(drifted) {
   );
 }
 
-/**
- * @returns {{version: string, sql: string, checksum: string}[]} files to apply, in order
- */
+/** @returns {{version: string, sql: string, checksum: string}[]} files to apply, in order */
 function planMigrations(files, applied, { allowMissing }) {
   const ledger = new Map(applied.map((row) => [row.version, row]));
   const drifted = [];
@@ -752,39 +513,14 @@ function planMigrations(files, applied, { allowMissing }) {
   return pending;
 }
 
-// ---------------------------------------------------------------------------
-// Commands.
-// ---------------------------------------------------------------------------
+// A failed migration must name its file and line, not just print the driver error.
 
-// ---------------------------------------------------------------------------
-// Failure reporting.
-//
-// A migration that fails has to say WHICH ONE. Before this existed, `applyFile`
-// let the raw driver error through and the top-level handler printed only its
-// message — so with four files in db/migrations an operator saw `relation "users"
-// already exists` and nothing at all naming the file, the line, or even which
-// command had been running. At 3am that is the difference between a two-minute
-// fix and an hour of `git log` on a schema.
-// ---------------------------------------------------------------------------
-
-/** The longest source line this will echo. Beyond it, a window around the fault. */
 const MAX_ECHOED_LINE = 140;
 
 /**
- * Maps PostgreSQL's `position` — a 1-based index into the statement it was given —
- * onto the file, because the statement it was given IS the file: `applyFile` sends
- * the whole `.sql` through one `.unsafe()` call.
- *
- * Returns null when there is no usable position, which is the common case: a great
- * many errors (`42P07 relation already exists`, every constraint violation) carry
- * no cursor at all, and inventing one would point at the wrong place with total
- * confidence.
- *
- * The caveat, stated because it is real and small: PostgreSQL counts characters and
- * JavaScript indexes UTF-16 code units, so a migration containing an astral-plane
- * character before the fault would report a column one too far for each. Every file
- * in db/migrations is ASCII, and a column that is off by one still names the right
- * line.
+ * PostgreSQL's 1-based `position` indexes the whole file, since `applyFile` sends it in one call.
+ * Null when there is no position, which most errors (42P07, constraint violations) lack.
+ * PostgreSQL counts characters and JS counts UTF-16 units, so an astral character shifts the column.
  *
  * @returns {{line: number, column: number, text: string} | null}
  */
@@ -801,28 +537,14 @@ export function locateInSource(sql, position) {
   };
 }
 
-/** The source line and a caret under the fault, windowed so one long line cannot fill a terminal. */
 function pointAtFault(spot) {
   const start = Math.max(0, spot.column - 1 - Math.floor(MAX_ECHOED_LINE / 2));
   const windowed = spot.text.slice(start, start + MAX_ECHOED_LINE);
   const prefix = start === 0 ? '' : '...';
-  return [
-    `    ${prefix}${windowed}`,
-    // The caret is built from spaces only, so it lines up under the echoed text above.
-    `    ${' '.repeat(prefix.length + (spot.column - 1 - start))}^`,
-  ];
+  return [`    ${prefix}${windowed}`, `    ${' '.repeat(prefix.length + (spot.column - 1 - start))}^`];
 }
 
-/**
- * The diagnostic fields worth putting in front of a person, as label/value pairs.
- *
- * A deliberate subset of what `inspectError` dumps under PRL_DEBUG. `file` and
- * `line` are absent because they are PostgreSQL's own C source location, which
- * looks exactly like the migration's file and line and is never what the reader
- * wants; `severity` and `routine` are absent for the same "true but not useful"
- * reason. `code` stays, because a SQLSTATE is the one thing that makes an error
- * searchable.
- */
+// `file` and `line` are left out because they are PostgreSQL's C source location, not the migration's.
 const REPORTED_FIELDS = [
   ['code', 'code'],
   ['detail', 'detail'],
@@ -833,35 +555,20 @@ const REPORTED_FIELDS = [
   ['column_name', 'column'],
 ];
 
-/**
- * Turns whatever a file's transaction threw into an error that names the file.
- *
- * The whole message goes through `redact()` on its way out like every other line
- * this script prints, so a driver error that quoted a connection string cannot
- * reach a terminal or a CI log through here.
- */
 function displayPath(path) {
-  // Repository-relative when the file is inside the checkout, which is every real run;
-  // absolute otherwise, because `../../../../var/folders/...` is worse than the truth.
+  // Absolute outside the repository, because `../../../../var/folders/...` is harder to read.
   const inside = relative(REPO_ROOT, path);
   return inside === '' || inside.startsWith('..') ? path : inside;
 }
 
-/**
- * Thrown when a file ended the transaction this runner opened for it.
- *
- * Carried as its own class so `applyFailure` can tell the two cases apart: an ordinary SQL
- * error really did roll everything back, and this one did not.
- */
+// Its own class, because unlike an ordinary SQL error this one did not roll everything back.
 class TransactionEscaped extends Error {
   name = 'TransactionEscaped';
 }
 
 function applyFailure(file, label, error) {
   const path = displayPath(file.path);
-  // The headline sentence is the one an operator acts on at 3am, so it must never be a guess.
-  // See `applyFile`: a file containing a bare `COMMIT;` ends this runner's transaction, and
-  // everything before that point is durable no matter what fails afterwards.
+  // The headline must not claim a rollback that did not happen. See `applyFile`.
   const escaped = error instanceof TransactionEscaped;
   const lines = [
     escaped
@@ -901,39 +608,16 @@ function applyFailure(file, label, error) {
   return new MigrateError(lines.join('\n'));
 }
 
-/**
- * Applies one file inside one transaction, and names it if anything goes wrong.
- *
- * Exported for the same reason `stripSqlComments` and `findIrreversibleStatements` are: a
- * failure message an operator depends on at 3am is a behaviour, and a behaviour with no test
- * is a claim. `apps/api/scripts/migrate.test.mjs` drives this with a stub handle and a real
- * broken `.sql` file, which needs no database — see the note at the top of that file for what
- * that does and does not prove.
- */
+// Exported for apps/api/scripts/migrate.test.mjs, which drives it with a stub handle.
 export async function applyFile(sql, file, recordInLedger, label) {
   const startedAt = Date.now();
   try {
     await sql.begin(async (tx) => {
-      // SET takes no parameters, so this is the parameterised way to set one.
+      // SET takes no parameters, and set_config does.
       await tx`select set_config('lock_timeout', ${STATEMENT_LOCK_TIMEOUT}, true)`;
-      // A transaction-local witness, checked again below.
-      //
-      // ## The defect this exists for
-      //
-      // "One transaction per file" is asserted by this runner's own failure message — "that
-      // transaction has been rolled back and this database is exactly as it was before the run
-      // started" — and a file can simply end the transaction. Measured, with a file containing
-      // `CREATE TABLE prl.rev_half_a …; COMMIT; CREATE TABLE prl.rev_half_b …;` twice (the
-      // second a deliberate duplicate): the runner printed "Nothing it contained was applied",
-      // exited 1, recorded no ledger row — and `prl.rev_half_a` was durably present. The retry
-      // a deploy pipeline performs then failed with a DIFFERENT error, `relation "rev_half_a"
-      // already exists`, and `up` could never succeed again without hand surgery.
-      //
-      // The only signal the old code had was a PostgreSQL NOTICE, `there is no transaction in
-      // progress`, which it printed as an unremarkable `·` line and ignored.
-      //
-      // `set_config(..., true)` is transaction-local, so the value cannot survive a COMMIT. The
-      // token is per-call so a leftover session GUC from an earlier statement cannot satisfy it.
+      // A file containing `COMMIT;` ends this transaction and leaves its first half durable.
+      // A transaction-local setting cannot survive that COMMIT, so its absence afterwards detects it.
+      // The token is per call so a leftover session GUC cannot satisfy the check.
       const witness = createHash('sha256')
         .update(`${file.version}${startedAt}${Math.random()}`)
         .digest('hex');
@@ -962,24 +646,16 @@ async function commandUp(sql, options) {
   const files = await readSqlDir(MIGRATIONS_DIR, 'migration');
 
   await withLock(sql, options.lockWaitMs, async () => {
-    // Create the ledger inside the lock, not before it. `create table if not
-    // exists` is not race-safe: two first-time deploys can both find the table
-    // absent and one then fails on a catalog unique index rather than on
-    // anything this runner can explain. Everything that touches the ledger,
-    // including bringing it into existence, belongs on this side of the lock.
+    // Create and read the ledger inside the lock. `create table if not exists` is not race-safe.
     await ensureLedger(sql);
-    // Read the ledger inside the lock too. Reading it outside would reintroduce
-    // the race the lock exists to remove.
     const applied = await appliedMigrations(sql);
     const pending = planMigrations(files, applied, options);
-    // Checked after planning and before the first apply, so a set containing one
-    // undeclared destructive file applies none of it rather than the first half.
+    // Before the first apply, so one undeclared destructive file stops the whole set.
     refuseUndeclaredIrreversible(pending);
 
     if (pending.length === 0) {
       ok(`up to date — ${applied.length} migration(s) applied, nothing pending`);
-      // Still checked on a no-op run: a database migrated before this alignment
-      // existed is exactly the one whose next deploy would fail on it.
+      // Also on a no-op run, for databases migrated before this alignment existed.
       await alignLedgerOwnership(sql);
       return;
     }
@@ -1041,13 +717,7 @@ async function commandStatus(sql) {
   if (ledger.size > 0) warn(`${ledger.size} applied migration(s) have no file — \`up\` will refuse`);
 }
 
-/**
- * Always throws. `down` is a command so that asking for a rollback gets the policy
- * instead of `Unknown command "down"` — which reads like a version skew and sends
- * an operator hunting for a missing release rather than reading a decision.
- *
- * Deliberately never opens a connection: there is nothing to ask the database.
- */
+// Always throws, so a rollback request gets the policy, not `Unknown command "down"`.
 function commandDown() {
   throw new MigrateError(
     [
@@ -1079,8 +749,7 @@ function commandDown() {
 async function commandRoles(sql, options) {
   const files = await readSqlDir(ROLES_DIR, 'role');
 
-  // Named from the server so the operator can see which cluster is about to gain
-  // roles, without this script going anywhere near the connection string.
+  // Named from the server, so the connection string is never parsed or printed.
   const [target] = await sql`select current_database() as database, current_user as role`;
   line(`${bold('Ensuring roles')} in database "${target.database}" as "${target.role}"`);
 
@@ -1156,30 +825,10 @@ async function dropSchema(sql) {
 }
 
 /**
- * Refuses a `reset` that has not named the database it is about to empty.
- *
- * ## The defect this exists for
- *
- * Until this existed, the ONLY thing standing between `reset` and every learner row was
- * `NODE_ENV === 'production'`. Three facts make that not a guard:
- *
- *  * `NODE_ENV` describes the *process*, and `reset` is documented to be run from an operator's
- *    host — docker-compose.yml says so in as many words ("Migrations are run from the host, not
- *    from inside the api container"). An operator's shell does not have production's NODE_ENV.
- *  * The repository's own `.env` sets `NODE_ENV=development`, and `pnpm run db:reset` loads it
- *    with `--env-file-if-exists`. Measured: with NODE_ENV unset in the shell, the script sees
- *    `development`. So the checked-in file supplies the value that disarms the guard.
- *  * Nothing whatsoever looked at `DATABASE_MIGRATION_URL`, which is the variable that actually
- *    decides what gets dropped.
- *
- * Reproduced: with `DATABASE_MIGRATION_URL` pointed at a database holding 944,297 rows and
- * NODE_ENV unset, `migrate.mjs reset` printed one yellow `!` line and emptied it. No prompt, no
- * TTY check, no second flag. By contrast `backup restore` — which destroys strictly less — asks
- * up to three times (`--target`, `--drop-existing`, `--overwrite-live-database`).
- *
- * The acknowledgement is bound to the TARGET rather than being a bare `--yes`, which is the
- * property that matters: a `pnpm run db:reset --confirm-database poker_risk_lab_dev` recalled
- * from shell history refuses against any other database instead of emptying it.
+ * NODE_ENV is not a guard for `reset`. It runs from an operator host, and the repo's `.env` sets
+ * development. Without this check, a reset against a 944,297-row database emptied it with no prompt.
+ * The confirmation names the target, not a bare `--yes`, so a command recalled from shell history
+ * refuses against any other database.
  */
 export function refuseUnconfirmedReset(database, confirmed) {
   if (confirmed === database) return;
@@ -1204,10 +853,8 @@ export function refuseUnconfirmedReset(database, confirmed) {
 async function commandReset(sql, options) {
   refuseInProduction('reset');
 
-  // Named from the server, not parsed out of the connection string, so nothing
-  // secret is anywhere near this line.
   const [target] = await sql`select current_database() as database, current_user as role`;
-  // Before the lock and before the drop: a refusal that has changed nothing is the point.
+  // Before the lock and the drop, so a refusal has changed nothing.
   refuseUnconfirmedReset(target.database, options.confirmDatabase ?? null);
   warn(`dropping schema prl in database "${target.database}" as "${target.role}"`);
 
@@ -1218,10 +865,6 @@ async function commandReset(sql, options) {
 
   await commandUp(sql, options);
 }
-
-// ---------------------------------------------------------------------------
-// Entry point.
-// ---------------------------------------------------------------------------
 
 function usage() {
   line(`${bold('migrate.mjs')} — Poker Risk Lab database migrations`);
@@ -1279,24 +922,14 @@ function lockWaitMs() {
 }
 
 async function run(options) {
-  // Checked before a connection is opened as well as inside the command itself.
-  // A refusal that never so much as authenticates against the production
-  // database is a stronger refusal than one that connects first and thinks
-  // afterwards, and the in-command check stays as the backstop that cannot be
-  // routed around.
+  // Refuse before connecting. The in-command checks remain as the backstop.
   if (options.command === 'seed' || options.command === 'reset') refuseInProduction(options.command);
-  // Same reasoning: `down` has no database work to do in any environment, so it
-  // answers without a connection and without DATABASE_URL having to be set.
   if (options.command === 'down') commandDown();
 
   const sql = connect(databaseUrl());
   try {
     const withTimeouts = { ...options, lockWaitMs: lockWaitMs() };
-    // Every command is dispatched by name, with no `else` fallthrough. A bare
-    // `else` here would mean that adding a command to COMMANDS without adding a
-    // branch silently ran `reset` — which drops schema prl — instead of failing.
-    // The one destructive command in this file must never be something a
-    // typo or an unfinished edit can reach.
+    // No bare `else` fallthrough, so a command added to COMMANDS without a branch cannot run `reset`.
     if (options.command === 'up') await commandUp(sql, withTimeouts);
     else if (options.command === 'status') await commandStatus(sql);
     else if (options.command === 'roles') await commandRoles(sql, withTimeouts);
@@ -1320,16 +953,7 @@ async function main() {
   await run(options);
 }
 
-/**
- * True when this file was started from the command line rather than imported.
- *
- * The pure helpers above (`stripSqlComments`, `findIrreversibleStatements`) are
- * exported so apps/api/scripts/migrate.test.mjs can assert on them directly; a
- * roll-forward-only policy whose enforcement has no test is a claim rather than a
- * gate. Without this guard, importing the module would run `main()` as a side
- * effect of the import. realpath on both sides so a checkout reached through a
- * symlink still recognises itself.
- */
+// Lets the test import this module without running `main()`. realpath handles a symlinked clone.
 function startedFromCommandLine() {
   const entry = process.argv[1];
   if (entry === undefined) return false;
@@ -1348,19 +972,12 @@ if (startedFromCommandLine()) {
     if (error instanceof MigrateError) {
       line(`${red('  ✗')} ${error.message}`);
     } else {
-      // A driver or PostgreSQL error. Print the message and the useful PostgreSQL
-      // fields, redacted, and keep the stack behind an opt-in flag so a normal
-      // failure reads as a sentence instead of a wall.
+      // A driver or PostgreSQL error. The stack stays behind PRL_DEBUG.
       const detail = [error?.detail, error?.hint, error?.where].filter(Boolean).join(' | ');
       line(`${red('  ✗')} ${error?.message ?? String(error)}`);
       if (error?.position) note(`at character ${error.position}`);
       if (detail !== '') note(detail);
-      // The debug dump goes through redact() like everything else. Driver error
-      // objects carry the failing statement and its bind parameters, so handing
-      // one straight to console.error would be the single place in this script
-      // where "nothing secret is ever printed" stopped being true — and it would
-      // be true right up until the run that failed while sending something worth
-      // hiding.
+      // Redacted too. Driver errors carry the failing statement and its bind parameters.
       if (process.env.PRL_DEBUG) {
         console.error(redact(error?.stack ?? String(error)));
         console.error(redact(inspectError(error)));

@@ -1,107 +1,18 @@
 /**
- * Hand review: the analysis, assembled at read time from the rows a finished hand left behind.
- *
- * Nothing in this file talks to a database and nothing in it is a Fastify handler. It takes the
- * persisted rows (`prl.hands`, `prl.hand_seats`, `prl.hand_actions`) plus the id of the user asking,
- * and returns the `HandReviewResponse` from `@prl/contracts`. That shape is what makes it unit
- * testable without Postgres, and it is why `test/hands.test.ts` can prove the visibility rules
- * without a live table anywhere.
- *
- * ## WHY REVIEW WORKS WITHOUT THE DECK EVER BEING STORED
- *
- * `db/migrations/0001_initial.sql` says it in capitals: there is no column for the deck and no
- * column for the commitment salts, so a replay cannot deal cards a second time. It does not need
- * to. A review only ever has to reconstruct the *situation* at each decision, and every ingredient
- * of a situation is already a row:
- *
- *   - the community cards come from `prl.hands.board`, which holds exactly the cards that were
- *     actually dealt and are public by definition. The board as of a given street is a prefix of
- *     that array (0 preflop, 3 on the flop, 4 on the turn, 5 on the river);
- *   - the hole cards come from `prl.hand_seats.hole_cards`, and are read under the rule on that
- *     column — the requesting user's own seat, or any seat whose `showed_down` is true;
- *   - every chip movement comes from `prl.hand_actions`: `amount_paid` is what actually left a
- *     stack, `bet_level_after` is the level the next player faced, and `pot_after` is the engine's
- *     own total. Stacks, per-street commitments and the pot are re-derived by adding those up;
- *   - the blinds and antes are the one thing that is not an action row, so they are RECOVERED from
- *     what the hand recorded — see `recoverPostedBlinds` below. They are emphatically not
- *     re-derived from the button.
- *
- * ## Why the blinds are recovered rather than derived from the button
- *
- * They used to be derived, with the engine's own `assignBlinds(button_seat, …)`. That was correct
- * only while the blinds were a function of the button, and the dead-button rule
- * (`packages/poker-engine/src/positions.ts`) ended that: the big blind advances by exactly one live
- * player per hand, the small blind may be DEAD (nobody posts it) and the button itself may sit in
- * an empty chair. Both are ordinary outcomes of the rule, not degenerate states.
- *
- * A review that re-derived the blinds therefore reconstructed a different hand from the one that
- * was played — it charged a small blind nobody paid, and charged both blinds to the wrong seats.
- * The pot cross-check in `analysisFor` caught the divergence and refused every decision, so the
- * whole analysis silently vanished for any hand with a dead small blind or a dead button. The
- * cross-check was right; the reconstruction was wrong.
- *
- * `prl.hands` has no `small_blind_seat` or `big_blind_seat` column, so there is nothing to read
- * back. What the rows DO record is what actually happened, and that pins both seats exactly:
- * whoever opened the action names the big blind, and the engine's own pot total says whether a
- * small blind was posted at all. Recovering them that way needs no migration and works on every
- * hand already in the table, including the ones dealt before the rule existed.
- *
- * The deck was only ever needed to *choose* those cards. Once chosen, the ones that legitimately
- * became public are persisted and the rest are gone for good — which is the point. A replay that
- * needed the deck would be a replay that could show a learner the cards an opponent folded.
- *
- * ## Whose decisions get analysed, and why only theirs
- *
- * Only the requesting user's own decisions. A Coach report needs the acting player's two cards, and
- * for anybody else those cards are either sealed forever (they folded) or belong to a different
- * learner. The honest answer for an opponent's decision is `analysis: null`, and the client says
- * why. Inventing a holding — picking a hand from a range and analysing that — would produce a
- * confident-looking report about a spot that never existed.
- *
- * The opponents in the analysis are therefore modelled by one fixed, written-out range
- * (`REVIEW_OPPONENT_RANGE`), stated in the report's own assumptions. That is a modelling choice,
- * not a read of what the opponent actually held, and the appended assumption line says exactly
- * that so no learner can mistake it for one.
- *
- * ## Bounded work
- *
- * Every figure is recomputed on every read (no computed poker number is ever stored — see decision
- * 7 in the migration), so a review is genuinely expensive: a six-handed preflop spot costs a
- * bounded Monte Carlo run. Three limits keep one request from becoming a denial of service:
- * `maxAnalysedDecisions`, a fixed sample count, and a wall-clock budget checked before each
- * report. The budget is a backstop rather than a routine cutoff — with the default cap it should
- * never fire — because a learner re-reading a hand must see the same numbers every time, and a
- * time-based cutoff makes the output depend on how busy the machine was.
- *
- * ## WHERE THE WORK HAPPENS, AND WHY THIS FILE IS SPLIT IN TWO
- *
- * Bounded is not the same as cheap, and this was measured rather than assumed. Reviewing one
- * three-handed showdown hand on the reference machine (Node 24, Apple silicon):
- *
- *   - everything except the Coach reports — parsing the jsonb, the replay walk, verifying the
- *     reveal's Merkle proofs, assembling the response: **0.2 ms**;
- *   - the four Coach reports that hand earns: **156 ms**, of which the single flop report is
- *     133 ms, because the outs breakdown re-runs an equity calculation per candidate card.
- *
- * So 99.9% of a review is Monte Carlo, and until this change all of it ran on the event loop. A
- * load test at six concurrent players measured action p99 at 948 ms with Hand Review in the
- * journey and 29 ms with `--no-review` on the same warm process; the process could not get back
- * to its own event loop, and every turn clock in it stopped for as long as somebody's review took.
- *
- * The fix is not to compute less. It is to compute it on a thread, which is what
- * `workers/pool.ts` exists for and what `POST /math/coach` has always done. That splits this
- * module in two along one line:
- *
- *   - **deciding** what to analyse — whose seat it was, whether the replay reconstructs, whether
- *     the pot agrees, which street, how many opponents — needs the replay, is microseconds, and
- *     stays here (`planAnalysis`);
- *   - **computing** the report needs only a description of the spot, is hundreds of milliseconds,
- *     and leaves (`coachTaskFor`, then `ReviewAnalyser`).
- *
- * `buildHandReview` still runs both halves in this process and is still what the fixture
- * generator and the tests use; `buildHandReviewOn` is what the API serves. The hidden-information
- * rules are unchanged by the move: a task carries hero's own two cards, the public board and the
- * chip counts, and a calculator thread holds no database handle, no logger and no `HandState`.
+ * Hand review, assembled at read time from `prl.hands`, `prl.hand_seats` and `prl.hand_actions`. No
+ * database and no Fastify here, so `test/hands.test.ts` proves the visibility rules without Postgres.
+ * No deck or salt is stored (migration 0001), and none is needed. The board is a prefix of
+ * `prl.hands.board`, hole cards follow the viewer-or-showed-down rule, and chips are re-summed from
+ * the action rows.
+ * The blinds are RECOVERED from the rows, never derived from the button. Under the dead-button rule
+ * the small blind may be dead and the button in an empty chair, and deriving them made the pot
+ * cross-check refuse every decision in such hands.
+ * Only the viewer's own decisions are analysed. Opponents are modelled by `REVIEW_OPPONENT_RANGE`,
+ * which the report states as an assumption.
+ * Work is bounded by `maxAnalysedDecisions`, a fixed sample count and a wall-clock backstop. Coach
+ * reports are 99.9% of the cost (156 ms against 0.2 ms for one hand), so `planAnalysis` decides here
+ * and the reports run on a worker thread. `buildHandReview` computes locally for fixtures and tests,
+ * and `buildHandReviewOn` is what the API serves.
  */
 
 import type {
@@ -140,36 +51,15 @@ import { buildCoachReport, deriveLegalActions, parseRange } from '@prl/poker-mat
 import type { CoachTask } from '../workers/equity-worker.ts';
 
 /**
- * Where one decision's Coach report is computed.
- *
- * A function rather than a `WorkerPool`, so this module keeps its promise that nothing in it talks
- * to a database, a pool or a Fastify instance — `routes/hands.ts` passes `(task) => pool.runCoach(task)`
- * and a test passes whatever it needs to provoke a refusal. `import type` above is what keeps the
- * protocol here and the calculator out: `equity-worker.ts` throws on sight if it is ever loaded on
- * the main thread, and a type-only import emits nothing at all.
- *
- * It may reject, and every rejection the pool can produce is handled at the call site rather than
- * propagated: see `failed`.
+ * A function, not a `WorkerPool`, so this module touches no pool. The `import type` matters, because
+ * `equity-worker.ts` throws if it is loaded on the main thread. Rejections are handled by `failed`.
  */
 export type ReviewAnalyser = (task: CoachTask) => Promise<CoachReport>;
 
-// ---------------------------------------------------------------------------
-// The persisted rows this module reads
-// ---------------------------------------------------------------------------
-
 /**
- * The columns a `HandSummary` reads, and nothing more.
- *
- * Declared separately from `HandRow` so the list endpoint can pass its own narrower projection
- * without inventing placeholder values for the columns a summary never looks at. `HandRow` extends
- * it, so one mapping serves both endpoints and the two cannot drift.
- *
- * `jsonb` columns are `unknown` on purpose. They are parsed and narrowed below rather than asserted
- * into shape: a row written by an older version of the server, or edited by hand, must degrade to
- * "no analysis" instead of throwing inside a response serializer.
- *
- * Timestamps admit `string` as well as `Date` because that is genuinely driver-dependent, and a
- * review that crashes on a string is a worse outcome than one that normalises it.
+ * The columns a `HandSummary` reads. `HandRow` extends it, so the list endpoint can pass a narrower
+ * projection. `jsonb` columns are `unknown` and narrowed below, so a malformed row degrades to "no
+ * analysis" instead of throwing. Timestamps may be `string` because that depends on the driver.
  */
 export interface HandSummaryRow {
   readonly id: string;
@@ -190,24 +80,14 @@ export interface HandRow extends HandSummaryRow {
   readonly street: string;
   readonly reveal: unknown;
   /**
-   * Where this hand's cards came from: `csprng` for a real deal, and the two labels a fixed deck
-   * or a seeded generator is permanently marked with.
-   *
-   * Read because the Legends comparison rebuilds a `PlayerView` per decision and that type carries
-   * it. Stating the hand's actual provenance matters more here than anywhere else in the app: a
-   * review is where a learner would go to ask whether the cards were fair, and a view that claimed
-   * `csprng` over a fixed-deck hand would be the one answer they must never be given.
+   * Read because `PlayerView` carries it. A review must never claim `csprng` for a fixed-deck hand.
    */
   readonly random_source_kind: 'csprng' | 'deterministic-test-only' | 'fixed-deck-scenario';
 }
 
 /**
- * `prl.hand_seats` joined to `prl.users` for the display name.
- *
- * `hole_cards` MUST already have been filtered by the query that produced this row — the column
- * comment in the migration requires `user_id = :viewer OR showed_down` on every read path. This
- * module applies the same rule again when it builds the response, so a query that forgot it still
- * cannot leak. Two independent layers, because one of them is a SQL predicate somebody could edit.
+ * `hole_cards` MUST already be filtered by `user_id = :viewer OR showed_down`. This module applies the
+ * rule again, so an edited query still cannot leak.
  */
 export interface HandSeatRow {
   readonly seat: number;
@@ -236,32 +116,15 @@ export interface HandActionRow {
   readonly automatic_reason: AutomaticReason | null;
 }
 
-// ---------------------------------------------------------------------------
-// Knobs
-// ---------------------------------------------------------------------------
-
 /**
- * The opponent range every review assumes.
- *
- * Written out rather than computed as a top-percentage for two reasons. It is instant, where
- * `topPercentRange` has to build the strength table (a few seconds on the first call in a
- * process — not something a request handler should ever wear). And it is legible: this exact
- * string reaches the learner inside the report's assumptions, so they can see the assumption and
- * disagree with it.
- *
- * It is deliberately a middling, unadjusted range — about a fifth of all hands. It is not a read
- * of the opponent, it does not tighten as the streets go by, and the note appended to every
- * report says so.
+ * Written out, not a top percentage, because it is instant (no strength table) and the learner sees
+ * the exact string. A middling, unadjusted range of about a fifth of all hands.
  */
 export const REVIEW_OPPONENT_RANGE = '22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, A9o+, KTo+, QJo';
 
 /**
- * Sample cap for a review's Monte Carlo runs.
- *
- * Small on purpose. A review prints its own confidence interval, and at this sample count that
- * interval is about a percentage point — wide enough to be honest about, narrow enough that no
- * teaching point in the report turns on it. Spending ten times the CPU to shrink it would change
- * the third digit of a number whose second digit is an assumption.
+ * At this sample count the printed interval is about one percentage point. More samples would only
+ * change the third digit of a number whose second digit is an assumption.
  */
 export const REVIEW_EQUITY_SAMPLES = 10_000;
 
@@ -284,16 +147,8 @@ const BOARD_LENGTH_BY_STREET: Readonly<Record<string, number>> = {
 
 const BETTING_STREET_NAMES: readonly BettingStreetName[] = ['preflop', 'flop', 'turn', 'river'];
 
-// ---------------------------------------------------------------------------
-// Narrowing helpers for the jsonb columns
-// ---------------------------------------------------------------------------
-
 /**
- * A `jsonb` object as a plain record, or null for anything that is not one.
- *
- * Each property is read with `Reflect.get` into an `unknown` binding — the containment trick
- * `logging.ts` documents. It reads properties off an object of unknown shape without letting an
- * `any` loose in the rest of the file, and without a cast.
+ * Reads through `Reflect.get` into `unknown`, as `logging.ts` documents, so no `any` or cast escapes.
  */
 function asRecord(value: unknown): Readonly<Record<string, unknown>> | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -318,12 +173,7 @@ function isoTimestamp(value: Date | string): string {
   return value.toISOString();
 }
 
-/**
- * Card notation from a `jsonb` array, normalised through the engine's parser.
- *
- * Returns `null` — never a partial list — when anything does not parse. A half-read board would
- * quietly produce an analysis of a different spot, which is worse than no analysis.
- */
+/** `null`, never a partial list. A half-read board would analyse a different spot. */
 function cardsFromJson(value: unknown): { notation: readonly string[]; cards: readonly Card[] } | null {
   if (!Array.isArray(value)) return null;
   const notation: string[] = [];
@@ -342,18 +192,8 @@ function cardsFromJson(value: unknown): { notation: readonly string[]; cards: re
 }
 
 /**
- * The stored `config`, as the two readers of it need it.
- *
- * The first four are what the REPLAY needs, and a row missing any of them cannot be reconstructed
- * at all. `actionTimeoutSeconds` is different and is deliberately nullable here: nothing in the
- * hand-history review reads it, and only the Legends comparison does — it rebuilds a `TableConfig`
- * per decision and that type requires one.
- *
- * Making it required would have coupled the two. A row whose timeout was somehow unreadable would
- * then lose its entire hand-history analysis over a field that review never looks at, which is a
- * strictly worse failure than the one it prevents. `hands_config_shape` requires the KEY on every
- * row; it cannot require the value to be a positive integer, so this reads it and lets the
- * comparison — the only caller that needs it — be the one to refuse.
+ * The first four are what the replay needs. `actionTimeoutSeconds` is nullable because only the
+ * Legends comparison reads it, and an unreadable timeout must not cost a hand its whole review.
  */
 interface TableConfigFields {
   readonly smallBlind: number;
@@ -383,10 +223,6 @@ function configFromJson(value: unknown): TableConfigFields | null {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Seats
-// ---------------------------------------------------------------------------
-
 /** One seat, after the jsonb has been parsed and the visibility rule applied. */
 interface ReviewSeat {
   readonly seat: number;
@@ -398,7 +234,7 @@ interface ReviewSeat {
   readonly netResult: number | null;
   readonly status: string;
   readonly showedDown: boolean;
-  /** False for a seat that sat the hand out: it holds no cards and is nobody's opponent. */
+  /** False for a seat that sat the hand out. It holds no cards and is nobody's opponent. */
   readonly dealtIn: boolean;
   /** Null unless this is the viewer's own seat or the seat showed down. */
   readonly visibleNotation: readonly string[] | null;
@@ -407,12 +243,8 @@ interface ReviewSeat {
 }
 
 /**
- * Applies the hole-card rule.
- *
- * Own seat always; any other seat only once it showed down. Nothing else opens the cards — not the
- * hand being over, not the seat having folded, not the room's owner asking. Whether a folder was
- * bluffing is the information the whole commitment scheme exists to keep sealed, so it stays
- * sealed after the hand as well as during it.
+ * Own seat always, any other seat only once it showed down. A folder's cards stay sealed after the
+ * hand as well as during it.
  */
 function toReviewSeat(row: HandSeatRow, viewerUserId: string): ReviewSeat {
   const isOwnSeat = row.user_id !== null && row.user_id === viewerUserId;
@@ -447,10 +279,6 @@ function toResponseSeat(seat: ReviewSeat): HandReviewSeat {
   };
 }
 
-// ---------------------------------------------------------------------------
-// The reveal and its verification
-// ---------------------------------------------------------------------------
-
 interface RevealCheck {
   readonly reveal: DeckReveal | null;
   readonly verification: HandReviewResponse['verification'];
@@ -482,12 +310,7 @@ type RevealParse =
   | { readonly ok: false; readonly reason: string };
 
 /**
- * Rebuilds a `DeckReveal` from the stored jsonb, field by field.
- *
- * Field by field rather than by handing the raw jsonb straight out, for the same reason
- * `redactFor` builds a `PlayerView` instead of deleting fields from a `HandState`: a column that
- * somehow acquired an extra key cannot then carry it to a client. Anything that does not fit the
- * shape is refused with its own reason rather than passed to `verifyDeckReveal`.
+ * Rebuilt field by field, as `redactFor` does, so an extra key in the column cannot reach a client.
  */
 function revealFromJson(value: unknown, root: string, context: string): RevealParse {
   const record = asRecord(value);
@@ -495,9 +318,7 @@ function revealFromJson(value: unknown, root: string, context: string): RevealPa
   if (record === null || commitmentRecord === null) {
     return { ok: false, reason: 'the stored reveal is not in the expected shape' };
   }
-  // The literals matter: `DeckCommitment` pins both `algorithm` and `version`, and a stored value
-  // that disagrees cannot be widened into one. Refusing it here says the same thing
-  // `verifyDeckReveal` would have said, without pretending the object was a reveal.
+  // `DeckCommitment` pins `algorithm` and `version` as literals, so a disagreeing value is refused.
   if (commitmentRecord['algorithm'] !== 'sha256' || commitmentRecord['version'] !== COMMITMENT_VERSION) {
     return { ok: false, reason: 'the stored reveal uses a commitment scheme this server cannot verify' };
   }
@@ -511,9 +332,8 @@ function revealFromJson(value: unknown, root: string, context: string): RevealPa
   if (storedRoot !== root || storedContext !== context) {
     return { ok: false, reason: 'the stored reveal does not belong to this hand' };
   }
-  // A complete reveal is every one of the 52 positions, which would expose the hole cards of every
-  // seat that folded. Two CHECK constraints already refuse to store one against a hand; this
-  // refuses to serve one if it ever gets past them.
+  // A complete reveal would expose every folder's cards. Two CHECK constraints refuse to store one, and
+  // this refuses to serve one.
   if (record['complete'] !== false) {
     return { ok: false, reason: 'a whole-deck reveal is never valid for a hand and will not be served' };
   }
@@ -539,12 +359,8 @@ function revealFromJson(value: unknown, root: string, context: string): RevealPa
 }
 
 /**
- * Verifies the stored reveal against the published root.
- *
- * A FOLD-OUT HAND HAS AN EMPTY REVEAL, AND THAT IS CORRECT. No board card was dealt and nobody
- * showed, so there is nothing that legitimately became public and nothing to prove. It reports
- * `ok: true` with `verifiedPositions: 0` — verified, with nothing to prove — and never as a
- * failure. Reporting it as a failure would train players to ignore the one signal that matters.
+ * A fold-out hand has an empty reveal, reported as `ok: true` with `verifiedPositions: 0`, never as a
+ * failure.
  */
 function checkReveal(hand: HandRow): RevealCheck {
   const stored = hand.reveal ?? resultReveal(hand.result);
@@ -570,8 +386,6 @@ function checkReveal(hand: HandRow): RevealCheck {
     verifiedPositions: verified.verifiedIndices.length,
   };
   if (verified.reason !== undefined) verification.reason = verified.reason;
-  // Said out loud rather than left as a bare zero, so an empty reveal reads as the correct
-  // outcome for a fold-out hand instead of as a missing proof.
   if (verified.ok && verified.verifiedIndices.length === 0) {
     verification.reason =
       'nothing became public in this hand — no board was dealt and nobody showed — so there is ' +
@@ -584,10 +398,6 @@ function resultReveal(result: unknown): unknown {
   const record = asRecord(result);
   return record === null ? null : (record['reveal'] ?? null);
 }
-
-// ---------------------------------------------------------------------------
-// Summary
-// ---------------------------------------------------------------------------
 
 function sumResultPots(result: unknown): number {
   const record = asRecord(result);
@@ -613,11 +423,8 @@ export interface HandSummaryInput {
   /** The viewer's own `hand_seats.net_result`, or null while the hand is unsettled. */
   readonly heroNet: number | null;
   /**
-   * `max(pot_after)` over the hand's actions, or null when it has none.
-   *
-   * The engine's own running total, so it needs no re-derivation. The fallback for a hand with no
-   * actions at all — everyone all-in from the blinds — is the sum of the settled pot layers, which
-   * is the only other place the figure exists.
+   * `max(pot_after)` over the hand's actions, or null with none. A hand with no actions falls back to
+   * the sum of the settled pot layers.
    */
   readonly maxPotAfter: number | null;
 }
@@ -639,10 +446,6 @@ export function toHandSummary(input: HandSummaryInput): HandSummary {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Replay
-// ---------------------------------------------------------------------------
-
 /** Mutable per-seat tally, rebuilt from the action log rather than read from anywhere. */
 interface ReplaySeat {
   stack: number;
@@ -659,11 +462,8 @@ interface ReplayState {
 }
 
 /**
- * Where the blinds actually fell in one hand.
- *
- * `smallBlindSeat` is null for a DEAD small blind — nobody posted it. That is a legitimate outcome
- * of the dead-button rule and not a missing value, which is why it is spelled the same way the
- * engine spells it (`HandState.smallBlindSeat`, `BlindRotation.smallBlindSeat`).
+ * `smallBlindSeat` is null for a DEAD small blind, a legitimate dead-button outcome, spelled as the
+ * engine spells it.
  */
 interface PostedBlinds {
   readonly smallBlindSeat: number | null;
@@ -671,11 +471,8 @@ interface PostedBlinds {
 }
 
 /**
- * The dealt seat immediately before `from`, clockwise, or null when there is none.
- *
- * `orderFrom` walks a FULL orbit and — as its own header spells out — returns an occupied `from`
- * as the LAST element. So the element before that last one is the seat immediately preceding
- * `from`, and a last element that is not `from` means `from` was not dealt in at all.
+ * `orderFrom` walks a full orbit and returns an occupied `from` last, so the element before it is the
+ * previous dealt seat.
  */
 function previousDealt(from: number, maxSeats: number, dealt: readonly number[]): number | null {
   const orbit = orderFrom(from, maxSeats, dealt);
@@ -684,17 +481,9 @@ function previousDealt(from: number, maxSeats: number, dealt: readonly number[])
 }
 
 /**
- * Which seat posted the big blind, read off who opened the action.
- *
- * The engine opens preflop betting at `firstToActPreflopFor`, which is `nextOccupied(bigBlindSeat)`
- * three or more handed and the button heads-up. Both are invertible, so the first action row names
- * the big blind exactly — with no reference to the button, which under the dead-button rule may be
- * two seats away from the blinds or in an empty chair altogether.
- *
- * The one shape this cannot read is a table with an ante large enough to put the opener all-in
- * before they act, because the engine then skips them and the first action row belongs to a later
- * seat. The pot check in `openReplay` refuses that hand rather than analysing a mis-reconstructed
- * one — the same fail-closed outcome as before, and no room in this app is configured with an ante.
+ * The engine opens preflop at `firstToActPreflopFor`, which is invertible, so the first action row
+ * names the big blind without reference to a possibly dead button. An ante that puts the opener
+ * all-in breaks this, and the pot check in `openReplay` then refuses the hand.
  */
 function recoverBigBlindSeat(
   hand: HandRow,
@@ -702,9 +491,7 @@ function recoverBigBlindSeat(
   dealt: readonly number[],
   opener: HandActionRow,
 ): number | null {
-  // Heads-up the button IS the small blind (`assignBlinds`, and `resolveBlinds` refuses any other
-  // arrangement), so the big blind is simply the other seat. Read structurally rather than from the
-  // action log because heads-up the button also acts first preflop, so the log says nothing new.
+  // Heads-up the button is the small blind and also acts first, so the big blind is the other seat.
   if (dealt.length === 2) {
     if (!dealt.includes(hand.button_seat)) return null;
     return dealt.find((seat) => seat !== hand.button_seat) ?? null;
@@ -713,16 +500,8 @@ function recoverBigBlindSeat(
 }
 
 /**
- * Posts the antes and blinds into a fresh tally, mirroring `startHand`.
- *
- * An ante is dead money — it goes straight to the middle and buys no part of the bet level — while
- * a blind is a live bet, and conflating the two would make every `toCall` in the review wrong by
- * the ante. A dead small blind posts nothing at all: it is not covered by the house and it is not
- * moved onto the next player, because that player paid it last hand.
- *
- * The ante order starts at the button, exactly as `startHand` does. `orderFrom` does not require
- * `from` to be occupied, so a dead button is fine here; the order does not affect the total anyway,
- * only which short stack pays first.
+ * Posts antes and blinds, mirroring `startHand`. An ante goes straight to the middle and a blind is a
+ * live bet, so mixing them would skew every `toCall` by the ante. A dead small blind posts nothing.
  */
 function openTally(
   hand: HandRow,
@@ -759,10 +538,8 @@ function openTally(
   if (blinds.smallBlindSeat !== null) post(blinds.smallBlindSeat, config.smallBlind, true);
   post(blinds.bigBlindSeat, config.bigBlind, true);
 
-  // The opening level is the big blind — the largest FULL wager in force — and not merely the
-  // largest amount that reached the pot. `startHand` says why at length: a big blind posted short
-  // does not reduce what everybody else has to pay, and taking the level from the largest
-  // commitment would under-charge every caller in the review.
+  // The opening level is the big blind, the largest FULL wager, not the largest commitment. A short
+  // big blind does not lower what callers owe.
   let posted = 0;
   for (const seat of state.seats.values()) posted = Math.max(posted, seat.committedThisStreet);
   state.betLevel = Math.max(config.bigBlind, posted);
@@ -774,24 +551,11 @@ function potTotal(state: ReplayState): number {
 }
 
 /**
- * Opens the replay with the blinds the hand actually had.
- *
- * Two independent recorded facts pin the two unknowns. The first action row names the big blind
- * (see `recoverBigBlindSeat`). The engine's own pot before that action — `pot_after` less what the
- * action paid — then says which of the two remaining possibilities happened: a small blind posted
- * by the seat before the big blind, or a dead one posted by nobody. The dead-button rule allows
- * exactly those two, because the small blind sits where the big blind was last hand and the big
- * blind is the next live player after it, so no dealt seat can be between them.
- *
- * Both candidates are built with the same `openTally`, so the arithmetic that decides between them
- * is literally the arithmetic the accepted reconstruction goes on to use.
- *
- * When NEITHER matches, the rows do not describe a hand this module can reproduce — a tampered
- * `pot_after`, say. The first candidate is returned anyway rather than null, and that is
- * deliberate: an opening that is wrong by some amount is wrong by that same amount at every
- * decision, so `analysisFor`'s pot cross-check refuses all of them and says exactly which check
- * failed. Nothing unverified is ever analysed either way; this only decides which reason reaches
- * the log. `null` is kept for the case where there is no anchor to check against at all.
+ * Opens the replay with the blinds the hand actually had. The first action names the big blind, and
+ * the engine's pot before it decides between a live small blind and a dead one, the only two the
+ * dead-button rule allows. Both candidates use the same `openTally`.
+ * When neither matches, the first is returned anyway, so the pot cross-check refuses every decision
+ * with a precise reason. `null` means there is no anchor at all.
  */
 function openReplay(
   hand: HandRow,
@@ -805,18 +569,15 @@ function openReplay(
     .sort((a, b) => a - b);
   if (dealt.length < 2) return null;
 
-  // The anchor for everything below, and both halves of it come off the FIRST action: the seat the
-  // engine opened the action on, and its own pot before that action. It has to be a preflop action
-  // for either to mean anything. A hand whose blinds put everybody all-in has no action rows at
-  // all, and no decisions to analyse either, so nothing is lost by refusing it here.
+  // Both anchors come off the FIRST action, which must be preflop. A hand with no action rows has no
+  // decisions to analyse.
   const opener = actions[0];
   if (opener === undefined || opener.street !== 'preflop') return null;
   const bigBlindSeat = recoverBigBlindSeat(hand, config, dealt, opener);
   if (bigBlindSeat === null) return null;
   const postedByForcedBets = opener.pot_after - opener.amount_paid;
 
-  // Live first, so a hand where the small blind seat could not put a chip in either way — an ante
-  // took its whole stack — settles on the arrangement that names a seat rather than on `null`.
+  // Live first, so if an ante took the small blind's whole stack the result still names a seat.
   const smallBlindCandidates: readonly (number | null)[] = [
     dealt.length === 2 ? hand.button_seat : previousDealt(bigBlindSeat, config.maxSeats, dealt),
     null,
@@ -842,11 +603,8 @@ interface Situation {
   readonly street: BettingStreetName;
   readonly potBefore: number;
   /**
-   * The part of `potBefore` this seat could actually win.
-   *
-   * Below `potBefore` exactly when the seat was all-in for less than the bet in front of it, which
-   * is the case a review used to grade against the whole middle: the excess of that bet is a side
-   * pot the seat is not in, so a correct fold was scored as a large error and published as one.
+   * The part of `potBefore` this seat could win. Lower when all-in for less than the bet. Grading
+   * against the whole middle scored a correct fold as a large error.
    */
   readonly contestablePot: number;
   readonly toCall: number;
@@ -865,15 +623,11 @@ function situationBefore(state: ReplayState, action: HandActionRow): Situation |
   const street = bettingStreetName(action.street);
   const actor = state.seats.get(action.seat);
   if (street === null || actor === undefined) return null;
-  // A seat that has already folded, or was never dealt in, cannot win a pot and so has no price
-  // to be quoted. Rows like that mean the log does not describe a hand this module can replay,
-  // and `null` is the established answer for that — the decision is shown without an analysis
-  // rather than with one computed from a state the engine would refuse. Checked here rather than
-  // left to `contestablePotFor`, which is entitled to throw on a seat that cannot win anything.
+  // A folded or undealt seat cannot win, so the log is not replayable here. Checked before
+  // `contestablePotFor`, which may throw on such a seat.
   if (replaySeatStatus(actor) !== 'active' && replaySeatStatus(actor) !== 'allIn') return null;
 
-  // Opponents are the seats that were dealt in and have not folded — all-in ones included, since
-  // they still hold cards and can still win the pot they paid for.
+  // All-in opponents still hold cards and can win the pot they paid for.
   const opponentStacks: number[] = [];
   for (const [seat, entry] of state.seats) {
     if (seat === action.seat || entry.folded || !entry.dealtIn) continue;
@@ -882,14 +636,9 @@ function situationBefore(state: ReplayState, action: HandActionRow): Situation |
 
   const potBefore = potTotal(state);
   const toCall = Math.max(0, Math.min(state.betLevel - actor.committedThisStreet, actor.stack));
-  // Asked of the engine, on the replayed tally, rather than derived here. `contestablePotFor` runs
-  // the same layering `buildPotLayers` runs at settlement, so a review prices a decision against
-  // the pot the dealer would have paid out — one implementation of the rule, not two.
-  //
-  // Only this street's commitments are passed, with everything carried in added back whole through
-  // `potTotal`. That is exact: a seat that is *to act* has matched the closing level of every
-  // completed street, so no earlier chip can sit above its reach. `state.potInMiddle` is a lump
-  // with no per-seat split, and this is why it does not need one.
+  // The engine's `contestablePotFor`, the same layering settlement uses. Only this street's
+  // commitments are passed. A seat to act has matched every earlier street's closing level, so
+  // `potInMiddle` needs no per-seat split.
   const { contestable } = contestablePotFor({
     seats: [...state.seats].map(([seat, entry]) => ({
       seat,
@@ -913,7 +662,7 @@ function situationBefore(state: ReplayState, action: HandActionRow): Situation |
   };
 }
 
-/** The layering rule's view of a replayed seat: who is still live, and who merely paid. */
+/** The layering rule's view of a replayed seat, which says who is still live and who merely paid. */
 function replaySeatStatus(entry: ReplaySeat): SeatStatus {
   if (!entry.dealtIn) return 'sittingOut';
   if (entry.folded) return 'folded';
@@ -927,12 +676,8 @@ function sumCommitted(state: ReplayState): number {
 }
 
 /**
- * Applies one persisted action.
- *
- * `amount_paid` is the chips that actually left the stack, for every action type, so one line
- * covers a call, a bet, a raise and a short all-in alike — there is no need to re-derive the
- * min-raise rule at review time. `bet_level_after` is taken as authoritative for the same reason:
- * it is what the engine recorded, and the next player really did face it.
+ * `amount_paid` and `bet_level_after` are what the engine recorded, so no min-raise rule is
+ * re-derived.
  */
 function applyReplayAction(state: ReplayState, action: HandActionRow): void {
   const actor = state.seats.get(action.seat);
@@ -944,28 +689,15 @@ function applyReplayAction(state: ReplayState, action: HandActionRow): void {
   state.betLevel = Math.max(state.betLevel, action.bet_level_after);
 }
 
-// ---------------------------------------------------------------------------
-// Analysis
-// ---------------------------------------------------------------------------
-
-/**
- * Why a decision of the viewer's own went unanalysed.
- *
- * Server-side only. It reaches the log, never the response: the contract's `analysis` is a report
- * or null, and a client that knows the decision was its own can already tell the difference.
- */
+/** Server-side only. It reaches the log, never the response. */
 export interface SkippedAnalysis {
   readonly sequence: number;
   readonly reason: string;
 }
 
 /**
- * A stable seed per decision.
- *
- * FNV-1a over the hand id and the sequence number. Deterministic and cheap, so re-reading a hand
- * reproduces every figure exactly — a learner who reloads a review and sees the equity move by a
- * point has been taught that the numbers are arbitrary. Nothing here is a source of randomness for
- * dealing; it only picks which sampled run-outs a Monte Carlo run walks.
+ * FNV-1a over hand id and sequence, so a reloaded review reproduces every figure. It only picks the
+ * sampled run-outs, never anything about dealing.
  */
 function seedFor(handId: string, sequence: number): number {
   let hash = 0x811c9dc5;
@@ -998,18 +730,9 @@ interface AnalysisRequest {
 }
 
 /**
- * The legal set for a replayed decision.
- *
- * A review replays stored rows; it never holds the `HandState` those rows came from, so the
- * engine's own `legalActions` is not available and the set is derived from the situation. This is
- * the surface where the derived rule bites most often: `situation` counts an all-in opponent as a
- * live opponent with a stack of 0 — correctly, they can still win the pot — and a review that
- * offered "raise" against a table of all-in opponents would be telling a learner they missed a
- * line the server would have rejected on the night.
- *
- * One function rather than two call sites, because the derived set now has to be identical in the
- * task a thread runs and in the report this module computes for itself, and "identical" is not a
- * property two copies of four lines keep for long.
+ * Derived from the situation, because a review never holds the `HandState`. An all-in opponent counts
+ * as live with a zero stack, so "raise" is withheld against a table of all-in opponents. One function,
+ * so the thread's task and the local report get the identical set.
  */
 function legalActionsFor(situation: Situation): readonly CoachAction[] {
   return deriveLegalActions({
@@ -1021,18 +744,9 @@ function legalActionsFor(situation: Situation): readonly CoachAction[] {
 }
 
 /**
- * One decision's analysis as a task for a calculator thread.
- *
- * The opponents are sent as RANGE DESCRIPTORS — the notation string, not its expansion — because
- * that is what the wire protocol carries and because `equity-worker.ts` expands it with exactly
- * the same call this module would have made: `parseRange(notation, blockers)` against hero's cards
- * and the board. `REVIEW_OPPONENT_RANGE` is written-out notation rather than a top percentage
- * precisely so that expanding it is microseconds wherever it happens.
- *
- * Nothing that crosses this boundary is anything the viewer may not already see: their own two
- * cards, the public board as of that street, and the chip counts. No deck, no salt, no other
- * seat's cards — the review's own hole-card rule (`toReviewSeat`) has already been applied to the
- * rows this is built from, and a task carries no seat but hero's.
+ * Opponents go as the notation string, which `equity-worker.ts` expands with the same `parseRange`
+ * call. Only the viewer's own cards, the board for that street and the chip counts cross. No deck, no
+ * salt, no other seat's cards.
  */
 function coachTaskFor(request: AnalysisRequest): CoachTask {
   const { situation } = request;
@@ -1063,30 +777,17 @@ function coachTaskFor(request: AnalysisRequest): CoachTask {
 }
 
 /**
- * The review's own assumption, appended to whatever the Coach reported.
- *
- * Appended, never replaced: `assumptions` is the list of everything the numbers depend on, and the
- * review's choice of opponent range is one of those things. Adding to it can only make the report
- * more honest, which is the direction this list is allowed to move in.
- *
- * Applied here rather than inside the analysis so that a report computed on a thread and a report
- * computed in this process end up carrying the same list. The thread knows nothing about reviews.
+ * Appended, never replaced. Applied outside the analysis so threaded and local reports carry the
+ * same list.
  */
 function withReviewAssumption(report: CoachReport, opponentCount: number): CoachReport {
   return { ...report, assumptions: [...report.assumptions, reviewRangeAssumption(opponentCount)] };
 }
 
 /**
- * Runs one decision's analysis on the calling thread.
- *
- * Kept, and kept honest, because it is the reference implementation. `buildHandReview` — the
- * entry point `scripts/regenerate-web-fixtures.mjs` and five test files use — runs it directly,
- * and `test/event-loop-budget.test.ts` asserts that a review built through a real worker pool is
- * deep-equal to one built through this function. So the two constructions cannot drift without a
- * test saying so.
- *
- * It is deliberately NOT what `GET /hands/:handId` calls. A flop analysis here measured 133 ms on
- * the reference machine, and eight of them is the event loop stopped for most of a second.
+ * The reference implementation, used by `buildHandReview`. `test/event-loop-budget.test.ts` asserts
+ * the worker-pool review is deep-equal to it. NOT what `GET /hands/:handId` calls, because one flop
+ * analysis measured 133 ms.
  */
 function analyse(request: AnalysisRequest): CoachReport {
   const { situation } = request;
@@ -1117,10 +818,6 @@ function analyse(request: AnalysisRequest): CoachReport {
   return withReviewAssumption(report, opponents.length);
 }
 
-// ---------------------------------------------------------------------------
-// Assembly
-// ---------------------------------------------------------------------------
-
 export interface BuildHandReviewInput {
   readonly hand: HandRow;
   readonly seats: readonly HandSeatRow[];
@@ -1149,25 +846,10 @@ interface AnalysisBudget {
 }
 
 /**
- * Decides whether this decision gets a report, and describes the analysis if so.
- *
- * Every `null` here is a deliberate refusal, and each has its own recorded reason: not the
- * viewer's seat, no cards the server may use, a street that is not a decision point, a board that
- * does not match the street, an opponent count the Coach does not handle, a replay that disagreed
- * with the persisted pot, or a limit reached.
- *
- * ## Why this decides and does not compute
- *
- * It used to call `analyse` itself, which is what made the whole walk synchronous and made
- * `GET /hands/:handId` the largest single contributor to event-loop saturation in the process.
- * Deciding is microseconds and needs the replay, which only exists during the walk; computing is
- * hundreds of milliseconds and needs a thread. Splitting them at exactly this line is what lets
- * the same rules serve both, with no second copy of them to keep in step.
- *
- * The cap is spent HERE, when the analysis is planned, so the "first eight of the viewer's
- * decisions" rule is a property of the walk rather than of how fast the threads answered. The
- * wall-clock deadline is checked at the other end (`runAnalysis`), because it is time that has to
- * have passed before it can be observed.
+ * Decides whether a decision gets a report, and describes the analysis without computing it, so the
+ * local and off-thread paths share the rules. Every `null` after the seat check records a reason.
+ * The cap is spent here, so "the first eight decisions" is a property of the walk. The deadline is
+ * checked when the analysis runs.
  */
 function planAnalysis(
   action: HandActionRow,
@@ -1183,10 +865,8 @@ function planAnalysis(
   },
 ): AnalysisRequest | null {
   const { budget, situation } = context;
-  // Not the viewer's seat: no analysis, and no recorded reason either, because this is the rule
-  // rather than a failure. It holds even for a seat that showed down and whose cards are therefore
-  // public — the decision was made when they were not, and a review that offered more analysis of
-  // other people the further a hand went would be teaching the wrong thing about what is knowable.
+  // Only the viewer's own seat, even for opponents who showed down. Their decision was made before
+  // the cards were public.
   if (context.viewerSeat === null || action.seat !== context.viewerSeat) return null;
 
   const skip = (reason: string): null => {
@@ -1200,8 +880,7 @@ function planAnalysis(
   if (situation.opponentCount < 1 || situation.opponentCount > 5) {
     return skip(`the Coach handles 1 to 5 opponents, this spot had ${situation.opponentCount}`);
   }
-  // The replay and the engine's own `pot_after` chain have to agree. If they do not, the
-  // reconstruction is wrong somewhere and every figure derived from it would be wrong too.
+  // The replay must agree with the engine's `pot_after` chain, or every derived figure is wrong.
   if (situation.potBefore !== context.persistedPotBefore) {
     return skip('the replayed pot disagrees with the persisted pot');
   }
@@ -1227,19 +906,9 @@ function planAnalysis(
 }
 
 /**
- * The two things both runners do around the analysis itself, so neither can forget one.
- *
- * `admits` is the wall-clock backstop, checked immediately before the work rather than during the
- * walk: with the default cap it should never fire (see the header), and when it does the review
- * degrades to `analysis: null` for the rest of the hand instead of running past the request's
- * budget.
- *
- * `failed` turns a thrown analysis into one null decision rather than a failed review — including
- * the three an off-thread run can throw that an in-process one cannot: a full queue
- * (`service_unavailable`), an overrun (`computation_timeout`) and a dead thread. That is the same
- * judgement the budget makes: a review is a page of decisions, and losing one figure on it is
- * enormously better than losing the page. The reason reaches the caller's log; the client is
- * simply told there is no analysis for this decision.
+ * `admits` is the wall-clock backstop, checked right before the work. Past it, the rest of the hand
+ * gets `analysis: null`. `failed` turns a thrown analysis (including a full queue, an overrun or a
+ * dead thread) into one null decision rather than a failed review.
  */
 function admits(request: AnalysisRequest, budget: AnalysisBudget): boolean {
   if (budget.now() < budget.deadline) return true;
@@ -1266,10 +935,8 @@ function runAnalysis(request: AnalysisRequest, budget: AnalysisBudget): CoachRep
 }
 
 /**
- * Runs a planned analysis somewhere else. The server's path.
- *
- * The report crossing back is the worker's, so the review's own assumption is appended here — the
- * calculator thread knows nothing about reviews and must not have to.
+ * Runs off this thread. The review's assumption is appended here, because the calculator thread knows
+ * nothing of reviews.
  */
 async function runAnalysisOn(
   request: AnalysisRequest,
@@ -1286,25 +953,10 @@ async function runAnalysisOn(
 }
 
 /**
- * Runs every planned analysis off this thread, ONE AT A TIME, and collects them by sequence.
- *
- * Sequential rather than `Promise.all`, and both halves of that matter:
- *
- * 1. The pool's queue is bounded at three slots per thread and `runBatch` admits a whole set or
- *    none of it, so a review submitting eight tasks at once would be refused outright on a
- *    four-thread pool with anything else already queued — and refused as a whole, losing every
- *    figure on the page rather than one of them.
- * 2. One review would otherwise occupy every thread in the process for the length of its slowest
- *    analysis. The point of moving this work was to stop one reader's page costing everybody else
- *    their turn clock; handing it every thread would swap one queue for another.
- *
- * The cost, stated: a review's wall clock is the SUM of its analyses plus queueing, which is no
- * better than the old inline version and is slightly worse under load. That is the trade made on
- * purpose — the number that got worse is one reader's page load, and the number it bought is
- * every other player's action latency.
- *
- * The deadline is re-read before each one (`admits`), so a set that has already spent the
- * request's budget stops rather than queueing more work nobody will wait for.
+ * Runs every planned analysis off this thread, ONE AT A TIME. `runBatch` admits a whole set or none
+ * and the queue holds three per thread, so eight at once could lose the whole page. In parallel, one
+ * review would also hold every thread. A review's wall clock becomes the sum of its analyses, traded
+ * for every other player's action latency. `admits` stops the set once the budget is spent.
  */
 async function runPlannedAnalyses(
   planned: readonly AnalysisRequest[],
@@ -1329,29 +981,16 @@ interface DecisionContext {
   readonly budget: AnalysisBudget;
 }
 
-/**
- * One decision as it will be reported, plus the analysis it is owed.
- *
- * `decision.analysis` is null in a plan and stays null unless the analysis produces a report.
- * Carrying the two side by side — rather than a second list keyed by sequence — is what makes
- * "every decision is reported, some of them with a report attached" a shape the type states.
- */
+/** `decision.analysis` stays null unless the analysis produces a report. */
 interface PlannedDecision {
   readonly decision: HandReviewDecision;
   readonly request: AnalysisRequest | null;
 }
 
 /**
- * Walks the action log in sequence order, reporting each action and planning the viewer's own.
- *
- * The replay advances alongside the walk: a street change sweeps the previous street's bets into
- * the middle, the situation is read *before* the action is applied, and then the action is applied.
- * Reading before applying is the whole point — a decision is described by what the player faced,
- * not by what they left behind.
- *
- * Measured cost of this walk on the reference machine, over a three-handed showdown hand: 0.2 ms,
- * against 156 ms for the same hand's four Coach reports. That ratio is why the walk stays on the
- * calling thread and only the reports leave it.
+ * Walks the action log in order, reporting each action and planning the viewer's own. The situation
+ * is read BEFORE the action is applied, because a decision is described by what the player faced.
+ * The walk costs 0.2 ms against 156 ms for the hand's Coach reports, so only the reports leave.
  */
 function planDecisions(actions: readonly HandActionRow[], context: DecisionContext): PlannedDecision[] {
   const { state } = context;
@@ -1360,9 +999,8 @@ function planDecisions(actions: readonly HandActionRow[], context: DecisionConte
 
   for (const action of actions) {
     if (state !== null && action.street !== state.street) closeStreet(state, action.street);
-    // The first action's `potBefore` is its own `pot_after` less what it paid; every later one is
-    // simply the previous action's `pot_after`. Both come from the engine, so this is the
-    // authoritative figure, and the replay is checked against it before anything is analysed.
+    // The first `potBefore` is its own `pot_after` less what it paid, later ones the previous
+    // `pot_after`. Both come from the engine.
     const persistedPotBefore = previousPotAfter ?? action.pot_after - action.amount_paid;
 
     planned.push({
@@ -1375,9 +1013,8 @@ function planDecisions(actions: readonly HandActionRow[], context: DecisionConte
         amountPaid: action.amount_paid,
         potBefore: persistedPotBefore,
         wasAutomatic: action.was_automatic,
-        // Passed through as recorded, null included. A row from before 0009 has no reason, and
-        // inventing one here from `was_automatic` is the guess that printed "the clock ran out"
-        // beside a fold the reader asked for.
+        // As recorded, null included. Inferring one from `was_automatic` printed "the clock ran out"
+        // beside a fold the reader chose.
         automaticReason: action.automatic_reason,
         analysis: null,
       },
@@ -1405,17 +1042,9 @@ function withAnalysis(planned: PlannedDecision, report: CoachReport | null): Han
   return report === null ? planned.decision : { ...planned.decision, analysis: report };
 }
 
-// ---------------------------------------------------------------------------
-// The Legends comparison's view of the same replay
-// ---------------------------------------------------------------------------
-
 /**
- * One decision, as `@prl/poker-ai`'s `buildHandComparison` needs it, plus its analysis.
- *
- * The comparison takes a `PlayerView` per decision — the picture the acting seat had — and checks
- * it against the action taken. Nothing persists a `PlayerView`, so it is reconstructed here from
- * the same replay `buildHandReview` uses, one street and one action at a time, read BEFORE the
- * action is applied.
+ * One decision for `buildHandComparison`. Nothing persists a `PlayerView`, so it is rebuilt from the
+ * same replay, read before the action is applied.
  */
 export interface ComparisonDecisions {
   readonly board: readonly Card[];
@@ -1431,21 +1060,9 @@ export interface ComparisonDecisions {
 }
 
 /**
- * Replays a stored hand into the views its seats acted on.
- *
- * Returns null when the rows do not describe a hand this module can reproduce — an unparsable
- * config, a board it cannot read, or a betting sequence `openReplay` cannot anchor. `null` rather
- * than a partial answer, because a comparison assembled from a reconstruction that drifted would
- * be describing a situation that never happened, with numbers that look entirely reasonable.
- *
- * Exported for `build-comparison.ts` and for nothing else. The replay itself stays private: every
- * step of it is only valid in the order this function walks it, and a second walk somewhere else
- * would be a second reconstruction to keep correct.
- *
- * Asynchronous because the analyses are, and for no other reason: the walk itself is the same
- * synchronous reconstruction it always was, and every `await` in it is a Coach report being
- * computed on a calculator thread. A comparison prices the actions that were NOT taken as well as
- * the one that was, so it does strictly more of that work than a hand review does.
+ * Replays a stored hand into the views its seats acted on. Null, never partial, when the rows cannot
+ * be reproduced, because a drifted reconstruction gives plausible wrong numbers.
+ * Exported for `build-comparison.ts` only. The replay stays private, so there is one walk.
  */
 export async function buildComparisonDecisions(input: {
   readonly hand: HandRow;
@@ -1464,9 +1081,8 @@ export async function buildComparisonDecisions(input: {
   const config = configFromJson(hand.config);
   const parsedBoard = cardsFromJson(hand.board);
   if (config === null || parsedBoard === null) return null;
-  // Only this path needs it, and it needs a real one: `PlayerView.config` is a `TableConfig`, and
-  // inventing a turn clock for a hand whose record does not carry one would be putting a number
-  // into a review that nobody at the table ever played under.
+  // `PlayerView.config` needs a real turn clock. Inventing one would put a number into a review that
+  // nobody played under.
   const actionTimeoutSeconds = config.actionTimeoutSeconds;
   if (actionTimeoutSeconds === null) return null;
 
@@ -1497,9 +1113,7 @@ export async function buildComparisonDecisions(input: {
 
     if (situation === null || action === null) return null;
 
-    // Planned during the walk, run after it. `situationBefore` returns a snapshot rather than a
-    // window onto the mutable replay, so a request stays valid once the walk has moved past it —
-    // which is what makes deferring the arithmetic safe at all.
+    // Planned during the walk, run after. `situationBefore` returns a snapshot, so deferring is safe.
     const request = planAnalysis(row, {
       hand,
       viewerSeat: viewer === null ? null : viewer.seat,
@@ -1527,8 +1141,7 @@ export async function buildComparisonDecisions(input: {
         action,
         board: parsedBoard.cards,
       }),
-      // Permanently null: `prl.hand_actions` records what was done, never the distribution a policy
-      // sampled from. See the header of `build-comparison.ts`.
+      // Permanently null. See the header of `build-comparison.ts`.
       decision: null,
     });
 
@@ -1551,9 +1164,8 @@ function actionFromRow(row: HandActionRow): Action | null {
       return { type: 'call' };
     case 'bet':
     case 'raise':
-      // `action_to` is the street TOTAL the seat reached, which is what `Action` carries. A row
-      // that names a bet without one is malformed rather than defaulted: a size invented here
-      // would be priced by the comparison as though the player had chosen it.
+      // `action_to` is the street total. A bet without one is malformed, never defaulted, or the
+      // comparison would assess a size nobody chose.
       return row.action_to === null ? null : { type: row.action_type, to: row.action_to };
     default:
       return null;
@@ -1561,11 +1173,8 @@ function actionFromRow(row: HandActionRow): Action | null {
 }
 
 /**
- * The board as it stood on one street.
- *
- * `prl.hands.board` holds the FINAL board. A preflop decision was made looking at none of it, and
- * showing a flop decision the river card would be the single most misleading thing a review could
- * do — so the stored board is truncated to the street's own length.
+ * `prl.hands.board` holds the FINAL board, so it is truncated to the street's own length. A flop
+ * decision must never show the river.
  */
 function boardForStreet(board: readonly Card[], street: string): readonly Card[] {
   const length = BOARD_LENGTH_BY_STREET[street];
@@ -1573,33 +1182,11 @@ function boardForStreet(board: readonly Card[], street: string): readonly Card[]
 }
 
 /**
- * The view one seat acted on, rebuilt from the replay.
- *
- * ## What is faithful, and what is deliberately empty
- *
- * Faithful, because `buildHandComparison` reads them and a learner sees the result: `street`,
- * `potTotal`, `amountToCall`, `betLevel`, `config`, `toAct`, `viewerSeat`, the board truncated to
- * the street, and every seat's stack, commitment and status.
- *
- * Hole cards follow the same rule as everywhere else — the viewer's own, and any seat that showed
- * down. `toReviewSeat` has already applied it and the SQL applied it before that; this only reads
- * what survived both.
- *
- * Empty on purpose: `pots` (side-pot layers are settled at the end of the hand and were not
- * recorded per action), `forcedBets` and `actions`. Nothing in the comparison reads them, and
- * filling them with a plausible reconstruction would be inventing detail the rows do not contain.
- * `result` is null for the same reason a live view's is: this view is the one held at the moment
- * of the decision, when the hand had not finished.
- *
- * ## `legalActions`
- *
- * Derived from the situation by `deriveLegalActions`, exactly as `analyse` does — the engine's own
- * set is not persisted. The action actually taken is then UNIONED in, and that is not a loophole:
- * the row is evidence that the engine offered it on the night, and the derived rule is a
- * conservative approximation that can legitimately miss a case (it counts an all-in opponent as a
- * live opponent with a zero stack, so it withholds "raise" in spots the engine allowed). Trusting
- * the recorded fact over the approximation is the honest direction; the reverse would refuse to
- * review hands that really happened.
+ * The view one seat acted on, rebuilt from the replay. Faithful in every field `buildHandComparison`
+ * reads. Hole cards are only what `toReviewSeat` and the SQL let through. `pots`, `forcedBets` and
+ * `actions` are empty because the rows do not record them, and `result` is null as in a live view.
+ * `legalActions` is derived as `analyse` does, then the action actually taken is added. The row
+ * proves the engine offered it, and the derivation can miss a raise when an opponent is all-in.
  */
 function viewAtDecision(context: {
   readonly hand: HandRow;
@@ -1665,9 +1252,7 @@ function viewAtDecision(context: {
     viewerSeat: row.seat as SeatIndex,
     // The hand's own recorded provenance, never a default. See the column's note on `HandRow`.
     randomSourceKind: context.hand.random_source_kind,
-    // `isSelf` on each seat below is relative to the ACTING seat, because that is whose view this
-    // is. A comparison built from somebody else's view is the exact thing `validateRecorded`
-    // refuses, and it refuses it by checking `viewerSeat` against the actor.
+    // `isSelf` is relative to the ACTING seat, which `validateRecorded` checks against `viewerSeat`.
   } satisfies PlayerView;
 }
 
@@ -1679,8 +1264,7 @@ function seatViewAt(seat: ReviewSeat, state: ReplayState, buttonSeat: number, ac
     playerId: seat.userId ?? `seat-${seat.seat}`,
     stack: tallied?.stack ?? seat.startingStack,
     committedThisStreet: tallied?.committedThisStreet ?? 0,
-    // The replay tracks the street, not the hand: a per-hand total would need a second tally and
-    // nothing in the comparison reads it, so the honest value is the one that is actually known.
+    // The replay tracks only the street, so that is the value actually known.
     committedTotal: tallied?.committedThisStreet ?? 0,
     status: seatStatusFor(seat, tallied),
     position: null,
@@ -1699,14 +1283,8 @@ function seatStatusFor(seat: ReviewSeat, tallied: ReplaySeat | undefined): SeatS
 }
 
 /**
- * Everything a review is, except the arithmetic.
- *
- * The response is assembled member by member from the values above. Nothing is spread in from a
- * database row, so a column that gains a field cannot carry it to a client — the same fail-closed
- * construction `redactFor` uses in the engine, for the same reason.
- *
- * Both entry points below go through this, so a review served by the API and a review built by the
- * fixture generator differ in exactly one thing: where the Coach reports were computed.
+ * Assembled member by member, never spread from a row, so a new column cannot reach a client. Both
+ * entry points share it, so they differ only in where the Coach reports are computed.
  */
 interface PlannedReview {
   readonly planned: readonly PlannedDecision[];
@@ -1730,8 +1308,8 @@ function planHandReview(input: BuildHandReviewInput, options: BuildHandReviewOpt
   const viewer = seats.find((seat) => seat.userId !== null && seat.userId === input.viewerUserId) ?? null;
   const board = cardsFromJson(hand.board);
   const config = configFromJson(hand.config);
-  // Sorted once and shared: the replay reads the FIRST action to recover the blinds the hand
-  // actually posted, and it has to be the same first action the walk below starts from.
+  // Sorted once and shared. The replay recovers the posted blinds from the same first action the
+  // walk starts from.
   const actions = [...input.actions].sort((a, b) => a.sequence - b.sequence);
 
   const planned = planDecisions(actions, {
@@ -1764,17 +1342,9 @@ function planHandReview(input: BuildHandReviewInput, options: BuildHandReviewOpt
 }
 
 /**
- * Builds the whole review, computing every analysis on the calling thread.
- *
- * This is the reference construction and the offline one. `scripts/regenerate-web-fixtures.mjs`
- * uses it to produce the fixtures `apps/web` renders, and five API test files use it to state what
- * a review contains without a pool or a thread anywhere in the picture.
- *
- * It is NOT what the API serves. `GET /hands/:handId` calls `buildHandReviewOn` instead, because
- * the analyses in here measured 156 ms for one three-handed hand on the reference machine and
- * `test/event-loop-budget.test.ts` holds the route to a budget far below that. The two are
- * asserted deep-equal in that same test, which is what makes this function's numbers the served
- * numbers rather than merely similar to them.
+ * Computes every analysis on the calling thread. Used by `scripts/regenerate-web-fixtures.mjs` and
+ * the tests, NOT by the API. `test/event-loop-budget.test.ts` asserts it deep-equal to
+ * `buildHandReviewOn`, which `GET /hands/:handId` serves.
  */
 export function buildHandReview(
   input: BuildHandReviewInput,
@@ -1788,13 +1358,7 @@ export function buildHandReview(
   );
 }
 
-/**
- * Builds the whole review, computing every analysis somewhere else.
- *
- * What `GET /hands/:handId` serves. The walk, the replay and the reveal check all still happen
- * here — they are 0.2 ms and they need the rows — and only the Coach reports leave, one at a time
- * (see `runPlannedAnalyses`).
- */
+/** What `GET /hands/:handId` serves. Only the Coach reports leave this thread, one at a time. */
 export async function buildHandReviewOn(
   input: BuildHandReviewInput,
   options: BuildHandReviewOptions,

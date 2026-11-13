@@ -1,18 +1,8 @@
 /**
- * The schema guard's comparison and its readiness gate, with no database.
- *
- * ## The incident these exist for
- *
- * Two PRs in one day added a migration the development database did not have (#25's 0008, #32's
- * 0009). The API booted green and `/ready` said 200 against a schema one column short; the first
- * sign was `column "automatic_reason" does not exist` from an archive write, after units had
- * silently stopped moving. `src/schema-guard.ts` compares the shipped files with the ledger, and
- * every verdict it can reach is pinned here, including the two that must NOT refuse — a schema
- * ahead of the build, which every rolling deploy produces, and a database that did not answer,
- * which `db-unavailable.md` says must leave the process up and degraded.
- *
- * `test/schema-guard-database.test.ts` is the other half: the same verdicts against a ledger the
- * real runner wrote, read as the runtime role, and the boot path in a spawned server.
+ * The schema guard's comparison and readiness gate, with no database. Pins every verdict, including
+ * the two that must not refuse. Those are a schema ahead of the build (every rolling deploy) and a database
+ * that did not answer (`db-unavailable.md` keeps the process up and degraded).
+ * `test/schema-guard-database.test.ts` is the database half.
  */
 
 import assert from 'node:assert/strict';
@@ -76,8 +66,6 @@ describe('compareSchema — the verdicts', () => {
   });
 
   it('refuses an empty list of shipped files — a comparison with nothing is not a pass', () => {
-    // The ledger is "complete" relative to nothing, which is exactly how a guard over an image
-    // whose COPY stopped matching would otherwise answer.
     const verdict = refused(compareSchema([], SHIPPED));
     assert.match(verdict.problems.join('\n'), /nothing to compare/);
   });
@@ -101,7 +89,6 @@ describe('compareSchema — the verdicts', () => {
   });
 
   it('allows a ledger AHEAD of the build, and reports what it does not know', () => {
-    // Migrate-then-roll (RUNBOOK §11.3): the outgoing build always sees this during a deploy.
     const ledger = [...SHIPPED, { version: '0004_from_a_newer_build.sql', checksum: 'sha256:dddd' }];
     assert.deepEqual(compareSchema(SHIPPED, ledger), {
       kind: 'current',
@@ -111,7 +98,6 @@ describe('compareSchema — the verdicts', () => {
   });
 
   it('warns that a pending file below an applied one will be refused as out of order', () => {
-    // Two branches that each added a migration: the database has the other branch's 0004.
     const ledger = [
       SHIPPED[0],
       SHIPPED[1],
@@ -122,9 +108,7 @@ describe('compareSchema — the verdicts', () => {
   });
 
   it("says migrate will also refuse the other branch's file when behind AND ahead", () => {
-    // Switching branches: the database has another branch's 0004 and lacks this one's 0003 — and
-    // `migrate.mjs up` refuses a ledger row with no file, so "run db:migrate" alone would be a
-    // second refusal.
+    // `migrate.mjs up` refuses a ledger row with no file, so "run db:migrate" alone would fail again.
     const ledger = [SHIPPED[0], SHIPPED[1], { version: '0009_other_branch.sql', checksum: 'sha256:ffff' }];
     const verdict = refused(compareSchema(SHIPPED, ledger as MigrationRecord[]));
     assert.match(
@@ -200,7 +184,6 @@ describe('migrationChecksum — the rule migrate.mjs records', () => {
 describe('readShippedMigrations — a sweep of nothing is not a pass', () => {
   it('reads the real directory, in order, and finds the ledger grant among it', () => {
     const files = readShippedMigrations();
-    // Counted independently, so a reader that dropped files would not agree with itself.
     const onDisk = readdirSync(SHIPPED_MIGRATIONS_DIR).filter((name) => name.endsWith('.sql'));
     assert.ok(onDisk.length > 0, `no migrations at ${SHIPPED_MIGRATIONS_DIR}`);
     assert.equal(files.length, onDisk.length);
@@ -227,7 +210,6 @@ describe('readShippedMigrations — a sweep of nothing is not a pass', () => {
   });
 });
 
-/** A ledger read from the database called `identity`. */
 const reading = (rows: readonly MigrationRecord[], identity = 'db-a'): LedgerReading => ({ identity, rows });
 
 describe('createSchemaGate — readiness', () => {
@@ -271,8 +253,6 @@ describe('createSchemaGate — readiness', () => {
     ledger = SHIPPED; // somebody ran `migrate up` while this instance was degraded
     assert.deepEqual(await gate.readiness(ok), ok);
 
-    // Sticky: from here `/ready` is the one probe query again. A reader that would now fail proves
-    // it is not consulted — for the same database.
     const before = reads;
     ledger = [];
     assert.deepEqual(await gate.readiness(ok), ok);
@@ -330,14 +310,9 @@ describe('createSchemaGate — readiness', () => {
   });
 });
 
-/**
- * PR #38's review (Devin): a verdict used to be trusted for the life of the process, so a database
- * replaced behind the same DSN — restored into a recreated database, failed over, a newer
- * container — was served on the strength of a check made against a different one.
- */
+/** A database replaced behind the same DSN must not inherit the old one's verdict. */
 describe('createSchemaGate — a verdict belongs to one database', () => {
   it('re-verifies when a different database answers, and refuses one that is behind', async () => {
-    // Database A is current; B, which replaces it, is one file behind.
     let answering = reading(SHIPPED, 'db-a');
     let reads = 0;
     let changes = 0;
@@ -364,7 +339,6 @@ describe('createSchemaGate — a verdict belongs to one database', () => {
     assert.equal(changes, 1);
     assert.equal(gate.admits().ok, false, 'and the feature routes close with it');
 
-    // B is migrated in place: the same identity, now current, and sticky again.
     answering = reading(SHIPPED, 'db-b');
     assert.equal((await gate.readiness({ ok: true, identity: 'db-b' })).ok, true);
     assert.equal(gate.admits().ok, true);
@@ -386,13 +360,11 @@ describe('createSchemaGate — a verdict belongs to one database', () => {
     await gate.verify();
     await gate.readiness({ ok: true });
     await gate.readiness({ ok: true });
-    // Fail closed: an identity-less answer re-asks every time rather than inheriting A's verdict.
     assert.equal(reads, 3);
   });
 
   it('does not answer for a database the ledger read did not reach', async () => {
-    // PR #38's review: mid-switch the probe reaches replacement B, which is behind, while the
-    // ledger read reuses a pooled connection to A, which is current. Both are one pool's answers.
+    // The probe reaches replacement B while the ledger read reuses a pooled connection to A.
     let answering = reading(SHIPPED, 'db-a');
     const gate = createSchemaGate({
       readLedger: () => Promise.resolve(answering),
@@ -406,7 +378,6 @@ describe('createSchemaGate — a verdict belongs to one database', () => {
     assert.match(mixed.detail ?? '', /reached different databases/);
     assert.equal(gate.admits().ok, false, 'and the feature routes stay closed');
 
-    // Once the ledger read reaches B too, B's own answer decides: here, one file behind.
     answering = reading(SHIPPED.slice(0, 2), 'db-b');
     const behind = await gate.readiness({ ok: true, identity: 'db-b' });
     assert.equal(behind.ok, false);
@@ -477,14 +448,9 @@ describe('createSchemaGate — admits, the feature gate', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// The hook in `buildApp`
-// ---------------------------------------------------------------------------
-
 function gateConfig(): AppConfig {
   return loadConfig({
     NODE_ENV: 'test',
-    // Syntactically valid and never dialled.
     DATABASE_URL: 'postgresql://unused:unused@127.0.0.1:5432/unused',
     PUBLIC_WEB_ORIGIN: 'http://localhost:3000',
     SESSION_COOKIE_SECRET: 'Zk7pQ2vR9tX4bN6mL1sD8gH3jF5wC0yA',
@@ -498,7 +464,6 @@ const stubDatabase: DatabaseHandle = {
   close: () => Promise.resolve(undefined),
 };
 
-/** A feature route that touches nothing, and a WebSocket route that would accept anybody. */
 const features: RouteModule = async (app) => {
   app.get('/feature', async () => ({ served: true }));
   await app.register(websocketPlugin);
@@ -522,15 +487,13 @@ async function gatedApp(
   return app;
 }
 
-/** The upgrade's answer: the HTTP status it was refused with, or 101 when the handshake completed. */
 async function upgradeStatus(app: FastifyInstance): Promise<number> {
   await app.listen({ port: 0, host: '127.0.0.1' });
   const { port } = app.server.address() as AddressInfo;
   return await new Promise<number>((resolve, reject) => {
     const socket = new WebSocket(`ws://127.0.0.1:${port}/api/v1/socket`);
     socket.once('unexpected-response', (_request, response) => {
-      // Not terminated from this side: the server must hang up itself, or the refused upgrade is a
-      // socket that holds a shutdown drain open. `close` never firing fails this as a timeout.
+      // The server must hang up itself, or the refused upgrade holds a shutdown drain open.
       response.socket.once('close', () => resolve(response.statusCode ?? 0));
       response.resume();
     });
@@ -554,7 +517,6 @@ describe('buildApp featureGate — feature routes wait for a verdict', () => {
       const body = response.json<{ error: { code: string; retryAfterSeconds?: number; message: string } }>();
       assert.equal(body.error.code, 'service_unavailable');
       assert.equal(body.error.retryAfterSeconds, 5);
-      // The reason is logged, never sent.
       assert.doesNotMatch(response.body, /schema|verified/);
     } finally {
       await app.close();
@@ -568,7 +530,6 @@ describe('buildApp featureGate — feature routes wait for a verdict', () => {
         const response = await app.inject({ method: 'GET', url });
         assert.equal(response.statusCode, 200, `${url} must not be gated: ${response.body}`);
       }
-      // An unknown path is refused too while closed: there is no route pattern to exempt.
       assert.equal((await app.inject({ method: 'GET', url: '/api/v1/nope' })).statusCode, 503);
     } finally {
       await app.close();

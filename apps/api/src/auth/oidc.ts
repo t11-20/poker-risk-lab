@@ -1,107 +1,44 @@
 /**
- * An OpenID Connect relying party, written out rather than installed.
- *
- * `openid-client` is a good library and it is deliberately not a dependency here. The whole
- * flow this app needs is authorization code + PKCE + one ID token, and that is a few hundred
- * lines of `node:crypto` and `fetch`. Set against that: this repo's supply-chain policy treats
- * every new package as a release-blocking decision (see `docs/SECURITY.md` and
- * `docs/security/shai-hulud-snapshot-2026-08-17.md`), and an authentication dependency is the
- * single worst place to accept an unreviewed transitive tree. Writing it out also means every
- * check below is *visible*, with the reason it exists next to it, instead of being a
- * configuration flag whose default nobody has read.
- *
- * ## What is implemented
- *
- * - Discovery, validated and cached with a TTL, failing closed on a malformed document.
- * - JWKS, cached, selected by `kid`, with one refetch on an unknown `kid` for key rotation and
- *   a floor between refetches so an unknown `kid` cannot be used as a request amplifier.
- * - PKCE, S256 only. The verifier's *digest* is what gets persisted.
- * - `state` and `nonce` from `randomBytes`, persisted hashed, single use, expiring.
- * - Full ID token verification. Every check has a comment saying what it stops.
- *
- * ## What is deliberately NOT implemented
- *
- * - The implicit and hybrid flows. There is no reason to accept a token in a URL fragment.
- * - `client_secret_jwt` / `private_key_jwt`. Not needed, and each is more attack surface.
- * - The UserInfo endpoint. The ID token already carries everything this app stores.
- * - Refresh tokens. Sessions here are our own cookie; a long-lived provider credential would
- *   be a second thing to keep safe for no benefit.
- * - `email`. Not requested, not read, not stored. Identity is `(iss, sub)` and nothing else:
- *   an email address is mutable, frequently unverified, and reused across providers, so keying
- *   on it means one address change or one unverified claim silently merges two accounts.
- *
- * ## Nothing here logs a secret
- *
- * Every failure carries a `logDetail` that names the *check* that failed, never the value that
- * failed it. No token, code, verifier, state or nonce appears in any string in this file.
+ * An OpenID Connect relying party on `node:crypto` and `fetch`, not `openid-client`, because the
+ * supply-chain policy treats every new package as release-blocking (`docs/SECURITY.md`).
+ * Authorization code + PKCE (S256 only) + one ID token. No implicit or hybrid flow, no
+ * `client_secret_jwt` or `private_key_jwt`, no UserInfo endpoint, no refresh tokens.
+ * Identity is `(iss, sub)`. `email` is never requested, because keying on it can merge two accounts.
+ * Failures name the check that failed, never the value. No secret appears in any string here.
  */
 
 import { constants, createPublicKey, verify } from 'node:crypto';
 import type { OidcConfig } from '../config.ts';
 import { AppError } from '../errors.ts';
-// Digests and comparisons come from the repository layer, not from a second copy here.
-// `hashOidcSecret` is what `prl.oidc_login_attempts` stores, so the nonce comparison below is
-// only valid because it is the *same* function — and `timingSafeEquals` is the house rule for
-// comparing two digests, with a long note on why it tolerates a length mismatch.
+// `hashOidcSecret` is what `prl.oidc_login_attempts` stores, so the nonce comparison must use it.
 import { hashOidcSecret, timingSafeEquals } from '../repositories/hashing.ts';
 import { generateOidcSecret } from '../repositories/ids.ts';
 import { OIDC_ATTEMPT_TTL_SECONDS } from '../repositories/sessions.ts';
 
-// ---------------------------------------------------------------------------
-// Policy
-// ---------------------------------------------------------------------------
-
 /**
- * The only signature algorithms accepted on an ID token.
- *
- * An allowlist, checked against the token's own `alg` header — which is attacker-controlled
- * until the signature verifies, and is therefore never allowed to *choose* the verification
- * strategy. Both entries are asymmetric, which is the property that matters: see
- * `assertAlgAllowed` for the algorithm-confusion attack this closes.
+ * An allowlist checked against the token's own `alg`, which never chooses the verification strategy.
+ * Both are asymmetric. See `assertAlgAllowed`.
  */
 export const SUPPORTED_ID_TOKEN_ALGS = ['RS256', 'ES256'] as const;
 export type SupportedIdTokenAlg = (typeof SUPPORTED_ID_TOKEN_ALGS)[number];
 
-/**
- * Tolerance for clock disagreement between this server and the provider, in seconds.
- *
- * 60 seconds. Every real deployment has some skew, and a token rejected because two machines
- * disagree by two seconds is an outage with no security benefit. Larger would widen the window
- * in which an expired token is still accepted, which is the thing the tolerance costs.
- */
+/** Clock skew tolerance in seconds. Larger widens the window in which an expired token passes. */
 export const CLOCK_SKEW_SECONDS = 60;
 
-/**
- * How old an ID token may be, by its own `iat`.
- *
- * The single-use `nonce` is the real replay defence; this is the cheap backstop that bounds how
- * long a captured token stays interesting at all. Ten minutes matches the login attempt's own
- * TTL, so a token older than the attempt that requested it is refused by both.
- */
+/** A backstop to the single-use `nonce`. Matches the login attempt's ten-minute TTL. */
 export const MAX_ID_TOKEN_AGE_SECONDS = 600;
 
-/**
- * How long a login attempt (state/nonce/verifier) stays usable, in milliseconds.
- *
- * Derived from the repository's constant rather than restated, so the cookie's `Max-Age` and the
- * row's `expires_at` cannot drift apart — a cookie that outlives its row is a confusing failure,
- * and one that dies first is a sign-in that fails for no visible reason.
- */
+/** Derived from the repository constant so the cookie's `Max-Age` and the row's `expires_at` agree. */
 export const OIDC_ATTEMPT_TTL_MS = OIDC_ATTEMPT_TTL_SECONDS * 1_000;
 
 /** Discovery cache TTL. Long enough to matter, short enough that a real rotation lands. */
 const DISCOVERY_TTL_MS = 15 * 60 * 1_000;
 
-/** JWKS cache TTL. */
 const JWKS_TTL_MS = 10 * 60 * 1_000;
 
 /**
- * Floor between two JWKS fetches.
- *
- * A JWS header is unauthenticated data, so anyone can post a callback carrying a token whose
- * `kid` matches nothing. Without a floor, each of those becomes an outbound request to the
- * provider's JWKS endpoint, and this server turns into a free amplifier aimed at our own
- * identity provider. With it, a run of unknown `kid`s costs one fetch per 30 seconds.
+ * Floor between JWKS fetches. A callback with a forged unknown `kid` would otherwise make this server
+ * an amplifier against the provider. With it, unknown `kid`s cost one fetch per 30 s.
  */
 const JWKS_MIN_REFETCH_MS = 30 * 1_000;
 
@@ -120,37 +57,22 @@ const MAX_JWKS_KEYS = 20;
 const PKCE_VERIFIER_MIN_LENGTH = 43;
 const PKCE_VERIFIER_MAX_LENGTH = 128;
 
-/** The scopes requested. `email` is absent on purpose — see the module header. */
+/** `email` is absent on purpose. See the module header. */
 const REQUESTED_SCOPE = 'openid profile';
 
 /**
- * A site-relative path, and nothing that a browser could read as an origin.
- *
- * Mirrors `oidcStartQuerySchema.redirectAfter` in `@prl/contracts` exactly. Kept here as well
- * because a value that has been round-tripped through the database is not a value the schema
- * has vouched for any more, and the redirect is the one place where getting this wrong is a
- * phishing vector rather than a 404.
+ * Mirrors `oidcStartQuerySchema.redirectAfter` in `@prl/contracts`. Rechecked here because a value
+ * round-tripped through the database is no longer vouched for, and this guards against phishing.
  */
 const SAFE_REDIRECT_PATH = /^\/(?![/\\])[A-Za-z0-9/_\-?=&.]*$/;
 const MAX_REDIRECT_PATH_LENGTH = 256;
 
-/** Only base64url, no padding: the character set of a JWS compact serialization part. */
+/** Base64url with no padding, the character set of a JWS compact serialization part. */
 const BASE64URL_PART = /^[A-Za-z0-9_-]+$/;
 
-// ---------------------------------------------------------------------------
-// Errors
-// ---------------------------------------------------------------------------
-
 /**
- * "This response does not belong to a login attempt of ours."
- *
- * State, nonce and PKCE failures all land here, because to a client they are the same event:
- * start again. Distinguishing them would tell somebody probing the callback which of the three
- * checks they had beaten.
- *
- * Exported because `routes/auth.ts` raises the same refusal from the other half of the same flow —
- * its cookie, state and PKCE checks run before this module is asked to verify anything — and two
- * copies of "which code does an unverifiable callback get" is one copy too many.
+ * State, nonce and PKCE failures share one code, so a prober cannot tell which check it beat.
+ * Exported because `routes/auth.ts` raises the same refusal.
  */
 export function stateMismatch(logDetail: string): AppError {
   return new AppError('oidc_state_mismatch', { logDetail });
@@ -161,24 +83,14 @@ function exchangeFailed(logDetail: string, cause?: unknown): AppError {
   return new AppError('oidc_exchange_failed', cause === undefined ? { logDetail } : { logDetail, cause });
 }
 
-// ---------------------------------------------------------------------------
-// Reading untrusted JSON without `any`
-// ---------------------------------------------------------------------------
-
 /**
- * A parsed JSON object, before anything has been believed about it.
- *
- * Typed as `object` rather than `Record<string, unknown>` and read through `Reflect.get`, which
- * is the same pattern (and the same reason) as `fieldOf` in `logging.ts`: narrowing `unknown` to a
- * record type needs either a cast — banned here — or a copy of every property on every parse.
- * Reading one field at a time keeps the loose typing at the boundary instead of letting it spread.
+ * A parsed JSON object, before anything is believed about it. Read one field at a time through
+ * `Reflect.get`, as `fieldOf` in `logging.ts` does, because casts are banned.
  */
 type Json = object;
 
 function asRecord(value: unknown): Json | null {
-  // `typeof null === 'object'` and an array is an object, so both are excluded explicitly. A
-  // top-level array where an object is expected is the classic way a lenient parser is handed
-  // something it will misread.
+  // Arrays and null are objects too. A top-level array is how a lenient parser gets misled.
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
   return value;
 }
@@ -220,10 +132,6 @@ function parseJsonObject(text: string, what: string): Json {
   return record;
 }
 
-// ---------------------------------------------------------------------------
-// Digests, PKCE, state and nonce
-// ---------------------------------------------------------------------------
-
 /** The S256 challenge for a verifier: `base64url(sha256(ascii(verifier)))`. */
 export function pkceChallengeFor(verifier: string): string {
   return hashOidcSecret(verifier).toString('base64url');
@@ -238,22 +146,13 @@ export interface OidcAttemptSecrets {
 }
 
 /**
- * Fresh secrets for one attempt.
- *
- * Three independent calls to `generateOidcSecret`, never one value used twice: a `state` that
- * doubled as a `nonce` would make the CSRF check and the ID-token replay check the same check.
- * Each is 32 bytes of CSPRNG output — never `Math.random`, because a predictable `state` or
- * `nonce` makes both of those checks decorative.
- *
- * S256 only. RFC 7636 also defines `plain`, for devices that cannot hash, and accepting it means
- * the verifier travels in the authorization request — which defeats the whole point, because
- * anyone who can read that request can then complete the exchange.
+ * Three independent CSPRNG values, so `state` and `nonce` are never the same check. S256 only,
+ * because `plain` sends the verifier in the authorization request.
  */
 export function createAttemptSecrets(): OidcAttemptSecrets {
   const codeVerifier = generateOidcSecret();
   if (codeVerifier.length < PKCE_VERIFIER_MIN_LENGTH || codeVerifier.length > PKCE_VERIFIER_MAX_LENGTH) {
-    // Cannot happen at 32 bytes; asserted because a future change to the generator's size that
-    // pushed it out of range would otherwise be discovered by a provider rejecting the flow.
+    // Cannot happen at 32 bytes. Asserted so a generator change fails here, not at the provider.
     throw new Error('PKCE verifier length is outside the range RFC 7636 allows');
   }
   return {
@@ -264,21 +163,10 @@ export function createAttemptSecrets(): OidcAttemptSecrets {
   };
 }
 
-// ---------------------------------------------------------------------------
-// The cookie that carries the verifier
-// ---------------------------------------------------------------------------
-
 /**
- * The two values the browser has to carry across the round trip, packed for one cookie.
- *
- * Why a cookie at all, when the attempt row already exists: the PKCE verifier must be *sent* to
- * the token endpoint in plaintext, and the database holds only its digest, deliberately — a
- * database read must not be enough to complete somebody else's login. So the plaintext lives
- * where only that browser has it. `state` rides along too, giving the callback a double-submit
- * check: a login-CSRF attempt that feeds a victim a callback URL carries the attacker's
- * `state`, and without the matching cookie it fails before any lookup happens.
- *
- * Both halves are base64url, so a single `.` is an unambiguous separator.
+ * `state` and the plaintext PKCE verifier, packed for one cookie. The database holds only the
+ * verifier's digest, so a database read cannot complete somebody's login. `state` in the cookie gives
+ * the callback a double-submit check against login CSRF. Both halves are base64url, so `.` separates.
  */
 export function packAttemptCookie(secrets: {
   readonly state: string;
@@ -301,47 +189,27 @@ export function unpackAttemptCookie(
   return { state, codeVerifier };
 }
 
-// ---------------------------------------------------------------------------
-// Redirect targets
-// ---------------------------------------------------------------------------
-
 /** Whether a stored or submitted `redirectAfter` is a path this server will honour. */
 export function isSafeRedirectPath(value: string): boolean {
   return value.length <= MAX_REDIRECT_PATH_LENGTH && SAFE_REDIRECT_PATH.test(value);
 }
 
 /**
- * Where to send the browser once sign-in succeeds.
- *
- * The *origin* comes from this server's own allowlist and the *path* from the request. That
- * split is the whole reason `redirectAfter` accepts a path only: if a client could supply an
- * absolute URL, `GET /auth/oidc/start?redirectAfter=https://evil.example` would be an open
- * redirect on an authentication endpoint — the highest-value place to have one, because the
- * victim has just been asked to prove who they are and will believe the next page they see.
- * Reconstructing the URL from a trusted origin plus a validated path means a hostile value can
- * change *where in our app* somebody lands and nothing else.
- *
- * A path that fails validation is not an error worth failing sign-in over; it becomes `/`.
+ * The origin comes from this server's allowlist and only the path from the request, so a hostile
+ * value cannot make an open redirect on the sign-in endpoint. An invalid path becomes `/`.
  */
 export function safeRedirectTarget(path: string | null, webOrigins: readonly string[]): string {
   const wanted = path !== null && isSafeRedirectPath(path) ? path : '/';
   const origin = webOrigins[0];
   if (origin === undefined) return wanted;
-  // `new URL(path, origin)` cannot escape `origin` for a value that matched
-  // SAFE_REDIRECT_PATH: it has no scheme (no colon), no backslash, and cannot begin `//`.
+  // `new URL(path, origin)` cannot escape `origin` for a value matching SAFE_REDIRECT_PATH. It has no
+  // scheme, no backslash, and cannot begin `//`.
   return new URL(wanted, origin).toString();
 }
 
-// ---------------------------------------------------------------------------
-// Discovery
-// ---------------------------------------------------------------------------
-
 /**
- * The fields of a discovery document this relying party uses, all validated.
- *
- * The seven required members come from OpenID Connect Discovery 1.0 §3. Absent or malformed
- * means the document is refused outright rather than partially believed: a half-read document
- * is how an endpoint silently falls back to a default that points somewhere else.
+ * The seven required members are from OpenID Connect Discovery 1.0 §3. A malformed document is
+ * refused outright, never partially believed.
  */
 export interface DiscoveryDocument {
   readonly issuer: string;
@@ -356,12 +224,8 @@ export interface DiscoveryDocument {
 }
 
 /**
- * Endpoint URLs must be absolute and https.
- *
- * Loopback over plaintext http is the one exception, and only so a local identity provider can
- * be run during development — the same exception `config.ts` makes for `OIDC_ISSUER`, and the
- * same one `prl.users.oidc_issuer`'s CHECK constraint makes. Anywhere else, http means the
- * authorization code, and on the token endpoint the client secret, cross the network in clear.
+ * Absolute https only, or the code and client secret cross the network in clear. Loopback http is
+ * allowed for a local provider, matching `config.ts` and the `prl.users.oidc_issuer` CHECK.
  */
 function assertHttpsUrl(raw: string, what: string): string {
   let url: URL;
@@ -379,7 +243,7 @@ function assertHttpsUrl(raw: string, what: string): string {
 /** `<issuer>/.well-known/openid-configuration`, built the way the spec says to build it. */
 export function discoveryUrlFor(issuer: string): string {
   const url = new URL(issuer);
-  // Appended to the issuer's path, not substituted for it: an issuer may legitimately be
+  // Appended to the issuer's path, not substituted for it. An issuer may legitimately be
   // `https://host/tenant/1`, and replacing the path would ask the wrong host for the document.
   const base = url.pathname.endsWith('/') ? url.pathname.slice(0, -1) : url.pathname;
   url.pathname = `${base}/.well-known/openid-configuration`;
@@ -389,13 +253,8 @@ export function discoveryUrlFor(issuer: string): string {
 }
 
 /**
- * Validates a parsed discovery document against the configured issuer.
- *
- * The `issuer` comparison is exact string equality, and it is the most important line in this
- * function. A document whose `issuer` differs from the one we configured is either
- * misconfiguration or an attempt to make this server accept tokens minted by somebody else,
- * and there is no version of "close enough" — no trailing-slash tolerance, no case folding, no
- * host-only comparison — that does not also accept a value an attacker chose.
+ * The `issuer` match is exact string equality. Any tolerance (trailing slash, case, host-only) also
+ * accepts a value an attacker chose.
  */
 export function validateDiscoveryDocument(document: Json, expectedIssuer: string): DiscoveryDocument {
   const issuer = readString(document, 'issuer');
@@ -417,16 +276,14 @@ export function validateDiscoveryDocument(document: Json, expectedIssuer: string
   if (subjectTypes === undefined) throw exchangeFailed('discovery had no subject_types_supported');
   if (signingAlgs === undefined) throw exchangeFailed('discovery had no signing algs');
 
-  // We only ever send `response_type=code`. A provider that does not advertise it cannot
-  // complete this flow, and finding that out here is better than at the redirect.
+  // We only send `response_type=code`, so fail here rather than at the redirect.
   if (!responseTypes.includes('code')) throw exchangeFailed('provider does not support response_type=code');
   if (!signingAlgs.some((alg) => isSupportedAlg(alg))) {
     throw exchangeFailed('provider signs ID tokens with no algorithm we accept');
   }
 
   const codeChallengeMethods = readStringArray(document, 'code_challenge_methods_supported') ?? null;
-  // Only checked when advertised. Some providers support S256 without listing it, so an absent
-  // list is not evidence of absent support; a list that omits S256 *is*.
+  // Checked only when advertised. Some providers support S256 without listing it.
   if (codeChallengeMethods !== null && !codeChallengeMethods.includes('S256')) {
     throw exchangeFailed('provider does not advertise the S256 PKCE method');
   }
@@ -449,16 +306,9 @@ function isSupportedAlg(alg: string): alg is SupportedIdTokenAlg {
   return SUPPORTED_ID_TOKEN_ALGS.some((candidate) => candidate === alg);
 }
 
-// ---------------------------------------------------------------------------
-// JWKS
-// ---------------------------------------------------------------------------
-
 /**
- * One JSON Web Key, narrowed to the members needed to verify a signature.
- *
- * A `type` alias rather than an `interface` for a mundane but load-bearing reason: only the
- * former gets an implicit index signature, and `crypto.createPublicKey({ key, format: 'jwk' })`
- * wants `JsonWebKey`, which has one. An interface here fails to compile.
+ * A `type`, not an `interface`, because only a type alias gets the implicit index signature that
+ * `createPublicKey`'s `JsonWebKey` requires.
  */
 export type Jwk = {
   readonly kty: string;
@@ -490,8 +340,8 @@ function parseJwk(value: unknown): Jwk | null {
     x?: string;
     y?: string;
   } = { kty };
-  // Assigned one at a time because `exactOptionalPropertyTypes` means an explicit `undefined`
-  // is not the same as an absent member, and `createPublicKey` inspects presence.
+  // One at a time. Under `exactOptionalPropertyTypes` an explicit `undefined` is not absent, and
+  // `createPublicKey` checks presence.
   const kid = readString(record, 'kid');
   if (kid !== undefined) key.kid = kid;
   const use = readString(record, 'use');
@@ -522,37 +372,22 @@ export function parseJwkSet(document: Json): readonly Jwk[] {
 }
 
 /**
- * Whether this key may verify this algorithm.
- *
- * Binding the two is not pedantry. `alg` arrives in the token's own header, so if key selection
- * ignored it, a provider holding both an RSA and an EC key could have either used against the
- * other's `kid`, and a token could nominate whichever pairing the verifier handles most
- * loosely. Every clause below refuses a pairing rather than reinterpreting it.
+ * Binds the key to the algorithm, because `alg` comes from the token and must not pick a looser
+ * pairing. Every clause refuses a pairing rather than reinterpreting it.
  */
 export function jwkMatchesAlg(jwk: Jwk, alg: SupportedIdTokenAlg): boolean {
-  // `use: 'enc'` is an encryption key. Using one to verify signatures is exactly the key-reuse
-  // mistake JWK's `use` member exists to prevent.
+  // `use: 'enc'` is an encryption key and must not verify signatures.
   if (jwk.use !== undefined && jwk.use !== 'sig') return false;
   if (jwk.key_ops !== undefined && !jwk.key_ops.includes('verify')) return false;
-  // A key that names its own algorithm is taken at its word, and a token disagreeing with it
-  // is refused.
   if (jwk.alg !== undefined && jwk.alg !== alg) return false;
   if (alg === 'RS256') return jwk.kty === 'RSA' && jwk.n !== undefined && jwk.e !== undefined;
-  // ES256 is P-256 and only P-256. `crv` is checked because an EC key on another curve with a
-  // sha256 digest is not ES256, and treating it as such is undefined behaviour, not a downgrade
-  // anyone has analysed.
+  // ES256 is P-256 only. Another curve with sha256 is not ES256.
   return jwk.kty === 'EC' && jwk.crv === 'P-256' && jwk.x !== undefined && jwk.y !== undefined;
 }
 
 /**
- * The key that should verify this token, or `null` when the `kid` is unknown.
- *
- * `null` is the caller's cue to refetch the key set once — that is what key rotation looks like
- * from here — rather than to fail immediately.
- *
- * A token with no `kid` is accepted only when exactly one key could have signed it. With two or
- * more candidates, "try them all" is the tempting answer and the wrong one: it turns every
- * retired key still published in the set into a live signing key.
+ * `null` for an unknown `kid` tells the caller to refetch once, for key rotation. With no `kid`, a
+ * token passes only when exactly one key fits, or every retired key would become live.
  */
 export function selectJwk(
   keys: readonly Jwk[],
@@ -562,10 +397,6 @@ export function selectJwk(
   if (header.kid !== undefined) return usable.find((key) => key.kid === header.kid) ?? null;
   return usable.length === 1 ? (usable[0] ?? null) : null;
 }
-
-// ---------------------------------------------------------------------------
-// JWS
-// ---------------------------------------------------------------------------
 
 export interface JwsHeader {
   readonly alg: string;
@@ -581,29 +412,21 @@ export interface ParsedJws {
 }
 
 /**
- * Splits and decodes a compact JWS, without verifying anything.
- *
- * Everything this returns is untrusted. Nothing downstream may act on a claim until
- * `verifyJwsSignature` has succeeded, which is why the two are separate functions with separate
- * names rather than one `decode()` that returns something that looks authoritative.
+ * Splits and decodes a compact JWS without verifying anything. Nothing may act on a claim until
+ * `verifyJwsSignature` succeeds.
  */
 export function parseJws(token: string): ParsedJws {
   const parts = token.split('.');
-  // Five parts is a JWE: an encrypted token, which this relying party does not accept. Saying
-  // so is clearer than "malformed", because it is a configuration mistake, not an attack.
+  // Five parts is a JWE, a configuration mistake rather than an attack.
   if (parts.length === 5) throw exchangeFailed('ID token was a JWE; encrypted ID tokens are not accepted');
   if (parts.length !== 3) throw exchangeFailed('ID token was not a three-part compact JWS');
   const [headerPart, claimsPart, signaturePart] = parts;
   if (headerPart === undefined || claimsPart === undefined || signaturePart === undefined) {
     throw exchangeFailed('ID token had a missing segment');
   }
-  // Called out separately from the base64url check below because this is what an `alg: none`
-  // token actually looks like on the wire — three parts, the third one empty — and "there is no
-  // signature" is the accurate reason to refuse it.
+  // This is what an `alg: none` token looks like on the wire.
   if (signaturePart === '') throw exchangeFailed('ID token carried no signature');
-  // Checked before decoding because `Buffer.from(x, 'base64url')` silently skips characters it
-  // does not recognise, so a token containing `+`, `/` or `=` would decode to *something* and
-  // be treated as valid base64url that it is not.
+  // Checked before decoding, because `Buffer.from(x, 'base64url')` silently skips `+`, `/` and `=`.
   for (const part of [headerPart, claimsPart, signaturePart]) {
     if (!BASE64URL_PART.test(part)) throw exchangeFailed('ID token segment was not base64url');
   }
@@ -622,32 +445,16 @@ export function parseJws(token: string): ParsedJws {
   return {
     header: parsedHeader,
     claims,
-    // ASCII, and the *exact* bytes that were signed. Re-serialising the decoded header and
-    // claims would produce different bytes and every signature would fail.
+    // The exact signed bytes. Re-serialising the decoded parts would change them.
     signingInput: Buffer.from(`${headerPart}.${claimsPart}`, 'ascii'),
     signature: Buffer.from(signaturePart, 'base64url'),
   };
 }
 
 /**
- * The algorithm check, which is the one that stops the classic attack.
- *
- * Three refusals, in order of how much damage they prevent:
- *
- * 1. **`alg: 'none'`.** An unsigned token. The signature segment is empty and there is nothing
- *    to verify, so accepting it means accepting whatever claims the caller typed — including
- *    `sub`. Any implementation that reaches its verification step with `none` still allowed has
- *    no authentication at all.
- * 2. **Any symmetric algorithm (`HS256`, `HS384`, `HS512`).** This is algorithm confusion. The
- *    verification key for an asymmetric token is a *public* key, which by definition the
- *    attacker also has. If the token is allowed to say "this is HMAC", a naive verifier will
- *    use that public key as the HMAC secret — and the attacker, holding the same public key,
- *    can compute the MAC. The token verifies. The fix is not to be careful about which key gets
- *    passed where; it is to refuse the family outright, because we never issue or accept a
- *    symmetric ID token.
- * 3. **Anything not on our allowlist, or not advertised by the provider.** `RS512` might be
- *    perfectly sound, but an algorithm nobody chose is an algorithm nobody reviewed, and the
- *    provider's own document is the authority on what it signs with.
+ * Refuses `none` (an unsigned token), any `HS*` (algorithm confusion, where a verifier uses the public
+ * key as the HMAC secret and the attacker, holding that key, forges the MAC), and anything not on our
+ * allowlist or not advertised by the provider.
  */
 export function assertAlgAllowed(alg: string, providerAlgs: readonly string[]): SupportedIdTokenAlg {
   const normalised = alg.trim();
@@ -664,22 +471,14 @@ export function assertAlgAllowed(alg: string, providerAlgs: readonly string[]): 
 }
 
 /**
- * Verifies the signature, and only the signature.
- *
- * The ES256 branch needs `dsaEncoding: 'ieee-p1363'`. A JOSE ECDSA signature is the raw
- * `r || s` pair, 64 bytes for P-256, while OpenSSL's default is DER. Verify with the wrong
- * encoding and *every* valid token fails, which is the sort of bug that gets "fixed" by
- * accepting either encoding — and accepting either reintroduces signature malleability.
- *
- * Returns `false` rather than throwing on a malformed key or signature: from a caller's point
- * of view "this did not verify" is one outcome, and branching on how it failed to verify is how
- * an error message becomes an oracle.
+ * ES256 needs `dsaEncoding: 'ieee-p1363'`, because JOSE ECDSA is raw `r || s` and OpenSSL defaults to
+ * DER. Accepting both would reintroduce signature malleability.
+ * Returns `false` rather than throwing, so how a check failed cannot become an oracle.
  */
 export function verifyJwsSignature(jws: ParsedJws, jwk: Jwk, alg: SupportedIdTokenAlg): boolean {
   try {
-    // Spread into a fresh object literal so it satisfies `JsonWebKey`'s index signature. This
-    // also rejects `kty: 'oct'` at the source: `createPublicKey` throws on a symmetric JWK, so
-    // there is no path by which an HMAC key becomes a verification key here.
+    // A fresh literal satisfies `JsonWebKey`'s index signature. `createPublicKey` throws on
+    // `kty: 'oct'`, so no HMAC key can become a verification key.
     const key = createPublicKey({ key: { ...jwk }, format: 'jwk' });
     if (alg === 'RS256') {
       return verify('sha256', jws.signingInput, { key, padding: constants.RSA_PKCS1_PADDING }, jws.signature);
@@ -690,17 +489,7 @@ export function verifyJwsSignature(jws: ParsedJws, jwk: Jwk, alg: SupportedIdTok
   }
 }
 
-// ---------------------------------------------------------------------------
-// Claims
-// ---------------------------------------------------------------------------
-
-/**
- * What the verified token yields.
- *
- * `(issuer, subject)` is the identity, and it is the *pair*: a subject is only unique within an
- * issuer, so keying on `sub` alone means two providers can collide onto one account. There is
- * deliberately no `email` member — see the module header.
- */
+/** The identity is the `(issuer, subject)` pair, because `sub` is unique only within an issuer. */
 export interface VerifiedIdToken {
   readonly issuer: string;
   readonly subject: string;
@@ -712,55 +501,39 @@ export interface IdTokenExpectation {
   readonly issuer: string;
   readonly clientId: string;
   /**
-   * `sha256(nonce)`, not the nonce.
-   *
-   * The plaintext nonce is never stored — only `prl.oidc_login_attempts.nonce_hash` — so the
-   * comparison is digest against digest. Taking a hash here rather than a string is what makes
-   * that impossible to get wrong by accident.
+   * `sha256(nonce)`. Only the digest is stored, so taking a hash keeps the comparison digest to digest.
    */
   readonly nonceHash: Buffer;
   readonly nowMs: number;
 }
 
 /**
- * Every claim check, in one place, each with the attack it closes.
- *
- * Order matters only for the quality of the log line — all of these are fatal — but `nonce` is
- * checked last on purpose, so a token that fails an unconditional check never reports itself as
- * a replay.
+ * Every check is fatal. `nonce` is checked last so a token that fails an unconditional check never
+ * logs as a replay.
  */
 export function verifyIdTokenClaims(claims: Json, expect: IdTokenExpectation): VerifiedIdToken {
   const nowSeconds = Math.floor(expect.nowMs / 1_000);
 
-  // `iss` — exact equality. A prefix or suffix comparison here also accepts
-  // `https://issuer.example.com.evil.test` and `https://evil.test/?x=https://issuer.example`.
-  // Exact equality is the only comparison with no such family of near-misses.
+  // `iss` by exact equality. A prefix or suffix match would also accept
+  // `https://issuer.example.com.evil.test`.
   const issuer = readString(claims, 'iss');
   if (issuer === undefined) throw exchangeFailed('ID token had no iss');
   if (issuer !== expect.issuer) throw exchangeFailed('ID token iss did not match the configured issuer');
 
-  // `sub` — the identity. Bounded to what `prl.users.oidc_subject` accepts, so a provider
-  // returning something enormous fails here with a clear reason instead of at the INSERT.
+  // Bounded to what `prl.users.oidc_subject` accepts, so it fails here rather than at the INSERT.
   const subject = readString(claims, 'sub');
   if (subject === undefined) throw exchangeFailed('ID token had no sub');
   if (subject.length > 255) throw exchangeFailed('ID token sub was longer than the schema allows');
 
-  // `aud` — the token must have been minted *for us*. Without this check, a token issued by the
-  // same provider to a different, possibly hostile, client application is accepted here: same
-  // issuer, valid signature, real user. That is a complete authentication bypass, and it is the
-  // reason `aud` is not optional in anybody's spec.
+  // Without `aud`, a token the same provider issued to another client would authenticate here.
   assertAudience(claims, expect.clientId);
 
-  // `exp` — required, and the skew is *subtracted* from the deadline so a stale token is not
-  // accepted for a further minute past its own expiry.
+  // The skew is subtracted, so a stale token gets no extra minute.
   const exp = readNumber(claims, 'exp');
   if (exp === undefined) throw exchangeFailed('ID token had no exp');
   if (nowSeconds - CLOCK_SKEW_SECONDS >= exp) throw exchangeFailed('ID token has expired');
 
-  // `iat` — required by OIDC Core §2. Two bounds: not meaningfully in the future (a provider
-  // whose clock is wrong by an hour would otherwise mint tokens we accept for an hour longer
-  // than intended), and not older than `MAX_ID_TOKEN_AGE_SECONDS`, which caps how long a
-  // captured token stays interesting even before the nonce check.
+  // Required by OIDC Core §2. Bounded against the future and by `MAX_ID_TOKEN_AGE_SECONDS`.
   const iat = readNumber(claims, 'iat');
   if (iat === undefined) throw exchangeFailed('ID token had no iat');
   if (iat - CLOCK_SKEW_SECONDS > nowSeconds) throw exchangeFailed('ID token iat is in the future');
@@ -768,17 +541,14 @@ export function verifyIdTokenClaims(claims: Json, expect: IdTokenExpectation): V
     throw exchangeFailed('ID token is older than this server will accept');
   }
 
-  // `nbf` — optional, and checked when present. A token that is not yet valid must not be
-  // treated as valid; skipping this is how a token minted for a future window gets used early.
+  // Optional, and checked when present.
   const nbf = readNumber(claims, 'nbf');
   if (nbf !== undefined && nbf - CLOCK_SKEW_SECONDS > nowSeconds) {
     throw exchangeFailed('ID token is not valid yet');
   }
 
-  // `nonce` — binds this token to the one authorization request that asked for it. Without it,
-  // a token captured from any earlier successful sign-in can be replayed into a fresh callback.
-  // Compared as digests, in constant time, because a comparison that short-circuits on the
-  // first differing byte leaks the digest one byte at a time.
+  // Binds the token to this authorization request, so a captured token cannot be replayed.
+  // Compared as digests, in constant time.
   const nonce = readString(claims, 'nonce');
   if (nonce === undefined) throw stateMismatch('ID token had no nonce');
   if (!timingSafeEquals(hashOidcSecret(nonce), expect.nonceHash)) {
@@ -788,14 +558,7 @@ export function verifyIdTokenClaims(claims: Json, expect: IdTokenExpectation): V
   return { issuer, subject, nameHint: readNameHint(claims) };
 }
 
-/**
- * `aud` and `azp`, per OIDC Core §3.1.3.7 rules 3 to 5.
- *
- * `aud` may be a string or an array. When it is an array with more than one entry the token was
- * minted for several clients at once, and the spec requires `azp` to name the one it was
- * *intended* for — otherwise a token legitimately issued to another client that happens to
- * share an audience list would pass.
- */
+/** OIDC Core §3.1.3.7 rules 3 to 5. With several audiences, `azp` must name this client. */
 function assertAudience(claims: Json, clientId: string): void {
   const raw = field(claims, 'aud');
   const audiences = typeof raw === 'string' ? [raw] : (readStringArray(claims, 'aud') ?? []);
@@ -808,12 +571,8 @@ function assertAudience(claims: Json, clientId: string): void {
 }
 
 /**
- * A display-name candidate, in order of how much a human would recognise it.
- *
- * Returned raw and marked as such. It is provider-supplied text that a user may well have
- * chosen, so it is sanitised at the point of storage (`sanitiseDisplayName` in
- * `src/routes/auth.ts`) rather than trusted here — and `logging.ts` censors `displayName`
- * everywhere, so it never reaches a log line either way.
+ * Returned raw. `sanitiseDisplayName` in `src/routes/auth.ts` sanitises it at storage, and
+ * `logging.ts` censors `displayName`.
  */
 function readNameHint(claims: Json): string | null {
   return (
@@ -824,10 +583,6 @@ function readNameHint(claims: Json): string | null {
     null
   );
 }
-
-// ---------------------------------------------------------------------------
-// The relying party
-// ---------------------------------------------------------------------------
 
 export interface AuthorizationRequest {
   readonly state: string;
@@ -869,23 +624,13 @@ interface JwksCache {
   readonly uri: string;
   readonly keys: readonly Jwk[];
   readonly expiresAtMs: number;
-  /**
-   * When an unknown-`kid` refetch last happened for this cached set, or `null` if none has.
-   * Separate from the TTL so that a genuine rotation is picked up at once while a run of forged
-   * `kid`s is not: see `keySet`.
-   */
+  /** When an unknown-`kid` refetch last happened. Separate from the TTL. See `keySet`. */
   readonly refetchedAtMs: number | null;
 }
 
 /**
- * Builds the relying party.
- *
- * A closure rather than a class, so the two caches are genuinely private — not `private` in the
- * type system only — and there is no `this` to lose.
- *
- * One instance per process, created once by `src/routes/auth.ts`. Creating one per request would
- * make every sign-in fetch discovery and the key set again, which is both slow and rude to the
- * provider.
+ * A closure, so the caches are truly private. One per process, created by `src/routes/auth.ts`, so
+ * every sign-in shares the cached discovery document and key set.
  */
 export function createOidcRelyingParty(options: RelyingPartyOptions): OidcRelyingParty {
   const { config } = options;
@@ -907,8 +652,7 @@ export function createOidcRelyingParty(options: RelyingPartyOptions): OidcRelyin
       throw exchangeFailed(`${what} could not be fetched`, error);
     }
     if (!response.ok) throw exchangeFailed(`${what} returned status ${response.status}`);
-    // The *final* URL after any redirect. A document fetched over https that redirected to
-    // plaintext http was read over the network in clear, whatever the original scheme said.
+    // The final URL after redirects. An https fetch that redirected to http was read in clear.
     assertHttpsUrl(response.url === '' ? url : response.url, `${what} response URL`);
     return parseJsonObject(await readBoundedText(response, maxBytes, what), what);
   }
@@ -918,8 +662,7 @@ export function createOidcRelyingParty(options: RelyingPartyOptions): OidcRelyin
     if (cached !== null && now() < cached.expiresAtMs) return cached.document;
     const document = await getJson(discoveryUrlFor(config.issuer), MAX_DISCOVERY_BYTES, 'discovery document');
     const validated = validateDiscoveryDocument(document, config.issuer);
-    // Only a *valid* document is cached. Caching a rejected one would turn one bad response
-    // into fifteen minutes of failed sign-ins.
+    // Only a valid document is cached, or one bad response would fail sign-ins for fifteen minutes.
     discoveryCache = { document: validated, expiresAtMs: now() + DISCOVERY_TTL_MS };
     return validated;
   }
@@ -931,24 +674,10 @@ export function createOidcRelyingParty(options: RelyingPartyOptions): OidcRelyin
   }
 
   /**
-   * The key set, with rotation handled and hammering prevented.
-   *
-   * Two paths in, and keeping them apart is the whole design:
-   *
-   * - `refresh: false` is the ordinary read. It serves the cache until the TTL runs out.
-   * - `refresh: true` is the caller saying "the `kid` I need is not in what you gave me", which
-   *   is exactly what a rotated signing key looks like from here. The *first* such refetch after
-   *   any successful fetch is honoured immediately — otherwise a real rotation would leave every
-   *   sign-in broken until the TTL happened to lapse — and every one after it inside
-   *   `JWKS_MIN_REFETCH_MS` is refused, because a JWS header is unauthenticated data and anyone
-   *   can mint a token whose `kid` matches nothing. Without the floor, this server would be a
-   *   free request amplifier aimed at our own identity provider.
-   *
-   * A failed fetch leaves the cache untouched, so the next request tries again rather than
-   * inheriting a poisoned entry. That is one outbound attempt per sign-in while the provider is
-   * down, which the route's own rate limit already bounds.
+   * `refresh: true` means the needed `kid` is missing, which is what rotation looks like. The first
+   * refetch is honoured at once, later ones within `JWKS_MIN_REFETCH_MS` are served from cache. A
+   * failed fetch leaves the cache untouched. Not `async`, because three of four paths await nothing.
    */
-  // Not `async`, because three of its four paths answer from the cache with nothing to await.
   function keySet(uri: string, refresh: boolean): Promise<readonly Jwk[]> {
     const at = now();
     const cached = jwksCache !== null && jwksCache.uri === uri ? jwksCache : null;
@@ -965,13 +694,10 @@ export function createOidcRelyingParty(options: RelyingPartyOptions): OidcRelyin
   async function authorizationUrl(request: AuthorizationRequest): Promise<string> {
     const document = await discovery();
     const url = new URL(document.authorizationEndpoint);
-    // Set one at a time rather than by string concatenation, so every value is percent-encoded
-    // by the URL implementation and a value containing `&` cannot inject a parameter.
+    // `searchParams` percent-encodes, so a value containing `&` cannot inject a parameter.
     url.searchParams.set('response_type', 'code');
     url.searchParams.set('client_id', config.clientId);
-    // Exactly the registered value, from configuration and never from the request. A
-    // request-supplied redirect_uri is how an authorization code gets delivered to somebody
-    // else's server.
+    // From configuration, never the request, or a code could be delivered to another server.
     url.searchParams.set('redirect_uri', config.redirectUri);
     url.searchParams.set('scope', REQUESTED_SCOPE);
     url.searchParams.set('state', request.state);
@@ -990,9 +716,7 @@ export function createOidcRelyingParty(options: RelyingPartyOptions): OidcRelyin
       grant_type: 'authorization_code',
       code: params.code,
       redirect_uri: config.redirectUri,
-      // PKCE: the verifier whose *digest* the provider has been holding since the
-      // authorization request. Sending it here is what proves this exchange comes from the
-      // same client that started the flow, so an intercepted code is useless on its own.
+      // PKCE proves this exchange comes from the client that started the flow.
       code_verifier: params.codeVerifier,
     });
     const headers = tokenRequestHeaders(document, config, body);
@@ -1003,9 +727,7 @@ export function createOidcRelyingParty(options: RelyingPartyOptions): OidcRelyin
         method: 'POST',
         headers,
         body: body.toString(),
-        // No redirects. This request carries the client secret; a redirect would forward it to
-        // whatever host the provider named, and the token endpoint has no legitimate reason to
-        // move mid-request.
+        // This request carries the client secret, and a redirect would forward it.
         redirect: 'error',
         signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
       });
@@ -1015,8 +737,8 @@ export function createOidcRelyingParty(options: RelyingPartyOptions): OidcRelyin
 
     const text = await readBoundedText(response, MAX_TOKEN_RESPONSE_BYTES, 'token response');
     if (!response.ok) {
-      // The provider's own error body is not read and not logged. It is attacker-influenceable
-      // (an attacker chooses the code that produced it) and it can echo request parameters.
+      // The provider's error body is attacker-influenceable and can echo parameters. Not read, not
+      // logged.
       throw exchangeFailed(`token endpoint returned status ${response.status}`);
     }
     const payload = parseJsonObject(text, 'token response');
@@ -1061,13 +783,8 @@ export function createOidcRelyingParty(options: RelyingPartyOptions): OidcRelyin
 }
 
 /**
- * Client authentication at the token endpoint.
- *
- * `client_secret_basic` when the provider allows it, because it keeps the secret out of the
- * request body — where a proxy or a debug log is more likely to capture it. `client_secret_post`
- * is the documented fallback. Anything else (`private_key_jwt`, `none`) is refused rather than
- * guessed at: a provider that requires an authentication method we do not implement should fail
- * loudly at the exchange, not silently send an unauthenticated request.
+ * `client_secret_basic` keeps the secret out of the body. `client_secret_post` is the fallback.
+ * Anything else fails loudly at the exchange rather than sending an unauthenticated request.
  */
 function tokenRequestHeaders(
   document: DiscoveryDocument,
@@ -1081,12 +798,9 @@ function tokenRequestHeaders(
     'cache-control': 'no-store',
   };
   const methods = document.tokenEndpointAuthMethodsSupported;
-  // An absent list means the OAuth 2.0 default, which is client_secret_basic. Written as one
-  // condition rather than a `useBasic` boolean so the compiler can see that `methods` is
-  // non-null below.
+  // An absent list means the OAuth 2.0 default, client_secret_basic.
   if (methods === null || methods.includes('client_secret_basic')) {
-    // RFC 6749 §2.3.1: both halves are form-urlencoded *before* base64, which matters for a
-    // secret containing a reserved character.
+    // RFC 6749 §2.3.1. Both halves are form-urlencoded before base64.
     const credentials = `${formEncode(config.clientId)}:${formEncode(config.clientSecret)}`;
     headers['authorization'] = `Basic ${Buffer.from(credentials, 'utf8').toString('base64')}`;
     body.set('client_id', config.clientId);
@@ -1105,11 +819,8 @@ function formEncode(value: string): string {
 }
 
 /**
- * Reads a response body with a hard ceiling.
- *
- * `response.text()` has no limit, so a provider — compromised, or merely misconfigured behind a
- * proxy that streams an error page — could make this process allocate until it dies. Reading
- * chunk by chunk and cancelling means the ceiling is enforced before the memory is committed.
+ * `response.text()` has no limit, so a misbehaving provider could exhaust memory. The ceiling is
+ * enforced chunk by chunk, before the memory is committed.
  */
 async function readBoundedText(response: Response, maxBytes: number, what: string): Promise<string> {
   const body = response.body;
@@ -1131,12 +842,8 @@ async function readBoundedText(response: Response, maxBytes: number, what: strin
 }
 
 /**
- * `typ`, when the provider sends one.
- *
- * Optional in JWS, so absence is fine. A `typ` of `at+jwt` is an *access* token, and a provider
- * (or an attacker who obtained one) handing us an access token where an ID token belongs is a
- * token-substitution attempt: access tokens are not audience-restricted to us in the same way
- * and are not required to carry a nonce.
+ * Optional in JWS. `at+jwt` is an access token, which is not audience-restricted to us or required to
+ * carry a nonce, so it is refused.
  */
 function assertHeaderType(header: JwsHeader): void {
   const typ = header.typ;

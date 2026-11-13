@@ -1,51 +1,9 @@
 /**
- * A hand played at a live table, read back out of Postgres.
- *
- * ## The hole this closes
- *
- * `postgresArchive` (`src/rooms/registry.ts`) is the only thing that writes a hand down, and
- * nothing exercised it. Every suite that plays a hand uses `noopArchive`; every suite that reads a
- * hand back inserts its rows by hand. So the join between the two — the live table's notices
- * becoming durable rows — was covered at both ends and not in the middle, and the release audit
- * was right to refuse to treat the API suite as evidence about the database.
- *
- * Worse, the guarantee this system is built around was in that gap. "One player never receives
- * another player's private cards" is asserted over live sockets and over the HTTP hand routes, both
- * of which read *this process's memory* or a fixture somebody typed. Neither says anything about
- * what is durably stored. A leak in the archive would put the cards in the table, where every
- * later read, backup and replica would carry them, and no test would have noticed.
- *
- * So this file plays real hands through `RoomRegistry` — with `postgresArchive` and
- * `postgresRoomStore` both bound to a real database — and then asks the database what it kept.
- *
- * ## What "faithful" is asserted against
- *
- * The archive's own inputs. The tap below wraps the real `postgresArchive`, delegates every call
- * to it unchanged, and keeps a copy of what went in: the `ArchivedDeal`, the `ArchivedAction`s and
- * the `ArchivedResult`. The rows are then compared against those, so a binding that dropped a
- * field, transposed two arguments or swallowed a rejection fails here. Nothing is stubbed — the
- * tap adds an observation and changes no behaviour.
- *
- * ## How the test knows the writes have finished
- *
- * Archive writes are deliberately fire-and-forget: `LiveRoom.archiveNotice` appends them to a
- * per-room promise chain that nobody awaits, because a failing history write must never stop a
- * hand. That makes "the hand is over" and "the hand is written" two different moments, and a test
- * that read the rows at the first would be a flake generator.
- *
- * `roomStatusChanged` is the last call in the chain for both the deal and the completion, so the
- * tap records it and `waitFor` resolves on the recorded fact. No sleeps, no polling: the condition
- * is the write itself. A chain that *rejects* is reported to `onProblem`, which fails the waiter
- * immediately with the underlying error rather than hanging until a timeout. The one timer in this
- * file is a watchdog inside `waitFor` that turns "the write never happened" into a named failure —
- * `node --test` has no default timeout, so the alternative is a suite that hangs.
- *
- * ## Everything runs inside one rolled-back transaction
- *
- * `postgresArchive` and `postgresRoomStore` both take `() => Db`, so both can be bound to a
- * transaction handle. Each case therefore creates its own accounts, room, hands and actions and
- * leaves nothing behind, which is what lets this file run repeatedly, next to the other suites,
- * and against a seeded development database.
+ * Plays real hands through `RoomRegistry` with `postgresArchive` and `postgresRoomStore` bound to a
+ * real database, then reads back what it kept. Rows are compared against the archive's own inputs,
+ * recorded by a tap that delegates every call unchanged. Archive writes are fire-and-forget, so
+ * tests wait on the recorded `roomStatusChanged` write, never a sleep. Each case runs in one
+ * rolled-back transaction.
  */
 
 import assert from 'node:assert/strict';
@@ -84,10 +42,8 @@ if (databaseUrl !== undefined) {
         PUBLIC_WEB_ORIGIN: 'http://localhost:3000',
         SESSION_COOKIE_SECRET: TEST_SECRET,
         DATABASE_POOL_MAX: '2',
-        // A hand is many statements inside one transaction, and the driver derives
-        // `idle_in_transaction_session_timeout` from this. The default 5s ceiling is ample on an
-        // idle laptop and not obviously ample on a loaded CI box; 30s keeps the bound (a runaway
-        // transaction still dies) without making this suite the first thing to fail under load.
+        // The driver derives `idle_in_transaction_session_timeout` from this, and a hand is many
+        // statements in one transaction. 30s survives a loaded CI box.
         DATABASE_STATEMENT_TIMEOUT_MS: '30000',
       }),
     );
@@ -123,31 +79,18 @@ async function inRollback(fn: (tx: TransactionSql) => Promise<void>): Promise<vo
   }
 }
 
-// ---------------------------------------------------------------------------
-// The tap: the real archive, plus a record of what it was asked to write
-// ---------------------------------------------------------------------------
-
 interface ArchiveTap {
-  /** The archive the registry is given. Delegates every call to `postgresArchive`. */
   readonly archive: HandArchive;
-  /** Resolves once `fact` has been written, or rejects if the write chain failed. */
   readonly waitFor: (fact: string) => Promise<void>;
-  /** Called by the registry when a write chain rejects. Fails any waiter at once. */
+  /** Fails any waiter at once. */
   readonly noteProblem: (message: string) => void;
   readonly deals: ArchivedDeal[];
   readonly results: ArchivedResult[];
-  /** Every `ArchivedAction` handed to the archive, by hand id, in the order it arrived. */
   readonly actions: Map<string, ArchivedAction[]>;
   readonly problems: string[];
 }
 
-/**
- * Wraps the real archive so a test can tell when a write has landed and compare rows against what
- * went in.
- *
- * Emphatically not a stand-in: every method awaits the real `postgresArchive`, and the recording
- * happens after that await, so a fact is only recorded once the row is genuinely there.
- */
+/** Every method awaits the real `postgresArchive` before recording, so a fact means the row exists. */
 function tapArchive(inner: HandArchive): ArchiveTap {
   const facts = new Set<string>();
   const waiters = new Map<string, { resolve: () => void; reject: (error: Error) => void }[]>();
@@ -166,15 +109,10 @@ function tapArchive(inner: HandArchive): ArchiveTap {
   };
 
   const archive: HandArchive = {
-    // Spread first, so every method this tap does not care about is the real one, and so a method
-    // ADDED to `HandArchive` later is forwarded rather than missing. That is not hypothetical: two
-    // (`lastDealtHand`, `abandonInterruptedHands`) arrived while this file was being written, and
-    // an enumerated wrapper answered them with `undefined is not a function` on the archive chain.
-    // The overrides below are only the calls this file needs to observe.
+    // Spread first so a method added to `HandArchive` later is forwarded, not `undefined`.
     ...inner,
     handStarted: async (deal) => {
       await inner.handStarted(deal);
-      // Recorded after the write, so `deals` never describes a hand the database refused.
       tap.deals.push(deal);
       record(`started:${deal.handId}`);
     },
@@ -199,7 +137,7 @@ function tapArchive(inner: HandArchive): ArchiveTap {
     },
     roomStatusChanged: async (roomId, status) => {
       await inner.roomStatusChanged(roomId, status);
-      // The last call in both chains, which is what makes it the one worth waiting on.
+      // The last call in both chains.
       record(`status:${roomId}:${status}`);
     },
   };
@@ -224,10 +162,8 @@ function tapArchive(inner: HandArchive): ArchiveTap {
           reject(new Error(`the archive write chain already failed: ${problems.join('; ')}`));
           return;
         }
-        // A failure guard, not a synchronisation device: the resolution above is the write itself,
-        // and this only fires when a write that should have happened never did. It exists because
-        // `node --test` has no default timeout, so without it a wiring mistake here would hang the
-        // whole package suite instead of failing it. `unref` so it can never hold the process open.
+        // `node --test` has no default timeout, so this turns a write that never happened into a
+        // named failure. `unref` so it cannot hold the process open.
         const watchdog = setTimeout(() => {
           reject(
             new Error(`the archive never wrote "${fact}" (waited 20s); recorded: ${[...facts].join(', ')}`),
@@ -251,10 +187,6 @@ function tapArchive(inner: HandArchive): ArchiveTap {
   return tap;
 }
 
-// ---------------------------------------------------------------------------
-// A live room with two seated learners, everything bound to the transaction
-// ---------------------------------------------------------------------------
-
 interface Learner {
   readonly userId: string;
   readonly displayName: string;
@@ -276,9 +208,7 @@ async function guest(tx: TransactionSql, displayName: string): Promise<Learner> 
 
 function registryOn(tx: TransactionSql, tap: ArchiveTap): RoomRegistry {
   return new RoomRegistry({
-    // A manual clock, never advanced: a turn timer that fires mid-assertion would apply an
-    // automatic fold and make the hand's shape depend on how loaded the machine is. Nothing here
-    // is about timeouts, so nothing here should be able to time out.
+    // Never advanced, so no turn timer can fold mid-assertion.
     clock: createManualClock(),
     random: createSecureRandom(),
     archive: tap.archive,
@@ -287,7 +217,6 @@ function registryOn(tx: TransactionSql, tap: ArchiveTap): RoomRegistry {
   });
 }
 
-/** Two learners, a private room, both seated. Every write goes to the real database. */
 async function seatTwo(tx: TransactionSql, names: readonly [string, string]): Promise<LiveFixture> {
   const tap = tapArchive(postgresArchive(() => tx));
   const registry = registryOn(tx, tap);
@@ -310,7 +239,6 @@ async function seatTwo(tx: TransactionSql, names: readonly [string, string]): Pr
   return { registry, tap, roomId, table: created.room.table, alice, bob };
 }
 
-/** Who is to act, and the sequence they must quote. Read from the table, never assumed. */
 function toAct(
   table: LiveTable,
   anyViewer: string,
@@ -323,19 +251,8 @@ function toAct(
 }
 
 /**
- * Plays the hand out, choosing from the engine's own legal set rather than from an assumption.
- *
- * `passive` checks when it can and calls otherwise, which walks any two-handed hand to showdown.
- * `fold` folds whoever is asked to act, which ends the hand before a card becomes public.
- *
- * Both styles loop until the hand is genuinely over rather than counting actions: heads-up, one
- * fold ends it, but "one fold is enough" is an assumption about the table's rules, and this file is
- * about persistence. The bounded loop turns a hand that will not end into a failed assertion rather
- * than a suite that hangs.
- *
- * Reading the legal actions off the view is what keeps this robust while the blind rules are being
- * worked on elsewhere: if the first seat to act preflop changes, or a forced bet moves, this loop
- * still submits something legal and the assertions stay about persistence.
+ * `passive` walks to showdown and `fold` ends the hand before a card is public. Both choose from
+ * the engine's legal set and loop until the hand is over, bounded so it cannot hang.
  */
 async function playOut(fixture: LiveFixture, style: 'passive' | 'fold'): Promise<void> {
   for (let guard = 0; guard < 40; guard += 1) {
@@ -357,7 +274,6 @@ async function playOut(fixture: LiveFixture, style: 'passive' | 'fold'): Promise
   assert.fail('the hand did not complete within 40 actions');
 }
 
-/** Deals, plays and waits for every archive write of that hand to land. */
 async function playOneHand(fixture: LiveFixture, style: 'passive' | 'fold'): Promise<string> {
   const started = await fixture.table.startHand();
   await fixture.tap.waitFor(`status:${fixture.roomId}:playing`);
@@ -367,10 +283,6 @@ async function playOneHand(fixture: LiveFixture, style: 'passive' | 'fold'): Pro
   assert.deepEqual(fixture.tap.problems, [], 'no archive write may fail');
   return started.handId;
 }
-
-// ---------------------------------------------------------------------------
-// Reading the persisted hand back
-// ---------------------------------------------------------------------------
 
 interface PersistedHandRow {
   readonly id: string;
@@ -399,7 +311,6 @@ async function readHand(tx: TransactionSql, handId: string): Promise<PersistedHa
   return row;
 }
 
-/** Every key name appearing anywhere in a parsed jsonb value. */
 function keyNames(value: unknown, into: Set<string> = new Set()): Set<string> {
   if (Array.isArray(value)) {
     for (const entry of value as readonly unknown[]) keyNames(entry, into);
@@ -421,13 +332,7 @@ interface RevealedCardView {
   readonly proofLength: number;
 }
 
-/**
- * The persisted reveal, read structurally rather than asserted into existence.
- *
- * `HandRow.reveal` is `unknown` — the driver hands back parsed jsonb and nothing at the type level
- * says what it parsed — so every field is checked as it is read. That is the same reasoning as
- * `cardNotationArray` in the repository: an assertion here would be a promise nobody checks.
- */
+/** `HandRow.reveal` is `unknown` parsed jsonb, so every field is checked as it is read. */
 function readReveal(value: unknown): { complete: boolean; cards: readonly RevealedCardView[] } {
   assert.ok(value !== null && typeof value === 'object', 'the reveal must be a jsonb object');
   const complete: unknown = Reflect.get(value, 'complete');
@@ -457,7 +362,6 @@ function readReveal(value: unknown): { complete: boolean; cards: readonly Reveal
   };
 }
 
-/** The hole cards of every seat that actually showed, from the persisted `hand_seats` rows. */
 async function shownHoleCards(tx: TransactionSql, handId: string): Promise<Set<string>> {
   const rows = await tx<{ hole_cards: unknown }[]>`
     select hole_cards from prl.hand_seats where hand_id = ${handId} and showed_down = true
@@ -474,10 +378,6 @@ function notationOf(cards: readonly Card[]): readonly string[] {
   return cards.map((card) => cardToString(card));
 }
 
-// ---------------------------------------------------------------------------
-// The tests
-// ---------------------------------------------------------------------------
-
 describe('postgresArchive — a played hand is durable and faithful', dbOptions, () => {
   it('writes the deal, every action, the board and the settlement as the table reported them', async () => {
     await inRollback(async (tx) => {
@@ -485,8 +385,7 @@ describe('postgresArchive — a played hand is durable and faithful', dbOptions,
       try {
         const handId = await playOneHand(fixture, 'passive');
 
-        // Annotated rather than inferred: `assert.ok` is an assertion function, and narrowing an
-        // inferred `const` through one makes its own type circular (TS7022).
+        // Annotated because narrowing an inferred `const` through `assert.ok` is circular (TS7022).
         const deal: ArchivedDeal | undefined = fixture.tap.deals.at(-1);
         const result: ArchivedResult | undefined = fixture.tap.results.at(-1);
         assert.ok(deal !== undefined && result !== undefined, 'the tap saw no deal or no result');
@@ -508,7 +407,6 @@ describe('postgresArchive — a played hand is durable and faithful', dbOptions,
           'the persisted board is the board the hand finished with',
         );
 
-        // The seats, against the deal and the settlement the table published.
         const seats = await handsRepository.seatsOf(tx, handId, null);
         assert.equal(seats.length, deal.seats.length, 'every dealt seat is written');
         for (const dealt of deal.seats) {
@@ -531,8 +429,7 @@ describe('postgresArchive — a played hand is durable and faithful', dbOptions,
           'chips are conserved: the nets of a settled hand sum to zero',
         );
 
-        // The actions, against the engine's own log. Sequence, sizing and the automatic flag all
-        // have to survive the binding, because the hand review is replayed from these rows.
+        // The hand review replays from these rows.
         const logged = fixture.tap.actions.get(handId) ?? [];
         assert.ok(logged.length > 0, 'a hand played to showdown logs at least one action');
         const persistedActions = await handsRepository.actionsOf(tx, handId);
@@ -557,7 +454,6 @@ describe('postgresArchive — a played hand is durable and faithful', dbOptions,
           );
         }
 
-        // `stacksSettled` and `roomStatusChanged`: the roster and the lobby agree with the table.
         const snapshot = fixture.table.snapshot();
         const members = await tx<{ user_id: string; stack: number }[]>`
           select user_id, stack from prl.room_members where room_id = ${fixture.roomId}
@@ -576,8 +472,7 @@ describe('postgresArchive — a played hand is durable and faithful', dbOptions,
     });
   });
 
-  // Migration 0009. Before it, this fold was written `was_automatic = true` exactly like a clock
-  // running out, and the hand review read it back as "The clock ran out and the server acted".
+  // Migration 0009. Before it this fold was written `was_automatic = true` like a timeout.
   it('writes down that a fold for a player who stood up was a departure, not a timeout', async () => {
     await inRollback(async (tx) => {
       const fixture = await seatTwo(tx, ['Alice', 'Bob']);
@@ -610,10 +505,8 @@ describe('postgresArchive — a played hand is durable and faithful', dbOptions,
         const second = await playOneHand(fixture, 'fold');
         fixture.registry.closeAll();
 
-        // A restart: a brand-new registry over the same database, with no memory of the room. It
-        // has to re-open the room from its rows, re-take the recorded seats, and continue the
-        // numbering — `hands_room_hand_number_key` is unique, so a table that started again from
-        // zero would fail its first deal.
+        // A new registry over the same database. `hands_room_hand_number_key` is unique, so a
+        // table that restarted numbering would fail its first deal.
         const tap = tapArchive(postgresArchive(() => tx));
         reopened = registryOn(tx, tap);
         const room = await reopened.ensureOpen(fixture.roomId);
@@ -649,8 +542,7 @@ describe('postgresArchive — the hidden-information guarantee, on the persisted
       try {
         const handId = await playOneHand(fixture, 'passive');
 
-        // 1. The schema. `HandState` carries `deck`, `deckCursor` and `deckSalts`; the point of
-        //    the design is that there is no column any of them could reach.
+        // 1. `HandState` carries `deck`, `deckCursor` and `deckSalts`, and no column may hold them.
         const columns = await tx<{ table_name: string; column_name: string }[]>`
           select table_name, column_name from information_schema.columns where table_schema = 'prl'
         `;
@@ -663,8 +555,7 @@ describe('postgresArchive — the hidden-information guarantee, on the persisted
           'no column may store the deck order, the deal cursor or the commitment salts',
         );
 
-        // 2. The rows. A key named for any of the three would mean the whole secret went into a
-        //    jsonb document instead — same leak, no new column.
+        // 2. Nor may a jsonb key.
         const row = await readHand(tx, handId);
         const keys = new Set([
           ...keyNames(row.config),
@@ -685,8 +576,7 @@ describe('postgresArchive — the hidden-information guarantee, on the persisted
     await inRollback(async (tx) => {
       const fixture = await seatTwo(tx, ['Alice', 'Bob']);
       try {
-        // A hand that ends when the first seat folds. Nothing became public — no board, no
-        // showdown — so a faithful archive has nothing to prove, and every salt is still sealed.
+        // Nothing became public, so every salt is still sealed.
         const folded = await playOneHand(fixture, 'fold');
         const foldedRow = await readHand(tx, folded);
         const foldedReveal = readReveal(foldedRow.reveal);
@@ -707,7 +597,6 @@ describe('postgresArchive — the hidden-information guarantee, on the persisted
           'nobody showed, so no seat is marked as having shown',
         );
 
-        // A hand played to showdown. Now some cards are public, and exactly those may be proved.
         const shown = await playOneHand(fixture, 'passive');
         const shownRow = await readHand(tx, shown);
         const reveal = readReveal(shownRow.reveal);
@@ -715,10 +604,7 @@ describe('postgresArchive — the hidden-information guarantee, on the persisted
         const shownCards = await shownHoleCards(tx, shown);
         const public_ = new Set([...board, ...shownCards]);
 
-        // Pinned so the equality below cannot pass by both sides being empty. A hand nobody folded
-        // runs the whole board out and both seats show, which is 5 + 2 + 2 = 9 public cards; if a
-        // future change to the betting rules ends this hand early, this fails and says so rather
-        // than quietly turning the assertion underneath into `0 === 0`.
+        // Pinned so the equality below cannot pass as `0 === 0`. A passive hand shows 5 + 2 + 2 = 9 cards.
         assert.equal(board.length, 5, 'a hand played out passively reaches the river');
         assert.equal(shownCards.size, 4, 'both seats show at a two-handed showdown');
 
@@ -737,15 +623,12 @@ describe('postgresArchive — the hidden-information guarantee, on the persisted
             public_.has(cardToString(card.card as Card)),
             `deck position ${card.index} unsealed a card (${cardToString(card.card as Card)}) that never became public`,
           );
-          // One salt per unsealed position, and only for these. A salt is what makes a Merkle leaf
-          // checkable, so publishing one for a card nobody saw would make that card brute-forceable.
+          // A published salt makes its leaf checkable, so a salt for an unseen card makes it brute-forceable.
           assert.match(card.saltHex, /^[0-9a-f]{64}$/, 'a published salt is the leaf salt, hex');
           assert.ok(card.proofLength > 0, 'a revealed card carries its Merkle path');
         }
 
-        // The same reveal is written twice — `hands.reveal` and inside `hands.result` — and both
-        // copies carry their own CHECK constraints. A guard applied to one and not the other would
-        // be no guard at all.
+        // The reveal is written to `hands.reveal` and inside `hands.result`, each with its own CHECK.
         assert.ok(shownRow.result !== null && typeof shownRow.result === 'object');
         const inResult = readReveal(Reflect.get(shownRow.result, 'reveal'));
         assert.equal(inResult.complete, false);
@@ -767,13 +650,10 @@ describe('postgresArchive — the hidden-information guarantee, on the persisted
         const handId = await playOneHand(fixture, 'fold');
         const deal: ArchivedDeal | undefined = fixture.tap.deals.at(-1);
         assert.ok(deal !== undefined);
-        // A folded hand shows nobody's cards, so the entitlement check below is exercised on a
-        // holding that genuinely stayed hidden rather than on one that was public anyway.
+        // So the check below runs on a holding that genuinely stayed hidden.
         assert.equal((await shownHoleCards(tx, handId)).size, 0, 'a fold makes no card public');
 
-        // The rule, as `seatsOf` states it: cards come back when the seat showed down, or when the
-        // viewer is the seat's own player. Asserted as an equivalence rather than case by case, so
-        // it holds whichever way the hand happened to end.
+        // Cards come back when the seat showed down or the viewer owns the seat.
         for (const viewer of [fixture.alice, fixture.bob, stranger]) {
           const seats = await handsRepository.seatsOf(tx, handId, viewer.userId);
           for (const seat of seats) {
@@ -794,14 +674,12 @@ describe('postgresArchive — the hidden-information guarantee, on the persisted
           }
         }
 
-        // An anonymous reader is a stranger with fewer rights, never more.
         const anonymous = await handsRepository.seatsOf(tx, handId, null);
         for (const seat of anonymous) {
           assert.equal(seat.holeCards !== null, seat.showedDown, 'nobody sees an unshown holding');
         }
 
-        // Fold or showdown, one thing never varies: a card that stayed sealed is in no row a
-        // non-owner can reach. Checked by set difference rather than by re-stating the rule.
+        // A sealed card is in no row a non-owner can reach.
         const bobSeats = await handsRepository.seatsOf(tx, handId, fixture.bob.userId);
         const visibleToBob = new Set(bobSeats.flatMap((seat) => seat.holeCards ?? []));
         const aliceSeat: ArchivedDealSeat | undefined = deal.seats.find(
@@ -846,9 +724,7 @@ describe('postgresArchive — the hidden-information guarantee, on the persisted
           [],
         );
 
-        // And the single-hand read is entitled the same way: a seat in the hand, or membership of
-        // its room. Carol has neither at Alice's table, so the answer is the one a fictional hand
-        // id gets — which is what stops the endpoint confirming which ids are real.
+        // Carol gets the same answer as a fictional id, so the endpoint does not confirm which ids are real.
         assert.equal((await handsRepository.byId(tx, aliceHand, first.bob.userId))?.id, aliceHand);
         assert.equal(await handsRepository.byId(tx, aliceHand, second.alice.userId), null);
         assert.equal(await handsRepository.byId(tx, aliceHand, stranger.userId), null);

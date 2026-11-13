@@ -1,81 +1,9 @@
 /**
- * The two heaviest paths in this API are not allowed to stop the event loop.
- *
- * ## What this file is
- *
- * A budget, in milliseconds, applied to the real Hand Review path and the real Coach-over-socket
- * path: while either is running, the process must keep getting back to its own event loop. Not
- * "should be fast" — a review is genuinely hundreds of milliseconds of Monte Carlo and this file
- * does not ask it to be less — but "must not be uninterruptible", which is a different property
- * and the only one that decides whether everybody else's turn clock keeps ticking.
- *
- * ## Why it exists, and what it would have caught
- *
- * Two measured P1 defects, both closed by routing the work through `workers/pool.ts`:
- *
- * 1. `GET /hands/:handId` built every Coach report inline. Measured on the reference machine
- *    (darwin arm64, 10 logical CPUs, Node 24): one three-handed showdown hand cost 156 ms of
- *    uninterruptible arithmetic, of which the flop report alone was 133 ms. `pnpm run test:load`
- *    at six concurrent players reported action p99 947.6 ms with Hand Review in the journey and
- *    29.2 ms with `--no-review` on the same warm process, and named the event loop as the
- *    saturated resource at every level.
- * 2. `requestCoach` over a socket ran the Coach inline — a 2,000-sample Monte Carlo plus
- *    the preflop strength table its default `top:40` range needs. The same load run measured the
- *    first analysis in a fresh process at 3,033.9 ms with an event-loop p99 of 3,028.8 ms for
- *    that window: one socket asking for advice froze every table in the process for three
- *    seconds.
- *
- * Without this file both are one refactor away from coming back, and neither shows up as a
- * failing assertion anywhere else: every existing test of these paths asserts what the answer
- * says, and the answer was always correct. What was wrong was where it was computed.
- *
- * ## Would this fail if the behaviour broke? Yes, and that was checked by breaking it
- *
- * Each budget test is paired with a NEGATIVE CONTROL that runs the same analysis in this process
- * — through `buildHandReview` and `coachHere`, which are still the reference implementations —
- * and asserts the probe fires. So the detector is proved to detect on every run, on whatever
- * machine is running it, rather than on the author's machine once.
- *
- * It was also checked the harder way, by reverting the fix. `runAnalysisOn` was pointed back at the
- * in-process `analyse`, and `onCoach` back at the in-process Coach, with this file left untouched. Real
- * numbers from that run, against the 50 ms budget:
- *
- *   - "builds every analysis on a calculator thread": stalled 180.8 ms (histogram max 184.9 ms);
- *   - "answers from a calculator thread": stalled 2,824.5 ms (histogram max 2,831.2 ms);
- *   - and four more failures, because the reverted path ignores the analyser altogether: the
- *     full-queue, deadline and closed-socket cases had nothing left to refuse or discard.
- *
- * Six of eleven tests failed. With the fix restored, the same two probes report 1.2 ms over 49
- * ticks and 1.5 ms over 577 ticks.
- *
- * ## HOW THE LOOP IS MEASURED, AND WHY IT IS NOT ONLY `monitorEventLoopDelay`
- *
- * `monitorEventLoopDelay` is enabled across every window and its histogram is asserted too, but it
- * is NOT the primary detector, because it cannot be relied on to record the very thing this file
- * is about. Measured directly, with a deliberate `while` loop and nothing else running:
- *
- *   | blocking stretch      | histogram max | timer-gap probe |
- *   | 20 ms                 | 20.1 ms       | 15.1 ms         |
- *   | 180 ms                |  0.0 ms       | 175.1 ms        |
- *   | 180 ms, resolution 10 |  0.0 ms       | 175.1 ms        |
- *
- * It does sometimes record — in the reverted run above it reported 184.9 ms and 2,831.2 ms — but a
- * detector that reads 0.0 ms for a 180 ms stall in a standalone probe cannot be the assertion: it
- * under-reports, and an under-reporting detector is a test that passes while the defect is present.
- * So the primary measure is a `setInterval` ticker and the worst gap between consecutive ticks,
- * which states the property under test directly — "how long did this process go without running a
- * callback it had asked for" — and which fired in every case above. The histogram is asserted as
- * well because it can only ever under-report, so it can add a failure and never a false one, and it
- * is the figure an operator sees in `prl_event_loop_delay_p99_seconds`.
- *
- * ## What this file does NOT do
- *
- * It does not measure throughput, latency or capacity — `pnpm run test:load` does that, against a
- * running server, and says so in its own header. It does not use a database: the review is built
- * from fixture rows and the socket from a fake room store, so it runs in `test:without-database`
- * as well. It does not assert that the analyses are FAST, only that they are interruptible. And
- * it says nothing about a machine with fewer cores than threads, where a busy pool would compete
- * with the main thread for CPU rather than running beside it.
+ * Hand Review and Coach-over-socket must keep returning to the event loop while they run. They may
+ * be slow, but not uninterruptible. Inline they stalled the loop 156 ms per review and 3,034 ms for
+ * a cold socket Coach. Each budget test has a negative control that runs the same work in process
+ * and asserts the probe fires. The primary detector is a `setInterval` gap, because
+ * `monitorEventLoopDelay` read 0.0 ms for a 180 ms stall. No database, and no throughput claims.
  */
 
 import assert from 'node:assert/strict';
@@ -98,60 +26,26 @@ import { type CoachAnalyser, type SocketSink, WsRouter } from '../src/ws/router.
 import { persistHand } from './helpers/hand-rows.ts';
 import { seatingOnlyStore } from './helpers/live-room.ts';
 
-// ---------------------------------------------------------------------------
-// The budget
-// ---------------------------------------------------------------------------
-
 /**
- * How long the process may go without reaching its own event loop, in milliseconds.
- *
- * 50 ms, chosen from measurement rather than taste, and it has to sit inside a gap with a floor
- * and a ceiling:
- *
- *  - the FLOOR is what the fixed paths actually produce, measured by setting this constant to
- *    0.0001 and reading the failure messages: a pooled review stalls the loop 1.2 ms (histogram
- *    max 1.7 ms) and a pooled socket Coach 1.5 ms (histogram max 5.3 ms). The walk itself is
- *    0.2 ms; the rest is serialising a task and a report across the thread boundary. 50 ms is
- *    roughly thirty times the worst of those, which is the headroom a CI box shared with a
- *    compiler, a database and a garbage collector needs before this test starts failing for
- *    reasons that have nothing to do with poker.
- *  - the CEILING is the cheapest real violation. The smallest single stall either defect
- *    produced was one flop Coach report at 133 ms, and the largest was the 3,034 ms cold start of
- *    the socket Coach. 50 ms is comfortably under both, so a regression cannot hide beneath it.
- *
- * It is also the number `scripts/load-test.mjs` uses as its own event-loop saturation threshold
- * (`--event-loop-p99-ms`), so a run that passes here and a load run that blames the event loop are
- * measured against the same line.
+ * The pooled paths stall 1.2 ms (review) and 1.5 ms (socket Coach), and the smallest real violation
+ * is 133 ms. It matches `scripts/load-test.mjs --event-loop-p99-ms`.
  */
 const LOOP_BUDGET_MS = 50;
 
-/**
- * How often the probe asks to be run.
- *
- * 5 ms. Small enough that a stall of the size being hunted is caught by an order of magnitude,
- * large enough that the ticker itself is not the load: at 5 ms a 200 ms idle window produced 39
- * ticks and a worst gap of 0.3 ms, so the probe measures the process rather than itself.
- */
+/** At 5 ms a 200 ms idle window gives 39 ticks and a worst gap of 0.3 ms. */
 const TICK_MS = 5;
 
-/** What one measured window saw. */
 interface LoopProbe {
   /** Worst gap between consecutive ticks, less the interval that was asked for. */
   readonly worstStallMs: number;
-  /** How many times the probe ran. Zero means it measured nothing and proves nothing. */
+  /** Zero means it measured nothing. */
   readonly ticks: number;
-  /** `monitorEventLoopDelay`'s own worst figure, for corroboration. See the header. */
   readonly histogramMaxMs: number;
 }
 
 /**
- * Runs `work` while watching the event loop.
- *
- * The ticker is started before the work and cleared after it, and the window is deliberately
- * closed with a yield: a stall is only observable once the loop turns again, so disabling the
- * probe in the same tick the work finished in would throw away the measurement of a stall that
- * had just happened. That is exactly the mistake that makes a naive version of this test report
- * `0.0 ms` for a 180 ms block.
+ * The window closes with a yield, because a stall is only observable once the loop turns again.
+ * Disabling the probe in the same tick reports `0.0 ms` for a 180 ms block.
  */
 async function whileWatchingTheLoop<T>(work: () => Promise<T> | T): Promise<{
   readonly result: T;
@@ -184,10 +78,8 @@ async function whileWatchingTheLoop<T>(work: () => Promise<T> | T): Promise<{
   }
 }
 
-/** The assertion both budget tests make, written once so the two cannot drift. */
 function assertLoopStayedFree(what: string, probe: LoopProbe): void {
-  // A window with no ticks measured nothing at all, and a detector that measured nothing must
-  // never be allowed to read as a pass. This is the "did it actually scan anything" check.
+  // A window with no ticks measured nothing and must not pass.
   assert.ok(
     probe.ticks > 0,
     `${what}: the loop probe never ran, so this measured nothing (ticks=${probe.ticks})`,
@@ -204,7 +96,6 @@ function assertLoopStayedFree(what: string, probe: LoopProbe): void {
   );
 }
 
-/** The negative control's assertion: the detector fires when it is given a real stall. */
 function assertProbeFires(what: string, probe: LoopProbe): void {
   assert.ok(probe.ticks > 0, `${what}: the loop probe never ran, so it proves nothing`);
   assert.ok(
@@ -215,23 +106,10 @@ function assertProbeFires(what: string, probe: LoopProbe): void {
   );
 }
 
-// ---------------------------------------------------------------------------
-// The calculator pool these tests use
-// ---------------------------------------------------------------------------
-
 /**
- * A pool of this file's own, rather than the process-wide one.
- *
- * `getSharedPool` needs an `AppConfig` and the router's default analyser reads the process-wide
- * configuration, which is absent in `test:without-database`. Constructing the pool directly keeps
- * this file runnable in both modes while exercising the identical call the production default
- * makes — `pool.runCoach(task, budget)` — against a real worker thread, a real bounded queue and
- * the real `assertReportStaysInsideItsLegalSet` on the way back.
- *
- * `timeoutMs` is 30 s rather than the configured 3 s because the first live Coach task in a
- * process builds the preflop strength ordering (about three seconds) inside the thread. That is
- * the same allowance `routes/calc.ts` and `ws/router.ts` make for a `top:NN` range, and it is the
- * cost this whole file exists to keep OFF the event loop rather than to eliminate.
+ * A pool of this file's own because `getSharedPool` needs an `AppConfig`, which is absent in
+ * `test:without-database`. 30 s because the first live Coach task builds the preflop strength
+ * ordering in the thread, about three seconds.
  */
 const pool = new WorkerPool({ size: 2, timeoutMs: 30_000 });
 
@@ -239,22 +117,11 @@ after(async () => {
   await pool.close();
 });
 
-// ---------------------------------------------------------------------------
-// Hand review
-// ---------------------------------------------------------------------------
-
 const HERO = 'usr_hero00000000000000000';
 const VILLAIN = 'usr_villain00000000000000';
 const FOLDER = 'usr_folder0000000000000aa';
 
-/**
- * Three seats, a fold, and hero acting on all four streets.
- *
- * Four analysable decisions for one viewer — preflop, flop, turn and river — which is what makes
- * this hand worth measuring: the flop report is the expensive one (133 ms in process, because the
- * outs breakdown re-runs an equity calculation per candidate card) and a hand with only a preflop
- * decision would not produce a stall large enough to be interesting.
- */
+/** Hero acts on all four streets. The flop report is the expensive one (133 ms in process). */
 function reviewableHand(): ReturnType<typeof persistHand> {
   return persistHand({
     handId: 'hand_loopbudget000000000a',
@@ -291,11 +158,8 @@ function reviewInput(fixture: ReturnType<typeof persistHand>): Parameters<typeof
 }
 
 /**
- * The live Coach's report for a view, computed on THIS thread: the in-process reference.
- *
- * `names` is the table's dealt names, which `requestCoach` now hands the Coach so that it labels
- * opponents the way the seat plates do. A reference built without them labels them `seat N` and
- * differs from the socket's report in exactly those labels.
+ * Computed on this thread as the in-process reference. Without `names` it labels opponents
+ * `seat N` and differs from the socket's report.
  */
 function coachHere(view: PlayerView, names?: ReadonlyMap<number, string>): CoachReport {
   const reading = coachSpotForView(
@@ -318,8 +182,7 @@ describe('a hand review does not block the event loop', () => {
       buildHandReviewOn(reviewInput(fixture), {}, (task) => pool.runCoach(task, 30_000)),
     );
 
-    // The review has to have actually done the work. A review that analysed nothing would stall
-    // nothing either, and would pass the budget while proving the opposite of what is claimed.
+    // A review that analysed nothing would also stall nothing.
     assert.equal(analysedCount(result), 4, 'the viewer had four analysable decisions');
     assertLoopStayedFree('a pooled hand review', probe);
   });
@@ -334,21 +197,13 @@ describe('a hand review does not block the event loop', () => {
 
   it('produces exactly the report the in-process reference produces', async () => {
     const fixture = reviewableHand();
-    // Deep equality, not "looks similar". The whole argument for moving this work is that it
-    // changes WHERE a figure is computed and nothing else, and the two constructions are genuinely
-    // separate code — `analyse` expands the range here, `equity-worker.ts` expands it there. A
-    // difference in a seed, a sample count, an opponent label or the blockers passed to
-    // `parseRange` would change a number a learner is shown, and this is the assertion that would
-    // notice.
+    // `analyse` and `equity-worker.ts` expand the range separately, so any drift in a seed, sample
+    // count, label or blockers changes a number a learner sees.
     const pooled = await buildHandReviewOn(reviewInput(fixture), {}, (task) => pool.runCoach(task, 30_000));
     const local = buildHandReview(reviewInput(fixture), {});
     assert.deepEqual(pooled, local);
   });
 });
-
-// ---------------------------------------------------------------------------
-// The Coach over a socket
-// ---------------------------------------------------------------------------
 
 const ALLOWED_ORIGIN = 'http://localhost:3000';
 
@@ -362,7 +217,6 @@ function testConfig(overrides: EnvRecord = {}): AppConfig {
   });
 }
 
-/** Never queried: this file builds no rows and reads none. */
 const stubDatabase: DatabaseHandle = {
   ping: () => Promise.resolve({ ok: true }),
   close: () => Promise.resolve(),
@@ -395,14 +249,7 @@ function framesOf(recorded: Recorder, type: string): Record<string, unknown>[] {
   return matching;
 }
 
-/**
- * Waits for a frame of a given type, or gives up.
- *
- * A socket Coach answer is asynchronous now — that is the fix — so a test cannot assert on it in
- * the same tick it asked for it. This polls the recorder rather than sleeping for a fixed period,
- * so the test takes as long as the analysis takes and no longer, and it fails with a message
- * naming what did arrive rather than an anonymous timeout.
- */
+/** Polls rather than sleeps, and names what did arrive on timeout. */
 async function waitForFrame(
   recorded: Recorder,
   type: string,
@@ -425,13 +272,6 @@ interface SocketHarness {
   readonly roomId: string;
 }
 
-/**
- * A two-seat table with a hand in progress, and a router pointed at it.
- *
- * The same shape `test/ws-router.test.ts` uses — a fake room store, a manual clock, the app's own
- * compiled frame validator — because the point of this file is the real protocol on the real
- * router, with only the calculator swapped for one whose lifetime a test can control.
- */
 async function socketHarness(options: { readonly analyseCoach?: CoachAnalyser }): Promise<SocketHarness> {
   const app = await buildApp({ config: testConfig(), database: stubDatabase });
   app.get(
@@ -478,7 +318,6 @@ async function socketHarness(options: { readonly analyseCoach?: CoachAnalyser })
   return { app, router, registry, roomId };
 }
 
-/** Opens a socket, completes the handshake, and returns the recorder for it. */
 function connect(
   harness: SocketHarness,
   userId: string,
@@ -501,7 +340,6 @@ function connect(
   return { recorded, connection };
 }
 
-/** Deals a hand and answers with whichever socket is to act. */
 async function dealAndFindTheActor(harness: SocketHarness): Promise<{
   readonly actor: ReturnType<typeof connect>;
   readonly other: ReturnType<typeof connect>;
@@ -562,17 +400,9 @@ describe('the Coach over a socket does not block the event loop', () => {
       const view = room.table.viewFor(actor.connection.principal.userId);
       assert.ok(view !== null, 'the seat that is to act must have a view');
 
-      // `coachHere` is what `requestCoach` used to run, with the production sample count and
-      // the production default range. It is still correct, and still exactly as
-      // blocking as it was — which is what makes it the honest control rather than a synthetic one.
-      //
-      // Its size comes from the COLD preflop strength table that `top:40` needs, which is the
-      // larger half of the defect this file guards: measured on this machine, the first such call
-      // in a process is 3,269 ms and every later one is 2.2 ms. So this test is only a control
-      // while it is the first main-thread expansion in the file — which it is, because the pooled
-      // tests above build that table inside a worker and the review tests use written-out notation.
-      // If a future edit warms it first, this assertion fails with a message saying so rather than
-      // passing quietly, and the fix is to move this test above whatever warmed it.
+      // Most of the stall is the cold preflop strength table `top:40` needs (3,269 ms first call,
+      // 2.2 ms after). This is only a control while it is the first main-thread expansion in the
+      // file. If an edit warms it first, move this test above that edit.
       const { result, probe } = await whileWatchingTheLoop(() => coachHere(view));
       assert.ok(result.candidates.length > 0, 'the control has to do the same work to be a control');
       assertProbeFires('an in-process socket Coach', probe);
@@ -594,12 +424,8 @@ describe('the Coach over a socket does not block the event loop', () => {
       const frame = await waitForFrame(actor.recorded, 'coach');
       const fromThread = frame['report'] as CoachReport;
       const local = coachHere(view, room.table.dealtNames());
-      // Same view, same samples, same seed: the thread's answer must be the reference answer to
-      // the digit.
       assert.deepEqual(fromThread, local);
-      // And the opponent is named as the table names them (audit at 308fadf: "seat 2 / seat 3 /
-      // seat 6" in the Coach, beside plates with names and no numbers). Equal to a reference that
-      // was given the names is not enough on its own: both could have dropped them.
+      // Equal to a named reference is not enough, because both could have dropped the names.
       const labels = fromThread.equity.perPlayer.map((player) => player.label);
       assert.ok(labels.length >= 2, `a sweep of nothing is not a pass: ${JSON.stringify(labels)}`);
       assert.equal(labels[0], 'you');
@@ -623,9 +449,7 @@ describe('the Coach over a socket does not block the event loop', () => {
       requestCoach(harness, actor, 'req-coach-legal', '22+');
       const frame = await waitForFrame(actor.recorded, 'coach');
       const report = frame['report'] as CoachReport;
-      // `WorkerPool.runCoach` applies `assertReportStaysInsideItsLegalSet` to every reply. Before
-      // the socket used the pool, this path had no such check at all — the guard existed and the
-      // one surface a player uses mid-hand never went through it.
+      // `WorkerPool.runCoach` applies `assertReportStaysInsideItsLegalSet` to every reply.
       for (const candidate of report.candidates) {
         assert.ok(offered.has(candidate.action), `the Coach published ${candidate.action}`);
       }
@@ -638,9 +462,7 @@ describe('the Coach over a socket does not block the event loop', () => {
 
 describe('a socket Coach request that cannot be served says so', () => {
   it('turns a full queue into a service_unavailable frame, not a dropped message', async () => {
-    // One thread, one queue slot: the second and later requests cannot be admitted at all. A
-    // refusal has to reach the socket — a client waiting forever for a frame that was silently
-    // dropped is the failure mode a bounded queue is supposed to prevent, not cause.
+    // One thread, one queue slot. A refusal must reach the socket, not be dropped.
     const tinyPool = new WorkerPool({ size: 1, timeoutMs: 30_000, queueLimit: 1 });
     const harness = await socketHarness({ analyseCoach: (task) => tinyPool.runCoach(task, 30_000) });
     try {
@@ -659,8 +481,7 @@ describe('a socket Coach request that cannot be served says so', () => {
   });
 
   it('turns a missed deadline into a computation_timeout frame', async () => {
-    // A one-millisecond budget: the deadline is armed at submission, so it expires before any
-    // thread can answer and the pool terminates the thread rather than waiting for it.
+    // The deadline is armed at submission, so it expires before any thread can answer.
     const impatientPool = new WorkerPool({ size: 1, timeoutMs: 1 });
     const harness = await socketHarness({ analyseCoach: (task) => impatientPool.runCoach(task) });
     try {
@@ -685,8 +506,7 @@ describe('a socket Coach request that cannot be served says so', () => {
     try {
       const { actor } = await dealAndFindTheActor(harness);
       requestCoach(harness, actor, 'req-coach-abandoned', '22+');
-      // The socket goes while the analysis is still running, which is the ordinary case for a
-      // player who closes the tab: the answer must be discarded rather than written to a dead sink.
+      // An answer for a closed socket must be discarded.
       harness.router.handleClose(actor.connection);
       const framesAtClose = actor.recorded.frames.length;
       release({
@@ -704,10 +524,7 @@ describe('a socket Coach request that cannot be served says so', () => {
   });
 
   it('refuses an Expert table before it queues anything', async () => {
-    // The refusal has to happen on this thread, before a task exists: an analysis that was
-    // computed and then thrown away would have cost a thread for a request the product does not
-    // offer. `analyseCoach` throwing if it is ever reached is how that is proved rather than
-    // assumed.
+    // The refusal must happen before a task exists. `analyseCoach` throws if it is ever reached.
     const harness = await socketHarness({
       analyseCoach: () => {
         throw new Error('an Expert table must not reach the calculator at all');

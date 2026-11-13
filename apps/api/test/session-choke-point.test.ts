@@ -1,42 +1,8 @@
 /**
- * The claim every authorisation decision in this API rests on: one cookie-to-identity path.
- *
- * ## Why this file exists
- *
- * `apps/api/src/auth/session.ts` opens by stating it:
- *
- *   > This module is the only place that turns the `prl_session` cookie into an identity, and the
- *   > only place that mints or destroys one. Everything else reads `request.session`.
- *
- * That was **prose**. Nothing read the source, and the property is load-bearing in a way few others
- * here are: `resolveSession` is where the signature is checked before the value is touched, where a
- * forged cookie is refused without a query, and where expiry and revocation are enforced — by
- * `findValidByToken`'s `expires_at > now()` and `revoked_at is null`, which live in the SQL and
- * nowhere else. A second path that resolved a token by any other route would be a second set of
- * rules, and the one it skipped would be whichever the author did not know about.
- *
- * This is not hypothetical in this codebase. The socket used to authenticate **once, at upgrade**,
- * and never again — so a connection outlived a sign-out, an account deletion and both TTLs. That
- * bug was a second identity path that did not carry the first one's rules. It was fixed; nothing
- * stops the next one.
- *
- * ## What it asserts
- *
- * The shape the claim implies, at three levels:
- *
- *   * `repositories/sessions.ts` defines `findValidByToken` and exactly one place in `src/` calls
- *     it — the store binding in `routes/auth.ts`;
- *   * exactly one place calls the bound `store.findValidByToken(…)` — `resolveSession`;
- *   * nothing outside `auth/session.ts` and `plugins/security.ts` reads the session cookie at all.
- *
- * `plugins/security.ts` is the one legitimate reader and is exempted deliberately rather than by
- * accident, so the exemption is narrow and its reason is recorded: it never resolves an identity.
- * `rateLimitKeyFor` unsigns the cookie to derive a limiter BUCKET and returns a hash, never a user;
- * the `onSend` hook reads only whether the cookie is PRESENT, to decide `cache-control`. Both were
- * read to confirm that before this exemption was written.
- *
- * A structural read, because the defect is a call site that exists and no request exercises —
- * nothing that runs the code can see a second door that this deployment's tests never open.
+ * One cookie-to-identity path, asserted from source. Expiry and revocation live only in
+ * `findValidByToken`'s SQL, so a second path would be a second set of rules. The socket once
+ * authenticated only at upgrade and outlived sign-out. `plugins/security.ts` is the one exempt
+ * cookie reader, because it derives a limiter bucket and checks presence but never resolves a user.
  */
 
 import assert from 'node:assert/strict';
@@ -47,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 
-/** Every `.ts` under `src/`, as `{ path, text }` with comments stripped. */
+/** Comments stripped. */
 function sources(): { path: string; text: string }[] {
   const out: { path: string; text: string }[] = [];
   const walk = (dir: string): void => {
@@ -58,10 +24,7 @@ function sources(): { path: string; text: string }[] {
         continue;
       }
       if (!entry.endsWith('.ts')) continue;
-      // Comments are stripped because this repository argues at length, in prose, about the very
-      // identifiers being counted — `ws/hub.ts` and `repositories/rooms.ts` both discuss
-      // `findValidByToken` without calling it. A parser that reads those finds the call sites it
-      // hoped to find, which is a mistake made more than once on this branch.
+      // `ws/hub.ts` and `repositories/rooms.ts` discuss `findValidByToken` in prose without calling it.
       const text = readFileSync(full, 'utf8')
         .replace(/\/\*[\s\S]*?\*\//gu, '')
         .replace(/^\s*\/\/.*$/gmu, '');
@@ -74,7 +37,6 @@ function sources(): { path: string; text: string }[] {
 
 const FILES = sources();
 
-/** Files containing `needle`, by path. */
 const filesWith = (needle: string): string[] =>
   FILES.filter((file) => file.text.includes(needle))
     .map((file) => file.path)
@@ -90,8 +52,6 @@ describe('there is one cookie-to-identity path', () => {
   });
 
   it('exactly one place calls the repository lookup (REGRESSION)', () => {
-    // `sessionsRepository.findValidByToken(sql, token)` is the SQL that enforces expiry and
-    // revocation. A second caller is a second place those rules can be got wrong.
     const callers = filesWith('sessionsRepository.findValidByToken(');
     assert.deepEqual(
       callers,
@@ -106,9 +66,7 @@ describe('there is one cookie-to-identity path', () => {
     const callers = filesWith('.findValidByToken(');
     assert.deepEqual(
       callers,
-      // Two, not three: `repositories/sessions.ts` DEFINES `findValidByToken` and never calls a
-      // bound one, so it does not carry the `.` this matches on. That distinction is the point —
-      // the definition is the SQL, and what is being counted here is who invokes it.
+      // `repositories/sessions.ts` defines it and calls no bound one, so it lacks the `.` matched here.
       [join('auth', 'session.ts'), join('routes', 'auth.ts')],
       'something other than resolveSession, the store binding and the repository itself now ' +
         `resolves a session token: ${callers.join(', ')}`,
@@ -116,9 +74,7 @@ describe('there is one cookie-to-identity path', () => {
   });
 
   it('nothing outside the auth module and the security plugin reads the session cookie', () => {
-    // The socket is the case worth naming: `ws/hub.ts` deliberately reads `request.session`, which
-    // the hook has already resolved, rather than the cookie. Reading the cookie there would be the
-    // authenticate-once bug returning in a new shape.
+    // `ws/hub.ts` reads `request.session`. Reading the cookie there would bring back authenticate-once.
     const readers = filesWith('sessionCookieName(');
     assert.deepEqual(
       readers,
@@ -130,9 +86,7 @@ describe('there is one cookie-to-identity path', () => {
   });
 
   it('the security plugin still only KEYS and CHECKS PRESENCE, never resolves', () => {
-    // The exemption above is only safe while this stays true, so it is asserted rather than
-    // trusted. `plugins/security.ts` may unsign the cookie — `rateLimitKeyFor` does — but it must
-    // never turn the result into a user.
+    // The exemption is only safe while this holds.
     const security = FILES.find((file) => file.path === join('plugins', 'security.ts'));
     assert.ok(security !== undefined);
     assert.ok(
@@ -165,8 +119,6 @@ describe('there is one cookie-to-identity path', () => {
       'a second cookie reader was not detected',
     );
 
-    // And the parser must not be fooled by prose, which is how this check would go quiet: several
-    // files discuss `findValidByToken` in comments without calling it.
     const commentary = readFileSync(join(SRC, 'ws', 'hub.ts'), 'utf8');
     assert.ok(
       commentary.includes('findValidByToken'),

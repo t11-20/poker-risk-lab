@@ -1,22 +1,7 @@
 /**
- * The WebSocket protocol, driven directly.
- *
- * ## No socket, no port, no timing
- *
- * `SocketSink` is two methods, so every test here is a recorder object and a manual clock. That
- * buys three things a socket-level test would not: the frames are inspectable as text (which is how
- * the redaction assertion is made), a five-second handshake window is exercised in a microsecond,
- * and there is no flakiness to explain away.
- *
- * The one thing it does not cover is the upgrade itself, so the two refusals that live there —
- * a rejected `Origin` and an unauthenticated cookie — are asserted against `evaluateUpgrade`, the
- * pure function `hub.ts` makes that decision with.
- *
- * ## The validator is the real one
- *
- * `compileFrameValidator` is handed a real Fastify instance built by `buildApp`, so frames are
- * validated by the app's own compiled Ajv against the contract's own `wsClientMessageSchema`. A
- * hand-written stand-in would prove nothing about what the server actually accepts.
+ * The WebSocket protocol driven through a recording `SocketSink` and a manual clock. The upgrade's
+ * refusals are asserted against `evaluateUpgrade`, the pure function `hub.ts` uses. Frames are
+ * validated by the app's own compiled Ajv against `wsClientMessageSchema`.
  */
 
 import assert from 'node:assert/strict';
@@ -43,11 +28,9 @@ import { RoomRegistry } from '../src/rooms/registry.ts';
 import { createManualClock, type ManualClock } from '../src/rooms/timers.ts';
 import { compileFrameValidator, evaluateUpgrade } from '../src/ws/hub.ts';
 import { coachTaskForView, type SocketSink, WsRouter } from '../src/ws/router.ts';
-// Shared with `test/ws-socket.test.ts`, which drives the same protocol over a real socket. Two
-// copies of this fake would be two different servers to reason about.
+// Shared with `test/ws-socket.test.ts`, so both suites reason about one fake.
 import { seatingOnlyStore } from './helpers/live-room.ts';
 
-/** Readable, sequential hand ids, so a failure names the hand it happened in. */
 function incrementingHandIds(): () => string {
   let count = 0;
   return () => {
@@ -73,7 +56,6 @@ const stubDatabase: DatabaseHandle = {
   close: () => Promise.resolve(),
 };
 
-/** A schema-carrying route, so Fastify sets up the validator this file borrows. */
 const SCHEMA_ROUTE = '/api/v1/test-frame-schema';
 
 async function appWithValidator(): Promise<FastifyInstance> {
@@ -86,10 +68,6 @@ async function appWithValidator(): Promise<FastifyInstance> {
   await app.ready();
   return app;
 }
-
-// ---------------------------------------------------------------------------
-// Recorders and harness
-// ---------------------------------------------------------------------------
 
 interface Recorder {
   readonly sink: SocketSink;
@@ -136,7 +114,6 @@ interface Harness {
   readonly roomId: string;
 }
 
-/** A two-seat room with both seats taken, and a router pointed at it. */
 async function harness(
   options: { readonly seated?: boolean; readonly units?: number } = {},
 ): Promise<Harness> {
@@ -178,7 +155,6 @@ async function harness(
   return { app, router, registry, clock, roomId };
 }
 
-/** Opens a socket and completes the handshake. */
 function connect(
   test: Harness,
   userId: string,
@@ -202,25 +178,13 @@ function connect(
   return { recorded, connection };
 }
 
-/** Lets the table's queued mutations settle. */
 async function settle(): Promise<void> {
   for (let turn = 0; turn < 6; turn += 1) await new Promise((resolve) => setImmediate(resolve));
 }
 
 /**
- * Waits for a frame of `type` to arrive, rather than for a fixed number of macrotask turns.
- *
- * `settle()` is right for everything the router answers synchronously, which was once everything.
- * The Coach is no longer one of those: it is submitted to the worker pool (`workers/pool.ts`), so
- * the reply arrives after a thread has spawned, imported the engine and run a Monte Carlo — tens
- * of milliseconds at best, seconds on a cold thread, and never within six `setImmediate` turns.
- *
- * Polling for the frame rather than sleeping a fixed time is what keeps this honest in both
- * directions: it returns the instant the frame lands, so the suite does not get slower, and it
- * fails with a NAMED timeout rather than a confusing "no frame arrived" if the reply never comes.
- * The deadline is generous because the first analysis in a process pays for the preflop strength
- * table on that thread; a tighter one would be a flake on a loaded machine, which is worse than
- * a slow test.
+ * The Coach runs on the worker pool, so its reply can take seconds on a cold thread. Polls for the
+ * frame and fails with a named timeout.
  */
 async function waitForFrame(recorded: Recorder, type: string, timeoutMs = 20_000): Promise<Frame> {
   const deadline = Date.now() + timeoutMs;
@@ -232,13 +196,8 @@ async function waitForFrame(recorded: Recorder, type: string, timeoutMs = 20_000
   assert.fail(`no "${type}" frame arrived within ${timeoutMs} ms`);
 }
 
-// ---------------------------------------------------------------------------
-// The upgrade
-// ---------------------------------------------------------------------------
-
 describe('the upgrade decision', () => {
   it('refuses an origin that is not allowlisted, and a missing one, with 4406', async () => {
-    // `isAllowedOrigin` is configured by the security plugin, so an app has to exist first.
     const app = await appWithValidator();
 
     const foreign = evaluateUpgrade({
@@ -249,8 +208,7 @@ describe('the upgrade decision', () => {
     assert.equal(foreign.ok, false);
     assert.equal(foreign.ok === false ? foreign.code : 0, WS_CLOSE.badOrigin);
 
-    // No Origin at all: every browser sends one, so this is a non-browser client and is refused
-    // for the same reason. Fail closed.
+    // Every browser sends an Origin, so a missing one is refused. Fail closed.
     const absent = evaluateUpgrade({ origin: null, userId: 'usr_a', socketsForSession: 0 });
     assert.equal(absent.ok, false);
     assert.equal(absent.ok === false ? absent.code : 0, WS_CLOSE.badOrigin);
@@ -278,10 +236,6 @@ describe('the upgrade decision', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// The handshake
-// ---------------------------------------------------------------------------
-
 describe('the handshake', () => {
   it('closes 4408 when hello does not arrive in time', async () => {
     const test = await harness();
@@ -306,7 +260,6 @@ describe('the handshake', () => {
     assert.ok(welcome !== null, 'hello is answered with a welcome');
     assert.equal(welcome['userId'], 'usr_a');
     assert.equal(welcome['seat'], 0);
-    // Reconnect is exactly this: the welcome is followed by the current view.
     assert.ok(lastOf(recorded, 'state') !== null, 'the welcome is followed by a state frame');
     await test.app.close();
   });
@@ -378,32 +331,10 @@ describe('the handshake', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Membership, after the handshake
-// ---------------------------------------------------------------------------
-
 /**
- * `hello` checks membership once. Leaving the room has to reach the socket that check let in.
- *
- * ## The defect
- *
- * `POST /rooms/:roomId/leave` drops the membership durably and in memory, and `registry.require`
- * then refuses a fresh `hello` with `room_not_found_or_not_permitted` — which is what made this
- * look closed. The socket the departed learner already held kept receiving the private table.
- * Measured against the shipped code, over a real socket, after `leaveRoom` for that learner:
- *
- *     ex-member's socket      -> {"type":"event","event":{"kind":"playerJoined",…}}
- *                             -> {"type":"state","room":{…"members":[…]},…}
- *     ex-member's fresh hello -> {"type":"error","error":{"code":"room_not_found_or_not_permitted"}}
- *
- * An invite-only table is invite-only for the duration and not only at the door: those frames
- * carry the roster, the seats, the stacks, and once a hand is dealt the spectator's view of it.
- *
- * ## Both directions
- *
- * The second test is the control that matters more than the first. A router that closed every
- * socket on every broadcast would pass "the ex-member is closed" and destroy the product, so the
- * member who stayed is asserted to still be there, still receiving state, and never closed.
+ * `hello` checks membership once, so leaving must reach the socket that check let in. Measured on
+ * the shipped code, an ex-member's socket kept receiving state and events after `leaveRoom`. The
+ * second test asserts the member who stayed is never closed, so closing every socket cannot pass.
  */
 describe('a socket whose membership has ended', () => {
   it('is closed rather than sent another frame from the table it left', async () => {
@@ -413,7 +344,6 @@ describe('a socket whose membership has ended', () => {
     const framesAtDeparture = leaves.recorded.frames.length;
 
     await test.registry.leaveRoom(test.roomId, 'usr_b');
-    // Anything at all that makes the table speak. `sit` is the cheapest.
     test.router.handleFrame(
       stays.connection,
       JSON.stringify({ type: 'sit', seat: 0, requestId: 'req-abcdefgh' }),
@@ -456,18 +386,13 @@ describe('a socket whose membership has ended', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Limits
-// ---------------------------------------------------------------------------
-
 describe('frame limits', () => {
   it('drops an oversized frame without parsing it, and closes 4429', async () => {
     const test = await harness();
     const { recorded, connection } = connect(test, 'usr_a', 'Ada');
     const before = recorded.frames.length;
 
-    // Valid JSON, and valid against the schema, so the only thing that can refuse it is the size
-    // cap. If the cap were missing this would produce a pong.
+    // Schema-valid, so only the size cap can refuse it.
     const padded = `${JSON.stringify({ type: 'ping', nonce: 'nonce-1234' })}${' '.repeat(WS_LIMITS.maxMessageBytes)}`;
     test.router.handleFrame(connection, padded);
 
@@ -479,7 +404,6 @@ describe('frame limits', () => {
   it('closes 4429 once a socket exceeds its burst allowance', async () => {
     const test = await harness();
     const { recorded, connection } = connect(test, 'usr_a', 'Ada');
-    // `hello` already spent one token, so the allowance runs out inside this loop.
     for (let sent = 0; sent < WS_LIMITS.burstAllowance + 1; sent += 1) {
       test.router.handleFrame(connection, JSON.stringify({ type: 'ping', nonce: 'nonce-1234' }));
     }
@@ -510,11 +434,6 @@ describe('frame limits', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Actions
-// ---------------------------------------------------------------------------
-
-/** The user whose turn it is, from the table itself. */
 function actorOf(test: Harness): { readonly userId: string; readonly sequence: number } {
   const room = test.registry.get(test.roomId);
   assert.ok(room !== null);
@@ -556,7 +475,6 @@ describe('submitting an action over a socket', () => {
     assert.ok(room !== null);
     const afterFirst = JSON.stringify(room.table.viewFor('usr_a'));
 
-    // The retry a dropped response produces: identical frame, identical actionId.
     test.router.handleFrame(socket.connection, frame);
     await settle();
     const secondAck = lastOf(socket.recorded, 'ack');
@@ -633,10 +551,6 @@ describe('submitting an action over a socket', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Redaction, per recipient
-// ---------------------------------------------------------------------------
-
 describe('per-recipient redaction', () => {
   it('sends two sockets different views, neither carrying the other’s hole cards', async () => {
     const test = await harness();
@@ -671,8 +585,6 @@ describe('per-recipient redaction', () => {
     assert.equal(alphaView.seats.find((seat) => seat.seat === 1)?.holeCards, null);
     assert.equal(betaView.seats.find((seat) => seat.seat === 0)?.holeCards, null);
 
-    // The text-level scan: the exact serialisation of the other seat's own cards must not appear
-    // anywhere in this socket's frames — not in a state frame, not in an event, not in an ack.
     const alphaText = alpha.recorded.frames.join('\n');
     const betaText = beta.recorded.frames.join('\n');
     assert.ok(!alphaText.includes(JSON.stringify(betaOwn)), 'seat 0 received seat 1’s hole cards in a frame');
@@ -697,7 +609,7 @@ describe('per-recipient redaction', () => {
     assert.ok(room !== null);
     const handId = room.table.handId;
 
-    // The socket drops and comes back. Nothing is replayed and nothing is requested.
+    // Nothing is replayed and nothing is requested.
     test.router.handleClose(alpha.connection);
     const again = connect(test, 'usr_a', 'Ada');
     const state = lastOf(again.recorded, 'state');
@@ -709,11 +621,6 @@ describe('per-recipient redaction', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// The Coach over a socket
-// ---------------------------------------------------------------------------
-
-/** A report from a seat's own view, on this thread, through the reader both clients share. */
 function coachHere(view: PlayerView, samples: number): CoachReport {
   const reading = coachSpotForView(view, { ...LIVE_COACH_POLICY, samples });
   assert.ok(reading.kind === 'spot', `no decision in this view: ${JSON.stringify(reading)}`);
@@ -722,7 +629,6 @@ function coachHere(view: PlayerView, samples: number): CoachReport {
 
 describe('the Coach read off a view', () => {
   it('builds a report from a seat’s own view, with its assumptions stated', () => {
-    // A hypothetical river spot, so the equity is an exact enumeration and this test is fast.
     const state = buildHypotheticalState({
       heroCards: parseCards('AhKh'),
       board: parseCards('Qh7h2c9s3d'),
@@ -762,11 +668,8 @@ describe('the Coach read off a view', () => {
   });
 
   /**
-   * Three seats, blinds 5 and 10. Seat 0 folds and seat 1 shoves its 40, leaving seat 2
-   * with 990 behind facing 30 to call and nobody who could answer a raise. The engine
-   * offers `fold, call`; the Coach used to publish three raises here and recommend
-   * "raise to 80-100" as its highest-EV line, because affordability was the only thing
-   * it could see.
+   * Seat 2 faces 30 with 990 behind and nobody left who could answer a raise. The engine offers
+   * `fold, call`, and the Coach once recommended a raise because it checked affordability only.
    */
   function everyOpponentAllIn(): ReturnType<typeof startHand>['state'] {
     let state = startHand({
@@ -794,7 +697,6 @@ describe('the Coach read off a view', () => {
     const view = redactFor(state, { viewerSeat: 2 });
     const report = coachHere(view, 400);
 
-    // Hero can plainly afford a raise; that was the whole of the old guard.
     const own = view.seats.find((seat) => seat.isSelf);
     assert.ok((own?.stack ?? 0) - view.amountToCall > 900, 'hero has chips behind');
 
@@ -811,9 +713,7 @@ describe('the Coach read off a view', () => {
   });
 
   it('refuses a report for a seat that is not to act, because every action would be rejected', () => {
-    // `redactFor` fills `legalActions` only for the seat that is to act, so a request from
-    // any other seat carries an empty list — and an empty list means there is no decision,
-    // not that every action is available.
+    // `redactFor` fills `legalActions` only for the seat to act, and an empty list means no decision.
     const state = everyOpponentAllIn();
     const bystander = redactFor(state, { viewerSeat: 1 });
     assert.deepEqual([...bystander.legalActions], [], 'the seat that is not to act is offered nothing');
@@ -865,8 +765,6 @@ describe('live Coach follows the match difficulty', () => {
       actor.connection,
       JSON.stringify({ type: 'requestCoach', requestId: 'req-coach-ed' }),
     );
-    // Not `settle()`: the Coach now runs on a worker thread, so the reply cannot arrive within a
-    // fixed number of macrotask turns. See `waitForFrame`.
     const coach = await waitForFrame(actor.recorded, 'coach');
     assert.ok(coach !== null, 'a table without an Expert bot must still receive a Coach report');
     await test.app.close();

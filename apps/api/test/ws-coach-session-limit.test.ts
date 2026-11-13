@@ -1,45 +1,10 @@
 /**
- * `coachRequestsPerMinute` is per SESSION, and this is the file that makes that true.
- *
- * ## The defect
- *
- * `WS_LIMITS.coachRequestsPerMinute` has always been documented "per minute per session", and
- * `takeCoachToken` kept its window on `connection.coachRequests` — a field of `WsConnection`, so a
- * window per socket. The contract also permits a session `maxSocketsPerSession: 4` sockets at
- * once, and the hub enforces exactly that. The two together meant one session could hold its four
- * permitted sockets and put 4 x 30 = 120 Coach analyses a minute onto the shared worker pool,
- * which is the process-wide resource the limit exists to protect and which every other session at
- * every other table is queueing behind. Nothing about that required a hostile client: four tabs
- * open on the same table is an ordinary thing for a learner to do.
- *
- * Measured against the old code with the fixtures below: 4 sockets on one session, 36 requests
- * round-robined across them, **144 accepted and 0 refused** — because each socket had its own
- * window and none of them reached 30. With the fix: **30 accepted, 114 refused**.
- *
- * `scripts/load-test.mjs` said "30 per socket" in its own header, so the repo disagreed with its
- * own contract in prose as well as in code. The contract's claim is the stronger one and the one
- * that protects the pool, so the code moved to meet it; that script's comment is now wrong and
- * could not be edited from this change.
- *
- * ## The two ways a per-session limit gets quietly undone
- *
- * Both are asserted here, because a fix for the first that reintroduced the second would be no
- * fix at all:
- *
- *  1. **Spread across sockets.** The headline case above.
- *  2. **Reset by reconnecting.** If the window died with the last socket, a caller would clear it
- *     by closing the socket and opening another — cheaper than the per-socket window it replaced,
- *     since the upgrade is bounded only by the global HTTP limiter. So the window outlives its
- *     sockets by one window, and `sessionsTracked()` is asserted to come back to zero afterwards
- *     so that "it outlives them" cannot quietly become "it lives forever".
- *
- * ## No hand is ever dealt here, and that is deliberate
- *
- * `onCoach` checks the rate limit BEFORE it reads a view, so a request at a table with no live
- * hand still spends a token and then fails with `hand_not_active`. That makes an accepted request
- * distinguishable from a refused one (`hand_not_active` vs `rate_limited`) without starting a
- * hand, without a worker thread and without a Monte Carlo — 144 real analyses would make this file
- * take minutes and would measure the pool rather than the limiter.
+ * `coachRequestsPerMinute` is per session. The window used to live on each socket, and a session
+ * may hold `maxSocketsPerSession` (4), so one session put 4 x 30 analyses a minute on the shared
+ * worker pool. Measured against the old code, 144 were accepted and 0 refused. Now 30 and 114.
+ * The window also outlives its last socket by one window, so reconnecting does not reset it.
+ * No hand is dealt. `onCoach` spends a token before reading a view, so `hand_not_active` means
+ * accepted and `rate_limited` means refused, with no Monte Carlo.
  */
 
 import assert from 'node:assert/strict';
@@ -59,7 +24,6 @@ import { seatingOnlyStore } from './helpers/live-room.ts';
 const ALLOWED_ORIGIN = 'http://localhost:3000';
 const ROOM_ID = 'room_coachlimit';
 const USER = 'usr_a';
-/** One session, however many sockets. That single fact is what this whole file is about. */
 const SESSION = 'ses_shared';
 
 function testConfig(overrides: EnvRecord = {}): AppConfig {
@@ -77,7 +41,6 @@ const stubDatabase: DatabaseHandle = {
   close: () => Promise.resolve(),
 };
 
-/** A schema-carrying route, so Fastify compiles the Ajv instance the frame validator borrows. */
 async function appWithValidator(): Promise<FastifyInstance> {
   const app = await buildApp({ config: testConfig(), database: stubDatabase });
   app.get(
@@ -144,13 +107,8 @@ interface Socket {
 }
 
 /**
- * Opens a socket on `sessionId` and completes its handshake.
- *
- * The `welcome` is asserted here rather than left to the caller, and that assertion earned its
- * place while this file was being written: `clientNonce` is `REQUEST_ID_PATTERN`, which is
- * `{8,64}` characters, and a seven-character nonce made every `hello` fail schema validation
- * silently — no close, just an `invalid_request` frame. Every later request was then refused
- * `before_handshake`, and the whole file "measured" a Coach limiter it had never reached.
+ * Asserts `welcome`, because a too-short `clientNonce` once failed every `hello` quietly and the
+ * file measured a limiter it never reached.
  */
 function connect(test: Harness, sessionId: string, label: string): Socket {
   const recorded = recorder();
@@ -170,12 +128,11 @@ function connect(test: Harness, sessionId: string, label: string): Socket {
   return { recorded, connection };
 }
 
-/** Lets the `void`-dispatched intents settle. */
 async function settle(): Promise<void> {
   for (let turn = 0; turn < 4; turn += 1) await new Promise((resolve) => setImmediate(resolve));
 }
 
-/** The error codes a recorder has seen, in order. `hand_not_active` means the token was spent. */
+/** `hand_not_active` means the token was spent. */
 function errorCodes(recorded: Recorder): readonly string[] {
   const codes: string[] = [];
   for (const text of recorded.frames) {
@@ -190,12 +147,8 @@ function countOf(codes: readonly string[], code: string): number {
 }
 
 /**
- * Requests per socket, chosen against the OTHER limit on this path.
- *
- * The per-socket token bucket is `burstAllowance` (40) deep and refills at `messagesPerSecond` on
- * a clock this test never advances, so a socket that sends its `hello` plus 36 Coach requests has
- * used 37 of 40 and is never closed for flooding. If it were, every assertion below would be
- * measuring the wrong limiter — which is exactly the confusion this constant exists to prevent.
+ * Under the per-socket bucket (`burstAllowance` 40, clock never advanced), so `hello` plus 36 is
+ * never closed for flooding and the other limiter never answers.
  */
 const PER_SOCKET_REQUESTS = 36;
 
@@ -217,8 +170,6 @@ describe('the Coach limit is spent by the session, not by each socket', () => {
       }
 
       for (let index = 0; index < PER_SOCKET_REQUESTS * sockets.length; index += 1) {
-        // Round-robin rather than one socket at a time, so a fix that merely summed the sockets'
-        // windows at the end would still have to get the ordering right.
         const socket = sockets[index % sockets.length];
         assert.ok(socket !== undefined);
         requestCoach(test, socket, index);
@@ -230,17 +181,13 @@ describe('the Coach limit is spent by the session, not by each socket', () => {
       const refused = countOf(codes, 'rate_limited');
       assert.equal(accepted + refused, PER_SOCKET_REQUESTS * sockets.length, `unexpected: ${codes}`);
 
-      // The old expression, written out. `takeCoachToken` filtered and pushed
-      // `connection.coachRequests`, so the ceiling was the limit TIMES the number of sockets a
-      // session may hold. MEASURED BEFORE: accepted = 144, refused = 0 — every socket stayed under
-      // its own 30 and nothing was refused at all.
+      // The old ceiling was the limit times the sockets a session may hold.
       const perSocketCeiling = WS_LIMITS.coachRequestsPerMinute * WS_LIMITS.maxSocketsPerSession;
       assert.notEqual(
         accepted,
         perSocketCeiling,
         'the session was allowed the per-socket ceiling; the window is still on the connection',
       );
-      // MEASURED AFTER: accepted = 30, refused = 114.
       assert.equal(
         accepted,
         WS_LIMITS.coachRequestsPerMinute,
@@ -248,9 +195,7 @@ describe('the Coach limit is spent by the session, not by each socket', () => {
       );
       assert.equal(refused, PER_SOCKET_REQUESTS * sockets.length - WS_LIMITS.coachRequestsPerMinute);
 
-      // Which socket was refused is not a property worth asserting, but that the refusal reached
-      // more than one of them is: a limit that only ever refused the fourth socket would be a
-      // per-socket limit with extra steps.
+      // Refusals must reach more than one socket, or this is a per-socket limit in disguise.
       const socketsThatSawARefusal = sockets.filter((socket) =>
         errorCodes(socket.recorded).includes('rate_limited'),
       ).length;
@@ -261,9 +206,6 @@ describe('the Coach limit is spent by the session, not by each socket', () => {
   });
 
   it('still refuses a single socket at 30, which is the control for the count itself', async () => {
-    // The negative control for the assertion above. Without it, "30 accepted across four sockets"
-    // would also pass against a limiter that refused everything after an arbitrary 30 requests for
-    // some unrelated reason — or against one that was broken in the other direction.
     const test = await harness();
     try {
       const socket = connect(test, 'ses_alone', 'nonce-alone');
@@ -281,9 +223,7 @@ describe('the Coach limit is spent by the session, not by each socket', () => {
   });
 
   it('keeps each session in its own budget, so one caller cannot spend another’s', async () => {
-    // The other direction, and the one that would make this limit a bug report rather than a fix:
-    // a window keyed on something too coarse — the user, the room, a single global counter —
-    // would let one learner exhaust the Coach for everybody.
+    // A window keyed too coarsely would let one learner exhaust the Coach for everybody.
     const test = await harness();
     try {
       const first = connect(test, 'ses_one', 'nonce-one');
@@ -308,9 +248,7 @@ describe('the Coach limit is spent by the session, not by each socket', () => {
 
 describe('the Coach window survives a reconnect, and then goes away', () => {
   it('does not hand a session a fresh budget for closing its socket and opening another', async () => {
-    // The hole a naive per-session fix leaves. Reconnecting costs one WebSocket upgrade, which is
-    // bounded only by the global HTTP limiter, so a window that died with the last socket would be
-    // a CHEAPER reset than the per-socket window it replaced.
+    // Reconnecting costs one upgrade, bounded only by the global HTTP limiter.
     const test = await harness();
     try {
       const first = connect(test, SESSION, 'nonce-first-socket');
@@ -331,9 +269,7 @@ describe('the Coach window survives a reconnect, and then goes away', () => {
       requestCoach(test, second, 100);
       await settle();
 
-      // MEASURED with the window on the connection, and also with a first draft of the fix that
-      // deleted the session entry as soon as its last socket closed: `['hand_not_active']`, a
-      // fresh budget for the price of a reconnect.
+      // A draft that deleted the entry on the last close gave a fresh budget here.
       assert.deepEqual(
         errorCodes(second.recorded),
         ['rate_limited'],
@@ -345,14 +281,11 @@ describe('the Coach window survives a reconnect, and then goes away', () => {
   });
 
   it('forgets a session one window after its last socket, and forgets an unused one at once', async () => {
-    // The leak assertion. A per-session map keyed on an id the caller can mint — a guest session
-    // costs one `POST /auth/guest` — is unbounded growth unless something removes the entries.
+    // A guest session costs one `POST /auth/guest`, so entries must be removed.
     const test = await harness();
     try {
       assert.equal(test.router.sessionsTracked(), 0, 'a fresh router holds nothing');
 
-      // A socket that never asked for a Coach analysis leaves nothing behind at all: no timer, no
-      // entry, nothing to sweep. That is the overwhelmingly common case.
       const quiet = connect(test, 'ses_quiet', 'nonce-quiet-socket');
       await settle();
       assert.equal(test.router.sessionsTracked(), 1);
@@ -370,7 +303,6 @@ describe('the Coach window survives a reconnect, and then goes away', () => {
         'the window outlives the socket, which is the previous test',
       );
 
-      // ...and no longer. The clock is manual, so this is exact rather than a sleep.
       test.clock.advance(60_000);
       assert.equal(
         test.router.sessionsTracked(),
@@ -383,9 +315,7 @@ describe('the Coach window survives a reconnect, and then goes away', () => {
   });
 
   it('cancels the pending deletion when a socket comes back inside the window', async () => {
-    // Without the cancel in `open`, the timer armed by the first close would fire while the second
-    // socket was live and delete a window that is still in force — a free reset, arriving a minute
-    // late, for any session that reconnects promptly.
+    // Without the cancel in `open`, the first close's timer would delete a window still in force.
     const test = await harness();
     try {
       const first = connect(test, SESSION, 'nonce-socket-a');
@@ -398,9 +328,7 @@ describe('the Coach window survives a reconnect, and then goes away', () => {
 
       const second = connect(test, SESSION, 'nonce-socket-b');
       await settle();
-      // Past when the first close's timer would have fired, but still inside the window as far as
-      // the timestamps are concerned? No: 60_000 expires them too. So the assertion is only that
-      // the ENTRY survived the timer — the window itself is allowed to have emptied.
+      // 60_000 also expires the timestamps, so only the entry's survival is asserted.
       test.clock.advance(60_000);
       assert.equal(
         test.router.sessionsTracked(),

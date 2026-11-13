@@ -1,54 +1,10 @@
 /**
- * The WebSocket hub, over a real socket.
- *
- * ## Why this file had to exist
- *
- * Every other WebSocket test in this repository drives `WsRouter` with a recorder object, or calls
- * one of the two pure functions `hub.ts` exports. `createWsHub` itself — the plugin that turns an
- * HTTP upgrade into a live connection — was instantiated by no test at all. So none of this was
- * covered: the real upgrade with a cookie-borne session, the per-session socket counter that a
- * reconnect leak would lock a user out of, `toBytes` on a binary or fragmented frame, and the whole
- * central journey of the product — connect, sit, play a hand, see the result.
- *
- * These tests therefore use the production wiring: `buildApp` (real helmet, CORS, CSRF, rate limit
- * and Ajv), the real `sessionPlugin` in front of the real signed cookie, `createWsHub` registered
- * through `registerRoutes` so the path is the shipped `/api/v1/ws`, a real `ws` client over
- * loopback, and a real `LiveTable` with a real bot. Only two seams are faked, and both are
- * database rows rather than behaviour: room/member persistence and the session row lookup (see
- * `test/helpers/live-room.ts`).
- *
- * ## The assertion that matters most
- *
- * `two sessions at one table` and `a hand that ends by a fold` prove the hidden-information
- * guarantee **over the wire**, against ground truth rather than against the frames themselves. The
- * server-side deal is read out of the table, the set of cards each viewer is entitled to see is
- * computed from it (own hole cards, the board, and the hole cards of seats that actually showed
- * down), and then every one of the remaining 43-50 cards in the deck — the opponent's unshown
- * holding and every undealt card — is required to be absent from every frame that socket ever
- * received, both structurally and as text. That is the property the brief names: one player must
- * never receive another player's private cards, and no client may ever learn future deck state.
- *
- * ## The other assertion that matters: a chair is not a person
- *
- * `a chair that changes owner` covers the case the two tests above cannot reach, because both seat
- * their players once and never move them. A `HandState` outlives its seating — the table keeps the
- * finished hand for the terminal frame and for a reconnect between deals — so the moment a player
- * stands and somebody else takes their chair, "seat 0" in the retained hand and "seat 0" at the
- * table are two different human beings. Deciding what a socket may see from the seat index rather
- * than from the user id therefore posts the previous occupant's unshown hole cards to the new one.
- * That test plays a hand out, stands the player up, seats a second session in the vacated chair,
- * and requires every byte that second session ever received to be free of the first's cards.
- *
- * ## Would these fail if the behaviour broke?
- *
- * Checked by breaking it. With `redactFor`'s `maySeeCards` forced to `true`, the two
- * hidden-information tests fail on the first state frame. With the `bySession` decrement in
- * `hub.ts`'s close handler removed, `the per-session socket cap` fails at the reconnect. With
- * `broadcast` changed to build one view and send it to everybody, the redaction tests fail. With
- * `viewFor` reverted to looking the caller's seat up in the current seating and passing that index
- * to `redactFor`, `a chair that changes owner` fails on the frame that follows the second session
- * taking the chair — reported as a leaked card value, a leaked notation, AND a seat marked as the
- * recipient's own whose `playerId` is somebody else's.
+ * `createWsHub` over a real socket, with production wiring: `buildApp`, the real session cookie, the
+ * shipped `/api/v1/ws` path, a real `ws` client and a real `LiveTable` with a bot. Only room/member
+ * rows and the session lookup are faked (`test/helpers/live-room.ts`). The hidden-information cases
+ * compute each viewer's entitlement from the server's own deal and require every other card to be
+ * absent from every frame. Mutation-checked against `maySeeCards` forced true, a missing `bySession`
+ * decrement, one shared `broadcast` view, and `viewFor` resolving the seat index from current seating.
  */
 
 import assert from 'node:assert/strict';
@@ -74,12 +30,10 @@ const FRAME_TIMEOUT_MS = 15_000;
 function testConfig(overrides: EnvRecord = {}): AppConfig {
   return loadConfig({
     NODE_ENV: 'test',
-    // Nothing here connects: `buildApp` gets a stub handle and the registry gets a fake store.
     DATABASE_URL: 'postgresql://unused:unused@127.0.0.1:5432/unused',
     PUBLIC_WEB_ORIGIN: ALLOWED_ORIGIN,
     SESSION_COOKIE_SECRET: 'Zk7pQ2vR9tX4bN6mL1sD8gH3jF5wC0yA',
-    // Generous, so the limiter is never why an assertion fails. The limits themselves are covered
-    // by `test/security-headers.test.ts` and `test/ws-router.test.ts`.
+    // Generous, so the limiter is never why an assertion fails.
     RATE_LIMIT_MAX: '5000',
     ...overrides,
   });
@@ -90,21 +44,11 @@ const stubDatabase: DatabaseHandle = {
   close: () => Promise.resolve(),
 };
 
-// ---------------------------------------------------------------------------
-// Cards: the ground truth this file measures leaks against
-// ---------------------------------------------------------------------------
-
-/**
- * Keys whose numeric values are card indices.
- *
- * `card` covers `result.reveal.cards[].card`; `holeCards` and `board` cover the view. Anything
- * numeric outside these keys is a stack, a pot, a sequence or a timestamp.
- */
+/** `card` covers `result.reveal.cards[].card`. Other numeric keys are stacks, pots and sequences. */
 const CARD_VALUE_KEYS = new Set(['holeCards', 'board', 'card']);
 
 const NOTATION = /^([2-9TJQKA])([cdhs])$/;
 
-/** A card from its two-character notation, or null. Used to catch a leak in a string field. */
 function cardFromNotation(text: string): Card | null {
   const match = NOTATION.exec(text);
   if (match === null) return null;
@@ -114,11 +58,8 @@ function cardFromNotation(text: string): Card | null {
 }
 
 /**
- * Every card mentioned anywhere in a frame, whether as an index under a card key or as notation.
- *
- * Two forms because the protocol uses both: the view carries indices, and a `street` event carries
- * `newCards` as notation strings. A scan that only understood one of them would be blind to a leak
- * through the other.
+ * Every card in a frame, as an index under a card key or as notation. Both forms, because the view
+ * carries indices and a `street` event carries `newCards` as notation strings.
  */
 function collectCards(value: unknown, out: Set<Card>, underCardKey = false): Set<Card> {
   if (typeof value === 'number') {
@@ -142,17 +83,11 @@ function collectCards(value: unknown, out: Set<Card>, underCardKey = false): Set
   return out;
 }
 
-/**
- * A card's notation as a word, so `Ad` does not match inside `Ada` and `9c` does not match inside a
- * hex digest.
- *
- * `_` is in the boundary class because ids look like `hand_ws1`.
- */
+/** A card's notation as a word, so `Ad` does not match inside `Ada`. `_` is in the class for `hand_ws1`. */
 function notationPattern(card: Card): RegExp {
   return new RegExp(`(?<![A-Za-z0-9_])${cardToString(card)}(?![A-Za-z0-9_])`);
 }
 
-/** Keys that must never appear in a frame, at any depth. */
 const FORBIDDEN_KEYS = ['deck', 'deckCursor', 'deckSalts', 'salts', 'salt', 'secret'];
 
 function collectKeys(value: unknown, out = new Set<string>()): Set<string> {
@@ -166,10 +101,6 @@ function collectKeys(value: unknown, out = new Set<string>()): Set<string> {
   }
   return out;
 }
-
-// ---------------------------------------------------------------------------
-// The harness
-// ---------------------------------------------------------------------------
 
 interface Frame {
   readonly type: string;
@@ -201,7 +132,6 @@ after(async () => {
   for (const app of openApps) await app.close();
 });
 
-/** Readable, sequential hand ids, so a failure names the hand it happened in. */
 function incrementingHandIds(prefix: string): () => string {
   let count = 0;
   return () => {
@@ -211,11 +141,8 @@ function incrementingHandIds(prefix: string): () => string {
 }
 
 /**
- * Starts an app on an ephemeral port with the hub registered exactly as `routes/index.ts` does.
- *
- * `botThinkingDelayMs: 0` so a bot answers on the next tick rather than after 700 ms of legibility
- * delay — the delay is a UI property and waiting it out per action would make this suite slow for
- * no extra coverage. The clock is the real one: this test is about real sockets in real time.
+ * Registers the hub exactly as `routes/index.ts` does. `botThinkingDelayMs: 0` skips the 700 ms UI
+ * delay. The clock is real, because this test is about real sockets in real time.
  */
 async function startHub(options: {
   readonly players: readonly Seated[];
@@ -272,17 +199,13 @@ async function startHub(options: {
     registry,
     room,
     roomId,
-    // Built from the contract's published path rather than from a literal `/api/v1${WS_PATH}`.
-    // The upgrade path is half a contract like every other path: `API_PATHS.ws()` is what the
-    // browser client opens, so driving the real handshake from that same constant is what makes
-    // `web-api-paths.test.ts`' route lookup a check on something a client actually uses.
+    // From `API_PATHS.ws()`, the constant the browser opens, so `web-api-paths.test.ts` checks a real path.
     url: `ws://127.0.0.1:${address.port}${API_PATHS.ws()}`,
     cookieFor: (token) => `${sessionCookieName(config)}=${app.signCookie(token)}`,
     problems,
   };
 }
 
-/** Seats a bot at the live table, the way `POST /rooms` does. */
 function seatBot(hub: Hub, seat: number, legacyName = 'tight-aggressive'): Promise<unknown> {
   const profile = resolveProfile(legacyName);
   return hub.registry.seatBot(
@@ -304,7 +227,6 @@ type Policy = (legal: readonly { readonly type: string; readonly minTo?: number 
   readonly to?: number;
 };
 
-/** Check when free, otherwise call, otherwise fold. Plays hands out rather than ending them. */
 const PASSIVE: Policy = (legal) => {
   const types = new Set(legal.map((action) => action.type));
   if (types.has('check')) return { type: 'check' };
@@ -312,7 +234,6 @@ const PASSIVE: Policy = (legal) => {
   return { type: 'fold' };
 };
 
-/** Fold at the first opportunity, so the hand ends with nobody's cards shown. */
 const FOLD_AT_ONCE: Policy = (legal) => {
   const types = new Set(legal.map((action) => action.type));
   if (types.has('fold')) return { type: 'fold' };
@@ -325,18 +246,12 @@ function nextRequestId(): string {
   return `req-${String(requestCounter).padStart(8, '0')}`;
 }
 
-/** A distinct `actionId` per attempt, so a retry can be told from a new decision. */
 function nextActionId(): string {
   requestCounter += 1;
   return String(requestCounter).padStart(8, '0');
 }
 
-/**
- * One real socket, recording every byte the server sent it.
- *
- * `raw` is kept as text as well as parsed, because the strongest leak assertion is a text scan: a
- * card that reached this client through a field nobody thought to check is still in `raw`.
- */
+/** One real socket. `raw` is kept as text because a text scan catches a card in a field nobody checked. */
 class SocketClient {
   readonly raw: string[] = [];
   readonly frames: Frame[] = [];
@@ -350,14 +265,12 @@ class SocketClient {
   private readonly hub: Hub;
   readonly player: Seated;
 
-  // Written out rather than declared as constructor parameter properties: Node's type stripping is
-  // strip-only, and a parameter property is the one TypeScript feature that emits code.
+  // Not parameter properties, because Node's strip-only type stripping cannot emit their code.
   constructor(hub: Hub, player: Seated) {
     this.hub = hub;
     this.player = player;
   }
 
-  /** Opens the socket. Resolves on the TCP/HTTP upgrade, not on `welcome`. */
   async connect(
     overrides: { readonly cookie?: string | null; readonly origin?: string | null } = {},
   ): Promise<void> {
@@ -420,10 +333,8 @@ class SocketClient {
     assert.ok(socket !== null, 'the socket is not open');
     const text = JSON.stringify(message);
     if (options.fragments !== undefined && options.fragments > 1) {
-      // A genuinely fragmented message: the server's `ws` receiver reassembles the continuation
-      // frames before the hub's handler sees them, which is the path `toBytes` exists for. (Its
-      // `Buffer[]` branch needs `binaryType: 'fragments'`, which the hub does not set, so it is
-      // unreachable from a conformant client — noted rather than pretended to be covered.)
+      // A real fragmented message, reassembled by `ws` before the hub sees it. The `Buffer[]` branch of
+      // `toBytes` needs `binaryType: 'fragments'`, which the hub does not set, so it is not covered.
       const size = Math.ceil(text.length / options.fragments);
       for (let offset = 0; offset < text.length; offset += size) {
         const chunk = text.slice(offset, offset + size);
@@ -439,7 +350,6 @@ class SocketClient {
     });
   }
 
-  /** Sends `hello` and waits for `welcome`. */
   handshake(): Promise<Frame> {
     this.send({
       type: 'hello',
@@ -450,14 +360,12 @@ class SocketClient {
     return this.waitFor((frame) => frame.type === 'welcome', 'a welcome');
   }
 
-  /** Takes a seat and waits for the ack. */
   async sit(seat: number): Promise<void> {
     const requestId = nextRequestId();
     this.send({ type: 'sit', seat, requestId });
     await this.waitFor((frame) => frame.type === 'ack' && frame['requestId'] === requestId, 'a sit ack');
   }
 
-  /** Stands up and waits for the ack. */
   async stand(): Promise<void> {
     const requestId = nextRequestId();
     this.send({ type: 'stand', requestId });
@@ -468,7 +376,6 @@ class SocketClient {
     this.send({ type: 'startHand', requestId: nextRequestId() });
   }
 
-  /** From now on, act whenever the server says it is this seat's turn. */
   play(policy: Policy): void {
     this.policy = policy;
   }
@@ -482,9 +389,7 @@ class SocketClient {
     const legal = record['legalActions'];
     if (!Array.isArray(legal) || legal.length === 0) return;
     if (record['toAct'] === null || record['toAct'] !== record['viewerSeat']) return;
-    // The same decision point can arrive twice (an unrelated change re-sends the state). Acting on
-    // it twice would earn a `stale_action_sequence` for the second, which is correct server
-    // behaviour and would look like a client bug here.
+    // A re-sent state repeats the decision point, and acting twice would earn `stale_action_sequence`.
     const key = `${String(record['handId'])}:${String(record['actionSequence'])}`;
     if (key === this.lastActedKey) return;
     this.lastActedKey = key;
@@ -500,7 +405,6 @@ class SocketClient {
     });
   }
 
-  /** The first frame, already received or yet to arrive, that matches. */
   waitFor(predicate: (frame: Frame) => boolean, what: string, timeoutMs = FRAME_TIMEOUT_MS): Promise<Frame> {
     const existing = this.frames.find(predicate);
     if (existing !== undefined) return Promise.resolve(existing);
@@ -538,7 +442,6 @@ class SocketClient {
     });
   }
 
-  /** The last frame of a type, for reading the final state. */
   last(type: string): Frame | null {
     return this.frames.filter((frame) => frame.type === type).at(-1) ?? null;
   }
@@ -552,13 +455,7 @@ class SocketClient {
   }
 }
 
-/**
- * One test identity.
- *
- * `id` is a readable slug rather than a number so a failure names the test it came from. The token
- * is long because `sessionCookieName`'s signed cookie is the real one and a short token would be
- * indistinguishable from a truncated signature while debugging.
- */
+/** `id` is a readable slug so a failure names its test. */
 function player(id: string, displayName: string): Seated {
   return {
     userId: `usr_${id}`,
@@ -568,7 +465,6 @@ function player(id: string, displayName: string): Seated {
   };
 }
 
-/** Waits until the table reports the hand complete, or fails saying where it got stuck. */
 async function playToCompletion(clients: readonly SocketClient[], hub: Hub): Promise<Frame> {
   const owner = clients[0];
   assert.ok(owner !== undefined);
@@ -585,12 +481,8 @@ async function playToCompletion(clients: readonly SocketClient[], hub: Hub): Pro
 }
 
 /**
- * Asserts that a socket never saw a card it was not entitled to.
- *
- * `entitled` is built from the SERVER's own deal — not from the frames — so the check cannot be
- * satisfied by a leak that also widens the expectation. Everything else in the 52-card deck is
- * forbidden: the opponent's unshown holding, and every card that was never dealt at all, which is
- * what "no future deck state" means in practice.
+ * `entitled` comes from the SERVER's deal, not from the frames, so a leak cannot also widen the
+ * expectation. Everything else in the 52-card deck is forbidden.
  */
 function assertSawOnly(client: SocketClient, entitled: ReadonlySet<Card>, label: string): void {
   const forbidden = orderedDeck().filter((card) => !entitled.has(card));
@@ -622,13 +514,8 @@ function assertSawOnly(client: SocketClient, entitled: ReadonlySet<Card>, label:
 }
 
 /**
- * Asserts that none of `forbidden` ever reached this socket, in any field or as text.
- *
- * The looser sibling of `assertSawOnly`, for a recipient whose entitlement can legitimately be
- * empty — a spectator at a hand that ended before a flop is entitled to no card at all, and
- * `assertSawOnly` requires the recipient to have seen at least two so that its scan is provably
- * live. Here the scan is proved live by a separate socket in the same test, which received exactly
- * these cards and is required to have done so.
+ * The looser sibling of `assertSawOnly`, for a recipient whose entitlement can be empty. The scan is
+ * proved live by another socket in the same test that did receive these cards.
  */
 function assertNeverReceived(client: SocketClient, forbidden: readonly Card[], label: string): void {
   assert.ok(forbidden.length > 0, `${label} has an empty forbidden set, so this scan proves nothing`);
@@ -646,7 +533,6 @@ function assertNeverReceived(client: SocketClient, forbidden: readonly Card[], l
   assert.deepEqual(textual, [], `${label} received the notation of ${textual.join(', ')}`);
 }
 
-/** One seat as it appears inside a `state` frame's view. */
 interface WireSeat {
   readonly seat: number;
   readonly playerId: string;
@@ -662,7 +548,6 @@ interface WireView {
   readonly result: { readonly showdowns: readonly { readonly seat: number }[] } | null;
 }
 
-/** The views out of every `state` frame this socket received, in order. */
 function viewsReceivedBy(client: SocketClient): WireView[] {
   const views: WireView[] = [];
   for (const frame of client.frames) {
@@ -675,14 +560,9 @@ function viewsReceivedBy(client: SocketClient): WireView[] {
 }
 
 /**
- * The property, over every frame a socket received: `isSelf` means "that seat's player IS me".
- *
- * Asserted on `playerId` rather than on the seat index deliberately. A recipient's seat index is
- * whatever the server says it is, so an implementation that mixed up two rosters would satisfy an
- * index-based check by construction; the user id is the one thing in the frame that the recipient
- * and the server independently agree on. Hole cards are then required to be absent everywhere the
- * flag is false and the seat did not show down — so the flag cannot be right while the cards are
- * wrong, or the other way about.
+ * `isSelf` must mean "that seat's player IS me", asserted on `playerId` because a seat index is
+ * whatever the server says. Hole cards must be absent wherever the flag is false and there was no
+ * showdown.
  */
 function assertSelfMeansIdentity(client: SocketClient, userId: string, label: string): void {
   const views = viewsReceivedBy(client);
@@ -713,12 +593,7 @@ function assertSelfMeansIdentity(client: SocketClient, userId: string, label: st
   }
 }
 
-/**
- * What a seat is entitled to see, from the server's own state.
- *
- * Own hole cards, the board as dealt, and the hole cards of seats that actually showed at showdown —
- * which is exactly `redactFor`'s contract, read from the table rather than from the wire.
- */
+/** Own hole cards, the dealt board and shown hands: `redactFor`'s contract, read from the table. */
 function entitlementFor(hub: Hub, userId: string): Set<Card> {
   const table = hub.room.table;
   const view = table.viewFor(userId);
@@ -728,9 +603,8 @@ function entitlementFor(hub: Hub, userId: string): Set<Card> {
   assert.ok(deal !== null, 'the table has no deal to read');
   const own = deal.seats.find((seat) => seat.userId === userId);
   assert.ok(own !== undefined, `${userId} is not seated in the deal`);
-  // A seat that was dealt in always holds two cards; the type is nullable because a seat can be
-  // sitting out. Asserted rather than defaulted, because an empty entitlement would make the leak
-  // scan below stricter by accident and mask what actually happened.
+  // Asserted rather than defaulted, because an empty entitlement would make the scan stricter by
+  // accident and mask what happened.
   assert.ok(own.holeCards !== null, `${userId} was dealt no cards, so there is no entitlement to build`);
   for (const card of own.holeCards) entitled.add(card);
   const shown = new Set((view.result?.showdowns ?? []).map((showdown) => showdown.seat));
@@ -740,10 +614,6 @@ function entitlementFor(hub: Hub, userId: string): Set<Card> {
   }
   return entitled;
 }
-
-// ---------------------------------------------------------------------------
-// The upgrade, for real
-// ---------------------------------------------------------------------------
 
 describe('the real WebSocket upgrade', () => {
   it('completes the handshake and answers hello with a welcome and the current view', async () => {
@@ -759,7 +629,6 @@ describe('the real WebSocket upgrade', () => {
     const room = welcome['room'] as { id: string; visibility: string };
     assert.equal(room.id, hub.roomId);
     assert.equal(room.visibility, 'invite_only');
-    // The welcome is followed by the current state, which is what makes reconnect trivial.
     const state = await client.waitFor((frame) => frame.type === 'state', 'the first state frame');
     assert.equal(state['revision'], 1);
     client.close();
@@ -780,8 +649,7 @@ describe('the real WebSocket upgrade', () => {
     const badOrigin = await foreign.waitForClose();
     assert.equal(badOrigin.code, WS_CLOSE.badOrigin, 'a foreign origin must close 4406');
 
-    // A cookie this server never signed. The signature is checked before any lookup, so this is the
-    // `malformed` path rather than the `unknown` one — and either way the upgrade is refused.
+    // A cookie this server never signed, refused on the signature before any lookup.
     const forged = new SocketClient(hub, ada);
     await forged.connect({ cookie: `${sessionCookieName(testConfig())}=tok_forged.not-a-signature` });
     const tampered = await forged.waitForClose();
@@ -816,8 +684,6 @@ describe('the real WebSocket upgrade', () => {
     const hub = await startHub({ players: [ada], idPrefix: 'cp' });
     const cap = WS_LIMITS.maxSocketsPerSession;
 
-    // The counter is the hub's own `bySession` map, which no previous test ever exercised: the cap
-    // was only ever asserted by handing `socketsForSession` to a pure function.
     const held: SocketClient[] = [];
     for (let index = 0; index < cap; index += 1) {
       const client = new SocketClient(hub, ada);
@@ -831,8 +697,7 @@ describe('the real WebSocket upgrade', () => {
     const refused = await overCap.waitForClose();
     assert.equal(refused.code, WS_CLOSE.rateLimited, `socket ${cap + 1} of one session must close 4429`);
 
-    // Close one and the slot must come back. If the decrement or the `delete` at zero were missing,
-    // a user who reconnected `cap` times would be locked out of their own table for ever.
+    // Without the decrement and the `delete` at zero, `cap` reconnects lock a user out for ever.
     const released = held.pop();
     assert.ok(released !== undefined);
     released.close();
@@ -846,10 +711,6 @@ describe('the real WebSocket upgrade', () => {
     for (const client of [...held, reconnected]) client.close();
   });
 });
-
-// ---------------------------------------------------------------------------
-// The journey: sit, play a hand against a bot, read the result
-// ---------------------------------------------------------------------------
 
 describe('a whole hand over a real socket', () => {
   it('sits, plays to completion against a bot, and reports a settled terminal state', async () => {
@@ -886,7 +747,6 @@ describe('a whole hand over a real socket', () => {
     assert.equal(view.street, 'complete', 'the terminal street is `complete`');
     assert.ok(view.result !== null, 'a completed hand carries a result');
     const result = view.result;
-    // Chips are conserved: every hand is a zero-sum transfer between the seats.
     const net = Object.values(result.netBySeat).reduce((total, value) => total + value, 0);
     assert.equal(net, 0, `the hand must not create or destroy chips, netBySeat summed to ${net}`);
     const awarded = result.awards.reduce((total, award) => total + award.amount, 0);
@@ -895,32 +755,9 @@ describe('a whole hand over a real socket', () => {
       result.endedByFold || result.showdowns.length >= 2,
       'a hand that did not end by a fold must have shown at least two hands down',
     );
-    // Chips really moved: the blinds were posted, every chip in every pot was paid out, and each
-    // seat closed on exactly the stack its net says it should have. A "completed" hand in which
-    // nothing actually happened fails all three, and every other assertion here would still pass.
-    //
-    // ## Why this is no longer "somebody's stack changed"
-    //
-    // It used to be `stacks.some((stack) => stack !== 1_000)`, and that is NOT a property of a
-    // settled hand — it is a property of a settled hand *somebody won*. A CHOPPED pot returns
-    // every seat exactly what it put in, so both seats close on the 1,000 they started with while
-    // the hand was completely normal. The deal here is a real CSPRNG deal, so that outcome arrived
-    // on its own schedule: it was measured on 2 of 40 runs of this file in isolation, and on 15 of
-    // 400 hands of this same line-up driven through the table directly. The captured terminal view
-    // of a failing run is unambiguous — two seats dealt in, `smallBlind 5` and `bigBlind 10` in
-    // `forcedBets`, eight logged actions, a 50-chip pot, and a board of 5d 5s 4s 4h Ad that played
-    // for both 6sTc and 3hTs, so both `showdowns` carry the same score and the same `bestFive` and
-    // `awards` is 25 each with `wasSplit: true`. Nothing was wrong except the expectation.
-    //
-    // A release gate that fails nondeterministically cannot tell a regression from noise, so the
-    // fix is not to retry or to relax: it is to assert the thing the comment always meant. These
-    // three are strictly stronger than the check they replace. A hand whose blinds were never
-    // posted commits nothing and fails the first; a pot that is formed and then not paid out fails
-    // the second (the old check passed happily as long as *some* stack differed); and a settlement
-    // that credits the wrong seat, or credits nobody, fails the third — which the old check could
-    // not see at all, and which was verified by mutation: withholding one seat's award in the
-    // engine's `settle` left the old predicate perfectly happy and fails this one. None of the
-    // three can be satisfied by a hand that never started.
+    // A chopped pot returns every seat its starting 1,000, so "some stack changed" failed on 2 of 40
+    // runs. These three assert what a settled hand means instead. Withholding one seat's award in the
+    // engine's `settle` fails the third.
     const committed = view.seats.reduce((total, seat) => total + seat.committedTotal, 0);
     assert.ok(
       committed >= view.config.smallBlind + view.config.bigBlind,
@@ -933,17 +770,12 @@ describe('a whole hand over a real socket', () => {
       view.seats.map((seat) => 1_000 + (result.netBySeat[seat.seat] ?? 0)),
       'every seat closes on the stack it started with plus its net for the hand',
     );
-    // The action log has real actions in it, so "complete" did not mean "never started".
     assert.ok(client.actionsAcked.length >= 1, 'the player acted at least once and was acked');
 
     assertSawOnly(client, entitlementFor(hub, ada.userId), 'the seated player');
     client.close();
   });
 });
-
-// ---------------------------------------------------------------------------
-// The guarantee, over the wire
-// ---------------------------------------------------------------------------
 
 describe('hidden information over a live socket', () => {
   it('never sends either of two sessions the other’s hole cards or any undealt card', async () => {
@@ -966,9 +798,7 @@ describe('hidden information over a live socket', () => {
     const finalView = complete['view'] as { street: string };
     assert.equal(finalView.street, 'complete');
 
-    // Every frame, in order: a seat's cards may be present only for its own recipient, or after a
-    // showdown that seat actually took part in. Checked on nullness, so it cannot be satisfied by a
-    // leak that also widened the expectation.
+    // Checked on nullness, so it cannot be satisfied by a leak that also widened the expectation.
     for (const [client, ownSeat] of [
       [first, 0],
       [second, 1],
@@ -1003,11 +833,8 @@ describe('hidden information over a live socket', () => {
     assertSawOnly(first, entitlementFor(hub, ada.userId), 'seat 0');
     assertSawOnly(second, entitlementFor(hub, bo.userId), 'seat 1');
 
-    // The scan is proved to fire, on this very frame stream rather than on a fixture. Seat 0's own
-    // first card is certainly in its frames, so narrowing the entitlement by exactly that one card
-    // must be reported — a scan that silently matched nothing would satisfy every assertion above
-    // while proving nothing at all. (The alternative check, flipping `redactFor` and re-running, is
-    // not available here: `packages/poker-engine/src` belongs to another workstream.)
+    // Negative control on this frame stream. Removing seat 0's own first card from its entitlement
+    // must be reported, or the scan matched nothing.
     const deal = hub.room.table.archivedDeal();
     assert.ok(deal !== null);
     const ownFirstCard = deal.seats.find((seat) => seat.userId === ada.userId)?.holeCards?.[0];
@@ -1020,8 +847,7 @@ describe('hidden information over a live socket', () => {
       'the leak scan must fire on a card the socket received but was not entitled to',
     );
 
-    // And the two sockets genuinely received different pictures. One shared view object serialised
-    // to both — the mistake `broadcast` is written to prevent — would be identical text.
+    // One shared view serialised to both, which `broadcast` prevents, would be identical text.
     const firstState = first.last('state');
     const secondState = second.last('state');
     assert.ok(firstState !== null && secondState !== null);
@@ -1048,7 +874,6 @@ describe('hidden information over a live socket', () => {
     await second.connect();
     await second.handshake();
     await second.sit(1);
-    // Whoever is asked to act first folds; the other never has to act.
     first.play(FOLD_AT_ONCE);
     second.play(FOLD_AT_ONCE);
 
@@ -1064,9 +889,6 @@ describe('hidden information over a live socket', () => {
       'a folded hand shows nothing — revealing it would say whether the folder was bluffing',
     );
 
-    // Ground truth: with no showdown, each socket is entitled to its own two cards and the board,
-    // and to nothing else in the deck — including the other player's holding, which stays private
-    // permanently rather than until the hand ends.
     assertSawOnly(first, entitlementFor(hub, ada.userId), 'the folded hand’s seat 0');
     assertSawOnly(second, entitlementFor(hub, bo.userId), 'the folded hand’s seat 1');
     assertSelfMeansIdentity(first, ada.userId, 'the folded hand’s seat 0');
@@ -1077,17 +899,12 @@ describe('hidden information over a live socket', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// The guarantee when the seating moves underneath a finished hand
-// ---------------------------------------------------------------------------
-
 describe('a chair that changes owner over a live socket', () => {
   it('never sends the new occupant the previous occupant’s cards, and survives a reconnect', async () => {
     const ada = player('reuse_a', 'Ada');
     const bo = player('reuse_b', 'Bo');
     const hub = await startHub({ players: [ada, bo], idPrefix: 'sr' });
-    // The bot is seated first, so the button lands on Ada: heads-up the button posts the small
-    // blind and acts first, which makes Ada the one who is offered the first decision and folds it.
+    // The bot sits first, so the button and the first decision land on Ada heads-up.
     await seatBot(hub, 1);
 
     const first = new SocketClient(hub, ada);
@@ -1095,8 +912,7 @@ describe('a chair that changes owner over a live socket', () => {
     await first.handshake();
     await first.sit(0);
 
-    // Bo watches the whole thing from the start without a seat, so his frames cover the live hand
-    // as well as everything after it.
+    // Bo watches without a seat from the start, so his frames cover the live hand too.
     const watcher = new SocketClient(hub, bo);
     await watcher.connect();
     await watcher.handshake();
@@ -1112,19 +928,15 @@ describe('a chair that changes owner over a live socket', () => {
     assert.equal(finished.result?.endedByFold, true, 'this hand is meant to end by a fold');
     assert.equal(finished.result?.showdowns.length, 0, 'so nobody’s cards ever became public');
 
-    // Ground truth for the rest of the test: the cards Ada was actually dealt, from the server's
-    // own deal record rather than from anything that went over a wire.
     const deal = hub.room.table.archivedDeal();
     assert.ok(deal !== null);
     const adaCards = deal.seats.find((seat) => seat.userId === ada.userId)?.holeCards ?? null;
     assert.ok(adaCards !== null && adaCards.length === 2, 'Ada must hold two cards to leak');
 
-    // Ada stands. The hand is over, so the chair is released immediately.
     await first.stand();
     assert.equal(hub.room.table.seatOf(ada.userId), null, 'Ada gave up the chair');
 
-    // A reconnect is a new socket for the same session. Identity is what carries entitlement, so
-    // Ada's own hand comes back to her over the new socket even though she no longer holds a chair.
+    // Identity carries entitlement, so Ada gets her hand back over a new socket without a chair.
     first.close();
     await first.waitForClose();
     const reconnected = new SocketClient(hub, ada);
@@ -1141,10 +953,8 @@ describe('a chair that changes owner over a live socket', () => {
       'Ada must still be shown the hand she played',
     );
 
-    // Bo now takes the chair Ada just left, while her finished hand is still in memory. This is the
-    // frame the defect leaked on, so it has to be a frame from AFTER the sit — Bo has been watching
-    // as a spectator all along and every one of those earlier frames says `viewerSeat: null`
-    // legitimately, which would satisfy the assertions below while proving nothing.
+    // Bo takes Ada's chair while her finished hand is retained. Only frames after the sit count, since
+    // his spectator frames say `viewerSeat: null` legitimately.
     const beforeSitting = new Set(watcher.frames);
     await watcher.sit(0);
     assert.equal(hub.room.table.seatOf(bo.userId), 0, 'Bo holds the chair Ada played');
@@ -1156,8 +966,7 @@ describe('a chair that changes owner over a live socket', () => {
     assert.equal(boView.handId, finished.handId, 'Bo is being shown the retained finished hand');
     assert.equal(boView.street, 'complete');
 
-    // The two rosters genuinely disagree, which is what makes this test worth having: the table's
-    // seat 0 is Bo, and the retained hand's seat 0 is Ada.
+    // The table's seat 0 is Bo and the retained hand's seat 0 is Ada.
     assert.equal(
       boView.seats.find((seat) => seat.seat === 0)?.playerId,
       ada.userId,
@@ -1170,8 +979,6 @@ describe('a chair that changes owner over a live socket', () => {
       'no seat of a hand Bo never played may be marked as Bo’s own',
     );
 
-    // Every frame Bo ever received — spectating the live hand and after taking the chair — checked
-    // as a property, then as raw card values, then as text.
     assertSelfMeansIdentity(watcher, bo.userId, 'the new occupant');
     const publicBoard = new Set(hub.room.table.viewFor(bo.userId)?.board ?? []);
     assertNeverReceived(
@@ -1180,8 +987,7 @@ describe('a chair that changes owner over a live socket', () => {
       'the new occupant',
     );
 
-    // And the scan is proved live on this very frame stream: the same two cards ARE detectable, in
-    // the frames of the one session entitled to them.
+    // The scan is proved live, because the same cards ARE detected in Ada's own frames.
     const adaSeen = new Set<Card>();
     for (const frame of reconnected.frames) collectCards(frame, adaSeen);
     assert.deepEqual(

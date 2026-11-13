@@ -1,21 +1,8 @@
 /**
- * The auth routes, end to end through `app.inject()`, with no database and no network.
- *
- * `createAuthRoutes({ store, relyingParty })` takes both of its dependencies as ports, so the
- * whole surface — guest creation, the session read, sign-out, the OIDC round trip, unit reset —
- * runs against three `Map`s and an in-process identity provider. That is not a shortcut: these
- * assertions are about *route* behaviour (what status, which cookie, which error code, in what
- * order), and a real Postgres would add minutes of setup without testing any of it.
- *
- * The one test that does use the real relying party is the OIDC round trip, because the thing
- * worth proving there is that `start` and `callback` agree with each other and with the protocol
- * module — a fake relying party would happily agree with a broken route.
- *
- * ## The store is a fake, but not a lenient one
- *
- * It enforces the properties the real schema enforces and the routes depend on: a session token
- * resolves only while it is unrevoked and unexpired, and a login attempt can be consumed exactly
- * once. A fake that let a state be consumed twice would make the replay test vacuous.
+ * The auth routes through `app.inject()` with no database and no network. The store and relying
+ * party are ports, so this runs on `Map`s. The OIDC round trip uses the real relying party, because
+ * a fake one would agree with a broken route. The fake store enforces what the routes rely on.
+ * A token resolves only while live, and a login attempt is consumed exactly once.
  */
 
 import assert from 'node:assert/strict';
@@ -71,10 +58,6 @@ function oidcConfig(overrides: EnvRecord = {}): AppConfig {
 }
 
 const stubDatabase: DatabaseHandle = { ping: async () => ({ ok: true }), close: async () => undefined };
-
-// ---------------------------------------------------------------------------
-// The in-memory store
-// ---------------------------------------------------------------------------
 
 interface FakeUser {
   readonly id: string;
@@ -161,13 +144,7 @@ function createFakeStore(): FakeStore {
     return session;
   }
 
-  /**
-   * The logic is written synchronously and wrapped in `Promise.resolve` at the port boundary.
-   *
-   * Two reasons. `async` with no `await` in it is a lint error in this repo, and rightly so — it
-   * usually means a missing one. And a fake whose bodies are plain functions is easier to read as
-   * a statement of the invariants it is standing in for.
-   */
+  /** Synchronous bodies wrapped in `Promise.resolve`, because `async` with no `await` is a lint error. */
   function findOrCreateOidc(issuer: string, subject: string, displayName: string): SessionAccount {
     const identity = `${issuer}|${subject}`;
     for (const user of users.values()) {
@@ -184,21 +161,8 @@ function createFakeStore(): FakeStore {
   }
 
   /**
-   * Mirrors `usersRepository.deleteAccount`, and mirrors it *behaviourally* rather than
-   * returning a fixed object.
-   *
-   * A stub that answered with zeroes and left the maps alone would let this harness pass
-   * every assertion about the route while the account it claimed to erase was still here —
-   * and "the fake said it worked" is exactly the shape of evidence this repository refuses
-   * elsewhere. So the user is removed, and every session that pointed at them goes with it,
-   * which is what makes the follow-up assertion "the caller's session no longer resolves"
-   * mean something.
-   *
-   * What is NOT modelled here: hand seats, audit rows and owned rooms. This harness has no
-   * such tables, and inventing them would be modelling the database rather than the route.
-   * The anonymisation half of the policy is proved against real Postgres in
-   * `test/account-deletion.test.ts`; this counts what it can actually observe and reports
-   * zero for the rest.
+   * Removes the user and their sessions, so "the session no longer resolves" means something.
+   * Hand seats, audit rows and rooms are not modelled. `account-deletion.test.ts` covers those.
    */
   function deleteAccount(userId: string): DeleteAccountResponse | null {
     if (!users.has(userId)) return null;
@@ -221,7 +185,7 @@ function createFakeStore(): FakeStore {
     };
   }
 
-  /** Mirrors `findValidByToken`: revoked and expired sessions resolve to nothing, in one answer. */
+  /** Mirrors `findValidByToken`. Revoked and expired sessions resolve to nothing. */
   function findValid(token: string): StoredSession | null {
     const session = sessions.get(token);
     if (session === undefined || session.revokedAt !== null) return null;
@@ -237,7 +201,7 @@ function createFakeStore(): FakeStore {
     return { sessionId: session.sessionId, token: session.token, expiresAt: session.expiresAt };
   }
 
-  /** Mirrors the sliding-expiry UPDATE, ceiling included: nothing moves, nothing is returned. */
+  /** Mirrors the sliding-expiry UPDATE, ceiling included. */
   function extendExpiry(sessionId: string): Date | null {
     for (const session of sessions.values()) {
       if (session.sessionId !== sessionId || session.revokedAt !== null) continue;
@@ -269,8 +233,7 @@ function createFakeStore(): FakeStore {
     readonly redirectAfter: string | null;
   }): void {
     attempts.set(input.state, {
-      // Digests, exactly as the table stores them. A fake that kept the plaintexts would let a
-      // broken route pass by comparing the wrong things.
+      // Digests, as the table stores them.
       nonceHash: hashOidcSecret(input.nonce),
       pkceVerifierHash: hashOidcSecret(input.pkceVerifier),
       redirectAfter: input.redirectAfter,
@@ -279,7 +242,7 @@ function createFakeStore(): FakeStore {
     });
   }
 
-  /** Single use, as the real `UPDATE ... WHERE consumed_at IS NULL RETURNING` is. */
+  /** Single use, like `UPDATE ... WHERE consumed_at IS NULL RETURNING`. */
   function consumeAttempt(state: string): {
     readonly nonceHash: Buffer;
     readonly pkceVerifierHash: Buffer;
@@ -334,10 +297,6 @@ function createFakeStore(): FakeStore {
   return { store, users, sessions, attempts, fingerprints, lastSeen, seedUser, seedSession };
 }
 
-// ---------------------------------------------------------------------------
-// The fake identity provider (real keys, real signatures, no sockets)
-// ---------------------------------------------------------------------------
-
 const KEY_PAIR = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const PUBLIC_JWK: Jwk = (() => {
   const exported = KEY_PAIR.publicKey.export({ format: 'jwk' });
@@ -346,11 +305,9 @@ const PUBLIC_JWK: Jwk = (() => {
 
 interface FakeProvider {
   readonly fetchImpl: typeof globalThis.fetch;
-  /** The `nonce` the token endpoint will mint a token for. Set from the authorization URL. */
+  /** Set from the authorization URL. */
   lastNonce: string | null;
-  /** Which subject the token names, for the "second sign-in reuses the account" case. */
   subject: string;
-  /** Set to make the token endpoint fail. */
   tokenStatus: number;
 }
 
@@ -439,10 +396,7 @@ function makeFakeProvider(): FakeProvider {
   };
 }
 
-/**
- * A relying party that always succeeds. Used where the protocol is not the subject of the test —
- * the state, cookie and PKCE checks all happen before it is reached.
- */
+/** For tests where the protocol is not the subject. The state, cookie and PKCE checks run first. */
 function stubRelyingParty(verified: VerifiedIdToken): OidcRelyingParty {
   return {
     discovery: () => Promise.reject(new Error('the stub relying party does not fetch discovery')),
@@ -456,15 +410,10 @@ function stubRelyingParty(verified: VerifiedIdToken): OidcRelyingParty {
   };
 }
 
-/** The OIDC config, non-null, so the round-trip tests do not have to keep asserting it. */
 function requiredOidcConfig(config: AppConfig): OidcConfig {
   assert.ok(config.oidc !== null, 'this test needs OIDC configured');
   return config.oidc;
 }
-
-// ---------------------------------------------------------------------------
-// App construction and request helpers
-// ---------------------------------------------------------------------------
 
 interface HarnessOptions {
   readonly config?: AppConfig;
@@ -493,7 +442,6 @@ interface CsrfPair {
   readonly cookie: string;
 }
 
-/** Fetches a session and takes the CSRF token and its paired secret cookie from the response. */
 async function csrfPair(app: FastifyInstance): Promise<CsrfPair> {
   const response = await app.inject({ method: 'GET', url: '/api/v1/auth/session' });
   assert.equal(response.statusCode, 200);
@@ -561,7 +509,6 @@ function cookieValue(response: { cookies: { name: string; value: string }[] }, n
   return found === undefined ? null : found.value;
 }
 
-/** Creates a guest and returns the signed session cookie the browser would hold. */
 async function signInAsGuest(app: FastifyInstance, displayName?: string): Promise<string> {
   const { token, cookie } = await csrfPair(app);
   const payload = displayName === undefined ? {} : { displayName };
@@ -578,16 +525,12 @@ async function signInAsGuest(app: FastifyInstance, displayName?: string): Promis
   return session;
 }
 
-// ---------------------------------------------------------------------------
-// Session read
-// ---------------------------------------------------------------------------
-
 describe('GET /auth/session', () => {
   it('answers 200 with user: null for a reader who has never signed in', async () => {
     const { app } = await harness();
     const response = await app.inject({ method: 'GET', url: '/api/v1/auth/session' });
 
-    // Never 401. An anonymous reader is the normal case, not an error.
+    // Never 401. An anonymous reader is the normal case.
     assert.equal(response.statusCode, 200);
     const body = sessionBody(response.json());
     assert.equal(body.user, null);
@@ -631,7 +574,6 @@ describe('GET /auth/session', () => {
 
     assert.equal(response.statusCode, 200);
     assert.equal(sessionBody(response.json()).user, null);
-    // Cleared, so the browser stops paying for a lookup on every future request.
     const cleared = response.cookies.find((entry) => entry.name === 'prl_session');
     assert.ok(cleared !== undefined, 'a refused cookie should be cleared');
     assert.equal(cleared.value, '');
@@ -665,10 +607,6 @@ describe('GET /auth/session', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Guest creation
-// ---------------------------------------------------------------------------
-
 describe('POST /auth/guest', () => {
   it('rejects a mutating request with no CSRF token', async () => {
     const { app, store } = await harness();
@@ -676,8 +614,7 @@ describe('POST /auth/guest', () => {
 
     assert.equal(response.statusCode, 403);
     assert.equal(errorCode(response.json()), 'csrf_failed');
-    // The side effect must not have happened either. Blocking only the reading of the response
-    // would leave a row behind on every cross-site attempt.
+    // Blocking only the response would still leave a row behind on every cross-site attempt.
     assert.equal(store.users.size, 0);
     await app.close();
   });
@@ -710,7 +647,6 @@ describe('POST /auth/guest', () => {
     assert.ok(stored !== undefined);
 
     const response = await app.inject({ method: 'GET', url: '/api/v1/auth/session' });
-    // The plaintext token exists in exactly one place a client can see: the Set-Cookie header.
     assert.equal(response.payload.includes(stored.token), false);
     await app.close();
   });
@@ -734,8 +670,7 @@ describe('POST /auth/guest', () => {
     assert.match(sessionCookie, /SameSite=Lax/i);
     assert.match(sessionCookie, /Path=\//);
     assert.match(sessionCookie, /Max-Age=\d+/);
-    // Not production, so no Secure and no `__Host-` prefix; both are asserted in the security
-    // layer's own tests and must not be re-decided here.
+    // Secure and `__Host-` belong to the security layer's own tests.
     await app.close();
   });
 
@@ -793,7 +728,7 @@ describe('POST /auth/guest', () => {
       headers: { 'x-csrf-token': token },
     });
 
-    // Session fixation: the old token must stop working the moment a new identity is issued.
+    // Session fixation.
     const reused = await app.inject({
       method: 'GET',
       url: '/api/v1/auth/session',
@@ -806,14 +741,7 @@ describe('POST /auth/guest', () => {
 });
 
 describe('sanitiseDisplayName', () => {
-  /**
-   * Every hostile character below is written as a `\u` escape rather than typed.
-   *
-   * Not a style preference: `pnpm run security:hygiene` rejects a NUL byte, an unexpected C0
-   * control character, a bidi override or a zero-width character anywhere in source, because
-   * those are how code hides from a reviewer. A test *about* those characters is exactly the
-   * file most likely to smuggle one in, so they are spelled out here instead.
-   */
+  /** Escaped because `security:hygiene` rejects bidi, zero-width and control characters in source. */
   const RTL_OVERRIDE = '\u202e';
   const ZERO_WIDTH_JOINER = '\u200d';
   const ZERO_WIDTH_SPACE = '\u200b';
@@ -826,7 +754,6 @@ describe('sanitiseDisplayName', () => {
   });
 
   it('strips what a log viewer or a room list could be fooled by', () => {
-    // Three ways to render as somebody else. Each becomes a space and then collapses away.
     assert.equal(sanitiseDisplayName(`Ada${RTL_OVERRIDE}Lovelace`), 'Ada Lovelace');
     assert.equal(sanitiseDisplayName(`Ada${ZERO_WIDTH_JOINER}Lovelace`), 'Ada Lovelace');
     assert.equal(sanitiseDisplayName(`Ada${BELL}Lovelace`), 'Ada Lovelace');
@@ -847,10 +774,6 @@ describe('sanitiseDisplayName', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Sign-out
-// ---------------------------------------------------------------------------
-
 describe('POST /auth/logout', () => {
   it('revokes the session, clears the cookie, and is idempotent', async () => {
     const { app, store } = await harness();
@@ -868,7 +791,6 @@ describe('POST /auth/logout', () => {
     assert.equal(cookieValue(first, 'prl_session'), '');
     assert.ok([...store.sessions.values()].every((entry) => entry.revokedAt !== null));
 
-    // Again with the same (now dead) cookie.
     const second = await app.inject({
       method: 'POST',
       url: '/api/v1/auth/logout',
@@ -877,7 +799,6 @@ describe('POST /auth/logout', () => {
     });
     assert.equal(second.statusCode, 204);
 
-    // And with no cookie at all.
     const third = await app.inject({
       method: 'POST',
       url: '/api/v1/auth/logout',
@@ -897,15 +818,10 @@ describe('POST /auth/logout', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Sliding expiry
-// ---------------------------------------------------------------------------
-
 describe('sliding expiry', () => {
   it('extends a session that is past halfway and re-sends the cookie', async () => {
     const { app, store } = await harness();
     const user = store.seedUser();
-    // A quarter of the window left: past the halfway mark.
     const before = new Date(Date.now() + SESSION_IDLE_TTL_MS * 0.25);
     const session = store.seedSession(user.id, {
       createdAt: new Date(Date.now() - SESSION_IDLE_TTL_MS * 0.75),
@@ -921,8 +837,7 @@ describe('sliding expiry', () => {
     assert.ok(sessionBody(response.json()).user !== null, 'the session should still be usable');
     assert.ok(session.expiresAt.getTime() > before.getTime(), 'expires_at should have moved out');
     assert.ok(cookieValue(response, 'prl_session') !== null, 'the cookie should be re-sent');
-    // The slide also marks the account as seen, which is what keeps an active learner out of the
-    // guest sweep.
+    // Marking the account as seen keeps an active learner out of the guest sweep.
     assert.deepEqual(store.lastSeen, [user.id]);
     await app.close();
   });
@@ -949,8 +864,7 @@ describe('sliding expiry', () => {
   it('never slides past the absolute ceiling', async () => {
     const { app, store } = await harness();
     const user = store.seedUser();
-    // A session created almost sixty days ago: a minute of absolute life left, and well past the
-    // halfway mark of its idle window, so the slide would otherwise push it out another fortnight.
+    // One minute of absolute life left, and past the idle halfway mark.
     const createdAt = new Date(Date.now() - (SESSION_ABSOLUTE_TTL_SECONDS * 1_000 - 60_000));
     const ceiling = createdAt.getTime() + SESSION_ABSOLUTE_TTL_SECONDS * 1_000;
     const before = new Date(Date.now() + 30_000);
@@ -962,18 +876,12 @@ describe('sliding expiry', () => {
       cookies: { prl_session: app.signCookie(session.token) },
     });
 
-    // It did move — so this is not passing because the slide never happened — and it stopped at
-    // the ceiling rather than at now + the idle window.
     assert.ok(session.expiresAt.getTime() > before.getTime(), 'the slide should have happened');
     assert.equal(session.expiresAt.getTime(), ceiling);
     assert.ok(session.expiresAt.getTime() < Date.now() + SESSION_IDLE_TTL_MS);
     await app.close();
   });
 });
-
-// ---------------------------------------------------------------------------
-// Unit reset
-// ---------------------------------------------------------------------------
 
 describe('POST /me/units/reset', () => {
   it('needs a session', async () => {
@@ -1001,8 +909,7 @@ describe('POST /me/units/reset', () => {
       cookies: { prl_csrf: cookie, prl_session: app.signCookie(dead.token) },
       headers: { 'x-csrf-token': token },
     });
-    // Still a 401 — no information is disclosed — but the code tells a client to start over
-    // rather than to give up.
+    // `session_expired` tells a client to start over rather than give up.
     assert.equal(response.statusCode, 401);
     assert.equal(errorCode(response.json()), 'session_expired');
     await app.close();
@@ -1030,10 +937,6 @@ describe('POST /me/units/reset', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// OIDC: disabled
-// ---------------------------------------------------------------------------
-
 describe('OIDC when it is not configured', () => {
   it('answers 501 oidc_not_configured on both endpoints', async () => {
     const { app } = await harness();
@@ -1051,10 +954,6 @@ describe('OIDC when it is not configured', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// OIDC: redirectAfter
-// ---------------------------------------------------------------------------
-
 function makeStubbedParty(): OidcRelyingParty {
   return stubRelyingParty({ issuer: ISSUER, subject: 'subject-0001', nameHint: 'Ada Lovelace' });
 }
@@ -1068,7 +967,6 @@ describe('redirectAfter on /auth/oidc/start', () => {
         method: 'GET',
         url: `/api/v1/auth/oidc/start?redirectAfter=${encodeURIComponent(value)}`,
       });
-      // Refused by the schema, before any attempt row is written.
       assert.equal(response.statusCode, 400, `${value} should have been refused`);
       assert.equal(errorCode(response.json()), 'invalid_request');
     }
@@ -1081,10 +979,6 @@ describe('redirectAfter on /auth/oidc/start', () => {
     await app.close();
   });
 });
-
-// ---------------------------------------------------------------------------
-// OIDC: the round trip, through the real relying party
-// ---------------------------------------------------------------------------
 
 interface StartedFlow {
   readonly state: string;
@@ -1135,11 +1029,10 @@ describe('the OIDC round trip', () => {
     });
 
     assert.equal(callback.statusCode, 303, callback.payload);
-    // The origin comes from our allowlist and the path from the attempt row.
     assert.equal(callback.headers['location'], 'http://localhost:3000/play');
     const session = cookieValue(callback, 'prl_session');
     assert.ok(session !== null, 'a successful callback must issue a session');
-    // The attempt cookie is cleared, so the PKCE verifier does not linger in the browser.
+    // The PKCE verifier must not linger in the browser.
     assert.equal(cookieValue(callback, 'prl_oidc'), '');
 
     const read = sessionBody(
@@ -1155,7 +1048,6 @@ describe('the OIDC round trip', () => {
     assert.equal(read.user.kind, 'oidc');
     assert.equal(read.user.displayName, 'Ada Lovelace');
 
-    // Replaying the identical callback fails: `state` is single use.
     const replay = await app.inject({
       method: 'GET',
       url: `/api/v1/auth/oidc/callback?code=the-code&state=${encodeURIComponent(flow.state)}`,
@@ -1168,19 +1060,9 @@ describe('the OIDC round trip', () => {
 
   it('completes when the provider adds its own query parameters, as every real one does', async () => {
     /**
-     * The defect this pins: `oidcCallbackQuerySchema` was `additionalProperties: false` with only
-     * `code`, `state`, `error` and `error_description`, and `app.ts` sets
-     * `removeAdditional: false` — deliberately, so an unknown parameter is a refusal rather than
-     * a silent deletion. Together that made an ordinary provider callback a 400 before the
-     * handler ran.
-     *
-     * Google appends `scope`, `authuser`, `prompt` and `hd`; Keycloak appends `session_state`;
-     * Microsoft appends `client_info`; and RFC 9207 requires `iss`. So a live sign-in against
-     * Google, Auth0, Okta, Entra or Keycloak could never have completed, which is the residual
-     * `docs/production/security.md` recorded as "the live OIDC flow is unverified".
-     *
-     * Sends the union of them in one callback. Without the fix this is a 400 with a validation
-     * error naming the first extra property.
+     * `app.ts` sets `removeAdditional: false`, so a strict callback schema refused real providers.
+     * Google, Keycloak and Microsoft append extra parameters and RFC 9207 requires `iss`. This
+     * sends the union of them in one callback.
      */
     const provider = makeFakeProvider();
     const store = createFakeStore();
@@ -1222,13 +1104,8 @@ describe('the OIDC round trip', () => {
 
   it('refuses a callback whose RFC 9207 issuer is not the one this deployment asked for', async () => {
     /**
-     * The mix-up attack RFC 9207 exists for: a client registered with more than one provider is
-     * induced to send provider A's code to provider B's token endpoint. `state` does not close
-     * it, because the attacker can start a genuine flow to obtain a genuine `state` — which is
-     * why this callback carries a VALID state and attempt cookie and must still be refused.
-     *
-     * The check runs before the attempt is consumed, so a mismatched issuer cannot burn a
-     * legitimate single-use attempt row: the assertion on `store.attempts.size` is that half.
+     * RFC 9207 mix-up. An attacker can obtain a genuine `state`, so this callback carries a valid
+     * one and must still be refused. The check runs before the attempt is consumed.
      */
     const provider = makeFakeProvider();
     const store = createFakeStore();
@@ -1256,8 +1133,7 @@ describe('the OIDC round trip', () => {
     assert.equal(cookieValue(callback, 'prl_session'), null, 'no session may be issued');
     assert.equal(store.attempts.size, 1, 'the legitimate attempt must survive a rejected callback');
 
-    // The positive control: the same flow with the RIGHT issuer completes, so the assertion above
-    // is the issuer check and not a broken fixture.
+    // Positive control. The right issuer completes, so the refusal above is the issuer check.
     const good = await app.inject({
       method: 'GET',
       url: `/api/v1/auth/oidc/callback?code=the-code&state=${encodeURIComponent(flow.state)}&iss=${encodeURIComponent(ISSUER)}`,
@@ -1289,15 +1165,11 @@ describe('the OIDC round trip', () => {
       assert.equal(callback.statusCode, 303, callback.payload);
     }
 
-    // Identity is (iss, sub), so the same subject is the same learner.
+    // Identity is (iss, sub).
     assert.equal(store.users.size, 1);
     await app.close();
   });
 });
-
-// ---------------------------------------------------------------------------
-// OIDC: the callback's refusals
-// ---------------------------------------------------------------------------
 
 describe('the OIDC callback refuses', () => {
   async function callbackHarness(): Promise<{ app: FastifyInstance; store: FakeStore }> {
@@ -1324,8 +1196,7 @@ describe('the OIDC callback refuses', () => {
     const mine = await startFlow(app);
     const theirs = await startFlow(app);
 
-    // The attacker's state, the victim's cookie. The attempt row for `theirs.state` exists and is
-    // unconsumed, so only the cookie comparison stands between this and a signed-in session.
+    // The attacker's state, the victim's cookie. Only the cookie comparison stands in the way.
     const response = await app.inject({
       method: 'GET',
       url: `/api/v1/auth/oidc/callback?code=c&state=${encodeURIComponent(theirs.state)}`,
@@ -1339,8 +1210,7 @@ describe('the OIDC callback refuses', () => {
   it('a PKCE verifier that does not match the attempt', async () => {
     const { app } = await callbackHarness();
     const flow = await startFlow(app);
-    // Same state, a different verifier: exactly what an attacker holding a stolen authorization
-    // code but not the victim's cookie would have to produce.
+    // What an attacker with a stolen code but not the victim's cookie would produce.
     const tampered = app.signCookie(`${flow.state}.${randomBytes(32).toString('base64url')}`);
 
     const response = await app.inject({
@@ -1453,9 +1323,7 @@ describe('the OIDC callback refuses', () => {
 
     const first = await startFlow(app);
     const second = await startFlow(app);
-    // The provider mints a token for the *first* attempt's nonce while the callback claims the
-    // second attempt. Without the nonce check, a token captured from any earlier sign-in would be
-    // replayable into a fresh callback.
+    // A token for the first attempt's nonce, replayed into the second attempt's callback.
     provider.lastNonce = first.nonce;
 
     const response = await app.inject({

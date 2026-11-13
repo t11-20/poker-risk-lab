@@ -1,86 +1,17 @@
 /**
- * Hand history and hand review: `GET /hands` and `GET /hands/:handId`.
+ * `GET /hands` and `GET /hands/:handId`, scoped to the caller by `s.user_id = <caller>` in the SQL.
  *
- * Two reads, both scoped to the caller by a SQL predicate rather than by a check afterwards.
- * `prl.hand_seats` is the join that decides what "my hands" means — a hand is the caller's when
- * they held a seat in it — and every query below starts from that table with
- * `s.user_id = <caller>` in the `where` clause. A filter applied after the rows are fetched is one
- * `return` away from being skipped; a filter in the predicate cannot be.
+ * A missing hand and somebody else's hand both answer `hand_not_found`, so a hand id cannot be confirmed.
+ * Hole cards follow `user_id = :viewer OR showed_down` in the SQL, and `buildHandReview` applies it again.
+ * `sort` selects a clause from `HAND_ORDERINGS` and is applied over the whole history in SQL.
+ * The review recomputes analysis on every read (nothing derived is stored), so it takes
+ * `app.expensiveRateLimit`. Rows are read on this thread and only `CoachTask`s go to the pool,
+ * because a worker never holds a database handle. One review measured 156 ms on the event
+ * loop, and action p99 went from 29 ms to 948 ms with reviews in the load test.
  *
- * ## The two answers a stranger gets are the same answer
- *
- * `GET /hands/:handId` matches the hand and the caller's seat in one statement. No row means
- * `hand_not_found`, whether the hand does not exist, belongs to somebody else, or was never
- * dealt. A distinguishable "it exists but you may not see it" would confirm a hand id for anyone
- * who cared to try, and hand ids appear in URLs that get shared.
- *
- * ## Hole cards are filtered in the SQL, and again in the review builder
- *
- * The column comment on `prl.hand_seats.hole_cards` requires every read path to carry
- * `user_id = :viewer OR showed_down`. The seat query below does exactly that, so the rows this
- * process holds never contain a card the caller may not see. `buildHandReview` then applies the
- * same rule a second time while constructing the response. Two layers, deliberately redundant:
- * the first is a SQL predicate somebody could edit while refactoring, and the second is a
- * property of the type that reaches the wire.
- *
- * ## Ordering is a server parameter, because only the server can honour it
- *
- * `GET /hands?sort=` takes one of the five names in `HAND_SORTS` and applies it in SQL over the
- * caller's whole history before the page is cut. That is not a convenience: the hand-history
- * screen offers "biggest gain first", and a client holding six rows cannot produce that ordering
- * — it can only reorder the six it has, under a heading that then means something else. The
- * screen used to send `sort=` into a closed schema and get `invalid_request`, then stopped
- * sending it and left the control offering four orderings nothing performed.
- *
- * The five clauses live in `HAND_ORDERINGS` and are written out in full. Nothing a caller sends
- * reaches SQL as text; `sort` selects a member of a table whose keys are the contract's own enum.
- *
- * ## Why the review is rate limited as an expensive route
- *
- * Nothing derived is stored (decision 7 in `db/migrations/0001_initial.sql`), so every read
- * recomputes the analysis: a six-handed preflop decision costs a bounded Monte Carlo run. Under
- * the global limit a single session could ask for three hundred of those a minute. `GET /hands`
- * is a cheap list and keeps the global limit; `GET /hands/:handId` takes
- * `app.expensiveRateLimit`, the same bucket the equity endpoints use, because it does the same
- * kind of work.
- *
- * ## The analysis happens on a calculator thread, and the rows are fetched here
- *
- * It is the same work `POST /math/coach` does, so it goes to the same place: the shared pool in
- * `workers/pool.ts`. That split is not negotiable in either direction. The DATA has to be read on
- * this thread — a review needs three queries and a worker must never hold a database handle, which
- * is what makes `worker.terminate()` safe. The COMPUTATION has to leave it: measured before this
- * change, one review was 156 ms of uninterruptible Monte Carlo on the event loop, and a load test
- * at six concurrent players reported action p99 of 948 ms with Hand Review in the journey against
- * 29 ms without it on the same process.
- *
- * What crosses to the thread is a `CoachTask` per decision — hero's own two cards, the board as of
- * that street, the pot and the stacks. The hole-card rule has already been applied twice by then
- * (in the SQL, and again in `toReviewSeat`), so a task cannot carry a card its viewer may not see.
- *
- * ## Where the queries live, and the duplication that is deliberately still here
- *
- * As local functions in this file, taking the `Db` handle first, exactly as `src/repositories/*`
- * does.
- *
- * `src/repositories/hands.ts` HAS since grown equivalents — `byId`, `seatsOf`, `actionsOf`,
- * `listForUser`, `encodeHandCursor`, `decodeHandCursor` — written independently of these. They are
- * not interchangeable, and until somebody decides which behaviour is wanted they must not be
- * swapped in blindly, because the two versions disagree twice and in opposite directions:
- *
- * 1. **Who may read a hand.** `findOwnHand` below requires the caller to have *held a seat*.
- *    `repositories/hands.ts :: byId` also admits any *member of the room*, so that somebody who
- *    sat down after hand 3 can review hand 3. Both are defensible and the second is strictly
- *    wider, so adopting it is a deliberate widening of an authorisation boundary — a product
- *    decision, not a refactor. Hole cards stay filtered either way.
- * 2. **Pagination.** The cursor here carries `started_at` to microseconds, on purpose (see
- *    `STARTED_AT_KEY_PATTERN`). `encodeHandCursor` truncates to milliseconds via `getTime()`,
- *    which compares as *earlier* than the row it names and so returns that row again on the next
- *    page. This version is the correct one.
- *
- * The hole-card rule is identical in both (`user_id = :viewer OR showed_down`, in the SQL), so
- * neither choice affects what cards leave the database. Whoever unifies them owns picking one
- * answer for (1) and keeping (2).
+ * `repositories/hands.ts` has similar queries that are NOT interchangeable. Its `byId` admits any
+ * room member (a wider authorisation boundary), and its `encodeHandCursor` truncates to milliseconds,
+ * which repeats a row on the next page. Unifying them is a product decision.
  */
 
 import type { HandComparison, HandListResponse, HandReviewResponse, HandSort } from '@prl/contracts';
@@ -101,69 +32,36 @@ import type { HandActionRow, HandRow, HandSeatRow, ReviewAnalyser } from '../rev
 import { buildHandReviewOn, toHandSummary } from '../review/build-review.ts';
 import { closeSharedPool, getSharedPool, type PoolWarning, peekSharedPool } from '../workers/pool.ts';
 
-// ---------------------------------------------------------------------------
-// Paging
-// ---------------------------------------------------------------------------
-
-/** Rows per page when the caller does not ask. `handListQuerySchema` caps the ask at 50. */
+/** `handListQuerySchema` caps the ask at 50. */
 const DEFAULT_PAGE_SIZE = 20;
 
 /**
- * The shape of the sort key the list query renders.
- *
- * `started_at` is a `timestamptz` with microsecond resolution, and the cursor has to carry all of
- * it. A key truncated to milliseconds compares as *earlier* than the row it names, so that row
- * comes back a second time on the next page — a duplicate rather than a gap, but wrong either
- * way. The key is therefore rendered by Postgres with `to_char(... 'US' ...)` (see `listHands`)
- * and compared back as a `timestamptz` bind parameter, which keeps the value exactly as stored
- * and keeps the comparison usable by an index.
+ * Microsecond `started_at`, rendered by Postgres with `to_char(... 'US' ...)`. A millisecond key
+ * compares earlier than its row and returns that row again on the next page.
  */
 const STARTED_AT_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/;
-/** The contract's own id rule, reused rather than copied, so the two cannot drift. */
 const ID_PATTERN = new RegExp(PATTERNS.ID);
 
-/** `YYYY-MM-DDTHH:MM:SS.ffffffZ` is exactly 27 characters, which is what makes the cursor parseable. */
+/** `YYYY-MM-DDTHH:MM:SS.ffffffZ` is exactly 27 characters. */
 const STARTED_AT_KEY_LENGTH = 27;
 
-/** The sort key of an ordering that has one, as it appears in a cursor. `null` is a real value. */
+/** `null` is a real value. */
 const SORT_VALUE_PATTERN = /^(?:null|-?\d{1,15})$/;
 
 export interface HandCursor {
   readonly handId: string;
   readonly startedAtKey: string;
-  /**
-   * The ordering this cursor was issued for, when that ordering needs more than a timestamp.
-   *
-   * Absent for `recent` and `oldest`, whose whole sort key IS `(started_at, id)` — so the
-   * two-part cursor this endpoint has always issued keeps working unchanged, which is the
-   * reason the extension is a suffix rather than a new format.
-   */
+  /** Absent for `recent` and `oldest`, so the original two-part cursor still parses. */
   readonly sort?: HandSort;
-  /**
-   * The value of that ordering's leading column on the row this cursor names.
-   *
-   * `null` is a value and not a missing one: an unsettled hand has no net and no pot, and it
-   * sorts into the block at the end of every ordering that names one. A cursor sitting in that
-   * block has to say so, or the next page starts from the wrong place.
-   */
+  /** `null` means the row sits in the trailing block of unsettled hands, which the next page must know. */
   readonly sortValue?: number | null;
 }
 
 /**
- * `<handId>:<startedAtKey>`, plus `:<sort>:<value>` for an ordering that needs one.
- *
- * The id goes first because it is the half that cannot contain a colon (`PATTERNS.ID` has no
- * `:`), while the timestamp has two. So the separator is the first colon, unambiguously — the
- * other way round would need a rule about which colon counts. The timestamp is a fixed 27
- * characters, so whatever follows it is unambiguous too.
- *
- * The ordering's NAME is in the cursor, not just its value. A cursor minted for `net-high` and
- * replayed against `net-low` would otherwise be accepted and would silently return a page from
- * the middle of a different sequence; naming it makes that a `400` instead.
- *
- * Exported, with `decodeCursor`, so `test/hands.test.ts` can prove the round trip and the
- * rejections without a database. Neither is part of the HTTP contract: to a client the cursor is
- * an opaque string it hands back unchanged.
+ * `<handId>:<startedAtKey>`, plus `:<sort>:<value>` for a keyed ordering.
+ * The id goes first because `PATTERNS.ID` has no colon. The timestamp is a fixed 27 characters.
+ * The ordering's name is included so a cursor replayed into another ordering is a 400.
+ * Exported for `test/hands.test.ts`. To a client the cursor is opaque.
  */
 export function encodeCursor(cursor: HandCursor): string {
   const base = `${cursor.handId}:${cursor.startedAtKey}`;
@@ -171,7 +69,6 @@ export function encodeCursor(cursor: HandCursor): string {
   return `${base}:${cursor.sort}:${cursor.sortValue === null || cursor.sortValue === undefined ? 'null' : String(cursor.sortValue)}`;
 }
 
-/** The one refusal this module gives for anything about a cursor that does not add up. */
 function rejectCursor(detail: string): never {
   throw new AppError('invalid_request', {
     fields: { 'query.cursor': 'is not a cursor this endpoint issued' },
@@ -179,14 +76,7 @@ function rejectCursor(detail: string): never {
   });
 }
 
-/**
- * Parses a cursor, or rejects it as `invalid_request`.
- *
- * Strictly checked even though every part becomes a bind parameter and could not be SQL whatever
- * it contained. A cursor is an opaque token this server minted; one that does not look like one
- * has been edited, and answering a tampered cursor with a page of somebody's history — or with a
- * confusing empty page — is worse than saying no.
- */
+/** Strict, because a cursor that does not look minted has been edited, and refusing beats a wrong page. */
 export function decodeCursor(raw: string): HandCursor {
   const separator = raw.indexOf(':');
   if (separator === -1) rejectCursor('no separator');
@@ -211,18 +101,7 @@ export function decodeCursor(raw: string): HandCursor {
   return { handId, startedAtKey, sort, sortValue: sortValue === 'null' ? null : Number(sortValue) };
 }
 
-// ---------------------------------------------------------------------------
-// Queries
-// ---------------------------------------------------------------------------
-
-/**
- * A row of the caller's own hand history.
- *
- * Columns are listed rather than `select *`: a column added by a later migration must not start
- * crossing this boundary because somebody widened a table. Note what is absent —
- * `hand_seats.hole_cards` is never projected here at all. A list of forty hands has no use for a
- * card, and a query that does not select one cannot leak one.
- */
+/** Columns listed, never `select *`. `hole_cards` is never projected, so a list cannot leak one. */
 interface HandListRow {
   readonly id: string;
   readonly room_id: string;
@@ -242,56 +121,24 @@ interface HandListQuery {
   readonly roomId: string | null;
   readonly cursor: HandCursor | null;
   readonly sort: HandSort;
-  /** How many rows to return. One more than this is fetched, to learn whether a page follows. */
+  /** One more row is fetched to learn whether a page follows. */
   readonly limit: number;
 }
 
-// ---------------------------------------------------------------------------
-// Ordering
-// ---------------------------------------------------------------------------
-
 /**
- * One ordering: the `order by` it renders, the keyset predicate that resumes it, and how to read
- * the key off a row so the next cursor can name it.
- *
- * ## No column name and no direction is ever interpolated
- *
- * Each clause is written out in full inside a `sql` template, and the table below is annotated
- * `Readonly<Record<HandSort, HandOrdering>>` — so an ordering the contract names without a clause
- * here does not compile, and there is no code path that turns a caller's string into SQL. The
- * caller's `sort` only ever selects a member of this table; `handListQuerySchema` has already
- * rejected anything that is not one of the five names.
- *
- * ## Why the tiebreak follows the primary direction
- *
- * Every clause ends `started_at, id` in the SAME direction as its leading column, and that is
- * load-bearing rather than tidy. The keyset predicate is a single row comparison — `(net,
- * started_at, id) < (…)` — and a row comparison applies ONE direction to the whole tuple. An
- * ordering that sorted net ascending and time descending could not be resumed by any row
- * comparison, so the page after the cursor would quietly not be the page after the cursor.
- *
- * ## Nulls
- *
- * `nulls last` in every ordering that names a nullable column. An unsettled hand has no net and
- * a hand with no recorded action has no pot; sorting either as zero would state a result it does
- * not have. A cursor that lands inside that trailing block carries `sortValue: null` and resumes
- * with the timestamp tiebreak alone, which is the only order that exists in there.
- */
-/**
- * What a `sql` template evaluates to, and therefore what may be embedded in another one.
- *
- * Named through `ReturnType` rather than imported: the driver's fragment type is an internal
- * name, and writing it out here would pin this file to a shape the package is free to rename.
+ * No column name or direction is interpolated. Every clause is written out, and the `Record<HandSort, ...>`
+ * type makes a missing ordering a compile error.
+ * The tiebreak `started_at, id` follows the leading direction because a keyset row comparison applies
+ * one direction to the whole tuple. `nulls last` keeps unsettled hands from sorting as zero.
+ * `SqlFragment` goes through `ReturnType` because the driver's fragment type is internal.
  */
 type SqlFragment = ReturnType<Db>;
 
 interface HandOrdering {
-  /** True when a cursor for this ordering must carry a sort value beyond the timestamp. */
   readonly keyed: boolean;
-  /** The ordering's leading value on a row, for minting the next cursor. */
   readonly keyOf: (row: HandListRow) => number | null;
   readonly orderBy: (sql: Db) => SqlFragment;
-  /** `and <predicate>`: the rows strictly after this cursor in this ordering. */
+  /** `and <predicate>` for rows strictly after the cursor. */
   readonly after: (sql: Db, cursor: HandCursor) => SqlFragment;
 }
 
@@ -347,32 +194,12 @@ const HAND_ORDERINGS: Readonly<Record<HandSort, HandOrdering>> = {
 };
 
 /**
- * The caller's hands, in the ordering they asked for.
- *
- * Keyset pagination rather than `offset`: an offset re-counts the rows it skips on every page,
- * and it silently shifts when a new hand is dealt mid-scroll, which shows one hand twice and
- * hides another. The `id` tiebreak makes every ordering total, so the comparison has a single
- * unambiguous answer even for two hands dealt in the same microsecond.
- *
- * The ordering is applied by the database over the caller's WHOLE history and the page is then
- * cut from it — the only order in which "the biggest pot you have ever played" means that rather
- * than "the biggest pot on this screen". A client cannot reproduce it: it holds one page.
- *
- * `roomId` stays expressed as `<param> is null or <predicate>` rather than being assembled
- * conditionally, so the filter costs one statement text however it is called. The cursor and the
- * ordering DO vary the statement, because a keyset predicate has no null-safe form that keeps a
- * single text — five statement texts is the price of five real orderings, and every value in
- * them is still a bind parameter.
- *
- * `s.user_id is not null` is redundant against the equality above it and is there for the
- * planner: `hand_seats_user_id_idx` is partial on exactly that predicate.
- *
- * `max_pot_after` moved from a scalar subquery in the select list into a `left join lateral`,
- * because `pot-high` has to compare it in the `where` clause as well as return it, and a column
- * that exists in one place cannot be two different expressions.
- *
- * The `to_char` mask quotes `"T"` and `"Z"` because `to_char` would otherwise read those letters
- * as field patterns of their own. `US` is microseconds, zero-padded to six digits.
+ * Keyset pagination, because `offset` shifts when a hand is dealt mid-scroll. The `id` tiebreak
+ * makes every ordering total.
+ * `roomId` uses `<param> is null or ...` so it does not vary the statement text.
+ * `s.user_id is not null` lets the planner use the partial `hand_seats_user_id_idx`.
+ * `max_pot_after` is a lateral join because `pot-high` filters on it as well as returning it.
+ * The `to_char` mask quotes `"T"` and `"Z"` so they are not read as patterns. `US` is microseconds.
  */
 async function listHands(sql: Db, query: HandListQuery): Promise<HandListRow[]> {
   const ordering = HAND_ORDERINGS[query.sort];
@@ -406,18 +233,11 @@ async function listHands(sql: Db, query: HandListQuery): Promise<HandListRow[]> 
   return [...rows];
 }
 
-/** `HandRow` plus the pot aggregate the summary needs. */
 interface HandReviewRow extends HandRow {
   readonly max_pot_after: number | null;
 }
 
-/**
- * The hand, if it is the caller's.
- *
- * The `exists` clause is the authorisation, and it is part of the same statement as the lookup so
- * there is no window between deciding and reading. Zero rows is the only outcome a stranger ever
- * sees, and the handler turns it into `hand_not_found`.
- */
+/** The `exists` clause is the authorisation, in the same statement as the lookup. */
 async function findOwnHand(sql: Db, handId: string, userId: string): Promise<HandReviewRow | null> {
   const rows = await sql<HandReviewRow[]>`
     select h.id,
@@ -448,17 +268,8 @@ async function findOwnHand(sql: Db, handId: string, userId: string): Promise<Han
 }
 
 /**
- * Every seat in the hand, with hole cards filtered in the projection itself.
- *
- * `case when s.user_id = <caller> or s.showed_down then s.hole_cards else null end` is the rule
- * from the column comment in `db/migrations/0001_initial.sql`, written where it cannot be
- * forgotten by a later caller: the cards a stranger may not see are not in the result set at all,
- * so they are never in this process's memory, never in a heap dump and never one serialisation
- * bug away from a response body.
- *
- * A NULL `user_id` — a seat whose account was deleted — compares as NULL, so the `case` falls
- * through to NULL unless the seat showed down. That is the correct answer: a detached seat is not
- * the caller's seat.
+ * Hole cards are filtered in the projection (rule from `db/migrations/0001_initial.sql`), so hidden
+ * cards never enter this process. A deleted account's NULL `user_id` falls through to NULL.
  */
 async function seatsOfHand(sql: Db, handId: string, userId: string): Promise<HandSeatRow[]> {
   const rows = await sql<HandSeatRow[]>`
@@ -479,7 +290,7 @@ async function seatsOfHand(sql: Db, handId: string, userId: string): Promise<Han
   return [...rows];
 }
 
-/** The action log, in sequence order. This is what the replay in `build-review.ts` walks. */
+/** Sequence order, which the replay in `build-review.ts` walks. */
 async function actionsOfHand(sql: Db, handId: string): Promise<HandActionRow[]> {
   const rows = await sql<HandActionRow[]>`
     select a.sequence,
@@ -499,10 +310,6 @@ async function actionsOfHand(sql: Db, handId: string): Promise<HandActionRow[]> 
   return [...rows];
 }
 
-// ---------------------------------------------------------------------------
-// The routes
-// ---------------------------------------------------------------------------
-
 interface ListQueryString {
   readonly roomId?: string;
   readonly limit?: number;
@@ -514,14 +321,7 @@ interface HandIdParams {
   readonly handId: string;
 }
 
-/**
- * The caller's identity, or a refusal.
- *
- * `requireSession` reads `request.session`, which `sessionPlugin` decorates. If that plugin were
- * never registered the property would be absent rather than null, and `requireSession` would hand
- * back `undefined` — so the wiring is checked here instead of trusted. It is a mis-wired server,
- * not a bad request, hence `internal_error` and a loud log line.
- */
+/** Without `sessionPlugin` the property is absent, not null. A mis-wired server is `internal_error`. */
 function callerId(request: FastifyRequest): string {
   if (!request.server.hasRequestDecorator('session')) {
     throw new AppError('internal_error', {
@@ -531,26 +331,16 @@ function callerId(request: FastifyRequest): string {
   return requireSession(request).user.id;
 }
 
-/**
- * One page, plus the cursor for the next one if there is one.
- *
- * `limit + 1` rows were fetched, so "is there another page" is answered by counting rather than by
- * a second query — and the extra row is dropped rather than returned, which is why `nextCursor`
- * names the last row of *this* page.
- */
+/** `limit + 1` rows were fetched. The extra row is dropped, so `nextCursor` names this page's last row. */
 function buildListResponse(rows: readonly HandListRow[], limit: number, sort: HandSort): HandListResponse {
   const page = rows.slice(0, limit);
   const hasMore = rows.length > limit;
   const last = page[page.length - 1];
   const ordering = HAND_ORDERINGS[sort];
   return {
-    // `HandListRow` satisfies `HandSummaryRow` structurally, so the same mapping the review header
-    // uses serves the list too. No placeholder values, and no second copy of the mapping.
     hands: page.map((row) =>
       toHandSummary({ hand: row, heroNet: row.hero_net, maxPotAfter: row.max_pot_after }),
     ),
-    // The cursor names the last row of THIS page, in the ordering that produced it, so the next
-    // request resumes the same sequence rather than restarting a different one.
     nextCursor:
       hasMore && last !== undefined
         ? encodeCursor({
@@ -562,15 +352,7 @@ function buildListResponse(rows: readonly HandListRow[], limit: number, sort: Ha
   };
 }
 
-/**
- * The cursor for this request, checked against the ordering it is being replayed into.
- *
- * A cursor is a position in ONE sequence. Handing a `net-high` cursor to `net-low` would resume
- * from a value that means something else there, and the resulting page would be a plausible-
- * looking slice of nothing in particular. Saying no is the only answer that is not misleading,
- * and no client of this API produces the combination: the hand-history page drops the cursor
- * whenever the reader picks a different ordering.
- */
+/** A cursor belongs to one ordering. The web page drops the cursor whenever the ordering changes. */
 function cursorFor(raw: string | undefined, sort: HandSort): HandCursor | null {
   if (raw === undefined) return null;
   const cursor = decodeCursor(raw);
@@ -584,28 +366,13 @@ function cursorFor(raw: string | undefined, sort: HandSort): HandCursor | null {
   return cursor;
 }
 
-/**
- * Registers both routes.
- *
- * Paths are written without `API_PREFIX`; `registerRoutes` supplies it.
- *
- * Not an `async` function even though the type is `FastifyPluginAsync`: there is nothing to await
- * here, and an `async` function with no `await` is a lint error for good reason — it usually means
- * a missing one. Returning an already-resolved promise says the same thing to Fastify.
- */
+/** Paths omit `API_PREFIX`. `registerRoutes` adds it. */
 const handsRoutes: FastifyPluginAsync = (app: FastifyInstance) => {
   const config = app.appConfig;
   const metrics = app.appMetrics;
   /**
-   * The same shared pool `routes/calc.ts` and `routes/content.ts` take, for the same reason.
-   *
-   * A review is Monte Carlo work with a database read in front of it: the rows are fetched here,
-   * on this thread, and only the arithmetic crosses to a calculator thread — a worker is never
-   * given a database handle, and `equity-worker.ts` imports nothing that could hold one.
-   *
-   * `getSharedPool` memoises, so whichever module registers first sizes the pool and installs the
-   * `onWarn` sink; registering it here as well means a deployment that serves hand history without
-   * the calculator endpoints still gets threads, gauges and a clean shutdown.
+   * The shared pool `routes/calc.ts` also takes. `getSharedPool` memoises, so registering here as well
+   * gives a deployment without the calculator routes threads, gauges and shutdown.
    */
   const poolHooks = {
     onWarn: (warning: PoolWarning) => {
@@ -619,28 +386,10 @@ const handsRoutes: FastifyPluginAsync = (app: FastifyInstance) => {
   });
 
   /**
-   * One decision's analysis, on a thread, timed like every other analysis in the process.
-   *
-   * ## The pool is looked up per request, not captured at registration
-   *
-   * `closeSharedPool()` closes the process-wide pool AND drops the memo, so the next
-   * `getSharedPool` builds a fresh one. A module that captured the instance at registration keeps
-   * a reference to the closed one, and every task it submits afterwards is refused with
-   * `service_unavailable` for the life of the process. That is not hypothetical: one Fastify
-   * instance closing while another is still serving is exactly what `test/hands.test.ts` does —
-   * the rate-limit suite builds a second app and closes it — and it turned every analysis in the
-   * still-running app into `analysis: null`. Asking the memo each time costs a property read and
-   * cannot go stale.
-   *
-   * No explicit deadline: the pool's own `coachTimeoutMs` applies, which is the budget every
-   * other Coach task in the process runs under. The review has a second, longer budget of its own
-   * (`budgetMs` below) covering the whole set, and the two do different jobs — one bounds a task,
-   * the other bounds a request.
-   *
-   * `observeAnalysis` records it under `kind="coach"` because that is what it is: the same task
-   * type, on the same threads, as `POST /math/coach`. An operator watching that histogram is
-   * asking "how long does a Coach analysis take here", and a review's eight are not a different
-   * answer to that question.
+   * The pool is looked up per call because `closeSharedPool()` drops the memo, and a captured instance
+   * would refuse every task after another app closes (seen in `test/hands.test.ts`).
+   * Each task runs under the pool's `coachTimeoutMs`. `budgetMs` below bounds the whole request.
+   * Recorded as `kind="coach"` because it is the same task type as `POST /math/coach`.
    */
   const analyseOnThread: ReviewAnalyser = (task) =>
     observeAnalysis('coach', () => getSharedPool(config, poolHooks).runCoach(task), metrics);
@@ -675,16 +424,12 @@ const handsRoutes: FastifyPluginAsync = (app: FastifyInstance) => {
       const hand = await findOwnHand(sql, request.params.handId, userId);
       if (hand === null) {
         throw new AppError('hand_not_found', {
-          // The client is told only the code. Which of the two it was stays here.
           logDetail: 'hand does not exist, or the caller held no seat in it',
         });
       }
 
-      // Two reads in parallel rather than in one transaction. The only way they could disagree is a
-      // hand still in progress gaining an action between them, and the consequence of that is one
-      // extra decision in the log — not a wrong number, because the replay checks itself against
-      // the persisted pot before it analyses anything. A REPEATABLE READ transaction would close
-      // even that, at the cost of a BEGIN/COMMIT on every review.
+      // Parallel, not transactional. A live hand gaining an action between them adds one decision,
+      // and the replay checks itself against the persisted pot.
       const [seats, actions] = await Promise.all([
         seatsOfHand(sql, hand.id, userId),
         actionsOfHand(sql, hand.id),
@@ -693,14 +438,10 @@ const handsRoutes: FastifyPluginAsync = (app: FastifyInstance) => {
       return await buildHandReviewOn(
         { hand, seats, actions, viewerUserId: userId, maxPotAfter: hand.max_pot_after },
         {
-          // Half the request budget. A review can then never be the reason a request times out,
-          // and shortening `REQUEST_TIMEOUT_MS` tightens this automatically rather than leaving a
-          // second number to remember.
+          // Half the request budget, so a review never causes a request timeout.
           budgetMs: Math.floor(config.requestTimeoutMs / 2),
           onAnalysisSkipped: (detail) => {
-            // Server-side only: the response says `analysis: null` and nothing about why. This is
-            // also where a pool refusal lands — a full queue or an overrun costs this decision its
-            // figure and nothing else, which is the same trade the wall-clock budget makes.
+            // Server-side only. Pool refusals land here too and cost one decision its figure.
             request.log.debug({ handId: hand.id, ...detail }, 'hand review skipped one analysis');
           },
         },
@@ -710,29 +451,9 @@ const handsRoutes: FastifyPluginAsync = (app: FastifyInstance) => {
   );
 
   /**
-   * `GET /legends/hands/:handId/comparison` — one of the caller's own finished hands, decision by
-   * decision, beside the maths and beside what the modelled opponent did.
-   *
-   * ## Why it is registered here and not in the Legends module
-   *
-   * The path says Legends and the data is this file's. Every query a comparison needs —
-   * `findOwnHand`, `seatsOfHand` with its hole-card predicate, `actionsOfHand` — already exists
-   * above, written once and tested. Registering the route beside them means the SQL stays in one
-   * place; putting the route in `routes/legends.ts` would mean either exporting three queries or
-   * writing a second copy of them, and a second copy of `seatsOfHand` is a second chance to forget
-   * `user_id = :viewer OR showed_down`.
-   *
-   * ## Authorisation is the same rule, deliberately
-   *
-   * `findOwnHand` requires the caller to have HELD A SEAT in the hand. Not to be a member of the
-   * room, not to know the id. And the refusal is `hand_not_found` whether the hand does not exist
-   * or is somebody else's, for the reason the file header gives: a distinguishable answer confirms
-   * a hand id to anyone who cares to try, and hand ids appear in shared URLs.
-   *
-   * ## Why the expensive bucket
-   *
-   * It prices the actions that were NOT taken as well as the one that was, so it does strictly
-   * more Monte Carlo work than `GET /hands/:handId`, which already takes this limit.
+   * `GET /legends/hands/:handId/comparison`. Registered here so it reuses `findOwnHand` and
+   * `seatsOfHand` instead of a second copy of the hole-card predicate. Same seat-holder rule and
+   * same `hand_not_found`. It evaluates the actions not taken too, so it takes the expensive bucket.
    */
   app.get<{ Params: HandIdParams }>(
     '/legends/hands/:handId/comparison',
@@ -771,9 +492,7 @@ const handsRoutes: FastifyPluginAsync = (app: FastifyInstance) => {
       });
 
       if (!outcome.ok) {
-        // Every refusal is a real, distinguishable state of a real hand, and none of them may
-        // become a bundled sample on the page. `hand_not_comparable` carries which one it was in
-        // the log; the client is told the code, and the screen turns it into a sentence.
+        // Each refusal is a real state of the hand and is never replaced with a sample.
         request.log.info(
           { handId: hand.id, refusal: outcome.refusal, detail: outcome.detail },
           'hand comparison refused',
@@ -791,13 +510,8 @@ const handsRoutes: FastifyPluginAsync = (app: FastifyInstance) => {
 };
 
 /**
- * Which strategy profile played each bot seat in a room, by user id.
- *
- * `prl.hand_seats` records that a seat was a bot and not which model it was — the right shape for
- * a hand log, where a seat is a seat — so the profile is joined in from the roster. Departed
- * members are included (`left_at` is not filtered): a bot that has since been stood up still
- * played the hand being reviewed, and dropping it would blank the opponent column of every
- * finished hand the moment the table was cleared.
+ * `hand_seats` does not record which model a bot was, so it is joined from the roster. Departed
+ * members are kept so finished hands still name their opponents.
  */
 async function botProfilesOfRoom(sql: Db, roomId: string): Promise<ReadonlyMap<string, string>> {
   const rows = await sql<{ user_id: string; bot_profile: string | null }[]>`
@@ -807,9 +521,7 @@ async function botProfilesOfRoom(sql: Db, roomId: string): Promise<ReadonlyMap<s
   `;
   const profiles = new Map<string, string>();
   for (const row of rows) {
-    // `'unknown'` is a row written before migration 0003 whose profile was destroyed at write
-    // time. It names no model, so it is left out and the seat is reported unnamed rather than
-    // guessed at — the same refusal `rehydrateBotSeat` makes when it reopens a table.
+    // `'unknown'` predates migration 0003 and names no model, so the seat stays unnamed.
     if (row.bot_profile !== null && row.bot_profile !== 'unknown') profiles.set(row.user_id, row.bot_profile);
   }
   return profiles;

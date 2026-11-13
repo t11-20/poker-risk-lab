@@ -1,38 +1,8 @@
 /**
- * The hand-route fixtures, run end to end as the RUNTIME role.
- *
- * ## The finding this closes (OPS-008)
- *
- * `db/migrations/0001_initial.sql` defines two roles: `prl_migrator` owns the schema, `prl_app` is
- * the runtime identity and holds the narrowest verb set the API actually needs — no DELETE on the
- * append-only tables, `prl.rooms` among them. CI's `end-to-end` and `a11y` jobs run the server as
- * a member of `prl_app` and so prove the model holds. The `test` job — the only job that runs the
- * SQL-backed suites at all — did not, and could not: `test/helpers/hands-app.ts` cleaned its
- * fixtures up with `delete from prl.rooms`, which `prl_app` may not do. So the job kept the
- * superuser, and the privilege model went unexercised by the one job in a position to exercise it.
- *
- * The fix was not to widen the grant. It was for the teardown to say which identity it needs: the
- * room delete goes to the schema-owning identity through `withAdminSql`, and everything the
- * application legitimately does stays on the application's own connection.
- *
- * ## What this file actually does
- *
- * It builds the real thing rather than asserting about it. A throwaway LOGIN role is created,
- * granted `prl_app` and nothing else, and proved bounded before it is trusted — it must not be a
- * superuser, must not be able to create objects, and must NOT be able to delete a room. The hand
- * fixtures are then written and torn down through that connection, exactly as the suite would in a
- * CI job configured for least privilege.
- *
- * The negative control is the third assertion in `the role is genuinely bounded`: if a future
- * migration quietly granted DELETE on `prl.rooms` to `prl_app`, the teardown below would pass for
- * the wrong reason and nothing else in the repository would notice. That assertion fails instead.
- *
- * ## Why the role is created here rather than in CI
- *
- * Because a test that depends on the CI job being configured a particular way proves nothing when
- * run anywhere else, and the whole lesson of this finding is that a gate nobody runs is not a gate.
- * Creating the role needs CREATEROLE; when the connected identity has not got it the file says so
- * out loud and skips, rather than passing quietly.
+ * The hand-route fixtures, written and torn down as a throwaway role holding only `prl_app` (OPS-008).
+ * The role is proved bounded first. It is not a superuser, cannot create objects, cannot delete a room.
+ * If a migration granted DELETE on `prl.rooms` to `prl_app`, that third assertion fails. The role is
+ * created here, not in CI, so the check runs anywhere. Without CREATEROLE the file skips loudly.
  */
 
 import assert from 'node:assert/strict';
@@ -45,20 +15,18 @@ import { deleteFixtures, insertGuest, insertHand, insertRoom } from './helpers/h
 
 const DB_SKIP = databaseSkip('the fixture teardown under the least-privilege role');
 
-/** A role name unique to this run, so two suites on one cluster cannot collide or race a DROP. */
+/** Unique per run, so two suites on one cluster cannot race a DROP. */
 const ROLE = `prl_w3_app_${generateOpaqueSecret()
   .slice(0, 12)
   .toLowerCase()
   .replace(/[^a-z0-9]/gu, 'x')}`;
 
-/** The connection every APPLICATION statement below goes through. Null when the role could not be made. */
 let appSql: Sql | null = null;
 let adminSql: Sql | null = null;
 let setupProblem: string | null = null;
-/** Restored in `after`, because `withAdminSql` reads it at call time and other files share nothing. */
+/** Restored in `after`, because `withAdminSql` reads it at call time. */
 let previousAdminUrl: string | undefined;
 
-/** The same DSN, as a different user. `URL` is used rather than string surgery on a password. */
 function asUser(url: string, user: string, password: string): string {
   const parsed = new URL(url);
   parsed.username = encodeURIComponent(user);
@@ -66,7 +34,6 @@ function asUser(url: string, user: string, password: string): string {
   return parsed.toString();
 }
 
-/** The database the DSN points at, for the CONNECT grant. */
 function databaseNameOf(url: string): string {
   const path = new URL(url).pathname;
   return path.startsWith('/') ? path.slice(1) : path;
@@ -80,14 +47,12 @@ before(async () => {
   adminSql = testClientFor(TEST_DATABASE_URL);
   const password = generateOpaqueSecret();
   try {
-    // Identifiers cannot be parameters, hence `adminSql(...)`, which is the driver's identifier
-    // escape and not string interpolation. The password IS a parameter, quoted by the driver.
+    // `adminSql(...)` is the driver's identifier escape. Identifiers cannot be parameters.
     await adminSql`create role ${adminSql(ROLE)} login password ${adminSql.unsafe(`'${password.replace(/'/gu, "''")}'`)}`;
     await adminSql`grant prl_app to ${adminSql(ROLE)}`;
     await adminSql`grant connect on database ${adminSql(databaseNameOf(TEST_DATABASE_URL))} to ${adminSql(ROLE)}`;
   } catch (error) {
-    // No CREATEROLE, most likely. Named rather than swallowed: this suite proving nothing has to
-    // look different from this suite passing.
+    // Named rather than swallowed, so proving nothing looks different from passing.
     setupProblem =
       `could not create the least-privilege role ${ROLE} ` +
       `(${error instanceof Error ? error.message : String(error)}). ` +
@@ -96,9 +61,7 @@ before(async () => {
     return;
   }
   appSql = testClientFor(asUser(TEST_DATABASE_URL, ROLE, password));
-  // The teardown's admin handle. Set here rather than in the environment of the whole run so that
-  // this file states the CI shape — DATABASE_URL least-privilege, DATABASE_URL_ADMIN privileged —
-  // instead of relying on somebody remembering to configure it.
+  // Set here, so this file states the CI shape instead of relying on configuration.
   previousAdminUrl = process.env['DATABASE_URL_ADMIN'];
   process.env['DATABASE_URL_ADMIN'] = TEST_DATABASE_URL;
 });
@@ -108,8 +71,7 @@ after(async () => {
   else process.env['DATABASE_URL_ADMIN'] = previousAdminUrl;
   await appSql?.end({ timeout: 5 }).catch(() => undefined);
   if (adminSql !== null && setupProblem === null && DB_SKIP === false) {
-    // A role that still holds a grant cannot be dropped, so the grants go first. Left behind, it
-    // would be a stray login role on a shared development cluster.
+    // A role that holds a grant cannot be dropped, so the grants go first.
     const revoke = async (statement: Promise<unknown>): Promise<void> => {
       await statement.catch(() => undefined);
     };
@@ -122,7 +84,6 @@ after(async () => {
   await adminSql?.end({ timeout: 5 }).catch(() => undefined);
 });
 
-/** The suite runs only when there is a database AND a role to run it as. */
 function skipReason(): string | false {
   if (DB_SKIP !== false) return DB_SKIP;
   if (setupProblem !== null) return setupProblem;
@@ -152,9 +113,7 @@ describe('the fixture harness under the least-privilege role', () => {
       'a role that can create objects in the prl schema makes this whole file theatre',
     );
 
-    // THE assertion this file exists for. `prl.rooms` carries other learners' hand history and the
-    // application must never be able to remove one; if this ever starts succeeding, the grant
-    // matrix has been widened and the teardown below is passing for the wrong reason.
+    // The assertion this file exists for. If this succeeds, the grant matrix has been widened.
     await assert.rejects(
       async () => sql`delete from prl.rooms where id = 'room_thisdoesnotexistatall'`,
       /permission denied/iu,
@@ -172,8 +131,7 @@ describe('the fixture harness under the least-privilege role', () => {
     const roomId = newRoomId();
     const handId = newHandId();
 
-    // Every insert here is an APPLICATION statement and goes through the application's own
-    // connection on purpose: a missing GRANT on any of them has to fail this suite.
+    // Application statements go through the app connection, so a missing GRANT fails here.
     await insertGuest(sql, aliceId, 'Alice');
     await insertGuest(sql, borysId, 'Borys');
     await insertRoom(sql, roomId, aliceId);
@@ -197,8 +155,7 @@ describe('the fixture harness under the least-privilege role', () => {
     `;
     assert.equal(before?.hands, 1, 'the fixture hand was not written');
 
-    // The teardown. Before the fix this threw `permission denied for table rooms`, which is the
-    // whole reason CI's test job could not drop the superuser.
+    // Before the fix this threw `permission denied for table rooms`.
     await deleteFixtures(sql, [roomId], [aliceId, borysId]);
 
     const [rooms] = await sql<{ count: number }[]>`

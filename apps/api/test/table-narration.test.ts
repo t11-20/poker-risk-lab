@@ -71,8 +71,7 @@ describe('the narration names who did it', () => {
     );
   });
 
-  // Audit at 308fadf, from the socket log: "Patient Technician 1 wins 1529 from the pot." and
-  // "Disciplined Specialist wins 1975 from the main pot." under a table whose plates say "1,529".
+  // Audit at 308fadf found "wins 1529 from the pot." under a plate reading "1,529".
   it('groups an amount of four figures or more, in every sentence that carries one (REGRESSION)', () => {
     assert.equal(awardSentence(award(3, 0, 1_529), 1, nameOf), 'Nit bot wins 1,529 from the pot.');
     assert.equal(awardSentence(award(0, 0, 1_975), 2, nameOf), 'Ada wins 1,975 from the main pot.');
@@ -108,7 +107,6 @@ describe('a live table narrates with the names it dealt in', () => {
     });
     const events: TableEvent[] = [];
     table.subscribe((notice) => events.push(...notice.events));
-    // Seats 0 and 3: a gap, so a zero-based number and a one-based one cannot coincide.
     await table.sit({ userId: 'usr_ada', displayName: 'Ada', seat: 0, stack: 1_000 });
     await table.sit({ userId: 'usr_bo', displayName: 'Bo', seat: 3, stack: 1_000 });
     await table.startHand();
@@ -142,9 +140,7 @@ describe('a live table narrates with the names it dealt in', () => {
       'the hand was played, so it narrated at least one action',
     );
 
-    // The page says these to Ada as "you" with `inSecondPerson` from `@prl/contracts`. Run over
-    // what this table actually wrote, so a verb added here without its row in `NARRATED_VERBS`
-    // fails here rather than leaving the reader named in the third person on the page.
+    // Run over what the table wrote, so a verb missing from `NARRATED_VERBS` fails here.
     const ada = sentences.flatMap((sentence) => sentence.split(/(?<=\.) (?=Ada |Bo )/u));
     assert.ok(
       ada.some((sentence) => sentence.startsWith('Ada ')),

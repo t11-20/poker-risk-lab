@@ -1,32 +1,8 @@
 /**
- * `GET /hands?sort=` orders the whole history, and the cursor resumes the ordering it was issued for.
- *
- * ## Why this file exists
- *
- * The hand-history screen offered five orderings and the endpoint performed one. `sort` was not in
- * `prl:handListQuery`, the schema is closed, so the parameter came back `invalid_request`; the
- * screen stopped sending it and kept the control, which left four labels naming an ordering that
- * nothing anywhere produced. That is the worse of the two failures, because a control that silently
- * does nothing looks exactly like a control that works.
- *
- * So the assertions here are about the two properties a client cannot check for itself:
- *
- *  1. **The ordering is over the whole history, not over a page.** Every case below asks for a page
- *     SMALLER than the fixture and checks the rows are the right rows — which is only true if the
- *     database sorted before it cut. A client-side sort of one page would pass a naive "is it in
- *     order" assertion and fail every one of these.
- *  2. **A page boundary lands in the same place on the way back.** The keyset predicate and the
- *     `order by` are written out separately per ordering (`HAND_ORDERINGS`), so a mismatch between
- *     them would silently drop or repeat rows at the seam. Each ordering is therefore paged all the
- *     way through and the concatenation is compared against the unpaged answer.
- *
- * ## The fixture, and why the sort keys are set rather than played
- *
- * The rows come from `persistHand`, so they are engine-shaped, and then `net_result` and the final
- * `pot_after` are overridden. Playing eight hands that happen to produce a spread of nets and pots
- * — including an unsettled one — would make the fixture a puzzle and would tie these assertions to
- * the engine's payouts, which are not what is under test. What IS under test is what the database
- * does with those two columns, and a null in either of them.
+ * `GET /hands?sort=` orders the whole history, and the cursor resumes its own ordering. Pages are
+ * smaller than the fixture, so only a database-side sort passes. Each ordering is paged through and
+ * compared with the unpaged answer, because `HAND_ORDERINGS` writes the keyset predicate and
+ * `order by` separately. `net_result` and the final `pot_after` are set directly, not played.
  */
 
 import assert from 'node:assert/strict';
@@ -54,23 +30,16 @@ import {
 
 announceSkipUnlessDatabase('the hand ordering tests');
 
-/** One row of the fixture: what it should look like once it is in the table. */
 interface Planned {
   readonly handNumber: number;
   readonly startedAt: string;
-  /** Null is an unsettled hand, which sorts last in both net orderings rather than as zero. */
+  /** Null is unsettled, and sorts last in both net orderings rather than as zero. */
   readonly net: number | null;
-  /** Null is a hand with no recorded action, which sorts last in the pot ordering. */
+  /** Null means no recorded action, and sorts last in the pot ordering. */
   readonly pot: number | null;
 }
 
-/**
- * Eight hands with a deliberately awkward spread.
- *
- * The nets are not in time order and are not in pot order, so no two of the five orderings agree —
- * an ordering that quietly fell back to `recent` would match `recent` and nothing else. Two rows
- * carry a null: one unsettled net, one hand with no action rows at all.
- */
+/** No two of the five orderings agree, so a silent fallback to `recent` fails. */
 const PLAN: readonly Planned[] = [
   { handNumber: 1, startedAt: '2026-08-10T10:00:00.100001Z', net: 250, pot: 400 },
   { handNumber: 2, startedAt: '2026-08-11T10:00:00.200002Z', net: -100, pot: 220 },
@@ -82,14 +51,11 @@ const PLAN: readonly Planned[] = [
   { handNumber: 8, startedAt: '2026-08-17T10:00:00.800008Z', net: -50, pot: 200 },
 ];
 
-/** The order each `sort` must produce over the whole fixture, by hand number. */
 const EXPECTED: Readonly<Record<(typeof HAND_SORTS)[number], readonly number[]>> = {
   recent: [8, 7, 6, 5, 4, 3, 2, 1],
   oldest: [1, 2, 3, 4, 5, 6, 7, 8],
-  // Nulls last; the unsettled hand is not the smallest gain, it has no gain.
   'net-high': [4, 1, 6, 3, 8, 2, 5, 7],
   'net-low': [5, 2, 8, 3, 6, 1, 4, 7],
-  // Hand 6 has no actions, so it has no pot and sorts after every hand that does.
   'pot-high': [4, 5, 1, 7, 2, 8, 3, 6],
 };
 
@@ -130,8 +96,6 @@ before(async () => {
       steps: [{ seat: 0, action: { type: 'fold' } }],
       startedAt: new Date(planned.startedAt),
     });
-    // The reader is seat 0. `net_result` and the last `pot_after` are the two columns the orderings
-    // key on, so they are set here rather than left to whatever a folded hand happens to pay.
     const finalPot = planned.pot;
     const actions =
       finalPot === null
@@ -175,7 +139,6 @@ async function list(query: string): Promise<HandListResponse> {
   return response.json<HandListResponse>();
 }
 
-/** Hand numbers, so a failure reads as an ordering rather than as a wall of ids. */
 function numbersOf(body: HandListResponse): readonly number[] {
   return body.hands.map((hand) => hand.handNumber);
 }
@@ -188,8 +151,6 @@ describe('GET /hands?sort=', { skip: DB_SKIP_REASON }, () => {
     });
 
     it(`applies ${sort} before the page is cut, not after`, async () => {
-      // Three rows out of eight. Every one of them has to be a row from the front of the WHOLE
-      // ordering — which is the property a client sorting its own page cannot have.
       const body = await list(`sort=${sort}&limit=3`);
       assert.deepEqual(numbersOf(body), EXPECTED[sort].slice(0, 3));
       assert.notEqual(body.nextCursor, null, 'five hands remain, so there is a next page');
@@ -231,8 +192,7 @@ describe('GET /hands?sort=', { skip: DB_SKIP_REASON }, () => {
     assert.ok(first.nextCursor !== null);
     const response = await context.app.inject({
       method: 'GET',
-      // The same cursor, replayed into the opposite ordering. Accepting it would return a page from
-      // the middle of a sequence that does not exist, which reads as data rather than as an error.
+      // A cursor from another ordering would return a plausible page from a sequence that does not exist.
       url: `/api/v1/hands?sort=net-low&limit=3&cursor=${encodeURIComponent(first.nextCursor)}`,
       headers: { cookie: context.cookie },
     });

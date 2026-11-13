@@ -1,49 +1,9 @@
 /**
- * Account deletion, proved against a real PostgreSQL rather than described.
- *
- * ## Why this file has to exist, and why it has to use the database
- *
- * Almost none of the erasure is written in TypeScript. `deleteAccount` issues one
- * `delete from prl.users`, and PostgreSQL then executes eight referential actions that decide
- * what happens to eight tables — four CASCADE, three SET NULL, and one that was `RESTRICT` until
- * migration 0004 and made every learner who had ever created or joined a table permanently
- * undeletable. A test with a fake store would exercise the one statement this repository controls
- * and none of the seven decisions the schema makes, which is to say it would prove nothing about
- * the feature at all.
- *
- * So the policy half of this file runs the real function against the real schema and then reads
- * every table back, one at a time, by name. Table by table rather than by a summary object,
- * because the summary is produced by the same code under test: a count that agreed with a
- * `deleteAccount` which had quietly stopped removing quiz attempts would agree with it in exactly
- * the way that hides the defect.
- *
- * ## Would this fail if the behaviour broke?
- *
- * Yes, and each way was checked by breaking it:
- *
- *   - Reverting `room_members_user_id_fkey` to `ON DELETE RESTRICT` in the live schema makes the
- *     deletion cases fail with `account_deletion_blocked` instead of succeeding. Measured.
- *   - Reverting `rooms_owner_user_id_fkey` to `ON DELETE RESTRICT` does the same. Measured.
- *   - Changing `hand_seats_user_id_fkey` to CASCADE makes "the hand survives with the seat
- *     anonymised" fail on the seat count rather than on the null check, which is the assertion
- *     that would matter: it is the difference between an anonymised hand and a destroyed one.
- *
- * The stranger-untouched case carries its own negative control in the same shape: every figure it
- * asserts is read before AND after the deletion, so an assertion comparing a value to itself
- * cannot pass by accident.
- *
- * ## The two halves, and why the second one commits
- *
- * Everything about the POLICY runs inside a transaction that is rolled back (`inRollback`), like
- * every other database suite here, so the file leaves no rows behind and can be pointed at a
- * seeded development database.
- *
- * The ROUTE half cannot: `app.inject` goes through the process-wide pool, and a session cookie
- * has to resolve against committed rows. It is safe anyway, because of what the endpoint under
- * test is — the account it creates through `POST /auth/guest` is erased by the request being
- * tested, so the suite cleans up after itself using the very behaviour it is asserting. The one
- * case that must NOT end in an erasure (a refused confirmation) finishes by erasing the account
- * itself, which is also the assertion that the refusal left the account intact.
+ * Account deletion against a real PostgreSQL. `deleteAccount` issues one `delete from prl.users`
+ * and the schema's referential actions decide the rest, so a fake store would prove nothing.
+ * Every table is read back by name, not through the summary the code under test produces.
+ * The policy cases run in a rolled-back transaction. The route cases commit, because `app.inject`
+ * uses the process pool, and each one ends by erasing the account it created.
  */
 
 import assert from 'node:assert/strict';
@@ -75,7 +35,7 @@ import { adminDatabaseUrl, databaseSkip, TEST_DATABASE_URL, testClientFor } from
 
 const TEST_SECRET = 'Zk7pQ2vR9tX4bN6mL1sD8gH3jF5wC0yA';
 const ALLOWED_ORIGIN = 'http://localhost:3000';
-/** A commitment root of the right shape. Nothing here verifies a proof; the hand only has to exist. */
+/** Nothing here verifies a proof. The hand only has to exist. */
 const ROOT = 'b'.repeat(64);
 
 function testConfig(): AppConfig {
@@ -84,17 +44,12 @@ function testConfig(): AppConfig {
     DATABASE_URL: TEST_DATABASE_URL ?? 'postgresql://unused:unused@127.0.0.1:5432/unused',
     PUBLIC_WEB_ORIGIN: ALLOWED_ORIGIN,
     SESSION_COOKIE_SECRET: TEST_SECRET,
-    // The route under test has a budget of five per fifteen minutes, which is generous for a
-    // person and tight for this file: the route cases below spend four between them. The GLOBAL
-    // limit is what is raised here, so the route's own budget is still the one being exercised.
+    // The route allows five per fifteen minutes and the cases below spend four. Only the global
+    // limit is raised.
     RATE_LIMIT_MAX: '5000',
     DATABASE_POOL_MAX: '2',
   });
 }
-
-// ---------------------------------------------------------------------------
-// The database harness — the shape `repositories.test.ts` uses, for the reasons it gives
-// ---------------------------------------------------------------------------
 
 const databaseUrl = TEST_DATABASE_URL;
 let client: Sql | null = null;
@@ -116,7 +71,7 @@ if (skipReason !== false) {
 
 const dbOptions = { skip: skipReason };
 
-/** Thrown to force a rollback. A module-private instance, so it can be identified by identity. */
+/** Module-private, so it can be identified by identity. */
 const ROLLBACK = new Error('rollback: this transaction was only ever a test');
 
 async function inRollback(fn: (tx: TransactionSql) => Promise<void>): Promise<void> {
@@ -133,16 +88,8 @@ async function inRollback(fn: (tx: TransactionSql) => Promise<void>): Promise<vo
 }
 
 /**
- * `inRollback` on the schema-owning identity, for a fixture the runtime role may not build.
- *
- * Two cases here set up what `prl_app` cannot: one rewrites a foreign key as `prl_migrator`, the
- * other creates cohorts and grants places, and `prl_app` holds SELECT only on the enrolment tables.
- * Run on `DATABASE_URL`, they passed wherever that login owned the schema, which is every
- * developer's `.env`, and failed in CI, where it is `prl_ci_app`, a member of `prl_app` and nothing
- * else: "permission denied to set role prl_migrator" and "permission denied for table cohorts", in
- * every CI run since at least 2026-10-11. The case itself drops to `prl_app` with
- * `actAsRuntimeRole` before the code under test runs, so the deletion is still exercised with the
- * privileges production gives it.
+ * For fixtures `prl_app` may not build. On `DATABASE_URL` these failed in CI, where the login is
+ * `prl_ci_app`. The case drops to `prl_app` with `actAsRuntimeRole` before the code under test runs.
  */
 async function inOwnerRollback(fn: (tx: TransactionSql) => Promise<void>): Promise<void> {
   const url = adminDatabaseUrl();
@@ -160,7 +107,7 @@ async function inOwnerRollback(fn: (tx: TransactionSql) => Promise<void>): Promi
   }
 }
 
-/** For the rest of the transaction, the request path's role: what `/me/delete` runs as. */
+/** For the rest of the transaction, the role `/me/delete` runs as. */
 async function actAsRuntimeRole(tx: TransactionSql): Promise<void> {
   await tx`set local role prl_app`;
 }
@@ -181,7 +128,6 @@ function makeRoom(tx: TransactionSql, ownerId: string) {
   });
 }
 
-/** Deals one two-handed hand in `roomId`. Both seats are real accounts, as a live table's are. */
 async function dealHand(
   tx: TransactionSql,
   roomId: string,
@@ -220,7 +166,6 @@ async function dealHand(
   return handId;
 }
 
-/** Gives one learner a row in every table an account deletion is supposed to reach. */
 async function giveEveryKindOfRow(tx: TransactionSql, userId: string): Promise<void> {
   await sessions.create(tx, { userId, ipHash: null, userAgentHash: null });
   await sessions.create(tx, { userId, ipHash: null, userAgentHash: null });
@@ -242,12 +187,8 @@ async function giveEveryKindOfRow(tx: TransactionSql, userId: string): Promise<v
 }
 
 /**
- * Every table that names a learner, counted by name.
- *
- * Written out here rather than derived from `information_schema`, and read through the SAME
- * connection the deletion ran on, so a table the erasure forgot shows up as a non-zero count
- * rather than as a column nobody enumerated. The keys are the table names on purpose: an
- * assertion failure says `prl.quiz_attempts`, not `field 3`.
+ * Written out rather than derived from `information_schema`, and keyed by table name so a failure
+ * names the table.
  */
 interface RowsNaming {
   readonly sessions: number;
@@ -279,7 +220,6 @@ async function rowsNaming(tx: TransactionSql, userId: string): Promise<RowsNamin
   return row;
 }
 
-/** How many seats one hand has, and how many of them still name somebody. */
 async function seatCensus(
   tx: TransactionSql,
   handId: string,
@@ -295,18 +235,8 @@ async function seatCensus(
   return row;
 }
 
-// ---------------------------------------------------------------------------
-// The policy
-// ---------------------------------------------------------------------------
-
 describe('account deletion — what goes, what is detached, what stays', dbOptions, () => {
-  /**
-   * The exact learner the schema used to refuse: one who created a table AND joined another.
-   *
-   * Both foreign keys that blocked this are exercised in one case on purpose. Splitting them
-   * would let a half-applied migration pass one case and fail the other, which is a state nobody
-   * should be able to reach with a green suite in front of them.
-   */
+  /** Both blocking foreign keys in one case, so a half-applied migration cannot pass. */
   it('deletes a learner who created a table and joined one, and empties every table naming them', async () => {
     await inRollback(async (tx) => {
       const leaverId = await makeGuest(tx, 'Leaver');
@@ -325,8 +255,7 @@ describe('account deletion — what goes, what is detached, what stays', dbOptio
       await giveEveryKindOfRow(tx, leaverId);
       const handId = await dealHand(tx, hostTable.id, hostId, leaverId);
 
-      // The control: every one of these is non-zero BEFORE the deletion, so the zeroes asserted
-      // afterwards are a change rather than a table that was always empty.
+      // Every count is non-zero before, so the zeroes after are a change.
       const before = await rowsNaming(tx, leaverId);
       for (const [table, count] of Object.entries(before)) {
         assert.ok(count > 0, `${table} has no row for the learner, so emptying it proves nothing`);
@@ -335,7 +264,6 @@ describe('account deletion — what goes, what is detached, what stays', dbOptio
       const summary = await users.deleteAccount(tx, leaverId);
       assert.ok(summary !== null);
 
-      // Table by table, by name.
       const after = await rowsNaming(tx, leaverId);
       assert.equal(after.users, 0, 'prl.users still holds the account');
       assert.equal(after.sessions, 0, 'prl.sessions still holds a credential for a deleted account');
@@ -347,8 +275,7 @@ describe('account deletion — what goes, what is detached, what stays', dbOptio
       assert.equal(after.audit_log, 0, 'prl.audit_log still attributes an event to them');
       assert.equal(after.rooms_owned, 0, 'prl.rooms still says they own a table');
 
-      // And the summary agrees with what was actually there. Asserted against `before` rather
-      // than against literals, so the case still means something if the fixture above changes.
+      // Against `before`, not literals, so it survives fixture changes.
       assert.equal(summary.deleted.sessions, before.sessions);
       assert.equal(summary.deleted.lessonsCompleted, before.lesson_progress);
       assert.equal(summary.deleted.quizAttempts, before.quiz_attempts);
@@ -358,17 +285,12 @@ describe('account deletion — what goes, what is detached, what stays', dbOptio
       assert.equal(summary.anonymised.auditEvents, before.audit_log);
       assert.equal(summary.anonymised.roomsCreated, before.rooms_owned);
 
-      // The hand is still there and is still a two-handed hand.
       const census = await seatCensus(tx, handId);
       assert.equal(census.seats, 2, 'the hand lost a seat, which is a destroyed hand not an erased one');
       assert.equal(census.named, 1, 'exactly one seat should still name a learner');
     });
   });
 
-  /**
-   * The half of the policy a learner is most likely to be surprised by, so it gets its own case:
-   * the hands survive, in full, and only the identity goes.
-   */
   it('leaves every hand intact, with the departing seat anonymised rather than removed', async () => {
     await inRollback(async (tx) => {
       const leaverId = await makeGuest(tx, 'Leaver');
@@ -397,9 +319,7 @@ describe('account deletion — what goes, what is detached, what stays', dbOptio
       assert.equal(seats.length, 2);
       assert.equal(seats[0]?.user_id, hostId, 'the other player keeps their seat and their identity');
       assert.equal(seats[1]?.user_id, null, 'the departing seat is detached, not deleted');
-      // The cards and the stack are the hand's own record and are not the departing learner's to
-      // remove: without them the surviving player's history is a hand with a seat that did
-      // nothing, which is a different hand from the one that was played.
+      // The cards and stack belong to the hand, not to the departing learner.
       assert.notEqual(seats[1]?.hole_cards, null, 'the seat keeps what it was dealt');
       assert.equal(seats[1]?.starting_stack, 200);
     });
@@ -433,13 +353,7 @@ describe('account deletion — what goes, what is detached, what stays', dbOptio
     });
   });
 
-  /**
-   * The case that says the blast radius is bounded.
-   *
-   * Every figure is read before and after, and the assertion is that they are equal. That is a
-   * weaker-looking shape than checking literals and a stronger one in practice: it cannot pass
-   * because the fixture happened to produce a zero.
-   */
+  /** Every figure is read before and after, so it cannot pass on a fixture that happened to be zero. */
   it('leaves an unrelated learner completely untouched', async () => {
     await inRollback(async (tx) => {
       const leaverId = await makeGuest(tx, 'Leaver');
@@ -468,14 +382,11 @@ describe('account deletion — what goes, what is detached, what stays', dbOptio
         'erasing one account changed the row counts of an unrelated one',
       );
       assert.deepEqual(await seatCensus(tx, strangerHand), beforeSeats);
-      // Their progress read, which is the thing they would actually notice.
       const snapshot = await progress.readProgress(tx, strangerId);
       assert.equal(snapshot.lessonsCompleted.length, 1);
       assert.equal(snapshot.quizQuestionsAnswered, 1);
       assert.equal(snapshot.scenariosAttempted.length, 1);
-      // And a live session of theirs still resolves, which no other assertion here covers: the
-      // deletion revokes sessions by user id, and a WHERE clause that had lost its predicate
-      // would revoke every session in the table.
+      // A WHERE clause that lost its predicate would revoke every session in the table.
       const live = await sessions.create(tx, {
         userId: strangerId,
         ipHash: null,
@@ -500,12 +411,8 @@ describe('account deletion — what goes, what is detached, what stays', dbOptio
   });
 
   /**
-   * The mapping that turns an unmigrated database into a truthful answer rather than a 500.
-   *
-   * This is the pre-0004 schema, recreated for the length of one savepoint: it is what a
-   * deployment whose API rolled ahead of its migration, or a restore of an older dump, actually
-   * looks like. Everything happens inside `tx`, which is rolled back, so the live schema is put
-   * back whatever this case does.
+   * The pre-0004 schema, recreated inside a rolled-back transaction. It is what an API ahead of its
+   * migration, or a restore of an older dump, looks like.
    */
   it('answers account_deletion_blocked when a foreign key still restricts the account', async () => {
     await inOwnerRollback(async (tx) => {
@@ -513,8 +420,7 @@ describe('account deletion — what goes, what is detached, what stays', dbOptio
       const table = (await makeRoom(tx, leaverId)).room;
       await rooms.addMember(tx, { roomId: table.id, userId: leaverId });
 
-      // The DDL is written literally rather than interpolated, so nothing here is a hole in the
-      // parameterisation rule `src/db.ts` states at the top.
+      // Literal DDL, so nothing here breaks the parameterisation rule in `src/db.ts`.
       await tx`set local role prl_migrator`;
       await tx`alter table prl.room_members drop constraint room_members_user_id_fkey`;
       await tx`
@@ -539,10 +445,6 @@ describe('account deletion — what goes, what is detached, what stays', dbOptio
   });
 });
 
-// ---------------------------------------------------------------------------
-// The route
-// ---------------------------------------------------------------------------
-
 let app: FastifyInstance | null = null;
 
 before(async () => {
@@ -560,7 +462,6 @@ after(async () => {
   if (client !== null) await client.end({ timeout: 5 });
 });
 
-/** One caller: their session cookie and the CSRF pair that goes with it. */
 interface Caller {
   readonly userId: string;
   readonly session: string;
@@ -573,7 +474,6 @@ function cookiePair(response: { cookies: { name: string; value: string }[] }, na
   return found === undefined ? null : `${name}=${found.value}`;
 }
 
-/** Creates a real guest account through the real route, and keeps everything needed to act as it. */
 async function signUp(instance: FastifyInstance): Promise<Caller> {
   const minted = await instance.inject({ method: 'GET', url: API_PATHS.session() });
   assert.equal(minted.statusCode, 200, minted.body);
@@ -601,14 +501,7 @@ async function signUp(instance: FastifyInstance): Promise<Caller> {
   return { userId: body.user.id, session, csrfToken: String(body.csrfToken), csrfCookie };
 }
 
-/**
- * `POST /me/delete` as a signed-in caller sends it.
- *
- * `await`ed inside rather than returned as a promise, because `inject` is overloaded — the form
- * that returns a chainable builder and the form that returns a response — and returning it
- * unresolved makes the compiler pick the builder. That is a type error with no runtime symptom,
- * which is exactly the kind this repository compiles the test tree to catch.
- */
+/** `await`ed inside because returning `inject` unresolved makes the compiler pick the builder overload. */
 async function deleteRequest(
   instance: FastifyInstance,
   caller: Caller | null,
@@ -635,20 +528,9 @@ function errorCodeOf(payload: string): string {
 
 describe('an entitlement that ends because its holder erased themselves', dbOptions, () => {
   /**
-   * The record of a place in a class ending, which did not exist.
-   *
-   * `enrolments_user_id_fkey` is ON DELETE CASCADE. Both `users.ts` and
-   * `db/migrations/0006_cohort_enrolments.sql` said the record survived that: "the RECORD that the
-   * grant and the revocation happened survives in `prl.audit_log`". Measured against the
-   * development database inside a rolled-back transaction — a user, a cohort, one live enrolment
-   * and its `enrolment.granted` entry, then `delete from prl.users` — the enrolment row went, the
-   * grant entry survived and was correctly detached, and entries recording a revocation: **zero**.
-   * A referential action is not a statement; it writes nothing.
-   *
-   * The operator's trail therefore said a place had been granted on this authority against this
-   * external reference and that nothing ever ended it. Reconciling "who holds a place" against the
-   * audit log over-counted for ever, and it over-counted precisely for the learners who exercised
-   * erasure. For a course somebody paid for, that is a dispute with no record behind either side.
+   * `enrolments_user_id_fkey` is ON DELETE CASCADE, and a referential action writes no audit entry.
+   * Without this the audit log showed a grant that nothing ever ended, so reconciling places
+   * against it over-counted every erased learner.
    */
   it('writes an entry per enrolment, detached, before the rows go (REGRESSION)', async () => {
     await inOwnerRollback(async (tx) => {
@@ -667,10 +549,8 @@ describe('an entitlement that ends because its holder erased themselves', dbOpti
       });
       assert.equal(live.outcome, 'granted');
 
-      // A second place that was ALREADY withdrawn before the erasure. Both rows cascade; only one
-      // of them is a live entitlement ending, and an operator asked "did anybody lose a place"
-      // needs to tell them apart. If both were recorded identically this test would pass while the
-      // record stayed useless.
+      // An already-withdrawn place too, because the record must tell a live place ending from one
+      // that had already ended.
       const other = await enrolments.createCohort(tx, {
         key: 'erasure-record-cohort-two',
         name: 'Erasure record two',
@@ -690,8 +570,7 @@ describe('an entitlement that ends because its holder erased themselves', dbOpti
         reason: 'withdrew before the course began',
       });
 
-      // The control: both rows exist before the deletion, so the entries asserted afterwards are a
-      // change rather than a sweep over a table that was always empty.
+      // Both rows exist before the deletion.
       const held = await enrolments.forUser(tx, leaverId);
       assert.equal(held.length, 2, 'the fixture did not create two enrolments');
 
@@ -699,7 +578,7 @@ describe('an entitlement that ends because its holder erased themselves', dbOpti
       const summary = await users.deleteAccount(tx, leaverId);
       assert.ok(summary !== null);
       assert.equal(summary.deleted.enrolments, 2, 'the cascade did not take both enrolments');
-      // Back to the owner to read the append-only log, which the runtime role may only append to.
+      // The runtime role may only append to the audit log.
       await tx`reset role`;
 
       const written = await tx<
@@ -715,8 +594,7 @@ describe('an entitlement that ends because its holder erased themselves', dbOpti
       `;
       assert.equal(written.length, 2, 'one entry per enrolment, and there were two');
 
-      // Detached at the point of writing, for the reason `/me/delete` gives for the deletion event
-      // itself: the log must never hold a pointer to an account that asked to stop existing.
+      // The log must never point at an account that asked to stop existing.
       for (const entry of written) {
         assert.equal(entry.user_id, null, 'an erasure record named the person it erased');
       }
@@ -730,8 +608,6 @@ describe('an entitlement that ends because its holder erased themselves', dbOpti
         'the external reference, the cohort and whether the place was still live must all survive',
       );
 
-      // And the rows really are gone, so this is a record of something that happened rather than
-      // an entry written beside an entitlement that still exists.
       const left = await tx<{ n: number }[]>`
         select count(*)::int as n from prl.enrolments where user_id = ${leaverId}`;
       assert.equal(left[0]?.n, 0);
@@ -739,8 +615,7 @@ describe('an entitlement that ends because its holder erased themselves', dbOpti
   });
 
   it('writes nothing for a learner who never held a place (NEGATIVE CONTROL)', async () => {
-    // The other half. An erasure log that gained an entry for every account, enrolled or not,
-    // would satisfy the test above and tell an operator nothing.
+    // An entry for every account, enrolled or not, would pass the test above and say nothing.
     await inRollback(async (tx) => {
       const leaverId = await makeGuest(tx, 'Never enrolled');
       await users.deleteAccount(tx, leaverId);
@@ -754,9 +629,7 @@ describe('an entitlement that ends because its holder erased themselves', dbOpti
 describe('POST /me/delete', dbOptions, () => {
   it('refuses an unauthenticated caller with not_authenticated', async () => {
     assert.ok(app !== null);
-    // A CSRF pair is minted and sent, so the refusal below is the session check rather than the
-    // CSRF hook answering first — which it would, with a 403, and the assertion would then be
-    // about nothing.
+    // A CSRF pair is sent, so the refusal comes from the session check and not a 403 from the CSRF hook.
     const minted = await app.inject({ method: 'GET', url: API_PATHS.session() });
     const token = String((minted.json() as { csrfToken: string }).csrfToken);
     const cookie = cookiePair(minted, 'prl_csrf');
@@ -782,20 +655,15 @@ describe('POST /me/delete', dbOptions, () => {
     const instance = app;
     const caller = await signUp(instance);
 
-    // Four refusals plus the acceptance below is five requests, which is exactly this route's
-    // budget for one caller (`ACCOUNT_DELETE_MAX` in `src/routes/auth.ts`). Deliberately at the
-    // edge rather than accidentally: a sixth case here would answer 429 and fail for a reason
-    // that has nothing to do with confirmation, so whoever adds one has to raise the limit or
-    // give the extra case a caller of its own. The case below spends a separate caller's budget
-    // proving the limit is real.
+    // Four refusals plus the acceptance is exactly the route's budget of five (`ACCOUNT_DELETE_MAX`).
+    // A sixth case here would answer 429.
     for (const payload of [{}, { confirm: '' }, { confirm: 'yes' }, { confirm: 'Delete My Account' }]) {
       const refused = await deleteRequest(instance, caller, payload);
       assert.equal(refused.statusCode, 400, `${JSON.stringify(payload)} -> ${refused.body}`);
       assert.equal(errorCodeOf(refused.body), 'invalid_request');
     }
 
-    // Still signed in and still an account, which is the half that matters: a refusal that had
-    // already deleted something would also have answered 400.
+    // A refusal that had already deleted something would also answer 400.
     const session = await instance.inject({
       method: 'GET',
       url: API_PATHS.session(),
@@ -803,22 +671,15 @@ describe('POST /me/delete', dbOptions, () => {
     });
     assert.equal((session.json() as { user: { id: string } | null }).user?.id, caller.userId);
 
-    // And the cleanup is the assertion that the right phrase does work.
+    // The cleanup proves the right phrase works.
     const accepted = await deleteRequest(instance, caller, { confirm: ACCOUNT_DELETE_CONFIRMATION });
     assert.equal(accepted.statusCode, 200, accepted.body);
   });
 
   /**
-   * The budget is the route's own, not the global one.
-   *
-   * `testConfig` sets `RATE_LIMIT_MAX` to 5000, so a 429 on the sixth request can only come from
-   * the per-route limit declared beside the handler. Without that limit a wrong confirmation
-   * costs an attacker who has stolen a cookie and a token nothing at all, and each attempt takes
-   * `for update` on the victim's account row.
-   *
-   * The caller cannot be cleaned up through the API — it is rate limited, which is the point — so
-   * the row is removed through the suite's own connection at the end. That is fixture teardown
-   * and not an assertion: the deletion behaviour is proved by the cases either side of this one.
+   * `RATE_LIMIT_MAX` is 5000, so a 429 on the sixth request comes from the per-route limit. Each
+   * attempt takes `for update` on the victim's row. The rate-limited caller is removed through the
+   * suite's own connection as teardown.
    */
   it('rate limits the destructive route on a budget of its own, so it cannot be attempted in a loop', async () => {
     assert.ok(app !== null);
@@ -856,15 +717,11 @@ describe('POST /me/delete', dbOptions, () => {
     assert.equal(body.deleted.sessions, 1, 'the session they were holding is one of the rows removed');
     assert.equal(typeof body.anonymised.handSeats, 'number');
 
-    // The cookie is cleared: a `set-cookie` for the session name with an empty value, so the
-    // browser stops presenting a credential for an account that no longer exists.
     const cleared = response.cookies.find((entry) => entry.name === 'prl_session');
     assert.ok(cleared !== undefined, 'the session cookie was not cleared');
     assert.equal(cleared.value, '', `the cookie was re-sent with a value: ${cleared.value.slice(0, 12)}`);
 
-    // And the cookie the caller still holds resolves to nothing. `session_expired` rather than
-    // `not_authenticated`, because this server signed that cookie — which is exactly the
-    // distinction `requireSession` draws and the client uses to open a fresh guest session.
+    // `session_expired`, not `not_authenticated`, because this server signed the cookie.
     const replayed = await instance.inject({
       method: 'GET',
       url: API_PATHS.session(),
@@ -873,8 +730,7 @@ describe('POST /me/delete', dbOptions, () => {
     assert.equal(replayed.statusCode, 200, 'the session read never fails for a signed-out caller');
     assert.equal((replayed.json() as { user: unknown }).user, null, 'the revoked session still resolves');
 
-    // Nothing anywhere still names the account. Read through the suite's own connection rather
-    // than the app's, so this is the committed state and not a view inside a transaction.
+    // The suite's own connection sees committed state.
     assert.ok(client !== null);
     const remaining = await client<{ users: number; sessions: number }[]>`
       select (select count(*) from prl.users    where id = ${caller.userId})::int as users,

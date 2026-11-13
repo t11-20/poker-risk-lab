@@ -1,92 +1,38 @@
 /**
- * A metrics registry, written here rather than taken from a package.
- *
- * ## Why not `prom-client`
- *
- * The supply-chain policy in this repository is deliberately hostile to new runtime
- * dependencies: every one of them is pinned, hashed, IOC-scanned, SBOM'd and re-reviewed on
- * every bump (`docs/adr/0007-supply-chain-policy.md`). A metrics client is a poor trade
- * against that. What it buys is the Prometheus text format — which is a documented, stable,
- * line-oriented serialisation that fits in the `render()` function below — and a label
- * registry, which is the part this file actually cares about getting right.
- *
- * ## The part that matters: label cardinality is bounded by construction
- *
- * The way a metrics endpoint takes down a service is not CPU. It is a label whose value comes
- * from the request — a path with an id in it, a user id, an error string — so the registry
- * grows one time series per distinct value and never shrinks. That is an unbounded in-process
- * memory leak reachable by an unauthenticated caller, and it is the single most common
- * production defect in hand-rolled instrumentation.
- *
- * So label values are not free text here. Every metric declares its label NAMES up front, and
- * every series is capped (`MAX_SERIES_PER_METRIC`). Past the cap, new label combinations
- * collapse into one overflow series rather than allocating: the metric stops being precise and
- * never stops being bounded, and the overflow series is itself visible so an operator can see
- * that it happened. Callers are additionally expected to pass values from a closed set —
- * `routeLabel()` in `metrics.ts` is what turns a URL into one — and the cap is the net under
- * that rule, not a replacement for it.
- *
- * ## Why histograms are explicit buckets and not a summary
- *
- * p50/p95/p99 have to be computable *across* processes. A per-process summary cannot be
- * aggregated — averaging two p99s is meaningless — while cumulative bucket counters can be
- * summed and then interpolated (`histogram_quantile`). Buckets are declared per metric because
- * the right ones for an HTTP request (milliseconds) and for a Monte Carlo analysis (hundreds
- * of milliseconds) are not the same set.
- *
- * ## What this file must never do
- *
- * Touch the database, throw, or block. It is scraped by a probe that is often the only thing
- * still working during an incident. `render()` allocates a string and nothing else.
+ * A Prometheus registry written here instead of `prom-client`, because every runtime dependency
+ * carries the supply-chain cost in `docs/adr/0007-supply-chain-policy.md`.
+ * Label cardinality is bounded by construction. Label names are declared up front and each metric
+ * is capped at `MAX_SERIES_PER_METRIC`, past which new combinations fold into one visible overflow
+ * series. Histograms use explicit buckets so quantiles aggregate across processes.
+ * Nothing here touches the database, throws or blocks.
  */
 
-/** Metric types this registry can render. Matches the Prometheus exposition `# TYPE` line. */
 export type MetricType = 'counter' | 'gauge' | 'histogram';
 
 /**
- * Upper bound on distinct label combinations per metric.
- *
- * 256 is chosen against the widest metric here: HTTP requests, labelled by method (7) × route
- * (about 30 declared routes) × status class (5). The real product is far below the cap in
- * normal operation, so hitting it means a caller is passing something unbounded — which is
- * exactly when collapsing into the overflow series is the behaviour we want.
+ * Sized against the widest metric, HTTP requests (7 methods x about 30 routes x 5 status classes).
+ * Reaching it means a caller is passing something unbounded.
  */
 const MAX_SERIES_PER_METRIC = 256;
 
-/** The label value every series past the cap collapses into. Deliberately greppable. */
 export const OVERFLOW_LABEL = 'overflow_cardinality_capped';
 
-/**
- * Longest label value kept.
- *
- * Prometheus' text format escapes backslash, double quote and newline in label values, and
- * `escapeLabelValue()` below does that. This cap is a second, stricter gate applied at the
- * point a value enters the registry: a value carrying a control character, or arriving from a
- * caller as megabytes of text, is a defect wherever it came from, and bounding it here keeps
- * one bad call site from corrupting an entire scrape. Same reasoning as
- * `withoutControlCharacters` in `logging.ts`.
- */
+/** Bounds memory so one bad call site cannot corrupt a scrape. */
 const MAX_LABEL_VALUE_LENGTH = 120;
 
-/** A label set, already reduced to the closed values the metric declared. */
 export type Labels = Readonly<Record<string, string>>;
 
 interface MetricDefinition {
   readonly name: string;
   readonly help: string;
   readonly type: MetricType;
-  /** Declared once. A sample carrying any other key is ignored; see `keyOf`. */
+  /** A sample carrying any other key is ignored. */
   readonly labelNames: readonly string[];
 }
 
 /**
- * Sanitises one label value.
- *
- * Truncation rather than rejection: a metric that silently drops a sample is worse during an
- * incident than one that reports a shortened label, and the length cap exists to bound memory,
- * not to validate input. Control characters are replaced by code point rather than by regex so
- * that no control character has to be typed into this repository — the hygiene gate rejects
- * them in source, for exactly the reason they are being stripped here.
+ * Truncates rather than rejects, so no sample is dropped. Control characters are matched by code
+ * point so none has to appear in source, which the hygiene gate forbids.
  */
 function safeLabelValue(value: string): string {
   let out = '';
@@ -99,16 +45,8 @@ function safeLabelValue(value: string): string {
 }
 
 /**
- * The series key for a label set.
- *
- * Built from the metric's DECLARED label names in their declared order, so two calls that pass
- * the same labels in a different object order land on the same series, and a caller that
- * passes an undeclared key cannot create a series at all — the key is ignored rather than
- * silently forking the metric in two.
- *
- * The separator is a unit separator rather than a comma or a space because a label value may
- * legitimately contain either, and a key built with a separator that can appear inside a value
- * lets two different label sets collide onto one series.
+ * Keys follow the declared label order, so object order does not fork a series. The unit separator
+ * cannot appear in a value, so two label sets cannot collide.
  */
 const KEY_SEPARATOR = String.fromCodePoint(0x1f);
 
@@ -127,12 +65,10 @@ function labelsFromKey(labelNames: readonly string[], key: string): Labels {
   return out;
 }
 
-/** Escapes a label value for the text exposition format. */
 function escapeLabelValue(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\r?\n/g, '\\n');
 }
 
-/** Escapes help text. Only backslash and a line break are special in a `# HELP` line. */
 function escapeHelp(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/\r?\n/g, ' ');
 }
@@ -148,29 +84,16 @@ function renderLabels(labels: Labels, extra?: readonly (readonly [string, string
   return parts.length === 0 ? '' : `{${parts.join(',')}}`;
 }
 
-/**
- * The shared behaviour of every metric: a bounded map from series key to value.
- *
- * `series` is a plain `Map` and not a `WeakMap` on purpose — the keys are strings, and the
- * whole point is that a series persists across scrapes so a counter can be monotonic.
- */
 abstract class BaseMetric<TSeries> {
   readonly definition: MetricDefinition;
   protected readonly series = new Map<string, TSeries>();
-  /** Set once the cap is hit, so an operator can tell precision was lost. */
   protected overflowed = false;
 
   constructor(definition: MetricDefinition) {
     this.definition = definition;
   }
 
-  /**
-   * The series for a label set, creating it if there is room.
-   *
-   * Past the cap every new combination is folded into one overflow series. Returning a series
-   * rather than `undefined` keeps every call site free of a null check — a metric that throws
-   * or returns nothing during an incident is worse than one that is imprecise.
-   */
+  /** Always returns a series, so no call site needs a null check. Past the cap, the overflow one. */
   protected resolve(labels: Labels): TSeries {
     const key = keyOf(this.definition.labelNames, labels);
     const existing = this.series.get(key);
@@ -194,15 +117,12 @@ abstract class BaseMetric<TSeries> {
 
   protected abstract createSeries(): TSeries;
 
-  /** Renders every sample line for this metric, without the `# HELP`/`# TYPE` preamble. */
   protected abstract renderSamples(): readonly string[];
 
-  /** True once at least one label combination was folded into the overflow series. */
   get didOverflow(): boolean {
     return this.overflowed;
   }
 
-  /** Number of live series. Feeds the registry's own self-metric. */
   get seriesCount(): number {
     return this.series.size;
   }
@@ -215,27 +135,19 @@ abstract class BaseMetric<TSeries> {
   }
 }
 
-/**
- * A monotonically increasing count.
- *
- * There is no `dec()` and no `reset()`, and that is the contract rather than an omission: a
- * counter that can go down breaks every `rate()` computed over it, and the resulting graph
- * shows a spike at the moment of the decrement. Something that goes both ways is a gauge.
- */
+/** No `dec()` or `reset()`, because a decrement breaks every `rate()` over the series. */
 export class Counter extends BaseMetric<{ value: number }> {
   protected createSeries(): { value: number } {
     return { value: 0 };
   }
 
   inc(labels: Labels = {}, amount = 1): void {
-    // A negative or non-finite increment is a caller bug that would corrupt every rate derived
-    // from this series. Ignoring it keeps the series usable; the alternative — throwing — turns
-    // an instrumentation bug into a failed request.
+    // Ignored rather than thrown, so an instrumentation bug never fails a request.
     if (!Number.isFinite(amount) || amount < 0) return;
     this.resolve(labels).value += amount;
   }
 
-  /** Reads one series. For tests; not used in rendering. */
+  /** For tests. */
   get(labels: Labels = {}): number {
     return this.series.get(keyOf(this.definition.labelNames, labels))?.value ?? 0;
   }
@@ -251,16 +163,10 @@ export class Counter extends BaseMetric<{ value: number }> {
 }
 
 /**
- * A value that goes up and down: connections open, rooms live, threads busy.
- *
- * `setFrom` is the form most of this codebase uses. A gauge whose value already exists
- * somewhere authoritative — `pool.stats()`, `live.size` — must be *read at scrape time* rather
- * than mirrored on every change, because a mirror drifts the first time an edit adds a code
- * path that changes the source and forgets the metric. Drift in a gauge is worse than no
- * gauge: it is a number an operator trusts during an incident and that is quietly wrong.
+ * Prefer `setFrom`. A gauge whose value lives somewhere authoritative is read at scrape time,
+ * because a mirror written on change drifts when a new code path forgets to update it.
  */
 export class Gauge extends BaseMetric<{ value: number }> {
-  /** Set when the gauge is computed at scrape time instead of being written to. */
   private collector: (() => number) | null = null;
 
   protected createSeries(): { value: number } {
@@ -286,13 +192,7 @@ export class Gauge extends BaseMetric<{ value: number }> {
     return this.series.get(keyOf(this.definition.labelNames, labels))?.value ?? 0;
   }
 
-  /**
-   * Binds this gauge to a function read at scrape time.
-   *
-   * Only valid for an unlabelled gauge: a collector cannot know which label set it is being
-   * asked about. A labelled gauge that is computed rather than written belongs in the
-   * registry's `onCollect` hook, which can `set()` every series it owns.
-   */
+  /** Unlabelled gauges only. A computed labelled gauge belongs in the registry's `onCollect`. */
   setFrom(collector: () => number): void {
     this.collector = collector;
   }
@@ -312,30 +212,19 @@ export class Gauge extends BaseMetric<{ value: number }> {
 }
 
 interface HistogramSeries {
-  /** Cumulative counts, parallel to `buckets`. Index i counts observations <= buckets[i]. */
+  /** Cumulative. Index i counts observations <= buckets[i]. */
   readonly counts: number[];
   sum: number;
   count: number;
 }
 
-/**
- * A cumulative histogram with explicit upper bounds.
- *
- * The bucket list is the whole design decision. Too few and `histogram_quantile` interpolates
- * across a range wide enough to hide the problem; too many and every series costs a line per
- * bucket on every scrape. The lists in `metrics.ts` are chosen so that the threshold each one
- * is alerted on falls *on a bucket boundary* — otherwise the alert fires on an interpolated
- * number rather than a counted one, which is the difference between "p99 is over 500 ms" and
- * "p99 is somewhere between 300 ms and 1 s and we assumed the observations were uniform".
- */
+/** Each alert threshold should sit on a bucket boundary, so it is counted rather than interpolated. */
 export class Histogram extends BaseMetric<HistogramSeries> {
   readonly buckets: readonly number[];
 
   constructor(definition: MetricDefinition, buckets: readonly number[]) {
     super(definition);
-    // Sorted and de-duplicated here rather than trusted: the cumulative rendering below depends
-    // on ascending order, and an out-of-order bound produces counts that decrease across `le`
-    // values, which is invalid exposition that a scraper rejects outright.
+    // Out-of-order bounds render decreasing `le` counts, which a scraper rejects.
     this.buckets = [...new Set(buckets)].sort((a, b) => a - b);
   }
 
@@ -343,7 +232,6 @@ export class Histogram extends BaseMetric<HistogramSeries> {
     return { counts: new Array<number>(this.buckets.length).fill(0), sum: 0, count: 0 };
   }
 
-  /** Records one observation, in the metric's declared unit (seconds throughout this app). */
   observe(labels: Labels, value: number): void {
     if (!Number.isFinite(value) || value < 0) return;
     const series = this.resolve(labels);
@@ -355,7 +243,7 @@ export class Histogram extends BaseMetric<HistogramSeries> {
     }
   }
 
-  /** Total observations across one series. For tests. */
+  /** For tests. */
   count(labels: Labels = {}): number {
     return this.series.get(keyOf(this.definition.labelNames, labels))?.count ?? 0;
   }
@@ -370,7 +258,6 @@ export class Histogram extends BaseMetric<HistogramSeries> {
         if (bound === undefined) continue;
         out.push(`${name}_bucket${renderLabels(labels, [['le', String(bound)]])} ${series.counts[i] ?? 0}`);
       }
-      // The `+Inf` bucket is required by the format and equals the total count by definition.
       out.push(`${name}_bucket${renderLabels(labels, [['le', '+Inf']])} ${series.count}`);
       out.push(`${name}_sum${renderLabels(labels)} ${series.sum}`);
       out.push(`${name}_count${renderLabels(labels)} ${series.count}`);
@@ -379,52 +266,20 @@ export class Histogram extends BaseMetric<HistogramSeries> {
   }
 }
 
-/** Everything a metric needs to be declared. */
 export interface MetricSpec {
   readonly name: string;
   readonly help: string;
   readonly labelNames?: readonly string[];
   /**
-   * Label sets to render at zero from process start, before anything increments them.
-   *
-   * ## The defect this exists for, which is subtle and cost a real alert
-   *
-   * A counter series is created by its first `inc()`, so until something goes wrong the series
-   * does not exist and the exposition has no line for it. `rate()` and `increase()` are computed
-   * from samples INSIDE their range, and Prometheus does not assume a series that appears
-   * mid-range started at zero — a series whose samples read `1, 1, 1` has an increase of 0. So
-   * the FIRST occurrence of a counted event is invisible to any alert keyed on its rate.
-   *
-   * That is precisely how the zero-tolerance alerts are written.
-   * `docs/production/alerts.md` keys `RateLimitBans` on `increase(...{kind="banned"}[15m]) > 0`,
-   * `HandsFailing` on `rate(prl_hands_failed_total[10m]) > 0`, and `ArchiveFailing` on
-   * `rate(prl_archive_failures_total[15m]) > 0`, each with the reasoning that there is no
-   * acceptable background rate. Every one of them would have missed the first event on a fresh
-   * process and fired only on the second.
-   *
-   * Measured: a real ban was recorded against staging — the counter read
-   * `prl_rate_limit_events_total{kind="banned"} 1` — and `RateLimitBans` did not fire, because
-   * the series had never been zero for Prometheus to see it rise from.
-   *
-   * Priming the series makes the 0 → 1 step visible. It only works for a CLOSED label set, which
-   * is why it is opt-in per metric rather than automatic: `authFailures` is keyed on a contract
-   * error code and `handsFailed` on a reason, and inventing every possible value would be worse
-   * than the problem. Prime the ones whose alert cannot afford to miss the first event.
-   *
-   * This is the same failure `scripts/load-test.mjs` documents from the other side — that a
-   * scraper "cannot tell `0` from 'nothing in this build feeds this metric'". Here it is the
-   * alerting rule that could not tell them apart.
+   * Label sets rendered at zero from process start. `increase()` and `rate()` cannot see the first
+   * event on a series that did not exist before it, so every zero-tolerance alert missed it.
+   * Measured on staging, `prl_rate_limit_events_total{kind="banned"} 1` and `RateLimitBans` stayed
+   * silent. Opt-in, because it only works for a closed label set.
    */
   readonly primeLabels?: readonly Labels[];
 }
 
-/**
- * The collection of metrics rendered by one scrape.
- *
- * Instantiated once per process (`metrics.ts`) rather than being a module-level singleton in
- * this file, so a test can build a registry, exercise it and throw it away — the same reason
- * `db.ts` has no eagerly-created `sql` export.
- */
+/** One per process (`metrics.ts`), not a module singleton, so tests can build and discard one. */
 export class MetricsRegistry {
   private readonly metrics = new Map<string, BaseMetric<unknown>>();
   private readonly beforeCollect: (() => void)[] = [];
@@ -432,9 +287,7 @@ export class MetricsRegistry {
   private add<T extends BaseMetric<unknown>>(metric: T): T {
     const name = metric.definition.name;
     if (this.metrics.has(name)) {
-      // A duplicate registration means two modules believe they own the same metric, and
-      // whichever loaded second would silently win. Worth failing at boot for: it happens at
-      // module load, never on a request.
+      // Two modules claiming one metric. Fails at module load, never on a request.
       throw new Error(`metric "${name}" is already registered`);
     }
     this.metrics.set(name, metric as unknown as BaseMetric<unknown>);
@@ -443,9 +296,7 @@ export class MetricsRegistry {
 
   counter(spec: MetricSpec): Counter {
     const counter = this.add(new Counter({ ...spec, type: 'counter', labelNames: spec.labelNames ?? [] }));
-    // `inc(labels, 0)` creates the series through the same path a real increment uses, so a primed
-    // series is identical to one that has been incremented and then never again. Nothing special
-    // renders it and nothing special has to remember it exists.
+    // Same path as a real increment, so a primed series is an ordinary series.
     for (const labels of spec.primeLabels ?? []) counter.inc(labels, 0);
     return counter;
   }
@@ -460,47 +311,31 @@ export class MetricsRegistry {
     );
   }
 
-  /**
-   * Registers a function run at the start of every scrape.
-   *
-   * This is where a gauge that mirrors state owned elsewhere gets its value — see the note on
-   * `Gauge.setFrom`. A hook that throws must not fail the scrape: `/metrics` answering with
-   * most of the picture beats it answering 500 during the incident it was built for.
-   */
+  /** Runs at the start of every scrape. A throwing hook must not fail the scrape. */
   onCollect(hook: () => void): void {
     this.beforeCollect.push(hook);
   }
 
-  /**
-   * The full exposition body.
-   *
-   * Sorted by metric name so two consecutive scrapes of an unchanged process produce
-   * byte-identical output, which makes a diff of two captures meaningful.
-   */
+  /** Sorted by name, so two scrapes of an unchanged process are byte-identical. */
   render(): string {
     for (const hook of this.beforeCollect) {
       try {
         hook();
       } catch {
-        // Deliberately swallowed, and deliberately not logged: this runs on every scrape, and a
-        // collector that fails every 15 seconds would fill the log with one repeated line. The
-        // symptom is visible in the output instead — the metric it feeds stops changing.
+        // Not logged, because it would repeat every scrape. The fed metric stops changing instead.
       }
     }
     const names = [...this.metrics.keys()].sort();
     const blocks = names.map((name) => this.metrics.get(name)?.render() ?? '');
-    // The trailing newline is required by the text exposition format.
     return `${blocks.filter((block) => block !== '').join('\n')}\n`;
   }
 
-  /** Total live series across every metric. Feeds `prl_metrics_series`. */
   totalSeries(): number {
     let total = 0;
     for (const metric of this.metrics.values()) total += metric.seriesCount;
     return total;
   }
 
-  /** True if any metric has folded a label combination into its overflow series. */
   anyOverflowed(): boolean {
     for (const metric of this.metrics.values()) {
       if (metric.didOverflow) return true;

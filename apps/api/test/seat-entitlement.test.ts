@@ -1,34 +1,9 @@
 /**
  * `PRL_ENROLMENT_REQUIRED`: who may take a seat, over BOTH transports, in every state.
- *
- * ## Why one file for two transports
- *
- * There are exactly three call sites of `LiveTable.sit` in this codebase — `sitAtTable`, the
- * restore loop in `ensureOpen`, and `seatBot` — and `sitAtTable` is the only one a person reaches.
- * `POST /rooms/:roomId/sit` and the socket `sit` frame both call it and nothing else, which is the
- * property the guard rests on. A guard that held on the REST route and not on the frame would be
- * worse than none: it would read as enforced, its own tests would pass, and the entire product
- * would be reachable through the transport nobody checked. So the two are asserted side by side,
- * against one registry, with the same fake and the same principals, and the socket case drives a
- * real `sit` FRAME through `WsRouter.handleFrame` rather than calling the method under it.
- *
- * ## The matrix
- *
- * `SeatEntitlement.entitledToSit` answers a boolean, so the four ways of not being entitled —
- * never enrolled, revoked, expired, not yet started, plus a cohort that has ended — are one case
- * here and are separated where they are actually decided: `test/enrolments-database.test.ts` runs
- * each of them against a real schema and PostgreSQL's own `now()`, because the window is
- * `greatest(...)`/`least(...)` in SQL and a fake would be asserting that a reimplementation agrees
- * with itself. This file's job is the other half — that a `false` from that read stops a seat on
- * both transports, that a `true` does not, and that `off` changes nothing at all.
- *
- * ## The negative control this file IS
- *
- * Every refusal here was demonstrated failing against the code as it stood before the guard
- * existed: with `entitlement` omitted (which is `off`, and the shipped default), the "refuses"
- * cases all seat the learner and the assertions fail. That is not a claim about a past run — it is
- * the `the switch off` group below, which asserts exactly that behaviour and would go red if the
- * guard ever became unconditional. The two groups are each other's control.
+ * REST `sit` and the socket `sit` frame both reach only `sitAtTable`, so they are asserted side by
+ * side, and the socket case drives a real frame through `WsRouter.handleFrame`. The ways of not being
+ * entitled are decided in SQL and tested in `enrolments-database.test.ts`; here a `false` must stop a
+ * seat. The `enforced` and `off` groups are each other's negative control.
  */
 
 import assert from 'node:assert/strict';
@@ -55,7 +30,6 @@ import { accountFor, fixedSessionStore, seatingOnlyStore } from './helpers/live-
 const ALLOWED_ORIGIN = 'http://localhost:3000';
 const ROOM_ID = 'room_entitlement1';
 
-/** Ada is the learner every case seats or refuses. Bo exists so the room has a second member. */
 const ADA = 'usr_ada';
 const BO = 'usr_bo';
 const ADA_TOKEN = 'token-ada';
@@ -77,12 +51,8 @@ const stubDatabase: DatabaseHandle = {
 };
 
 /**
- * An entitlement that answers from a set, and counts what it was asked.
- *
- * The call count is asserted as well as the answer, because "the switch is off" has to mean the
- * read does not happen at all: a registry that asked and ignored the answer would pass every
- * behavioural assertion here while adding a query per seat and per member of every room re-open on
- * deployments that opted out.
+ * Answers from a set and records what it was asked. The count is asserted because `off` must mean
+ * the read never happens, not that it happens and is ignored.
  */
 function fakeEntitlement(entitled: readonly string[]): SeatEntitlement & { readonly asked: string[] } {
   const asked: string[] = [];
@@ -104,12 +74,8 @@ interface Harness {
 }
 
 /**
- * One room, two members, neither seated, reachable over both transports.
- *
- * The room is opened directly rather than created through `POST /rooms`, so `openRoomFor` in
- * `routes/rooms.ts` takes its live branch and the store is only asked the three things seating
- * needs — which is all `seatingOnlyStore` answers, and every other method of it throws rather than
- * quietly returning something a test did not intend.
+ * One room, two members, neither seated, reachable over both transports. The room is opened directly
+ * so `openRoomFor` takes its live branch and `seatingOnlyStore` is asked only what seating needs.
  */
 async function harness(entitlement: SeatEntitlement | null): Promise<Harness> {
   const metrics = new AppMetrics();
@@ -143,9 +109,7 @@ async function harness(entitlement: SeatEntitlement | null): Promise<Harness> {
   );
   app.get('/api/v1/test-csrf-entitlement', async (_request, reply) => ({ token: reply.generateCsrf() }));
   // A schema-carrying route, so Fastify builds the Ajv instance `compileFrameValidator` borrows.
-  // Without one, every inbound frame is refused `invalid_request` and this file would be asserting
-  // that the validator rejects a `sit` rather than that the guard does. Same seam, same reason, as
-  // `appWithValidator` in `test/ws-router.test.ts`.
+  // Without it every frame is refused `invalid_request` before the guard is reached.
   app.get(
     '/api/v1/test-frame-schema-entitlement',
     { schema: { querystring: { type: 'object', additionalProperties: false, properties: {} } } },
@@ -163,11 +127,6 @@ async function harness(entitlement: SeatEntitlement | null): Promise<Harness> {
   return { app, registry, router, metrics, problems };
 }
 
-// ---------------------------------------------------------------------------
-// The REST transport
-// ---------------------------------------------------------------------------
-
-/** `POST /rooms/:roomId/sit`, as a browser sends it: signed session cookie and a CSRF pair. */
 async function sitOverRest(test: Harness, seat: number): Promise<{ status: number; code: string }> {
   const seed = await test.app.inject({ method: 'GET', url: '/api/v1/test-csrf-entitlement' });
   const payload: unknown = seed.json();
@@ -189,22 +148,14 @@ async function sitOverRest(test: Harness, seat: number): Promise<{ status: numbe
   };
 }
 
-// ---------------------------------------------------------------------------
-// The socket transport
-// ---------------------------------------------------------------------------
-
 interface SocketRun {
   readonly frames: readonly { readonly type: string; readonly [key: string]: unknown }[];
   readonly closes: readonly { readonly code: number; readonly reason: string }[];
 }
 
 /**
- * Drives a real `sit` FRAME: open, `hello`, `sit`, and everything the router said back.
- *
- * Deliberately not a call to `registry.sitAtTable`. The whole risk this guard exists against is a
- * socket path that does not reach the guarded method, and a test that calls the method cannot see
- * that. Every frame here goes through `handleFrame`, so it is validated by the real compiled Ajv
- * schema and routed by the real switch.
+ * Drives a real `sit` FRAME through `handleFrame`, not `registry.sitAtTable`, because the risk is a
+ * socket path that never reaches the guarded method.
  */
 async function sitOverSocket(test: Harness, seat: number): Promise<SocketRun> {
   const frames: { type: string; [key: string]: unknown }[] = [];
@@ -232,7 +183,6 @@ async function sitOverSocket(test: Harness, seat: number): Promise<SocketRun> {
   return { frames, closes };
 }
 
-/** The value of one counter series, read out of the rendered exposition. */
 function counterValue(metrics: AppMetrics, name: string, labels: string): number | null {
   const line = metrics.registry
     .render()
@@ -240,10 +190,6 @@ function counterValue(metrics: AppMetrics, name: string, labels: string): number
     .find((row) => row.startsWith(`${name}{${labels}}`));
   return line === undefined ? null : Number(line.slice(line.lastIndexOf(' ') + 1));
 }
-
-// ---------------------------------------------------------------------------
-// Enforced
-// ---------------------------------------------------------------------------
 
 describe('PRL_ENROLMENT_REQUIRED=enforced: taking a seat', () => {
   it('refuses an unenrolled learner over REST, with a code they can act on', async () => {
@@ -282,13 +228,9 @@ describe('PRL_ENROLMENT_REQUIRED=enforced: taking a seat', () => {
   });
 
   /**
-   * The refusal must not close the socket, and this is the assertion that says so.
-   *
-   * A `sit` refusal is an error FRAME and nothing more: the socket is still perfectly good, the
-   * reader may keep watching the table, ping it and read state from it, and none of that is the
-   * course. Closing here would also throw away the one place the refusal is displayed
-   * (`ConnectionNotices` in `apps/web/src/app/play/LiveTable.tsx` renders `table.notice`), and the
-   * client would reconnect and show a connection problem instead of the reason.
+   * A `sit` refusal is an error frame only. Closing the socket would discard the one place the reason
+   * is shown (`table.notice` in `LiveTable.tsx`), and the client would reconnect and show a connection
+   * problem instead.
    */
   it('leaves the socket open: a refused seat is not a refused connection', async () => {
     const test = await harness(fakeEntitlement([]));
@@ -326,12 +268,8 @@ describe('PRL_ENROLMENT_REQUIRED=enforced: taking a seat', () => {
   });
 
   /**
-   * The read is asked BEFORE anything durable happens.
-   *
-   * `sitAtTable` writes the seat to the database before it tells the live table, and gives the row
-   * back if the table refuses. A guard placed after that write would work and would leave a
-   * refused learner's seat briefly allocated to them — visible to another client racing for the
-   * same chair, and left behind entirely if the process died in the window.
+   * `sitAtTable` writes the seat before it tells the live table, so a guard placed after that write
+   * would briefly allocate the chair to a refused learner.
    */
   it('refuses before the durable seat is written', async () => {
     const entitlement = fakeEntitlement([]);
@@ -366,12 +304,8 @@ describe('PRL_ENROLMENT_REQUIRED=enforced: taking a seat', () => {
   });
 
   /**
-   * A database that cannot answer must not produce `enrolment_required`.
-   *
-   * That code is permanent — `wsCloseForError` maps 4xx to a close the client never retries — so
-   * answering it for a transient fault would tell a genuinely enrolled learner, forever, that they
-   * are not. The seat is still refused (fail closed); it is refused as `internal_error`, which is
-   * 500 and therefore the retryable branch on both transports.
+   * `enrolment_required` is permanent (`wsCloseForError` maps 4xx to a close the client never
+   * retries), so a transient fault must refuse as `internal_error`, the retryable 500.
    */
   it('fails closed but honestly when the entitlement read itself fails', async () => {
     const test = await harness({
@@ -389,10 +323,6 @@ describe('PRL_ENROLMENT_REQUIRED=enforced: taking a seat', () => {
     await test.app.close();
   });
 });
-
-// ---------------------------------------------------------------------------
-// Off — the shipped default, and the control for everything above
-// ---------------------------------------------------------------------------
 
 describe('PRL_ENROLMENT_REQUIRED=off: nothing changes', () => {
   it('seats anybody over REST and over the socket, and has nothing to ask', async () => {
@@ -427,17 +357,9 @@ describe('PRL_ENROLMENT_REQUIRED=off: nothing changes', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// The third way to end up in a chair: a restart putting you back in it
-// ---------------------------------------------------------------------------
-
 /**
  * A store that holds one room and a roster, so `ensureOpen` has seats to restore.
- *
- * `seatingOnlyStore` deliberately answers `byId: null` and an empty roster, which is right for
- * every other suite and useless here — the whole subject is what `ensureOpen` does with recorded
- * seats. Everything not needed throws, for the reason `helpers/live-room.ts` gives: a fake that
- * quietly answers a call the test did not intend hides a missing assertion.
+ * Everything not needed throws, so an unintended call cannot pass quietly.
  */
 function rosterStore(
   members: readonly { readonly userId: string; readonly seat: number; readonly isBot: boolean }[],
@@ -469,8 +391,7 @@ function rosterStore(
     seat: member.seat,
     stack: 1_000,
     is_bot: member.isBot,
-    // A profile this build knows, so a bot seat is genuinely rehydrated rather than refused for an
-    // unrelated reason and mistaken for the entitlement guard.
+    // A profile this build knows, so a bot seat is not refused for an unrelated reason.
     bot_profile: member.isBot ? 'tight-aggressive' : null,
     bot_difficulty: member.isBot ? ('realistic' as const) : null,
     bot_seed: member.isBot ? 17 : null,
@@ -526,12 +447,8 @@ async function restoreRoom(
 
 describe('a room re-opened after a restart', () => {
   /**
-   * The gap this closes: a revocation that stops applying to the one person it was aimed at.
-   *
-   * Nothing ejects a seated learner mid-session, by design — their chair is theirs until they
-   * stand. The next restart is the moment the question is asked again, and answering it with the
-   * durable row alone would mean an expired or withdrawn enrolment is quietly ignored for as long
-   * as nobody deploys, then applied months later at a deploy nobody connects to it.
+   * Nothing ejects a seated learner mid-session, so a restart is when entitlement is asked again.
+   * Restoring from the durable row alone would ignore a revocation until some later deploy.
    */
   it('does not give the chair back to somebody who is no longer entitled', async () => {
     const restored = await restoreRoom(fakeEntitlement([]), [{ userId: ADA, seat: 0, isBot: false }]);
@@ -549,13 +466,8 @@ describe('a room re-opened after a restart', () => {
   });
 
   /**
-   * The reported event is `seat-entitlement`, and specifically NOT `seat-retake`.
-   *
-   * `seat-retake` is classified as an ACTOR failure — "it is somebody's turn and nothing is going
-   * to act" — and increments `prl_table_actor_failures_total`, which has a page-tier runbook about
-   * stalled tables. A chair deliberately left empty stalls nothing. Reusing the nearest existing
-   * kind is the mistake `docs/production/runbooks/stuck-seat.md` records having been made once
-   * already, and this assertion is what stops it being made again here.
+   * `seat-retake` is an actor failure that feeds `prl_table_actor_failures_total` and a page-tier
+   * runbook. A chair left empty on purpose stalls nothing. See `docs/production/runbooks/stuck-seat.md`.
    */
   it('reports it as its own kind rather than as a seat that could not be re-taken', async () => {
     const restored = await restoreRoom(fakeEntitlement([]), [{ userId: ADA, seat: 0, isBot: false }]);
@@ -569,24 +481,10 @@ describe('a room re-opened after a restart', () => {
   });
 
   /**
-   * ##########################################################################
-   * ## "THE SEAT IS LEFT FREE" HAS TO BE TRUE IN THE DATABASE TOO.          ##
-   * ##########################################################################
-   *
-   * `room_members_live_seat_key` is UNIQUE `(room_id, seat) WHERE left_at IS NULL`, so a row that
-   * still names seat 0 HOLDS seat 0 whether or not anybody is sitting in it. Leaving it meant the
-   * live table reported the chair empty — that is where `RoomSummary` is built from — while the
-   * next learner to tap it was refused by that index with `seat_taken`, for the life of the room,
-   * with nothing anywhere saying why.
-   *
-   * That is not a new failure mode, it is a known one arrived at from a new direction:
-   * `standFromTable` records the identical state ("the room summary showed the seat free, the next
-   * client to tap it was refused by `room_members_live_seat_key` … for the rest of the process's
-   * life") as the incident that removed its own `if (seatOf(userId) === null)` guard.
-   *
-   * Only `seat` is given back. The membership and the STACK stay, so the learner loses nothing
-   * they won, and a re-entitled learner still buys in at what they had rather than at the room's
-   * starting stack.
+   * `room_members_live_seat_key` is UNIQUE `(room_id, seat) WHERE left_at IS NULL`, so a row that still
+   * names seat 0 holds it. Leaving it showed the chair free while the next learner got `seat_taken` for
+   * the life of the room, the same state `standFromTable` records as an incident.
+   * Only `seat` is given back. The membership and the stack stay.
    */
   it('gives the durable seat back, so the chair is usable by somebody else (NEGATIVE CONTROL)', async () => {
     const restored = await restoreRoom(fakeEntitlement([]), [{ userId: ADA, seat: 0, isBot: false }]);
@@ -608,12 +506,8 @@ describe('a room re-opened after a restart', () => {
   });
 
   /**
-   * A bot is never asked, and this is the assertion that keeps every Legends table alive.
-   *
-   * Bots have real user rows — a seat is a seat whoever occupies it — and can never hold an
-   * enrolment, because nothing enrols them and the operator tool works on accounts a person signed
-   * in with. Asking would empty every AI table on the first restart of an enforcing deployment,
-   * which is a total outage of the feature dressed as a security control.
+   * Bots have user rows but can never hold an enrolment. Asking would empty every AI table on the
+   * first restart of an enforcing deployment.
    */
   it('never asks about a bot seat, and restores it', async () => {
     const entitlement = fakeEntitlement([ADA]);
@@ -636,19 +530,10 @@ describe('a room re-opened after a restart', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// The close code
-// ---------------------------------------------------------------------------
-
 describe('the close code an enrolment refusal would carry', () => {
   /**
-   * The `sit` guard never closes a socket, so this is about the OTHER paths.
-   *
-   * `wsCloseForError` is exhaustive over `ErrorCode` by construction — it reads `ERROR_STATUS` —
-   * so any future path that closes on this code (a `hello`-time gate, a broadened `guard`) gets
-   * whatever the status implies, without anybody choosing again. This asserts that what it implies
-   * is the PERMANENT branch, because a client that reconnects in a loop against a refusal only an
-   * operator can lift is a defect, and 4503 is exactly the code that instructs it to.
+   * The `sit` guard never closes a socket. Any future path that closes on this code gets the close
+   * `ERROR_STATUS` implies, and that must be the permanent 4403, not the reconnect-in-a-loop 4503.
    */
   it('is 4403 and not 4503: an absent enrolment is not something waiting fixes', () => {
     assert.equal(wsCloseForError('enrolment_required'), WS_CLOSE.forbidden);
@@ -657,7 +542,7 @@ describe('the close code an enrolment refusal would carry', () => {
       ERROR_STATUS.enrolment_required < 500,
       'a 5xx status would route this to the retry-with-backoff close code',
     );
-    // The contrast that makes the choice legible: the one refusal that IS retryable.
+    // The one refusal that IS retryable.
     assert.equal(wsCloseForError('room_owned_elsewhere'), WS_CLOSE.serverShuttingDown);
   });
 
@@ -676,30 +561,15 @@ describe('the close code an enrolment refusal would carry', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// The wiring, on the app that is actually assembled
-// ---------------------------------------------------------------------------
-
 /**
- * Everything above drives a registry this file constructed. This drives the one `registerApiRoutes`
- * builds, which is the only one a deployment has.
- *
- * The failure it guards against is silent and looks exactly like success: drop the one line in
- * `routes/index.ts` that passes `postgresSeatEntitlement(getSql)` and every test in this package
- * stays green, every room opens, every learner is seated, and `PRL_ENROLMENT_REQUIRED=enforced`
- * does nothing whatsoever. That is the same failure `test/wiring.test.ts` guards for the room
- * lease, and its comment records the same mistake having been made once already for the archive.
- *
- * Asserted in BOTH directions, because a wiring that ignored the config and always bound one would
- * pass a one-sided test and would break every existing deployment.
- *
- * `configureDatabase` is called and never dialled: `postgresSeatEntitlement` takes a getter, so
- * building the registry issues no query, which is itself part of what is being asserted.
+ * Drives the registry `registerApiRoutes` builds, the only one a deployment has. Dropping the
+ * `postgresSeatEntitlement(getSql)` line in `routes/index.ts` would leave every other test green and
+ * `enforced` doing nothing. Asserted in both directions, because always binding breaks every existing
+ * deployment.
  */
 describe('the assembled app', () => {
-  // Once per process, and never dialled. `db.ts` refuses a second pool outright, which is why this
-  // is here rather than inside `wire` — and the connection details are irrelevant to the question,
-  // because `postgresSeatEntitlement` takes a getter and issues no query at wiring time.
+  // Once per process, because `db.ts` refuses a second pool. Never dialled, since
+  // `postgresSeatEntitlement` takes a getter and issues no query at wiring time.
   let databaseReady = false;
 
   const wire = async (enrolmentRequired: string | undefined): Promise<RoomRegistry> => {
@@ -745,10 +615,6 @@ describe('the assembled app', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// The switch itself
-// ---------------------------------------------------------------------------
-
 describe('reading PRL_ENROLMENT_REQUIRED', () => {
   it('defaults to off, so every existing deployment keeps working', () => {
     assert.equal(testConfig().enrolmentRequired, 'off');
@@ -760,13 +626,7 @@ describe('reading PRL_ENROLMENT_REQUIRED', () => {
     assert.equal(testConfig({ PRL_ENROLMENT_REQUIRED: 'off' }).enrolmentRequired, 'off');
   });
 
-  /**
-   * `true` is the realistic typo, and taking `off` from it is the dangerous outcome.
-   *
-   * Somebody who writes `PRL_ENROLMENT_REQUIRED=true` has decided to enforce and believes they
-   * have. A silent fallback would leave a cohort's tables open to the internet while the
-   * deployment's own configuration said otherwise, and nothing would ever say so.
-   */
+  /** `true` is the realistic typo, and silently taking `off` from it would leave a cohort's tables open. */
   it('refuses an unrecognised value at boot rather than falling back', () => {
     for (const value of ['true', 'on', '1', 'required', 'yes']) {
       assert.throws(
@@ -786,24 +646,10 @@ describe('reading PRL_ENROLMENT_REQUIRED', () => {
 });
 
 /**
- * The binding a deployment actually runs, and the one thing about it that has no database in it.
- *
- * `postgresSeatEntitlement`'s header is explicit: "Nothing is caught here. A database that cannot
- * answer 'is this person entitled' must not produce a seat, and it must not produce
- * `enrolment_required` either — that code is a permanent refusal and the client is told never to
- * retry it (`wsCloseForError` maps 4xx to a permanent close)." Nothing asserted it.
- *
- * `enrolments-database.test.ts` drives this binding against a real schema, but only on the paths
- * where the query SUCCEEDS. The registry-level case in this file — "fails closed but honestly when
- * the entitlement read itself fails" — drives a fake `SeatEntitlement` that rejects, so it proves
- * what the REGISTRY does with a rejection and nothing about whether this binding ever produces
- * one. Measured: wrapping the call in `try { … } catch { return false; }` left the whole
- * `@prl/api` suite passing 1,001 of 1,001.
- *
- * What that ships is a database outage rendered as `enrolment_required` — every learner told their
- * place has been withdrawn, and told it in a form their client will never retry — instead of
- * `internal_error` and a 4503 close the client reconnects from. Fail closed on the seat, and
- * honest about which direction the failure was in; a swallowed error is only the first half.
+ * The real binding must let a failed read propagate. Swallowing it would render a database outage as
+ * the permanent `enrolment_required` instead of a retryable `internal_error`.
+ * The registry case above uses a fake, so it cannot see this. Measured, wrapping the call in
+ * `try { … } catch { return false; }` left the whole `@prl/api` suite passing 1,001 of 1,001.
  */
 describe('the real seat entitlement, with no database behind it', () => {
   it('lets a failed read propagate rather than answering "not entitled"', async () => {
@@ -819,8 +665,7 @@ describe('the real seat entitlement, with no database behind it', () => {
   });
 
   it('answers false only when the query itself says nobody is entitled', async () => {
-    // The positive control for the other direction: a binding that rethrew everything, or one that
-    // never answered at all, would satisfy the case above and refuse nothing.
+    // Positive control. A binding that rethrew everything would satisfy the case above too.
     const answering = (rows: readonly unknown[]): Db => (() => Promise.resolve([...rows])) as unknown as Db;
     const nobody = postgresSeatEntitlement(() => answering([]));
     assert.equal(await nobody.entitledToSit('usr_ada'), false);

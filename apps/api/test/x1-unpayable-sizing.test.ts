@@ -1,47 +1,9 @@
 /**
- * What the Scenario Lab does with a size the learner could not have paid, or that it never priced.
- *
- * ## The defect this file exists for
- *
- * The release remediation fixed the half of the legality guard that governs what the Coach
- * *publishes*: across all 36 shipped scenarios, no candidate and no suggestion sits outside the
- * legal set. Nothing governed what the product *accepts*. Measured against the running server,
- * hero holding 500 behind and facing a bet of 25:
- *
- *     POST /api/v1/content/scenarios/eq-flush-draw-turn-small-bet/attempt
- *          {"action":"raise","to":26000}
- *       -> 200  {"consistentWithAnalysis": true, ...}
- *
- * `to: 100000`, `to: 1` and `to: 0` behaved identically. The cause was one line in
- * `@prl/poker-math`: `candidateFor` fell back to the highest-EV row for the action name when the
- * submitted `to` matched nothing, so a 26,000-chip raise was scored against the 67-chip raise the
- * Coach liked and the learner was told their impossible action agreed with an analysis that had
- * never considered it.
- *
- * It is a P0 and not a rough edge because the product's stated guardrail is that it never teaches
- * something false, and this told a learner something false about both the maths and the rules of
- * poker in one reply. It is also pre-existing rather than a regression — it is present at the
- * baseline commit — and it stayed invisible because nothing in the suite ever submitted a size
- * nobody could pay. That is the gap this file closes.
- *
- * ## The three outcomes, which are deliberately not two
- *
- *  1. **Unpayable** — above hero's whole stack, at or below zero, or below the smallest legal
- *     raise. Refused with a 400 before anything is graded. It is not a decision that could have
- *     been made at the table, so there is no verdict to give it.
- *  2. **Payable but unpriced** — a legal size the analysis did not put on its ladder. Answered,
- *     with `consistentWithAnalysis: false` meaning *not established*: the reply says the analysis
- *     did not price that size, names the sizes it did price, and says in as many words that this
- *     is not a claim the size is wrong. Nothing is recorded against the learner.
- *  3. **Priced** — graded exactly as before. Asserted here too, because a fix that made every
- *     sizing unanswerable would satisfy the first two and destroy the feature.
- *
- * ## No database needed for most of it
- *
- * Everything an anonymous reader can do runs unconditionally. The one claim that needs a database
- * is the one about what gets *recorded* — that an unpriced decision writes `matched_expected` as
- * NULL rather than as a wrong answer — and it is skipped with a printed reason when `DATABASE_URL`
- * is absent, like every other database-backed suite here.
+ * The Scenario Lab once graded a raise to 26,000 with 500 behind as consistent with the analysis,
+ * because `candidateFor` fell back to the best row for the action name. Three outcomes, not two.
+ * An unpayable size (over the stack, at or below zero, under the minimum raise) is refused with a 400.
+ * A legal size off the analysis ladder is answered as not established and records NULL.
+ * A size on the ladder is graded as before, which stops a fix that refuses everything.
  */
 
 import assert from 'node:assert/strict';
@@ -57,7 +19,7 @@ import contentRoutes, { coachTaskFor } from '../src/routes/content.ts';
 import { closeSharedPool } from '../src/workers/pool.ts';
 import { databaseSkip, TEST_DATABASE_URL } from './helpers/database.ts';
 
-/** The spot the defect was reported against: hero has 500 behind and faces a bet of 25. */
+/** Hero has 500 behind and faces a bet of 25. */
 const SCENARIO_ID = 'eq-flush-draw-turn-small-bet';
 
 const databaseTest = { skip: databaseSkip('what an unpriced scenario decision records') };
@@ -77,7 +39,6 @@ function stubDatabase(): DatabaseHandle {
   return { ping: async () => ({ ok: true }), close: async () => undefined };
 }
 
-/** Fills the seam `sessionPlugin` normally fills, so the write path can be exercised. */
 function withSignedInCaller(app: FastifyInstance, userId: string): void {
   app.decorateRequest('session', null);
   app.decorateRequest('sessionRejection', null);
@@ -136,7 +97,7 @@ function errorOf(body: Record<string, unknown>): Record<string, unknown> {
   return { ...error };
 }
 
-/** The bounds this spot's own numbers fix, read from the same functions the route holds a size to. */
+/** Read from the same functions the route holds a size to. */
 function boundsFor(scenarioId: string): { readonly floorTo: number; readonly maxTo: number } {
   const scenario = scenarioById(scenarioId);
   assert.ok(scenario !== null, `no scenario ${scenarioId}`);
@@ -150,13 +111,8 @@ describe('a scenario sizing nobody could have paid', () => {
   });
 
   /**
-   * The reported payload, verbatim, and the three variants that behaved the same way.
-   *
-   * The load-bearing assertion is the second one in each iteration, not the status: whatever the
-   * endpoint decides to do with an impossible size, it must never come back saying that size
-   * agreed with the analysis. The status is asserted too, because "refused" is the answer this
-   * fix chose and a silent downgrade to a 200 with a soft sentence would be a different product
-   * decision that should have to change a test.
+   * The reported payload and three variants. The load-bearing check is that an impossible size never
+   * agrees with the analysis. The 400 is pinned too, so a softer 200 has to change a test.
    */
   it('refuses it instead of reporting it as consistent with the analysis', async () => {
     const app = await contentApp();
@@ -208,13 +164,6 @@ describe('a scenario sizing nobody could have paid', () => {
     }
   });
 
-  /**
-   * The whole shipped bundle, not one scenario.
-   *
-   * A fix pinned to one scenario's numbers is a fix that holds until content changes. Every
-   * scenario that offers aggression at all is asked to grade a raise to one chip above hero's
-   * whole stack, and none of them may answer that it was consistent.
-   */
   it('holds for every scenario in the bundle, not just the one it was found in', async () => {
     const app = await contentApp();
     try {
@@ -240,15 +189,8 @@ describe('a scenario sizing nobody could have paid', () => {
 });
 
 /**
- * A total the table would accept and the analysis did not price, read off the analysis itself.
- *
- * Derived, never assumed. The database test below used to raise to `floorTo` on the premise that
- * "the Coach's ladder starts above it". It stopped being true the moment the Coach began pricing
- * the sizes the decision bar offers, because the bar's default IS the minimum raise: in CI on
- * `lab-pricing`, run 43047978449, the floor came back `consistentWithAnalysis: true` and the test
- * failed on `true !== false` — a test of the unpriced path that had quietly become a test of a
- * priced one. Both tests now ask the same question the same way, so the next change to what gets
- * priced cannot split them.
+ * A legal total the analysis left off its ladder, derived from the analysis itself. A hardcoded floor
+ * stopped being unladdered once the Coach began grading the minimum raise (CI run 43047978449).
  */
 async function unpricedRaise(
   app: FastifyInstance,
@@ -265,7 +207,6 @@ async function unpricedRaise(
     .map((candidate) => Number(candidate['to']));
   assert.ok(pricedRaises.length >= 2, 'the spot should price more than one raise');
 
-  // A legal total the ladder skipped: at or above the floor, at or below the stack, unpriced.
   for (let to = floorTo; to <= maxTo; to += 1) {
     if (!pricedRaises.includes(to)) return { to, pricedRaises };
   }
@@ -278,18 +219,12 @@ describe('a scenario sizing that is legal but was never priced', () => {
   });
 
   /**
-   * The honest middle case, and the reason the fix is not simply "refuse harder".
-   *
-   * The Coach prices the sizes the table's sizing buttons offer, not every legal total. A learner
-   * who types or drags to a total between them has made a decision the table would accept and the analysis has nothing to
-   * say about. That is neither consistent nor inconsistent, and the reply has to say so — the
-   * `ScenarioAttemptResponse` contract has one boolean, so the distinction lives in the prose and
-   * in what does *not* get written to the database.
+   * The Coach grades the sizes the sizing buttons offer, not every legal total. The contract has one
+   * boolean, so "not established" lives in the prose and in what is not written to the database.
    */
   it('answers it, and says plainly that the analysis has nothing to compare it with', async () => {
     const app = await contentApp();
     try {
-      // Every priced raise, from the analysis itself rather than from a number written here.
       const { to: unpriced, pricedRaises } = await unpricedRaise(app);
 
       const response = await attempt(app, SCENARIO_ID, { action: 'raise', to: unpriced });
@@ -298,7 +233,6 @@ describe('a scenario sizing that is legal but was never priced', () => {
       const reasoning = String(response.body['reasoning']);
       assert.match(reasoning, new RegExp(`did not price raise to ${unpriced}`));
       assert.match(reasoning, /not a statement that your size is wrong/);
-      // The sizes it did price are named, so the reply is useful rather than merely correct.
       for (const size of pricedRaises) assert.match(reasoning, new RegExp(`\\b${size}\\b`));
     } finally {
       await app.close();
@@ -316,7 +250,7 @@ describe('a scenario sizing that is legal but was never priced', () => {
       const response = await attempt(app, SCENARIO_ID, { action: 'raise', to: unpriced });
       assert.equal(response.status, 200);
       assert.equal(response.body['consistentWithAnalysis'], false);
-      // The reply has to be the unpriced one, or the NULL below proves nothing about that path.
+      // Without the unladdered reply, the NULL below proves nothing about that path.
       assert.match(String(response.body['reasoning']), new RegExp(`did not price raise to ${unpriced}`));
 
       const rows = await sql<{ matched_expected: boolean | null }[]>`
@@ -341,14 +275,6 @@ describe('the sizings that were always answered correctly', () => {
     await closeSharedPool();
   });
 
-  /**
-   * The regression half of the fix.
-   *
-   * Refusing everything would satisfy every assertion above and would break the feature, so the
-   * cases that worked before have to be pinned: a size the analysis did price is graded on its own
-   * row, an unsized call is graded as before, and the fold the remediation corrected still reads
-   * as consistent in the scenario that asks whether to fold.
-   */
   it('grades a size the analysis did price, exactly as before', async () => {
     const app = await contentApp();
     try {
@@ -388,8 +314,7 @@ describe('the sizings that were always answered correctly', () => {
   });
 
   it('still reads a fold as consistent in the scenario that asks whether to fold', async () => {
-    // The case the remediation fixed by not judging a fold against an assumed fold frequency.
-    // Nothing here may undo it.
+    // Pins the earlier fix that stopped judging a fold against an assumed fold frequency.
     const app = await contentApp();
     try {
       for (const id of ['rk-the-fold-that-feels-wrong', 'eq-implied-odds-deep-stacks-turn']) {

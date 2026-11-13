@@ -1,33 +1,8 @@
 /**
- * The content routes: what is cached, what is computed, and what is deliberately not returned.
- *
- * ## What these tests are really guarding
- *
- * 1. **The caching split.** A response that carries one learner's progress must never be
- *    cacheable, and a response that is identical for everybody should be. Getting that backwards
- *    is a data leak through a shared cache rather than a performance bug, so both halves are
- *    asserted: the lists have no validator and say `no-store`, the immutable resources have a
- *    strong `ETag` and answer `If-None-Match` with a 304.
- * 2. **That numeric answers are graded against a *computed* value.** The test recomputes the
- *    expected figure from `@prl/poker-math` itself and asserts the endpoint agrees. If the
- *    endpoint ever started reading an answer key out of the content file, this test would keep
- *    passing only for as long as the key happened to be right — which is the entire argument of
- *    ADR 0006, made executable.
- * 3. **That no score exists anywhere.** The response key sets are asserted exactly, so a future
- *    `score`, `streak` or `percentage` cannot be added without a test failing.
- *
- * ## Sessions without the auth module
- *
- * The per-caller paths need somebody to be signed in, and resolving a cookie into a session
- * belongs to `src/auth/session.ts` and its store. These tests therefore decorate the request and
- * set `request.session` from a hook — the same seam the auth plugin fills — which keeps them
- * testing this file's behaviour rather than the auth module's.
- *
- * ## The database
- *
- * Everything an anonymous reader can do needs no database, and those tests always run. The
- * signed-in paths do need one and are skipped, with a printed reason, when `DATABASE_URL` is
- * absent.
+ * The content routes. A response carrying one learner's progress must never be cacheable, and the
+ * shared resources get a strong ETag. Numeric answers are graded against a value recomputed from
+ * `@prl/poker-math` (ADR 0006), and response key sets are exact so no score can be added.
+ * `request.session` is set from a hook, the seam the auth plugin fills. Signed-in paths need a database.
  */
 
 import assert from 'node:assert/strict';
@@ -47,12 +22,6 @@ import progressRoutes from '../src/routes/progress.ts';
 import { closeSharedPool, WorkerPool } from '../src/workers/pool.ts';
 import { databaseSkip, TEST_DATABASE_URL } from './helpers/database.ts';
 
-/**
- * `node:test` prints this next to the skipped test, so an absent database is never silent — and
- * `test/database-availability.test.ts` turns an absent database into a hard failure unless the
- * caller ran the explicitly named waiver script. The reason comes from the shared helper because
- * one file decides; see `test/helpers/database.ts`.
- */
 const databaseTest = { skip: databaseSkip('the signed-in content paths that write rows') };
 
 function testConfig(overrides: EnvRecord = {}): AppConfig {
@@ -70,21 +39,13 @@ function stubDatabase(): DatabaseHandle {
   return { ping: async () => ({ ok: true }), close: async () => undefined };
 }
 
-/**
- * Fills the seam `sessionPlugin` normally fills.
- *
- * Decorating the request is what makes `request.server.hasRequestDecorator('session')` true,
- * which is how `routes/progress.ts` tells "nobody is signed in" from "this instance has no auth
- * module at all". A callback hook rather than an async one, because there is nothing to await.
- */
+/** Decorating `session` is how `routes/progress.ts` tells "signed out" from "no auth module". */
 function withSignedInCaller(app: FastifyInstance, userId: string): void {
   app.decorateRequest('session', null);
   app.decorateRequest('sessionRejection', null);
   app.addHook('preHandler', (request, _reply, done) => {
     request.session = {
       sessionId: 'ses_contentroutestest000000',
-      // Far enough out that nothing here exercises expiry; the field is required because a
-      // WebSocket is bounded by it (see `ws/hub.ts`).
       expiresAt: new Date(Date.now() + 3_600_000),
       user: { id: userId, kind: 'guest', displayName: 'Test Learner', createdAt: new Date().toISOString() },
     };
@@ -179,7 +140,6 @@ function recordsAt(record: Record<string, unknown>, key: string): readonly Recor
   });
 }
 
-/** The first numeric question in the pot-odds quiz, which the tests grade by hand. */
 function numericQuestion(quizId: string, questionId: string): Extract<QuizQuestion, { kind: 'numeric' }> {
   const quiz = content().quizzes.find((candidate) => candidate.id === quizId);
   assert.ok(quiz !== undefined, `no quiz ${quizId}`);
@@ -189,10 +149,6 @@ function numericQuestion(quizId: string, questionId: string): Extract<QuizQuesti
   assert.ok(question.kind === 'numeric');
   return question;
 }
-
-// ---------------------------------------------------------------------------
-// The caching split
-// ---------------------------------------------------------------------------
 
 describe('content responses: what may be cached and what may not', () => {
   it('never lets a list carrying progress be cached, and never gives it a validator', async () => {
@@ -237,11 +193,10 @@ describe('content responses: what may be cached and what may not', () => {
         assert.equal(revalidated.raw, '', 'a 304 carries no body');
         assert.equal(revalidated.headers['etag'], etag);
 
-        // A GET uses weak comparison, so the weak form of the same tag still matches.
+        // A GET uses weak comparison.
         const weak = await get(app, url, { 'if-none-match': `W/${etag}` });
         assert.equal(weak.status, 304, `${url} should accept the weak form of its own tag`);
 
-        // A stale validator gets the body.
         const stale = await get(app, url, { 'if-none-match': '"0.0.0-stale"' });
         assert.equal(stale.status, 200, `${url} should send the body when the validator is stale`);
         assert.equal(stale.headers['etag'], etag, 'the tag is a function of the bytes, so it is stable');
@@ -268,10 +223,6 @@ describe('content responses: what may be cached and what may not', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Reading content
-// ---------------------------------------------------------------------------
-
 describe('reading lessons, scenarios and the glossary', () => {
   it('lists lessons in reading order with nothing ticked for an anonymous reader', async () => {
     const app = await contentApp();
@@ -284,7 +235,6 @@ describe('reading lessons, scenarios and the glossary', () => {
         assert.equal(typeof lesson['title'], 'string');
         assert.equal(typeof lesson['estimatedMinutes'], 'number');
       }
-      // Reading order: a lesson never appears before one it lists as a prerequisite.
       const seen = new Set<string>();
       for (const lesson of lessons) {
         for (const prerequisite of arrayAt(lesson, 'prerequisites')) {
@@ -339,11 +289,9 @@ describe('reading lessons, scenarios and the glossary', () => {
         assert.notEqual(uncertainty['confidenceInterval'], null);
       }
 
-      // The stored scenario contains no numbers to serve, which is the point of ADR 0006: the
-      // figures above cannot have come from the file.
+      // ADR 0006. The stored scenario has no figures to serve.
       assert.equal(Object.keys(objectAt(response.body, 'scenario')).includes('equity'), false);
 
-      // Deterministic: the same request twice gives byte-identical bytes.
       const again = await get(app, `/api/v1/content/scenarios/${scenario.id}`);
       assert.equal(again.raw, response.raw);
     } finally {
@@ -352,20 +300,8 @@ describe('reading lessons, scenarios and the glossary', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Quiz attempts
-// ---------------------------------------------------------------------------
-
 describe('POST /content/quizzes/:id/attempt', () => {
-  /**
-   * Every numeric question in the bundle, graded.
-   *
-   * This is the test that keeps the endpoint and the content honest with each other as content
-   * grows. A question can name any field of any calculation kind, and the endpoint has to be able
-   * to compute that field *in the unit the question declares* — a mismatch is a 500 that only
-   * shows up when a learner answers that particular question. Sweeping the whole bundle turns
-   * that into a build failure instead.
-   */
+  /** A field the endpoint cannot compute in the declared unit is a 500 for one learner, so sweep all. */
   it('can compute the expected value for every numeric question in the bundle', async () => {
     const app = await contentApp();
     try {
@@ -403,14 +339,7 @@ describe('POST /content/quizzes/:id/attempt', () => {
     }
   });
 
-  /**
-   * The stated tolerance is the band, inclusively, for every numeric question.
-   *
-   * The grader used `Math.abs(answer - value) <= tolerance`, and `Math.abs(3.2 - 3)` is
-   * 0.20000000000000018: `spr-q2` marked 3.2 against 3 with a stated tolerance of 0.2 wrong, and the
-   * server's verdict is the one a learner sees. The answers are written the way a learner types
-   * them, as short decimals, because that is where the binary representation bites.
-   */
+  /** `Math.abs(3.2 - 3)` is 0.20000000000000018, which once marked `spr-q2` wrong at tolerance 0.2. */
   it('accepts an answer at exactly the stated tolerance, and refuses one past it', async () => {
     const app = await contentApp();
     try {
@@ -430,8 +359,8 @@ describe('POST /content/quizzes/:id/attempt', () => {
           checked += 1;
           const probe = await attempt(quiz.id, question.id, 0);
           const value = Number(objectAt(probe.body, 'expected')['value']);
-          // Six decimals, as a learner would type them, rounded TOWARD the expected value: rounding a
-          // repeating decimal outward (30.769230… + 2 to 32.769231) leaves the band for real.
+          // Typed to six decimals, rounded toward the value.
+          // Rounding 30.769230… + 2 outward leaves the band.
           const typed = (x: number): number => {
             const rounded = Number(x.toFixed(6));
             if (Math.abs(rounded - value) <= Math.abs(x - value)) return rounded;
@@ -461,8 +390,7 @@ describe('POST /content/quizzes/:id/attempt', () => {
       assert.equal(question.calculation.kind, 'potOdds');
       assert.ok(question.calculation.kind === 'potOdds');
 
-      // Computed here, independently, from the same maths the endpoint uses. If the endpoint ever
-      // started serving a stored answer key instead, this is the assertion that would catch it.
+      // Computed independently, so a stored answer key in the endpoint would be caught.
       const expected = potOdds(question.calculation.pot, question.calculation.toCall).breakEvenEquity * 100;
 
       const right = await post(
@@ -487,10 +415,7 @@ describe('POST /content/quizzes/:id/attempt', () => {
         'the response should carry the working as well as the stored explanation',
       );
 
-      // Exactly the contract's fields, and no aggregate of any kind. `recorded` is a fact about
-      // THIS one answer — whether a row was written for it — not a count of anything; the
-      // forbidden-name loop below is what guards against the aggregate, and it is unchanged.
-      // See `test/y2-quiz-attempt-recording.test.ts` for what the field is for.
+      // `recorded` says whether a row was written for this answer. It is not an aggregate.
       assert.deepEqual(Object.keys(right.body).sort(), ['correct', 'expected', 'explanation', 'recorded']);
       for (const forbidden of ['score', 'streak', 'total', 'percentage', 'grade', 'passed']) {
         assert.equal(right.body[forbidden], undefined, `there must be no ${forbidden} in the response`);
@@ -517,7 +442,7 @@ describe('POST /content/quizzes/:id/attempt', () => {
     const app = await contentApp();
     try {
       const csrf = await csrfPair(app);
-      // The rule of 2 and 4 is arithmetic with no sampling in it, so the boundary is exact.
+      // No sampling in the rule of 2 and 4, so the boundary is exact.
       const question = numericQuestion('quiz-rule-of-2-and-4', 'rule24-q2');
       assert.ok(question.calculation.kind === 'ruleOf24');
       const exact = ruleOf24(question.calculation.outs, question.calculation.cardsToCome).estimatePercent;
@@ -624,8 +549,7 @@ describe('POST /content/quizzes/:id/attempt', () => {
   });
 
   it('fails loudly when a question declares a unit its field does not produce', async () => {
-    // A content bug, not a caller's. Left unchecked it would mark 33.3 wrong and 0.333 right for
-    // every learner, so it must be an error rather than a plausible-looking answer.
+    // Unchecked, a unit mismatch would mark 33.3 wrong and 0.333 right for every learner.
     const pool = new WorkerPool({ size: 1, timeoutMs: 1_000 });
     try {
       const broken: Extract<QuizQuestion, { kind: 'numeric' }> = {
@@ -657,10 +581,6 @@ describe('POST /content/quizzes/:id/attempt', () => {
     }
   });
 });
-
-// ---------------------------------------------------------------------------
-// Scenario attempts
-// ---------------------------------------------------------------------------
 
 describe('POST /content/scenarios/:id/attempt', () => {
   it('reports consistency with the analysis rather than a grade', async () => {
@@ -699,7 +619,6 @@ describe('POST /content/scenarios/:id/attempt', () => {
     const app = await contentApp();
     try {
       const csrf = await csrfPair(app);
-      // A scenario with something to call, where checking is not one of the options.
       const scenario = scenarios().find((candidate) => candidate.toCall > 0);
       assert.ok(scenario !== undefined);
       const response = await post(
@@ -717,14 +636,8 @@ describe('POST /content/scenarios/:id/attempt', () => {
   });
 
   /**
-   * A sizeless bet is refused, and refused the same way for everybody.
-   *
-   * `scenarioAttemptBodySchema` cannot say "required only for bet and raise" without an `oneOf`, so
-   * the rule is a check in the route. The reason it is in the route rather than only in the write is
-   * the second assertion: `recordScenarioAttempt` refuses to store `{"type":"bet"}` with no size, so
-   * a check at the write alone would answer 200 to an anonymous reader and 400 to the signed-in
-   * learner making the identical request. Both callers are asserted here, and the signed-in one
-   * needs no database because the request never reaches the insert.
+   * The check is in the route, not only in the write, or an anonymous reader would get 200 and a
+   * signed-in learner 400 for the same request. The signed-in case never reaches the insert.
    */
   it('refuses a bet or a raise with no sizing, for signed-in and anonymous callers alike', async () => {
     const scenario = scenarios()[0];
@@ -752,9 +665,7 @@ describe('POST /content/scenarios/:id/attempt', () => {
   });
 
   it('measures consistency against folding, not against the highest-value action', async () => {
-    // The rule matters more than any single scenario: a profitable call stays consistent even
-    // when a semi-bluff raise scores higher under an *assumed* fold frequency. Grading against
-    // the top action would mark the intended teaching point wrong.
+    // A profitable call stays consistent even when a raise scores higher under an assumed fold rate.
     const app = await contentApp();
     try {
       const scenario = scenarios().find((candidate) =>
@@ -785,8 +696,7 @@ describe('POST /content/scenarios/:id/attempt', () => {
   });
 
   it('treats a spot with several defensible actions as making no single claim', async () => {
-    // Checked directly, because the property is about the rule rather than about any one
-    // scenario: `claimsOneAction` is what decides whether a NULL goes into the database.
+    // `claimsOneAction` decides whether a NULL goes into the database.
     const app = await contentApp();
     try {
       const scenario = scenarios()[0];
@@ -797,16 +707,9 @@ describe('POST /content/scenarios/:id/attempt', () => {
       const container: { readonly analysis?: unknown } = analysisJson;
       const report = container.analysis;
       assert.ok(typeof report === 'object' && report !== null);
-      // `consistencyOf` is exported precisely so the rule can be exercised without HTTP.
       const stored = scenarioById(scenario.id);
       assert.ok(stored !== null);
-      const outcome = consistencyOf(
-        // The report round-tripped through JSON is the same shape the route hands it.
-        JSON.parse(JSON.stringify(report)),
-        'fold',
-        undefined,
-        stored.bigBlind,
-      );
+      const outcome = consistencyOf(JSON.parse(JSON.stringify(report)), 'fold', undefined, stored.bigBlind);
       assert.equal(typeof outcome.consistent, 'boolean');
       assert.equal(typeof outcome.claimsOneAction, 'boolean');
       assert.ok(outcome.reasoning.length > 0);
@@ -815,10 +718,6 @@ describe('POST /content/scenarios/:id/attempt', () => {
     }
   });
 });
-
-// ---------------------------------------------------------------------------
-// Progress
-// ---------------------------------------------------------------------------
 
 describe('GET /me/progress', () => {
   it('refuses an anonymous caller rather than inventing an empty record', async () => {
@@ -833,10 +732,6 @@ describe('GET /me/progress', () => {
     }
   });
 });
-
-// ---------------------------------------------------------------------------
-// The signed-in paths, which need a database
-// ---------------------------------------------------------------------------
 
 describe('the signed-in paths', () => {
   let configured = false;
@@ -880,7 +775,6 @@ describe('the signed-in paths', () => {
         csrf,
       );
       assert.equal(quizAttempt.status, 200);
-      // Answering the same question twice must still count as one question answered.
       await post(
         app,
         '/api/v1/content/quizzes/quiz-pot-odds/attempt',
@@ -901,8 +795,7 @@ describe('the signed-in paths', () => {
       assert.equal(answers[0]?.was_correct, true);
       assert.equal(answers[1]?.was_correct, false);
 
-      // A completed lesson is written by the lesson-progress path, which this module only reads;
-      // inserting it directly is what lets the read be tested on its own.
+      // This module only reads lesson progress, so the row is inserted directly.
       const lesson = content().lessons[0];
       assert.ok(lesson !== undefined);
       await sql`
@@ -932,7 +825,6 @@ describe('the signed-in paths', () => {
         arrayAt(progress.body, 'topicsTouched').map(String).sort(),
         [...new Set([lesson.topic, scenario.topic])].sort(),
       );
-      // Counts only.
       assert.deepEqual(Object.keys(progress.body).sort(), [
         'handsPlayed',
         'lessonsCompleted',

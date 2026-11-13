@@ -1,33 +1,8 @@
 /**
- * The Legends fixture's expected values are the ones the shared model produces.
- *
- * ## The defect this closes
- *
- * `apps/web/src/fixtures/legends.ts` carried hand-authored EV figures with prose derivations
- * beside them and no generator anywhere. None of the raises reproduced. From the fixture's own
- * stated premises the two preflop raises are worth 28.7 and 34.7 units and the file said 12.4 and
- * 11.6; the flop bet table was out by roughly a factor of seven on every row; and the compare block
- * was not internally consistent under any single convention — its call row priced the pot at 210
- * while its raise row spoke of "the 390 already committed", which are the before-call and
- * after-call pots of the same spot.
- *
- * They erred conservatively, understating raises, which is the opposite direction from the Coach
- * defect this release fixed. That makes them not urgent and it does not make them teachable. A
- * worked example that does not survive its own arithmetic teaches a learner to stop checking, and
- * checking is the entire subject.
- *
- * The fixture now computes its figures from `evOfCall`, `evOfBet` and `evOfRaise`. This file is the
- * independent check on that: it re-derives every candidate from the pot, price, equity and assumed
- * fold frequency the fixture PUBLISHES — the numbers a reader can see on screen — rather than from
- * the constants the fixture happens to hold. A figure that agreed with the model but disagreed with
- * its own printed premises would still be untrustworthy, and this is the comparison that catches it.
- *
- * ## Why an API test reads web files
- *
- * `apps/web` is a separate TypeScript program that cannot be imported statically from here, so the
- * fixture is loaded by URL and narrowed explicitly — the same arrangement `web-fixture-figures.test.ts`
- * and `legends-naming-fallback.test.ts` use. `@prl/poker-ai` is available here and deliberately not
- * in `apps/web`, which is why the decision-quality bands are asserted from this side.
+ * The Legends fixture's figures must match the shared EV model. Every candidate is re-derived from
+ * the premises the fixture publishes on screen, not from its constants, so a figure that agrees
+ * with the model but not its own printed premises still fails. `apps/web` cannot be imported
+ * statically, so the fixture is loaded by URL. `@prl/poker-ai` is only available on this side.
  */
 
 import assert from 'node:assert/strict';
@@ -80,20 +55,9 @@ const PROFILE_CARDS = exported<readonly LegendProfileCardDto[]>('LEGEND_PROFILE_
 const learnFromFixture = exported<(id: string) => { readonly observed: unknown } | null>('learnFromFixture');
 
 /**
- * The EV of one candidate, from the report's own published premises.
- *
- * The three conventions come from `@prl/poker-math/ev` and none of them is restated here. What IS
- * decided here is which of the three a candidate takes and what to feed it, and that mapping is the
- * part the old figures got wrong:
- *
- *  - **`pot` is `report.potTotal`**, the middle BEFORE the action, already including the bet being
- *    faced. It is what a fold wins. The compare block's raise row used the pot a CALL would have
- *    created, which is `potTotal + toCall` and a different number.
- *  - **A raise's increment is `cost - toCall`, not `to - toCall`.** `to` is the seat's total
- *    commitment for the street; `cost` is what leaves the stack now. They differ by whatever was
- *    already committed, which is zero in most spots and is the small blind preflop.
- *  - **The risk is `cost`**, so `evOfRaise` is charged `toCall + raiseBy`. A model that charges only
- *    the increment overstates every raise by `(1 - f) x toCall x (1 - e)`.
+ * `pot` is `report.potTotal`, the pot before the action including the bet faced. A raise's
+ * increment is `cost - toCall`, not `to - toCall`, because `to` includes chips already committed.
+ * The risk is `cost`, so `evOfRaise` is charged `toCall + raiseBy`.
  */
 function recompute(report: CoachReport, candidate: ActionCandidate): number {
   const pot = report.potTotal;
@@ -102,7 +66,7 @@ function recompute(report: CoachReport, candidate: ActionCandidate): number {
     case 'fold':
       return 0;
     case 'check':
-      // A check is a call of nothing: `e x pot`, a free showdown.
+      // `e x pot`, a free showdown.
       return evOfCall({ pot, toCall: 0, equity }).ev;
     case 'call':
       return evOfCall({ pot, toCall: report.toCall, equity }).ev;
@@ -128,7 +92,6 @@ function recompute(report: CoachReport, candidate: ActionCandidate): number {
   }
 }
 
-/** Every analysis the fixture publishes, named so a failure says which block is wrong. */
 function analyses(): readonly { readonly name: string; readonly report: CoachReport }[] {
   const found: { name: string; report: CoachReport }[] = [];
   for (const decision of HAND.decisions) {
@@ -158,9 +121,7 @@ describe('the Legends fixture prices every action the way @prl/poker-math does',
     });
 
     it(`${name} quotes its own figures in its derivations`, () => {
-      // Every derivation states the figure it derived. A prose block that names a different number
-      // from the row it sits in is what this whole rewrite is correcting, and it is the half a
-      // numeric assertion cannot see.
+      // A prose derivation that names a different number from its row is invisible to a numeric check.
       for (const candidate of report.candidates) {
         if (candidate.action === 'fold') continue;
         const stated = candidate.ev.toFixed(1).replace('-', '');
@@ -209,10 +170,7 @@ describe('the Legends fixture bands its decisions the way @prl/poker-ai does', (
   it('bands the hand, and lets that decide whether the outcome note exists', () => {
     const quality = HAND.decisionQuality;
     assert.equal(quality.band, bandForShortfall(Math.max(0, -quality.evGivenUp) / BIG_BLIND));
-    // The note is reserved for a result and a quality in CLEAR disagreement — `slightly-off` returns
-    // null on purpose, so the paragraph does not become wallpaper. Keeping an authored note over a
-    // band that no longer earns it would be teaching text contradicting the table above it, which is
-    // exactly the failure this file exists to prevent.
+    // `slightly-off` returns null on purpose, so an authored note must not outlive the band that earns it.
     assert.equal(
       HAND.outcomeVersusQualityNote,
       outcomeVersusQualityNote({ chipResult: HAND.chipResult, quality }),
@@ -243,22 +201,8 @@ describe('the Legends fixture is a fixture, not a measurement', () => {
   });
 
   it('carries the same axis PROSE the served profiles do (REGRESSION)', () => {
-    // The numbers were joined; the words beside them were not. Measured 2026-08-27: 25 mismatches,
-    // and all of them were strings this package had already CORRECTED, so the fixture was serving
-    // the wording each fix had removed.
-    //
-    //   aggressionFrequency  fixture: "How often it bets and raises."
-    //                        source:  "...on a hand it reads as neither strong nor hopeless. With
-    //                                  nothing it bets less often than this..."
-    //   threeBetTendency     fixture: "How often it re-raises someone who opened."
-    //                        source:  "How much of the range it would have called an opening raise
-    //                                  with it re-raises instead..."
-    //
-    // The first is the unconditional reading that `declared-versus-observed.test.ts` proves is
-    // arithmetically unsatisfiable for four profiles, and the second is the reading `traits.ts`
-    // says "cannot be read as" a 3-bet frequency — printed on a card that shows `vpip 0.15` beside
-    // `threeBetTendency 0.44`. This is the offline path, which is what a reader sees whenever the
-    // API is unreachable.
+    // Measured 2026-08-27, 25 trait descriptions in the fixture were wording the source had already
+    // corrected. This is the offline path a reader sees whenever the API is unreachable.
     const labels = TRAIT_LABELS as Readonly<Record<string, string>>;
     const descriptions = TRAIT_DESCRIPTIONS as Readonly<Record<string, string>>;
     let compared = 0;
@@ -277,9 +221,7 @@ describe('the Legends fixture is a fixture, not a measurement', () => {
   });
 
   it('carries the same style notes the served profiles do (REGRESSION)', () => {
-    // `volume-grinder` said "Re-raises preflop more than any other profile here." `profiles.ts`
-    // documents that exact sentence as false and replaced it with one about SHARE of openings
-    // played back at — measured, its unconditional 3-bet frequency is third, not first.
+    // `profiles.ts` documents the old `volume-grinder` sentence as false.
     const byId = new Map(PROFILES.map((profile) => [profile.naming.id, profile]));
     let compared = 0;
     for (const card of PROFILE_CARDS) {
@@ -290,9 +232,7 @@ describe('the Legends fixture is a fixture, not a measurement', () => {
         profile.styleNotes,
         `${card.id}: the fixture's style notes are stale`,
       );
-      // `learnFrom` and `counterStrategy` too. They were NOT covered when this join was written,
-      // and the omission surfaced the way these always do: `calling-station`'s teaching strings
-      // were corrected in `profiles.ts`, the fixture kept the old ones, and this test passed.
+      // These were not covered at first, and `calling-station`'s corrected strings went stale.
       assert.deepEqual(card.learnFrom, profile.learnFrom, `${card.id}: the fixture's learnFrom is stale`);
       assert.deepEqual(
         card.counterStrategy,
@@ -305,21 +245,9 @@ describe('the Legends fixture is a fixture, not a measurement', () => {
   });
 
   it('carries the SAME trait numbers the served profiles do (REGRESSION)', () => {
-    // The fixture does not derive these — it copies them. `OLD_SCHOOL_PRESSURE_TRAITS` in
-    // `apps/web/src/fixtures/legends.ts` is `old-school-pressure`'s trait block from
-    // `packages/poker-ai/src/profiles.ts`, digit for digit, and eleven more like it: measured
-    // 2026-08-27, 110 twelve-line blocks are byte-identical between the two files.
-    //
-    // Nothing joined the numbers. The check above pairs the two rosters by `id` and stops there, so
-    // tuning a profile — raising `pressureTendency` from 0.8, widening a `vpip` — left `/legends`
-    // describing the old one. A learner would read a radar chart and a trait description for a
-    // style the bot no longer plays, which is the same defect as the Coach sentence that priced a
-    // threshold that did not exist: the page teaches something the product does not do.
-    //
-    // Compared over the keys the FIXTURE declares rather than the profile's full set: `makeTraits`
-    // fills unspecified axes from `DEFAULT_TRAITS`, so a profile always has every key and the
-    // fixture is the side that can silently omit one. The count is asserted so that a fixture which
-    // stopped declaring traits could not pass this by comparing nothing.
+    // The fixture copies the trait blocks from `profiles.ts`, so tuning a profile left `/legends`
+    // describing the old one. Compared over the keys the fixture declares, because `makeTraits`
+    // fills every key on the profile side. The count stops a sweep of nothing passing.
     let compared = 0;
     for (const card of PROFILE_CARDS) {
       const profile = PROFILES.find((candidate) => candidate.naming.id === card.id);
@@ -345,8 +273,7 @@ describe('the Legends fixture is a fixture, not a measurement', () => {
   });
 
   it('never claims to have observed anything', () => {
-    // A fixture has observed nothing by definition. This shipped as a `ProfileObservedStats` of 128
-    // invented hands under the caption "Measured over 128 hands of your own play".
+    // A fixture has observed nothing. This once shipped 128 invented hands as "your own play".
     for (const card of PROFILE_CARDS) {
       const learn = learnFromFixture(card.id);
       assert.ok(learn !== null, `${card.id} has a card but no learn-from payload`);
@@ -360,8 +287,7 @@ describe('the Legends fixture is a fixture, not a measurement', () => {
       const total = entry.actionDistribution.reduce((sum, row) => sum + row.probability, 0);
       assert.ok(Math.abs(total - 1) < 1e-9, `${entry.profileId}'s weights do not sum to 1`);
       for (const row of entry.actionDistribution) {
-        // A frequency measured over N trials is a multiple of 1/N. A weight that is not one is
-        // claiming a resolution the sample does not have.
+        // A frequency over N trials is a multiple of 1/N.
         const trials = row.probability * COMPARE.trials;
         assert.ok(
           Math.abs(trials - Math.round(trials)) < 1e-9,
@@ -374,10 +300,8 @@ describe('the Legends fixture is a fixture, not a measurement', () => {
 
 describe('the web client and the API agree on the compare limit', () => {
   it('publishes the same maximum the endpoint enforces', async () => {
-    // `apps/api/src/rooms/bots.ts` is the authority: the schema and the clamp are built from it.
-    // The contract carries a copy so a client can compile against it, and the compare screen asked
-    // for 400 against a cap of 40 — every request it could have made was rejected before it reached
-    // a handler, behind a CSRF failure that hid it.
+    // `rooms/bots.ts` is the authority and the contract carries a copy. The copy once said 400
+    // against a cap of 40, and a CSRF failure hid the rejections.
     const bots: Record<string, unknown> = await import('../src/rooms/bots.ts');
     assert.equal(bots['MAX_COMPARE_TRIALS'], MAX_COMPARE_TRIALS);
   });

@@ -1,31 +1,9 @@
 /**
- * The sentences a table's events are narrated in: the screen reader's whole account of a hand,
- * and the "How the hand ended" list under the table.
- *
- * ## The defect this module exists for
- *
- * `wireEvents` wrote these inline, for a log rather than a reader. An action was announced as its
- * verb alone, so a screen-reader user at a six-handed table heard "folds", "calls 10", "raises to
- * 40" and was never told by whom. `scripts/ax-assertions.test.mjs` carries the narration of a real
- * Chrome run, and its fold is recorded as the bare word `folds`. The blinds and the result named
- * seats by their zero-based index ("smallBlind 5 from seat 3", "seat 1 wins 35 from pot 0"), when
- * every seat number a learner sees anywhere else counts from one, and the seat plates name the
- * player rather than number them.
- *
- * ## Whose name
- *
- * The name of the player who was DEALT into that seat, captured at the deal. `table.ts` explains
- * why a seat index is not a person: between hands somebody stands and somebody else takes the
- * chair, and the current roster would then put a newcomer's name on the previous player's fold.
- * A seat with no captured name is still counted from one, never from zero.
- *
- * ## Whose verbs
- *
- * `NARRATED_VERBS` in `@prl/contracts`, and only those. Every sentence here is broadcast to every
- * socket in the room, so the reader hears their own hand under their dealt name; the page puts the
- * sentences that open on that name into the second person ("You fold", "You win 1,529 from the pot.")
- * with `inSecondPerson`, which reads the same table. A verb written here as a literal would be one
- * the page cannot recognise, and the reader would be named in the third person again.
+ * The sentences a table's events are narrated in, for the screen reader and the "How the hand ended" list.
+ * Every action names its player, using the name captured at the deal (the chair may change hands
+ * between hands). A seat with no captured name counts from one, never zero.
+ * Verbs come only from `NARRATED_VERBS` in `@prl/contracts`, because `inSecondPerson` on the page
+ * matches the same table to say "You fold".
  */
 
 import { ALL_THEY_HAD, NARRATED_VERBS } from '@prl/contracts';
@@ -33,15 +11,7 @@ import type { ForcedBet, LoggedAction, PotAward, SeatIndex, SeatShowdown } from 
 
 export type NameOf = (seat: SeatIndex) => string;
 
-/**
- * An amount as a reader sees it, grouped.
- *
- * These were `String(amount)`, so the result line under the table read "Patient Technician 1 wins
- * 1529 from the pot." and "Disciplined Specialist wins 1975 from the main pot." (audit at 308fadf,
- * both from the socket log), beside seat plates and a pot that `formatUnits` in `@prl/ui` prints
- * grouped. `en-GB` because that is the grouping the web client's own `units()` uses for the
- * sentences it writes into the same live region, so one announcement cannot mix "1,529" and "1529".
- */
+/** `en-GB` grouping ("1,529") to match the web client's `units()` in the same live region. */
 const GROUPED = new Intl.NumberFormat('en-GB', { maximumFractionDigits: 0 });
 
 export function amount(value: number): string {

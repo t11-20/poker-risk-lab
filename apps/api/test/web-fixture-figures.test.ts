@@ -1,40 +1,8 @@
 /**
- * The web app's offline fixtures still agree with the engine that produced them.
- *
- * ## Why this exists
- *
- * `apps/web/src/fixtures/scenarios.ts` and `.../review.ts` are generated: every `CoachReport` in
- * them came out of `buildCoachReport` (via `readSituation`) and `buildHandReview`. Generated data
- * with no test is data that silently becomes wrong the moment the generator changes, and it did —
- * the Coach's raise arithmetic was corrected to charge hero the call as well as the increment, and
- * both fixtures went on serving the old figures, which overstate every raise by `(1-f)·C·(1-e)`.
- * Always positive, worse the lower hero's equity, and pointed the one direction a teaching product
- * must not be wrong in: it flatters aggression.
- *
- * The fix was to regenerate them. This is what stops the next generator change from needing anybody
- * to remember: it recomputes both fixtures from the current functions and asserts the stored figures
- * are what those functions produce today. It fails loudly rather than drifting quietly, and its
- * failure message is "regenerate the fixture", not "edit a number".
- *
- * The remedy is `pnpm run fixtures:regenerate` (`scripts/regenerate-web-fixtures.mjs`).
- * That script did not exist when this guard was written, which is exactly why the fixtures were
- * left stale long enough to ship a rule-of-2-and-4 estimate of 1.6 — rendered to a learner as
- * "160.0%". A check whose remedy is not executable is a check that gets left red.
- *
- * ## Why the review fixture is rebuilt from reconstructed rows
- *
- * `buildHandReview` takes database rows, and the fixture is its output — the rows themselves were
- * never checked in. They are reconstructed here from the fixture's own replay, and the
- * reconstruction is *proved* rather than assumed: everything the review reports other than the
- * per-decision analysis has to come back byte-identical. A wrong button seat, blind or action row
- * would move a pot, a stack or a street and that comparison would fail first, so a passing analysis
- * comparison is a comparison against a faithfully replayed hand.
- *
- * ## Why an API test reads web files
- *
- * `buildHandReview` lives in this app, and `apps/web` is a separate TypeScript program that cannot
- * be imported statically from here. The fixtures are loaded at runtime by URL and narrowed
- * explicitly, the same way `legends-naming-fallback.test.ts` does it.
+ * The web app's generated offline fixtures still match the engine. Recomputes every `CoachReport`
+ * and fails with "regenerate the fixture" (`pnpm run fixtures:regenerate`). The review fixture is
+ * rebuilt from reconstructed rows, proved by requiring everything but the analyses to come back
+ * byte-identical. `apps/web` cannot be imported statically, so fixtures are loaded by URL.
  */
 
 import assert from 'node:assert/strict';
@@ -48,30 +16,11 @@ import { buildHandReview, type HandActionRow, type HandSeatRow } from '../src/re
 
 const WEB_FIXTURES = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'web', 'src', 'fixtures');
 
-/**
- * The sample count and seed, IMPORTED rather than restated.
- *
- * These were two literals under a comment saying they were "the API's own
- * `CONTENT_SAMPLES`/`CONTENT_SEED`". They were not: nothing imported those, and nothing could,
- * because they were not exported. A comment asserting an agreement that nothing enforces is this
- * branch's most common defect, and this was an instance of it sitting inside a guard.
- */
+/** Imported, not restated, so the fixture and the API cannot disagree on samples or seed. */
 const SCENARIO_SAMPLES = SCENARIO_ANALYSIS_SAMPLES;
 const SCENARIO_SEED = SCENARIO_ANALYSIS_SEED;
 
-/*
- * There used to be a `normaliseRuleOfThumb` helper here, dividing the producer's
- * `ruleOfThumb.estimate` by 100 before every comparison, with a comment explaining that
- * `@prl/poker-math` published a percentage while `@prl/ui` rendered a fraction.
- *
- * That helper was the bug, written down and accepted. The two sides genuinely disagreed about
- * the unit, `@prl/ui` multiplied by 100 a second time, and a shipped panel told learners a
- * nine-out flush draw was "3,600.0%". This test compensated for the mismatch instead of
- * failing on it — which is what a fixture comparison is for — and so held it in place.
- *
- * `estimate` is now a fraction in 0..1 on both sides, like every other probability on this
- * contract, so there is nothing to normalise and the reports are compared as they are.
- */
+// `ruleOfThumb.estimate` is a fraction in 0..1 on both sides, so reports are compared without normalising.
 
 async function loadWebFixture(file: string): Promise<Record<string, unknown>> {
   const module: unknown = await import(pathToFileURL(join(WEB_FIXTURES, file)).href);
@@ -79,11 +28,6 @@ async function loadWebFixture(file: string): Promise<Record<string, unknown>> {
   return module as Record<string, unknown>;
 }
 
-// ---------------------------------------------------------------------------
-// The Scenario Lab fixture
-// ---------------------------------------------------------------------------
-
-/** The label `routes/content.ts` gives the opponent, so the fixture reads exactly like the wire. */
 function opponentLabelFor(scenario: Scenario): string {
   const spec = scenario.opponentRange;
   return spec.kind === 'exact' ? 'the opponent' : spec.label;
@@ -98,10 +42,8 @@ function reportForScenario(scenario: Scenario): CoachReport {
     street: scenario.street,
     opponents: [{ label: opponentLabelFor(scenario), range: situation.opponentRange }],
     pot: situation.pot,
-    // The described-spot derivation, which is what `routes/content.ts` uses and why: a scenario
-    // does not carry a complete per-seat record of the street (`preflop-squeeze-fold-equity` keeps
-    // hero's own posted blind inside `potBeforeStreet`), so the engine's layering has nothing
-    // sound to layer.
+    // The described-spot derivation, as `routes/content.ts` uses, because a scenario has no full
+    // per-seat record of the street.
     contestablePot: deriveContestablePot({
       pot: situation.pot,
       toCall: situation.toCall,
@@ -139,37 +81,16 @@ describe('the Scenario Lab fixture is the analysis the engine produces today', (
   });
 });
 
-// ---------------------------------------------------------------------------
-// The hand-review fixture
-// ---------------------------------------------------------------------------
-
 /**
- * The table these fixture hands were played at.
- *
- * Read off the hands rather than chosen: seat 1 folds preflop for a net of -10 and seat 2 pays 40 to
- * call a raise to 60, so the blinds are 10 and 20; seat 0 acts first preflop three-handed, which
- * makes it the button.
- */
-/**
- * The five members `hands_config_shape` requires of every stored `config`.
- *
- * `actionTimeoutSeconds` was missing here for as long as nothing read it. The Legends comparison
- * does — it rebuilds a `TableConfig` per decision — and a real row always carries it, because the
- * CHECK constraint in `db/migrations/0001_initial.sql` lists all five. A fixture that is missing a
- * member every stored row has is a fixture testing a shape that cannot occur.
+ * Read off the hands, with blinds 10 and 20 and seat 0 the button. All five members of
+ * `hands_config_shape` are present, as on every stored row.
  */
 const REVIEW_CONFIG = { smallBlind: 10, bigBlind: 20, ante: 0, maxSeats: 6, actionTimeoutSeconds: 30 };
 const REVIEW_BUTTON_SEAT = 0;
 const REVIEW_VIEWER = 'usr-you';
 
 /**
- * The action rows behind a review, with the two engine-authoritative columns re-derived.
- *
- * `pot_after` is the running total, and `bet_level_after` is the highest total committed on the
- * street so far — seeded at the big blind preflop, because that is a live bet everyone else has to
- * match. Both are checked by the replay itself: `buildHandReview` compares its own reconstruction
- * against them and refuses to analyse a decision where the two disagree.
- */
+/** `bet_level_after` starts at the big blind preflop. `buildHandReview` checks both against its replay. */
 function reviewActionRows(review: HandReviewResponse): readonly HandActionRow[] {
   const rows: HandActionRow[] = [];
   let potAfter: number | null = null;
@@ -181,8 +102,6 @@ function reviewActionRows(review: HandReviewResponse): readonly HandActionRow[] 
       betLevel = decision.street === 'preflop' ? REVIEW_CONFIG.bigBlind : 0;
     }
     if (decision.to !== null) betLevel = Math.max(betLevel, decision.to);
-    // The first action's own `potBefore` seeds the chain; after that the engine's running total is
-    // the only figure that may be trusted, so it is carried rather than re-read.
     const potBefore: number = potAfter ?? decision.potBefore;
     const nextPotAfter: number = potBefore + decision.amountPaid;
     potAfter = nextPotAfter;
@@ -240,14 +159,12 @@ function rebuildReview(review: HandReviewResponse): HandReviewResponse {
       viewerUserId: REVIEW_VIEWER,
       maxPotAfter: review.hand.potTotal,
     },
-    // Generous where the route is stingy: the route's budget is about a request deadline, and
-    // inheriting it here would make the fixture's correctness depend on how busy this machine is.
+    // The route's budget is a request deadline, so a busy machine must not decide correctness here.
     { budgetMs: 600_000, maxAnalysedDecisions: 32 },
   );
   return rebuilt;
 }
 
-/** The review with every analysis replaced by a marker, for proving the replay before the figures. */
 function withoutAnalyses(review: HandReviewResponse): unknown {
   return {
     ...review,
@@ -266,15 +183,13 @@ describe('the hand-review fixture is the review the builder produces today', () 
       assert.ok(stored !== undefined, `${name} is not exported`);
       const rebuilt = rebuildReview(stored);
 
-      // First: the replay. If this fails the reconstruction above is wrong and the figure comparison
-      // below would be meaningless rather than merely failing.
+      // The replay first, so a wrong reconstruction fails before the figures.
       assert.deepEqual(
         withoutAnalyses(stored),
         withoutAnalyses(rebuilt),
         `${name} does not replay from its own rows — the reconstruction in this test is wrong`,
       );
 
-      // Then: the figures.
       assert.deepEqual(
         stored.decisions.map((decision) => decision.analysis),
         rebuilt.decisions.map((decision) => decision.analysis),

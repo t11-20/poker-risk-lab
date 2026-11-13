@@ -1,51 +1,10 @@
 /**
- * A small, bounded, cancellable pool of calculator threads.
- *
- * Monte Carlo is the one place in this API where a 200-byte request buys a lot of CPU, so it
- * gets the treatment that shape of work needs: a fixed number of threads, a bounded queue in
- * front of them, a wall-clock deadline per request, and a kill switch for a thread that
- * overruns it. Everything below is one of those four things.
- *
- * ## Why threads are reused and never spawned per request
- *
- * Starting a worker costs a new V8 isolate plus the import of `@prl/poker-math` and
- * `@prl/poker-engine` — tens of milliseconds, comfortably more than a typical calculation.
- * Worse, the preflop strength table that `top:NN` needs is memoised *per thread* and takes
- * about three seconds to build, so a thread-per-request pool would rebuild it every time.
- *
- * Production therefore pre-warms every thread at boot (`WorkerPool.warm`, driven from
- * `server.ts`) and `/ready` stays 503 until that finishes. A deployment that never serves
- * Coach still pays the three seconds once, at startup, rather than on the first learner. Tests
- * that never call `beginSharedPoolWarmup` keep the old lazy behaviour: no threads, and `/ready`
- * does not wait for them.
- *
- * ## The deadline is wall-clock, and it starts when the request is submitted
- *
- * Not when a thread picks the task up. Queue time is time the caller is waiting, and a budget
- * that excluded it would let a busy pool blow through any latency promise while every
- * individual task still looked healthy.
- *
- * When the deadline fires there is exactly one way to stop a synchronous enumeration loop:
- * `worker.terminate()`. That is why the worker is a pure calculator (see `equity-worker.ts`) —
- * terminating a thread runs no `finally`, no flush and no destructor, so a thread must never
- * hold anything that needs one. A terminated thread is dropped from the pool and the next
- * submission creates a replacement, so a timeout costs one warm thread and never leaks one.
- *
- * ## The queue is bounded, and full means "no"
- *
- * An unbounded queue turns a CPU limit into a memory limit and a latency limit into neither:
- * callers keep being accepted, each waits longer than the last, and each eventually times out
- * having consumed a slot anyway. A full queue answers `service_unavailable` immediately, which
- * is both honest and cheap. The bound scales with the pool, because a bigger pool drains
- * faster.
- *
- * ## One pool per process
- *
- * `getSharedPool` exists because two pools would mean twice the threads competing for the same
- * cores while each believed it was inside its own limit. Route modules that need calculation
- * (`routes/calc.ts` today, the WebSocket hub's Coach request later) take the shared one and
- * close it from an `onClose` hook. This mirrors the single-client rule in `db.ts`, with the
- * same caveat: the first caller's sizing wins for the life of the process.
+ * A bounded, cancellable pool of calculator threads. Fixed thread count, bounded queue, a
+ * wall-clock deadline per request, and `terminate()` for a thread that overruns it.
+ * Threads are reused because each builds a preflop strength table (about 3 s). Production warms
+ * every thread at boot and `/ready` stays 503 until done.
+ * The deadline starts at submission, so queue time counts against the caller.
+ * One pool per process, so two pools never compete for the same cores. The first caller's sizing wins.
  */
 
 import { Worker } from 'node:worker_threads';
@@ -65,39 +24,20 @@ import type {
 } from './equity-worker.ts';
 
 /**
- * Queue slots per thread.
- *
- * Three is a deliberate compromise. One would refuse a caller the instant every thread is
- * busy, which is wrong for work that usually takes tens of milliseconds. A large number
- * accepts requests the pool cannot serve inside the deadline, so the caller waits and *then*
- * gets a timeout instead of an immediate, actionable `service_unavailable`. With four threads
- * and a half-second task, twelve queued tasks is roughly the deepest queue whose last entry
- * can still finish in time.
+ * One slot would refuse a caller whenever every thread is busy. Many would accept work that then
+ * times out. With four threads and a half-second task, twelve is about the deepest queue that finishes.
  */
 const QUEUE_SLOTS_PER_WORKER = 3;
 
-/**
- * Worker heap ceiling, in megabytes.
- *
- * Every calculation here has bounded allocation by construction — the largest thing any of
- * them builds is a 1,326-entry combination list — so reaching this means something has gone
- * wrong, and the point is that it goes wrong *inside a thread that can be dropped* instead of
- * taking the server's heap with it. Node reports the breach as an `error` event on the Worker,
- * which this file already handles.
- */
+/** Every task's allocation is bounded, so a breach is a bug contained in a droppable thread. */
 const WORKER_HEAP_MB = 256;
 
 /**
- * Wall-clock budget for pre-warming one pool.
- *
- * The strength table is about three seconds on the reference machine; twelve seconds is the
- * allowance live Coach requests already get (`STRENGTH_TABLE_ALLOWANCE_MS` in `calc/parse.ts`).
- * Fifteen leaves a little more for a cold isolate on a slower box without approaching the
- * 20-second request timeout that would otherwise cut the process off mid-boot.
+ * The table build is about 3 s and live Coach requests get 12 s (`STRENGTH_TABLE_ALLOWANCE_MS`).
+ * 15 s stays under the 20 s request timeout.
  */
 const WARMUP_TIMEOUT_MS = 15_000;
 
-/** A worker reply that carries a result, i.e. everything except a failure. */
 type SuccessResponse = Extract<WorkerResponse, { ok: true }>;
 
 interface Job {
@@ -105,13 +45,12 @@ interface Job {
   readonly task: WorkerTask;
   readonly resolve: (response: SuccessResponse) => void;
   readonly reject: (error: unknown) => void;
-  /** The thread running this job; null while it is still queued. */
+  /** Null while queued. */
   worker: Worker | null;
   timer: ReturnType<typeof setTimeout> | null;
   settled: boolean;
 }
 
-/** Counters, for tests and for an operator asking whether the pool is the bottleneck. */
 export interface PoolStats {
   readonly size: number;
   readonly workers: number;
@@ -125,33 +64,25 @@ export interface PoolStats {
   readonly closed: boolean;
 }
 
-/** Diagnostics the pool cannot log itself, because it must not import the logger. */
+/** The pool must not import the logger, so it reports through `onWarn`. */
 export interface PoolWarning {
   readonly event: 'worker-error' | 'worker-exit' | 'task-timeout' | 'protocol-mismatch';
   readonly detail: string;
 }
 
 export interface PoolOptions {
-  /** Maximum threads. `config.monteCarloWorkers`. */
   readonly size: number;
-  /** Default wall-clock budget per submitted task. `config.coachTimeoutMs`. */
   readonly timeoutMs: number;
   /** Defaults to `size * QUEUE_SLOTS_PER_WORKER`. */
   readonly queueLimit?: number;
-  /** Test seam: a different worker script. Production leaves this alone. */
+  /** Test seam. */
   readonly workerUrl?: URL;
-  /** Called for anything worth a log line. The route module passes `app.log`. */
   readonly onWarn?: (warning: PoolWarning) => void;
 }
 
 /**
- * The worker script's URL, resolved from this module's own extension.
- *
- * In development and in tests this file runs as `pool.ts` and Node strips the types; after
- * `tsc` it runs as `dist/workers/pool.js` beside `dist/workers/equity-worker.js`. Import
- * specifiers are rewritten on emit, but a string inside `new URL(...)` is not, so the
- * extension is derived rather than written down. Getting it wrong fails loudly — the Worker
- * constructor throws `MODULE_NOT_FOUND` — rather than silently, which is the right direction.
+ * `tsc` rewrites import specifiers but not a string in `new URL(...)`, so the extension is derived.
+ * A wrong one throws `MODULE_NOT_FOUND`.
  */
 function defaultWorkerUrl(): URL {
   const extension = import.meta.url.endsWith('.ts') ? '.ts' : '.js';
@@ -159,24 +90,10 @@ function defaultWorkerUrl(): URL {
 }
 
 /**
- * The report a thread sent back names no action the task did not permit.
- *
- * `buildCoachReport` already filters its own candidates through `legalActions`, so in a
- * healthy process this never fires. It is here because the failure it guards against is
- * silent by nature and was live in production for the whole of this feature's life: the
- * field was optional, the wire type had no slot for it, and the filter treated "absent" as
- * "everything is permitted", so four of the five Coach surfaces published actions the table
- * would refuse and nothing anywhere said so. A report is the one thing a learner is asked to
- * trust, so the pool checks the reply against the request rather than assuming the two agree.
- *
- * Deliberately on the boundary between the thread and the route, not inside the route:
- * `routes/calc.ts` and `routes/content.ts` both serve Coach reports, and a check written
- * twice is a check one of them eventually loses.
- *
- * Exported for `test/coach-legality.test.ts` only. It cannot be reached through `runCoach`
- * with a healthy worker — which is the point of it — so the alternative to exporting it is a
- * guard nothing ever executes, and the audit that produced this fix was largely a list of
- * those.
+ * Refuses a report naming an action the task did not permit. A missing `legalActions` once let four
+ * of five Coach surfaces publish illegal actions silently. Checked at the thread boundary so both
+ * Coach routes share it. Exported for `test/coach-legality.test.ts`, since a healthy worker never
+ * reaches it.
  */
 export function assertReportStaysInsideItsLegalSet(task: CoachTask, report: CoachReport): void {
   const permitted = new Set<string>(task.legalActions);
@@ -191,20 +108,14 @@ export function assertReportStaysInsideItsLegalSet(task: CoachTask, report: Coac
   }
 }
 
-/**
- * One equity calculation, possibly split across shards.
- *
- * Produced by `calc/parse.ts`, which is where the method, the sample count and the shard count
- * are decided and where the reasoning for each of them lives.
- */
+/** Built by `calc/parse.ts`, which decides method, samples and shards. */
 export interface ShardedEquityRequest {
   readonly spec: WireSpec;
   readonly method: 'exact' | 'monte-carlo';
-  /** Total samples across every shard. Ignored on the exact path. */
+  /** Total across shards. Ignored on the exact path. */
   readonly samples: number;
-  /** 1 for exact; 1 or more for sampled. */
   readonly shards: number;
-  /** Seed of the first shard; shard `i` uses `seed + i`. */
+  /** Shard `i` uses `seed + i`. */
   readonly seed: number;
 }
 
@@ -218,7 +129,7 @@ export class WorkerPool {
   private readonly idle: Worker[] = [];
   private readonly busy = new Map<Worker, Job>();
   private readonly queue: Job[] = [];
-  /** Threads already removed from the pool, so `discard` cannot double-count one. */
+  /** So `discard` cannot double-count a thread. */
   private readonly dead = new WeakSet<Worker>();
   private workerCount = 0;
   private nextJobId = 1;
@@ -253,19 +164,7 @@ export class WorkerPool {
     };
   }
 
-  /**
-   * Runs one Coach analysis.
-   *
-   * Never sharded: `buildCoachReport` produces one report from one equity figure, and two
-   * halves of a report could not be combined into anything meaningful.
-   */
-  /**
-   * Spawns every thread and builds the preflop strength table on each of them.
-   *
-   * One warmup task per slot, submitted together, so a pool of four does the three-second
-   * table build four times in parallel rather than four times in sequence. After this
-   * resolves, a live `top:NN` Coach request on any of those threads is a warm lookup.
-   */
+  /** One warmup per slot, submitted together, so the table builds in parallel. */
   async warm(timeoutMs?: number): Promise<void> {
     const tasks: WarmupTask[] = Array.from({ length: this.size }, () => ({ kind: 'warmup' }));
     const responses = await this.runBatch(tasks, timeoutMs ?? WARMUP_TIMEOUT_MS);
@@ -278,6 +177,7 @@ export class WorkerPool {
     }
   }
 
+  /** Never sharded. Two halves of a report cannot be combined. */
   async runCoach(task: CoachTask, timeoutMs?: number): Promise<CoachReport> {
     const [response] = await this.runBatch([task], timeoutMs);
     if (response === undefined || response.kind !== 'coach') {
@@ -290,15 +190,8 @@ export class WorkerPool {
   }
 
   /**
-   * Runs one equity calculation, sharding a sampled run by seed and combining the shards.
-   *
-   * `combineMonteCarlo` is what keeps the sharding honest. It sums the shards' counts and then
-   * **recomputes the confidence interval from the pooled sample size** rather than averaging
-   * the shards' intervals. Averaging would report one shard's error bar for a run with several
-   * times as many samples, which overstates it; the opposite naive mistake — four shards, so a
-   * quarter of the interval — understates it, because sampling error falls with the square
-   * root of the sample size and not with the sample size. Four shards of 50,000 report an
-   * interval about half a single shard's, not a quarter of it.
+   * `combineMonteCarlo` recomputes the interval from the pooled sample size. Error falls with the
+   * square root of samples, so four shards give about half a shard's interval, not a quarter.
    */
   async runEquity(request: ShardedEquityRequest, timeoutMs?: number): Promise<EquityResult> {
     const responses = await this.runBatch(shardTasks(request), timeoutMs);
@@ -315,18 +208,13 @@ export class WorkerPool {
     if (first === undefined) {
       throw new AppError('internal_error', { logDetail: 'equity request produced no shards' });
     }
-    // Combined in submission order, never completion order, so the figure does not depend on
-    // which thread happened to finish first.
+    // Submission order, so the figure does not depend on which thread finished first.
     return results.length === 1 ? first : combineMonteCarlo(results);
   }
 
   /**
-   * Submits a set of tasks that succeed or fail together, under one shared deadline.
-   *
-   * Capacity is checked for the whole set before any of it is submitted. Admitting three
-   * shards of four and refusing the fourth would burn three threads on work whose result can
-   * never be assembled — the caller gets an error either way, so the right error is the one
-   * that costs nothing.
+   * All or nothing under one deadline. Capacity is checked for the whole set first, so no thread is
+   * spent on shards that can never be combined.
    */
   private async runBatch(tasks: readonly WorkerTask[], timeoutMs?: number): Promise<SuccessResponse[]> {
     if (this.closed) {
@@ -347,9 +235,7 @@ export class WorkerPool {
     try {
       return await Promise.all(jobs.map((entry) => entry.promise));
     } catch (error) {
-      // One shard failing makes every sibling's work worthless, so stop paying for it: queued
-      // siblings are dropped and running ones are terminated. Without this, a request that has
-      // already failed keeps the pool busy for the rest of its budget.
+      // One failed shard makes the siblings worthless, so stop them now.
       for (const entry of jobs) this.cancel(entry.job);
       throw error;
     }
@@ -365,8 +251,6 @@ export class WorkerPool {
 
     const { promise, resolve, reject } = Promise.withResolvers<SuccessResponse>();
     const job: Job = { id, task, resolve, reject, worker: null, timer: null, settled: false };
-    // Armed here — at submission — so that time spent queued counts against the caller's
-    // budget rather than being invisible.
     job.timer = setTimeout(() => {
       this.expire(job);
     }, budget);
@@ -375,7 +259,6 @@ export class WorkerPool {
     return { job, promise };
   }
 
-  /** Hands queued jobs to idle threads, creating threads up to `size` as needed. */
   private pump(): void {
     if (this.closed) return;
     while (this.queue.length > 0) {
@@ -391,14 +274,9 @@ export class WorkerPool {
   }
 
   /**
-   * A new thread, or null when the pool is at its size — or when a thread cannot be started at
-   * all.
-   *
-   * That last case needs handling rather than propagating. `new Worker()` reports a missing or
-   * broken script through an `error` event, but an unusable *configuration* throws here, and a
-   * throw escaping `pump` would leave queued jobs holding armed deadlines that nobody is
-   * awaiting: the timer would fire, reject an unobserved promise, and `server.ts` exits the
-   * process on an unhandled rejection. So the queue is failed instead, honestly, with a code.
+   * A configuration that cannot start a thread throws here. Escaping `pump`, it would leave armed
+   * timers rejecting unobserved promises, and `server.ts` exits on an unhandled rejection. So the
+   * queue is failed instead.
    */
   private spawnIfAllowed(): Worker | null {
     if (this.workerCount >= this.size) return null;
@@ -424,7 +302,6 @@ export class WorkerPool {
   private assign(worker: Worker, job: Job): void {
     job.worker = worker;
     this.busy.set(worker, job);
-    // A thread with work to do must keep the process alive; `parkIdle` is the other half.
     worker.ref();
     const request: WorkerRequest = { id: job.id, task: job.task };
     worker.postMessage(request);
@@ -433,9 +310,7 @@ export class WorkerPool {
   private spawn(): Worker {
     const worker = new Worker(this.workerUrl, {
       name: 'prl-equity',
-      // The calculator needs no configuration, so it is given none. An empty environment also
-      // means that a `process.env` read from anywhere inside a future dependency cannot pick
-      // up this process's database URL or cookie secret.
+      // Empty so no dependency in the thread can read the database URL or cookie secret.
       env: {},
       resourceLimits: { maxOldGenerationSizeMb: WORKER_HEAP_MB },
     });
@@ -452,8 +327,7 @@ export class WorkerPool {
       );
     });
     worker.on('exit', (code) => {
-      // Only surprising when a job was in flight: a thread this pool terminated on purpose
-      // exits with its job already settled.
+      // A thread terminated on purpose exits with its job already settled.
       const job = this.busy.get(worker);
       if (job !== undefined && !job.settled) {
         this.onWarn({ event: 'worker-exit', detail: `thread exited with code ${code} mid-task` });
@@ -472,13 +346,11 @@ export class WorkerPool {
   private onMessage(worker: Worker, response: WorkerResponse): void {
     const job = this.busy.get(worker);
     if (job === undefined) {
-      // A reply for a job that already timed out, from a thread terminated a moment too late.
-      // Nothing to settle and nothing to return the thread to.
+      // A late reply from a thread terminated after a timeout.
       return;
     }
     if (response.id !== job.id) {
-      // One thread runs one task at a time, so this cannot happen unless the protocol has
-      // drifted. Drop the thread rather than guess which job the reply belongs to.
+      // Protocol drift. Drop the thread rather than guess.
       this.onWarn({
         event: 'protocol-mismatch',
         detail: `thread replied to job ${response.id} while running job ${job.id}`,
@@ -503,7 +375,6 @@ export class WorkerPool {
     job.reject(failureToAppError(response.failure));
   }
 
-  /** A thread died or misbehaved: settle whatever it was running, then drop it. */
   private failWorker(worker: Worker, error: AppError): void {
     const job = this.busy.get(worker);
     this.discard(worker);
@@ -513,7 +384,6 @@ export class WorkerPool {
     job.reject(error);
   }
 
-  /** The deadline fired. */
   private expire(job: Job): void {
     if (job.settled) return;
     this.timedOutCount += 1;
@@ -527,9 +397,8 @@ export class WorkerPool {
   }
 
   /**
-   * Stops a job without settling it: dequeues it if it is waiting, kills its thread if it is
-   * running. Terminating is the only way to interrupt a synchronous enumeration loop, and it
-   * is safe precisely because the worker holds nothing that needs unwinding.
+   * Stops a job without settling it. Terminating is the only way to interrupt a synchronous loop,
+   * and is safe because the worker holds nothing that needs unwinding.
    */
   private cancel(job: Job): void {
     if (job.settled) return;
@@ -543,7 +412,6 @@ export class WorkerPool {
     if (index >= 0) this.queue.splice(index, 1);
   }
 
-  /** Marks a job as no longer pending and disarms its deadline. */
   private finish(job: Job): void {
     job.settled = true;
     if (job.timer !== null) {
@@ -552,21 +420,18 @@ export class WorkerPool {
     }
   }
 
-  /** Returns a thread to the idle set, or terminates it if the pool is closing. */
   private parkIdle(worker: Worker): void {
     if (this.closed || this.dead.has(worker)) {
       this.discard(worker);
       return;
     }
-    // An idle thread must not be the reason this process stays alive. Without the unref, a
-    // forgotten pool would keep a test runner — or a server that has finished shutting down —
-    // waiting on threads with nothing to do.
+    // An idle thread must not keep a test runner or a stopped server alive.
     worker.unref();
     this.idle.push(worker);
     this.pump();
   }
 
-  /** Removes a thread from the pool and terminates it. Safe to call more than once. */
+  /** Idempotent. */
   private discard(worker: Worker): void {
     this.busy.delete(worker);
     const index = this.idle.indexOf(worker);
@@ -574,18 +439,11 @@ export class WorkerPool {
     if (this.dead.has(worker)) return;
     this.dead.add(worker);
     this.workerCount = Math.max(0, this.workerCount - 1);
-    // `terminate()` resolves once the thread is gone and cannot reject; nothing here needs to
-    // wait for it, and a job that was running on it has already been settled by the caller.
     void worker.terminate();
     this.pump();
   }
 
-  /**
-   * Shuts the pool down: refuses new work, abandons what is queued, terminates every thread.
-   *
-   * Queued jobs are rejected rather than drained. Shutdown has a deadline of its own (see
-   * `server.ts`) and a calculation nobody is waiting for any more is not worth delaying it by.
-   */
+  /** Queued jobs are rejected, not drained, because shutdown has its own deadline (`server.ts`). */
   async close(): Promise<void> {
     this.closed = true;
     const abandoned = [...this.queue, ...this.busy.values()];
@@ -607,13 +465,8 @@ export class WorkerPool {
 }
 
 /**
- * Splits a request into per-shard tasks.
- *
- * Shard `i` gets `seed + i`, which is what makes the split reproducible: the same request
- * always produces the same shards with the same seeds and therefore the same combined figure,
- * whatever the pool's size or the machine's load. The remainder goes to the first shard so the
- * shards sum to exactly the requested sample count — rounding it down would make the reported
- * sample size a lie.
+ * Shard `i` gets `seed + i`, so a request always yields the same combined figure. The remainder
+ * goes to the first shard so the shards sum to the requested sample count.
  */
 export function shardTasks(request: ShardedEquityRequest): EquityTask[] {
   if (request.method === 'exact') {
@@ -638,16 +491,9 @@ export function shardTasks(request: ShardedEquityRequest): EquityTask[] {
 }
 
 /**
- * Maps a worker failure to an `ErrorCode`, by error class and nothing else.
- *
- * `EquityError`, `CoachError` and `StackError` are the maths package refusing a calculation it
- * cannot do honestly — ranges that block each other so completely that no legal matchup exists,
- * for instance. That is a statement about the request, so it becomes `computation_rejected`
- * (422). Anything else is a bug in our own planning: `calc/parse.ts` has already validated the
- * cards, the ranges and the board, so a `CardParseError` or a `RangeParseError` arriving here
- * means those two disagree, and a caller must not be told that as though it were their mistake.
- *
- * The thread's message goes into `logDetail` and never into a response body.
+ * `EquityError`, `CoachError` and `StackError` are the maths refusing the request (422). Anything
+ * else means `calc/parse.ts` and the maths disagree, which is our bug. The thread's message goes
+ * only to `logDetail`.
  */
 function failureToAppError(failure: WorkerFailure): AppError {
   const rejected =
@@ -656,10 +502,6 @@ function failureToAppError(failure: WorkerFailure): AppError {
     logDetail: `calculation thread refused the task: ${failure.name}: ${failure.message}`,
   });
 }
-
-// ---------------------------------------------------------------------------
-// The process-wide pool
-// ---------------------------------------------------------------------------
 
 let shared: WorkerPool | null = null;
 
@@ -673,8 +515,7 @@ let warmupPromise: Promise<void> | null = null;
 function dropClosedShared(): void {
   if (shared?.stats().closed) {
     shared = null;
-    // The finished warmup described the dead pool. Drop the promise so a later
-    // `beginSharedPoolWarmup` actually starts threads again instead of joining a resolved no-op.
+    // So a later `beginSharedPoolWarmup` starts threads instead of joining a resolved no-op.
     warmupPromise = null;
     if (warmupRequired && warmupState !== 'failed') warmupState = 'pending';
   }
@@ -687,30 +528,15 @@ function resetWarmup(): void {
   warmupPromise = null;
 }
 
-/**
- * The process-wide pool, or `null` when none exists or the memo still points at a closed one.
- *
- * Metrics scrape this rather than calling `getSharedPool`, so a Prometheus poll cannot be the
- * thing that creates four threads. A closed leftover is treated as absent: `close()` without
- * `closeSharedPool()` used to leave the memo pointing at a pool that refused every task.
- */
+/** Metrics read this, so a scrape cannot create threads. A closed pool reads as absent. */
 export function peekSharedPool(): WorkerPool | null {
   dropClosedShared();
   return shared;
 }
 
 /**
- * The pool every route module shares.
- *
- * Sized from configuration on first use. As with the allowlist in `plugins/security.ts` and the
- * client in `db.ts`, the first caller's configuration wins for the life of the process — which
- * is right for a server (it builds one app) and something a test building several apps has to
- * know about: `closeSharedPool()` drops the memo.
- *
- * A memo that still points at a *closed* pool is dropped too. Capturing the instance and calling
- * `.close()` on it, or a hook that closed without going through `closeSharedPool`, used to make
- * every later `getSharedPool` return the dead leftover and refuse work for the life of the
- * process.
+ * The first caller's configuration wins until `closeSharedPool()`. A memo pointing at a closed pool
+ * is dropped, or every later call would return a pool that refuses all work.
  */
 export function getSharedPool(
   config: AppConfig,
@@ -726,12 +552,8 @@ export function getSharedPool(
 }
 
 /**
- * What `/ready` should report about the calculation threads.
- *
- * `required` is false until something in this process has asked for a warmup — tests that
- * never boot the production entry point, and so never call `beginSharedPoolWarmup`, keep the
- * historical `/ready` body (database only). Once warmup is required, `/ready` is 503 until
- * every thread has built its strength table, and 503 again if that failed.
+ * `required` stays false until something calls `beginSharedPoolWarmup`, so tests that never boot
+ * `server.ts` keep a database-only `/ready`.
  */
 export function sharedPoolReadiness(): {
   readonly required: boolean;
@@ -750,13 +572,7 @@ export function sharedPoolReadiness(): {
   return { required: true, ok: false, detail: 'calculation workers are still starting' };
 }
 
-/**
- * Pre-warms the shared pool and makes `/ready` wait until it is usable.
- *
- * Safe to call more than once: a warmup already in flight is joined, a finished one is a
- * no-op, a failed one can be retried. `server.ts` fires this before `listen` and does not
- * await it — liveness starts answering immediately, readiness waits.
- */
+/** Joins a warmup in flight and allows a retry after failure. `server.ts` does not await it. */
 export function beginSharedPoolWarmup(
   config: AppConfig,
   hooks: { readonly onWarn?: (warning: PoolWarning) => void } = {},
@@ -783,7 +599,7 @@ export function beginSharedPoolWarmup(
   return warmupPromise;
 }
 
-/** Closes and forgets the shared pool. Idempotent, so several `onClose` hooks may call it. */
+/** Idempotent, so several `onClose` hooks may call it. */
 export async function closeSharedPool(): Promise<void> {
   const pool = shared;
   shared = null;

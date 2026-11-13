@@ -1,51 +1,9 @@
 /**
- * The guard that stops this suite quietly stopping.
- *
- * Fifty-seven tests in this package only run against a real schema — among them the six that
- * assert the release-blocking guardrail that one player never receives another player's private
- * cards. They used to skip on every documented developer command, because the test script passed
- * no `--env-file` and so `DATABASE_URL` was never set, and the run exited 0 anyway.
- *
- * This file makes that impossible in three ways:
- *
- *   1. **It fails when the database is required and absent.** No skip, no warning: a failing test
- *      with the fix in its message. `test/helpers/database.ts` owns the policy.
- *   2. **It proves the guards are not permanently true.** When a database IS reachable, it asserts
- *      `databaseSkip()` returns `false` — so a typo in the variable name, or a helper that returns
- *      a truthy reason unconditionally, fails here rather than skipping for ever in silence.
- *   3. **It scans this directory for a guard that does not go through the shared helper.** The
- *      original defect was five hand-rolled copies of the same condition; a sixth would reintroduce
- *      it. Every `skip:` in this test tree has to come from `databaseSkip` (or be a literal
- *      `false`), and that is checked as text, because the alternative is trusting a convention.
- *
- * ## The second thing this file owns: the request path against a database that IS there
- *
- * Every query in this application now goes through a client-side deadline (`deadlineBound` in
- * `src/db.ts`), which exists because a FROZEN PostgreSQL enforces no `statement_timeout` and used
- * to hang every request for the length of the outage. `test/db-deadlines.test.ts` proves the
- * bound fires against a server that never answers, and needs no database to do it.
- *
- * The other half can only be proved where a real one exists, which is here: that the bound
- * changes NOTHING about a healthy request. Rows still come back, the driver's own helpers still
- * work inside a template, a transaction still commits and still rolls back, and a PostgreSQL
- * error still arrives as the driver's error rather than as something the wrapper invented. That
- * last one matters more than it looks: `repositories/sql.ts` reads `code` and `constraint_name`
- * off the thrown object to turn a race into `seat_taken`, and a wrapper that replaced those would
- * turn every 409 in the product into a 500.
- *
- * ## Would this fail if the behaviour broke?
- *
- * Verified by hand, three ways for the skip policy: with `DATABASE_URL` unset it fails and names
- * `db:setup`; with `DATABASE_URL` pointed at a database with no `prl` schema it fails naming
- * `db:migrate`; and with `databaseSkip` edited to return a reason unconditionally, the
- * meta-assertion below fails.
- *
- * For the deadline half, the controls are in the cases themselves and are run rather than
- * described: the driver error is compared against the SAME error raised through an UNBOUND
- * client, so an assertion that had drifted into tautology would show up as the two disagreeing;
- * and the server's `statement_timeout` is deliberately set to 100 ms and a ten-second sleep
- * issued, so a client deadline that had been made tighter than the server's ceiling — the change
- * that would start cancelling legitimate work — reports `service_unavailable` and fails the case.
+ * The guard that stops this suite quietly skipping its database tests, which once skipped 57 on
+ * every documented command. It fails when a database is required and absent, asserts
+ * `databaseSkip()` is false when one is present, and scans this tree for a guard that bypasses
+ * `test/helpers/database.ts`. It also proves `deadlineBound` changes nothing about a healthy request,
+ * including the driver's `code` and `constraint_name`, which `repositories/sql.ts` maps to 409s.
  */
 
 import assert from 'node:assert/strict';
@@ -71,22 +29,12 @@ import {
 
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 
-/** The only file allowed to read the variable. Relative to this directory, POSIX separators. */
 const HELPER_FILE = 'helpers/database.ts';
 
-/**
- * A direct read of the environment variable, in either accessor form.
- *
- * Not a match for `DATABASE_URL:` appearing as a key in a hand-built `EnvRecord` — which is what
- * `config.test.ts` and every harness legitimately do — because the `process.env` prefix is part of
- * the pattern.
- */
+/** The `process.env` prefix is in the pattern, so `DATABASE_URL:` as an object key does not match. */
 const READS_DATABASE_URL = /process\.env(?:\[['"`]DATABASE_URL['"`]\]|\.DATABASE_URL)/;
 
-/**
- * The banner. Printed once, from this file only, so a waived run says out loud what it did not
- * prove — and says it at the end, where the summary is read.
- */
+/** Printed once, at the end where the summary is read, so a waived run says what it did not prove. */
 if (TEST_DATABASE_URL === undefined && DATABASE_TESTS_WAIVED && !RUNNING_IN_CI) {
   process.on('exit', () => {
     console.warn(
@@ -106,9 +54,7 @@ describe('the database-backed suites are not silently skipped', () => {
     const probe = await probeSchema();
     if (probe.ok) return;
     if (!DATABASE_REQUIRED) {
-      // The only path that tolerates a missing database, and it is only reachable through the
-      // explicitly named `test:without-database` script outside CI. The banner above has already
-      // said what this run does not prove.
+      // Reachable only through `test:without-database` outside CI.
       assert.equal(DATABASE_TESTS_WAIVED, true);
       assert.equal(RUNNING_IN_CI, false);
       return;
@@ -134,8 +80,6 @@ describe('the database-backed suites are not silently skipped', () => {
   });
 
   it('refuses to let CI waive the database suites', () => {
-    // The distinction the policy turns on: a developer without Docker may waive these; a release
-    // pipeline may not. Asserted as an implication so it holds in both environments.
     assert.equal(
       RUNNING_IN_CI && !DATABASE_REQUIRED,
       false,
@@ -162,8 +106,6 @@ describe('the database-backed suites are not silently skipped', () => {
       offences.push(relative);
     }
     assert.ok(scanned > 12, `expected the api test tree, scanned ${scanned} files`);
-    // The positive control: if the detector matched nothing anywhere, the assertion below would
-    // pass for a tree in which every guard had gone hand-rolled again.
     assert.equal(sawTheHelper, true, `the detector did not even match ${HELPER_FILE}`);
     assert.deepEqual(
       offences,
@@ -181,30 +123,18 @@ describe('the database-backed suites are not silently skipped', () => {
 });
 
 /**
- * The server-side statement ceiling these cases configure.
- *
- * The floor of the range `config.ts` accepts, so the sleep below is cancelled in a tenth of a
- * second instead of five, and so `queryDeadlineMs` — which is this plus two seconds of slack — is
- * as close to the server's ceiling as it is ever allowed to get. If the client deadline could
- * ever pre-empt the server, this is the setting under which it would.
+ * The floor `config.ts` accepts. `queryDeadlineMs` is this plus two seconds, so this is where a
+ * client deadline would pre-empt the server if it could.
  */
 const TIGHT_STATEMENT_TIMEOUT_MS = 100;
 
-/**
- * A `pg_sleep` far longer than anything here waits for.
- *
- * Ten seconds rather than one, so the case cannot pass by accident on a machine slow enough for
- * the sleep to have finished on its own.
- */
+/** Ten seconds, so the sleep cannot finish on its own on a slow machine. */
 const LONGER_THAN_ANY_TIMEOUT_SECONDS = 10;
 
 describe('the request-path deadline leaves a healthy database alone', () => {
   /**
-   * Every case here returns early without a database, and that is NOT a silent skip: the very
-   * first test in this file FAILS the run when a database is required and missing, and the banner
-   * at the top says out loud what a waived run did not prove. This is the same early-return shape
-   * `reports no skip reason once a database is present` uses, and it is deliberately not a
-   * `skip:`, which would make the run green while proving nothing.
+   * Returns early without a database rather than using `skip:`. The first test in this file fails
+   * the run when a database is required and missing.
    */
   function liveConfig(statementTimeoutMs: number) {
     assert.ok(TEST_DATABASE_URL !== undefined);
@@ -232,9 +162,7 @@ describe('the request-path deadline leaves a healthy database alone', () => {
         `an ordinary query is nowhere near the deadline, took ${Math.round(elapsed)} ms`,
       );
 
-      // The helper branch of the proxy: `sql(name)` inside a template builds an identifier and is
-      // NOT a query, so it must pass through untouched. Wrapping it would turn every dynamic
-      // column reference in the repositories into a promise spliced into SQL.
+      // `sql(name)` in a template builds an identifier, not a query, so it must pass through untouched.
       const sql = getSql();
       const identified = await sql<{ n: number }[]>`select ${sql('n')} from (select 7 as n) as t`;
       assert.deepEqual([...identified], [{ n: 7 }], 'sql(identifier) must still build a fragment');
@@ -245,9 +173,7 @@ describe('the request-path deadline leaves a healthy database alone', () => {
       });
       assert.equal(committed, 42, 'a transaction must still return its callback’s value');
 
-      // And a rollback still propagates the callback's own error, unchanged. A wrapper that
-      // swallowed it, or replaced it with a deadline error, would make every failed write look
-      // like an outage.
+      // A rollback must propagate the callback's own error unchanged.
       const marker = new Error('deliberate rollback');
       const thrown = await withTransaction(async (tx) => {
         await tx`select 1`;
@@ -272,9 +198,7 @@ describe('the request-path deadline leaves a healthy database alone', () => {
         () => null,
         (error: unknown) => error,
       );
-      // The CONTROL: the same statement through a client with no deadline wrapper on it at all.
-      // Asserting against the driver rather than against a literal is what stops this case
-      // becoming a restatement of whatever the wrapper happens to do.
+      // The control runs the same statement through an unwrapped client, so this is no tautology.
       const throughRaw = await unbound`select 1 / 0 as boom`.then(
         () => null,
         (error: unknown) => error,
@@ -306,10 +230,8 @@ describe('the request-path deadline leaves a healthy database alone', () => {
 
   it('lets the server’s own statement_timeout fire first, so slow work is cancelled by Postgres', async () => {
     if (TEST_DATABASE_URL === undefined) return;
-    // The property that makes a blanket client-side deadline safe, measured rather than argued:
-    // the client bound sits ABOVE `statement_timeout`, so anything a live server is still able to
-    // enforce is enforced by the server. A change that made the client deadline tighter would
-    // show up here as `service_unavailable` instead of `57014`.
+    // The client bound sits above `statement_timeout`. A tighter client deadline would show
+    // `service_unavailable` instead of `57014`.
     const config = liveConfig(TIGHT_STATEMENT_TIMEOUT_MS);
     configureDatabase(config);
     try {

@@ -1,39 +1,8 @@
 /**
- * Blinds and the button across a CHANGING roster.
- *
- * ## Why this file exists
- *
- * Every other test of the table deals to a roster that is fixed before the first hand and never
- * moves again, so the only rotation they ever exercise is "button + 1 / button + 2 over the same
- * six seats" — which is correct, and which is also the one case in which the defect this file
- * covers cannot appear. `docs/audit/poker-correctness.md` (P1-1) called that the one genuine
- * coverage hole in the engine, measured it over 40 hands with a scripted join/leave schedule, and
- * found **6 players paying the big blind twice in a row and 1 skipping it entirely**.
- *
- * The old rule advanced the BUTTON by one occupied seat and then read the blinds off it as
- * button + 1 / button + 2 among whoever happened to be seated at that instant. Seat a player
- * between the button and the blinds and the whole assignment shifts backwards under the players
- * who had already paid: seats 0/1/3 deal `BTN 1 / SB 3 / BB 0`, somebody takes seat 2, and the
- * next hand deals `BTN 2 / SB 3 / BB 0` — seat 0 pays the big blind twice, and pays `2 × BB`
- * where the rules charge `BB + SB`.
- *
- * The rule that fixes it is the dead-button rule, and it is stated the other way round: the BIG
- * BLIND advances by exactly one live player per hand, and the button is whatever falls out of
- * that. A dead small blind (nobody posts it) and a dead button (it sits in an empty chair) are
- * legitimate outcomes, not errors.
- *
- * ## What is asserted
- *
- * The simulation below is not a smoke test. It counts, over the whole schedule:
- *
- *   - `doubleBigBlinds` — a player charged the big blind in two consecutive hands.
- *   - `skippedBigBlinds` — a seat in the rotation that the big blind jumped over.
- *
- * Both must be zero, and the counts are reported in the assertion message so a regression says
- * how bad it is rather than merely that it happened. On top of that: the big blind must land on
- * the very next seat in the rotation every single hand (the rule itself, asserted directly), a
- * newcomer must not be dealt a free hand, the obligation must survive a stand/sit cycle, and
- * chips must be conserved after every hand.
+ * Blinds and the button across a changing roster, the coverage hole in
+ * `docs/audit/poker-correctness.md` (P1-1). The dead-button rule moves the big blind by exactly one
+ * live player per hand, and the button follows from that. A dead small blind or button is correct.
+ * Over the schedule, no player may pay the big blind twice running and no seat may be skipped.
  */
 
 import assert from 'node:assert/strict';
@@ -45,7 +14,6 @@ import { systemClock } from '../src/rooms/timers.ts';
 const CONFIG = { smallBlind: 5, bigBlind: 10, ante: 0, maxSeats: 6, actionTimeoutSeconds: 30 } as const;
 const BUY_IN = 1_000;
 
-/** Readable, sequential hand ids, so a failure names the hand it happened in. */
 function incrementingHandIds(): () => string {
   let count = 0;
   return () => {
@@ -54,33 +22,24 @@ function incrementingHandIds(): () => string {
   };
 }
 
-/** One dealt hand, reduced to the facts the blind rules are about. */
 interface HandRecord {
   readonly handNumber: number;
-  /** Seats in the blind rotation when the hand was dealt: seated, with chips, not leaving. */
+  /** Seated, with chips, not leaving. */
   readonly entrants: readonly number[];
-  /** Seats actually dealt cards. A subset of `entrants` once obligations exist. */
+  /** A subset of `entrants` once obligations exist. */
   readonly dealtIn: readonly number[];
   readonly buttonSeat: number | null;
   readonly smallBlindSeat: number | null;
   readonly bigBlindSeat: number;
   readonly bigBlindUserId: string;
   readonly smallBlindUserId: string | null;
-  /** Chips each user posted as a forced bet in this hand. */
   readonly posted: ReadonlyMap<string, number>;
 }
 
-/**
- * A table plus the bookkeeping the assertions need.
- *
- * Chips are tracked by hand rather than read back out of the table, because a player who stands
- * up leaves the seating altogether: without banking their closing stack at that moment, a
- * conservation check would report every departure as destroyed chips.
- */
+/** Chips are banked when a player stands, or conservation would count each departure as lost chips. */
 class Simulation {
   readonly table: LiveTable;
   readonly hands: HandRecord[] = [];
-  /** Chips belonging to players who have stood up, so the total stays comparable. */
   private banked = 0;
   private boughtIn = 0;
   private actionCount = 0;
@@ -111,7 +70,6 @@ class Simulation {
     return this.table.snapshot().seats.find((entry) => entry.userId === userId);
   }
 
-  /** Total chips in the system: everything on the table plus everything carried away. */
   chipsInSystem(): number {
     const onTable = this.table.snapshot().seats.reduce((sum, seat) => sum + seat.stack, 0);
     return onTable + this.banked;
@@ -121,7 +79,6 @@ class Simulation {
     return this.boughtIn;
   }
 
-  /** Deals one hand, records who paid what, then folds it round to a conclusion. */
   async playHand(): Promise<HandRecord> {
     const before = this.table.snapshot();
     const entrants = before.seats
@@ -131,8 +88,7 @@ class Simulation {
 
     await this.table.startHand();
 
-    // Any seated user will do: `forcedBets`, the seat roster and the button are public, and the
-    // spectator view carries all three. Nothing here reads a card.
+    // The spectator view carries forced bets, roster and button. Nothing here reads a card.
     const observer = before.seats[0]?.userId;
     assert.ok(observer !== undefined, 'a hand needs somebody at the table');
     const view = this.table.viewFor(observer);
@@ -173,13 +129,7 @@ class Simulation {
     return record;
   }
 
-  /**
-   * Folds every decision until the hand is over.
-   *
-   * Folding rather than calling keeps the hand short and the chip movement trivial, which is what
-   * this file wants: the subject is who was CHARGED, not who won. `fold` is always in the legal
-   * set (betting.ts offers it even when checking is free), so no policy is needed.
-   */
+  /** The subject is who was charged, not who won. `fold` is always legal. */
   private async foldItOut(observer: string): Promise<void> {
     for (let guard = 0; guard <= 64; guard += 1) {
       const view = this.table.viewFor(observer);
@@ -197,7 +147,6 @@ class Simulation {
   }
 }
 
-/** Seats strictly between `from` and `to`, walking clockwise. The seats the big blind jumped. */
 function seatsJumped(from: number, to: number, entrants: readonly number[]): number[] {
   const jumped: number[] = [];
   for (let step = 1; step <= CONFIG.maxSeats; step += 1) {
@@ -241,22 +190,18 @@ function tally(hands: readonly HandRecord[]): Tally {
 }
 
 /**
- * The schedule, applied BEFORE the numbered hand is dealt.
- *
- * Chosen to cover every case the rule has to survive rather than to be random: a join between the
- * button and the blinds (the audit's minimal repro), a departure from the small blind seat (a dead
- * small blind), a departure from the button seat (a dead button), a stand-and-sit straddling the
- * blinds (the dodge), a drop to heads-up and a return to three handed.
+ * Applied before the numbered hand is dealt. Covers a join between button and blinds, a dead small
+ * blind, a dead button, a stand-and-sit dodge, a drop to heads-up and a return to three-handed.
  */
 const SCHEDULE: ReadonlyMap<number, readonly (readonly [string, number | null])[]> = new Map([
   [1, [['A', 0] as const, ['B', 1] as const, ['C', 3] as const]],
-  // The audit's minimal repro: a newcomer takes the seat between the button and the blinds.
+  // The audit's minimal repro.
   [2, [['D', 2] as const]],
   [5, [['E', 5] as const]],
-  // C holds seat 3, which is where the small blind falls in hand 9 — a dead small blind.
+  // Seat 3 is the small blind in hand 9, so it becomes dead.
   [9, [['C', null] as const]],
   [12, [['F', 4] as const]],
-  // A stands as the blinds approach and comes straight back: the dodge P1-2 describes.
+  // The P1-2 dodge.
   [15, [['A', null] as const]],
   [17, [['A', 0] as const]],
   [20, [['D', null] as const, ['E', null] as const]],
@@ -302,8 +247,6 @@ describe('blinds and the button across a changing roster', () => {
       await simulation.playHand();
     }
 
-    // The rule itself, asserted directly rather than through its symptoms. Everything else in
-    // this file — no double, no skip, a fair share of the blinds — is a consequence of it.
     for (const [index, hand] of simulation.hands.entries()) {
       const previous = simulation.hands[index - 1];
       if (previous === undefined) continue;
@@ -330,9 +273,7 @@ describe('blinds and the button across a changing roster', () => {
       'the first hand deals BTN 1 / SB 3 / BB 0',
     );
 
-    // The newcomer takes the seat between the button and the small blind. Under the old rule the
-    // button moved onto seat 2 and dragged the blinds back onto seats 3 and 0, charging seat 0 a
-    // second consecutive big blind.
+    // The old rule moved the button onto seat 2 and charged seat 0 a second big blind.
     await simulation.sit('D', 2);
     const second = await simulation.playHand();
     assert.notEqual(second.bigBlindSeat, first.bigBlindSeat, 'seat 0 must not pay the big blind twice');
@@ -353,8 +294,7 @@ describe('blinds and the button across a changing roster', () => {
     assert.equal(first.smallBlindSeat, 2);
     assert.equal(first.bigBlindSeat, 3);
 
-    // The big blind leaves. The small blind for the next hand belongs to their seat, and there is
-    // nobody in it: it is dead, and the three remaining players post one blind between them.
+    // Nobody sits in the next small blind's seat, so it is dead.
     await simulation.stand('D');
     const second = await simulation.playHand();
     assert.equal(second.bigBlindSeat, 0, 'the big blind advances to the next live player');
@@ -375,9 +315,7 @@ describe('blinds and the button across a changing roster', () => {
     const first = await simulation.playHand();
     assert.equal(first.smallBlindSeat, 2);
 
-    // The small blind leaves, so the button — which belongs on their seat next hand — has nobody
-    // to sit on. A dead button is the correct outcome; moving it forward would move the blinds
-    // with it and charge somebody twice.
+    // Moving the button forward would move the blinds with it and charge somebody twice.
     await simulation.stand('C');
     const second = await simulation.playHand();
     assert.equal(second.bigBlindSeat, 0, 'the big blind advances to the next live player');
@@ -395,8 +333,7 @@ describe('the blind obligation a newcomer owes', () => {
     await simulation.sit('C', 2);
     await simulation.playHand();
 
-    // Seat 4 is two seats behind the blinds: under the old rule this newcomer was dealt straight
-    // in, in position, having paid nothing.
+    // Under the old rule this newcomer was dealt in for free, in position.
     await simulation.sit('N', 4);
 
     const dealtInBefore: number[] = [];
@@ -420,8 +357,6 @@ describe('the blind obligation a newcomer owes', () => {
     await simulation.sit('C', 2);
     await simulation.sit('D', 3);
 
-    // Play until the big blind is on seat 1, which leaves D on seat 3 two hands away from paying
-    // it — the moment the dodge is worth attempting.
     let reached = false;
     for (let index = 0; index < 8 && !reached; index += 1) {
       const hand = await simulation.playHand();
@@ -432,9 +367,7 @@ describe('the blind obligation a newcomer owes', () => {
     await simulation.stand('D');
     await simulation.sit('D', 3);
 
-    // The hand D was trying to buy: under the old rule they were seated and dealt straight back
-    // in, having paid nothing and skipped nothing. The obligation follows the person, not the
-    // chair, so the round trip bought them nothing at all.
+    // The obligation follows the person, not the chair.
     assert.ok(simulation.table.owesBlind('D'), 'the returning player owes a blind');
     const skipped = await simulation.playHand();
     assert.equal(skipped.bigBlindSeat, 2, 'the rotation carries on regardless');

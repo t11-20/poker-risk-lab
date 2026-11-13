@@ -1,95 +1,10 @@
 /**
- * The schema guard: this build refuses to serve a database whose migration ledger is behind the
- * migrations it shipped with.
- *
- * ## The incident
- *
- * The API neither migrates at boot nor asked whether anybody had. Twice in one day an open PR added
- * a migration (#25's 0008, then #32's 0009) and the development database stayed behind it until
- * somebody happened to run `migrate.mjs up`. Meanwhile the API booted green and `/ready` answered
- * 200 — `select 1` is perfectly happy against a schema one column short — and the only symptom was
- * archive writes failing with `column "automatic_reason" does not exist`: units silently stopped
- * moving, and the whole API test file failed with an error that named a column rather than a cause.
- * Nothing anywhere said "the schema is behind the code", which is a sentence this file can say
- * because both halves of it are on hand at boot: the files in `db/migrations/` and the ledger
- * `apps/api/scripts/migrate.mjs` writes into `prl.schema_migrations`.
- *
- * ## The verdicts, and which direction each one fails in
- *
- *   * **Behind** — a shipped file has no ledger row. Refused: the code was written against a column
- *     or a constraint that is not there, and the failure is a wrong answer on some later request
- *     rather than an error now. The refusal names the files and the command that applies them.
- *   * **Drifted** — a ledger row's checksum is not the file's. Refused, mirroring `migrate.mjs`,
- *     which aborts on the same comparison: the database and this build describe different schemas,
- *     and neither "reapply" nor "carry on" is safe.
- *   * **Ahead** — the ledger holds a file this build does not know. ALLOWED, with a warning. The
- *     RUNBOOK's deploy order is "migrate, then roll the API" (§11.3), so every rolling deploy runs
- *     the outgoing build against a ledger one file ahead of it, and a rollback of the image runs
- *     the previous build against the schema the new one migrated. Migrations are additive by
- *     policy — `up` refuses a destructive statement that does not declare itself irreversible, and
- *     a destructive change takes two releases — so an older build against a newer schema is the
- *     designed state of a deploy, not a fault. Refusing it would turn every deploy into an outage
- *     of the instances still draining.
- *   * **Unreadable** — the ledger does not exist, or this identity may not read it. Refused: that
- *     is the database ANSWERING, and the answer is "never migrated" or "behind 0010", which grants
- *     the read. A guess in the serving direction is the incident again.
- *   * **Unverified** — the database did not answer at all. NOT refused at boot, because
- *     `docs/production/runbooks/db-unavailable.md` makes "liveness 200, readiness 503, process
- *     stays up" the designed posture for an outage, drilled by `test:drills --only
- *     postgres-outage`: an API rescheduled during an outage must come up degraded, not crash-loop.
- *     Readiness reports degraded until a probe gets an answer, and then applies the same verdicts.
- *
- * ## Why readiness asks only until it has an answer — for the same database
- *
- * A schema can only be BEHIND this build at boot, or when a DIFFERENT database starts answering
- * the DSN. The file list is fixed when the build is, so a row that appears in the ledger while
- * the process runs is the AHEAD case, which is allowed. So once the schema has been verified, the
- * gate is sticky and `/ready` goes back to one cheap query (`db.ts` says why that matters: the
- * probe must be cheaper than the cheapest real request) — but sticky to the database it verified,
- * not to the process. PR #38's review (Devin) found the first version trusted the verdict for the
- * process's whole life, while a restore into a recreated database, a failover or a DSN that now
- * resolves to a newer container can each put a database behind this build under a process that
- * already said "current". So every verdict records `databaseIdentity` (`db.ts`, read in the same
- * statement as the ledger so the two describe one database), `ping()` returns the same value in
- * its single round trip, and a probe that sees a different one drops the verdict and asks again.
- * The probe and the ledger read are still two queries, so a probe is answered "current" only
- * when the ledger read that produced the verdict reached the database the probe did.
- *
- * Only an instance that has not yet seen an answer for the database in front of it spends a
- * ledger query per probe, and that one is single-flight and bounded by `PROBE_QUERY_DEADLINE_MS`.
- * It runs after `ping()`, so a slow probe followed by a slow ledger read can outlast
- * `READINESS_DEADLINE_MS` and answer "readiness probe did not answer" rather than the schema's own
- * detail: still a 503, only in the not-yet-verified state, and the next probe usually has the
- * answer the first one started.
- *
- * ## Why the feature routes are gated too, and not only `/ready`
- *
- * The same review: a 503 from `/ready` withholds traffic only where something routes on it. The
- * staging proxy is open-source nginx, which has no active upstream health checks — Compose's
- * `depends_on: service_healthy` gates the proxy's START on `/ready` and nothing after it — so an
- * API that booted degraded and then found its database behind was being sent learners anyway,
- * and their writes failed on columns that were not there. `admits()` is what `server.ts` hands
- * `buildApp` as its feature gate: every route except liveness, readiness and metrics answers 503
- * `service_unavailable` with `Retry-After` until a verdict of current (or ahead) is held for the
- * database that is answering, and a refusal found later keeps them there. The WebSocket upgrade
- * is an ordinary request through the same hook, so no socket opens onto an unverified schema.
- *
- * Nothing drives this from outside but probes, and a deployment may have none, so `server.ts` also
- * runs the readiness check on its own timer: a gate that recovers only if somebody remembers to
- * poll `/ready` is a gate that stays shut.
- *
- * A refusal found by a probe, rather than at boot, does NOT exit. Traffic is already withheld by
- * the 503, and a readiness handler that can kill the process is a kill switch on a public route.
- * It keeps asking, so `migrate up` run while the instance is degraded makes it ready without a
- * restart.
- *
- * ## Why the ledger, and not the columns
- *
- * Comparing the live catalogue against what the code expects would need a second, hand-maintained
- * description of the schema, which is a list that drifts. The ledger already records exactly which
- * file ran, with a checksum of what it contained, and `migrate.mjs` is the only writer. The runtime
- * role reads it with the SELECT that `db/migrations/0010_schema_migrations_readable.sql` grants and
- * nothing more; it still cannot write a row.
+ * Refuses to serve a database whose migration ledger (`prl.schema_migrations`, written only by
+ * `migrate.mjs`) is behind or has drifted from the migrations this build shipped. Without it the API
+ * booted green against a schema one column short and failed archive writes on a missing column.
+ * Feature routes are gated too, not only `/ready`, because the staging nginx has no active health
+ * checks and kept routing learners to a degraded API. A refusal found by a probe never exits the
+ * process, because a readiness handler that can kill it is a kill switch on a public route.
  */
 
 import { createHash } from 'node:crypto';
@@ -99,12 +14,8 @@ import { fileURLToPath } from 'node:url';
 import { type DbCheck, databaseIdentity, type Sql } from './db.ts';
 
 /**
- * `db/migrations/` at the repository root.
- *
- * The same three steps up from `src/` (development, tests) and from `dist/` (the built server),
- * because `tsconfig.json` maps `rootDir: src` to `outDir: dist` one-for-one. `Dockerfile.api` copies
- * the directory into the runtime image for exactly this path; before this file the image pruned
- * `db` altogether.
+ * Three steps up from both `src/` and `dist/`, because `tsconfig.json` maps one onto the other.
+ * `Dockerfile.api` copies the directory into the runtime image for this path.
  */
 export const SHIPPED_MIGRATIONS_DIR = fileURLToPath(new URL('../../../db/migrations/', import.meta.url));
 
@@ -114,7 +25,6 @@ const FILE_NAME_PATTERN = /^\d{4}_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$/;
 /** The migration that lets the runtime role read the ledger, named in the refusal it prevents. */
 export const LEDGER_GRANT_MIGRATION = '0010_schema_migrations_readable.sql';
 
-/** What both sides of the comparison are reduced to. */
 export interface MigrationRecord {
   readonly version: string;
   readonly checksum: string;
@@ -123,23 +33,19 @@ export interface MigrationRecord {
 export type SchemaVerdict =
   | {
       readonly kind: 'current';
-      /** How many shipped files the ledger matched. Logged at boot as evidence of a real comparison. */
+      /** Logged at boot as evidence of a real comparison. */
       readonly applied: number;
-      /** Ledger rows this build has no file for: a newer build migrated this database. */
       readonly ahead: readonly string[];
     }
   | {
       readonly kind: 'refused';
-      /** One line, short enough for the readiness body. */
       readonly summary: string;
-      /** Every finding, for stderr at boot. */
       readonly problems: readonly string[];
-      /** What to run or do about it. */
       readonly fix: string;
     }
   | {
       readonly kind: 'unverified';
-      /** Why no answer was had. Never a driver message: those name hosts, users and databases. */
+      /** Never a driver message, which can name hosts, users and databases. */
       readonly reason: string;
     };
 
@@ -155,30 +61,19 @@ const DRIFT_FIX =
   'the change as a new migration.';
 
 /**
- * The checksum `migrate.mjs` records, byte for byte: BOM stripped, CRLF collapsed, `sha256:` prefix.
- *
- * A second implementation rather than an import, because the runtime image ships neither
- * `apps/api/scripts/` nor a reason to. That the two agree is not assumed:
- * `test/schema-guard-database.test.ts` migrates an empty database with the real runner and asserts
- * this module finds every row matching, which fails the moment either side changes its rule.
+ * The checksum `migrate.mjs` records, byte for byte. Reimplemented because the runtime image does not
+ * ship `apps/api/scripts/`. `test/schema-guard-database.test.ts` proves the two agree.
  */
 export function migrationChecksum(contents: string): string {
   const normalised = contents.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n');
   return `sha256:${createHash('sha256').update(normalised, 'utf8').digest('hex')}`;
 }
 
-/** A shipped directory this guard cannot read is a refusal, not a skip. */
 export class ShippedMigrationsError extends Error {
   override readonly name = 'ShippedMigrationsError';
 }
 
-/**
- * Every migration this build shipped, in apply order.
- *
- * Throws rather than returning an empty list, and an empty directory throws too: a guard that read
- * nothing and compared nothing would pass every database, which is a sweep of nothing reported as
- * a pass. The likeliest way to get there is an image whose prune or COPY stopped matching.
- */
+/** Throws on an unreadable or empty directory, because a comparison against nothing passes every database. */
 export function readShippedMigrations(dir: string = SHIPPED_MIGRATIONS_DIR): readonly MigrationRecord[] {
   let names: string[];
   try {
@@ -220,12 +115,9 @@ function listed(versions: readonly string[]): string {
 }
 
 /**
- * The comparison, with no I/O, so every verdict is a unit test.
- *
- * Mirrors `planMigrations` in `migrate.mjs` deliberately — pending, drifted and orphaned are its
- * three categories too — with one difference: an orphan (here, `ahead`) is allowed. The runner
- * refuses one because it is about to change the schema and wants the repository to describe the
- * result; this process changes nothing and is asked only whether it can serve.
+ * No I/O, so every verdict is unit-tested. Behind (a shipped file with no row) and drifted (a checksum
+ * mismatch) are refused. Ahead (a row with no file) is allowed, because migrate-then-roll deploys and
+ * image rollbacks run an older build against a newer additive schema by design.
  */
 export function compareSchema(
   shipped: readonly MigrationRecord[],
@@ -280,8 +172,7 @@ export function compareSchema(
             `expects ${pending.length} migration(s), ${listed(pending)}`
         : `${pending.length} migration(s) this build expects are not applied: ${pending.join(', ')}`,
     );
-    // `migrate.mjs` refuses a pending file that sorts below the highest applied one, so telling
-    // somebody to run it without saying so sends them straight into a second refusal.
+    // `migrate.mjs` refuses a pending file that sorts below the highest applied one, so say so.
     const highest = [...ledger.map((row) => row.version)].sort().at(-1);
     const outOfOrder = highest === undefined ? [] : pending.filter((version) => version < highest);
     if (outOfOrder.length > 0 && highest !== undefined) {
@@ -290,9 +181,7 @@ export function compareSchema(
           '`migrate.mjs up` will refuse them as out of order: renumber them to follow it',
       );
     }
-    // Served on its own, an ahead ledger is fine. Beside a pending file it is the state switching
-    // branches leaves — another branch's 0009 applied, this one's 0010 not — and `up` refuses a
-    // ledger row with no file unless told otherwise, so "run db:migrate" alone is a second refusal.
+    // Ahead beside pending is the state branch switching leaves, and `up` refuses it too.
     if (ahead.length > 0) {
       problems.push(
         `the ledger also holds ${ahead.length} migration(s) this build has no file for: ` +
@@ -311,19 +200,15 @@ export function compareSchema(
   return { kind: 'refused', summary, problems, fix: drifted.length > 0 ? DRIFT_FIX : MIGRATE_FIX };
 }
 
-/** The ledger, and which database it was read from. */
 export interface LedgerReading {
-  /** `databaseIdentity` of the database that answered. Compared with `ping()`'s, never shown. */
+  /** Compared with `ping()`'s, never shown. */
   readonly identity: string;
   readonly rows: readonly MigrationRecord[];
 }
 
 /**
- * The ledger, as the connecting identity sees it. Throws the driver's own error.
- *
- * One statement for both halves, so the rows and the identity cannot come from two different
- * databases: the pool is shared, and two queries can land on two connections. A missing table,
- * schema or grant still fails with the same SQLSTATE `classifyLedgerFailure` reads.
+ * One statement for the rows and the identity, because two queries on the shared pool can reach two
+ * different databases. Throws the driver's own error.
  */
 export async function readLedger(sql: Sql): Promise<LedgerReading> {
   const [row] = await sql<{ identity: string; rows: MigrationRecord[] }[]>`
@@ -339,11 +224,9 @@ export async function readLedger(sql: Sql): Promise<LedgerReading> {
 }
 
 /**
- * "The database answered badly" versus "the database did not answer".
- *
- * Three SQLSTATEs are answers about the ledger itself, and are refusals. Everything else —
- * a refused connection, a deadline, `57P03` while Postgres is still starting — says nothing about
- * the schema, so it leaves the question open rather than guessing in either direction.
+ * A missing ledger or a refused read is the database answering, so it is a refusal. Anything else
+ * (a refused connection, a deadline, `57P03`) is unverified. Boot does not refuse that, because an API
+ * started during an outage must come up degraded, not crash-loop (`runbooks/db-unavailable.md`).
  */
 export function classifyLedgerFailure(error: unknown): SchemaVerdict {
   const code = (error as { code?: unknown } | null)?.code;
@@ -374,7 +257,7 @@ export function classifyLedgerFailure(error: unknown): SchemaVerdict {
   return { kind: 'unverified', reason: `the migration ledger could not be read (${named})` };
 }
 
-/** Reads the ledger and compares it. Never throws: every failure is a verdict. */
+/** Never throws. Every failure is a verdict. */
 export async function verifySchema(
   read: () => Promise<readonly MigrationRecord[]>,
   shipped: () => readonly MigrationRecord[],
@@ -400,7 +283,6 @@ export async function verifySchema(
   return compareSchema(files, ledger);
 }
 
-/** The text a refusal at boot prints to stderr, in `ConfigError`'s shape. */
 export function describeRefusal(verdict: Extract<SchemaVerdict, { kind: 'refused' }>): string {
   return (
     'Refusing to start: the database schema does not match this build.\n' +
@@ -410,28 +292,18 @@ export function describeRefusal(verdict: Extract<SchemaVerdict, { kind: 'refused
 
 export interface SchemaGateOptions {
   readonly readLedger: () => Promise<LedgerReading>;
-  /** Defaults to `readShippedMigrations()`, read once and kept: the file list IS the build. */
+  /** Defaults to `readShippedMigrations()`, read once, because the file list is fixed by the build. */
   readonly shipped?: () => readonly MigrationRecord[];
-  /** How long a readiness probe waits for the ledger before answering "not yet verified". */
   readonly probeDeadlineMs: number;
-  /** A probe saw a different database from the one the verdict was for. */
   readonly onDatabaseChanged?: () => void;
-  /**
-   * A verification reached a different verdict from the one before it. Not called for the first,
-   * which is boot's, and which `server.ts` reports itself.
-   */
+  /** Not called for the first verdict, which `server.ts` reports itself. */
   readonly onVerdictChanged?: (verdict: SchemaVerdict) => void;
 }
 
 export interface SchemaGate {
-  /** Asks now, records the answer, and returns it. Boot calls this once. */
   readonly verify: () => Promise<SchemaVerdict>;
-  /** A readiness answer that also requires a verified schema. See the header for when it queries. */
   readonly readiness: (database: DbCheck) => Promise<DbCheck>;
-  /**
-   * Whether a feature request may be served now. Synchronous, and reads no database: it is on
-   * every request, so it answers from what the last verification recorded.
-   */
+  /** On every request, so it reads no database and answers from the last verification. */
   readonly admits: () => DbCheck;
 }
 
@@ -441,12 +313,10 @@ export function createSchemaGate(options: SchemaGateOptions): SchemaGate {
     files ??= (options.shipped ?? readShippedMigrations)();
     return files;
   };
-  /** The identity of the database the current verdict was reached against, or null for none. */
+  /** The database identity a current verdict holds for, or null. */
   let verified: string | null = null;
-  /** Why a feature request is refused while `verified` is null. Server-side only. */
   let refusal = 'schema not yet verified: no verification has finished';
   let previous: SchemaVerdict | null = null;
-  /** A verification in progress, and the database its ledger read reached. */
   let inflight: Promise<{ verdict: SchemaVerdict; identity: string | null }> | null = null;
 
   const record = (verdict: SchemaVerdict, identity: string | null): void => {
@@ -462,8 +332,7 @@ export function createSchemaGate(options: SchemaGateOptions): SchemaGate {
   };
 
   const verifyAt = (): Promise<{ verdict: SchemaVerdict; identity: string | null }> => {
-    // Single-flight: probes that arrive while one verification is outstanding share it, so an
-    // instance waiting on a slow database costs it one ledger query, not one per probe.
+    // Single-flight, so a slow database costs one ledger query, not one per probe.
     inflight ??= (async () => {
       let identity: string | null = null;
       const verdict = await verifySchema(async () => {
@@ -481,16 +350,13 @@ export function createSchemaGate(options: SchemaGateOptions): SchemaGate {
   const verify = async (): Promise<SchemaVerdict> => (await verifyAt()).verdict;
 
   const readiness = async (database: DbCheck): Promise<DbCheck> => {
-    // `ping()` first, and its answer unchanged when it failed: its latch exists so an outage costs
-    // the pool one connection, and asking for the ledger behind a dead probe would spend another.
+    // Once verified, a probe costs only `ping()`, since a schema can fall behind only when a different
+    // database answers. A failed ping is returned as is, so the ledger read spends no second connection.
     if (!database.ok) return database;
     if (verified !== null) {
       if (database.identity === verified) return database;
-      // A different database is answering — or a handle that cannot say which, which is treated
-      // the same way: a verdict is only ever trusted for the database it was reached against.
-      // Dropped BEFORE asking again, so feature requests are refused for the length of the
-      // re-verification rather than served against a schema nobody has looked at. That is the
-      // safe direction, and against a healthy database it lasts one ledger read.
+      // A different database, or one that cannot say. The verdict is dropped before asking again, so
+      // feature requests are refused during re-verification. That is the safe direction.
       verified = null;
       refusal = 'schema not yet verified: a different database is answering DATABASE_URL';
       options.onDatabaseChanged?.();
@@ -510,12 +376,8 @@ export function createSchemaGate(options: SchemaGateOptions): SchemaGate {
       }
       const { verdict, identity } = outcome;
       if (verdict.kind === 'current' && identity !== database.identity) {
-        // The probe and the ledger read are two queries on one pool, so mid-switch they can reach
-        // two databases: PR #38's review (Devin) had the probe see a replacement that is behind
-        // while the ledger read reused a connection to the current one, and this answered 200 for
-        // the replacement and reopened the gate. "Current" is only ever an answer about the
-        // database that gave it, so a verdict for another one closes the gate again — the safe
-        // direction — and the next probe asks the database it then sees.
+        // The probe and the ledger read reached different databases mid-switch (PR #38 review). A
+        // verdict about another database closes the gate again.
         if (verified === identity) {
           verified = null;
           refusal = 'schema not yet verified: the probe and the migration ledger reached different databases';

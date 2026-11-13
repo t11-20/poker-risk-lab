@@ -1,40 +1,8 @@
 /**
- * `apps/api/scripts/verify-schema.mjs`, proved capable of failing.
- *
- * ## The hole this closes
- *
- * `pnpm run db:verify` is a release gate: it asks the live database whether the security properties
- * the threat model claims are actually true — no column can hold the deck or the salts, no raw
- * token or invite code is stored, the concurrency indexes exist, `rooms.visibility` admits one
- * value, and the runtime role is genuinely least-privilege. It had no test, and the release audit
- * found four other gates in this repository that could not fail. A schema guard that has never been
- * seen to reject anything is worth nothing: it is indistinguishable from `exit 0`.
- *
- * So every check this file exercises is exercised by *breaking the schema* and watching the script
- * refuse. Each hostile change is applied to a throwaway database this file creates and drops, the
- * script is run, its exit code and its finding are asserted, the change is reverted, and the script
- * is run again to confirm it is content — which is what makes each failure attributable to the
- * change rather than to anything else that happened to be wrong.
- *
- * ## The hostile change the loop cannot make
- *
- * Every case in `HOSTILE_CHANGES` is applied to a table the runtime role already has a grant on,
- * and the script is run as the schema owner — who sees the whole schema whichever catalogue is
- * asked. So none of them could detect the defect that mattered most: `information_schema` is
- * filtered by the CONNECTING ROLE's privileges, `pnpm run db:verify` connects as a member of
- * `prl_app`, and a table added by a later migration is granted nothing by default. The verifier
- * was therefore blind, by default, to exactly the tables nobody had reviewed. The suite named
- * "a table the connecting role cannot see" is the negative control for that, and it runs the
- * script as `prl_app` because running it as the owner is what hid the hole.
- *
- * ## What is deliberately NOT broken
- *
- * `prl_app`'s role *attributes* — `rolsuper`, `rolcreatedb`, `rolcreaterole`. Those are cluster-wide
- * in PostgreSQL: making one of them true to watch the script complain would grant it in every
- * database on the server, including the one the rest of this suite is using, and a test that
- * escalates a shared role's privileges is a bad trade whatever it proves. The privilege checks that
- * *are* database-scoped — CREATE on the schema, TRUNCATE on a table — are exercised in full, and
- * they are the ones an ordinary mistake in a migration would actually produce.
+ * Proves `apps/api/scripts/verify-schema.mjs` (`db:verify`) can fail: each check is exercised by breaking
+ * a throwaway database's schema, asserting the finding, reverting, and asserting a pass again.
+ * `information_schema` is filtered by the connecting role, so the blind-table case runs as `prl_app`.
+ * Role attributes (`rolsuper` etc.) are not broken because they are cluster-wide.
  */
 
 import assert from 'node:assert/strict';
@@ -56,10 +24,7 @@ const REPO_ROOT = join(API_DIR, '..', '..');
 const VERIFY = join(API_DIR, 'scripts', 'verify-schema.mjs');
 const MIGRATE = join(API_DIR, 'scripts', 'migrate.mjs');
 
-// The schema-owning identity: this file creates throwaway databases and applies hostile
-// ALTER/GRANT/REVOKE changes to prove the gate can fail. The runtime role deliberately
-// cannot do any of that, so asking for it here is what lets the rest of the suite run as a
-// prl_app member without widening a single grant.
+// The schema owner, because hostile DDL needs it and the runtime role must not have it.
 const databaseUrl = adminDatabaseUrl();
 let maintenance: Sql | null = null;
 let skipReason: string | false = databaseSkip('the schema verifier');
@@ -105,23 +70,13 @@ after(async () => {
   if (maintenance !== null) await maintenance.end({ timeout: 5 });
 });
 
-// ---------------------------------------------------------------------------
-// Throwaway databases
-// ---------------------------------------------------------------------------
-
 interface Throwaway {
   readonly name: string;
   readonly url: string;
   readonly sql: Sql;
 }
 
-/**
- * A database of this file's own, so a hostile schema change is never applied anywhere real.
- *
- * The name comes from the same CSPRNG the repositories use and is matched against a strict pattern
- * before it is interpolated: `CREATE DATABASE` cannot take a bind parameter, so `sql(name)` —
- * postgres.js's identifier quoting — is what puts it in the statement.
- */
+/** `CREATE DATABASE` takes no bind parameter, so the name is pattern-checked and identifier-quoted. */
 async function createThrowaway(): Promise<Throwaway> {
   const handle = maintenance;
   assert.ok(handle !== null, 'these tests need a maintenance connection');
@@ -158,10 +113,7 @@ interface RunResult {
 }
 
 async function run(script: string, args: readonly string[], url: string | undefined): Promise<RunResult> {
-  // Both connection strings are filtered out of the inherited environment and only `url` is put
-  // back. `DATABASE_MIGRATION_URL` matters as much as `DATABASE_URL` here: the migration runner
-  // prefers it, and a developer machine that sets it would send the `up` below to a real database
-  // instead of to the throwaway one this file is about to vandalise.
+  // The migration runner prefers DATABASE_MIGRATION_URL, so an inherited one would migrate a real database.
   const env: Record<string, string> = {
     ...Object.fromEntries(
       Object.entries(process.env).filter(
@@ -186,7 +138,6 @@ async function run(script: string, args: readonly string[], url: string | undefi
 
 const verify = (url: string | undefined): Promise<RunResult> => run(VERIFY, [], url);
 
-/** A throwaway database with every migration applied, dropped however the body ends. */
 async function withMigratedDatabase(use: (throwaway: Throwaway) => Promise<void>): Promise<void> {
   const throwaway = await createThrowaway();
   try {
@@ -198,7 +149,6 @@ async function withMigratedDatabase(use: (throwaway: Throwaway) => Promise<void>
   }
 }
 
-/** The verifier is content with this schema. The control every hostile case is measured against. */
 async function assertPasses(throwaway: Throwaway, when: string): Promise<void> {
   const result = await verify(throwaway.url);
   assert.equal(result.code, 0, `${when}: the verifier should pass but did not:\n${result.output}`);
@@ -206,20 +156,8 @@ async function assertPasses(throwaway: Throwaway, when: string): Promise<void> {
 }
 
 /**
- * The same DSN, but the verifier runs as `prl_app` — the privileges a deployment actually gives it.
- *
- * `pnpm run db:verify` connects as `DATABASE_URL`, which RUNBOOK §5 makes `prl_api`: a login role
- * that is a member of `prl_app` and holds nothing of its own. This file's DSN is the schema-owning
- * identity instead, because it has to be able to apply hostile DDL — and an owner sees everything
- * in `pg_catalog` AND everything in `information_schema`, which is precisely the difference the
- * test below exists to catch. Running the script under the runtime role is what puts it back.
- *
- * Done with the `options` startup parameter rather than a second login role, for two reasons: a
- * role is cluster-wide, so creating one to prove a point in one throwaway database leaks out of
- * the database this file is allowed to vandalise; and `prl_app` is NOLOGIN on purpose, so there
- * is no password to put in a test file. `SET ROLE` is exactly what a login role's membership does
- * at connection time, and postgres.js forwards any query parameter it does not recognise as a
- * startup parameter, which is how `-c role=prl_app` reaches the server.
+ * Runs the verifier as `prl_app`, as a deployment does. The owner sees every table in both catalogues.
+ * `-c role=prl_app` avoids a second login role, which would be cluster-wide, and `prl_app` is NOLOGIN.
  */
 function asRuntimeRole(url: string): string {
   const parsed = new URL(url);
@@ -227,23 +165,13 @@ function asRuntimeRole(url: string): string {
   return parsed.toString();
 }
 
-// ---------------------------------------------------------------------------
-// The hostile changes
-// ---------------------------------------------------------------------------
-
 interface HostileChange {
   readonly what: string;
-  /** The finding the verifier has to produce. */
   readonly expect: RegExp;
   readonly apply: (sql: Sql) => Promise<void>;
   readonly revert: (sql: Sql) => Promise<void>;
 }
 
-/**
- * Every change is written as a literal DDL statement inside a tagged template — no value is
- * interpolated anywhere, so nothing here is a hole in the parameterisation rule that
- * `src/db.ts` states at the top.
- */
 const HOSTILE_CHANGES: readonly HostileChange[] = [
   {
     what: 'a column that would persist the deck order',
@@ -321,9 +249,7 @@ const HOSTILE_CHANGES: readonly HostileChange[] = [
     apply: async (sql) => {
       await sql`drop index prl.hand_actions_client_action_id_key`;
     },
-    // Restored exactly as `db/migrations/0002_indexes_and_constraints.sql` declares it. Copied
-    // rather than captured from the catalogue, because re-executing a captured `indexdef` would
-    // mean `.unsafe()`, and this database is discarded either way.
+    // Copied from migration 0002 because re-executing a captured `indexdef` would need `.unsafe()`.
     revert: async (sql) => {
       await sql`
         create unique index hand_actions_client_action_id_key
@@ -347,15 +273,7 @@ const HOSTILE_CHANGES: readonly HostileChange[] = [
     },
   },
   {
-    /**
-     * The exact regression `db/migrations/0004_account_deletion.sql` exists to prevent.
-     *
-     * `room_members.user_id` was `ON DELETE RESTRICT`, and a foreign key has no predicate — so a
-     * membership a learner ended months ago restricted their erasure exactly as hard as one they
-     * were sitting in. Every learner who had ever joined a table was undeletable, and the failure
-     * arrived as a bare `23503` that nothing mapped. Putting the constraint back the old way here
-     * proves the check that now catches it can actually fail.
-     */
+    // The regression migration 0004 fixed. RESTRICT made every learner who ever joined a table undeletable.
     what: 'a foreign key to prl.users that would make an account undeletable again',
     expect: /user reference: room_members: room_members_user_id_fkey is ON DELETE RESTRICT/,
     apply: async (sql) => {
@@ -429,39 +347,19 @@ const HOSTILE_CHANGES: readonly HostileChange[] = [
   },
   {
     what: 'a table in the schema owned by the runtime role, which could then drop it',
-    // Not pinned to a count: `ALTER TABLE ... OWNER TO` carries the table's indexes with it, so
-    // one hostile change moves several relations. The finding that matters is that ownership of
-    // `audit_log` — the tamper-evident record — is reported at all.
+    // Not pinned to a count, because `OWNER TO` moves the table's indexes too.
     expect: /prl_app: owns \d+ relation\(s\), so it can DROP them:.*audit_log/,
     apply: async (sql) => {
       await sql`alter table prl.audit_log owner to prl_app`;
     },
-    /**
-     * The GRANT has to be re-issued, and finding that out is what the grant matrix check bought.
-     *
-     * `ALTER TABLE ... OWNER TO prl_app` makes `prl_app` the owner, and PostgreSQL drops the now
-     * redundant explicit grant to it from the ACL. Handing ownership back to `prl_migrator` does
-     * NOT put that entry back, so the revert left `audit_log` with no grant to the runtime role at
-     * all — the security-audit trail unwritable by the only role that writes to it.
-     *
-     * This test reverted that way from the day it was written and passed every time, because
-     * nothing in the verifier looked at grants: `assertPasses` after the revert only ever proved
-     * that ownership was restored. Check 10 caught it on its first run against the full suite.
-     */
+    // Handing ownership back does not restore the explicit grant PostgreSQL dropped, so re-issue it.
     revert: async (sql) => {
       await sql`alter table prl.audit_log owner to prl_migrator`;
       await sql`grant select, insert on prl.audit_log to prl_app`;
     },
   },
   {
-    /**
-     * The over-grant direction of the matrix.
-     *
-     * `prl.hands` is SELECT/INSERT/UPDATE and 0001 says why in as many words: "deal, advance,
-     * settle. No DELETE". A DELETE here would let the request path — and therefore an injection
-     * that reaches it — remove a hand that other people played, and it looks like nothing at all in
-     * a migration diff. Check 6 could never see it: it asks only about TRUNCATE.
-     */
+    // Over-grant. Migration 0001 gives hands no DELETE, and check 6 only asks about TRUNCATE.
     what: 'DELETE on prl.hands granted to the runtime role, which no migration ever decided',
     expect: /grant matrix: prl_app holds SELECT INSERT UPDATE DELETE on hands, expected SELECT INSERT UPDATE/,
     apply: async (sql) => {
@@ -472,15 +370,7 @@ const HOSTILE_CHANGES: readonly HostileChange[] = [
     },
   },
   {
-    /**
-     * The missing-grant direction, on the table where it costs the most.
-     *
-     * A new table is granted nothing by default — 0001 says so — so this is what a migration that
-     * forgot its GRANT looks like. `prl.room_ownership` is the room lease: the API refuses to serve
-     * a room whose lease it cannot take, so a missing grant here does not degrade a feature, it
-     * refuses every room in the deployment. That failure would otherwise arrive as a runtime
-     * `permission denied` on a table nothing else mentions, with `db:verify` having passed.
-     */
+    // Missing grant, the default for a new table. Without the lease grant every room is refused.
     what: 'the room-lease table left with no grants, the default state of a new table',
     expect: /grant matrix: prl_app holds nothing on room_ownership, expected SELECT INSERT UPDATE DELETE/,
     apply: async (sql) => {
@@ -508,13 +398,10 @@ describe('verify-schema.mjs — it passes a correct schema and rejects a hostile
       const result = await verify(throwaway.url);
       assert.equal(result.code, 0, result.output);
       assert.match(result.output, /every documented schema security property holds/);
-      // The notes are what tell a reader the script looked at anything at all. A run that found no
-      // columns and no indexes would also report no failures.
+      // A run that read no columns, indexes or tables would also report no failures.
       assert.match(result.output, /\d+ columns across the prl schema/);
       assert.match(result.output, /\d+ indexes/);
       assert.match(result.output, /checked \d+ tables for prl_app privileges/);
-      // And that the grant matrix looked at every table rather than at the ones it happened to
-      // find. A matrix that silently checked nothing would report no failures either.
       assert.match(result.output, /prl_app holds exactly the declared verbs on all \d+ tables/);
     });
   });
@@ -534,7 +421,6 @@ describe('verify-schema.mjs — it passes a correct schema and rejects a hostile
         assert.match(rejected.output, change.expect);
         assert.match(rejected.output, /schema property\/properties violated/);
 
-        // Reverting and passing again is what attributes the failure to this change alone.
         await change.revert(throwaway.sql);
         await assertPasses(throwaway, 'after the revert');
       });
@@ -544,39 +430,18 @@ describe('verify-schema.mjs — it passes a correct schema and rejects a hostile
 
 describe('verify-schema.mjs — a table the connecting role cannot see', dbOptions, () => {
   /**
-   * The negative control for the privilege filter, and the one case the loop above cannot make.
-   *
-   * Every hostile change above is applied to a table `prl_app` already has a grant on, and the
-   * verifier is run as the schema owner, who sees everything either way. So none of them could
-   * ever have caught this: `information_schema.columns` is filtered by the CURRENT ROLE's
-   * privileges, `db/migrations/0001_initial.sql` says a table added by a later migration is
-   * granted nothing until somebody writes the GRANT, and `pnpm run db:verify` connects as a
-   * member of `prl_app`. A new table is therefore invisible to the gate by default — and checks
-   * 1, 2 and 7 iterate exactly that column list.
-   *
-   * `prl.hand_deck_cache` is the table an auditor built to demonstrate it: created by the
-   * migrator with no grants, it produced four violations as the owner and exit 0 as `prl_api`.
-   * The same database, and the property the script calls its most important one — no column may
-   * hold the deck or the salts — answering "fine" about the one table holding both.
-   *
-   * The three assertions in the middle are not decoration. Without them, a future GRANT (or a
-   * change of DSN identity) could make the table visible again, and this test would go on passing
-   * as an ordinary duplicate of "rejects a column that would persist the deck order" while
-   * silently no longer covering the blind case at all.
+   * Negative control for the privilege filter. A table with no grant is invisible to `prl_app` in
+   * `information_schema`, and against such a verifier this table gave four violations as owner and exit 0
+   * as `prl_api`. The visibility assertions stop this from silently becoming a duplicate case.
    */
   it('fails on a forbidden column in a table it has no grant on, run as prl_app', async () => {
     await withMigratedDatabase(async (throwaway) => {
       const runtimeUrl = asRuntimeRole(throwaway.url);
 
-      // The control: as the runtime role, the migrated schema passes. If this fails, the run is
-      // not measuring the privilege filter — it is measuring a broken connection.
       const clean = await verify(runtimeUrl);
       assert.equal(clean.code, 0, `the migrated schema should pass as prl_app:\n${clean.output}`);
 
-      // Created as prl_migrator so the table is owned the way every other relation is — check 6b
-      // would otherwise fail for the unrelated reason that the owner is wrong, and the finding
-      // this test is about would arrive alongside a distraction. `set local` is undone by the
-      // commit, so the pooled connection is not left wearing another role.
+      // Owned by prl_migrator so check 6b does not also fire. `set local` ends with the transaction.
       await throwaway.sql.begin(async (tx) => {
         await tx`set local role prl_migrator`;
         await tx`
@@ -589,8 +454,6 @@ describe('verify-schema.mjs — a table the connecting role cannot see', dbOptio
         `;
       });
 
-      // It really is invisible to the runtime role: pg_catalog lists its four columns, and
-      // information_schema — asked as prl_app — lists none of them.
       const seen = await throwaway.sql.begin(async (tx) => {
         await tx`set local role prl_app`;
         const [visible] = await tx<{ count: number }[]>`
@@ -615,7 +478,6 @@ describe('verify-schema.mjs — a table the connecting role cannot see', dbOptio
           'something granted it, and the negative control has quietly become a duplicate',
       );
 
-      // The finding. Against a verifier that reads `information_schema.columns` this run exits 0.
       const rejected = await verify(runtimeUrl);
       assert.equal(
         rejected.code,
@@ -626,11 +488,9 @@ describe('verify-schema.mjs — a table the connecting role cannot see', dbOptio
       assert.match(rejected.output, /forbidden column: hand_deck_cache\.deck — would persist deck order/);
       assert.match(rejected.output, /forbidden column: hand_deck_cache\.deck_salts .*sealed Merkle leaves/);
       assert.match(rejected.output, /gamification column: hand_deck_cache\.total_score/);
-      // The count it reports has to be the whole schema's, not the visible subset's.
       assert.match(rejected.output, /columns across the prl schema, read from pg_catalog as prl_app/);
       assert.match(rejected.output, /invisible to prl_app/);
 
-      // Reverting and passing again attributes every one of those findings to this table.
       await throwaway.sql.begin(async (tx) => {
         await tx`set local role prl_migrator`;
         await tx`drop table prl.hand_deck_cache`;
@@ -641,14 +501,8 @@ describe('verify-schema.mjs — a table the connecting role cannot see', dbOptio
   });
 
   /**
-   * The table list check 6 iterates, asked the same way.
-   *
-   * This one is NOT a case the old code got wrong, and saying so is the point of the test:
-   * `information_schema.tables` includes TRUNCATE in the privilege list its filter tests, so a
-   * table `prl_app` can TRUNCATE was always visible to it. Check 6 was sound by coincidence, on a
-   * detail of one view definition that nobody had written down. The script now reads `pg_class`
-   * there too, and this asserts the finding still arrives — so converting the read cannot have
-   * cost the check the one thing it was already doing correctly.
+   * Not a past bug. `information_schema.tables` happens to count TRUNCATE as visibility, so check 6 was
+   * sound by coincidence. This pins the finding after the switch to `pg_class`.
    */
   it('still reports a TRUNCATE grant to prl_app when run as prl_app', async () => {
     await withMigratedDatabase(async (throwaway) => {
@@ -667,9 +521,7 @@ describe('verify-schema.mjs — a table the connecting role cannot see', dbOptio
 
 describe('verify-schema.mjs — pointed at the wrong thing', dbOptions, () => {
   it('fails against a database with no schema at all, rather than finding nothing to complain about', async () => {
-    // The failure mode this guards: `pnpm run db:verify` run against an empty or wrong database.
-    // Every check reads a catalogue, and a catalogue with nothing in it produces no forbidden
-    // columns — so a naive verifier would report success on a database with no application in it.
+    // An empty catalogue has no forbidden columns, so a naive verifier would pass it.
     const throwaway = await createThrowaway();
     try {
       const result = await verify(throwaway.url);

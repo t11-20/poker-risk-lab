@@ -1,35 +1,8 @@
 /**
- * Every path `scripts/load-test.mjs` and `scripts/smoke-test.mjs` can call, driven against a real
- * `buildApp()` + `registerApiRoutes()`.
- *
- * ## The defect this exists for
- *
- * `pnpm run test:load` had never once worked. Three of its route constants named endpoints that do
- * not exist — `/api/v1/session/guest` for `POST /api/v1/auth/guest`, `/api/v1/session` for
- * `GET /api/v1/auth/session`, and `POST /api/v1/rooms/:roomId/join` for a `POST /api/v1/rooms/join`
- * that takes the invite code in the body. It died on request one, every time, and had done since it
- * was written. The wrong path never surfaced as a 404 because every unrouted path answers
- * `content_not_found`, and because the first call was a POST the CSRF hook refused it *before*
- * routing, so the error read `csrf_failed` — which reads like a client problem.
- *
- * The harness is also the repository's only real-WebSocket client outside the test suite, so its
- * silence cost the live-table path all of its end-to-end coverage.
- *
- * `apps/api/test/wiring.test.ts` already proved the server serves its routes, and
- * `apps/api/test/web-api-paths.test.ts` now proves the web client calls routes that exist. Nothing
- * proved it for the harnesses, which is this file. Same defect class, same shape of guard.
- *
- * ## Why the paths are read out of the scripts rather than restated
- *
- * A copy of the list here would be a third place to get it wrong. These are extracted from the
- * script sources as text, so a rename that misses one is caught by the scan rather than by the
- * next person to run a load test.
- *
- * ## Would this fail if the behaviour broke?
- *
- * Yes: restoring any one of the three original constants in `load-test.mjs` makes this fail, and
- * that was checked. The negative control at the bottom proves the assertion is capable of failing
- * at all, by probing the exact three paths the harness used to use.
+ * Every path `scripts/load-test.mjs` and `scripts/smoke-test.mjs` can call routes on a real
+ * `buildApp()`. `test:load` once never worked, because three constants named missing endpoints and
+ * the CSRF hook refused the first POST before routing, so it read `csrf_failed`. Paths are extracted
+ * from the script sources as text. The negative control probes those three old paths.
  */
 
 import assert from 'node:assert/strict';
@@ -62,34 +35,19 @@ function testConfig(overrides: EnvRecord = {}): AppConfig {
 }
 
 /**
- * Removes comments, so a path quoted in prose is not read as a path the script calls.
- *
- * Taken from `test/server-randomness.test.ts` unchanged, including the `[^:]` guard that stops the
- * line-comment rule eating the rest of a line after `https://`. Needed here because this file's own
- * fix documents the three wrong constants by name, and without stripping, the extractor below would
- * dutifully report the documentation as a defect.
+ * From `test/server-randomness.test.ts` unchanged, including the `[^:]` guard for `https://`.
+ * Without stripping, prose naming the old constants would be reported as calls.
  */
 function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
 }
 
-/**
- * The upgrade path is not an HTTP route and cannot be probed with `inject`.
- *
- * `@fastify/websocket` answers a GET that carries no `Upgrade` header with a 404, so probing it here
- * would report a route that demonstrably works as missing. It is covered properly, by a real
- * handshake over a real socket, in `test/ws-socket.test.ts`.
- */
+/** `@fastify/websocket` answers a GET without `Upgrade` with 404. `test/ws-socket.test.ts` covers it. */
 const NOT_AN_HTTP_ROUTE = new Set([`${API_PREFIX}/ws`]);
 
 /**
- * Every `/api/v1/...` literal a harness calls, with template holes filled.
- *
- * A parameterised path needs an id that EXISTS where the endpoint looks one up, because an unknown
- * content id answers the same `content_not_found` as an unrouted path — which is the exact ambiguity
- * that hid the broken constants. So content ids come from `@prl/content`, and the id-guarded routes
- * (`/hands/:id`, `/rooms/:id`) get a syntactically valid id, since both refuse an anonymous caller
- * before they ever look it up.
+ * An unknown content id answers `content_not_found` like an unrouted path, so content ids come from
+ * `@prl/content`. `/hands/:id` and `/rooms/:id` refuse an anonymous caller before any lookup.
  */
 function pathsIn(source: string, scenarioId: string): string[] {
   const found = new Set<string>();
@@ -110,9 +68,7 @@ let csrf: { readonly token: string; readonly cookie: string };
 before(async () => {
   configureDatabase(testConfig());
   app = await buildApp({ config: testConfig() });
-  // A test-only route purely to mint a CSRF pair, registered before the route modules so it cannot
-  // shadow one of theirs. Same device as `web-api-paths.test.ts`, and for the same reason: without
-  // a token a POST is refused before routing and a bare "not 404" check would prove nothing.
+  // Without a CSRF token a POST is refused before routing, so a bare "not 404" proves nothing.
   app.get(`${API_PREFIX}/test-harness-csrf`, (_request, reply) => ({ token: reply.generateCsrf() }));
   await registerApiRoutes(app);
   await app.ready();
@@ -135,7 +91,6 @@ after(async () => {
   await closeDatabase(0);
 });
 
-/** Probes a path with both verbs, because the scripts use both and this file cannot tell which. */
 async function routesSomewhere(path: string): Promise<{ readonly routed: boolean; readonly detail: string }> {
   const get = await app.inject({ method: 'GET', url: path, headers: { origin: 'http://localhost:3000' } });
   if (get.statusCode !== 404) return { routed: true, detail: `GET ${get.statusCode}` };
@@ -150,7 +105,6 @@ async function routesSomewhere(path: string): Promise<{ readonly routed: boolean
     },
     payload: {},
   });
-  // 403 would mean the request never reached the router, so it can never count as "routed".
   assert.notEqual(
     post.statusCode,
     403,
@@ -186,9 +140,7 @@ describe('every path the shell harnesses call is a registered route', () => {
   }
 
   it('would notice a wrong path: the three the load harness used to use all 404', async () => {
-    // The negative control. These are verbatim the constants that made `pnpm run test:load` fail on
-    // request one for its entire existence. If any of them ever routes, the assertions above have
-    // stopped meaning anything.
+    // Verbatim the old constants. If any routes, the assertions above mean nothing.
     for (const path of ['/api/v1/session/guest', '/api/v1/session', '/api/v1/rooms/room_x/join']) {
       const outcome = await routesSomewhere(path);
       assert.equal(outcome.routed, false, `${path} is routed, so the checks above prove nothing`);

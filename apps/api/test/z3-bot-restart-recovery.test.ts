@@ -1,37 +1,10 @@
 /**
- * Every AI Legend must survive the death of the process that seated it.
- *
- * ## The defect
- *
- * `room_members.bot_profile` was CHECK-constrained to the five values of `OPPONENT_PROFILES` —
- * the Scenario Lab's *range* vocabulary — and the write path squeezed a strategy profile through
- * it with `persistableProfile`, which answered the literal string `unknown` for anything those
- * five names could not express. Seven of the twelve. The live registry held the real id, so the
- * mismatch was invisible for exactly as long as the process lived.
- *
- * Then `ensureOpen` re-took every recorded seat and registered no bots at all — deliberately, on
- * the reasoning that an inert seat is more honest than one playing a different style. So a
- * restart turned a Legends table into six seats that do nothing until the turn clock folds them,
- * and for seven of the twelve profiles there was not even a name left to say who had been there.
- *
- * ## What this file proves, and why in this shape
- *
- * The first suite runs against a REAL database, because the defect was half a CHECK constraint:
- * a fake store cannot reject a value, so a fake store cannot prove the column accepts one. All
- * twelve profiles are written and read back, and the read is asserted field by field.
- *
- * The second suite builds a room in one `RoomRegistry`, throws that registry away, and opens the
- * same rows in a SECOND registry. That second object is what "after a process restart" means
- * here: the live table, the bot runner and every `OpponentModel` are new, and the only thing
- * carried across is the durable rows — which is exactly the carry a real restart gets.
- *
- * `specOf` is asserted rather than `profileOf`, because a seat is `(profile, difficulty, seed)`
- * and a restart that restored only the first would look right and play differently.
- *
- * The third suite is the negative half. A row this build cannot reproduce must produce an inert
- * seat and a logged reason — never a substituted strategy. Fixing "the bots do not come back" is
- * one careless line away from "the bots come back as somebody else", which would be worse: the
- * learner would be studying an opponent nobody chose, with nothing on screen to say so.
+ * Every AI Legend survives the death of the process that seated it.
+ * Suite 1 uses a real database because the `bot_profile` CHECK constraint is half of the contract.
+ * Suite 2 opens the same rows in a second `RoomRegistry`, which is what a restart means here, and
+ * asserts `specOf` because a seat is (profile, difficulty, seed).
+ * Suite 3: a row this build cannot reproduce gives an inert seat and a logged reason, never a
+ * substituted strategy.
  */
 
 import assert from 'node:assert/strict';
@@ -118,10 +91,6 @@ function registryOn(store: RoomStore, problems: string[]): RoomRegistry {
   });
 }
 
-// ---------------------------------------------------------------------------
-// 1. The column can name every profile this build carries
-// ---------------------------------------------------------------------------
-
 describe('room_members can durably name every strategy profile', dbOptions, () => {
   it('writes and reads back all twelve, with difficulty and seed intact', async () => {
     await inRollback(async (tx) => {
@@ -130,8 +99,7 @@ describe('room_members can durably name every strategy profile', dbOptions, () =
       const created = await store.create({ ...ROOM_SPEC, ownerUserId: owner.id });
       const roomId = created.room.id;
 
-      // Six seats to a table, twelve profiles: two rooms. Written through the real store, so the
-      // CHECK constraint is the thing being tested rather than a TypeScript union.
+      // Twelve profiles, six seats a table, so two rooms.
       const rooms = [roomId];
       const second = await store.create({ ...ROOM_SPEC, ownerUserId: owner.id });
       rooms.push(second.room.id);
@@ -192,7 +160,7 @@ describe('room_members can durably name every strategy profile', dbOptions, () =
       const created = await store.create({ ...ROOM_SPEC, ownerUserId: owner.id });
       const bot = await store.createBotUser('Retired');
 
-      // Straight SQL, bypassing `durableProfile`, so it is the CHECK constraint answering.
+      // Raw SQL bypasses `durableProfile`, so the CHECK constraint answers.
       await assert.rejects(
         tx.savepoint(
           async () =>
@@ -217,10 +185,6 @@ describe('room_members can durably name every strategy profile', dbOptions, () =
   });
 });
 
-// ---------------------------------------------------------------------------
-// 2. A second registry over the same rows is the restart
-// ---------------------------------------------------------------------------
-
 describe('a restarted process puts every Legend back', dbOptions, () => {
   it('rehydrates profile, difficulty and seed for all twelve', async () => {
     await inRollback(async (tx) => {
@@ -233,7 +197,6 @@ describe('a restarted process puts every Legend back', dbOptions, () => {
           | 'realistic'
           | 'expert';
 
-        // ---- the process that seats the bot -------------------------------------------
         const before: string[] = [];
         const first = registryOn(store, before);
         const created = await first.createRoom(
@@ -268,10 +231,8 @@ describe('a restarted process puts every Legend back', dbOptions, () => {
           'precondition: the bot is registered before the restart',
         );
 
-        // ---- the process ends. Everything in memory goes with it. ---------------------
         first.closeAll();
 
-        // ---- a new process, the same rows ---------------------------------------------
         const problems: string[] = [];
         const restarted = registryOn(store, problems);
         const reopened = await restarted.ensureOpen(roomId);
@@ -291,7 +252,6 @@ describe('a restarted process puts every Legend back', dbOptions, () => {
         assert.equal(spec.seat, 1);
         assert.deepEqual(problems, [], `${profile.naming.id}: rehydration should not have logged a problem`);
 
-        // The roster the client is served must agree with the runner.
         assert.equal(
           restarted.summary(roomId).members.find((m) => m.userId === bot.id)?.botProfile,
           profile.naming.id,
@@ -301,10 +261,6 @@ describe('a restarted process puts every Legend back', dbOptions, () => {
     });
   });
 });
-
-// ---------------------------------------------------------------------------
-// 3. What must NOT happen: a substituted opponent
-// ---------------------------------------------------------------------------
 
 describe('an unrehydratable bot seat fails safely and explicitly', dbOptions, () => {
   for (const broken of [
@@ -334,8 +290,7 @@ describe('an unrehydratable bot seat fails safely and explicitly', dbOptions, ()
         const roomId = created.room.record.id;
         first.closeAll();
 
-        // Written with raw SQL: `addMember` refuses these shapes on purpose, which is the forward
-        // guarantee. This is the row a database that predates migration 0003 already contains.
+        // Raw SQL, because `addMember` refuses these pre-0003 shapes.
         const bot = await store.createBotUser('Legacy');
         await tx`
           insert into prl.room_members
@@ -358,8 +313,7 @@ describe('an unrehydratable bot seat fails safely and explicitly', dbOptions, ()
         assert.equal(problems.length, 1, 'the refusal must be logged, not silent');
         assert.match(problems[0] ?? '', /could not be restored and will not act/);
 
-        // The seat itself is still occupied, so the table is consistent and the turn clock can
-        // resolve it. Losing the room over one unrepairable row would be the other failure.
+        // The seat stays occupied so the turn clock can resolve it and the room is not lost.
         const roster = restarted.summary(roomId).members;
         const seated = roster.find((member) => member.userId === bot.id);
         assert.ok(seated !== undefined, 'the seat must still be part of the room');

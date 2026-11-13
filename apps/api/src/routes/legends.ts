@@ -1,40 +1,12 @@
 /**
- * The Legends measurement endpoints: what a profile ACTUALLY did, against what its card claims.
+ * Legends measurement. What a profile actually did, against what its card claims.
  *
- * ## Why this is a stored table and not a computation
- *
- * `ProfileStatsResponse` was a dead contract — a wire type with no producer anywhere — and the
- * producer it needed already existed in `@prl/poker-ai`: `simulateHeadsUpAgainstReference` plays
- * the model, `seatStats` counts what it did, `toObservedStats` puts the counts on the wire shape,
- * and `compareToDeclared` says where the behaviour and the card disagree. Nothing here reimplements
- * any of that, deliberately: a second definition of "VPIP" is how a statistic quietly starts
- * measuring something other than its name, and `stats.ts` documents at length which denominator
- * each rate takes and why.
- *
- * What this file adds is the one thing the package cannot decide: WHEN to run it. A run of 4,000
- * hands takes roughly three seconds of solid CPU, on the event loop, in a server that is also
- * dealing live tables with action timers. Twelve of those reachable from an unauthenticated GET is
- * a denial of service anybody can trigger with a `for` loop. So the runs are performed offline,
- * once, and the results are stored below.
- *
- * ## What "stored" means here, and why it is not the fabrication this review is full of
- *
- * Every number in `STORED_RUNS` was produced by running the code named in `PROFILE_SIMULATION`
- * against the profiles as they stand, and every input that determines it is recorded next to it:
- * the reference opponent, the difficulty, the hand count and the seed. The run is deterministic, so
- * the table is a cache of a pure function rather than a set of figures somebody chose —
- * `apps/api/test/legend-profile-stats.test.ts` re-derives a profile from those inputs and asserts
- * the stored row matches, so a policy change in `@prl/poker-ai` makes this table fail a test
- * instead of quietly becoming a lie. Regenerate with the snippet in that test's header.
- *
- * ## What is NOT here
- *
- * `LearnFromProfileResponse.observed` — frequencies from the reader's own session — is not served
- * from this table, and putting it there would be the exact defect this review raised. The prose
- * `learnFromSummary` generates from that field reads "across N hands you have seen", which is a
- * true sentence about a session and a false one about a simulation. Three things block a real
- * measurement today and all three are producer-side rather than contract-side; they are listed on
- * `LearnFromProfileResponse.observed` in `@prl/contracts`.
+ * A 4,000-hand run takes about three seconds of event-loop CPU, so runs are made offline and stored.
+ * The figures come from `@prl/poker-ai` (`simulateHeadsUpAgainstReference`, `seatStats`,
+ * `compareToDeclared`), never a second definition of a statistic. The run is deterministic, and
+ * `apps/api/test/legend-profile-stats.test.ts` re-derives a row and holds the table to it.
+ * Regenerate with the snippet in that test's header.
+ * `LearnFromProfileResponse.observed` describes the reader's own session and is never served from here.
  */
 
 import type {
@@ -48,18 +20,9 @@ import type { FastifyInstance } from 'fastify';
 import { AppError } from '../errors.ts';
 
 /**
- * The inputs that determine every figure in `STORED_RUNS`.
- *
- * Heads-up against one fixed reference, not at a full table: at a six-handed table a profile's
- * observed entry rate is partly a function of who opened in front of it, so measuring twelve
- * profiles in different company would confound the style with the table. `reading-pressure-
- * specialist` is the same reference `packages/poker-ai/test/simulation` uses, so the figures here
- * and the ones the differentiation suite asserts are comparable. That profile is measured against
- * itself; self-play is a legitimate heads-up match and is stated rather than special-cased.
- *
- * `realistic` because it is the setting at which a profile's traits are expressed as declared.
- * `educational` mutes every trait towards the baseline on purpose, so a divergence measured there
- * would be the feature working rather than a defect.
+ * Heads-up against one fixed reference, so a profile's style is not confounded with its table.
+ * The same reference as `packages/poker-ai/test/simulation`. `realistic` because `educational`
+ * mutes traits on purpose.
  */
 export const PROFILE_SIMULATION = {
   referenceProfileId: 'reading-pressure-specialist',
@@ -79,13 +42,7 @@ export interface StoredProfileRun {
   }[];
 }
 
-/**
- * The runs, keyed by profile id.
- *
- * An empty `divergences` array is a real result and the one every profile currently produces: it
- * is the claim "this model behaves the way its card says", measured, at a 1.5-point sampling
- * interval. It is not a placeholder, and a screen must say what it means rather than hiding it.
- */
+/** An empty `divergences` array is a measured result at a 1.5-point interval, not a placeholder. */
 export const STORED_RUNS: Readonly<Record<string, StoredProfileRun>> = {
   'vocal-aggressor': {
     simulated: {
@@ -269,13 +226,7 @@ export const STORED_RUNS: Readonly<Record<string, StoredProfileRun>> = {
   },
 };
 
-/**
- * The measurement for one profile, or `content_not_found`.
- *
- * A profile the server knows but has no stored run for is an `internal_error` rather than a 404:
- * the table is generated from `PROFILES`, so a gap means somebody added a profile without
- * regenerating, and answering "no such thing" would hide that behind a plausible 404.
- */
+/** A known profile with no stored run is `internal_error`: STORED_RUNS was not regenerated. */
 export function profileStats(profileId: string): ProfileStatsResponse {
   const profile = profileById(profileId);
   const run = STORED_RUNS[profile.naming.id];
@@ -298,7 +249,7 @@ export function profileStats(profileId: string): ProfileStatsResponse {
   };
 }
 
-/** The profile, or `content_not_found`: an unknown id is a bad link, not a bad request. */
+/** An unknown id is a bad link, so `content_not_found`. */
 function profileById(profileId: string) {
   try {
     return requireProfile(profileId);
@@ -308,16 +259,8 @@ function profileById(profileId: string) {
 }
 
 /**
- * `GET /legends/profiles/:profileId/stats`.
- *
- * Registered from `routes/rooms.ts`, beside the other Legends routes, rather than as its own
- * module: `registerApiRoutes` gives each module an encapsulated instance, and a second Legends
- * plugin would be a second place to look for a Legends path.
- *
- * No session required, like the rest of this surface — it is teaching material about a model, not
- * anything about a reader. The handler is a table lookup, which is the whole reason the runs are
- * stored: an endpoint that measured on demand would be three seconds of blocked event loop per
- * call.
+ * `GET /legends/profiles/:profileId/stats`. Registered from `routes/rooms.ts` beside the other
+ * Legends routes. No session required, and a table lookup rather than a run.
  */
 export function registerLegendStatsRoute(app: FastifyInstance, schema: object): void {
   app.get<{ Params: { profileId: string } }>(

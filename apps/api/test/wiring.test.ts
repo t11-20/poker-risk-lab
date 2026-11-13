@@ -1,30 +1,9 @@
 /**
- * The wiring: that the assembled app actually serves every route module, and that the shared
- * state the modules expect somebody else to have registered really is registered.
- *
- * Every other test file in this package builds an app out of one or two modules and its own
- * stand-in for the rest. That is the right way to test a module, and it is precisely why it cannot
- * catch a wiring bug: each harness supplies the seam the real server has to supply for itself. So
- * this file assembles the whole thing the way `src/server.ts` does — `buildApp`, then
- * `registerApiRoutes` — and asks it questions no single module could answer.
- *
- * ## The three failures this is here to catch
- *
- * 1. **A module that is listed but not registered.** `EXPECTED_ROUTE_MODULES` in `app.ts` is the
- *    contract; a module missing from `API_ROUTE_MODULES` is a 404 for a whole feature, and nothing
- *    else fails.
- * 2. **The session decorator not reaching a module's scope.** Fastify's `decorateRequest` is
- *    scoped to the instance it is called on, and `registerRoutes` gives each module its own child.
- *    With `sessionPlugin` registered only inside `routes/auth.ts`, `GET /hands` answers 500 for
- *    everybody and `GET /me/progress` answers 401 even to a signed-in learner. Both are asserted
- *    below as the 401 they should be — a 500 from `/hands` is the exact signature of that bug.
- * 3. **The two probes not answering.** `/health` and `/ready` are registered by `buildApp` before
- *    any route module exists, so a module that throws during registration takes them with it.
- *
- * No database: `buildApp` takes a `DatabaseHandle` and this passes a stub, so `/ready` answers from
- * the stub. `configureDatabase` is still called, because `registerApiRoutes` binds a session store
- * over the pool — postgres.js opens no connection until a query runs, and none of the requests
- * below reaches one.
+ * Assembles the whole app as `src/server.ts` does (`buildApp`, then `registerApiRoutes`) to catch
+ * wiring bugs no per-module harness can see. Examples are a listed module that is not registered, the session
+ * decorator not reaching a module's child scope (`/hands` then answers 500), and the probes dying
+ * with a module that throws during registration.
+ * No database: a stub handle answers `/ready`, and postgres.js opens no connection until a query.
  */
 
 import assert from 'node:assert/strict';
@@ -47,8 +26,7 @@ const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 
 function testConfig(): AppConfig {
   return loadConfig({
     NODE_ENV: 'test',
-    // Syntactically valid and never dialled. `loadConfig` insists on a URL, and nothing here
-    // issues a query.
+    // Never dialled.
     DATABASE_URL: 'postgresql://unused:unused@127.0.0.1:5432/unused',
     PUBLIC_WEB_ORIGIN: 'http://localhost:3000',
     SESSION_COOKIE_SECRET: 'Zk7pQ2vR9tX4bN6mL1sD8gH3jF5wC0yA',
@@ -57,19 +35,12 @@ function testConfig(): AppConfig {
   });
 }
 
-/** Answers the readiness probe without a server. `/ready` reports whatever this says. */
 const stubDatabase: DatabaseHandle = {
   ping: () => Promise.resolve({ ok: true }),
   close: () => Promise.resolve(undefined),
 };
 
-/**
- * Every path the assembled API is expected to serve, with the module that owns it.
- *
- * Written out rather than derived from the router, because a list derived from the thing it is
- * checking cannot detect a missing route. `:param` segments are the router's own patterns, which is
- * what `hasRoute` matches on.
- */
+// Written out, because a list derived from the router cannot detect a missing route.
 const EXPECTED_ROUTES: readonly { readonly method: 'GET' | 'POST'; readonly url: string }[] = [
   { method: 'POST', url: '/api/v1/auth/guest' },
   { method: 'GET', url: '/api/v1/auth/session' },
@@ -144,8 +115,6 @@ describe('the route manifest', () => {
       'every module app.ts lists must appear in API_ROUTE_MODULES exactly once',
     );
     for (const relative of EXPECTED_ROUTE_MODULES) {
-      // The file existing is not the same claim as it being registered — that is what the route
-      // assertions below are for — but a listed module with no file is worth its own message.
       await access(path.join(PACKAGE_ROOT, relative));
     }
   });
@@ -179,11 +148,7 @@ describe('liveness and readiness on the assembled app', () => {
 });
 
 describe('the session layer reaches every module, not only the auth module', () => {
-  /**
-   * `/hands` checks `hasRequestDecorator('session')` itself and answers `internal_error` when the
-   * plugin is missing. So a 500 here means the decorator did not reach this module's child scope,
-   * and 401 means it did.
-   */
+  // `/hands` answers `internal_error` when the session decorator did not reach its child scope.
   it('answers /hands with not_authenticated rather than internal_error', async () => {
     const response = await app.inject({ method: 'GET', url: '/api/v1/hands' });
     assert.equal(response.statusCode, 401, 'a 500 here means sessionPlugin is not on the root instance');
@@ -203,7 +168,6 @@ describe('the session layer reaches every module, not only the auth module', () 
     assert.equal(errorCodeOf(response.payload), 'not_authenticated');
   });
 
-  /** The one identity endpoint that must never fail for an anonymous reader. */
   it('answers /auth/session with a null user and a CSRF token', async () => {
     const response = await app.inject({ method: 'GET', url: '/api/v1/auth/session' });
     assert.equal(response.statusCode, 200);
@@ -216,15 +180,8 @@ describe('the session layer reaches every module, not only the auth module', () 
 });
 
 describe('the security layer still applies to the registered modules', () => {
-  /**
-   * Every mutating route, swept in one test.
-   *
-   * The CSRF check is a `preValidation` hook on the root instance, added by `securityPlugin` before
-   * any route module is registered — so it reaches a module by inheritance, and a module registered
-   * the wrong way round (or one that replaced the hook in its own scope) would be silently exempt.
-   * Asserting one endpoint would not notice that; asserting all of them does. Concrete ids are used
-   * where a route takes one, so the reply comes from the hook rather than from the router.
-   */
+  // CSRF is a root `preValidation` hook reached by inheritance, so a module can be silently exempt.
+  // Concrete ids make the reply come from the hook rather than the router.
   const mutating: readonly string[] = EXPECTED_ROUTES.filter((route) => route.method === 'POST').map(
     (route) =>
       route.url
@@ -235,10 +192,7 @@ describe('the security layer still applies to the registered modules', () => {
   );
 
   it('refuses every mutating route with no CSRF token', async () => {
-    // Raised from 13 with `POST /me/delete`. The floor is what stops this sweep from quietly
-    // becoming a sweep of nothing: a filter that matched no route would still report zero
-    // mismatches, and the one destructive endpoint in the product is the last one that should be
-    // allowed to fall out of the CSRF assertion without anybody noticing.
+    // The floor stops a sweep of nothing. 14 includes `POST /me/delete`.
     assert.ok(mutating.length >= 14, `expected the whole mutating surface, got ${mutating.length}`);
     const wrong: string[] = [];
     for (const url of mutating) {
@@ -264,10 +218,7 @@ describe('the security layer still applies to the registered modules', () => {
 
 describe('assembled observability wiring', () => {
   it('uses the app-owned metrics registry for the default WebSocket hub', async () => {
-    // The default route factory has no options object to carry metrics through. Capture the
-    // router's private dependency at the factory seam: it must be the exact decoration installed
-    // by buildApp rather than the process-global fallback. The assembled app above exercises the
-    // same default factory through API_ROUTE_MODULES; this small probe makes the identity visible.
+    // The router must get buildApp's metrics decoration, not the process-global fallback.
     const probeMetrics = new AppMetrics();
     const probe = await buildApp({ config: testConfig(), database: stubDatabase, metrics: probeMetrics });
     let routerMetrics: unknown;
@@ -279,24 +230,9 @@ describe('assembled observability wiring', () => {
     await probe.close();
   });
 
-  /**
-   * The room lease is actually wired into the assembled app.
-   *
-   * This is a one-line assertion about a one-line call site, and it is here because losing that
-   * line is invisible in every other way. `RoomRegistry` defaults to `ownership: null` — it has to,
-   * because `test/rooms.test.ts` and `test/ws-router.test.ts` drive the whole of rooms and the
-   * socket protocol against a `Map` with no database — so a `registerApiRoutes` that stopped
-   * passing `postgresRoomOwnership(getSql)` would leave every test in this package green, every
-   * room opening normally, and the guard simply gone.
-   *
-   * What it is a guard against is not hypothetical: `routes/index.ts` exists at all because the
-   * registry was once left on its permissive `archive` default in production, so hands were played
-   * that were never persisted and `GET /hands` was empty forever. The equivalent mistake here does
-   * not lose history, it lets two API processes deal two different hands at one table.
-   *
-   * `roomRegistry()` with no options returns the process-wide instance `registerApiRoutes` built in
-   * `before`, because the singleton's dependencies are decided by its FIRST caller.
-   */
+  // `RoomRegistry` defaults to `ownership: null` for database-free tests, so dropping
+  // `postgresRoomOwnership(getSql)` from `registerApiRoutes` would leave every other test green.
+  // `roomRegistry()` returns the singleton built in `before`; its first caller decides its deps.
   it('gives the assembled registry a room lease, so a second process cannot serve a live room', () => {
     assert.equal(
       roomRegistry().enforcesOwnership,
