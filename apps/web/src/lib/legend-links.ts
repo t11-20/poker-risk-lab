@@ -19,7 +19,19 @@ import type { LegendDifficulty } from '@prl/contracts';
 export type SearchParams = Readonly<Record<string, string | string[] | undefined>>;
 
 /** The play screen's route. A legend match runs as an ordinary private room once it starts. */
-const PLAY_PATH = '/play';
+export const PLAY_PATH = '/play';
+
+/**
+ * The two query parameters `/play` reads to start a legend match, named once.
+ *
+ * There are two ways to write that URL on `/legends`: every card's Play link builds it with
+ * `legendMatchHref`, and the "Start a match" form above the framing lets the browser build it from
+ * its fields' `name`s. A form field renamed on its own would still submit, and `/play` would deal
+ * the six-handed bot table instead of the match the reader chose — no error, just the wrong game.
+ * `test/legend-quick-start.test.ts` holds the form, this builder and the play page to these names.
+ */
+export const MATCH_PROFILE_PARAM = 'profile';
+export const MATCH_DIFFICULTY_PARAM = 'difficulty';
 
 export const LEGENDS_PATH = '/legends';
 export const LEGENDS_COMPARE_PATH = '/legends/compare';
@@ -178,7 +190,7 @@ export function profileHref(profileId: string, difficulty?: LegendDifficulty): s
  * shape, and a link into a path it has not defined would be a broken link on every card.
  */
 export function legendMatchHref(profileId: string, difficulty: LegendDifficulty): string {
-  return `${PLAY_PATH}?profile=${encodeURIComponent(profileId)}&difficulty=${difficulty}`;
+  return `${PLAY_PATH}?${MATCH_PROFILE_PARAM}=${encodeURIComponent(profileId)}&${MATCH_DIFFICULTY_PARAM}=${difficulty}`;
 }
 
 export function compareHref(profileIds: readonly string[], difficulty: LegendDifficulty): string {

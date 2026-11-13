@@ -61,7 +61,14 @@ import {
   type TableStateName,
 } from '@/fixtures/table.ts';
 import { legendMatchCopy } from '@/lib/legend-match-copy.ts';
-import { findProfile, LEGENDS_PATH, loadLegendProfiles, profileHref } from '@/lib/legends-data.ts';
+import {
+  findProfile,
+  LEGENDS_PATH,
+  loadLegendProfiles,
+  MATCH_DIFFICULTY_PARAM,
+  MATCH_PROFILE_PARAM,
+  profileHref,
+} from '@/lib/legends-data.ts';
 import { LiveTable } from './LiveTable.tsx';
 import '@/styles/play.css';
 
@@ -262,8 +269,8 @@ export default async function PlayPage({ searchParams }: PlayPageProps): Promise
   // the live table, because a fixture that a wrong URL can fall into is a fixture that ships.
   if (isTableStateName(asked)) return <FixturePage state={asked} />;
 
-  const profile = firstValue(params['profile']);
-  const difficulty = firstValue(params['difficulty']);
+  const profile = firstValue(params[MATCH_PROFILE_PARAM]);
+  const difficulty = firstValue(params[MATCH_DIFFICULTY_PARAM]);
   const legendMatch =
     profile !== undefined && isMatchDifficulty(difficulty) ? { profileId: profile, difficulty } : undefined;
   const legend =
