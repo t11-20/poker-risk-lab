@@ -169,9 +169,13 @@ cohort and a paid one produce identical rows.
 
 The style is strongly present in the code; read a neighbouring file before writing a new one.
 
-**Comments say WHY, and name the incident.** Not what the code does — what went wrong, or would.
-The best comments here name a measurement: "measured against the running server: 60 consecutive
-guest creations produced zero 429s, while freezing the cookie produced a 429 after six".
+**Comments say WHY, in one or two sentences.** Not what the code does, and not the history of how
+it came to be. Keep a comment only for what the code cannot show: a constraint, an invariant, a
+workaround, or the measured number behind a value ("freezing the cookie produced a 429 after six
+creations"). The story of the incident belongs in the commit message and the PR. No banners, no
+JSDoc that repeats the signature, no step-by-step narration. The codebase was swept to this rule
+in November 2026 (PRs #43 to #45 and their follow-ups) after comments had grown to about 30% of
+all lines.
 
 **Every guard needs a negative control.** A test that fails against the OLD code, demonstrated by
 actually running it — stash the change, watch it fail, restore. *A guard whose failure mode has
