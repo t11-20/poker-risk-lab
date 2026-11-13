@@ -1,22 +1,8 @@
 /**
- * Test fixture: a real hand, turned into the rows the database would hold.
- *
- * Not a `.test.ts` file, so the runner's `test/**\/*.test.ts` glob does not pick it up.
- *
- * The hand is dealt and played by `@prl/poker-engine` itself, and then written out through the
- * same narrowing a real persistence path would use: the board and the hole cards as card notation,
- * the actions as the `hand_actions` columns, the result and the reveal as JSON. Two things follow
- * from doing it that way rather than hand-writing rows.
- *
- * First, the review's replay is checked against the engine's own numbers — `pot_after`,
- * `bet_level_after` and `amount_paid` come from `applyAction`, so a reconstruction that disagrees
- * with them is a real disagreement and not a fixture typo.
- *
- * Second, and more importantly: THE DECK AND THE SALTS ARE NOT WRITTEN OUT AT ALL, because there
- * is nowhere to write them. `persistHand` returns the full `HandState` alongside the rows so a
- * test can ask what the cards actually were and then assert that none of the ones the viewer was
- * not entitled to see appears anywhere in the response. The rows themselves carry only what
- * `db/migrations/0001_initial.sql` has a column for.
+ * Test fixture: a hand dealt and played by `@prl/poker-engine`, written out as the database rows,
+ * so a review replay is checked against the engine's own numbers rather than hand-written ones.
+ * The deck and salts are never written, since no column holds them. `persistHand` returns the full
+ * `HandState` beside the rows so a test can assert hidden cards appear nowhere in a response.
  */
 
 import type { Action, Card, HandState, SeatIndex } from '@prl/poker-engine';
@@ -31,7 +17,6 @@ import {
 } from '@prl/poker-engine';
 import type { HandActionRow, HandRow, HandSeatRow } from '../../src/review/build-review.ts';
 
-/** `HandRow` plus the aggregate the route computes in SQL. Matches what `buildHandReview` takes. */
 export interface PersistedHandRow extends HandRow {
   readonly max_pot_after: number | null;
 }
@@ -42,7 +27,6 @@ export interface PersistedHand {
   readonly actions: readonly HandActionRow[];
   /** The engine's state, for asking what must NOT be visible. Never persisted, never serialised. */
   readonly state: HandState;
-  /** Seat index for each user id, so a test can talk about "Alice's seat". */
   readonly seatOfUser: ReadonlyMap<string, SeatIndex>;
 }
 
@@ -62,7 +46,6 @@ export interface PersistHandOptions {
   readonly seats: readonly SeatFixture[];
   /** Seat → two cards, e.g. `{ 0: 'AhKs' }`. Every dealt seat needs an entry. */
   readonly holeCards: Readonly<Record<number, string>>;
-  /** Up to five community cards, e.g. `'Qh 7h 2c'`. */
   readonly board?: string;
   readonly steps: readonly { readonly seat: SeatIndex; readonly action: Action }[];
   readonly smallBlind?: number;
@@ -73,11 +56,8 @@ export interface PersistHandOptions {
 }
 
 /**
- * A 52-card deck that deals the requested cards.
- *
- * Deal order has to match `machine.ts` exactly — one card at a time, twice round the table
- * starting left of the button, then the board straight off the cursor with no burn cards — or the
- * hand would not receive the cards this fixture claims it did.
+ * A 52-card deck that deals the requested cards. Order must match `machine.ts`: one card at a time,
+ * twice round from left of the button, then the board with no burn cards.
  */
 function stackedDeck(
   holeCards: Readonly<Record<number, string>>,
@@ -110,7 +90,6 @@ function stackedDeck(
   return sequence;
 }
 
-/** Clockwise from the button, exclusive — the deal order `machine.ts` uses. */
 function dealOrderFor(buttonSeat: SeatIndex, maxSeats: number, occupied: readonly SeatIndex[]): SeatIndex[] {
   const order: SeatIndex[] = [];
   for (let step = 1; step <= maxSeats; step++) {
@@ -130,14 +109,7 @@ function asJson(value: unknown): unknown {
   return text === undefined ? null : JSON.parse(text);
 }
 
-/**
- * Deals the hand, plays the given steps, and returns the rows plus the state.
- *
- * `createDeterministicRandomForTests` supplies the commitment salts. It is legitimate here and
- * illegal in `src/` — `test/server-randomness.test.ts` scans only the server tree, and a hand
- * dealt from it is permanently labelled in `randomSourceKind`. A `fixedDeck` is used so the cards
- * are the fixture's choice, which is exactly what the Scenario Lab path does.
- */
+// `createDeterministicRandomForTests` is legal here and banned in `src/` (server-randomness.test.ts).
 export function persistHand(options: PersistHandOptions): PersistedHand {
   const maxSeats = Math.max(2, ...options.seats.map((seat) => seat.seat + 1));
   const buttonSeat = options.buttonSeat ?? 0;
@@ -189,8 +161,7 @@ export function persistHand(options: PersistHandOptions): PersistedHand {
       display_name: fixture?.displayName ?? null,
       is_bot: fixture?.isBot === true,
       starting_stack: startingStacks.get(seat.seat) ?? 0,
-      // The row holds every dealt seat's cards, exactly as `prl.hand_seats` does. Filtering them
-      // is the reader's job, and proving that the reader does it is the point of the tests.
+      // Every dealt seat's cards, as `prl.hand_seats` holds them. Filtering is the reader's job.
       hole_cards: seat.holeCards === null ? null : seat.holeCards.map((card) => cardToString(card)),
       net_result: result === null ? null : (result.netBySeat[seat.seat] ?? 0),
       status: seat.status,
@@ -208,8 +179,7 @@ export function persistHand(options: PersistHandOptions): PersistedHand {
     bet_level_after: logged.betLevelAfter,
     pot_after: logged.potAfter,
     was_automatic: logged.wasAutomatic,
-    // The engine's log has no reason: that is the live table's (`ArchivedAction`). Null is what a
-    // row archived before migration 0009 holds, and these hands contain no automatic action anyway.
+    // The engine's log has no reason, so this is the pre-0009 null.
     automatic_reason: null,
   }));
 
@@ -221,8 +191,7 @@ export function persistHand(options: PersistHandOptions): PersistedHand {
     config: asJson(config),
     commitment_root: state.commitment.root,
     commitment_context: state.commitment.context,
-    // What the fixture actually dealt from, not what a real table would. A review that claimed
-    // `csprng` over a stacked deck would be the one lie a hand review must never tell.
+    // The stacked deck's real source. A review must never claim `csprng` for it.
     random_source_kind: state.randomSourceKind,
     board: state.board.map((card) => cardToString(card)),
     street: state.street,
@@ -248,7 +217,6 @@ export function holeCardsOf(fixture: PersistedHand, seat: SeatIndex): readonly s
   return cards === null || cards === undefined ? [] : cards.map((card) => cardToString(card));
 }
 
-/** Space-separated notation, for readable assertion messages. */
 export function describeCards(cards: readonly Card[]): string {
   return cardsToString(cards);
 }

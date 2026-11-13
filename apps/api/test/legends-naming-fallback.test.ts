@@ -1,24 +1,9 @@
 /**
- * The Legends naming guardrail, asserted where the web app falls back.
- *
- * ## Why an API test asserts a web fixture
- *
- * `PRL_LEGEND_NAMING` is a deployer's decision with legal consequences: unset means archetype names,
- * and attributed real-person names are an explicit opt-in (`resolveNamingMode` in
- * `@prl/poker-ai/labelling` — "the safe mode is the one you get by not thinking about it"). The
- * server honours that. The bundled fixture the Legends screens fall back to did not: it hard-coded
- * `namingMode: 'attributed'` and six real people's names, so an operator who never set the variable
- * shipped attributed identities on every page load where the profile service was unreachable — which,
- * while every request 404'd on the wrong path, was every page load.
- *
- * Repairing the paths does not close that. A fixture is by definition what renders when the API is
- * not answering, so an offline render path that *can* display an attributed name will display one
- * during the next outage regardless of configuration. The guardrail therefore has to hold in the
- * fixture itself, and this asserts that it does.
- *
- * `apps/web` has no test runner of its own and cannot be imported statically from here — its
- * `tsconfig.json` is a different program with `rootDir` elsewhere and DOM lib types — so the fixture
- * is loaded at runtime by URL and narrowed explicitly. Nothing typed `any` escapes `readFixture`.
+ * The Legends fallback fixture in apps/web obeys the naming guardrail. Attributed real-person names
+ * are an explicit server-side opt-in (`PRL_LEGEND_NAMING`), and the fixture renders whenever the API
+ * is down, so it must never carry an attributed name.
+ * `apps/web` is a different TypeScript program, so the fixture is imported at runtime by URL and
+ * narrowed with type guards.
  */
 
 import assert from 'node:assert/strict';
@@ -30,7 +15,6 @@ import { PROFILES, resolveNamingMode } from '@prl/poker-ai';
 
 const WEB_FIXTURES = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'web', 'src', 'fixtures');
 
-/** Only what this file asserts on. Deliberately narrower than `LegendProfilesResponse`. */
 interface FixtureDisclosure {
   readonly displayName: string;
   readonly archetypeName: string;
@@ -67,12 +51,6 @@ function isProfile(value: unknown): value is FixtureProfile {
   return typeof candidate.id === 'string' && isDisclosure(candidate.disclosure);
 }
 
-/**
- * The bundled profiles response, loaded from the web app and narrowed.
- *
- * The dynamic import is what keeps this file inside its own TypeScript program; the type guards are
- * what stop that from becoming an untyped read.
- */
 async function readFixture(): Promise<FixtureResponse> {
   const module: unknown = await import(pathToFileURL(join(WEB_FIXTURES, 'legends.ts')).href);
   assert.ok(typeof module === 'object' && module !== null, 'the legends fixture module did not load');
@@ -86,7 +64,6 @@ async function readFixture(): Promise<FixtureResponse> {
   return { namingMode: String(namingMode), profiles: profiles as readonly FixtureProfile[] };
 }
 
-/** Every `.ts`/`.tsx` file under a directory, recursively. */
 function sourceFiles(dir: string): readonly string[] {
   const out: string[] = [];
   for (const entry of readdirSync(dir)) {
@@ -102,8 +79,6 @@ function sourceFiles(dir: string): readonly string[] {
 
 describe('the Legends fallback obeys the naming guardrail', () => {
   it('defaults to archetype naming, the same default the server resolves', () => {
-    // Stated as an equality rather than as a literal, so the fixture cannot be "corrected" to a mode
-    // the server would never choose by default.
     assert.equal(resolveNamingMode({}), 'archetype');
   });
 
@@ -128,9 +103,7 @@ describe('the Legends fallback obeys the naming guardrail', () => {
 
   it('shows the archetype name and nothing else as the identity', async () => {
     const fixture = await readFixture();
-    // In attributed mode the server builds `"<real name> (modelled style)"` and puts the archetype
-    // name beneath it. In archetype mode display name, short label and archetype name are one string,
-    // so any divergence here is an attributed rendering that survived.
+    // In archetype mode display name, short label and archetype name are one string.
     const wrong = fixture.profiles
       .filter(
         (profile) =>
@@ -151,9 +124,6 @@ describe('the Legends fallback obeys the naming guardrail', () => {
   });
 
   it('has no attributed naming material anywhere in apps/web/src/fixtures', () => {
-    // The behavioural assertions above cover what the fixture currently exports. This covers what a
-    // future edit could reach for: the builder, the disclaimer and the suffix that together turn a
-    // profile into a claim about a person have no business in a tree the app renders offline.
     const banned: readonly (readonly [RegExp, string])[] = [
       [/namingMode:\s*'attributed'/, 'a fixture declaring attributed mode'],
       [/attributed:\s*true/, 'a disclosure claiming an attributed identity'],
@@ -165,8 +135,7 @@ describe('the Legends fallback obeys the naming guardrail', () => {
       const lines = readFileSync(file, 'utf8').split('\n');
       lines.forEach((line, index) => {
         const trimmed = line.trim();
-        // Comments are how this file's own reasoning is recorded; a sentence explaining why the
-        // attributed path was removed is not the attributed path.
+        // Comments may explain why the attributed path was removed.
         if (trimmed.startsWith('*') || trimmed.startsWith('//') || trimmed.startsWith('/*')) return;
         for (const [pattern, what] of banned) {
           if (pattern.test(line)) offenders.push(`${file}:${index + 1}: ${what} — ${trimmed}`);

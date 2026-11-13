@@ -1,9 +1,5 @@
-/**
- * A worker that dies on the first task, the way an OOM or a native fault would.
- *
- * Used by `worker-pool-lifecycle.test.ts` to prove the pool surfaces a typed error rather
- * than hanging, and that the dead thread is dropped.
- */
+// Dies on the first task, like an OOM or native fault. worker-pool-lifecycle.test.ts uses it to
+// prove the pool surfaces a typed error instead of hanging, and drops the dead thread.
 import { parentPort } from 'node:worker_threads';
 
 if (parentPort === null) {

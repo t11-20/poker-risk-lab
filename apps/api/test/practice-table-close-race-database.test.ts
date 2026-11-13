@@ -1,24 +1,9 @@
 /**
- * Retiring a practice table and a friend joining it, on two connections at once.
- *
- * ## The defect
- *
- * Devin Review on PR #25: `RoomRegistry.retirePracticeTables` read the roster, decided nobody else
- * was a member, and closed the row with `rooms.close`, which does not look at the roster. A friend
- * whose join committed in between had their table closed under them. `practice-table-units.test.ts`
- * makes that join inside the registry's gap, in one rolled-back transaction, which proves the
- * registry asks again at the close. What it cannot prove is that asking again in SQL is enough
- * when the join is on another connection, still uncommitted, at the instant the close runs.
- *
- * That is this file. Connection A joins and holds its transaction open — the room-row lock
- * `rooms.addMember` takes, and an uncommitted member. Connection B runs
- * `rooms.closePracticeTable`, which must wait for A and then see A's member.
- *
- * ## Why the data is committed, and removed after
- *
- * Two connections cannot share a rolled-back transaction, so the room and both users are real
- * rows. They are removed through the schema-owning identity (`withAdminSql`), because `prl_app`
- * holds no DELETE on `prl.rooms` and must not.
+ * Retiring a practice table while a friend joins it on another connection. Connection A joins and
+ * holds the room-row lock open; connection B's `rooms.closePracticeTable` must wait and then see A's
+ * member, or the friend's table closes under them.
+ * Two connections cannot share a rolled-back transaction, so rows are committed and removed through
+ * `withAdminSql`, because `prl_app` holds no DELETE on `prl.rooms` and must not.
  */
 
 import assert from 'node:assert/strict';
@@ -86,8 +71,7 @@ describe('closing a practice table against a concurrent join', { skip: skipReaso
       await holding;
 
       const closing = roomsRepository.closePracticeTable(sql(), room.id, owner.id);
-      // The close must be WAITING on the join's lock before the join commits, or this case has not
-      // produced the interleaving it is about and would pass on any implementation.
+      // Unless the close is blocked on the join's lock before the commit, this passes on any code.
       await withAdminSql(async (watcher) => {
         for (let attempt = 0; attempt < 250; attempt += 1) {
           const rows = await watcher<{ waiting: number }[]>`
@@ -107,7 +91,6 @@ describe('closing a practice table against a concurrent join', { skip: skipReaso
       assert.equal((await roomsRepository.byId(sql(), room.id))?.status, 'open');
       assert.ok(await roomsRepository.memberOf(sql(), room.id, friend.id), 'the friend is a member');
 
-      // The control: the same close with nobody else in the room does close it.
       await roomsRepository.removeMember(sql(), room.id, friend.id);
       assert.equal(await roomsRepository.closePracticeTable(sql(), room.id, owner.id), true);
       assert.equal((await roomsRepository.byId(sql(), room.id))?.status, 'closed');

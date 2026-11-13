@@ -1,44 +1,8 @@
 /**
- * A WebSocket is authenticated once. This file is about what happens next.
- *
- * ## The defect
- *
- * `ws/hub.ts` resolves `request.session` during the HTTP upgrade and the router never asks again.
- * Every REST request re-reads the session row, so expiry and revocation are enforced there by
- * `repositories/sessions.ts` and nothing else has to think about it — and a socket goes through
- * none of that. Measured against the code this file was written for:
- *
- *     POST /auth/logout            -> 204, session row revoked
- *     ws  {"type":"sit",...}       -> {"type":"ack","requestId":"..."}
- *     ws  {"type":"ping",...}      -> {"type":"pong","nonce":"...","serverTimeMs":...}
- *     socket close frames          -> none
- *
- * So `POST /auth/logout`, `POST /me/delete` and signing in a second time all revoked the
- * credential and left the channel it had opened fully live: a stolen cookie whose holder has a
- * socket open keeps an authenticated connection to the table after the victim signs out, and an
- * erased account keeps one after the account is gone.
- *
- * The same gap swallows expiry. `auth/session.ts` imposes `SESSION_ABSOLUTE_TTL_SECONDS` because
- * "sliding expiry with no ceiling means a stolen cookie stays valid forever provided the thief
- * keeps using it, which is precisely the property an attacker wants" — and that ceiling lives in
- * `findValidByToken`'s `expires_at > now()`, which a socket passes through exactly once. A peer
- * that answers pings therefore held an authenticated channel with no lifetime at all: neither the
- * fourteen-day idle window nor the sixty-day ceiling reached it.
- *
- * ## Would these fail if the behaviour broke?
- *
- * Checked by breaking it, which is how the transcript above was taken. With
- * `noteSessionRevoked` removed from `destroySession`, `signing out closes the socket it opened`
- * and `erasing an account closes every socket that account holds` both fail with the socket still
- * open and the `ack` still arriving. With the `sessionExpiresAtMs` check removed from the hub's
- * message handler, `a socket cannot outlive the session that opened it` fails on the `pong`.
- *
- * ## What is faked, and what is not
- *
- * Only the two stores — `prl.sessions`/`prl.users` and room persistence. The routes are the real
- * `createAuthRoutes`, the hub is the real `createWsHub` registered at the shipped path, the CSRF
- * token and the signed cookie are the real ones, and the socket is a real `ws` client over
- * loopback. The revocation path under test runs from `POST /auth/logout` end to end.
+ * A socket is authenticated once at the upgrade, so revocation and expiry must reach it separately.
+ * Before this, sign-out, account erasure and a second sign-in left the socket live, and a socket that
+ * answered pings had no lifetime cap. Removing `noteSessionRevoked` or the hub's `sessionExpiresAtMs`
+ * checks fails the cases below. Only the two stores are faked; routes, hub, cookies and socket are real.
  */
 
 import assert from 'node:assert/strict';
@@ -59,7 +23,7 @@ import { createWsHub } from '../src/ws/hub.ts';
 import { accountFor, seatingOnlyStore } from './helpers/live-room.ts';
 
 const ALLOWED_ORIGIN = 'http://localhost:3000';
-/** The one learner. A fixed id, so the room's roster can name them. */
+/** A fixed id, so the room's roster can name them. */
 const LEARNER = 'usr_ada';
 const ROOM = 'room_revocation';
 /** Long enough for a close frame to cross loopback; short enough to fail rather than hang. */
@@ -80,10 +44,6 @@ const stubDatabase: DatabaseHandle = {
   close: () => Promise.resolve(),
 };
 
-// ---------------------------------------------------------------------------
-// The two stores
-// ---------------------------------------------------------------------------
-
 interface Row {
   readonly sessionId: string;
   readonly user: SessionAccount;
@@ -91,13 +51,7 @@ interface Row {
   revoked: boolean;
 }
 
-/**
- * `prl.sessions` and `prl.users` as a `Map`, with the one property that matters kept honest:
- * `findValidByToken` refuses a revoked or expired row, exactly as the SQL does.
- *
- * `sessionTtlMs` is a parameter so the expiry test can open a socket on a session that is about to
- * lapse. Nothing else in this file uses it.
- */
+/** `findValidByToken` refuses a revoked or expired row, exactly as the SQL does. */
 function fakeAuthStore(sessionTtlMs: number): AuthStore & { readonly rows: Map<string, Row> } {
   const rows = new Map<string, Row>();
   let counter = 0;
@@ -148,13 +102,11 @@ function fakeAuthStore(sessionTtlMs: number): AuthStore & { readonly rows: Map<s
     rows,
     sessions,
     users: {
-      // Always the same account, so the room roster below can name it before it exists.
       createGuest: () => Promise.resolve(accountFor(LEARNER, 'Ada')),
       findOrCreateOidc: () => Promise.reject(new AppError('internal_error', { logDetail: 'no oidc here' })),
       readUnits: () => Promise.resolve(10_000),
       resetUnits: () => Promise.resolve(10_000),
-      // The real one revokes every session inside the deletion transaction. Doing the same here is
-      // what makes `erasing an account…` a test of the hub rather than of this fake.
+      // Revokes every session as the real deletion transaction does, so the erasure case tests the hub.
       deleteAccount: (userId) => {
         for (const row of rows.values()) {
           if (row.user.id === userId) row.revoked = true;
@@ -168,10 +120,6 @@ function fakeAuthStore(sessionTtlMs: number): AuthStore & { readonly rows: Map<s
     },
   };
 }
-
-// ---------------------------------------------------------------------------
-// The harness
-// ---------------------------------------------------------------------------
 
 const openApps: FastifyInstance[] = [];
 const openSockets: WebSocket[] = [];
@@ -227,7 +175,6 @@ function cookieValue(response: { cookies: { name: string; value: string }[] }, n
   return response.cookies.find((entry) => entry.name === name)?.value ?? null;
 }
 
-/** A signed-in browser: the session cookie and the CSRF pair that goes with it. */
 interface Browser {
   readonly sessionCookie: string;
   readonly csrfToken: string;
@@ -258,7 +205,6 @@ interface Frame {
   readonly [key: string]: unknown;
 }
 
-/** One real socket, recording frames and the close it eventually gets. */
 class Client {
   readonly frames: Frame[] = [];
   readonly closes: { readonly code: number; readonly reason: string }[] = [];
@@ -347,10 +293,6 @@ class Client {
   }
 }
 
-// ---------------------------------------------------------------------------
-// The tests
-// ---------------------------------------------------------------------------
-
 describe('a websocket and the session that opened it', () => {
   it('signing out closes the socket it opened', async () => {
     const harnessed = await harness();
@@ -379,8 +321,7 @@ describe('a websocket and the session that opened it', () => {
   });
 
   it('leaves the socket usable while the session is still live', async () => {
-    // The positive control. Without it, a hub that closed every socket on every revocation — or
-    // simply on a timer — would pass the test above.
+    // Positive control, so a hub that closed every socket would not pass the case above.
     const harnessed = await harness();
     const browser = await signIn(harnessed);
     const client = new Client();
@@ -394,8 +335,7 @@ describe('a websocket and the session that opened it', () => {
 
   it('erasing an account closes every socket that account holds', async () => {
     const harnessed = await harness();
-    // Two browsers, two sessions, two sockets — which is the case a per-session revocation cannot
-    // reach: the deletion transaction revokes every row and hands back none of their ids.
+    // Two sessions, because the deletion transaction revokes every row and returns none of their ids.
     const first = await signIn(harnessed);
     const firstSocket = new Client();
     await firstSocket.connect(harnessed, first);
@@ -428,9 +368,7 @@ describe('a websocket and the session that opened it', () => {
   });
 
   it('a socket cannot outlive the session that opened it', async () => {
-    // A session with 250 ms to live. The point is not the number: it is that the ceiling
-    // `SESSION_ABSOLUTE_TTL_SECONDS` exists to impose is enforced on the CONNECTION and not only
-    // on the requests that re-read the row.
+    // Session expiry must hold on the connection, not only on requests that re-read the row.
     const harnessed = await harness(250);
     const browser = await signIn(harnessed);
     const client = new Client();
@@ -453,23 +391,9 @@ describe('a websocket and the session that opened it', () => {
   });
 
   /**
-   * The other half of the same guard, and the half that had never been observed failing.
-   *
-   * `hub.ts` enforces the session's expiry on a socket in TWO places, and they cover two different
-   * peers. The per-frame check in the `message` handler catches a socket that is still talking —
-   * which is what the case above drives, because it sends a `ping` after the session lapses. The
-   * sweep inside the heartbeat catches one that has gone QUIET, and its own comment says so: "a
-   * socket that sends nothing must expire too". That is the stolen-cookie shape — a peer that
-   * opens a socket, holds it, and says nothing while the TCP stack answers the pings for it.
-   *
-   * Measured before this case existed: with `if (entry.sessionExpiresAtMs <= now)` in the sweep
-   * turned into `if (false && …)`, the whole `@prl/api` suite passed 1,001 of 1,001. Every case in
-   * this file waits at most `CLOSE_TIMEOUT_MS` (5,000 ms) and the shipped sweep runs every
-   * `WS_LIMITS.heartbeatIntervalMs` (15,000 ms), so no case here could reach it even in principle.
-   * `createWsHub`'s `heartbeatIntervalMs` seam exists for exactly this, and nothing else uses it.
-   *
-   * Nothing is sent after `hello`. If this case ever starts sending a frame it stops testing the
-   * sweep and silently becomes a duplicate of the one above.
+   * The heartbeat sweep expires a socket that has gone quiet. The shipped sweep runs every 15,000 ms
+   * and every wait here is 5,000 ms, so with the sweep check disabled the suite passed 1,001 of 1,001.
+   * Nothing is sent after `hello`, or this becomes a duplicate of the per-frame case above.
    */
   it('a socket that has gone quiet is closed by the heartbeat sweep (NEGATIVE CONTROL)', async () => {
     const harnessed = await harness(250, 40);
@@ -478,8 +402,7 @@ describe('a websocket and the session that opened it', () => {
     await client.connect(harnessed, browser);
     await client.helloInto(ROOM, 'nonce-quiet0001');
 
-    // Not a frame after this line. The socket answers the protocol-level pings `ws` handles for it
-    // — which is what keeps `missedHeartbeats` at zero — and sends nothing the router ever sees.
+    // `ws` answers protocol pings, keeping `missedHeartbeats` at zero while the router sees nothing.
     const close = await client.waitForClose();
     assert.equal(
       close.code,
@@ -487,9 +410,7 @@ describe('a websocket and the session that opened it', () => {
       'a quiet socket outlived the session that opened it: the heartbeat sweep did not expire it',
     );
     assert.equal(close.reason, 'session expired', 'the socket was closed for some other reason');
-    // The positive control for the other direction: a sweep that closed everything would satisfy
-    // the assertions above and would drop every healthy socket in the product. The hello was
-    // answered before the session lapsed, so the connection was live and serving.
+    // Positive control, so a sweep that closed everything would not pass.
     assert.ok(
       client.frames.some((frame) => frame.type === 'state' || frame.type === 'welcome'),
       'the socket never became live, so the close proves nothing about expiry',

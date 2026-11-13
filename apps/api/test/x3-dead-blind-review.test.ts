@@ -1,28 +1,9 @@
 /**
- * Hand review under a CHANGED ROSTER — the shapes the dead-button rule creates.
- *
- * `test/hands.test.ts` reviews hands whose blinds sit exactly where the button says they should,
- * because `test/helpers/hand-rows.ts` deals every fixture through `startHand` without a rotation.
- * That is the one arrangement in which deriving the blinds from the button happens to be right, so
- * a review that derived them passed every one of those tests — and published no analysis at all for
- * any hand where a player left between deals.
- *
- * The dead-button rule (`packages/poker-engine/src/positions.ts`) makes two further arrangements
- * ordinary rather than exceptional:
- *
- *   - a DEAD SMALL BLIND: the small blind falls in a chair nobody is playing from, so nobody posts
- *     it. The hand is played for one big blind. This is what happens whenever the player who paid
- *     the big blind leaves before the next deal.
- *   - a DEAD BUTTON: the button falls in an empty chair for one hand. `button + 1` and `button + 2`
- *     are then not the blinds, and the button is not even a seat in the hand.
- *
- * Both are dealt here through the engine's own `advanceBlindRotation`, so the rows under test are
- * the rows a real table would have written, and the numbers the review is checked against are the
- * engine's own `pot_after` and `amount_paid`.
- *
- * The fixtures are built locally rather than through `persistHand`, because that helper deals from
- * a button and has no way to express a rotation. Everything else about the mapping — which columns
- * exist, what a `jsonb` read hands back — mirrors it.
+ * Hand review when the dead-button rule moves the blinds off `button + 1` and `button + 2`: a dead
+ * small blind (nobody posts it) and a dead button (the button chair is empty). Both rotations come
+ * from the engine's `advanceBlindRotation`. A review that derived blinds from the button passed
+ * hands.test.ts and published no analysis for these hands.
+ * Fixtures are built here because `persistHand` cannot express a rotation.
  */
 
 import assert from 'node:assert/strict';
@@ -48,7 +29,6 @@ import { buildHandReview } from '../src/review/build-review.ts';
 const ROOM_ID = 'room_x3deadblindaaaaaaaaaaaa';
 const NAMES = ['Ada', 'Bo', 'Cy', 'Dee'] as const;
 
-/** Small sample count: these tests assert that an analysis exists and what spot it describes. */
 const TEST_SAMPLES = 500;
 
 const SMALL_BLIND = 5;
@@ -56,7 +36,6 @@ const BIG_BLIND = 10;
 const MAX_SEATS = 4;
 const STARTING_STACK = 200;
 
-/** `usr_` ids are prefixed and fixed-shape, one per seat, so a seat can be asked for by user. */
 function userFor(seat: SeatIndex): string {
   return `usr_x3deadblindseat${seat}aaaaa`;
 }
@@ -78,14 +57,7 @@ interface DealOptions {
   readonly steps: readonly { readonly seat: SeatIndex; readonly action: Action }[];
 }
 
-/**
- * Deals one hand with the blinds stated rather than derived, plays it, and writes out the rows.
- *
- * No `fixedDeck`: nothing here turns on which cards came out, only on whether the review could
- * reconstruct the situation at all, so the deterministic test RNG deals whatever it deals. The
- * hands are still reproducible — that is what `createDeterministicRandomForTests` is for — and the
- * row is permanently labelled `deterministic-test-only` either way.
- */
+// Blinds are stated, not derived. No `fixedDeck`, because nothing here depends on the cards.
 function deal(options: DealOptions): DealtHand {
   const config = {
     smallBlind: SMALL_BLIND,
@@ -150,8 +122,7 @@ function deal(options: DealOptions): DealtHand {
     id: state.handId,
     room_id: state.roomId,
     hand_number: state.handNumber,
-    // The column the review used to derive the blinds from. It records where the button sat, which
-    // under the dead-button rule can be a chair nobody is playing from.
+    // Can be an empty chair under the dead-button rule.
     button_seat: state.buttonSeat,
     config: JSON.parse(JSON.stringify(config)) as unknown,
     commitment_root: state.commitment.root,
@@ -188,31 +159,19 @@ function reviewAs(dealt: DealtHand, seat: SeatIndex, skipped?: SkippedAnalysis[]
   });
 }
 
-/** Every decision belonging to `seat`, which are the only ones that can carry an analysis. */
 function decisionsOf(review: HandReviewResponse, seat: SeatIndex): HandReviewResponse['decisions'] {
   return review.decisions.filter((decision) => decision.seat === seat);
 }
 
-// ---------------------------------------------------------------------------
-// The rotation these fixtures reproduce
-// ---------------------------------------------------------------------------
-
-/**
- * Four-handed, then the player who paid the big blind stands up.
- *
- * Worked through the engine rather than asserted from memory, so the fixtures below cannot claim a
- * rotation the rule does not actually produce.
- */
+// Four-handed, then the big blind leaves. Rotations come from the engine, not from memory.
 const SEEDED: BlindPositions = { buttonSeat: 0, smallBlindSeat: 1, bigBlindSeat: 2 };
 
-/** Seat 2 — the big blind — leaves. The small blind position (seat 2) is now empty: it is DEAD. */
 const DEAD_SMALL_BLIND = advanceBlindRotation({
   previous: SEEDED,
   maxSeats: MAX_SEATS,
   entrants: [0, 1, 3],
 });
 
-/** One more hand with the same three players. The button position (seat 2) is empty: it is DEAD. */
 const DEAD_BUTTON = advanceBlindRotation({
   previous: DEAD_SMALL_BLIND.positions,
   maxSeats: MAX_SEATS,
@@ -249,18 +208,9 @@ describe('the rotation under test is the engine’s own, not a hand-written one'
   });
 });
 
-// ---------------------------------------------------------------------------
-// The regression
-// ---------------------------------------------------------------------------
-
 describe('a hand with a dead small blind is reviewed, not silently skipped', () => {
-  /**
-   * Button 1, no small blind, big blind seat 3. Seat 0 opens (the seat after the big blind).
-   *
-   * A review that derived the blinds from the button would charge `assignBlinds(1, 4, [0,1,3])` —
-   * seat 3 the small blind and seat 0 the big blind — reconstructing a pot of 15 against the 10 the
-   * engine actually recorded, and would refuse every decision on the pot cross-check.
-   */
+  // Button 1, no small blind, big blind seat 3. Deriving blinds from the button gives a pot of 15
+  // against the recorded 10, so the cross-check refuses every decision.
   function dealt(): DealtHand {
     return deal({
       handId: 'hand_x3deadsmallblindaaaaaaa',
@@ -321,9 +271,7 @@ describe('a hand with a dead small blind is reviewed, not silently skipped', () 
       BIG_BLIND,
       'seat 0 posted nothing, so it owed a whole big blind — not the 0 a mis-assigned blind gives',
     );
-    // Seat 0 posted nothing, so it still has its whole stack and covers everybody. Charging it a
-    // blind it never paid shows up here as well as in `toCall`: the effective stack would drop by
-    // the blind, because it is hero's own stack that becomes the binding one.
+    // A wrongly charged blind would also shrink the effective stack, since hero's stack binds.
     assert.equal(preflop.analysis.stackContext.effectiveStack, STARTING_STACK);
   });
 
@@ -339,12 +287,7 @@ describe('a hand with a dead small blind is reviewed, not silently skipped', () 
 });
 
 describe('a hand with a dead button is reviewed, not silently skipped', () => {
-  /**
-   * Button 2 — an empty chair — small blind seat 3, big blind seat 0. Seat 1 opens.
-   *
-   * The button is not a seat in this hand at all, so a replay that insisted on finding it among the
-   * dealt seats gave up before it started and reported `analysis: null` for the whole hand.
-   */
+  // Button 2 is an empty chair, so a replay that looks for it among dealt seats finds nothing.
   function dealt(): DealtHand {
     return deal({
       handId: 'hand_x3deadbuttonaaaaaaaaaaa',
@@ -395,10 +338,6 @@ describe('a hand with a dead button is reviewed, not silently skipped', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// The check that caught the regression must keep catching things
-// ---------------------------------------------------------------------------
-
 describe('the pot cross-check still refuses a hand it cannot faithfully replay', () => {
   it('refuses every decision when the persisted pot does not follow from the rows', () => {
     const hand = deal({
@@ -415,8 +354,7 @@ describe('the pot cross-check still refuses a hand it cannot faithfully replay',
         { seat: 0, action: { type: 'check' } },
       ],
     });
-    // A row nothing can explain: the first action claims a pot that no arrangement of the blinds
-    // produces, so no reconstruction may be accepted for it.
+    // No blind arrangement produces this pot.
     const tampered: DealtHand = {
       ...hand,
       actions: hand.actions.map((action) => (action.sequence === 1 ? { ...action, pot_after: 999 } : action)),

@@ -1,61 +1,9 @@
 /**
- * The four request classes the security layer refused for free, and the ban it recorded per
- * request instead of per caller.
- *
- * ## The invariant this file guards
- *
- * `plugins/security.ts` opens by explaining that its hook order was chosen so that a caller
- * "could not send unlimited requests that fail CSRF without ever being counted", and that the
- * route-level limiter is "the first thing that can cost a caller anything". It was not true.
- * Fastify runs every INSTANCE hook before every route-level hook, so anything answered from an
- * instance hook is answered before the limiter has run at all; and the not-found route's limiter
- * is a `preHandler`, which is a stage LATER than the instance `preValidation` CSRF check.
- *
- * Four classes fell through, and all four were measured against the shipped code before the fix,
- * each with 50 requests at `RATE_LIMIT_MAX=3`, each returning 403 every time with the caller's
- * bucket still empty afterwards:
- *
- *  1. a cross-origin `POST` from an origin that is not allowlisted;
- *  2. a rejected `OPTIONS` preflight;
- *  3. an ACCEPTED `OPTIONS` preflight (204, and equally uncounted);
- *  4. a `POST` to a nonexistent path with a bad or missing CSRF token — the exact hole the header
- *     names, and the one that blunts `errors.ts`'s own reason for limiting the 404 route ("a
- *     caller can hammer nonexistent paths for free — exactly what a path scanner does").
- *
- * None is a knockout: every one of those responses is cheap, with no database and (for three of
- * the four) no body parse. They are amplification, they are unbounded, and they are the property
- * the file claimed to have.
- *
- * ## The controls, and why each is here
- *
- * A test that only asserts "the fourth request is a 429" would also pass against a server that
- * had started refusing everything, or one that counted each request twice and hit the limit
- * early. So each case asserts the whole sequence — how many got the refusal they should, and
- * exactly when the limiter takes over — and two further cases assert the two ways the fix could
- * have gone wrong:
- *
- *  * **Counted once, not twice.** A CSRF-VALID `POST` to a real route is counted by the route's
- *    own limiter at `onRequest`; the manual call in the CSRF hook must be the no-op there. If it
- *    were not, every mutating request would consume two of the caller's budget.
- *  * **A stricter route limit is not displaced.** `@fastify/rate-limit` counts a request once, so
- *    a manual call made too early would consume the request's one count against the GLOBAL bucket
- *    and silently disable `expensiveRateLimit` on the routes that carry it. That route's limit is
- *    set to 1 here and asserted to still fire.
- *
- * ## And the ban, which is a separate defect on the same path
- *
- * `onBanReach` fires on every request while `current - max > ban`, not once when the threshold is
- * crossed. Each call wrote a `warn` line, a metric increment, and an un-awaited `INSERT` into
- * `prl.audit_log`. Under a flood — which is the only condition it fires under — the refusal path
- * became a database write amplifier with no backpressure and an unbounded pending-promise queue.
- * The last block measures the metric, which is the observable half of the same call.
- *
- * ## No database
- *
- * `buildApp` takes a `DatabaseHandle` and this file passes a stub. Every request here is answered
- * at or before `preValidation`, or by a route that touches nothing, and `recordSecurityAudit`
- * returns immediately when no database is configured — which is why the ban assertions are made
- * against the metric rather than against `prl.audit_log`.
+ * Fastify runs every instance hook before any route-level hook, so a refusal answered from an instance
+ * hook was never counted by the limiter. Measured before the fix with 50 requests at `RATE_LIMIT_MAX=3`,
+ * four classes stayed 403 (or 204) with an empty bucket. `onBanReach` also fired on every refused
+ * request, so each one wrote an un-awaited audit INSERT. The database is a stub, so ban assertions read
+ * the metric.
  */
 
 import assert from 'node:assert/strict';
@@ -71,7 +19,6 @@ const ALLOWED_ORIGIN = 'http://localhost:3000';
 const HOSTILE_ORIGIN = 'https://evil.test';
 const GOOD_SECRET = 'Zk7pQ2vR9tX4bN6mL1sD8gH3jF5wC0yA';
 
-/** The global limit every case below is measured against. Small enough to reach in a loop. */
 const GLOBAL_MAX = 3;
 
 function testConfig(overrides: EnvRecord = {}): AppConfig {
@@ -97,23 +44,14 @@ interface Built {
   readonly csrf: { readonly token: string; readonly cookie: string };
 }
 
-/**
- * An app with its own metrics, its own limiter counters, and a CSRF pair minted against it.
- *
- * `forgetRateLimitStoresForTests()` first for the same reason `rate-limit-isolation.test.ts` does
- * it: the store registry is process-wide, and counters left by an earlier app would be attributed
- * to this one.
- */
+/** The store registry is process-wide, so earlier counters are forgotten first. */
 async function buildIsolated(overrides: EnvRecord = {}): Promise<Built> {
   forgetRateLimitStoresForTests();
   const metrics = new AppMetrics();
   const app = await buildApp({ config: testConfig(overrides), database: stubDatabase, metrics });
-  // A GET route purely to mint a CSRF pair, and a POST route that exists so that "a real route"
-  // can be tested without a database. Same device as `rate-limit-isolation.test.ts`.
   app.get('/api/v1/test-csrf', (_request, reply) => ({ token: reply.generateCsrf() }));
   app.post('/api/v1/test-echo', async () => ({ ok: true }));
-  // The stricter per-route limit, on a route of its own. `expensiveRateLimit` is a decorator, so
-  // this is exactly what `routes/calc.ts` spreads onto `POST /math/equity`.
+  // The same decorator `routes/calc.ts` spreads onto `POST /math/equity`.
   app.post('/api/v1/test-expensive', { config: app.expensiveRateLimit }, async () => ({ ok: true }));
   await app.ready();
 
@@ -126,13 +64,8 @@ async function buildIsolated(overrides: EnvRecord = {}): Promise<Built> {
 }
 
 /**
- * A session cookie this app will accept the signature of.
- *
- * Every case needs its OWN rate-limit bucket, and `rateLimitKeyFor` prefers a signed session over
- * the address — under `app.inject` every request comes from the same address, so without this
- * they would all share one counter and the cases would drain each other. An unsigned value would
- * not do: the limiter checks the signature and keys an unsigned cookie on the address, which is
- * the defect `rateLimitKeyFor` was fixed for.
+ * Gives each case its own bucket. Under `app.inject` every request shares one address, and an
+ * unsigned session cookie is keyed on the address.
  */
 function bucket(app: FastifyInstance, name: string): string {
   return `prl_session=${app.signCookie(name)}`;
@@ -147,7 +80,6 @@ function errorCode(body: string): string {
   }
 }
 
-/** The status codes of `count` identical requests, in order. */
 async function repeat(
   app: FastifyInstance,
   count: number,
@@ -163,13 +95,6 @@ async function repeat(
   return { statuses, bodies };
 }
 
-/**
- * The shape every case asserts: `refused` answers of the expected kind, then 429 for ever.
- *
- * Written as one helper because the four classes differ only in what the pre-limit answer is, and
- * four copies of this sequence would be four chances to assert something slightly weaker in one
- * of them.
- */
 function assertCountedAfter(
   result: { readonly statuses: number[]; readonly bodies: string[] },
   expectedBefore: number,
@@ -183,9 +108,7 @@ function assertCountedAfter(
   );
   const after = result.statuses.slice(limit);
   assert.ok(after.length > 0, 'the loop must go past the limit or it proves nothing');
-  // MEASURED BEFORE THE FIX: every entry here was `expectedBefore` too — the refusal was answered
-  // from a hook the limiter had not run in, so the bucket was still empty after 50 of them. The
-  // old expectation, written out:
+  // The pre-fix behaviour, written out as a negative control.
   const uncounted = new Array(after.length).fill(expectedBefore);
   assert.notDeepEqual(after, uncounted, 'these requests were refused without ever being counted');
   assert.deepEqual(
@@ -209,8 +132,6 @@ describe('a refusal from an instance hook is still counted', () => {
   });
 
   it('counts a cross-origin POST refused by the origin check', async () => {
-    // `POST /api/v1/ready` is a mutating method on a real path with a hostile Origin, so
-    // `applyCors` returns `refuse` and the request never reaches the router.
     const cookie = bucket(built.app, 'cors-refuse');
     const result = await repeat(built.app, GLOBAL_MAX + 2, () => ({
       method: 'POST',
@@ -233,8 +154,6 @@ describe('a refusal from an instance hook is still counted', () => {
   });
 
   it('counts a preflight it accepts, which is answered from the same hook', async () => {
-    // The one that reads like it should be free and is not. A 204 from an instance hook is a
-    // response this server produced for a caller who has presented nothing at all.
     const cookie = bucket(built.app, 'preflight-allowed');
     const result = await repeat(built.app, GLOBAL_MAX + 2, () => ({
       method: 'OPTIONS',
@@ -242,7 +161,6 @@ describe('a refusal from an instance hook is still counted', () => {
       headers: { origin: ALLOWED_ORIGIN, 'access-control-request-method': 'POST', cookie },
     }));
     assertCountedAfter(result, 204, GLOBAL_MAX);
-    // The preflight it accepts must still be a usable answer, not merely a counted one.
     assert.equal(
       (
         await built.app.inject({
@@ -260,9 +178,7 @@ describe('a refusal from an instance hook is still counted', () => {
   });
 
   it('counts a CSRF-failing POST to a path that does not exist', async () => {
-    // The hole the file header names. The not-found route's limiter is a `preHandler` and the
-    // CSRF check is a `preValidation` hook, so the 403 came one whole stage before the counting.
-    // A different path each time, because a path scanner does not ask twice.
+    // The 404 limiter is a `preHandler`, a stage after the CSRF `preValidation`. A new path each time.
     const cookie = bucket(built.app, 'csrf-404');
     const result = await repeat(built.app, GLOBAL_MAX + 2, (index) => ({
       method: 'POST',
@@ -274,9 +190,7 @@ describe('a refusal from an instance hook is still counted', () => {
   });
 
   it('still limits a GET to an unknown path, which was never the broken case', async () => {
-    // The positive control from the other direction: this one was already counted before the fix
-    // (`errors.ts` gives the not-found route a rate-limit `preHandler`), and it must stay counted.
-    // Without it, "the 404 path is limited" could be true only because of the new call.
+    // Positive control. This was already counted before the fix and must stay counted.
     const cookie = bucket(built.app, 'get-404');
     const result = await repeat(built.app, GLOBAL_MAX + 2, (index) => ({
       method: 'GET',
@@ -298,10 +212,7 @@ describe('counting by hand does not count anything twice', () => {
   });
 
   it('spends exactly one unit of budget per valid POST to a real route', async () => {
-    // The route's own limiter runs at `onRequest`, so the manual call in the CSRF `preValidation`
-    // hook must find the request already counted and do nothing. If it double-counted, the limit
-    // would be reached after GLOBAL_MAX / 2 requests instead of GLOBAL_MAX — which is the failure
-    // this asserts against by pinning the exact index at which 429 first appears.
+    // The route limiter already counted at `onRequest`, so the manual call in the CSRF hook must be a no-op.
     const cookie = bucket(built.app, 'double-count');
     const result = await repeat(built.app, GLOBAL_MAX + 1, () => ({
       method: 'POST',
@@ -321,11 +232,8 @@ describe('counting by hand does not count anything twice', () => {
   });
 
   it('leaves a stricter per-route limit in force', async () => {
-    // `@fastify/rate-limit` counts a request once, whichever handler counts it. So a manual call
-    // made in an instance `onRequest` hook — on every request rather than only on the ones the
-    // hook answers — would consume that one count against the GLOBAL bucket and silently disable
-    // `expensiveRateLimit` everywhere it is used. `routes/calc.ts` spreads that same decorator
-    // onto an endpoint that accepts 500,000 Monte Carlo samples per call.
+    // `@fastify/rate-limit` counts a request once, so a manual call made too early would spend it on
+    // the global bucket and disable `expensiveRateLimit` (500,000 Monte Carlo samples per call).
     const strict = await buildIsolated({ RATE_LIMIT_MAX: '100', RATE_LIMIT_EXPENSIVE_MAX: '1' });
     try {
       const cookie = bucket(strict.app, 'expensive');
@@ -350,7 +258,6 @@ describe('counting by hand does not count anything twice', () => {
   });
 });
 
-/** The value of `prl_rate_limit_events_total{kind="banned"}` in a rendered exposition. */
 function bannedCount(metrics: AppMetrics): number {
   const line = metrics
     .render()
@@ -364,11 +271,7 @@ describe('a ban is recorded once per caller per window, not once per refused req
   let built: Built;
 
   before(async () => {
-    // `RATE_LIMIT_BAN_AFTER=0` is the most aggressive setting the library has, not "off":
-    // `isBanned = ban !== -1 && current - max > ban`, and `config.ts` bounds the variable at
-    // `min: 0` so a negative value cannot be configured at all. `.env.example` says the same.
-    // Every request past the limit is therefore a ban, which is what makes this measurable in a
-    // handful of injections instead of 501 of them.
+    // 0 is the most aggressive setting, not "off", so every request past the limit is a ban.
     built = await buildIsolated({ RATE_LIMIT_BAN_AFTER: '0' });
   });
   after(async () => {
@@ -383,17 +286,14 @@ describe('a ban is recorded once per caller per window, not once per refused req
       url: '/api/v1/ready',
       headers: { cookie },
     }));
-    // The negative control for the count below: without these refusals the ban path was never
-    // reached and "one ban" would be indistinguishable from "no bans".
+    // Without these refusals, "one ban" would be indistinguishable from "no bans".
     assert.deepEqual(
       result.statuses.slice(GLOBAL_MAX),
       new Array(overLimit).fill(429),
       `the flood must actually be refused: ${result.statuses}`,
     );
 
-    // MEASURED BEFORE: `onBanReach` fired on every refused request, so this was `overLimit` — one
-    // `warn` line, one metric increment and one un-awaited INSERT into `prl.audit_log` each. The
-    // old expression, written out:
+    // The pre-fix count, one ban per refused request.
     const oncePerRefusedRequest = overLimit;
     const banned = bannedCount(built.metrics);
     assert.notEqual(
@@ -401,13 +301,11 @@ describe('a ban is recorded once per caller per window, not once per refused req
       oncePerRefusedRequest,
       'the ban is still being recorded per request, which is the write amplifier',
     );
-    // MEASURED AFTER: 1.
     assert.equal(banned, 1, `one caller, one window, one ban: got ${banned}`);
   });
 
   it('records the second caller separately, so the deduplication is per key', async () => {
-    // The control for the assertion above. A `return` that suppressed every ban after the first
-    // one in the process would satisfy "exactly 1" and would hide every subsequent attacker.
+    // Control. Suppressing every ban after the first in the process would also satisfy "exactly 1".
     const before = bannedCount(built.metrics);
     const cookie = bucket(built.app, 'second-flood');
     await repeat(built.app, GLOBAL_MAX + 4, () => ({
@@ -424,24 +322,8 @@ describe('a ban is recorded once per caller per window, not once per refused req
 });
 
 /**
- * The other half of "once per caller PER WINDOW", which nothing reached.
- *
- * The two cases above prove `once per caller`. Neither lets a window elapse, so the expiry arm of
- * `bansRecordedUntil` — the `now + config.rateLimit.globalWindowMs` that makes the entry temporary
- * — was never exercised, and the describe block's own name promised it.
- *
- * Measured: with `bansRecordedUntil.set(key, now + config.rateLimit.globalWindowMs)` replaced by
- * `bansRecordedUntil.set(key, Number.POSITIVE_INFINITY)`, the whole `@prl/api` suite passed 1,001
- * of 1,001, three runs out of three. What that ships is a caller who is recorded ONCE and then
- * never again for the life of the process: the `warn`, the `prl.audit_log` row and the
- * `prl_rate_limit_events_total{kind="banned"}` increment all go silent for every repeat offender,
- * and the `RateLimitBans` rule — `sum(increase(...[15m])) > 0` — stops being able to fire for a
- * flood that has been going on since before the last deploy. The failure direction is the wrong
- * one: the longer an attacker persists, the quieter the alerting gets.
- *
- * A one-second window, which is the floor `config.ts` allows, so the wait is a wait and not a
- * sleep. The window is deliberately the limiter's own window rather than a separate knob: they are
- * the same number in production and the deduplication is defined in terms of it.
+ * The expiry arm of `bansRecordedUntil`. With the expiry set to infinity the whole suite passed, which
+ * silences a persistent attacker and the `RateLimitBans` rule. One second is the floor `config.ts` allows.
  */
 describe('a caller who is still flooding in the next window is recorded again', () => {
   const WINDOW_MS = 1_000;
@@ -470,7 +352,6 @@ describe('a caller who is still flooding in the next window is recorded again', 
     assert.ok(first.includes(429), `the first flood must actually be refused: ${first}`);
     assert.equal(bannedCount(built.metrics) - before, 1, 'the first window did not record exactly one ban');
 
-    // The window rolls. Nothing about the caller has changed: it is the same key, still flooding.
     await new Promise((resolve) => {
       const timer = setTimeout(resolve, WINDOW_MS + 150);
       timer.unref();

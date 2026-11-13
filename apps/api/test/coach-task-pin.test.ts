@@ -1,12 +1,6 @@
-/**
- * The task the socket sends a calculator thread is the one it sent before the Coach's input moved
- * into `@prl/poker-math`, to the byte.
- *
- * The views and the tasks were written by the API's own `coachTaskForView` at the commit before
- * the move; `packages/poker-math/test/coach-view.test.ts` says how, and holds the reports for the
- * same views. A task is the thread's whole input, so a field that changed here would change a
- * figure on the thread with nothing on this side to show it.
- */
+// Pins the calculator-thread task byte for byte to what `coachTaskForView` produced before the move
+// into `@prl/poker-math`. The task is the thread's whole input, so any drift changes a Coach figure.
+// `packages/poker-math/test/coach-view.test.ts` explains how the fixture was written.
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
