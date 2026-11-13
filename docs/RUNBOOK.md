@@ -11,6 +11,7 @@ Everything you need to run, verify, and operate Poker Risk Lab.
 | Node | **24.18.0** | `.nvmrc` and `.node-version` pin 24.18.0, which CI uses. `engines` accepts `>=24.18.0 <25` and `engineStrict` refuses anything outside that; the test runner relies on Node 24's native TypeScript execution |
 | pnpm | **11.10.0** | Pinned with an integrity hash in `packageManager`, verified by Corepack. `engines` accepts `>=11.10.0 <12` |
 | Docker | any recent, **running** | PostgreSQL 16 for local development; `db:setup` starts it with `docker compose` |
+| Google Chrome or Chromium | any current | **Only for `verify`**, not for the first run: `design:contrast`, `test:ax`, `test:keyboard`, `test:layout`, `test:csp` and `test:age-gate` drive a real headless Chrome over the DevTools Protocol. Found at the usual install paths, or set `CHROME_PATH`; without one those gates stop with `no Chrome found` |
 
 ```bash
 corepack enable            # uses the packageManager field, so the hash is checked
@@ -40,6 +41,18 @@ pnpm run dev                       # api on :3001, web on :3000
 ```
 
 Open <http://localhost:3000>. No sign-in is needed — the app is guest-first.
+
+**A second checkout on the same machine shares the first one's database.** `docker-compose.yml`
+sets `name: poker-risk-lab`, so the project — and with it the `poker-risk-lab-postgres-1`
+container and its volume — is the same whichever directory `db:up` runs from. Measured on
+2026-11-13 from a fresh clone beside an existing one: `docker compose --dry-run up -d postgres`
+answered `Container poker-risk-lab-postgres-1 Recreate`. The volume survives a recreate, but the
+running database restarts under whoever else is using it, and the new clone's `db:migrate` then
+writes into the database the old one uses. To keep a second checkout apart, leave `db:up` out:
+create a database of its own on the running server, point both URLs in that checkout's `.env` at
+it, and run `pnpm run db:wait && pnpm run db:migrate && pnpm run db:seed`. The roles are
+cluster-wide, not per database: that `db:seed` sets the `prl_api` and `prl_deployer` passwords
+back to `poker-dev-only`, which is what the other checkout expects unless its `.env` changed them.
 
 ### Use `localhost`, not `127.0.0.1`
 
@@ -209,7 +222,7 @@ unknown, and unknown is not clean.
 | Command | What it does |
 | --- | --- |
 | `pnpm run db:up` | Start PostgreSQL |
-| `pnpm run db:wait` | Block until it accepts connections |
+| `pnpm run db:wait` | Block until it accepts connections. Reads `.env` and waits on `DATABASE_MIGRATION_URL`, else `DATABASE_URL` — the database `db:migrate` opens next |
 | `pnpm run db:migrate` | Apply pending migrations |
 | `pnpm run db:migrate:status` | Show applied and pending. Reads `DATABASE_MIGRATION_URL`, so it needs a migration identity — see the note below |
 | `pnpm run db:roles` | Create the cluster-wide `prl_migrator`/`prl_app` roles. Only needed before a **restore** (§11.4); `db:migrate` creates them otherwise |
@@ -240,6 +253,12 @@ pnpm run verify
 #   joined, fourteen until test:layout did, and fifteen until test:keyboard did.
 #   Read the list in package.json, never this comment, if the two ever disagree.
 ```
+
+It takes no arguments and has no `--help`. `pnpm run verify --help` is not a way to ask what it does:
+pnpm appends `--help` to the end of the script, where the last `printf` ignores it, and **all sixteen
+gates run** — several minutes, two of them starting their own API on :3001. Measured with a
+throwaway script `echo RAN; printf done`: `pnpm run x --help` printed `RAN`. The list above, or the
+`for gate in` clause in `package.json`, is the description.
 
 **Every gate runs, every gate reports, and the command exits non-zero if any of them failed.** It
 prints `=== PASS <gate> ===` or `=== FAIL <gate> ===` after each one and finishes with the list of
@@ -670,6 +689,17 @@ what the engine produces. The fix is `pnpm run fixtures:regenerate`, never editi
 
 **`verifyDepsBeforeRun` error.** `node_modules` no longer matches the lockfile. Run
 `pnpm install --frozen-lockfile`.
+
+**The API starts, but nothing that needs the database works.** A `DATABASE_URL` with a stale
+password, or naming a database that was never created, is not refused at boot: config validation
+checks that the variable is present and well-formed, not that the server answers, so the log says
+`Server listening` and `GET /api/v1/health` is 200. Ask the endpoint that does check:
+`curl -s localhost:3001/api/v1/ready` answers 503 with `"database did not answer"` (measured with a
+wrong password and with a database name that does not exist; it takes about five seconds, the
+connect timeout). `pnpm run db:verify` connects with `DATABASE_URL`, as the API does, and names
+the real error — `password authentication failed for user "prl_api"`, `database "…" does not
+exist`. `db:migrate` is not the check: it prefers `DATABASE_MIGRATION_URL`, which can be right while
+`DATABASE_URL` is wrong.
 
 **The API refuses to boot.** Read the message — config validation lists every problem at
 once. The usual cause is a missing or too-short `SESSION_COOKIE_SECRET`.

@@ -108,7 +108,8 @@ const HELP = `
 ${bold('pnpm run db:wait')} — block until PostgreSQL answers a query
 
   Options:
-    --url <conn>       connection string (default: $DATABASE_URL, then dev defaults)
+    --url <conn>       connection string (default: $DATABASE_MIGRATION_URL, then
+                       $DATABASE_URL, then dev defaults)
     --timeout <secs>   give up after this long          (default ${DEFAULTS.timeoutSeconds})
     --interval <ms>    delay between attempts           (default ${DEFAULTS.intervalMs})
     -q, --quiet        only print the final line
@@ -116,11 +117,14 @@ ${bold('pnpm run db:wait')} — block until PostgreSQL answers a query
 
   Connection settings are read in this order:
     1. --url
-    2. DATABASE_URL
-    3. POSTGRES_HOST / POSTGRES_PORT / POSTGRES_USER / POSTGRES_PASSWORD /
+    2. DATABASE_MIGRATION_URL
+    3. DATABASE_URL
+    4. POSTGRES_HOST / POSTGRES_PORT / POSTGRES_USER / POSTGRES_PASSWORD /
        POSTGRES_DB  (PGHOST / PGPORT / PGUSER / PGPASSWORD / PGDATABASE are
        accepted as aliases)
-    4. the dev defaults in docker-compose.yml
+    5. the dev defaults in docker-compose.yml
+
+  \`pnpm run db:wait\` loads .env first, as db:migrate and db:seed do.
 
   Exit codes: 0 ready, 1 timed out or a non-retryable failure.
 `;
@@ -132,9 +136,28 @@ ${bold('pnpm run db:wait')} — block until PostgreSQL answers a query
  * documented first-run sequence works with no .env file at all. If you change one,
  * change the other; there is no third place these live.
  */
+function isSet(value) {
+  return typeof value === 'string' && value.trim() !== '';
+}
+
 function connectionStringFrom(env, override) {
   if (override) return { url: override, source: '--url' };
-  if (env.DATABASE_URL) return { url: env.DATABASE_URL, source: 'DATABASE_URL' };
+  // DATABASE_MIGRATION_URL before DATABASE_URL, which is migrate.mjs's order, because db:wait
+  // exists to clear the way for db:migrate and must wait on the server and database db:migrate
+  // is about to open. Measured on a fresh clone whose .env named a scratch database: this script
+  // printed `target poker@127.0.0.1:5432/poker_risk_lab (from environment)` and reported ready
+  // against a DIFFERENT database, because `pnpm run db:wait` loaded no .env at all
+  // (docs/audit/production-audit.md P2-1). Loading .env alone would have broken the first run
+  // instead: DATABASE_URL names prl_api, which db:seed creates two steps later, and the 28P01 a
+  // missing role returns is not retried — so on a fresh cluster db:setup would stop here.
+  //
+  // A blank value counts as unset, as `databaseUrl` in migrate.mjs treats it: otherwise a
+  // whitespace-only DATABASE_MIGRATION_URL beat a valid DATABASE_URL and db:setup stopped on a
+  // target nothing could connect to (Devin Review on #37).
+  if (isSet(env.DATABASE_MIGRATION_URL)) {
+    return { url: env.DATABASE_MIGRATION_URL.trim(), source: 'DATABASE_MIGRATION_URL' };
+  }
+  if (isSet(env.DATABASE_URL)) return { url: env.DATABASE_URL.trim(), source: 'DATABASE_URL' };
 
   const host = env.POSTGRES_HOST ?? env.PGHOST ?? '127.0.0.1';
   const port = env.POSTGRES_PORT ?? env.PGPORT ?? '5432';
@@ -347,7 +370,10 @@ for (;;) {
     lastReason =
       verdict.code && verdict.code !== verdict.why ? `${verdict.code}: ${verdict.why}` : verdict.why;
     if (!verdict.retry) {
-      console.error(red(`\n  x not retryable — ${verdict.why}\n`));
+      console.error(red(`\n  x not retryable — ${verdict.why}`));
+      // Which variable the target came from, because there are now two that can supply it and
+      // "check DATABASE_URL" is the wrong advice when DATABASE_MIGRATION_URL is the one in use.
+      console.error(dim(`      target: ${describeTarget(target.url)} (from ${target.source})\n`));
       process.exit(1);
     }
     if (Date.now() + options.intervalMs >= deadline) break;
