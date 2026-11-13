@@ -74,6 +74,7 @@ import {
 import { TableStage, type TableStageStatus } from '@/components/TableStage.tsx';
 import { reviewHrefFor } from '@/lib/coach-body.ts';
 import { LEGENDS_PATH } from '@/lib/legend-links.ts';
+import { describeTable } from '@/lib/table-description.ts';
 import { INVITE_CODE_EXAMPLE, MAX_INVITE_CODE_INPUT } from '@/lib/table-rooms.ts';
 import type { TableSocketStatus } from '@/lib/table-socket.ts';
 import { type LiveTable as LiveTableModel, useLiveTable } from '@/lib/use-live-table.ts';
@@ -228,10 +229,16 @@ interface ConnectionPanelProps {
  * screen reader ends up reading the same failure three times.
  */
 function statusSentence(live: LiveTableModel): string {
+  if (live.phase === 'idle' && live.resuming) return 'Reconnecting you to the table you were at.';
   if (live.phase === 'idle') {
+    // "Opens your practice table", not "creates a room": the press reuses a table this account
+    // already has (`chooseRoom`), and this sentence used to promise a new one to a reader who had
+    // just come back to /play from a table that was still being held for them (UI audit of
+    // 308fadf, item 15). Both halves are said because, from here, the page cannot know which.
     return (
-      'Not connected yet. “Deal me in” creates a guest session — no email, no password — and a private ' +
-      'room with bots already seated, then sits you down and deals your first hand.'
+      'Not connected yet. “Deal me in” starts a guest session if you need one — no email, no ' +
+      'password — and opens your practice table: the one you already have, or a new one with bots ' +
+      'already seated. Then it takes your seat and deals, unless a hand is already being played.'
     );
   }
   if (live.phase === 'preparing') {
@@ -324,9 +331,9 @@ function ConnectionNotices({ live }: ConnectionPanelProps): ReactElement {
         the button they pressed would look broken rather than refused.
 
         The server's own sentence is shown unchanged and unlabelled by a code: it is the one place
-        in this app that already says what to do about it, and repeating "(enrolment_required)"
-        after it — which the generic branch does deliberately, so a reader can quote a code at
-        support — would put a machine token in the middle of the one message written for a person.
+        in this app that already says what to do about it. No branch here prints a contract code any
+        more — the generic one used to append "(insufficient_units)" and the like, a machine token
+        after a sentence written for a person (audit at 308fadf). `noticeCode` is what branches.
 
         There is no "get access" control here, and there must not be. This software has no way to
         take money, holds no amount, currency or price anywhere in its schema, and nobody reading
@@ -827,9 +834,7 @@ function ConnectionPanel({ live, inLegendMatch = false }: ConnectionPanelProps):
       {room === null ? null : (
         <dl className="prl-stat__pair prl-play__facts">
           <dt className="prl-label">Room</dt>
-          <dd>
-            {`${room.name} — ${room.visibility.replace('_', '-')}, ${String(room.members.length)} at the table`}
-          </dd>
+          <dd>{describeTable(room, live.table.userId)}</dd>
           <dt className="prl-label">Blinds</dt>
           <dd>{`${String(room.smallBlind)} / ${String(room.bigBlind)} units`}</dd>
           <dt className="prl-label">Your seat</dt>

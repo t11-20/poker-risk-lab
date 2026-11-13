@@ -23,7 +23,7 @@
 import assert from 'node:assert/strict';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { after, describe, it } from 'node:test';
-import type { ErrorCode } from '@prl/contracts';
+import { AUTOMATIC_REASONS, type AutomaticReason, type ErrorCode } from '@prl/contracts';
 import { COMMITMENT_VERSION, type HandResult, parseCard } from '@prl/poker-engine';
 import { loadConfig } from '../src/config.ts';
 import { createDatabaseClient, type Sql, type TransactionSql } from '../src/db.ts';
@@ -1431,6 +1431,7 @@ describe('hands — against Postgres', dbOptions, () => {
         betLevelAfter: 6,
         potAfter: 9,
         wasAutomatic: false,
+        automaticReason: null,
         actionId,
       };
 
@@ -1491,9 +1492,74 @@ describe('hands — against Postgres', dbOptions, () => {
           betLevelAfter: 6,
           potAfter: 9,
           wasAutomatic: false,
+          automaticReason: null,
           actionId: null,
         }),
       );
+    });
+  });
+
+  /**
+   * Migration 0009. `was_automatic` alone could not tell a seat whose clock ran out from a player
+   * who had pressed "Stand up" holding cards, and the hand review printed "the clock ran out" for
+   * both. The reason is written with the row and read back as written, and the CHECKs are held to
+   * `AUTOMATIC_REASONS` here so the contract and the schema cannot drift apart unnoticed.
+   */
+  it('records why an automatic action was taken, and only for an automatic one', async () => {
+    await inRollback(async (tx) => {
+      const { handId } = await dealtHand(tx);
+      const base = {
+        handId,
+        street: 'preflop' as const,
+        seat: 0,
+        actionType: 'fold' as const,
+        actionTo: null,
+        amountPaid: 0,
+        betLevelAfter: 2,
+        potAfter: 3,
+        actionId: null,
+      };
+      assert.ok(AUTOMATIC_REASONS.length >= 2, 'a sweep of nothing is not a pass');
+      let sequence = 0;
+      for (const reason of AUTOMATIC_REASONS) {
+        sequence += 1;
+        await hands.appendAction(tx, { ...base, sequence, wasAutomatic: true, automaticReason: reason });
+      }
+      // A row as the previous build writes it between migrate and roll: automatic, reason unknown.
+      sequence += 1;
+      await hands.appendAction(tx, { ...base, sequence, wasAutomatic: true, automaticReason: null });
+
+      const logged = await hands.actionsOf(tx, handId);
+      assert.deepEqual(
+        logged.map((entry) => [entry.was_automatic, entry.automatic_reason]),
+        [...AUTOMATIC_REASONS.map((reason) => [true, reason]), [true, null]],
+      );
+
+      // A reason the contract does not know, and a reason on a decision a person made. Neither
+      // constraint maps to an `ErrorCode` (nothing a caller could do about it), so the driver's own
+      // error comes through, and it is held to the constraint that refused it.
+      const refusedBy = async (constraint: string, input: hands.AppendActionInput): Promise<void> => {
+        await assert.rejects(
+          tx.savepoint(async (savepoint) => {
+            await hands.appendAction(savepoint, input);
+          }),
+          (error: unknown) =>
+            typeof error === 'object' && Reflect.get(error ?? {}, 'constraint_name') === constraint,
+          `expected ${constraint} to refuse the row`,
+        );
+      };
+      await refusedBy('hand_actions_automatic_reason_allowed', {
+        ...base,
+        sequence: sequence + 1,
+        wasAutomatic: true,
+        automaticReason: 'disconnected' as AutomaticReason,
+      });
+      await refusedBy('hand_actions_automatic_reason_only_if_automatic', {
+        ...base,
+        sequence: sequence + 1,
+        wasAutomatic: false,
+        automaticReason: 'timeout',
+      });
     });
   });
 

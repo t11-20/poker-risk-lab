@@ -105,6 +105,7 @@
  */
 
 import type {
+  AutomaticReason,
   CoachReport,
   HandReviewDecision,
   HandReviewResponse,
@@ -231,6 +232,8 @@ export interface HandActionRow {
   readonly bet_level_after: number;
   readonly pot_after: number;
   readonly was_automatic: boolean;
+  /** Null on a person's decision, and on an automatic row archived before migration 0009. */
+  readonly automatic_reason: AutomaticReason | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1372,6 +1375,10 @@ function planDecisions(actions: readonly HandActionRow[], context: DecisionConte
         amountPaid: action.amount_paid,
         potBefore: persistedPotBefore,
         wasAutomatic: action.was_automatic,
+        // Passed through as recorded, null included. A row from before 0009 has no reason, and
+        // inventing one here from `was_automatic` is the guess that printed "the clock ran out"
+        // beside a fold the reader asked for.
+        automaticReason: action.automatic_reason,
         analysis: null,
       },
       request: planAnalysis(action, {

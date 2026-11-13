@@ -290,9 +290,19 @@ function reviewInput(fixture: ReturnType<typeof persistHand>): Parameters<typeof
   };
 }
 
-/** The live Coach's report for a view, computed on THIS thread: the in-process reference. */
-function coachHere(view: PlayerView): CoachReport {
-  const reading = coachSpotForView(view, LIVE_COACH_POLICY);
+/**
+ * The live Coach's report for a view, computed on THIS thread: the in-process reference.
+ *
+ * `names` is the table's dealt names, which `requestCoach` now hands the Coach so that it labels
+ * opponents the way the seat plates do. A reference built without them labels them `seat N` and
+ * differs from the socket's report in exactly those labels.
+ */
+function coachHere(view: PlayerView, names?: ReadonlyMap<number, string>): CoachReport {
+  const reading = coachSpotForView(
+    view,
+    LIVE_COACH_POLICY,
+    names === undefined ? undefined : (seat) => names.get(seat),
+  );
   assert.ok(reading.kind === 'spot', `no decision in this view: ${JSON.stringify(reading)}`);
   return buildCoachReport(coachInputFor(reading.spot));
 }
@@ -583,10 +593,17 @@ describe('the Coach over a socket does not block the event loop', () => {
       requestCoach(harness, actor, 'req-coach-parity');
       const frame = await waitForFrame(actor.recorded, 'coach');
       const fromThread = frame['report'] as CoachReport;
-      const local = coachHere(view);
+      const local = coachHere(view, room.table.dealtNames());
       // Same view, same samples, same seed: the thread's answer must be the reference answer to
       // the digit.
       assert.deepEqual(fromThread, local);
+      // And the opponent is named as the table names them (audit at 308fadf: "seat 2 / seat 3 /
+      // seat 6" in the Coach, beside plates with names and no numbers). Equal to a reference that
+      // was given the names is not enough on its own: both could have dropped them.
+      const labels = fromThread.equity.perPlayer.map((player) => player.label);
+      assert.ok(labels.length >= 2, `a sweep of nothing is not a pass: ${JSON.stringify(labels)}`);
+      assert.equal(labels[0], 'you');
+      for (const label of labels.slice(1)) assert.match(label, /^(Ada|Bo)$/u, 'an opponent is named');
     } finally {
       await harness.app.close();
     }

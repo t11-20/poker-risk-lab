@@ -185,6 +185,7 @@ function reviewActionRows(review) {
       bet_level_after: betLevel,
       pot_after: nextPotAfter,
       was_automatic: decision.wasAutomatic,
+      automatic_reason: decision.automaticReason ?? null,
     });
   }
   return rows;

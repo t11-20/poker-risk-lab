@@ -63,11 +63,17 @@
  * the region speaks once per turn rather than once per frame.
  */
 
-import type { CoachReport, CreateRoomRequest, ErrorCode, RoomSummary, WsServerMessage } from '@prl/contracts';
+import {
+  type CoachReport,
+  type CreateRoomRequest,
+  type ErrorCode,
+  inSecondPerson,
+  type RoomSummary,
+  type WsServerMessage,
+} from '@prl/contracts';
 import type { PlayerView, TableAction, TurnClock } from '@prl/ui';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { TableSubmission } from '@/components/TableStage.tsx';
-import { ApiRequestError } from './api.ts';
 import {
   BOT_TABLE_REQUEST,
   chooseRoom,
@@ -80,6 +86,7 @@ import {
   listRooms,
   normaliseInviteCode,
   READER_SEAT,
+  resumeRememberedTable,
 } from './table-rooms.ts';
 import {
   type CloseMeaning,
@@ -522,14 +529,104 @@ const COACH_NOT_SENT: Readonly<Record<'rate-limited' | 'undeliverable', string>>
  */
 export const DEAL_ANNOUNCEMENT = 'A new hand was dealt.';
 
+type WireEvent = Extract<WsServerMessage, { type: 'event' }>['event'];
+
+/**
+ * The reader's seat in the hand the next event is about, or null when they were not dealt into it.
+ *
+ * Events are written into the socket BEFORE the state frame of the same notice
+ * (`apps/api/src/ws/router.ts`), so while a hand is in progress `view` is that hand and `viewerSeat`
+ * is the answer — resolved by the server from the dealt roster, so null means "not in this hand"
+ * and must stay null. Falling through to `state.seat` there would make a reader who sat down mid-hand
+ * into whoever was dealt the chair before them. Only between hands, when the next event is the new
+ * hand's forced bets and the view is the last hand's, is the chair the best there is.
+ */
+function readersSeat(state: TableState): number | null {
+  const view = state.view;
+  if (view !== null && view.street !== 'complete') return view.viewerSeat;
+  return state.seat;
+}
+
+/**
+ * Whether a sentence that opens on `name` can only be about the reader.
+ *
+ * Review on PR #33 (Devin): display names are not unique — `createGuest` takes any name, and seats
+ * are by user id — so matching on the name alone told one Alex that the other Alex's fold was
+ * theirs ("You fold"), told a spectator named Alex that every Alex's blind was theirs, and read "Dr.
+ * Alex posts the small blind" as "Dr. You post the small blind", because `inSecondPerson` opens a
+ * sentence after any ". ". The forced bets, the showdown and the awards carry no seat, so the name is
+ * all there is, and it is only enough when nobody else at the table could be the one it names:
+ *
+ *   - the reader holds a seat in this hand;
+ *   - no other member's name contains the reader's as a whole word. EVERY member, seated or not: a
+ *     player who was dealt in and then stood up is narrated under that name with `seat: null`.
+ *     Whole-word rather than equal, which is the "Dr. Alex" case; "Patient Technician 12" does not
+ *     contain "Patient Technician 1" as a word, and the verb after the name already keeps them apart;
+ *   - every player dealt into the view is a member, so no dealt name is one this page cannot see.
+ *
+ * Any doubt leaves the server's sentence, which is true. A rename mid-hand is not chased: the dealt
+ * name then no longer opens on the roster's, nothing matches, and the sentence is left alone.
+ */
+function onlyTheReaderIsNamed(state: TableState, name: string): boolean {
+  if (readersSeat(state) === null) return false;
+  const members = state.room?.members ?? [];
+  const word = new RegExp(`(?:^|[^\\p{L}\\p{N}])${escapedName(name)}(?:$|[^\\p{L}\\p{N}])`, 'u');
+  const named = members.some((member) => member.userId !== state.userId && word.test(member.displayName));
+  if (named) return false;
+  const known = new Set(members.map((member) => member.userId));
+  return (state.view?.seats ?? []).every((seat) => known.has(seat.playerId));
+}
+
+function escapedName(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+}
+
+/**
+ * The event as the reader should hear it: their own sentences in the second person.
+ *
+ * Every socket in the room receives the same sentences, written with the name each seat was dealt in
+ * under, so the reader's own hand used to come back to them as "Guest 12D91B posts the big blind,
+ * 10." and, under the table, "Guest 12D91B wins 1529 from the pot." (audit at 308fadf). The name is
+ * the reader's roster entry — the same string the server dealt them in under — and the rewrite is
+ * `inSecondPerson`, which reads the verbs from the table the API writes them from. A sentence it
+ * does not recognise is left exactly as the server wrote it, which is still true.
+ *
+ * WHOSE sentence is decided here, not by the name: an action carries its seat, and is the reader's
+ * exactly when that is the reader's seat in this hand; the rest carry none, and are rewritten only
+ * when `onlyTheReaderIsNamed`.
+ */
+function inReadersWords(event: WireEvent, state: TableState): WireEvent {
+  const name = state.room?.members.find((member) => member.userId === state.userId)?.displayName ?? null;
+  if (name === null) return event;
+  if (event.kind === 'action') {
+    const own = event.seat === readersSeat(state);
+    return own ? { ...event, description: inSecondPerson(event.description, name) } : event;
+  }
+  if (!onlyTheReaderIsNamed(state, name)) return event;
+  switch (event.kind) {
+    case 'forcedBets':
+      return { ...event, detail: inSecondPerson(event.detail, name) };
+    case 'showdown':
+    case 'handComplete':
+      return { ...event, summaries: event.summaries.map((line) => inSecondPerson(line, name)) };
+    default:
+      return event;
+  }
+}
+
 /**
  * One sentence for the table's single polite live region.
  *
  * `clockExpired` says whether the `seatTimedOut` just before this event named its seat — see
  * `clockExpiredSeat` on `TableState`. Without it an automatic action is the server folding for a
  * player who stood up, and the sentence says the server acted without naming a cause.
+ *
+ * `ownSeat` is the reader's seat in this hand, so the two sentences this page writes about a seat by
+ * number say "you" about the reader's: "Seat 1 ran out of time and the server acted for it" was the
+ * reader being told about themselves as a chair.
  */
-function announce(event: Extract<WsServerMessage, { type: 'event' }>['event'], clockExpired = false): string {
+function announce(event: WireEvent, clockExpired = false, ownSeat: number | null = null): string {
+  const own = ownSeat !== null && 'seat' in event && event.seat === ownSeat;
   switch (event.kind) {
     case 'handStarted':
       return DEAL_ANNOUNCEMENT;
@@ -539,7 +636,7 @@ function announce(event: Extract<WsServerMessage, { type: 'event' }>['event'], c
       if (!event.wasAutomatic) return event.description;
       return clockExpired
         ? `${event.description} (the clock ran out, so the server acted)`
-        : `${event.description} (the server acted for this seat)`;
+        : `${event.description} (the server acted for ${own ? 'you' : 'this seat'})`;
     case 'street':
       return event.newCards.length === 0
         ? `The ${event.street}.`
@@ -553,7 +650,9 @@ function announce(event: Extract<WsServerMessage, { type: 'event' }>['event'], c
     case 'playerLeft':
       return `${event.displayName} left the table.`;
     case 'seatTimedOut':
-      return `Seat ${String(event.seat + 1)} ran out of time and the server acted for it.`;
+      return own
+        ? 'You ran out of time and the server acted for you.'
+        : `Seat ${String(event.seat + 1)} ran out of time and the server acted for it.`;
     default:
       return '';
   }
@@ -606,20 +705,21 @@ function onEventFrame(state: TableState, frame: Extract<WsServerMessage, { type:
   const clockExpired =
     frame.event.kind === 'action' && frame.event.wasAutomatic && frame.event.seat === state.clockExpiredSeat;
   const clockExpiredSeat = frame.event.kind === 'seatTimedOut' ? frame.event.seat : null;
-  const sentence = announce(frame.event, clockExpired);
+  const event = inReadersWords(frame.event, state);
+  const sentence = announce(event, clockExpired, readersSeat(state));
   const announcement = state.carried === '' ? sentence : `${state.carried} ${sentence}`;
   const next: TableState = { ...state, announcement, carried: '', clockExpiredSeat };
-  if (frame.event.kind === 'showdown') {
-    return { ...next, summary: frame.event.summaries };
+  if (event.kind === 'showdown') {
+    return { ...next, summary: event.summaries };
   }
-  if (frame.event.kind === 'handComplete') {
+  if (event.kind === 'handComplete') {
     // APPENDED to the showdown's lines, never written over them. Both events arrive at the end of
     // a contested hand and each carries different sentences: `showdown` says what each seat showed
     // ("Patient Technician 1 shows three of a kind, sixes"), `handComplete` who was paid. This used
     // to assign `summaries` for both, so the second always replaced the first and "How the hand
     // ended" listed a winner with no word of what they won with. `handStarted` empties the list,
     // so nothing carries into the next hand.
-    return { ...next, summary: [...state.summary, ...frame.event.summaries] };
+    return { ...next, summary: [...state.summary, ...event.summaries] };
   }
   // A clock expiry at the reader's own seat, and nothing else: an automatic fold after "Stand up"
   // is the reader's own choice and has no `seatTimedOut` before it.
@@ -747,8 +847,11 @@ function onErrorFrame(state: TableState, frame: Extract<WsServerMessage, { type:
     };
   }
   const pending = state.pending;
+  // The server's sentence and nothing after it. These read "…(insufficient_units)" and "…(not_your_turn).
+  // Nothing was applied." (audit at 308fadf): a contract token after a sentence that had already said
+  // everything a person can use. The code is kept, in `noticeCode`, for the one screen that branches on it.
   if (pending === null || pending.requestId !== frame.requestId) {
-    return { ...state, notice: `${frame.error.message} (${frame.error.code})`, noticeCode: frame.error.code };
+    return { ...state, notice: frame.error.message, noticeCode: frame.error.code };
   }
   const stale = frame.error.code === 'stale_action_sequence';
   return {
@@ -760,7 +863,7 @@ function onErrorFrame(state: TableState, frame: Extract<WsServerMessage, { type:
       message: stale
         ? 'The hand moved on before this arrived, so the server applied nothing. It refuses to put a ' +
           'decision into a spot you never saw. The table below is the spot as it is now.'
-        : `${frame.error.message} (${frame.error.code}). Nothing was applied.`,
+        : `${frame.error.message} Nothing was applied.`,
     },
   };
 }
@@ -1172,6 +1275,12 @@ export type CoachOff =
 
 export interface LiveTable {
   readonly phase: SetupPhase;
+  /**
+   * True while the page is reconnecting, on load, to the table this tab was at. `phase` stays `idle`
+   * meanwhile, because nothing has been asked for on this visit; this is what lets the status line
+   * say "reconnecting" rather than "not connected yet". See `resumeRememberedTable`.
+   */
+  readonly resuming: boolean;
   readonly status: TableSocketStatus | null;
   readonly closed: CloseMeaning | null;
   readonly setupError: string | null;
@@ -1264,24 +1373,18 @@ function winningCards(view: PlayerView | null): readonly number[] {
   return result.showdowns.filter((showdown) => winners.has(showdown.seat)).flatMap((s) => [...s.bestFive]);
 }
 
-function messageOf(cause: unknown): string {
-  if (cause instanceof ApiRequestError) return `${cause.message} (${cause.code})`;
+/**
+ * A refusal as the sentence a reader is shown: the server's own wording, without its contract code.
+ *
+ * This used to append the code — "(invite_code_invalid)", "(insufficient_units)" — on the theory that
+ * a reader might quote it to support. Nobody reading a play-money table is going to, and it was the one
+ * machine token on a screen otherwise written for a person (audit at 308fadf). The join field dropped it
+ * first, as a `joinRefusalOf` beside this; the setup path and the socket's refusals now drop it too, so there is one
+ * rule and one function.
+ */
+export function refusalSentence(cause: unknown): string {
   if (cause instanceof Error) return cause.message;
   return 'the table could not be prepared';
-}
-
-/**
- * A join refusal, as the sentence beside the field — without the contract code `messageOf` appends.
- *
- * The code is there for a reason on the setup path, where a reader may need to quote it to support.
- * Under an invite field it is noise in the one place a person is reading closely: the field showed
- * "That invite code is not valid. (invite_code_invalid)", a machine token after a sentence that had
- * already said everything it says. `ConnectionNotices` drops it for `enrolment_required` for the
- * same reason.
- */
-function joinRefusalOf(cause: unknown): string {
-  if (cause instanceof ApiRequestError) return cause.message;
-  return messageOf(cause);
 }
 
 async function openPracticeRoom(
@@ -1337,6 +1440,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
   const [inviteCode, setInviteCode] = useState<string | null>(null);
   const [join, setJoin] = useState<JoinPhase>({ state: 'idle' });
   const [dealIn, setDealIn] = useState<DealIn>('off');
+  const [resuming, setResuming] = useState(false);
 
   const socketRef = useRef<TableSocketHandle | null>(null);
   const pendingRef = useRef<PendingDecision | null>(null);
@@ -1361,6 +1465,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
   const prepare = useCallback(
     (fresh: boolean, request: CreateRoomRequest = BOT_TABLE_REQUEST) => {
       setupRef.current?.abort();
+      setResuming(false);
       setPhase('preparing');
       setSetupError(null);
       const controller = new AbortController();
@@ -1379,7 +1484,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
           setPhase('ready');
         } catch (cause) {
           if (controller.signal.aborted) return;
-          setSetupError(messageOf(cause));
+          setSetupError(refusalSentence(cause));
           setPhase('failed');
         }
       })();
@@ -1389,6 +1494,60 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
 
   /** Whatever setup pass is still running when the component goes away. */
   useEffect(() => () => setupRef.current?.abort(), []);
+
+  /**
+   * Back at the table this tab was at, when the reader returns to `/play`.
+   *
+   * Navigating away unmounts this hook and closes the socket, and the server keeps the seat; coming
+   * back used to land on "Not connected yet" with a button whose sentence promised a new room (UI
+   * audit of 308fadf, item 15). `resumeRememberedTable` decides, and only ever reconnects: no
+   * guest is minted, no room is created or chosen in place of the remembered one. Anything else
+   * leaves the page exactly where a first visit starts.
+   *
+   * Never for a Legends page: `/play?profile=…` is a request for a new match by its URL, and the
+   * match is opened by the press there, as it always was.
+   *
+   * Read in an effect, not during render: `sessionStorage` does not exist on the server, and a first
+   * render that differed between the two would be a hydration mismatch.
+   *
+   * `dealIn` stays `off`. Reconnecting is not being dealt in — the reader may be mid-hand, or have
+   * stood up before leaving — so the manual controls appear and nothing is sent on their behalf.
+   */
+  useEffect(() => {
+    if (legendMatch !== undefined) return;
+    const remembered = rememberedRoom();
+    if (remembered === null) return;
+    const controller = new AbortController();
+    setupRef.current = controller;
+    setResuming(true);
+    void (async (): Promise<void> => {
+      try {
+        const resumed = await resumeRememberedTable(remembered, controller.signal);
+        if (controller.signal.aborted) return;
+        if (resumed === null) {
+          // The tab's memory names a table this account can no longer reach — closed, left, or a
+          // different session. Forgotten, so the next press of "Deal me in" does not aim at it.
+          rememberRoom(null);
+          return;
+        }
+        setDisplayName(resumed.session.user.displayName);
+        dispatch({ kind: 'reset' });
+        setInviteCode(null);
+        setJoin({ state: 'idle' });
+        setRoomId(resumed.room.id);
+        setPhase('ready');
+      } catch {
+        // A failed reconnect is the page a first visit gets, which still works: "Deal me in" reads
+        // the same memory and tries again, with its own error reporting.
+      } finally {
+        // Only this pass's own flag. A press of "Deal me in" meanwhile aborted it and cleared the
+        // flag itself, and React's development double-mount starts a second pass before the first
+        // one's `finally` has run.
+        if (setupRef.current === controller) setResuming(false);
+      }
+    })();
+    return () => controller.abort();
+  }, [legendMatch]);
 
   const start = useCallback((): void => {
     if (phase === 'preparing' || phase === 'ready') return;
@@ -1454,6 +1613,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
     }
 
     setupRef.current?.abort();
+    setResuming(false);
     const controller = new AbortController();
     setupRef.current = controller;
     setDealIn('off');
@@ -1483,7 +1643,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
         // wrong code is not a broken page, and turning the whole screen into an error state would
         // throw away a table the reader may already be sitting at.
         setPhase(socketRef.current === null ? 'idle' : 'ready');
-        setJoin({ state: 'refused', message: joinRefusalOf(cause) });
+        setJoin({ state: 'refused', message: refusalSentence(cause) });
       }
     })();
   }, []);
@@ -1746,6 +1906,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
 
   return {
     phase,
+    resuming,
     status,
     closed,
     setupError,

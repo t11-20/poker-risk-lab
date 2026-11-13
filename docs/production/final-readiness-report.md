@@ -1,10 +1,77 @@
 # Final readiness report
 
-**Candidate SHA:** `0b01f90ce510759ccc253692a11b179787e9e0db`
+**Candidate SHA:** `6b3886ed3246938528e10574635701c4e563d36a`
 **Tree at freeze:** clean — the release manifest records `dirty: false`.
-**Branch:** `production-hardening-2`
-**Date:** 2026-08-26
-**Host:** Darwin arm64, Node v24.18.0, pnpm 11.10.0
+**Branch:** `main`
+**Date:** 2026-11-12
+**Host:** Darwin arm64, Node v24.18.0, pnpm 11.10.0, Docker 29.6.1, cosign v3.1.3, trivy 0.72.0
+
+> ## Re-frozen 2026-11-12 at `6b3886ed3246`
+>
+> The header now names `6b3886ed3246`: `main`, 245 commits, 332 files and 34,932 inserted lines
+> past `0b01f90ce510`, and the PR merges in that range are #7 to #29 — #10 being the one that
+> merged `production-hardening-2`, the branch the previous header was frozen on, into `main`
+> (`git rev-list --count 0b01f90..6b3886e`, `git diff --shortstat 0b01f90 6b3886e`,
+> `git log --merges 0b01f90..6b3886e`). The banner below this one is explicit that advancing a
+> header over measurements taken elsewhere manufactures confidence, so this banner lists what was
+> measured on this host at this commit today and what was not. **Every figure below the banners
+> that this one does not name was measured at `0b01f90ce510` or earlier and is left as captured**,
+> the "Gates from this SHA" table included: its rows are stamped, and the convention of this
+> document is that a stamped row edited to match a later tree is evidence of nothing.
+>
+> **Measured at `6b3886ed3246` on 2026-11-12, in `go-live.md`'s order:**
+>
+> | Step | Result |
+> | --- | --- |
+> | `pnpm run release:artifacts` | both images built from a clean tree, `dirty: false`; artefact checks all passed — no markdown, no `.env` and no credential material among the 433 (api) and 788 (web) files under `/app` outside `node_modules`; both run as `node` |
+> | `pnpm run security:containers` | trivy 0.72.0, floor HIGH, allowlist empty: **api 0, web 0** at or above HIGH, 0 unfixable, both on alpine 3.24.1 |
+> | `pnpm run release:sign` | both published to `127.0.0.1:5001`, **signed by digest**, each with a CycloneDX 1.7 SBOM attestation (api 104 components, web 62); the registry digest equals the build digest for both (`tiedBy: manifest-digest`). The signature record is committed as `bb288b9` |
+> | `pnpm run security:image-provenance` | PASS, posture **KEY** — both signatures and both SBOM attestations verify against the committed `deploy/signing/cosign.pub` |
+> | `pnpm run staging up`, from a clean detached checkout of `6b3886e` | migrations applied; every service running and healthy; both running containers confirmed to be the manifest digests from `docker inspect`, not from a tag; `/api/v1/ready` answers 200 over TLS with the chain verified against the local CA; **73-check strict smoke over TLS passed**; X-Forwarded-For overwritten 24/24 against forged client addresses; HSTS single-sourced; `staging-verified.json` written. Deployed from the local image store with `pull_policy never`, so that record's `deployedFromRegistryByDigest` is `false`. The staging certificate expires in 8 days; `pnpm run staging init` renews it |
+> | `pnpm run verify` | **15 of 16 gates passed and `test` failed** — on exactly three checks, all in `scripts/readiness-report.test.mjs` and all the join of this document to the manifest: the candidate SHA was still `0b01f90ce510`, the api digest it stated was not in the manifest, and the manifest's api digest was not in the document. That is the gate doing what it was written for, and this re-freeze is what closes it. Behind it: 4,164 of 4,167 tests passing and 3 failing (unit 1,685 across eight packages, API 1,088, scripts 1,391 of 1,394). Per gate: `security:audit` **15 of 15**, `release-image-signatures` included; `test:ax` 117 checks, 0 failed; `test:keyboard` 149 checks; `test:layout` 160 measurements over 34,118 painted text elements, 0 findings, 7 of 7 negative controls caught; `test:csp` 11; `test:age-gate` 36; `test:exhaustive` all 133,784,560 seven-card hands; `test:simulation` 24 of 24 |
+>
+> **Not re-run at `6b3886ed3246`:** `test:load`, `test:drills`, `alerts:verify`, `alerts:preflight`,
+> `alerts:ack`, `alerts:unit`, `backup` and `certify:screen-reader`. Each needs the observability
+> overlay, a container this run did not create, a person, or would disrupt the stack that had just
+> been verified, and none was run today. Every figure of theirs in this document — the
+> `alerts:verify` rows and their 35 of 35, the live-scrape grounding, the `alerts:preflight`
+> refusal, the drills' 16 of 16, the backup, restore and rollback sentences in the verdict, the
+> musl load ramp, the proxy log-leak sentinel — was taken against the `0b01f90ce510` pair or
+> earlier and has NOT been re-taken against the pair now deployed. Two of those are narrower than
+> "not re-run", and it is worth saying how:
+> `git diff --stat 0b01f90 6b3886e -- deploy/staging/observability scripts/drills` is empty, so no
+> alert rule expression and no drill changed between the two commits; what has not been shown is
+> that the rules still ground against a live scrape of the new image.
+>
+> **Finding, and it is about monitoring: staging had been down for about two months and nothing
+> said so.** Before `staging up` ran today, the stack on this host was in this state: the postgres
+> and proxy containers had exited roughly two months earlier, and the api container — still the
+> `0b01f90ce510` image — had kept running and was failing readiness with
+> `getaddrinfo ENOTFOUND postgres`. `staging up` recreated the containers, so that state is recorded
+> here as it was observed and not from an artefact, and "about two months" is the operator's
+> reading of the exit times rather than a measurement this document can reproduce. Nothing paged.
+> Read against residual 2 that is the documented posture and not a surprise, and it is worth being
+> exact about which part. No alert rule failed, because none was evaluating: Prometheus and
+> Alertmanager are `docker-compose.observability.yml`, an overlay that `alerts:verify` brings up and
+> tears down, and the staging manifest has no monitoring in it (`docs/production/alerts.md`). On
+> paper `ApiNotReady` (`prl_readiness_state == 0`, `for: 5m`, `severity: page`) is the rule this
+> outage matches, and whether it would have fired was not tested today. So this does not bear on
+> the 35 of 35, which was taken with the overlay up. What the two months do show is the open half
+> of residual 2 happening rather than being described: the one report built for "the deployment is
+> blind and nobody noticed" is the dead man's switch, whose watcher is irreducibly external, and
+> this deployment's destinations are — as the `alerts:preflight` row records and nothing
+> re-checked today — `alerts:verify`'s own throwaway sinks; nothing in this repository runs
+> `staging status` on a schedule, and nothing outside it said so. The outage was found by
+> hand, which is what `runbooks/alerting-blind.md` tells an operator to assume, and the verdict
+> already says nobody is on call. What changes is the size of "found by hand": two months, on the
+> one deployment this repository has.
+>
+> Committing this re-freeze moves `HEAD` one commit past the commit the images were built from,
+> and since `82f25e0` `scripts/staging.mjs` deploys such a checkout anyway: a `HEAD` that differs
+> from a clean build (`dirty: false`, as this one is; `f7c8d39` holds a dirty build to its own
+> commit) only in `RELEASE_RECORD_PATHS` — the signature record and this report, neither of which
+> is in an image, read by a migration or read by the smoke test — deploys exactly what was built,
+> so committing this document does not strand the images it describes.
 
 > ## Re-frozen 2026-08-26 at `b5bbdd734169`
 >
@@ -98,10 +165,12 @@
 > document. Each claim is now attributed to the list it is about by its nearest preceding marker,
 > and a claim naming neither list is refused rather than guessed at.
 
-This candidate supersedes `b292b2ac234c`. That one was frozen with two open blockers and a
+This candidate supersedes `0b01f90ce510` (re-frozen 2026-11-12, first banner above), which in
+turn superseded `b292b2ac234c`. `b292b2ac234c` was frozen with two open blockers and a
 disagreement between two reviews; reconciling the disagreement found defects neither review had,
 and an adversarial audit of the whole repository found more. Everything below is measured against
-this SHA unless a line says otherwise.
+`0b01f90ce510` or earlier unless a line says otherwise; what was re-measured at `6b3886ed3246` is
+in the 2026-11-12 banner and nowhere else.
 
 ---
 
@@ -359,21 +428,40 @@ gate could have caught it, because until now nothing consumed both: prose in a r
 manifest were two records with nothing joining them. The signature record is the first artefact
 that has to reconcile a digest with the manifest's, which is why the drift surfaced here.
 **The digests this candidate built, signed and runs are the ones below**, and they are what
-`deploy/staging/release-manifest.json` and `deploy/staging/release-signatures.json` both record:
+`deploy/staging/release-manifest.json` and `deploy/staging/release-signatures.json` both record
+(re-frozen 2026-11-12; the table after this one holds the two pairs it replaced):
 
-| Service | Digest built, pushed, **signed** and **deployed** | Superseded digest |
+| Service | Digest built, pushed, **signed** and **deployed** at `6b3886ed3246` |
+| --- | --- |
+| api | `sha256:c620ee527970a5519c4284e20b7ca3f5cb43bfcdda976d7af9fca151c99fabf0` |
+| web | `sha256:b0739f9d8281bd1ea5441fd0ecccb24b6d9f36fa603f4e44cc996c0528751e9a` |
+
+**This pair is the live one**: built at `6b3886ed3246` on 2026-11-12, published to the promotion
+registry, signed by digest with a CycloneDX SBOM attestation each (api 104 components, web 62), and
+deployed to staging the same day, where `staging up` confirmed from `docker inspect` that both
+running containers are these digests and the container scan reports 0 findings at or above HIGH
+against them — each step with its command in the 2026-11-12 banner.
+
+**Superseded 2026-11-12 — the `0b01f90ce510` pair, NOT this candidate's.** It was built on
+2026-08-26, signed and deployed on 2026-08-27, and it is what staging ran until today — for about
+two of those months with its postgres and proxy gone, see the banner. It is kept visible for the
+same reason the pair beside it is. Scanned today at the HIGH floor with today's database
+(`trivy image --scanners vuln --severity HIGH,CRITICAL prl-<service>:0b01f90ce510`, trivy 0.72.0,
+against the local copies of the two images), the pair carries **30 findings at or above HIGH** —
+api 17 HIGH; web 8 HIGH and 5 CRITICAL — 0 of them unfixable. Not a byte of either image changed
+since the gate table's row recorded 0 against them; the database did, which is the caveat that
+scan prints on every run. It is the second pair in this document to scan clean when built and be
+carrying HIGH advisories by the time it was replaced.
+
+| Service | Superseded — built at `0b01f90ce510`, deployed 2026-08-27 to 2026-11-12 | Superseded — built at `375303fa9714`, CVE-2026-14456 |
 | --- | --- | --- |
 | api | `sha256:94872a9abc937547b0d98441e4496718a9a5f879b2ea4f6c17a33be48a9d4083` | `sha256:5411626265ada1324ede2544034bfe2699e5106469319e106429c17c34bfb75d` |
 | web | `sha256:e1c04b0e4f5f1d940280c09cda74e23981120d9f9fdacb72b3995199b9864af3` | `sha256:6b1043cc9edbdce67870d365f74809199be5cc0b5f905b77747138dce9fa1f5f` |
 
-**The left-hand pair is the live one**: built at `0b01f90ce510`, published to the promotion
-registry, signed by digest with a CycloneDX SBOM attestation each, and deployed to staging on
-2026-08-27, where `staging status` confirms both services match the manifest and the container scan
-reports 0 findings at or above HIGH against those exact digests.
-
-The superseded pair is kept visible rather than deleted because it is the pair **CVE-2026-14456 was
-found in**, and deleting the digests a HIGH advisory landed on would erase the only record of what
-was affected. It was itself pushed and signed while it was current.
+The `375303fa9714` pair is kept visible rather than deleted because it is the pair
+**CVE-2026-14456 was found in**, and deleting the digests a HIGH advisory landed on would erase the
+only record of what was affected. It was itself pushed and signed while it was current, and so was
+the `0b01f90ce510` pair that replaced it.
 
 The registry digest equals the build digest for both — checked rather than assumed: the manifest is
 re-fetched from the registry over HTTP and re-hashed in process, and `pnpm run release:sign` refuses
@@ -689,8 +777,13 @@ under a real network partition.
    policy also carries `"repository": null`, because this repository has **no git remote** and no
    committed file knows its GitHub owner; the owner half of the identity is therefore unpinned until
    somebody commits it, the gate warns about that on every run, and it refuses outright if a keyless
-   signature record is ever committed while it is null. And a SLSA provenance predicate emitted by
-   the builder — what went *into* the image, as opposed to who signed it — still does not exist.
+   signature record is ever committed while it is null. (Corrected 2026-11-12: the repository has
+   had a remote since this was written — `origin` is `t11-20/poker-risk-lab` on GitHub, and PRs #1
+   to #30 were merged there — but `keyless-policy.json` still reads `"repository": null`, and
+   `gh run list --workflow release-sign.yml` lists no run, so the owner half is unpinned by omission
+   now rather than by necessity, and the paragraph above is otherwise still true.) And a SLSA
+   provenance predicate emitted by the builder — what went *into* the image, as opposed to who
+   signed it — still does not exist.
 
    **What the first CI run will produce**: a Fulcio certificate whose SAN is
    `https://github.com/<owner>/poker-risk-lab/.github/workflows/release-sign.yml@refs/heads/main`,

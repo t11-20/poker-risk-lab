@@ -76,6 +76,32 @@ export type CoachSpotReading =
   | { readonly kind: 'refused'; readonly refusal: CoachRefusal };
 
 /**
+ * How a client names the seats a view cannot: the view carries a `playerId` per seat and no name.
+ *
+ * Optional, and every caller that passes nothing gets `seat N` exactly as before, so the pinned
+ * reports in `test/fixtures/coach-views.json` and the chat bot's assumptions list do not move.
+ *
+ * It exists because the live table named players two ways at once. The seat plates show a name and
+ * a position and no number, and the Coach beside them listed "seat 2 / seat 3 / seat 6" under
+ * "Equity by player" and "Seat 2 holds any of 518 combinations…" in its assumptions (audit at
+ * 308fadf), so a reader had to count chairs to find out who "seat 3" was. The API hands this the
+ * names the table dealt in, which are the names the plates and the narration already use.
+ */
+export type SeatNamer = (seat: SeatIndex) => string | undefined;
+
+/**
+ * The label an opponent is given: the client's name for the seat, or its one-based number.
+ *
+ * A name that is blank, or that is "you" in any case, falls back to the number. "you" is not a
+ * hypothetical: `holdsClause` in `equity.ts` reads that label as the reader and conjugates for them,
+ * so an opponent who chose it as a display name would have been written up as "You hold any of…".
+ */
+function opponentLabel(seat: SeatIndex, nameOf: SeatNamer | undefined): string {
+  const name = nameOf?.(seat)?.trim() ?? '';
+  return name === '' || name.toLowerCase() === 'you' ? `seat ${seat + 1}` : name;
+}
+
+/**
  * Reads the decision in one view, or says why there is none.
  *
  * A function of the view alone: the viewer's cards are in it and nobody else's are, so there is
@@ -86,7 +112,11 @@ export type CoachSpotReading =
  * with one opponent folded and the other all-in, the engine offering `fold, call`, and the Coach
  * headlining "raise to 80-100". An empty list is therefore a refusal, never "everything is legal".
  */
-export function coachSpotForView(view: PlayerView, policy: CoachPolicy): CoachSpotReading {
+export function coachSpotForView(
+  view: PlayerView,
+  policy: CoachPolicy,
+  nameOf?: SeatNamer,
+): CoachSpotReading {
   const own = view.seats.find((seat) => seat.isSelf);
   const heroCards = own?.holeCards ?? null;
   if (own === undefined || heroCards === null) return refused({ kind: 'not-seated' });
@@ -122,7 +152,7 @@ export function coachSpotForView(view: PlayerView, policy: CoachPolicy): CoachSp
       // Five is `buildCoachReport`'s ceiling, and a six-max table cannot exceed it.
       opponents: opponents
         .slice(0, 5)
-        .map((seat) => ({ label: `seat ${seat.seat + 1}`, range: policy.range })),
+        .map((seat) => ({ label: opponentLabel(seat.seat, nameOf), range: policy.range })),
       pot: view.potTotal,
       contestablePot: contestable,
       toCall: view.amountToCall,
