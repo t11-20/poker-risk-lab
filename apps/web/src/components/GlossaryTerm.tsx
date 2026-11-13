@@ -1,52 +1,12 @@
 'use client';
 
 /**
- * A term in running prose that opens its definition.
- *
- * ## Why this is a button and not a `title`
- *
- * `title` is unreachable from a keyboard, unreadable on a touch screen, invisible to most
- * screen readers in any useful way, and impossible to style or to keep on screen long enough to
- * read two sentences. A definition is content, so it goes in the document.
- *
- * ## The keyboard model, in full
- *
- * The pattern is a **disclosure**, not a dialog: the panel is the next thing in the DOM after
- * the trigger, so `Tab` walks into it and out the other side with no focus management at all.
- * That is the whole reason it is not `role="dialog"` — a trap and a restore are machinery, and
- * machinery is what breaks.
- *
- *  - `Enter` / `Space` on the trigger toggles it. Native `<button>` behaviour, not reimplemented.
- *  - `aria-expanded` on the trigger reports the state; `aria-controls` names the panel while it
- *    is open. Neither is set when the panel is not in the DOM, because a dangling
- *    `aria-controls` is a broken reference in the accessibility tree.
- *  - `Escape` anywhere inside the wrapper closes it **and returns focus to the trigger**, which
- *    is the one piece of focus management a disclosure does owe: after `Escape` from inside the
- *    panel, focus would otherwise be on a node that has just been removed.
- *  - `Tab`bing past the end of the panel closes it, via `focusout` on the wrapper. Leaving an
- *    open panel behind the reader is how a page ends up with six of them open.
- *  - A pointer press outside closes it, without moving focus — focus is already elsewhere and
- *    yanking it back would be the rudest possible response to a click.
- *
- * ## Positioning, and why there is no measurement
- *
- * The panel is `position: absolute` and spans the *paragraph* it sits in rather than being
- * pinned to the word, so it cannot be clipped and can never push the page sideways at the right
- * edge of a line. That needs no `getBoundingClientRect`, no popover polyfill and no anchor
- * positioning: the containing block is the paragraph, which `learn.css` marks `position:
- * relative`.
- *
- * The cost is that the panel is not visually attached to the word, so the trigger takes an
- * accent underline and accent ink while open. That is a stronger connection than a tail on a
- * bubble, and it survives forced-colors mode.
- *
- * ## Every element here is phrasing content, and that is not incidental
- *
- * The trigger sits inside a `<p>`, so the panel does too. A `<div>` inside a paragraph closes
- * the paragraph in the browser's parser, which produces a DOM that does not match the one React
- * rendered — a hydration mismatch that reproduces as content jumping on load. Hence `<span>`
- * throughout, with `<strong>`, `<code>`, `<a>` and `<button>`, all of which are phrasing
- * content and legal where they are.
+ * A term in running prose that opens its definition. A button, because `title` is unreachable by
+ * keyboard and touch. A disclosure, not a dialog: the panel follows the trigger in the DOM, so Tab
+ * walks through it with no trap. Escape returns focus to the trigger because the focused node is
+ * removed. `aria-controls` is set only while the panel exists. The panel spans its paragraph
+ * (`position: relative` in `learn.css`), so it needs no measurement and cannot overflow sideways.
+ * Every element is phrasing content, because a `<div>` inside a `<p>` breaks hydration.
  */
 
 import type { GlossaryEntry } from '@prl/contracts';
@@ -65,7 +25,6 @@ import {
 } from 'react';
 import { topicLabel } from '@/lib/learn-curriculum.ts';
 
-/** One `seeAlso` cross-reference, already resolved to a readable term. */
 export interface RelatedTerm {
   readonly id: string;
   readonly term: string;
@@ -73,16 +32,7 @@ export interface RelatedTerm {
 
 export interface GlossaryTermProps {
   readonly entry: GlossaryEntry;
-  /** The term as the sentence spells it. Defaults to the entry's own heading form. */
   readonly children?: ReactNode;
-  /**
-   * `seeAlso` ids resolved to their terms, so cross-references read as words rather than slugs.
-   *
-   * Resolved data rather than a resolver function, and that is not a style choice: this is a client
-   * component rendered from a server component, and a function cannot cross that boundary — React
-   * rejects it outright ("Functions cannot be passed directly to Client Components"). The lesson
-   * renderer already holds the entry map, so it does the lookup where the map lives.
-   */
   readonly related?: readonly RelatedTerm[];
 }
 
@@ -98,15 +48,7 @@ export function GlossaryTerm(props: GlossaryTermProps): ReactElement {
     if (returnFocus) triggerRef.current?.focus();
   }, []);
 
-  /**
-   * Outside presses, on `pointerdown` rather than `click`.
-   *
-   * `click` fires after the press has already moved focus, so a reader who clicks another
-   * trigger would briefly have two panels open. `pointerdown` closes this one first.
-   *
-   * Registered only while open, and removed on close, so a page of forty terms holds at most
-   * one document listener.
-   */
+  /** `pointerdown`, not `click`, which fires after focus moves and briefly leaves two panels open. */
   useEffect(() => {
     if (!open) return undefined;
     const onPointerDown = (event: PointerEvent): void => {
@@ -122,20 +64,12 @@ export function GlossaryTerm(props: GlossaryTermProps): ReactElement {
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLSpanElement>): void => {
     if (event.key !== 'Escape' || !open) return;
-    // Stopping propagation so a term inside a wider dismissible surface does not close both at
-    // once: the innermost open thing is what Escape means.
+    // Escape closes only the innermost open surface.
     event.stopPropagation();
     close(true);
   };
 
-  /**
-   * Focus leaving the wrapper entirely closes the panel.
-   *
-   * `relatedTarget` is `null` when focus goes to the document body — a click on empty space, or
-   * a browser-chrome focus change. That is treated as "still here" rather than as leaving,
-   * because closing on it would fight the pointer handler above and would shut the panel when
-   * the window itself lost focus.
-   */
+  /** A `null` `relatedTarget` (body or window blur) is left to the pointer handler. */
   const onFocusOut = (event: ReactFocusEvent<HTMLSpanElement>): void => {
     const next = event.relatedTarget;
     if (next === null) return;

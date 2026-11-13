@@ -1,31 +1,10 @@
 'use client';
 
 /**
- * The glossary: ninety terms, filterable, with every entry addressable by id.
- *
- * ## The addressability is the requirement
- *
- * `GlossaryTerm`'s "open in the glossary" link and every `seeAlso` cross-reference point at
- * `/learn/glossary#<id>`, so each entry carries that `id` and the page must be able to reach it.
- * Which is why the filters start empty: a filtered-out entry has no box to scroll to, so an
- * arriving `#alpha` would silently do nothing. First paint shows everything.
- *
- * ## Cross-references are buttons, not links
- *
- * A `seeAlso` inside this page is a `<button>` rather than an `<a href="#id">` for one concrete
- * reason: if the reader has typed a filter, the target may not be rendered, and a fragment link
- * to a missing element fails quietly. The button clears the filters and then moves focus to the
- * target's heading, which scrolls it into view natively, announces it, and leaves the keyboard
- * user where a mouse user would be looking. An anchor could do the first of those three.
- *
- * The headings therefore carry `tabIndex={-1}`: programmatically focusable, never in the tab
- * order.
- *
- * ## Filtering is a render, not a fetch
- *
- * The whole glossary is already on the page — it is 90 short entries — so the search box is a
- * substring match over an array. No debounce, no request, no loading state, and it works with the
- * API down.
+ * The glossary, filterable, with every entry addressable as `/learn/glossary#<id>`. Filters start
+ * empty so an arriving fragment always has a target. A `seeAlso` is a button, not a fragment link,
+ * because a filtered-out target is not rendered. It clears the filters and focuses the target's
+ * `tabIndex={-1}` heading. Filtering is a substring match over entries already on the page.
  */
 
 import type { GlossaryEntry } from '@prl/contracts';
@@ -38,7 +17,6 @@ export interface GlossaryBrowserProps {
   readonly entries: readonly GlossaryEntry[];
 }
 
-/** The letter an entry files under. Anything not A–Z files under `#`. */
 function initialOf(term: string): string {
   const first = term.trim().charAt(0).toUpperCase();
   return /[A-Z]/.test(first) ? first : '#';
@@ -84,9 +62,7 @@ export function GlossaryBrowser(props: GlossaryBrowserProps): ReactElement {
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return entries.filter((entry) => {
-      // `entry.topics` is `readonly Topic[]` and the select's value is a plain string, so the
-      // comparison is widened rather than the value being asserted into the union: a topic this
-      // build has never heard of should simply not match, not become a `Topic` by fiat.
+      // Widened, not asserted into the union, so an unknown topic simply does not match.
       const topics: readonly string[] = entry.topics;
       if (topic !== '' && !topics.includes(topic)) return false;
       if (needle === '') return true;
@@ -96,12 +72,10 @@ export function GlossaryBrowser(props: GlossaryBrowserProps): ReactElement {
 
   const groups = useMemo(() => groupByLetter(filtered), [filtered]);
 
-  /** Clears the filters so the target is rendered, then moves focus to it. */
   const jumpTo = (id: string): void => {
     setQuery('');
     setTopic('');
-    // The heading may not be mounted yet if it was filtered out; a microtask is enough, because
-    // React has already committed the state updates above by the time this resolves.
+    // A filtered-out heading mounts once React commits the updates above, before this microtask.
     queueMicrotask(() => headings.current.get(id)?.focus());
   };
 
@@ -173,12 +147,7 @@ export function GlossaryBrowser(props: GlossaryBrowserProps): ReactElement {
               <h2 className="prl-learn-glossary__letter" id={`glossary-letter-${group.letter}`}>
                 {group.letter}
               </h2>
-              {/*
-                An `<h3>` per term rather than a `<dl>`: a definition list would be the tidier
-                semantic, but `dt`'s content model forbids heading content, and heading navigation
-                is how a screen-reader user actually moves through ninety entries. The heading is
-                the more useful of the two affordances, so the list goes.
-              */}
+              {/* Not a `<dl>`, because `dt` forbids headings and heading navigation is how readers move. */}
               <div className="prl-learn-glossary__entries">
                 {group.entries.map((entry) => (
                   <article className="prl-learn-glossary__entry" id={entry.id} key={entry.id}>

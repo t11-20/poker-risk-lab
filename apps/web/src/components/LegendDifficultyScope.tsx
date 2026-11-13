@@ -1,40 +1,11 @@
 'use client';
 
 /**
- * The difficulty a reader has TICKED, carried to every Play link on the page before they submit —
- * and to "Start a match" above the picker (`LegendQuickStart.tsx`), whose hidden field and setting
- * sentence follow it the same way.
- *
- * ## The defect
- *
- * `DifficultyPicker` is a GET form and deliberately does not navigate on `change` (WCAG 3.2.2 —
- * see its header; that reason stands). So the setting only changed when "Apply setting" was
- * pressed, and on `/legends` that button is the last thing in the picker: y=1790 on a 360px phone,
- * below three option blocks. Measured on the running build: tapping "Expert" gave it the accent
- * border and the checked dot, and all twelve "Play this style" links still read
- * `difficulty=educational` — a reader who picked Expert and pressed Play was dealt an Educational
- * match, with the Coach they had chosen to give up still on screen.
- *
- * ## Why the links follow the radio, rather than the radio moving next to the links
- *
- * Moving the choice onto each card would be twelve copies of a three-way control, and moving it to
- * the pre-deal panel on `/play` would put it after the reader has already chosen who to play. The
- * picker is in the right place; what was wrong is that its state reached nothing until a submit.
- * Following the ticked radio is not a change of context — nothing navigates, nothing moves focus,
- * no content appears — so 3.2.2 is not engaged, and "Apply setting" keeps its job of putting the
- * choice in the address bar.
- *
- * ## Without JavaScript
- *
- * Every link is server-rendered with the difficulty from the URL, which is the setting the page
- * actually has, so before hydration and with scripts off the links are what they always were —
- * correct for the applied setting — and the picker's note says the setting applies on submit.
- * `ScopedDifficultyNote` changes that sentence only once this code is running, because only then is
- * the new one true.
- *
- * The ticked state is read from the DOM, not mirrored from props: the radios are uncontrolled
- * (`defaultChecked`), and after Back the browser may restore a different tick than the URL says.
- * The mount effect reads whatever is ticked so a restored Expert is not shown under Educational links.
+ * Carries the TICKED difficulty to every Play link and to "Start a match" before the picker is
+ * submitted. The picker's Apply button sits far below on a phone, and a reader who ticked Expert was
+ * dealt Educational. Following the radio moves no focus and navigates nowhere, so WCAG 3.2.2 is not
+ * engaged. Without scripts the links keep the URL's applied setting. The tick is read from the DOM
+ * on mount because after Back the browser may restore a tick the URL does not carry.
  */
 
 import type { LegendDifficulty } from '@prl/contracts';
@@ -52,27 +23,22 @@ import {
 import { DIFFICULTIES, legendMatchHref, MATCH_PROFILE_PARAM, profileHref } from '@/lib/legend-links.ts';
 import { coachWords } from '@/lib/legend-match-copy.ts';
 
-/** The radio group's `name`. Same string as `DIFFICULTY_PARAM` in `DifficultyPicker.tsx`. */
+/** Same string as `DIFFICULTY_PARAM` in `DifficultyPicker.tsx`. */
 const DIFFICULTY_NAME = 'difficulty';
 
 interface Scope {
-  /** What is ticked now, or null until the reader (or the browser's restore) has ticked something. */
   readonly chosen: LegendDifficulty | null;
-  /** The opponent picked in "Start a match", or null until this code has read it. */
   readonly opponent: string | null;
 }
 
-/** `undefined` outside a scope, which is how a link or a note knows nothing is following it. */
+/** `undefined` outside a scope. */
 const ScopeContext = createContext<Scope | undefined>(undefined);
 
 function asDifficulty(value: string): LegendDifficulty | null {
   return DIFFICULTIES.find((difficulty) => difficulty === value) ?? null;
 }
 
-/**
- * `display: contents` (`.prl-legend-scope` in `legends.css`), so the wrapper is not a box: the
- * page's grid gap still falls between the picker and the profiles exactly as it did.
- */
+/** `display: contents` in `legends.css`, so the page's grid gap is unchanged. */
 export function LegendDifficultyScope({ children }: { readonly children: ReactNode }): ReactElement {
   const root = useRef<HTMLDivElement | null>(null);
   const [chosen, setChosen] = useState<LegendDifficulty | null>(null);
@@ -83,8 +49,7 @@ export function LegendDifficultyScope({ children }: { readonly children: ReactNo
       `input[type="radio"][name="${DIFFICULTY_NAME}"]:checked`,
     );
     if (ticked) setChosen(asDifficulty(ticked.value));
-    // Same reason as the radio: after Back the browser may restore a different opponent than the
-    // server rendered, and the picker must carry the one on screen.
+    // After Back the browser may restore a different opponent too.
     const select = root.current?.querySelector<HTMLSelectElement>(`select[name="${MATCH_PROFILE_PARAM}"]`);
     if (select) setOpponent(select.value);
   }, []);
@@ -107,7 +72,6 @@ export function LegendDifficultyScope({ children }: { readonly children: ReactNo
   );
 }
 
-/** The ticked difficulty inside a scope, else the one the server rendered with. */
 function useDifficulty(fallback: LegendDifficulty): LegendDifficulty {
   return useContext(ScopeContext)?.chosen ?? fallback;
 }
@@ -115,16 +79,11 @@ function useDifficulty(fallback: LegendDifficulty): LegendDifficulty {
 export interface LegendLinkProps {
   readonly profileId: string;
   readonly archetypeName: string;
-  /** The applied setting, from the URL. What the link says until the reader ticks another. */
   readonly difficulty: LegendDifficulty;
   readonly className: string;
   readonly children: ReactNode;
 }
 
-/**
- * "Play this style", following the ticked setting. The visually-hidden suffix follows too, so a
- * screen-reader user is told the setting the link will actually start.
- */
 export function LegendPlayLink(props: LegendLinkProps): ReactElement {
   const difficulty = useDifficulty(props.difficulty);
   return (
@@ -135,7 +94,7 @@ export function LegendPlayLink(props: LegendLinkProps): ReactElement {
   );
 }
 
-/** "Full profile", carrying the ticked setting, because the profile page's own Play link reads it. */
+/** Carries the setting because the profile page's own Play link reads it. */
 export function LegendProfileLink(props: LegendLinkProps): ReactElement {
   const difficulty = useDifficulty(props.difficulty);
   return (
@@ -146,10 +105,7 @@ export function LegendProfileLink(props: LegendLinkProps): ReactElement {
   );
 }
 
-/**
- * The picker's note: `children` (the no-script sentence) until this code is running inside a scope,
- * then `following`. Two sentences because each is true in exactly one of the two cases.
- */
+/** `children` is the no-script sentence, shown until this code runs inside a scope. */
 export function ScopedDifficultyNote({
   following,
   children,
@@ -163,19 +119,14 @@ export function ScopedDifficultyNote({
   return <>{inScope && running ? following : children}</>;
 }
 
-/** Just enough of a `LegendDifficultyDto` to name it: no description crosses to the client. */
+/** No description crosses to the client. */
 export interface SettingName {
   readonly id: LegendDifficulty;
   readonly label: string;
   readonly coachAvailable: boolean;
 }
 
-/**
- * The "Start a match" form's `difficulty` field. A hidden input that follows the tick exactly as the
- * Play links do, so the form above the picker and the cards below it can never start two different
- * settings. Without a scope, or before hydration, it is the applied setting — the one the visible
- * sentence beside it names.
- */
+/** Follows the tick like the Play links, so the form and the cards never start different settings. */
 export function ScopedDifficultyInput({
   name,
   difficulty,
@@ -186,7 +137,6 @@ export function ScopedDifficultyInput({
   return <input name={name} type="hidden" value={useDifficulty(difficulty)} />;
 }
 
-/** The setting the form will start, by name and by what it does to the Coach, following the tick. */
 export function ScopedSettingName({
   settings,
   difficulty,
@@ -196,28 +146,14 @@ export function ScopedSettingName({
 }): ReactElement {
   const chosen = useDifficulty(difficulty);
   const setting = settings.find((candidate) => candidate.id === chosen);
-  // A deployment whose difficulties list lacks the ticked id still gets the id, never a blank.
+  // An unknown id renders the id, never a blank.
   return <>{setting === undefined ? chosen : `${setting.label}, ${coachWords(setting.coachAvailable)}`}</>;
 }
 
 /**
- * The opponent picked in "Start a match", carried through the picker's "Apply setting".
- *
- * The picker is its own GET form, so applying a setting reloaded `/legends?difficulty=…` with no
- * opponent in it, and the select came back on the first profile. "Change the setting" under the
- * Play button sends a reader to exactly that form, so the ordinary path was: pick Passive Calling
- * Station, follow the link, tick Expert, Apply, press Play — and be dealt High-Variance Tournament
- * Aggressor (Devin Review on PR #41). The page reads the parameter back into the select.
- *
- * `initial` is the opponent the URL carried, which is what the field says before this code runs and
- * with scripts off; it renders nothing when there is neither, so a page nobody has chosen on does not
- * grow a parameter.
- *
- * With scripts off, an opponent picked since the page loaded is NOT carried: two GET forms cannot
- * share a field without code, and the only no-script cure is a second setting control inside "Start
- * a match", which `LegendQuickStart.tsx` turns down as two answers to one question. The direction it
- * fails in is the safe one: after Apply the select visibly shows the profile it will submit, directly
- * above Play, so what is on screen is what is dealt — the reader re-picks, nothing is mis-dealt.
+ * Carries the "Start a match" opponent through the picker's own GET form, which otherwise reloads
+ * with the first profile selected. `initial` is the URL's opponent. Renders nothing when there is none.
+ * With scripts off a newly picked opponent is not carried, and the select visibly shows what is dealt.
  */
 export function ScopedOpponentInput({ initial }: { readonly initial: string | null }): ReactElement | null {
   const opponent = useContext(ScopeContext)?.opponent ?? initial;

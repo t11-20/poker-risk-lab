@@ -1,42 +1,10 @@
 'use client';
 
 /**
- * The one input the Scenario Lab promises: the assumed fold frequency, changed after deciding.
- *
- * ## Why it exists
- *
- * The nav calls the Lab "change one input, watch the maths move", and every scenario's assumptions
- * say the fold frequency behind its bet and raise rows "is an input you can change, not something
- * measured". After a decision the page offered no control of any kind. Measured at commit 308fadf:
- * the reveal held one button ("Choose again") and links.
- *
- * ## What it changes, and what it deliberately does not
- *
- * It re-prices the candidate rows that read a fold frequency, in the browser, with
- * `repriceAtFoldEquity` — the Coach's own `evOfBet`/`evOfRaise` over the report already on the
- * page — and lists every row with its analysed figure beside the new one. Rows that read none
- * (fold, check, call) are listed as not moving, and equity is stated as not moving, because a
- * reader who watches the call row stay put has learned what the fold assumption is and is not.
- *
- * It does NOT re-grade the verdict above it or touch the full analysis below. The verdict is the
- * one the server recorded, judged at the analysed frequency, and a panel that silently re-scored a
- * recorded decision as a slider moved would be the defect `ScenarioStage` was fixed for.
- *
- * ## Where it is not offered
- *
- * `repriceAtFoldEquity` answers `unavailable` with a reason for a report with no row that reads a
- * fold frequency (the five Lab scenarios facing an all-in offer fold and call only) and for any
- * report whose rows it cannot reproduce to a millionth of a unit. The control is then replaced by
- * that reason, rather than by figures that only look like the analysis's.
- *
- * ## Accessibility
- *
- * A native range input, so arrows, Page Up/Down and Home/End work and are announced by the
- * platform; `aria-valuetext` makes the announcement "20% fold frequency" rather than a bare
- * number. The summary of what moved is a polite status region, so it is read once the reader
- * pauses rather than interrupting each step. The reset is a real button, disabled at the analysed
- * value, and it moves focus to the slider before it disables itself: a focused control that becomes
- * disabled leaves the caret on `<html>` (measured in Chrome 151 for `ActionBar`'s Fold).
+ * The Lab's one promised input, the assumed fold frequency after deciding. It re-prices only the
+ * rows that read a fold frequency with the Coach's own formulas (`repriceAtFoldEquity`). It never
+ * re-grades the recorded verdict. Where no row reads one, or the rows do not reproduce to a millionth
+ * of a unit, the reason replaces the control. A native range with `aria-valuetext` and a polite status.
  */
 
 import type { CoachReport } from '@prl/contracts';
@@ -73,8 +41,7 @@ export function FoldEquityControl({ report }: { readonly report: CoachReport }):
   }
 
   const repriced = repriceAtFoldEquity(report, percent / 100);
-  // Unreachable — the same report was reproducible a line above — but a refusal is never rendered
-  // as figures.
+  // Unreachable, but a refusal is never rendered as figures.
   if (repriced.kind === 'unavailable') return null;
   const equity = report.equity.heroEquity;
 
@@ -113,9 +80,7 @@ export function FoldEquityControl({ report }: { readonly report: CoachReport }):
           size="sm"
           disabled={percent === analysedPercent}
           onClick={() => {
-            // Focus first, then disable. The button disables itself on the render this click causes,
-            // and a focused control that becomes disabled drops the caret to <html> in Chrome — the
-            // defect ActionBar and "Choose again" were both fixed for. The slider is what was reset.
+            // Focus first. A focused control that becomes disabled drops the caret to <html> in Chrome.
             sliderRef.current?.focus();
             setPercent(analysedPercent);
           }}
