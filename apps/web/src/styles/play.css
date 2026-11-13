@@ -191,8 +191,100 @@
 
 /* The empty table before "Deal me in": an empty state at reading width, not a skeleton at the
    table's size. Its job is one sentence about what the press does, not to hold the space. */
+/**
+ * The empty table: an oval on the table surface with six places around it and the explanation in
+ * the middle. It replaced a dashed `.prl-empty` box. The oval is the same graph-paper surface the
+ * dealt table sits on, so dealing in fills this drawing rather than replacing a placeholder with
+ * something of a different shape.
+ */
 .prl-play__idle {
-  max-width: calc(var(--prl-measure) + 2 * var(--prl-space-9));
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: calc(var(--prl-space-14) * 3);
+  aspect-ratio: 9 / 4;
+  max-height: 26rem;
+  padding: var(--prl-space-11) var(--prl-space-9);
+}
+
+.prl-play__idle-table {
+  position: absolute;
+  inset: var(--prl-space-9) var(--prl-space-7);
+  border: 2px solid var(--prl-line-strong);
+  border-radius: 50% / 46%;
+  background-color: var(--prl-surface-table);
+  background-image:
+    linear-gradient(var(--prl-table-grid-color) 1px, transparent 1px),
+    linear-gradient(90deg, var(--prl-table-grid-color) 1px, transparent 1px);
+  background-size: var(--prl-table-grid-size) var(--prl-table-grid-size);
+}
+
+.prl-play__idle-seat {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  inline-size: var(--prl-space-11);
+  block-size: var(--prl-space-11);
+  border: 1px dashed var(--prl-line-strong);
+  border-radius: 50%;
+  background-color: var(--prl-surface-page);
+  color: var(--prl-text);
+  font-size: var(--prl-type-body-sm);
+  font-weight: var(--prl-weight-semibold);
+  translate: -50% -50%;
+}
+
+.prl-play__idle-seat[data-seat="top-left"] {
+  inset-block-start: 8%;
+  inset-inline-start: 22%;
+}
+
+.prl-play__idle-seat[data-seat="top"] {
+  inset-block-start: 0;
+  inset-inline-start: 50%;
+}
+
+.prl-play__idle-seat[data-seat="top-right"] {
+  inset-block-start: 8%;
+  inset-inline-start: 78%;
+}
+
+.prl-play__idle-seat[data-seat="bottom-right"] {
+  inset-block-start: 92%;
+  inset-inline-start: 78%;
+}
+
+.prl-play__idle-seat[data-seat="you"] {
+  inset-block-start: 100%;
+  inset-inline-start: 50%;
+  border: 2px solid var(--prl-accent-edge);
+  background-color: var(--prl-surface-panel);
+}
+
+.prl-play__idle-seat[data-seat="bottom-left"] {
+  inset-block-start: 92%;
+  inset-inline-start: 22%;
+}
+
+.prl-play__idle-text {
+  position: relative;
+  display: grid;
+  gap: var(--prl-space-3);
+  max-width: 34ch;
+  color: var(--prl-text-secondary);
+  text-align: center;
+}
+
+.prl-play__idle-text p {
+  margin: 0;
+}
+
+.prl-play__idle-title {
+  color: var(--prl-text);
+  font-family: var(--prl-font-display);
+  font-size: var(--prl-type-display-3);
+  font-stretch: var(--prl-stretch-display);
+  font-weight: 800;
 }
 
 /* ==========================================================================================

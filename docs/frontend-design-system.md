@@ -1,6 +1,21 @@
 # Poker Risk Lab — Frontend Design System
 
-**Version:** 3.0 (dark-primary, material ladder) · **Last reviewed:** 2026-08-26
+**Version:** 4.0 (card stock and card back) · **Last reviewed:** 2026-11-13
+
+> **What changed in 4.0: a visual re-identity, at the owner's request.** The product is now
+> dressed as the object it is about — a deck of cards — rather than as an instrument panel.
+> Graphite and readout cyan are replaced by **card stock** (a cool white ground, navy pip ink) and
+> **card back** (the deep blue of a classic card back, for the dark theme), with **back blue** as
+> the one accent. Headlines are **Archivo**, self-hosted and set condensed and heavy (§3.1), so
+> "no web fonts" is now "no font host". Labels are sentence case: the tracked-uppercase label is
+> gone everywhere except the legal "not yet reviewed" flag, where the capitals are one of the three
+> carriers of meaning. The `01…05` index on every page head is replaced by **suit marks** (§2.8):
+> the four suits for the four steps of the loop, and a court letter for the Legends. Radii are
+> 0 / 3 / 6 / 10px, 6px being a playing card's corner. The home page leads with one priced hand,
+> computed when it renders, and the test evidence it used to list is on `/checks`. Everything
+> below that still names graphite or cyan describes 3.0 and is kept as the record of why the
+> structure (the ramps, the ladder, the measured contrast) is shaped the way it is; the values are
+> in `tokens.css`, and `check-contrast.mjs` measures them, as before.
 
 > **What changed in 3.0.** §2.7 is new: a five-level material ladder with translucent levels,
 > elevation tokens and a lit hairline, replacing "one step on the surface ramp plus a hairline".
@@ -16,11 +31,13 @@ is not in here, it does not belong in a component — see §11.
 
 ## 1. What this should feel like
 
-**A high-performance decision laboratory that happens to have a poker table in it.**
+**The deck is the instrument.** (4.0; it was "a high-performance decision laboratory that
+happens to have a poker table in it".)
 
-Precise, dark, confident. Information-dense without being cluttered. Numbers are the
-heroes: an equity figure should read like an instrument readout, not a score. The
-brightest thing on screen is data.
+Printed, precise, confident. The interface is set on card stock, in the four inks of a
+four-colour deck, and its headlines read like a card's corner index or a printed odds board.
+Numbers are still the heroes: the boldest type on a screen is a figure or a headline, and the
+boldest object is a card. Spend boldness in one place per screen and keep the rest quiet.
 
 Explicitly **not**: a casino, a SaaS dashboard, or a game. No felt green, no gold, no
 metallic gradients, no glow, no chips-flying celebration, no jackpot colours. Those are the
@@ -53,9 +70,11 @@ is method — restraint, hairlines over shadows, one accent, technical labels, b
 
 ## 2. Colour
 
-Dark-primary. A light theme is retained (`[data-theme='light']`) because the product is
-educational and some people read better on light backgrounds, but dark is the designed
-default.
+Two designed themes since 4.0, chosen by the reader's system setting unless they pick one:
+**card stock** (light: ground `#f4f6f9`, ink `#161b33`, accent back blue `#2b44d4`, white text on
+it) and **card back** (dark: ground `#0e1433`, text `#f1f3fa`, accent `#8597ff`, ink text on it).
+Hearts red `#c02637` doubles as *adverse* and clubs green `#127152` as *favourable* on the light
+theme, each with a lighter partner on the dark one. No felt green, no gold, no cyan, no cream.
 
 **Every ratio below is measured** with the WCAG 2.x relative-luminance formula, not
 estimated. Reproduce with `node scripts/check-contrast.mjs`.
@@ -426,9 +445,36 @@ It resolves to `none` under `prefers-reduced-transparency`, `prefers-contrast: m
 
 ---
 
+### 2.8 Suit marks (4.0)
+
+`SuitMark` (`apps/web/src/components/SuitMark.tsx`) gives each part of the product its mark:
+Learn ♠, Lab ♦, Play ♥, Review ♣ — the four steps of the loop — and Legends a court letter, K.
+They appear in the header, the phone menu, the footer, every section's page head and the home
+page's loop and "three ways in". They replace the `01…05` page-head index, which implied an order
+the sections are not read in.
+
+- **Never colour alone, never alone at all.** The shape differs per area and the area's name is
+  always beside the mark, which is `aria-hidden`.
+- **`--prl-mark-*`, not `--prl-suit-*`.** The suit tokens are inks for a card face; on the card
+  back a spade in card ink would be navy on navy, so each theme carries its own mark colours.
+- **On a filled control the mark takes the control's text colour.** A diamond in the accent on an
+  accent-filled pill measured 1.0:1.
+- **U+FE0E after each suit**, or iOS draws the heart and diamond as emoji in its own colours.
+- Numbering stays where the content really is a sequence: lesson order, quiz position, the
+  loop's four steps, a scenario's reading order.
+
 ## 3. Typography
 
 ### 3.1 Families
+
+**Since 4.0: one family, Archivo, at two widths.** `@fontsource-variable/archivo` (OFL-1.1, pinned
+in the lockfile and through every supply-chain gate) is imported in `layout.tsx`; Next bundles the
+woff2 files and serves them from this origin, which `font-src 'self'` already permitted. `h1`, `h2`
+and display figures are set at `font-stretch: var(--prl-stretch-display)` (72%) and weight 800;
+body text is the same family at its normal width. The system stack below is the fallback.
+
+The 3.0 text follows, kept for its reasoning: the rule it states was about a third-party font
+request, and a self-hosted file makes none.
 
 ```css
 --prl-font-sans: 'Inter var', 'Inter', -apple-system, BlinkMacSystemFont,

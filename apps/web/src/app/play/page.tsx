@@ -278,6 +278,7 @@ function firstValue(raw: string | string[] | undefined): string | undefined {
 
 export default async function PlayPage({ searchParams }: PlayPageProps): Promise<ReactElement> {
   const params = await searchParams;
+  const showFixtures = process.env.NODE_ENV !== 'production' || params.fixtures !== undefined;
   const requested = params['state'];
   const asked = Array.isArray(requested) ? requested[0] : requested;
 
@@ -332,27 +333,28 @@ export default async function PlayPage({ searchParams }: PlayPageProps): Promise
       <LiveTable key={tableKey} {...(legendMatch === undefined ? {} : { legendMatch })} />
 
       {/*
-        Deliberately public, and deliberately below the table with a rule above it. The four fixture
-        states are an audit surface: `test:ax`, `test:keyboard` and `test:layout` crawl
-        `/play?state=…` on the PRODUCTION build (`next start`), so they cannot be hidden outside
-        development without hiding them from the gates that check them, and a reviewer reaches them
-        from here. What was wrong was only that they read as part of the table; the separator and the
-        "For reviewers" label say they are not.
+        The four fixture states are an audit surface: `test:ax`, `test:keyboard` and `test:layout`
+        crawl `/play?state=…` on the PRODUCTION build, so the routes stay public. The panel that links
+        to them does not: a learner arriving at the table had "For reviewers: fixture renderings"
+        under it, which is the product describing its own test harness. It renders in development,
+        and in production when the URL carries `?fixtures`, which is how a reviewer reaches it.
       */}
-      <div className="prl-play__review-states">
-        <p className="prl-label">For reviewers</p>
-        <details className="prl-disclose">
-          <summary className="prl-disclose__summary">Fixture renderings, for design and audit</summary>
-          <div className="prl-disclose__body">
-            <p>
-              Four states this screen has to handle, rendered from a typed fixture so they can be reviewed
-              without waiting for a live table to reach them. They are not what this page is showing, and no
-              link below opens a socket.
-            </p>
-            <FixtureLinks current={null} />
-          </div>
-        </details>
-      </div>
+      {showFixtures ? (
+        <div className="prl-play__review-states">
+          <p className="prl-label">For reviewers</p>
+          <details className="prl-disclose">
+            <summary className="prl-disclose__summary">Fixture renderings, for design and audit</summary>
+            <div className="prl-disclose__body">
+              <p>
+                Four states this screen has to handle, rendered from a typed fixture so they can be reviewed
+                without waiting for a live table to reach them. They are not what this page is showing, and no
+                link below opens a socket.
+              </p>
+              <FixtureLinks current={null} />
+            </div>
+          </details>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -8,13 +8,17 @@
  * THE SHORT VERSION
  * ============================================================================
  *
- * Dark-primary. "High-performance decision laboratory that happens to have a poker
- * table in it." Precise, information-dense, confident. The brightest thing on screen
- * is data.
+ * The deck is the instrument (since 4.0 — docs/frontend-design-system.md says what changed).
+ * Card stock in the light theme, card back in the dark one, back blue as the one accent, the
+ * four inks of a four-colour deck for the suit marks, and headlines in Archivo condensed. The
+ * boldest thing on a screen is a figure, a headline or a card.
  *
  * Explicitly NOT a casino: no felt green, no gold, no metallic gradient, no glow, no
  * jackpot colour, no celebration. Those are gambling's visual language and this
  * product is the opposite of gambling.
+ *
+ * The ramps below keep their 3.0 names (`ink-*` was "graphite", `accent-*` was "readout cyan")
+ * because every component reads them by role, not by hue; only the values changed.
  *
  * ============================================================================
  * FOUR STRUCTURAL DECISIONS, AND WHY
@@ -40,9 +44,10 @@
  *    `box-shadow` literal in components.css or play.css, which is a tighter rule than the
  *    "none at all" it replaced, not a looser one. Focus is still an `outline` (see FOCUS).
  *
- * 2. NEAR-SQUARE RADII (0 / 2 / 4 / 8px).
- *    Rounded reads friendly and consumer; near-square reads instrument. `--prl-radius-pill`
- *    exists for status chips only.
+ * 2. A PLAYING CARD'S CORNER (0 / 3 / 6 / 10px), since 4.0.
+ *    It was near-square (0 / 2 / 4 / 8) to read as an instrument. 6px is the corner of a card at
+ *    the sizes the table draws one, so panels and the cards on them read as one material.
+ *    `--prl-radius-pill` exists for status chips and pill controls only.
  *
  * 3. ONE ACCENT RAMP, USED SPARINGLY.
  *    Roughly one primary action per view. An accent that appears everywhere stops
@@ -71,9 +76,9 @@
   color-scheme: dark light;
 
   /* ==========================================================================
-     NEUTRALS — "graphite". Cool-shifted so dark surfaces read as instrument
-     housing rather than as an absence of colour. 13 steps, with half-steps at
-     750/850 where the surface stack needs finer control.
+     NEUTRALS — "card back" (4.0; was "graphite"). Blue-shifted toward the deep
+     blue of a classic card back, so the dark theme reads as the back of the deck.
+     13 steps, with half-steps at 750/850 where the surface stack needs finer control.
      ========================================================================== */
   --prl-ink-000: #f1f3fa;
   --prl-ink-050: #e2e6f2;
@@ -90,7 +95,7 @@
   --prl-ink-900: #0e1433;
 
   /* ==========================================================================
-     ACCENT — "readout cyan". Interaction, focus, and live data. Not decoration.
+     ACCENT — "back blue" (4.0; was "readout cyan"). Interaction, focus, live data.
      ========================================================================== */
   --prl-accent-200: #d6dcff;
   --prl-accent-300: #b7c2ff;

@@ -777,8 +777,6 @@ function ConnectionPanel({ live, inLegendMatch = false }: ConnectionPanelProps):
     <Panel
       className="prl-play__connection"
       title="This table"
-      eyebrow="Connection"
-      index={1}
       tone="inset"
       actions={
         live.phase === 'ready' ? (

@@ -510,6 +510,22 @@ body {
   margin-inline-end: var(--prl-space-2);
 }
 
+/**
+ * On the current page the pill is filled with the accent, and a diamond in the accent on it measured
+ * 1.0:1 — the mark vanished exactly where it should say "you are here". On a filled pill it takes
+ * the pill's text colour, like the word beside it.
+ */
+.prl-nav__link[aria-current="page"] .prl-nav__mark {
+  color: inherit;
+}
+
+/* Page-head eyebrows set the mark and the area's name as two inline items with no gap of their own. */
+.prl-eyebrow .prl-suit-mark,
+.prl-play__eyebrow .prl-suit-mark,
+.prl-learn-page__eyebrow .prl-suit-mark {
+  margin-inline-end: var(--prl-space-3);
+}
+
 .prl-shell__brand-name {
   font-size: var(--prl-type-heading);
   font-weight: var(--prl-weight-bold);

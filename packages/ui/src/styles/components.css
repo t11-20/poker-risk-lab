@@ -2455,8 +2455,11 @@
   justify-items: start;
   gap: var(--prl-space-4);
   padding: var(--prl-space-9);
-  border: 1px dashed var(--prl-line-strong);
-  border-radius: var(--prl-radius-2);
+  /* A hairline on the inset surface, not a dashed outline: a dashed box reads as a drop zone or a
+     wireframe left in by mistake, and an empty state is a finished thing that says what is true. */
+  border: 1px solid var(--prl-line);
+  border-radius: var(--prl-radius-3);
+  background-color: var(--prl-surface-inset);
   color: var(--prl-text-secondary);
   font-size: var(--prl-type-body);
 }
