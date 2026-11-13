@@ -483,7 +483,8 @@ function validateQuizQuestion(problems: Problems, path: string, raw: unknown): Q
           `${notes.length} note(s) for ${options.length} option(s); they are read positionally`,
         );
       }
-      // The note on the right answer opens with "Correct:".
+      // The note on the right answer opens with "Correct:". Asserting it makes a reordered notes array
+      // visible, so it is not left to review.
       const marked = notes.findIndex((note) => note.trimStart().startsWith('Correct:'));
       if (marked !== -1 && marked !== correctIndex) {
         problems.add(

@@ -134,7 +134,7 @@ function compute(calculation: LiveCalculation): Calculation {
           `figure beside it is counted from the ${unseen} unseen cards.`,
         working: `${estimate.explanation} ${estimate.caveat} ${hit.derivation}`,
         figures: {
-          // Already in percentage points.
+          // Already in percentage points. Scaling it again would turn 36% into 3,600%.
           estimatePercent: {
             label: 'Rule-of-thumb estimate',
             value: estimate.estimatePercent,
