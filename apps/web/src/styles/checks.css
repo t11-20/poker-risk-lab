@@ -1,10 +1,4 @@
-/**
- * `/checks` — four claims and what backs each one.
- *
- * Moved from `home.css` section 5 with the list itself. A row is a claim beside its evidence on a
- * wide screen and the claim above its evidence on a narrow one; the hairline between rows is the
- * decorative use `--prl-line-subtle` exists for.
- */
+/** `/checks` sets each claim beside its evidence when wide and above it when narrow. */
 
 .prl-checks-page {
   padding-block-end: var(--prl-section-y);

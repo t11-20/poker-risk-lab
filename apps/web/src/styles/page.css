@@ -1,106 +1,35 @@
 /**
- * The route chrome the Lab and Review screens share: the page opener, the breadcrumb, the
- * "this came from a fixture" notice, and the sibling-route links at the foot.
- *
- * ## Why these four are here and not in `globals.css`
- *
- * `globals.css` owns the app *shell* — the sticky header, the two navigations, the theme control,
- * the footer — and it says so at the top: "a route's own patterns live in a stylesheet the route
- * imports, so that two people editing two features are never editing the same file." A page's
- * opening block is a route pattern, not shell.
- *
- * ## Why they are not in `lab.css` or `review.css` either
- *
- * They were, in `lab.css`, and that was wrong in a way only the browser showed: the Review routes
- * import `review.css` and never `lab.css`, so a breadcrumb and a fixture notice on
- * `/review/hand-0042` rendered completely unstyled — the classes existed in the markup and nowhere
- * in the cascade. Anything two route groups both use has to live where both of them import it, and
- * this file is that place.
- *
- * Four rules is small enough that a fifth stylesheet is worth it; the alternative was the same
- * block copied into two files, which is how two screens stop looking like one product.
- *
- * Same rules as everywhere else: every value is a `--prl-*` token, no shadows, and any border that
- * carries meaning uses `--prl-line-strong` or the accent rather than the decorative hairline.
+ * Route chrome shared by every route group: the page opener, the breadcrumb, the fixture notice and
+ * the sibling-route links. It lives here because Review imports `review.css` and never `lab.css`, so
+ * a rule kept in `lab.css` left Review's breadcrumb and fixture notice unstyled.
  */
 
-/* ==========================================================================================
-   0. THE ONE TOKEN THIS FILE DEFINES
-   ==========================================================================================
-   A definition is the one place a literal is supposed to live, which is the same licence
-   `globals.css` §0 and `nav.css` §0 take. It is here rather than in `tokens.css` because it is a
-   route-chrome value: nothing in `packages/ui` has an opinion about how wide a page's headline is.
-
-   `--prl-measure` (60ch) is the READING measure — the ~76 characters past which the eye loses the
-   line beginning on the return sweep. That argument is about a paragraph and does not transfer to
-   display type: a headline is read in one or two glances rather than swept, it is set 2.5x larger,
-   and at 60ch a 44px headline runs most of a 1360px container and reads as a banner. 22ch is the
-   width at which the app's longest `h1` — "What this is, and what you may do with it" — breaks
-   into two balanced lines rather than one very long one.
-   ========================================================================================== */
+/* 0. The headline measure. 22ch breaks the longest `h1` into two balanced lines, where the 60ch
+   reading measure runs a display headline across most of the container. */
 
 :root {
   --prl-measure-display: 22ch;
 }
 
-/* ==========================================================================================
-   1. THE PAGE OPENER
-   ==========================================================================================
-   Eyebrow, `h1`, standfirst — in that order, with one hairline under the block. Every route needs
-   the same opening rhythm, and a page that invents its own heading spacing is how two routes end
-   up looking like two products.
-
-   THE SPACING IS NOT UNIFORM, AND THAT IS THE POINT
-
-   This block used to be `gap: var(--prl-space-5)` — one value between all three lines. Even
-   spacing between an eyebrow, a 44px headline and a paragraph does not read as calm; it reads as
-   three unrelated lines that happen to be stacked, because nothing in the spacing says which of
-   them belong together. Typographic hierarchy is carried by PROXIMITY at least as much as by size:
-   the eyebrow is a label ON the headline and sits close enough to be read as attached to it, and
-   the standfirst is a separate voice and gets a step of air to say so.
-
-   So the grid gap is the TIGHT value and the one relationship that needs to be loose adds its own
-   margin on top of it. Written that way round because the tight pair is the default and the loose
-   one is the exception; the alternative — a loose gap with a negative margin pulling the eyebrow
-   back up — states the same layout as a correction to itself.
-
-   The block above it grew too: `--prl-space-13` (80px) of air over the eyebrow rather than
-   `--prl-space-11` (48px). 48px under a 92px sticky bar left the eyebrow reading as part of the
-   chrome. Generous at the page level, tight within the group — that is the whole rhythm rule, and
-   it is the reason `--prl-page-nav` at the foot of this file spends `--prl-space-13` as well.
-   ========================================================================================== */
+/* 1. Page opener. The grid gap is the tight eyebrow-to-title value and the standfirst adds its own
+   margin, because proximity is what groups the eyebrow with the title. */
 
 .prl-page-head {
   display: grid;
   align-content: start;
   justify-items: start;
   gap: var(--prl-space-4);
-  /* `--prl-space-11`, not `--prl-space-13`. The note above argues for 80px because 48px "under a
-     92px sticky bar left the eyebrow reading as part of the chrome". That argument was made against
-     a 44px `h1`; the title is 30px now, and the thing that separates it from the chrome is the step
-     between the two, not the absolute distance. 80px of nothing above a 30px title on a 1100px
-     screen is a third of the first fold spent before the page has said anything. */
+  /* 48px, not 80px. 80px above a 30px title spends a third of the first fold at 1100px. */
   padding-block: var(--prl-space-11) var(--prl-space-9);
   border-block-end: var(--prl-hairline);
 }
 
 .prl-page-head__title {
   margin: 0;
-  /* See section 0: display type takes the display measure, not the reading one. `text-wrap:
-     balance` in `.prl-display-2` then has something to balance. */
   max-width: var(--prl-measure-display);
 }
 
-/**
- * The lede voice. 20px rather than the 17px reading size, because this paragraph is doing a
- * different job from the ones below it: it is the page's own summary, read once, by somebody
- * deciding whether to read the rest. `--prl-type-body-lg` is the token the design system already
- * has for exactly that ("lead paragraphs, Coach conclusions") and it was not being spent here.
- *
- * `--prl-tracking-heading` comes with the size. Tracking is a function of size in this system, and
- * 20px sits in the band that token covers; leaving it at the body value is the discontinuity the
- * OPTICAL TRACKING block in `tokens.css` was written about.
- */
+/** The lede takes `--prl-type-body-lg` and the heading tracking, because tracking follows size. */
 .prl-page-head__standfirst {
   margin: 0;
   margin-block-start: var(--prl-space-5);
@@ -111,35 +40,10 @@
   line-height: var(--prl-leading-body);
 }
 
-/* ==========================================================================================
-   1a. THE OPENER'S SECOND COLUMN
-   ==========================================================================================
-   Measured at 1440x1100: the shell is 1248px wide and this block used a single column of it — the
-   title capped at `--prl-measure-display` (22ch, ~400px) and the standfirst at `--prl-measure`
-   (60ch, ~576px), with the remaining ~670px empty from the header rule to the hairline under the
-   block. That is the "narrow column inside a wide frame" the whole pass is about, and it is not
-   only a cosmetic cost: it is also ~90px of height, because a standfirst stacked under a title
-   pushes everything the page is for further down.
-
-   The fix is the one `play.css` section 1 already made for `.prl-play__head` and `legends.css`
-   made for its opener — the standfirst takes a column of its own beside the title, capped at the
-   same measure it had underneath, so the line length does not change and the height comes back.
-   This is the third copy of that layout, which is why it is HERE, in the file both route groups
-   already import, rather than a fourth copy in `lab.css`.
-
-   `grid-row: 1 / span 6` and not `1 / -1`: with no explicit rows declared, `-1` resolves to the
-   end of the EXPLICIT grid, which is line 1, and the standfirst would stretch the eyebrow's row to
-   its own height. Spanning past the end of the content spans everything and stretches nothing.
-   The same trap is written up at length in `legends.css` section 1; this is the same layout.
-
-   1000px is the width at which the app gains its wide layout, and it is one number used by all
-   three openers that have one — this block, `.prl-learn-page__head`, and the home hero and section
-   heads. At 1000px the shell is 920px and a half of it is 436px, which at the 16px reading size is
-   about 60 characters: comfortably inside the measure, and well past the ~46 that the note on the
-   home hero identified as the floor for a readable second column. (That note measured 30 characters
-   at 900px against 17px type; the same column is wider in characters now that the type is smaller,
-   which is what moved the threshold down.) Below 1000px every one of them stacks.
-   ========================================================================================== */
+/* 1a. From 1000px the standfirst takes a column beside the title at the same measure, which saves
+   ~90px of height at 1440. Use `grid-row: 1 / span 6`, not `1 / -1`. With no explicit rows `-1` is
+   line 1, and the standfirst would stretch the eyebrow's row. 1000px is shared with
+   `.prl-learn-page__head` and the home hero. */
 
 @media (min-width: 1000px) {
   .prl-page-head {
@@ -155,13 +59,11 @@
     grid-column: 2;
     grid-row: 1 / span 6;
     align-self: start;
-    /* It is level with the title rather than with the eyebrow, and the eyebrow is a caption on the
-       title rather than a line of its own — so the standfirst starts one eyebrow-line down. */
+    /* One eyebrow line down, level with the title. */
     margin-block-start: var(--prl-space-8);
   }
 }
 
-/** The trail back up. Quiet, and never the only way out of a page — see `.prl-page-nav`. */
 .prl-crumb {
   color: var(--prl-accent-text);
   text-decoration: none;
@@ -171,25 +73,9 @@
   text-decoration: underline;
 }
 
-/* ==========================================================================================
-   THE FIXTURE NOTICE
-   ==========================================================================================
-   Shown on every screen that rendered without the API. Deliberately quiet — a hairline and a
-   label, not a warning tone: rendering from a fixture is a normal state during the build-out, and
-   a yellow banner on every page would train a reader to stop reading it. What it must never be is
-   absent: a reviewer looking at a number is entitled to know whether a server produced it.
-   ========================================================================================== */
+/* Fixture notice. Quiet on purpose, because it shows on every screen rendered without the API. */
 
-/**
- * Level 1 of the material ladder — a grouped background, not a card: `--prl-surface-raised`, the
- * lit hairline, and NO elevation. That is exactly the distinction `tokens.css` draws between L1
- * and L2, and it is the right one here: an unshadowed pane reads as part of the page and a
- * shadowed one reads as an object lying on it, and this note is an aside inside the page's own
- * flow rather than something floating over it.
- *
- * The lit hairline replaces a flat `--prl-hairline` on three of the four sides. The fourth is the
- * inline-start rule, which is unchanged and is not decoration: it is the mark that says "aside".
- */
+/** Material level 1 (raised, lit hairline, no elevation), because it is an aside in the page flow. */
 .prl-source-note {
   display: block;
   margin-block: var(--prl-space-7) 0;
@@ -197,7 +83,6 @@
   border: 1px solid var(--prl-edge);
   border-block-start-color: var(--prl-edge-lit);
   border-block-end-color: var(--prl-edge-shade);
-  /* A left rule at the focus width, so the note reads as an aside rather than as a panel. */
   border-inline-start: var(--prl-focus-width) solid var(--prl-line-strong);
   border-radius: var(--prl-radius-2);
   background-color: var(--prl-surface-raised);
@@ -208,18 +93,9 @@
   margin-inline-end: var(--prl-space-4);
 }
 
-/* ==========================================================================================
-   SIBLING ROUTES
-   ==========================================================================================
-   The links at the foot of a page. A flex row with a real gap: without one the anchors run
-   together into "All handsScenario Lab", which is what happens when a `<nav>` of bare links has
-   no layout at all.
-   ========================================================================================== */
+/* Sibling-route links. */
 
-/* `--prl-space-13` above and `--prl-space-11` below: the space that separates this row from the
-   page it closes is a SECTION seam and gets the section's air, while the space under it is only
-   the gap before the footer's own rule. Symmetric margins here were part of what made the page
-   rhythm read as one repeated value. */
+/* A section seam above, only the gap before the footer rule below. */
 .prl-page-nav {
   display: flex;
   flex-wrap: wrap;
@@ -244,38 +120,24 @@
   text-decoration: underline;
 }
 
-/**
- * /record's figures, one to a row on a phone. Each carries a note several lines long, and the shared
- * row's 8rem tracks made two columns of about 140px at 390: the notes wrapped to as many as 13
- * lines, and the fifth figure stood alone with 392px of empty cell beside it.
- */
+/** Below 600px each /record figure takes the row. Two 140px tracks wrapped notes to 13 lines at 390. */
 @media (width < 600px) {
   .prl-record__figures {
     grid-template-columns: minmax(0, 1fr);
   }
 }
 
-/**
- * /record stacks its panels directly in the container, and nothing spaced them: covered, reset
- * and delete met edge to edge at every width (0px measured at 360 and 1440). The page-head above
- * is a hairline the first panel sits against, which is how every route opens, so only a panel
- * that follows a panel gets the gap.
- */
+/** Only a panel that follows a panel gets the gap. Without it they met edge to edge. */
 .prl-record > .prl-panel + .prl-panel {
   margin-block-start: var(--prl-space-8);
 }
 
-/**
- * `.prl-stat__pair` is one label and one value, 4px apart. /record puts three pairs in it, so the
- * 4px also fell between "…try a scenario in it." and the next label, and the three lists read as
- * one block. Each label after the first opens a group.
- */
+/** Each label after the first opens a group, or the three lists read as one block. */
 .prl-record__lists dd + dt {
   margin-block-start: var(--prl-space-5);
 }
 
-/* The markers are kept: `reset.css` keeps list semantics by leaving `list-style` alone, and a
-   bulleted column is what separates one title from the next when the titles contain commas. */
+/* Markers stay. They separate titles that contain commas. */
 .prl-record__list {
   display: grid;
   gap: var(--prl-space-2);
