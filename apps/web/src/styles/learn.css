@@ -332,7 +332,6 @@
   font-size: var(--prl-type-label);
   font-variant-numeric: var(--prl-numeric);
   letter-spacing: var(--prl-tracking-label);
-  text-transform: uppercase;
 }
 
 .prl-learn-group__entries {
@@ -1150,7 +1149,6 @@
   font-size: var(--prl-type-label);
   font-weight: var(--prl-weight-medium);
   letter-spacing: var(--prl-tracking-label);
-  text-transform: uppercase;
   white-space: nowrap;
 }
 

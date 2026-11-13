@@ -132,7 +132,6 @@
   font-weight: var(--prl-weight-medium);
   letter-spacing: var(--prl-tracking-label);
   text-decoration: none;
-  text-transform: uppercase;
   transition:
     background-color var(--prl-dur-fast) var(--prl-ease-material),
     border-color var(--prl-dur-fast) var(--prl-ease-material),
@@ -260,7 +259,6 @@
   font-size: var(--prl-type-label);
   font-weight: var(--prl-weight-medium);
   letter-spacing: var(--prl-tracking-label);
-  text-transform: uppercase;
   white-space: nowrap;
 }
 
@@ -416,7 +414,6 @@ td.prl-review-table__when {
   color: var(--prl-text-muted);
   font-size: var(--prl-type-label);
   letter-spacing: var(--prl-tracking-label);
-  text-transform: uppercase;
 }
 
 .prl-review-net[data-sign="positive"] .prl-review-net__value {
@@ -431,7 +428,6 @@ td.prl-review-table__when {
   color: var(--prl-text-muted);
   font-size: var(--prl-type-label);
   letter-spacing: var(--prl-tracking-label);
-  text-transform: uppercase;
 }
 
 /* The column names printed inside the cells exist for the card layout below and nowhere else.
@@ -563,7 +559,6 @@ span.prl-review-table__cell-label {
     color: var(--prl-text-muted);
     font-size: var(--prl-type-label);
     letter-spacing: var(--prl-tracking-label);
-    text-transform: uppercase;
   }
 
   /* The net is the card's headline, so it is set larger, with its label on a line of its own. */
@@ -590,7 +585,6 @@ span.prl-review-table__cell-label {
   color: var(--prl-text-muted);
   font-size: var(--prl-type-label);
   letter-spacing: var(--prl-tracking-label);
-  text-transform: uppercase;
 }
 
 /* ==========================================================================================
@@ -733,7 +727,6 @@ span.prl-review-table__cell-label {
   font-size: var(--prl-type-body-sm);
   font-weight: var(--prl-weight-semibold);
   letter-spacing: var(--prl-tracking-label);
-  text-transform: uppercase;
 }
 
 /**
@@ -1212,7 +1205,6 @@ span.prl-review-table__cell-label {
   font-size: var(--prl-type-label);
   font-weight: var(--prl-weight-medium);
   letter-spacing: var(--prl-tracking-label);
-  text-transform: uppercase;
 }
 
 /* ==========================================================================================

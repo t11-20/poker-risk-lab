@@ -528,7 +528,6 @@ body {
   font-weight: var(--prl-weight-medium);
   letter-spacing: var(--prl-tracking-label);
   text-decoration: none;
-  text-transform: uppercase;
   transition:
     background-color var(--prl-dur-instant) var(--prl-ease-hover),
     border-color var(--prl-dur-instant) var(--prl-ease-hover),
@@ -1038,7 +1037,6 @@ body {
   font-size: var(--prl-type-label);
   font-weight: var(--prl-weight-semibold);
   letter-spacing: var(--prl-tracking-label);
-  text-transform: uppercase;
 }
 
 .prl-footer__summary {

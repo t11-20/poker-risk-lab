@@ -79,6 +79,9 @@
  * system forbids remote assets outright.
  */
 
+// Self-hosted from npm and served from this origin (`font-src 'self'`): no font host, no request
+// to a third party, which is what the design system's old "no web fonts" rule was protecting.
+import '@fontsource-variable/archivo/wdth.css';
 import '@prl/ui/styles.css';
 import './globals.css';
 // The floating pill bar. After `globals.css` because it reshapes the shell that file frames; every

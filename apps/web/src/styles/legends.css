@@ -1367,7 +1367,6 @@
   font-size: var(--prl-type-label);
   letter-spacing: var(--prl-tracking-label);
   text-align: start;
-  text-transform: uppercase;
 }
 
 /** The header rule is a chart axis in table form: it separates data from labels, so it is
@@ -1386,7 +1385,6 @@
   font-size: var(--prl-type-label);
   font-weight: var(--prl-weight-medium);
   letter-spacing: var(--prl-tracking-label);
-  text-transform: uppercase;
   white-space: nowrap;
 }
 

@@ -387,7 +387,6 @@
   font-weight: var(--prl-weight-medium);
   letter-spacing: var(--prl-tracking-label);
   text-decoration: none;
-  text-transform: uppercase;
   white-space: nowrap;
   transition:
     background-color var(--prl-dur-instant) var(--prl-ease-hover),
@@ -623,7 +622,6 @@
   font-weight: var(--prl-weight-semibold);
   letter-spacing: var(--prl-tracking-label);
   text-decoration: none;
-  text-transform: uppercase;
   white-space: nowrap;
   transition:
     background-color var(--prl-dur-instant) var(--prl-ease-hover),

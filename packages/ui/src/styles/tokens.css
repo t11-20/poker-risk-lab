@@ -75,31 +75,31 @@
      housing rather than as an absence of colour. 13 steps, with half-steps at
      750/850 where the surface stack needs finer control.
      ========================================================================== */
-  --prl-ink-000: #f4f6f8;
-  --prl-ink-050: #e4e8ec;
-  --prl-ink-100: #cbd2d9;
-  --prl-ink-200: #a9b2bd;
-  --prl-ink-300: #8b95a1;
-  --prl-ink-400: #6e7885;
-  --prl-ink-500: #545d69;
-  --prl-ink-600: #3d444e;
-  --prl-ink-700: #2a2f37;
-  --prl-ink-750: #212630;
-  --prl-ink-800: #171b22;
-  --prl-ink-850: #12151b;
-  --prl-ink-900: #0b0d11;
+  --prl-ink-000: #f1f3fa;
+  --prl-ink-050: #e2e6f2;
+  --prl-ink-100: #c8cee2;
+  --prl-ink-200: #a6aecb;
+  --prl-ink-300: #9ba3c2;
+  --prl-ink-400: #7f88ab;
+  --prl-ink-500: #535c80;
+  --prl-ink-600: #3c4469;
+  --prl-ink-700: #2b3259;
+  --prl-ink-750: #232a50;
+  --prl-ink-800: #1a2146;
+  --prl-ink-850: #141a3c;
+  --prl-ink-900: #0e1433;
 
   /* ==========================================================================
      ACCENT — "readout cyan". Interaction, focus, and live data. Not decoration.
      ========================================================================== */
-  --prl-accent-200: #a5eef5;
-  --prl-accent-300: #6fe2ee;
-  --prl-accent-400: #3ed6e6;
-  --prl-accent-500: #17c6db;
-  --prl-accent-600: #0fa6bd;
-  --prl-accent-700: #0c8298;
-  --prl-accent-800: #0a6274;
-  --prl-accent-900: #08454f;
+  --prl-accent-200: #d6dcff;
+  --prl-accent-300: #b7c2ff;
+  --prl-accent-400: #9dabff;
+  --prl-accent-500: #8597ff;
+  --prl-accent-600: #6a7cf0;
+  --prl-accent-700: #5062d6;
+  --prl-accent-800: #3a49a8;
+  --prl-accent-900: #28327a;
 
   /* ==========================================================================
      SEMANTIC DATA COLOURS
@@ -108,13 +108,13 @@
      a failure. Each is ALWAYS paired with a sign, glyph, label or fill pattern —
      never left to carry meaning by hue alone (WCAG 1.4.1).
      ========================================================================== */
-  --prl-favourable: #3ddc9a;
+  --prl-favourable: #4fd3a0;
   --prl-favourable-dim: #1f9c6c;
-  --prl-adverse: #ff7a91;
+  --prl-adverse: #ff8593;
   --prl-adverse-dim: #c94259;
   --prl-caution: #f5b93d;
   --prl-caution-dim: #b8811f;
-  --prl-info: #7db8f0;
+  --prl-info: #8ec5ff;
 
   /* Chart series. Every one clears 3:1 against every surface (worst 6.10:1).
      components.css additionally gives each a distinct fill pattern. */
@@ -133,21 +133,21 @@
   --prl-surface-raised: var(--prl-ink-850);
   --prl-surface-panel: var(--prl-ink-800);
   --prl-surface-inset: var(--prl-ink-750);
-  --prl-surface-hover: #1b2029;
-  --prl-surface-active: #232935;
+  --prl-surface-hover: #1e2650;
+  --prl-surface-active: #262f5c;
 
   /* The table: a deep slate one step cooler than the panels, carrying a faint
      hairline grid (see --prl-table-grid-*). It reads as GRAPH PAPER, which is the
      whole thesis — a worksheet you happen to be playing on. */
-  --prl-surface-table: #101922;
+  --prl-surface-table: #111838;
   --prl-table-grid-color: var(--prl-ink-800);
   --prl-table-grid-size: 32px;
 
   /* Translucent scrims. Kept to low alpha and small areas: a large backdrop-filter
      is one of the most expensive things a browser can be asked to composite. */
-  --prl-scrim: rgb(4 6 9 / 72%);
-  --prl-veil-8: rgb(244 246 248 / 8%);
-  --prl-veil-4: rgb(244 246 248 / 4%);
+  --prl-scrim: rgb(6 9 26 / 72%);
+  --prl-veil-8: rgb(241 243 250 / 8%);
+  --prl-veil-4: rgb(241 243 250 / 4%);
 
   /* ==========================================================================
      THE PAGE WASH — the reason glass is worth having
@@ -167,8 +167,8 @@
      as a content surface alongside the opaque ones. If a stop gets brighter, raise the
      token and the gate re-measures every text pairing against it.
      ========================================================================== */
-  --prl-wash-tint: rgb(23 198 219 / 7%);
-  --prl-wash-tint-2: rgb(125 184 240 / 5%);
+  --prl-wash-tint: rgb(133 151 255 / 8%);
+  --prl-wash-tint-2: rgb(255 133 147 / 4%);
   --prl-page-wash:
     radial-gradient(115% 78% at 10% -12%, var(--prl-wash-tint), transparent 62%),
     radial-gradient(92% 62% at 92% 2%, var(--prl-wash-tint-2), transparent 58%);
@@ -263,14 +263,14 @@
   /* L3. ink-850 with 10% pass-through. Hover and active raise BOTH the lightness and the
      opacity: a pane that firms up as you press it is the physical reading, and it is also
      the direction that protects the contrast floor instead of eroding it. */
-  --prl-glass-floating: rgb(18 21 27 / 90%);
-  --prl-glass-floating-hover: rgb(26 30 38 / 94%);
-  --prl-glass-floating-active: rgb(33 38 48 / 97%);
+  --prl-glass-floating: rgb(20 26 60 / 90%);
+  --prl-glass-floating-hover: rgb(28 35 75 / 94%);
+  --prl-glass-floating-active: rgb(36 44 87 / 97%);
 
   /* L4. ink-900 with 8% pass-through — darker AND more opaque than L3, because this level
      carries body text over content it cannot see. */
-  --prl-glass-overlay: rgb(11 13 17 / 92%);
-  --prl-glass-overlay-hover: rgb(20 24 30 / 95%);
+  --prl-glass-overlay: rgb(14 20 51 / 92%);
+  --prl-glass-overlay-hover: rgb(24 31 67 / 95%);
 
   /**
    * blur + saturate. The saturation is not decoration and it is the half most imitations
@@ -316,8 +316,8 @@
    * selected state, an axis) still has to be `--prl-line-strong` or the accent. The gate
    * measures them for the record and does not assert them.
    */
-  --prl-edge: rgb(244 246 248 / 12%);
-  --prl-edge-lit: rgb(244 246 248 / 24%);
+  --prl-edge: rgb(241 243 250 / 12%);
+  --prl-edge-lit: rgb(241 243 250 / 24%);
   --prl-edge-shade: rgb(0 0 0 / 34%);
 
   /* ==========================================================================
@@ -346,15 +346,15 @@
      legibility. Four-colour deck by default; every card also carries its glyph
      and an aria-label, so suit is never conveyed by colour alone.
      ========================================================================== */
-  --prl-card-face: #f2f0ea;
-  --prl-card-face-dim: #d8d4c9;
-  --prl-card-edge: #b9b5a8;
-  --prl-card-back: #16222c;
-  --prl-card-back-pattern: #24333f;
-  --prl-suit-spade: #15181d;
-  --prl-suit-club: #0f5a44;
-  --prl-suit-heart: #a81f2b;
-  --prl-suit-diamond: #1d4fa8;
+  --prl-card-face: #f7f8fb;
+  --prl-card-face-dim: #e4e7ef;
+  --prl-card-edge: #b9becd;
+  --prl-card-back: #22308a;
+  --prl-card-back-pattern: #3142a8;
+  --prl-suit-spade: #161b33;
+  --prl-suit-club: #127152;
+  --prl-suit-heart: #c02637;
+  --prl-suit-diamond: #2b44d4;
 
   /* ==========================================================================
      TYPOGRAPHY
@@ -363,8 +363,13 @@
      resolves to a real grotesk on every target platform.
      ========================================================================== */
   --prl-font-sans:
-    "Inter var", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Roboto,
+    "Archivo Variable", "Inter var", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Roboto,
     "Helvetica Neue", Arial, sans-serif;
+  /* One family at two widths. Headlines are Archivo condensed and heavy — the voice of a card's
+     corner index and a printed odds board — and body text is the same family at its normal
+     width, so the two are told apart by shape rather than by a second typeface. */
+  --prl-font-display: var(--prl-font-sans);
+  --prl-stretch-display: 72%;
   --prl-font-mono:
     ui-monospace, SFMono-Regular, "SF Mono", "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, monospace;
 
@@ -405,14 +410,14 @@
      32px at 1000px, 38px at 1280px and 40px from 1400px up, so the one display size on the page
      comes down as the column holding it does. A `vw` slope steep enough to hit the cap at 1100px
      is a step function with extra syntax. */
-  --prl-type-display-1: clamp(2rem, 0.4rem + 2.5vw, 2.5rem); /* 32 -> 40px */
-  --prl-type-display-2: clamp(1.75rem, 1.3rem + 1.2vw, 1.875rem); /* 28 -> 30px */
-  --prl-type-display-3: clamp(1.375rem, 1.15rem + 0.6vw, 1.5rem); /* 22 -> 24px */
+  --prl-type-display-1: clamp(2.75rem, 1.1rem + 5.2vw, 4.75rem); /* 44 -> 76px, condensed */
+  --prl-type-display-2: clamp(2.25rem, 1.4rem + 2.6vw, 3.25rem); /* 36 -> 52px, condensed */
+  --prl-type-display-3: clamp(1.625rem, 1.3rem + 1vw, 2.125rem); /* 26 -> 34px, condensed */
   /* Tracking follows the size down. -0.03em is the value for a 64px line; applied to 40px it
      closes the counters and the word starts to read as one blot. */
-  --prl-tracking-display-1: -0.022em;
-  --prl-tracking-display-2: -0.018em;
-  --prl-tracking-display-3: -0.013em;
+  --prl-tracking-display-1: -0.005em;
+  --prl-tracking-display-2: -0.004em;
+  --prl-tracking-display-3: 0em;
 
   /* ------------------------------------------------------------------------
      READING SIZES — the floor is 13px, and the reason is measured rather than
@@ -522,8 +527,8 @@
      becomes a legibility cost once the letterforms are big enough to read. */
   --prl-type-label: 0.8125rem; /* 13px — the floor. Never go below this. */
   --prl-type-label-sm: 0.75rem; /* 12px — only for a badge beside a label */
-  --prl-tracking-label: 0.07em;
-  --prl-tracking-label-sm: 0.09em;
+  --prl-tracking-label: 0.01em;
+  --prl-tracking-label-sm: 0.015em;
   --prl-tracking-index: 0.12em;
 
   /* Metrics — oversized numbers. The reason this system exists.
@@ -605,9 +610,9 @@
      RADII — near-square by default. pill is for status chips only.
      ========================================================================== */
   --prl-radius-0: 0;
-  --prl-radius-1: 2px;
-  --prl-radius-2: 4px;
-  --prl-radius-3: 8px;
+  --prl-radius-1: 3px;
+  --prl-radius-2: 6px;
+  --prl-radius-3: 10px;
   --prl-radius-pill: 999px;
   /* A diagonal corner cut. It was once the signature mark on primary buttons and is no longer:
      at 100% it read as a corner that had failed to render rather than as a deliberate shape, and
@@ -738,44 +743,44 @@
   :root:not([data-theme="dark"]) {
     color-scheme: light;
 
-    --prl-surface-page: #f5f7f9;
+    --prl-surface-page: #f4f6f9;
     --prl-surface-raised: #ffffff;
     --prl-surface-panel: #ffffff;
-    --prl-surface-inset: #eceff3;
-    --prl-surface-hover: #e7ebf0;
-    --prl-surface-active: #dde3ea;
-    --prl-surface-table: #e8edf1;
-    --prl-table-grid-color: #d5dce3;
+    --prl-surface-inset: #ebeef4;
+    --prl-surface-hover: #e5e9f1;
+    --prl-surface-active: #dae0eb;
+    --prl-surface-table: #e9edf4;
+    --prl-table-grid-color: #d6dce8;
 
-    --prl-text: #10141a;
-    --prl-text-secondary: #3b4553;
-    --prl-text-muted: #55606f;
+    --prl-text: #161b33;
+    --prl-text-secondary: #353c5a;
+    --prl-text-muted: #4f5675;
     /* Light collapses `faint` onto `muted` rather than carrying a fourth step. A distinct value
        here has to clear 4.5:1 against --prl-surface-active (#dde3ea), and every colour that does
        is within a rounding error of muted: the light surface ramp is too tight for a fourth text
        step to be both legible and visibly different. One honest step of hierarchy is worth more
        than a fifth token nobody can see. (The old #6b7684 measured 3.57:1 here — a fail.) */
     --prl-text-faint: var(--prl-text-muted);
-    --prl-text-disabled: #98a1ad;
+    --prl-text-disabled: #9aa0b5;
 
-    --prl-line-subtle: #dce1e7;
-    --prl-line: #c3cad3;
+    --prl-line-subtle: #dde1ea;
+    --prl-line: #c4cad8;
     /* NOT lightened for light. Lifting the meaningful-border token to #7e8894 made it the weakest
        it was in either theme — 2.78:1 on --prl-surface-active, under the 3:1 non-text floor. The
        shared ink-400 clears every light surface (3.47:1 worst) and needs no override at all. */
-    --prl-line-strong: var(--prl-ink-400);
+    --prl-line-strong: #5c6587; /* light only: the dark ramp's ink-400 is too light to edge a pale surface */
 
     /* EVERY accent step is remapped for light, not just the two that happen to be
        used today. Measured on the light page ground the bright steps run 1.21:1
        (200) to 2.71:1 (600), so leaving any of them bright means the first
        component that uses one as text silently fails contrast. Remapping the whole
        ramp makes that unrepresentable rather than merely unlikely. */
-    --prl-accent-200: #0a6274; /* 6.49:1 as text on the light page */
-    --prl-accent-300: #08454f; /* 9.90:1 — also the focus ring */
-    --prl-accent-400: #0a6274; /* 6.49:1 */
-    --prl-accent-500: #0a6274; /* the fill; see --prl-text-on-accent below */
-    --prl-accent-600: #08454f;
-    --prl-focus-color: #08454f;
+    --prl-accent-200: #2b44d4;
+    --prl-accent-300: #1f33a8;
+    --prl-accent-400: #2b44d4;
+    --prl-accent-500: #2b44d4; /* the fill; see --prl-text-on-accent below */
+    --prl-accent-600: #1f33a8;
+    --prl-focus-color: #1f33a8;
 
     /* The button pairing INVERTS between themes, which is easy to miss:
          dark  — accent-500 #17c6db fill + ink-900 text = 9.39:1 (white is 2.07:1)
@@ -783,10 +788,10 @@
        Both clear AA, but only if the text colour flips with the theme. */
     --prl-text-on-accent: #ffffff;
 
-    --prl-favourable: #0f7a56;
-    --prl-adverse: #b5304a;
+    --prl-favourable: #127152;
+    --prl-adverse: #c02637;
     --prl-caution: #8a5c0d;
-    --prl-info: #1c5a86;
+    --prl-info: #1f5a9e;
 
     /* The sixth chart series is the one that does NOT come from the semantic set, so it is the one
        easiest to forget when remapping. Left at ink-200 it measured 2.15:1 on a white panel —
@@ -794,9 +799,9 @@
        3:1 non-text floor on every light surface (5.16:1 worst). */
     --prl-series-f: var(--prl-ink-500);
 
-    --prl-scrim: rgb(16 20 26 / 44%);
-    --prl-veil-8: rgb(16 20 26 / 6%);
-    --prl-veil-4: rgb(16 20 26 / 3%);
+    --prl-scrim: rgb(22 27 51 / 44%);
+    --prl-veil-8: rgb(22 27 51 / 6%);
+    --prl-veil-4: rgb(22 27 51 / 3%);
 
     /* MATERIALS, LIGHT. The ladder is the same five levels; what inverts is the direction
        everything moves in. Glass tints toward WHITE rather than toward ink, the lit edge is
@@ -804,8 +809,8 @@
        a light material is worst over a BLACK backdrop, where dark theme's light text on a
        dark material is worst over a WHITE one. The gate measures both extremes in both
        themes for exactly that reason, and takes the worse. */
-    --prl-wash-tint: rgb(10 98 116 / 6%);
-    --prl-wash-tint-2: rgb(28 90 134 / 4%);
+    --prl-wash-tint: rgb(43 68 212 / 6%);
+    --prl-wash-tint-2: rgb(192 38 55 / 3%);
 
     --prl-glass-floating: rgb(255 255 255 / 94%);
     --prl-glass-floating-hover: rgb(248 250 252 / 96%);
@@ -815,21 +820,21 @@
 
     /* Light shadows are an order of magnitude weaker. On a light ground a shadow at dark
        theme's alpha does not read as height, it reads as dirt. */
-    --prl-elevation-1: 0 1px 2px rgb(16 20 26 / 6%), 0 2px 8px rgb(16 20 26 / 5%);
-    --prl-elevation-2: 0 2px 6px rgb(16 20 26 / 8%), 0 10px 24px rgb(16 20 26 / 8%);
-    --prl-elevation-3: 0 4px 12px rgb(16 20 26 / 10%), 0 20px 48px rgb(16 20 26 / 12%);
-    --prl-elevation-4: 0 8px 24px rgb(16 20 26 / 12%), 0 36px 80px rgb(16 20 26 / 16%);
+    --prl-elevation-1: 0 1px 2px rgb(22 27 51 / 6%), 0 2px 8px rgb(22 27 51 / 5%);
+    --prl-elevation-2: 0 2px 6px rgb(22 27 51 / 8%), 0 10px 24px rgb(22 27 51 / 8%);
+    --prl-elevation-3: 0 4px 12px rgb(22 27 51 / 10%), 0 20px 48px rgb(22 27 51 / 12%);
+    --prl-elevation-4: 0 8px 24px rgb(22 27 51 / 12%), 0 36px 80px rgb(22 27 51 / 16%);
 
-    --prl-edge: rgb(16 20 26 / 10%);
+    --prl-edge: rgb(22 27 51 / 10%);
     --prl-edge-lit: rgb(255 255 255 / 90%);
-    --prl-edge-shade: rgb(16 20 26 / 14%);
+    --prl-edge-shade: rgb(22 27 51 / 14%);
 
     /* The halo inverts with the theme, because its job is to be the OPPOSITE polarity to
        the ring. A dark ring on a dark backdrop is rescued by a white halo. */
     --prl-focus-halo: #ffffff;
 
     --prl-card-face: #ffffff;
-    --prl-card-face-dim: #e8e6df;
+    --prl-card-face-dim: #e6e8ee;
   }
 }
 
@@ -837,40 +842,40 @@
 :root[data-theme="light"] {
   color-scheme: light;
 
-  --prl-surface-page: #f5f7f9;
+  --prl-surface-page: #f4f6f9;
   --prl-surface-raised: #ffffff;
   --prl-surface-panel: #ffffff;
-  --prl-surface-inset: #eceff3;
-  --prl-surface-hover: #e7ebf0;
-  --prl-surface-active: #dde3ea;
-  --prl-surface-table: #e8edf1;
-  --prl-table-grid-color: #d5dce3;
+  --prl-surface-inset: #ebeef4;
+  --prl-surface-hover: #e5e9f1;
+  --prl-surface-active: #dae0eb;
+  --prl-surface-table: #e9edf4;
+  --prl-table-grid-color: #d6dce8;
 
-  --prl-text: #10141a;
-  --prl-text-secondary: #3b4553;
-  --prl-text-muted: #55606f;
+  --prl-text: #161b33;
+  --prl-text-secondary: #353c5a;
+  --prl-text-muted: #4f5675;
   /* See the media-query block above: light has no fourth text step, because no value that clears
      4.5:1 on --prl-surface-active is visibly different from muted. */
   --prl-text-faint: var(--prl-text-muted);
-  --prl-text-disabled: #98a1ad;
+  --prl-text-disabled: #9aa0b5;
 
-  --prl-line-subtle: #dce1e7;
-  --prl-line: #c3cad3;
+  --prl-line-subtle: #dde1ea;
+  --prl-line: #c4cad8;
   /* See above: light does NOT lighten the meaningful-border token. ink-400 clears 3:1 on every
      light surface; #7e8894 did not (2.78:1 on --prl-surface-active). */
-  --prl-line-strong: var(--prl-ink-400);
+  --prl-line-strong: #5c6587; /* light only: the dark ramp's ink-400 is too light to edge a pale surface */
 
   /* EVERY accent step is remapped for light, not just the two that happen to be
      used today. Measured on the light page ground the bright steps run 1.21:1
      (200) to 2.71:1 (600), so leaving any of them bright means the first
      component that uses one as text silently fails contrast. Remapping the whole
      ramp makes that unrepresentable rather than merely unlikely. */
-  --prl-accent-200: #0a6274; /* 6.49:1 as text on the light page */
-  --prl-accent-300: #08454f; /* 9.90:1 — also the focus ring */
-  --prl-accent-400: #0a6274; /* 6.49:1 */
-  --prl-accent-500: #0a6274; /* the fill; see --prl-text-on-accent below */
-  --prl-accent-600: #08454f;
-  --prl-focus-color: #08454f;
+  --prl-accent-200: #2b44d4;
+  --prl-accent-300: #1f33a8;
+  --prl-accent-400: #2b44d4;
+  --prl-accent-500: #2b44d4; /* the fill; see --prl-text-on-accent below */
+  --prl-accent-600: #1f33a8;
+  --prl-focus-color: #1f33a8;
 
   /* The button pairing INVERTS between themes, which is easy to miss:
        dark  — accent-500 #17c6db fill + ink-900 text = 9.39:1 (white is 2.07:1)
@@ -878,23 +883,23 @@
      Both clear AA, but only if the text colour flips with the theme. */
   --prl-text-on-accent: #ffffff;
 
-  --prl-favourable: #0f7a56;
-  --prl-adverse: #b5304a;
+  --prl-favourable: #127152;
+  --prl-adverse: #c02637;
   --prl-caution: #8a5c0d;
-  --prl-info: #1c5a86;
+  --prl-info: #1f5a9e;
 
   /* See the media-query block above: the sixth series needs its own light value, because it is the
      one that is not part of the semantic set. */
   --prl-series-f: var(--prl-ink-500);
 
-  --prl-scrim: rgb(16 20 26 / 44%);
-  --prl-veil-8: rgb(16 20 26 / 6%);
-  --prl-veil-4: rgb(16 20 26 / 3%);
+  --prl-scrim: rgb(22 27 51 / 44%);
+  --prl-veil-8: rgb(22 27 51 / 6%);
+  --prl-veil-4: rgb(22 27 51 / 3%);
 
   /* See the media-query block above for why each of these inverts rather than merely
      lightening, and why the binding contrast extreme flips with the theme. */
-  --prl-wash-tint: rgb(10 98 116 / 6%);
-  --prl-wash-tint-2: rgb(28 90 134 / 4%);
+  --prl-wash-tint: rgb(43 68 212 / 6%);
+  --prl-wash-tint-2: rgb(192 38 55 / 3%);
 
   --prl-glass-floating: rgb(255 255 255 / 94%);
   --prl-glass-floating-hover: rgb(248 250 252 / 96%);
@@ -902,19 +907,19 @@
   --prl-glass-overlay: rgb(255 255 255 / 96%);
   --prl-glass-overlay-hover: rgb(248 250 252 / 97%);
 
-  --prl-elevation-1: 0 1px 2px rgb(16 20 26 / 6%), 0 2px 8px rgb(16 20 26 / 5%);
-  --prl-elevation-2: 0 2px 6px rgb(16 20 26 / 8%), 0 10px 24px rgb(16 20 26 / 8%);
-  --prl-elevation-3: 0 4px 12px rgb(16 20 26 / 10%), 0 20px 48px rgb(16 20 26 / 12%);
-  --prl-elevation-4: 0 8px 24px rgb(16 20 26 / 12%), 0 36px 80px rgb(16 20 26 / 16%);
+  --prl-elevation-1: 0 1px 2px rgb(22 27 51 / 6%), 0 2px 8px rgb(22 27 51 / 5%);
+  --prl-elevation-2: 0 2px 6px rgb(22 27 51 / 8%), 0 10px 24px rgb(22 27 51 / 8%);
+  --prl-elevation-3: 0 4px 12px rgb(22 27 51 / 10%), 0 20px 48px rgb(22 27 51 / 12%);
+  --prl-elevation-4: 0 8px 24px rgb(22 27 51 / 12%), 0 36px 80px rgb(22 27 51 / 16%);
 
-  --prl-edge: rgb(16 20 26 / 10%);
+  --prl-edge: rgb(22 27 51 / 10%);
   --prl-edge-lit: rgb(255 255 255 / 90%);
-  --prl-edge-shade: rgb(16 20 26 / 14%);
+  --prl-edge-shade: rgb(22 27 51 / 14%);
 
   --prl-focus-halo: #ffffff;
 
   --prl-card-face: #ffffff;
-  --prl-card-face-dim: #e8e6df;
+  --prl-card-face-dim: #e6e8ee;
 }
 
 :root[data-theme="dark"] {

@@ -12,6 +12,7 @@
     "test": "tsc -p test/tsconfig.json && node --test 'test/**/*.test.ts'"
   },
   "dependencies": {
+    "@fontsource-variable/archivo": "5.3.0",
     "@prl/content": "workspace:*",
     "@prl/contracts": "workspace:*",
     "@prl/poker-engine": "workspace:*",

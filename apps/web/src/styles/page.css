@@ -238,7 +238,6 @@
   font-weight: var(--prl-weight-medium);
   letter-spacing: var(--prl-tracking-label);
   text-decoration: none;
-  text-transform: uppercase;
 }
 
 .prl-page-nav a:hover {

@@ -157,7 +157,6 @@
   font-size: var(--prl-type-label);
   font-weight: var(--prl-weight-semibold);
   letter-spacing: var(--prl-tracking-label);
-  text-transform: uppercase;
 }
 
 /**
@@ -407,7 +406,6 @@
   font-size: var(--prl-type-label);
   font-weight: var(--prl-weight-medium);
   letter-spacing: var(--prl-tracking-label);
-  text-transform: uppercase;
   transition:
     background-color var(--prl-dur-fast) var(--prl-ease-material),
     color var(--prl-dur-fast) var(--prl-ease-material);
@@ -583,7 +581,6 @@
   font-size: var(--prl-type-label);
   font-weight: var(--prl-weight-semibold);
   letter-spacing: var(--prl-tracking-label);
-  text-transform: uppercase;
 }
 
 .prl-stage__glossary-row dd {

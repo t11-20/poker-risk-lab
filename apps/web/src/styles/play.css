@@ -603,7 +603,6 @@
   font-size: var(--prl-type-label);
   font-weight: var(--prl-weight-medium);
   letter-spacing: var(--prl-tracking-label);
-  text-transform: uppercase;
   cursor: pointer;
   touch-action: none;
 }
