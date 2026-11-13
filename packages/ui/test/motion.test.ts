@@ -1,42 +1,9 @@
 /**
- * Tests for the motion primitives' pure parts.
- *
- * The hooks themselves cannot be tested here — `node --test` runs no renderer in this repo, by
- * policy — so everything the hooks *decide*, and everything they *do*, was extracted into
- * modules that import no React precisely so that it could be. What is covered:
- *
- *  - the count-up's arithmetic, including the two floating-point traps (an animation that
- *    settles on 41.199999, and a NaN progress reaching the DOM);
- *  - the easing curve, checked by round-trip and by the shape the design system asks for
- *    rather than by a table of magic numbers copied from the implementation;
- *  - the reduced-motion decisions, which are the accessibility-critical part: a false positive
- *    here means a reader who asked for no motion gets motion;
- *  - **the reduced-motion preference itself, exercised rather than asserted** — see the block
- *    below;
- *  - the JS mirror of the motion tokens, asserted **against `tokens.css` itself**. That
- *    duplication is deliberate and documented, and this is what stops it drifting: change the
- *    token and forget the mirror, and this test fails.
- *
- * ## The A11Y-016 block, and what "exercised" means here
- *
- * The release audit recorded reduced motion as PARTIAL: the CSS backstop was verified in a real
- * browser, but the three JavaScript drivers "were not proven to respect `prefers-reduced-motion`".
- * They did respect it. Nothing demonstrated it — and for an accessibility guarantee that is very
- * nearly the same thing, because the way it is lost is a refactor nobody notices.
- *
- * The three tests below therefore do not check that a flag is passed along. They set the
- * preference and count the consequences, through the real code:
- *
- *  1. `createReducedMotionStore` is handed a `matchMedia` that reports `reduce`, and the store's
- *     own snapshot is read back — the real query string, the real subscription, the real answer.
- *  2. `driveCountUp` is run with that answer and a fake frame clock, and the assertion is that
- *     **zero** animation frames are requested. Not "fewer", not "the predicate said no": none.
- *  3. `watchForReveal` is run the same way with a fake browser, and the assertion is that **no
- *     `IntersectionObserver` is created** and the content is revealed at once.
- *
- * What is still not covered, stated plainly rather than papered over: the two lines where each
- * hook calls `usePrefersReducedMotion()` and hands the result to the function under test. Those
- * need a renderer this package does not have. Everything on either side of them is exercised.
+ * The motion primitives' pure parts. There is no renderer, so the hooks' decisions and effects live
+ * in React-free modules tested here.
+ * A11Y-016: the reduced-motion preference is exercised, not asserted. A faked `matchMedia` reports
+ * `reduce`, and the tests count zero animation frames and zero `IntersectionObserver`s.
+ * Not covered: the line in each hook that calls `usePrefersReducedMotion()`, which needs a renderer.
  */
 
 import assert from 'node:assert/strict';
@@ -70,8 +37,7 @@ function assertClose(actual: number, expected: number, what: string): void {
 
 describe('interpolate', () => {
   it('returns the endpoints by identity, not by arithmetic', () => {
-    // The reason this matters: `41.2 + (0 - 41.2) * 1` is not always exactly 0 in binary
-    // floating point, and a metric that settles one digit off is a visible bug.
+    // `41.2 + (0 - 41.2) * 1` is not always exactly 0 in binary floating point.
     assert.equal(interpolate(0.412, 0.489, 1), 0.489);
     assert.equal(interpolate(0.412, 0.489, 0), 0.412);
     assert.equal(interpolate(1 / 3, 2 / 3, 1), 2 / 3);
@@ -95,7 +61,6 @@ describe('interpolate', () => {
   });
 
   it('never produces NaN from a NaN progress', () => {
-    // A strange frame timestamp must not put "NaN%" on screen.
     assert.equal(interpolate(10, 20, Number.NaN), 20);
   });
 });
@@ -113,8 +78,7 @@ describe('progress', () => {
   });
 
   it('treats a zero or negative duration as already finished', () => {
-    // This is what makes `durationMs: 0` a legitimate way to ask for no animation, rather
-    // than a division by zero producing Infinity.
+    // This makes `durationMs: 0` a way to ask for no animation.
     assert.equal(progress(0, 0), 1);
     assert.equal(progress(10, -5), 1);
   });
@@ -135,9 +99,7 @@ describe('cubicBezier', () => {
   });
 
   it('is the identity when the curve is a straight line', () => {
-    // Both CSS spellings of "linear": the x and y control values are equal, so the mapping
-    // from progress to eased progress must come back unchanged. This is the strongest simple
-    // check of the solver, because a sign error or a bad derivative shows up immediately.
+    // Both CSS spellings of "linear". A sign error or a bad derivative in the solver shows up here.
     for (const ease of [cubicBezier(0, 0, 1, 1), cubicBezier(0.5, 0.5, 0.5, 0.5)]) {
       for (const t of [0.1, 0.2, 0.37, 0.5, 0.63, 0.8, 0.95]) {
         assertClose(ease(t), t, `linear curve at ${t}`);
@@ -156,8 +118,7 @@ describe('cubicBezier', () => {
   });
 
   it('has the shape the design system asks for: fast out, long settle', () => {
-    // §5: the signature curve arrives quickly and then settles. So by the halfway point most
-    // of the distance is covered, and the last tenth of the time covers almost none of it.
+    // Design system §5 asks for a curve that arrives quickly and then settles.
     assert.ok(easeStandard(0.5) > 0.7, `midpoint should be well ahead of linear: ${easeStandard(0.5)}`);
     assert.ok(easeStandard(0.9) > 0.99, `should be nearly settled by 90%: ${easeStandard(0.9)}`);
     assert.ok(easeStandard(0.1) < 0.1, `should not leap on the first frames: ${easeStandard(0.1)}`);
@@ -179,19 +140,14 @@ describe('shouldRevealImmediately', () => {
   });
 
   it('reveals at once when there is no observer to watch with', () => {
-    // The failure direction that matters: no observer must mean visible content, never content
-    // left hidden waiting for a callback that can never arrive.
+    // Fail visible. No observer must never leave content hidden.
     assert.equal(shouldRevealImmediately({ reducedMotion: false, observerAvailable: false }), true);
     assert.equal(shouldRevealImmediately({ reducedMotion: true, observerAvailable: false }), true);
   });
 
   it('reveals at once when the document is hidden', () => {
-    // Measured in Chrome, and the reason this input exists: IntersectionObserver entries are
-    // delivered from the "update the rendering" step, which a hidden document does not run.
-    // An element sitting FULLY inside the viewport of a background tab received no entry in
-    // 1.5s, and the document timeline advanced 0ms over the same window — so neither the
-    // observer nor a CSS deadline was ever going to resolve it. Nobody is looking at a hidden
-    // document, so there is no arrival to animate: resolve, and show the content.
+    // A hidden document runs no rendering step. In Chrome a background tab delivered no observer entry
+    // in 1.5s and its document timeline advanced 0ms, so neither the observer nor a CSS deadline resolves.
     assert.equal(
       shouldRevealImmediately({ reducedMotion: false, observerAvailable: true, documentHidden: true }),
       true,
@@ -207,8 +163,7 @@ describe('shouldRevealImmediately', () => {
   });
 
   it('treats an absent documentHidden as "not known to be hidden"', () => {
-    // The server cannot answer this, and guessing "hidden" there would make the server's markup
-    // disagree with the client's first render. Omitted must therefore behave exactly as `false`.
+    // The server cannot answer this, and guessing "hidden" would break hydration.
     assert.equal(
       shouldRevealImmediately({ reducedMotion: false, observerAvailable: true }),
       shouldRevealImmediately({ reducedMotion: false, observerAvailable: true, documentHidden: false }),
@@ -235,9 +190,8 @@ describe('shouldCountUp', () => {
   });
 
   it('applies the 1% floor relative to the larger end', () => {
-    // Exactly on the threshold animates; just under it does not. Relative rather than absolute
-    // so an equity in 0..1 and a pot in the hundreds behave the same way. Note the base is the
-    // LARGER end, so 99 -> 100 is exactly 1% while 100 -> 101 is a shade under it.
+    // Relative, so an equity in 0..1 and a pot in the hundreds behave alike. The base is the larger
+    // end, so 99 -> 100 is exactly on the floor and 100 -> 101 is just under it.
     assert.equal(shouldCountUp({ ...base, from: 99, to: 100 }), true);
     assert.equal(shouldCountUp({ ...base, from: 100, to: 101 }), false);
     assert.equal(shouldCountUp({ ...base, from: 99.5, to: 100 }), false);
@@ -251,8 +205,7 @@ describe('shouldCountUp', () => {
   });
 
   it('is symmetric: a figure oscillating between two values animates both ways or neither', () => {
-    // Dividing by the larger end rather than by the starting value is what buys this. Without
-    // it, a pot flicking between 100 and 101 would animate one way and jump the other.
+    // Dividing by the larger end, not the starting value, is what makes this symmetric.
     for (const [low, high] of [
       [0.4, 0.41],
       [100, 101],
@@ -278,8 +231,6 @@ describe('shouldCountUp', () => {
   });
 
   it('never animates towards or away from a figure that is not a number', () => {
-    // A missing figure renders as "not available" at once. Counting towards it would render a
-    // sequence of numbers on the way to nothing.
     for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
       assert.equal(shouldCountUp({ ...base, from: 0.4, to: bad }), false);
       assert.equal(shouldCountUp({ ...base, from: bad, to: 0.4 }), false);
@@ -293,25 +244,16 @@ describe('shouldCountUp', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// A11Y-016 — the preference, exercised
-// ---------------------------------------------------------------------------
-
 interface FakeMedia {
   readonly host: MediaQueryHost;
-  /** Every query string `matchMedia` was called with, in order. */
   readonly queries: readonly string[];
-  /** How many listeners are attached right now. */
   listenerCount(): number;
-  /** Changes the OS preference and notifies, exactly as a real change event would. */
   setMatches(next: boolean): void;
 }
 
 /**
- * A `window` that reports whatever preference the test asks for.
- *
- * `supportsEvents: false` models the `MediaQueryList` implementations too old to be an
- * `EventTarget`, which is the one case `createReducedMotionStore` has a branch for.
+ * A `window` that reports whatever preference the test asks for. `supportsEvents: false` models a
+ * `MediaQueryList` too old to be an `EventTarget`, the one case `createReducedMotionStore` branches on.
  */
 function fakeMediaHost(options: { matches: boolean; supportsEvents?: boolean }): FakeMedia {
   const queries: string[] = [];
@@ -354,8 +296,6 @@ function fakeMediaHost(options: { matches: boolean; supportsEvents?: boolean }):
 
 describe('createReducedMotionStore — the preference is actually read', () => {
   it('reports true when the OS says reduce, through the query the stylesheet uses', () => {
-    // The whole accessibility guarantee starts here. If this returns the wrong boolean, every
-    // careful decision downstream is carefully wrong.
     const media = fakeMediaHost({ matches: true });
     const store = createReducedMotionStore(media.host);
 
@@ -397,16 +337,14 @@ describe('createReducedMotionStore — the preference is actually read', () => {
   });
 
   it('answers false, and subscribes to nothing, where there is no matchMedia', () => {
-    // The server, and any environment without a DOM. False is the safe guess: the client's first
-    // render corrects it before paint, and guessing true would render every reveal as
-    // already-arrived and then take it away again on hydration.
+    // False is the safe guess on the server. The client's first render corrects it before paint, while
+    // true would show every reveal as arrived and take it away on hydration.
     const store = createReducedMotionStore(undefined);
     assert.equal(store.getSnapshot(), false);
     assert.doesNotThrow(() => store.subscribe(() => undefined)());
   });
 
   it('still reads the preference from a MediaQueryList too old to be an EventTarget', () => {
-    // The snapshot is the part that must not be lost. Only the change notification is.
     const media = fakeMediaHost({ matches: true, supportsEvents: false });
     const store = createReducedMotionStore(media.host);
     assert.equal(store.getSnapshot(), true);
@@ -416,10 +354,8 @@ describe('createReducedMotionStore — the preference is actually read', () => {
 
 interface FakeClock {
   readonly clock: FrameClock;
-  /** Total frames requested since the driver started. */
   requested(): number;
   cancelled(): number;
-  /** Runs the pending frame callback with this timestamp. Does nothing if none is pending. */
   advance(now: number): void;
 }
 
@@ -457,10 +393,7 @@ describe('driveCountUp — reduced motion means no animation at all', () => {
   const base = { from: 0.412, to: 0.489, durationMs: COUNT_DURATION_MS };
 
   it('requests zero animation frames when the reader asked for reduced motion', () => {
-    // The requirement, stated as the reader would state it: "I asked for no motion, so do not
-    // animate this number." Counting frames is the only way to say that and mean it — a test
-    // that checked `shouldCountUp` returned false would pass just as happily against a driver
-    // that ignored the answer.
+    // Counts frames, because checking `shouldCountUp` would pass a driver that ignored the answer.
     const clock = fakeClock();
     const seen: number[] = [];
 
@@ -472,8 +405,7 @@ describe('driveCountUp — reduced motion means no animation at all', () => {
   });
 
   it('animates the same change when motion is allowed, so the guard is doing the work', () => {
-    // The contrast is the point. Without it, a driver that never animated anything at all would
-    // pass the test above and look like a fix.
+    // The control. A driver that never animated would pass the test above.
     const clock = fakeClock();
     const seen: number[] = [];
     driveCountUp({ ...base, reducedMotion: false }, clock.clock, (value) => seen.push(value));
@@ -515,11 +447,8 @@ describe('driveCountUp — reduced motion means no animation at all', () => {
 
 interface FakeBrowser {
   readonly host: RevealHost;
-  /** How many times an observer was created. Under reduced motion this must stay zero. */
   observeCalls(): number;
-  /** Delivers the "it is in view now" callback. */
   intersect(): void;
-  /** Backgrounds or foregrounds the tab, firing the visibility listener. */
   setHidden(next: boolean): void;
   visibilityListeners(): number;
   disconnects(): number;
@@ -561,11 +490,7 @@ function fakeBrowser(options: { hidden?: boolean } = {}): FakeBrowser {
   };
 }
 
-/**
- * `watchForReveal` takes an `Element` only to hand it straight back to the host, so the tests
- * pass a token rather than a DOM node — there is no DOM here, and inventing one would be
- * testing the stand-in rather than the watcher.
- */
+/** `watchForReveal` only hands the `Element` back to the host, so a token stands in for a DOM node. */
 const TARGET = { nodeName: 'DIV' } as unknown as Element;
 
 describe('watchForReveal — reduced motion means no observer', () => {
@@ -599,8 +524,7 @@ describe('watchForReveal — reduced motion means no observer', () => {
   });
 
   it('reveals without observing when the document is hidden', () => {
-    // A hidden document runs no rendering step, so an observer would never fire and the element
-    // would stay at opacity 0 forever. That is "I opened it in a new tab and the page was blank".
+    // An observer never fires in a hidden document, so the element would stay at opacity 0.
     const browser = fakeBrowser({ hidden: true });
     let revealed = 0;
     watchForReveal({ ...base, reducedMotion: false }, browser.host, () => {
@@ -647,8 +571,7 @@ describe('the JS mirror of the motion tokens', () => {
   const css = readFileSync(new URL('../src/styles/tokens.css', import.meta.url), 'utf8');
 
   it('matches --prl-dur-count in tokens.css', () => {
-    // The first match is the `:root` value; the 1ms later in the file is the reduced-motion
-    // collapse, which is CSS's own business.
+    // The first match is the `:root` value. The later 1ms is the reduced-motion collapse.
     const found = /--prl-dur-count:\s*(\d+)ms;/.exec(css);
     assert.ok(found !== null, '--prl-dur-count not found in tokens.css');
     assert.equal(Number(found[1]), COUNT_DURATION_MS);

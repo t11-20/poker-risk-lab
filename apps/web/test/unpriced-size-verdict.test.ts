@@ -1,18 +1,7 @@
 /**
- * A size the analysis never priced must not be reported as a disagreement.
- *
- * ## The failure this is written against
- *
- * `@prl/poker-math` states the hazard in its own source: "A caller that renders the boolean without
- * reading `pricing` will tell somebody their decision disagreed with an analysis that never looked
- * at it." `apps/web/src/lib/consistency.ts` did not carry `pricing` at all, so `ScenarioStage` had
- * a two-state chip and everything that was not `consistent` became "not the line the analysis leans
- * towards".
- *
- * It is reachable by ordinary use, not by a contrived input. The Coach prices discrete rungs; the
- * ActionBar exposes a continuous range and clamps to it. So a panel reading "Raise — 51 to 95
- * units" accepts 70, prices neither 70 nor anything strictly between the ends, and told the learner
- * their decision disagreed with an analysis that had no opinion about it.
+ * A size the analysis never priced must not be reported as a disagreement. The Coach prices discrete
+ * rungs and the ActionBar a continuous range, so an ordinary raise between rungs reaches an analysis
+ * that has no opinion about it, and `pricing` must be read, not just the boolean.
  */
 
 import assert from 'node:assert/strict';
@@ -36,7 +25,6 @@ describe('an unpriced size is reported as unpriced', () => {
         .map((candidate) => candidate.to as number)
         .sort((a, b) => a - b);
       if (raises.length < 2) continue;
-      // A total strictly between the lowest and highest priced rung that is not itself a rung.
       const priced = new Set(raises);
       const lowest = raises[0] as number;
       const highest = raises[raises.length - 1] as number;
@@ -67,14 +55,9 @@ describe('an unpriced size is reported as unpriced', () => {
   });
 
   it('the component reads pricing rather than only the boolean (REGRESSION)', () => {
-    // A source assertion, because the alternative is rendering React here for one branch. What must
-    // be true is that the unpriced case is DISTINGUISHED before the consistent/not-consistent chip
-    // is chosen — the defect was a component that never asked.
     const stage = readFileSync(join(SRC, 'components', 'ScenarioStage.tsx'), 'utf8');
-    // Pinned to the CHIP branch specifically. An earlier version matched the bare condition
-    // `judgement.pricing !== 'priced'`, which appears twice — once here and once in the note
-    // beneath — so disabling the chip branch left the note's copy and the guard passed over the
-    // very defect it was written for. Its own negative control is what caught that.
+    // Pinned to the CHIP branch. `judgement.pricing !== 'priced'` also appears in the note beneath, and an
+    // earlier bare match passed with the chip branch disabled.
     assert.match(
       stage,
       /judgement\.pricing !== 'priced' \? \(\s*<Chip tone="info"/u,
@@ -89,9 +72,8 @@ describe('an unpriced size is reported as unpriced', () => {
 });
 
 describe('an unpriced size names the priced sizes nearest it', () => {
-  // "This analysis did not price that size" was the whole message, which left the reader nowhere to
-  // go. Only a typed or dragged total reaches it now — every preset and the default are priced, see
-  // `lab-sizes-priced.test.ts` — and the reply names the priced sizes either side.
+  // Every preset and the default are priced (`lab-sizes-priced.test.ts`), so only a typed or dragged total
+  // reaches this.
   it('carries the neighbours on the judgement and says them in units (REGRESSION)', () => {
     let checked = 0;
     for (const scenario of LAB_SCENARIOS) {
@@ -115,7 +97,6 @@ describe('an unpriced size names the priced sizes nearest it', () => {
         assert.match(sentence, new RegExp(`${action} to ${low} units and ${action} to ${high} units`, 'u'));
         checked += 1;
       }
-      // A priced size and an unsized action carry no neighbours.
       const best = report.candidates.find((candidate) => candidate.to !== undefined);
       if (best !== undefined) {
         assert.equal(judgeConsistency(report, best.action, best.to, scenario.bigBlind).nearestPriced, null);

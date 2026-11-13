@@ -1,34 +1,6 @@
 /**
  * `/learn` must not warn a reader off a lesson that works, or claim to know what they have read.
- *
- * ## Two false statements on one screen, both about the reader
- *
- * **Nine of seventeen cards said the lesson was unavailable while the API was serving it.**
- * `READABLE_LESSON_IDS` is derived from the bundled fixture, which carries eight of the seventeen
- * lesson BODIES, and it was passed to `buildCurriculum` unconditionally. So on a healthy deployment
- * nine cards carried "this lesson's text comes from the content service, which is not reachable" —
- * about a service that had just answered the request that drew the page. Clicking straight through
- * rendered the complete lesson. The index was reporting fixture coverage in the words of service
- * availability, on more than half the curriculum.
- *
- * **Sixteen of seventeen cards claimed the reader had not read their prerequisites.**
- * `loadLessonList()` forwards no session, so the API's per-reader `completed` comes back `false` for
- * everybody. `buildCurriculum` took that at face value, printed "N of those are not marked read",
- * and picked a "start here" from the same non-answer. Every one of those sentences was a statement
- * about a reader nobody had looked up.
- *
- * ## The resolution, and why the second half is a copy change rather than a cookie
- *
- * The index is the most cacheable screen in the product — seventeen summaries, identical for every
- * reader — and forwarding a session to personalise one chip per card would turn it into a per-reader
- * dynamic render. That trade is defensible; making per-reader claims while taking it is not. So the
- * screen keeps the trade and stops making the claims, and says once, in the lead, where reading
- * actually is recorded.
- *
- * The last test here is what keeps that decision honest over time: it reads `learn-data.ts` and
- * `app/learn/page.tsx` together, and fails the moment somebody makes the loader per-reader without
- * telling the index it may now speak about the reader. The failure is directional — it names which
- * flag to flip — because the alternative is a screen that silently goes back to guessing.
+ * `READABLE_LESSON_IDS` describes the offline bundle only, and without a session `completed` is false.
  */
 
 import assert from 'node:assert/strict';
@@ -95,21 +67,17 @@ describe('with completion unknown, the index makes no claim about the reader', (
   it('suggests the first lesson in the syllabus, and says so through completionKnown', () => {
     assert.equal(curriculum.startHere?.summary.id, 'one');
     assert.equal(curriculum.startHere?.position, 1);
-    // The screen branches on this to word the panel: "where the syllabus starts" rather than
-    // "the earliest lesson you have not marked read".
+    // The screen words the panel from this, as "where the syllabus starts" rather than "not yet read".
     assert.equal(curriculum.completionKnown, false);
   });
 
   it('still leaves every lesson readable when no fixture coverage was declared', () => {
-    // `readableIds` describes the OFFLINE bundle. Omitted, nothing is marked unreadable, which is
-    // the correct state for an index that came from a live API.
+    // `readableIds` describes the OFFLINE bundle. Omitted, nothing is marked unreadable.
     for (const entry of curriculum.entries) assert.equal(entry.readable, true);
   });
 });
 
 describe('with completion known, the index still says everything it used to', () => {
-  // The fix must not be a blanket silencing: for a caller that HAS identified the reader, all the
-  // original behaviour is still correct and still wanted.
   const summaries = [
     lesson('one', { completed: true }),
     lesson('two', { prerequisites: ['one' as ContentId], completed: false }),
@@ -156,7 +124,6 @@ describe('the fixture-coverage note only appears when the index IS the fixture',
   });
 
   it('no longer blames the content service for a gap in the bundle', () => {
-    // The old sentence named the wrong subject: the service was reachable, the BUNDLE was short.
     assert.doesNotMatch(
       page,
       /text comes from the content service, which is not reachable/u,
@@ -171,7 +138,6 @@ describe('the index and its loader cannot drift apart', () => {
   const page = read('app', 'learn', 'page.tsx');
   const loader = read('lib', 'learn-data.ts');
 
-  /** `loadLessonList`'s body, which is where a session would have to be forwarded. */
   const loadLessonList = /export async function loadLessonList\(\)[\s\S]*?\n\}/u.exec(loader)?.[0] ?? '';
 
   it('finds the loader, so this check cannot pass by failing to look', () => {
@@ -184,8 +150,7 @@ describe('the index and its loader cannot drift apart', () => {
   });
 
   it('claims completion is known if and only if the loader identifies the reader', () => {
-    // `readerCallOptions()` is the one supported way a server render carries the reader's session
-    // (src/lib/server-session.ts). Its presence is what would make `completed` mean something.
+    // `readerCallOptions()` (src/lib/server-session.ts) is how a server render carries the reader's session.
     const perReader = /readerCallOptions|cookie:/u.test(loadLessonList);
     const hardcodedUnknown = /completionKnown:\s*false/u.test(page);
     const usesCookie = /reader\.cookie|readerCallOptions/u.test(page);
@@ -203,8 +168,7 @@ describe('the index and its loader cannot drift apart', () => {
   });
 
   it('tells the reader what the index does not know, rather than saying nothing', () => {
-    // Deleting the claims would be the other way to pass this file, and it would leave a reader
-    // wondering why nothing is ever ticked. The screen has to account for it.
+    // Deleting the claims would also pass this file, and leave a reader wondering why nothing is ticked.
     assert.match(page, /it does not know which lessons you have already\s*\n?\s*finished/u);
     assert.match(page, /your record/u);
   });

@@ -1,75 +1,23 @@
 /**
- * The Review section's own rules: the history table, the decision timeline, the replay stage and
- * the commitment verifier.
- *
- * Same boundaries and the same rules as `lab.css` — every value is a `--prl-*` token, elevation is
- * spent only through `--prl-elevation-*`, a glass fill never appears without its blur in the same
- * block, meaningful borders use `--prl-line-strong` or the accent, and only `transform`, `opacity`
- * and colour animate. Every class is prefixed `prl-review-`, `prl-timeline-`, `prl-replay-` or
- * `prl-verifier-`, so nothing here can collide with a `@prl/ui` block.
- *
- * The three interesting problems in this file are all about the scrubber, so they are worth naming
- * up front:
- *
- *  1. **The spine has to be a line behind the markers, drawn without a wrapper element.** It is a
- *     `::before` on the marker row with a token hairline, positioned at the markers' vertical
- *     centre. A separate element would need the same width as the row and would sit in the
- *     accessibility tree for no reason.
- *  2. **A marker's state must survive the stylesheet being thrown away.** `data-viewer`,
- *     `data-analysis` and `aria-current` change the fill, the border and the ink — but each state
- *     also has a glyph and a sentence in the markup, so forced-colors mode and a text browser both
- *     still read correctly.
- *  3. **The transport is the control this page turns on, and it used to scroll away.** A hand runs
- *     to eleven steps and the table below it is a full screen tall, so by the third decision the
- *     Previous/Next pair and the step counter were off the top of the viewport and the only way to
- *     scrub was the arrow keys — which the instructions describe and which a pointer user has no
- *     reason to have read. It is now a sticky level-3 pane: the ONE surface in this file that
- *     genuinely travels over content, and therefore the one that takes glass.
+ * The Review section: history table, decision timeline, replay stage and commitment verifier. Every
+ * marker state also has a glyph and a sentence in the markup, so it survives forced colors.
  */
 
-/* ==========================================================================================
-   0. THE PAGE OPENER, ON THIS ROUTE ONLY
-   ==========================================================================================
-   `.prl-page-head` lives in `page.css` because the Lab and Review screens share it, and a route that
-   edited a shared file to change its own rhythm is how a shared file stops being shareable. So both
-   Review pages carry `.prl-review-page` and the layout below is scoped to it.
-
-   ## What it fixes
-
-   `base.css` caps every `<p>` at `--prl-measure`, which is right — past about 75 characters the eye
-   loses the start of the next line on the return sweep. The consequence in a one-column page is a
-   1360px row holding a 642px paragraph and 718px of nothing, on every screen in the app. Measured on
-   `/review` at 1440x900: the opener was 1360px wide and every word in it sat inside the leftmost
-   690px.
-
-   The measure is not the problem and it does not change here. What changes is that the capped column
-   is put where the space already was — which also takes about 90px off the height above the table, on
-   a screen whose whole purpose is the table below it.
-
-   Same rule, same breakpoint and the same reasoning as `play.css` section 1 and `legends.css`
-   section 1, deliberately: three routes inventing three opening rhythms is how one product starts
-   looking like three.
-   ========================================================================================== */
+/* 0. Page opener, scoped to `.prl-review-page` so the shared `page.css` stays shared. The capped
+   standfirst moves into the empty half of the row, which also saves ~90px above the table. */
 
 .prl-review-page .prl-page-head__standfirst {
   font-size: var(--prl-type-body-lg);
 }
 
 /**
- * `span 6` and the margin standing in for the row gap are both deliberate, and the reasoning is
- * written out once in `legends.css` section 1 rather than three times. Short version: a grid that
- * declares no explicit rows has one explicit row line, so `grid-row: 1 / -1` means `1 / 2` and the
- * standfirst stretches the eyebrow's row instead of sitting beside the whole block. Spanning past the
- * end of the content spans all of it and stretches none of it; the row gap then has to become a
- * margin, because a gap is charged for the empty rows and a margin is not.
- *
- * `--prl-space-5` is `.prl-page-head`'s own gap in `page.css`. The two are a pair.
+ * `grid-row: 1 / -1` means `1 / 2` in a grid with no explicit rows, so the standfirst spans 6 rows and
+ * the row gap becomes a margin, because a gap is charged for empty rows. `--prl-space-5` matches
+ * `.prl-page-head`'s gap in `page.css`. The full reasoning is in `legends.css` section 1.
  */
 @media (min-width: 900px) {
-  /* `:has()` because `/review/[handId]` has no standfirst — its opener is a crumb, the hand number
-     and four figures — and an empty second track would still claim its width and crush the first.
-     Two equal halves rather than a fixed measure track, so the split scales with the viewport instead
-     of leaving 138px for the title at 900px. Both points are worked through in `legends.css`. */
+  /* `:has()` because `/review/[handId]` has no standfirst, and an empty second track would still
+     claim its width. Equal halves scale with the viewport, where a fixed track left 138px at 900. */
   .prl-review-page .prl-page-head:has(> .prl-page-head__standfirst) {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     column-gap: var(--prl-space-11);
@@ -94,13 +42,7 @@
   }
 }
 
-/* ==========================================================================================
-   1. THE HISTORY TABLE
-   ==========================================================================================
-   Dense on purpose: a hand history is a list you scan for an outlier, and generous row padding
-   makes that scan longer. Tabular numerals in every numeric column, so a column of pots and nets
-   aligns without manual padding.
-   ========================================================================================== */
+/* 1. History table. Dense on purpose, with tabular numerals in every numeric column. */
 
 .prl-review-sorts {
   display: flex;
@@ -144,14 +86,7 @@
   color: var(--prl-accent-text);
 }
 
-/**
- * The active ordering: an accent fill with `--prl-text-on-accent`, never white.
- * ink-900 on accent-500 measures 9.39:1; white on it measures 2.07:1 and is a hard fail. The token
- * flips with the theme, which is the whole reason it exists.
- *
- * `aria-current` is also on the element, so the state is in the accessibility tree and not only in
- * the paint.
- */
+/** `--prl-text-on-accent`, never white. Ink-900 on accent-500 is 9.39:1, white on it is 2.07:1. */
 .prl-review-sorts__link[aria-current] {
   border-color: var(--prl-accent-edge);
   background-color: var(--prl-accent-fill);
@@ -159,16 +94,9 @@
 }
 
 /**
- * The narrow form of the same control: a `<select>` and a submit, in one row.
- *
- * Measured at 360x640 on the fixture history before this existed: the five links wrapped to five
- * rows, the control was 247px tall, and the first hand began at y=931 — below the fold of a 640px
- * screen whose whole purpose is the list of hands. `.prl-select` and `.prl-btn` are `@prl/ui`'s, so
- * the box, its dark-mode fill and its focus ring are the ones `design:contrast` and `test:keyboard`
- * already measure on the Lab's filters.
- *
- * Each form is `display: none` at the widths where the other is shown, which removes it from the
- * tab order and the accessibility tree as well as from sight — one ordering control at a time.
+ * The narrow form, a `<select>` and a submit in one row. The five links wrapped to 247px at 360x640
+ * and pushed the first hand below the fold. Each form is `display: none` where the other shows, which
+ * also takes it out of the tab order and the accessibility tree.
  */
 .prl-review-sorts__form {
   display: none;
@@ -183,13 +111,8 @@
 }
 
 /**
- * The submit keeps its own width; the select is the one that gives.
- *
- * `.prl-btn` sets an explicit `min-width`, and an explicit `min-width` on a flex item replaces the
- * automatic min-content floor, so with the default `flex-shrink: 1` the button shrank alongside the
- * select's long option text. `test:layout` caught it in CI run 43044654587, at 360px in both themes:
- * "the column is 16.02px and the word "Sort" needs 29.34px". The select already has `min-width: 0`
- * and ellipsises an option; a button word cut in half is just wrong.
+ * `.prl-btn`'s explicit `min-width` replaces the min-content floor, so with `flex-shrink: 1` the button
+ * shrank to 16px at 360 and cut "Sort" (`test:layout`). The select gives instead.
  */
 .prl-review-sorts__form .prl-btn {
   flex: none;
@@ -211,14 +134,9 @@
 }
 
 /**
- * The scroll container. A table's columns cannot wrap, so from 1024px up — where the rows are a
- * table again (section 1b) — anything that makes the six columns wider than the window (a larger
- * text size, a longer timestamp) makes this scroll sideways. axe's `scrollable-region-focusable`
- * (WCAG 2.1.1) requires a scrollable region with no focusable content to be reachable by keyboard,
- * so `ScrollRegion` makes it a tab stop exactly while `scrollWidth > clientWidth`, and not otherwise.
- * Below 1024px the cards never scroll, and a stop that stayed anyway cost `test:keyboard` its 360x640
- * sticky-bar walk: the region is 1,549px tall there, and focusing it backwards left its top at
- * y=-134 with 263px of it behind a bar ending at 129.
+ * From 1024px the table can scroll sideways, so `ScrollRegion` makes this a tab stop exactly while
+ * `scrollWidth > clientWidth` (axe `scrollable-region-focusable`, WCAG 2.1.1). A permanent stop broke
+ * the `test:keyboard` sticky-bar walk at 360x640, where the 1,549px region scrolled under the bar.
  */
 .prl-review-scroll {
   overflow-x: auto;
@@ -252,7 +170,6 @@
   vertical-align: middle;
 }
 
-/* The header row's rule is the axis of the table, so it carries meaning and takes the strong line. */
 .prl-review-table thead th {
   border-block-end: var(--prl-hairline-strong);
   color: var(--prl-text-muted);
@@ -268,22 +185,10 @@
 }
 
 /**
- * THE ROW IS THE TARGET.
- *
- * The audit at 308fadf measured the only way into a hand as its number — a 10px-wide link on a
- * one-digit hand, 21px on a two-digit one, at every width — while the row around it took a hover
- * background that promised the whole row would open. It did nothing: a tap at 70% across the first
- * row at 1440 landed on the net figure's `<span>`.
- *
- * The link's own `::after` is stretched over the row, so the whole row opens the hand and there is
- * still ONE link per row for a screen reader — the stretched-link pattern, rather than a click
- * handler on the `<tr>` (no keyboard path, and a row that is clickable without being a link). The
- * `<tr>` is the containing block: `position: relative` on a table row is honoured by Chrome's table
- * layout, measured with `elementFromPoint` at 10%, 40%, 70% and 95% across the first row at 1440 —
- * all four land on the link. Below 1024px the row is a grid box (section 1b), where it is a
- * containing block in every engine.
- *
- * The hover background stays, because it is now true.
+ * The row is the target. The link's `::after` is stretched over the row, so there is still one link
+ * per row for a screen reader and no click handler on the `<tr>`. Chrome honours `position: relative`
+ * on a table row (`elementFromPoint` at 10, 40, 70 and 95 percent across the row at 1440 all hit the
+ * link). Below 1024px the row is a grid box.
  */
 .prl-review-table tbody tr {
   position: relative;
@@ -294,15 +199,13 @@
   background-color: var(--prl-surface-hover);
 }
 
-/* The caret is on the link, but the thing it opens is the row, so the row says so too. Ink and
-   background only: the link keeps its own focus ring, which is what `test:keyboard` measures. */
+/* The row says the link has focus too. Ink and background only, the link keeps its own ring. */
 .prl-review-table tbody tr:has(.prl-review-table__link:focus-visible) {
   background-color: var(--prl-surface-hover);
 }
 
-/* `--prl-z-raised` because `.prl-card` is `position: relative` and comes later in the row, so at
-   `z-index: auto` the board cards painted over this layer and a tap on a card opened nothing —
-   measured with `elementFromPoint` at 40% across the first row at 1440, which found `.prl-card__face`. */
+/* `--prl-z-raised`, because `.prl-card` is `position: relative` and later in the row, so at
+   `z-index: auto` the board cards painted over the link and a tap on a card opened nothing. */
 .prl-review-table__link::after {
   content: "";
   position: absolute;
@@ -311,44 +214,29 @@
 }
 
 /**
- * EVERY NUMERIC COLUMN IS `--prl-numeric` AND END-ALIGNED.
- *
- * These four rules used to say `tabular-nums` and leave it there. The token says
- * `tabular-nums lining-nums`, and the second half is the one that gets forgotten: several faces in
- * `--prl-font-sans` default to OLD-STYLE figures in a lowercase run, which puts a descending `4`
- * and a short `1` in the middle of a pot. Restating the guarantee means restating all of it.
- *
- * End-alignment is the other half of "numerals align in columns". Tabular figures make every digit
- * the same width; start-aligned, a 3-digit pot and a 5-digit pot still have their units digits two
- * characters apart, and scanning a column of pots for an outlier is exactly the task this table
- * exists for. The headers move with their cells so the label sits over the column it names.
+ * Numeric columns take all of `--prl-numeric` (some sans faces default to old-style figures) and
+ * end-align with their headers, so a column of pots can be scanned for an outlier.
  */
 .prl-review-table__hand {
   font-variant-numeric: var(--prl-numeric);
   font-weight: var(--prl-weight-semibold);
 }
 
-/* `a.` and `td.` rather than a bare class, for the reason the `.prl-review-table__pot` block below
-   spells out at length: this table styles its own cells through type selectors, and a bare class is
-   (0,1,0) against their (0,1,1). Both of these happen to sit on an element no cell rule can match
-   today, so nothing renders differently — the qualification is what stops that being luck the next
-   time a `.prl-review-table <type>` rule takes a property one of them declares. */
+/* Qualified with `a.` and `td.` because cell rules here use type selectors at (0,1,1), and a bare
+   class at (0,1,0) loses to them. See `.prl-review-table__pot` below. */
 a.prl-review-table__link {
   display: inline-flex;
   align-items: center;
   min-height: var(--prl-target-min);
   color: var(--prl-accent-text);
-  /* Body size and underlined, because it is now a sentence that is a link ("Replay hand 42") rather
-     than a figure. At `metric-sm` with metric tracking it read as a number in a column, which is
-     exactly how a reader came to see it as data rather than as the way in. */
+  /* Body size and underlined, because it reads as a sentence ("Replay hand 42"), not a figure. */
   font-size: var(--prl-type-body);
   font-variant-numeric: var(--prl-numeric);
   font-weight: var(--prl-weight-semibold);
   white-space: nowrap;
 }
 
-/* `base.css`'s own hover cue for a link — the underline getting heavier — given to the row, since
-   hovering anywhere on the row is now hovering the link. Same value, so it is the same cue. */
+/* `base.css`'s link hover cue, given to the row, since hovering the row is hovering the link. */
 .prl-review-table tbody tr:hover .prl-review-table__link {
   text-decoration-thickness: 0.12em;
 }
@@ -360,20 +248,8 @@ td.prl-review-table__when {
 }
 
 /**
- * `.prl-review-table td.prl-review-table__pot`, and the extra `td` is not noise.
- *
- * `.prl-review-table th, .prl-review-table td { text-align: start }` is (0,2,1) and appears above
- * this block. A bare `.prl-review-table__pot` is (0,1,0) and loses to it, silently — measured on
- * `/review` at 1440x900, the pot column rendered start-aligned with `text-align: end` declared and
- * inert. `.prl-legend-table__figure` in `legends.css` had exactly the same defect, in a file that
- * had carried the declaration since it was written; both are fixed the same way.
- *
- * What end-alignment buys and what it does not: `formatUnits` renders "1,520 units", so the string
- * ends in a word and it is the WORD that lands on the column edge, not the units digit. That is
- * still worth having — a firm right edge is what separates the numeric half of the table from the
- * text half, and `--prl-numeric` keeps the digits themselves from shifting as a value changes. A
- * true units-digit column would need the unit in its own cell, which is a markup change and a
- * different piece of work.
+ * The extra `td` is not noise. `.prl-review-table th, .prl-review-table td` is (0,2,1), and a bare
+ * `.prl-review-table__pot` at (0,1,0) lost to it silently, so the column rendered start-aligned.
  */
 .prl-review-table td.prl-review-table__pot,
 .prl-review-table th.prl-review-table__pot {
@@ -392,11 +268,7 @@ td.prl-review-table__when {
   color: var(--prl-text-muted);
 }
 
-/**
- * The net cell. Four independent signals, and the colour is the fourth: the digits carry an
- * explicit `+`/`-`, the unit word is in the string, the word "gained"/"lost"/"broke even" sits beside it,
- * and only then does `data-sign` change the ink. Remove the stylesheet and the column still reads.
- */
+/** The colour is the fourth signal after the sign, the unit word and the gained/lost word. */
 .prl-review-net {
   display: inline-flex;
   flex-wrap: wrap;
@@ -430,48 +302,17 @@ td.prl-review-table__when {
   letter-spacing: var(--prl-tracking-label);
 }
 
-/* The column names printed inside the cells exist for the card layout below and nowhere else.
-   `span.` for the reason `a.prl-review-table__link` gives: bare, the label's colour lost to
-   `.prl-review-table caption` (0,1,1), which `layout-guarantees.test.ts` caught on this change. */
+/* Column names in the cells exist only for the card layout below. `span.` because bare, the
+   label's colour lost to `.prl-review-table caption` (0,1,1) (`layout-guarantees.test.ts`). */
 span.prl-review-table__cell-label {
   display: none;
 }
 
-/* ==========================================================================================
-   1b. THE SAME TABLE, AS CARDS, BELOW 1024px
-   ==========================================================================================
-   Measured on the fixture history before this section existed: at 360x640 an 852px table in a
-   328px scroller, "Net to you" starting at x=616 and "Ending" at x=745 — the two columns a reader
-   opens this page for were the two they had to scroll sideways to find, and nothing on screen said
-   they were there. It is not only a phone: the six columns need about 930px, so at 768 the table
-   was 928px in a 707px scroller and at 900 it was 928px in 828px. From 1024 up it fits (942px in
-   944px at 1024), which is where the breakpoint is.
-
-   ## Why the rows can change `display` here, when this file used to say they could not
-
-   The old comment said `display: block` on the rows "strips the table role from the accessibility
-   tree in every current browser". Measured in Chrome 157 (CDP `Accessibility.getFullAXTree` on
-   this page at 360, with exactly these rules applied): `table`, a header `row` with all six
-   `columnheader`s, then one `row` per hand holding a `rowheader` (its link) and five `cell`s. The
-   engine keeps a table's semantics from its elements rather than from its boxes. Two details are
-   load-bearing:
-
-   - The header row is VISUALLY hidden, not `display: none`. With `display: none` the same probe
-     found no `columnheader` at all, which leaves a cell announced as a bare "1,520 units".
-   - Each card prints its own column names (`.prl-review-table__cell-label`), `aria-hidden`,
-     because the header row a sighted reader relied on is the thing that was hidden.
-
-   Not measured, and which way it fails: an engine that still flattens a re-displayed table
-   (WebKit used to) would expose each card as a run of text with ONE link in it — "Replay hand
-   42" — which is still the way in, once per hand, in reading order. It loses column navigation,
-   not the content or the control.
-
-   ## The order on the card
-
-   Net to you first, then the board, then when and the pot, then the link — the order a reader
-   asks the questions in. It is a visual reordering of the grid only; the DOM, and so the reading
-   order and the single tab stop per row, is the table's own.
-   ========================================================================================== */
+/* 1b. Below 1024px the table is cards, because its six columns need ~930px and the net column
+   started off screen at 360. Chrome 157 keeps the table roles with these rows re-displayed
+   (`Accessibility.getFullAXTree` at 360). The header row is visually hidden, not `display: none`,
+   which dropped every `columnheader`. Each card prints its own `aria-hidden` column names. The card
+   reorders the grid only, so DOM, reading and tab order stay the table's own. */
 
 @media (width < 1024px) {
   .prl-review-table,
@@ -479,7 +320,6 @@ span.prl-review-table__cell-label {
     display: block;
   }
 
-  /* One card per hand: one column on a phone, two at 768, three at 900. */
   .prl-review-table tbody {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(min(100%, calc(2 * var(--prl-space-15))), 1fr));
@@ -487,8 +327,7 @@ span.prl-review-table__cell-label {
     padding: var(--prl-space-5);
   }
 
-  /* The visually-hidden technique from `base.css`, restated rather than added as a class in the
-     markup, because it is only hidden at these widths. */
+  /* Visually hidden only at these widths, so the `base.css` technique is restated here. */
   .prl-review-table thead {
     position: absolute;
     width: 1px;
@@ -530,8 +369,7 @@ span.prl-review-table__cell-label {
 
   .prl-review-table tbody td.prl-review-table__when {
     grid-area: when;
-    /* Wraps here rather than painting past its own box: "11 Nov 2026, 13:37 UTC" is wider than its
-       track on the narrowest phones, and `test:layout` reports glyphs outside their box. */
+    /* Wraps, because "11 Nov 2026, 13:37 UTC" is wider than its track on the narrowest phones. */
     white-space: normal;
   }
 
@@ -561,7 +399,6 @@ span.prl-review-table__cell-label {
     letter-spacing: var(--prl-tracking-label);
   }
 
-  /* The net is the card's headline, so it is set larger, with its label on a line of its own. */
   .prl-review-table__net .prl-review-table__cell-label {
     display: block;
     margin-block-end: var(--prl-space-2);
@@ -587,20 +424,11 @@ span.prl-review-table__cell-label {
   letter-spacing: var(--prl-tracking-label);
 }
 
-/* ==========================================================================================
-   2. THE REPLAY HEADER
-   ========================================================================================== */
+/* 2. Replay header */
 
 /**
- * The four figures under the `h1`, as a grouped readout rather than four loose stacks.
- *
- * L1 — a well that collects related rows, hairline, NO elevation. That is the level's whole job
- * and it is the right one here: these four numbers are part of the page header, not an object
- * lying on it, and giving them a shadow would put the hand's summary in front of the hand.
- *
- * The separators are `border-inline-start` on each item after the first rather than a gap, because
- * a gap says "four things" and a rule says "one readout with four fields" — which is what a pot, a
- * net, an ending and a decision count are.
+ * Material level 1 with no elevation, because the figures are part of the header. Rules between them,
+ * not gaps, make one readout with four fields.
  */
 .prl-review-summary {
   display: flex;
@@ -632,14 +460,7 @@ span.prl-review-table__cell-label {
   border-inline-start: var(--prl-hairline);
 }
 
-/**
- * The four figures under the `h1`: the pot, the net, how it ended, how many decisions.
- *
- * `metric-md` rather than `metric-sm`. These are the headline of the hand — the first thing a reader
- * came to this page to know — and at 18px they were two points larger than the body text beside them,
- * which is not a hierarchy anybody can see. The replay's own step metrics further down the page are
- * already `md`, and it read as though the summary were the smaller fact. It is not.
- */
+/** `metric-md`, because the hand's headline figures at 18px were barely above the body text. */
 .prl-review-summary__value {
   color: var(--prl-text);
   font-size: var(--prl-type-metric-md);
@@ -649,20 +470,9 @@ span.prl-review-table__cell-label {
   line-height: var(--prl-leading-tight);
 }
 
-/* ==========================================================================================
-   3. THE DECISION TIMELINE
-   ==========================================================================================
-   A horizontal spine of street blocks, each holding its own markers. It wraps to a vertical stack
-   on a narrow screen, which is why both arrow axes are bound in the component: a reader whose key
-   depends on the viewport width is a reader who has to look before they press.
-   ========================================================================================== */
+/* 3. Decision timeline. It wraps to a stack on a narrow screen, so both arrow axes are bound. */
 
-/**
- * The timeline is a `<fieldset>`, which brings two UA defaults that have to go: a non-zero inline
- * margin, and `min-inline-size: min-content`. The second is the one that bites — it stops the panel
- * shrinking below its widest row, so a long hand would push the page sideways on a phone instead of
- * scrolling inside its own container.
- */
+/** Resets a `<fieldset>`'s `min-inline-size: min-content`, which kept it from shrinking to scroll. */
 .prl-timeline {
   overflow-x: auto;
   min-inline-size: 0;
@@ -681,9 +491,7 @@ span.prl-review-table__cell-label {
   display: flex;
   flex-wrap: wrap;
   align-items: stretch;
-  /* Row gap larger than the column gap. When the streets wrap onto a second line — which is what a
-     long hand does at any width below about 1100px — an even gap left two rows of markers close
-     enough that the eye read them as one continuous spine. */
+  /* A larger row gap, so wrapped streets do not read as one continuous spine. */
   gap: var(--prl-space-9) var(--prl-space-8);
   margin: 0;
   padding: 0;
@@ -695,8 +503,7 @@ span.prl-review-table__cell-label {
   align-content: start;
   justify-items: start;
   gap: var(--prl-space-5);
-  /* The street separator is the accent, because a street boundary is the most load-bearing division
-     in a hand and a decorative hairline would not clear 3:1 against the panel behind it. */
+  /* The accent, because a decorative hairline does not clear 3:1 against the panel. */
   padding-inline-start: var(--prl-space-6);
   border-inline-start: var(--prl-focus-width) solid var(--prl-line-accent);
 }
@@ -712,16 +519,7 @@ span.prl-review-table__cell-label {
   color: var(--prl-accent-text);
 }
 
-/**
- * The street name is the heading of a group a reader scans BY, so it is read at a glance rather than
- * inspected: "which street am I looking at" is answered by this word and by nothing else on the row.
- *
- * `body-sm` rather than `label`. It keeps the uppercase technical voice, but 13px was the same size
- * as the markers underneath it, and a group heading that is exactly as loud as its contents is not a
- * heading. Tracking comes down a step at the same time, for the reason `tokens.css` gives: wide
- * tracking is a legibility aid at small sizes and a legibility cost once the letterforms are big
- * enough to read on their own.
- */
+/** `body-sm` with less tracking, because at 13px the heading was as loud as the markers under it. */
 .prl-timeline__street-name {
   color: var(--prl-text);
   font-size: var(--prl-type-body-sm);
@@ -730,23 +528,8 @@ span.prl-review-table__cell-label {
 }
 
 /**
- * The markers row, with the spine drawn behind it.
- *
- * `::before` at 50% of the row height with a token hairline, `inset-inline: 0`, and `z-index: 0`
- * against the markers' own stacking. A separate element would duplicate the row's width and sit in
- * the accessibility tree for nothing.
- */
-/**
- * `width: fit-content` is what stops the spine dangling.
- *
- * The row is a grid item of the street, so it stretched to the street's width — and the street is as
- * wide as its widest child, which is often the HEAD rather than the markers. On the last street of a
- * folded-out hand ("04 FOLDED OUT", one `■ END` marker) that left the spine running 60px past the
- * last marker into empty panel, which reads as a connector to something that is not there.
- *
- * `fit-content` resolves to the markers' own width when they fit and to the available width when
- * they wrap, so the axis is exactly as long as the row of steps it is the axis of — at every width,
- * without a media query.
+ * The spine is a `::before` at the row's vertical centre, not an element in the accessibility tree.
+ * `width: fit-content` keeps it as long as the markers, where stretching ran it 60px past the last one.
  */
 .prl-timeline__markers {
   position: relative;
@@ -767,10 +550,7 @@ span.prl-review-table__cell-label {
   z-index: 0;
   inset-block-start: 50%;
   inset-inline: 0;
-  /* A border rather than `height: 1px` plus a background: the hairline's width and colour then both
-     come from `--prl-hairline-strong` instead of a literal, and this file keeps its promise that
-     every value in it is a token. Strong, not subtle: the spine is the axis of the control, and an
-     axis carries meaning. */
+  /* A border, so width and colour come from the token. Strong, because the spine is the axis. */
   border-block-start: var(--prl-hairline-strong);
 }
 
@@ -781,28 +561,15 @@ span.prl-review-table__cell-label {
 }
 
 /**
- * A MARKER — the thing this page is scrubbed with, so it is the thing that has to feel precise.
- *
- * "Precise" is a material claim rather than a metaphor. A resting marker is RECESSED: an inset
- * fill, a decorative edge, no elevation — a detent in the spine. Hovering firms it to the panel
- * fill and lifts it one pixel. The current one is an accent fill lifted two pixels with a real
- * shadow under it, which is the only marker in the row that is above the plane of the timeline.
- * Reading down that list is reading a physical control: a groove with one raised stop in it.
- *
- * `--prl-line` and not `--prl-hairline-strong` at rest, which is a change that needs its reason
- * stated because it moves a border DOWN the ramp: at `--prl-line-strong` all eleven markers were
- * drawn at the same weight as the current one, so the row read as eleven equally-weighted buttons
- * and the accent fill was doing all the work of saying where you are. `--prl-line-strong` is
- * required of a border that carries MEANING, and a resting marker's edge carries none — the
- * meaning is on the current marker, which takes the accent, and on the hovered one, which takes it
- * too. WCAG 1.4.11's 3:1 applies to the state that has to be perceived, and both of those do.
+ * A resting marker is recessed with no elevation, hover lifts it 1px, and the current one is an
+ * accent fill lifted 2px. Rest uses `--prl-line`, because its edge carries no meaning. WCAG 1.4.11's
+ * 3:1 applies to the current and hovered states, which both take the accent.
  */
 .prl-timeline__marker {
   display: inline-flex;
   align-items: center;
   gap: var(--prl-space-3);
-  /* 44px, exceeding WCAG 2.2's 24px floor: a scrub marker is small and consequential, and often
-     used one-handed on a phone. */
+  /* 44px, above WCAG 2.2's 24px floor, because a scrub marker is often used one-handed. */
   min-width: var(--prl-target-min);
   min-height: var(--prl-target-min);
   padding-inline: var(--prl-space-5);
@@ -812,18 +579,12 @@ span.prl-review-table__cell-label {
   box-shadow: var(--prl-elevation-0);
   color: var(--prl-text-secondary);
   font-family: var(--prl-font-sans);
-  /* A marker's text is CONTENT — "raise 159", "call 33" — not a label, and it is the only place in
-     the hand where that figure is scannable in sequence. At 13px with label tracking it was set in
-     the app's quietest voice, which is the opposite of what a scrub control wants. `body-sm` with no
-     extra tracking is the same treatment a table cell gets, and a timeline is a table of decisions
-     laid on its side. */
+  /* `body-sm` with no extra tracking, because a marker's text is content, read in sequence. */
   font-size: var(--prl-type-body-sm);
   font-variant-numeric: var(--prl-numeric);
   font-weight: var(--prl-weight-medium);
   cursor: pointer;
-  /* Transform, colour and elevation only. Nothing here animates a layout property, and the
-     durations are the material band rather than `--prl-dur-instant`: 90ms with a signature curve
-     reads as a jump cut, because `--prl-ease-standard` spends most of its time settling. */
+  /* Transform, colour and elevation only, on the material band. `--prl-dur-instant` reads as a jump cut. */
   transition:
     background-color var(--prl-dur-fast) var(--prl-ease-material),
     border-color var(--prl-dur-fast) var(--prl-ease-material),
@@ -840,7 +601,6 @@ span.prl-review-table__cell-label {
   transform: translateY(calc(-1 * var(--prl-space-1)));
 }
 
-/** The reader's own decisions: a heavier weight and brighter ink, plus the `▸` glyph in the markup. */
 .prl-timeline__marker[data-viewer="true"] {
   color: var(--prl-text);
   font-weight: var(--prl-weight-semibold);
@@ -850,11 +610,7 @@ span.prl-review-table__cell-label {
   border-style: dashed;
 }
 
-/**
- * The scrub position. An accent fill with `--prl-text-on-accent` — never white, see the sort link
- * above — plus a two-pixel lift, plus a real elevation, plus `aria-current="step"` in the markup,
- * plus the `▸`/`·`/`■` glyph. Five signals, and only one of them is hue.
- */
+/** `--prl-text-on-accent`, never white. The lift, elevation, `aria-current` and glyph also mark it. */
 .prl-timeline__marker[aria-current="step"] {
   border-color: var(--prl-accent-edge);
   background-color: var(--prl-accent-fill);
@@ -865,12 +621,8 @@ span.prl-review-table__cell-label {
 }
 
 /**
- * The focus ring, restated WITH the elevation.
- *
- * `box-shadow` is one property, so a focused current marker that set only `var(--prl-focus-ring)`
- * would drop its elevation for as long as the keyboard was on it — the marker falls back into the
- * groove at the exact moment a keyboard reader arrives on it, which reads as the control breaking.
- * The ring goes FIRST because shadows paint in list order, first on top.
+ * The ring is restated with the elevation, because `box-shadow` is one property and the current marker
+ * would drop into the groove under focus. The ring goes first, since the first shadow paints on top.
  */
 .prl-timeline__marker:focus-visible {
   box-shadow: var(--prl-focus-ring), var(--prl-elevation-1);
@@ -888,22 +640,14 @@ span.prl-review-table__cell-label {
   white-space: nowrap;
 }
 
-/**
- * Who acted, ahead of what they did — "Quartile RAISE 20", "You FOLD".
- *
- * Quieter than the action (regular weight, secondary ink) because the action is still what a reader
- * scans the row for; the name is what tells them whose it was, which the row did not say at all
- * before. A display name runs to 24 characters with spaces (`DISPLAY_NAME_SCHEMA`), so it is
- * allowed to wrap inside the marker rather than being clipped or ellipsised — a cut-off name is a
- * different name.
- */
+/** A display name runs to 24 characters (`DISPLAY_NAME_SCHEMA`), so it wraps, never clips. */
 .prl-timeline__actor {
   color: inherit;
   font-weight: var(--prl-weight-regular);
   overflow-wrap: anywhere;
 }
 
-/** The `+` that marks a decision carrying an analysis. Ink only; the sentence says it too. */
+/** Ink only. The sentence says it too. */
 .prl-timeline__analysis-mark {
   color: var(--prl-accent-text);
   font-weight: var(--prl-weight-bold);
@@ -913,9 +657,7 @@ span.prl-review-table__cell-label {
   color: var(--prl-text-on-accent);
 }
 
-/* ==========================================================================================
-   4. THE REPLAY STAGE
-   ========================================================================================== */
+/* 4. Replay stage */
 
 .prl-replay {
   display: grid;
@@ -924,49 +666,24 @@ span.prl-review-table__cell-label {
 }
 
 /**
- * THE TRANSPORT — a sticky level-3 pane, and the only glass in this file.
- *
- * It earns the material on the physics, not on taste. It is `position: sticky`, so it is a bounded
- * pane that travels over the table, the metrics and the analysis as the page scrolls; it is small;
- * `isolation: isolate` gives it its own stacking context, which is what stops the blur sampling
- * siblings that were never meant to be behind it; and nothing about it is animated. Those are the
- * four conditions `tokens.css` sets for a `backdrop-filter` that costs nothing per frame.
- *
- * THE DEFECT IT FIXES. Measured on `/review/hand-0042` at 1440x900: the replay stage below this row
- * is 1,100px tall, so from the second decision onwards the Previous/Next pair and the step counter
- * were above the top of the viewport. A pointer user scrubbing a hand had to scroll up, click, and
- * scroll back down for every step of an eleven-step hand. The arrow keys always worked and are
- * described in the instructions above the timeline — which is not an answer, because a control
- * that is only reachable if you read a paragraph is a control most people do not have.
- *
- * `-webkit-backdrop-filter` is declared beside the fill because Safari still requires it, and the
- * filter is declared beside the fill because a translucent bar with NO blur is the ghosting bug in
- * `nav.css`'s header comment: the analysis passing underneath would read straight through it as a
- * second, perfectly legible layer of type. `packages/ui/test/layout-guarantees.test.ts` reads that
- * pairing off this block rather than trusting this paragraph.
- *
- * `backdrop-filter` is deliberately not in any transition list here.
+ * The transport is sticky, so the step buttons stay on screen over a 1,100px stage. It meets the four
+ * `tokens.css` conditions for glass: sticky, small, `isolation: isolate` and not animated. The blur sits
+ * beside the fill, because translucency with no blur ghosts the content underneath, and
+ * `-webkit-backdrop-filter` because Safari needs it. `layout-guarantees.test.ts` checks the pairing.
+ * `backdrop-filter` is never in a transition list here.
  */
 .prl-replay__transport {
   position: sticky;
   z-index: var(--prl-z-sticky);
   isolation: isolate;
   inset-block-start: var(--prl-space-13);
-  /* Three tracks, never wrapping: back, what happened, forward. It used to be a wrapping flex row,
-     and at 360 the two worded buttons and the counter wrapped onto two rows — 126px of sticky glass
-     under the 77px header, 32% of a 640px screen held by chrome. Below 600px the button words are
-     visually hidden (section 4, the `width < 600px` block), so the row fits one line at 360. */
+  /* Three tracks, never wrapping. A wrapping row took 126px of sticky glass at 360. */
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--prl-space-5);
-  /* BOUNDED, and that is a rule rather than a preference: `tokens.css` allows glass on a floating
-     PANE and forbids it on a full-width strip, because a `backdrop-filter` across the whole
-     content column is one of the most expensive things a compositor can be asked for on every
-     scroll frame. Unbounded this measured 1360px wide at a 1440px viewport — a strip. It was 34rem
-     for two buttons and a counter; it is 40rem (`4 x --prl-space-16`) now that the middle track
-     also carries the sentence saying what happened at this step, which needs a line long enough to
-     hold "Quartile raised to 1,250 units." without breaking. Still a centred pane, not a strip. */
+  /* Bounded, because `tokens.css` forbids glass on a full-width strip. 40rem holds "Quartile raised
+     to 1,250 units." on one line. */
   max-inline-size: calc(4 * var(--prl-space-16));
   margin-inline: auto;
   padding: var(--prl-space-5) var(--prl-space-6);
@@ -980,13 +697,7 @@ span.prl-review-table__cell-label {
   box-shadow: var(--prl-elevation-2);
 }
 
-/**
- * The step readout, at the centre of the transport.
- *
- * `metric-md` and not `metric-sm`: this is the figure a reader checks after every press, and at
- * 18px it was the same size as the button labels either side of it. The counter is what tells you
- * the press landed, so it is the loudest thing in the bar.
- */
+/** `metric-md`, because the counter confirms each press and is the loudest thing in the bar. */
 .prl-replay__now {
   display: grid;
   justify-items: center;
@@ -995,10 +706,7 @@ span.prl-review-table__cell-label {
   text-align: center;
 }
 
-/* Wraps only as a fallback. "Decision 1 / 13 Preflop" is about 30px wider than "Step 2 / 14
-   Preflop" was, in a middle track that is roughly 200px at 360 and again just above 600, where the
-   buttons gain their words. Where it fits nothing changes; where it does not, the street drops to a
-   line of its own rather than painting into the next button. */
+/* Wraps only as a fallback, so the street drops to its own line rather than into a button. */
 .prl-replay__position {
   display: flex;
   flex-wrap: wrap;
@@ -1016,14 +724,7 @@ span.prl-review-table__cell-label {
   letter-spacing: var(--prl-tracking-metric);
   line-height: var(--prl-leading-tight);
 }
-/**
- * What happened at this step, in the transport where the reader is looking when they press.
- *
- * Measured before: the transport said only "STEP 3 / 16", and the sentence for the step sat under
- * the table — y≈1997 at 1440 and ≈2900 at 360 — while the copy a screen reader hears is visually
- * hidden. A sighted reader stepping through a hand could see the table change and could not read
- * what had changed it without scrolling a screen and a half.
- */
+/** What happened at this step, where the reader is looking when they press. */
 .prl-replay__headline {
   margin: 0;
   max-width: none;
@@ -1045,7 +746,7 @@ span.prl-review-table__cell-label {
     padding: var(--prl-space-4);
   }
 
-  /* The visually-hidden technique from `base.css`: out of sight, still the button's name. */
+  /* Out of sight, still the button's name. */
   .prl-replay__step-words {
     position: absolute;
     width: 1px;
@@ -1055,7 +756,7 @@ span.prl-review-table__cell-label {
     white-space: nowrap;
   }
 
-  /* A glyph-only button is still a 44px square target, not a 30px sliver. */
+  /* A glyph-only button is still a 44px square target. */
   .prl-replay__transport .prl-replay__step-button {
     min-width: var(--prl-target-min);
     min-height: var(--prl-target-min);
@@ -1068,17 +769,9 @@ span.prl-review-table__cell-label {
 }
 
 /**
- * The scrubbed panel.
- *
- * Keyed on the step index in the component, so a scrub remounts it and replays this keyframe. It is
- * `transform` and `opacity` only — the two properties that get a compositor ride — which is what
- * makes stepping through a ten-decision hand cheap.
- *
- * `--prl-dur-base` with `--prl-ease-material` rather than `--prl-dur-in` with the signature curve.
- * A scrub is a STATE change, not new information arriving: 420ms of travel on every arrow press
- * would make holding the key feel like wading, and `--prl-ease-standard` spends most of its time
- * settling, which is a signature you have to watch. 200ms on the unremarkable material curve is
- * felt and not seen, which is what a state change should be.
+ * Keyed on the step index, so a scrub remounts the panel and replays the keyframe on `transform` and
+ * `opacity` only. `--prl-dur-base` on the material curve, because a scrub is a state change and 420ms
+ * of travel per arrow press makes holding the key feel slow.
  */
 .prl-replay__stage {
   display: grid;
@@ -1112,29 +805,10 @@ span.prl-review-table__cell-label {
   line-height: var(--prl-leading-body);
 }
 
-/* ------------------------------------------------------------------------------------------
-   THE SETTLED SEATS, AS A COLUMN OF FIGURES RATHER THAN A ROW OF PAIRS.
-
-   The base layout is the flex row this always had: name at one end, figure and direction word at
-   the other. Everything that makes the figures share a column is inside the `@supports` block
-   below, so a browser without subgrid gets exactly what it got before rather than a broken grid.
-
-   WHY IT NEEDS SUBGRID AT ALL, and the wrong answer that was tried first.
-
-   The obvious fix is a three-track grid on each `.prl-replay__result-row`. It does not work and it
-   LOOKS like it works, which is worse: each row is its own grid container, so `auto` tracks are
-   sized per row and each row's figure lands wherever that row's own content puts it. Measured on
-   `/review/hand-0042` at 1440x900 with three settled seats, the figures' right edges came out at
-   1325, 1342 and 1342 — one row seventeen pixels out of the column it was supposed to be in.
-
-   Tracks are only shared if they belong to ONE grid, so the tracks live on the `<dl>` and both
-   levels below it inherit them: the row spans all three and takes `subgrid`, and the `<dd>` spans
-   the last two and takes `subgrid` again. Chrome resolves nested subgrid.
-
-   `display: contents` on the `<dd>` would be shorter and is not used on purpose: dropping a `dd`'s
-   box has historically dropped it from the accessibility tree with it, and this list's `dt`/`dd`
-   pairing is what says whose figure this is. A layout trick may not cost a name.
-   ------------------------------------------------------------------------------------------ */
+/* The settled seats share one figure column through nested subgrid on the `<dl>`, row and `<dd>`,
+   inside `@supports` so a browser without subgrid keeps the flex row. A grid per row sizes per row
+   (right edges at 1325, 1342 and 1342). Not `display: contents` on the `<dd>`, which has dropped it
+   from the accessibility tree and with it the `dt`/`dd` pairing. */
 
 .prl-replay__result {
   display: grid;
@@ -1169,7 +843,7 @@ span.prl-review-table__cell-label {
 }
 
 @supports (grid-template-columns: subgrid) {
-  /* The tracks are declared ONCE, here, and every row and every `dd` borrows them. */
+  /* The tracks are declared once, here. */
   .prl-replay__result {
     grid-template-columns: minmax(0, 1fr) auto auto;
     column-gap: var(--prl-space-5);
@@ -1186,8 +860,6 @@ span.prl-review-table__cell-label {
     grid-column: 2 / 4;
     grid-template-columns: subgrid;
     align-items: baseline;
-    /* End-aligned inside the figure's own track, so the signed figures form one vertical edge and
-       the direction words start on another. */
     text-align: end;
   }
 }
@@ -1207,13 +879,8 @@ span.prl-review-table__cell-label {
   letter-spacing: var(--prl-tracking-label);
 }
 
-/* ==========================================================================================
-   5. THE COMMITMENT VERIFIER
-   ==========================================================================================
-   A 64-character hex hash has no word boundaries, so it needs `overflow-wrap: anywhere` or it
-   pushes the panel sideways on a phone. It is shown in full rather than truncated: a root a reader
-   cannot copy is a root they cannot check anywhere else, which defeats the purpose of publishing it.
-   ========================================================================================== */
+/* 5. Commitment verifier. The hash is shown in full with `overflow-wrap: anywhere`, because a root
+   a reader cannot copy is a root they cannot check. */
 
 .prl-verifier {
   display: grid;
@@ -1250,8 +917,7 @@ span.prl-review-table__cell-label {
   align-items: baseline;
 }
 
-/* A 64-character hex root is a figure, so it is set in the mono face with tabular figures: the one
-   thing a reader does with it is compare it, character by character, against another copy. */
+/* Mono with tabular figures, because the root is compared character by character. */
 .prl-verifier__hash {
   margin: 0;
   overflow-wrap: anywhere;
@@ -1273,7 +939,7 @@ span.prl-review-table__cell-label {
   margin: 0;
 }
 
-/* At the height of one line of body text, so the panel does not resize when the result lands. */
+/* One line of body text, so the panel does not resize when the result lands. */
 .prl-verifier__skeleton {
   display: block;
   --prl-skeleton-h: var(--prl-space-6);
@@ -1299,13 +965,7 @@ span.prl-review-table__cell-label {
   gap: var(--prl-space-2);
 }
 
-/* ==========================================================================================
-   6. LOADING SKELETONS AT THE REAL DIMENSIONS
-   ==========================================================================================
-   Each block below is the height of the thing it stands in for, so nothing reflows on arrival. The
-   table block matches the `min-height: 36rem` that `@prl/ui`'s `@container prl-table` block reserves
-   for the six-max oval layout; the metric blocks reuse the shared `--prl-skeleton--metric` height.
-   ========================================================================================== */
+/* 6. Loading skeletons, each the height of what it stands in for, so nothing reflows. */
 
 .prl-review-skeleton {
   display: grid;
@@ -1343,7 +1003,7 @@ span.prl-review-table__cell-label {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--prl-space-15)), 1fr));
 }
 
-/* 36rem is what the table reserves for the oval layout: `--prl-space-15` (8rem) x 4.5. */
+/* The table's oval-layout reserve, `--prl-space-15` (8rem) x 4.5 = 36rem. */
 .prl-review-skeleton__table {
   display: block;
   --prl-skeleton-h: calc(4.5 * var(--prl-space-15));
@@ -1359,13 +1019,8 @@ span.prl-review-table__cell-label {
   --prl-skeleton-h: var(--prl-space-16);
 }
 
-/* ==========================================================================================
-   7. FORCED COLORS
-   ==========================================================================================
-   The accent fill on the active marker and the active sort link is a background-color, and
-   forced-colors discards those. Both states are restated as a border width plus an underline, which
-   it keeps. The spine is `CanvasText` via the token override in tokens.css and needs nothing here.
-   ========================================================================================== */
+/* 7. Forced colors. These discard background colours, so the active marker and sort link restate
+   their state as a border width and an underline. */
 
 @media (forced-colors: active) {
   .prl-timeline__marker[aria-current="step"],

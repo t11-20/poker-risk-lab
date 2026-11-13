@@ -1,75 +1,13 @@
 /**
- * The table: the phase of the hand, the pot and its layers, the board, and every seat.
- *
- * Everything drawn here comes from `PlayerView` — the server's redacted view. This component
- * reads it and nothing else: it does not fetch, does not compute legality, does not decide what is
- * visible. A seat's `holeCards` are `null` unless the server chose to reveal them, so "should I
- * show these cards?" is not a question this component can get wrong.
- *
- * ## Not a casino: the surface is graph paper
- *
- * `--prl-surface-table` is a deep slate carrying a 32px hairline grid. No felt, no baize, no wood,
- * no rail highlight, no green. The decorative ellipse is a 1px hairline, not a table edge. This is
- * a worksheet that happens to have a hand of poker on it, which is the honest description of what
- * the product does.
- *
- * ## Two layouts, and why the DOM order is what it is
- *
- * The visual layout switches on a **container** query rather than a viewport query, so the table
- * lays itself out correctly inside a 22rem rail as well as on a wide page:
- *
- *   - under 46rem of container: a vertical stack — opponents, then the board and pot, then the
- *     viewer's own plate pinned at the bottom;
- *   - at 46rem and above: the seats are absolutely positioned around an ellipse with the pot and
- *     board in the middle. 46rem is where a 13rem plate stops overlapping its neighbours; the
- *     arithmetic is in the `@container prl-table` block of components.css.
- *
- * The DOM order is **pot and board, then opponents, then the viewer's own seat**, which is the
- * order that makes sense read aloud: "pot 420 units, community cards queen of hearts, seven of
- * hearts, two of clubs, seat 2..., your seat...". The stacked layout re-orders the three regions
- * visually with `order`, because a player's spatial model wants their own cards at the bottom of
- * the screen and the opponents above the board.
- *
- * Divergence between visual and DOM order is normally a bug, and it is safe here for one specific
- * reason: **nothing inside the table field is focusable.** Cards are `role="img"` spans, seats are
- * plain elements, and every control on the play screen lives in the ActionBar outside this
- * component. There is therefore no tab sequence to desynchronise. If a focusable control is ever
- * added to a seat, the `order` declarations have to go.
- *
- * The ellipse positions are a pure function of (ring index, seat count) computed in `Seat`, so the
- * server and the client render identical markup — no hydration mismatch, no `window`, no
- * measurement.
- *
- * ## Information is re-flowed, never removed
- *
- * The narrow layout shows the same position labels, names, stacks, street commitments, statuses,
- * badges and cards as the wide one. It compacts the plate; it does not drop a field. Two places
- * that could have been "simplified" and are not: the opponents grid **wraps** rather than
- * scrolling sideways (a scroll container with no focusable content cannot be scrolled from the
- * keyboard at all — WCAG 2.1.1 — and making it focusable would add an unnamed tab stop), and the
- * side pots keep their eligibility lists.
- *
- * ## Announcements are NOT made from here, and that is a fix
- *
- * This component used to own the table's one polite `aria-live` region and take the sentence as an
- * `announcement` prop. It cannot, because **it is not always on screen**: the play screen renders
- * no table until a `view` arrives, and the frames that start a hand carry the first sentence and
- * the first view in the same React commit. So on the first hand of every session the region was
- * INSERTED already holding the forced-bets sentence — and a live region that arrives with its text
- * announces nothing, because the platform is notified of a change to a region it already knew
- * about. Measured on this repo's own gate: at the moment "Deal the next hand" was pressed, the
- * document's live regions were the route announcer, the connection line, the invite and join notes,
- * the decision band's turn region and the footer statement, and no table narration region at all.
- *
- * The region now lives in `TableStage` (`apps/web/src/components/TableStage.tsx`), outside the
- * conditional that renders this component, so it is in the document from the first paint. The two
- * rules that governed it are unchanged and are stated there.
- *
- * The pot's own figure keeps its exception here: `Metric`'s count-up owns a small atomic region of
- * its own so that a settled figure is announced once and a *mid-count* figure never is — the
- * alternative is a screen reader reading eleven wrong numbers on the way to the right one.
- *
- * Server-render safe: no state, no effects, no `window`.
+ * The table (phase spine, pot, board and every seat), drawn only from the server's redacted `PlayerView`.
+ * The surface is graph paper, not a casino. No felt, no green.
+ * Layout switches on a container query at 46rem (the arithmetic is in `@container prl-table`).
+ * DOM order is pot and board, opponents, then the viewer, which reads well aloud. The stacked layout
+ * reorders visually with `order`, which is safe only because nothing in the table field is focusable.
+ * If a seat ever gets a focusable control, the `order` declarations must go.
+ * The opponents grid wraps rather than scrolls, because a scroller with no focusable content fails
+ * WCAG 2.1.1. The narration region lives in `TableStage`, outside the conditional that renders this,
+ * so the first hand of a session is announced.
  */
 
 import type { ReactElement } from 'react';
@@ -85,41 +23,23 @@ import type { TurnClock } from './TurnTimer.tsx';
 
 export interface PokerTableProps {
   readonly view: PlayerView;
-  /** Heading text. Defaults to the hand number. */
   readonly title?: string;
-  /** Display names by seat index. `playerId` is an opaque id and is never shown. */
+  /** `playerId` is opaque and never shown. */
   readonly seatNames?: Readonly<Record<number, string>>;
-  /** Cards to ring, e.g. the five that made a hand in review. */
   readonly highlightedCards?: readonly number[];
-  /**
-   * What the ring means, e.g. "part of the winning hand". Appended to each marked card's accessible
-   * name, because a border and a corner notch are cues only a sighted reader gets.
-   */
+  /** Appended to each marked card's accessible name, because the ring is a visual cue only. */
   readonly highlightLabel?: string;
-  /**
-   * The server's deadline for the seat to act, plus the server clock from the same frame. Absent
-   * or `null` renders the active seat's other two cues without a ring.
-   */
+  /** Absent or `null` renders the active seat's other two cues without a ring. */
   readonly turn?: TurnClock | null;
-  /**
-   * Show each seat's last action on the street in progress on its plate. Off by default: the live
-   * table and its fixtures want it, and the screens that already narrate a hand step by step
-   * (review, the Lab) are left as they were.
-   */
+  /** Off by default. Review and the Lab already narrate a hand step by step. */
   readonly showLastActions?: boolean;
   readonly className?: string;
 }
 
-/**
- * The phases of a hand, as the numbered spine the design system uses elsewhere for lesson steps
- * and the process outline. Five steps rather than the engine's six `Street` values: `showdown` and
- * `complete` are the same *phase* to a reader — the cards are down and the pot is being awarded —
- * and a spine that grows a step at the very end reads as a layout bug.
- */
+/** Five steps, not the engine's six streets. `showdown` and `complete` are one phase to a reader. */
 const PHASES = ['preflop', 'flop', 'turn', 'river', 'showdown'] as const;
 type Phase = (typeof PHASES)[number];
 
-/** Which spine step a street belongs to. `complete` folds into `showdown`. */
 const PHASE_OF_STREET: Readonly<Record<Street, Phase>> = {
   preflop: 'preflop',
   flop: 'flop',
@@ -131,13 +51,7 @@ const PHASE_OF_STREET: Readonly<Record<Street, Phase>> = {
 
 type PhaseState = 'done' | 'current' | 'pending';
 
-/**
- * Rotates the seat list so the viewer comes first.
- *
- * Order, not position: `Seat` then places ring index 0 at the bottom of the ellipse. Done here
- * rather than in CSS because the *reading* order has to match, and CSS `order` changes only the
- * visual one.
- */
+/** The viewer first. Done in the DOM, not CSS `order`, because the reading order has to match. */
 function rotateToViewer(seats: readonly SeatView[], viewerSeat: number | null): readonly SeatView[] {
   if (viewerSeat === null) return seats;
   const at = seats.findIndex((seat) => seat.seat === viewerSeat);
@@ -149,14 +63,7 @@ function seatLabel(seat: SeatView, seatNames: Readonly<Record<number, string>> |
   return seatNames?.[seat.seat] ?? `Seat ${seat.seat + 1}`;
 }
 
-/**
- * The board's accessible name, as one sentence.
- *
- * "community cards: queen of hearts, seven of hearts and two of clubs" is announced when the
- * reader reaches the figure, so the board arrives as a *group* rather than as three unrelated
- * cards. The individual cards keep their own names underneath, which is the normal
- * figure-and-contents behaviour and gives a reader both granularities.
- */
+/** The board's accessible name, so it is announced as one group. */
 function boardName(board: readonly number[]): string {
   if (board.length === 0) return 'community cards: none dealt yet';
   return `community cards: ${listCardNames(board)}`;
@@ -166,17 +73,11 @@ interface PhaseSpineProps {
   readonly view: Pick<PlayerView, 'street' | 'board' | 'result'>;
 }
 
-/** The betting street a board of this many cards belongs to. */
 const PHASE_OF_BOARD: readonly Phase[] = ['preflop', 'preflop', 'preflop', 'flop', 'turn', 'river'];
 
 /**
- * The spine step a hand is on — and, for a finished hand, the step it actually ENDED on.
- *
- * `complete` used to fold into `showdown` unconditionally, so a hand everybody folded to preflop
- * finished with SHOWDOWN marked "(current phase)" and every street before it marked done — a
- * showdown that never happened, on a hand whose board was empty. The engine says whether one did:
- * `result.showdowns` is empty when the pot was won uncontested, and the board's length is then the
- * street the betting stopped on.
+ * The spine step a hand is on, or for a finished hand the step it ended on. A hand won uncontested
+ * (`result.showdowns` empty) ends on the street its board length implies, not on showdown.
  */
 function phaseOf(view: PhaseSpineProps['view']): Phase {
   if (view.street === 'complete' && view.result !== null && view.result.showdowns.length === 0) {
@@ -201,11 +102,7 @@ function PhaseSpine({ view }: PhaseSpineProps): ReactElement {
             className="prl-table__step"
             key={`phase-${phase}`}
             data-state={state}
-            /**
-             * `aria-current="step"` is the machine-readable half. The visible half is an accent
-             * underline plus heavier weight, so the current phase is not signalled by hue alone,
-             * and a visually-hidden word says which is which for a reader who gets neither.
-             */
+            /** With an accent underline, heavier weight and hidden text, so not hue alone. */
             {...(state === 'current' ? { 'aria-current': 'step' as const } : {})}
           >
             <span className="prl-table__step-index prl-index" aria-hidden="true">
@@ -235,16 +132,11 @@ export function PokerTable(props: PokerTableProps): ReactElement {
   const headingId = `prl-table-heading-${view.handId}`;
   const board = [...view.board];
 
-  // The viewer's own plate is rendered outside the opponents list so the stacked layout can pin it
-  // to the bottom without reordering anything inside a list. Ring indices still come from the
-  // rotated order, so the oval geometry is unchanged.
-  // `noUncheckedIndexedAccess` types `seats[heroIndex]` as possibly undefined even after the
-  // `findIndex`, and `!` is banned repo-wide, so the seat is found rather than indexed.
+  // The viewer's plate sits outside the opponents list so the stacked layout can pin it.
+  // Found rather than indexed, because `!` is banned repo-wide.
   const heroIndex = seats.findIndex((seat) => seat.isSelf);
   const hero = seats.find((seat) => seat.isSelf) ?? null;
 
-  // `exactOptionalPropertyTypes`: an absent key and an explicit `undefined` are different types, so
-  // the two marking props are built conditionally and spread as one object.
   const highlightProps = {
     ...(highlightedCards === undefined ? {} : { highlightedCards }),
     ...(highlightLabel === undefined ? {} : { highlightLabel }),
@@ -271,7 +163,6 @@ export function PokerTable(props: PokerTableProps): ReactElement {
       </div>
 
       <div className="prl-table__field">
-        {/* An anchor for the eye in the wide layout; absent entirely in the stacked one. */}
         <div className="prl-table__oval" aria-hidden="true" />
 
         <div className="prl-table__centre">
@@ -291,8 +182,6 @@ export function PokerTable(props: PokerTableProps): ReactElement {
               size="md"
               {...highlightProps}
               emptyText="no community cards yet"
-              /* Deals in with `--prl-dur-deal-stagger`; see the note on this class in
-                 components.css for why the stagger is a stateless `nth-child`. */
               className="prl-card-row--dealing"
             />
           </div>
@@ -304,8 +193,6 @@ export function PokerTable(props: PokerTableProps): ReactElement {
               <Seat
                 key={`seat-${seat.seat}`}
                 seat={seat}
-                /* The phase, so a settled hand is described in the past tense and drops its live
-                   badges. `SeatStatus` alone cannot say which; see rule 3 in `Seat.tsx`. */
                 street={view.street}
                 name={seatLabel(seat, seatNames)}
                 ringIndex={index}

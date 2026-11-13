@@ -1,20 +1,8 @@
 /**
- * Tests for the radar chart's geometry and its spoken summary.
- *
- * A radar chart cannot be eyeballed for correctness: a quarter-turn error, a flipped y axis or
- * an off-by-one in the axis order all produce a plausible-looking shape that says something
- * false about a profile. So the coordinates are asserted **exactly**, against values that can
- * be worked out by hand:
- *
- *  - the centre is (120, 120) and the radius is 88, so the first axis — straight up — must land
- *    on (120, 32). If that moves, the chart has rotated.
- *  - a four-axis polygon at full value must be the diamond `120,32 208,120 120,208 32,120`,
- *    clockwise from the top. Both the direction of rotation and the SVG y-axis convention are
- *    pinned by that one string.
- *
- * The trig is only exact at multiples of a quarter turn, so the exact assertions live on
- * `polygonPoints` (which rounds on the way out) and on `polarPoint` at angle 0, while the other
- * quarter turns are checked to a tolerance.
+ * The radar chart's geometry and its spoken summary. A rotated or flipped radar still looks plausible,
+ * so coordinates are asserted exactly against hand-worked values. Centre (120, 120), radius 88, the
+ * first axis at (120, 32), and a full four-axis polygon is `120,32 208,120 120,208 32,120` (clockwise).
+ * Trig is exact only at quarter turns, so other angles are checked to a tolerance.
  */
 
 import assert from 'node:assert/strict';
@@ -61,7 +49,6 @@ describe('the chart frame', () => {
     assert.equal(radarViewBox(0), '0 0 240 240');
     assert.equal(radarViewBox(), '0 0 240 240');
     assert.equal(radarViewBox(RADAR_LABEL_GUTTER), '-64 0 368 240');
-    // The centre must stay where the geometry puts it, whichever window is used.
     assert.equal(polygonPoints([1]), '120,32');
   });
 
@@ -86,7 +73,6 @@ describe('axisAngle', () => {
   });
 
   it('has no angle to give when there are no axes', () => {
-    // Rather than dividing by zero and sending Infinity into a coordinate.
     assert.equal(axisAngle(0, 0), 0);
     assert.equal(axisAngle(3, -1), 0);
     assert.equal(axisAngle(Number.NaN, 16), 0);
@@ -271,8 +257,7 @@ describe('summariseAxes', () => {
   });
 
   it('never implies that a high value is a good one', () => {
-    // The trait vocabulary describes style, not quality: a high `foldToPressure` is not a
-    // virtue, and the summary must not smuggle a judgement in.
+    // Traits describe style, not quality. A high `foldToPressure` is not a virtue.
     const forbidden = ['best', 'worst', 'strongest', 'weakest', 'good', 'bad', 'better', 'optimal'];
     const text = summariseAxes(axes).toLowerCase();
     for (const word of forbidden) {

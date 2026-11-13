@@ -1,23 +1,8 @@
 /**
- * The header's units re-read the session after a hand the reader played has settled.
- *
- * ## The defect (audit at 6b3886e, minor 3)
- *
- * The pill re-read `GET /auth/session` only after an HTTP mutation, and a hand settles over the
- * table's socket. At a bust it read 1,000 UNITS while the session said `"units":0` and the seat said
- * STACK 0; at 1440 it read 1,000 beside a stack of 334.
- *
- * ## And the trap in the obvious fix
- *
- * Re-reading the moment the hand-ending frame arrives reads the stack from BEFORE the hand: the API
- * writes it on its archive queue after the broadcast. Measured on the live table with the re-read
- * immediate, the pill trailed by exactly one hand on 4 of 4 hands; polled from the frame every
- * 10ms, the session had the new figure 12-34ms later on 8 of 8. So the re-read is scheduled, and
- * this file holds both halves: the signal is real and fires the header's own listener, and the hook
- * schedules it after the write rather than at the frame.
- *
- * `use-live-table.ts` is a hook with no renderer here (ADR 0008), so its half is read from source,
- * with each predicate also run against the old text, where it must fail.
+ * The header's units re-read the session after a hand the reader played has settled. A hand settles
+ * over the socket, and the API writes the stack on its archive queue after the broadcast, so a
+ * re-read at the frame trailed by one hand on 4 of 4; the write landed 12-34ms later on 8 of 8. The
+ * hook half is read from source (no renderer, ADR 0008), with each predicate run against the old text.
  */
 
 import assert from 'node:assert/strict';

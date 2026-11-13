@@ -1,44 +1,10 @@
 /**
  * What a client-side navigation announces, and which announcer says it.
- *
- * ## The premise was checked before any of this was written
- *
- * The obvious brief — "nothing announces a client navigation in this app" — is false, and finding
- * that out cost ten minutes of real Chrome rather than an afternoon of building the wrong thing.
- * Next 16.3.0 ships `AppRouterAnnouncer`, the App Router mounts it unconditionally, and driving
- * Chrome 151 over the DevTools Protocol against a production build of this app and clicking a real
- * `<Link>` from `/` to `/learn` showed it go from `""` to `"Learn — Poker Risk Lab"` within 300ms,
- * while staying empty on the initial load.
- *
- * What is wrong with it is HOW: it is `role="alert"` plus `aria-live="assertive"`, so it interrupts
- * on every navigation; and it lives inside a shadow root on a `<next-route-announcer>` element, so
- * it is invisible to every light-DOM scan — `scripts/a11y-audit.mjs` included — and unreliable on
- * the screen-reader/browser pairs that have historically dropped live regions in shadow trees. A
- * previous audit of this app came within one shadow-root inspection of filing "route change not
- * announced" as a finding.
- *
- * `RouteAnnouncer.tsx` therefore stands that one down and owns the announcement in the light DOM,
- * politely. Two regions saying the same title — one of them interrupting — is worse than one saying
- * it badly.
- *
- * ## Would this fail if the behaviour broke?
- *
- * Yes, in three independent ways, and each was checked by breaking it:
- *
- *  1. `contractProblems` is a detector, and it is run against a NEGATIVE CONTROL below — a component
- *     that is assertive, has no `usePathname`, announces on first load and never stands the
- *     framework announcer down. Every one of those four is asserted to be reported.
- *  2. The real component is run through the same detector and must come back clean, which is what
- *     makes (1) meaningful rather than a test of a regex.
- *  3. The framework half is pinned against the INSTALLED Next, not against a remembered fact: if an
- *     upgrade renames `next-route-announcer` or stops shipping an announcer, the assertion fails and
- *     somebody re-checks whether there is still anything to stand down — rather than this app
- *     quietly growing a second announcer nobody in the light DOM can hear.
- *
- * The component itself cannot be rendered here: `apps/web` has no component harness (see
- * `live-regions.test.ts`), and a `.tsx` module cannot even be imported under `node --test`, because
- * Node's type stripping does not handle JSX. The constant is therefore read out of the source rather
- * than imported, which is stated here so nobody mistakes this for a render test.
+ * Next 16.3.0's `AppRouterAnnouncer` does announce (measured in Chrome 151), but it is assertive and
+ * lives in a shadow root that light-DOM scans and some screen readers miss. `RouteAnnouncer.tsx`
+ * stands it down and announces politely in the light DOM. The framework half is pinned against the
+ * installed Next, so an upgrade that renames `next-route-announcer` fails here. The constant is read
+ * from source, because a `.tsx` module cannot be imported under `node --test`.
  */
 
 import assert from 'node:assert/strict';
@@ -52,28 +18,14 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC = resolve(HERE, '..', 'src');
 const read = (...parts: readonly string[]): string => readFileSync(join(SRC, ...parts), 'utf8');
 
-/**
- * Source with its comments removed.
- *
- * Load-bearing, not tidiness. Both files below EXPLAIN the framework announcer they replace, in
- * prose that names `role="alert"` and `aria-live="assertive"` — and the first version of the
- * detector read those sentences and reported the component as breaking the rule the sentences exist
- * to keep. A scan that cannot tell code from the documentation of code will always report the
- * best-documented file as the worst one.
- */
+/** Comments removed, because both files explain the framework announcer in prose naming its attributes. */
 const withoutComments = (source: string): string =>
   source.replace(/\/\*[\s\S]*?\*\//gu, '').replace(/^\s*\/\/.*$/gmu, '');
 
 const ANNOUNCER = withoutComments(read('components', 'RouteAnnouncer.tsx'));
 const LAYOUT = withoutComments(read('app', 'layout.tsx'));
 
-/**
- * Everything wrong with a route announcer, as a list of reasons.
- *
- * A named detector rather than a run of `assert.match` calls, so the negative control below can feed
- * it a component that gets every one of these wrong and prove the checks actually fire. A scan that
- * has only ever seen correct input is a scan nobody has tested.
- */
+/** Everything wrong with a route announcer, as a named detector the negative control can feed. */
 function contractProblems(source: string): readonly string[] {
   const problems: string[] = [];
   if (!/aria-live="polite"/u.test(source)) {
@@ -130,8 +82,7 @@ describe('the app’s own route announcer', () => {
   });
 
   it('waits for the title rather than reading it once and giving up', () => {
-    // A route whose metadata resolves in a later commit than its tree would otherwise be announced
-    // as the title of the page the reader has just left, or not at all.
+    // Otherwise a route whose metadata resolves later announces the title of the page just left.
     assert.match(ANNOUNCER, /new MutationObserver\(/u);
     assert.match(ANNOUNCER, /observer\.disconnect\(\)/u, 'it must stop after one announcement');
     assert.match(ANNOUNCER, /TITLE_SETTLE_MS/u, 'the wait must be bounded, or a stale title is announced');
@@ -139,8 +90,7 @@ describe('the app’s own route announcer', () => {
 
   it('defers the stand-down past the commit that creates the element', () => {
     // React runs a child's effects before its parent's, and `AppRouterAnnouncer` is rendered by an
-    // ancestor of everything in the app — so an inline `remove()` finds nothing on the first paint
-    // and the element appears a moment later.
+    // ancestor, so an inline `remove()` finds nothing on the first paint.
     assert.match(ANNOUNCER, /setTimeout\(\(\) => \{\s*document\.getElementsByTagName/u);
   });
 });

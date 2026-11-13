@@ -1,43 +1,9 @@
 /**
- * `fixtures/table.ts` is a Coach report nothing recomputes, so this recomputes it.
- *
- * ## Why this file and not `fixtures:check`
- *
- * `apps/api/test/web-fixture-figures.test.ts` rebuilds every `CoachReport` in
- * `fixtures/scenarios.ts` and `fixtures/review.ts` through `buildCoachReport` and compares,
- * and `pnpm run fixtures:regenerate` is the remedy when they drift. Neither reaches
- * `fixtures/table.ts`: it is not built from a scenario record, so it is baked demo copy end
- * to end — hand-typed equities, prices, expected values and the prose that explains them —
- * and it is what the live table renders when the API is unreachable.
- *
- * The file's own header works most of those figures out by hand, and every one it works out
- * is right. The one it did not work out was wrong:
- *
- *   > "A cutoff who folds far less often than 35% to a flop raise. **Below roughly 20% the
- *   > raise and the call are worth about the same.**"
- *
- * Measured against `evOfRaise`/`evOfCall` on the report's own inputs, at 20% fold equity the
- * raise is **17.0 chips ahead** of the call, and there is no fold frequency at or above zero
- * at which they meet — solving for it gives −10.2%. With 54.1% equity the raise beats the
- * call even against an opponent who never folds, because above an even share more units in
- * the middle is worth more than more folds. A learner told to abandon the raise below 20%
- * fold equity has been given a threshold that does not exist. The sentence now states the
- * real quantities and the real crossover, which is 50% *equity*, and this file is why it
- * cannot go back to being a guess.
- *
- * ## Why the fixture is read as TEXT rather than imported
- *
- * `src/fixtures/table.ts` imports `parseCardText` from `@prl/ui` as a value, and `@prl/ui` is
- * consumed as source — `exports` points at `./src/index.ts`, whose barrel reaches `.tsx`
- * components that `node --test` cannot load. `coach-report-binding.test.ts` and
- * `live-regions.test.ts` both hit this and both write their views out by hand instead;
- * `honesty-claims.test.ts` reads the fixtures with `readFileSync` for the same reason. This
- * follows the third, because what has to be checked here is the numbers in the file.
- *
- * Every extraction asserts it matched, and that the values it found agree with one another
- * wherever the fixture states the same quantity twice — **a sweep of nothing is not a pass**,
- * and a regex that silently stops matching a renamed field would otherwise leave this whole
- * file green over nothing.
+ * `fixtures/table.ts` is a hand-typed Coach report that `fixtures:check` never reaches, and the live
+ * table renders it when the API is unreachable, so this recomputes it. Its sentence "below roughly 20%
+ * the raise and the call are worth about the same" was wrong: at 54.1% equity the raise wins even
+ * against an opponent who never folds. Read as text, because the fixture imports `@prl/ui`, whose
+ * barrel reaches `.tsx` that `node --test` cannot load. Every extraction asserts it matched.
  */
 
 import assert from 'node:assert/strict';
@@ -66,12 +32,7 @@ const REPORT = (() => {
   return SOURCE.slice(start, end);
 })();
 
-/**
- * Every value the fixture gives `field`, as numbers.
- *
- * Returns all of them rather than the first: the report states `toCall` twice and `pot` in
- * two shapes, and disagreement between those copies is itself a defect worth failing on.
- */
+/** Every value the fixture gives `field`, because `toCall` and `pot` appear twice and must agree. */
 function values(field: string, text: string = REPORT): number[] {
   const found = [...text.matchAll(new RegExp(`\\b${field}:\\s*(-?[\\d_.]+)`, 'g'))].map((match) =>
     Number((match[1] as string).replace(/_/g, '')),
@@ -84,7 +45,6 @@ function values(field: string, text: string = REPORT): number[] {
   return found;
 }
 
-/** The single value the fixture gives `field`, insisting every copy of it agrees. */
 function value(field: string, text: string = REPORT): number {
   const found = values(field, text);
   const first = found[0] as number;
@@ -94,7 +54,6 @@ function value(field: string, text: string = REPORT): number {
   return first;
 }
 
-/** One `candidates: [...]` entry, by its action. */
 function candidate(action: string): string {
   const marker = `action: '${action}'`;
   const start = REPORT.indexOf(marker);
@@ -147,8 +106,8 @@ describe('the bundled flop report is the arithmetic it claims to be', () => {
   it('reports the rule of 2 and 4 with the error the exact figure gives it', () => {
     const total = value('total');
     const estimate = ruleOf24(total, 2);
-    // The shortcut is a FRACTION on this contract; `estimatePercent` is in points. Publishing
-    // the points here is the defect that rendered "160.0%" in the Scenario Lab.
+    // The shortcut is a fraction on this contract and `estimatePercent` is in points. Mixing them
+    // rendered "160.0%" in the Scenario Lab.
     assert.ok(
       Math.abs(value('estimate') - estimate.estimatePercent / 100) < 1e-9,
       `fixture ${value('estimate')}, computed ${estimate.estimatePercent / 100}`,
@@ -158,9 +117,8 @@ describe('the bundled flop report is the arithmetic it claims to be', () => {
       Math.abs(value('errorPoints') - (estimate.estimatePercent - exact * 100)) < 0.05,
       `error: fixture ${value('errorPoints')} points, computed ${estimate.estimatePercent - exact * 100}`,
     );
-    // The header derives 54.10% from 1 - (32/47)(31/46) and the stored equity is that figure,
-    // presented as a sample against a range. If the two drift apart the whole "the shortcut
-    // overstates by 5.9 points" sentence stops being about this hand.
+    // 54.10% is 1 - (32/47)(31/46). If the stored figure drifts, "the shortcut overstates by 5.9
+    // points" stops being about this hand.
     assert.ok(Math.abs(EQUITY - exact) < 0.001, `equity ${EQUITY} against the exact ${exact}`);
   });
 
@@ -229,12 +187,8 @@ describe('the bundled flop report is the arithmetic it claims to be', () => {
   });
 
   /**
-   * The defect this file was written for. See the header.
-   *
-   * Every figure in the sentence is recomputed and required to appear in it, and the SHAPE of
-   * the claim is checked too: with equity above an even share there is no non-negative fold
-   * frequency at which the raise and the call meet, so a sentence naming one is wrong however
-   * the arithmetic around it reads.
+   * Every figure in the sentence is recomputed, and the shape is checked too. Above an even share of
+   * equity no non-negative fold frequency equalises raise and call, so naming one is wrong.
    */
   it('does not promise a fold frequency at which the raise stops being better', () => {
     const raiseBy = value('to', candidate('raise')) - TO_CALL;
@@ -271,7 +225,7 @@ describe('the bundled flop report is the arithmetic it claims to be', () => {
       );
     }
 
-    // And the crossover it does name is one that exists: an even share.
+    // The crossover it does name exists, at an even share.
     const evenShare = 0.5;
     assert.ok(
       Math.abs(

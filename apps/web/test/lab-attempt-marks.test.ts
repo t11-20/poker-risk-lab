@@ -1,33 +1,9 @@
 /**
  * The Scenario Lab's "You have worked through this one" mark is the READER's, or it is not shown.
- *
- * ## The two defects these exist for
- *
- * `ScenarioSummary.attempted` is a per-reader fact. `apps/api/src/routes/content.ts` derives it
- * from `callerUserId(request)` and answers `false` for every scenario when there is no caller, and
- * a server render carries no session cookie unless one is explicitly forwarded — which is what
- * `readerCallOptions()` in `lib/server-session.ts` exists for, and what `/learn`, `/record` and
- * `/review` all do.
- *
- * **`/lab` did not.** `loadScenarios` called `apiGet(API_PATHS.scenarios())` with no options at
- * all, so the request was anonymous by construction. Measured in Chrome 151 against the running
- * API: all thirty-six cards carried `data-attempted="false"` and read "Not yet attempted", for
- * every learner, permanently — while `/record` on the same session counts and lists the scenarios
- * they have tried. `/learn` had exactly this defect and fixed it; `/lab` was never carried across.
- *
- * **And on the fixture path it was worse than useless.** `ATTEMPTED` in `src/fixtures/scenarios.ts`
- * hard-codes two ids to `true`, so during an API outage a first-time visitor was told "You have
- * worked through this one" about two scenarios they had never opened. That is the same defect
- * `components/LessonRead.tsx` documents as fixed for the lesson header ("bundled sample data, two
- * entries of which are hard-coded `true`") — and `LESSONS_FALLBACK` says in as many words that the
- * bundled read/unread marks "are not yours". The Lab's own fixture note said nothing about them.
- *
- * ## Why these are source assertions
- *
- * A `page.tsx` is an async server component: there is no renderer in this repository (ADR 0008) and
- * `apiGet` is not injectable here, so the fact being held is "this call forwards the reader" and the
- * only place that fact exists is the call. The end-to-end half was measured in the browser and is
- * quoted above. The failure messages name what to restore rather than saying a regex did not match.
+ * `attempted` is per-reader and `false` for an anonymous request, so `/lab` must forward the session
+ * with `readerCallOptions()`, as `/learn`, `/record` and `/review` do. The bundled fixture hard-codes
+ * two marks that belong to nobody. Source assertions, because a server component has no renderer
+ * here (ADR 0008) and `apiGet` is not injectable.
  */
 
 import assert from 'node:assert/strict';
@@ -78,8 +54,7 @@ describe('the Scenario Lab index', () => {
   });
 
   it('is checking against a fixture that really does carry hard-coded marks', () => {
-    // A sweep of nothing is not a pass: if `ATTEMPTED` ever empties, the two tests above are
-    // guarding a hazard that no longer exists and this one says so rather than going quietly green.
+    // If `ATTEMPTED` ever empties, the two tests above guard nothing, and this one says so.
     const bundled = scenarioListFixture().scenarios;
     assert.ok(bundled.length > 0, 'the bundled list is not empty');
     assert.ok(

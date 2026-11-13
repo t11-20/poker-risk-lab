@@ -1,51 +1,9 @@
 /**
- * Turning an authored `Scenario` into the `PlayerView` the real `PokerTable` renders.
- *
- * ## Why this exists at all
- *
- * There is exactly one poker table in this app and it takes exactly one input: `PlayerView`, the
- * server's redacted view of a live hand. A scenario is not a live hand — nothing was dealt, there
- * is no deck and no commitment — but it describes the same situation, so the honest move is to
- * project it into the same shape rather than to build a second table that reads a second type.
- * A second table would drift: the live one would gain a feature and the teaching one would not.
- *
- * ## What is faithful, and what is a stand-in
- *
- * Faithful, because a scenario states it: seats, stacks, per-street commitments, the board, the
- * button, whose turn it is, the pot and what hero owes.
- *
- * Stand-ins, each named here rather than left for a reader to discover:
- *
- *  - `commitmentRoot` is empty and `commitmentContext` is `scenario:<id>`. There is no deck, so
- *    there is nothing to commit to and nothing to prove. `PokerTable` reads neither field; the
- *    context is filled in so that a value appearing anywhere unexpected can be traced back here.
- *  - `result` is null. A scenario is a decision point, not a finished hand.
- *  - `actions` and `forcedBets` are empty. A scenario states the action hero is *facing* in words
- *    (`facingAction`) rather than as a log, and inventing a log to match would be inventing history.
- *    `PokerTable` renders neither.
- *  - `randomSourceKind` is `'fixed-deck-scenario'`, which is the engine's own name for exactly this
- *    situation: cards that were chosen rather than dealt. It is the truthful value, and it is why
- *    the engine has that variant.
- *
- * ## Legal actions are derived, not taken from the engine
- *
- * `legalActions()` in `@prl/poker-engine` needs a `HandState`, which needs a deck. So the bounds
- * are derived here from the scenario, using the engine's own conventions:
- *
- *  - `to` is a TOTAL street commitment, never an increment.
- *  - the raise floor is `betLevel + max(betLevel - heroCommitted, bigBlind)` — the bet level plus
- *    the last full raise increment, floored at one big blind, which is the rule
- *    `redactFor` encodes as `minimumRaiseTo`.
- *  - the ceiling is `heroCommitted + heroStack`: hero's whole stack expressed as a street total.
- *  - when the floor exceeds the ceiling a full raise is impossible, so the only legal raise is
- *    all-in and floor and ceiling collapse onto the ceiling. That is the engine's behaviour and
- *    `ActionBar` needs it, or the sizer would offer an amount the server would reject.
- *
- * The server re-derives and re-validates all of this on arrival, so nothing here is authoritative.
- * Its job is to make the illegal amount unreachable in the sizer, which is what stops a learner
- * meeting a rejection they could not have predicted.
- *
- * Pure and server-safe: no state, no effects, no `window`.
+ * Projects an authored `Scenario` into the `PlayerView` the one real `PokerTable` renders, so there is
+ * no second table to drift. With no deck, `commitmentRoot` is empty, `result` is null, `actions` and
+ * `forcedBets` are empty and `randomSourceKind` is `'fixed-deck-scenario'`. Legal actions are derived
+ * here with the engine's conventions (`to` is a total street commitment). The server re-validates
+ * them; this only keeps an illegal amount out of the sizer.
  */
 
 import type { Scenario, ScenarioSeat } from '@prl/contracts';
@@ -54,7 +12,6 @@ import { assignBlinds, parseCards, positionLabels } from '@prl/poker-engine';
 
 export interface ScenarioTable {
   readonly view: PlayerView;
-  /** The hero seat index, for the components that need to address it directly. */
   readonly heroSeat: number;
   /** The legal actions offered to hero, already bounded. Empty when hero has no decision. */
   readonly legalActions: readonly LegalAction[];
@@ -73,28 +30,21 @@ const POSITION_LABELS: ReadonlySet<string> = new Set<PositionLabel>([
 ]);
 
 /**
- * The name a scenario seat's plate shows.
- *
- * Every seat in the bundled scenarios is labelled with its position, and the plate prints the
- * position as well, so the Lab table read "BTN / BTN", "CO / CO" six times over and never said which
- * plate was the reader's opponent. A label that is a position says nothing the plate does not, so
- * it becomes the seat's role instead. A label that is anything else is the scenario naming the seat
- * on purpose, and is kept.
+ * Every bundled seat is labelled with its position, which the plate already prints, so a position
+ * label becomes the seat's role. Any other label is kept.
  */
 export function scenarioSeatName(seat: ScenarioSeat): string {
   if (!POSITION_LABELS.has(seat.label)) return seat.label;
   return seat.isHero === true ? 'You' : 'Opponent';
 }
 
-/** A pair of cards, or null when the notation does not parse into exactly two. */
 function holeCardsOf(seat: ScenarioSeat): readonly [number, number] | null {
   if (seat.holeCards === undefined) return null;
   let parsed: readonly number[];
   try {
     parsed = parseCards(seat.holeCards);
   } catch {
-    // A scenario with unparseable cards is a content bug. Returning null draws a face-down card,
-    // which is a visible failure that does not take the page down with it.
+    // Null draws a face-down card, a visible failure that keeps the page up.
     return null;
   }
   const [first, second] = parsed;
@@ -102,12 +52,7 @@ function holeCardsOf(seat: ScenarioSeat): readonly [number, number] | null {
   return [first, second];
 }
 
-/**
- * Builds the view, or null when the scenario has no usable hero seat.
- *
- * Null rather than a partial view: a table drawn without hero's cards would silently ask the
- * learner a different question from the one the scenario wrote.
- */
+/** Null rather than a partial view, which would ask a different question from the scenario's. */
 export function scenarioToPlayerView(scenario: Scenario): ScenarioTable | null {
   const hero = scenario.seats.find((seat) => seat.isHero === true);
   if (hero === undefined) return null;
@@ -128,30 +73,12 @@ export function scenarioToPlayerView(scenario: Scenario): ScenarioTable | null {
     scenario.potBeforeStreet + scenario.seats.reduce((sum, seat) => sum + commitmentOf(seat.seat), 0);
 
   const occupied = scenario.seats.map((seat) => seat.seat).sort((a, b) => a - b);
-  // The number of CHAIRS, not the number of players sitting in them.
-  //
-  // Every walk round a table is `(seat + step) % maxSeats`, so a table sized by the count of
-  // players can never reach a seat above that count. Sizing it by the count is why the twelve
-  // scenarios that seat two players at seats 3 and 5 rendered with NO position labels at all —
-  // `assignBlinds` walked a two-chair table, found neither seat, and threw "heads-up table has no
-  // second seat" — and why `rk-when-survival-outweighs-chip-ev` badged seats 2 and 3 as the blinds
-  // when its own `committedThisStreet` says seats 4 and 5 posted them. A hand played by two people
-  // at seats 3 and 5 is a six-max table with four empty chairs, and that is what the seat
-  // arithmetic has to be told.
+  // CHAIRS, not players. Seat walks are `% maxSeats`, so two players at seats 3 and 5 need a six-max table.
   const maxSeats = Math.max(2, Math.min(6, Math.max(...occupied, 1) + 1));
-  // `positionLabels` needs at least two occupied seats and throws on a layout it cannot read. A
-  // scenario without positions is still a perfectly renderable table, so a failure here degrades
-  // to unlabelled seats rather than to no table.
-  //
-  // The blinds are stated rather than left to be derived. A scenario is a single authored spot and
-  // not a hand in a rotation: there is no previous hand, so nobody can already have paid and
-  // neither blind can be dead. The button really does fix the blinds here — the one case
-  // `assignBlinds` is correct for, as `positions.ts` puts it — and saying so at the call site
-  // records it as a decision about scenarios rather than as whatever `positionLabels` defaults to.
+  // An unreadable layout degrades to unlabelled seats, not to no table. Blinds are stated, because a
+  // single authored spot has no previous hand, so the button fixes them (the case `assignBlinds` fits).
   let labels: ReadonlyMap<number, SeatView['position']>;
   try {
-    // `assignBlinds` refuses fewer than two players and a button nobody occupies, which is exactly
-    // the set of layouts `positionLabels` cannot read either.
     const blinds = assignBlinds(scenario.buttonSeat, maxSeats, occupied);
     labels = positionLabels(scenario.buttonSeat, maxSeats, occupied, blinds);
   } catch {
@@ -164,8 +91,7 @@ export function scenarioToPlayerView(scenario: Scenario): ScenarioTable | null {
     const status: SeatStatus = 'active';
     return {
       seat: seat.seat,
-      // Not an opaque server id, because there is no server here. The label is what a scenario has,
-      // and `PokerTable` never renders `playerId` — it takes names from `seatNames`.
+      // `PokerTable` never renders `playerId`. It takes names from `seatNames`.
       playerId: `scenario-seat-${seat.seat}`,
       stack: seat.stack,
       committedThisStreet: commitmentOf(seat.seat),
@@ -189,8 +115,7 @@ export function scenarioToPlayerView(scenario: Scenario): ScenarioTable | null {
       bigBlind: scenario.bigBlind,
       ante: scenario.ante ?? 0,
       maxSeats,
-      // A scenario has no clock. Zero is the inert value rather than a plausible-looking 30, and
-      // `PokerTable` does not render it.
+      // A scenario has no clock. Zero is the inert value.
       actionTimeoutSeconds: 0,
     },
     street: scenario.street,
@@ -201,8 +126,7 @@ export function scenarioToPlayerView(scenario: Scenario): ScenarioTable | null {
     betLevel,
     minimumRaiseTo: raiseFloor(betLevel, heroCommitted, scenario.bigBlind),
     potTotal,
-    // One main pot. Side pots only form when a seat is all in for less than the bet level, and a
-    // scenario states no all-in — every seat in `ScenarioSeat` has a stack behind it.
+    // One main pot. A scenario states no all-in, so no side pot can form.
     pots: [
       {
         amount: potTotal,
@@ -230,17 +154,11 @@ export function scenarioToPlayerView(scenario: Scenario): ScenarioTable | null {
   };
 }
 
-/** The bet level plus the last full raise increment, floored at one big blind. */
 function raiseFloor(betLevel: number, heroCommitted: number, bigBlind: number): number {
   return betLevel + Math.max(betLevel - heroCommitted, bigBlind);
 }
 
-/**
- * The actions hero may take, with the bounds the sizer clamps to.
- *
- * `costAtMin` and `allInAtMax` are filled in because `ActionBar` prints them on the buttons: a
- * player should never have to work out what a button will cost them.
- */
+/** `costAtMin` and `allInAtMax` are filled because `ActionBar` prints them on the buttons. */
 function heroLegalActions(
   scenario: Scenario,
   hero: ScenarioSeat,
@@ -266,27 +184,11 @@ function heroLegalActions(
     actions.push({ type: 'check', note: 'Stay in the hand without putting chips in.' });
   }
 
-  // Aggression needs chips behind the call on BOTH sides. The comment here has always said so and
-  // the condition only ever tested hero's, so the Lab published a Raise button on spots where every
-  // opponent was already all in — `eq-rule-of-four-big-draw-flop` offered "raise to 260" against an
-  // opponent with 0 behind, and `eq-set-on-connected-flop-jam` offered 300-320 against the same.
-  // The Coach never priced those: `deriveLegalActions` in @prl/poker-math tests
-  // `opponentStacks.some((stack) => stack > 0)`, so its table listed only fold and call. A learner
-  // who pressed the button got `pricing: 'action-not-priced'` and was told their decision was not
-  // the line the analysis leans towards — for taking an action the product had offered them.
-  //
-  // `ScenarioSeat.stack` is chips BEHIND, so a seat that is all in is exactly `stack === 0`; this
-  // is the same test the Coach makes, against the same numbers, which is the point.
+  // Aggression needs chips behind on both sides, the same `stack > 0` test the Coach's
+  // `deriveLegalActions` makes, or the Lab offers a raise the Coach never priced.
   const someOpponentCanAnswer = scenario.seats.some((seat) => seat.isHero !== true && seat.stack > 0);
-  //
-  // A raise whenever there is a bet LEVEL, not whenever something is owed. The two differ at the big
-  // blind's option in a limped pot (`fl-big-blind-option-limped-pot`: hero posted 10, the cutoff
-  // limped 10, nothing owed), and keying on `owed` offered "Bet to 10 · 0 units" there — a button
-  // that put nothing in, floored at the blind hero had already posted. Every size it accepted came
-  // back `pricing: 'action-not-priced'`, because the Coach names the action from the bet level
-  // (`betLevelOf(spot) === 0 ? bet : raise` in `@prl/poker-math`), its rows for that spot are
-  // `raise 22`, `raise 28` and `raise 1000`, and `judgeConsistency` matches on the name. With a level
-  // in force the floor is the raise floor — 20 here, the same figure `minimumAggressiveTo` derives.
+  // Keyed on the bet level, not on what is owed, so the big blind's option in a limped pot is a raise
+  // floored at the raise floor, matching how the Coach names the action.
   if (someOpponentCanAnswer && ceiling > heroCommitted + Math.min(owed, hero.stack)) {
     const isRaise = betLevel > 0;
     const floor = isRaise ? raiseFloor(betLevel, heroCommitted, scenario.bigBlind) : scenario.bigBlind;

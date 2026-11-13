@@ -1,26 +1,13 @@
 /**
- * Tests for the card decoder.
- *
- * `src/cards.ts` re-derives the engine's integer encoding rather than importing it (see
- * the comment there for why the UI must not link against `@prl/poker-engine`). This test
- * file is the contract that makes that duplication safe: it checks all 52 cards against
- * an expectation written independently of the implementation, from the encoding as it is
- * documented in `packages/poker-engine/src/cards.ts`:
- *
- *   card = rankIndex * 4 + suitIndex
- *   rankIndex 0..12 -> 2 3 4 5 6 7 8 9 T J Q K A
- *   suitIndex 0..3  -> c d h s
- *
- * If the engine ever changes that, these assertions fail rather than the UI silently
- * printing the wrong card — which is the only failure mode that would matter here and
- * also the only one impossible to spot by eye.
+ * `src/cards.ts` re-derives the engine's encoding instead of importing `@prl/poker-engine`, so this
+ * checks all 52 cards against expectations written independently from the engine's documented order.
+ *   card = rankIndex * 4 + suitIndex, ranks 2..A, suits c d h s
  */
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { describeCard, isCardValue, listCardNames, parseCardText, SUIT_KEYS } from '../src/cards.ts';
 
-/** Independently written expectations, in the engine's documented order. */
 const RANK_FACES = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
 const RANK_SHORT = ['2', '3', '4', '5', '6', '7', '8', '9', 'T', 'J', 'Q', 'K', 'A'];
 const RANK_WORDS = [

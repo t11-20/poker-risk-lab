@@ -1,22 +1,8 @@
 /**
- * A multiple-choice answer is given by "Check answer", never by the radio group changing.
- *
- * ## The defect (UX audit at 6b3886e, Minor 2)
- *
- * `MultipleChoice` answered on the radio's `onChange`. A radio group changes on every arrow key, so a
- * keyboard reader moving through four options answered, and posted to the attempts endpoint, each
- * one on the way — measured: Space → "not the answer", Down → "matches", Down → "not the answer" —
- * and one stray tap on a phone revealed which option is "the answer this lesson gives".
- *
- * ## What is asserted, and where the rest is
- *
- * This app has no component renderer in its tests (ADR 0008: `node --test`, no framework), so this
- * reads `QuizRunner.tsx` the way `y2-quiz-recording-note.test.ts` does: the radio's change handler
- * may only select, and the one call to `onAnswer` in the multiple-choice branch is the Check
- * button's. The behaviour in a browser is `test:ax`'s J2.5, which reads the verdict region between
- * selecting and pressing and fails if anything was written there.
- *
- * Negative control: the old `QuizRunner.tsx` put back fails both behaviour cases.
+ * A multiple-choice answer is given by "Check answer", never by the radio group changing, because a
+ * radio group changes on every arrow key and each change posted an attempt. With no renderer
+ * (ADR 0008) this reads `QuizRunner.tsx`. The radio may only select, and the one `onAnswer` call in
+ * the branch is the Check button's. `test:ax` J2.5 covers it in a browser.
  */
 
 import assert from 'node:assert/strict';

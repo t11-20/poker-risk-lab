@@ -1,50 +1,22 @@
 'use client';
 
 /**
- * The first-run explainer: three things worth knowing before the first lesson.
- *
- * ## What this deliberately is not
- *
- * Not a modal, not a tour with a spotlight, not a countdown, and not a reward. It is a panel at
- * the top of the curriculum with three short steps and two ways out, and once it is dismissed it
- * never appears again. The product guardrails rule out urgency and variable reward; a first-run
- * overlay that has to be cleared before the page can be used is the mildest form of both, and
- * the content of this one — "the chips are worthless, the Coach might be wrong, start here" — is
- * the opposite of a hook.
- *
- * ## Why it does not steal focus
- *
- * A modal would have to trap focus and would put an obstacle between a reader and the thing they
- * navigated to. This does neither: it is in the document after the page heading, it is reachable
- * by `Tab` in reading order, and the reader can ignore it entirely. Focus moves only when *they*
- * change step, and then only to the new step's heading, which is where a reader who just pressed
- * "next" expects to be.
- *
- * ## Why it renders nothing on the first paint
- *
- * Whether it has been dismissed lives in `localStorage`, which the server cannot read. Rendering
- * the panel and then removing it would be a flash of content that a returning learner sees on
- * every visit; rendering nothing and then adding it is a one-off shift on the very first visit
- * only, immediately after load, above content nobody has started reading. The second is the
- * cheaper mistake by a wide margin.
- *
- * `localStorage` rather than a cookie or the API: this is a per-device UI preference with no
- * bearing on anything the server does, and sending it to the server would make a
- * "have you seen the intro" fact into an account-level record for no gain.
+ * The first-run explainer, three steps before the first lesson. An in-flow panel, not a modal, so it
+ * traps nothing and can be ignored. Focus moves only when the reader changes step.
+ * The dismissal is a per-device `localStorage` flag the server cannot read, so the first paint
+ * renders nothing. A one-off shift on a first visit beats a flash on every return visit.
  */
 
 import { Button, Callout, formatIndex, UNITS_EXPLANATION } from '@prl/ui';
 import Link from 'next/link';
 import { type ReactElement, useEffect, useRef, useState } from 'react';
 
-/** Namespaced so it cannot collide with anything else this origin stores. */
 const DISMISSED_KEY = 'prl.learn.onboarding.dismissed';
 
 export interface OnboardingProps {
-  /** Where "start here" points. `null` when every lesson is already marked read. */
+  /** `null` when every lesson is already marked read. */
   readonly startHref: string | null;
   readonly startTitle: string | null;
-  /** The start-here lesson's number in the curriculum, for the `01` motif. */
   readonly startPosition: number | null;
 }
 
@@ -53,11 +25,7 @@ interface Step {
   readonly body: readonly string[];
 }
 
-/**
- * Three steps, in the order a learner needs them: what the chips are, what the Coach is, where to
- * begin. The units wording comes from `UNITS_EXPLANATION` in `@prl/ui` rather than being written
- * again here, because that string is also what the header badge says and the two must not drift.
- */
+/** `UNITS_EXPLANATION` is shared with the header badge so the two cannot drift. */
 const STEPS: readonly Step[] = [
   {
     title: 'The chips are not money',
@@ -90,9 +58,7 @@ export function Onboarding(props: OnboardingProps): ReactElement | null {
   const stepped = useRef(false);
 
   useEffect(() => {
-    // A browser with storage disabled throws on access rather than returning null, and the
-    // honest response to "we cannot remember whether you have seen this" is not to nag: the panel
-    // stays hidden rather than reappearing on every page load for the rest of time.
+    // Disabled storage throws. Stay hidden rather than reappear on every page load.
     try {
       if (window.localStorage.getItem(DISMISSED_KEY) === null) setVisible(true);
     } catch {
@@ -100,14 +66,7 @@ export function Onboarding(props: OnboardingProps): ReactElement | null {
     }
   }, []);
 
-  /**
-   * Focus follows a step change, and only a step change.
-   *
-   * `step` is the effect's *trigger* rather than a value it reads, which is why the linter cannot
-   * see that it belongs in the list — and why removing it would silently stop focus following
-   * "next", leaving a keyboard reader on a button whose surrounding text has changed underneath
-   * them. `stepped` keeps the first render from stealing focus on page load.
-   */
+  /** `stepped` keeps the first render from taking focus on page load. */
   // biome-ignore lint/correctness/useExhaustiveDependencies: `step` is the trigger; without it focus stops following navigation
   useEffect(() => {
     if (!stepped.current) return;
@@ -119,8 +78,7 @@ export function Onboarding(props: OnboardingProps): ReactElement | null {
     try {
       window.localStorage.setItem(DISMISSED_KEY, '1');
     } catch {
-      // Storage refused. The panel is gone for this page view, which is what was asked for; it
-      // will be back next time, and there is nothing further to do about it.
+      // Storage refused. Hidden for this page view only.
     }
   };
 

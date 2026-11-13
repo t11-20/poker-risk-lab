@@ -1,9 +1,6 @@
 /**
- * The home page's hand: the cards, the price of calling, and the two numbers that decide it.
- *
- * It is the first thing a visitor sees because it is the whole product in one picture — a decision
- * with its price worked out — where the old hero was a sentence describing that. The figures come
- * from `homeSpot()`, computed from the deck when the page renders.
+ * The home page's hand, its price of calling and the two numbers that decide it. The figures come
+ * from `homeSpot()`, computed from the deck at render.
  */
 
 import { formatPercent, formatUnits, PlayingCard } from '@prl/ui';
@@ -12,7 +9,6 @@ import type { CSSProperties, ReactElement } from 'react';
 import type { HomeSpot as Spot } from '@/lib/home-spot.ts';
 import { lessonHref } from '@/lib/learn-data.ts';
 
-/** The places the board has not dealt yet: drawn empty so the reader sees two cards are to come. */
 const TO_COME = ['turn', 'river'] as const;
 
 export function HomeSpot({ spot }: { readonly spot: Spot }): ReactElement {
@@ -20,8 +16,7 @@ export function HomeSpot({ spot }: { readonly spot: Spot }): ReactElement {
   const have = formatPercent(spot.have);
   const pays = spot.have > spot.need;
   const total = spot.pot + spot.toCall;
-  // Custom properties rather than geometry in the attribute, the convention `EquityBar` set: the
-  // stylesheet owns how a share is drawn, the markup only says what the share is.
+  // Custom properties, so the stylesheet owns how a share is drawn.
   const barStyle = {
     '--prl-spot-have': `${(spot.have * 100).toFixed(2)}%`,
     '--prl-spot-need': `${(spot.need * 100).toFixed(2)}%`,
@@ -75,8 +70,7 @@ export function HomeSpot({ spot }: { readonly spot: Spot }): ReactElement {
             <dd>{have}</dd>
           </div>
         </dl>
-        {/* The bar repeats the two figures above it, so it is hidden from assistive technology
-            rather than given a second, competing description of the same numbers. */}
+        {/* Hidden because it repeats the two figures above. */}
         <div aria-hidden="true" className="prl-spot__bar" style={barStyle}>
           <span className="prl-spot__bar-have" />
           <span className="prl-spot__bar-need" />
@@ -86,8 +80,7 @@ export function HomeSpot({ spot }: { readonly spot: Spot }): ReactElement {
           you need to break even. Over all {spot.runouts.toLocaleString('en-GB')} ways the turn and river can
           fall, you win {formatPercent(spot.win)}
           {spot.tie > 0 ? ` and split the pot ${formatPercent(spot.tie)}` : ''} of the time.{' '}
-          {/* Equity assumes the hand reaches the river with no more betting (`equity.ts`), and a
-              turn bet can fold you out before then. So the conclusion is stated on that assumption. */}
+          {/* Equity assumes no more betting to the river (`equity.ts`), so the conclusion states that. */}
           If nobody bets again before the river, the call {pays ? 'pays' : 'costs'} at this price. A bet on
           the turn can make you fold before you see that share;{' '}
           <Link href={lessonHref('pot-odds')}>the pot odds lesson</Link> covers what later betting does to a

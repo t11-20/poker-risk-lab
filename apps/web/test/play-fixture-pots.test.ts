@@ -1,26 +1,6 @@
 /**
- * The play fixture's pot obeys the same rule the engine does.
- *
- * ## The gap this closes
- *
- * `FLOP_DECISION_VIEW` is hand-authored demo data — it never goes through `redactFor` — and it is
- * the state `/play?state=decision` renders, which is a route `test:ax`, `test:layout` and
- * `design:contrast` all walk. Nothing asserted its `pots`:
- *
- *   - `table-fixture-figures.test.ts` extracts only the `FLOP_DECISION_REPORT` literal.
- *   - `regenerate-web-fixtures.mjs` rewrites `scenarios.ts` and `review.ts`; `table.ts` is not a
- *     target, so `fixtures:check` cannot see it.
- *
- * That mattered because the engine and the fixture disagreed, and the FIXTURE was right. `redactFor`
- * used to fill `pots` with `buildPots`, which layers by `committedTotal` and is correct only at
- * settlement; on a live state it turns an uncalled bet into a side pot. For these very seats it
- * produced two layers where the fixture correctly showed one:
- *
- *     buildPots: [{amount:65, eligible:[0,3], cap:30}, {amount:35, eligible:[3], cap:65}]
- *     fixture:   [{amount:100, eligible:[0,3], cap:65}]
- *
- * The engine now agrees with the fixture. This asserts the rule rather than the literal, so it
- * holds if the fixture is re-authored.
+ * The play fixture's pot obeys the engine's rule. `FLOP_DECISION_VIEW` is hand-authored and owned by no
+ * regenerator, so `fixtures:check` cannot see it. The rule is asserted, not the literal.
  */
 
 import assert from 'node:assert/strict';
@@ -29,10 +9,7 @@ import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-// Read as TEXT, not imported. `src/fixtures/table.ts` transitively pulls in `@prl/ui`'s `.tsx`
-// components, which the package's plain `node --test` runner cannot load — importing it fails the
-// whole file with ERR_UNKNOWN_FILE_EXTENSION. `table-fixture-figures.test.ts` next door reads the
-// same file the same way for the same reason.
+// Read as text, because `src/fixtures/table.ts` pulls in `@prl/ui`'s `.tsx`, which Node cannot load.
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SOURCE = readFileSync(join(HERE, '..', 'src', 'fixtures', 'table.ts'), 'utf8');
 
@@ -45,14 +22,10 @@ const VIEW = (() => {
   return SOURCE.slice(start, end);
 })();
 
-/** Every `{...}` seat entry in the view, as its raw text. */
 function seatEntries(): readonly string[] {
   const seats = /seats:\s*\[([\s\S]*?)\n {2}\]/u.exec(VIEW);
   const body = seats?.[1];
-  // Narrowed rather than asserted non-null: `apps/web`'s test script runs `tsc -p
-  // test/tsconfig.json` BEFORE the runner, and `assert.ok` on the match does not narrow the
-  // captured group for it. The file ran green under the runner and failed the typecheck in front
-  // of it.
+  // Narrowed here, because the `tsc -p test/tsconfig.json` step does not narrow on `assert.ok(match)`.
   assert.ok(body !== undefined, 'the view no longer states a seats array this test can read');
   return [...body.matchAll(/\{[^{}]*\}/gu)].map((match) => match[0]);
 }
@@ -89,14 +62,8 @@ describe('the play fixture states a pot the engine would state', () => {
 });
 
 /**
- * `COMPLETED_HAND_VIEW` is the hand `/play?state=complete` renders, and it showed "You, STACK 0" beside a
- * summary saying you had won the 905 main pot (UI audit of 308fadf, item 18): its stacks were the ones
- * from just before settlement. Nothing here asserted them, for the same reason nothing asserted the
- * decision view's pot — the literal is hand-authored and no regenerator owns it.
- *
- * So this settles the hand the way `settle` in `@prl/poker-engine` does, from the fixture's own pots
- * and the winners its own summary names, and holds every seat to the result. The starting stacks are
- * the fixture's story (hero short on 300, everybody else on 1,000), stated once here.
+ * `COMPLETED_HAND_VIEW` once showed "You, STACK 0" after winning the main pot. This settles the hand
+ * as `settle` in `@prl/poker-engine` does. Starting stacks: hero 300, everybody else 1,000.
  */
 describe('the completed-hand fixture shows the stacks the hand settled to', () => {
   const view = (() => {
@@ -133,8 +100,7 @@ describe('the completed-hand fixture shows the stacks the hand settled to', () =
   it('reads the hand it is about to settle', () => {
     assert.equal(seats.length, 6, 'a sweep of nothing is not a pass');
     assert.deepEqual(pots, [905, 600]);
-    // The winners above are the summary's, not this test's invention; if the summary changes hands,
-    // this is the line that has to change with it.
+    // The winners above are the summary's; if the summary changes hands, this line changes with it.
     assert.match(summary, /Main pot, 905 units: your/u);
     assert.match(summary, /Side pot, 600 units: three queens/u);
     assert.match(view, /seat: 3,[\s\S]*?holeCards: pair\('Qs Qd'\)/u);

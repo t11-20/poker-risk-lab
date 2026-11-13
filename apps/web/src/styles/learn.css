@@ -1,140 +1,37 @@
 /**
- * The Learn section: every class the three learn routes and their seven components use.
- *
- * ## Why this file rather than rules in `globals.css`
- *
- * `globals.css` is the app shell, edited by whoever owns the header and the frame. A feature that
- * put its patterns there would be a merge conflict waiting to happen. Everything below is
- * namespaced `.prl-learn-*` (or `.prl-term-*`, for the glossary popover that appears inside lesson
- * prose) and imported by `app/learn/layout.tsx`, so an edit here cannot reach another feature.
- *
- * ## The rules this file is written against
- *
- *  - **Every value is a `--prl-*` token.** No hex, no px, no ms, no bezier literal. The three
- *    exceptions are called out where they appear: `1px` on hairlines drawn as borders, the four
- *    media-query breakpoints (see below), and the feature-local custom properties in section 0.
- *  - **Depth comes from the five-level ladder in `tokens.css`, spent through its tokens.**
- *    This file's rules used to say "no shadows", and that was true of a system with one card
- *    style. It now has five levels, so what replaced the ban is TIGHTER rather than looser:
- *    an elevation may only be spent as `var(--prl-elevation-0..4)`, never as a literal, and
- *    `packages/ui/test/layout-guarantees.test.ts` fails the file if it ever is.
- *  - **A glass fill never appears without `--prl-glass-filter`, in the same block.** That is the
- *    ghosting bug documented in `nav.css`, and the same test reads it off this stylesheet.
- *  - **Glass is for bounded chrome that TRAVELS over content.** In this section that is exactly
- *    two things: the sticky contents rail and the quiz's position pill. Lesson prose sits on an
- *    opaque L2 sheet, because long-form text over a varying backdrop is a legibility problem no
- *    amount of tint solves.
- *  - **A border that carries meaning uses `--prl-line-strong` or the accent.** `--prl-line-subtle`
- *    and the `--prl-edge-*` trio are decoration only, so none of them ever marks a state.
- *  - **Only `transform`, `opacity` and colour animate**, in the 150-250ms material band
- *    (`--prl-dur-fast`/`--prl-dur-base` with `--prl-ease-material`). `backdrop-filter` is never
- *    transitioned — it is re-evaluated against the whole backdrop on every frame it changes.
- *  - **Nothing is distinguished by colour alone.** The active contents link takes an accent bar
- *    AND `aria-current`; a term's open state takes an underline AND `aria-expanded`; the chosen
- *    quiz answer takes an accent edge, a raised level AND the radio's own checked dot.
- *
- * ## The breakpoint literals
- *
- * `600px`, `900px` and `1280px` are written as numbers because `var()` is invalid inside a media
- * feature — there is no way to express a breakpoint as a token. These are the design system's own
- * three content breakpoints (§10), the same ones `components.css`, `home.css` and `legends.css`
- * use; no new breakpoint is introduced here.
+ * The Learn section (`.prl-learn-*`, `.prl-term-*`), imported by `app/learn/layout.tsx`. Shadows go
+ * through `--prl-elevation-*`, and every glass fill sits beside its filter (`layout-guarantees.test.ts`).
+ * Glass is only for the sticky rail and the quiz pill. Lesson prose sits on an opaque L2 sheet.
+ * Breakpoints are literals, because `var()` is invalid in a media query.
  */
 
-/* ==========================================================================================
-   0. FEATURE-LOCAL VALUES
-   ==========================================================================================
-   Two custom properties scoped to this feature rather than added to `tokens.css`. Neither is
-   systemic — nothing else in the app needs a contents-rail width — and the design system says to
-   add a token only when it genuinely is one. Both are composed from existing spacing steps rather
-   than being new numbers, which is the same thing `.prl-candidates__derivation` does in
-   `components.css`.
-   ========================================================================================== */
+/* 0. Feature-local values, composed from spacing steps. */
 
 .prl-learn-lesson {
-  /* 14rem: the narrowest a contents rail can be and still fit two words of a heading per line. */
+  /* 14rem, the narrowest rail that still fits two words of a heading per line. */
   --prl-learn-rail: calc(var(--prl-space-16) + var(--prl-space-12));
 
-  /* ------------------------------------------------------------------------------------
-     THE SHEET'S INLINE PADDING, NAMED BECAUSE THE PAGE WIDTH HAS TO KNOW IT.
-
-     Lesson prose now sits on an opaque card rather than directly on the page ground, and a card
-     has padding. `.prl-learn-lesson`'s width is computed from rail + gutter + MEASURE + gutter,
-     so a padded sheet inside it would eat the measure from both sides — the column would come
-     out four characters narrower than the value that was measured, at every width above 1280.
-     Naming the padding is what lets the width arithmetic add it back.
-
-     `--prl-space-9` is also exactly the negative margin `.prl-learn-lesson__heading` uses to pull
-     its index into the gutter at 900px and up, so the index lands on the sheet's inner edge
-     rather than in the middle of the padding. The two are a pair; change one and change both.
-     ------------------------------------------------------------------------------------ */
+  /* The sheet's inline padding, named so the page width can add it back around the measure.
+     `--prl-space-9` is also the heading index's negative margin at 900px. Change both together. */
   --prl-learn-sheet-x: var(--prl-space-9);
 }
 
 .prl-learn-page,
 .prl-learn-lesson {
-  /* The offset a sticky element and a scrolled-to heading share. Matches
-     `scroll-padding-block-start` in base.css, which is what `LessonContents` reads at runtime. */
+  /* Matches `scroll-padding-block-start` in base.css, which `LessonContents` reads at runtime. */
   --prl-learn-sticky-top: var(--prl-space-13);
 
-  /* ------------------------------------------------------------------------------------
-     THE READING MEASURE, NARROWED FOR THIS SECTION.
-     `--prl-measure` is the design token and this is the token, given a tighter value on the two
-     routes in the app that are actually long-form reading. Every consumer of it — `base.css`'s
-     bare `<p>`, `.prl-panel__lede`, `.prl-note`, and the dozen rules in `components.css` — uses it
-     as a `max-width` on a text column and nothing else, so narrowing it here narrows exactly the
-     columns it should and cannot reach layout.
-
-     WHY, measured rather than assumed. `--prl-measure` is `60ch`, and `ch` is the advance of "0",
-     which in this stack is much wider than the average letter — so `60ch` has never meant 60
-     characters. Walking a Range character by character down a rendered lesson paragraph at 1440px
-     and recording where each line actually broke gave 80, 80 and 88 characters. Past roughly 75 the
-     eye starts losing its place on the return sweep, which is the whole reason the rule exists.
-
-     `52ch` measures out in the low seventies, and because the ratio between `ch` and the average
-     character is a property of the typeface rather than of the size, one value holds at the 17px
-     body, the 20px lede and the 15px caption alike.
-
-     RE-MEASURED after the reading sheet landed, by the same method — a Range walked character by
-     character down the first six `.prl-learn-prose` paragraphs at 1440x900, recording where each
-     line actually broke, discarding each paragraph's ragged last line. Eighteen full lines in two
-     columns of 557px and 533px: 66 characters at the low end, 77 at the high, mean 73. (One line
-     came out at 92; it is the paragraph carrying an inline `<code>` run, which is set in
-     `--prl-font-mono` at 0.9375em and therefore fits more characters in the same column. It is a
-     different typeface, not a longer line.) The sheet's padding is added back into
-     `.prl-learn-lesson`'s width cap in section 9, which is why the column did not narrow when the
-     prose gained a surface.
-
-     This belongs in `tokens.css` — the same arithmetic applies to every reading column in the app.
-     It is scoped here because that file is `packages/ui`, which this change does not own.
-     ------------------------------------------------------------------------------------ */
+  /* `60ch` broke lesson lines at 80 to 88 characters at 1440px, past the ~75 where the return sweep
+     loses the line. `52ch` measured 66 to 77 (mean 73) on the sheet, at every size. It overrides the
+     token, so every reading column it caps narrows with it. */
   --prl-measure: 52ch;
 }
 
-/* ==========================================================================================
-   0a. REPAIRS TO `@prl/ui`
-   ==========================================================================================
-   THE PANEL-HEADER REPAIR IS GONE, BECAUSE THE DEFECT IS.
-
-   This section used to restate `.prl-panel__header` / `__heading` / `__actions` here, because
-   `components.css` styled a `.prl-panel__head` that `Panel.tsx` has never emitted and every panel
-   header in the app therefore rendered unstyled. `packages/ui` now styles the classes the
-   component actually publishes, so the copy in this file was a second definition of the same
-   three rules with a slightly different `gap` — which is not a harmless duplicate, it is a
-   route stylesheet quietly overriding the design system from a file nobody reads when a panel
-   looks wrong. The rules are deleted rather than left in agreement.
-
-   What is left below is the one repair that is still real.
-   ========================================================================================== */
+/* 0a. Repairs to `@prl/ui` */
 
 /**
- * REPAIR: `AssumptionList` draws its own `01 02 03` index inside each `<li>`, and
- * `.prl-assumptions__list` in `components.css` leaves the list's default marker on — so every
- * assumption currently renders with a bullet AND a number, which is the same information twice
- * and reads as a mistake. The list stays a `<ul>` deliberately (an `<ol>` would claim these have
- * an order that matters), so the marker is what goes.
- *
- * Delete once `components.css` sets `list-style: none` on `.prl-assumptions__list`.
+ * `AssumptionList` draws its own index, so the default marker is a duplicate. It stays a `<ul>`, because
+ * the order does not matter. Delete once `components.css` sets `list-style: none` on the list.
  */
 .prl-assumptions__list {
   padding-inline-start: 0;
@@ -148,12 +45,7 @@
   align-items: baseline;
 }
 
-/* ==========================================================================================
-   1. PAGE FRAME
-   ==========================================================================================
-   Shared by the curriculum index and the glossary. The lesson has its own frame in section 4
-   because it carries a rail.
-   ========================================================================================== */
+/* 1. Page frame, shared by the curriculum index and the glossary. The lesson has its own in section 4. */
 
 .prl-learn-page,
 .prl-learn-lesson {
@@ -183,13 +75,7 @@
   font-size: var(--prl-type-body-sm);
 }
 
-/**
- * The page's opening paragraph, at the token that exists for one: `--prl-type-body-lg`.
- *
- * `max-width` is the measure, and because `ch` resolves against this element's own 20px rather than
- * the 17px it used to inherit, the column grows with the type instead of squeezing the same 60
- * characters into a taller block.
- */
+/** `ch` resolves against this element's own 20px, so the column grows with the type. */
 .prl-learn-page__lead,
 .prl-learn-lesson__summary {
   margin: 0;
@@ -203,39 +89,12 @@
   margin-block-start: var(--prl-space-5);
 }
 
-/* ==========================================================================================
-   1a. THE CURRICULUM OPENER'S SECOND COLUMN
-   ==========================================================================================
-   Measured at 1440x1100: this opener was the worst void in the app. Three lead paragraphs capped
-   at the 52ch measure and a three-cell figures row, all stacked in a 640px column, with the entire
-   right half of a 1360px shell empty from the header rule to the fixture notice 700px below it.
-
-   The three figures are what belong beside the prose, and the reason is editorial rather than
-   geometric: "17 lessons, 10 topics, 179 minutes end to end" is the answer to the question the
-   three paragraphs are answering at length. A reader deciding whether to start the curriculum
-   either reads the argument or checks the size of it, and putting the two side by side lets them
-   do whichever they came to do. Stacked, the figures were the fourth thing after the third
-   paragraph, which is where a reader who wanted them had already stopped looking.
-
-   `row-gap: 0` with margins doing the vertical spacing is not a style choice — it is the trap
-   `play.css` section 1 and `legends.css` section 1 both document. `grid-row: 1 / span 8` spans past
-   the end of the content so the figures stretch nothing, but the implicit rows it creates beyond
-   the last real one are still rows, and a `row-gap` would pay for every one of them.
-   1000px is the app-wide threshold for a second column — see the note on `.prl-page-head` in
-   `page.css`, which carries the arithmetic. One number for all three openers.
-   ========================================================================================== */
+/* 1a. From 1000px the curriculum figures sit beside the opener, which left half the shell empty
+   when stacked. `row-gap: 0` with margins, because `grid-row: 1 / span 8` creates implicit rows and a
+   `row-gap` pays for each of them. The 1000px arithmetic is in `page.css`. */
 
 @media (min-width: 1000px) {
-  /**
-   * The page comes in to exactly two reading columns.
-   *
-   * `--prl-container` is 1248px and this page's widest real arrangement is two of them: the opener
-   * below, and the two-column lesson grid at 1280px. Two measures plus the gutter between them is
-   * 1048px, so 200px of the shell was frame around nothing — and a frame around nothing is what
-   * makes every block inside it look like it stopped short. Composed from the tokens rather than
-   * typed as a number, the same way `.prl-learn-lesson` below computes its own width from rail +
-   * gutter + measure.
-   */
+  /** Capped at two measures plus the gutter, the widest real arrangement on this page. */
   .prl-learn-page {
     width: min(var(--prl-container), calc(2 * var(--prl-measure) + var(--prl-space-11)));
   }
@@ -255,48 +114,28 @@
     margin-block-end: var(--prl-space-0);
   }
 
-  /**
-   * The figures sit level with the title, not with the eyebrow: the eyebrow is a caption ON the
-   * title rather than a line above it, and a stat block level with a caption reads as a fourth
-   * navigation item.
-   */
+  /** Level with the title, not the eyebrow, which is a caption on the title. */
   .prl-learn-page__figures {
     grid-column: 2;
     grid-row: 1 / span 8;
-    /* Centred against the three paragraphs rather than pinned to the top of them. Pinned, the
-       column below it is a 400px void; centred, the same emptiness is split above and below a
-       block that is obviously a sidebar, which is the difference between a layout and a gap. */
     align-self: center;
-    /* One column, not three. `.prl-metric-row` fits three cells to whatever width it is given, and
-       given half of this opener that is 166px a cell — narrow enough that "READING, END TO END"
-       breaks across two lines with "END" alone on the second. Stacked, each label has the whole
-       column and none of them wrap. */
+    /* One column. At three across, 166px cells broke "READING, END TO END" over two lines. */
     grid-template-columns: minmax(0, 1fr);
     gap: var(--prl-space-7);
-    /* The rule is what says "sidebar". Without it three figures beside three paragraphs read as a
-       block that was left behind rather than one that was placed. */
     padding-inline-start: var(--prl-space-8);
     border-inline-start: var(--prl-hairline);
     margin-block: var(--prl-space-0);
   }
 }
 
-/* ==========================================================================================
-   2. CURRICULUM INDEX
-   ========================================================================================== */
+/* 2. Curriculum index */
 
 .prl-learn-start__summary {
   margin: 0;
   max-width: var(--prl-measure);
 }
 
-/**
- * A panel body is a grid, so a lone button stretches to the full column.
- *
- * `justify-items: start` on the body rather than a width on the button: the button should be as
- * wide as its label, and a full-bleed accent bar is exactly the "one CTA per view" restraint the
- * design system asks for being spent on emphasis it does not need.
- */
+/** A lone button in a panel body would stretch to the column, so the body uses `justify-items: start`. */
 .prl-learn-start .prl-panel__body,
 .prl-learn-glossary-cta .prl-panel__body,
 .prl-learn-terms .prl-panel__body {
@@ -340,21 +179,11 @@
 }
 
 /**
- * A lesson card: level 2 of the ladder — opaque fill, lit hairline, one step of elevation.
- *
- * The number sits in its own column at every width, because a number that reflows above the title
- * on a phone stops reading as an index and starts reading as a stray digit.
- *
- * The lit hairline is what makes seventeen of these read as seventeen objects rather than as a
- * ruled list. Before it, the card's border was `--prl-line-subtle` at 1.44:1 and its fill was one
- * step off the page — measured on the curriculum index at 1440x900, the boundary between two
- * cards was invisible in a screenshot and the grid read as one continuous field of text.
- *
- * `:focus-within` rides with `:hover` so arriving by keyboard lifts the same card, and the lift is
- * a `translateY` rather than a margin: transform composites, layout does not.
+ * A lesson card is level 2, so seventeen read as objects. The number keeps its own column at every
+ * width. The hover lift is a `translateY`, because transform composites.
  */
 .prl-learn-entry {
-  /* The containing block for the title link's stretched `::after`, below. */
+  /* The containing block for the title link's stretched `::after`. */
   position: relative;
   display: grid;
   gap: var(--prl-space-4) var(--prl-space-6);
@@ -381,12 +210,7 @@
   transform: translateY(calc(-1 * var(--prl-space-1)));
 }
 
-/**
- * The suggested next lesson.
- *
- * An accent border on the inline start edge, one more step of elevation so it reads as the card
- * nearest the reader, and a "start here" chip in the markup — three cues, never the edge alone.
- */
+/** The suggested lesson takes an accent edge, more elevation and a chip, never the edge alone. */
 .prl-learn-entry[data-start="true"] {
   border-color: var(--prl-accent-edge);
   border-inline-start-width: var(--prl-space-1);
@@ -424,17 +248,8 @@
 }
 
 /**
- * The whole title is the link, and it is underlined — and the whole card is its target.
- *
- * `base.css` already underlines links; this only removes the underline offset default so a
- * two-line title's rules do not collide with the descenders above them.
- *
- * The card used to be tappable only on the title: measured at 390x844, a 252x24 target inside a
- * card several times that size, beside Lab cards that take a tap anywhere (UX audit at 6b3886e,
- * Minor 1). The stretch is the Lab's own (`.prl-lab-card__link::after` in lab.css, which says why
- * it is a pseudo-element and not an anchor around the card). One difference: a lesson card holds
- * other links, its prerequisites, and an overlay above them would swallow their taps — so they are
- * lifted over it below.
+ * The whole card is the title link's target, through the Lab's stretched `::after` (see
+ * `.prl-lab-card__link::after` in lab.css). Prerequisite links are lifted above it below.
  */
 .prl-learn-entry__link {
   color: var(--prl-text);
@@ -452,7 +267,7 @@
   color: var(--prl-accent-text);
 }
 
-/** The ring belongs on the card, as on the Lab: the card is what the pseudo-element covers. */
+/** The ring goes on the card, because the card is what the pseudo-element covers. */
 .prl-learn-entry:has(.prl-learn-entry__link:focus-visible) {
   outline: var(--prl-focus-width) solid var(--prl-focus-color);
   outline-offset: var(--prl-focus-offset);
@@ -462,11 +277,6 @@
   outline: none;
 }
 
-/**
- * The sentence a reader actually chooses a lesson from, so it is set at the reading size rather
- * than at the caption size. Seventeen of these are the substance of the curriculum page; there is
- * nothing secondary about them.
- */
 .prl-learn-entry__summary {
   margin: 0;
   max-width: var(--prl-measure);
@@ -490,12 +300,8 @@
 }
 
 /**
- * Above the card's stretched link, and a full target of their own.
- *
- * `position: relative` with a `z-index` is what puts these over `.prl-learn-entry__link::after`;
- * without it a tap on "How a hand runs" opened the card's own lesson instead. The height is the
- * product's 44px floor (`--prl-target-min`): these were 17px tall (UX audit at 6b3886e, Minor 1),
- * and a comma-separated list of links is a row of controls, not a sentence of prose.
+ * Lifted over the card's stretched link, or a tap opened the card's lesson. A full 44px target
+ * (`--prl-target-min`), because they were 17px tall.
  */
 .prl-learn-entry__prereq-link {
   position: relative;
@@ -533,12 +339,7 @@
   list-style: none;
 }
 
-/* ==========================================================================================
-   3. ONBOARDING
-   ==========================================================================================
-   A panel, not an overlay. Nothing here dims the page, traps focus, or has to be cleared before
-   the curriculum can be read.
-   ========================================================================================== */
+/* 3. Onboarding. A panel, not an overlay. Nothing dims the page or traps focus. */
 
 .prl-learn-onboarding {
   display: grid;
@@ -575,13 +376,7 @@
   margin: 0;
 }
 
-/**
- * A step dot that is a number, not a dot.
- *
- * 44px minimum target, because it is a real control. The current step is marked by an accent
- * border and `aria-current="step"`; the number itself is always readable, so the marker is the
- * second cue.
- */
+/** A real control, so a 44px target. The current step is an accent border and `aria-current="step"`. */
 .prl-learn-onboarding__step-btn {
   display: inline-flex;
   align-items: center;
@@ -638,40 +433,17 @@
   font-weight: var(--prl-weight-semibold);
 }
 
-/* ==========================================================================================
-   4. THE LESSON
-   ==========================================================================================
-   Two columns from 1280px: the contents rail, then the reading column. DOM order matches visual
-   order — rail first — so nothing has to be re-ordered with `order`, which would put the focus
-   sequence out of step with the page (WCAG 1.3.2).
-   ========================================================================================== */
+/* 4. The lesson. Two columns from 1280px. DOM order is rail first, matching the visual order, so
+   nothing uses `order` (WCAG 1.3.2). */
 
 /**
- * THE ORPHANED "To,".
- *
- * Measured at 1440x1100 on `/learn/pot-odds`, this line broke as
- *
- *     ASSUMES YOU HAVE READ Actions, and What Each One Commits You
- *     To, Outs: Clean, Dirty and Imaginary
- *
- * — two words of a lesson title stranded on their own line, with the separator comma from the NEXT
- * item pushed up against them, so the line read as if "To" were a prerequisite called To.
- *
- * The cause was `max-width: var(--prl-measure)`, which is the READING measure: the ~75-character
- * cap that stops the eye losing the line beginning on the return sweep. There is no return sweep
- * here. This is a metadata row — a label and a comma-separated list of links, scanned rather than
- * read — and capping it at a prose measure is applying a rule to a case its argument does not
- * cover. Uncapped it sets in about 700px inside an 880px reading page and does not wrap at all.
- *
- * `text-wrap: pretty` is the insurance for the case where it does: a fourth prerequisite, or a
- * narrow window. It is the property whose entire job is to stop a short last line, and unlike
- * `balance` it does not reflow a paragraph — on a block that fits on one line it costs nothing.
+ * Not capped at the reading measure, because this metadata row is scanned, not read. Capped, it
+ * stranded a title's last word on its own line at 1440. `text-wrap: pretty` covers the case where it
+ * still wraps.
  */
 .prl-learn-lesson__prereq {
   display: block;
-  /* `none`, not "no declaration": this is a `<p>`, and `base.css` caps every bare paragraph at the
-     measure. Dropping the declaration here just hands the cap back to the element rule, which is
-     the rule the paragraph above is arguing against. */
+  /* `none`, because `base.css` caps every bare `<p>` at the measure. */
   max-width: none;
   margin: 0;
   color: var(--prl-text-muted);
@@ -702,25 +474,8 @@
 }
 
 /**
- * THE READING SHEET — level 2, and the one place in this section that is deliberately NOT glass.
- *
- * A lesson is twelve minutes of prose, and prose over a backdrop that varies is a legibility
- * problem no amount of tint solves; `tokens.css` says so in the MATERIALS block and this is the
- * surface it is talking about. So the blocks sit on an opaque panel with the lit hairline and one
- * step of elevation, and everything translucent in this feature travels OVER it.
- *
- * What this fixes, measured on `/learn/pot-odds` at 1440x900 before the change: the prose had no
- * surface at all. It was 17px text sitting directly on the page ground, in a 669px column, with
- * the contents rail beside it drawn in `--prl-surface-raised` (#12151b) on `--prl-surface-page`
- * (#0b0d11) — a 1.05:1 fill step — behind a 1.44:1 hairline. The rail was legible, just: what it
- * was not was an OBJECT. Neither was the prose. With no figure and no ground the page had nothing
- * to say which of the two columns was the thing to read, and every callout, formula and table in
- * the lesson was a slightly different rectangle floating in the same dark.
- *
- * So the prose gets a sheet and the rail gets a material (see the contents rail below), and the
- * page acquires the one relationship it did not have: something in front of something else. The
- * sheet also gives the lesson its own bottom edge, which is what stops a twelve-minute read ending
- * in the same undifferentiated dark it started in.
+ * The reading sheet is level 2 and opaque on purpose, because prose over a varying backdrop is a
+ * legibility problem no tint solves. Everything translucent in this feature travels over it.
  */
 .prl-learn-lesson__blocks {
   display: grid;
@@ -736,14 +491,7 @@
   box-shadow: var(--prl-elevation-1);
 }
 
-/**
- * A section heading, with its index in the gutter at wide widths.
- *
- * `--prl-space-11` of space above it and `--prl-space-3` below: a heading belongs to the text that
- * follows it, and the asymmetry is what makes a twelve-minute read scannable. The rule above it is
- * the second half of the same idea — a hairline at the top of the space rather than a bigger gap,
- * so the eye is told where a section ENDS instead of being asked to infer it from a measurement.
- */
+/** More space above a heading than below it, and a hairline marks where the previous section ends. */
 .prl-learn-lesson__heading {
   display: grid;
   gap: var(--prl-space-3);
@@ -758,7 +506,6 @@
   scroll-margin-block-start: var(--prl-learn-sticky-top);
 }
 
-/** The first heading opens the sheet, so it takes neither the rule nor the space above it. */
 .prl-learn-lesson__heading:first-child {
   padding-block-start: 0;
   margin-block-start: 0;
@@ -771,18 +518,11 @@
 }
 
 /**
- * Lesson prose.
- *
- * `position: relative` is load-bearing rather than cosmetic: it makes the paragraph the containing
- * block for a glossary popover, which is how the popover spans the reading column instead of being
- * pinned to a word near the right edge and clipped. See `GlossaryTerm.tsx`.
+ * `position: relative` makes the paragraph the containing block for a glossary popover, so the
+ * popover spans the column and is not clipped. See `GlossaryTerm.tsx`.
  */
-/* `--prl-leading-prose`, not `--prl-leading-body`.
-   The body token came down from 1.65 to 1.5 across the app, because 1.65 is a long-form-reading
-   value and almost nothing in this product is long-form reading — it was inflating every table
-   cell, chip and card by a sixth. A lesson IS long-form reading: one column, read top to bottom,
-   and this is the surface the looser setting was always for. It is the only place in the app that
-   spends it. */
+/* `--prl-leading-prose`, the only use in the app. A lesson is long-form reading, and the body token
+   is 1.5 for everything else. */
 .prl-learn-prose {
   position: relative;
   margin: 0;
@@ -790,7 +530,6 @@
   line-height: var(--prl-leading-prose);
 }
 
-/* The same leading as the paragraphs it sits between — a list inside a lesson is prose. */
 .prl-learn-lesson__list {
   display: grid;
   gap: var(--prl-space-4);
@@ -810,29 +549,18 @@
 }
 
 /**
- * A button whose label carries a lesson title, and so can wrap.
- *
- * `.prl-btn` has a 44px `min-height` and no block padding, which is right for a one-line label and
- * wrong for "I have finished “Actions, and what each one commits you to”": measured at 360, that
- * label wrapped to two lines (41.6px of text) inside the 44px pill with nothing above or below it.
- * Block padding lets the pill grow round the text; a one-line label (20.8px + 16px) is still under
- * the 44px floor, so every single-line button keeps exactly the height it had.
+ * Block padding lets the pill grow around a title that wraps (41.6px of text at 360). A one-line label
+ * is still under the 44px floor, so its height does not change.
  */
 .prl-learn-titled-btn {
   padding-block: var(--prl-space-4);
 }
 
-/* ---- contents rail ---------------------------------------------------------------------- */
+/* Contents rail */
 
 /**
- * THE CONTENTS RAIL.
- *
- * Below 1280px it is an ordinary block sitting above the prose in the flow, so it is level 1 — a
- * grouped well, hairline, no elevation, no material. It becomes glass in the 1280px block at the
- * bottom of this file, and ONLY there, because that is the width at which it becomes `position:
- * sticky` and starts travelling over the reading sheet. That is the whole test `tokens.css` sets
- * for L3: bounded chrome that moves over content. A translucent pane that simply sits in a column
- * is a tint, not a material, and it would be paying for a blur with nothing behind it to blur.
+ * Below 1280px the rail is a level 1 block in the flow. It becomes glass only in the 1280px block,
+ * where it is sticky and travels over the sheet.
  */
 .prl-learn-contents {
   display: grid;
@@ -847,13 +575,6 @@
   box-shadow: var(--prl-elevation-0);
 }
 
-/**
- * "On this page", set as the technical voice rather than as a heading.
- *
- * It carried `.prl-label` in the markup and nothing else, so it inherited the label size and
- * colour and sat flush against the first link with no separation at all. The rule beneath it is
- * what turns a stray line of small caps into a rail with a head.
- */
 .prl-learn-contents__label {
   display: block;
   padding-block-end: var(--prl-space-4);
@@ -874,15 +595,9 @@
 }
 
 /**
- * A contents link.
- *
- * The 44px target comes from the padding rather than a fixed height, so a heading that wraps to
- * three lines still has one hit area. The inline-start border is transparent in the resting state
- * rather than absent, so nothing shifts sideways when it becomes current.
- *
- * `align-items: start` and not `baseline`: the index is a 13px small-cap and the label is 15px, so
- * a shared baseline pulled the number down off the first line of a wrapping heading. On a rail
- * where every row starts with a number, one misaligned number is the thing the eye finds first.
+ * The 44px target comes from padding, so a wrapping heading keeps one hit area. The start border is
+ * transparent at rest, so nothing shifts when it becomes current. `align-items: start`, because a
+ * shared baseline pulled the 13px index off the first line of a wrapped 15px label.
  */
 .prl-learn-contents__link {
   display: grid;
@@ -914,15 +629,8 @@
 }
 
 /**
- * The section being read.
- *
- * An accent bar, an accent index and a heavier weight — three cues, and `aria-current="true"` in
- * the markup carries the same fact to assistive technology. In forced-colors mode the bar becomes
- * a `Highlight` border (section 10), because a background tint is thrown away there.
- *
- * `--prl-veil-8` rather than `--prl-surface-active`: this pane is translucent, so an opaque fill
- * on one of its rows would punch a solid rectangle through the glass. A veil tints what is already
- * there, which is what "the row I am on" should do on a material that is partly its backdrop.
+ * An accent bar, an accent index and weight, with `aria-current="true"` in the markup. Section 10
+ * restates it for forced colors. `--prl-veil-8`, because an opaque fill would punch through the glass.
  */
 .prl-learn-contents__link[aria-current="true"] {
   border-inline-start-color: var(--prl-accent-edge);
@@ -935,7 +643,7 @@
   color: var(--prl-accent-text);
 }
 
-/* ---- takeaways -------------------------------------------------------------------------- */
+/* Takeaways */
 
 .prl-learn-takeaways__list {
   display: grid;
@@ -958,16 +666,9 @@
   font-variant-numeric: var(--prl-numeric);
 }
 
-/* ---- scenario link ---------------------------------------------------------------------- */
+/* Scenario link */
 
-/**
- * "Now try it in the Lab" — the one call to action a lesson makes, so it takes a level of its own.
- *
- * L2 with the accent on its leading edge rather than an accent FILL: the design system allows
- * roughly one accent action per view and the button inside this block is already it. An accent
- * panel around an accent button is the same emphasis spent twice, and the second spend is the one
- * that stops the first meaning anything.
- */
+/** L2 with an accent leading edge, not an accent fill, because the button inside is the accent action. */
 .prl-learn-scenario {
   display: grid;
   align-content: start;
@@ -1002,14 +703,8 @@
   margin-inline-start: var(--prl-space-4);
 }
 
-/* ==========================================================================================
-   5. THE LIVE CALCULATION
-   ==========================================================================================
-   An instrument inset into the prose. Everything a reader needs in order to judge the figure —
-   method, interval, formula, caveat, assumptions — is visible; only the derivation string, the EV
-   term table and the card-by-card notes sit behind a `<details>`, which is exactly the set §6.2
-   permits to be collapsed.
-   ========================================================================================== */
+/* 5. Live calculation. Only the derivation, EV term table and card notes sit behind a `<details>`,
+   the set design system 6.2 permits to collapse. */
 
 .prl-learn-calc {
   margin-block: var(--prl-space-4);
@@ -1022,17 +717,8 @@
 }
 
 /**
- * The stored situation. A grid of label/value pairs, tabular so the numbers align.
- *
- * INSET rather than panel, and the distinction is the whole point of putting it here: the
- * calculation is recessed INTO the reading sheet it sits on, which is what "an instrument inset
- * into the prose" means as a material. It was `--prl-surface-panel`, the same fill as the sheet
- * around it, so the block had no edge a reader could see and the figures read as a stray table in
- * the middle of a paragraph.
- *
- * `--prl-numeric` on the values rather than the bare `tabular-nums` this used to carry: the token
- * states `lining-nums` too, and several faces in `--prl-font-sans` default to OLD-STYLE figures in
- * a lowercase run — which puts a descending `4` and a short `1` in the middle of a pot size.
+ * Inset, so the calculation reads as recessed into the sheet. `--prl-numeric` adds `lining-nums`,
+ * because some sans faces default to old-style figures.
  */
 .prl-learn-calc__inputs {
   display: grid;
@@ -1051,7 +737,6 @@
   min-width: 0;
 }
 
-/* Two opponents' holdings sit side by side and wrap as whole holdings, never mid-hand. */
 .prl-learn-calc__input-cards {
   display: flex;
   flex-wrap: wrap;
@@ -1114,12 +799,8 @@
 }
 
 /**
- * A data table that scrolls rather than reflowing to blocks.
- *
- * `display: block` on `tr`/`td` at narrow widths strips the table role from the accessibility tree
- * in every current browser, which trades the row and column relationships for a prettier phone
- * layout. So it scrolls, and the wrapper is focusable in the markup so the scroll is reachable
- * from a keyboard (WCAG 2.1.1). This mirrors `.prl-candidates` in `components.css`.
+ * Scrolls rather than reflowing to blocks, which strips table roles. The wrapper is focusable in the
+ * markup, so the scroll is reachable by keyboard (WCAG 2.1.1). Mirrors `.prl-candidates`.
  */
 .prl-learn-table {
   overflow-x: auto;
@@ -1128,7 +809,7 @@
 
 .prl-learn-table__table {
   width: 100%;
-  /* 20rem: below this the outcome column collapses to one word per line. */
+  /* 20rem. Below it the outcome column collapses to one word per line. */
   min-width: calc(var(--prl-space-16) * 2);
   font-size: var(--prl-type-body-sm);
 }
@@ -1141,8 +822,7 @@
   vertical-align: top;
 }
 
-/* The header rule is the table's axis, so it carries meaning and takes the strong line rather than
-   the decorative one — the same rule `.prl-review-table` and `.prl-legend-table` follow. */
+/* The header rule is the table's axis, so it takes the strong line. */
 .prl-learn-table__table thead th {
   border-block-end: var(--prl-hairline-strong);
   color: var(--prl-text-muted);
@@ -1162,22 +842,10 @@
   white-space: nowrap;
 }
 
-/* ==========================================================================================
-   6. THE GLOSSARY POPOVER
-   ==========================================================================================
-   The panel spans its paragraph rather than being anchored to the word. That is what makes it
-   impossible to clip at the right edge of a line without a single `getBoundingClientRect` — the
-   containing block is `.prl-learn-prose`, which section 4 marks `position: relative`.
-   ========================================================================================== */
+/* 6. Glossary popover. It spans its paragraph (`.prl-learn-prose` is `position: relative`), so it
+   cannot clip at a line's right edge. */
 
-/**
- * The trigger.
- *
- * A dotted underline in the resting state — the same convention `abbr[title]` uses in `base.css`,
- * so it reads as "there is more here" without looking like a link. Open, it becomes a solid accent
- * underline and accent ink, which is the visual tie to the panel below. `aria-expanded` carries
- * the same state, so neither cue is alone.
- */
+/** Dotted underline at rest, a solid accent underline when open, with `aria-expanded` too. */
 .prl-term__trigger {
   padding: 0;
   border: 0;
@@ -1204,21 +872,9 @@
 }
 
 /**
- * THE POPOVER — level 4, the one genuine overlay in this feature.
- *
- * It is a popover in the literal sense the ladder means: it opens ON TOP of the paragraph that
- * spawned it, it is small and bounded, and it is dismissed rather than scrolled past. So it takes
- * the overlay material — the darker, MORE opaque of the two glass tints in dark mode, which is not
- * a mistake: this pane carries body text over content it cannot see, and the higher a pane floats
- * the less it can rely on what is behind it.
- *
- * The fill and `--prl-glass-filter-strong` are declared together, here, for the reason the header
- * of this file gives and `layout-guarantees.test.ts` enforces. Without the blur, the sentence the
- * trigger sits in would read straight through the definition that is explaining it.
- *
- * It arrives on `transform` and `opacity` at `--prl-dur-slow` — the material band's top end, which
- * is what a sheet arriving is for — and never on `backdrop-filter`, which would re-evaluate the
- * blur against the whole backdrop on every frame of the animation.
+ * Level 4, the one overlay in this feature, with the more opaque overlay tint because it carries body
+ * text. The fill and `--prl-glass-filter-strong` sit together, or the sentence behind reads through.
+ * It animates `transform` and `opacity` only, never `backdrop-filter`.
  */
 .prl-term__panel {
   position: absolute;
@@ -1298,37 +954,10 @@
   font-size: var(--prl-type-body-sm);
 }
 
-/* ==========================================================================================
-   7. THE QUIZ
-   ==========================================================================================
-   There is no score anywhere in this section, and therefore nothing here styles one. No progress
-   bar, no tally, no colour for "right" and "wrong": the verdict is a sentence, and each option is
-   labelled with a chip that carries a word.
+/* 7. The quiz. No score, tally or right/wrong colour. An option is a recessed well that lifts when
+   chosen. Only the numeric field's `aria-invalid` border goes adverse, for a malformed number. */
 
-   WHAT THIS SECTION HAD TO STOP LOOKING LIKE, measured on `/learn/pot-odds` at 1440x900.
-
-   Every option was `--prl-surface-panel` on a `--prl-surface-panel` panel behind a 1.44:1 hairline:
-   a 1:1 fill step and a border at the edge of visibility, four times over. The chosen answer was
-   marked by the radio dot and by nothing else on a 640px-wide block, the padding gave a 34px row
-   for a two-line label, and the correction sentence sat indented under it in the same voice as
-   everything else. That is a form. An assessment is a set of OBJECTS a reader picks one of, and
-   the difference is expressible entirely in material: an option is now a recessed well that lifts
-   to a raised card when it is the one you chose.
-
-   The refusal state is deliberately not drawn as an error. A wrong answer here costs nothing and
-   can be changed as often as the reader likes, so the correction takes the INFO edge and the
-   reading colour, and the only thing that goes adverse is the numeric field's own `aria-invalid`
-   border, which is about a malformed number rather than about a wrong one.
-   ========================================================================================== */
-
-/**
- * The question.
- *
- * `display-3` rather than `heading`: this is the sentence the whole panel exists to ask, and at
- * 22px it was the same size as the panel title above it and two points above the options below it.
- * A question that is not visibly the loudest thing in its own panel is a question a reader scrolls
- * past. It stays an `h3` — this changes the size, not the outline.
- */
+/** `display-3`, so the question is the loudest thing in its panel. It stays an `h3`. */
 .prl-learn-quiz__heading {
   margin: 0;
   max-width: var(--prl-measure);
@@ -1340,20 +969,8 @@
 }
 
 /**
- * "01 / 05" — the second of this feature's two glass surfaces, and the weaker argument for it.
- *
- * Worth stating the weakness rather than dressing it up. This pill sits in the quiz panel's header,
- * so most of what is behind it is the panel's own opaque fill, and `tokens.css` is blunt about what
- * that means: "a translucent pane over a flat colour is a slightly different flat colour". What it
- * gets from the material here is not the blur; it is the lit edge and `--prl-elevation-2`, which
- * lift the position off the header rather than letting it read as a third piece of the title. It
- * keeps the glass fill because the page wash and the reading sheet DO pass under it as the panel
- * scrolls, and because a progress chip that changed material between the quiz panel and anywhere
- * else it appears would be two components with one name.
- *
- * It is a pill: bounded, tiny, its own layer, never animated — the shape `tokens.css` blesses. And
- * it is NOT a score: there is no tally in this section, only a position in a sequence, which is why
- * it reads as a coordinate rather than as a result.
+ * The second glass surface. The page wash and sheet pass under it as the panel scrolls, and it keeps
+ * the same material wherever it appears. It is a position in a sequence, not a score.
  */
 .prl-learn-quiz__position {
   isolation: isolate;
@@ -1373,9 +990,8 @@
   font-variant-numeric: var(--prl-numeric);
 }
 
-/* `min-inline-size: 0` because a `<fieldset>` defaults to `min-content`, and once a question is
-   answered its min-content includes the nowrap chip below. Measured at 360: the options overflowed
-   the panel's inner edge by ~15px, the chip being 233px wide plus the feedback's inset. */
+/* A `<fieldset>` defaults to `min-inline-size: min-content`, which includes the nowrap chip once
+   answered. At 360 the options overflowed by ~15px. */
 .prl-learn-quiz__options {
   display: grid;
   gap: var(--prl-space-5);
@@ -1386,17 +1002,8 @@
 }
 
 /**
- * ONE ANSWER.
- *
- * The padding lives on the `<label>` inside rather than here, which is what makes the whole block
- * the hit area: a `<label>` extends a native control's activation region, so a 640x76 label is a
- * 640x76 target — the pattern WCAG 2.5.8 is satisfied by, rather than a 44px minimum bolted onto
- * a 16px dot. The fill and the edge stay on this element so a hover tints the whole option and not
- * just the part the label covers.
- *
- * No `overflow: hidden`, deliberately. It would clip the focus ring's halo — the `box-shadow` half
- * of the two-tone indicator — on the radio inside, and the ring is the one thing in this system
- * that may never be degraded.
+ * Padding lives on the inner `<label>`, so the whole block is the WCAG 2.5.8 target. No
+ * `overflow: hidden`, because it would clip the radio's focus ring halo.
  */
 .prl-learn-quiz__option {
   display: grid;
@@ -1411,12 +1018,7 @@
     box-shadow var(--prl-dur-base) var(--prl-ease-material);
 }
 
-/**
- * `align-items: start`, against `.prl-choice`'s own `center`.
- *
- * These labels run to two and three lines. Centred, the radio drifted to the middle of a 76px
- * block and stopped reading as the marker for the first line — which is where the eye starts.
- */
+/** `start`, because centred the radio drifted off the first line of a multi-line label. */
 .prl-learn-quiz__option .prl-choice {
   align-items: start;
   gap: var(--prl-space-5);
@@ -1433,11 +1035,7 @@
   background-color: var(--prl-surface-hover);
 }
 
-/**
- * The answer this reader chose: an accent edge, a step up the surface ramp, and one level of
- * elevation, plus the radio's own checked dot in the platform's own accent. Four cues, none of
- * them hue on its own, and the elevation is the one that survives being photocopied.
- */
+/** Accent edge, a surface step, elevation and the checked dot, none of them hue alone. */
 .prl-learn-quiz__option:has(.prl-choice__control:checked) {
   border-color: var(--prl-accent-edge);
   background-color: var(--prl-surface-active);
@@ -1445,12 +1043,8 @@
 }
 
 /**
- * The note under an option, once the question has been answered.
- *
- * Separated by a hairline rather than by a gap: a gap says "there is more"; a rule says "this part
- * is the response to the part above it". The inline-start padding lines the sentence up with the
- * label rather than with the radio — `--prl-space-6` is the label's own padding and
- * `--prl-space-7` + `--prl-space-5` is the control plus its gap.
+ * A hairline, not a gap, marks the note as the response. The inline padding aligns it with the label,
+ * `--prl-space-6` plus the control and its gap (`--prl-space-7` + `--prl-space-5`).
  */
 .prl-learn-quiz__option-feedback {
   display: grid;
@@ -1460,22 +1054,15 @@
   border-block-start: var(--prl-hairline);
 }
 
-/* The other half of the 360px overflow above: "◆ the answer this lesson gives" is a sentence, and a
-   chip is `nowrap`. Here it may wrap, so it can never be wider than the column it is in. */
+/* The chip here is a sentence, so it may wrap and never exceed its column. */
 .prl-learn-quiz__option-feedback .prl-chip {
   white-space: normal;
 }
 
 /**
- * The verdict.
- *
- * Present in the DOM from the first render, empty, so the `aria-live` region is established before
- * its content changes — a region inserted together with its text is missed by several screen
- * readers. Empty, it takes no vertical space, which is why every box-drawing declaration below is
- * on `:not(:empty)` rather than on the element: a bordered, padded, empty live region is a stray
- * rectangle sitting above the options for the whole time before the first answer.
+ * The verdict is in the DOM from first render, so the `aria-live` region exists before its content
+ * changes. Several screen readers miss a region inserted with its text. Box styles are on `:not(:empty)`.
  */
-/** The answer to the question just asked. There is no version of this that is secondary text. */
 .prl-learn-quiz__verdict {
   margin: 0;
   max-width: var(--prl-measure);
@@ -1501,22 +1088,15 @@
 }
 
 /**
- * Which verdict this is, before the sentence is read.
- *
- * The two used to be drawn identically — one neutral box, no mark — so "matches" and "does not
- * match" could only be told apart by reading them, from a box that at 360x640 sits 1060–1210px down
- * the page. They now carry the mark of the chip they agree with (`◆` the lesson's answer, `✕` a
- * different pick) and a match takes the accent edge the chosen option already wears. A miss keeps
- * the neutral `--prl-line-strong` edge on purpose: nothing is deducted for it, and a rose or red edge
- * would be the mark this product declines to give. Both edges are gated by `design:contrast` as
- * meaningful borders on every surface.
+ * Each verdict carries its chip's mark. A match takes the accent edge. A miss keeps the neutral
+ * `--prl-line-strong` edge, because nothing is deducted. `design:contrast` gates both edges.
  */
 .prl-learn-quiz__verdict[data-matched="true"] {
   border-inline-start-color: var(--prl-accent-edge);
 }
 
 .prl-learn-quiz__verdict[data-mark]::before {
-  /* `/ ""` is the alternative text: drawn, never announced. See `verdictMarkAttributes`. */
+  /* `/ ""` is the alternative text, so the mark is drawn and never announced. See `verdictMarkAttributes`. */
   content: attr(data-mark) / "";
   margin-inline-end: var(--prl-space-4);
   color: var(--prl-text-secondary);
@@ -1527,13 +1107,7 @@
   color: var(--prl-accent-text);
 }
 
-/**
- * The number input is narrow; its label and hint are not.
- *
- * Capping the whole `.prl-field` would cap the hint with it, turning a two-line sentence into a
- * six-line column beside an empty half of the panel. So the cap goes on the control, which is the
- * only part of the field that has a natural size.
- */
+/** The cap goes on the control, not the `.prl-field`, so the hint keeps its width. */
 .prl-learn-quiz__numeric {
   max-width: var(--prl-measure);
   gap: var(--prl-space-4);
@@ -1547,14 +1121,8 @@
 }
 
 /**
- * A REFUSED ANSWER, drawn as a correction rather than as an alarm.
- *
- * `aria-describedby` picks up the error sentence before the hint, and `test:ax` asserts that
- * ordering; nothing here touches it. What this does is give the sentence somewhere to be: an
- * inset strip on the caution edge, at the reading colour rather than at `--prl-adverse`, because
- * "that is not a number I can read" is a request to retype and not a failure. The control's own
- * border stays adverse — that state is about the value being malformed, and it is the one the
- * design system already draws.
+ * `aria-describedby` reads the error before the hint (`test:ax` asserts it). The strip uses the caution
+ * edge and reading colour, because an unreadable number is a request to retype.
  */
 .prl-learn-quiz__numeric .prl-field__error {
   padding: var(--prl-space-4) var(--prl-space-5);
@@ -1572,7 +1140,6 @@
   background-color: var(--prl-surface-inset);
 }
 
-/** Assumptions are one of the two things a learner most needs to read, so they are not fine print. */
 .prl-learn-quiz__assumptions {
   display: grid;
   gap: var(--prl-space-3);
@@ -1584,13 +1151,7 @@
   line-height: var(--prl-leading-body);
 }
 
-/**
- * "Why" — the reasoning, which is the part the lesson actually wants read.
- *
- * The info edge and one step up the ramp, so it reads as the panel's conclusion rather than as a
- * fifth option. It is deliberately the only block in the quiz that is BRIGHTER than the options
- * around it: the options are wells, this is the thing standing on top of them.
- */
+/** The info edge and a step up the ramp, so the explanation stands above the option wells. */
 .prl-learn-quiz__explanation {
   display: grid;
   gap: var(--prl-space-4);
@@ -1619,13 +1180,6 @@
   line-height: var(--prl-leading-body);
 }
 
-/**
- * The step controls, at the foot of the panel.
- *
- * `space-7` above the rule and `space-6` below it rather than one even `space-5` on both sides:
- * the row belongs to the panel's frame rather than to the question, and the asymmetry is what
- * says so. Same reasoning as the heading rhythm in section 4.
- */
 .prl-learn-quiz__nav {
   align-items: center;
   gap: var(--prl-space-5);
@@ -1639,9 +1193,7 @@
   margin: 0;
 }
 
-/* ==========================================================================================
-   8. THE GLOSSARY PAGE
-   ========================================================================================== */
+/* 8. Glossary page */
 
 .prl-learn-glossary {
   display: grid;
@@ -1663,7 +1215,7 @@
   box-shadow: var(--prl-elevation-1);
 }
 
-/** The A–Z jump list. Each letter is a 44px target, because it is a link on a phone. */
+/** Each letter is a 44px target. */
 .prl-learn-glossary__jump {
   display: flex;
   flex-wrap: wrap;
@@ -1714,8 +1266,7 @@
   scroll-margin-block-start: var(--prl-learn-sticky-top);
 }
 
-/* `start`, not the grid's default stretch: at two columns a card took its row partner's height, and
-   "All-in" carried about 150px of empty panel under its See also at 1440. */
+/* `start`, because stretch gave a card its row partner's height (~150px empty under "All-in" at 1440). */
 .prl-learn-glossary__entries {
   display: grid;
   align-items: start;
@@ -1768,13 +1319,8 @@
 }
 
 /**
- * "See also", then the links in a column of their own.
- *
- * The label and the links shared one wrapping row, so a second line of links started under the
- * label rather than under the first link (x=755 against x=832 at 1440), and sat 50px below it: each
- * link's 44px target plus a 6px row gap, about twice a line. The links now wrap in their own column
- * with no row gap, so the targets themselves are the spacing, and the label is centred on the first
- * row by being a target's height too.
+ * The links wrap in their own column with no row gap, so a second line aligns under the first link.
+ * The label is a target's height, so it centres on the first row.
  */
 .prl-learn-glossary__related {
   display: grid;
@@ -1796,12 +1342,7 @@
   column-gap: var(--prl-space-2);
 }
 
-/**
- * A cross-reference.
- *
- * A `<button>`, because following it may first have to clear a filter so the target exists to
- * scroll to. Styled as a link so it reads as one, with a real 44px target from the padding.
- */
+/** A `<button>`, because following it may first clear a filter so the target exists. */
 .prl-learn-glossary__related-btn {
   min-height: var(--prl-target-min);
   padding: var(--prl-space-2) var(--prl-space-3);
@@ -1819,21 +1360,11 @@
   background-color: var(--prl-surface-hover);
 }
 
-/* ==========================================================================================
-   9. RESPONSIVE
-   ==========================================================================================
-   See the header comment on why these three numbers are literals. Information is re-flowed, never
-   removed: the contents rail becomes an inline block above the prose rather than disappearing, and
-   nothing is hidden at any width.
-   ========================================================================================== */
+/* 9. Responsive. The rail reflows above the prose, and nothing is hidden at any width. */
 
 /**
- * A phone gets a 16px sheet, not a 32px one. At 360 the 32px padding sat inside the 16px page
- * gutter and left the prose 262px wide and a worked example inside it 220px. Measured on
- * /learn/pot-odds: 294px and 252px at 360, and the page 653px shorter (13,405 → 12,752).
- * Taking the example panels' own 20px padding down too bought another 24px of height and nothing
- * a reader would notice, so they keep it. The width arithmetic above 1280 and the gutter index at
- * 900 never see this value.
+ * A phone gets a 16px sheet, not 32px. At 360 the prose went from 262px to 294px wide. The width
+ * arithmetic above 1280 and the gutter index at 900 never see this value.
  */
 @media (width < 600px) {
   .prl-learn-lesson {
@@ -1856,28 +1387,14 @@
     grid-template-columns: auto minmax(0, 1fr);
     align-items: baseline;
     gap: var(--prl-space-5);
-    /* The index moves into the gutter, so the heading text lines up with the prose below it. */
     margin-inline-start: calc(-1 * var(--prl-space-9));
   }
 }
 
 @media (min-width: 1280px) {
   /**
-   * THE TWO LONG LISTS GO TO TWO COLUMNS.
-   *
-   * Measured at 1460px: a lesson card was 1360px wide with its title, its sentence and its chips
-   * all inside the first 650px of it, seventeen times over — and the glossary did the same thing
-   * ninety times. The empty half was not restraint, it was a single-column list that had never been
-   * asked what to do with a wide screen.
-   *
-   * Two columns is the honest answer for both, because both are LOOKUP surfaces rather than prose:
-   * a reader is picking one lesson out of seventeen or one term out of ninety, and halving the
-   * scroll is the single biggest thing that helps. The cap on the text inside each card is
-   * untouched, so a column is still a comfortable measure — what changed is that there are two of
-   * them instead of one and a void.
-   *
-   * The curriculum keeps its numbering, its topic groups and its reading order, so the sequence is
-   * still legible; row-major flow means 01 and 02 sit side by side, not 01 above 09.
+   * Lesson cards and glossary entries go to two columns, because both are lookup lists. Row-major flow
+   * keeps 01 beside 02.
    */
   .prl-learn-group__entries,
   .prl-learn-glossary__entries {
@@ -1885,19 +1402,8 @@
     gap: var(--prl-space-6);
   }
 
-  /**
-   * The reading page narrows rather than stretching.
-   *
-   * A lesson is prose capped at `--prl-measure`, so on a 1440px viewport a full-width container
-   * would leave the text hugging the left edge with half the screen empty beside it. The page is
-   * therefore capped at exactly what it needs — rail, gutter, reading column, gutter — and centred,
-   * which keeps the contents rail beside the prose it indexes instead of drifting away from it.
-   *
-   * Composed from tokens rather than being a new number: nothing here is a value the design system
-   * does not already name.
-   */
-  /* The two inline paddings of the reading sheet are added to the cap, so the measure inside it is
-     still the measure. See `--prl-learn-sheet-x` in section 0. */
+  /** The lesson page is capped at rail, gutter, reading column and gutter, and centred. */
+  /* The sheet's two inline paddings are added, so the measure inside it is still the measure. */
   .prl-learn-lesson {
     width: min(
       var(--prl-container),
@@ -1918,23 +1424,9 @@
   }
 
   /**
-   * The rail sticks below the header band, and THAT is what earns it the glass.
-   *
-   * This is the only block in the file that spends a glass fill on the rail, and it is inside the
-   * media query on purpose: below this width the rail is a static block in the flow, where a
-   * translucent pane would be a tint over a flat colour — a blur paid for with nothing behind it
-   * to blur. From here up it travels over the reading sheet, which is exactly the bounded,
-   * promoted, unanimated case `tokens.css` reserves level 3 for.
-   *
-   * `-webkit-backdrop-filter` is beside the fill because Safari still needs it, and the filter is
-   * beside the fill because a translucent pane with no blur is a window: the lesson headings
-   * passing underneath would read through it as a second, perfectly legible layer of type. That is
-   * the ghosting bug `nav.css` documents, and `layout-guarantees.test.ts` reads this pairing off
-   * the stylesheet rather than trusting the comment.
-   *
-   * `max-height` plus `overflow-y` so a lesson with fifteen sections scrolls its own contents
-   * rather than running off the bottom of the viewport. `dvh` rather than `vh` because a mobile
-   * browser's toolbar makes `vh` taller than the visible area.
+   * Sticky from here, so it travels over the sheet and earns glass (level 3). The blur sits beside the
+   * fill, because without it the headings underneath read through (`layout-guarantees.test.ts`), and
+   * `-webkit-backdrop-filter` because Safari needs it. `dvh`, because mobile toolbars make `vh` too tall.
    */
   .prl-learn-contents {
     position: sticky;
@@ -1949,16 +1441,8 @@
   }
 }
 
-/* ==========================================================================================
-   10. FORCED COLORS
-   ==========================================================================================
-   Windows High Contrast throws away every background colour and forces borders to `CanvasText`,
-   which takes out both cues this feature leans on: a surface step and an accent edge. Everything
-   below restates a state that would otherwise be lost.
-
-   The test that matters: with the palette replaced, can you still tell which section you are in,
-   which lesson is suggested, and which term is open?
-   ========================================================================================== */
+/* 10. Forced colors discard backgrounds and force borders to `CanvasText`, so each lost state is
+   restated here. */
 
 @media (forced-colors: active) {
   .prl-learn-contents__link[aria-current="true"] {
@@ -1976,10 +1460,7 @@
     border-color: Highlight;
   }
 
-  /* The chosen answer is a fill, an edge and an elevation, and forced-colors keeps none of the
-     three: a background tint is discarded, every border becomes `CanvasText`, and a `box-shadow`
-     is removed outright. The radio's own checked dot survives — the platform repaints it — and
-     this restates the block-level cue as the one property the mode does keep. */
+  /* Fill, edge and elevation are all lost here, so `Highlight` and a wider border restate the choice. */
   .prl-learn-quiz__option:has(.prl-choice__control:checked) {
     border-color: Highlight;
     border-width: var(--prl-focus-width);
@@ -1994,8 +1475,7 @@
     border-inline-start-color: Highlight;
   }
 
-  /* The explanation's info-coloured edge is `CanvasText` here like every other border, so the
-     style change is what keeps it distinguishable from the panel it sits inside. */
+  /* The info edge is `CanvasText` here, so a double style keeps it distinct. */
   .prl-learn-quiz__explanation {
     border-inline-start-style: double;
   }

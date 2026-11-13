@@ -1,28 +1,12 @@
 /**
- * Who acted at a replay step, what the marker says about it, and which step the replay opens on.
- *
- * Lifted out of `HandReplay.tsx` so it can be tested, and two of these decisions were defects
- * measured on the running page (`/review/hand-0042` on the fixture, and a live hand at 308fadf):
- *
- *  1. **The timeline named actions and not actors.** Every marker read "FOLD", "RAISE 20",
- *     "CALL 10" with no player on it, so a reader looking for their own decisions had to open each
- *     one. The name was in the visually-hidden sentence only. `markerActor` puts it on screen.
- *  2. **The replay opened on somebody else's decision.** Step 1 is the first action of the hand,
- *     which is a bot's unless the reader is first to act — so the first Coach panel anybody saw was
- *     "This decision belongs to <bot>, and it is not analysed". `openingStepIndex` opens on the
- *     reader's own first decision; step 1 stays one Home key, one marker or "Previous decision" away.
- *
- * ## Why this is a leaf module
- *
- * Nothing is imported here except types, which are erased. `HandReplay.tsx` imports `@prl/ui`,
- * whose entry point re-exports `.tsx`, and Node's type stripping cannot load a `.tsx` under
- * `node --test` — so the sentences that format an amount stay in the component, and everything
- * that does not is here. Same shape and same reason as `lib/quiz-tolerance.ts`.
+ * Who acted at a replay step, what its marker says, and which step the replay opens on.
+ * A leaf module with type-only imports, because `HandReplay.tsx` pulls in `@prl/ui`'s `.tsx`, which
+ * `node --test` cannot load.
  */
 
 import type { HandReplay, ReplayStep } from './hand-replay.ts';
 
-/** Who acted at a step: "You", the seat's name, or "Seat N" when the review carries no name. */
+/** "You", the seat's name, or "Seat N" when the review carries no name. */
 export function markerActor(step: ReplayStep, names: Readonly<Record<number, string>>): string | null {
   const decision = step.decision;
   if (decision === null) return null;
@@ -30,7 +14,7 @@ export function markerActor(step: ReplayStep, names: Readonly<Record<number, str
   return names[decision.seat] ?? `Seat ${decision.seat + 1}`;
 }
 
-/** The compressed action on a marker. Amounts are what left the stack, which is what a reader tracks. */
+/** Amounts are what left the stack, which is what a reader tracks. */
 export function markerShort(step: ReplayStep): string {
   const decision = step.decision;
   if (decision === null) return 'END';
@@ -40,39 +24,19 @@ export function markerShort(step: ReplayStep): string {
   return word;
 }
 
-/**
- * The step the replay opens on: the reader's first own decision, or step 1 when they had none.
- *
- * A reader opens a hand from their own history to see their own play, and the analysis exists only
- * for their own decisions. A hand the reader never acted in — everybody folded to their big blind —
- * still opens at the start, which is the only honest place for it to open.
- */
+/** The reader's first own decision, because only theirs are analysed, or step 1 when they had none. */
 export function openingStepIndex(replay: Pick<HandReplay, 'steps'>): number {
   return replay.steps.find((step) => step.isViewerDecision)?.index ?? 0;
 }
 
-/**
- * How many decisions the replay steps through: every step but the terminal "settled" frame.
- *
- * The hand's summary and the transport both count from this, so they cannot disagree. They did: the
- * summary printed `review.decisions.length` as "DECISIONS 13" while the transport counted steps,
- * terminal frame included, as "STEP 2 / 14" — two numbers for one hand, side by side (audit at
- * 6b3886e, `shots/d-dark-replay-0.png`).
- */
+/** Every step but the terminal frame. The summary and the transport both count from this. */
 export function decisionCount(replay: Pick<HandReplay, 'steps'>): number {
   return replay.steps.filter((step) => step.decision !== null).length;
 }
 
 /**
- * What the transport's counter shows: "Decision 2 / 13", or "Result" on the terminal frame.
- *
- * The terminal frame is not a decision, so it is not given a number that would make it the
- * fourteenth of thirteen. Its value slot still holds a word, so the counter keeps its height and the
- * row does not move when the reader steps onto it.
- *
- * Visible text only. The live region still announces "Step N of M." over every frame, terminal
- * included: that sentence is what `scripts/ax-assertions.mjs` (J6) holds the announcement to, and
- * "step 14 of 14" is true of the frame it describes.
+ * The terminal frame shows "Result" rather than a fourteenth of thirteen. Visible text only, because
+ * the live region still announces "Step N of M." on every frame, as `ax-assertions.mjs` (J6) expects.
  */
 export function stepCounter(
   step: Pick<ReplayStep, 'index' | 'decision'>,
@@ -83,21 +47,9 @@ export function stepCounter(
 }
 
 /**
- * What the replay says about a decision the server made, as a sentence for the marker's description.
- *
- * ## The defect
- *
- * `HandReplay` printed "The clock ran out and the server acted" for every `wasAutomatic` decision,
- * because that flag was all the review carried. The server also folds, with the same flag, for a
- * player who pressed "Stand up" (or left the room, or opened another practice table) while holding
- * cards — so a reader who chose to leave was told, in their own hand history, that they had run out
- * of time. The live table had already stopped saying that, because it sees `seatTimedOut`; the
- * review could not, until `automaticReason` was recorded with the row (migration 0009).
- *
- * A row recorded before that has no reason, and gets the one sentence that is true of every
- * automatic decision rather than the likelier guess: a guess is what this replaced.
- *
- * Empty for a decision a person made.
+ * The server also folds, with the same `wasAutomatic` flag, for a player who stood up or left, so the
+ * sentence follows `automaticReason` (migration 0009). An older row with no reason gets the sentence
+ * true of every automatic decision, never a guess. Empty for a decision a person made.
  */
 export function automaticSentence(step: ReplayStep): string {
   const decision = step.decision;

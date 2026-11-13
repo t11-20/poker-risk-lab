@@ -1,25 +1,8 @@
 /**
- * What a quiz verdict says, and how it is marked.
- *
- * ## The wording defect
- *
- * Measured against the running build on `/learn/pot-odds`, answering 35 to `pot-odds-q2`, whose
- * computed figure is 33.3 % and whose declared tolerance is 1.5:
- *
- *     "35.0 % is outside the tolerance of 33.3 %."
- *
- * 33.3 % is the TARGET. The sentence named it as the tolerance and never said what the tolerance
- * was, so a learner could not tell how far out they were or how close they needed to be. The
- * sentence now names both, and the tolerance it names is the band the grader applied.
- *
- * ## The marking defect
- *
- * The two multiple-choice verdicts — "That matches the answer this lesson gives" and "That is not
- * the answer this lesson gives" — were drawn in one identical neutral box, with no glyph, so at a
- * glance (and at 360x640 the box sits 1060–1210px down the page, under the options) the two could
- * only be told apart by reading the sentence. The option chips already carry `◆` for the lesson's
- * answer and `✕` for a different pick; the verdict now carries the same mark as the chip it agrees
- * with. These tests pin the mapping; the box's edge is CSS keyed off the same `data-matched`.
+ * What a quiz verdict says, and how it is marked. The numeric sentence once called the computed
+ * figure "the tolerance" and never named the band, so it now names both. The two multiple-choice
+ * verdicts carry the mark of the option chip they agree with (`◆` or `✕`); the box's edge is CSS
+ * keyed off the same `data-matched`.
  */
 
 import assert from 'node:assert/strict';

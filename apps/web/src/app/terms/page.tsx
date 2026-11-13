@@ -1,83 +1,9 @@
 /**
- * `/terms` — the terms of use, written from what this software actually does.
- *
- * ## Why this page exists and what it is honestly worth
- *
- * There were no terms at all. That is not a defensible state for an application that creates an
- * account for a visitor, stores what they read, and keeps a permanent record of every hand they
- * play — whatever a particular deployer's obligations turn out to be.
- *
- * What is here is **an integration point, not a reviewed document**. Every factual sentence is
- * checked against the schema, the routes and the guardrails, and can be relied on as a description
- * of the software. Every sentence that is a legal *conclusion* — who is bound, by what law, with
- * what liability, at what age — carries `COUNSEL_MARKER` and is listed in
- * `docs/production/legal-review-requirements.md`. The distinction is the point of the page: a
- * reader must never mistake a placeholder for a reviewed term, and neither must a deployer.
- *
- * ## Why §7 and §8 are two sections and not the one that used to be here
- *
- * §7 read, in full: *"This service is provided free of charge and with no promise that it will be
- * available, that your data will survive, or that any particular feature will continue to exist. It
- * may be taken down, reset or changed at any time by whoever runs it."* Every promise it withheld
- * was withheld **on the basis of the first six words**, and the sentence was true — an exhaustive
- * search of this repository (`docs/production/legal-register.md` §1) found no route by which money
- * could be taken and no way to tell a paying reader from any other. (That phrasing is deliberate:
- * `test/legal-pages.test.ts` sweeps this file for the vocabulary of a money-moving integration, and
- * this page is not on its reviewed-exemption list. A legal page is a plausible place for somebody to
- * describe a buying flow in prose, so it is worth a synonym to keep the file in scope.)
- *
- * Then the schema grew a record of who is enrolled in a course, on whose authority, against an
- * external reference. `test/legal-pages.test.ts` fired on it, which is what it was built to do.
- *
- * The trap is to treat that as a copy-edit. Swapping "free of charge" for "for a fee" leaves a
- * document promising a paying student nothing at all — worse than the contradiction it replaces,
- * because it reads as deliberate. And the subtler trap is to assume the fee: **an enrolment record
- * does not establish that money changed hands.** A scholarship cohort, an employer-funded class and
- * a paid course produce identical rows, because the grant happens out of band and nothing in this
- * schema can hold an amount. So the honest split is by *who is competent to state the thing*:
- *
- *  * **§7** is a fact about this software — what an enrolment record contains, and the fact that no
- *    column here can hold a price. Checkable against `db/migrations`, and checked.
- *  * **§8** keeps the technical half of the old clause, which is still true and still a description
- *    of how the thing is built, and then says outright that whether the operator may exercise any of
- *    it without owing the reader something is *not settled by this page*.
- *  * Both commercial halves — what the enrolment bought, and what an interruption or a cancellation
- *    is worth — go to `COUNSEL_CLAUSES` as `enrolment-and-fees` and `refunds-and-cancellation`,
- *    rather than being asserted by the people who wrote the software. That is the whole mechanism
- *    this page already had; the change is that it is now pointed at the right two questions.
- *
- * `test/legal-pages.test.ts` group *"what /terms says about money"* now reads this page to decide
- * which of the two postures it is in, and holds the page and `db/migrations` to the same answer in
- * both directions. Neither can move alone.
- *
- * One consequence of that is worth knowing before editing §8, because it looks like timidity and is
- * not: **§8 describes the clause it replaced instead of quoting it.** The draft did quote it, and the
- * posture reader — which decides what this page says by looking for that exact sentence — read the
- * historical quotation as a live claim and reported the page as saying both things at once. A
- * detector keyed to a sentence cannot tell a claim from a quotation of one, so the sentence must
- * appear on this page exactly when it is meant, or not at all. The reader loses nothing: they are
- * still told the clause changed and what it used to rest on.
- *
- * ## Why it is not in `NAV_DESTINATIONS`
- *
- * `/record` is the precedent and its header states it: the five numbered destinations are an
- * argument about learning order, and a sixth entry blunts it. A terms page is not a destination in
- * that argument; it is a document reached from the footer, which is where documents live and where
- * a reader looks for them.
- *
- * ## Why `robots` is not overridden
- *
- * The root layout applies `index: false, follow: false` to the whole app and this page keeps it,
- * deliberately. The instinct is that a legal page should be public and indexable — and it should
- * be, once it is real. Indexing THIS text would publish unreviewed placeholder clauses under
- * whatever operator name is configured, which is a worse failure than being unfindable. The
- * decision to reverse belongs with the counsel review that replaces the flagged clauses; it is
- * recorded in the review document as an explicit follow-up rather than left as an oversight.
- *
- * ## A server component
- *
- * No state, no effects, no JavaScript. The only dynamic input is `readLegalDeployment()`, read from
- * the process environment at request time so that one built image can serve any operator.
+ * `/terms`. Factual sentences are checked against the schema and routes. Every legal conclusion carries
+ * `COUNSEL_MARKER` and is listed in `docs/production/legal-review-requirements.md`. `legal-pages.test.ts`
+ * reads this page's posture on enrolment and holds it and `db/migrations` to the same answer, so §8
+ * describes the old free-of-charge clause instead of quoting it. `robots` is not overridden, because
+ * indexing unreviewed placeholder clauses is worse than being unfindable. Counsel review decides that.
  */
 
 import type { Metadata } from 'next';
@@ -107,13 +33,8 @@ export const metadata: Metadata = {
 };
 
 /**
- * The marker, rendered in the flow of the document beside the clause it qualifies.
- *
- * Repeated in each of the three legal pages rather than shared, because there is no legal-component
- * module in this app to put it in and inventing one for three uses would move the marker further
- * from the prose it is about. What must not drift — the wording, the register, and which page owns
- * which clause — lives in `lib/legal-config.ts`, and `test/legal-pages.test.ts` asserts that every
- * clause assigned to this page is actually rendered on it.
+ * Repeated in each legal page to keep the marker beside its prose. The wording and clause ownership
+ * live in `lib/legal-config.ts`, and `legal-pages.test.ts` asserts each clause is rendered.
  */
 function CounselFlag(props: { readonly clause: CounselClause }): ReactElement {
   const { clause } = props;

@@ -1,12 +1,8 @@
 /**
- * The Coach input the API builds for a Lab scenario, for the tests that need a real report.
- *
- * Mirrors `coachTaskFor` in `apps/api/src/routes/content.ts` field for field, as a `CoachInput`
- * rather than a wire task: the range is the one `readSituation` already expanded, where the API
- * sends a description for a worker to expand. `apps/web` cannot import the API, and the fixture
- * regenerator keeps its own copy for the reason its header gives. Sampling is cut to 2,000 by
- * default, which moves equity by sampling noise and nothing else; a caller comparing figures that
- * depend on equity passes the content seed and sample count instead.
+ * The Coach input the API builds for a Lab scenario, mirroring `coachTaskFor` in
+ * `apps/api/src/routes/content.ts` field for field, because `apps/web` cannot import the API.
+ * Sampling defaults to 2,000, which moves equity by noise only; a caller comparing equity-dependent
+ * figures passes the content seed and sample count.
  */
 
 import { readSituation } from '@prl/content';

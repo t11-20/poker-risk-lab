@@ -1,10 +1,6 @@
 /**
- * The home page's hand is computed, not written down.
- *
- * The product's first claim about itself is that nothing is looked up. The hand on the home page is
- * the first figure a visitor sees, so a literal "45.6%" in the markup would make the first number on
- * the site the exact thing the site says it does not contain. These pin the figures to the maths
- * and keep percentages out of the source that renders them.
+ * The home page's hand is computed, not written down. The product's first claim is that nothing is
+ * looked up, so no literal percentage may sit in the markup that shows the first figure.
  */
 
 import assert from 'node:assert/strict';
@@ -47,8 +43,7 @@ describe('the home page hand', () => {
   });
 
   it('states the assumption its conclusion rests on (PR #40 review)', () => {
-    // Equity is computed to the river with no more betting. "The call pays" without that condition
-    // is a claim the maths does not make, on the one page meant to show figures with their assumptions.
+    // Equity is computed to the river with no more betting, so the conclusion must carry that condition.
     const source = readFileSync(join(SRC, 'components', 'HomeSpot.tsx'), 'utf8');
     assert.match(source, /If nobody bets again before the river/u);
   });

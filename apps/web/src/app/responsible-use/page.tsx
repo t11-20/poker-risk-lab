@@ -1,32 +1,9 @@
 /**
- * `/responsible-use` — what this product is for, what it cannot teach, and how to stop.
- *
- * ## Why it is a page and not a paragraph in the terms
- *
- * The terms are a document about obligations and almost nobody reads them. This is the page that
- * has something a learner actually needs: that practising against free chips does not tell you how
- * you behave when a loss costs something, that the tools for noticing you have been here two hours
- * are in the footer of every page, and that the product is built to be easy to leave.
- *
- * It is also the honest counterweight to the whole feature set. A poker simulator with correct
- * arithmetic and contrasting opponents is a good way to learn probability, and it is also a good
- * way to become more comfortable with a game that takes money from people. Both are true. Saying
- * only the first would make every other page in this app slightly dishonest.
- *
- * ## What is deliberately NOT on this page
- *
- * **A named helpline chosen by us.** The right organisation depends entirely on where a reader is,
- * and a wrong or out-of-date referral on a page about vulnerability is worse than an honest gap.
- * `PRL_LEGAL_SUPPORT_RESOURCE` lets an operator name one for their own audience, and it is rendered
- * as plain text rather than as a link — the value comes from a deployment's environment, and a
- * clickable destination on this page in particular is not somewhere to be relaxed about that.
- *
- * **Any of the mechanisms it is warning about.** No "you have played N hands today" counter, no
- * cooling-off timer that locks the tables, no scored self-assessment. Each of those is the same
- * attention-grab as the thing it claims to protect against, and `docs/PRODUCT-GUARDRAILS.md` §2
- * rules out the whole family. What is offered instead is a clock and an off switch.
- *
- * `robots` is not overridden here, for the reason written out on `/terms`.
+ * `/responsible-use`. No helpline is chosen by the software, because the right one depends on where
+ * a reader is. `PRL_LEGAL_SUPPORT_RESOURCE` is rendered as plain text, never a link, because it comes
+ * from the environment. No hand counters, lockouts or scored self-assessments
+ * (`docs/PRODUCT-GUARDRAILS.md` §2). `robots` is not overridden here, for the reason written out on
+ * `/terms`.
  */
 
 import type { Metadata } from 'next';
@@ -52,7 +29,7 @@ export const metadata: Metadata = {
     'controls it gives you for noticing how long you have been here.',
 };
 
-/** See the note on the identical function in `app/terms/page.tsx` for why it is repeated. */
+/** Repeated from `app/terms/page.tsx`. See the note there. */
 function CounselFlag(props: { readonly clause: CounselClause }): ReactElement {
   const { clause } = props;
   return (

@@ -1,11 +1,4 @@
-/**
- * How the numbers are checked.
- *
- * The evidence behind the home page's figures, moved here from the home page itself (see
- * `lib/checks.ts` for why). A description list, because that is what it is: four claims and what
- * backs each one. `<dl>` gives the pairing to a screen reader without a table's row-and-column
- * overhead.
- */
+/** The evidence behind the home page's figures (see `lib/checks.ts`), as a `<dl>` of claim and test. */
 
 import type { Metadata } from 'next';
 import type { ReactElement } from 'react';
@@ -44,8 +37,7 @@ export default function ChecksPage(): ReactElement {
         ))}
       </dl>
 
-      {/* Moved from the footer, word for word: see the "scoped on purpose" note in `SiteFooter.tsx`
-          before tightening either paragraph. */}
+      {/* Moved from the footer verbatim. Read the "scoped on purpose" note in `SiteFooter.tsx` first. */}
       <section aria-labelledby="checks-source" className="prl-checks__source">
         <h2 id="checks-source">Where the numbers come from</h2>
         <p className="prl-checks__prose">

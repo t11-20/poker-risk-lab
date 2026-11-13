@@ -1,91 +1,19 @@
 'use client';
 
 /**
- * The decision controls: fold, check, call, bet, raise — with a bet sizer that cannot produce an
- * illegal amount.
+ * The decision controls (fold, check, call, bet, raise), with a bet sizer that cannot send an illegal
+ * amount. The server re-validates, but a learner should never meet a rejection they could not predict.
  *
- * ## The invariant: no out-of-range value can leave this component
+ * Every control writes a text draft, and the amount sent is always `resolveDraft(draft, bounds)` from
+ * `../bet-sizing.ts`, where the clamp is unit-tested. The draft is text so that typing `5` on the way
+ * to `500` does not snap to the minimum. It is stamped with the bounds it was typed against
+ * (`draftForBounds`), so a draft from an earlier street cannot outlive its spot. It carries `badInput`
+ * because a number input sanitises unparseable text to `''`.
  *
- * `LegalAction` carries `minTo` and `maxTo` straight from the engine's `legalActions()`, and the
- * server re-derives and re-validates the same bounds on arrival — a client is never the authority
- * on what is legal. This component's job is to make the illegal value *unreachable in the control*,
- * so a learner never meets a rejection they could not have predicted.
- *
- * It is enforced in one place rather than four, and that place is `../bet-sizing.ts` — pulled out of
- * this file precisely so the invariant can be unit-tested, since JSX cannot be run under
- * `node:test` in this repo. Every control writes to a *draft string*, and the amount that actually
- * gets sent is always `resolveDraft(draft, bounds)`. So:
- *
- *   - typing `9999` submits `maxTo`, not `9999`
- *   - typing `1` when the minimum raise is `200` submits `200`
- *   - dragging, presets and typing all pass through the same clamp
- *   - if the bounds change under the component (a new street, a new bet level), the clamp re-runs
- *     on the next render and the value follows — no effect, no stale state, no "reset on prop
- *     change" dance
- *
- * The draft is *text*, not a number, on purpose. Clamping on every keystroke makes the field
- * unusable: type `5` on the way to `500` and it snaps to the minimum before the second digit lands.
- * The string is what the reader is typing; the clamped number is what the button will send. They
- * are allowed to disagree while the field has focus — which is why the readout always shows the
- * number that will actually be sent, and why blur normalises the text back to it.
- *
- * **And blur is not the whole of it, which this header used to imply.** Normalising on blur makes
- * the field agree with the button at the instant the field is left, and the bounds move afterwards
- * — every street, and again at every raise. A draft typed against one spot then sat in the field
- * describing a spot that no longer existed: measured at a live table, preflop bounds 20–1,000 and
- * `1000` in the field, the flop's 10–980 left the field reading `1000` while the slider, the
- * readout and the button all read 980. So the draft is stamped with the bounds it was typed
- * against and is read only while those still hold — see `StampedDraft` and `draftForBounds` in
- * `../bet-sizing.ts`, which is where the rule lives and where it is tested.
- *
- * It carries `badInput` alongside the text because on an `<input type="number">` the text is not
- * enough to know what is in the field: the browser sanitises anything it cannot parse to `''`, so
- * letters on screen and an empty field are indistinguishable from the value alone. See `BetDraft`.
- * `badInput` is not enough on its own either — a number input parses `1e3` happily and reports
- * nothing wrong with it, which is why `bet-sizing.ts` owns what counts as an amount at all.
- *
- * ## Every button prints its cost, and announces it
- *
- * A player must never have to work out what a button will cost them, and they must never have to
- * read a *different* button to find out. So each action carries two things:
- *
- *   - a visible cost line in tabular figures (`0 units`, `50 units`, `250 units`) — tabular so the
- *     five costs form a column that can be compared at a glance rather than five ragged strings;
- *   - an `aria-label` that states the action and its cost as a sentence ("call 50 units",
- *     "raise to 300 units, 250 units out of your stack"). Without it a screen reader announces the
- *     two spans as one run-together string, and for fold and check it would announce a bare `0`.
- *
- * `formatUnits` supplies the word "units" every time. A bare number could read as currency, and
- * these are free, resettable and valueless.
- *
- * ## Sizer before buttons
- *
- * The sizer comes first in the DOM, so the visual order and the keyboard order are both "choose a
- * size, then choose what to do". Most poker clients put the buttons first, which means a keyboard
- * user tabs past the commit button to reach the size control.
- *
- * ## Accessibility
- *
- *  - The slider is paired with a number input. A slider alone cannot express an exact amount, and
- *    the exact amount is the entire point of a bet sizer. Both are native controls, so the
- *    platform's keyboard handling (arrows, Home/End, PageUp/PageDown) is intact — a `div`-based
- *    slider would have to reimplement all of it, and would get it wrong.
- *  - `accent-color` styles the native range track rather than replacing it.
- *  - Every control is a real `<button>` or `<input>` at or above the 44px target floor, reachable
- *    in one tab sequence.
- *  - Presets use `aria-pressed`, and the pressed one also shows a check glyph and heavier weight,
- *    so the selection is not signalled by colour alone.
- *  - The allowed range is stated as visible text and referenced by `aria-describedby` from both
- *    inputs, instead of being discoverable only by hitting the end of the slider.
- *  - The number field carries a real invalid state: `aria-invalid` plus a visible correction that
- *    `aria-describedby` names FIRST, ahead of the range. The state is read from
- *    `event.target.validity.badInput` and could not have been derived from the value — a number
- *    input reports `value === ''` for text it failed to parse, so a check written against the
- *    draft can never fire, and the field would sit there looking empty while the reader looks at
- *    their own letters. That silent version is the "clamp without marking the field" the audit
- *    named on the quiz's numeric answer, and this is the same control in the shared package.
- *  - The sizer is a `<fieldset>` with a `<legend>`, so its controls are announced as one group, and
- *    `disabled` on the fieldset disables all of them at once.
+ * Each button shows its cost in tabular figures and has an `aria-label` sentence with action and cost.
+ * Without it a screen reader runs the two spans together and reads a bare `0` for fold and check.
+ * The sizer comes first in the DOM, so tab order is "choose a size, then act". Presets use
+ * `aria-pressed` plus a check glyph, so selection is not signalled by colour alone.
  */
 
 import {
@@ -123,37 +51,26 @@ export interface ActionBarProps {
   readonly legalActions: readonly LegalAction[];
   /** Called with an action whose amount is already clamped to the legal bounds. */
   readonly onAct: (action: TableAction) => void;
-  /** `PlayerView.potTotal` — everything in the middle, this street included. */
+  /** `PlayerView.potTotal`, everything in the middle including this street. */
   readonly pot: number;
-  /** `PlayerView.amountToCall`. Zero when nothing is owed. */
   readonly toCall: number;
-  /** This seat's commitment so far this street. `to` amounts are totals, not increments. */
+  /** This street so far. `to` amounts are totals, not increments. */
   readonly committedThisStreet: number;
   /**
-   * Disables every control, e.g. while an action is in flight.
-   *
-   * Setting this takes the focused control away from whoever was standing on it, so this component
-   * also renders somewhere for the caret to go and puts it there. See the focus block in
-   * `ActionBar` — the behaviour is part of what this prop means, not a detail of it.
+   * Disables every control. It also parks the caret on an in-flight line and returns it afterwards;
+   * see the focus block in `ActionBar`.
    */
   readonly disabled?: boolean;
-  /** Shown when there are no legal actions. */
   readonly idleText?: string;
-  /**
-   * What the decision is about, drawn between the price and the sizer, and only while there is a
-   * decision. The play screen passes `HandGlance` here on a phone, where the follow scroll takes the
-   * reader's own plate and the board off the top: see that component for why it is inside the bar
-   * and not above it. A full line of the bar to itself, like the price.
-   */
+  /** Drawn between the price and the sizer, only while there is a decision (`HandGlance` on a phone). */
   readonly context?: ReactNode;
   readonly className?: string;
 }
 
 interface ActionButtonProps {
   readonly label: string;
-  /** The cost as a figure, drawn under the label in tabular numerals. */
   readonly cost: string;
-  /** The whole button as one sentence, for assistive tech. Always states the cost. */
+  /** The whole button as one sentence for assistive tech. Always states the cost. */
   readonly spoken: string;
   readonly primary?: boolean;
   readonly disabled: boolean;
@@ -177,10 +94,8 @@ function ActionButton(props: ActionButtonProps): ReactElement {
 }
 
 /**
- * Fold, which is the one key in the row that can ask before it acts. See `../fold-guard.ts`.
- *
- * Armed, it is the same button relabelled, never a second one: the caret a pointer press left on it
- * stays put, the row keeps its shape, and the changed name is read where focus already is.
+ * Fold, the one key that can ask before it acts (`../fold-guard.ts`). Armed, it is the same button
+ * relabelled, so the caret stays put and the new name is read where focus already is.
  */
 function FoldButton(props: {
   readonly canCheck: boolean;
@@ -209,7 +124,7 @@ interface BetSizerProps {
   readonly sized: SizedAction;
   /** The clamped amount that will be sent. */
   readonly to: number;
-  /** What the reader has typed, which may be mid-edit and therefore unclamped. Null before then. */
+  /** What the reader typed, possibly mid-edit and unclamped. Null before then. */
   readonly draft: BetDraft | null;
   readonly pot: number;
   readonly toCall: number;
@@ -234,21 +149,11 @@ function BetSizer(props: BetSizerProps): ReactElement {
   const isAllIn = to >= bounds.max && bounds.max > bounds.min;
 
   /**
-   * The field is marked invalid when it is holding text this control cannot size a bet with.
-   *
-   * "Invalid" means the INPUT and never the amount: a legal-but-unwise size is a correct use of
-   * this field, and `resolveDraft` clamps an out-of-range number rather than refusing it, so a
-   * number outside the bounds is not invalid either — it is a number the sizer has already
-   * corrected, and the readout says so.
-   *
-   * The correction comes FIRST in `aria-describedby`, so a reader who has just been told the
-   * field is invalid hears why before hearing the allowed range again. It is rendered only while
-   * it applies rather than hidden with CSS: a description that is present but usually irrelevant
-   * is read out on every visit to the field.
+   * Invalid means text this control cannot size a bet with, never an out-of-range amount (the clamp
+   * corrects those). The correction is first in `aria-describedby` and rendered only while it applies,
+   * because a present but irrelevant description is read on every visit to the field.
    */
   const malformed = isDraftMalformed(draft);
-  // A number the clamp has replaced. Said beside the field, and first in its description, for the
-  // same reason the malformed correction is: the reader is in the field when it matters.
   const clamped = clampedFrom(draft, to);
   const describedBy = malformed
     ? `${invalidId} ${boundsId}`
@@ -264,16 +169,13 @@ function BetSizer(props: BetSizerProps): ReactElement {
 
       <div className="prl-sizer__presets">
         {SIZING_PRESETS.map((preset) => {
-          // Derived from the engine's own bounds, never from an invented maximum: `presetTotal`
-          // clamps into `[minTo, maxTo]`, so a preset can never propose an amount the server did
-          // not offer. On a short stack several presets collapse onto all-in, which is correct.
+          // `presetTotal` clamps into the engine's bounds, so on a short stack presets collapse onto all-in.
           const target = presetTotal(preset, context);
           return (
             <button
               key={preset.id}
               type="button"
               className="prl-preset"
-              // One pressed preset at most — see `pressedPreset`.
               aria-pressed={preset.id === pressed}
               onClick={() => onDraft({ text: String(target), badInput: false })}
             >
@@ -300,8 +202,6 @@ function BetSizer(props: BetSizerProps): ReactElement {
           step={1}
           value={to}
           aria-describedby={boundsId}
-          // A slider cannot produce unparseable text, so dragging it also clears the invalid
-          // state — which is the point of carrying the flag in the draft rather than beside it.
           onChange={(event) => onDraft({ text: event.currentTarget.value, badInput: false })}
         />
         <span className="prl-sizer__field">
@@ -319,17 +219,11 @@ function BetSizer(props: BetSizerProps): ReactElement {
             value={draft?.text ?? String(to)}
             aria-describedby={describedBy}
             aria-invalid={malformed ? true : undefined}
-            // `validity.badInput` is read here and nowhere else, because here is the only place it
-            // can be read. The value has ALREADY been sanitised to '' by the time it arrives, so
-            // no later inspection of the draft could recover the fact that anything was typed —
-            // and a field that silently reads as empty while the reader is looking at their own
-            // letters is exactly the state this markup exists to name.
+            // `validity.badInput` can only be read here. The value is already sanitised to '' on arrival.
             onChange={(event) =>
               onDraft({ text: event.target.value, badInput: event.target.validity.badInput })
             }
-            // Normalising on blur is what makes the typed text and the clamped value agree again
-            // once the field is left. Writing a real number over the field also clears whatever
-            // the browser was holding, so the invalid state goes with it.
+            // Blur writes the clamped value back, which also clears any unparseable text.
             onBlur={() => onDraft({ text: String(to), badInput: false })}
           />
         </span>
@@ -371,13 +265,8 @@ function BetSizer(props: BetSizerProps): ReactElement {
 }
 
 /**
- * Whether the browser has dropped the caret onto the document rather than onto a control.
- *
- * Chrome does not always land on `document.body` after it blurs a control that just became
- * `disabled`. Measured against `/play?state=decision` in Chrome 151: after Fold, `activeElement`
- * was `<html>`, the computed tree named the focused node `RootWebArea`, and a rescue that only
- * treated `body` as abandoned never ran. `<html>` and `null` are the same state: nothing the
- * reader can be told about has focus.
+ * Whether the caret has dropped onto the document. Chrome 151 can leave `activeElement` on `<html>`
+ * rather than `body` after blurring a newly disabled control (measured on `/play?state=decision`).
  */
 export function browserAbandonedFocus(): boolean {
   const active = document.activeElement;
@@ -397,104 +286,34 @@ export function ActionBar(props: ActionBarProps): ReactElement {
     className,
   } = props;
 
-  // One piece of state, not three: the text, whether the browser could parse it, and the bounds it
-  // was typed against are all set by the same event and must never be read from different renders.
-  // A separate `badInput` flag could outlive the text it described — a preset click clearing the
-  // value while the flag stayed true would leave a legal amount marked invalid — and a separate
-  // record of the bounds could outlive the text in the other direction.
+  // One state object, so the text, its `badInput` and the bounds it was typed against always come
+  // from the same event. A separate flag could outlive the text it described.
   const [stamped, setStamped] = useState<StampedDraft | null>(null);
-  /**
-   * The spot in which Fold was pressed once by pointer while Check was free, or null. Stamped rather
-   * than a boolean so it cannot outlive the spot it was pressed in; see `../fold-guard.ts`.
-   */
+  /** The spot where Fold was pointer-pressed once beside a free Check. Stamped so it cannot outlive it. */
   const [foldArmedFor, setFoldArmedFor] = useState<string | null>(null);
 
   /**
-   * Where focus goes when the controls it was on are taken away, in the TWO ways that happens.
+   * Focus management for the two ways this bar takes the reader's controls away.
    *
-   * ## The first defect: the turn ends
+   * When the turn ends every button unmounts and the browser drops focus to `<body>`
+   * (`scripts/keyboard-audit.mjs`). The effect on `acting` moves it to the idle line.
+   * While a decision is in flight `disabled` blurs the focused button for the whole round trip. The
+   * layout effect parks the caret on a `role="status"` line in the row and then returns it to the exact
+   * control it came from, so a refusal leaves the reader on the button they pressed.
    *
-   * Found by `scripts/keyboard-audit.mjs` folding a real hand with the keyboard: pressing Enter on
-   * Fold unmounts every button in this bar — correctly, it is no longer this seat's turn — and the
-   * browser's only remaining option is to drop focus to `<body>`. A keyboard user who has just
-   * acted is therefore returned to the very top of the document, with no announcement, and has to
-   * tab past the whole page to get back to the table. A screen-reader user is worse off again:
-   * nothing was announced at all, because focus did not land on anything that says something.
+   * `aria-disabled` was rejected because `components.css` styles only `:disabled`, so the row would look
+   * live. The line is a status because Chrome 151 does not report a focused `role="group"` as focused.
    *
-   * ## The second defect: the whole round trip before that
+   * Focus moves only if it was inside the bar and the browser abandoned it, so a reader in the Coach
+   * panel is never pulled back. `hadFocus` survives a disable or unmount because `focusout` then fires
+   * with a null `relatedTarget`.
    *
-   * `disabled` goes true the instant a decision is sent, and a browser blurs the focused element
-   * the moment it becomes disabled. So the caret sat on `<body>` for the ENTIRE server round trip —
-   * every action, every time — and the rescue above did not cover it, because it fires when
-   * `legalActions` goes empty and that only happens when the server's next frame arrives. On a
-   * fixture path, where no frame ever arrives, it was permanent.
-   *
-   * ## What was chosen, and what was rejected
-   *
-   * **Rejected: `aria-disabled` with a no-op handler.** It is the only option that keeps the caret
-   * exactly where the reader put it, and it was very nearly the answer. Two costs sank it. The
-   * control then *looks* operable — `:disabled` is what `components.css` styles, and nothing in
-   * this repository styles `[aria-disabled]`, so the whole row would keep its enabled colours,
-   * hover and pointer while doing nothing; a player pressing Fold twice at a table because it
-   * looked live is a worse failure than a lost caret. And a control that is in the tab order but
-   * inert makes `disabled` mean two different things to the harnesses that read it.
-   *
-   * **Rejected: keeping the button focused while disabled.** A disabled control is removed from
-   * the accessibility tree by some combinations of browser and screen reader, so the caret would be
-   * on a node the reader is told nothing about — the same silence, in a different place.
-   *
-   * **Chosen: a named place inside the bar, and the reader is put back afterwards.** The controls
-   * stay natively `disabled`, so nothing about how they look or how they are read changes. A line
-   * mounts while `disabled` holds, carrying `role="status"` and an `aria-label` — a focused
-   * `role="group"` is not reported as the focused accessibility-tree node in Chrome 151 (the
-   * tree keeps `RootWebArea` focused while `document.activeElement` is the group), so a reader
-   * would hear the page title. `status` is exposed as focused and can carry a name. The caret
-   * goes there, so what the reader hears is where their
-   * decision went. When the answer arrives the line unmounts and the caret is returned to the exact
-   * control it came from, which is the half that makes this a fix rather than a relocation: a
-   * refusal leaves the reader on the button they pressed, ready to press it again.
-   *
-   * The honest cost: for the length of the round trip the reader is somewhere they did not choose
-   * to be, and pressing Tab from it moves on rather than back. That is the price of `disabled`
-   * being real, and it is paid on purpose.
-   *
-   * ## Why the rescue yields for a microtask first
-   *
-   * A caller may already handle this from outside, and `apps/web/src/components/TableStage.tsx`
-   * does: it moves the caret to the acknowledgement that says what became of the decision, which
-   * carries more than this bar can know. Effects run child-first inside one commit, so an
-   * unconditional rescue here would win that race every time and quietly replace a better
-   * destination. `queueMicrotask` runs after the whole passive-effect flush — after any parent's
-   * rescue — and the re-check of `document.activeElement` then stands down if anybody else has
-   * taken it. No paint happens in between, so nothing is announced twice.
-   *
-   * ## The guards, which are load-bearing
-   *
-   * Focus moves only when it was inside this bar to begin with: a table where the opponent acts
-   * while the reader is halfway down the Coach panel must not have focus yanked back here, which
-   * would be a worse bug than the one being fixed and is how "manage focus" usually goes wrong. And
-   * only when the browser has actually given up on focus, so anything that legitimately holds it
-   * keeps it.
-   *
-   * `hadFocus` stays true through a disable or an unmount on purpose. `focusout` fires with a null
-   * `relatedTarget` in both cases, and treating that as "focus left the bar" would clear the flag a
-   * moment before the effect needs to read it.
-   *
-   * ## Every move here is `preventScroll`
-   *
-   * Each of these moves is for the caret and for a screen reader, and none of them is a reason to
-   * move the page. A plain `.focus()` scrolls its target into view, and these targets are lines
-   * that appear and disappear as the bar changes shape — so every decision scrolled the page by
-   * however far the new line was from the old button. Measured at 1440x900 on the live table: a
-   * Call pressed at scrollY 1286 ended at 1851, the footer, with the next decision's buttons at
-   * viewport y -261; at 390x844 every action jumped the page 566 to 2,073px. Every target is inside
-   * this bar, which is where the reader's eyes already were, so nothing lands off-screen that was
-   * on-screen a moment before.
+   * Every move passes `preventScroll`. A plain `.focus()` scrolls its target into view, and at 390x844
+   * every action jumped the page 566 to 2,073px.
    */
   const idleRef = useRef<HTMLParagraphElement>(null);
   const inFlightRef = useRef<HTMLParagraphElement>(null);
   const hadFocus = useRef(false);
-  /** The control the reader was on, so it can be given back when the decision comes home. */
   const lastControl = useRef<HTMLElement | null>(null);
   /** True only while the caret is on the in-flight line because this component put it there. */
   const parked = useRef(false);
@@ -504,8 +323,7 @@ export function ActionBar(props: ActionBarProps): ReactElement {
 
   const onFocusCapture = (event: ReactFocusEvent<HTMLDivElement>): void => {
     hadFocus.current = true;
-    // The in-flight line is not somewhere to be returned to, and arriving there is not the reader
-    // choosing to leave it. Everything else inside the bar is both.
+    // Landing on the in-flight line is not the reader choosing a control.
     if (event.target === inFlightRef.current) return;
     parked.current = false;
     lastControl.current = event.target;
@@ -522,12 +340,9 @@ export function ActionBar(props: ActionBarProps): ReactElement {
   useEffect(() => {
     const left = wasActing.current && !acting;
     wasActing.current = acting;
-    // A turn that ended takes its arming with it, even when the next spot draws the same row: a
-    // clock that ran out checks, and an unchanged pot on the next street would otherwise match.
+    // A timed-out turn checks with the pot unchanged, so the next spot could match a stale arming.
     if (left) setFoldArmedFor(null);
     if (!left || !hadFocus.current) return;
-    // Only when the browser has actually given up on focus. If something else legitimately took it
-    // — a Coach panel that re-rendered and restored its own — leave it alone.
     if (!browserAbandonedFocus()) return;
     idleRef.current?.focus({ preventScroll: true });
     hadFocus.current = false;
@@ -540,10 +355,8 @@ export function ActionBar(props: ActionBarProps): ReactElement {
 
     if (taken) {
       if (!hadFocus.current) return;
-      // Layout, not a microtask: the disabled button is already blurred by this point, and a
-      // delayed rescue can lose to Chrome parking the caret on `<html>` with nobody watching.
-      // A parent (TableStage) that wants a better destination runs its own layout effect after
-      // this one, because layout effects run child-then-parent, and overwrites the caret.
+      // Layout, not a microtask, so the rescue cannot lose to Chrome parking the caret on `<html>`.
+      // A parent such as TableStage overrides it, since layout effects run child-then-parent.
       inFlightRef.current?.focus({ preventScroll: true });
       parked.current = document.activeElement === inFlightRef.current;
       return;
@@ -552,9 +365,7 @@ export function ActionBar(props: ActionBarProps): ReactElement {
     if (!returned || !parked.current) return;
     parked.current = false;
     const control = lastControl.current;
-    // `isConnected` because the whole row may have been replaced by the server's next frame, in
-    // which case the turn is over and the rescue above owns what happens next; and the disabled
-    // check because a control that came back still disabled is not somewhere to leave a reader.
+    // The row may have been replaced by the next frame, or the control may have come back disabled.
     if (control === null || !control.isConnected) return;
     if (control instanceof HTMLButtonElement && control.disabled) return;
     control.focus({ preventScroll: true });
@@ -567,12 +378,8 @@ export function ActionBar(props: ActionBarProps): ReactElement {
   const spot = spotSignature(legalActions, toCall, pot, committedThisStreet);
   const foldArmed = foldArmedFor === spot;
 
-  // The single clamp every path goes through. `draft` is what the reader typed FOR THIS SPOT; `to`
-  // is what will be sent, and the two cannot disagree at submit time because the button reads `to`.
-  //
-  // `draftForBounds` is what stops the text outliving the spot: a draft typed against a different
-  // range is not this spot's draft, so the field falls back to `String(to)` along with the slider,
-  // the readout and the button. See the module header and `../bet-sizing.ts`.
+  // The single clamp every path goes through. The button reads `to`, so submit cannot disagree with it.
+  // `draftForBounds` drops a draft typed against other bounds.
   const bounds = sized?.bounds ?? { min: 0, max: 0 };
   const draft = draftForBounds(stamped, bounds);
   const to = resolveDraft(draft?.text ?? null, bounds);
@@ -582,19 +389,14 @@ export function ActionBar(props: ActionBarProps): ReactElement {
   const callCost = call?.costAtMin ?? toCall;
 
   /**
-   * A press on a control in this bar is presence in this bar.
-   *
-   * `onFocusCapture` is the usual way we know, and it is not enough: Chrome's input pipeline
-   * can deliver the activating Enter without a prior `focus` event that React saw, which is
-   * exactly how `/play?state=decision` folded, disabled the button, and left the caret on
-   * `RootWebArea`. A click (or the Enter that synthesises one) is itself the evidence.
+   * A press in this bar is presence in it. Chrome can deliver the activating Enter without a focus
+   * event React saw, which left the caret on `RootWebArea` after a fold.
    */
   const actFromBar = (action: TableAction): void => {
     hadFocus.current = true;
     onAct(action);
   };
 
-  /** Fold, or, for a pointer press beside a free Check, ask once first. See `../fold-guard.ts`. */
   const pressFold = (event: ReactMouseEvent<HTMLButtonElement>): void => {
     if (foldPress({ canCheck, pointer: event.detail > 0, armed: foldArmed }) === 'arm') {
       setFoldArmedFor(spot);
@@ -605,8 +407,7 @@ export function ActionBar(props: ActionBarProps): ReactElement {
 
   const commitSized = (): void => {
     if (sized === null) return;
-    // Re-clamped here rather than trusted from state: there must be no path, including a future
-    // one, on which an unclamped number reaches `onAct`.
+    // Re-clamped rather than trusted from state, so no path can send an unclamped number.
     const safe = clampBetTo(to, bounds);
     actFromBar(sized.kind === 'bet' ? { type: 'bet', to: safe } : { type: 'raise', to: safe });
   };
@@ -614,11 +415,7 @@ export function ActionBar(props: ActionBarProps): ReactElement {
   if (legalActions.length === 0) {
     return (
       <div className={cx('prl-action-bar', className)}>
-        {/*
-          `tabIndex={-1}` so the effect above can land focus here, and `role="status"` so the same
-          sentence is announced whether or not focus arrived. Not in the tab order: a reader tabbing
-          past a table that is not theirs to act on should not stop on a line that says so.
-        */}
+        {/* `tabIndex={-1}` lets focus land here without a tab stop. `role="status"` announces it anyway. */}
         <p className="prl-action-bar__idle" ref={idleRef} role="status" tabIndex={-1}>
           {idleText}
         </p>
@@ -634,9 +431,6 @@ export function ActionBar(props: ActionBarProps): ReactElement {
       onBlurCapture={onBlurCapture}
       onFocusCapture={onFocusCapture}
     >
-      {/* The price of the decision, in one line, above the controls that act on it. It repeats
-          figures the buttons also carry — deliberately: the pot is nowhere else in this component,
-          and a player comparing the price with the pot should not have to look in two places. */}
       <p className="prl-action-bar__price">
         <span className="prl-action-bar__price-item">
           <span className="prl-label">In the pot</span>
@@ -682,12 +476,7 @@ export function ActionBar(props: ActionBarProps): ReactElement {
           <ActionButton
             label="Call"
             cost={formatUnits(callCost)}
-            // A call that takes the whole stack says so, in the label a screen reader speaks and in
-            // the note below. The engine already decides this and writes the sentence
-            // (`allInAtMax`, "Calling puts your whole remaining stack in.") and both were dropped
-            // here: a learner pressing Call for their last chip saw only "Call / 62 units", the
-            // same as any other call. Measured over 3,000 hands, 3,569 of 15,137 call offers were
-            // all-in calls, so this is the ordinary short-stack case rather than an edge one.
+            // An all-in call says so (`allInAtMax`). In 3,000 hands, 3,569 of 15,137 call offers were all-in.
             spoken={
               call.allInAtMax
                 ? `call ${formatUnits(callCost)}, which is all in`
@@ -713,29 +502,10 @@ export function ActionBar(props: ActionBarProps): ReactElement {
           />
         )}
         {/*
-          The caret's home for the length of the round trip, mounted only while there is one.
-
-          Not always present: a labelled status that is always there sits in every reader's rotor
-          announcing an empty container on a table where nothing has been sent. `TableStage` reached
-          the same conclusion about its acknowledgement for the same reason.
-
-          It borrows `prl-action-bar__idle`, which is the other line in this bar that exists to be
-          landed on and is the one place in `components.css` with a `:focus-visible` ring drawn for
-          exactly that — "unlike <main>, this is a place focus arrives at unexpectedly, and a reader
-          who has just folded needs to see where they now are". Sharing it means the two lines cannot
-          drift apart visually; it costs a class name that says `idle` on a line that is not idle at
-          all, and this comment is the whole of the mitigation for that.
-
-          The label and the sentence deliberately do not say the same thing: the label is announced as
-          the name of the place the caret arrived at, and the sentence is what is on the screen.
-
-          INSIDE the action row, as its last line, and that placement is what lets the caret move
-          here with `preventScroll` and still be seen. Below 46rem of column the row is sticky
-          (`styles/play.css` section 3.1) and paints at the bottom of the viewport while its place in
-          flow is further down, past the sizer. As the bar's next block the line sat at its flow
-          position: measured at 390x844 on `/play?state=decision`, Fold at viewport y 620 and this
-          line at 1,099, off the screen, so a focus move that no longer scrolls left the caret where
-          nobody could see it. In the row it rides with the buttons it replaced.
+          The caret's home during the round trip, mounted only then so an empty status never sits in
+          the rotor. It reuses `prl-action-bar__idle` for that class's `:focus-visible` ring.
+          It sits inside the sticky action row so a `preventScroll` focus lands on screen. As the next
+          block it was off screen at 390x844 (y 1,099 against Fold at 620).
         */}
         {disabled ? (
           <p
@@ -751,10 +521,7 @@ export function ActionBar(props: ActionBarProps): ReactElement {
       </div>
 
       <p className="prl-action-bar__note">
-        {/* The engine offers Fold where Check is free, with the note "Legal, but checking costs
-            nothing.", and this line used to drop it: "Folding costs nothing" was the only sentence
-            beside a free check, which reads as no reason not to. Stated as the two prices, not as
-            advice. */}
+        {/* Beside a free check, state both prices. "Folding costs nothing" read as a reason to fold. */}
         {canCheck
           ? 'Checking costs nothing here; folding gives up any claim on the pot for no saving. '
           : 'Folding costs nothing and gives up any claim on the pot. '}

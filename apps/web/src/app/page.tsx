@@ -1,39 +1,7 @@
 /**
- * The home page.
- *
- * ## What it is trying to do, in one line
- *
- * Make the product's actual differentiator legible in the first screen: the maths is computed, in
- * front of you, with its method and its assumptions attached — and none of it is a gambling
- * product. Everything on this page serves one of those two sentences.
- *
- * ## Four sections, and why each one is here
- *
- *  1. **Hero.** A statement, two actions, the "not a gambling product" line at full size — a
- *     disclosure that only exists at the bottom of a page is written to be missed — and beside them
- *     one hand with its price worked out (`HomeSpot`). The hand replaced a boxed notice: the product
- *     is a decision with its price attached, so the first screen shows one rather than describing it.
- *  2. **The process spine.** Learn, calculate, decide, review: playing a hand is one step of four,
- *     and the step most products skip is the last one.
- *  3. **Three ways in.** What the reader can actually do, each under its area's suit.
- *  4. **What has been checked.** Four checkable figures, and a link to the page that names the test
- *     behind each. The tests themselves used to be listed here, with `pnpm` commands, which is
- *     material for a reviewer rather than for somebody deciding whether to learn poker; it is now
- *     `/checks`.
- *
- * There are no testimonials, no logos, no counters of other people's activity, no streaks and
- * nothing that rewards an outcome. The design system rules all of those out and the product
- * guardrails rule them out again.
- *
- * ## Why this is a server component
- *
- * There is nothing on this page that depends on the browser. `Reveal` and `MetricsBand` are the
- * two client components, and they are leaves — the page's prose, structure, headings and links
- * ship as HTML with no JavaScript attached, which is also what makes the whole page legible with
- * scripting off (`.prl-reveal[data-revealed='false']` is neutralised under `@media (scripting:
- * none)`, and `MetricsBand` renders its real figures on the server for exactly that reason).
- *
- * One `h1`, then `h2` per section, then `h3` on the three ways in — so `heading-order` holds.
+ * The home page. The "not a gambling product" line sits in the hero at full size, never only at the
+ * bottom. No testimonials, logos, activity counters or streaks. `Reveal` and `MetricsBand` are client
+ * leaves and both render their content on the server, so the page reads with scripting off.
  */
 
 import { lessonsInReadingOrder } from '@prl/content';
@@ -70,21 +38,11 @@ interface CapabilityModule {
   readonly action: string;
 }
 
-/**
- * Where "Start with the foundations" goes: the first lesson in reading order, not the index.
- *
- * It used to be `/learn`, and on a 360x640 first visit the index's first lesson button was measured
- * at y=1682 — a link that promised the foundations delivered four screens of curriculum first. The
- * index is still one tap away in the hero ("Read the lessons"), which is the link that names it.
- * Falls back to the index only if the content package ever ships no lessons at all.
- */
+/** The first lesson, not the index, whose first lesson button sat at y=1682 at 360x640. */
 const FOUNDATIONS = firstLesson(lessonsInReadingOrder());
 const FOUNDATIONS_HREF = FOUNDATIONS === null ? LEARN_PATH : lessonHref(FOUNDATIONS.id);
 
-/**
- * Three modules, one per verb. Each `points` entry is a capability that exists, not a promise —
- * anything aspirational belongs in a roadmap rather than on a home page.
- */
+/** Each `points` entry is a capability that exists, not a promise. */
 const MODULES: readonly CapabilityModule[] = [
   {
     area: 'learn',
@@ -144,8 +102,7 @@ export default function HomePage(): ReactElement {
           </p>
 
           <div className="prl-home__actions">
-            {/* A link, styled as the primary button. `Button` in @prl/ui deliberately has no `href`:
-                a button that is really a link is a link, and the app's links go through next/link. */}
+            {/* A link styled as a button, because `Button` in @prl/ui has no `href` on purpose. */}
             <Link className="prl-btn prl-btn--primary prl-btn--lg" href="/play">
               Start a hand
             </Link>

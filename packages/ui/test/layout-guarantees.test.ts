@@ -1,26 +1,9 @@
 /**
- * The four stylesheet invariants that a browser would otherwise be the only witness to.
- *
- * Three release defects motivated this file, and all three shared a shape: a rule whose effect was
- * argued for in a comment and checked nowhere.
- *
- *  - **R7.** `.prl-play__decision` was `position: sticky; inset-block-end: 0` from 900px up, which
- *    covered the pot, the board, all six seats and the dealer button at every common desktop size.
- *    The comment above the rule named the pot as the thing it protected.
- *  - **P2-1.** The boot overlay's 900ms cap lived only in `BootSequence`'s effect, so a bundle that
- *    never arrived left an opaque full-viewport sheet in place permanently.
- *  - **P2-1, second half.** The reveal's hidden state had no exit for "scripting is enabled and the
- *    bundle failed", which is the one failure mode no media query matches.
- *
- * The real test for the first is a hit-test at three viewports in a browser, and this repo has no
- * browser in CI (`node --test` runs no renderer, by policy — see `motion.test.ts`). What CAN be
- * asserted here is the *rule* rather than its rendering, which is where each of these regressed:
- * a stylesheet is text, and "this declaration must not come back" is a statement about text.
- *
- * `motion.test.ts` sets the precedent for a test in this package reading a stylesheet as its
- * source of truth. This one also reads `apps/web`'s route stylesheet, because the guarantee it
- * checks is a property of the two files together: the app's route arranges components this package
- * styles, and the occlusion was the product of both.
+ * Stylesheet invariants a browser would otherwise be the only witness to, asserted on the CSS text.
+ * R7: a sticky `.prl-play__decision` from 900px up covered the pot, the board and all six seats.
+ * P2-1: the boot overlay's 900ms cap lived only in an effect, so a failed bundle left it up for good,
+ * and the reveal's hidden state had no exit for a failed bundle either.
+ * It reads `apps/web`'s stylesheets too, because the occlusion came from both packages together.
  */
 
 import assert from 'node:assert/strict';
@@ -31,13 +14,8 @@ const componentsCss = readFileSync(new URL('../src/styles/components.css', impor
 const playCss = readFileSync(new URL('../../../apps/web/src/styles/play.css', import.meta.url), 'utf8');
 
 /**
- * The declarations of one rule, by selector, with comments stripped.
- *
- * Deliberately crude — this is not a CSS parser and does not want to be. It finds every block whose
- * selector list contains `selector` and returns the declarations, which is enough to answer "is
- * this property set on this selector anywhere in the file", including inside a media or container
- * query. A false positive would be a rule that mentions the selector in a comment, which is why
- * comments go first.
+ * The declarations of every block whose selector list contains `selector`, including inside media
+ * and container queries. Not a CSS parser. Comments go first so prose cannot match.
  */
 function declarationsFor(css: string, selector: string): readonly string[] {
   const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, '');
@@ -93,9 +71,7 @@ describe('the play screen never pins a surface over the table', () => {
   });
 
   it('does not set `display` on the plate readout inside that container query', () => {
-    // Named by its condition: `prl-play-column` has a `width < 46rem` query too (section 3.1), and
-    // it comes first in the file, so an unqualified match read a block with no HUD rule in it and
-    // passed over nothing.
+    // Matched by its condition, because the earlier `width < 46rem` query has no HUD rule.
     const query = /@container\s+prl-play-column\s*\(min-width:\s*46rem\)[^{]*\{([\s\S]*?)\n\}/.exec(
       playCss,
     )?.[1];
@@ -113,10 +89,8 @@ describe('the play screen never pins a surface over the table', () => {
 });
 
 describe('the sticky action row is bounded by a bar that stays in flow', () => {
-  // `play.css` section 3.1 makes `.prl-action-bar__actions` sticky below 46rem of column. That is
-  // safe only because a sticky box travels inside its containing block, and the row's is the
-  // ActionBar, which sits below the table. Pin the bar, or dissolve it or the band with
-  // `display: contents`, and the row's travel reaches the table: the R7 failure again.
+  // The action row is sticky below 46rem of column, which is safe only because its containing block,
+  // the ActionBar, sits below the table. Pinning or dissolving the bar brings back R7.
   it('never pins or dissolves the ActionBar or the band around it', () => {
     const blocks = [
       ...declarationsFor(componentsCss, '.prl-action-bar'),
@@ -170,11 +144,8 @@ describe('nothing can hide content until JavaScript arrives', () => {
   });
 
   it('releases every hidden reveal on an UNCONDITIONAL deadline', () => {
-    // This used to be scoped to `:root:has(.prl-boot[data-state="pending"])` — "no JavaScript has
-    // run yet". That covered one failure mode and missed the rest: boot finishes, the selector
-    // stops matching, and from then on any reveal whose observer never fires is hidden forever.
-    // It was measured doing exactly that. The deadline is now part of the hidden state itself,
-    // so "still marked false" is the only condition, whatever the reason.
+    // A deadline scoped to boot stops matching once boot ends, leaving a reveal whose observer never
+    // fires hidden for good. The deadline belongs to the hidden state itself.
     const hidden = declarationsFor(componentsCss, '.prl-reveal[data-revealed="false"]')[0];
     assert.ok(hidden !== undefined, 'expected a .prl-reveal[data-revealed="false"] block');
     const animation = /animation\s*:\s*([^;]+)/.exec(hidden)?.[1];
@@ -196,12 +167,8 @@ describe('nothing can hide content until JavaScript arrives', () => {
   });
 
   it('binds that deadline to the hidden selector, so revealing removes it', () => {
-    // The whole safety argument. An actively-filling opacity animation out-ranks a later
-    // declaration of opacity, so a deadline that kept matching after the reveal resolved would
-    // own the property and the `.prl-reveal` transition could never run. Keying it on
-    // `[data-revealed="false"]` means flipping the attribute deletes the animation with the
-    // hidden state — verified in Chrome: `animation-name` is `none` and `getAnimations()` holds
-    // only the two CSSTransitions once `data-revealed="true"`.
+    // A filling opacity animation out-ranks a later opacity declaration, so the deadline must vanish
+    // with the hidden attribute. In Chrome, `data-revealed="true"` leaves only the two CSSTransitions.
     for (const block of declarationsFor(componentsCss, '.prl-reveal')) {
       assert.doesNotMatch(
         block,
@@ -223,13 +190,7 @@ describe('nothing can hide content until JavaScript arrives', () => {
   });
 });
 
-/**
- * Every declaration block in a stylesheet, as `{ selector, body }`, comments stripped.
- *
- * The same deliberately-crude scan `declarationsFor` uses, kept separate because these two
- * invariants are about blocks nobody named: the question is "does ANY rule do this", and a
- * lookup by selector cannot ask it.
- */
+/** Every declaration block, as `{ selector, body }`, comments stripped, for checks over any rule. */
 function allBlocks(css: string): readonly { selector: string; body: string }[] {
   const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, '');
   const out: { selector: string; body: string }[] = [];
@@ -242,9 +203,7 @@ function allBlocks(css: string): readonly { selector: string; body: string }[] {
   return out;
 }
 
-/** Every stylesheet a glass fill could legitimately reach: the package's own class layer, the
-    app shell, and every route stylesheet. A guard that covered only `packages/ui` would miss the
-    exact file the ghosting bug shipped in. */
+/** Every stylesheet a glass fill can reach. The ghosting bug shipped in an `apps/web` route stylesheet. */
 const ROUTE_STYLE_DIR = new URL('../../../apps/web/src/styles/', import.meta.url);
 const GLASS_SCANNED: readonly (readonly [string, string])[] = [
   ['packages/ui components.css', componentsCss],
@@ -260,19 +219,8 @@ const GLASS_SCANNED: readonly (readonly [string, string])[] = [
 
 describe('the design system rules that are stated in prose and checked nowhere', () => {
   /**
-   * This replaced a check that read `assert.doesNotMatch(css, /box-shadow/)`, and the
-   * replacement is TIGHTER rather than looser.
-   *
-   * The old rule was "no box-shadow at all", which was enforceable because the design system had
-   * no elevation to express. It now has five levels, so a blanket ban would have had to be
-   * deleted outright. What is asserted instead is that a shadow is never a LITERAL: every
-   * `box-shadow` value must be built from `--prl-elevation-*` and `--prl-focus-ring` and nothing
-   * else. That still forbids the thing the original rule existed to forbid - somebody inventing a
-   * blurred layer in a component, on the table, where six seats and a live Coach panel repaint -
-   * and it additionally forbids the ad-hoc `0 2px 8px rgba(...)` that a "no shadows" rule never
-   * had to think about because no shadow was allowed anywhere.
-   *
-   * `none` is permitted so a rule can explicitly cancel an inherited elevation.
+   * A shadow is never a literal. Every `box-shadow` part is `--prl-elevation-*`, `--prl-focus-ring`,
+   * or `none` to cancel an inherited elevation.
    */
   const SHADOW_VALUE = /box-shadow\s*:\s*([^;]+)/g;
   const ALLOWED_SHADOW_PART = /^(none|var\(--prl-elevation-[0-4]\)|var\(--prl-focus-ring\))$/;
@@ -295,22 +243,9 @@ describe('the design system rules that are stated in prose and checked nowhere',
   });
 
   /**
-   * THE GHOSTING GUARD.
-   *
-   * `apps/web/src/styles/nav.css` documents the defect this exists for: a header resting at 92%
-   * opacity with NO `backdrop-filter` let the headings underneath read straight through it as a
-   * second, perfectly legible layer of text in the wrong place. Blur plus saturate is the
-   * legitimate way to make a translucent bar work, because it destroys the LEGIBILITY of what is
-   * behind while keeping its colour. Opacity alone destroys neither.
-   *
-   * So the rule is mechanical and has no exceptions: wherever a glass fill token goes, the
-   * filter goes with it, in the same block - including in a `:hover` block whose base rule
-   * already set it. Restating it costs nothing (the same value, re-declared, not re-computed)
-   * and it is what makes the rule readable off a stylesheet instead of off a comment.
-   *
-   * Scoped to the FILL tokens, not to the word "glass": `--prl-glass-filter` is the filter
-   * itself, and a block that sets it without a fill is a block adding blur to something that
-   * already has its own background, which is not this defect.
+   * The ghosting guard (`apps/web/src/styles/nav.css`). A translucent fill with no blur leaves the
+   * text behind legible. Wherever a glass fill token goes, `backdrop-filter` goes in the same block,
+   * a `:hover` block included. Scoped to the fill tokens, not `--prl-glass-filter`.
    */
   const GLASS_FILL = /var\(--prl-glass-(?:floating|overlay)(?:-hover|-active)?\)/;
 
@@ -329,8 +264,7 @@ describe('the design system rules that are stated in prose and checked nowhere',
         );
       }
     }
-    // A sweep of nothing is not a pass. If the material classes are renamed or deleted, this
-    // guard would otherwise report success having examined zero blocks.
+    // A sweep of nothing is not a pass.
     assert.ok(seen > 0, 'expected at least one glass fill to exist to be checked');
   });
 
@@ -347,27 +281,10 @@ describe('the design system rules that are stated in prose and checked nowhere',
 });
 
 /**
- * A numeric column that declares `text-align: end` must actually win the cascade.
- *
- * ## The defect this exists for
- *
- * `.prl-legend-table__figure` carried `text-align: end` from the day that file was written and
- * **never once applied**. `.prl-legend-table th, td { text-align: start }` is specificity (0,2,1);
- * a bare class selector is (0,1,0) and loses silently. Every figure in that table had been
- * left-aligned for the whole life of the file, and the stylesheet read as though it were not.
- *
- * That is not a one-off. The same trap was reproduced in a *new* rule in the same session before
- * anybody noticed the first one, and again in the Coach's candidate table — the most numeric
- * surface in the product — where `.prl-candidates__table td` (0,1,1) beat `.prl-candidates__cost`
- * (0,1,0) and the costs and EVs rendered left-aligned under right-aligned intent.
- *
- * A declaration that applies to nothing is worse than a missing one: it reads as done.
- *
- * ## What this asserts
- *
- * For every rule that end-aligns a cell, the selector must be element-qualified (`td.` / `th.`),
- * which is (0,1,1) and at least ties with the table-wide rule it must beat — and a later rule wins
- * a tie, which is why placement below matters too and is asserted here as well.
+ * A numeric column that declares `text-align: end` must win the cascade. `.prl-x__table td` is
+ * (0,1,1) and silently beats a bare `.prl-x__cost` at (0,1,0). This shipped more than once.
+ * End-aligning selectors must be element-qualified (`td.`/`th.`) and placed below, since a tie
+ * goes to source order.
  */
 describe('numeric columns are actually end-aligned', () => {
   /** `.prl-candidates__table th, .prl-candidates__table td { … text-align: start … }` */
@@ -381,14 +298,10 @@ describe('numeric columns are actually end-aligned', () => {
     const offenders: string[] = [];
     let tablesFound = 0;
     for (const [name, raw] of GLASS_SCANNED) {
-      // Comments stripped first. The first version of this scanned raw text and reported prose out
-      // of the very comment block explaining the defect — a check reading its own documentation as
-      // evidence. Every file here is heavily commented, so that is not a corner case.
+      // Comments stripped first, or prose explaining the defect is reported as the defect.
       const css = strip(raw);
 
-      // Only a table that sets `text-align: start` on its own cells can defeat anything. Without
-      // one, an unqualified class is perfectly fine — which is why the first version of this test
-      // produced three false positives on `div`/`span` layouts that merely end-align a value.
+      // Only a table that start-aligns its own cells can defeat anything. Without one, a bare class is fine.
       const guarded = new Set<string>();
       for (const wide of css.matchAll(TABLE_WIDE_START)) {
         const block = blockOf(wide[1] ?? '');
@@ -418,7 +331,6 @@ describe('numeric columns are actually end-aligned', () => {
   });
 
   it('places the candidate table override BELOW the rule it has to beat', () => {
-    // (0,1,1) ties with (0,1,1); a tie is decided by source order, so this is load-bearing.
     const wide = componentsCss.indexOf('.prl-candidates__table th,');
     const override = componentsCss.indexOf('td.prl-candidates__cost');
     assert.ok(wide > 0 && override > 0, 'both rules must exist for the ordering to matter');
@@ -426,31 +338,19 @@ describe('numeric columns are actually end-aligned', () => {
   });
 
   /**
-   * The scan above is a check on SELECTORS. It says nothing about VALUES, and that is a hole.
-   *
-   * `offenders` is built from the blocks that declare `text-align: end`, so deleting the
-   * declaration — or changing it to `start` — removes the thing being scanned and the sweep goes
-   * quiet. Measured: with `td.prl-candidates__cost, td.prl-candidates__ev, …`'s
-   * `text-align: end` changed to `start`, `packages/ui` passed 297 of 297, `apps/web` 425 of 425
-   * and `design:contrast` passed twice — while the Coach's candidate table, the most numeric
-   * surface in the product, rendered its costs and EVs left-aligned. The "places the override
-   * BELOW" case survives it too: it only looks for the selector, which is still there.
-   *
-   * So the value is resolved here rather than assumed, by the cascade rather than by grep: every
-   * rule in `components.css` that can match `td.prl-candidates__cost` is collected, ordered by
-   * (specificity, source position), and the winner's `text-align` is what a reader sees.
+   * The scans above check selectors, not values. Changing the override to `start` passed every test
+   * in both packages. So the cascade is resolved here, by (specificity, source position), over every
+   * rule that can match `td.prl-candidates__cost`.
    */
   it("resolves the candidate table's numeric cells to `end`, not merely to a declaration", () => {
     const css = strip(componentsCss);
-    /** Rules that could match this element, with the specificity of the matching selector. */
     const matching: { selector: string; at: number; specificity: number; value: string | null }[] = [];
     for (const match of css.matchAll(/([^{}]+)\{([^{}]*)\}/gu)) {
       const body = match[2] ?? '';
       const align = /(?:^|;)\s*text-align:\s*([a-z-]+)/u.exec(body);
       if (align === null) continue;
       for (const selector of (match[1] ?? '').split(',').map((part) => part.trim())) {
-        // Only the selectors that can actually match `<td class="prl-candidates__cost">` inside a
-        // `.prl-candidates__table`. Anything else is irrelevant to what this cell renders as.
+        // Only selectors that can match `<td class="prl-candidates__cost">` in `.prl-candidates__table`.
         const classes = [...selector.matchAll(/\.([a-z0-9_-]+)/gu)].map((entry) => entry[1]);
         const known = new Set(['prl-candidates__table', 'prl-candidates__cost']);
         if (!classes.every((name) => known.has(String(name)))) continue;
@@ -465,8 +365,7 @@ describe('numeric columns are actually end-aligned', () => {
         });
       }
     }
-    // A sweep of nothing is not a pass: at minimum the table-wide rule and the override must both
-    // have been found, or this is resolving an empty list to `undefined` and calling it a pass.
+    // A sweep of nothing is not a pass. The table-wide rule and the override must both be found.
     assert.ok(
       matching.length >= 2,
       `only ${matching.length} rule(s) could match the candidate cost cell; the resolver found nothing to arbitrate`,
@@ -479,8 +378,6 @@ describe('numeric columns are actually end-aligned', () => {
       `the candidate table's cost cell resolves to ${winner?.value} via \`${winner?.selector}\`; ` +
         'a column of money that reads left-aligned is the defect this whole block exists for',
     );
-    // And the losing rule really is the table-wide one, so the arithmetic above was arithmetic
-    // rather than a single-element list agreeing with itself.
     assert.ok(
       matching.some((rule) => rule.value === 'start' && rule !== winner),
       'no table-wide start-align rule was in the comparison, so nothing was actually beaten',
@@ -488,8 +385,6 @@ describe('numeric columns are actually end-aligned', () => {
   });
 
   it('catches the historical defect when it is replayed (NEGATIVE CONTROL)', () => {
-    // The exact shape that shipped in legends.css and never applied: a bare class end-aligning a
-    // cell in a table whose own rule start-aligns every cell.
     const replayed = `
       .prl-x__table th, .prl-x__table td { text-align: start; }
       .prl-x__figure { text-align: end; }
@@ -513,39 +408,15 @@ describe('numeric columns are actually end-aligned', () => {
 });
 
 /**
- * The same trap as the block above, one level out: a BEM part that loses to its own block's
- * element rules.
- *
- * ## The defect this exists for
- *
- * `.prl-legal-flag__mark { color: var(--prl-caution) }` had never once painted. The mark is a
- * `<p>`, and `.prl-legal-flag p { color: var(--prl-text-secondary) }` sits four lines below it:
- * (0,1,1) against a bare class's (0,1,0). Measured in Chrome, the caution marker on /terms,
- * /privacy and /responsible-use rendered `rgb(59, 69, 83)` — body-secondary — on all fifteen
- * instances, and `.prl-legal__banner-mark` did the same on all three banners. The colour is the
- * only thing separating "this clause has not been reviewed by counsel" from the paragraph beneath
- * it, so this is the legal surface's one visual signal, and it was off.
- *
- * The end-aligned-cell guard above could not see it: that one is scoped to tables, and this block
- * is a `<div>` of paragraphs. What the two share is the shape — an element selector inside a block
- * quietly out-ranking the block's own part classes — and that shape is not about tables at all.
- *
- * ## What this asserts
- *
- * For every block that styles a bare element type of its own (`.prl-legal-flag p`), any part class
- * of that block declaring the same property must be TYPE-QUALIFIED (`p.prl-legal-flag__mark`),
- * which is (0,1,1) and at least ties; and where it ties on the same type, it must be declared
- * BELOW the rule it has to beat, because a tie is decided by source order.
- *
- * Scoped to `color` and `text-align` deliberately, and not to every property: those are the two
- * this has now bitten (four times for `text-align`, twice for `color`), and they are the two where
- * a block's element rules and its part classes routinely both have an opinion. Widening it to
- * layout properties would flag every `.prl-x li { margin }` against every `.prl-x__item { margin }`
- * pair in the repo, most of which are on different elements entirely.
+ * The same trap outside tables. `.prl-legal-flag p` (0,1,1) beat `.prl-legal-flag__mark` (0,1,0), so
+ * the caution colour never painted on any of the fifteen legal-page marks.
+ * A part class competing with its block's element rule must be type-qualified (`p.prl-legal-flag__mark`)
+ * and declared below it. Scoped to `color` and `text-align`, the two properties this has hit. Layout
+ * properties would flag pairs on different elements.
  */
 describe('a block never lets its element rules out-rank its own parts', () => {
   const CONTESTED = ['color', 'text-align'] as const;
-  /** `.prl-legal-flag p` — a block, then a bare element type, and nothing else. (0,1,1). */
+  /** `.prl-legal-flag p`, a block then a bare element type. (0,1,1). */
   const BLOCK_TYPE = /^\.(prl-[a-z0-9_-]+)\s+([a-z][a-z0-9]*)$/u;
   /** `.prl-legal-flag__mark`, optionally type-qualified as `p.prl-legal-flag__mark`. */
   const PART = /^([a-z][a-z0-9]*)?\.(prl-[a-z0-9_-]+)$/u;
@@ -617,8 +488,7 @@ describe('a block never lets its element rules out-rank its own parts', () => {
 
   it('type-qualifies every part that competes with one of its block’s element rules', () => {
     const { guards, unqualified } = scan();
-    // A sweep of nothing is not a pass: if the BEM convention or the file list changes shape, this
-    // guard would otherwise report success having compared zero pairs.
+    // A sweep of nothing is not a pass.
     assert.ok(guards.length > 0, 'no `.block <type>` rule setting a contested property was found');
     assert.deepEqual(
       unqualified,
@@ -634,8 +504,7 @@ describe('a block never lets its element rules out-rank its own parts', () => {
   });
 
   it('catches the historical defect when it is replayed (NEGATIVE CONTROL)', () => {
-    // The exact shape that shipped in legal.css: a bare part class colouring a mark inside a block
-    // whose own `p` rule colours every paragraph.
+    // The shape that shipped in legal.css.
     const replayed = `
       .prl-x-flag p { color: var(--prl-text-secondary); }
       .prl-x-flag__mark { color: var(--prl-caution); }

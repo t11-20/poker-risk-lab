@@ -1,35 +1,7 @@
 /**
- * One scenario.
- *
- * The page's job is data and landmarks; `ScenarioStage` owns the reading order and the reveal, and
- * its header explains why the assumptions come before the decision.
- *
- * ## Why the table view is built here and not in the component
- *
- * `scenarioToPlayerView` needs `@prl/poker-engine` for card parsing and position labels, and the
- * engine's module graph contains the shuffler and the deck commitment. Doing the projection in this
- * server component means the finished `PlayerView` crosses to the client as plain data and the client
- * bundle links against none of it. Same reasoning as the hand replay; the only place the engine is
- * deliberately allowed into the browser is `lib/deck-proof.ts`, the client-side deck-proof check
- * behind `CommitmentVerifier`.
- *
- * ## Three different kinds of "not found", and only two of them are 404s
- *
- *  - An id no scenario has: `notFound()`, a real 404. A learner who mistypes a URL should get the
- *    page that says so, not an empty analysis.
- *  - A scenario whose situation will not project into a table: also a 404, but for a different
- *    reason, and the comment at that branch says which. Rendering the question with no table would
- *    silently ask a different question from the one the scenario wrote.
- *  - **The scenario API could not be reached and the bundled copy does not carry this id.** This
- *    used to be a 404 as well, and it was a lie. The API serves thirty-six scenarios and
- *    `src/fixtures/scenarios.ts` carries six of them, so with the API down thirty perfectly real
- *    scenarios told a learner "there is nothing at this address" — including anybody who had
- *    bookmarked one, or who was reading one when the API went away and pressed reload. The `/lab`
- *    index degrades correctly in the same conditions and says what happened; this page said the
- *    scenario had never existed.
- *
- * `ScenarioState` below is what keeps those apart. Only `missing` may reach `notFound()`, and it is
- * reachable only from a 404 the API itself sent about an id the reader supplied.
+ * One scenario. The table view is projected here so the engine stays out of the client bundle.
+ * Only the API's own 404 (`missing`) renders the not-found body. An unreachable API with no bundled
+ * copy gets an explanation instead, because the bundle carries six of the thirty-six scenarios.
  */
 
 import { scenarios } from '@prl/content';
@@ -58,13 +30,11 @@ export function generateStaticParams(): { scenarioId: string }[] {
 export const dynamicParams = false;
 
 type ScenarioState =
-  /** The API answered. */
   | { readonly state: 'live'; readonly response: ScenarioResponse }
-  /** The API did not, and the bundled copy carries this scenario. Labelled on the page. */
+  /** The bundled copy carries this scenario. Labelled on the page. */
   | { readonly state: 'sampled'; readonly response: ScenarioResponse; readonly detail: string }
-  /** The API said 404 about an id the reader supplied. The only route to `notFound()`. */
+  /** The API said 404. The only route to the not-found body. */
   | { readonly state: 'missing' }
-  /** The API is unreachable and the bundled copy does not carry this one. Explained, not 404'd. */
   | { readonly state: 'unavailable'; readonly detail: string };
 
 async function loadScenario(id: string): Promise<ScenarioState> {
@@ -72,8 +42,6 @@ async function loadScenario(id: string): Promise<ScenarioState> {
   if (result.ok) return { state: 'live', response: result.data };
 
   const error = result.error;
-  // `id` came out of the URL, so a 404 is the API answering "no such scenario" — the one condition
-  // that earns the not-found screen.
   if (isMissingResource(error)) return { state: 'missing' };
   if (!isApiUnavailable(error)) throw error;
   const fixture = scenarioFixture(id);
@@ -87,22 +55,13 @@ export async function generateMetadata({
   readonly params: Promise<RouteParams>;
 }): Promise<Metadata> {
   const { scenarioId } = await params;
-  // The bundled content, not `LAB_SCENARIO_SUMMARIES`: that is the six offline fixtures, whose ids
-  // are not the API's, and looking the id up there titled all 36 real pages "Scenario".
+  // Not `LAB_SCENARIO_SUMMARIES`, whose six fixture ids are not the API's.
   return scenarioPageMetadata(scenarioId);
 }
 
 /**
- * The next scenario in the Lab index's own order, so "next" is a stable route rather than a guess.
- *
- * `lib/lab-next.ts` has the defect this replaced. The list is asked for anonymously: the order is
- * the same for everybody and only the attempt marks are per-reader, so forwarding the session
- * cookie would buy nothing. ANY failure falls back to the bundle rather than to no button — the
- * scenario itself has already loaded, and a missing "next" is not worth an error page.
- *
- * A page rendered from the fixture walks the fixture: those six ids are the only ones that can be
- * staged while the API is away, so a "next" into the bundle would mostly lead to the unavailable
- * screen.
+ * The Lab index's order. Asked anonymously, because the order is the same for everybody. Any failure
+ * falls back to the bundle. A fixture page walks the fixture, the only ids stageable offline.
  */
 async function nextHrefAfter(id: string, state: 'live' | 'sampled'): Promise<string | null> {
   if (state === 'sampled') return nextScenarioHref(id, LAB_SCENARIO_SUMMARIES);
@@ -113,20 +72,9 @@ async function nextHrefAfter(id: string, state: 'live' | 'sampled'): Promise<str
 }
 
 /**
- * The screen for "the scenario service is not answering and this one is not in the bundle".
- *
- * It names the scenario where it can. The bundled content (`bundledScenarioTitle`) carries every
- * scenario's title and question even though the analysis is the server's to compute, so for every
- * id this route can render the page can still say WHICH scenario the reader asked for even though
- * it cannot stage it. It used to read `LAB_SCENARIO_SUMMARIES`, which a comment here called "the
- * bundled index — thirty-six titles" and which is the six offline fixtures, under ids the API does
- * not use: it named none of them. That matters: "Rule of 4:
- * a big draw on the flop could not be loaded" is a different message from "there is nothing at this
- * address", and the difference is the whole ticket.
- *
- * A 200 carrying an explanation rather than a 503: a server component can set a status only through
- * `notFound()` and the experimental auth interrupts. The status is the smaller of the two problems
- * and the false sentence was the larger one.
+ * Names the scenario from the bundled content, which carries every title even without an analysis.
+ * A 200, because a server component can set a status only through `notFound()` and the experimental
+ * auth interrupts.
  */
 function ScenarioUnavailable({
   scenarioId,
@@ -189,7 +137,6 @@ export default async function ScenarioPage({
 }): Promise<ReactElement> {
   const { scenarioId } = await params;
   const data = await loadScenario(scenarioId);
-  // The ONLY route to the not-found screen: the API itself said there is no such scenario.
   if (data.state === 'missing') return <NotFoundBody />;
   if (data.state === 'unavailable') {
     return <ScenarioUnavailable scenarioId={scenarioId} detail={data.detail} />;
@@ -197,8 +144,7 @@ export default async function ScenarioPage({
 
   const { scenario, analysis, glossary } = data.response;
   const table = scenarioToPlayerView(scenario);
-  // A scenario whose seats or cards will not parse cannot be staged. That is a content bug, and a
-  // 404 is the honest outcome: the alternative is a question asked without the situation it needs.
+  // Unparseable seats or cards get a 404, rather than a question without its situation.
   if (table === null) return <NotFoundBody />;
 
   const seatNames: Record<number, string> = {};
@@ -222,9 +168,6 @@ export default async function ScenarioPage({
 
       {data.state === 'sampled' ? (
         <p className="prl-source-note prl-note">
-          {/* The fallback is `src/fixtures/scenarios.ts`, built by `readSituation` and `buildCoachReport`
-              — which is what this used to say, file path and function names included (UX audit at
-              6b3886e, M5). The learner needs the consequence: same maths, worked out in advance. */}
           <span className="prl-label prl-label--accent">Bundled copy</span> This scenario could not be loaded
           live, so this is the copy that ships with the app. Its analysis was worked out by the same maths,
           ahead of time rather than for you just now, so the figures are the same ones the live Lab shows.
@@ -234,14 +177,8 @@ export default async function ScenarioPage({
       <ScenarioStage
         scenario={scenario}
         analysis={analysis}
-        // The stakes, beside the analysis rather than smuggled inside it. `judgeConsistency`
-        // denominates its indifference margin in big blinds and a `CoachReport` carries no
-        // stakes, so an earlier version attached the big blind to the report itself — an extra
-        // field, so the denominator travelled with the figures. (That helper is gone; do not
-        // reintroduce it.) It worked, and it hid the dependency: nothing in `ScenarioStage`'s
-        // signature said it needed the stakes, so a caller could stop attaching them and the
-        // verdict would quietly be judged against a one-chip margin while the server recorded a
-        // twenty-chip one. A required prop is the version of that arrangement the compiler checks.
+        // A required prop, because `judgeConsistency` measures its margin in big blinds and a
+        // `CoachReport` carries no stakes. Do not attach the big blind to the report instead.
         bigBlind={scenario.bigBlind}
         view={table.view}
         legalActions={table.legalActions}

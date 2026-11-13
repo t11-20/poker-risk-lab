@@ -1,20 +1,8 @@
 /**
- * "Start a match" on `/legends`: the form under the head that put a Play button on the first screen.
- *
- * Measured on the production build at 375x812 with the API up: the first "Play this style" was at
- * y=2,869, three and a half screens down, and at y=1,968 at 1440x900 — below a desktop fold too.
- * The form's Play is at y=741 and y=488. See `LegendQuickStart.tsx`.
- *
- * The form is TSX and `node --test` cannot render it, so what is asserted is what makes it start the
- * RIGHT match, read off the source and the link builder:
- *
- *  - the URL the browser builds from the form's fields is the URL a card's Play link carries, and
- *    `/play` reads the same two names. A field renamed on its own still submits, and `/play` then
- *    deals the six-handed bot table instead — no error, the wrong game;
- *  - the form carries the one-line framing pointer, sits after the head and before the framing
- *    block, and the framing still comes before the picker and the first card;
- *  - no server component calls a plain function exported from a `'use client'` module. That is how
- *    the first version of this change took `/legends` down on the production build.
+ * "Start a match" on `/legends` puts a Play button on the first screen (the first card's Play was at
+ * y=2,869 at 375x812). `node --test` cannot render the form, so the source is held to start the RIGHT
+ * match, because a renamed field still submits and `/play` deals the bot table instead. No server component
+ * may call a plain function from a `'use client'` module, which once took `/legends` down.
  */
 
 import assert from 'node:assert/strict';
@@ -122,11 +110,7 @@ describe('"Start a match" and the framing', () => {
 describe('the closed select is wide enough for every archetype name', () => {
   const css = read('styles', 'legends.css').replace(/\/\*[\s\S]*?\*\//gu, '');
 
-  /*
-    Measured in Chrome with `field-sizing: content`: "High-Variance Tournament Aggressor" needs 322px
-    in a closed select. A 15rem basis cut eight names at 430; a padded panel cut two at 375 and four
-    at 360. A native select cuts its value at the arrow, and `test:layout` never measures an option.
-  */
+  /* The longest archetype name needs 322px in a closed select; `test:layout` never measures an option. */
   it('the field’s basis is the card floor, not the column floor', () => {
     assert.match(css, /\.prl-legend-quick__field \{\s*flex: 1 1 var\(--prl-legend-card-min\);/u);
   });
@@ -140,11 +124,6 @@ describe('the closed select is wide enough for every archetype name', () => {
 });
 
 describe('"Apply setting" keeps the opponent picked in "Start a match"', () => {
-  /*
-    Devin Review on PR #41: pick Passive Calling Station, follow "Change the setting", tick Expert,
-    Apply — the page reloaded with no opponent in the URL, the select came back on the first
-    profile, and Play started that one instead.
-  */
   const page = code(read('app', 'legends', 'page.tsx'));
   const picker = code(read('components', 'DifficultyPicker.tsx'));
   const scope = code(read('components', 'LegendDifficultyScope.tsx'));
@@ -174,12 +153,7 @@ describe('"Apply setting" keeps the opponent picked in "Start a match"', () => {
 });
 
 describe('the match screen prints the chosen profile’s own disclaimers', () => {
-  /*
-    Devin Review on PR #41: "Start a match" lists every profile by name, so a reader could pick the
-    course-derived one and be dealt in without either screen printing its course notice. The cards
-    print it above their Play link; the form does not, so the match screen now prints every
-    disclaimer but the universal one, which its framing line already restates.
-  */
+  /* The form lists every profile, so the match screen prints each disclaimer but the universal one. */
   const play = code(read('app', 'play', 'page.tsx'));
 
   it('computes every disclaimer but the universal one for the chosen profile', () => {
@@ -198,13 +172,7 @@ describe('the match screen prints the chosen profile’s own disclaimers', () =>
 });
 
 describe('no server component calls a plain function from a client module', () => {
-  /*
-    `coachWords` was first exported from `LegendDifficultyScope.tsx` ('use client') and called from
-    `DifficultyPicker.tsx`, a server component. The build passed and typecheck passed; the page
-    rendered "This screen did not load", because across that boundary a function arrives as a client
-    REFERENCE, not as something callable. A component (capitalised, rendered as JSX) is the only
-    kind of value that crosses it usefully.
-  */
+  /* Across the client boundary a plain function arrives as a REFERENCE; only components cross usefully. */
   const COMPONENTS = join(SRC, 'components');
   const files = readdirSync(COMPONENTS).filter((name) => name.endsWith('.tsx'));
   const isClient = (source: string): boolean => /^\s*['"]use client['"];/u.test(source);
@@ -218,7 +186,6 @@ describe('no server component calls a plain function from a client module', () =
     assert.ok(clientModules.size < files.length, 'no server components found');
   });
 
-  /** Every `.tsx` under `src/app` and `src/components`, relative to `src`. */
   const importers = ['app', 'components'].flatMap((dir) =>
     readdirSync(join(SRC, dir), { recursive: true, encoding: 'utf8' })
       .filter((name) => name.endsWith('.tsx'))

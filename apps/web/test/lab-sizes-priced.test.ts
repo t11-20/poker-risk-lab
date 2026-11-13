@@ -1,24 +1,6 @@
 /**
- * Every size the Lab's decision bar offers without typing is a size the analysis priced.
- *
- * ## The failure this is written against
- *
- * The `ActionBar` offers a default (the minimum raise, which is what an untouched sizer sends) and
- * ⅓, ½, ⅔, pot and all-in presets. The Coach used to price three rungs of its own ladder — the
- * smallest ladder rung at or above the floor, a middle one and the shove, each rounded down — and
- * `judgeConsistency` grades a sized action only on an exact match. Measured over the bundle at
- * commit 308fadf: the default was unpriced in 23 of the 31 scenarios with a bet or raise, the ⅔-pot
- * preset on `eq-second-pair-vs-wide-range` was 207 against a priced 206, and the best row on
- * `eq-flush-draw-turn-small-bet` ("Raise to 67") was reachable by no preset at all. A learner who
- * pressed a button the product offered was told "this analysis did not price that size".
- *
- * ## What is built, and from where
- *
- * The bar's side comes from `scenarioToPlayerView` — the function that fills the real bar — fed
- * through `offeredSizes`, which is the list `ActionBar` renders (`packages/ui/test` pins that the
- * bar's presets and arithmetic ARE these). The Coach's side is a real `buildCoachReport`, with the
- * input `coachTaskFor` in `apps/api/src/routes/content.ts` builds. Sampling is cut to 2,000 because
- * no size depends on equity: a size is arithmetic on the pot, the price and the bounds.
+ * Every size the Lab's bar offers without typing is a size the analysis priced, because
+ * `judgeConsistency` matches sizes exactly. Sampling is cut to 2,000; a size does not depend on equity.
  */
 
 import assert from 'node:assert/strict';
@@ -61,13 +43,11 @@ function sweep(): Sweep {
 
     const hero = table.view.seats.find((seat) => seat.isSelf);
     const input = coachInputFor(scenario);
-    // The two sides must be sizing the same spot, or agreement below would be a coincidence. Each
-    // of these is a figure one side reads and the other derives separately.
+    // The two sides must size the same spot, or agreement below would be a coincidence.
     const facts: [string, number, number][] = [
       ['pot', table.view.potTotal, input.pot],
-      // The Coach prices against the pot hero can win; the bar sizes against the whole middle. They
-      // are equal wherever a raise is on offer — hero has to cover the bet to raise past it, which
-      // leaves nothing above hero's reach — and this says so rather than assuming it.
+      // The Coach prices the pot hero can win, the bar the whole middle. They are equal wherever a raise
+      // is on offer, because hero must cover the bet to raise past it.
       ['contestable pot', table.view.potTotal, input.contestablePot],
       ['to call', table.view.amountToCall, input.toCall],
       ['committed this street', hero?.committedThisStreet ?? -1, input.heroCommittedThisStreet],
@@ -101,7 +81,7 @@ function sweep(): Sweep {
 
 describe('the Lab offers only sizes the analysis priced', () => {
   it('reaches the scenarios that offer a bet or a raise', () => {
-    // 31 of 36 at the time of writing; the other five face an all-in and offer fold and call only.
+    // The other five face an all-in and offer fold and call only.
     assert.ok(sweep().withAggression >= 30, `only ${sweep().withAggression} scenario(s) offer aggression`);
   });
 

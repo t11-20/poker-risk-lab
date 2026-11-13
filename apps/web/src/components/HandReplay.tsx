@@ -4,50 +4,13 @@
  * The hand replay: a scrubbable reconstruction of a finished hand, with the analysis for each of the
  * reader's own decisions.
  *
- * ## What this component owns, and what it does not
+ * The only state here is the step index. Each step's `PlayerView` is rebuilt on the server by
+ * `src/lib/hand-replay.ts`, so no engine code reaches the browser bundle. An opponent's decision gets
+ * an explanation, not an analysis, because a report needs their two cards, which are sealed or belong
+ * to another learner.
  *
- * It owns exactly one piece of state: which step is being looked at. Everything else — the seat
- * plates, the pot, the board, the position labels — arrives as a finished `PlayerView` per step,
- * reconstructed on the server by `src/lib/hand-replay.ts`. That split is deliberate and it is a
- * bundle decision: the reconstruction needs `@prl/poker-engine` for card parsing, and the engine's
- * module graph is the shuffler and the deck commitment, which have no business in a browser bundle.
- * Doing it server-side means this file imports no engine at all.
- *
- * ## Why the analysis for an opponent's decision is a paragraph rather than an empty panel
- *
- * The server analyses the requesting reader's own decisions and nothing else, and it is worth being
- * clear that this is a *rule*, not a gap. A Coach report needs the acting player's two cards. For
- * anybody else those cards are either sealed forever — they folded and never showed, and whether
- * they were bluffing is the information the game is played over — or they belong to a different
- * learner. The alternatives are both worse than silence: inventing a holding would produce a
- * confident-looking report about a spot that never existed, and rendering an empty panel would read
- * as a bug and invite somebody to "fix" it by leaking.
- *
- * So an opponent's step gets a short, non-apologetic explanation of the rule. It is not framed as a
- * limitation, because it is not one.
- *
- * ## Motion
- *
- * Two things move, both within the rules of section 5.4. The step panel is keyed on the step index,
- * so changing steps replays a `transform`/`opacity` keyframe — nothing that triggers layout. The
- * pot, the reader's stack and the equity count up through `Metric`'s `countUp`, which writes the
- * final value to the DOM immediately and animates a visually-hidden copy, so a screen reader never
- * reads a number mid-count. Both collapse to nothing under `prefers-reduced-motion` via the duration
- * tokens, and the replay is fully usable with every animation off — the numbers are simply there.
- *
- * ## Announcements
- *
- * A polite live region carries the step change. Focus is never moved by this component *except* to
- * rescue it: the timeline moves focus in response to the reader's own key press and nothing else,
- * and a scrub that yanked the caret would make the replay unusable with a keyboard.
- *
- * The exception is the transport pair, and it is a real defect rather than a hypothetical one.
- * "Previous decision" is `disabled` at step 0 and "Next decision" is `disabled` at the last step, so
- * a keyboard reader stepping through a hand with Enter loses focus the moment they reach either end:
- * the browser blurs a control that becomes disabled, and there is nothing to blur it to but
- * `<body>`. Having read a whole hand they are silently returned to the top of the document. The
- * effect below moves the caret to whichever of the two survived, and only when the browser has in
- * fact given up on it — the same two conditions `ActionBar` uses in `@prl/ui` for the same reason.
+ * Motion follows section 5.4 and collapses under reduced motion. Focus moves only to rescue the caret
+ * when a transport button disables itself at either end of the hand.
  */
 
 import type { HandReviewResponse } from '@prl/contracts';
@@ -114,16 +77,8 @@ function markerDescription(step: ReplayStep, names: Readonly<Record<number, stri
 }
 
 /**
- * The sentence the transport shows: who did what, as a sighted reader scans it.
- *
- * Shorter than `markerDescription` on purpose. The street and the step number sit beside it in the
- * transport, and "an analysis is attached" is the `+` on the marker and the Coach panel itself — so
- * this is the one fact the counter could not say. It is NOT a live region: `role="status"` below
- * already announces the step, and J6.2 fails a step that is announced from two places.
- *
- * "To act:" because a step is positioned BEFORE its decision (`ReplayStep.decision`): the table
- * shows the seat with "to act" on it and the bet not yet in. A bare "Quartile called 40 units."
- * beside a table where Quartile has not called yet reads as the table being a step behind.
+ * Who did what, for the transport. Not a live region, because J6.2 fails a step announced twice.
+ * "To act:" because a step is positioned before its decision, with the bet not yet in.
  */
 function stepHeadline(step: ReplayStep, names: Readonly<Record<number, string>>): string {
   if (step.decision === null) return 'The hand is over.';
@@ -132,12 +87,8 @@ function stepHeadline(step: ReplayStep, names: Readonly<Record<number, string>>)
 }
 
 /**
- * A transport button's label: a glyph, and words that are visible from 600px up.
- *
- * Below 600px the words are visually hidden rather than removed, so the accessible name stays
- * "Previous decision" / "Next decision" (J6.5 finds the buttons by that text, and a voice-control
- * user says it) while the row fits one line. Measured at 360 before: the two worded buttons and the
- * counter wrapped to two rows, a 126px sticky bar under a 77px header — 32% of a 640px screen.
+ * A glyph plus words visually hidden below 600px, so the name stays "Previous decision" (J6.5 finds
+ * it) while the row fits one line at 360px.
  */
 function TransportLabel({ glyph, words }: { readonly glyph: string; readonly words: string }): ReactElement {
   return (
@@ -178,17 +129,7 @@ function buildStreets(replay: Replay): readonly TimelineStreet[] {
   }));
 }
 
-/**
- * The three figures above the table: the pot, the reader's stack, and their equity.
- *
- * All three count up on a step change through `Metric`'s `countUp`, which writes the final value to
- * the DOM immediately and animates a visually-hidden copy — so a screen reader never reads a number
- * mid-count, and the count is skipped outright under `prefers-reduced-motion`.
- *
- * The equity tile is the one that can be absent, and it says why rather than showing a dash. An
- * opponent's decision has no equity figure because it has no analysis, and that is a rule rather
- * than a gap.
- */
+/** Pot, stack and equity. An opponent's step has no equity, and the tile says why instead of a dash. */
 function StepMetrics({ step }: { readonly step: ReplayStep }): ReactElement {
   const analysis = step.analysis;
   const seat = step.view.seats.find((candidate) => candidate.isSelf);
@@ -216,9 +157,7 @@ function StepMetrics({ step }: { readonly step: ReplayStep }): ReactElement {
           value={Number.NaN}
           format="percent"
           size="md"
-          // `null` rather than the default "%": `formatPercent` renders a non-finite value as an em
-          // dash, and "— %" reads as a broken figure where "—" reads as an absent one. The note
-          // beneath carries the reason, so the unit has no work left to do.
+          // `null`, because "— %" reads as a broken figure and the note carries the reason.
           unit={null}
           note="Computed for your own decisions only — see the panel below."
         />
@@ -260,18 +199,10 @@ function ResultRow({
 }
 
 export function HandReplay({ review, replay }: HandReplayProps): ReactElement {
-  // The reader's own first decision, not step 1 — see `openingStepIndex`. Computed from props, so
-  // the server render and the first client render agree and nothing jumps on hydration.
+  // Opens on the reader's first decision, computed from props so hydration agrees.
   const [stepIndex, setStepIndex] = useState(() => openingStepIndex(replay));
   const instructionsId = useId();
-  /**
-   * The transport row, so the rescue below can find whichever button is still enabled.
-   *
-   * A `ref` on the buttons themselves would be tidier and is not available: `Button` in `@prl/ui` is
-   * a plain function component that does not declare one, and adding it there is a change to a
-   * shared package for a problem this container owns. Querying inside a row that holds exactly two
-   * buttons is unambiguous.
-   */
+  /** The transport row. `Button` takes no ref, so the rescue queries this row's two buttons. */
   const transportRef = useRef<HTMLDivElement | null>(null);
   /** Which transport control the reader last pressed, so a scrub from the timeline moves nothing. */
   const pressed = useRef<'previous' | 'next' | null>(null);
@@ -281,39 +212,11 @@ export function HandReplay({ review, replay }: HandReplayProps): ReactElement {
     const which = pressed.current;
     pressed.current = null;
     if (which === null) return;
-    // Only when the browser has actually dropped focus, which is what it does to a control that
-    // becomes disabled. If the pressed button is still enabled it still has the caret.
-    //
     const row = transportRef.current;
     if (row === null) return;
-    // Two ways the caret is lost, and this used to test only the first — which is the one that has
-    // not happened yet when this runs.
-    //
-    // Measured 2026-08-27 by instrumenting this effect and walking the transport to the end: on
-    // every press, including the last, `browserAbandonedFocus()` was **false**. Chrome had not
-    // moved focus yet. It blurs a control that becomes `disabled` AFTER React's effect, so at this
-    // instant `document.activeElement` is still the button the reader pressed, now disabled. A
-    // probe taken later in the same run found `BODY`. The old guard therefore returned early every
-    // single time and the rescue never ran once — a reader who had just stepped through fifteen
-    // decisions was returned to the top of the document, which is exactly what J6.5 says.
-    //
-    // `ActionBar`'s `browserAbandonedFocus` is still the right test for the state AFTER the blur
-    // (it learned that Chrome can land on `<html>` rather than `<body>`), so it is kept for that
-    // case. What is added is the case before: the caret is on a disabled control inside this row.
-    // Either way the reader cannot be told where they are, and either way the answer is the
-    // transport control that survived.
-    // Why this is two conditions and not `ActionBar`'s design. `ActionBar` faces the same problem
-    // and solves it more thoroughly: it tracks focus with `onFocusCapture`/`onBlurCapture` so its
-    // `hadFocus` flag SURVIVES the disable — `focusout` fires with a null `relatedTarget` in that
-    // case — and it rescues in a `useLayoutEffect`, before paint, because "a delayed rescue can
-    // lose to Chrome parking the caret on `<html>` with nobody watching". That is the right shape
-    // for a bar whose whole row is replaced by the server's next frame.
-    //
-    // This row is two buttons that never unmount and where exactly one is disabled at a time, so
-    // covering BOTH timings is enough and needs no focus bookkeeping: whether Chrome has already
-    // blurred, or is still holding the disabled control, the caret is somewhere the reader cannot
-    // be told about and the destination is the same. If this component ever grows a third control
-    // or starts remounting the row, take `ActionBar`'s approach rather than extending this one.
+    // Chrome blurs a newly disabled button after this effect runs, so the caret may still be on it
+    // (measured 2026-08-27, J6.5) or already on the document. Both cases rescue to the survivor.
+    // If this row grows a third control or remounts, use `ActionBar`'s focus tracking instead.
     const active = document.activeElement;
     const caretOnDisabledControl =
       active instanceof HTMLButtonElement && active.disabled && row.contains(active);
@@ -324,8 +227,7 @@ export function HandReplay({ review, replay }: HandReplayProps): ReactElement {
   const markers = buildMarkers(replay);
   const streets = buildStreets(replay);
   const total = replay.steps.length;
-  // Clamped rather than trusted: `steps` is a prop, and a shorter one arriving under a stale index
-  // would index past the end. `?? steps[0]` keeps the component total.
+  // Clamped, because a shorter `steps` could arrive under a stale index.
   const step = replay.steps[Math.min(stepIndex, total - 1)] ?? replay.steps[0];
 
   if (step === undefined) {
@@ -339,8 +241,7 @@ export function HandReplay({ review, replay }: HandReplayProps): ReactElement {
 
   const analysis = step.analysis;
   const counter = stepCounter(step, replay);
-  // Seats the server disclosed. Named on screen, because a replay that shows an opponent's cards
-  // from step one without saying why invites the reader to think the analysis knew them too.
+  // Named on screen, so the reader knows why an opponent's cards show from step one.
   const shownSeats = review.seats
     .filter((seat) => seat.showedDown && seat.holeCards !== null && seat.seat !== replay.viewerSeat)
     .map((seat) => seat.displayName);
@@ -375,9 +276,7 @@ export function HandReplay({ review, replay }: HandReplayProps): ReactElement {
         >
           <TransportLabel glyph="‹" words="Previous decision" />
         </Button>
-        {/* What the counter could not say: who did what at this step, where the reader is looking
-            when they press. Plain text, not a live region — `role="status"` below announces the
-            step, and J6.2 fails a step announced from two places. */}
+        {/* Plain text, not a live region. J6.2 fails a step announced from two places. */}
         <div className="prl-replay__now">
           <p className="prl-replay__position">
             <span className="prl-label">{counter.label}</span>
@@ -441,9 +340,7 @@ export function HandReplay({ review, replay }: HandReplayProps): ReactElement {
           </p>
         )}
 
-        {/* The terminal frame only. For a decision this line used to read "About to act: preflop:
-            you folded." under the table — y≈1997 at 1440 — and that fact is now the transport's
-            headline, where the reader is looking when they press. */}
+        {/* The terminal frame only. For a decision the transport headline says it. */}
         {step.decision === null ? (
           <p className="prl-replay__caption">
             {review.hand.endedByFold
@@ -461,8 +358,7 @@ export function HandReplay({ review, replay }: HandReplayProps): ReactElement {
             {review.seats.map((seat) => (
               <ResultRow
                 key={seat.seat}
-                // The replay's names, not the payload's: the reader's own seat is "You" there, as it
-                // is on the table and the timeline, rather than "Guest 7E37B1".
+                // The replay's names, so the reader's seat is "You" as on the table.
                 name={replay.seatNames[seat.seat] ?? seat.displayName}
                 isBot={seat.isBot}
                 net={seat.net}

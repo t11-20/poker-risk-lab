@@ -1,10 +1,7 @@
 /**
- * The guard on Fold beside a free Check, as the pure decision it is.
- *
- * The audit at 308fadf found Fold beside Check with nothing between a mis-tap and a free hand
- * thrown away. `ActionBar` cannot be clicked under `node:test` (no DOM, ADR 0008), so the decision
- * lives in `src/fold-guard.ts` and is driven here, and the wiring — that the component feeds it
- * `event.detail` — is asserted against the source in `action-bar-render.test.ts`.
+ * The guard on Fold beside a free Check, as a pure decision.
+ * `ActionBar` cannot be clicked under `node:test` (no DOM, ADR 0008), so the decision lives in
+ * `src/fold-guard.ts`, and `action-bar-render.test.ts` checks the component passes it `event.detail`.
  */
 
 import assert from 'node:assert/strict';
@@ -20,7 +17,6 @@ const CHECK_IS_FREE: readonly LegalAction[] = [
 
 describe('foldPress', () => {
   it('asks once when a pointer presses Fold and checking is free (REGRESSION)', () => {
-    // The defect itself: a tap that lands on Fold instead of Check used to fold, at once.
     assert.equal(foldPress({ canCheck: true, pointer: true, armed: false }), 'arm');
   });
 
@@ -29,8 +25,7 @@ describe('foldPress', () => {
   });
 
   it('folds at once from the keyboard, whose label already said checking is free', () => {
-    // Also what keeps every harness in scripts/ deterministic: they press by key or `.click()`,
-    // both `detail === 0`, so a spot the bots happen to leave check-free does not change the run.
+    // Harnesses in scripts/ press by key or `.click()` (`detail === 0`), so this keeps them deterministic.
     assert.equal(foldPress({ canCheck: true, pointer: false, armed: false }), 'fold');
   });
 

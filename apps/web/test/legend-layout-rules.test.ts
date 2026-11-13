@@ -1,16 +1,7 @@
 /**
- * Three layout defects on the Legends pages, measured in Chrome against the running build, held
- * here as the rules that fixed them. `test:layout` measures glyphs and would not call any of these
- * a failure — nothing overlaps or clips — so without this nothing would notice them coming back.
- *
- *  1. 360px, `/legends/calling-station`: "03 Aggression [Signature axis] 0.16" filled the row and
- *     "OF 1" wrapped onto a line of its own, a scale with no figure beside it.
- *  2. 768px, `/legends`: the three difficulty options laid out two on a row and one alone beside an
- *     empty cell (two 322px options at y=806, the third at y=1000).
- *  3. 1440px: each radio was centred across the option's name AND description, so it sat beside
- *     the description — dot centre 72px into the option, name centre 29px.
- *  4. 360px, `/legends`: three full difficulty options made the picker 849px of the 3,230 above the
- *     first "Play this style".
+ * Layout defects on the Legends pages, held as the rules that fixed them. `test:layout` measures
+ * glyphs, and nothing in these overlaps or clips: a trait's "of 1" wrapping alone at 360px, two
+ * difficulty options beside an empty cell at 768px, and a radio centred on the description.
  */
 
 import assert from 'node:assert/strict';
@@ -23,7 +14,6 @@ const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 const css = readFileSync(join(SRC, 'styles', 'legends.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//gu, '');
 const traitBars = readFileSync(join(SRC, 'components', 'TraitBars.tsx'), 'utf8');
 
-/** The declarations of the first top-level rule with exactly this selector. */
 function rule(selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
   const match = new RegExp(`(?:^|\\n)${escaped} \\{([^}]*)\\}`, 'u').exec(css);
@@ -56,12 +46,7 @@ describe('legends layout rules', () => {
     assert.doesNotMatch(control, /span 2/u);
   });
 
-  /*
-    4. 360px, `/legends`: the picker was 849px — three full option blocks — and the first Play sat
-       at y=3,230. On a phone only the ticked option now shows its description (602px, 247px off
-       the first Play); the other two keep their name and Coach chip. See the comment in
-       `legends.css` for the three alternatives measured and why each was turned down.
-  */
+  /* At 360px the picker was 849px; `legends.css` records the alternatives measured and turned down. */
   describe('on a phone only the ticked difficulty shows its description', () => {
     const picker = readFileSync(join(SRC, 'components', 'DifficultyPicker.tsx'), 'utf8');
     const PHONE = /@media \(width < 600px\) \{([\s\S]*?)\n\}/gu;
@@ -70,7 +55,6 @@ describe('legends layout rules', () => {
       '.prl-legend-difficulty__option:not(:has(.prl-legend-difficulty__control:checked))\n' +
       '    > .prl-legend-difficulty__description {';
 
-    /** The declarations of the unticked-description rule, from whichever phone block holds it. */
     function untickedRule(): string {
       assert.ok(phoneBlocks.length > 0, 'no `@media (width < 600px)` block in legends.css');
       for (const block of phoneBlocks) {

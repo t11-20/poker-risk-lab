@@ -1,22 +1,8 @@
 /**
- * The replay names who acted on every marker, and opens on the reader's own first decision.
- *
- * ## The failures these are written against
- *
- * Measured by the audit at 308fadf on a live hand at 360 and 1440:
- *
- *   - the timeline's visible text was "FOLD", "RAISE 20", "CALL 10" — actions with no actor. The
- *     name existed only in each marker's visually-hidden sentence.
- *   - the replay opened on step 1, another player's action, so the first Coach panel a reader met
- *     was "This decision belongs to <bot>, and it is not analysed".
- *
- * Both fixture hands happen to open on the reader's own decision — the reader raises first in each
- * — which is why the fixture never showed the second one. The cases below drop the opening step to
- * produce the shape a live hand has whenever the reader is not first to act.
- *
- * The last two assertions read the components' source, because `node --test` cannot load a `.tsx`
- * file and the defect was in the component's wiring (`useState(0)`, and a marker that rendered
- * `short` alone), not in a value a pure function returns.
+ * The replay names who acted on every marker, and opens on the reader's own first decision. Both
+ * fixture hands open on the reader's decision, so the cases drop the opening step to get the live
+ * shape where somebody else acts first. The component checks read source, because `node --test`
+ * cannot load `.tsx` and the defect was in the wiring.
  */
 
 import assert from 'node:assert/strict';

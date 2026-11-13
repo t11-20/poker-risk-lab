@@ -1,30 +1,6 @@
 /**
- * The `"— most likely"` marker on a sampled action distribution, and the mismatch that stopped it
- * appearing at all above a thousand units.
- *
- * ## What a learner saw
- *
- * `ActionDistribution` marks one row of the distribution with the words "— most likely", chosen by
- * comparing a string with `===`. Two different pieces of code produced that string:
- *
- *   - the rows themselves come from `@prl/poker-ai`'s `describeAction`, which formats a size with
- *     a private `formatChips` — `Number.isInteger(v) ? String(v) : v.toFixed(1)` — so a raise to
- *     1,200 arrives on the wire as `"raise to 1200"`;
- *   - `PostHandComparison` rebuilt the same description itself using `@prl/ui`'s `formatChips`,
- *     which groups thousands: `"raise to 1,200"`.
- *
- * Under a thousand the two agree character for character, so every review of a small pot looked
- * correct. At a thousand and above they never matched: no row was marked, and nothing on the page
- * said a mark had been dropped. Starting stacks are 1,000 units, so a raise past that is ordinary
- * play.
- *
- * ## Why this file tests a `lib/` module rather than the component
- *
- * `apps/web` has no render harness — the suite runs under `node --test`, which cannot load a
- * `.tsx` at all. So the decision was moved into `lib/action-distribution.ts`, which imports
- * nothing, and the component re-exports it. The half that cannot be imported — that the component
- * is actually wired to it — is asserted against the source below, which is the same split
- * `test/live-regions.test.ts` and `test/account-deletion.test.ts` settled on.
+ * The "most likely" marker is matched with `===`, and `@prl/poker-ai` writes "raise to 1200" where
+ * `@prl/ui`'s `formatChips` writes "1,200". So the marker must be taken from the distribution itself.
  */
 
 import assert from 'node:assert/strict';
@@ -38,14 +14,7 @@ const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 const COMPARISON = readFileSync(join(SRC, 'components', 'PostHandComparison.tsx'), 'utf8');
 const DISTRIBUTION = readFileSync(join(SRC, 'components', 'ActionDistribution.tsx'), 'utf8');
 
-/**
- * The two formatters, restated as the strings they produce.
- *
- * Neither package can be imported into this file: `@prl/ui`'s entry point re-exports `.tsx`, and
- * `@prl/poker-ai` is not a dependency of this app. The values below were measured rather than
- * assumed — `formatChips(1200)` from `@prl/ui/src/format.ts` is `"1,200"`, and
- * `Number.isInteger(1200) ? String(1200) : …` from `@prl/poker-ai/src/commentary.ts` is `"1200"`.
- */
+/** Measured output. `@prl/ui` re-exports `.tsx`, and `@prl/poker-ai` is not a dependency of this app. */
 const FROM_POKER_AI = 'raise to 1200';
 const REBUILT_WITH_GROUPING = 'raise to 1,200';
 
@@ -58,8 +27,6 @@ describe('the marker is taken out of the distribution, never described a second 
     ];
     const marked = mostLikelyAction(entries);
     assert.equal(marked, FROM_POKER_AI);
-    // The property that actually matters: what comes back is one of the strings that will be
-    // compared, so `===` in the component compares a value with itself.
     assert.ok(
       entries.some((entry) => entry.action === marked),
       'the marker is not one of the rows, so it can fail to match one',
@@ -90,7 +57,6 @@ describe('the marker is taken out of the distribution, never described a second 
   it('marks nothing when there is nothing to mark', () => {
     assert.equal(mostLikelyAction([]), undefined);
     assert.equal(mostLikelyAction([{ action: 'call', probability: Number.NaN }]), undefined);
-    // A single unusable weight beside a usable one still leaves the usable one as the answer.
     assert.equal(
       mostLikelyAction([
         { action: 'call', probability: Number.NaN },
@@ -101,10 +67,7 @@ describe('the marker is taken out of the distribution, never described a second 
   });
 
   it('NEGATIVE CONTROL: the string the web app used to build could never match', () => {
-    // The old expression in `PostHandComparison`, restated:
-    //   `${action}${action === 'raise' ? ' to' : ''} ${formatChips(to)}`
-    // with `@prl/ui`'s grouping formatter. Against a distribution carrying `@prl/poker-ai`'s
-    // ungrouped string, the `===` in `ActionDistribution` finds nothing.
+    // The old `PostHandComparison` expression, rebuilt with `@prl/ui`'s grouping formatter.
     const entries = [
       { action: FROM_POKER_AI, probability: 0.62 },
       { action: 'call', probability: 0.38 },
@@ -115,9 +78,8 @@ describe('the marker is taken out of the distribution, never described a second 
       0,
       'the two formatters agree on 1,200, so this defect was never real and this file proves nothing',
     );
-    // And they DO agree below a thousand, which is why it went unnoticed for so long.
+    // They agree below a thousand, which is why it went unnoticed.
     assert.equal('raise to 520', 'raise to 520');
-    // The fix marks the row, on the very figure the old code could not.
     assert.equal(
       entries.filter((entry) => entry.action === mostLikelyAction(entries)).length,
       1,
@@ -127,9 +89,7 @@ describe('the marker is taken out of the distribution, never described a second 
 });
 
 describe('the component is wired to it', () => {
-  // Narrow on purpose: it names the exact expression that was the second producer. The guard that
-  // carries the weight is the positive assertion beside it — the marker has to come from
-  // `mostLikelyAction`, and there is nowhere else for a rebuilt string to be used.
+  // Names the exact expression that was the second producer. The positive assertion carries the weight.
   const REBUILDS = /formatChips\(decision\.modelAction/u;
 
   it('does not rebuild the description in PostHandComparison', () => {
@@ -146,8 +106,7 @@ describe('the component is wired to it', () => {
   });
 
   it('NEGATIVE CONTROL: the detector fires on the expression this replaced', () => {
-    // `${…}` is built rather than written out: biome's `noTemplateCurlyInString` refuses those two
-    // characters inside a plain string, and the repo's idiom is a helper rather than an ignore.
+    // Biome's `noTemplateCurlyInString` refuses those two characters in a plain string, hence the helper.
     const hole = (expression: string): string => `\${${expression}}`;
     const old =
       'modalAction={decision.modelAction === null ? undefined : `' +

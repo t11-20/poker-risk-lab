@@ -1,22 +1,8 @@
 /**
- * Coming back to `/play` puts the reader back at the table they were at — and never makes one.
- *
- * ## The defect
- *
- * Navigating away from `/play` and back showed "Not connected yet. “Deal me in” creates a guest
- * session … and a private room with bots already seated" (UI audit of 308fadf, item 15). Both halves
- * were wrong for a returning reader: the server was still holding their seat, the tab remembered the
- * room (`prl.play.roomId`), and "Deal me in" would rejoin it, not create anything. Only that press
- * ever read the memory, so the page looked as if the table had been dropped.
- *
- * ## What is held here
- *
- * The page-load reconnect runs without a press, so the guard on it is about what it must NOT do: no
- * request at all on a first visit, no guest minted, no room created and no other room chosen in
- * place of the remembered one. Those are asserted on `resumeRememberedTable` with its network
- * injected, and on `readSession` against a stubbed `fetch`. There is no renderer in this repository
- * (ADR 0008), so the hook's wiring and the panel's sentence are read from source, as
- * `live-regions.test.ts` reads `statusSentence`.
+ * Coming back to `/play` puts the reader back at the table they were at, and never makes one. The
+ * page-load reconnect runs without a press, so the guards are what it must NOT do: no request on a
+ * first visit, no guest minted, no room created, no other room chosen. The hook's wiring and the
+ * panel's sentence are read from source, because there is no renderer here (ADR 0008).
  */
 
 import assert from 'node:assert/strict';
@@ -75,7 +61,7 @@ const SESSION: TableSession = {
   csrfToken: 'token-abc',
 };
 
-/** The network, counted. Only reads are offered: a resume that wanted to create could not. */
+/** The network, counted. Only reads are offered, so a resume that wanted to create could not. */
 function network(session: TableSession | null, rooms: readonly RoomSummary[]) {
   const calls: string[] = [];
   const dependencies: ResumeDependencies = {
@@ -123,8 +109,7 @@ describe('the table a returning reader is put back at', () => {
   });
 
   it('chooses no other room when the remembered one has gone', async () => {
-    // `chooseRoom` would take `room_spare` (owned, with a bot): right for a press of "Deal me in",
-    // which asks for a table; wrong here, where nothing was asked for but THAT table.
+    // `chooseRoom` would take `room_spare`, right for "Deal me in" but not when THAT table was asked for.
     const { dependencies } = network(SESSION, [room('room_spare')]);
     assert.equal(await resumeRememberedTable('room_mine', signal, dependencies), null);
   });
@@ -172,7 +157,6 @@ describe('the page that does the reconnecting', () => {
   const hook = readFileSync(new URL('../src/lib/use-live-table.ts', import.meta.url), 'utf8');
   const panel = readFileSync(new URL('../src/app/play/LiveTable.tsx', import.meta.url), 'utf8');
 
-  /** The body of the effect that reconnects on load, so a neighbouring call cannot satisfy this. */
   const effect = (() => {
     const start = hook.indexOf('resumeRememberedTable(remembered');
     assert.ok(start > 0, 'useLiveTable no longer reconnects on load through resumeRememberedTable');

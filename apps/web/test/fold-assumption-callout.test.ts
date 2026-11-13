@@ -1,13 +1,7 @@
 /**
- * The Lab's insight callout names the rows the fold assumption actually moves.
- *
- * ## The failure this is written against
- *
- * The callout under every verdict read "If you think that fold assumption is too generous, the row it
- * moves is the raise row" — unconditionally. On `flop-spr-commitment` (the bundled fixture) the rows
- * carrying an assumed fold frequency are BET rows, and on a spot where every opponent is already all
- * in (`eq-rule-of-four-big-draw-flop`) there is no aggressive row and no fold assumption at all, so
- * the sentence pointed the reader at a row that is not on the table.
+ * The Lab's insight callout names the rows the fold assumption actually moves. It once said "the
+ * raise row" unconditionally, though some fixtures assume folds on BET rows and an all-in spot has
+ * no fold assumption at all.
  */
 
 import assert from 'node:assert/strict';

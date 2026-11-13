@@ -1,20 +1,8 @@
 /**
  * `UnitsBadge`: the explanation can be put away, and the reset it promises is somewhere to go.
- *
- * ## The defect this exists for
- *
- * The audit at 6b3886e opened the header's `i` at 390x844 and could not close it again except by
- * pressing the `i` a second time. The panel measured 16,66,358,91 after an outside tap, after
- * Escape, after scrolling 400px and after a client navigation, with `aria-expanded` still `true`
- * after Escape — a permanent cover over the top of every page. Its text promised "you can reset
- * them to the starting amount at any time" and gave no way to do it.
- *
- * ## What is rendered and what is read from the source
- *
- * The links are rendered for real through `loadComponent`. The three ways of closing need a DOM to
- * drive and this package has none under `node --test` (ADR 0008), so the wiring is asserted against
- * the source, as `action-bar-render.test.ts` does for the same reason. The Escape path is driven in
- * a real browser by `scripts/keyboard-audit.mjs` ("the units explanation closes on Escape").
+ * The panel once stayed open over every page after an outside tap, Escape, a scroll or a navigation.
+ * The closing paths need a DOM, which `node --test` lacks (ADR 0008), so their wiring is read from the
+ * source. `scripts/keyboard-audit.mjs` drives the Escape path in a real browser.
  */
 
 import assert from 'node:assert/strict';
@@ -66,7 +54,7 @@ describe('the explanation names where the reset is', () => {
   });
 
   it('says exactly what UNITS_EXPLANATION says, link or no link', async () => {
-    // The footer and onboarding restate the exported string; the panel must not drift from it.
+    // The footer and onboarding restate the exported string, so the panel must not drift from it.
     const linked = noteOf(await render({ units: 1000, resetHref: '/record' })).replace(/<[^>]+>/gu, '');
     const plain = noteOf(await render({ units: 1000 })).replace(/<[^>]+>/gu, '');
     const promise = await explanation();
@@ -91,7 +79,7 @@ describe('the figure leads to the reader’s record', () => {
     const inside = pill[1] ?? '';
     assert.match(inside, /<span class="prl-units__figure">1,000<\/span>/u);
     assert.match(inside, /<span class="prl-units__word prl-label">units<\/span>/u);
-    // "1,000 units" names the figure; the name has to say where the link goes.
+    // "1,000 units" names the figure, so the name has to say where the link goes.
     assert.match(inside.replace(/<[^>]+>/gu, ''), /your record$/u);
   });
 

@@ -1,19 +1,7 @@
 /**
- * The Verdict panel's distance from the benchmark is the real distance.
- *
- * ## The failure this is written against
- *
- * Measured on the running app at commit 308fadf, a call on a Lab scenario read:
- *
- *     Your action is worth      −2.9 units
- *     Judged against            folding, worth 0
- *     Shortfall against that    0.0 units, against an allowance of 10 units
- *
- * The action is 2.9 units behind folding and the panel said 0.0. `shortfallUnits` in
- * `@prl/poker-math` is zeroed on purpose for a consistent action — it is "how far outside the
- * allowance", which inside the allowance is nothing — and the panel printed it under a label that
- * reads as "how far behind". Two facts were folded into one number, and the one shown was the
- * wrong one for its label. They are now separate fields, and the verdict semantics are untouched.
+ * The Verdict panel's distance from the benchmark is the real distance. `shortfallUnits` is zeroed on
+ * purpose inside the allowance, so a call 2.9 units behind folding once read "Shortfall 0.0". The
+ * distance is now its own field, and the verdict semantics are untouched.
  */
 
 import assert from 'node:assert/strict';

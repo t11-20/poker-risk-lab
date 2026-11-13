@@ -1,31 +1,9 @@
 /**
- * The distribution a policy sampled its action from, as a small bar plus a printed legend.
- *
- * ## Why a learner has to see this
- *
- * These styles are **probabilistic, not scripted**. The same spot does not always produce the same
- * action, and a learner who thinks "this style folds here" has learned something false about the
- * opponent and something worse about poker. `ModelReasoning.actionProbabilities` and
- * `ProfileComparisonEntry.actionDistribution` are on the wire for exactly this reason, so the job
- * of this component is to make the spread visible rather than to summarise it as its mode.
- *
- * ## Two rules it is built around
- *
- * 1. **Every probability is printed as text.** The bar is a secondary encoding. A stacked bar
- *    cannot satisfy "never convey a value by length or colour alone", so if the legend were
- *    dropped to save space the layout would be wrong.
- * 2. **An action keeps the same colour AND the same fill pattern in every column.** The series is
- *    chosen from the action's verb, not from its position in the list, so `raise` looks the same in
- *    all four columns of the compare page — which is the only thing that makes those columns
- *    comparable at a glance. The colour-plus-pattern pairs come from `[data-series]` in
- *    `components.css`, so a reader with any form of colour-vision deficiency, and a reader in
- *    forced-colors mode, still tells the segments apart.
- *
- * If the probabilities do not sum to 1 the component says so instead of normalising them. A
- * distribution that does not add up is a defect in whatever produced it, and hiding it behind a
- * rescale hides the defect.
- *
- * Server-render safe: no state, no effects.
+ * The distribution a policy sampled its action from, as a bar plus a printed legend. The styles are
+ * probabilistic, so the spread is shown rather than its mode. Every probability is printed as text,
+ * because the bar alone would convey value by length. The series comes from the verb, so an action
+ * keeps its colour and fill pattern (`[data-series]` in `components.css`) in every compare column.
+ * A sum other than 1 is reported, never normalised away. Server-render safe.
  */
 
 import {
@@ -38,56 +16,28 @@ import {
 } from '@prl/ui';
 import type { ReactElement } from 'react';
 
-/** One action and the weight the policy gave it before sampling. */
 export interface ActionShare {
-  /** The action as the model names it: `fold`, `check`, `call`, `bet 90`, `raise to 520`. */
   readonly action: string;
-  /** A fraction in 0..1. */
   readonly probability: number;
-  /** Median size as a fraction of the pot, for a sized action. Absent or null otherwise. */
   readonly medianSizeToPotFraction?: number | null;
 }
 
 export interface ActionDistributionProps {
-  /** Names the group, e.g. "Action mix over 400 trials". Required: an unlabelled bar is a shape. */
   readonly label: string;
   readonly entries: readonly ActionShare[];
   /**
-   * The most likely action, marked with a word as well as by its position.
-   *
-   * **It has to be one of `entries[].action`, taken from that list rather than rebuilt** — this is
-   * matched with `===` and there is no normalisation to fall back on. `ProfileComparisonEntry`
-   * satisfies this by construction: the API sets `modalAction: distribution[0].action`, out of the
-   * very array it is sending. A caller that formats a number of its own has to agree with a
-   * formatter in another package, and `mostLikelyAction` below exists so that nobody has to.
-   *
-   * ## The defect that rule is written for
-   *
-   * `PostHandComparison` used to build this string itself, with `@prl/ui`'s grouping `formatChips`
-   * — `"raise to 1,200"`. The entries come from `@prl/poker-ai`'s `describeAction`, which formats
-   * with a private `String(value)` — `"raise to 1200"`. So for any sizing of a thousand or more the
-   * two never matched, no row was marked, and nothing said so. Starting stacks are 1,000, so it was
-   * reachable in ordinary play and silent whenever it happened.
+   * Must be one of `entries[].action`, taken from the list and never rebuilt, because it is matched
+   * with `===`. A rebuilt `raise to 1,200` never matched the entry's `raise to 1200`.
+   * Use `mostLikelyAction`.
    */
   readonly modalAction?: string;
   readonly className?: string;
 }
 
-/**
- * Re-exported from `lib/action-distribution.ts` rather than defined here.
- *
- * It moved to a leaf module so it could be tested: this file is a `.tsx`, and `node --test` in
- * this repository cannot load one. Same shape and same reason as `lib/quiz-tolerance.ts`. That
- * file's header carries the measurement and the rule.
- */
+/** Lives in a leaf `.ts` module because `node --test` cannot load a `.tsx`. */
 export { mostLikelyAction } from '@/lib/action-distribution.ts';
 
-/**
- * Series letter per action verb, fixed so the mapping is stable across every column and screen.
- *
- * `d` is the fallback for an action this map does not know, which keeps an unexpected verb visible
- * rather than silently sharing a colour with something else.
- */
+/** `d` is reserved for an unknown verb, so it never shares a colour with a known one. */
 const SERIES_BY_VERB: Readonly<Record<string, string>> = {
   fold: 'f',
   check: 'e',
@@ -98,7 +48,6 @@ const SERIES_BY_VERB: Readonly<Record<string, string>> = {
 
 const UNKNOWN_SERIES = 'd';
 
-/** How far a distribution may drift from 1 before it is worth saying so on screen. */
 const SUM_TOLERANCE = 0.005;
 
 const SHARE_DECIMALS = 1;
@@ -136,10 +85,7 @@ export function ActionDistribution(props: ActionDistributionProps): ReactElement
   return (
     <div className={cx('prl-legend-dist', className)}>
       <span className="prl-label">{label}</span>
-      {/*
-        Decorative. Every segment's probability is printed in the legend below, which is the
-        encoding that actually carries the data.
-      */}
+      {/* Decorative. The legend below carries every value as text. */}
       <div aria-hidden="true" className="prl-bar">
         {entries.map((entry, index) => {
           const style: StyleWithVars = {
@@ -177,23 +123,12 @@ export function ActionDistribution(props: ActionDistributionProps): ReactElement
               ) : null}
             </span>
             <span className="prl-legend-dist__probability">
-              {/*
-                A weight the model sampled from IS a probability, so it goes through the domain
-                rather than through the formatter. An entry outside 0..1 is named as such instead
-                of being printed as an impossible percentage — `formatPercent` would render 1.6 as
-                "160.0%", in the app's own authoritative voice, on the page that teaches how much
-                confidence a number deserves.
-              */}
+              {/* A probability, so an entry outside 0..1 is named rather than printed as a percentage. */}
               {formatProbability(entry.probability, { decimals: SHARE_DECIMALS }) ?? NOT_A_PROBABILITY}
             </span>
             {entry.medianSizeToPotFraction === undefined || entry.medianSizeToPotFraction === null ? null : (
               <span className="prl-legend-dist__size">
-                {/*
-                  NOT a probability, and deliberately still `formatPercent`: a bet of one and a half
-                  times the pot is 150% of it and is an ordinary size. Sending this through the
-                  probability domain would refuse a correct figure, which is the same conflation as
-                  the one above, in reverse.
-                */}
+                {/* Not a probability. A bet above pot size is ordinary, so this uses `formatPercent`. */}
                 {`Median size ${formatPercent(entry.medianSizeToPotFraction, { decimals: 0 })} of the pot`}
               </span>
             )}

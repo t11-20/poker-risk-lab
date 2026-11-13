@@ -1,50 +1,9 @@
 /**
- * The post-hand comparison: the learner's decisions, the maths behind each one, what the model did,
- * and why.
- *
- * ============================================================================================
- * THE RULE THIS COMPONENT EXISTS TO ENFORCE
- * ============================================================================================
- *
- * **The chip result and the decision quality are never presented as explaining each other.**
- *
- * `HandComparison` keeps them as separate, unrelated fields, and `DecisionQuality` is computed from
- * the maths before the run-out is known — `scoreDecisionQuality()` has no parameter capable of
- * carrying the winner. That separation is structural on the server, and this component is where a
- * layout could quietly undo it. So it is structural here too:
- *
- *  - the two figures sit in **two separate panels**, each with its own heading;
- *  - a labelled **wall** runs between them — a hairline plus a sentence saying that neither is
- *    evidence about the other — and `grid-template-areas` puts it between them at every viewport
- *    width, not underneath both on a phone;
- *  - they are **never in one metric row**, never adjacent figures, and neither one's tone, colour or
- *    glyph is derived from the other;
- *  - `chipResult` is rendered with a **neutral tone whatever its sign**. A green number on a won pot
- *    is the core casino reward pattern, and this product rewards the reasoning instead. There is no
- *    celebration here: no flourish, no particles, no "nice hand".
- *
- * When `outcomeVersusQualityNote` is present — a well-played hand that lost, or a badly-played hand
- * that won — it is rendered immediately after those panels as a `Callout` with tone `insight`,
- * because a line the maths supported that lost is the most valuable teaching moment in the product.
- *
- * ============================================================================================
- * What may be collapsed, and what may not
- * ============================================================================================
- *
- * Per the Coach panel's rules (§6.2), the equity figure with its method and interval, the pot odds,
- * **the assumptions** and the uncertainty are always visible. Only the per-action expected-value
- * table is behind a `<details>`. Hiding the assumptions while showing the number would let a
- * learner read a figure without its caveats, which is the exact failure this product exists to
- * prevent.
- *
- * ============================================================================================
- * Headings
- * ============================================================================================
- *
- * This component emits `h2` for its sections, `h3` per decision and `h4` inside a decision. It
- * expects to sit directly under the page's single `h1` and never emits one itself.
- *
- * Server-render safe: no state, no effects, no clock.
+ * The post-hand comparison. The chip result and the decision quality are never presented as
+ * explaining each other. They sit in two panels with a labelled wall between them at every width,
+ * neither one's tone derives from the other, and the chip result is always neutral in tone.
+ * Only the per-action EV table may collapse (§6.2). Assumptions and uncertainty stay visible.
+ * Emits `h2` sections, `h3` per decision and `h4` inside one. Never an `h1`. Server-render safe.
  */
 
 import type {
@@ -79,13 +38,7 @@ import { ActionDistribution, mostLikelyAction } from './ActionDistribution.tsx';
 import { LegendSigil } from './LegendSigil.tsx';
 import { ProfileDisclaimers } from './ProfileDisclaimers.tsx';
 
-/**
- * One decimal on every expected-value figure.
- *
- * Chips are integers in the engine; expected value is not. At zero decimals a shortfall of 0.4
- * units renders as `0` — which is exactly the figure the band is measured on, reported as nothing.
- * The bands themselves are fractions of a big blind, so a whole-unit readout cannot express them.
- */
+/** The bands are fractions of a big blind, so at zero decimals a 0.4-unit shortfall reads `0`. */
 const EV_DECIMALS = 1;
 
 const BAND_WORD: Readonly<Record<DecisionQuality['band'], string>> = {
@@ -94,21 +47,13 @@ const BAND_WORD: Readonly<Record<DecisionQuality['band'], string>> = {
   'materially-off': 'Materially off the best-priced action',
 };
 
-/**
- * Tones for the bands.
- *
- * `accent` marks the band where the analysis and the action agree, because the accent means
- * "computed data" in this system rather than "well done". Neither off band gets `adverse`: a
- * decision the maths priced lower is information to work through, not a failure, and the words
- * carry the distinction anyway.
- */
+/** The accent means "computed data", not "well done". An off band is information, so never `adverse`. */
 const BAND_TONE: Readonly<Record<DecisionQuality['band'], 'accent' | 'caution'>> = {
   'consistent-with-analysis': 'accent',
   'slightly-off': 'caution',
   'materially-off': 'caution',
 };
 
-/** Past tense, for a replay line. `bet` takes no "to"; `raise` does. */
 const ACTION_PAST: Readonly<Record<string, string>> = {
   fold: 'folded',
   check: 'checked',
@@ -117,7 +62,6 @@ const ACTION_PAST: Readonly<Record<string, string>> = {
   raise: 'raised to',
 };
 
-/** Present tense, for a table row. */
 const ACTION_PRESENT: Readonly<Record<string, string>> = {
   fold: 'Fold',
   check: 'Check',
@@ -140,7 +84,6 @@ function describePriced(action: string, to: number | null): string {
   return to === null ? verb : `${verb} ${formatChips(to)}`;
 }
 
-/** Engine card integers for the board, dropping anything that does not parse. */
 function boardCards(board: readonly string[]): readonly number[] {
   const cards: number[] = [];
   for (const text of board) {
@@ -150,13 +93,7 @@ function boardCards(board: readonly string[]): readonly number[] {
   return cards;
 }
 
-/**
- * The interval to show beside a sampled figure, pre-formatted.
- *
- * `null` for an exact enumeration, which has no interval to show. A **sampled** figure with no
- * half-width gets a sentence saying so rather than a bare percentage: printing a Monte Carlo number
- * as though it were exact is the single most misleading thing this UI could do.
- */
+/** `null` for an exact enumeration. A sampled figure with no half-width gets a sentence in `methodNote`. */
 function intervalFor(report: CoachReport): string | null {
   const half = report.equity.confidenceHalfWidthPoints;
   if (half === null) return null;
@@ -173,10 +110,6 @@ function methodNote(report: CoachReport): string {
   }
   return `Monte Carlo over ${formatChips(trials)} sampled run-outs, so the figure carries the interval beside it.`;
 }
-
-// ---------------------------------------------------------------------------
-// The maths for one decision
-// ---------------------------------------------------------------------------
 
 function DecisionMaths({ report }: { readonly report: CoachReport }): ReactElement {
   const interval = intervalFor(report);
@@ -217,12 +150,7 @@ function DecisionMaths({ report }: { readonly report: CoachReport }): ReactEleme
           }
           value={report.potOdds.breakEvenEquity}
         />
-        {/*
-          `potOdds.pot` is the pot hero could WIN, which is the whole middle except where hero was
-          all-in for less than the bet in front of them. The label says "could win" rather than
-          "pot" so that a review of such a decision does not put a figure below `report.potTotal`
-          under a label claiming to be it.
-        */}
+        {/* `potOdds.pot` is what hero could win, which is less than `potTotal` when hero is all-in short. */}
         <Metric
           format="units"
           label="Pot the decision was for"
@@ -239,10 +167,7 @@ function DecisionMaths({ report }: { readonly report: CoachReport }): ReactEleme
       {priced ? (
         <Formula
           eyebrow="Pot odds"
-          // Break-even equity is a probability — `toCall / (pot + toCall)` cannot exceed 1 — so the
-          // right-hand side of the formula goes through the domain. A pot-odds line that resolved
-          // to an impossible percentage would be the worst place in the app to print one: it is
-          // the figure a learner is being taught to compare their equity against.
+          // Break-even equity is a probability, so it goes through the domain formatter.
           expression={`break-even equity = ${formatChips(report.toCall)} / (${formatChips(report.potOdds.pot)} + ${formatChips(report.toCall)}) = ${formatProbability(report.potOdds.breakEvenEquity) ?? NOT_A_PROBABILITY}`}
           explanation={report.potOdds.explanation}
         />
@@ -252,10 +177,6 @@ function DecisionMaths({ report }: { readonly report: CoachReport }): ReactEleme
           <p>{report.equity.ruleOfThumb.note}</p>
         </Callout>
       )}
-      {/*
-        The per-action expected-value table is the one thing §6.2 permits collapsing. The
-        assumptions and the uncertainty below it are not, and they are not inside this element.
-      */}
       <details className="prl-disclose">
         <summary className="prl-disclose__summary">Every action the analysis priced</summary>
         <div className="prl-disclose__body">
@@ -288,20 +209,12 @@ function DecisionMaths({ report }: { readonly report: CoachReport }): ReactEleme
           </div>
         </div>
       </details>
-      {/*
-        Both are `h4`, the same level as every other subsection inside a decision's `h3`. An `h5`
-        here would be a level skipped from the decision heading, which is a real navigation failure
-        rather than a lint detail: a screen-reader user moving by heading would lose the outline.
-      */}
+      {/* `h4`, not `h5`. A skipped level breaks heading navigation under the decision's `h3`. */}
       <AssumptionList headingLevel={4} items={report.assumptions} />
       <UncertaintyNote headingLevel={4} note={report.uncertainty} />
     </div>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Why the model did what it did
-// ---------------------------------------------------------------------------
 
 function ModelReasoningBlock({
   reasoning,
@@ -346,10 +259,6 @@ function ModelReasoningBlock({
     </section>
   );
 }
-
-// ---------------------------------------------------------------------------
-// One decision
-// ---------------------------------------------------------------------------
 
 function DecisionBlock({ decision }: { readonly decision: ComparedDecision }): ReactElement {
   const actor = decision.userAction !== null ? 'you' : 'model';
@@ -444,21 +353,8 @@ function DecisionBlock({ decision }: { readonly decision: ComparedDecision }): R
 
       {decision.modelReasoning === null ? null : (
         /*
-          The marked row is chosen FROM the distribution, never described a second time.
-
-          This used to build the string here — `raise to 1,200`, with `@prl/ui`'s grouping
-          `formatChips` — and compare it against rows built by `@prl/poker-ai`'s `describeAction`,
-          which formats with a private `String(value)` and therefore writes `raise to 1200`. For
-          any sizing of a thousand or more the two could never be equal, so no row was ever marked
-          "— most likely" and nothing on the screen said a mark had been dropped. Starting stacks
-          are 1,000; a raise past that is an ordinary hand, not an edge case.
-
-          It also fixes what was marked. `modelAction` is the action the policy SAMPLED, and this
-          component already prints that on its own line ("This model's action"). The row this
-          component marks is labelled "most likely", which is a claim about the weights — and the
-          weights are exactly what `ActionDistribution` was given. `mostLikelyAction` is the same
-          rule the API uses for the compare page: `distribution[0].action`, out of the array it is
-          already sending.
+          The marked row is chosen from the distribution, never described a second time. A rebuilt
+          string grouped digits differently and never matched (action-distribution-marker.test.ts).
         */
         <ModelReasoningBlock
           modalAction={mostLikelyAction(decision.modelReasoning.actionProbabilities)}
@@ -471,25 +367,13 @@ function DecisionBlock({ decision }: { readonly decision: ComparedDecision }): R
   );
 }
 
-// ---------------------------------------------------------------------------
-// The whole comparison
-// ---------------------------------------------------------------------------
-
 export interface PostHandComparisonProps {
   readonly comparison: HandComparison;
-  /**
-   * The blind level the quality bands were scaled by.
-   *
-   * Optional, and absent rather than guessed. `HandComparison` does not carry a big blind, and the
-   * bands are defined in big blinds — so a component that defaulted to 20 would print a sentence
-   * claiming a scale it had invented. Where the caller knows the blind level it says so; where it
-   * does not, the note simply omits the claim.
-   */
+  /** Absent rather than guessed. `HandComparison` carries no big blind, and a default would be invented. */
   readonly bigBlind?: number;
   readonly className?: string;
 }
 
-/** The scale sentence, or the honest absence of one. */
 function bandScaleNote(bigBlind: number | undefined): string {
   const measured = 'Computed from the analysis at each decision, with no reference to the result.';
   if (bigBlind === undefined || !Number.isFinite(bigBlind) || bigBlind <= 0) {
@@ -523,10 +407,6 @@ export function PostHandComparison(props: PostHandComparisonProps): ReactElement
 
       <ProfileDisclaimers disclosure={disclosure} />
 
-      {/*
-        The separation. Two panels, a labelled wall between them, and nothing in either panel
-        derived from the other. See the module comment: this is the point of the component.
-      */}
       <section className="prl-legend-outcome">
         <Panel
           className="prl-legend-outcome__result"
@@ -536,10 +416,7 @@ export function PostHandComparison(props: PostHandComparisonProps): ReactElement
           title="Chip result"
           tone="raised"
         >
-          {/*
-            Neutral tone whatever the sign. A colour that rewarded a won pot would be rewarding the
-            outcome, which is the one thing this product does not do.
-          */}
+          {/* Neutral whatever the sign. A colour on a won pot would reward the outcome. */}
           <Metric format="units" label="Net for this hand" size="lg" tone="neutral" value={result} />
           <p>
             {`${resultWord} ${formatUnits(Math.abs(result))} in free practice units. Units are resettable and have no value, and this figure is the run-out only — it says nothing about the decisions that produced it.`}

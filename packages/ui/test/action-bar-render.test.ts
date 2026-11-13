@@ -1,40 +1,8 @@
 /**
- * `ActionBar`, actually rendered, with the bet field's invalid state as the subject.
- *
- * ## The defect this exists for
- *
- * The bet amount had no invalid state at all. Type something that is not a number into it and the
- * browser keeps the characters on screen, reports `value === ''` to the change handler, and the
- * sizer resolves that to the minimum — so the commit button silently changed its number while the
- * field still showed letters and nothing said the two were connected. The audit called that
- * shape "announce, or silently clamp without marking the field" when it found it on the quiz's
- * numeric answer; the same control in this package was missed because it is not `.prl-input` and
- * does not live in `apps/web`.
- *
- * ## What is rendered and what is read from the source, and why the split is honest
- *
- * The CLEAN state is rendered for real, through `loadComponent`, by the same compiler and the same
- * React the app ships — so "the field is not marked invalid before anything is typed, and the
- * correction is not in the accessibility tree waiting to be read out on every visit" is a fact
- * about the component rather than about a copy of it.
- *
- * The MALFORMED state cannot be rendered here and this file does not pretend otherwise. Reaching
- * it needs a change event carrying `validity.badInput`, which needs a DOM, and this package's
- * tests run under `node --test` with no DOM and no client renderer (ADR 0008 — and adding one is a
- * dependency this project has declined). So the malformed path is covered in two other places
- * instead, and they are the two halves that actually matter:
- *
- *   - the DECISION is `isDraftMalformed` in `src/bet-sizing.ts`, a pure function driven in
- *     `bet-sizing.test.ts` with the exact pair a browser produces — `{ text: '', badInput: true }`
- *     against `{ text: '', badInput: false }` — which is the pair a value-derived implementation
- *     gets wrong;
- *   - the WIRING is asserted below against the component's source, because the one thing a
- *     rendered clean state cannot show is *where the flag comes from*. A rewrite that derived the
- *     invalid state from the value would still render this file's clean state identically, still
- *     pass every arithmetic test, and still be the original defect.
- *
- * That is the same division `apps/web/test/live-regions.test.ts` settled on for the same defect on
- * the quiz field, for the same reason.
+ * `ActionBar`, rendered, with the bet field's invalid state as the subject.
+ * Unparseable text in a number field reports `value === ''`, so the sizer silently fell back to the
+ * minimum. The clean state is rendered. The malformed state needs a DOM (ADR 0008), so its decision
+ * is driven in `bet-sizing.test.ts` and its wiring is read from the source here.
  */
 
 import assert from 'node:assert/strict';
@@ -136,10 +104,7 @@ describe('the bet amount field, rendered clean', () => {
 
 describe('where the invalid state comes from', () => {
   it('reads it from validity.badInput, which is the only thing that can report it', () => {
-    // The defect, stated so it cannot come back: an `<input type="number">` sanitises text it
-    // could not parse to the empty string, so nothing about the value distinguishes "the reader
-    // typed letters" from "the reader cleared the field". Deriving the invalid state from the
-    // draft therefore produces a check that can never fire.
+    // A number input sanitises unparseable text to "", so the value cannot tell letters from a cleared field.
     assert.match(
       SOURCE,
       /event\.target\.validity\.badInput/u,
@@ -161,20 +126,17 @@ describe('where the invalid state comes from', () => {
   });
 
   it('puts the correction before the range in aria-describedby', () => {
-    // Order is not cosmetic. A reader who has just been told the field is invalid should hear WHY
-    // before hearing the allowed range again, which they have already heard once.
+    // A reader told the field is invalid should hear why before hearing the range again.
     assert.match(
       SOURCE,
-      // Followed by the clamp note's own branch, which puts ITS sentence first the same way.
       /malformed\s*\?\s*`\$\{invalidId\} \$\{boundsId\}`\s*:/u,
       'the correction id must come first in aria-describedby',
     );
   });
 
   it('clears the invalid state on every path that writes a real number into the field', () => {
-    // A separate `badInput` flag beside the text could outlive the text it described: click a
-    // preset while the flag is true and a perfectly legal amount stays marked invalid. Carrying
-    // both in one draft object makes that unreachable, so every writer states `badInput: false`.
+    // A separate flag could outlive its text and mark a preset's legal amount invalid, so every
+    // draft writer states `badInput`.
     const writers = [...SOURCE.matchAll(/onDraft\(\{[^}]*\}/gu)].map((match) => match[0]);
     assert.ok(writers.length >= 4, `expected the sizer's draft writers, found ${writers.length}`);
     for (const writer of writers) {
@@ -201,16 +163,13 @@ describe('a call that takes the whole stack says so', () => {
   ];
 
   it('speaks the all-in and prints the engine sentence (REGRESSION)', async () => {
-    // The engine decides this and writes the sentence; both were dropped here, so a learner
-    // pressing Call for their last chip saw "Call / 62 units" — identical to any other call.
-    // Measured over 3,000 hands: 3,569 of 15,137 call offers were all-in calls.
+    // Over 3,000 hands, 3,569 of 15,137 call offers were all-in calls.
     const markup = await render({ legalActions: ALL_IN_CALL, toCall: 62 });
     assert.match(markup, /call 62 units, which is all in/u, 'the spoken label must say it is all in');
     assert.match(markup, /Calling puts your whole remaining stack in\./u, "the engine's note must be shown");
   });
 
   it('says nothing of the sort on an ordinary call, so the wording is conditional', async () => {
-    // Without this, the guard above is satisfied by printing "all in" on every call.
     const markup = await render();
     assert.ok(!markup.includes('which is all in'), 'an ordinary call must not be announced as all in');
     assert.ok(
@@ -229,8 +188,6 @@ describe('a fold where checking is free says what it gives up', () => {
   ];
 
   it('prints and speaks both prices beside a free check (REGRESSION)', async () => {
-    // The engine's fold note here is "Legal, but checking costs nothing."; the bar printed only
-    // "Folding costs nothing", which beside a free check reads as no reason not to.
     const markup = await render({ legalActions: CHECK_IS_FREE, toCall: 0 });
     assert.match(
       markup,
@@ -244,18 +201,14 @@ describe('a fold where checking is free says what it gives up', () => {
   });
 
   it('draws Fold as plain Fold beside a free check until a pointer has pressed it once', async () => {
-    // The armed state ("Fold anyway") needs a click event and so a DOM, which this package does not
-    // have (ADR 0008); `fold-guard.test.ts` drives the decision. What a render CAN show is that the
-    // guard costs nothing before anybody presses: the label and its spoken form are unchanged.
+    // The armed state needs a click and so a DOM (ADR 0008). `fold-guard.test.ts` drives the decision.
     const markup = await render({ legalActions: CHECK_IS_FREE, toCall: 0 });
     assert.match(markup, /<span class="prl-action-btn__label">Fold<\/span>/u);
     assert.ok(!markup.includes('Fold anyway'), 'nothing has been pressed, so nothing is armed');
   });
 
   it('feeds the guard whether a POINTER pressed Fold, and sends the fold through it', () => {
-    // The wiring a render cannot see. A rewrite that dropped `event.detail` would render the
-    // unarmed state identically and be the audit's defect again: a mis-tap beside a free check
-    // folds at once.
+    // A rewrite that dropped `event.detail` would render identically and fold a mis-tap at once.
     const code = SOURCE.replace(/\s+/gu, ' ');
     assert.match(code, /foldPress\(\{ canCheck, pointer: event\.detail > 0, armed: foldArmed \}\)/u);
     assert.match(code, /<FoldButton [^>]*onClick=\{pressFold\}/u);

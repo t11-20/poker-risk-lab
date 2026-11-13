@@ -1,79 +1,24 @@
 /**
  * Number-to-text formatting for every figure the UI shows.
  *
- * These are the only pure functions in this package, and they carry more weight
- * than their size suggests: every number a learner reads passes through here, so
- * a wrong or unstable rendering is a teaching error, not a cosmetic one.
- *
- * ## Why this hand-rolls grouping instead of using `Intl.NumberFormat`
- *
- * Two reasons, both learned the hard way in server-rendered React:
- *
- *  1. `Intl.NumberFormat()` with no explicit locale reads the *host* default.
- *     Next.js renders these strings twice — once in Node, once in the browser —
- *     and those two hosts routinely disagree (`1,250` vs `1 250` vs `1.250`).
- *     The result is a hydration mismatch that only reproduces on some machines.
- *  2. Even with a pinned locale, ICU output drifts between Node versions
- *     (grouping of 4-digit numbers, the shape of the minus sign). Tests that
- *     assert on it become version-dependent.
- *
- * So the output here is fixed, ASCII-grouped and identical everywhere. The app is
- * English-only by design; if it is ever localised, that becomes a deliberate piece
- * of work rather than an accident of the host's environment.
- *
- * ## Why plain ASCII `+` and `-` for signs
- *
- * A signed figure is one of the places the accessibility rules bite: win/loss must
- * never be conveyed by colour alone, so the sign has to be *in the text*. ASCII
- * `+`/`-` are announced predictably by screen readers, unlike U+2212 MINUS SIGN,
- * which several announce as nothing at all. Components pair the sign with a word
- * ("gain", "loss") where the distinction carries meaning.
- *
- * ## Conventions the engine and math packages already fixed
- *
- *  - Equities and probabilities are **fractions in 0..1**. `formatPercent` multiplies.
- *    That includes `EquitySummary.ruleOfThumb.estimate`, which is a probability like
- *    any other on that contract. It has not always been: `@prl/poker-math` used to
- *    publish it in percentage POINTS while `CoachPanel` rendered it with
- *    `formatPercent`, so a nine-out flush draw reached a learner as **"3,600.0%"** and
- *    a flopped set as "18,000.0%". The producer is the side that changed, because one
- *    contract with two units for the same kind of number is the defect — the second
- *    multiplication was only where it became visible.
- *  - Anything already scaled says so in its NAME and goes through `formatPoints`
- *    instead: `errorPoints`, `halfWidthPoints`. A field whose name carries no unit is
- *    a fraction.
- *  - Chips are integers in the engine, but EV is not, so anything that can hold an
- *    EV takes a decimal count.
- *
- * Nothing here clamps. If an equity arrives as 1.03 the UI shows `103.0%`, because
- * hiding an impossible number hides the bug that produced it — and a formatter that
- * quietly rescued 36 into "36.0%" would have hidden the unit mismatch above for good.
- * Impossible probabilities are kept out at the producer, where they can be refused
- * with a reason, rather than rounded off here where they cannot.
+ * Grouping is hand-rolled, not `Intl.NumberFormat`, because the default locale differs between the
+ * Node and browser renders (a hydration mismatch) and ICU output drifts between Node versions.
+ * Signs are ASCII `+`/`-`, because several screen readers announce U+2212 as nothing.
+ * Equities and probabilities are fractions in 0..1. A field already scaled says so in its name
+ * (`errorPoints`) and goes through `formatPoints`. A points value sent to `formatPercent` showed "3,600.0%".
+ * Nothing here clamps. An impossible number is shown as is, so the bug that produced it stays visible.
  */
 
-/**
- * Rendered in place of a figure that does not exist. An em dash on its own is
- * ambiguous to a screen reader, so every component that can render this pairs it
- * with real text (see `StatTile`, which supplies an `aria-label`).
- */
 import { sprBandFor } from '@prl/poker-math';
 
+/** Every component that renders this pairs it with real text, because a lone em dash is ambiguous. */
 export const NOT_AVAILABLE = '—';
 
-/** Raised for arguments that are not numbers at all, which is a caller bug. */
 export class FormatError extends Error {
   override readonly name = 'FormatError';
 }
 
-/**
- * Inserts thousands separators into a run of digits.
- *
- * Written with `slice` rather than indexed access because `noUncheckedIndexedAccess`
- * makes every `s[i]` a `string | undefined`, and a regex lookahead
- * (`/\B(?=(\d{3})+(?!\d))/g`) is the other common approach but is quietly
- * catastrophic on very long inputs. This loop is O(digits) and obvious.
- */
+/** A loop rather than a lookahead regex, which is catastrophic on very long inputs. */
 function groupThousands(digits: string): string {
   const groups: string[] = [];
   let remaining = digits;
@@ -85,13 +30,7 @@ function groupThousands(digits: string): string {
   return groups.join(',');
 }
 
-/**
- * `toFixed` plus thousands grouping, with negative zero normalised away.
- *
- * `(-0.4).toFixed(0)` is `"-0"`, and a stack shown as `-0 units` looks like a bug
- * to a learner even though the arithmetic is fine. Anything that rounds to exactly
- * zero loses its sign here.
- */
+/** `toFixed` plus grouping. Anything that rounds to zero loses its sign, so `-0 units` never shows. */
 function formatFixed(value: number, decimals: number): string {
   const rounded = value.toFixed(decimals);
   const unsigned = rounded.startsWith('-') ? rounded.slice(1) : rounded;
@@ -102,7 +41,6 @@ function formatFixed(value: number, decimals: number): string {
   return `${isNegative ? '-' : ''}${groupThousands(whole)}${fraction}`;
 }
 
-/** Drops a trailing `.00` / `.50` → `.5`, so counts read naturally. */
 function trimTrailingZeros(text: string): string {
   if (!text.includes('.')) return text;
   return text.replace(/\.?0+$/, '');
@@ -112,33 +50,17 @@ function assertNumber(value: number, what: string): void {
   if (typeof value !== 'number') throw new FormatError(`${what} must be a number`);
 }
 
-/** True for a value that can actually be rendered as a figure. */
 function isRenderable(value: number): boolean {
   return Number.isFinite(value);
 }
 
-// ---------------------------------------------------------------------------
-// Percentages
-// ---------------------------------------------------------------------------
-
 export interface PercentOptions {
-  /** Decimal places. One is the default: equity is not precise to two. */
+  /** One by default. Equity is not precise to two. */
   readonly decimals?: number;
-  /** Force a leading `+` on positive values. For surpluses and differences. */
   readonly signed?: boolean;
 }
 
-/**
- * A fraction in 0..1 as a percentage: `0.6237` → `"62.4%"`.
- *
- * Hand it a value that is already in percentage points and it renders a hundred times
- * too large, silently, because both are `number` and both are plausible. That is not a
- * hypothetical: it is what put "3,600.0%" on a shipped Coach panel. If a figure needs
- * this function, it is a fraction; if it needs `formatPoints`, its name ends in
- * `Points`. There is no third case.
- *
- * @param fraction pot share / probability, NOT an already-multiplied percentage
- */
+/** A fraction in 0..1 as a percentage, `0.6237` → `"62.4%"`. A value in points renders 100x too large. */
 export function formatPercent(fraction: number, options: PercentOptions = {}): string {
   assertNumber(fraction, 'fraction');
   if (!isRenderable(fraction)) return NOT_AVAILABLE;
@@ -148,13 +70,7 @@ export function formatPercent(fraction: number, options: PercentOptions = {}): s
   return `${sign ? '+' : ''}${body}%`;
 }
 
-/**
- * A difference between two percentages, in percentage points.
- *
- * "Points" and "percent" are different units and conflating them is one of the
- * most common ways to misread a confidence interval, so the word is spelled out
- * rather than abbreviated to `pp`.
- */
+/** A difference in percentage points. The word is spelled out because points and percent get confused. */
 export function formatPoints(points: number, options: PercentOptions = {}): string {
   assertNumber(points, 'points');
   if (!isRenderable(points)) return NOT_AVAILABLE;
@@ -165,31 +81,17 @@ export function formatPoints(points: number, options: PercentOptions = {}): stri
   return `${sign ? '+' : ''}${body} ${magnitude === 1 ? 'point' : 'points'}`;
 }
 
-// ---------------------------------------------------------------------------
-// Chips and units
-// ---------------------------------------------------------------------------
-
 export interface UnitsOptions {
-  /** Decimal places. Zero by default — table amounts are whole chips. */
   readonly decimals?: number;
 }
 
-/**
- * A table amount with no unit word: `1250` → `"1,250"`.
- *
- * Used where the word "units" already appears in a nearby label (a stack column,
- * a pot readout) and repeating it on every row would be noise. Anywhere the
- * amount stands alone, use `formatUnits` so the word is present — the product
- * guardrails require "units" to be visible, never a bare number that could read
- * as currency.
- */
+/** No unit word. Only where "units" is in a nearby label. A standalone amount uses `formatUnits`. */
 export function formatChips(chips: number, options: UnitsOptions = {}): string {
   assertNumber(chips, 'chips');
   if (!isRenderable(chips)) return NOT_AVAILABLE;
   return formatFixed(chips, options.decimals ?? 0);
 }
 
-/** A table amount with its unit word: `1250` → `"1,250 units"`, `1` → `"1 unit"`. */
 export function formatUnits(units: number, options: UnitsOptions = {}): string {
   assertNumber(units, 'units');
   if (!isRenderable(units)) return NOT_AVAILABLE;
@@ -199,14 +101,7 @@ export function formatUnits(units: number, options: UnitsOptions = {}): string {
   return `${body} ${isOne ? 'unit' : 'units'}`;
 }
 
-/**
- * A change in units, with an explicit sign: `120` → `"+120 units"`.
- *
- * Zero is rendered unsigned (`"0 units"`): `"+0"` invites the reading that
- * something was won. The sign is the *only* thing distinguishing a gain from a
- * loss in the string, which is deliberate — it means a component can render this
- * with no colour at all and still be understood.
- */
+/** Zero is unsigned, because `+0` reads as a win. The sign alone tells gain from loss, without colour. */
 export function formatSignedUnits(delta: number, options: UnitsOptions = {}): string {
   assertNumber(delta, 'delta');
   if (!isRenderable(delta)) return NOT_AVAILABLE;
@@ -218,25 +113,10 @@ export function formatSignedUnits(delta: number, options: UnitsOptions = {}): st
   return `${sign}${body} ${isOne ? 'unit' : 'units'}`;
 }
 
-// ---------------------------------------------------------------------------
-// Odds
-// ---------------------------------------------------------------------------
-
 /**
- * A pot-odds ratio as words: `3.5` → `"3.5 to 1"`, `null` → `"no cost to continue"`.
- *
- * Words rather than `3.5:1` because a colon is announced inconsistently — some
- * screen readers say "three point five colon one", some say nothing at all.
- *
- * The ratio is `pot / toCall`, so a free continuation has no "X to 1" form at all.
- * `@prl/poker-math` and `@prl/contracts` report that as `null` — the one value JSON
- * can carry for it, and the reason this parameter is nullable — and it is a real
- * situation rather than an error, so it gets a sentence instead of a number. It used
- * to arrive as `Infinity`, which `JSON.stringify` turns into `null` on the way to the
- * browser; that mismatch is fixed at the source and `Infinity` is no longer a value
- * this function is expected to see. If one turns up it is a live division by zero
- * somewhere, which is a bug rather than a free call, so it renders as not-available
- * rather than being dressed up as one.
+ * `3.5` → `"3.5 to 1"`. Words, because screen readers announce a colon inconsistently.
+ * `null` is a free continuation (the contract's encoding of `pot / 0`). `Infinity` is a bug upstream
+ * and renders as not-available.
  */
 export function formatOdds(ratio: number | null, options: { readonly decimals?: number } = {}): string {
   if (ratio === null) return 'no cost to continue';
@@ -246,25 +126,15 @@ export function formatOdds(ratio: number | null, options: { readonly decimals?: 
   return `${trimTrailingZeros(formatFixed(ratio, options.decimals ?? 1))} to 1`;
 }
 
-// ---------------------------------------------------------------------------
-// Uncertainty
-// ---------------------------------------------------------------------------
-
 export interface ConfidenceIntervalOptions {
-  /** Interval level as a fraction. `@prl/poker-math` always reports 0.95. */
+  /** As a fraction. `@prl/poker-math` always reports 0.95. */
   readonly level?: number;
   readonly decimals?: number;
 }
 
 /**
- * A sampled figure with its error bar: `"62.4% ± 0.8 points (95% interval)"`.
- *
- * `halfWidthPoints === null` means the caller has no interval to show. It does NOT
- * mean the figure is exact, so this never says "exact" — it says the interval is
- * missing, and lets the panel above it explain why. That distinction is the whole
- * reason this function exists rather than string concatenation at each call site:
- * a Monte Carlo number rendered without its interval is the single most misleading
- * thing this UI could do.
+ * `"62.4% ± 0.8 points (95% interval)"`. A null half-width says the interval is missing, never that
+ * the figure is exact, because a Monte Carlo number without its interval is the most misleading output.
  */
 export function formatConfidenceInterval(
   fraction: number,
@@ -283,33 +153,20 @@ export function formatConfidenceInterval(
   return levelText === '' ? `${centre} ± ${spread}` : `${centre} ± ${spread} (${levelText} interval)`;
 }
 
-// ---------------------------------------------------------------------------
-// Stack-to-pot ratio
-// ---------------------------------------------------------------------------
-
 export const SPR_BANDS = ['unknown', 'committed', 'low', 'medium', 'high', 'deep'] as const;
 export type SprBand = (typeof SPR_BANDS)[number];
 
 export interface SprDescription {
   readonly band: SprBand;
   readonly value: number;
-  /** Short label for a stat tile: `"2.4 — low"`. */
   readonly label: string;
-  /** One sentence on what the band means. Descriptive, never prescriptive. */
+  /** Descriptive, never prescriptive. */
   readonly meaning: string;
 }
 
 /**
- * Classifies a stack-to-pot ratio into a band with a plain-language meaning.
- *
- * Returns a structure rather than a string because the band is also a styling
- * hook (`data-band`), and re-deriving it from the label in the component would be
- * a second definition of the same thresholds.
- *
- * The thresholds are this app's own convention, stated as a convention. There is
- * no universally agreed SPR taxonomy, so every sentence below describes *how much
- * room is left* and none of them tells the reader what to do — claiming otherwise
- * would breach the "never claim universal optimality" guardrail.
+ * The band is also a styling hook (`data-band`), so it is returned rather than parsed from the label.
+ * The bands are this app's convention. Each sentence says how much room is left, never what to do.
  */
 export function describeSpr(spr: number): SprDescription {
   assertNumber(spr, 'spr');
@@ -323,15 +180,8 @@ export function describeSpr(spr: number): SprDescription {
     };
   }
   const shown = trimTrailingZeros(formatFixed(spr, 1));
-  // ONE classifier, in `@prl/poker-math`. These edges used to live here as 1/4/8/15 against that
-  // module's 1/3/6/13, and `CoachPanel` renders this label directly above the sentence that module
-  // generates — so a panel showed "3.3 — low" over prose reading 'which is the "medium" band', and
-  // at 6.82 the two disagreed about the meaning rather than the word: "roughly two streets of
-  // betting" against "several streets fit". Five of the thirty-six Lab scenarios showed a pair.
-  //
-  // The vocabulary stays this module's own: `committed` and `deep` read better on a tile than
-  // `very-low` and `very-high`, and the wording of `meaning` is presentation. Only the EDGES are
-  // now shared, which is the part a learner can catch the app out on.
+  // The edges come from `@prl/poker-math`, because `CoachPanel` shows this label above that module's
+  // prose and separate edges made them disagree on five Lab scenarios. The band names stay local.
   const band = sprBandFor(spr);
   if (band === 'very-low') {
     return {
@@ -377,25 +227,10 @@ export function describeSpr(spr: number): SprDescription {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Indices
-// ---------------------------------------------------------------------------
-
-/** Two digits: `01`, `02`, … The design system's numbered-system motif is fixed-width. */
+/** The design system's numbered motif is fixed-width, so every index pads to the same width. */
 const INDEX_DIGITS = 2;
 
-/**
- * A position as a zero-padded index: `1` → `"01"`.
- *
- * The numbering motif appears in several places — panel headers, the process spine, hand
- * phases, lesson steps, assumption rows, radar axes — and it only reads as a *system* when
- * every one of them pads to the same width. Hence one function rather than a `padStart` at
- * each call site, each with its own idea of how wide.
- *
- * Positions are 1-based, because these are read as ordinals by a human. A fractional value
- * truncates towards zero. A negative index keeps its sign (`-1` → `"-01"`) rather than being
- * silently flipped: an index below one is a caller bug, and hiding it would hide the bug.
- */
+/** 1-based, so `1` → `"01"`. Fractions truncate. A negative keeps its sign, because it is a caller bug. */
 export function formatIndex(position: number, options: { readonly digits?: number } = {}): string {
   assertNumber(position, 'position');
   if (!isRenderable(position)) return NOT_AVAILABLE;
@@ -405,20 +240,7 @@ export function formatIndex(position: number, options: { readonly digits?: numbe
   return `${sign}${String(Math.abs(whole)).padStart(digits, '0')}`;
 }
 
-// ---------------------------------------------------------------------------
-// Words
-// ---------------------------------------------------------------------------
-
-/**
- * A count with the right form of its noun: `pluralise(1, 'out')` → `"1 out"`.
- *
- * English pluralisation is not solvable in a helper, and pretending otherwise
- * produces "2 flushs". So the rule here is deliberately dumb — append `s` — and
- * every irregular case passes an explicit plural. `pluralise(3, 'penny', 'pence')`.
- *
- * The magnitude decides the form, so `-1` takes the singular ("-1 unit"), which is
- * what English does.
- */
+/** Appends `s` unless `plural` is given. The magnitude picks the form, so `-1` is singular. */
 export function pluralise(count: number, singular: string, plural?: string): string {
   assertNumber(count, 'count');
   if (typeof singular !== 'string' || singular === '') {

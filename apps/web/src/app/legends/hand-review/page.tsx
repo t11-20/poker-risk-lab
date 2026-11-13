@@ -1,31 +1,7 @@
 /**
- * `/legends/hand-review` — one of the reader's OWN finished hands, reviewed decision by decision.
- *
- * ## What this route used to be, and why that was a defect
- *
- * It rendered `HAND_COMPARISON_FIXTURE` for every hand id anybody asked for. `loadHandComparison`
- * ignored its argument — the parameter was underscored — and the page's own header explained that
- * the API had never registered a per-hand comparison route, which was true: `buildHandComparison`
- * sat in `@prl/poker-ai`, complete and tested, with nothing in front of it.
- *
- * A banner said "this is a bundled sample hand", so nobody was lied to. But the one screen whose
- * entire purpose is *how did YOU play this hand* showed the same worked example to every reader,
- * and the honesty of the banner is not a substitute for the feature.
- *
- * `GET /legends/hands/:handId/comparison` now exists, scoped to a seat the caller actually held.
- * This page requests it, and every way that can fail gets its own sentence:
- *
- *   - no `?hand=` at all → an empty state that explains what this page needs and links to the
- *     reader's hand history and to the demo;
- *   - a hand that does not exist, or is not theirs → the app's 404 body, which is the same answer
- *     for both, because a distinguishable "it exists but is not yours" confirms a hand id;
- *   - a hand that exists and cannot be compared (still in progress, no modelled seat in it, or a
- *     record the server cannot replay) → the specific reason, from the API;
- *   - no session on this render, or the API unreachable → said plainly.
- *
- * **None of them falls back to the sample.** That is the rule this file exists to hold. The worked
- * example is still worth reading and still shipped — at `/legends/hand-review/demo`, a URL that
- * says demo — and the only way to reach it is to ask for it by name.
+ * `/legends/hand-review`, one of the reader's own finished hands. Each failure gets its own sentence,
+ * and none falls back to the sample, which lives only at `/legends/hand-review/demo`. "No such hand"
+ * and "not yours" share the 404 body, because telling them apart would confirm a hand id.
  */
 
 import { Callout } from '@prl/ui';
@@ -52,9 +28,7 @@ export const metadata: Metadata = {
     'actions that were not taken, and the chip result kept strictly separate from the decision quality.',
 };
 
-/** The reader's own hand history, which is where a hand id on this page comes from. */
 const REVIEW_PATH = '/review';
-/** The worked example. Says demo in the URL, because that is the only honest way to ship one. */
 export const HAND_REVIEW_DEMO_PATH = '/legends/hand-review/demo';
 
 function readHandId(raw: string | string[] | undefined): string | null {
@@ -84,7 +58,6 @@ export function HandReviewHeader(): ReactElement {
   );
 }
 
-/** The empty state: no hand was named, so there is nothing to be wrong about yet. */
 function NoHandChosen(): ReactElement {
   return (
     <div className="prl-legend-page">
@@ -108,12 +81,7 @@ function NoHandChosen(): ReactElement {
   );
 }
 
-/**
- * A hand that is the reader's and cannot be shown, with the reason.
- *
- * Deliberately not a 404 and deliberately not the sample: the hand is real, the reader can see it
- * in their history, and telling them it does not exist would be a worse answer than the true one.
- */
+/** Not a 404 and not the sample, because the hand is real. */
 function CannotCompare({
   problem,
   handId,
@@ -169,32 +137,18 @@ export default async function HandReviewPage({
   const handId = readHandId(query['hand']);
   if (handId === null) return <NoHandChosen />;
 
-  // The session travels with the request: this route is scoped to a seat the caller held, and a
-  // server render has no cookie jar of its own. See `src/lib/server-session.ts`.
   const result = await loadHandComparison(handId, await readerCallOptions());
 
-  // One answer for "no such hand" and "not yours", matching the API. `NotFoundBody` rather than
-  // `notFound()`, which Next 16 renders as an empty document from inside a page.
+  // Not `notFound()`, which Next 16 renders as an empty document from inside a page.
   if (!result.ok && result.problem.kind === 'not-found') return <NotFoundBody />;
   if (!result.ok) return <CannotCompare handId={handId} problem={result.problem} />;
 
   return (
     <div className="prl-legend-page">
       <HandReviewHeader />
-      {/*
-        No `bigBlind` prop. The blind level is not part of `HandComparison`, and the bundled sample
-        is the only hand whose scale this client knows independently — claiming one for a hand that
-        came from the API would be inventing the unit the quality bands are measured in. The
-        component omits that sentence instead.
-      */}
+      {/* No `bigBlind` prop, because `HandComparison` carries no blind level to state. */}
       <PostHandComparison comparison={result.comparison} />
-      {/*
-        Back to the style this hand was played against. `HandComparison.profileId` is the server's
-        own record of which modelled style held the seat, so this names nothing the API did not send.
-        `/review/<hand>` cannot do the same: `HandReviewResponse` carries seat plates and no profile
-        id, and the six-handed bot table plates its bots from the same ids, so a plate cannot tell a
-        legend match from the bot table without inventing the answer.
-      */}
+      {/* `profileId` is the server's record of the style in the seat, so this invents nothing. */}
       <nav aria-label="After this hand" className="prl-legend-nav">
         <Link href={profileHref(result.comparison.profileId)}>
           {`${result.comparison.disclosure.archetypeName}, in full`}

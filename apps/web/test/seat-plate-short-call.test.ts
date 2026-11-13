@@ -1,16 +1,8 @@
 /**
- * A short all-in call is labelled with what the caller matched, not with the price.
- *
- * Found in review on PR #27. `applyAction` keeps the bet level where it was when a caller commits
- * less than it (`betLevel = max(state.betLevel, committedThisStreet)` in
- * `packages/poker-engine/src/machine.ts`), so the logged `betLevelAfter` of a 30-unit stack calling
- * a raise to 100 is 100. The seat plate used that figure and read "called 100" over a seat whose own
- * chips in front of it said 30.
- *
- * Here and not in `@prl/ui`, because this package depends on both: the frame is made by the real
- * engine — `startHand`, `applyAction`, `redactFor`, the same redaction boundary the API sends —
- * rather than typed in, so the test cannot pass by agreeing with a fixture that the engine would
- * never produce.
+ * A short all-in call is labelled with what the caller matched, not with the price. `applyAction`
+ * keeps the bet level when a caller commits less (`packages/poker-engine/src/machine.ts`), so the
+ * logged `betLevelAfter` of a 30-unit call of a raise to 100 is 100. The frame comes from the real
+ * engine and `redactFor`, so the test cannot agree with a fixture the engine would never produce.
  */
 
 import assert from 'node:assert/strict';

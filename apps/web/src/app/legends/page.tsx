@@ -1,29 +1,7 @@
 /**
- * `/legends` — the profile selector.
- *
- * ## What this screen is for
- *
- * Choosing an opponent, and understanding what you are choosing. The learning value of the mode
- * comes from facing *contrasting* styles, so the selector's job is to make the contrast legible
- * before a hand is played: eight portrait cards, each with its three signature axes as metric
- * blocks and its whole sixteen-axis radar, so a reader can see that the tightest profile and the
- * loosest one are not two settings on a slider.
- *
- * ## What it says out loud, every time
- *
- *  - **The universal disclaimer, at the top, in the body.** `LegendProfilesResponse` carries it as
- *    its own field precisely so it is shown once above the grid, and it is rendered as visible
- *    prose rather than as a footer nobody reads. Each card then carries a visible one-line
- *    statement of it with a link back here, plus every disclaimer specific to that card in full —
- *    see `lib/disclaimer-framing.ts` for why the full text is no longer printed thirteen times.
- *  - **Which naming mode is in force.** If a deployment has opted into attributed names, the page
- *    says so and says what those names are: a mnemonic for a modelled style, beneath the archetype.
- *  - **Where the data came from.** When the API is unreachable the page renders from a typed
- *    fixture and says that in a warning, because sample numbers presented as live ones would be
- *    fabrication in a product about how much a number can be trusted.
- *
- * The page owns the single `h1`; "Start a match" and the grid each own an `h2`, and the cards emit
- * `h3` under the grid's.
+ * `/legends`, the profile selector. The universal disclaimer is printed once above the grid as visible
+ * prose, and each card links back to it (`lib/disclaimer-framing.ts`). The page names the naming mode
+ * in force and warns when the profiles are bundled sample data.
  */
 
 import { Callout, Chip, pluralise } from '@prl/ui';
@@ -53,14 +31,7 @@ export const metadata: Metadata = {
     'the others. Not real people, and not copies of anyone.',
 };
 
-/**
- * What the naming mode means for the reader, in their words.
- *
- * `namingMode` is an operator setting (`resolveNamingMode` in `@prl/poker-ai`): `archetype`, the
- * default, or an opt-in `attributed`. These used to say "This deployment shows archetype names
- * only", and the chip above them read "Naming: archetype" — the config key and its value, shown to
- * a learner who has never heard of either (UX audit at 6b3886e, M5).
- */
+/** The operator's `namingMode`, in the reader's words rather than the config key's. */
 const NAMING_NOTE: Readonly<Record<'archetype' | 'attributed', string>> = {
   archetype:
     'Each profile is named for the style it plays. The sixteen trait values beneath the name are the ' +
@@ -76,10 +47,8 @@ const NAMING_CHIP: Readonly<Record<'archetype' | 'attributed', string>> = {
   attributed: 'Named by style, some with a person’s name',
 };
 
-/** The page-level framing block's fragment, which every card's one-line pointer links to. */
 const FRAMING_ID = 'what-these-profiles-are';
 
-/** The difficulty picker's fragment, which "Start a match" links to for changing the setting. */
 const SETTING_ID = 'how-the-opponent-plays';
 
 export default async function LegendsPage({
@@ -90,9 +59,7 @@ export default async function LegendsPage({
   const params = await searchParams;
   const difficulty = parseDifficulty(params['difficulty']);
   const profiles = await loadLegendProfiles();
-  // The opponent "Apply setting" carried back from "Start a match" (`ScopedOpponentInput`), kept
-  // only when it is a profile this page lists: an unknown id would be a select showing one name and
-  // a hidden field submitting another.
+  // Kept only if this page lists it, or the select would show one name and submit another.
   const asked = params[MATCH_PROFILE_PARAM];
   const opponent =
     profiles.data.profiles.find((profile) => profile.id === (Array.isArray(asked) ? asked[0] : asked))?.id ??
@@ -104,12 +71,6 @@ export default async function LegendsPage({
       <div className="prl-legend-head">
         <SuitMark area="legends" />
         <h1 className="prl-legend-head__title prl-display-2">AI Legends: opponent profiles</h1>
-        {/*
-          It used to end "chosen to contrast with the others so you can feel the difference between
-          styles rather than read about it" — the universal disclaimer's own clause, word for word, which
-          the framing block prints a screen later. At 375px the repeat was two of the standfirst's six
-          lines standing between the head and "Start a match". The contrast is the framing's to state.
-        */}
         <p className="prl-legend-head__standfirst">
           Each opponent is sixteen trait values — how many hands it plays, how hard it bets, how much it cares
           about position — and no two are set alike.
@@ -131,16 +92,11 @@ export default async function LegendsPage({
       )}
 
       {/*
-        One scope from here to the last card, so every way of starting a match — the form under the
-        head and each card's Play link — follows the picker's ticked option before "Apply setting" is
-        pressed. See `LegendDifficultyScope.tsx` for the measurement. It is `display: contents`, so
-        the page grid's gaps fall exactly where they did.
+        One scope to the last card, so every Play link follows the picker before "Apply setting" is
+        pressed. `display: contents`, so the grid gaps are unchanged.
       */}
       <LegendDifficultyScope>
-        {/*
-          The first thing a reader can press to play, directly under the head. At 375px the first
-          card's Play was at y=2,869; see `LegendQuickStart.tsx` for why this sits above the framing.
-        */}
+        {/* At 375px the first card's Play was at y=2,869. See `LegendQuickStart.tsx`. */}
         <LegendQuickStart
           difficulty={difficulty}
           framingHref={`#${FRAMING_ID}`}
@@ -153,12 +109,7 @@ export default async function LegendsPage({
           settings={difficulties.map(({ id, label, coachAvailable }) => ({ id, label, coachAvailable }))}
         />
 
-        {/*
-          The framing, above every card. Same treatment as the per-card disclaimers — inline prose at
-          body-sm, never collapsed — so a reader meets it before the first profile rather than after
-          the last one. "Start a match" above it is not a profile: it carries the one-line pointer to
-          this block, as every card does.
-        */}
+        {/* Above every card, inline and never collapsed. */}
         <div className="prl-legend-disclaimers prl-legend-disclaimers--wide" id={FRAMING_ID}>
           <span className="prl-legend-disclaimers__title prl-label">What these profiles are</span>
           <ul className="prl-legend-disclaimers__list">

@@ -1,24 +1,7 @@
 /**
- * The live table's components, rendered, against the usability defects an audit of the running build
- * found at the table — the core of the product, where every gate was green.
- *
- * ## What each block holds the line on
- *
- *   - **The turn ring's budget.** `TurnTimer` clamps what is left to the budget it is handed, so a
- *     240-second turn handed a 60-second budget drew 60s, reached 0s a minute in, and sat at 0s for
- *     three minutes. The fix is upstream (`turnClockFor` in `apps/web`), and this is the other half:
- *     handed the real budget, the ring says the real thing, digits and accessible name alike.
- *   - **What each seat did.** The server's "X raises to 124" only ever reached a 1x1 live region;
- *     the plates said "in the hand" through a whole street of raises.
- *   - **One preset at a time.** On a short stack two presets clamp to the same amount and both were
- *     ticked.
- *   - **A typed amount the clamp replaced** is said, rather than left in the field beside a button
- *     showing a different number.
- *   - **A showdown that never happened** is not the phase an uncontested hand ended on.
- *   - **Focus rescues do not scroll the page.** Measured at 1440x900: a Call at scrollY 1286 ended
- *     at the footer, 1851, with the next decision's buttons at viewport y -261.
- *
- * Each has a NEGATIVE CONTROL beside it that runs the same detector over what the old code produced.
+ * The live table's components, rendered, against usability defects found at the running table.
+ * `TurnTimer` clamps what is left to the budget it is handed, so the budget comes from `turnClockFor`
+ * in `apps/web`. Each block has a negative control that runs its detector over the old output.
  */
 
 import assert from 'node:assert/strict';
@@ -34,10 +17,6 @@ import type { LegalAction, PlayerView, TableAction } from '../src/view-types.ts'
 import { loadComponent } from './support/render-component.ts';
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src');
-
-// ---------------------------------------------------------------------------
-// The turn ring
-// ---------------------------------------------------------------------------
 
 interface TurnTimerProps {
   readonly clock: {
@@ -99,14 +78,10 @@ async function ringAt(
   };
 }
 
-/**
- * Three digits and an "s" do not fit the seat ring: at 1440x900 "196s" painted 31.7px of glyphs
- * across the 24px hole of a 32px ring, over the stroke on both sides. The unit goes at three digits.
- */
+/** At 1440x900 "196s" painted 31.7px of glyphs in the 24px hole of a 32px ring, so 3 digits drop the unit. */
 describe('the countdown fits inside the ring', () => {
   it('paints a bare figure at three digits and keeps the "s" at two', async () => {
-    // `tight` is the hook for the -0.05em in `components.css`: three bare digits still measured
-    // 25.4px of advance boxes in the 24px hole, so they are set a hair closer.
+    // `tight` hooks the -0.05em in `components.css`. Three bare digits measured 25.4px in the 24px hole.
     assert.deepEqual(await ringAt(196_000), { digits: '196', unit: false, tight: true });
     assert.deepEqual(await ringAt(100_000), { digits: '100', unit: false, tight: true });
     assert.deepEqual(await ringAt(99_000), { digits: '99', unit: true, tight: false });
@@ -124,10 +99,6 @@ describe('the countdown fits inside the ring', () => {
     assert.equal(name(markup), 'Your turn timer: 240 seconds to act');
   });
 });
-
-// ---------------------------------------------------------------------------
-// What each seat did on this street
-// ---------------------------------------------------------------------------
 
 type Logged = PlayerView['actions'][number];
 
@@ -254,7 +225,6 @@ describe('the plates, rendered', () => {
       lines.includes('checked by the server'),
       `the automatic check is not on the hero plate: ${lines.join(' | ')}`,
     );
-    // Seat 6 folded on the flop: its status says so, and nothing from the flop leaks onto the turn.
     assert.equal(lines.filter((line) => line === 'folded').length, 2);
   });
 
@@ -263,10 +233,6 @@ describe('the plates, rendered', () => {
     assert.deepEqual([...lines].sort(), ['folded', 'folded', 'in the hand', 'in the hand']);
   });
 });
-
-// ---------------------------------------------------------------------------
-// The phase spine on a hand nobody showed down
-// ---------------------------------------------------------------------------
 
 const currentStep = (markup: string): string =>
   /<li class="prl-table__step"[^>]*aria-current="step"[^>]*>.*?<span class="prl-table__step-name">([^<]*)<\/span>/u.exec(
@@ -300,10 +266,6 @@ describe('the phase a finished hand ended on', () => {
     assert.match(markup, /\(current phase\)/u);
   });
 });
-
-// ---------------------------------------------------------------------------
-// The sizer
-// ---------------------------------------------------------------------------
 
 interface ActionBarProps {
   readonly legalActions: readonly LegalAction[];

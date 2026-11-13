@@ -1,24 +1,8 @@
 /**
  * Where a lesson's "Next" step goes, and where the home page's "Start with the foundations" goes.
- *
- * ## The defect these exist for
- *
- * Measured against the running build at 360x640: every lesson ended with "Back to the curriculum"
- * and "Open the glossary" and nothing else, and so did the quiz's review panel. A learner who had
- * just finished lesson one had to go back to an index, find where they were, and scroll — on
- * `/learn` the first lesson's button sat at y=1682 on a first visit. The home page's "Start with
- * the foundations" sent them to that same index rather than to a foundation.
- *
- * ## Why reading order and not the old topic-grouped numbering
- *
- * The index used to number its cards in a DISPLAY order grouped by topic, and that order is not a
- * sequence a learner can follow: over the shipped content it numbered `bet-sizing` 11 and
- * `fold-equity` 13, though `bet-sizing` declares `fold-equity` a prerequisite. A "Next" link that
- * followed it would walk a reader straight past a lesson they were told to read first. The index is
- * now numbered in reading order too, so the two agree — `learn-index-reading-order.test.ts`.
- * `lessonsInReadingOrder()` is the order the content package defines as "front to back", and the
- * lesson page already enumerates its static params from it, so every "next" it names is a page
- * that exists.
+ * Next follows `lessonsInReadingOrder()`, which the lesson page also enumerates its static params
+ * from, so every "next" is a page that exists. The old topic-grouped order numbered `bet-sizing`
+ * before its prerequisite `fold-equity` (`learn-index-reading-order.test.ts` holds the index to it).
  */
 
 import assert from 'node:assert/strict';
@@ -37,7 +21,6 @@ const ORDER = lessonsInReadingOrder();
 
 describe('the next lesson', () => {
   it('reads a non-empty curriculum', () => {
-    // A sweep of nothing is not a pass.
     assert.ok(ORDER.length > 1, 'there are lessons to step between');
   });
 
@@ -70,8 +53,7 @@ describe('the next lesson', () => {
   });
 
   it('is not the old topic-grouped numbering, which would skip a prerequisite', () => {
-    // The control for the test above: walking DISPLAY order does break a prerequisite, so the
-    // assertion above is distinguishing something rather than passing over any order at all.
+    // The control for the test above. Walking DISPLAY order does break a prerequisite.
     const display = TOPICS.flatMap((topic) => ORDER.filter((lesson) => lesson.topic === topic));
     const passed = new Set<string>();
     const broken = display.filter((lesson) => {
@@ -95,16 +77,14 @@ describe('the next lesson', () => {
 
 describe('the lesson title anchor', () => {
   it('is never also the id of a section heading', () => {
-    // "Re-read" points at `#${LESSON_TITLE_ID}`. A heading that slugged to the same text would
-    // make two elements with one id, and the link would land on whichever the browser found first.
+    // "Re-read" points at `#${LESSON_TITLE_ID}`; a heading with the same slug would make two elements one id.
     const outline = lessonOutline([{ kind: 'heading', text: LESSON_TITLE_ID.replace(/-/g, ' ') }]);
     assert.notEqual(outline.headings[0]?.id, LESSON_TITLE_ID);
   });
 });
 
 describe('nextLessonStep: Next never promises a lesson this page cannot show (REGRESSION)', () => {
-  // Devin Review on #22: offline, the lesson page reads a bundle of eight bodies, and reading order
-  // puts an unbundled lesson straight after `hand-flow`, so the primary Next opened an apology.
+  // Offline the page has eight bodies, and reading order puts an unbundled lesson right after `hand-flow`.
   const [first, second] = ORDER;
   assert.ok(first !== undefined && second !== undefined, 'reading order has at least two lessons');
   const next = nextLesson(ORDER, first.id);

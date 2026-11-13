@@ -20,8 +20,7 @@ function calculationsOf(lessonId: string, kind: LiveCalculation['kind']): readon
 
 describe('a lesson shows each definition once', () => {
   it('keeps every risk-of-ruin definition, because each carries its own numbers (REGRESSION)', () => {
-    // The definitions exactly as `resolveRiskOfRuin` builds them, from the lesson's own inputs. A
-    // same-kind rule showed only the first of these three.
+    // As `resolveRiskOfRuin` builds them. A same-kind rule showed only the first of these three.
     const definitions = calculationsOf('sample-size-and-risk-of-ruin', 'riskOfRuin').map((calculation) => {
       assert.ok(calculation.kind === 'riskOfRuin');
       const result = riskOfRuin(calculation);

@@ -1,32 +1,6 @@
 /**
- * The Content-Security-Policy, as a value.
- *
- * ## What was wrong
- *
- * `THEME_BOOT_SCRIPT_CSP_HASH` existed, `test/theme-csp-hash.test.ts` kept it accurate, and
- * nothing ever put it on a response. `next.config.ts` had no `headers()`, there was no proxy
- * file, and `docker-compose.yml`'s reverse proxy sets no security headers either. `curl -I` against
- * a running server returned a page with no policy at all. A hash nobody serves is documentation
- * that reads like a control.
- *
- * ## What this file can and cannot prove
- *
- * It proves the *value*: that the production policy has no way to run an inline script other than
- * the nonce and the one hash, that the two development allowances cannot appear in it, and that
- * every directive an injection would need is closed.
- *
- * It cannot prove the policy reaches a browser — a pure test has no server. Two other things do:
- * `scripts/smoke-test.mjs` §10 fetches a rendered HTML response from a running production server
- * and asserts the header, the nonce, and that every `<script>` tag carries it; and
- * `docs/audit/blocker-remediation.md` records the manual browser verification, including the
- * negative control (an inline `onclick` attribute refused with a `script-src-attr` violation while
- * the page stayed fully interactive).
- *
- * That was §11 in an earlier version of the harness and has been §10 since the guest-bootstrap
- * walk took the number. A citation that points at the wrong section is the same class of defect as
- * the hash that nobody served: it reads like a reference and sends the next reader to the wrong
- * place. `apps/web/src/lib/csp.ts` carried the worse version of it — a citation to a file that has
- * never existed at all — and now names this harness section too.
+ * The Content-Security-Policy, as a value. It cannot prove the header reaches a browser;
+ * `scripts/smoke-test.mjs` §10 checks a running server's response for that.
  */
 
 import assert from 'node:assert/strict';
@@ -36,7 +10,7 @@ import { THEME_BOOT_SCRIPT_CSP_HASH } from '../src/lib/theme.ts';
 
 const NONCE = 'dGVzdC1ub25jZS0xMjM0';
 
-/** `script-src`'s own source list, so an allowance in another directive cannot be mistaken for it. */
+/** One directive's source list, so an allowance in another directive cannot be mistaken for it. */
 function directive(policy: string, name: string): string | null {
   const found = policy
     .split(';')
@@ -66,8 +40,7 @@ describe('the production Content-Security-Policy', () => {
     assert.ok(!script.includes("'unsafe-eval'"), `script-src must never allow unsafe-eval: ${script}`);
     assert.ok(!script.includes("'unsafe-hashes'"), `script-src must never allow unsafe-hashes: ${script}`);
     assert.ok(script.includes("'strict-dynamic'"), 'strict-dynamic is what makes host sources stop counting');
-    // Nothing anywhere in the policy may name a remote host. This app has no third-party origin,
-    // and the day one is added it should be a visible diff here rather than a quiet widening.
+    // This app has no third-party origin, so adding one should be a visible diff here.
     assert.ok(
       !/https?:\/\/(?!localhost|127\.0\.0\.1)/.test(policy),
       `no remote origin may appear in the production policy: ${policy}`,
@@ -94,9 +67,8 @@ describe('the production Content-Security-Policy', () => {
   });
 
   it('confines inline styling to the attribute directive, and says so', () => {
-    // The design system passes CSS custom properties through `style=`, which cannot carry a nonce.
-    // That allowance must stay in `style-src-attr` — widening `style-src` itself would let an
-    // injected <style> element run.
+    // CSS custom properties pass through `style=`, which cannot carry a nonce. Widening `style-src` itself
+    // would let an injected <style> element run.
     assert.equal(directive(policy, 'style-src-attr'), "style-src-attr 'unsafe-inline'");
     assert.ok(!(directive(policy, 'style-src') ?? '').includes("'unsafe-inline'"));
   });
@@ -130,8 +102,7 @@ describe('the development Content-Security-Policy', () => {
   });
 
   it('differs from production only in those places', () => {
-    // The two are built by one function, so a directive added to one is added to both. This asserts
-    // the structural claim directly: same directive NAMES, in the same order.
+    // One function builds both, so the directive NAMES must match in order.
     const names = (policy: string): string[] =>
       policy
         .split(';')

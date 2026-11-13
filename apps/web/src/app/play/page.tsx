@@ -1,43 +1,8 @@
 /**
- * `/play` — the table screen.
- *
- * A Server Component. It owns the page's single `h1`, decides whether this request wants the live
- * table or one of the reviewable fixture states, and renders one of them. `@prl/ui` components emit
- * `h2` and below, so the heading outline is h1 (here) -> h2 (the connection panel, the table, the
- * Coach) -> h3 (the Coach's sections).
- *
- * ## The live table is the page
- *
- * `/play` opens a real WebSocket to `/api/v1/ws`, sits the reader down at a private six-handed room
- * with five bots, and plays hands driven entirely by the server. That is `LiveTable.tsx`, which is
- * the client boundary because a socket, a bet sizer, a sheet and a turn clock all need state.
- *
- * This route used to render from `src/fixtures/table.ts` in every case, with a header explaining
- * that the socket was still being built. It has landed, so that explanation is gone rather than
- * softened: a comment describing a state the code is no longer in is worse than no comment, because
- * the next reader believes it.
- *
- * ## Why the fixture states are still addressable, and how they are kept honest
- *
- * `?state=loading|error|complete|decision` renders the typed fixture instead of connecting. Those
- * are not a fallback the live path can slip into — nothing here can choose them, only an explicit
- * query parameter can — and they exist for two reasons that survive the socket landing:
- *
- *   - A state you cannot navigate to is a state nobody reviews. Loading, unreachable and
- *     completed-hand are all states a reader will meet, and they are hard to produce on demand
- *     against a live server.
- *   - The static accessibility audit crawls them, so it checks four renderings of this screen
- *     rather than one.
- *
- * Every fixture rendering says at the top of the page, not in a collapsed disclosure, that there is
- * no server behind it — a fixture that is merely *labelled quietly* is how a review found six
- * scenarios in a product that ships thirty-six.
- *
- * ## `searchParams` is a promise in this version of Next
- *
- * It is awaited rather than read synchronously (the synchronous form is deprecated), and reading it
- * opts the route into dynamic rendering at request time — which is correct here: a live table is not
- * a static page, and every state below depends on the request.
+ * `/play`. Owns the page's single `h1`, and `@prl/ui` emits `h2` and below. The live table is
+ * `LiveTable.tsx`. `?state=loading|error|complete|decision` renders a typed fixture so the audits can
+ * crawl hard-to-reach states, and only an explicit valid value reaches it. A fixture says so at the
+ * top of the page, never in a collapsed disclosure.
  */
 
 import type { LegendDifficultyDto } from '@prl/contracts';
@@ -85,7 +50,6 @@ interface PlayPageProps {
   readonly searchParams: Promise<{ readonly [key: string]: string | string[] | undefined }>;
 }
 
-/** One sentence per fixture state, shown under the `h1` so the screen says what it is showing. */
 const STATE_LEDE: Readonly<Record<TableStateName, string>> = {
   decision:
     'A fixed decision on the flop. The Coach panel prices it: what the hand is worth, what the call ' +
@@ -98,19 +62,14 @@ const STATE_LEDE: Readonly<Record<TableStateName, string>> = {
 };
 
 /**
- * The six-handed table's lede. A legend match has its own — see `legendMatchCopy`.
- *
- * True of every table this page can seat the reader at, because it is rendered before any room
- * exists. It said "A private table against five bots", which the private table (two bots) and a
- * friend's table reached by code are not (audit at 308fadf). Who is actually at the table is in the
- * Room line of the connection panel, from `describeTable`, once there is a table to describe.
+ * Rendered before any room exists, so it must be true of the bot table, a private table and a
+ * friend's table. `describeTable` says who is actually seated.
  */
 const LIVE_LEDE =
   'A play-money table dealt and settled by the server: five bots to practise against, or a private ' +
   'table with seats kept for people you invite. Every card, every stack, every pot and every legal ' +
   'action on this screen arrived over the socket — nothing here is decided in your browser.';
 
-/** What each fixture state hands to the stage. Built here so the page reads as one table of cases. */
 function stagePropsFor(state: TableStateName): {
   readonly status: TableStageStatus;
   readonly view: typeof FLOP_DECISION_VIEW | null;
@@ -119,27 +78,15 @@ function stagePropsFor(state: TableStateName): {
   if (state === 'loading') return { status: 'loading', view: null, report: null };
   if (state === 'error') return { status: 'error', view: null, report: null };
   if (state === 'complete') {
-    // No report: a finished hand has no decision to price, and the stage says so on its own.
     return { status: 'complete', view: COMPLETED_HAND_VIEW, report: null };
   }
   return { status: 'ready', view: FLOP_DECISION_VIEW, report: FLOP_DECISION_REPORT };
 }
 
 /**
- * The legend match's head: the style the reader picked, the setting, and the framing, from the same
- * profiles response `/legends` rendered. An outage falls back to the bundled profiles inside
- * `loadLegendProfiles`; anything else it throws is caught here and costs only the archetype name,
- * because a heading is not worth failing the table over.
- *
- * ## `specific`: the profile's own disclaimers, every one but the universal
- *
- * The framing line restates the universal disclaimer in one sentence. A profile can carry more —
- * the course-derived notice on "Fundamentals-First Study Model", the attribution notice in
- * attributed naming mode — and until "Start a match" on `/legends` (PR #41) the only way here was a
- * card or a profile page that had printed them in full above its Play link. The form lists every
- * profile by name, so a reader could pick that one and be dealt in without either screen saying it
- * is not affiliated with any course provider (Devin Review on #41). They are printed here, in full,
- * so every path to a legend table passes them, whichever page it started from.
+ * A failure here costs only the archetype name, never the table. `specific` is every disclaimer but
+ * the universal one, printed in full because "Start a match" can reach this page without passing a
+ * card or profile page that showed them.
  */
 async function legendHead(profileId: string, difficulty: MatchDifficulty) {
   let archetypeName: string | null = null;
@@ -154,7 +101,7 @@ async function legendHead(profileId: string, difficulty: MatchDifficulty) {
       specific = disclaimerFraming(profile.disclosure.disclaimers, profiles.data.universalDisclaimer).inFull;
     }
   } catch {
-    // Fail in the safe direction: a generic heading, still framed, and the table still loads.
+    // Safe direction. The heading goes generic but stays framed, and the table still loads.
   }
   return {
     known: archetypeName !== null,
@@ -163,7 +110,6 @@ async function legendHead(profileId: string, difficulty: MatchDifficulty) {
   };
 }
 
-/** The list of fixture renderings, used from both branches so the audit can crawl all four. */
 function FixtureLinks({ current }: { readonly current: TableStateName | null }): ReactElement {
   return (
     <ul className="prl-play__states">
@@ -191,7 +137,6 @@ function FixtureLinks({ current }: { readonly current: TableStateName | null }):
   );
 }
 
-/** The fixture rendering. Reachable only by an explicit `?state=`, and it says so on the page. */
 function FixturePage({ state }: { readonly state: TableStateName }): ReactElement {
   const stage = stagePropsFor(state);
   const isComplete = state === 'complete';
@@ -207,10 +152,7 @@ function FixturePage({ state }: { readonly state: TableStateName }): ReactElemen
         <p className="prl-play__lede">{STATE_LEDE[state]}</p>
       </header>
 
-      {/*
-        Stated at the top and never collapsed. `onAct` is absent from the stage below, which is what
-        "no server" means in code; this says the same thing to a reader before they press anything.
-      */}
+      {/* Never collapsed. The stage below has no `onAct`, which is "no server" in code. */}
       <div className="prl-error">
         <p className="prl-error__title">
           <span aria-hidden="true">{'▲ '}</span>
@@ -253,25 +195,17 @@ function FixturePage({ state }: { readonly state: TableStateName }): ReactElemen
   );
 }
 
-/** The difficulties `POST /legends/matches` accepts. Mirrors `LiveTable`'s own prop type. */
+/** Mirrors `LiveTable`'s own prop type. */
 type MatchDifficulty = 'educational' | 'realistic' | 'expert';
 
 /**
- * A narrowing predicate, rather than the `===` chain that used to be written inline.
- *
- * The inline form did not typecheck, and the reason is worth recording because it looks like it
- * should: TypeScript narrows the *reference* `difficulty` inside the conditional, but a fresh
- * object literal built from it widens the property straight back to `string`. So
- * `{ profileId: profile, difficulty }` was inferred as `{ difficulty: string }` and failed against
- * `LiveTable`'s literal union under `exactOptionalPropertyTypes`. A type predicate carries the
- * narrowing across the literal because the return type says what the value is, rather than
- * leaving it to be re-inferred.
+ * A predicate, because an inline `===` chain does not narrow the property of a fresh object literal,
+ * which then fails `LiveTable`'s union under `exactOptionalPropertyTypes`.
  */
 function isMatchDifficulty(value: string | undefined): value is MatchDifficulty {
   return value === 'educational' || value === 'realistic' || value === 'expert';
 }
 
-/** The first value of a repeated query parameter, or undefined. `?a=1&a=2` is a caller mistake. */
 function firstValue(raw: string | string[] | undefined): string | undefined {
   return Array.isArray(raw) ? raw[0] : raw;
 }
@@ -282,8 +216,7 @@ export default async function PlayPage({ searchParams }: PlayPageProps): Promise
   const requested = params['state'];
   const asked = Array.isArray(requested) ? requested[0] : requested;
 
-  // Only an explicit, valid `?state=` reaches the fixture. Anything else — including a typo — gets
-  // the live table, because a fixture that a wrong URL can fall into is a fixture that ships.
+  // A typo gets the live table, so no wrong URL can fall into a fixture.
   if (isTableStateName(asked)) return <FixturePage state={asked} />;
 
   const profile = firstValue(params[MATCH_PROFILE_PARAM]);
@@ -292,11 +225,8 @@ export default async function PlayPage({ searchParams }: PlayPageProps): Promise
     profile !== undefined && isMatchDifficulty(difficulty) ? { profileId: profile, difficulty } : undefined;
   const legend =
     legendMatch === undefined ? null : await legendHead(legendMatch.profileId, legendMatch.difficulty);
-  // One live table per match. `/play?profile=…` and `/play` are the same route, so a client-side
-  // navigation between them re-renders this page and React keeps `<LiveTable>` mounted: the legend
-  // match's "open the bot table" link changed the heading to "Six-handed table" while
-  // `useLiveTable` kept the match's room and its socket (Devin Review on #24). A new key unmounts
-  // it, which closes the socket and aborts any setup in flight, and the next start chooses afresh.
+  // `/play?profile=…` and `/play` are one route, so React would keep the table mounted with the
+  // match's socket. A new key per match closes it and aborts any setup in flight.
   const tableKey =
     legendMatch === undefined ? 'bot-table' : `legend:${legendMatch.profileId}:${legendMatch.difficulty}`;
 
@@ -333,11 +263,8 @@ export default async function PlayPage({ searchParams }: PlayPageProps): Promise
       <LiveTable key={tableKey} {...(legendMatch === undefined ? {} : { legendMatch })} />
 
       {/*
-        The four fixture states are an audit surface: `test:ax`, `test:keyboard` and `test:layout`
-        crawl `/play?state=…` on the PRODUCTION build, so the routes stay public. The panel that links
-        to them does not: a learner arriving at the table had "For reviewers: fixture renderings"
-        under it, which is the product describing its own test harness. It renders in development,
-        and in production when the URL carries `?fixtures`, which is how a reviewer reaches it.
+        The fixture routes stay public because the audits crawl them on the production build. This
+        panel shows only in development or with `?fixtures`, so learners do not see the harness.
       */}
       {showFixtures ? (
         <div className="prl-play__review-states">

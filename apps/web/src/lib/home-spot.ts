@@ -1,14 +1,6 @@
 /**
- * The hand on the home page: one call, priced.
- *
- * The figures are computed here, from the deck, every time the page renders — the same promise the
- * rest of the product makes ("nothing is looked up"), kept on the one page a visitor reads before
- * deciding whether to believe it. A home page that printed "you have 41%" as a literal would be
- * the exact hard-coded odds table the product says it does not contain.
- *
- * The opponent's hand is face up because the example is about the price, not about reading a
- * range: with both hands known the equity is exact, with no interval to explain before the reader
- * has met the word "equity".
+ * The hand on the home page, priced from the deck on every render, never from a literal.
+ * The opponent's hand is face up, so the equity is exact with no interval to explain.
  */
 
 import { parseCards } from '@prl/poker-engine';
@@ -18,17 +10,16 @@ export interface HomeSpot {
   readonly yours: readonly number[];
   readonly theirs: readonly number[];
   readonly board: readonly number[];
-  /** Chips in the middle before your call. */
   readonly pot: number;
   readonly toCall: number;
-  /** The share of the pot the call must win back to break even, 0..1. */
+  /** Break-even share of the pot, 0..1. */
   readonly need: number;
-  /** Your exact equity from here — wins, plus ties counted as half — 0..1. */
+  /** Exact equity, ties counted as half, 0..1. */
   readonly have: number;
-  /** The share of runouts you win outright, and the share you split, 0..1. */
+  /** Outright wins and splits, 0..1. */
   readonly win: number;
   readonly tie: number;
-  /** How many turn-and-river runouts the equity was counted over. */
+  /** Turn-and-river runouts counted. */
   readonly runouts: number;
 }
 

@@ -1,54 +1,7 @@
 /**
- * The curriculum index: seventeen lessons as a numbered syllabus, in reading order.
- *
- * ## The numbering is the point, so it is the route "Next" takes
- *
- * `01 … 17` down the page, derived from the reading order by `buildCurriculum` rather than stored
- * in the content. A flat list of seventeen links is a list; the same seventeen with numbers,
- * prerequisites and reading times is a system a learner can hold in their head and refer to out
- * loud ("I'm on 06"). That is §1's "numbering turns a list into a system", applied to the screen it
- * was written for.
- *
- * It only works if the numbers are the route. They used to count down a topic-grouped display
- * order while each lesson's "Next" followed reading order, so the lead's "the numbering is a route
- * through the material" sent Lesson 2's reader to Lesson 4 (UX audit at 6b3886e, M1). The cards are
- * now in reading order under Intro / Core / Advanced headings, and the topic is a chip on each card;
- * `learn-curriculum.ts` has the reasoning and `test/learn-index-reading-order.test.ts` the guard.
- *
- * ## Nothing is locked, and nothing is scored
- *
- * Prerequisites are printed and linked; they never disable a link. A lesson marked read gets a
- * word and a glyph, not a tick in a progress bar, and there is no "3 of 17 complete" anywhere on
- * this page. A completion percentage is the first step towards a streak, and the product
- * guardrails rule out the whole family.
- *
- * The three figures at the top — lessons, topics, reading time — are facts about the curriculum,
- * not about the reader. That is the line: the page will tell you how long the syllabus is, and it
- * will not tell you how you are doing against it.
- *
- * ## A server component, and a shared one — which is why it does not know who you are
- *
- * Everything here is data plus links, so it renders on the server and arrives as HTML. The two
- * client components are `Onboarding` (which needs `localStorage`) and `Metric` (which is a client
- * component in `@prl/ui` because of its count-up), and neither is on the critical path for
- * reading the page.
- *
- * `loadLessonList()` forwards the session cookie when the browser has one, so the `completed`
- * flags are that reader's. Without a cookie the API still answers `false` for everybody, and
- * the page treats that as unknown rather than unread. `test/y1-learn-index-honesty.test.ts`
- * couples the loader and the flag so they cannot drift.
- *
- * ## Nine cards used to warn readers off nine working lessons
- *
- * `READABLE_LESSON_IDS` is derived from the bundled fixture, which carries eight of the seventeen
- * lesson BODIES. It was passed to `buildCurriculum` unconditionally, so with a healthy API — one
- * serving all seventeen bodies — nine cards told the reader "this lesson's text comes from the
- * content service, which is not reachable". The content service was reachable; it had just answered
- * this very request. The index was reporting fixture coverage in the words of service availability,
- * on more than half the curriculum, on a working deployment.
- *
- * It is now passed only when the list itself came from the fixture, which is the only condition
- * under which it describes anything true.
+ * The curriculum index, numbered in reading order so the numbers are the route "Next" takes
+ * (`test/learn-index-reading-order.test.ts`). Nothing is locked and nothing is scored: no progress
+ * bar, no "3 of 17", no streak. The top figures describe the curriculum, never the reader.
  */
 
 import { Callout, Chip, formatIndex, Metric, Panel, pluralise } from '@prl/ui';
@@ -76,7 +29,7 @@ export const metadata: Metadata = {
     'ranges, variance and bankroll. Every figure is computed, never stored.',
 };
 
-/** The difficulty chip. A word and a shape, so it never depends on a colour. */
+/** A word and a shape, so it never depends on a colour. */
 function DifficultyChip({ difficulty }: { readonly difficulty: string }): ReactElement {
   const known = asDifficulty(difficulty);
   if (known === null) return <Chip>{difficulty}</Chip>;
@@ -105,12 +58,10 @@ function EntryCard({
         </h3>
         <p className="prl-learn-entry__summary">{summary.summary}</p>
         <div className="prl-row prl-learn-entry__chips">
-          {/* The topic, not the difficulty: the group heading above already says the difficulty,
-              and the topic is what the old topic headings used to tell a reader. */}
+          {/* The topic, because the group heading already says the difficulty. */}
           <Chip>{topicLabel(summary.topic)}</Chip>
           <Chip>{pluralise(summary.estimatedMinutes, 'minute')}</Chip>
-          {/* `=== true`, not truthiness: `null` means nobody asked, and a "read" tick on a lesson
-              nobody checked would be the same lie in the opposite direction. */}
+          {/* `=== true`, because `null` means nobody asked. */}
           {entry.completed === true ? <Chip glyph="✓">read</Chip> : null}
           {isStart ? <Chip glyph="▸">start here</Chip> : null}
           {summary.quizId === undefined ? null : <Chip glyph="?">has a quiz</Chip>}
@@ -128,9 +79,7 @@ function EntryCard({
                 </Link>
               </span>
             ))}
-            {/* Only when the index actually knows. `unlocked` is `null` on this screen as it stands,
-                and printing this note for `null` is what warned sixteen of seventeen cards' readers
-                about prerequisites nobody had checked. */}
+            {/* `false` only. `unlocked` is `null` when nobody checked. */}
             {entry.unlocked === false ? (
               <span className="prl-learn-entry__prereq-note">
                 {entry.prerequisites.length === 1
@@ -157,13 +106,9 @@ export default async function LearnPage(): Promise<ReactElement> {
   const reader = await readerCallOptions();
   const lessons = await loadLessonList();
   const curriculum = buildCurriculum(lessons.data.lessons, {
-    // Fixture coverage, and only meaningful when the list itself is the fixture. Passed
-    // unconditionally, it warned readers off the nine lessons whose bodies the bundle lacks — while
-    // the API was serving all seventeen.
+    // Fixture coverage, so only for a fixture list. With a live list it flagged nine working lessons.
     ...(lessons.source === 'fixture' ? { readableIds: READABLE_LESSON_IDS } : {}),
-    // `loadLessonList()` now forwards the session cookie, so `completed` is this reader's when
-    // one exists. Without a cookie the API still answers `false` for everybody — keep that as
-    // "unknown", not "unread". `test/y1-learn-index-honesty.test.ts` couples the two.
+    // Without a cookie the API answers `false` for everybody, which means unknown, not unread.
     completionKnown: lessons.source === 'api' && reader.cookie !== undefined,
   });
   const start = curriculum.startHere;
@@ -187,9 +132,7 @@ export default async function LearnPage(): Promise<ReactElement> {
           cannot be reached, the lesson says so where the figure would have been.
         </p>
         {curriculum.completionKnown ? null : (
-          // Said once, in the lead, rather than hedged on seventeen cards. The index is the same
-          // page for every reader — that is what makes it fast — so it has no way to know what you
-          // have read, and it now says so instead of guessing `false` and printing the guess.
+          // Said once in the lead, rather than hedged on seventeen cards.
           <p className="prl-learn-page__lead">
             This index is the same for every reader, so it does not know which lessons you have already
             finished — nothing below is a mark on your record. What you have read is recorded when you press
@@ -238,8 +181,6 @@ export default async function LearnPage(): Promise<ReactElement> {
           actions={<DifficultyChip difficulty={start.summary.difficulty} />}
         >
           <p className="prl-learn-start__summary">{start.summary.summary}</p>
-          {/* Three states of `unlocked`, and a fourth: a lesson with no prerequisites, over which
-              "everything it assumes is marked read" was vacuously true and read as a claim. */}
           <p className="prl-note">{startHereNote(start)}</p>
           <Link className="prl-btn prl-btn--primary prl-btn--lg" href={lessonHref(start.summary.id)}>
             {`Read lesson ${formatIndex(start.position)}`}

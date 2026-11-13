@@ -1,19 +1,11 @@
-/**
- * How the numbers are checked: four claims, each with the test or document that settles it.
- *
- * This list lived on the home page until the visual re-identity, under "How correctness is
- * established", with `pnpm` commands in it. It is evidence a reviewer wants and a learner deciding
- * whether to start does not, so it has its own page, linked from the home page's figures and from
- * the footer. Every figure comes from `docs/VERIFICATION.md` and every command is one that exists
- * in `package.json`.
- */
+/** The `/checks` page's four claims, each with what settles it. Figures from `docs/VERIFICATION.md`. */
 
 export const CHECKS_PATH = '/checks';
 
 export interface ProofEntry {
   readonly claim: string;
   readonly detail: string;
-  /** The command or file that settles it. A claim nobody can check is an assertion. */
+  /** A claim nobody can check is an assertion. */
   readonly check: string;
 }
 

@@ -1,32 +1,9 @@
 /**
- * Every endpoint this client is allowed to address must actually be addressed by something.
- *
- * ## The gate this replaces, and why the existing one could not fail
- *
- * `apps/api/test/web-api-paths.test.ts` drives every entry of `API_PATHS` against a real
- * `buildApp()` and asserts each one resolves to a registered route. That is a real guarantee and it
- * is the wrong direction to catch what actually shipped: it proves the SERVER has a route for every
- * path the contract publishes, and says nothing about whether any screen ever calls it.
- *
- * The release audit found that `quizAttempt` — the endpoint that grades a quiz answer and writes
- * the row `GET /me/progress` counts — had **zero call sites anywhere in `apps/web/src`**. It passed
- * the server-side test on every run, because the route existed. A learner could work through every
- * quiz in the product and nothing would be recorded, and no gate anywhere could have said so.
- *
- * So this asserts the other direction: a published path with no caller is a feature with no client.
- * That is not automatically a defect — a path could legitimately be server-to-server — but it is
- * always a decision, and the way to record the decision is to add the exception here with its
- * reason rather than to let the silence stand.
- *
- * ## The three paths that were once built outside the contract
- *
- * `roomJoin`, `progress` and `unitsReset` were briefly built in a local holding pen, because the
- * contract package could not be edited while those features were written. They are published now,
- * and the holding pen is gone. What survives from it is the property that mattered: **none of the
- * three may take an argument**, because the only one that would ever carry an identifier is the
- * invite code, and an invite code is the sole thing protecting a private table. A URL is written to
- * the access log of every proxy it passes and is sent onwards in `Referer`; the code has to travel
- * in a request body. That is asserted below against the published builders.
+ * Every endpoint this client may address must be addressed by something. The API-side test proves a
+ * route exists for every published path, not that a screen calls it, and `quizAttempt` once shipped
+ * with zero call sites. A path with no caller needs a recorded exception here.
+ * `roomJoin`, `progress` and `unitsReset` take no argument, because an invite code must travel in a
+ * body. A URL lands in proxy access logs and in `Referer`.
  */
 
 import assert from 'node:assert/strict';
@@ -38,7 +15,6 @@ import { API_PATHS, API_PREFIX } from '@prl/contracts';
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 
-/** Every TypeScript source under `src`, as `{ path, text }`. */
 function sources(directory: string): readonly { readonly path: string; readonly text: string }[] {
   const found: { path: string; text: string }[] = [];
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
@@ -53,7 +29,7 @@ function sources(directory: string): readonly { readonly path: string; readonly 
 
 const FILES = sources(SRC);
 
-/** Files that mention `TABLE.name(` — the call, not the declaration. */
+/** Files that mention `TABLE.name(`, the call rather than the declaration. */
 function callersOf(table: string, name: string): readonly string[] {
   const needle = `${table}.${name}(`;
   return FILES.filter((file) => file.text.includes(needle)).map((file) => file.path);

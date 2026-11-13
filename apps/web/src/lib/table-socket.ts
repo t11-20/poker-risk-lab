@@ -1,70 +1,11 @@
 /**
- * The live-table WebSocket client: transport, handshake, reconnect, and the narrowing of every
- * frame the server sends.
- *
- * Nothing in this module renders anything and nothing in it decides a poker question. It carries
- * intent one way and authoritative state the other, and it refuses to believe a frame it has not
- * checked. `use-live-table.ts` turns what arrives here into React state; `app/play/LiveTable.tsx`
- * draws it.
- *
- * ## Where the socket connects, and why it is the page's own origin
- *
- * `ws(s)://<the page's own host>/api/v1/ws`. Three facts decide that:
- *
- *  1. **The upgrade path is `/api/v1/ws`**, and it now comes from `API_PATHS.ws()` in
- *     `@prl/contracts` rather than from a constant in this file. `WS_PATH` in
- *     `apps/api/src/ws/hub.ts` is `/ws`, but the hub is registered under `API_PREFIX` like every
- *     other route module, so the mounted path is `/api/v1/ws`. It therefore sits *inside*
- *     `/api/:path*` and is matched by the rewrite in `next.config.ts` — which is what makes the
- *     same-origin answer work in the dev loop as well as behind the container stack's reverse
- *     proxy. (This was not assumed: it was measured — a full hand was played through `next dev`'s
- *     rewrite.) `apps/api/test/web-api-paths.test.ts` asserts the published path against a real
- *     `buildApp()`, and `apps/api/test/ws-socket.test.ts` completes a real handshake on it.
- *  2. **The session cookie is `__Host-` prefixed with no `Domain`** (`plugins/security.ts` in the
- *     API), so it is only ever sent back to the exact host that set it. A socket opened against a
- *     second origin would arrive unauthenticated and be closed `4401`, and page script cannot set a
- *     header on `new WebSocket()` to compensate.
- *  3. **There is no build-time variable to read.** `NEXT_PUBLIC_*` is inlined by `next build`, so a
- *     built image could never be pointed at its own API — a defect that was removed from this app
- *     and must not come back. The browser addresses its own origin and something in front routes
- *     `/api/*`; that is the same arrangement `lib/api.ts` uses for REST, and this module deliberately
- *     makes no independent decision about where the API lives.
- *
- * The scheme is derived, never hard-coded: `https:` gives `wss:`, anything else gives `ws:`. A
- * secure page opening an insecure socket is blocked by the browser as mixed content, so getting this
- * wrong is a silent failure on exactly the deployment that matters.
- *
- * ## Everything from the server is untrusted input
- *
- * `JSON.parse` returns `unknown`, and every field this client reads is checked before it is read.
- * There is one deliberate boundary in that rule, stated here rather than hidden: the members of
- * `PlayerView` that the UI *renders* are validated field by field (seats, cards, legal actions,
- * pots, the sequence, the totals), and the members it only carries — the commitment context, the
- * Merkle reveal inside a completed hand's result — are checked for kind and presence rather than
- * structure. Validating a Merkle proof's interior here would be a second implementation of the
- * engine's own definition, and the client has no use for the contents.
- *
- * Shape is not the only question asked of a `state` frame, and it used to be. `narrowState` also
- * holds the view to `redactFor`'s own hole-card rule — see `lib/hole-card-entitlement.ts`, which
- * carries the whole argument for why that is an assertion about the server's published fields
- * rather than a second redaction boundary. It is deliberately NOT inside `isPlayerView`: "is this
- * the shape the contract describes" and "does the server's own promise hold in it" are different
- * questions and it should stay obvious which one refused a frame.
- *
- * ## Idempotency and sequencing are the caller's to supply, and this module will not invent them
- *
- * `sendAction` takes an `actionId` and an `expectedSequence` and sends exactly those. It does not
- * generate an id per attempt, because that is precisely what makes a retry unsafe: the server
- * refuses to apply the same `actionId` twice, so a retry after a dropped response must carry the
- * *same* id or it is a second bet. See `use-live-table.ts`, which mints one id per decision and
- * replays it unchanged across a reconnect.
- *
- * ## Limits are respected here, not left to the server
- *
- * `WS_LIMITS` publishes them so a client can behave. A token bucket matching the server's
- * (`burstAllowance` capacity, refilled at `messagesPerSecond`) means a runaway effect loop is
- * refused locally instead of costing the reader their socket with a `4429`; the 8 KiB ceiling is
- * checked before `send`, because a frame that exceeds it is dropped *and* the socket closed.
+ * The live-table WebSocket client: transport, handshake, reconnect, and narrowing of every inbound frame.
+ * It renders nothing and decides no poker question.
+ * Every frame is untrusted. Rendered members are validated field by field, while carried-only members
+ * (commitment context, the Merkle reveal) are checked for kind and presence.
+ * `sendAction` sends the caller's `actionId` and `expectedSequence` unchanged, because a retry must
+ * carry the same id or it is a second bet. A token bucket matching `WS_LIMITS` and the 8 KiB ceiling
+ * are enforced locally, since exceeding either costs the reader their socket.
  */
 
 import {
@@ -85,10 +26,6 @@ import {
 import type { LegalAction, PlayerView, PotLayer, SeatView, TableAction } from '@prl/ui';
 import { checkHoleCardEntitlement, describeUnentitledSeats } from './hole-card-entitlement.ts';
 
-// ---------------------------------------------------------------------------
-// Where the socket goes
-// ---------------------------------------------------------------------------
-
 /** Just enough of `Location` to build the URL, so this is testable without a DOM. */
 export interface SocketOrigin {
   readonly protocol: string;
@@ -96,47 +33,26 @@ export interface SocketOrigin {
 }
 
 /**
- * The socket URL for a page served from `origin`.
- *
- * The path comes from `API_PATHS.ws()` — the contract — and no longer from a `WS_ROUTE` constant
- * kept here. That constant mirrored `WS_PATH` in `apps/api/src/ws/hub.ts` by hand, which is exactly
- * the arrangement `api-paths.ts` exists to abolish: a path written on one side of the wire drifts
- * the moment the other side is renamed, and nothing fails until a reader opens a table.
- * `apps/api/test/web-api-paths.test.ts` now asserts that path against a real `buildApp()`.
- *
- * The scheme and host are still assembled here, and deliberately: `wss:` for a secure page, `ws:`
- * otherwise, against the page's OWN host. A hard-coded scheme is a mixed-content failure on the only
- * deployment where it matters, and a second origin would not receive the `__Host-` session cookie.
+ * Same origin as the page, because the `__Host-` session cookie goes only to the host that set it and
+ * page script cannot add headers to a WebSocket. `wss:` for an `https:` page, or the browser blocks it as
+ * mixed content.
  */
 export function tableSocketUrl(origin: SocketOrigin): string {
   const scheme = origin.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${scheme}//${origin.host}${API_PATHS.ws()}`;
 }
 
-// ---------------------------------------------------------------------------
-// Close codes, as sentences a reader can act on
-// ---------------------------------------------------------------------------
-
-/** What a closed socket means, and whether reconnecting could possibly help. */
 export interface CloseMeaning {
   readonly code: number;
-  /** Short, for a heading. */
   readonly title: string;
-  /** One or two sentences. States the cause, never "something went wrong". */
+  /** States the cause, never "something went wrong". */
   readonly detail: string;
-  /** False when retrying would fail identically — the reader has to do something. */
+  /** False when retrying would fail identically. */
   readonly retryable: boolean;
-  /** Set when there is a specific thing the reader can do about it. */
   readonly action?: 'signIn' | 'reload';
 }
 
-/**
- * Every close code this server can send, plus the ones a browser produces on its own.
- *
- * Written as a table rather than a chain of conditionals so that "distinct message per code" is a
- * property you can read off the page. A reader who has been signed out is told that; they are not
- * shown a generic "disconnected" that leaves them clicking a button that will never work.
- */
+/** A table, so each close code visibly gets its own message. Includes browser-generated codes. */
 export function describeClose(code: number, wasClean: boolean): CloseMeaning {
   switch (code) {
     case WS_CLOSE.normal:
@@ -248,10 +164,6 @@ export function describeClose(code: number, wasClean: boolean): CloseMeaning {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Narrowing every inbound frame
-// ---------------------------------------------------------------------------
-
 type JsonObject = Record<string, unknown>;
 
 function isObject(value: unknown): value is JsonObject {
@@ -266,7 +178,7 @@ function isBoolean(value: unknown): value is boolean {
   return typeof value === 'boolean';
 }
 
-/** Finite, because `NaN` and `Infinity` survive `JSON.parse` via no path we want to trust. */
+/** Finite, so `NaN` and `Infinity` are refused. */
 function isNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
@@ -279,7 +191,6 @@ function isArrayOf(value: unknown, item: (candidate: unknown) => boolean): value
   return Array.isArray(value) && value.every(item);
 }
 
-/** A card is an index into the 52-card deck. Anything else is not a card. */
 function isCard(value: unknown): boolean {
   return isInteger(value) && value >= 0 && value < 52;
 }
@@ -314,13 +225,7 @@ function isSeatView(value: unknown): value is SeatView {
   );
 }
 
-/**
- * A legal action, with the bounds the server will accept.
- *
- * The optional members are checked as "absent, or the right type". They are load-bearing: the bet
- * sizer clamps into `[minTo, maxTo]`, which is what stops the UI from ever offering a size the
- * server did not.
- */
+/** The optional bounds are load-bearing. The bet sizer clamps into `[minTo, maxTo]`. */
 function isLegalAction(value: unknown): value is LegalAction {
   if (!isObject(value)) return false;
   const optionalNumbers = ['minTo', 'maxTo', 'costAtMin'];
@@ -354,13 +259,7 @@ function isTableConfig(value: unknown): boolean {
   );
 }
 
-/**
- * A completed hand's result.
- *
- * The showdown members the table draws — the seat, its five best cards, the sentence describing the
- * hand — are checked. `reveal` carries Merkle proofs this client never opens, so it is checked for
- * presence and kind only; see the module comment for why that line is drawn where it is.
- */
+/** `reveal` carries Merkle proofs this client never opens, so it is checked for presence only. */
 function isHandResult(value: unknown): boolean {
   if (value === null) return true;
   if (!isObject(value)) return false;
@@ -385,7 +284,6 @@ function isHandResult(value: unknown): boolean {
   );
 }
 
-/** The scalar members of a view, split out to keep each predicate readable. */
 function hasViewScalars(value: JsonObject): boolean {
   return (
     isString(value['handId']) &&
@@ -408,16 +306,8 @@ function hasViewScalars(value: JsonObject): boolean {
 }
 
 /**
- * The redacted table state.
- *
- * Note what is *not* here: any check that the view is consistent, that the pot adds up, or that a
- * legal action is sensible. That is the server's job and it is the only authority. This asks one
- * question — "is this the shape the contract describes?" — so that a malformed or hostile frame
- * produces a refusal rather than `undefined` reaching a renderer.
- *
- * The hole-card entitlement check is the one thing about a view's CONTENT this client decides, and
- * it is not here for that reason: it lives in `narrowState`, one level up, so that a rejection can
- * say which of the two questions was answered no. See the module header.
+ * Shape only. Consistency is the server's job. The hole-card entitlement check lives in `narrowState`,
+ * so a rejection can say whether shape or content failed.
  */
 export function isPlayerView(value: unknown): value is PlayerView {
   if (!isObject(value)) return false;
@@ -444,10 +334,8 @@ function isRoomMember(value: unknown): boolean {
     isBoolean(value['isBot']) &&
     (value['botProfile'] === null || isString(value['botProfile'])) &&
     isBoolean(value['connected']) &&
-    // Required, and checked: a seat awaiting the big blind holds a chair but is not dealt in, and a
-    // frame missing the field would validate, read `undefined`, and render that seat as an ordinary
-    // player receiving no cards with nothing explaining why — the exact defect the field was added
-    // to remove. Adding a field is wire-compatible; silently accepting its absence is not.
+    // Required. A frame without it would render a seat awaiting the big blind as an ordinary player
+    // dealt no cards.
     isBoolean(value['awaitingBigBlind'])
   );
 }
@@ -457,10 +345,7 @@ function isRoomSummary(value: unknown): value is WsWelcome['room'] {
   return (
     isString(value['id']) &&
     isString(value['name']) &&
-    // Null once the creator has erased their account. `RoomSummary.ownerUserId` is
-    // `string | null` in the contract, and a guard that insisted on a string would reject the
-    // whole welcome frame for such a room — turning "the person who made this table has left"
-    // into "this table does not exist" for everybody still sitting at it.
+    // Null once the creator erased their account. Requiring a string would reject the whole welcome.
     (value['ownerUserId'] === null || isString(value['ownerUserId'])) &&
     isInteger(value['maxSeats']) &&
     isNumber(value['smallBlind']) &&
@@ -505,11 +390,8 @@ function narrowWelcome(value: JsonObject): WsWelcome | null {
 function narrowState(value: JsonObject): WsState | null {
   const view = value['view'];
   if (!(view === null || isPlayerView(view))) return null;
-  // The server's own hole-card rule, evaluated on the server's own published fields. A frame that
-  // breaks it is refused whole rather than quietly stripped: the cards have already reached this
-  // browser and cannot be recalled, so the only thing left to decide is whether the defect is
-  // visible. Refusing makes the table stop, which somebody reports. See
-  // `lib/hole-card-entitlement.ts` for why removing the cards instead would be the wrong call.
+  // Refused whole, not stripped. The cards already reached the browser, so a stopped table is the
+  // only way the defect gets reported. See `hole-card-entitlement.ts`.
   if (checkHoleCardEntitlement(view).unentitled.length > 0) return null;
   if (!isRoomSummary(value['room'])) return null;
   if (!(value['deadlineMs'] === null || isNumber(value['deadlineMs']))) return null;
@@ -524,7 +406,7 @@ function narrowState(value: JsonObject): WsState | null {
   };
 }
 
-/** Event kinds, with the members each one carries. Never load-bearing; `state` is the truth. */
+/** Never load-bearing; `state` is the truth. */
 const EVENT_SHAPES: Readonly<Record<string, readonly [string, (value: unknown) => boolean][]>> = {
   handStarted: [
     ['handId', isString],
@@ -547,7 +429,6 @@ const EVENT_SHAPES: Readonly<Record<string, readonly [string, (value: unknown) =
   seatTimedOut: [['seat', isSeatIndex]],
 };
 
-/** True when `value` is one of the contract's event members, checked kind-first then field by field. */
 function isTableEvent(value: unknown): value is WsEvent['event'] {
   if (!isObject(value)) return false;
   const kind = value['kind'];
@@ -562,15 +443,7 @@ function narrowEvent(value: JsonObject): WsEvent | null {
   return { type: 'event', event: value['event'], serverTimeMs: value['serverTimeMs'] };
 }
 
-/**
- * The members `PotOddsSummary` promises, checked one by one.
- *
- * `oddsRatio` is checked as `number | null` because that is what the contract declares and what the
- * wire carries: `null` means the call is free, so there is no "X to 1" price to quote. It is not a
- * missing figure and not a bad one, and `formatOdds` in `@prl/ui` renders it as "no cost to
- * continue". Accepting it is therefore narrowing the frame, not relaxing the check — the frame that
- * is refused is one where the member is a string, a boolean, `NaN` or absent.
- */
+/** `oddsRatio` is `number | null` per the contract. Null means the call is free. */
 function checkPotOdds(value: unknown): string | null {
   if (!isObject(value)) return 'potOdds is not an object';
   const numbers = ['pot', 'toCall', 'breakEvenEquity', 'equitySurplus'];
@@ -586,11 +459,8 @@ function checkPotOdds(value: unknown): string | null {
 }
 
 /**
- * The Coach report, checked to the depth `CoachPanel` renders it.
- *
- * Returns the name of the first member that failed, or null when the report is renderable. A name
- * rather than a boolean because this is the one frame whose rejection a reader has to be told about:
- * every other frame type is followed by another one, but an analysis is asked for and answered once.
+ * Returns the first failing member's name. A Coach frame is asked for and answered once, so its
+ * rejection must be explained to the reader.
  */
 function checkCoachReport(value: unknown): string | null {
   if (!isObject(value)) return 'report is not an object';
@@ -625,8 +495,7 @@ function narrowAck(value: JsonObject): WsAck | null {
   const deduplicated = value['deduplicated'];
   if (!(applied === undefined || isInteger(applied))) return null;
   if (!(deduplicated === undefined || isBoolean(deduplicated))) return null;
-  // Built member by member rather than spread: `exactOptionalPropertyTypes` rejects an explicit
-  // `undefined`, and an ack without `appliedSequence` is a different fact from one carrying it.
+  // Built member by member because `exactOptionalPropertyTypes` rejects an explicit `undefined`.
   return {
     type: 'ack',
     requestId: value['requestId'],
@@ -647,20 +516,13 @@ function narrowPong(value: JsonObject): WsPong | null {
   return { type: 'pong', nonce: value['nonce'], serverTimeMs: value['serverTimeMs'] };
 }
 
-/** A frame that did not match the contract, described well enough to act on. */
 export interface FrameRejection {
-  /** The `type` the frame claimed, when it had a readable one. Null for unparseable input. */
+  /** Null for unparseable input. */
   readonly claimedType: string | null;
-  /** Which member failed, in the contract's own vocabulary. Never a stack trace. */
   readonly reason: string;
   /**
-   * Present, and non-empty, only for a `state` frame refused for carrying hole cards the recipient
-   * was not entitled to. The seat indices, so a caller can act on the fact rather than on a
-   * substring of `reason`.
-   *
-   * A field and not a code word inside the sentence, for the reason `noticeCode` exists beside
-   * `notice` in `use-live-table.ts`: prose written for a person is allowed to be improved, and a
-   * branch that reads a substring of it breaks the first time somebody does.
+   * Set only when a `state` frame carried unentitled hole cards. A field, not a substring of `reason`,
+   * so improving the prose cannot break a branch.
    */
   readonly unentitledSeats?: readonly number[];
 }
@@ -669,7 +531,6 @@ export type FrameOutcome =
   | { readonly ok: true; readonly frame: WsServerMessage }
   | { readonly ok: false; readonly rejection: FrameRejection };
 
-/** The type-specific narrowers, so the switch below is a lookup rather than eight branches. */
 const NARROWERS: Readonly<Record<string, (value: JsonObject) => WsServerMessage | null>> = {
   welcome: narrowWelcome,
   state: narrowState,
@@ -681,19 +542,9 @@ const NARROWERS: Readonly<Record<string, (value: JsonObject) => WsServerMessage 
 };
 
 /**
- * One inbound frame, or a description of why it was refused.
- *
- * A refusal is usually not something a reader needs to see: `state` is sent whole on every change,
- * so a dropped frame is corrected by the next one, and that is the benefit of a non-delta protocol.
- * The exception is a `coach` frame — an analysis is asked for once and answered once, so dropping it
- * silently leaves a panel that will never fill. Hence the reason string: the caller decides which
- * refusals are worth a sentence.
- *
- * There are now two exceptions, and the second one is louder than the first. A `state` frame
- * refused for carrying unentitled hole cards is not corrected by the next frame — a server that
- * leaked once will leak again in one second's time — so the table stops, and a table that has
- * stopped without saying why is the silent failure this repository keeps writing guards against.
- * `unentitledSeats` on the rejection is what lets the caller tell that apart from a drifted frame.
+ * Most refusals need no reader-facing sentence, since the next whole `state` frame corrects them.
+ * Two exceptions. A `coach` frame is answered once. A hole-card leak recurs every frame, so the
+ * table stops, and `unentitledSeats` lets the caller say why.
  */
 export function readServerMessage(raw: string): FrameOutcome {
   let parsed: unknown;
@@ -717,10 +568,8 @@ export function readServerMessage(raw: string): FrameOutcome {
   const frame = narrow(parsed);
   if (frame !== null) return { ok: true, frame };
   if (claimedType === 'state') {
-    // Asked before the generic sentence, because "did not match the shape the contract describes"
-    // is a false statement about this frame and the wrong thing to go looking for: the shape was
-    // right and the CONTENT was a hole-card leak. The check is re-run rather than threaded out of
-    // `narrowState` so that the narrowers stay uniform `(value) => T | null`.
+    // A hole-card leak had the right shape, so the generic shape sentence would be false. Re-run
+    // here so every narrower stays `(value) => T | null`.
     const unentitledSeats = checkHoleCardEntitlement(parsed['view']).unentitled;
     if (unentitledSeats.length > 0) {
       return {
@@ -736,17 +585,12 @@ export function readServerMessage(raw: string): FrameOutcome {
   return { ok: false, rejection: { claimedType, reason } };
 }
 
-/** The same check as a plain narrowing, for callers that do not care why a frame was refused. */
 export function narrowServerMessage(raw: string): WsServerMessage | null {
   const outcome = readServerMessage(raw);
   return outcome.ok ? outcome.frame : null;
 }
 
-// ---------------------------------------------------------------------------
-// The transport seam
-// ---------------------------------------------------------------------------
-
-/** What this module needs from a socket. Two methods, so a test can be a pair of functions. */
+/** Two methods, so a test can be a pair of functions. */
 export interface RawSocket {
   send(data: string): void;
   close(code?: number, reason?: string): void;
@@ -761,13 +605,7 @@ export interface RawSocketHandlers {
 
 export type RawSocketFactory = (url: string, handlers: RawSocketHandlers) => RawSocket;
 
-/**
- * The real one.
- *
- * No headers and no query string: the session travels as a cookie on the upgrade, which is the only
- * mechanism a browser offers and the one the server expects. A token in the URL would end up in
- * proxy logs and browser history.
- */
+/** No headers and no query string. The session cookie rides the upgrade, and a URL token would leak. */
 export const browserSocketFactory: RawSocketFactory = (url, handlers) => {
   const socket = new WebSocket(url);
   socket.addEventListener('open', () => handlers.onOpen());
@@ -784,10 +622,8 @@ export const browserSocketFactory: RawSocketFactory = (url, handlers) => {
   };
 };
 
-/** Timers, injectable so the reconnect schedule can be tested without waiting for it. */
 export interface Scheduler {
   readonly now: () => number;
-  /** Returns a cancel function. */
   readonly delay: (ms: number, run: () => void) => () => void;
 }
 
@@ -799,86 +635,48 @@ export const systemScheduler: Scheduler = {
   },
 };
 
-// ---------------------------------------------------------------------------
-// The client
-// ---------------------------------------------------------------------------
-
 export type TableSocketStatus =
-  /** A socket is being opened. */
   | 'connecting'
-  /** Open, `hello` sent, waiting for `welcome`. */
   | 'handshaking'
-  /** `welcome` received. Frames are flowing. */
   | 'live'
-  /** Closed for a retryable reason; a reconnect is scheduled. */
   | 'reconnecting'
-  /** Closed and not coming back without the reader doing something. */
+  /** Not coming back without the reader doing something. */
   | 'closed';
 
 export interface TableSocketOptions {
   readonly roomId: string;
   readonly url: string;
-  /** Every frame that survived narrowing, in arrival order. */
   readonly onFrame: (frame: WsServerMessage) => void;
   readonly onStatus: (status: TableSocketStatus) => void;
-  /** The last close, as a sentence. Null once a connection is live again. */
+  /** Null once a connection is live again. */
   readonly onClose: (meaning: CloseMeaning | null) => void;
-  /**
-   * A frame that did not match the contract and was dropped.
-   *
-   * Separate from `onProblem` because some of these are worth telling a reader about — an analysis
-   * the panel cannot render is one the reader is waiting for — and the caller is the only one that
-   * knows which.
-   */
+  /** A dropped frame. Separate from `onProblem` because some, like a Coach report, matter to a reader. */
   readonly onRejected?: (rejection: FrameRejection) => void;
-  /** Something the developer needs to see. Never shown to a reader. */
+  /** Developer-only. Never shown to a reader. */
   readonly onProblem?: (message: string) => void;
   readonly socketFactory?: RawSocketFactory;
   readonly scheduler?: Scheduler;
 }
 
 /**
- * What happened to a frame this client tried to send.
- *
- * ## Why this is not a boolean
- *
- * It was one, and the single `false` covered two refusals that mean opposite things to a reader.
- * There is no socket during the whole reconnect backoff — up to fifteen seconds — and the caller
- * had no way to tell that apart from the client's own token bucket refusing a burst. So
- * `use-live-table.ts` reported "this page is refusing to exceed the socket rate limit" for a
- * decision that was refused because the connection had dropped: a cause that never happened (no
- * token was taken), a conclusion that was wrong (the reconnect replays the decision and the server
- * applies it), and an alert that contradicted the "Decision sent" beside it.
- *
- * The two also differ in what the caller should DO. A disconnected frame is held and replayed; a
- * rate-limited one is gone, and only the reader can decide again.
+ * Not a boolean. A disconnected frame is held and replayed on the next `welcome`, while a rate-limited
+ * one is gone and the reader must decide again. Conflating them reported a rate limit for a dropped
+ * connection.
  */
 export type SendOutcome =
-  /** On the wire. The server's answer is the next thing to wait for. */
   | 'sent'
-  /**
-   * There is no open socket. A reconnect is scheduled, and `useLiveTable` replays the outstanding
-   * decision on the next `welcome` — same `actionId`, so the server applies it once.
-   */
+  /** No open socket. `useLiveTable` replays the decision on `welcome` with the same `actionId`. */
   | 'disconnected'
-  /** This client's own token bucket refused it. Nothing will send it later; the reader decides again. */
+  /** Nothing will send it later; the reader decides again. */
   | 'rate-limited'
-  /** Refused for a reason a retry will not fix: over the protocol's 8 KiB ceiling, or `send` threw. */
+  /** Over the 8 KiB ceiling, or `send` threw. */
   | 'undeliverable';
 
-/** What the caller can do with a live table. */
 export interface TableSocketHandle {
-  /** Sends `sit`. See `SendOutcome` for the refusals, which are not interchangeable. */
   sit(seat: number, requestId: string): SendOutcome;
   stand(requestId: string): SendOutcome;
   startHand(requestId: string): SendOutcome;
-  /**
-   * Sends one decision.
-   *
-   * `actionId` and `expectedSequence` are the caller's, unchanged. A retry MUST reuse both: the
-   * server refuses a repeated `actionId`, which is what makes a retry after a dropped response a
-   * no-op instead of a second bet.
-   */
+  /** A retry MUST reuse both `actionId` and `expectedSequence`, so the server treats it as a no-op. */
   action(input: {
     readonly action: TableAction;
     readonly actionId: string;
@@ -886,18 +684,18 @@ export interface TableSocketHandle {
     readonly requestId: string;
   }): SendOutcome;
   requestCoach(requestId: string, opponentRange?: string): SendOutcome;
-  /** Closes and stops reconnecting. Safe to call twice. */
+  /** Safe to call twice. */
   dispose(): void;
 }
 
-/** Reconnect schedule: doubling, capped, with jitter so many tabs do not return in lockstep. */
+/** Doubling and capped, with jitter so many tabs do not return in lockstep. */
 const BACKOFF_FIRST_MS = 500;
 const BACKOFF_CAP_MS = 15_000;
-/** A `4429` means we have been told to slow down, so the schedule starts near its ceiling. */
+/** A `4429` means slow down, so start near the ceiling. */
 const BACKOFF_RATE_LIMITED_MS = 10_000;
-/** How long to wait for `welcome` before treating the socket as dead. Just over the server's. */
+/** Just over the server's handshake timeout. */
 const HANDSHAKE_GRACE_MS = WS_LIMITS.handshakeTimeoutMs + 2_000;
-/** App-level liveness. Two unanswered pings and the socket is treated as gone. */
+/** Two unanswered pings and the socket is treated as gone. */
 const PING_INTERVAL_MS = WS_LIMITS.heartbeatIntervalMs;
 const PINGS_UNANSWERED_ALLOWED = 2;
 
@@ -906,7 +704,7 @@ interface Bucket {
   lastRefillMs: number;
 }
 
-/** The same token bucket the server runs, so we are refused locally instead of disconnected. */
+/** The server's token bucket, so we are refused locally instead of disconnected. */
 function takeToken(bucket: Bucket, now: number): boolean {
   const elapsed = Math.max(0, now - bucket.lastRefillMs);
   bucket.lastRefillMs = now;
@@ -920,12 +718,8 @@ function takeToken(bucket: Bucket, now: number): boolean {
 }
 
 /**
- * Opens a table socket and keeps it open.
- *
- * Written as a closure rather than a class because everything it owns is private and the caller
- * needs five verbs. It starts connecting immediately; `dispose` is the only way it stops, and a
- * disposed handle never schedules anything again — a leaked socket per navigation would reach the
- * four-per-session cap and lock the reader out of their own table.
+ * `dispose` is the only way it stops, and a disposed handle schedules nothing again. A leaked socket
+ * per navigation would hit the four-per-session cap and lock the reader out.
  */
 export function openTableSocket(options: TableSocketOptions): TableSocketHandle {
   const factory = options.socketFactory ?? browserSocketFactory;
@@ -955,13 +749,10 @@ export function openTableSocket(options: TableSocketOptions): TableSocketHandle 
   };
 
   const sendRaw = (message: WsClientMessage): SendOutcome => {
-    // Each refusal names itself. A caller that is told only "no" has to guess which of these
-    // happened, and the guess this file used to invite was the wrong one — see `SendOutcome`.
     if (disposed) return 'undeliverable';
     if (socket === null) return 'disconnected';
     const text = JSON.stringify(message);
-    // Checked before `send`: the server drops an oversized frame AND closes the socket, so an
-    // accidental giant frame costs the reader their table rather than one message.
+    // The server drops an oversized frame AND closes the socket.
     if (new TextEncoder().encode(text).length > WS_LIMITS.maxMessageBytes) {
       problem(`refusing to send a ${message.type} frame larger than the protocol's 8 KiB ceiling`);
       return 'undeliverable';
@@ -984,8 +775,7 @@ export function openTableSocket(options: TableSocketOptions): TableSocketHandle 
     cancelPing = scheduler.delay(PING_INTERVAL_MS, () => {
       if (disposed || mine !== generation) return;
       if (unansweredPings >= PINGS_UNANSWERED_ALLOWED) {
-        // A half-open socket answers nothing and never fires `close`. Forcing one is the only way
-        // to stop a seat's clock running out against a connection that is already gone.
+        // A half-open socket never fires `close`, so force one before the seat's clock runs out.
         problem('no pong for two intervals; treating the socket as gone');
         socket?.close(WS_CLOSE.normal, 'no pong');
         handleClose(1006, 'no pong', false, mine);
@@ -1008,11 +798,7 @@ export function openTableSocket(options: TableSocketOptions): TableSocketHandle 
       meaning.code === WS_CLOSE.rateLimited
         ? BACKOFF_RATE_LIMITED_MS
         : Math.min(BACKOFF_FIRST_MS * 2 ** (attempt - 1), BACKOFF_CAP_MS);
-    // ±20%, so a server that dropped every socket at once does not get them all back in one tick.
-    // From the CSPRNG, not `Math.random`: this repository bans `Math.random` outright and a
-    // release gate enforces it across every source tree. Backoff jitter is not a security
-    // boundary, but a per-file exemption is how the ban stops being checkable — and the cost of
-    // using the CSPRNG for one float is nothing.
+    // ±20%, from the CSPRNG because a release gate bans the non-crypto RNG in every src tree.
     const jittered = Math.round(base * (0.8 + randomUnitInterval() * 0.4));
     setStatus('reconnecting');
     cancelReconnect?.();
@@ -1044,8 +830,7 @@ export function openTableSocket(options: TableSocketOptions): TableSocketHandle 
       onOpen: () => {
         if (disposed || mine !== generation) return;
         setStatus('handshaking');
-        // The first frame, always. Nothing else is accepted until it lands, and a socket that has
-        // not sent it inside the server's window is closed 4408.
+        // Must be the first frame. The server closes a socket without it 4408.
         sendRaw({
           type: 'hello',
           protocolVersion: WS_PROTOCOL_VERSION,
@@ -1085,8 +870,7 @@ export function openTableSocket(options: TableSocketOptions): TableSocketHandle 
       },
       onClose: (code, reason, wasClean) => handleClose(code, reason, wasClean, mine),
       onError: () => {
-        // `error` on a WebSocket carries nothing useful by design (it would be a cross-origin
-        // information leak), and `close` always follows it. Recorded, not acted on.
+        // `error` carries nothing by design and `close` always follows it.
         problem('the socket reported an error; waiting for its close');
       },
     });
@@ -1125,19 +909,9 @@ export function openTableSocket(options: TableSocketOptions): TableSocketHandle 
   };
 }
 
-// ---------------------------------------------------------------------------
-// Ids
-// ---------------------------------------------------------------------------
-
 /**
- * A request id the contract will accept: `^[A-Za-z0-9_-]{8,64}$`.
- *
- * `crypto.randomUUID()` where it exists, falling back to `randomUnitInterval`'s CSPRNG rather
- * than to `Math.random`. The distinction matters more than it looks: `randomUUID` is restricted
- * to secure contexts, but `getRandomValues` is not — so the fallback path is reached exactly
- * when the page is least trustworthy, which is the worst possible moment to switch to a
- * predictable generator. These ids are idempotency keys, and a collision means one player's
- * action is silently treated as a replay of another's.
+ * `^[A-Za-z0-9_-]{8,64}$`. These are idempotency keys, so a collision replays another's action.
+ * `randomUUID` needs a secure context, so the fallback uses the CSPRNG too.
  */
 let idCounter = 0;
 
@@ -1147,23 +921,16 @@ export function newRequestId(prefix: string): string {
     typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
       ? crypto.randomUUID()
       : `${String(Date.now())}-${String(idCounter)}-${randomToken(8)}`;
-  // Trimmed to the contract's 64-character ceiling, and stripped of anything outside its alphabet.
   return `${prefix}-${unique}`.replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 64);
 }
 
-/**
- * A float in `[0, 1)` from the platform CSPRNG — the `Math.random` replacement this file uses.
- *
- * Divides by `2 ** 32` rather than by `0xffffffff`, so the result can never reach 1 and the
- * distribution stays uniform over the whole 32-bit range.
- */
+/** `[0, 1)` from the CSPRNG. Dividing by `2 ** 32` keeps 1 out of range. */
 function randomUnitInterval(): number {
   const buffer = new Uint32Array(1);
   crypto.getRandomValues(buffer);
   return (buffer[0] ?? 0) / 2 ** 32;
 }
 
-/** `length` lowercase hex characters from the platform CSPRNG. */
 function randomToken(length: number): string {
   const bytes = new Uint8Array(Math.ceil(length / 2));
   crypto.getRandomValues(bytes);

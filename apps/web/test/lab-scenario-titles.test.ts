@@ -1,11 +1,7 @@
 /**
- * Every scenario page the Lab can render is titled after its scenario.
- *
- * `generateMetadata` on `/lab/[scenarioId]` looked the id up in `LAB_SCENARIO_SUMMARIES` — the six
- * offline fixtures, under ids the API does not serve — so all 36 pages `generateStaticParams`
- * builds from `scenarios()` were titled "Scenario", and the "could not be loaded" screen could name
- * none of them. The page file imports CSS and cannot be loaded here, so the lookup lives in
- * `src/lib/lab-scenario-titles.ts` and the page is held to calling it.
+ * Every scenario page the Lab can render is titled after its scenario, not looked up in the six
+ * offline fixtures whose ids the API does not serve. The page imports CSS and cannot load here, so
+ * the lookup lives in `src/lib/lab-scenario-titles.ts` and the page is held to calling it.
  */
 
 import assert from 'node:assert/strict';
@@ -31,7 +27,6 @@ describe('a scenario page is titled after its scenario', () => {
   });
 
   it('says "not found" for an id the bundle does not carry (REGRESSION)', () => {
-    // It said "Scenario", announced over the 404 body at `/lab/nope` (audit at 6b3886e).
     assert.deepEqual(scenarioPageMetadata('no-such-scenario'), { title: 'Scenario not found' });
     assert.equal(bundledScenarioTitle('no-such-scenario'), null);
   });

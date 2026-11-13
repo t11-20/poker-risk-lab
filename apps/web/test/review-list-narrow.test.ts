@@ -1,27 +1,6 @@
 /**
  * The hand history is usable on a phone: the row opens the hand, the columns are on screen, and the
- * sort control is one row.
- *
- * ## The failure this is written against
- *
- * Measured on `/review` with the fixture history, before the change:
- *
- *   - 360x640: an 852px table in a 328px scroller. "Net to you" began at x=616 and "Ending" at
- *     x=745, both off screen, with nothing saying they were there.
- *   - every width: the only way into a hand was its number, a 21x44px link whose words ("Replay
- *     hand") were visually hidden; `elementFromPoint` at 70% across the first row found the net
- *     figure's `<span>` — and the row still lit up on hover.
- *   - 360x640: the five sort links wrapped to five rows, 247px of control, and the first hand began
- *     at y=931.
- *
- * After: no horizontal scroll at 360, 768, 900, 1024 or 1440; every probe across the first row
- * lands on the link; the sort control is 44px tall at 360. Those numbers come from a browser and
- * this file cannot reproduce them — it pins the four things in the source that produce them, each
- * of which fails against the code as it was.
- *
- * Read as text because `apps/web` has no way to render a `.tsx` component under `node --test`
- * (Node strips types and does not transform JSX), and `packages/ui/test/layout-guarantees.test.ts`
- * reads CSS the same way for the same kind of guarantee.
+ * sort control is one row. `test:layout` measures the result; this pins the source rules behind it.
  */
 
 import assert from 'node:assert/strict';
@@ -36,7 +15,6 @@ const region = readFileSync(new URL('../src/components/ScrollRegion.tsx', import
 /** Comments out, so a selector quoted in prose cannot satisfy an assertion about a rule. */
 const code = css.replace(/\/\*[\s\S]*?\*\//gu, '');
 
-/** The body of the first top-level `@media` block whose prelude contains `query`. */
 function mediaBlock(query: string): string {
   const at = code.indexOf(`@media (${query})`);
   assert.ok(at >= 0, `review.css has no @media (${query}) block`);
@@ -50,7 +28,6 @@ function mediaBlock(query: string): string {
   throw new Error(`unbalanced @media (${query}) block`);
 }
 
-/** The declarations of the rule whose selector list is exactly `selector`, within `source`. */
 function rule(source: string, selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
   const match = new RegExp(`(?:^|[}\\s])${escaped}\\s*\\{([^}]*)\\}`, 'u').exec(source);
@@ -103,19 +80,14 @@ describe('/review at every width', () => {
   });
 
   it('does not let the select squeeze the submit button below its word (REGRESSION)', () => {
-    // test:layout, CI run 43044654587, /review at 360px: "the column is 16.02px and the word
-    // "Sort" needs 29.34px". The glyph measurement is that gate's; this pins the rule behind it.
+    // test:layout at 360px measured the "Sort" column at 16.02px against 29.34px needed.
     assert.match(rule(code, '.prl-review-sorts__form .prl-btn'), /flex:\s*none/u);
   });
 });
 
 /**
- * The table's scroll region is a tab stop exactly when it scrolls sideways.
- *
- * `test:keyboard` on this branch, the 360x640 sticky-bar walk: "6 hands, ordered by most recent
- * first. Net i" top=-134, bar ends at 129 (263.0px of a 1549.2px control behind it). Below 1024px
- * the rows are cards and the region cannot scroll, so the stop did nothing and was 1,549px tall.
- * Which way the default leans, and why, is in `src/lib/scroll-region.ts`.
+ * The scroll region is a tab stop exactly when it scrolls sideways. Below 1024px the rows are cards,
+ * so a fixed stop was 1,549px of nothing. The default's lean is explained in `src/lib/scroll-region.ts`.
  */
 describe('/review scroll region', () => {
   it('is a tab stop when the table is wider than the region', () => {
@@ -125,7 +97,6 @@ describe('/review scroll region', () => {
   });
 
   it('is not a tab stop when the table fits, including exactly (REGRESSION)', () => {
-    // A region whose content fits has scrollWidth === clientWidth; then one pixel short of it.
     for (const box of [
       { scrollWidth: 328, clientWidth: 328 },
       { scrollWidth: 944, clientWidth: 944 },

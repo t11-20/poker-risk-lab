@@ -1,54 +1,18 @@
 /**
- * Element defaults, focus, and the handful of utilities every layer above depends on.
- *
- * reset.css repairs browser defaults; this file makes *choices*. Every value here comes from
- * a `--prl-*` token, so a reader can trace any pixel on screen back to tokens.css and the
- * design system doc rather than to somebody's taste on the day.
- *
- * Read section 0 and the focus section before changing anything. Section 0 names the three
- * accent ROLES the rest of the package uses and repairs three light-theme values that do not
- * measure up; the focus ring is the single most load-bearing accessibility rule here.
+ * Element defaults, focus, and the utilities every layer above depends on. reset.css repairs
+ * browser defaults, this file makes choices, and every value comes from a `--prl-*` token.
  */
 
-/* ==========================================================================================
-   0. ACCENT ROLES, AND THREE MEASURED REPAIRS
-   ==========================================================================================
-
-   No new *values* are introduced below. Every declaration points at a token that already exists
-   in tokens.css; what is added is three names for three jobs, and three repairs.
-
-   THE THREE ROLES. One accent step cannot serve every purpose, because the contrast requirement
-   is different for each: a fill is judged against the text ON it, a border against the surface
-   BEHIND it, and ink against the surface behind it at the stricter text threshold. Naming the
-   roles is what stops a component reaching for "the accent" and getting the wrong one.
+/* 0. ACCENT ROLES. A fill is judged against the text on it, a border against the surface behind
+   it, and ink against that surface at the text threshold, so one accent step cannot do all three.
 
      --prl-accent-fill   a background that carries --prl-text-on-accent   (>= 4.5:1)
      --prl-accent-edge   a border or graphic mark that carries meaning    (>= 3:1)
      --prl-accent-text   accent-coloured TEXT                             (>= 4.5:1)
 
-   All three resolve without a theme split, because tokens.css remaps the WHOLE accent ramp for
-   light rather than only the steps in use, and flips `--prl-text-on-accent` with it. Measured
-   (`node scripts/check-contrast.mjs`), worst surface in each theme:
-
-     accent-fill + text-on-accent    dark 9.39:1   light 6.97:1     (the pairing inverts:
-                                                                     ink-900 on a bright fill,
-                                                                     white on a dark one)
-     accent-edge on any surface      dark 7.04:1   light 5.39:1
-     accent-text on any surface      dark 8.31:1   light 5.39:1
-
-   Use these three, not `--prl-accent-400/500` directly, anywhere the accent has to be legible
-   rather than decorative.
-
-   THERE ARE NO LONGER ANY REPAIRS HERE. Three light-theme tokens used to be patched in this file
-   because they measured below their floor in tokens.css - `--prl-line-strong` (2.78:1 on
-   --prl-surface-active), `--prl-series-f` (2.15:1 on a white panel) and `--prl-text-faint`
-   (3.57:1 on --prl-surface-active). All three are now fixed at source in the light theme of
-   tokens.css, in both of its scopes, so `node scripts/check-contrast.mjs` passes its token pass
-   and its rendered pass together instead of reporting a defect the component layer routes around.
-
-   Keep it that way. A repair layer here is a second place to look for the value a browser paints,
-   and the reason the gate reports two passes at all is so that the gap between them stays zero.
-   ========================================================================================== */
+   Use these, not `--prl-accent-400/500`, wherever the accent must be legible. No theme split is
+   needed because tokens.css remaps the whole ramp for light. Do not add light-theme repairs here.
+   Fix the token at source, so the gate's token pass and rendered pass stay identical. */
 
 :root {
   --prl-accent-fill: var(--prl-accent-500);
@@ -56,42 +20,20 @@
   --prl-accent-text: var(--prl-accent-400);
 }
 
-/* ==========================================================================================
-   1. PAGE
-   ========================================================================================== */
+/* 1. PAGE */
 
 html {
-  /**
-   * A focused element must never be delivered underneath the sticky header (WCAG 2.4.11).
-   * This is the header's own height plus a little air; it is deliberately generous, because
-   * the failure mode of too much is a heading that sits slightly low, and the failure mode of
-   * too little is a keyboard user who cannot see where they are.
-   */
+  /** A focused element must never land under the sticky header (WCAG 2.4.11). Generous on purpose. */
   scroll-padding-block-start: var(--prl-space-13);
 }
 
 body {
-  /**
-   * An explicit background is required, not optional: a transparent body inherits whatever
-   * the embedding page paints, which in a dark host produces dark-on-dark text from a
-   * perfectly valid-looking stylesheet.
-   */
+  /** Required. A transparent body inherits the host's paint, which gives dark-on-dark text. */
   background-color: var(--prl-surface-page);
   /**
-   * THE WASH. Two very low-alpha radial fields over the page ground - see the MATERIALS block
-   * in tokens.css. It is what makes a translucent pane read as a pane: over a flat colour,
-   * glass is just a slightly different flat colour, and the whole material system above this
-   * line would be invisible without something behind it that varies.
-   *
-   * Three properties are set together and all three matter. `no-repeat` stops the browser
-   * tiling a gradient whose stops end before the box does. `scroll` (the initial value, stated
-   * because the alternative is the trap) is NOT `fixed`: a fixed background is re-resolved
-   * against the viewport on every scroll frame, which is precisely the per-frame repaint the
-   * rest of this system goes out of its way to avoid. Scrolled, it is painted once into the
-   * page's own layer and travels with it.
-   *
-   * `--prl-page-wash` resolves to `none` under `prefers-reduced-transparency`,
-   * `prefers-contrast: more` and `forced-colors`, so this declaration needs no override.
+   * The wash makes glass read as material (tokens.css MATERIALS). `scroll`, never `fixed`, which
+   * re-resolves against the viewport every scroll frame. `--prl-page-wash` is already `none` under
+   * reduced transparency, increased contrast and forced colors.
    */
   background-image: var(--prl-page-wash);
   background-repeat: no-repeat;
@@ -100,28 +42,12 @@ body {
   font-family: var(--prl-font-sans);
   font-size: var(--prl-type-body);
   font-weight: var(--prl-weight-regular);
-  /**
-   * A whisper of negative tracking at the reading size. Every face in `--prl-font-sans` is
-   * spaced for 15-16px and this app reads at 17, where the default spacing is visibly loose.
-   * It is a token rather than a number because it is one point on a ramp that continues up
-   * through the display sizes - see the OPTICAL TRACKING block in tokens.css.
-   */
   letter-spacing: var(--prl-tracking-body);
   line-height: var(--prl-leading-body);
   /**
-   * Tabular figures for the whole document, not just for metrics.
-   *
-   * At a poker table every number on screen can change while it is being read - a stack, a
-   * pot, a price, an equity figure. Proportional digits change width as they change value, so
-   * the number moves sideways under the reader's eye, and a number that moves while you read
-   * it is a number you misread. Components that show a figure restate this locally so the
-   * guarantee survives being used outside this stylesheet.
-   *
-   * `--prl-numeric` carries `lining-nums` as well, which is the half that is usually
-   * forgotten: several faces in the stack default to OLD-STYLE figures next to lowercase, so a
-   * stack size renders with a descending 4 and a short 1 in the middle of it. `font-feature-
-   * settings` restates `tnum` for the one browser generation that shipped the low-level
-   * property before the high-level one.
+   * Tabular figures for the whole document, so a changing stack or pot never shifts sideways.
+   * Components restate it locally so the guarantee survives outside this stylesheet.
+   * `font-feature-settings` covers browsers that shipped the low-level property first.
    */
   font-variant-numeric: var(--prl-numeric);
   font-feature-settings:
@@ -131,17 +57,8 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* ==========================================================================================
-   2. TYPE
-   ==========================================================================================
-
-   Component-level type comes from the `.prl-display-*` / `.prl-label` / `.prl-metric`
-   utilities in components.css. What is here is the ELEMENT default, so that a lesson body or
-   a piece of Markdown-shaped content is readable with no classes at all.
-
-   Components in this package never emit an `h1`: a page owns its one `h1`, and a reusable
-   panel cannot know whether it is the page's subject. Component headings start at `h2`.
-   ========================================================================================== */
+/* 2. TYPE. Element defaults, so unclassed lesson content is readable. Components in this package
+   never emit an `h1`, because a page owns its one `h1`. Component headings start at `h2`. */
 
 h1,
 h2,
@@ -156,21 +73,10 @@ h6 {
 }
 
 /**
- * THE LEVELS ARE TOLD APART BY WEIGHT AND SPACE, NOT ONLY BY SIZE.
- *
- * `h1` and `h2` are 30px and 24px — a step of 1.25, where they used to be 44 and 28. A 1.25 step
- * is not, on its own, enough to read as two levels at a glance, and the answer to that is NOT to
- * put the size back: it is to spend the other two axes a heading has.
- *
- * So `h1` stays bold and `h2` drops to semibold, and `h2` gets a large space above it and a small
- * one below. Those two asymmetries do more work than 14px of size ever did — a reader locates a
- * subheading by the gap that precedes it long before they compare its cap height with the title's.
- * `margin-block-start` is set with `:where()` at zero specificity on the first-child case so a
- * heading that opens a block does not push itself away from the top of it.
+ * Levels are told apart by weight and space as well as size. `h2` is semibold with a large gap
+ * above and a small one below; a reader finds a subheading by the gap before it.
  */
-/* The two headline levels are set condensed and heavy: the width axis is what makes a headline
-   read as printed on a card rather than typed into a page, and it buys the size that a 360px
-   phone could not otherwise fit. `h3` and below stay at the reading width. */
+/* `h1` and `h2` are condensed and heavy, which buys the size a 360px phone could not otherwise fit. */
 h1,
 h2 {
   font-family: var(--prl-font-display);
@@ -196,18 +102,8 @@ h2 {
   margin-block-start: 0;
 }
 
-/**
- * `--prl-tracking-heading`, not `--prl-tracking-display-3`.
- *
- * Tracking is a function of SIZE, not of role, and display-3 is the value for 28px. Borrowing
- * it for a 22px heading over-tightens by about a third of the step, which is small enough to
- * look like a rendering artefact and large enough to see once a heading sits directly above its
- * lede. The ramp now continues down through the reading sizes instead of stopping at display.
- */
+/** `--prl-tracking-heading`, not display-3. Tracking follows size, and display-3 is for 28px. */
 h3 {
-  /* A third of the step above `h2`. The rhythm is what carries the level: a large gap says "new
-     section", a small one says "next part of this section", and a reader reads the two apart
-     without ever comparing the type. Uniform spacing is what makes a long page feel unsorted. */
   margin-block: var(--prl-space-9) var(--prl-space-4);
   font-size: var(--prl-type-heading);
   font-weight: var(--prl-weight-semibold);
@@ -247,7 +143,6 @@ li:last-child {
   margin-block-end: 0;
 }
 
-/** Markers are structure, not content: quiet, but never below the body-text floor. */
 ::marker {
   color: var(--prl-text-muted);
 }
@@ -270,22 +165,8 @@ small {
 }
 
 /**
- * THE NUMERIC GUARANTEE, RESTATED WHERE A COLUMN DEPENDS ON IT.
- *
- * `body` already sets `--prl-numeric`, and inheritance carries it into every cell - which is
- * exactly why this is easy to lose: any wrapper that sets `font-variant-numeric: normal` for a
- * legitimate reason (a heading in a small-caps voice, a component that wanted proportional
- * figures for one label) silently un-aligns every table below it, and the failure looks like a
- * column that is slightly ragged rather than like a bug.
- *
- * A table column is the one place where the alignment is load-bearing rather than merely tidy:
- * a stack of equity percentages that do not share a decimal position cannot be compared by eye,
- * which is the entire reason a reader put them in a column. Restating it on the cells means the
- * guarantee survives whatever is above them.
- *
- * Alignment itself is not set here, because it cannot be decided from markup: `.prl-number`
- * (components.css) carries `text-align: end` and is applied per cell by whoever knows which
- * columns hold figures.
+ * Restated on cells because a wrapper that sets `font-variant-numeric: normal` would silently
+ * un-align every column below it. Alignment comes from `.prl-number` (components.css), per cell.
  */
 th,
 td {
@@ -302,10 +183,7 @@ i {
   font-style: italic;
 }
 
-/**
- * A hairline, drawn as a border rather than a background, so that forced-colors mode keeps it:
- * a 1px background-coloured block is repainted out of existence there, a border is not.
- */
+/** A border, not a background, so forced-colors mode keeps it. */
 hr {
   margin-block: var(--prl-space-9);
   border: 0;
@@ -322,9 +200,7 @@ kbd,
 samp,
 pre {
   font-family: var(--prl-font-mono);
-  /* `em`, not a token: a monospace face at the same nominal size looks a step larger than the
-     grotesk beside it, and this is the optical correction for that, relative to whatever size
-     the surrounding text happens to be. */
+  /* `em`, not a token. Monospace looks a step larger at equal size, and this corrects it. */
   font-size: 0.9375em;
 }
 
@@ -361,77 +237,28 @@ a {
   text-decoration-thickness: max(1px, 0.06em);
 }
 
-/**
- * The hover cue is the underline getting heavier, not the colour changing. A thickness change
- * is visible to a reader with any form of colour-vision deficiency and it survives forced
- * colors, where an author colour would have been repainted anyway. `em` so it scales with the
- * text rather than becoming a hairline in a heading.
- */
+/** Hover thickens the underline instead of changing colour, which survives CVD and forced colors. */
 a:hover {
   text-decoration-thickness: 0.12em;
 }
 
-/**
- * Selection is the accent-fill pairing, which is the one place in the system where the ink
- * inverts with the theme: ink-900 on a bright cyan fill in dark, white on a deep teal fill in
- * light. Writing it as the token pair rather than as two colours is what keeps that inversion
- * automatic - and 9.39:1 / 6.97:1 rather than a guess.
- */
+/** The accent-fill pairing, so the ink inverts with the theme automatically. */
 ::selection {
   background-color: var(--prl-accent-fill);
   color: var(--prl-text-on-accent);
 }
 
-/* ==========================================================================================
-   3. FOCUS
-   ==========================================================================================
-
-   `:focus-visible`, not `:focus`: a pointer click on a button should not leave a ring behind,
-   but every keyboard arrival must show one. Drawn with `outline`, which follows the element's
-   own border-radius and never affects layout, plus an offset so the ring is visible against
-   both the control and the surface behind it.
-
-   The ring is `--prl-focus-color`: accent-300 on dark (12.77:1 against the page ground) and
-   accent-800 on light (6.49:1), comfortably over the 3:1 WCAG 1.4.11 asks of a focus
-   indicator, and it is `Highlight` under forced colors.
-
-   `:focus:not(:focus-visible)` clearing the UA ring for pointer users is the ONLY place in
-   this package where an outline is removed, and it is conditional on `:focus-visible` being
-   supported and not matching.
-
-   This rule sets `outline` and nothing else. An earlier version also set
-   `border-radius: inherit`, on the theory that it would make the ring hug a rounded control.
-   It does not - `outline` already follows the element's own radius - what it actually does is
-   reshape the focused control, so a status chip would take its parent's radius the instant it
-   received focus.
-   ========================================================================================== */
+/* 3. FOCUS. `:focus-visible`, not `:focus`. `:focus:not(:focus-visible)` is the only place this
+   package removes an outline. The rule sets `outline` and the halo only. `border-radius: inherit`
+   here once reshaped every focused control to its parent's radius. Design system section 7.1. */
 
 /**
- * THE SECOND TONE, AND WHY GLASS FORCED IT.
- *
- * The rule above was, for a long time, correct and complete: one accent outline, 12.77:1 on the
- * page ground, offset so it clears the control. It stops being complete the moment a control can
- * float. `--prl-focus-offset` puts most of the ring's width on WHAT IS BEHIND the control rather
- * than on the control, and a floating pane's backdrop is not something this stylesheet owns:
- * `accent-300` measures 1.52:1 against white. On a pill lying over a playing card, a
- * single-colour ring is not dim, it is absent.
- *
- * So the indicator is two-tone - the accent outline, plus `--prl-focus-halo` of the opposite
- * polarity as a hairline immediately outside it and filling the offset gap immediately inside
- * it. The claim is not "this looks clearer"; it is that NO backdrop defeats both tones, and
- * `scripts/check-contrast.mjs` proves it in closed form over every backdrop luminance in [0, 1]
- * rather than by sampling a few. In dark the ring covers L <= 0.180 and the halo covers
- * L >= 0.112; in light the ring covers L >= 0.246 and the halo covers L <= 0.300. Both pairs
- * overlap, so there is no gap.
- *
- * The halo is a `box-shadow`, and that has two consequences, both accepted rather than hidden:
- * it is clipped by an ancestor's `overflow: hidden`, and it is not painted under `forced-colors`.
- * In both cases the indicator degrades to exactly the outline it was before, which is why the
- * outline is still the primary tone and not the supplement.
- *
- * `box-shadow` is one property, so an element that carries an elevation must restate the ring
- * alongside it while focused: see the composition rule beside `--prl-focus-ring` in tokens.css,
- * and `.prl-material` in components.css for the worked example.
+ * Two tones, because a floating control's ring sits on a backdrop this stylesheet does not own
+ * (`accent-300` is 1.52:1 on white). check-contrast.mjs proves no backdrop luminance defeats both:
+ * dark ring L <= 0.180 and halo L >= 0.112, light ring L >= 0.246 and halo L <= 0.300.
+ * The halo is a box-shadow, so it is clipped by `overflow` and dropped under forced colors, and the
+ * outline stays the primary tone. An element with an elevation restates the ring while focused
+ * (`--prl-focus-ring` in tokens.css, `.prl-material` in components.css).
  */
 :focus-visible {
   outline: var(--prl-focus-width) solid var(--prl-focus-color);
@@ -443,21 +270,13 @@ a:hover {
   outline: none;
 }
 
-/** A focused element inside a scroll container or a clipped panel must not have its ring
-    clipped away by a sibling that paints later. */
+/** Keeps the ring from being painted over by a later sibling inside a clipped panel. */
 :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
   position: relative;
   z-index: var(--prl-z-raised);
 }
 
-/* ==========================================================================================
-   4. FORM ELEMENT DEFAULTS
-   ==========================================================================================
-
-   Bare-element defaults only; the styled controls are `.prl-input`, `.prl-select`,
-   `.prl-range` and friends in components.css. `--prl-target-min` is 44px, above WCAG 2.2's
-   24x24 floor, because these controls are consequential and often used one-handed.
-   ========================================================================================== */
+/* 4. FORM ELEMENT DEFAULTS. Bare elements only. The styled controls are in components.css. */
 
 input,
 select,
@@ -476,22 +295,14 @@ textarea {
   resize: vertical;
 }
 
-/** Placeholders are hints, never labels. `--prl-text-muted` is a real 4.94:1 at worst, so the
-    hint is readable rather than a ghost; `opacity: 1` undoes the UA's extra fade. */
+/** `--prl-text-muted` is 4.94:1 at worst. `opacity: 1` undoes the UA's extra fade. */
 input::placeholder,
 textarea::placeholder {
   color: var(--prl-text-muted);
   opacity: 1;
 }
 
-/**
- * Disabled state changes the TOKENS, not the opacity.
- *
- * `opacity: 0.6` on a disabled control is the common shortcut and it compounds: it fades text
- * that is already the dimmest token in the system, taking a 4.5:1 label down towards 2:1 and
- * also dimming any border that was carrying the control's shape. Swapping colour for colour
- * keeps the result measurable.
- */
+/** Disabled swaps tokens, never opacity. `opacity: 0.6` takes a 4.5:1 label towards 2:1. */
 input:disabled,
 select:disabled,
 textarea:disabled,
@@ -511,17 +322,11 @@ legend {
   padding: 0;
 }
 
-/* ==========================================================================================
-   5. UTILITIES
-   ========================================================================================== */
+/* 5. UTILITIES */
 
 /**
- * Visually hidden, still announced.
- *
- * `clip-path: inset(50%)` rather than `display: none` or `visibility: hidden`, both of which
- * remove the node from the accessibility tree - the exact opposite of what this class is for.
- * `white-space: nowrap` stops a long string wrapping inside a 1px box, which some screen
- * readers report with the spaces stripped.
+ * Visually hidden, still announced. `display: none` and `visibility: hidden` remove the node from
+ * the accessibility tree. `nowrap` stops some screen readers reading a wrapped string without spaces.
  */
 .prl-visually-hidden {
   position: absolute;
@@ -535,8 +340,7 @@ legend {
   white-space: nowrap;
 }
 
-/** Hidden until focused. The pair of `:not()`s means the element reveals itself for its own
-    focus and for focus on anything inside it. */
+/** Revealed for its own focus and for focus on anything inside it. */
 .prl-visually-hidden-focusable:not(:focus):not(:focus-within) {
   position: absolute;
   width: 1px;
@@ -549,13 +353,7 @@ legend {
   white-space: nowrap;
 }
 
-/**
- * The skip link. First focusable thing in the document, invisible until it is focused, and
- * then a real button at the top-left of the viewport rather than a 1px sliver.
- *
- * `position: fixed` and a z-index above the sticky header, because the one situation where
- * this control gets used is the one where the header is on screen.
- */
+/** `position: fixed` above the sticky header, because the header is on screen when this is used. */
 .prl-skip-link {
   position: absolute;
   width: 1px;
@@ -589,11 +387,7 @@ legend {
   text-decoration: none;
 }
 
-/**
- * A live region. Empty until there is something to say, and NEVER focused - an announcement
- * must not move the keyboard caret away from whatever the player was doing (WCAG 4.1.3, and
- * simple courtesy in a UI where the table updates itself).
- */
+/** Never focused. An announcement must not move the caret away from the player (WCAG 4.1.3). */
 .prl-live-region {
   position: absolute;
   width: 1px;
@@ -604,27 +398,9 @@ legend {
   white-space: nowrap;
 }
 
-/* ==========================================================================================
-   6. REDUCED MOTION
-   ==========================================================================================
-
-   tokens.css already collapses every duration token under this preference, which handles
-   every transition and animation written against a token. This block is the backstop for
-   anything that slipped through with a literal duration, and it is written with `!important`
-   because it must beat any component rule regardless of specificity or source order.
-
-   Durations collapse to 1ms rather than 0 so `transitionend` and `animationend` still fire:
-   code that waits for a transition would otherwise wait forever, and a half-applied state
-   would be stuck on screen. `animation-iteration-count: 1` stops anything that loops, which
-   is the category a reader with vestibular sensitivity most needs stopped.
-
-   `!important` is flagged by `noImportantStyles` and suppressed rather than worked around.
-   The rule's objection is that `!important` inverts the cascade - which is precisely the
-   intent: a stated accessibility preference has to outrank every author rule, and the
-   universal selector has specificity 0, so nothing else can win. Raising specificity instead
-   (`:root *`) would tie with a single class and depend on source order, which is exactly the
-   fragility this must not have.
-   ========================================================================================== */
+/* 6. REDUCED MOTION. A backstop for literal durations that tokens.css cannot collapse. 1ms, not 0,
+   so `transitionend` and `animationend` still fire. `!important` because a stated preference must
+   outrank every author rule, and the universal selector has specificity 0. */
 
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -640,31 +416,14 @@ legend {
   }
 }
 
-/* ==========================================================================================
-   7. FORCED COLORS
-   ==========================================================================================
-
-   Windows High Contrast replaces the palette wholesale: backgrounds, borders and shadows are
-   repainted with the user's own colours, and background-COLOR is thrown away entirely. Two
-   consequences drive everything in this block and the ones in components.css:
-
-     1. A state that is only a background tint disappears. Every meaningful state in this
-        package therefore also has a border, a glyph or a word - which is the same rule
-        WCAG 1.4.1 asks for, arrived at from a different direction.
-     2. `border-color` is forced to CanvasText, so an accent border and a decorative hairline
-        become the same colour. Anything that was distinguished by border COLOUR has to be
-        restated with a system colour (`Highlight`) or with width.
-
-   tokens.css already maps the line and focus tokens onto system colours. What is left here is
-   the element level.
-   ========================================================================================== */
+/* 7. FORCED COLORS. Background colour is discarded and every border becomes CanvasText, so a
+   state shown only by tint or border colour disappears and must use a glyph, width or `Highlight`. */
 
 @media (forced-colors: active) {
   a {
     color: LinkText;
   }
 
-  /* The ring must survive even where the author colour was forced away. */
   :focus-visible {
     outline-color: Highlight;
   }

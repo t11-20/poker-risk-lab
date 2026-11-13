@@ -1,18 +1,7 @@
 /**
- * Turning an answer into a request, and deciding whose verdict the learner sees.
- *
- * Driven against real shipped questions rather than hand-built objects. A fabricated `QuizQuestion`
- * would prove the mapping compiles; the shipped ones prove it works on every question kind a
- * learner can actually reach — a kind the mapping silently declined to send would show up here as
- * a whole quiz nobody's answers are recorded for.
- *
- * The questions come from `src/fixtures/learn-quizzes.ts` rather than from `@prl/content`, and only
- * their SHAPE is used — `kind` and `id`, never a number. The fixtures carry stale figures that are
- * being regenerated separately, and reading a value out of them here would make this file fail for
- * a reason that has nothing to do with what it is asserting.
- *
- * The defect being fixed is that no answer was ever sent at all. See `quiz-attempts.ts` and the
- * call-site gate in `api-paths.test.ts`, which is the assertion that would have caught it.
+ * Turning an answer into a request, and deciding whose verdict the learner sees. Driven against the
+ * shipped questions so every reachable kind is covered. Only `kind` and `id` are read, because the
+ * fixture's figures are regenerated separately. `api-paths.test.ts` holds that the call is made at all.
  */
 
 import assert from 'node:assert/strict';
@@ -40,8 +29,7 @@ describe('an answer becomes a request the server will accept', () => {
 
   it('sends a numeric answer as a number, dropping the text it was typed as', () => {
     const question = firstOfKind('numeric');
-    // `raw` is the string in the field and never leaves the browser: the wire type carries a
-    // number, and sending both would be the same fact twice in two formats.
+    // `raw` is the string in the field and never leaves the browser.
     assert.deepEqual(attemptBodyFor(question, { kind: 'number', value: 33.3, raw: '33.30' }), {
       questionId: question.id,
       answer: { kind: 'number', value: 33.3 },
@@ -49,9 +37,7 @@ describe('an answer becomes a request the server will accept', () => {
   });
 
   it('sends nothing for a decision question, which has no recorded answer', () => {
-    // There is no `correctAction` field in the contract and the product declines to invent one, so
-    // "show me the reasoning" is not an attempt at anything. Posting it would put a row in
-    // `prl.quiz_attempts` claiming a question was answered that the learner explicitly declined.
+    // The contract has no `correctAction`, so a reveal is not an attempt and must not become a row.
     assert.equal(attemptBodyFor(firstOfKind('decision'), { kind: 'revealed' }), null);
   });
 
@@ -61,8 +47,7 @@ describe('an answer becomes a request the server will accept', () => {
   });
 
   it('sends nothing for a value that is not a finite number', () => {
-    // `JSON.stringify(NaN)` is `null`, so this would reach the server as a field error about a type
-    // the learner never typed. Caught at the last place the value is still a number.
+    // `JSON.stringify(NaN)` is `null`, which the server would refuse as a type the learner never typed.
     const question = firstOfKind('numeric');
     assert.equal(attemptBodyFor(question, { kind: 'number', value: Number.NaN, raw: 'x' }), null);
     assert.equal(
@@ -90,8 +75,7 @@ describe('an answer becomes a request the server will accept', () => {
 
 describe('whose verdict the learner is shown', () => {
   it('is the server’s whenever the server answered', () => {
-    // The server grades AND stores. A screen showing its own answer instead could disagree with the
-    // one that was recorded, and the learner would be looking at the one that was thrown away.
+    // The server grades AND stores, so its verdict is the one that was recorded.
     const live = resolvedVerdict(
       { state: 'live', correct: true, explanation: 'because', expected: null },
       false,
@@ -112,8 +96,6 @@ describe('whose verdict the learner is shown', () => {
   });
 
   it('never claims a recording that did not happen', () => {
-    // The failure note is the one that has to be exactly right: an outage means nothing was written,
-    // and a sentence implying otherwise is a lie about the learner's own record.
     assert.match(VERDICT_SOURCE_NOTE.local, /nothing was recorded/u);
     assert.doesNotMatch(VERDICT_SOURCE_NOTE.pending, /recorded/u);
     assert.match(VERDICT_SOURCE_NOTE.server, /Recorded on your record/u);

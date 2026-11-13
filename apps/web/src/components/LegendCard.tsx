@@ -1,44 +1,9 @@
 /**
- * One profile, as a portrait panel.
- *
- * ## The labelling rules, expressed as structure rather than as a convention
- *
- * Reading order is fixed and it is the guardrail:
- *
- *   sigil -> ARCHETYPE NAME (the heading) -> attributed name (a label, beneath) -> tagline ->
- *   three signature metrics -> the sixteen-axis radar -> the disclaimers -> the action
- *
- * Three things about that order are not stylistic:
- *
- *  1. **The archetype name is the heading.** It is what the profile *is*. The attributed name is a
- *     mnemonic for a style and it sits below, at `--prl-type-label`, always carrying the
- *     "(modelled style)" framing that `profileDisclosure()` put in the string. This component never
- *     builds that suffix itself, so it cannot forget it.
- *  2. **The disclaimers are in the body**, rendered by `ProfileDisclaimers`, which renders the whole
- *     array as visible text. Not a tooltip, not an icon, not a `<details>`.
- *     On `/legends` the one
- *     entry the page already printed in full above the grid is a visible one-line pointer instead
- *     (`lib/disclaimer-framing.ts`); every entry specific to this card is still printed in full.
- *  3. **No image of a person, ever.** The visual identity is `LegendSigil`, a mark generated from
- *     the profile id. There is no `src` anywhere in this file.
- *
- * ## The hover state
- *
- * The hairline goes accent and the sigil turns a few degrees over `--prl-dur-quick`. `:focus-within`
- * is paired with `:hover` in the stylesheet so a keyboard reader gets the same cue when the card's
- * link takes focus, and the rotation is removed rather than shortened under
- * `prefers-reduced-motion` — a mark that snaps six degrees is worse than one that never moves.
- *
- * ## Why the actions are links and not buttons
- *
- * Both actions navigate, so both are links. `Button` in `@prl/ui` deliberately has no `href`, and
- * its own comment says to style a link with the `.prl-btn` classes — which is what happens here,
- * with `next/link` doing the navigation. Each link carries a visually-hidden suffix naming the
- * profile and the difficulty, because a page of eight cards otherwise offers a screen-reader user
- * eight links all called "Play this style".
- *
- * Server-render safe: no state, no effects. The two links are client components, for the reason
- * given where they are rendered.
+ * One profile as a card. The reading order is the guardrail. The archetype name is the heading,
+ * and the attributed name sits beneath it carrying the "(modelled style)" suffix that
+ * `profileDisclosure()` builds. Disclaimers are visible body text via `ProfileDisclaimers`.
+ * No image of a person. The visual identity is `LegendSigil`.
+ * Actions navigate, so they are links styled `.prl-btn`, each with a visually-hidden profile suffix.
  */
 
 import type { LegendDifficulty, LegendProfileCardDto, LegendTraitAxis } from '@prl/contracts';
@@ -48,10 +13,8 @@ import { LegendPlayLink, LegendProfileLink } from './LegendDifficultyScope.tsx';
 import { LegendSigil } from './LegendSigil.tsx';
 import { ProfileDisclaimers } from './ProfileDisclaimers.tsx';
 
-/** Two decimals, matching the scale `@prl/poker-ai` documents for every trait. */
 const TRAIT_DECIMALS = 2;
 
-/** How many signature axes get a metric block. The wire supplies three. */
 const SIGNATURE_LIMIT = 3;
 
 const BEST_FOR_WORD: Readonly<Record<LegendProfileCardDto['bestFor'], string>> = {
@@ -62,22 +25,14 @@ const BEST_FOR_WORD: Readonly<Record<LegendProfileCardDto['bestFor'], string>> =
 
 export interface LegendCardProps {
   readonly profile: LegendProfileCardDto;
-  /**
-   * The APPLIED setting, from the URL. The links start here and follow the picker's ticked option
-   * when the page wraps them in a `LegendDifficultyScope`.
-   */
+  /** The applied setting from the URL. Inside a `LegendDifficultyScope` the links follow the tick. */
   readonly difficulty: LegendDifficulty;
-  /** Defaults to 3: a page owns its `h1` and the grid's section owns the `h2`. Never 1. */
+  /** Never 1. The page owns the `h1`. */
   readonly headingLevel?: HeadingLevel;
   readonly className?: string;
-  /**
-   * The universal disclaimer as the page printed it above the grid, and where. Passed through to
-   * `ProfileDisclaimers`, which then prints a one-line pointer for that entry only.
-   */
   readonly shownAbove?: { readonly text: string; readonly href: string };
 }
 
-/** The signature axes, in the order the profile declares them, skipping any the axes list lacks. */
 function signatureAxes(profile: LegendProfileCardDto): readonly LegendTraitAxis[] {
   const found: LegendTraitAxis[] = [];
   for (const key of profile.signatureTraits) {
@@ -100,11 +55,6 @@ export function LegendCard(props: LegendCardProps): ReactElement {
         <LegendSigil profileId={profile.id} />
         <div className="prl-legend-identity__names">
           <Heading className="prl-legend-identity__archetype">{disclosure.archetypeName}</Heading>
-          {/*
-            Beneath the heading, at label size, and only when the deployment has opted into
-            attributed names. The string already reads "<name> (modelled style)" — see
-            `profileDisclosure()`. Nothing here shortens it.
-          */}
           {disclosure.attributed ? (
             <span className="prl-legend-identity__attributed prl-label">{disclosure.displayName}</span>
           ) : null}
@@ -116,11 +66,7 @@ export function LegendCard(props: LegendCardProps): ReactElement {
         <Chip>{BEST_FOR_WORD[profile.bestFor]}</Chip>
       </div>
 
-      {/*
-        The three signature axes, so the card is readable at a glance. Values, units and labels —
-        never a rank: `0.92 of 1` on position awareness says what the style does, and says nothing
-        about whether that is good.
-      */}
+      {/* Values and units, never a rank. A trait value says what the style does, not whether it is good. */}
       <div className="prl-legend-card__metrics">
         {signature.map((axis) => (
           <Metric
@@ -143,11 +89,6 @@ export function LegendCard(props: LegendCardProps): ReactElement {
 
       <ProfileDisclaimers disclosure={disclosure} {...(shownAbove === undefined ? {} : { shownAbove })} />
 
-      {/*
-        Client links inside a server card: they start at the setting this page was rendered with and
-        follow whatever the reader ticks in the picker above (`LegendDifficultyScope.tsx`). Without a
-        scope, or without JavaScript, they are exactly the server-rendered links they used to be.
-      */}
       <div className="prl-legend-card__actions">
         <LegendPlayLink
           archetypeName={disclosure.archetypeName}

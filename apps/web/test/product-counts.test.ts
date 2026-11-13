@@ -1,32 +1,8 @@
 /**
- * The counts the product prints about itself, checked against the content it ships.
- *
- * The home page tells a prospective student "17 lessons across 11 topics", "A glossary of 90
- * terms", "36 scenarios, each carrying a claim the maths re-checks on every build", "All 36
- * scenarios carry qualitative claims — 74 of them". The curriculum index spells two of the
- * same figures out in words. Every one of those is a factual claim about the bundle, every
- * one is a hand-typed literal in a `.tsx` file, and none of them was checked by anything.
- *
- * This is not hypothetical drift. `docs/VERIFICATION.md` §9 said "17 quizzes (80 questions)"
- * where `contentStats()` says **81** — a figure printed by every run of the content suite,
- * carried forward by hand for long enough to be wrong. A number nobody re-derives goes stale
- * on the first content change, and on a marketing surface it goes stale in the direction that
- * flatters: content gets added far more often than it gets removed.
- *
- * ## What this asserts and what it deliberately does not
- *
- * Only the counts, and only against `contentStats()` and the bundle itself. It has no opinion
- * on the prose around them — `honesty-claims.test.ts` is where unqualified claims are pinned —
- * and it makes no claim about the engine figures on the same page (133,784,560 seven-card
- * hands and the 200,000/20,000 ordering samples), which `test:exhaustive` and
- * `packages/poker-engine/test/evaluate.test.ts` reproduce directly.
- *
- * The pages are read as TEXT: they are `.tsx`, which `node --test` cannot load, and
- * `honesty-claims.test.ts` reads the same files the same way for the same reason.
- *
- * **A sweep of nothing is not a pass.** Every phrase below must be found, and finding none of
- * them fails as loudly as finding a wrong one — a page reworded past this check is exactly how
- * it would go quiet.
+ * The counts the product prints about itself, checked against `contentStats()` and the bundle. They
+ * are hand-typed literals in `.tsx` (read as text, because `node --test` cannot load `.tsx`), and
+ * `docs/VERIFICATION.md` §9 once said 80 quiz questions where the bundle had 81. Prose is pinned in
+ * `honesty-claims.test.ts`. Every phrase must be found, so a reworded page fails rather than going quiet.
  */
 
 import assert from 'node:assert/strict';
@@ -45,16 +21,14 @@ const read = (...parts: readonly string[]): string => readFileSync(join(SRC, ...
 
 const HOME = read('app', 'page.tsx');
 const LEARN = read('app', 'learn', 'page.tsx');
-// The evidence list moved off the home page to `/checks` in the 4.0 re-identity; its counts moved with it.
+// The evidence list and its counts moved off the home page to `/checks` in the 4.0 re-identity.
 const CHECKS = read('lib', 'checks.ts');
 
 interface StatedCount {
-  /** The sentence the page shows, with the figure in it. */
   readonly phrase: (n: number) => string;
-  /** The page it must appear in. */
   readonly page: string;
   readonly where: string;
-  /** The figure, DERIVED — never a literal copied off the page. */
+  /** The figure, derived and never copied off the page. */
   readonly computed: () => number;
 }
 
@@ -69,11 +43,8 @@ const STATED_COUNTS: readonly StatedCount[] = [
     computed: () => stats.lessons,
   },
   {
-    // The topics the LESSONS span, which is what the sentence says. It was pinned to
-    // `topicsCovered`, which also counts the Lab's scenarios: 11, because `risk-psychology` has
-    // scenarios and no lesson. So the home page said "17 lessons across 11 topics" beside a
-    // /learn index that counts its own topic groups and showed 10, and this check agreed with
-    // the home page.
+    // The topics the lessons span. `topicsCovered` also counts the Lab's scenarios, which gave 11
+    // beside a /learn index showing 10.
     where: 'home page — topics the lessons cover',
     page: HOME,
     phrase: (n) => `lessons across ${n} topics`,
@@ -109,7 +80,6 @@ const STATED_COUNTS: readonly StatedCount[] = [
   },
 ];
 
-/** The two figures the curriculum index spells out in words rather than digits. */
 const SPELLED_OUT: readonly {
   readonly where: string;
   readonly word: string;
@@ -156,15 +126,8 @@ describe('the counts the product prints about itself', () => {
   });
 
   it('the lesson-summary fixture still says what the lessons say (REGRESSION)', () => {
-    // `LEARN_LESSON_SUMMARIES` copies all seventeen lesson titles and summaries out of
-    // `@prl/content`, and `app/learn/[lessonId]/page.tsx` serves them from `generateMetadata` when
-    // `loadLesson` returns null — the path taken when the API is unreachable. Nothing joined the
-    // two, so a lesson retitled in the content package would keep its old title in the tab and the
-    // link preview for exactly as long as the API stayed down, which is the moment somebody is
-    // most likely to be looking.
-    //
-    // Measured 2026-08-27: no drift today. This is the guard, not the fix — the same shape as the
-    // Legends trait numbers, which were also copied, also undrifted, and also joined by nothing.
+    // `generateMetadata` serves these copied titles when the API is unreachable, so a retitled lesson
+    // would keep its old tab title for as long as the API was down.
     const byId = new Map(bundle.lessons.map((lesson) => [lesson.id, lesson]));
     assert.equal(
       LEARN_LESSON_SUMMARIES.length,
@@ -183,26 +146,10 @@ describe('the counts the product prints about itself', () => {
   });
 
   /**
-   * The other three fixtures, joined for the first time.
-   *
-   * `learn.ts`'s own header says what these are: "roughly 140 KB of teaching prose copied verbatim
-   * from `packages/content/data`", split across four modules. One of the four — the lesson
-   * summaries, above — was joined on this branch. The other three were not, and they carry the
-   * material a fee is actually charged for: every definition, every lesson body, every quiz
-   * question and its marked answer.
-   *
-   * This is not hypothetical drift. It was MEASURED on 2026-08-27, by causing it: a correction to
-   * the `under-the-gun` definition in `packages/content/data/glossary.json` — it taught that UTG
-   * is worst "on this street and on every street after it", when postflop the blinds act first,
-   * which is the answer `position-q2` marks CORRECT — landed in the content package and not in the
-   * fixture. `pnpm run fixtures:regenerate` reported "already the analysis the engine produces
-   * today" and `fixtures:check` passed, because that script covers scenario analysis and has never
-   * read these files. The web app serves these fixtures from `generateMetadata` and wherever the
-   * API is unreachable, so the corrected glossary would have shipped while the fallback kept
-   * teaching the error, and every gate would have stayed green.
-   *
-   * Definitions and question text are compared, not just ids and titles: an id-only join would
-   * have passed the very drift that prompted this.
+   * The other three fixtures (glossary, lesson bodies, quizzes) copied from `packages/content/data`.
+   * On 2026-08-27 a corrected glossary definition landed in content and not in the fixture, and
+   * `fixtures:check` passed, because it covers only scenario analysis. Definitions and question text
+   * are compared, because an id-only join would have passed that drift.
    */
   it('the glossary fixture still says what the content package says (REGRESSION)', () => {
     const byId = new Map(bundle.glossary.map((entry) => [entry.id, entry]));
@@ -219,10 +166,8 @@ describe('the counts the product prints about itself', () => {
   });
 
   it('the lesson fixture still says what the content package says (REGRESSION)', () => {
-    // A SUBSET, deliberately: the fixture's header says eight of the seventeen, chosen so that
-    // between them they exercise every `LessonBlock` variant. So this joins what is there and does
-    // not assert the counts match — but it does assert the subset is non-empty and still eight, so
-    // a fixture emptied by a bad edit cannot pass as "nothing to compare".
+    // A subset of eight, chosen to exercise every `LessonBlock` variant, so the count is pinned
+    // instead of matched.
     const byId = new Map(bundle.lessons.map((lesson) => [lesson.id, lesson]));
     assert.equal(LEARN_LESSONS.length, 8, 'the fixture no longer carries the eight lessons it documents');
     let compared = 0;
@@ -237,9 +182,8 @@ describe('the counts the product prints about itself', () => {
         `${lesson.id}: the fixture's key takeaways are stale`,
       );
       compared += 3;
-      // The one documented exception, named rather than skipped silently: `counting-outs` ends
-      // with an authored `scenarioLink` block because no lesson in `packages/content` uses that
-      // variant yet and `LessonBlockRenderer` has to handle it. Its other blocks are still joined.
+      // `counting-outs` ends with an authored `scenarioLink` block, because no content lesson uses
+      // that variant yet. Its other blocks are still joined.
       if (lesson.id === 'counting-outs') {
         assert.deepEqual(
           lesson.blocks.slice(0, real.blocks.length),
@@ -260,9 +204,8 @@ describe('the counts the product prints about itself', () => {
   });
 
   it('the quiz fixture still says what the content package says, answers included (REGRESSION)', () => {
-    // The marked answer is the field that matters most here. A quiz whose `correctIndex` drifted
-    // would mark a student wrong for a right answer, on the offline path, with nothing to notice.
-    // A subset, like the lessons: eight of the seventeen. Non-emptiness is asserted instead.
+    // A drifted `correctIndex` would mark a student wrong for a right answer on the offline path.
+    // A subset of eight, like the lessons.
     const byId = new Map(bundle.quizzes.map((quiz) => [quiz.id, quiz]));
     assert.equal(LEARN_QUIZZES.length, 8, 'the fixture no longer carries the eight quizzes it documents');
     let compared = 0;
@@ -276,8 +219,7 @@ describe('the counts the product prints about itself', () => {
   });
 
   it('does not let the quiz-question count drift the way the verification record did', () => {
-    // Not printed on a page — asserted here because it is the figure that actually drifted,
-    // and because the content suite prints it on every run for anyone quoting it again.
+    // Not printed on a page. Asserted because it is the figure that actually drifted.
     const counted = bundle.quizzes.reduce((sum, quiz) => sum + quiz.questions.length, 0);
     assert.equal(counted, stats.quizQuestions, 'contentStats must agree with the bundle it counted');
     assert.ok(counted > 0, 'a sweep of nothing is not a pass');

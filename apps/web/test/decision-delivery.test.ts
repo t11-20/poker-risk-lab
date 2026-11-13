@@ -1,37 +1,8 @@
 /**
- * What the table says about a decision it could not send.
- *
- * ## The defect these exist for
- *
- * `sendRaw` returned `false` for two unrelated conditions — the client's own token bucket refused
- * the frame, OR there is no socket at all — and `useLiveTable.act` read that single `false` as
- * "the rate limit refused it". `socket` is null for the whole reconnect backoff, which runs to
- * fifteen seconds, and `stageStatusOf` still reports `ready` in that window, so `ActionBar` is live
- * and a reader can and does press Fold there.
- *
- * They then got both of these at once:
- *
- *  - "Decision sent — the server is the only authority on a hand, so the controls stay disabled
- *    until it answers." (`submission.status === 'pending'`, a polite `role="status"`)
- *  - "The decision was not sent: this page is refusing to exceed the socket rate limit."
- *    (`table.notice`, a `role="alert"`)
- *
- * Three things wrong, in one press. The two announcements contradict each other. The attributed
- * cause is false: no token was ever taken, because the frame never reached the bucket. And the
- * conclusion is false too — `pending` survives, the reconnect replays the frame unchanged
- * (`onFrame`'s `welcome` branch), and the fold is applied after all, so the reader is told their
- * decision was refused by a hand that then gets folded.
- *
- * ## Observed
- *
- *  - **Before the fix:** `handle.action(...)` returned `false` in both conditions, so the two cases
- *    were indistinguishable at the call site; `act` dispatched `submit` (message: "Sent…") and then
- *    a `notice` naming the rate limit, and both were on screen together.
- *  - **After the fix:** the socket reports WHICH refusal it was (`'disconnected'` vs
- *    `'rate-limited'`), the reducer is told, and exactly one of the two sentences is produced:
- *    "held until the connection returns" with the decision still pending, or "this page did not
- *    send it" with the decision cleared so the reader can press again. A `pending` submission and a
- *    notice can no longer coexist.
+ * What the table says about a decision it could not send. `sendRaw` once returned `false` both when
+ * the token bucket refused a frame and when there was no socket at all, so a fold pressed during the
+ * reconnect backoff (up to 15s) was reported as refused by the rate limit and then applied on replay.
+ * The socket now names the refusal, and the reducer produces exactly one sentence per outcome.
  */
 
 import assert from 'node:assert/strict';
@@ -53,11 +24,6 @@ const FOLD: PendingDecision = {
   requestId: 'req-1',
 };
 
-// ---------------------------------------------------------------------------
-// The socket half: two refusals, told apart
-// ---------------------------------------------------------------------------
-
-/** A transport that records what was written and lets the test decide when it closes. */
 function fakeTransport(): {
   readonly sent: string[][];
   readonly handlers: RawSocketHandlers[];
@@ -77,7 +43,7 @@ function fakeTransport(): {
   };
 }
 
-/** A clock that never moves on its own, so a fifteen-second backoff costs no seconds. */
+/** A clock that never moves, so a fifteen-second backoff costs no seconds. */
 function frozenScheduler(): Scheduler {
   return { now: () => 1_000, delay: () => () => undefined };
 }
@@ -97,7 +63,7 @@ describe('the socket says WHICH refusal it was', () => {
     transport.handlers[0]?.onOpen();
     assert.equal(handle.action(FOLD), 'sent', 'the frame goes out while the socket is open');
 
-    // 1006, the ordinary drop. `socket` is null from here until the backoff fires — up to 15s.
+    // 1006, the ordinary drop. `socket` is null from here until the backoff fires.
     transport.handlers[0]?.onClose(1006, 'gone', false);
     assert.equal(
       handle.action(FOLD),
@@ -130,10 +96,6 @@ describe('the socket says WHICH refusal it was', () => {
     handle.dispose();
   });
 });
-
-// ---------------------------------------------------------------------------
-// The reducer half: one sentence per fate, and never two that disagree
-// ---------------------------------------------------------------------------
 
 const DELIVERIES: readonly SendOutcome[] = ['sent', 'disconnected', 'rate-limited', 'undeliverable'];
 
@@ -185,8 +147,6 @@ describe('the table tells the reader what actually happened to their decision', 
   });
 
   it('never lets the two regions contradict each other', () => {
-    // The shape of the original defect, asserted as a property rather than as one example: a
-    // `role="alert"` saying the decision was not sent, beside a `role="status"` saying it was.
     for (const delivery of DELIVERIES) {
       const state = tableReducer(EMPTY_TABLE_STATE, { kind: 'submit', pending: FOLD, delivery });
       const claimsSent = state.submission?.status === 'pending';

@@ -1,11 +1,6 @@
 /**
- * The "(you)" marker on the reader's own plate, and the one name it must not follow.
- *
- * Every fixture names the reader "You" (`SEAT_NAMES` in `apps/web/src/fixtures/table.ts`, the
- * review fixtures' `displayName`), and the plate appended " (you)" to whatever name it was given, so
- * `/play?state=decision` and the demo hand review both read "You (you)". Seen in a 390px capture of
- * the decision fixture. A live seat is named "Guest 3FA2C1" by the API, and there the marker is the
- * only thing on the plate that says which seat is yours, so it stays.
+ * The "(you)" marker on the reader's own plate. Every fixture names the reader "You", which read "You (you)".
+ * A live seat is named "Guest 3FA2C1" by the API, and there the marker is the only sign of your seat.
  */
 
 import assert from 'node:assert/strict';

@@ -1,193 +1,27 @@
 /**
- * App-shell rules, and nothing else.
- *
- * `@prl/ui/styles.css` is imported from `layout.tsx` immediately BEFORE this file rather than
- * with an `@import` here. Both work, and the JS import is the one that cannot go wrong: it
- * guarantees the token layer is in the document before any rule below can reference a
- * `--prl-*` value, without depending on how the CSS pipeline resolves a bare package
- * specifier inside an `@import`. The design-system doc describes this file as "the ui
- * stylesheet plus app-shell rules"; the import order is the same either way.
- *
- * What belongs here: the frame the routes sit in — the sticky header, the two navigations, the
- * theme control, the footer, and the guards on the boot overlay. What does not: anything a
- * route owns. A route's own patterns live in a stylesheet the route imports (`src/styles/*.css`),
- * so that two people editing two features are never editing the same file.
- *
- * ==========================================================================================
- * WHAT COUNTS AS A VALUE HERE
- * ==========================================================================================
- * Every colour, size, duration, easing and radius comes from a `--prl-*` token. The same three
- * exceptions `components.css` documents apply, and no others:
- *
- *   1. `1px`, exclusively as a hairline — the hairline IS one device-independent pixel.
- *   2. Structural geometry with no design content: `100%`, `100dvh`, `1fr`, `minmax(0, 1fr)`.
- *   3. Media-query lengths. `var()` is invalid in a media feature, so the nav breakpoint appears
- *      as `860px` — the same number the design system names in section 9 and the same one
- *      `NAV_SHEET_QUERY` mirrors in `src/lib/nav.ts`.
- *
- * The app-shell custom properties in section 0 are token DEFINITIONS, which is the one place a
- * literal is supposed to live — and the one place a raw `rgb()` appears in this file, for the
- * backdrop field's falloff, whose two values are derived from a contrast measurement printed
- * beside them rather than picked.
+ * App-shell rules only: the sticky header, both navigations, the theme control, the footer and the
+ * boot overlay's guards. A route's own patterns live in a stylesheet the route imports.
+ * `layout.tsx` imports `@prl/ui/styles.css` before this file, not via `@import`, so the tokens exist
+ * before any rule here reads them. Every value is a `--prl-*` token, with the exceptions
+ * `components.css` lists. The `860px` nav breakpoint is mirrored by `NAV_SHEET_QUERY` in `src/lib/nav.ts`.
  */
 
-/* ==========================================================================================
-   0. THE APP-SHELL TOKENS
-   ==========================================================================================
+/* 0. THE APP-SHELL TOKENS
+   Shell-only, so they live here and not in `tokens.css`.
 
-   All of them describe the shell rather than the system, which is why they are defined here and
-   not in `tokens.css`: no component outside this file and `nav.css` has any use for them.
+   The header is glass. Its fill and filter are literal tokens in one block, with no shell alias, so
+   the ghosting guard in layout-guarantees.test.ts can see them (the nav.css header has the bug).
+   `--prl-shell-nav-fill` is opaque `--prl-surface-inset`, because glass pills on a glass strip would
+   be indistinguishable. `--prl-shell-sentinel` is the 40px scroll distance before the header floats.
 
-   ------------------------------------------------------------------------------------------
-   THE RULE THAT REPLACED "EVERY FLOATING SURFACE IS OPAQUE", AND WHY THE OLD BUG CANNOT RETURN
-   ------------------------------------------------------------------------------------------
-
-   This block used to say, in capitals, that every surface floating over content is opaque. The
-   incident behind it is real and is worth restating in full, because the rule has changed and the
-   incident has not: the header once rested at `color-mix(… 92%, transparent)` with NO
-   `backdrop-filter`, and what a reader reported was "when I scroll down it overlaps with the menu
-   bar" — headings and rules ghosting straight through the bar and staying PERFECTLY LEGIBLE, as a
-   second, wrong layer of text. It was never a z-index bug; hit-testing put the header on top at
-   every point. It was the fill.
-
-   The old fix was to make the fill solid. That worked, and it cost the app the only thing that
-   could have made it read as a material: a strip painted in the page's own colour is invisible
-   against the page, so the bar was a rectangle you could not see with four rectangles on it that
-   you could, and every "floating" pane in the app was a slightly different flat near-black.
-
-   The header is GLASS now, and the distinction the old wording missed is the whole argument:
-
-     92% opacity destroys neither the legibility nor the colour of what is behind it.
-     blur(20px) saturate(180%) destroys the LEGIBILITY and keeps the COLOUR.
-
-   Ghosting is a legibility failure. A backdrop that has been through a 20px blur carries no
-   letterforms at any type size this app sets — the strip is 92px tall and the blur radius is
-   larger than the x-height of every face in `--prl-font-sans` at every size in the ramp — so the
-   defect the reader reported is not merely unlikely here, it is unrepresentable. What survives
-   the blur is hue and value, which is exactly what a material is supposed to sample.
-
-   Three consequences that are not optional:
-
-     1. THE FILL AND THE FILTER ARE WRITTEN IN THE SAME BLOCK, as literal tokens rather than
-        through a shell-level alias. `--prl-shell-header-fill` is deleted for that reason: a rule
-        reading `background-color: var(--prl-shell-header-fill)` hides the glass from
-        `packages/ui/test/layout-guarantees.test.ts`, whose ghosting guard matches on
-        `var(--prl-glass-*)` in a block and requires a `backdrop-filter` beside it. An indirection
-        that makes a guard stop seeing the thing it guards is worse than no token.
-
-     2. IT DEGRADES TO THE OLD OPAQUE BAR ON ITS OWN. Under `prefers-reduced-transparency`,
-        `prefers-contrast: more` and `forced-colors`, `tokens.css` resolves `--prl-glass-floating`
-        to `--prl-surface-raised` and `--prl-glass-filter` to `none`. The strip goes solid and
-        unblurred with no override here — which also means a reader who has asked for less
-        transparency never meets a translucent fill without a blur, the one combination that
-        produces the defect.
-
-     3. IT IS ONE BOUNDED, PROMOTED STRIP AND NOTHING ELSE. The performance objection in
-        `tokens.css` is to blur on surfaces that repaint under moving content — the table field,
-        six seats and a live Coach panel. A `position: sticky` bar with `backdrop-filter` is
-        promoted to its own compositor layer and re-composited, not re-laid-out, on scroll. No
-        blurred layer in this app is animated or transitioned, and `backdrop-filter` is not in any
-        transition list here.
-
-     --prl-shell-nav-fill      the fill for a control that floats in the bar — the navigation
-                               pill, the units readout, the menu trigger. It is OPAQUE
-                               `--prl-surface-inset`, and it is opaque for a reason that is now
-                               about hierarchy rather than about ghosting: the strip is the glass,
-                               so a pill that were also glass would stack one tint on another and
-                               land within a rounding error of the bar it sits on. In dark
-                               `--prl-surface-inset` (#212630) is two steps up from the strip's
-                               tint (ink-850); in light it is #eceff3 against a near-white strip.
-                               It reads as an object on the sheet in both directions, and every
-                               text pairing on it is already an asserted surface in
-                               `scripts/check-contrast.mjs`.
-
-     --prl-shell-sentinel      the scroll distance after which the header takes its floating
-                               treatment: 40px, which is exactly `--prl-space-10` (2.5rem).
-                               Expressed as a height on an element rather than as a number in a
-                               JavaScript comparison, so the threshold stays in the token system
-                               and the header needs no scroll listener to read it.
-
-   ------------------------------------------------------------------------------------------
-   THE BACKDROP FIELD — the reason any of the glass above is worth having
-   ------------------------------------------------------------------------------------------
-
-   A translucent pane over a flat colour is a slightly different flat colour. `tokens.css` says so
-   and ships `--prl-page-wash` for it; what that token could not do from `base.css` is be there
-   when you need it. It is painted on `<body>` with `background-attachment: scroll`, and both of
-   its stops are anchored near the top edge (`at 10% -12%`, `at 92% 2%`), so on any page longer
-   than a viewport the varying part of the ground scrolls away and every pane below the fold is
-   back over a flat fill. Measured on `/terms` at 1440x1200: the wash is gone by 700px of scroll,
-   which is section 2 of a fourteen-section document.
-
-   So the shell paints the field instead, as `.prl-app::before` — one `position: fixed` layer, the
-   size of the viewport, promoted once and never repainted, never scrolled, never animated. Every
-   pane in the app therefore samples a ground that varies, wherever it is and however far down the
-   page the reader has come.
-
-     --prl-shell-field         three soft pools plus a falloff. The pools are drawn with
-                               `--prl-wash-tint` and `--prl-wash-tint-2`, the token layer's own
-                               stops, and NOT with brighter colours of the shell's invention. That
-                               is a contrast obligation, not taste: `scripts/check-contrast.mjs`
-                               derives `--prl-surface-wash` by compositing the brightest stop of
-                               the wash over `--prl-surface-page` and asserts every text pairing
-                               against it. Using the same stops keeps that derived surface the
-                               true ceiling of the page ground. A brighter pool here would make
-                               the gate's headline number a claim about a surface that no longer
-                               exists.
-
-     --prl-shell-field-falloff the fourth layer, painted ON TOP of the pools (first in the list, so
-                               first in the paint order), easing the field away from the middle of
-                               the viewport towards the edges. It is the half that makes the
-                               difference read as DEPTH rather than as a tint: a pool with no
-                               falloff is a coloured page, a pool with one is a lit room.
-
-                               Its direction is decided by contrast, not by taste, and the two
-                               themes therefore get different colours rather than one shared
-                               shade. Measured with the same formula `scripts/check-contrast.mjs`
-                               uses:
-
-                                 dark   42% black over #0b0d11 -> #06080a.
-                                        text-faint  6.61:1  (6.40:1 on the flat ground)
-                                        line-strong 4.49:1   (4.34:1)
-                                        Away from the ink. Every ratio in the design system's
-                                        table is a FLOOR, and this direction only clears it by
-                                        more, so no number in section 2.7 moves.
-
-                                 light   5% ink over #f5f7f9 -> #e9ebed.
-                                        text-muted  5.26:1  (5.44:1 on the wash)
-                                        line-strong 3.69:1  (3.82:1)
-                                        Towards the ink, which is the one direction here that
-                                        SPENDS headroom rather than banking it, so it is the one
-                                        that was measured at its worst case rather than at its
-                                        typical one. See the note below.
-
-                               Light goes towards the ink rather than towards white for a reason
-                               that has nothing to do with contrast and everything to do with the
-                               look: `--prl-surface-panel` is pure white in light, so a page
-                               ground lifted towards white erases the one step of value that says
-                               a card is lying on something.
-
-   THE WORST CASE, WHICH IS NOT THE ONE ANYBODY LOOKS AT
-
-   Four layers over one ground is four chances to be darker than any single one of them, and the
-   arithmetic that matters is the arithmetic at a point where they ALL land at full strength. The
-   geometry does not produce that point — the pools' plateaus are placed at three corners of the
-   viewport and the falloff is transparent through the middle 46% — but "the geometry does not
-   produce it" is exactly the kind of claim that stops being true when somebody moves a stop, so
-   the number is taken as if it did:
-
-     light   both pools at plateau + falloff at full  ->  #d4dee2
-             text 13.47:1   secondary 7.08:1   muted/faint 4.66:1   line-strong 3.27:1
-             against floors of 4.5:1 for text and 3:1 for a meaningful border. `muted` is the row
-             with the least headroom and is the one to re-measure if a stop moves.
-
-     dark    both pools at plateau, falloff absent    ->  #11222a
-             text 15.09:1   secondary 10.71:1   muted 7.62:1   faint 5.38:1   line-strong 3.65:1
-             Adding the falloff only darkens this, which in dark is the safe direction, so the
-             stacked pools with NO falloff are the dark theme's worst case rather than its best.
-
-   Reproduce either with the compositing and luminance formulas in `scripts/check-contrast.mjs`.
-   ========================================================================================== */
+   The backdrop field (`.prl-app::before`) replaces the body wash, which scrolls away (gone by 700px
+   on `/terms`). Its pools use the token layer's `--prl-wash-tint` stops, so the `--prl-surface-wash`
+   that check-contrast.mjs derives stays the true ceiling of the page ground. Never use a brighter pool.
+   The falloff darkens towards the edges, which in dark only raises contrast. The dark worst case is
+   both pools with no falloff (#11222a), where faint text is 5.38:1 and `--prl-line-strong` 3.65:1.
+   In light the falloff is 5% ink, which spends headroom. The light worst case, both pools at plateau
+   under the full falloff, is #d4dee2, where muted text is 4.66:1 and `--prl-line-strong` 3.27:1.
+   Re-measure muted if a stop moves. Light darkens towards ink because `--prl-surface-panel` is white. */
 
 :root {
   --prl-shell-nav-fill: var(--prl-surface-inset);
@@ -195,13 +29,7 @@
 
   --prl-shell-field-falloff: rgb(0 0 0 / 55%);
 
-  /**
-   * Each pool holds its stop for the first sixth of its radius before it starts falling away.
-   * A bare `radial-gradient(colour, transparent)` reaches its colour at exactly one point — the
-   * centre — and is already half gone a third of the way out, so at these alphas it reads as
-   * nothing at all. The plateau does not raise the peak, which is what the contrast argument above
-   * is about; it just makes the peak an area rather than a pixel.
-   */
+  /** Each pool holds its stop for a sixth of its radius, so the peak is an area. The peak is unchanged. */
   --prl-shell-field:
     radial-gradient(120% 92% at 46% 14%, transparent 0%, transparent 40%, var(--prl-shell-field-falloff) 100%),
     radial-gradient(64% 54% at 4% 22%, var(--prl-wash-tint) 0%, var(--prl-wash-tint) 20%, transparent 70%),
@@ -209,11 +37,7 @@
     radial-gradient(72% 56% at 82% 99%, var(--prl-wash-tint) 0%, var(--prl-wash-tint) 18%, transparent 72%);
 }
 
-/**
- * Two blocks rather than one, mirroring `tokens.css`: a reader's explicit choice has to win over
- * the system preference in both directions, and a `var()` chain across two media queries resolves
- * in cascade order rather than in preference order.
- */
+/** Two blocks, mirroring `tokens.css`, so an explicit theme beats the system preference both ways. */
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {
     --prl-shell-field-falloff: rgb(16 20 26 / 5%);
@@ -224,15 +48,9 @@
   --prl-shell-field-falloff: rgb(16 20 26 / 5%);
 }
 
-/* ==========================================================================================
-   1. THE SHELL COLUMN
-   ========================================================================================== */
+/* 1. THE SHELL COLUMN */
 
-/**
- * A flex column: header, main, footer. `100dvh` rather than `100vh` so a mobile browser's
- * retracting toolbar does not leave the footer floating above the fold, and rather than `100%`,
- * which resolves against an auto-height body and therefore against nothing.
- */
+/** `100dvh`, so a retracting mobile toolbar cannot strand the footer above the fold. */
 .prl-app {
   display: flex;
   flex-direction: column;
@@ -240,28 +58,9 @@
 }
 
 /**
- * THE BACKDROP FIELD. See section 0 for what it is made of and why its stops are the token
- * layer's own; what is here is why it is drawn this way and not one of the three obvious
- * alternatives.
- *
- *   NOT `background-attachment: fixed` on the body. That is the trap `base.css` names: a fixed
- *   attachment is re-resolved against the viewport on every scroll frame, which is a full-page
- *   repaint per frame. A `position: fixed` element is the opposite — it is promoted to its own
- *   compositor layer once and then translated, not repainted, for the rest of the session.
- *
- *   NOT a `background-image` on `.prl-app`. `.prl-app` is `min-height: 100dvh` and grows with the
- *   content, so the gradient would stretch over the whole document: on a fourteen-section legal
- *   page the pools end up several viewports tall and the reader sees a flat slice of one of them.
- *   Fixed to the viewport, every pane samples the same field wherever it has scrolled to.
- *
- *   NOT a real element. There is no markup change in this work — 425 web tests and 65
- *   accessibility-tree assertions read these class names — and a pseudo-element is the right
- *   shape anyway: it is invisible to the accessibility tree by construction rather than by an
- *   `aria-hidden` somebody has to remember.
- *
- * `z-index: -1` puts it behind every box in the app and in front of the canvas, and `.prl-app`
- * deliberately establishes no stacking context, so nothing between here and the root can trap it.
- * `position: fixed` also takes it out of flow, so it is not a flex item of the column above.
+ * The backdrop field. A fixed pseudo-element is composited once, where `background-attachment: fixed`
+ * repaints every scroll frame and a background on `.prl-app` would stretch over the whole document.
+ * `.prl-app` sets no stacking context, so `z-index: -1` keeps the layer behind every box.
  */
 .prl-app::before {
   content: "";
@@ -273,36 +72,17 @@
 }
 
 /**
- * The body's own wash is switched off, because the shell is now painting it.
- *
- * `base.css` sets `background-image: var(--prl-page-wash)` on `<body>` for exactly the reason the
- * layer above exists, and that rule is right in a package that cannot know what shell it is in.
- * In THIS shell it would be painted twice — the body's copy under the canvas and the fixed layer
- * over it — and two copies of a 7% tint composite to 13.5%, which is brighter than
- * `--prl-wash-tint` and therefore brighter than the `--prl-surface-wash` the contrast gate
- * measures and asserts. Turning one of them off is what keeps the gate's headline number a
- * statement about the surface that actually renders.
- *
- * The background COLOUR is untouched: `base.css` sets it for the reason it documents (a
- * transparent body inherits whatever an embedding page paints), and that argument still holds.
+ * The shell paints the wash, so the body's copy is off. Two 7% tints composite to 13.5%, brighter
+ * than the `--prl-surface-wash` the contrast gate asserts against.
  */
 body {
   background-image: none;
 }
 
 /**
- * THE THREE PREFERENCES THAT SWITCH THE FIELD OFF, stated here rather than inherited.
- *
- * `tokens.css` resolves `--prl-page-wash` to `none` under all three, so `base.css`'s body rule
- * needs no override. This layer is NOT built from that token — it is built from the two tint
- * STOPS, which stay defined under every one of these preferences — so it would go on painting an
- * accent-tinted field for a reader who had asked for a flat one. Inheriting the intent without
- * inheriting the mechanism is the usual way a fallback quietly stops applying.
- *
- * Three separate blocks and not one selector list, deliberately: a reader can ask for any one of
- * these without the others, and `forced-colors` in particular keeps `background-image` while
- * discarding `background-color`, so an author gradient under system-coloured text is precisely
- * what that mode exists to remove.
+ * The field is built from the tint stops, not `--prl-page-wash`, so it switches itself off under each
+ * preference. Separate blocks, because a reader can ask for any one, and `forced-colors` keeps
+ * `background-image`.
  */
 @media (prefers-reduced-transparency: reduce) {
   .prl-app::before {
@@ -322,43 +102,23 @@ body {
   }
 }
 
-/**
- * The app's single `<main>`, and the skip link's target.
- *
- * One `main` for the whole app, owned by the layout, is what keeps `landmark-one-main` and
- * `landmark-unique` true no matter how many sections a route renders. Routes render sections
- * inside it and own their single `h1`.
- */
+/** The app's single `<main>` and the skip link's target, which keeps `landmark-one-main` true. */
 .prl-app__main {
   flex: 1 1 auto;
   padding-block-end: var(--prl-section-y);
 }
 
 /*
- * `<main>` carries `tabindex="-1"` so the skip link can move focus into it (see the note in
- * layout.tsx). That makes it match `:focus-visible` in `base.css`, which would draw a focus ring
- * around the whole page body the first time somebody used the skip link — a ring the size of the
- * viewport is not an indicator, it is a surprise.
- *
- * Removed here and nowhere else, and safe for exactly one reason: `<main>` is not in the tab order
- * and cannot be reached by tabbing, so no keyboard user ever navigates TO it and needs to see where
- * they are. They arrive by deliberate act, and the next Tab lands on a real control that does show
- * its ring. This is the only outline removal in the app that is not conditional on
- * `:focus-visible` being false.
+ * `<main>` has `tabindex="-1"` for the skip link, so `:focus-visible` would ring the whole page. It is
+ * not in the tab order, which makes this the one unconditional outline removal in the app.
  */
 .prl-app__main:focus,
 .prl-app__main:focus-visible {
   outline: none;
 }
 
-/* ==========================================================================================
-   2. THE STICKY HEADER, AND THE SENTINEL THAT DRIVES IT
-   ==========================================================================================
-
-   The header's opaque state is decided by an `IntersectionObserver` watching the sentinel below,
-   never by a scroll handler (see `SiteHeader.tsx`). The sentinel is absolutely positioned inside a
-   zero-height anchor, so neither element takes part in layout and neither can shift the page.
-   ========================================================================================== */
+/* 2. THE STICKY HEADER, AND THE SENTINEL THAT DRIVES IT. An `IntersectionObserver` on the sentinel
+   sets the state, never a scroll handler (SiteHeader.tsx). Neither element takes part in layout. */
 
 .prl-shell__sentinel-anchor {
   position: relative;
@@ -374,46 +134,24 @@ body {
 }
 
 /**
- * THE GLASS STRIP. The fill and the filter are written here as literal tokens, in one block, on
- * purpose — see the long note in section 0 for the argument and for why the old
- * `--prl-shell-header-fill` alias was deleted rather than repointed.
- *
- * `-webkit-backdrop-filter` is still required by Safari and is declared beside every use, exactly
- * as `components.css` does it. Neither is in the transition list below and neither may ever be:
- * `backdrop-filter` is re-evaluated against the whole backdrop on every frame it CHANGES, which is
- * the one way to turn a cheap bounded blur into an expensive one.
- *
- * The bottom edge is `--prl-edge-shade` rather than `--prl-line-subtle`: this is the underside of
- * a physical sheet, which is the lit-hairline vocabulary in `tokens.css`, and it is decorative
- * while the bar is part of the page. It becomes meaningful the moment content passes under it —
- * see the `[data-stuck]` rule.
+ * The glass strip. Fill and filter stay literal tokens in one block (section 0). Neither may ever
+ * transition, because a changing `backdrop-filter` re-evaluates the whole backdrop every frame.
  */
 .prl-shell__header {
   position: sticky;
   z-index: var(--prl-z-nav);
   inset-block-start: 0;
   border-block-end: 1px solid var(--prl-edge-shade);
-  /* Colour only. `background-color` and `border-color` neither lay out nor composite badly, which
-     is why the design system permits them alongside transform and opacity. */
+  /* Colour only, which neither lays out nor composites badly. */
   transition:
     background-color var(--prl-dur-quick) var(--prl-ease-standard),
     border-color var(--prl-dur-quick) var(--prl-ease-standard);
 }
 
 /**
- * The glass is a layer BEHIND the bar's contents, never a property of the bar.
- *
- * A `backdrop-filter` on an element makes it the containing block for every `position: fixed`
- * descendant (Filter Effects 2; Chrome and Safari both do it). The menu sheet is `position: fixed;
- * inset: 0` and is mounted inside this header, so with the filter here the sheet was sized to the
- * 77px bar, not the viewport: measured at 360x640 and at 600, the open sheet was 76px tall with a
- * 684px scroll height, and `elementFromPoint` on its first link returned the page behind it. On a
- * phone the menu opened as a strip reading "NAVIGATE ×" and no destination could be reached. It
- * looked fine under `prefers-reduced-transparency`, where `--prl-glass-filter` is `none`.
- *
- * On a pseudo-element the blur is identical and contains nothing. `z-index: -1` is inside the
- * header's own stacking context (it is sticky with a z-index), so the layer paints above the page
- * and below the pills.
+ * The glass is a layer behind the bar. A `backdrop-filter` makes an element the containing block for
+ * its fixed descendants, so on the header the menu sheet opened 76px tall at 360x640. `z-index: -1`
+ * stays inside the header's stacking context, above the page and below the pills.
  */
 .prl-shell__header::before {
   position: absolute;
@@ -426,31 +164,12 @@ body {
   pointer-events: none;
 }
 
-/**
- * Past the sentinel: the hairline becomes a MEANINGFUL border.
- *
- * `--prl-edge-shade` describes an object's edge (1.5:1-ish) and is fine while the header is part
- * of the page; once the header is floating over content, the line is the only thing saying where
- * the header ends, so it moves to `--prl-line-strong` (4.34:1). That is the non-text-contrast rule
- * applied to a border whose job changed.
- *
- * The FILL is deliberately not part of this state, and that has survived the move to glass. It
- * used to go from 92% to opaque here, which meant the header was translucent-without-blur for the
- * first 40px of every page — exactly the region a reader is looking at when they begin to scroll,
- * and exactly where the ghosting was reported. The strip is blurred from the first paint now, at
- * every scroll position, so there is no window in which the old defect can appear.
- */
+/** Past the sentinel the hairline separates two layers, so it becomes `--prl-line-strong` (4.34:1). */
 .prl-shell__header[data-stuck="true"] {
   border-block-end-color: var(--prl-line-strong);
 }
 
-/**
- * Wraps rather than shrinks.
- *
- * Below the nav breakpoint the row is brand · units · theme · menu, and on a narrow phone that is
- * two rows. Wrapping keeps every control at its full 44px target; the alternative — squeezing them
- * onto one line — is how a units badge ends up 28px tall on the device where it is hardest to hit.
- */
+/** Wraps rather than shrinks, so every control keeps its 44px target on a narrow phone. */
 .prl-shell__header-inner {
   display: flex;
   flex-wrap: wrap;
@@ -460,7 +179,7 @@ body {
   padding-block: var(--prl-space-4);
 }
 
-/* ---- 2.1 the wordmark ------------------------------------------------------------------- */
+/* ---- 2.1 the wordmark ---- */
 
 .prl-shell__brand {
   display: inline-flex;
@@ -471,14 +190,9 @@ body {
   text-decoration: none;
 }
 
-/* ---- the suit marks (`SuitMark`) ----------------------------------------------------------- */
+/* ---- the suit marks (`SuitMark`) ---- */
 
-/**
- * Four-colour, like the deck on the table, so the four parts of the loop are told apart at a glance
- * — and never by colour alone: the shape differs and the area's name is always beside it. The
- * colours are the suit tokens on the card stock, and their lighter partners on the card back,
- * where a spade in card ink would be navy on navy.
- */
+/** Four colours, never colour alone. The lighter partners on the card back avoid navy on navy. */
 .prl-suit-mark {
   display: inline-block;
   min-width: 1em;
@@ -510,11 +224,7 @@ body {
   margin-inline-end: var(--prl-space-2);
 }
 
-/**
- * On the current page the pill is filled with the accent, and a diamond in the accent on it measured
- * 1.0:1 — the mark vanished exactly where it should say "you are here". On a filled pill it takes
- * the pill's text colour, like the word beside it.
- */
+/** On the accent-filled current pill an accent diamond measured 1.0:1, so the mark takes the text colour. */
 .prl-nav__link[aria-current="page"] .prl-nav__mark {
   color: inherit;
 }
@@ -533,22 +243,14 @@ body {
   line-height: var(--prl-leading-tight);
 }
 
-/**
- * The second word is dropped below the nav breakpoint, where the header is competing for room with
- * the units badge. Two words become one; nothing else moves. `Lab` and its leading space live in
- * their own element for exactly this — clipping with `text-overflow` would cut mid-word.
- */
+/** ` Lab` is its own element so it can drop below 860px without clipping mid-word. */
 .prl-shell__brand-tail {
   display: none;
 }
 
-/* ---- 2.2 the desktop nav ---------------------------------------------------------------- */
+/* ---- 2.2 the desktop nav ---- */
 
-/**
- * Hidden below 860px, where `MobileNav` takes over. `display: none` rather than a visually-hidden
- * class: this is not an alternative presentation of the same control, it is the other control, and
- * two navigations in the accessibility tree at once is two ways to get lost.
- */
+/** `display: none` below 860px, so only one navigation is in the accessibility tree. */
 .prl-nav {
   display: none;
 }
@@ -595,12 +297,7 @@ body {
   color: var(--prl-text);
 }
 
-/**
- * The current destination, marked three ways: an accent underline, an accent text colour, and a
- * faint fill — on top of the `aria-current="page"` that the markup carries. Colour is the last cue
- * added here and never the only one (WCAG 1.4.1), which also means the state survives
- * forced-colors mode, where the fill is repainted away and the border is not.
- */
+/** The current page is marked by underline, colour and fill, never colour alone (WCAG 1.4.1). */
 .prl-nav__link[aria-current="page"] {
   border-block-end-color: var(--prl-accent-edge);
   background-color: var(--prl-veil-8);
@@ -611,7 +308,7 @@ body {
   color: var(--prl-accent-text);
 }
 
-/* ---- 2.3 the tools cluster -------------------------------------------------------------- */
+/* ---- 2.3 the tools cluster ---- */
 
 .prl-shell__header-tools {
   display: flex;
@@ -620,21 +317,11 @@ body {
   gap: var(--prl-space-4) var(--prl-space-6);
 }
 
-/**
- * The units explanation, when expanded, takes its own row instead of `flex: 1 1 10rem` inside a
- * header — where it would fight the nav for horizontal space and reflow the whole bar. Same
- * disclosure, same text, placed where it can be read.
- */
 .prl-shell__units .prl-units__note {
   flex-basis: 100%;
 }
 
-/* ==========================================================================================
-   3. THE NARROW-VIEWPORT NAVIGATION
-   ==========================================================================================
-   Trigger plus full-screen sheet. The focus trap, the scroll lock and the Escape handling are in
-   `MobileNav.tsx`; what is here is the surface and the wipe.
-   ========================================================================================== */
+/* 3. THE NARROW-VIEWPORT NAVIGATION. The focus trap, scroll lock and Escape live in `MobileNav.tsx`. */
 
 .prl-nav-trigger {
   display: inline-flex;
@@ -656,14 +343,7 @@ body {
   background-color: var(--prl-surface-hover);
 }
 
-/**
- * The three rules, drawn as one element and two pseudo-elements rather than as an icon.
- *
- * No icon package (the dependency policy makes every one a reviewed event), no glyph from a font
- * that may not be installed, no SVG asset the CSP would have to allow. Borders rather than
- * backgrounds so the bars survive forced-colors mode, where a background-coloured 1px block is
- * repainted out of existence.
- */
+/** Borders, not an icon or glyph, so the bars need no dependency or CSP change and survive forced colours. */
 .prl-nav-trigger__bars {
   position: relative;
   display: block;
@@ -685,14 +365,9 @@ body {
   color: var(--prl-text-secondary);
 }
 
-/* ---- 3.1 the sheet --------------------------------------------------------------------- */
+/* ---- 3.1 the sheet ---- */
 
-/**
- * A full-screen opaque surface, not a drawer over a scrim.
- *
- * On the viewport sizes this appears at, a drawer leaves a strip of unreadable page behind it and
- * spends a translucent layer for the privilege. Opaque is cheaper to composite and easier to read.
- */
+/** A full-screen opaque surface, not a drawer over a scrim. */
 .prl-sheet {
   position: fixed;
   z-index: var(--prl-z-sheet);
@@ -703,8 +378,7 @@ body {
   padding: var(--prl-gutter);
   overflow-y: auto;
   background-color: var(--prl-surface-page);
-  /* Runs whenever the element goes from `display: none` (the `hidden` attribute) to displayed,
-     which is what makes an animation the right tool here and a transition the wrong one. */
+  /* An animation, not a transition, because it must run when `hidden` is removed. */
   animation: prl-sheet-in var(--prl-dur-in) var(--prl-ease-enter) both;
 }
 
@@ -729,11 +403,7 @@ body {
   padding-block-end: var(--prl-space-5);
 }
 
-/**
- * The accent wipe the design system asks for on the sheet opening (§9): a 1px accent hairline
- * scaling out from the leading edge. One composited transform on one hairline — no width
- * animation, no blur, nothing that lays out.
- */
+/** The accent wipe (§9). One composited transform on a hairline, nothing that lays out. */
 .prl-sheet__bar::after {
   content: "";
   position: absolute;
@@ -796,10 +466,6 @@ body {
   border-block-end: var(--prl-hairline);
 }
 
-/**
- * A whole row is the target, not just the word: this is the control most likely to be used
- * one-handed on a phone, and the generous target is the point of the layout.
- */
 .prl-sheet__link {
   display: grid;
   align-items: baseline;
@@ -833,14 +499,7 @@ body {
   line-height: var(--prl-leading-snug);
 }
 
-/**
- * `--prl-space-1` (0.125rem = 2px) as a border width, not `--prl-focus-width`.
- *
- * Both resolve to 2px and only one of them means it. The focus token exists to keep every focus
- * ring in the app identical; borrowing it as a generic length is how a later change to the ring's
- * weight silently thickens an unrelated marker. A spacing step used as a length is at least the
- * same kind of thing.
- */
+/** `--prl-space-1`, not `--prl-focus-width`, so a change to the focus ring cannot thicken this marker. */
 .prl-sheet__link[aria-current="page"] {
   border-inline-start: var(--prl-space-1) solid var(--prl-accent-edge);
   padding-inline-start: var(--prl-space-5);
@@ -851,13 +510,7 @@ body {
   color: var(--prl-accent-text);
 }
 
-/**
- * `display: flex` so the theme fieldset inside sizes to its content.
- *
- * A `<fieldset>` is a block element, so in a block container it stretches to the full width of the
- * sheet and a three-option switch ends up as one very wide bar with its options bunched at the
- * left. `margin-block-start: auto` pins the row to the bottom of the flex column above it.
- */
+/** Flex, so the theme fieldset sizes to its content. `margin-block-start: auto` pins it to the bottom. */
 .prl-sheet__foot {
   display: flex;
   margin-block-start: auto;
@@ -865,23 +518,13 @@ body {
   border-block-start: var(--prl-hairline);
 }
 
-/**
- * The scroll lock, published by `MobileNav` as an attribute on the root element rather than as an
- * inline style. Two reasons: the value stays in the stylesheet with every other value in this app,
- * and a lock that is an attribute is a lock you can see in the inspector.
- */
+/** The scroll lock, set by `MobileNav` as an attribute so the value stays in the stylesheet. */
 :root[data-nav-open="true"] {
   overflow: hidden;
 }
 
-/* ==========================================================================================
-   4. THE THEME CONTROL
-   ==========================================================================================
-   Three radios styled as a segmented switch. The inputs are `.prl-visually-hidden` rather than
-   `display: none`, so they keep their roles, their group semantics and their arrow-key behaviour —
-   which means the focus ring has to be drawn on the sibling word, because a clipped 1px input
-   cannot show one.
-   ========================================================================================== */
+/* 4. THE THEME CONTROL. The radios are visually hidden, not `display: none`, so they keep their
+   semantics and arrow keys. The focus ring is therefore drawn on the sibling word. */
 
 .prl-theme {
   display: flex;
@@ -914,11 +557,7 @@ body {
   color: var(--prl-text);
 }
 
-/**
- * The selected option is the accent-fill pairing, which is the one place in the system where the
- * ink inverts with the theme — `--prl-text-on-accent` is ink-900 on dark and white on light, and
- * writing it as the token pair is what keeps that automatic (9.39:1 / 6.97:1 rather than a guess).
- */
+/** `--prl-text-on-accent` flips with the theme, which keeps the pairing at 9.39:1 dark and 6.97:1 light. */
 .prl-theme__input:checked + .prl-theme__word {
   background-color: var(--prl-accent-fill);
   color: var(--prl-text-on-accent);
@@ -932,50 +571,20 @@ body {
 }
 
 /**
- * The SELECTED option's ring, which cannot be `--prl-focus-color`.
- *
- * `--prl-focus-color` is the same hue family as `--prl-accent-fill` - by design, since everywhere
- * else the ring is drawn against a page or surface colour and reads at 9.9:1 / 12.8:1. The selected
- * option is the one control in this group wearing the accent fill, and in the pill layouts the ring
- * is drawn INSIDE it (`outline-offset` is negated so the parent pill's corner cannot clip it), so
- * both of the ring's neighbours are that fill. Measured in Chrome: 1.53:1 in light and 1.36:1 in
- * dark - the focus indicator on the option a keyboard reader is most likely to land on first was
- * very nearly invisible, and WCAG 2.2 SC 2.4.11 wants 3:1 between the focused and unfocused states
- * of the indicator's own area.
- *
- * `--prl-text-on-accent` is the token that already carries the guarantee: it is picked, and
- * `scripts/check-contrast.mjs` re-picks it on every run, as the better of white and ink-900 against
- * this exact fill (6.97:1). Using it for the ring makes the indicator the same mark as the word it
- * surrounds, which is also why it does not read as a second colour.
+ * The ring on the accent fill measured 1.53:1 light and 1.36:1 dark (WCAG 2.4.11 wants 3:1), so it
+ * uses `--prl-text-on-accent` (6.97:1).
  */
 .prl-theme__input:checked:focus-visible + .prl-theme__word {
   outline-color: var(--prl-text-on-accent);
 }
 
-/**
- * Below the nav breakpoint the theme control moves into the sheet, where there is room for it.
- *
- * This rule sits AFTER `.prl-theme` rather than beside the header's other rules, and that is not
- * tidiness: both selectors are one class, so source order decides, and a `display: none` written
- * earlier would silently lose to the `display: flex` above it.
- */
+/** After `.prl-theme`, because both are one class and source order decides. */
 .prl-shell__theme {
   display: none;
 }
 
-/* ==========================================================================================
-   5. THE BOOT OVERLAY'S GUARDS
-   ==========================================================================================
-
-   `.prl-boot` itself is styled in `components.css`. What is here is the three conditions under
-   which it must never be seen — all three expressed in CSS rather than in JavaScript, because CSS
-   applies before first paint and JavaScript does not.
-
-   The `scripting: none` guard is the one that matters most and is the easiest to leave out. With
-   JavaScript disabled nothing will ever mark the overlay as done, so an unguarded boot screen
-   would sit opaque and permanent over a page that is otherwise working perfectly — a total failure
-   that is invisible in every environment it is developed in.
-   ========================================================================================== */
+/* 5. THE BOOT OVERLAY'S GUARDS. CSS, because it applies before first paint. Without scripting
+   nothing ever dismisses the overlay, so `scripting: none` must hide it. */
 
 @media (scripting: none) {
   .prl-boot {
@@ -990,22 +599,12 @@ body {
   }
 }
 
-/**
- * A repeat visit within the session. `data-boot="skip"` is stamped on the root element by the
- * pre-paint inline script in `src/lib/theme.ts`, from `sessionStorage` — which CSS cannot read and
- * React cannot reach in time.
- */
+/** On a repeat visit `data-boot="skip"` is set before paint by the inline script in `src/lib/theme.ts`. */
 :root[data-boot="skip"] .prl-boot {
   display: none;
 }
 
-/* ==========================================================================================
-   6. ROUTE TRANSITIONS AND SKELETONS
-   ==========================================================================================
-   A route change gets the 2px accent bar (`.prl-route-progress`, in `components.css`) plus
-   skeleton blocks at the real content's dimensions, so nothing reflows when the page arrives.
-   Never the boot sequence, which would make every navigation feel like a cold start.
-   ========================================================================================== */
+/* 6. ROUTE TRANSITIONS AND SKELETONS. Skeletons match the content's size, so nothing reflows. */
 
 .prl-shell__loading {
   display: grid;
@@ -1013,19 +612,11 @@ body {
   padding-block: var(--prl-space-12);
 }
 
-/* ==========================================================================================
-   7. THE FOOTER
-   ========================================================================================== */
+/* 7. THE FOOTER */
 
 /**
- * No fill. The footer used to be a `--prl-surface-raised` block, which on a flat page was the only
- * way to say "the document has ended" — and on the backdrop field it is the wrong way: an opaque
- * near-black slab across the foot of the page cuts the field off mid-pool, and the reader sees the
- * seam rather than the ending. A hairline says the same thing and lets the ground continue under
- * it, which is what the ground is for.
- *
- * Everything in here is text on the page ground, which is the surface `scripts/check-contrast.mjs`
- * measures as `--prl-surface-wash` and asserts every text pairing against.
+ * No fill, so the backdrop field continues under it. Its text sits on the page ground that
+ * check-contrast.mjs measures as `--prl-surface-wash`.
  */
 .prl-footer {
   border-block-start: var(--prl-hairline);
@@ -1033,9 +624,6 @@ body {
 
 .prl-footer__inner {
   display: grid;
-  /* Section rhythm, not list rhythm. The footer is the last section of the page and opens with the
-     same air any other section would; a `--prl-space-11` lid on a block that has just been given
-     no fill reads as the content having run out rather than as a deliberate close. */
   gap: var(--prl-space-11);
   padding-block: var(--prl-space-13) var(--prl-space-11);
 }
@@ -1059,14 +647,7 @@ body {
   margin-block-end: 0;
 }
 
-/**
- * The underline is left to `base.css`, deliberately.
- *
- * `a` there is accent-coloured with a `max(1px, 0.06em)` underline that thickens on hover — a
- * thickness change rather than a colour change, so it is visible with any form of colour-vision
- * deficiency and survives forced colors. Overriding `text-decoration` here to re-invent that would
- * be a second definition of the same hover cue, and the two would drift.
- */
+/** The underline is left to `base.css`, whose hover thickens it, a cue that does not depend on colour. */
 .prl-footer__link {
   display: inline-flex;
   align-items: baseline;
@@ -1074,11 +655,7 @@ body {
   min-height: var(--prl-target-min);
 }
 
-/**
- * The index slot of an unnumbered entry listed after the numbered five (`RECORD_DESTINATION`).
- * Empty, so nothing is read or seen as a sixth number, and two figures wide, so its label lines up
- * with the five above it instead of starting two digits further left.
- */
+/** The blank index slot is two figures wide, so its label aligns with the numbered five above. */
 .prl-index--blank {
   display: inline-block;
   min-inline-size: 2ch;
@@ -1107,24 +684,9 @@ body {
   margin-block-end: 0;
 }
 
-/* ==========================================================================================
-   7a. THE PROCESS SPINE
-   ==========================================================================================
-
-   `01 LEARN → 02 CALCULATE → 03 DECIDE → 04 REVIEW`, as a numbered spine with a connecting
-   hairline (§9.1). It lives at shell level rather than in the home page's stylesheet because the
-   same component is the breadcrumb inside a hand — the graphic and the breadcrumb are one thing,
-   and two copies of it would drift apart the first time a step was renamed.
-
-   The connector is a border on the LIST, not on each step, so it is one continuous line across the
-   row rather than four segments with gaps between them. Each step meets it with a short accent
-   tick; the current step's tick is longer AND its label goes accent, so the state is never carried
-   by colour alone.
-
-   No arrow glyphs. `content: "→"` in a pseudo-element is announced by some screen readers as
-   "right arrow" between every step, and the ordered list plus the numerals already say everything
-   the arrows were there to say.
-   ========================================================================================== */
+/* 7a. THE PROCESS SPINE (§9.1). Shell-level because the same component is the in-hand breadcrumb.
+   The connector is one border on the list. The current step has a longer tick and an accent label,
+   so colour is never the only cue. No arrow glyphs, because screen readers announce them. */
 
 .prl-spine {
   display: grid;
@@ -1151,8 +713,7 @@ body {
   inset-inline-start: 0;
   width: var(--prl-space-7);
   border-block-start: var(--prl-space-1) solid var(--prl-accent-edge);
-  /* No transition on the width. `width` triggers layout, and the design system permits transform
-     and opacity only — the longer tick is a static state, not an animation. */
+  /* No width transition, because `width` triggers layout. */
 }
 
 .prl-spine__index {
@@ -1182,13 +743,7 @@ body {
   color: var(--prl-accent-text);
 }
 
-/* ==========================================================================================
-   8. RESPONSIVE
-   ==========================================================================================
-   One breakpoint belongs to the shell: 860px, where the sheet gives way to the inline nav. It is a
-   literal because `var()` is invalid inside a media feature, and it is the same number the design
-   system names in section 9 and `NAV_SHEET_QUERY` mirrors for `matchMedia`.
-   ========================================================================================== */
+/* 8. RESPONSIVE. 860px is the shell's breakpoint, mirrored by `NAV_SHEET_QUERY`. */
 
 @media (min-width: 860px) {
   .prl-nav {
@@ -1210,8 +765,7 @@ body {
 }
 
 @media (min-width: 600px) {
-  /* Two by two before four across: the detail line under each step needs about 30 characters to
-     stay on two lines, which four columns on a tablet does not give it. */
+  /* Two by two before four across, so each detail line keeps the ~30 characters it needs. */
   .prl-spine {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     column-gap: var(--prl-space-8);
@@ -1229,13 +783,7 @@ body {
   }
 }
 
-/* ==========================================================================================
-   9. FORCED COLORS
-   ==========================================================================================
-   The palette is replaced wholesale, and `background-color` is discarded. Both states that rely
-   on a tint here — the stuck header and the current destination — already carry a border, so what
-   is left is to make sure the borders are distinguishable from the decorative ones.
-   ========================================================================================== */
+/* 9. FORCED COLORS. Fills are discarded, so the stuck header and current destination rely on borders. */
 
 @media (forced-colors: active) {
   .prl-nav__link[aria-current="page"],
@@ -1244,16 +792,8 @@ body {
   }
 
   /**
-   * The selected theme option, restated as the `Highlight` PAIR rather than as its ink alone.
-   *
-   * `HighlightText` is defined as the ink that is legible **on** `Highlight`, and in the default
-   * high-contrast themes it is the same colour as `Canvas` — so `color: HighlightText` with no fill
-   * behind it painted the selected word invisibly, which is worse than losing the accent tint: the
-   * one option a reader needs to identify became the one they could not read.
-   *
-   * Author colours are replaced wholesale in this mode, but a SYSTEM colour is used as written, so
-   * `background-color: Highlight` survives here where `--prl-accent-fill` does not. The border stays
-   * as a second cue for a theme where Highlight and Canvas are closer together than expected.
+   * The selected option uses the `Highlight` pair. `HighlightText` alone often equals `Canvas`, which
+   * painted the word invisibly. A system colour survives this mode where `--prl-accent-fill` does not.
    */
   .prl-theme__input:checked + .prl-theme__word {
     border: 1px solid Highlight;

@@ -1,85 +1,21 @@
 /**
- * Design tokens — the single source of every visual value in the app.
+ * Design tokens, the single source of every visual value. Rationale and the measured contrast
+ * table are in docs/frontend-design-system.md (section 2.4). Read it before changing anything here.
+ * Not a casino. No felt green, no gold, no metallic gradient, no glow.
+ * The ramps keep their 3.0 names (`ink-*`, `accent-*`) because components read them by role.
+ * Shadows only through `--prl-elevation-*`. layout-guarantees.test.ts fails a raw `box-shadow`.
  *
- * Full rationale, the reference inspection it came from, and the measured contrast
- * table: docs/frontend-design-system.md. Read that before changing anything here.
+ * Rule A. Text on the dark accent fill is `--prl-ink-900`. White on it fails AA.
+ * Rule B. `--prl-line-subtle` and `--prl-line` are decorative (under 3:1). A border that
+ * carries meaning uses `--prl-line-strong` or the accent.
  *
- * ============================================================================
- * THE SHORT VERSION
- * ============================================================================
- *
- * The deck is the instrument (since 4.0 — docs/frontend-design-system.md says what changed).
- * Card stock in the light theme, card back in the dark one, back blue as the one accent, the
- * four inks of a four-colour deck for the suit marks, and headlines in Archivo condensed. The
- * boldest thing on a screen is a figure, a headline or a card.
- *
- * Explicitly NOT a casino: no felt green, no gold, no metallic gradient, no glow, no
- * jackpot colour, no celebration. Those are gambling's visual language and this
- * product is the opposite of gambling.
- *
- * The ramps below keep their 3.0 names (`ink-*` was "graphite", `accent-*` was "readout cyan")
- * because every component reads them by role, not by hue; only the values changed.
- *
- * ============================================================================
- * FOUR STRUCTURAL DECISIONS, AND WHY
- * ============================================================================
- *
- * 1. A FIVE-LEVEL MATERIAL LADDER, AND SHADOWS ONLY AS TOKENS.
- *    This decision has been revised, and the old wording is worth keeping in view because
- *    the reasoning behind it was right and only its scope was wrong. It used to read:
- *
- *      "NO SHADOW TOKENS FOR ELEVATION. Depth comes from one step on the neutral ramp plus
- *       a 1px hairline. Beyond taste, this is performance: a six-seat table with a live
- *       Coach panel is exactly the scene where large blurred layers cost frames."
- *
- *    The performance claim is correct and is preserved: nothing on the table field takes a
- *    shadow or a blur, `backdrop-filter` is confined to small bounded elements, and no
- *    blurred layer is ever animated. What was wrong was concluding from that a system with
- *    ONE card style — which is what "one step on the ramp plus a hairline" gives you, and
- *    it cannot express the difference between a card, a floating toolbar and a popover.
- *
- *    So there are now five levels (see MATERIALS below), each changing material, elevation
- *    and border luminance together. Shadows exist as `--prl-elevation-1..4` and may only be
- *    spent through those tokens; `packages/ui/test/layout-guarantees.test.ts` fails a raw
- *    `box-shadow` literal in components.css or play.css, which is a tighter rule than the
- *    "none at all" it replaced, not a looser one. Focus is still an `outline` (see FOCUS).
- *
- * 2. A PLAYING CARD'S CORNER (0 / 3 / 6 / 10px), since 4.0.
- *    It was near-square (0 / 2 / 4 / 8) to read as an instrument. 6px is the corner of a card at
- *    the sizes the table draws one, so panels and the cards on them read as one material.
- *    `--prl-radius-pill` exists for status chips and pill controls only.
- *
- * 3. ONE ACCENT RAMP, USED SPARINGLY.
- *    Roughly one primary action per view. An accent that appears everywhere stops
- *    meaning "this matters".
- *
- * 4. ASYMMETRIC MOTION: entering is SLOWER than leaving (420ms vs 300ms).
- *    Things should arrive with weight and leave without ceremony. Symmetric timing
- *    is what makes transitions feel mechanical.
- *
- * ============================================================================
- * TWO RULES THAT FALL OUT OF THE MEASURED CONTRAST — easy to get wrong
- * ============================================================================
- *
- * A. Text on an accent fill MUST be --prl-ink-900, never white.
- *    ink-900 on accent-500 = 9.39:1. White on accent-500 = 2.07:1, a hard fail.
- *    The accent is a bright colour; treat it like a highlighter, not a brand navy.
- *
- * B. --prl-line-subtle and --prl-line are DECORATIVE ONLY (1.44:1 and 1.98:1 on the
- *    page ground). Any border that carries meaning — an input outline, a selected
- *    state, a chart axis — must use --prl-line-strong (4.34:1) or the accent.
- *
- * Reproduce every ratio with: node scripts/check-contrast.mjs
+ * Reproduce every ratio with `node scripts/check-contrast.mjs`.
  */
 
 :root {
   color-scheme: dark light;
 
-  /* ==========================================================================
-     NEUTRALS — "card back" (4.0; was "graphite"). Blue-shifted toward the deep
-     blue of a classic card back, so the dark theme reads as the back of the deck.
-     13 steps, with half-steps at 750/850 where the surface stack needs finer control.
-     ========================================================================== */
+  /* NEUTRALS, "card back". 13 steps, with half-steps at 750/850 for the surface stack. */
   --prl-ink-000: #f1f3fa;
   --prl-ink-050: #e2e6f2;
   --prl-ink-100: #c8cee2;
@@ -94,9 +30,7 @@
   --prl-ink-850: #141a3c;
   --prl-ink-900: #0e1433;
 
-  /* ==========================================================================
-     ACCENT — "back blue" (4.0; was "readout cyan"). Interaction, focus, live data.
-     ========================================================================== */
+  /* ACCENT, "back blue". Interaction, focus, live data. */
   --prl-accent-200: #d6dcff;
   --prl-accent-300: #b7c2ff;
   --prl-accent-400: #9dabff;
@@ -106,13 +40,7 @@
   --prl-accent-800: #3a49a8;
   --prl-accent-900: #28327a;
 
-  /* ==========================================================================
-     SEMANTIC DATA COLOURS
-     Desaturated on purpose. `favourable` is a mint-teal, not a "win green";
-     `adverse` is a rose, not an "alarm red". A hand that lost is information, not
-     a failure. Each is ALWAYS paired with a sign, glyph, label or fill pattern —
-     never left to carry meaning by hue alone (WCAG 1.4.1).
-     ========================================================================== */
+  /* SEMANTIC DATA COLOURS. Always paired with a sign, glyph, label or pattern (WCAG 1.4.1). */
   --prl-favourable: #4fd3a0;
   --prl-favourable-dim: #1f9c6c;
   --prl-adverse: #ff8593;
@@ -121,8 +49,7 @@
   --prl-caution-dim: #b8811f;
   --prl-info: #8ec5ff;
 
-  /* Chart series. Every one clears 3:1 against every surface (worst 6.10:1).
-     components.css additionally gives each a distinct fill pattern. */
+  /* Every series clears 3:1 on every surface (worst 6.10:1). components.css adds a fill pattern each. */
   --prl-series-a: var(--prl-accent-400);
   --prl-series-b: var(--prl-favourable);
   --prl-series-c: var(--prl-caution);
@@ -130,10 +57,7 @@
   --prl-series-e: var(--prl-info);
   --prl-series-f: var(--prl-ink-200);
 
-  /* ==========================================================================
-     SURFACES — the elevation stack. Each step is one move on the ramp; a hairline
-     does the rest. There is no shadow.
-     ========================================================================== */
+  /* SURFACES. Each step is one move on the ramp. */
   --prl-surface-page: var(--prl-ink-900);
   --prl-surface-raised: var(--prl-ink-850);
   --prl-surface-panel: var(--prl-ink-800);
@@ -141,170 +65,54 @@
   --prl-surface-hover: #1e2650;
   --prl-surface-active: #262f5c;
 
-  /* The table: a deep slate one step cooler than the panels, carrying a faint
-     hairline grid (see --prl-table-grid-*). It reads as GRAPH PAPER, which is the
-     whole thesis — a worksheet you happen to be playing on. */
   --prl-surface-table: #111838;
   --prl-table-grid-color: var(--prl-ink-800);
   --prl-table-grid-size: 32px;
 
-  /* Translucent scrims. Kept to low alpha and small areas: a large backdrop-filter
-     is one of the most expensive things a browser can be asked to composite. */
+  /* Low alpha and small areas only. A large backdrop-filter is among the most expensive composites. */
   --prl-scrim: rgb(6 9 26 / 72%);
   --prl-veil-8: rgb(241 243 250 / 8%);
   --prl-veil-4: rgb(241 243 250 / 4%);
 
-  /* ==========================================================================
-     THE PAGE WASH — the reason glass is worth having
-
-     A translucent pane over a flat colour is a slightly different flat colour. The
-     material only reads as material when there is something behind it that VARIES,
-     so the page ground carries two very low-alpha radial fields — one accent, one
-     info-blue — that a floating pane picks up differently depending on where it sits.
-
-     Cost: one extra paint on the body's own layer, no repeat, no `background-attachment:
-     fixed` (which WOULD repaint every scroll frame). It is not composited per frame and
-     it is not animated.
-
-     The contrast consequence is measured rather than assumed. `--prl-wash-tint` is the
-     brightest single stop either gradient reaches, and `scripts/check-contrast.mjs`
-     composites it over `--prl-surface-page` to produce `surface-wash`, which is asserted
-     as a content surface alongside the opaque ones. If a stop gets brighter, raise the
-     token and the gate re-measures every text pairing against it.
-     ========================================================================== */
+  /* THE PAGE WASH. Glass only reads as material over a ground that varies. No
+     `background-attachment: fixed`, which repaints every scroll frame. check-contrast.mjs composites
+     `--prl-wash-tint`, the brightest stop, as `surface-wash`. Raise it if a stop gets brighter. */
   --prl-wash-tint: rgb(133 151 255 / 8%);
   --prl-wash-tint-2: rgb(255 133 147 / 4%);
   --prl-page-wash:
     radial-gradient(115% 78% at 10% -12%, var(--prl-wash-tint), transparent 62%),
     radial-gradient(92% 62% at 92% 2%, var(--prl-wash-tint-2), transparent 58%);
 
-  /* ==========================================================================
-     MATERIALS — THE DEPTH LADDER
-
-     Five levels. Each step changes MATERIAL, ELEVATION and BORDER LUMINANCE together;
-     changing only one of the three is what makes an interface look like cards stacked on
-     cards rather than like objects at different heights.
-
-       L0  page       --prl-surface-page + --prl-page-wash
-                      The ground. Nothing is "on" it; things float over it. No border,
-                      no shadow, no material.
-
-       L1  grouped    --prl-surface-raised, hairline, NO SHADOW
-                      A grouped background: a well that collects related rows. What
-                      separates it from L2 is the absence of elevation, not the fill —
-                      an unshadowed pane reads as part of the page, a shadowed one reads
-                      as an object lying on it. (It is not darker than the page in either
-                      theme, and it is not meant to be: in light, `surface-raised` is
-                      white ON a grey page. "Recess" is the wrong word for it.)
-
-       L2  raised     --prl-surface-panel, lit hairline, --prl-elevation-1
-                      The card. THIS IS WHERE BODY TEXT LIVES. Opaque, on purpose: long
-                      prose over a varying backdrop is a legibility problem no amount of
-                      tint solves, and the brief for this system is restraint.
-
-       L3  floating   --prl-glass-floating + --prl-glass-filter + --prl-elevation-2
-                      Bounded chrome that travels over content: pills, toolbars, chips,
-                      the action bar, a sticky summary. Labels, numbers and controls.
-
-       L4  overlay    --prl-glass-overlay + --prl-glass-filter-strong + --prl-elevation-3
-                      Popovers, menus, sheets. May carry body text, which is why its tint
-                      is the DARKEST of the two in dark mode rather than the lightest: the
-                      higher a pane floats, the less it can rely on what is behind it.
-
-       L5  modal      --prl-scrim behind + L4 material + --prl-elevation-4
-                      A modal dialog. The scrim is what makes it modal; the material is
-                      the same overlay material, one shadow step higher.
-
-     TWO RULES, BOTH ENFORCEABLE BY READING A STYLESHEET
-
-     1. A GLASS FILL IS NEVER USED WITHOUT `--prl-glass-filter`.
-        A translucent fill with no blur is not glass, it is a window: the text behind it
-        stays perfectly legible in the wrong place, as a second layer of type. That is a
-        bug this app has already shipped once — see the header comment in
-        `apps/web/src/styles/nav.css`, where a 92%-opacity header with no backdrop-filter
-        let headings ghost through. Blur plus saturate is the legitimate fix because it
-        destroys the LEGIBILITY of what is behind while keeping its colour; 92% opacity
-        alone destroys neither. `packages/ui/test/layout-guarantees.test.ts` fails any
-        rule that sets a glass fill without also setting the filter.
-
-     2. GLASS IS FOR BOUNDED, FLOATING SURFACES ONLY.
-        Never a full-width strip, never a page background, never anything larger than a
-        panel. `backdrop-filter` on a wide element that repaints on every scroll frame is
-        one of the most expensive things a compositor can be asked for, and that argument
-        (tokens.css, nav.css) is still correct. What changed is scope, not the physics:
-        Apple's answer is to keep blurred regions small and already promoted to their own
-        layer, which is exactly what a pill, a popover or a chip is.
-
-     THE CONTRAST FLOOR, AND HOW IT IS ESTABLISHED
-
-     Text on a translucent surface has an effective background that depends on what is
-     behind it, so "the contrast of glass" is meaningless until the backdrop is bounded.
-     It is bounded here by construction: nothing any display can paint is outside
-     [#000000, #ffffff], so every glass tint is measured composited over BOTH extremes and
-     the WORSE of the two is the ratio the system claims. A ratio that holds at both holds
-     over a card face, an accent fill, a chart, a photograph, or anything added later.
-
-     That is why the tints are as opaque as they are. At 90% the pass-through is 10% of a
-     BLURRED, 180%-SATURATED backdrop — enough colour to read as material, little enough
-     structure to be safe. Measured floors are printed by `node scripts/check-contrast.mjs`
-     and tabulated in docs/frontend-design-system.md section 2.7.
-
-     THE WHOLE CONTENT TEXT RAMP IS PERMITTED ON GLASS, `--prl-text-faint` INCLUDED — but
-     that is a measured result rather than a design goal, and it was not the first answer.
-     At the tints this started with, `faint` landed at 4.00:1 over the bright extreme and
-     was excluded in prose. The tints then had to get more opaque for an unrelated reason
-     (`--prl-line-strong` on a hovered pane fell to 2.71:1), and the gate's negative control
-     reported that the exclusion had gone stale. It is asserted now instead of written down.
-
-     `faint` therefore has the least headroom of anything in the system: 4.55:1 on a pressed
-     floating pane over a white backdrop, against a 4.5:1 floor. It is the row that fails
-     first if any glass tint is ever made more transparent, which is exactly what you want a
-     tripwire to be — but do not spend that margin on a fourth state without re-running the
-     gate.
-     ========================================================================== */
+  /* MATERIALS, the depth ladder (design system section 2.7). Each level changes material, elevation
+     and border luminance together. L0 page, L1 grouped (no shadow), L2 raised (opaque, where body
+     text lives), L3 floating glass, L4 overlay glass (may carry body text), L5 modal (scrim + L4).
+     A glass fill always comes with `--prl-glass-filter`, or the text behind it ghosts through (the
+     nav.css header bug). Glass is for bounded floating surfaces only, never a full-width strip.
+     layout-guarantees.test.ts enforces the first rule.
+     Glass contrast is measured composited over both #000000 and #ffffff, and the worse ratio counts.
+     `--prl-text-faint` has the least headroom, 4.55:1 on a pressed floating pane over white. */
   --prl-glass-backdrop-min: #000000;
   --prl-glass-backdrop-max: #ffffff;
 
-  /* L3. ink-850 with 10% pass-through. Hover and active raise BOTH the lightness and the
-     opacity: a pane that firms up as you press it is the physical reading, and it is also
-     the direction that protects the contrast floor instead of eroding it. */
+  /* L3. Hover and active raise lightness and opacity together, which protects the contrast floor. */
   --prl-glass-floating: rgb(20 26 60 / 90%);
   --prl-glass-floating-hover: rgb(28 35 75 / 94%);
   --prl-glass-floating-active: rgb(36 44 87 / 97%);
 
-  /* L4. ink-900 with 8% pass-through — darker AND more opaque than L3, because this level
-     carries body text over content it cannot see. */
+  /* L4. Darker and more opaque than L3, because it carries body text over content it cannot see. */
   --prl-glass-overlay: rgb(14 20 51 / 92%);
   --prl-glass-overlay-hover: rgb(24 31 67 / 95%);
 
   /**
-   * blur + saturate. The saturation is not decoration and it is the half most imitations
-   * drop: blur alone averages a backdrop towards grey, which reads as fog. Pushing
-   * saturation back past 100% restores the chroma the blur averaged away, and THAT is what
-   * makes a pane read as a tinted sheet of glass rather than as a dirty window.
-   *
-   * `-webkit-backdrop-filter` is still required by Safari and is declared beside every use.
-   * Never animated, never transitioned: `backdrop-filter` is re-evaluated against the whole
-   * backdrop on every frame it changes, which is the one way to turn a cheap bounded blur
-   * into an expensive one.
+   * Saturate restores the chroma that blur averages away. Blur alone reads as fog.
+   * Safari needs `-webkit-backdrop-filter` beside every use. Never animate or transition it.
    */
   --prl-glass-filter: blur(20px) saturate(180%);
   --prl-glass-filter-strong: blur(30px) saturate(180%);
 
   /**
-   * ELEVATION. Two shadows per level, because one cannot do both jobs: a short, tight,
-   * higher-alpha shadow is the contact edge that says the pane is a physical object, and a
-   * long, wide, lower-alpha one is the ambient occlusion that says how far above the page
-   * it is. A single blurred shadow reads as a glow.
-   *
-   * This is the one reversal of the original system's "no shadow tokens" rule, and the
-   * reason the rule existed is preserved rather than discarded: the objection was to LARGE
-   * BLURRED LAYERS ON THE TABLE, where six seats, the board and a live Coach panel are all
-   * repainting. So shadows are tokens — never literals in a component, which
-   * `layout-guarantees.test.ts` enforces — they stop at level 4, and nothing on the table
-   * field takes one. A box-shadow on a static, promoted, bounded element is composited once
-   * and costs nothing per frame; a box-shadow on a moving element is a different question
-   * and does not appear here.
+   * Two shadows per level, a tight contact edge and a wide ambient one. One shadow reads as a glow.
+   * Tokens only, and nothing on the table field takes one.
    */
   --prl-elevation-0: none;
   --prl-elevation-1: 0 1px 2px rgb(0 0 0 / 24%), 0 2px 8px rgb(0 0 0 / 18%);
@@ -313,31 +121,21 @@
   --prl-elevation-4: 0 8px 24px rgb(0 0 0 / 36%), 0 36px 80px rgb(0 0 0 / 48%);
 
   /**
-   * THE LIT HAIRLINE. A pane reads as a physical sheet when its top edge catches light and
-   * its bottom edge falls into shadow — one border, three colours, applied per side.
-   *
-   * These are DECORATIVE, in exactly the sense `--prl-line-subtle` is: they describe an
-   * object's edge, never its meaning. A border that carries meaning (an input outline, a
-   * selected state, an axis) still has to be `--prl-line-strong` or the accent. The gate
-   * measures them for the record and does not assert them.
+   * Decorative, like `--prl-line-subtle`. A border that carries meaning uses `--prl-line-strong`.
    */
   --prl-edge: rgb(241 243 250 / 12%);
   --prl-edge-lit: rgb(241 243 250 / 24%);
   --prl-edge-shade: rgb(0 0 0 / 34%);
 
-  /* ==========================================================================
-     TEXT
-     ========================================================================== */
+  /* TEXT */
   --prl-text: var(--prl-ink-000);
   --prl-text-secondary: var(--prl-ink-100);
   --prl-text-muted: var(--prl-ink-200);
   --prl-text-faint: var(--prl-ink-300);
   --prl-text-disabled: var(--prl-ink-500);
-  --prl-text-on-accent: var(--prl-ink-900); /* rule A above — never white */
+  --prl-text-on-accent: var(--prl-ink-900); /* rule A above, never white */
 
-  /* ==========================================================================
-     LINES — see rule B. subtle/default are decorative; strong is meaningful.
-     ========================================================================== */
+  /* LINES. Rule B. subtle and default are decorative, strong is meaningful. */
   --prl-line-subtle: var(--prl-ink-700);
   --prl-line: var(--prl-ink-600);
   --prl-line-strong: var(--prl-ink-400);
@@ -345,12 +143,8 @@
   --prl-hairline: 1px solid var(--prl-line-subtle);
   --prl-hairline-strong: 1px solid var(--prl-line-strong);
 
-  /* ==========================================================================
-     CARD FACES — deliberately light in BOTH themes. A dark playing card is
-     unreadable at six-max sizes, and inverting one is a novelty that costs
-     legibility. Four-colour deck by default; every card also carries its glyph
-     and an aria-label, so suit is never conveyed by colour alone.
-     ========================================================================== */
+  /* CARD FACES. Light in both themes, because a dark card is unreadable at six-max sizes. Every card
+     also carries its glyph and an aria-label, so suit is never colour alone. */
   --prl-card-face: #f7f8fb;
   --prl-card-face-dim: #e4e7ef;
   --prl-card-edge: #b9becd;
@@ -360,25 +154,17 @@
   --prl-suit-club: #127152;
   --prl-suit-heart: #c02637;
   --prl-suit-diamond: #2b44d4;
-  /* Suit marks on the page rather than on a card face (`SuitMark`): on the card back the card's own
-     inks would be navy on navy, so the page carries a lighter partner for each. */
+  /* Suit marks on the page (`SuitMark`). The card inks would be navy on navy in dark. */
   --prl-mark-spade: var(--prl-ink-000);
   --prl-mark-heart: #ff8593;
   --prl-mark-diamond: #9dabff;
   --prl-mark-club: #4fd3a0;
 
-  /* ==========================================================================
-     TYPOGRAPHY
-     No web fonts. No @font-face, no remote stylesheet, no CDN — the supply-chain
-     policy forbids remote assets and the CSP has no font host. This stack
-     resolves to a real grotesk on every target platform.
-     ========================================================================== */
+  /* TYPOGRAPHY. No web fonts. Supply-chain policy forbids remote assets and the CSP has no font host. */
   --prl-font-sans:
     "Archivo Variable", "Inter var", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text",
     "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  /* One family at two widths. Headlines are Archivo condensed and heavy — the voice of a card's
-     corner index and a printed odds board — and body text is the same family at its normal
-     width, so the two are told apart by shape rather than by a second typeface. */
+  /* One family at two widths. Headlines are Archivo condensed, body is the same family at normal width. */
   --prl-font-display: var(--prl-font-sans);
   --prl-stretch-display: 72%;
   --prl-font-mono:
@@ -390,178 +176,65 @@
   --prl-weight-semibold: 600;
   --prl-weight-bold: 700;
 
-  /* Display — fluid via clamp(), so there are no typographic breakpoints.
-     Tight tracking at large sizes is what makes a grotesk read as engineered
-     rather than merely big.
-
-     THE STEPS WERE THE PROBLEM, NOT THE FACES.
-
-     Measured in Chrome at 1440x1100 against the deployed app: the home `h1` set at 64px/67px, a
-     section `h2` at 44px, a lesson `h1` at 44px, body at 17px. Two things follow from those four
-     numbers and both were visible on every screen.
-
-     First, 64 to 44 is a ratio of 1.45. A step that large between the top two levels does not
-     read as two levels — it reads as two SIZES of the same shout, because 44px inside a 1360px
-     shell is already display type. Everything on the page was emphatic, so nothing was.
-
-     Second, a lesson `h1` and a home section `h2` were the same 44px. The scale had run out of
-     room, so a page title and a subheading a level below it landed on the same value and the
-     levels stopped meaning anything across surfaces.
-
-     The ramp below is 40 / 30 / 24 over a 20 / 18 / 16 / 14 reading scale: adjacent steps of
-     1.33, 1.25, 1.2, 1.11, 1.13, 1.14 rather than one step of 1.45 and then a cliff. 40px is the
-     top and it appears exactly once in the app (the home hero); a page title is 30px and a
-     section is 24px, and the two are told apart by WEIGHT and SPACE as much as by size — see the
-     `h1`/`h2` block in `base.css`, where `h2` drops to semibold rather than borrowing more size
-     it does not need.
-
-     The floors are raised, not lowered, because the same compression applies at 375px: a 40px
-     headline that falls to 32px on a phone is still the largest thing on the screen. */
-  /* The middle term is genuinely fluid rather than a slope that saturates immediately: this reads
-     32px at 1000px, 38px at 1280px and 40px from 1400px up, so the one display size on the page
-     comes down as the column holding it does. A `vw` slope steep enough to hit the cap at 1100px
-     is a step function with extra syntax. */
+  /* Display sizes are fluid via clamp(), so there are no typographic breakpoints. */
   --prl-type-display-1: clamp(2.75rem, 1.1rem + 5.2vw, 4.75rem); /* 44 -> 76px, condensed */
   --prl-type-display-2: clamp(2.25rem, 1.4rem + 2.6vw, 3.25rem); /* 36 -> 52px, condensed */
   --prl-type-display-3: clamp(1.625rem, 1.3rem + 1vw, 2.125rem); /* 26 -> 34px, condensed */
-  /* Tracking follows the size down. -0.03em is the value for a 64px line; applied to 40px it
-     closes the counters and the word starts to read as one blot. */
+  /* Tracking follows size down. -0.03em on a 40px line closes the counters. */
   --prl-tracking-display-1: -0.005em;
   --prl-tracking-display-2: -0.004em;
   --prl-tracking-display-3: 0em;
 
-  /* ------------------------------------------------------------------------
-     READING SIZES — the floor is 13px, and the reason is measured rather than
-     stylistic.
-
-     This scale used to run from an 84px display down to a 10px label. Both ends
-     were wrong, and the gap between them was the real problem: a 7.6x ratio with
-     nothing in the middle reads as two unrelated typefaces sharing a page.
-
-     Sampled from two products with strong reading typography: Stripe sets body,
-     navigation and almost everything else at 16px — 2,277 elements on its home
-     page — with 14px as the secondary size and 11px appearing exactly 5 times,
-     for legal fine print. Linear sets body and navigation at 16px. Neither uses
-     a small size as a general-purpose voice.
-
-     That paragraph argued its way to 17px body / 15px secondary, and the sample
-     it cites says 16 / 14. The extra step was taken on the theory that this app
-     asks people to READ rather than scan — but a size is not what makes a
-     paragraph readable, and 17px was doing measurable damage everywhere else:
-     it is `1em` for every `ch` cap in the app, so every reading column got 6%
-     wider, every panel title had to grow to stay above it, and the whole ramp
-     was levered up from underneath. This IS an application — a navigation bar,
-     panels, tables, chips and controls — and 16px is the size those read at.
-
-     So: 16px body, 14px secondary, 13px an absolute floor for labels. Nothing in
-     this product is fine print — the guardrail notice and the assumptions behind
-     a number are the two things a learner most needs to read.
-
-     LEADING. `--prl-leading-body` was 1.65, which is a long-form-reading value
-     (a blog measure of 700px and one column of text on the page). Applied to UI
-     body it is the single most expensive number in this file: it inflates every
-     paragraph, every list, every table cell and every card by a sixth, which is
-     why the home page's four loop cards were cut off at the fold. 1.5 is the UI
-     value. Long-form lesson prose keeps the looser setting — see
-     `--prl-leading-prose` below, which is the one place the space is earned.
-     ------------------------------------------------------------------------ */
-  --prl-type-heading: 1.25rem; /* 20px — panel titles, h3 */
-  --prl-type-body-lg: 1.125rem; /* 18px — lead paragraphs, Coach conclusions */
-  --prl-type-body: 1rem; /* 16px — the default reading size */
-  --prl-type-body-sm: 0.875rem; /* 14px — secondary, captions, table cells */
-  /* 1.05 was the value for a 64px headline. At 40px it clips the descenders of a
-     two-line title against the ascenders of the line below it. */
+  /* READING SIZES. Body 16px, secondary 14px, 13px an absolute floor for labels. Stripe and Linear
+     both set body and navigation at 16px. 17px was `1em` for every `ch` cap and widened every column
+     by 6%. Leading is 1.5 for UI. 1.65 inflated every card by a sixth. */
+  --prl-type-heading: 1.25rem; /* 20px, panel titles, h3 */
+  --prl-type-body-lg: 1.125rem; /* 18px, lead paragraphs, Coach conclusions */
+  --prl-type-body: 1rem; /* 16px, the default reading size */
+  --prl-type-body-sm: 0.875rem; /* 14px, secondary, captions, table cells */
+  /* 1.05 clips the descenders of a two-line 40px title against the next line. */
   --prl-leading-tight: 1.1;
   --prl-leading-snug: 1.3;
   --prl-leading-body: 1.5;
 
   /**
-   * THE ONE PLACE LOOSE LEADING IS EARNED.
-   *
-   * A lesson is the only surface in this app that is genuinely long-form: one column of
-   * continuous prose that somebody reads top to bottom rather than scans. That is the reading
-   * situation 1.6 is for, and it is the reading situation `--prl-leading-body` used to assume
-   * about every table cell and every chip in the product.
-   *
-   * Deliberately below the 1.65 it replaces, because the measure came down with the type: at
-   * 16px a 52ch column is ~500px, and leading and measure move together — a shorter line needs
-   * less vertical separation to keep the return sweep on the right row.
+   * Loose leading only for lesson prose, the one long-form surface. Leading and measure move
+   * together, and a 52ch column at 16px is about 500px.
    */
   --prl-leading-prose: 1.6;
 
   /**
-   * OPTICAL TRACKING — the scale continues below the display sizes, because it has to.
-   *
-   * Tracking is a function of size, not of role. The display tokens above already tighten
-   * as they grow; the ramp stopped there, so a 22px panel title borrowed
-   * `--prl-tracking-display-3` (-0.02em), which is the value for 28px, and a 17px paragraph
-   * got 0 — a discontinuity you can see as soon as a heading and its lede sit together.
-   *
-   * These three continue the same curve down through the reading sizes.
-   *
-   * Body is now ZERO, and that is a consequence of the size change rather than a taste change.
-   * The reason body carried -0.003em was written down: every grotesk in `--prl-font-sans` is
-   * spaced for 15-16px and looks loose at 17. Body IS 16px now, so the correction it was
-   * compensating for no longer exists, and leaving it in would tighten the reading size below
-   * what the face was drawn for. It stays a separate token from `--prl-tracking-flat` because
-   * the two say different things: this one is "the reading size, optically correct", and the
-   * flat one is "small enough that tracking is a legibility aid, so do not take any away".
+   * Tracking continues the display curve down through the reading sizes. Body is 0 because the
+   * faces are spaced for 16px. `body` and `flat` stay separate tokens because they mean different things.
    */
-  --prl-tracking-heading: -0.008em; /* 18-20px — panel titles, h3, lede */
-  --prl-tracking-body: 0; /* 16px — the reading size, at the face's own spacing */
+  --prl-tracking-heading: -0.008em; /* 18-20px, panel titles, h3, lede */
+  --prl-tracking-body: 0; /* 16px, the reading size, at the face's own spacing */
   --prl-tracking-flat: 0; /* 14px and below, and anything already tracked */
 
-  /** Between `tight` (display) and `snug` (headings-with-two-lines). A 20px title that wraps
-      needs more than 1.1 and less than 1.3, and every panel title in the app wraps somewhere. */
+  /** A wrapping 20px title needs more than 1.1 and less than 1.3. */
   --prl-leading-heading: 1.2;
 
   /**
-   * THE NUMERIC RULE, AS A TOKEN.
-   *
-   * `tabular-nums` is what stops a live figure jittering sideways as it changes, and
-   * `lining-nums` is the half that is usually forgotten: a few of the faces in
-   * `--prl-font-sans` default to old-style figures for lowercase runs, which puts a
-   * descending `4` and a short `1` in the middle of a stack size. Both are stated together
-   * so a component that restates the guarantee restates all of it.
-   *
-   * There is deliberately no proportional counterpart. Tabular figures inside a sentence are
-   * slightly gappy — a `1` takes as much room as a `0`, which is the entire point — and that is
-   * a real cost, paid knowingly: this app puts live figures inside prose (a Coach conclusion
-   * naming a pot, an assumption naming a stack), and a token that let one paragraph opt out
-   * would eventually be applied to a paragraph whose numbers move.
+   * `lining-nums` as well, because some faces default to old-style figures. No proportional
+   * counterpart on purpose. Live figures sit inside prose, and an opt-out would reach one that moves.
    */
   --prl-numeric: tabular-nums lining-nums;
 
-  /* Labels — the technical voice: uppercase, wide-tracked, quiet colour. They
-     sit above loud data without competing with it. Tracking is REDUCED as the
-     size comes up, because wide tracking is a legibility aid at small sizes and
-     becomes a legibility cost once the letterforms are big enough to read. */
-  --prl-type-label: 0.8125rem; /* 13px — the floor. Never go below this. */
-  --prl-type-label-sm: 0.75rem; /* 12px — only for a badge beside a label */
+  /* Label tracking shrinks as size grows. Wide tracking only helps legibility at small sizes. */
+  --prl-type-label: 0.8125rem; /* 13px, the floor. Never go below this. */
+  --prl-type-label-sm: 0.75rem; /* 12px, only for a badge beside a label */
   --prl-tracking-label: 0.01em;
   --prl-tracking-label-sm: 0.015em;
   --prl-tracking-index: 0.12em;
 
-  /* Metrics — oversized numbers. The reason this system exists.
-
-     They come down with the ramp, and by less than it. A metric is allowed to be the loudest
-     thing on its panel — that is the product — but "loudest on the panel" is a relationship, not
-     a size, and the old hero at 88px was set against a 64px headline. Against a 40px headline the
-     same number is a billboard on a dashboard. 64 / 36 / 22 / 17 keeps every metric comfortably
-     above the heading beside it (the hero is 2.6x the section heading it sits under) while
-     leaving the page a top. */
+  /* Metrics stay louder than the heading beside them (the hero is 2.6x its section heading). */
   --prl-type-metric-hero: clamp(2.5rem, 1.5rem + 3vw, 4rem); /* 40 -> 64px */
   --prl-type-metric-lg: clamp(1.75rem, 1.2rem + 1.6vw, 2.25rem); /* 28 -> 36px */
   --prl-type-metric-md: 1.375rem; /* 22px */
   --prl-type-metric-sm: 1.0625rem; /* 17px */
   --prl-tracking-metric: -0.025em;
 
-  /* ==========================================================================
-     SPACING — em/rem hybrid ramp, 17 steps. Section rhythm is deliberately
-     large: the reference's confidence comes substantially from how much empty
-     space it spends between sections, and copying the palette without the rhythm
-     would miss the point entirely.
-     ========================================================================== */
+  /* SPACING */
   --prl-space-0: 0;
   --prl-space-1: 0.125rem;
   --prl-space-2: 0.25rem;
@@ -580,67 +253,28 @@
   --prl-space-15: 8rem;
   --prl-space-16: 10rem;
 
-  /* SECTION RHYTHM — measured, then cut.
-     This was `clamp(4rem, 9vw, 8rem)`. Because a section pads BOTH block edges and sections
-     stack, every seam between two sections spent the value twice: 128px + 128px = a measured
-     257px of nothing between the home page's guardrail notice and the heading below it, on a
-     viewport 801px tall. That is a third of a screen, and it does not read as confidence — it
-     reads as a page that failed to load.
-     Generous space between sections is still the intent; what changed is that the intended
-     amount is now the amount at the SEAM rather than at each edge. 5vw caps at 5.5rem, so the
-     seam lands near 144px on a laptop and 96px on a phone.
-
-     CUT AGAIN, WITH THE TYPE. Section rhythm is a RATIO to the type it separates, not an absolute
-     length: 144px at a seam was proportionate under a 44px section heading with 28px body lines,
-     and under a 24px heading with 24px body lines it is the same "page that failed to load" the
-     paragraph above describes. 3.2vw caps at 4rem, so the seam is near 104px on a laptop and 80px
-     on a phone — still, by a distance, the largest vertical step in the app, which is what makes
-     it read as hierarchy rather than as one repeated value. */
+  /* Sections pad both block edges, so a seam spends this twice. It was 257px of nothing on an
+     801px viewport. Now the seam is near 104px on a laptop and 80px on a phone. */
   --prl-section-y: clamp(2.5rem, 3.2vw, 4rem);
   --prl-gutter: clamp(1rem, 4vw, 2.5rem);
-  /* 78rem, not 88rem.
-     Measured at 1440x1100: the shell was 1360px wide and the content columns inside it ran
-     810-940px, so every page carried a 400px void down one side. Two things fix that and this file
-     owns one of them — the shell comes in to 1248px, and the surfaces that had a column and a void
-     gain a real second column (`.prl-page-head` in `page.css`, `.prl-learn-page__head` in
-     `learn.css`, both following the pattern `play.css` section 1 already established). Neither
-     alone was enough: narrowing a frame around a column that still uses 60% of it just makes a
-     smaller void, and a second column inside a 1360px frame is two columns adrift.
-     78rem is where the 1248px shell holds two 560px columns with a 128px gutter between them,
-     which is the widest arrangement in the app. */
+  /* 78rem is a 1248px shell holding two 560px columns with a 128px gutter, the widest layout here. */
   --prl-container: min(100% - 2 * var(--prl-gutter), 78rem);
   --prl-container-narrow: min(100% - 2 * var(--prl-gutter), 52rem);
-  /* THE MEASURE. `ch` is the advance of "0", which in this stack is 0.60em — noticeably WIDER
-     than the average lowercase letter. So `68ch` never meant 68 characters: measured on the
-     Learn index at the new body size it produced a 728px column running 86 characters a line,
-     well past the ~75 where the eye starts losing the line beginning on the return sweep.
-     60ch measures out at roughly 76 characters, which is the number the rule is actually about. */
+  /* `ch` is the advance of "0" (0.60em here), so 68ch ran 86 characters a line. 60ch is about 76. */
   --prl-measure: 60ch;
 
-  /* ==========================================================================
-     RADII — near-square by default. pill is for status chips only.
-     ========================================================================== */
+  /* RADII. Playing-card corners. pill is for status chips and pill controls only. */
   --prl-radius-0: 0;
   --prl-radius-1: 3px;
   --prl-radius-2: 6px;
   --prl-radius-3: 10px;
   --prl-radius-pill: 999px;
-  /* A diagonal corner cut. It was once the signature mark on primary buttons and is no longer:
-     at 100% it read as a corner that had failed to render rather than as a deliberate shape, and
-     applying it to the primary but not the secondary made a side-by-side pair look inconsistent.
-     See the note above `.prl-btn--primary::before` in components.css.
-
-     It survives on `.prl-seat`, where the context is different: six seats around a table repeat
-     the cut into a pattern, at a size where it is legible as a bevel. If that ever stops being
-     true, delete this token rather than reintroducing the cut on a control. */
+  /* Only on `.prl-seat`, where six seats repeat it as a legible bevel. Never on a control.
+     Delete the token if seats stop using it. */
   --prl-chamfer: 10px;
 
-  /* ==========================================================================
-     MOTION
-     `in` is deliberately SLOWER than `out`. Every animation must answer one of:
-     what changed, where did it come from, whose turn is it, is this new? If it
-     answers none of those, it does not ship.
-     ========================================================================== */
+  /* MOTION. `in` (420ms) is slower than `out` (300ms). Every animation must say what changed, where
+     it came from, whose turn it is, or what is new. */
   --prl-ease-standard: cubic-bezier(0.62, 0.14, 0.12, 1);
   --prl-ease-enter: cubic-bezier(0.16, 0.84, 0.3, 1);
   --prl-ease-exit: cubic-bezier(0.4, 0, 0.8, 0.3);
@@ -655,81 +289,40 @@
   --prl-dur-deal-stagger: 120ms;
 
   /**
-   * MATERIAL MOTION — a second, shorter family, for state rather than for narrative.
-   *
-   * The curves above answer "what changed" and "where did it come from", and their timing
-   * is right for that: 420ms in, 300ms out, asymmetric so arrivals have weight. That timing
-   * is wrong for a surface responding to a pointer. A pill that takes 420ms to acknowledge a
-   * hover feels broken, and 90ms with a signature curve reads as a jump cut, because
-   * `--prl-ease-standard` spends most of its time settling.
-   *
-   * So: one symmetric curve and three durations in the 150-250ms band. The curve is the
-   * standard material/HIG interpolation — fast to leave, gentle to arrive, no overshoot —
-   * and it is the right one precisely because it is unremarkable. State changes should be
-   * FELT and not SEEN; a signature easing on a hover is a signature you have to watch.
-   *
-   * Only `transform` and `opacity` may be animated with these (plus colour, which neither
-   * lays out nor composites badly). `backdrop-filter` MUST NOT be — see the materials block.
+   * MATERIAL MOTION. Symmetric and 150-250ms, for a surface answering a pointer, where 420ms feels
+   * broken. Only transform, opacity and colour animate with these. Never `backdrop-filter`.
    */
   --prl-ease-material: cubic-bezier(0.4, 0, 0.2, 1);
   --prl-dur-fast: 150ms; /* hover, active, a chip flipping state */
   --prl-dur-base: 200ms; /* the default for a surface changing level */
   --prl-dur-slow: 250ms; /* a popover or sheet arriving */
 
-  /* ==========================================================================
-     FOCUS — drawn as an `outline`, never a box-shadow: an outline is outside layout,
-     is not clipped by `overflow: hidden`, and is replaced wholesale under forced-colors.
-     12.77:1 on the page ground. Applied with :focus-visible, never :focus, never removed.
-     ========================================================================== */
+  /* FOCUS. An `outline`, never a box-shadow, so it is outside layout, unclipped and replaced under
+     forced-colors. `:focus-visible` only, never removed. */
   --prl-focus-color: var(--prl-accent-300);
   --prl-focus-width: 2px;
   --prl-focus-offset: 2px;
 
   /**
-   * THE HALO — the half of the focus ring that makes it work on glass.
-   *
-   * A single-colour ring is only ever as visible as its contrast with WHAT IS BEHIND IT, and
-   * the whole point of a floating pane is that what is behind it is not ours. The ring is
-   * drawn at `--prl-focus-offset`, which puts most of it on the backdrop rather than on the
-   * control — and `accent-300` measures 1.52:1 against white. On a pill floating over a card
-   * face, the ring simply is not there.
-   *
-   * So the indicator is two-tone: a bright inner ring and a 1px outer edge of the opposite
-   * polarity. The argument is arithmetic rather than aesthetic, and the gate checks it:
-   * across every backdrop luminance in [0, 1], the ring clears 3:1 on the dark half of the
-   * range and the halo clears 3:1 on the light half, and the two ranges OVERLAP. There is no
-   * backdrop against which both disappear. That is the WCAG-recommended two-colour indicator,
-   * derived rather than copied.
-   *
-   * The halo is a `box-shadow`, which means it is clipped by an ancestor's `overflow: hidden`
-   * and removed under `forced-colors`. Both are acceptable because it is a SUPPLEMENT: the
-   * ring itself is still an `outline`, still unclipped, still replaced by `Highlight` under
-   * forced colors. The indicator degrades to exactly what it was before.
+   * THE HALO. `accent-300` is 1.52:1 on white, so the ring alone vanishes over a light backdrop.
+   * The ring clears 3:1 on the dark half of backdrop luminance and the opposite-polarity halo on
+   * the light half, and the ranges overlap (the gate checks it). The halo is a box-shadow, so it is
+   * clipped by `overflow` and dropped under forced-colors. The outline ring still stands then.
    */
   --prl-focus-halo: var(--prl-ink-900);
   --prl-focus-halo-width: 1px;
 
   /**
-   * The halo, ready to spend. A single `box-shadow` with a spread that reaches one pixel past
-   * the outline's outer edge, so the halo shows as a hairline OUTSIDE the ring — and, because a
-   * spread shadow is solid rather than a ring, also fills the `--prl-focus-offset` gap INSIDE
-   * it. Both adjacencies then carry the two-tone guarantee: 1.4.11 asks a focus indicator to
-   * contrast with what is next to it, and on a floating pane that is the backdrop on one side
-   * and the pane's own material on the other.
-   *
-   * COMPOSITION RULE: `box-shadow` is one property, so any rule that gives an element an
-   * elevation must restate the ring when that element is focused —
-   * `box-shadow: var(--prl-focus-ring), var(--prl-elevation-2)` — or the pane drops a level for
-   * as long as the keyboard is on it. The ring goes FIRST: shadows paint in order, first on top.
+   * The spread reaches one pixel past the outline and fills the offset gap (WCAG 1.4.11).
+   * `box-shadow` is one property, so a rule with an elevation restates the ring on focus, ring
+   * first: `box-shadow: var(--prl-focus-ring), var(--prl-elevation-2)`.
    */
   --prl-focus-ring: 0 0 0 calc(var(--prl-focus-offset) + var(--prl-focus-width) + var(--prl-focus-halo-width))
     var(--prl-focus-halo);
 
-  /* Minimum interactive target. WCAG 2.2 asks 24x24; these are consequential and
-     often used one-handed on a phone, so the floor is higher. */
+  /* WCAG 2.2 asks 24x24. These controls are used one-handed on a phone, so the floor is 44px. */
   --prl-target-min: 44px;
 
-  /* Layering. Named rather than numeric so a stacking bug is a lookup, not a hunt. */
   --prl-z-table: 1;
   --prl-z-raised: 10;
   --prl-z-sticky: 100;
@@ -740,16 +333,8 @@
   --prl-z-boot: 900;
 }
 
-/* ============================================================================
-   LIGHT THEME
-   Retained because this is an educational product and some people read better on
-   light backgrounds — not because it is the designed default. Only the tokens
-   that must change are redefined; everything structural is inherited.
-
-   Note the accent moves DOWN the ramp (500 -> 700) for light: a bright cyan that
-   is perfect on near-black fails against white. Text on the accent fill stays
-   ink-900 in both themes, which is the one thing that does not flip.
-   ============================================================================ */
+/* LIGHT THEME. Only the tokens that change. The accent moves down the ramp, and text on the
+   accent fill flips to white (design system section 2.4a). */
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {
     color-scheme: light;
@@ -766,26 +351,18 @@
     --prl-text: #161b33;
     --prl-text-secondary: #353c5a;
     --prl-text-muted: #4f5675;
-    /* Light collapses `faint` onto `muted` rather than carrying a fourth step. A distinct value
-       here has to clear 4.5:1 against --prl-surface-active (#dde3ea), and every colour that does
-       is within a rounding error of muted: the light surface ramp is too tight for a fourth text
-       step to be both legible and visibly different. One honest step of hierarchy is worth more
-       than a fifth token nobody can see. (The old #6b7684 measured 3.57:1 here — a fail.) */
+    /* No fourth text step in light. No value that clears 4.5:1 on `--prl-surface-active` is
+       visibly different from muted. */
     --prl-text-faint: var(--prl-text-muted);
     --prl-text-disabled: #9aa0b5;
 
     --prl-line-subtle: #dde1ea;
     --prl-line: #c4cad8;
-    /* NOT lightened for light. Lifting the meaningful-border token to #7e8894 made it the weakest
-       it was in either theme — 2.78:1 on --prl-surface-active, under the 3:1 non-text floor. The
-       shared ink-400 clears every light surface (3.47:1 worst) and needs no override at all. */
+    /* Do not lighten. #7e8894 measured 2.78:1 on `--prl-surface-active`, under the 3:1 non-text floor. */
     --prl-line-strong: #5c6587; /* light only: the dark ramp's ink-400 is too light to edge a pale surface */
 
-    /* EVERY accent step is remapped for light, not just the two that happen to be
-       used today. Measured on the light page ground the bright steps run 1.21:1
-       (200) to 2.71:1 (600), so leaving any of them bright means the first
-       component that uses one as text silently fails contrast. Remapping the whole
-       ramp makes that unrepresentable rather than merely unlikely. */
+    /* Every accent step is remapped, not only the ones in use. The bright steps measure 1.21:1 to
+       2.71:1 on the light page. */
     --prl-accent-200: #2b44d4;
     --prl-accent-300: #1f33a8;
     --prl-accent-400: #2b44d4;
@@ -793,10 +370,7 @@
     --prl-accent-600: #1f33a8;
     --prl-focus-color: #1f33a8;
 
-    /* The button pairing INVERTS between themes, which is easy to miss:
-         dark  — accent-500 #17c6db fill + ink-900 text = 9.39:1 (white is 2.07:1)
-         light — accent-800 #0a6274 fill + white  text = 6.97:1 (ink-900 is 2.79:1)
-       Both clear AA, but only if the text colour flips with the theme. */
+    /* The button pairing inverts. Both themes clear AA only because the label colour flips. */
     --prl-text-on-accent: #ffffff;
 
     --prl-favourable: #127152;
@@ -804,22 +378,16 @@
     --prl-caution: #8a5c0d;
     --prl-info: #1f5a9e;
 
-    /* The sixth chart series is the one that does NOT come from the semantic set, so it is the one
-       easiest to forget when remapping. Left at ink-200 it measured 2.15:1 on a white panel —
-       invisible as a data mark, which is a wrong chart rather than a dim one. ink-500 clears the
-       3:1 non-text floor on every light surface (5.16:1 worst). */
+    /* The sixth series is not from the semantic set. ink-200 measured 2.15:1 on a white panel, and
+       ink-500 clears 3:1 on every light surface. */
     --prl-series-f: var(--prl-ink-500);
 
     --prl-scrim: rgb(22 27 51 / 44%);
     --prl-veil-8: rgb(22 27 51 / 6%);
     --prl-veil-4: rgb(22 27 51 / 3%);
 
-    /* MATERIALS, LIGHT. The ladder is the same five levels; what inverts is the direction
-       everything moves in. Glass tints toward WHITE rather than toward ink, the lit edge is
-       white and the shaded edge is ink, and the binding contrast extreme flips: dark text on
-       a light material is worst over a BLACK backdrop, where dark theme's light text on a
-       dark material is worst over a WHITE one. The gate measures both extremes in both
-       themes for exactly that reason, and takes the worse. */
+    /* Light glass tints toward white, and the binding contrast extreme flips to a black backdrop.
+       The gate measures both extremes in both themes. */
     --prl-wash-tint: rgb(43 68 212 / 6%);
     --prl-wash-tint-2: rgb(192 38 55 / 3%);
 
@@ -829,8 +397,7 @@
     --prl-glass-overlay: rgb(255 255 255 / 96%);
     --prl-glass-overlay-hover: rgb(248 250 252 / 97%);
 
-    /* Light shadows are an order of magnitude weaker. On a light ground a shadow at dark
-       theme's alpha does not read as height, it reads as dirt. */
+    /* An order of magnitude weaker. Dark-theme alpha reads as dirt on a light ground. */
     --prl-elevation-1: 0 1px 2px rgb(22 27 51 / 6%), 0 2px 8px rgb(22 27 51 / 5%);
     --prl-elevation-2: 0 2px 6px rgb(22 27 51 / 8%), 0 10px 24px rgb(22 27 51 / 8%);
     --prl-elevation-3: 0 4px 12px rgb(22 27 51 / 10%), 0 20px 48px rgb(22 27 51 / 12%);
@@ -840,8 +407,7 @@
     --prl-edge-lit: rgb(255 255 255 / 90%);
     --prl-edge-shade: rgb(22 27 51 / 14%);
 
-    /* The halo inverts with the theme, because its job is to be the OPPOSITE polarity to
-       the ring. A dark ring on a dark backdrop is rescued by a white halo. */
+    /* The halo is the opposite polarity to the ring, so it inverts with the theme. */
     --prl-focus-halo: #ffffff;
 
     --prl-card-face: #ffffff;
@@ -853,7 +419,7 @@
   }
 }
 
-/* Explicit choice wins over the system preference, in both directions. */
+/* Explicit choice wins over the system preference. Mirrors the media-query block above; change both. */
 :root[data-theme="light"] {
   color-scheme: light;
 
@@ -869,33 +435,20 @@
   --prl-text: #161b33;
   --prl-text-secondary: #353c5a;
   --prl-text-muted: #4f5675;
-  /* See the media-query block above: light has no fourth text step, because no value that clears
-     4.5:1 on --prl-surface-active is visibly different from muted. */
   --prl-text-faint: var(--prl-text-muted);
   --prl-text-disabled: #9aa0b5;
 
   --prl-line-subtle: #dde1ea;
   --prl-line: #c4cad8;
-  /* See above: light does NOT lighten the meaningful-border token. ink-400 clears 3:1 on every
-     light surface; #7e8894 did not (2.78:1 on --prl-surface-active). */
-  --prl-line-strong: #5c6587; /* light only: the dark ramp's ink-400 is too light to edge a pale surface */
+  --prl-line-strong: #5c6587;
 
-  /* EVERY accent step is remapped for light, not just the two that happen to be
-     used today. Measured on the light page ground the bright steps run 1.21:1
-     (200) to 2.71:1 (600), so leaving any of them bright means the first
-     component that uses one as text silently fails contrast. Remapping the whole
-     ramp makes that unrepresentable rather than merely unlikely. */
   --prl-accent-200: #2b44d4;
   --prl-accent-300: #1f33a8;
   --prl-accent-400: #2b44d4;
-  --prl-accent-500: #2b44d4; /* the fill; see --prl-text-on-accent below */
+  --prl-accent-500: #2b44d4;
   --prl-accent-600: #1f33a8;
   --prl-focus-color: #1f33a8;
 
-  /* The button pairing INVERTS between themes, which is easy to miss:
-       dark  — accent-500 #17c6db fill + ink-900 text = 9.39:1 (white is 2.07:1)
-       light — accent-800 #0a6274 fill + white  text = 6.97:1 (ink-900 is 2.79:1)
-     Both clear AA, but only if the text colour flips with the theme. */
   --prl-text-on-accent: #ffffff;
 
   --prl-favourable: #127152;
@@ -903,16 +456,12 @@
   --prl-caution: #8a5c0d;
   --prl-info: #1f5a9e;
 
-  /* See the media-query block above: the sixth series needs its own light value, because it is the
-     one that is not part of the semantic set. */
   --prl-series-f: var(--prl-ink-500);
 
   --prl-scrim: rgb(22 27 51 / 44%);
   --prl-veil-8: rgb(22 27 51 / 6%);
   --prl-veil-4: rgb(22 27 51 / 3%);
 
-  /* See the media-query block above for why each of these inverts rather than merely
-     lightening, and why the binding contrast extreme flips with the theme. */
   --prl-wash-tint: rgb(43 68 212 / 6%);
   --prl-wash-tint-2: rgb(192 38 55 / 3%);
 
@@ -945,16 +494,8 @@
   color-scheme: dark;
 }
 
-/* ============================================================================
-   REDUCED MOTION
-   Collapses every duration rather than disabling transitions outright, so
-   transitionend handlers still fire and nothing gets stuck mid-state. JS reads
-   the same preference and resolves reveals to their final state on mount, jumps
-   count-ups to their value, and skips the boot sequence.
-
-   The app must be fully usable and fully legible with all motion disabled:
-   motion is never the only carrier of meaning.
-   ============================================================================ */
+/* REDUCED MOTION. Durations collapse to 1ms rather than transitions being removed, so
+   transitionend still fires. Motion never carries meaning alone. */
 @media (prefers-reduced-motion: reduce) {
   :root {
     --prl-dur-instant: 1ms;
@@ -970,39 +511,11 @@
   }
 }
 
-/* ============================================================================
-   REDUCED TRANSPARENCY
-
-   A stated preference, and it is not a taste. Translucency plus blur is a real cost
-   for readers with low vision, migraine or vestibular sensitivity, and on macOS and iOS
-   the switch is under Accessibility for that reason. The materials collapse to the opaque
-   surface one level below them and the filter goes to `none`, which is the state this
-   system was in before glass existed — so this path is not a degraded fallback, it is
-   the design's own flat mode, and every ratio it produces is already asserted.
-
-   `--prl-glass-filter: none` is what makes the collapse complete: an opaque fill with a
-   live `backdrop-filter` still pays for the blur, on an element where nothing can be seen
-   through it. The blur is removed, not hidden.
-
-   `:root:root`, NOT a bare `:root`, and that doubled pseudo-class is the whole defect this
-   block shipped with. A media query contributes nothing to specificity, so a bare `:root`
-   here is (0,1,0) — and the light theme is declared twice above at (0,2,0):
-   `:root[data-theme="light"]`, and `:root:not([data-theme="dark"])` inside the
-   `prefers-color-scheme` query, because `:not()` takes the specificity of its argument.
-   Both set `--prl-glass-floating` and `--prl-glass-overlay` themselves, so both beat this
-   block and NEITHER light reader got the collapse. Measured in Chrome 151 at 1440x900
-   against the production build with `prefers-color-scheme: light` emulated and
-   `prefers-reduced-transparency: reduce`: `--prl-glass-floating` resolved to `#fffffff0`
-   — 94% translucent — both with `<html data-theme="light">` and with no `data-theme` at
-   all; it is `#ffffff` with this selector. Worse than "no collapse": `--prl-glass-filter`
-   is set by neither theme scope, so it DID go to `none`, leaving a translucent pane with
-   no blur behind it. That is the ghosting failure `nav.css` documents at length, handed
-   to the one reader who asked the operating system for less translucency.
-
-   Doubling the pseudo-class costs nothing, matches the root element unconditionally, and
-   ties with both theme scopes at (0,2,0) — and this block is written after them, so it
-   wins the tie. `packages/ui/test/preference-cascade.test.ts` fails if it stops winning.
-   ============================================================================ */
+/* REDUCED TRANSPARENCY. Materials collapse to the opaque surface below them, and the filter goes
+   to `none` so no blur is paid for behind an opaque fill.
+   `:root:root` is required. Both light scopes are (0,2,0) and set the glass tokens, so a bare
+   `:root` (0,1,0) lost and light readers got a 94% pane with no blur. The doubled pseudo-class
+   ties and wins by source order. preference-cascade.test.ts pins it. */
 @media (prefers-reduced-transparency: reduce) {
   :root:root {
     --prl-glass-floating: var(--prl-surface-raised);
@@ -1016,26 +529,9 @@
   }
 }
 
-/* ============================================================================
-   INCREASED CONTRAST
-
-   `prefers-contrast: more` asks for edges, not for atmosphere. Everything translucent
-   goes solid — including the wash, whose whole job is to vary the ground under a pane —
-   every decorative edge is promoted to the MEANINGFUL border token (`--prl-line-strong`,
-   4.34:1 rather than the edge tokens' ~1.5:1), and the focus ring gains a pixel.
-
-   This is deliberately a superset of the reduced-transparency block rather than a
-   reference to it: a reader can ask for one without the other, and a `var()` chain between
-   two media queries resolves in cascade order rather than in the order the two preferences
-   were stated.
-
-   `:root:root` for the reason given in the reduced-transparency block above, and the loss
-   here was the worse of the two: measured with `prefers-contrast: more`
-   emulated and `<html data-theme="light">`, `--prl-edge` stayed `#10141a1a` — 10% ink,
-   about 1.1:1 on a white pane — instead of being promoted to `--prl-line-strong` (`#6e7885`,
-   4.34:1). Every pane edge in the interface stayed decorative for the one reader who had
-   asked the operating system for edges.
-   ============================================================================ */
+/* INCREASED CONTRAST. A superset of the reduced-transparency block, not a `var()` reference,
+   because a reader can ask for either alone. Decorative edges become `--prl-line-strong` and the
+   focus ring gains a pixel. `:root:root` for the reason in the reduced-transparency block. */
 @media (prefers-contrast: more) {
   :root:root {
     --prl-glass-floating: var(--prl-surface-raised);
@@ -1056,20 +552,8 @@
   }
 }
 
-/* ============================================================================
-   HIGH CONTRAST / FORCED COLORS
-   Windows High Contrast replaces our palette wholesale. Rather than fight it,
-   lean on system colours and make sure every border that carries meaning is a
-   real border rather than a background tint — a tint disappears entirely in
-   forced-colors mode, and a table whose active seat was only tinted would lose
-   the only cue for whose turn it is.
-
-   `:root:root` for the reason given in the reduced-transparency block above. Forced colors
-   replaces the fills regardless, so this scope loses less than the other two
-   do — but `--prl-edge*` and `--prl-line*` are set by `:root[data-theme="light"]` as well,
-   and a border colour that stays an author rgba() instead of `CanvasText` is exactly the
-   edge this block exists to keep.
-   ============================================================================ */
+/* FORCED COLORS. A meaningful border must be a real border, because a tint disappears (an active
+   seat shown only by tint loses whose turn it is). `:root:root` as in reduced transparency. */
 @media (forced-colors: active) {
   :root:root {
     --prl-line-subtle: CanvasText;
@@ -1077,17 +561,12 @@
     --prl-line-strong: CanvasText;
     --prl-focus-color: Highlight;
 
-    /* The edge tokens would be forced to CanvasText as border colours anyway; naming them
-       is what stops one of them being used as a BACKGROUND somewhere and disappearing. */
+    /* Named so that none of them is ever used as a background and disappears. */
     --prl-edge: CanvasText;
     --prl-edge-lit: CanvasText;
     --prl-edge-shade: CanvasText;
 
-    /* Forced colors replaces every fill, so nothing can be seen through a pane — but the
-       blur is still computed and still costs. Removing it is a straight saving with no
-       visual consequence. The wash goes for the same reason: `background-image` survives
-       forced-colors, and an accent-tinted field under system-coloured text is precisely the
-       kind of author decoration this mode exists to remove. */
+    /* Forced colors replaces every fill, so the blur and the wash are pure cost. */
     --prl-glass-filter: none;
     --prl-glass-filter-strong: none;
     --prl-page-wash: none;
