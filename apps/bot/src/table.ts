@@ -1,27 +1,11 @@
 /**
- * One reader's table: six seats, five bots, stacks that carry from hand to hand.
- *
- * This is the chat client's copy of what `apps/api/src/rooms/table.ts` and `bots.ts` do for the
- * web, cut down to one person and no clock. It is a copy and not an import because an app must
- * not depend on an app; ADR 0014 says why the bot runs the packages in-process at all.
- *
- * ## The reader only ever sees `redactFor(state, { viewerSeat: READER_SEAT })`
- *
- * The `HandState` here holds every seat's cards and the deck. Nothing in this file renders text;
- * `readerView` is the only way out of it toward a message, and it is the engine's own redaction.
- * `test/step.test.ts` scans every message of a played hand for the bots' cards to hold that line.
- *
- * ## Bots act synchronously, the way `simulate.ts` drives them
- *
- * The web's `BotRunner` waits 700 ms per decision so a watcher can follow the table. A chat
- * message is edited once per reader decision, so the delay buys nothing here: the bots act inside
- * the same `step`, and the message shows what they did since the reader's last move.
- *
- * ## Cards come from the injected dealer, which is `createSecureRandom()` outside tests
- *
- * `Dealer` is a seam so a test can deal a scripted hand. The engine refuses a sampling source for
- * dealing and refuses the test-only generator in production, and `test/source-randomness.test.ts`
- * asserts no file under `src/` names the test-only generator at all.
+ * One reader's table: six seats, five bots, stacks that carry between hands. A copy of the API's
+ * room and bot logic cut down to one person and no clock, because an app must not depend on an app
+ * (ADR 0014).
+ * The `HandState` holds every card. `readerView` (the engine's redaction) is the only way toward a
+ * message, and `test/step.test.ts` scans played hands for bot cards.
+ * Bots act synchronously inside `step`, since a chat message is edited once per reader decision.
+ * `Dealer` is a seam for scripted test hands. Outside tests it is `createSecureRandom()`.
  */
 
 import {
@@ -50,10 +34,7 @@ import {
 export const READER_SEAT: SeatIndex = 0;
 const READER_ID = 'reader';
 
-/**
- * The same table the web's `/play` page asks for: `BOT_TABLE_REQUEST` in
- * `apps/web/src/lib/table-rooms.ts` — six seats, 5/10, 1,000 units each.
- */
+/** The web's `BOT_TABLE_REQUEST` in `apps/web/src/lib/table-rooms.ts`. */
 export const TABLE_CONFIG: TableConfig = {
   smallBlind: 5,
   bigBlind: 10,
@@ -64,10 +45,8 @@ export const TABLE_CONFIG: TableConfig = {
 export const STARTING_STACK = 1_000;
 
 /**
- * The web's `BOT_TABLE`, already mapped through `LEGACY_PROFILE_IDS` (`apps/api/src/rooms/bots.ts`):
- * two `tight-aggressive`, then `calling-station`, `loose-aggressive`, `nit`. The plates are what
- * `botDisplayNames` makes of the lineup, so a reader sees the same names in both clients: the two
- * Patient Technicians are numbered there because a narrated line named a seat by its plate alone.
+ * The web's `BOT_TABLE` mapped through `LEGACY_PROFILE_IDS` (`apps/api/src/rooms/bots.ts`). Plates
+ * match `botDisplayNames`, so both clients show the same names.
  */
 const LINEUP: readonly { readonly profileId: string; readonly plate: string }[] = [
   { profileId: 'patient-technician', plate: 'Patient Technician 1' },
@@ -77,40 +56,30 @@ const LINEUP: readonly { readonly profileId: string; readonly plate: string }[] 
   { profileId: 'disciplined-specialist', plate: 'Disciplined Specialist' },
 ];
 
-/**
- * `realistic`, because a web bot table seats its bots at `realistic` (`seatRequestedBots` in
- * `apps/api/src/routes/rooms.ts`) and "same bots" has to mean the same difficulty too.
- */
+/** Matches `seatRequestedBots` in `apps/api/src/routes/rooms.ts`. */
 const BOT_DIFFICULTY: Difficulty = 'realistic';
 
 export interface BotSeat {
   readonly seat: SeatIndex;
   readonly profileId: string;
   readonly plate: string;
-  /** The archetype name, never the attributed one: see `lineupNames`. */
+  /** The archetype name, never the attributed one. */
   readonly archetypeName: string;
   readonly traits: Traits;
   readonly settings: DifficultySettings;
   /** Mutable: fed every public action and every completed hand, as `simulate.ts` does. */
   readonly model: OpponentModel;
-  /** Mutable stream for this bot's decisions. Never deals. */
+  /** Never deals. */
   readonly random: RandomSource;
 }
 
 export interface Dealer {
-  /** The source a hand's deck is shuffled from. `createSecureRandom()` outside tests. */
   readonly dealRandom: () => RandomSource;
-  /** One decision stream per bot seat. */
   readonly decisionRandom: (seat: SeatIndex) => RandomSource;
 }
 
-/** What lasts between hands: the seats, the stacks, the button. */
 export interface Table {
-  /**
-   * Random per table, and part of every hand id, so a button from before a restart can never
-   * name a hand of the table that replaced it. Hand numbers restart at 1 with a new table, so
-   * without this "hand 3, action 5" on yesterday's message would match today's hand 3.
-   */
+  /** Random per table and part of every hand id, so a button from before a restart matches nothing. */
   readonly tag: string;
   readonly stacks: readonly number[];
   readonly buttonSeat: SeatIndex;
@@ -132,9 +101,8 @@ export function newTable(tag: string, dealer: Dealer): Table {
         seat,
         profileId: entry.profileId,
         plate: entry.plate,
-        // Archetype mode is fixed here rather than read from `PRL_LEGEND_NAMING`. A chat message
-        // is forwarded and screenshotted without the page around it, so this client never shows
-        // an attributed name; turning that on is a decision for its own review (ADR 0011).
+        // Fixed to archetype, not read from `PRL_LEGEND_NAMING`. A chat message travels without the
+        // page around it, so this client never shows an attributed name (ADR 0011).
         archetypeName: profileDisclosure(profile.naming, 'archetype').archetypeName,
         traits: expressTraits(profile, BOT_DIFFICULTY),
         settings: DIFFICULTY_SETTINGS[BOT_DIFFICULTY],
@@ -150,7 +118,6 @@ export function nameOf(table: Table, seat: SeatIndex): string {
   return table.bots.find((bot) => bot.seat === seat)?.plate ?? `Seat ${seat + 1}`;
 }
 
-/** Every seat with units can be dealt in, and a table needs the reader plus one more. */
 export function canDeal(table: Table): boolean {
   const withUnits = table.stacks.filter((stack) => stack > 0).length;
   return (table.stacks[READER_SEAT] ?? 0) > 0 && withUnits >= 2;
@@ -161,12 +128,8 @@ export function resetUnits(table: Table): Table {
 }
 
 /**
- * Deals the next hand and lets the bots act until the reader must decide or the hand is over.
- *
- * The button moves one seat on, skipping nobody: a seat at zero is dealt out (`sittingOut`) and
- * the engine derives the blinds from the button among the seats that are dealt in. The web table
- * runs the full dead-button rule (`advanceBlindRotation`) because players come and go; here the
- * only way to leave is to reach zero, and the reader can always reset.
+ * The button moves to the next seat with chips. No dead-button rule, because the only way to leave
+ * is to reach zero and the reader can always reset.
  */
 export function dealNext(table: Table, dealer: Dealer): { table: Table; state: HandState } {
   const handNumber = table.handsDealt + 1;
@@ -194,24 +157,17 @@ export function handIdOf(tag: string, handNumber: number): string {
   return `${tag}-${handNumber}`;
 }
 
-/**
- * Applies the reader's action, then lets the bots act.
- *
- * Throws the engine's own `BettingRuleError` for an action it would not accept: the engine is the
- * authority on legality (ADR 0002), and the caller turns the refusal into a toast.
- */
+/** Throws the engine's `BettingRuleError` for an illegal action (ADR 0002). */
 export function readerActs(table: Table, state: HandState, action: Action, actionId: string): HandState {
   const applied = applyAction(state, READER_SEAT, action, { actionId });
   observeLast(table, state, applied.state);
   return runBots(table, applied.state);
 }
 
-/** Stacks after a completed hand, and the bots' models told how it ended. */
 export function settle(table: Table, state: HandState): Table {
   for (const bot of table.bots) {
     if (state.seats.some((seat) => seat.seat === bot.seat)) {
-      // The bot's OWN view: `result.showdowns` holds only the hands actually turned over, so a
-      // hand that ended in a fold teaches no model anything about anybody's cards.
+      // The bot's own view, so only cards actually shown reach a model.
       bot.model.observe(redactFor(state, { viewerSeat: bot.seat }));
     }
   }
@@ -229,12 +185,8 @@ function playerIdOf(seat: SeatIndex): string {
 }
 
 /**
- * Bots act until it is the reader's turn or nobody can act.
- *
- * Each bot is handed its own redacted view and its own two cards, exactly the `PolicyInput`
- * `buildPolicyInput` in `apps/api/src/rooms/bots.ts` builds, and its proposal goes through
- * `applyAction` like the reader's does. The loop bound is the engine's own termination: every
- * action either advances `actionSequence` or throws.
+ * Each bot gets its own redacted view and cards, as `buildPolicyInput` in the API builds. The loop
+ * ends because every action advances `actionSequence` or throws.
  */
 function runBots(table: Table, start: HandState): HandState {
   let state = start;
@@ -261,13 +213,7 @@ function runBots(table: Table, start: HandState): HandState {
   return state;
 }
 
-/**
- * Tells every bot's model about the action just taken, from public information only.
- *
- * Built the way `takeTurn` in `packages/poker-ai/src/simulate.ts` builds it: the pre-action
- * numbers read from the acting seat's view before `applyAction`, the chips moved read from the
- * engine's own log after it.
- */
+/** Public information only, built as `takeTurn` in `packages/poker-ai/src/simulate.ts` builds it. */
 function observeLast(table: Table, before: HandState, after: HandState): void {
   const logged = after.actions[after.actions.length - 1];
   if (logged === undefined || before.street === 'showdown' || before.street === 'complete') return;

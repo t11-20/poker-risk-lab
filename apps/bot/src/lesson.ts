@@ -1,28 +1,10 @@
 /**
- * Lessons in a chat: the list in reading order, then each lesson as pages of plain text.
- *
- * ## A page is addressed, not stepped
- *
- * A lesson button names the lesson by id and the page it shows (`lp:<id>:<page>`), never "the
- * next one". A lesson is content that does not change while the process runs, so a press is
- * answered from its own data and touches no session. Next pressed twice shows the same page twice,
- * which Telegram refuses as "message is not modified" and the adapter treats as delivered, and Next
- * on an older lesson message pages that message, which is the one the reader pressed. A quiz needs
- * a run tag (`QuizMoment`) because answering changes the session; reading does not. What a deploy
- * can make stale is a lesson or page that no longer exists, and that is `GONE`.
- *
- * ## Pages
- *
- * A page breaks at a heading where it can, and fills to `PAGE_FILL` before it does, so a phone
- * screen holds a section or two rather than a single sentence or the whole lesson. No page body
- * exceeds `PAGE_BUDGET`, far under `MESSAGE_LIMIT`: Next and Previous are edits, and an edit is not
- * split for Telegram the way a send is. A block is cut only when it alone exceeds the budget, and
- * then at a line, then a sentence, then a word. The key takeaways are a page of their own, last.
- *
- * ## Between hands
- *
- * Every lesson press waits for a live hand to end, as a quiz does (`FINISH_HAND_FIRST`), so the
- * reader in a hand has one thing in front of them to answer.
+ * Lessons as pages of plain text. A button names the page (`lp:<id>:<page>`), never "the next one",
+ * so a press reads only content and touches no session. A double press shows the same page, and a
+ * page a deploy removed is `GONE`.
+ * Pages break at headings after filling to `PAGE_FILL`, and stay under `PAGE_BUDGET` because an edit
+ * is not split the way a send is. An oversized block is cut at a line, then a sentence, then a word.
+ * The key takeaways are the last page. A lesson press waits for a live hand to end.
  */
 
 import { glossaryEntriesFor, lessonById, lessonsInReadingOrder, quizForLesson } from '@prl/content';
@@ -40,7 +22,7 @@ const PAGE_FILL = 1_200;
 const LIST_PAGE_SIZE = 6;
 const BETWEEN_BLOCKS = '\n\n';
 
-/** `MARKERS` in `packages/ui/src/components/Callout.tsx`: the tone is a word, never a colour alone. */
+/** `MARKERS` in `packages/ui/src/components/Callout.tsx`. The tone is a word, never a colour alone. */
 const CALLOUT_WORDS: Readonly<Record<Extract<LessonBlock, { kind: 'callout' }>['tone'], string>> = {
   insight: 'Insight',
   warning: 'Watch out',
@@ -54,10 +36,6 @@ function toast(session: Session, text: string): StepResult {
 function menuButton(): Button {
   return { label: 'Menu', data: encodePress({ kind: 'menu' }) };
 }
-
-// ---------------------------------------------------------------------------
-// Blocks as text
-// ---------------------------------------------------------------------------
 
 function calculationText(block: Extract<LessonBlock, { kind: 'liveCalculation' }>): string {
   const computed = calculate(block.calculation);
@@ -73,13 +51,7 @@ function calculationText(block: Extract<LessonBlock, { kind: 'liveCalculation' }
   ].join('\n');
 }
 
-/**
- * One block as plain text.
- *
- * A heading is in capitals. Telegram's font is proportional, so a rule drawn under a heading never
- * matches its width, and a screen reader announces each rule character; capitals survive any
- * client, copy and paste, and need no glyph a reader has to hear.
- */
+/** Headings are in capitals. A drawn rule never matches a proportional font and a screen reader reads it. */
 export function blockText(block: LessonBlock): string {
   switch (block.kind) {
     case 'prose':
@@ -97,8 +69,7 @@ export function blockText(block: LessonBlock): string {
     case 'liveCalculation':
       return calculationText(block);
     case 'scenarioLink':
-      // No address: the web origin is a deployment setting (`PUBLIC_WEB_ORIGIN`), not a constant
-      // this process knows, and a guessed link is worse than none.
+      // No link. The web origin is a deployment setting this process does not know.
       return `In the Scenario Lab, on the web: ${block.prompt}`;
     default: {
       const unreachable: never = block;
@@ -106,10 +77,6 @@ export function blockText(block: LessonBlock): string {
     }
   }
 }
-
-// ---------------------------------------------------------------------------
-// Pages
-// ---------------------------------------------------------------------------
 
 const CUTS: readonly { readonly split: RegExp; readonly join: string }[] = [
   { split: /\n/, join: '\n' },
@@ -143,7 +110,6 @@ function cut(text: string, budget: number, level = 0): string[] {
   return pieces;
 }
 
-/** Blocks grouped so that each heading starts a section. */
 function sections(blocks: readonly LessonBlock[]): string[][] {
   const out: string[][] = [];
   for (const block of blocks) {
@@ -184,7 +150,6 @@ function takeawaysPage(lesson: Lesson): string {
 
 const pageCache = new Map<string, readonly string[]>();
 
-/** Every page body of a lesson, the key takeaways last. */
 export function lessonPages(lesson: Lesson): readonly string[] {
   const cached = pageCache.get(lesson.id);
   if (cached !== undefined) return cached;
@@ -192,10 +157,6 @@ export function lessonPages(lesson: Lesson): readonly string[] {
   pageCache.set(lesson.id, pages);
   return pages;
 }
-
-// ---------------------------------------------------------------------------
-// Messages
-// ---------------------------------------------------------------------------
 
 function listPageCount(): number {
   return Math.ceil(lessonsInReadingOrder().length / LIST_PAGE_SIZE);
@@ -244,12 +205,10 @@ export function onLessons(session: Session, page: number): StepResult {
   };
 }
 
-/** Opens a lesson at its first page, as a new message. */
 export function onLesson(session: Session, lessonId: string): StepResult {
   return showPage(session, lessonId, 0, 'send');
 }
 
-/** Another page of the lesson, in the message that was pressed. */
 export function onLessonPage(session: Session, lessonId: string, page: number): StepResult {
   return showPage(session, lessonId, page, 'edit');
 }

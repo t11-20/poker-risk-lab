@@ -14,9 +14,7 @@ function code(source: string): string {
 const BANNED = ['createDeterministicRandomForTests', 'createSamplingRandom', 'Math.random'];
 
 test('no source file can deal from a seeded or test-only stream', () => {
-  // The engine already refuses a sampling source for dealing, and the test-only generator in
-  // production. This keeps the bot from reaching for either in the first place: the only seam
-  // through which a test deals a scripted hand is `Deps.dealRandom`.
+  // The only seam through which a test deals a scripted hand is `Deps.dealRandom`.
   assert.ok(
     code('createDeterministicRandomForTests(1)').includes(BANNED[0] as string),
     'the scan fires on code',

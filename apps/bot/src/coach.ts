@@ -1,29 +1,15 @@
 /**
- * The Coach, in chat: one line under the table, and the fuller reading behind "Why?".
- *
- * ## Where the input comes from
- *
- * `coachSpotForView` in `@prl/poker-math`, under `LIVE_COACH_POLICY`: the same function and the
- * same seed, sample count and `top:40` range the web's live Coach is read with, so the same spot
- * gets the same figure in both clients. Only the words for a refusal are this client's.
- *
- * It runs on the calling thread. The API moved this off its event loop after measuring 3,034 ms
- * for the first analysis in a process (the preflop strength table `top:NN` needs) and 56-84 ms
- * warm. In this process that first reading stalls the poll loop once; ADR 0014 records the cost.
- *
- * ## The rules the text keeps, from `packages/ui/src/components/CoachPanel.tsx`
- *
- * 1. A percentage always names its method, and a sampled one always carries its interval.
+ * The Coach in chat: one line under the table and the full reading behind "Why?". Input is
+ * `coachSpotForView` under `LIVE_COACH_POLICY`, as on the web, so both clients show the same figure.
+ * It runs on the calling thread, so the first reading (3,034 ms cold) stalls the poll loop once
+ * (ADR 0014).
+ * Rules from `packages/ui/src/components/CoachPanel.tsx`:
+ * 1. A percentage names its method, and a sampled one carries its interval.
  * 2. The suggestion is never called correct, optimal, best or GTO. It is "one reading".
- * 3. Wherever the suggestion appears, the disclaimer and the full assumptions list appear with it.
- *    The one-liner therefore does not carry the suggestion: a single line cannot also carry the
- *    assumptions, so it carries the figures and points at "Why?".
- * 4. Every probability is range-checked before it is formatted, and a value outside 0..1 is
- *    replaced by a refusal. That is `formatProbability` in `packages/ui/src/probability.ts`,
- *    duplicated as `probabilityText`: `@prl/ui` is React source and cannot be imported here.
- *
- * Only the fields those rules name are rendered. The teaching notes and the rule-of-thumb note
- * are left out, and `test/coach-text.test.ts` scans what is rendered for the banned words.
+ * 3. The suggestion always appears with the disclaimer and all assumptions, so the one-liner omits it.
+ * 4. A probability outside 0..1 becomes a refusal. `probabilityText` copies `formatProbability`
+ *    from `packages/ui/src/probability.ts`, because `@prl/ui` is React.
+ * `test/coach-text.test.ts` scans the rendered text for banned words.
  */
 
 import type { CoachReport } from '@prl/contracts';
@@ -43,12 +29,7 @@ export type CoachReading =
 
 export type CoachFn = (view: PlayerView) => CoachReport;
 
-/**
- * A Coach report for the reader's decision, or the reason there is none.
- *
- * A Coach failure must never stop the hand, so every refusal becomes `unavailable` and the table
- * still shows its buttons.
- */
+/** A Coach failure must never stop the hand, so every refusal becomes `unavailable`. */
 export function readCoach(view: PlayerView, at: string, coach: CoachFn): CoachReading {
   try {
     return { kind: 'report', at, report: coach(view) };
@@ -77,7 +58,7 @@ function refusalWords(refusal: CoachRefusal): string {
   }
 }
 
-/** A probability as a percentage, or a refusal that says why. See rule 4 in the file comment. */
+/** Rule 4. */
 export function probabilityText(fraction: number): string {
   if (!Number.isFinite(fraction) || fraction < -1e-9 || fraction > 1 + 1e-9) return '(not a probability)';
   const clamped = Math.min(1, Math.max(0, fraction));
@@ -87,13 +68,11 @@ export function probabilityText(fraction: number): string {
 function equityText(report: CoachReport): string {
   const { equity } = report;
   const figure = probabilityText(equity.heroEquity);
-  // "Every runout" would be wrong on the river, where no card is left to come and what is
-  // enumerated is the opponents' holdings.
+  // Not "every runout", because on the river the enumeration is over opponent holdings.
   if (equity.method === 'exact-enumeration') return `${figure} (exact enumeration, no sampling)`;
   const interval = report.uncertainty.confidenceInterval;
   const samples = equity.trials.toLocaleString('en-US');
-  // Rule 1: a sampled figure never travels without its interval. If one arrives without it, the
-  // text says so rather than printing the bare number as though it were exact.
+  // Rule 1. A sampled figure without an interval says so.
   if (interval === null || !Number.isFinite(interval.halfWidthPoints) || !Number.isFinite(interval.level)) {
     return `about ${figure} (Monte Carlo, ${samples} samples, no interval reported: treat as approximate)`;
   }
@@ -105,17 +84,14 @@ function priceText(report: CoachReport): string {
   if (report.toCall === 0) return 'checking is free, so there is no price to beat';
   const { potOdds } = report;
   const price = `${probabilityText(potOdds.breakEvenEquity)} needed to call ${units(potOdds.toCall)} into ${units(potOdds.pot)}`;
-  // The table shows the whole middle and the price is against the part the reader can win. They
-  // differ only when the reader is all-in for less than the bet, and measured in a played hand the
-  // two lines read "314 to call into 1,674" and "into 1,652" with nothing to say why. CoachPanel
-  // names the side pot for the same reason.
+  // The price is against the pot the reader can win. Name the side pot so the two totals reconcile.
   const sidePot = report.potTotal - potOdds.pot;
   return sidePot > 0 ? `${price} (the other ${units(sidePot)} are a side pot you cannot win)` : price;
 }
 
 const RANGE_WORDS = `an assumed top-${LIVE_COACH_POLICY.range.percent}% range for each opponent`;
 
-/** The line under the table. Figures only: the suggestion lives behind "Why?" with its caveats. */
+/** Figures only. The suggestion lives behind "Why?" with its caveats. */
 export function coachLine(reading: CoachReading): string {
   if (reading.kind === 'unavailable') return 'Coach: no reading for this spot.';
   const { report } = reading;

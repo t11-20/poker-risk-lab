@@ -1,17 +1,8 @@
 /**
- * `/define <term>`: a glossary entry from `@prl/content`, or the nearest names to what was typed.
- *
- * ## A definition is only ever an entry's own text
- *
- * An unknown term gets suggestions by NAME and nothing else: no definition is composed, guessed or
- * borrowed from a near match. A reader who typed "blind" is shown Blinds, Big blind and Small blind
- * as buttons and chooses; the bot does not decide that one of them is what they meant.
- *
- * ## What counts as the same name
- *
- * Case, punctuation and a leading "the" are ignored, and an entry answers to its term, its term
- * without the bracketed part, the bracketed part, and its id. So "EV", "expected value" and
- * "Expected value (EV)" all reach one entry, and "push fold" reaches "Push/fold".
+ * `/define <term>`. A definition is only ever an entry's own text. An unknown term gets suggestions
+ * by name, and the reader chooses.
+ * Case, punctuation and a leading "the" are ignored. An entry answers to its term, the term without
+ * its bracketed part, the bracketed part, and its id.
  */
 
 import { glossary } from '@prl/content';
@@ -39,11 +30,7 @@ function namesOf(entry: GlossaryEntry): string[] {
 
 let index: ReadonlyMap<string, GlossaryEntry> | null = null;
 
-/**
- * Every name to its entry. Built once: the content does not change while the process runs. Where
- * two entries share a derived name, the first in the file keeps it, and an entry's own term always
- * beats another's derived name, so "Dirty out" and "Dirty outs" each answer to themselves.
- */
+/** On a shared derived name the first entry wins, and an entry's own term beats a derived one. */
 function names(): ReadonlyMap<string, GlossaryEntry> {
   if (index !== null) return index;
   const built = new Map<string, GlossaryEntry>();
@@ -68,11 +55,7 @@ export function lookup(query: string): Lookup {
   return { kind: 'unknown', suggestions: wanted === '' ? [] : suggestionsFor(wanted) };
 }
 
-/**
- * The closest entries by name: one name containing the other first, then by edit distance. A
- * distance is close when it is at most a third of the longer name, so "pot ods" finds Pot odds and
- * "xyzzy" finds nothing rather than the least unlike of ninety words.
- */
+/** Containment first, then edit distance up to a third of the longer name. */
 function suggestionsFor(wanted: string): GlossaryEntry[] {
   const scored: { entry: GlossaryEntry; score: number }[] = [];
   for (const entry of glossary()) {
@@ -106,7 +89,6 @@ function editDistance(left: string, right: string): number {
   return previous[right.length] ?? 0;
 }
 
-/** The entry as a message: term, definition, the formula in plain text when it has one. */
 export function entryText(entry: GlossaryEntry): string {
   const lines = [entry.term, '', entry.definition];
   if (entry.formula !== undefined) lines.push('', `Formula: ${entry.formula}`);
@@ -114,7 +96,7 @@ export function entryText(entry: GlossaryEntry): string {
   return lines.join('\n');
 }
 
-/** The see-also entries that exist. The validator checks the links; this does not trust it to. */
+/** The validator checks see-also links. This does not rely on it. */
 export function seeAlsoOf(entry: GlossaryEntry): GlossaryEntry[] {
   return (entry.seeAlso ?? []).flatMap((id) => {
     const linked = entryById(id);

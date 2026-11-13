@@ -1,29 +1,12 @@
 /**
- * The chat client's whole behaviour, with no transport in it.
- *
- * `step(session, event, deps)` takes one thing the reader did and returns the next session and
- * the messages to send. Telegram and the terminal are adapters over this function and nothing
- * else, so a test drives exactly what a reader drives.
- *
- * ## One message per hand, edited in place
- *
- * A hand is posted once (`send`) and every later state of it is an `edit`. An edit always targets
- * the message whose button was pressed, which is the only message a press can come from, so the
- * core never needs to know a transport's message ids. A new hand is a new message, which leaves
- * the previous result readable above it.
- *
- * ## A press is applied only to the moment it was drawn for
- *
- * Every hand-scoped button carries the hand id and the `actionSequence` it was drawn from
- * (`view.ts`). If either no longer matches, the press is answered with `STALE` and the session is
- * returned unchanged, which is what makes a double press idempotent: the first press advances the
- * sequence, so the second no longer matches.
- *
- * ## It only ever replies
- *
- * Every outgoing message answers an event from the reader. There is no timer, no reminder, and no
- * path that writes to a chat on its own (guardrail §8), and there is nothing that carries one
- * reader's text to anybody else (ADR 0010).
+ * The chat client's whole behaviour, with no transport. Telegram and the terminal are adapters over
+ * `step`, so a test drives exactly what a reader drives.
+ * A hand is sent once and then edited. An edit targets the pressed message, so the core needs no
+ * message ids.
+ * Each hand button carries the hand id and `actionSequence`. A mismatch answers `STALE` and changes
+ * nothing, which makes a double press idempotent.
+ * It only replies. No timer writes to a chat (guardrail §8), and no reader's text reaches another
+ * (ADR 0010).
  */
 
 import type { GlossaryEntry } from '@prl/contracts';
@@ -66,23 +49,16 @@ export type Event =
 
 export type Outgoing =
   | { readonly kind: 'send'; readonly text: string; readonly buttons: readonly (readonly Button[])[] }
-  /** Replaces the message whose button was pressed. Only ever produced for a `button` event. */
+  /** Replaces the pressed message. Only produced for a `button` event. */
   | { readonly kind: 'edit'; readonly text: string; readonly buttons: readonly (readonly Button[])[] }
-  /** A short notice on the press itself. Changes no message. */
   | { readonly kind: 'toast'; readonly text: string };
 
-/**
- * Where the reader is. A phase per state the table can be in, so "a Coach reading for a hand that
- * is over" or "a result with nobody to act" cannot be built.
- */
+/** One phase per table state, so a Coach reading on a finished hand cannot be built. */
 export type Phase =
   | { readonly kind: 'idle' }
   | { readonly kind: 'deciding'; readonly state: HandState; readonly coach: CoachReading }
   | { readonly kind: 'over'; readonly state: HandState }
-  /**
-   * A question of a quiz run, being asked or answered. `quiz` and `position` index the content,
-   * which does not change while the process runs; `run` is a fresh tag per run (see `quiz.ts`).
-   */
+  /** `quiz` and `position` index the content. `run` is a fresh tag per run (see `quiz.ts`). */
   | {
       readonly kind: 'quiz';
       readonly run: string;
@@ -92,16 +68,14 @@ export type Phase =
     };
 
 export interface Session {
-  /** Lazily created on the first hand, so `/start` costs nothing but a menu. */
   readonly table: Table | null;
   readonly phase: Phase;
-  /** Increments on every change, and only on a change: a refused press leaves it where it was. */
+  /** Increments only on a change. A refused press leaves it alone. */
   readonly revision: number;
 }
 
 export interface Deps extends Dealer {
   readonly coach: CoachFn;
-  /** A fresh table tag. Random outside tests; see `Table.tag`. */
   readonly newTag: () => string;
 }
 
@@ -151,7 +125,6 @@ const GLOSSARY_TEXT =
   'Send /define and a term to read its glossary entry, for example /define pot odds. Capitals and ' +
   'punctuation do not matter. If no entry has that name, the nearest names are offered instead.';
 
-/** Starting points for a reader on a phone, who would rather press than type. */
 const GLOSSARY_EXAMPLES = ['pot-odds', 'equity', 'expected-value', 'outs', 'variance'] as const;
 
 function menuButtons(): Button[][] {
@@ -171,10 +144,7 @@ function menuButtons(): Button[][] {
   ];
 }
 
-/**
- * What a person typed, as an event. A command is `/word`, with an optional `@botname` that
- * Telegram adds in some clients, and everything after it is the command's argument.
- */
+/** Some Telegram clients append `@botname` to a command. */
 export function eventOfText(text: string): Event {
   const command = /^\/([A-Za-z]+)(?:@\w+)?(?:\s+([\s\S]*))?$/.exec(text.trim());
   if (command !== null) {
@@ -199,10 +169,7 @@ export function step(session: Session, event: Event, deps: Deps): StepResult {
   }
 }
 
-/**
- * A command has no press to answer, and Telegram shows a toast only as the answer to a press, so a
- * toast from a command reached nobody: `/quiz` in the middle of a hand used to get no reply at all.
- */
+/** Telegram shows a toast only as the answer to a press, so a command's toast is sent as a message. */
 function toastsAsMessages(result: StepResult): StepResult {
   return {
     session: result.session,
@@ -228,10 +195,8 @@ const about = (session: Session): StepResult => ({
 });
 
 /**
- * Every command, in the order Telegram's "/" menu lists them. The same table answers a command,
- * registers the menu (`registerCommands` in `telegram.ts`) and writes the terminal's intro, so a
- * command cannot be answered and missing from the menu, or listed and answered with "Use the
- * buttons". `/learn` shipped answered and unlisted, which is how this table came about.
+ * In "/" menu order. One table answers commands, registers the menu (`registerCommands` in
+ * `telegram.ts`) and writes the terminal intro, so the three cannot disagree.
  */
 export const COMMANDS: Readonly<Record<string, Command>> = {
   start: { description: 'The menu: play a hand, read a lesson, practise a quiz', run: menu },
@@ -244,15 +209,9 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
   about: { description: 'What this bot is, and what units are', run: about },
 };
 
-/** Spellings people type that are not worth a line in the menu. */
 const ALIASES: Readonly<Record<string, string>> = { help: 'about', menu: 'start' };
 
-/**
- * Own keys only. Both tables are plain objects, so `/constructor` reaches `Object.prototype`, and a
- * throw from `step` is how the Telegram adapter knows to close a chat's table. It was refused only
- * because the inherited `ALIASES.constructor` is a function, which then missed in `COMMANDS`: by
- * luck, not by design. Raised in review on #12.
- */
+/** Own keys only, so `/constructor` cannot reach `Object.prototype`. */
 function onCommand(session: Session, name: string, args: string): StepResult {
   const key = Object.hasOwn(ALIASES, name) ? (ALIASES[name] ?? name) : name;
   const command = Object.hasOwn(COMMANDS, key) ? COMMANDS[key] : undefined;
@@ -275,8 +234,7 @@ function entryMessage(entry: GlossaryEntry): Outgoing {
 function defineMessage(query: string): Outgoing {
   const found = lookup(query);
   if (found.kind === 'found') return entryMessage(found.entry);
-  // The reader's text is quoted back only after normalising, so it cannot carry anything the
-  // glossary's own names could not: letters, digits and spaces, and no more than a term's length.
+  // Quoted back only after normalising, so it holds only letters, digits and spaces.
   const asked = normalise(query).slice(0, 60);
   if (found.suggestions.length === 0) {
     return {
@@ -300,9 +258,7 @@ function onPress(session: Session, press: Press, deps: Deps): StepResult {
     case 'about':
       return { session, out: [{ kind: 'send', text: ABOUT_TEXT, buttons: [] }] };
     case 'play':
-      // Mid-hand, "Play a hand" posts the live table again rather than refusing. If an edit ever
-      // failed to land, the reader's newest table would carry stale buttons and nothing would
-      // reach the current decision; this is the way back, and it changes nothing.
+      // Mid-hand this reposts the live table, the way back if an edit failed to land.
       if (phase.kind === 'deciding' && session.table !== null) {
         return { session, out: [decidingMessage(session.table, phase.state, phase.coach, 'send')] };
       }
@@ -369,10 +325,8 @@ function onAct(session: Session, press: Extract<Press, { kind: 'act' }>, deps: D
   if (phase.kind !== 'deciding' || table === null) return refuse(session);
   if (!drawnFor(phase.state, press.handId, press.sequence)) return refuse(session);
   try {
-    // Asked before anything moves. The engine is the authority on legality (ADR 0002), and data
-    // this process wrote cannot name an illegal action at a matching sequence, so a refusal here
-    // is a forged or corrupted press. Asking first keeps a bot's own failure, later in the same
-    // step, from being mistaken for one.
+    // Validated before anything moves (ADR 0002). A refusal here means a forged or corrupted press,
+    // and checking first keeps a later bot failure from looking like one.
     validateAction(phase.state, READER_SEAT, press.action);
   } catch (error) {
     if (error instanceof BettingRuleError) {
@@ -413,7 +367,6 @@ function deal(session: Session, deps: Deps): StepResult {
   return show({ ...session, revision: session.revision + 1 }, dealt.table, dealt.state, deps, 'send');
 }
 
-/** The session after `state`, and the one message that shows it. */
 function show(
   session: Session,
   table: Table,
@@ -438,8 +391,7 @@ function show(
     };
   }
   if (state.toAct !== READER_SEAT) {
-    // `runBots` stops only for the reader's turn or a finished hand. Anything else would post a
-    // table with no action buttons; refuse instead, and the adapter closes the table.
+    // Anything else would post a table with no buttons. The throw makes the adapter close it.
     throw new Error(
       `hand ${state.handId} stopped on ${state.street} with seat ${String(state.toAct)} to act`,
     );
