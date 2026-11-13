@@ -390,6 +390,30 @@ describe('createSchemaGate — a verdict belongs to one database', () => {
     assert.equal(reads, 3);
   });
 
+  it('does not answer for a database the ledger read did not reach', async () => {
+    // PR #38's review: mid-switch the probe reaches replacement B, which is behind, while the
+    // ledger read reuses a pooled connection to A, which is current. Both are one pool's answers.
+    let answering = reading(SHIPPED, 'db-a');
+    const gate = createSchemaGate({
+      readLedger: () => Promise.resolve(answering),
+      shipped: () => SHIPPED,
+      probeDeadlineMs: 50,
+    });
+    await gate.verify();
+    assert.equal(gate.admits().ok, true);
+    const mixed = await gate.readiness({ ok: true, identity: 'db-b' });
+    assert.equal(mixed.ok, false, "A's ledger is no answer for B");
+    assert.match(mixed.detail ?? '', /reached different databases/);
+    assert.equal(gate.admits().ok, false, 'and the feature routes stay closed');
+
+    // Once the ledger read reaches B too, B's own answer decides: here, one file behind.
+    answering = reading(SHIPPED.slice(0, 2), 'db-b');
+    const behind = await gate.readiness({ ok: true, identity: 'db-b' });
+    assert.equal(behind.ok, false);
+    assert.match(behind.detail ?? '', /0003_third\.sql/);
+    assert.equal(gate.admits().ok, false);
+  });
+
   it('closes the gate for the length of the re-verification, not after it', async () => {
     let release: (value: LedgerReading) => void = () => undefined;
     let first = true;

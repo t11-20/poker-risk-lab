@@ -269,13 +269,16 @@ describe('schema guard — a ledger the real runner wrote, read as prl_app', dbO
       shipped: () => SHIPPED,
       probeDeadlineMs: 2_000,
     });
+    // The probe names the database it reached, as `ping()` does: a "current" verdict is only an
+    // answer for the database whose ledger gave it.
+    const probe = { ok: true, identity: (await readLedger(runtimeSql())).identity };
     await withLedger('drop-newest', async () => {
-      const degraded = await gate.readiness({ ok: true });
+      const degraded = await gate.readiness(probe);
       assert.equal(degraded.ok, false);
       assert.ok((degraded.detail ?? '').includes(NEWEST.version), degraded.detail);
     });
     // `withLedger` put the row back: somebody ran `migrate up` while the instance was degraded.
-    assert.deepEqual(await gate.readiness({ ok: true }), { ok: true });
+    assert.deepEqual(await gate.readiness(probe), probe);
   });
 });
 

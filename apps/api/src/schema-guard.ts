@@ -52,6 +52,8 @@
  * already said "current". So every verdict records `databaseIdentity` (`db.ts`, read in the same
  * statement as the ledger so the two describe one database), `ping()` returns the same value in
  * its single round trip, and a probe that sees a different one drops the verdict and asks again.
+ * The probe and the ledger read are still two queries, so a probe is answered "current" only
+ * when the ledger read that produced the verdict reached the database the probe did.
  *
  * Only an instance that has not yet seen an answer for the database in front of it spends a
  * ledger query per probe, and that one is single-flight and bounded by `PROBE_QUERY_DEADLINE_MS`.
@@ -444,7 +446,8 @@ export function createSchemaGate(options: SchemaGateOptions): SchemaGate {
   /** Why a feature request is refused while `verified` is null. Server-side only. */
   let refusal = 'schema not yet verified: no verification has finished';
   let previous: SchemaVerdict | null = null;
-  let inflight: Promise<SchemaVerdict> | null = null;
+  /** A verification in progress, and the database its ledger read reached. */
+  let inflight: Promise<{ verdict: SchemaVerdict; identity: string | null }> | null = null;
 
   const record = (verdict: SchemaVerdict, identity: string | null): void => {
     verified = verdict.kind === 'current' ? identity : null;
@@ -458,10 +461,10 @@ export function createSchemaGate(options: SchemaGateOptions): SchemaGate {
     if (changed) options.onVerdictChanged?.(verdict);
   };
 
-  const verify = (): Promise<SchemaVerdict> => {
+  const verifyAt = (): Promise<{ verdict: SchemaVerdict; identity: string | null }> => {
     // Single-flight: probes that arrive while one verification is outstanding share it, so an
     // instance waiting on a slow database costs it one ledger query, not one per probe.
-    inflight ??= (async (): Promise<SchemaVerdict> => {
+    inflight ??= (async () => {
       let identity: string | null = null;
       const verdict = await verifySchema(async () => {
         const reading = await options.readLedger();
@@ -470,10 +473,12 @@ export function createSchemaGate(options: SchemaGateOptions): SchemaGate {
       }, shipped);
       inflight = null;
       record(verdict, identity);
-      return verdict;
+      return { verdict, identity };
     })();
     return inflight;
   };
+
+  const verify = async (): Promise<SchemaVerdict> => (await verifyAt()).verdict;
 
   const readiness = async (database: DbCheck): Promise<DbCheck> => {
     // `ping()` first, and its answer unchanged when it failed: its latch exists so an outage costs
@@ -496,11 +501,28 @@ export function createSchemaGate(options: SchemaGateOptions): SchemaGate {
       timer.unref();
     });
     try {
-      const verdict = await Promise.race([verify(), expiry]);
-      if (verdict === null) {
+      const outcome = await Promise.race([verifyAt(), expiry]);
+      if (outcome === null) {
         return {
           ok: false,
           detail: `schema not yet verified: the migration ledger did not answer within ${options.probeDeadlineMs} ms`,
+        };
+      }
+      const { verdict, identity } = outcome;
+      if (verdict.kind === 'current' && identity !== database.identity) {
+        // The probe and the ledger read are two queries on one pool, so mid-switch they can reach
+        // two databases: PR #38's review (Devin) had the probe see a replacement that is behind
+        // while the ledger read reused a connection to the current one, and this answered 200 for
+        // the replacement and reopened the gate. "Current" is only ever an answer about the
+        // database that gave it, so a verdict for another one closes the gate again — the safe
+        // direction — and the next probe asks the database it then sees.
+        if (verified === identity) {
+          verified = null;
+          refusal = 'schema not yet verified: the probe and the migration ledger reached different databases';
+        }
+        return {
+          ok: false,
+          detail: 'schema not yet verified: the probe and the migration ledger reached different databases',
         };
       }
       if (verdict.kind === 'current') return database;
