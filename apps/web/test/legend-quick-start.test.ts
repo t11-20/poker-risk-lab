@@ -139,6 +139,64 @@ describe('the closed select is wide enough for every archetype name', () => {
   });
 });
 
+describe('"Apply setting" keeps the opponent picked in "Start a match"', () => {
+  /*
+    Devin Review on PR #41: pick Passive Calling Station, follow "Change the setting", tick Expert,
+    Apply — the page reloaded with no opponent in the URL, the select came back on the first
+    profile, and Play started that one instead.
+  */
+  const page = code(read('app', 'legends', 'page.tsx'));
+  const picker = code(read('components', 'DifficultyPicker.tsx'));
+  const scope = code(read('components', 'LegendDifficultyScope.tsx'));
+  const form = code(read('components', 'LegendQuickStart.tsx'));
+
+  it('the picker on /legends carries the opponent through its submit', () => {
+    assert.match(page, /<DifficultyPicker[^>]*carryOpponent=\{\{ initial: opponent \}\}/u);
+    assert.match(picker, /<ScopedOpponentInput initial=\{carryOpponent\.initial\} \/>/u);
+    assert.match(scope, /<input name=\{MATCH_PROFILE_PARAM\} type="hidden" value=\{opponent\} \/>/u);
+  });
+
+  it('the scope hears the select by the same name the form submits', () => {
+    assert.match(scope, /target instanceof HTMLSelectElement && target\.name === MATCH_PROFILE_PARAM/u);
+    assert.match(form, /<select[^>]*name=\{MATCH_PROFILE_PARAM\}/u);
+  });
+
+  it('the page reads it back into the select, and only when it is a listed profile', () => {
+    assert.match(page, /const asked = params\[MATCH_PROFILE_PARAM\];/u);
+    assert.match(page, /profiles\.data\.profiles\.find\(/u);
+    const quick = page.slice(
+      page.indexOf('<LegendQuickStart'),
+      page.indexOf('/>', page.indexOf('<LegendQuickStart')),
+    );
+    assert.match(quick, /\sselected=\{opponent\}/u);
+    assert.match(form, /profiles\.find\(\(profile\) => profile\.id === selected\) \?\? profiles\[0\]/u);
+  });
+});
+
+describe('the match screen prints the chosen profile’s own disclaimers', () => {
+  /*
+    Devin Review on PR #41: "Start a match" lists every profile by name, so a reader could pick the
+    course-derived one and be dealt in without either screen printing its course notice. The cards
+    print it above their Play link; the form does not, so the match screen now prints every
+    disclaimer but the universal one, which its framing line already restates.
+  */
+  const play = code(read('app', 'play', 'page.tsx'));
+
+  it('computes every disclaimer but the universal one for the chosen profile', () => {
+    assert.match(
+      play,
+      /specific = disclaimerFraming\(profile\.disclosure\.disclaimers, profiles\.data\.universalDisclaimer\)\.inFull/u,
+    );
+  });
+
+  it('renders each of them in full in the head, above the table', () => {
+    const head = play.indexOf('legend?.specific.map(');
+    const table = play.indexOf('<LiveTable');
+    assert.ok(head >= 0, 'the specific disclaimers are computed and never rendered');
+    assert.ok(head < table, 'the disclaimers come after the table');
+  });
+});
+
 describe('no server component calls a plain function from a client module', () => {
   /*
     `coachWords` was first exported from `LegendDifficultyScope.tsx` ('use client') and called from

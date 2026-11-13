@@ -40,6 +40,7 @@ import {
   LEGENDS_HAND_REVIEW_PATH,
   LEGENDS_PATH,
   loadLegendProfiles,
+  MATCH_PROFILE_PARAM,
   parseDifficulty,
   type SearchParams,
 } from '@/lib/legends-data.ts';
@@ -88,6 +89,13 @@ export default async function LegendsPage({
   const params = await searchParams;
   const difficulty = parseDifficulty(params['difficulty']);
   const profiles = await loadLegendProfiles();
+  // The opponent "Apply setting" carried back from "Start a match" (`ScopedOpponentInput`), kept
+  // only when it is a profile this page lists: an unknown id would be a select showing one name and
+  // a hidden field submitting another.
+  const asked = params[MATCH_PROFILE_PARAM];
+  const opponent =
+    profiles.data.profiles.find((profile) => profile.id === (Array.isArray(asked) ? asked[0] : asked))?.id ??
+    null;
   const { namingMode, universalDisclaimer, difficulties } = profiles.data;
 
   return (
@@ -141,6 +149,7 @@ export default async function LegendsPage({
             id: profile.id,
             archetypeName: profile.disclosure.archetypeName,
           }))}
+          selected={opponent}
           settingHref={`#${SETTING_ID}`}
           settings={difficulties.map(({ id, label, coachAvailable }) => ({ id, label, coachAvailable }))}
         />
@@ -162,6 +171,7 @@ export default async function LegendsPage({
         <DifficultyPicker
           action={LEGENDS_PATH}
           difficulties={difficulties}
+          carryOpponent={{ initial: opponent }}
           id={SETTING_ID}
           selected={difficulty}
         />

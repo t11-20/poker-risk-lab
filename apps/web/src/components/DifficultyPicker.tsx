@@ -39,7 +39,7 @@ import type { LegendDifficulty, LegendDifficultyDto } from '@prl/contracts';
 import { Button, Chip, cx } from '@prl/ui';
 import type { ReactElement } from 'react';
 import { coachWords } from '@/lib/legend-match-copy.ts';
-import { ScopedDifficultyNote } from './LegendDifficultyScope.tsx';
+import { ScopedDifficultyNote, ScopedOpponentInput } from './LegendDifficultyScope.tsx';
 
 /** The query parameter this control writes. Shared with `parseDifficulty` in `legends-data.ts`. */
 export const DIFFICULTY_PARAM = 'difficulty';
@@ -58,6 +58,11 @@ export interface DifficultyPickerProps {
   readonly className?: string;
   /** A fragment target, for a page that links to the picker from above it. */
   readonly id?: string;
+  /**
+   * `/legends` only: carry the opponent picked in "Start a match" through a submit, starting from
+   * the one the URL named. See `ScopedOpponentInput`.
+   */
+  readonly carryOpponent?: { readonly initial: string | null };
 }
 
 export function DifficultyPicker(props: DifficultyPickerProps): ReactElement {
@@ -69,6 +74,7 @@ export function DifficultyPicker(props: DifficultyPickerProps): ReactElement {
     legend = 'How the opponent plays',
     className,
     id,
+    carryOpponent,
   } = props;
 
   return (
@@ -88,6 +94,7 @@ export function DifficultyPicker(props: DifficultyPickerProps): ReactElement {
       {hidden.map((field) => (
         <input key={`${field.name}:${field.value}`} name={field.name} type="hidden" value={field.value} />
       ))}
+      {carryOpponent === undefined ? null : <ScopedOpponentInput initial={carryOpponent.initial} />}
       <fieldset>
         <legend className="prl-legend-difficulty__legend prl-label">{legend}</legend>
         <div className="prl-legend-difficulty__options">

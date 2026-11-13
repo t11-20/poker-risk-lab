@@ -66,11 +66,13 @@ export interface LegendQuickStartProps {
   readonly framingHref: string;
   /** Fragment of the difficulty picker. */
   readonly settingHref: string;
+  /** The opponent the URL carried back through "Apply setting", if it is one of `profiles`. */
+  readonly selected: string | null;
 }
 
 export function LegendQuickStart(props: LegendQuickStartProps): ReactElement | null {
-  const { profiles, settings, difficulty, framingHref, settingHref } = props;
-  const first = profiles[0];
+  const { profiles, settings, difficulty, framingHref, settingHref, selected } = props;
+  const first = profiles.find((profile) => profile.id === selected) ?? profiles[0];
   // No profiles is not a form with an empty select: it is nothing to start, and the page's own
   // empty grid says why.
   if (first === undefined) return null;

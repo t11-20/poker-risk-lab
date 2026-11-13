@@ -49,7 +49,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { DIFFICULTIES, legendMatchHref, profileHref } from '@/lib/legend-links.ts';
+import { DIFFICULTIES, legendMatchHref, MATCH_PROFILE_PARAM, profileHref } from '@/lib/legend-links.ts';
 import { coachWords } from '@/lib/legend-match-copy.ts';
 
 /** The radio group's `name`. Same string as `DIFFICULTY_PARAM` in `DifficultyPicker.tsx`. */
@@ -58,6 +58,8 @@ const DIFFICULTY_NAME = 'difficulty';
 interface Scope {
   /** What is ticked now, or null until the reader (or the browser's restore) has ticked something. */
   readonly chosen: LegendDifficulty | null;
+  /** The opponent picked in "Start a match", or null until this code has read it. */
+  readonly opponent: string | null;
 }
 
 /** `undefined` outside a scope, which is how a link or a note knows nothing is following it. */
@@ -74,16 +76,25 @@ function asDifficulty(value: string): LegendDifficulty | null {
 export function LegendDifficultyScope({ children }: { readonly children: ReactNode }): ReactElement {
   const root = useRef<HTMLDivElement | null>(null);
   const [chosen, setChosen] = useState<LegendDifficulty | null>(null);
+  const [opponent, setOpponent] = useState<string | null>(null);
 
   useEffect(() => {
     const ticked = root.current?.querySelector<HTMLInputElement>(
       `input[type="radio"][name="${DIFFICULTY_NAME}"]:checked`,
     );
     if (ticked) setChosen(asDifficulty(ticked.value));
+    // Same reason as the radio: after Back the browser may restore a different opponent than the
+    // server rendered, and the picker must carry the one on screen.
+    const select = root.current?.querySelector<HTMLSelectElement>(`select[name="${MATCH_PROFILE_PARAM}"]`);
+    if (select) setOpponent(select.value);
   }, []);
 
   const onChange = (event: ChangeEvent<HTMLDivElement>): void => {
     const target = event.target;
+    if (target instanceof HTMLSelectElement && target.name === MATCH_PROFILE_PARAM) {
+      setOpponent(target.value);
+      return;
+    }
     if (!(target instanceof HTMLInputElement)) return;
     if (target.type !== 'radio' || target.name !== DIFFICULTY_NAME || !target.checked) return;
     setChosen(asDifficulty(target.value));
@@ -91,7 +102,7 @@ export function LegendDifficultyScope({ children }: { readonly children: ReactNo
 
   return (
     <div className="prl-legend-scope" onChange={onChange} ref={root}>
-      <ScopeContext.Provider value={{ chosen }}>{children}</ScopeContext.Provider>
+      <ScopeContext.Provider value={{ chosen, opponent }}>{children}</ScopeContext.Provider>
     </div>
   );
 }
@@ -187,4 +198,22 @@ export function ScopedSettingName({
   const setting = settings.find((candidate) => candidate.id === chosen);
   // A deployment whose difficulties list lacks the ticked id still gets the id, never a blank.
   return <>{setting === undefined ? chosen : `${setting.label}, ${coachWords(setting.coachAvailable)}`}</>;
+}
+
+/**
+ * The opponent picked in "Start a match", carried through the picker's "Apply setting".
+ *
+ * The picker is its own GET form, so applying a setting reloaded `/legends?difficulty=…` with no
+ * opponent in it, and the select came back on the first profile. "Change the setting" under the
+ * Play button sends a reader to exactly that form, so the ordinary path was: pick Passive Calling
+ * Station, follow the link, tick Expert, Apply, press Play — and be dealt High-Variance Tournament
+ * Aggressor (Devin Review on PR #41). The page reads the parameter back into the select.
+ *
+ * `initial` is the opponent the URL carried, which is what the field says before this code runs and
+ * with scripts off; it renders nothing when there is neither, so a page nobody has chosen on does not
+ * grow a parameter.
+ */
+export function ScopedOpponentInput({ initial }: { readonly initial: string | null }): ReactElement | null {
+  const opponent = useContext(ScopeContext)?.opponent ?? initial;
+  return opponent === null ? null : <input name={MATCH_PROFILE_PARAM} type="hidden" value={opponent} />;
 }
