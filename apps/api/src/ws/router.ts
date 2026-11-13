@@ -1,75 +1,14 @@
 /**
- * The WebSocket message handler, with no socket in it.
- *
- * Everything about *what a frame means* lives here; everything about sockets, upgrades, origins
- * and cookies lives in `hub.ts`. The split is what makes this testable: a `SocketSink` is two
- * methods, so `test/ws-router.test.ts` drives the real protocol — handshake timeout, rate limit,
- * oversized frame, duplicate action, stale sequence, per-recipient redaction — with no network, no
- * port and no timing.
- *
- * ## State goes out whole, never as a delta
- *
- * Every change sends the complete redacted view (ADR 0009). A delta protocol needs client and
- * server to agree on a base state, and any disagreement — a dropped frame, a reconnect at the
- * wrong moment — produces a table that is subtly wrong and extremely hard to reproduce. The cost
- * is a few kilobytes per update; the benefit is that reconnect is just "send the current view",
- * with no resynchronisation protocol to get wrong. `WsState.revision` is monotonic **per socket**
- * so a client can discard an out-of-order frame without needing to understand the sequence.
- *
- * ## Broadcast is per recipient, always
- *
- * `broadcast` loops over the sockets in a room and calls `table.viewFor(thatSocket.userId)` for
- * each one. There is deliberately no "build the view once and send it to everybody" path: that is
- * exactly the shape in which one player's hole cards reach the whole table, and it is a
- * one-character change away from being introduced by accident. `test/ws-router.test.ts` asserts
- * two sockets at the same table receive *different* frames and that neither contains the other's
- * cards, by scanning the serialised text.
- *
- * ## Validation before routing
- *
- * Every inbound frame is validated against `wsClientMessageSchema` before anything reads a field
- * off it. The validator is Fastify's own compiled Ajv instance (see `compileFrameValidator` in
- * `hub.ts`) rather than a second one, so the socket and the REST routes cannot disagree about what
- * the contract means. One consequence of sharing it is worth naming: the app's Ajv has
- * `coerceTypes: 'array'`, so `{"seat": "3"}` is accepted and coerced. Every field in the schema is
- * bounded or an enum, so coercion cannot produce an out-of-range value, and the alternative — a
- * second Ajv with different options — would be a second definition of the contract.
- *
- * ## Limits are enforced here, not hoped for
- *
- * `maxMessageBytes` (drop and close), `messagesPerSecond` with `burstAllowance` (a token bucket),
- * and `coachRequestsPerMinute` (the analysis is not free to compute). `maxSocketsPerSession` is
- * the hub's, because it is a property of the upgrade rather than of a message.
- *
- * The first two are PER SOCKET and the third is PER SESSION, which is not an inconsistency. A
- * token bucket bounds what one connection may push through the frame path, and a socket is the
- * right unit for that. A Coach request is answered by the shared worker pool, which is a
- * process-wide resource, so the unit has to be the thing a caller is allowed several of: a
- * session may hold `maxSocketsPerSession` sockets, and a per-socket Coach window handed one
- * session four times its published budget. See `takeCoachToken` and `bySession`.
- *
- * ## The Coach analysis happens on a thread, and that is not an optimisation
- *
- * `requestCoach` used to run the analysis — a 2,000-sample Monte Carlo, plus the preflop
- * strength table the default `top:NN` range needs — inline, on the event loop. Measured on this
- * machine before the change: 3,034 ms for the first analysis in a fresh process (the strength
- * table), 56-84 ms warm, and the event loop's own p99 for that window was 3,029 ms. Every socket,
- * every turn clock and every timer in the process stopped for exactly that long, which is the
- * thing `workers/pool.ts` exists to prevent and which the REST Coach path already avoided.
- *
- * So the socket now builds a `CoachTask` here — validation, redaction and the numbers read off
- * the view, all of which are microseconds — and hands it to the same shared pool
- * `routes/calc.ts` uses. Three consequences are deliberate and are handled rather than hoped
- * about, in `onCoach`: a full queue answers `service_unavailable` immediately, an overrun
- * answers `computation_timeout`, and a socket that closes while its analysis is in flight has
- * the result dropped.
- *
- * The cost, stated plainly: the answer is no longer computed in the same tick the request
- * arrived in, so it describes the spot AS IT STOOD WHEN THE REQUEST WAS ACCEPTED. A player who
- * acts while the analysis is running gets a report about the decision they have just made. That
- * is the same report they would have got before — the analysis was always of the view at request
- * time — but it can now arrive after the fact, and the frame carries the `requestId` so a client
- * can tell which question it answers.
+ * The WebSocket message handler, with no socket in it. Sockets, upgrades, origins and cookies live in
+ * `hub.ts`, so `test/ws-router.test.ts` drives the real protocol through a two-method `SocketSink`.
+ * Every change sends the complete redacted view (ADR 0009), never a delta, so reconnect is "send the
+ * current view". `broadcast` builds a view per recipient, because a shared view is how hole cards leak.
+ * Frames are validated with Fastify's own Ajv, which has `coerceTypes: 'array'`. Every schema field is
+ * bounded or an enum, so coercion cannot produce an out-of-range value.
+ * Frame limits are per socket. The Coach limit is per session, because the worker pool is
+ * process-wide and a session may hold several sockets.
+ * Coach analysis runs on the shared worker pool. Inline, it stalled the event loop for 3,034 ms cold.
+ * The report describes the view when the request was accepted, and carries its `requestId`.
  */
 
 import type {
@@ -107,11 +46,7 @@ export interface SocketSink {
 export interface WsPrincipal {
   readonly userId: string;
   readonly displayName: string;
-  /**
-   * The session, used only as the key for `maxSocketsPerSession`. Never sent anywhere and never
-   * logged: `logging.ts` censors anything matching `/session/i` in a log object, and this is a
-   * session identifier rather than a token, but the same care applies.
-   */
+  /** The key for per-session limits. Never sent and never logged. */
   readonly sessionId: string;
 }
 
@@ -123,11 +58,8 @@ export interface WsConnection {
   /** Null until `hello` has been accepted. */
   roomId: string | null;
   /**
-   * True from the moment a `hello` is accepted for validation until it has joined a room or failed.
-   *
-   * Only `roomId` existed, and it was enough while the handshake was synchronous. Reopening a room
-   * after a restart reads the database, so there is now a window in which `roomId` is still null and
-   * a second `hello` would be let through to join the same socket twice. See `onHello`.
+   * True while a `hello` is being handled. Reopening a room reads the database, so a second `hello`
+   * could otherwise join the same socket twice. See `onHello`.
    */
   joining: boolean;
   /** Monotonic per socket, so a client can discard an out-of-order frame. */
@@ -149,16 +81,9 @@ export type FrameValidation =
 export type FrameValidator = (value: unknown) => FrameValidation;
 
 /**
- * Why an inbound frame was refused, as a CLOSED set.
- *
- * This is a metric label (`prl_websocket_frames_rejected_total`), and a metric label whose value
- * comes from the caller is an unbounded in-process memory leak that anybody with a socket can
- * reach — the failure `observability/registry.ts` opens by describing. So the reason is chosen
- * from this union at the rejection site and NEVER derived from the frame: not from the schema
- * error, not from the message type the client claimed, not from the JSON parser's complaint.
- *
- * Snake_case because these are label values, not `ProblemEvent`s; the two vocabularies are
- * deliberately spelled differently so one cannot be passed where the other is expected.
+ * Label values for `prl_websocket_frames_rejected_total`, a closed set. Chosen at the rejection site
+ * and NEVER derived from the frame, or a caller could mint unbounded series. Snake_case, so these
+ * cannot be confused with `ProblemEvent` names.
  */
 export type WsFrameRejection =
   /** Over `WS_LIMITS.maxMessageBytes`. Dropped unparsed; the socket is closed. */
@@ -190,48 +115,26 @@ export interface WsRouterOptions {
   readonly onProblem?: ProblemHook;
   /** Defaults to the process-wide metrics. A test that wants isolation passes its own. */
   readonly metrics?: AppMetrics;
-  /**
-   * Monte Carlo samples for a Coach answer over a socket. Lower than a REST Coach request on
-   * purpose: this one is answered while a player is waiting on their own clock.
-   */
+  /** Monte Carlo samples over a socket. Lower than REST, because the player is on their own clock. */
   readonly coachSamples?: number;
   /**
-   * Where a Coach task is computed. Defaults to the process-wide calculator pool.
-   *
-   * A seam rather than a hard-wired `getSharedPool(...)` call for the reason every other
-   * collaborator here is one: a test that wants to drive the refusals — a full queue, a
-   * deadline, a thread that died — needs to produce them without arranging real thread
-   * exhaustion first. The DEFAULT is the pool, not an in-process call, so that a deployment
-   * which forgets to pass anything still keeps the analysis off the event loop; the defect this
-   * closes was precisely a path that quietly computed on the main thread.
+   * Defaults to the shared pool, so a deployment that passes nothing still keeps the analysis off the
+   * event loop. A seam so tests can drive the pool's refusals.
    */
   readonly analyseCoach?: CoachAnalyser;
 }
 
 /**
- * Runs one Coach task somewhere that is not this thread, and answers with the report.
- *
- * Rejections are `AppError`s and reach the socket through `guard`, so the four the pool can
- * produce — `service_unavailable` for a full queue or a closed pool, `computation_timeout` for
- * an overrun, `computation_rejected` for maths that refused the task, `internal_error` for a
- * thread that died — arrive as error frames carrying the contract's own wording.
+ * Pool rejections are `AppError`s, which reach the socket through `guard` as error frames with the
+ * contract's wording.
  */
 export type CoachAnalyser = (task: CoachTask) => Promise<CoachReport>;
 
 /**
- * The default: the shared pool, under the configured Coach budget.
- *
- * The allowance is the same one `routes/calc.ts` applies and for the same reason: a `top:NN`
- * range cannot be expanded without the preflop strength table, which is about three seconds on
- * the first request a thread serves and memoised per thread afterwards. Without the allowance
- * the very first live Coach request in a process would be terminated for overrunning
- * `coachTimeoutMs`, taking the half-built table with it — and the next one would start cold and
- * fail in exactly the same way. See `STRENGTH_TABLE_ALLOWANCE_MS`.
- *
- * The app config is passed in by `ws/hub.ts`, so the WebSocket path uses the same timeout and
- * worker-pool sizing as the REST calculation routes. Reading process-global configuration here
- * would make isolated app instances impossible to test and would let the first unrelated config
- * parse decide the socket budget.
+ * The shared pool, under the configured Coach budget. A `top:NN` range needs the preflop strength
+ * table, about 3 s cold per thread, so without `STRENGTH_TABLE_ALLOWANCE_MS` the first request in a
+ * process would time out and the next would start cold again. `config` comes from `ws/hub.ts`, so
+ * sockets and REST share one budget.
  */
 function pooledCoachAnalyser(config: AppConfig): CoachAnalyser {
   return (task) => {
@@ -246,28 +149,10 @@ function pooledCoachAnalyser(config: AppConfig): CoachAnalyser {
 const COACH_WINDOW_MS = 60_000;
 
 /**
- * The per-SESSION state, which is everything a limit whose unit is the session needs.
- *
- * `sockets` is a reference count: it is incremented in `open` and decremented in `handleClose`,
- * the same lifetime `hub.ts` gives its own `bySession` counter (the one that enforces
- * `maxSocketsPerSession`), so there is one answer to "is this session still connected" rather
- * than two that can disagree. It is a separate map only because the hub's belongs to the upgrade
- * and this belongs to the frames; if a third per-session limit appears they should become one.
- *
- * ## Why the entry does not simply die with the last socket
- *
- * That was the first version, and it reintroduced the defect through the back door. Reconnecting
- * is free — a client does it on every network hiccup — so an entry discarded the instant the last
- * socket closed would let a caller clear their Coach window by closing the socket and opening
- * another, which is a cheaper reset than the per-socket window ever was. The upgrade is only
- * bounded by the global HTTP limiter (300/minute by default), so "the window survives the socket"
- * is the difference between 30 analyses a minute and several thousand.
- *
- * So an entry with spent Coach tokens outlives its sockets by one window, on a timer. An entry
- * with none is deleted immediately, which is the common case: a socket that never asked for a
- * Coach analysis leaves nothing behind. The map is therefore bounded by the sessions that have
- * actually used the Coach in the last two minutes, and NOT by every session that has ever
- * connected — which is what an unswept map keyed on caller-supplied ids would be.
+ * Per-session state. `sockets` is a reference count with the same lifetime as `hub.ts`'s `bySession`.
+ * An entry with spent Coach tokens outlives its last socket by one window, because reconnecting is
+ * free and would otherwise reset the Coach limit. An entry with none is deleted at once, so the map
+ * holds only sessions that used the Coach recently.
  */
 interface SessionState {
   /** Live sockets this session holds. Zero means only the window below is keeping it alive. */
@@ -311,16 +196,9 @@ export class WsRouter {
     return this.counter;
   }
 
-  // -----------------------------------------------------------------------
-  // Lifecycle
-  // -----------------------------------------------------------------------
-
   /**
-   * Registers a socket that has already been authenticated and origin-checked.
-   *
-   * The handshake timer starts here: a socket that never sends `hello` has cost us an accepted
-   * connection and holds a slot against `maxSocketsPerSession`, so it is closed rather than left
-   * to sit. Closing with `4408` tells an honest client exactly what went wrong.
+   * Registers an authenticated, origin-checked socket. A socket that never sends `hello` holds a slot,
+   * so it is closed with `4408`.
    */
   open(sink: SocketSink, principal: WsPrincipal): WsConnection {
     const connection: WsConnection = {
@@ -336,18 +214,13 @@ export class WsRouter {
       missedHeartbeats: 0,
       closed: false,
     };
-    // The session's entry is claimed here and released in `handleClose`, whatever ends the socket
-    // — a peer close, the heartbeat's `terminate`, the shutdown drain. A Coach window that only
-    // lived as long as one socket was the defect; one that never goes away is a leak. See
-    // `SessionState`.
+    // Claimed here and released in `handleClose`, whatever ends the socket.
     const session = this.bySession.get(principal.sessionId) ?? {
       sockets: 0,
       coachRequests: [],
       expiry: null,
     };
-    // A session that reconnects inside its window keeps the window. Cancelling the pending
-    // deletion rather than letting it fire and re-creating the entry is what makes "close the
-    // socket and open another" useless as a way to clear the Coach limit.
+    // Cancelling the pending deletion keeps the window, so reconnecting does not clear the Coach limit.
     session.expiry?.cancel();
     session.expiry = null;
     session.sockets += 1;
@@ -365,9 +238,8 @@ export class WsRouter {
     connection.closed = true;
     connection.handshake?.cancel();
     connection.handshake = null;
-    // BEFORE the `roomId === null` return below, because a socket that never sent `hello` still
-    // claimed a session entry in `open`. Releasing it only on the room path would leave one entry
-    // per handshake that timed out, held for the life of the process.
+    // Before the `roomId` return, because a socket that never sent `hello` still claimed a session
+    // entry.
     this.releaseSession(connection.principal.sessionId);
     const roomId = connection.roomId;
     if (roomId === null) return;
@@ -376,8 +248,7 @@ export class WsRouter {
     this.registry.noteSocket(roomId, connection.principal.userId, -1);
     if (sockets !== undefined && sockets.size === 0) {
       this.byRoom.delete(roomId);
-      // The room's table subscription belongs to the sockets watching it. Dropping it when the
-      // last one goes stops a closed-over listener keeping this router alive for a dead room.
+      // Drop the subscription with the last socket, or the listener keeps this router alive.
       this.subscriptions.get(roomId)?.();
       this.subscriptions.delete(roomId);
     } else {
@@ -387,12 +258,8 @@ export class WsRouter {
   }
 
   /**
-   * Drops one socket's claim on its session's state, and arms the state's own expiry.
-   *
-   * The deletion is the point. A `Map` keyed on something the caller supplies — a session id is
-   * one per guest session, and a guest session costs one `POST /auth/guest` — is unbounded growth
-   * unless every entry has something that removes it. Two things do here: the last socket
-   * leaving, when there is no window to preserve, and a timer for when there is.
+   * Drops one socket's claim. Session ids are caller-supplied, so every entry needs something that
+   * removes it.
    */
   private releaseSession(sessionId: string): void {
     const session = this.bySession.get(sessionId);
@@ -400,30 +267,20 @@ export class WsRouter {
     session.sockets -= 1;
     if (session.sockets > 0) return;
     if (session.coachRequests.length === 0) {
-      // Nothing to remember. The overwhelmingly common case: most sockets never ask for a Coach
-      // analysis at all, so most sessions leave no residue whatsoever.
+      // Most sessions never ask for a Coach analysis and leave nothing behind.
       this.bySession.delete(sessionId);
       return;
     }
-    // One window from now, not from the oldest token: it is an upper bound, it is one timer
-    // instead of a re-arming chain, and over-retaining a handful of timestamps by up to a minute
-    // costs nothing. The task is `unref`'d by `systemClock`, so it never holds the process open.
+    // One window from now is an upper bound and a single timer. `systemClock` `unref`s it.
     session.expiry?.cancel();
     session.expiry = this.clock.schedule(COACH_WINDOW_MS, () => {
-      // Re-checked rather than assumed: a socket may have come back and cancelled this, and a
-      // stale timer deleting a live session's window would hand it a free reset.
+      // Re-checked. A stale timer deleting a live session's window would hand it a free reset.
       const current = this.bySession.get(sessionId);
       if (current === session && current.sockets <= 0) this.bySession.delete(sessionId);
     });
   }
 
-  /**
-   * Sessions this router currently holds state for.
-   *
-   * Public for the leak assertions in `test/ws-coach-session-limit.test.ts`: a limit whose
-   * bookkeeping only ever grows is a different defect from the one it fixed, and "the map is
-   * empty again afterwards" is the only way to see that from outside.
-   */
+  /** Public for the leak assertions in `test/ws-coach-session-limit.test.ts`. */
   sessionsTracked(): number {
     return this.bySession.size;
   }
@@ -434,14 +291,8 @@ export class WsRouter {
   }
 
   /**
-   * Closes every socket watching one room.
-   *
-   * Exists for one caller: a room this process has been FENCED from (`RoomRegistry.onEviction`).
-   * The registry has already closed the table and dropped the room, so these sockets are attached
-   * to something that will never send another frame — and a client sitting on a healthy socket that
-   * has silently stopped receiving state is the worst possible version of this, because its ping
-   * watchdog is answered and it never reconnects. Closing them with a real code is what sends it to
-   * the process that does own the room.
+   * For a room this process was fenced from. A healthy socket that silently stops receiving state
+   * never reconnects, so it is closed with a real code.
    */
   closeRoom(roomId: string, code: WsCloseCode, reason: string): void {
     for (const connection of this.socketsIn(roomId)) this.closeConnection(connection, code, reason);
@@ -454,33 +305,18 @@ export class WsRouter {
         this.closeConnection(connection, WS_CLOSE.serverShuttingDown, reason);
       }
     }
-    // The session windows go with the sockets. Their expiry timers are `unref`'d and would not
-    // hold the process open, but a router that has been shut down should be holding nothing at
-    // all — an armed timer closing over a dead router is the shape `handleClose` drops a room's
-    // table subscription to avoid.
+    // A shut-down router should hold nothing, including armed timers.
     for (const session of this.bySession.values()) session.expiry?.cancel();
     this.bySession.clear();
   }
 
-  // -----------------------------------------------------------------------
-  // Inbound frames
-  // -----------------------------------------------------------------------
-
-  /**
-   * Handles one inbound frame.
-   *
-   * The order is the security property, and it is cheapest-first: size, then rate, then parse,
-   * then schema, then routing. A caller who sends a megabyte of malformed JSON at 500 frames a
-   * second is refused by the first two checks, having cost one length comparison and one
-   * subtraction each.
-   */
+  /** Cheapest check first. Size, then rate, then parse, then schema, then routing. */
   handleFrame(connection: WsConnection, raw: string | Uint8Array): void {
     if (connection.closed) return;
 
     const bytes = typeof raw === 'string' ? Buffer.byteLength(raw, 'utf8') : raw.byteLength;
     if (bytes > WS_LIMITS.maxMessageBytes) {
-      // Dropped without being parsed — the point of a size cap is to refuse before doing work —
-      // and the socket is closed, because a client that oversends once will do it again.
+      // Dropped unparsed and closed, because a client that oversends once will do it again.
       this.rejectFrame('too_large');
       this.closeConnection(connection, WS_CLOSE.rateLimited, 'frame too large');
       return;
@@ -503,9 +339,7 @@ export class WsRouter {
 
     const validated = this.validate(parsed);
     if (!validated.ok) {
-      // `validated.problem` is deliberately not the label. It is a sentence, and one that a
-      // future validator could easily start deriving from the frame — which is how a caller
-      // starts minting time series.
+      // `validated.problem` is prose and is never the label.
       this.rejectFrame('schema');
       this.sendError(connection, null, 'invalid_request');
       return;
@@ -513,8 +347,8 @@ export class WsRouter {
     const message = validated.value;
 
     if (connection.roomId === null && message.type !== 'hello') {
-      // Not a close: an honest client that raced its own `hello` deserves to be told rather than
-      // dropped, and the handshake timer is still running.
+      // Not a close. An honest client may have raced its own `hello`, and the handshake timer still
+      // runs.
       this.rejectFrame('before_handshake');
       this.sendError(connection, requestIdOf(message), 'invalid_request');
       return;
@@ -545,32 +379,22 @@ export class WsRouter {
         void this.guard(connection, message.requestId, () => this.onCoach(connection, message));
         return;
       default:
-        // Unreachable while the schema and this switch agree: the validator has already narrowed
-        // the frame to one of the contract's message types. It stays because the two can drift —
-        // a message added to the contract and not handled here would otherwise be silently
-        // ignored — and this counter is how that drift becomes visible.
+        // Unreachable while the schema and this switch agree. Counts the drift if a contract message
+        // goes unhandled.
         this.rejectFrame('unknown_type');
         this.sendError(connection, null, 'invalid_request');
         return;
     }
   }
 
-  /**
-   * Counts one refused frame against a reason from the closed set above.
-   *
-   * One method rather than eight `inc` calls so that the label can only ever be a
-   * `WsFrameRejection` — a call site cannot pass a string that happens to be handy.
-   */
+  /** One method, so the label can only be a `WsFrameRejection`. */
   private rejectFrame(reason: WsFrameRejection): void {
     this.metrics.wsFramesRejected.inc({ reason });
   }
 
   /**
-   * Runs one intent, turning a thrown `AppError` into an error frame.
-   *
-   * Every handler below is allowed to throw the same `AppError` a REST route would, so the two
-   * transports report a rejection with the same code and the same wording, and neither can leak
-   * an internal message: only `ERROR_MESSAGES[code]` is ever sent.
+   * Handlers throw the same `AppError` as REST, so both transports report the same code and wording.
+   * Only `ERROR_MESSAGES[code]` is ever sent.
    */
   private async guard(connection: WsConnection, requestId: string, work: () => Promise<void>): Promise<void> {
     try {
@@ -588,43 +412,23 @@ export class WsRouter {
     }
   }
 
-  // -----------------------------------------------------------------------
-  // The intents
-  // -----------------------------------------------------------------------
-
   /**
-   * `hello`: the protocol version, the room, and the membership check.
-   *
-   * Authentication is *not* here. It happened during the upgrade, from the session cookie, and a
-   * token in the first frame would end up in client logs and browser history far more easily than
-   * an `HttpOnly` cookie does.
-   *
-   * ## An empty registry is not a refusal
-   *
-   * This used to be `registry.require` on its own, and room state is in memory by design, so an API
-   * restart stranded every open table: the first `hello` afterwards found no live room, answered
-   * `room_not_found_or_not_permitted`, and the client showed a member of their own table "Not your
-   * table… either it does not exist or this session is not a member of it". The row was still
-   * there, and so was their membership. `reopenFor` rebuilds it from the database the way the REST
-   * path (`openRoomFor` in `routes/rooms.ts`) always has.
+   * Identity comes from the upgrade, never from this frame. After a restart the registry is empty, so
+   * `reopenFor` rebuilds the room from the database, as `openRoomFor` in `routes/rooms.ts` does.
    */
   private async onHello(
     connection: WsConnection,
     message: WsClientMessage & { type: 'hello' },
   ): Promise<void> {
-    // `joining` as well as `roomId`, because reopening a room reads the database and this handler
-    // is dispatched with `void`. Two `hello` frames arriving in one tick would both pass a
-    // `roomId === null` test, both await, and both run the join below — registering the same socket
-    // twice and leaving `noteSocket` one increment over, so a member who has disconnected still
-    // shows as connected at the table. Set synchronously, before anything can suspend.
+    // `joining` as well as `roomId`, set before anything suspends. Two `hello` frames in one tick would
+    // otherwise both join and leave `noteSocket` one increment over.
     if (connection.roomId !== null || connection.joining) {
       this.rejectFrame('duplicate_hello');
       this.sendError(connection, null, 'invalid_request');
       return;
     }
     if (message.protocolVersion !== WS_PROTOCOL_VERSION) {
-      // The version itself is not the label. It is a number the client chose, so labelling by it
-      // would let one caller mint a series per integer it feels like sending.
+      // Not labelled by the version, which the client chose.
       this.rejectFrame('bad_protocol_version');
       this.sendError(connection, null, 'unsupported_protocol_version');
       this.closeConnection(connection, WS_CLOSE.protocolMismatch, 'protocol version');
@@ -634,14 +438,8 @@ export class WsRouter {
 
     let room: LiveRoom;
     try {
-      // A room already in memory is taken with no `await` EVALUATED on this path — the branch is
-      // the point, not an optimisation. `await` on an already-resolved promise still suspends for
-      // a microtask, and suspending here would move every handshake behind one: a client whose
-      // `hello` and `sit` arrive in a single read would have the `sit` refused by the "no room
-      // yet" guard in `handleFrame`, and `test/ws-router.test.ts` — which drives the protocol with
-      // no event loop between frames — would stop seeing a welcome at all. Only the first `hello`
-      // for a room this process has not loaded, which is to say the first one after a restart,
-      // waits for anything.
+      // A live room is taken with no `await` evaluated. Even a resolved `await` suspends for a
+      // microtask, so a `sit` in the same read as `hello` would be refused.
       const live = this.registry.get(message.roomId);
       room =
         live === null
@@ -651,36 +449,21 @@ export class WsRouter {
       connection.joining = false;
       const code: ErrorCode = isAppError(error) ? error.code : 'internal_error';
       this.sendError(connection, null, code);
-      // The close code comes from the SAME error the frame does. It used to be a hard-coded
-      // `WS_CLOSE.forbidden` here, justified by a comment that only held for one of the errors
-      // this block can catch: "4403 for both 'no such room' and 'not your room' — the frame
-      // already carries the one code that does not distinguish them, and the close code must not
-      // either." That reasoning is still exactly right for `room_not_found_or_not_permitted`, and
-      // `wsCloseForError` keeps it: a 4xx code still closes 4403, so a stranger and a room that
-      // never existed remain indistinguishable, close code included.
-      //
-      // What the comment did not cover is everything else that can be thrown here. Nothing on the
-      // `reopenFor` path is wrapped — `store.byId`, `store.memberOf` and `ensureOpen`'s
-      // `membersOfRooms` all reach Postgres directly — so a connection blip arrived as a plain
-      // `Error`, became `internal_error` in the frame, and was still closed 4403. 4403 is
-      // `retryable: false` in `describeClose` (`apps/web/src/lib/table-socket.ts`), so the client
-      // set status `closed` and never tried again: a member of their own table was told, until
-      // they reloaded by hand, that the table was not theirs. A 5xx code now closes 4503, which
-      // that same client reconnects from with backoff.
+      // The close code comes from the same error as the frame. A 4xx closes 4403, so a stranger and a
+      // missing room stay indistinguishable. A 5xx (a database blip in `reopenFor`) closes 4503, which
+      // the client retries. A hard-coded 4403 told members their own table was not theirs.
       const closeCode = wsCloseForError(code);
       this.closeConnection(
         connection,
         closeCode,
-        // The reason is diagnostic only — browsers do not show it — so it says which of the two
-        // things happened, which the close code deliberately no longer does on its own.
+        // Diagnostic only. Browsers do not show it.
         closeCode === WS_CLOSE.forbidden ? 'not permitted' : 'handshake failed',
       );
       return;
     }
     connection.joining = false;
-    // The socket may have gone while the room was being read back from the database. Joining it now
-    // would put a closed connection in `byRoom` that `handleClose` has already been through, so the
-    // room would carry a socket nothing will ever remove.
+    // The socket may have closed during the database read. Joining it now would leave a socket in
+    // `byRoom` that nothing removes.
     if (connection.closed) return;
 
     connection.handshake?.cancel();
@@ -703,7 +486,7 @@ export class WsRouter {
       seat: room.table.seatOf(connection.principal.userId),
       serverTimeMs: this.clock.now(),
     });
-    // Reconnect is exactly this: send the current view. There is no catch-up protocol.
+    // Reconnect is just sending the current view. There is no catch-up protocol.
     this.sendState(connection, summary);
     // Everybody else's `connected` flag just changed.
     this.broadcastExcept(message.roomId, connection);
@@ -711,30 +494,10 @@ export class WsRouter {
   }
 
   /**
-   * Rebuilds a room this process has never seen, and refuses a stranger without telling them it
-   * exists.
-   *
-   * Only called when `registry.get` came back null — `onHello` takes a live room synchronously, and
-   * the comment there says why that branch is load-bearing rather than an optimisation. The `get`
-   * is repeated here anyway so this method is correct on its own terms: a caller that reached it
-   * with a live room would otherwise re-read the durable rows for no reason.
-   *
-   * ## The order of the two checks is a security property
-   *
-   * Membership is read from the durable rows BEFORE anything is built. Opening first and checking
-   * afterwards would be shorter and would let anybody who guessed a room id make this process
-   * construct a live table — a `HandState`, a turn timer, a bot runner — before being told no.
-   *
-   * Every refusal is the same `room_not_found_or_not_permitted`, with the detail only in the log:
-   * "that room exists but is not yours" is a free way to confirm a room id, which is why the REST
-   * side answers a 404 that does not confirm the room exists and the socket answers one error code
-   * and one close code (4403) for both cases.
-   *
-   * This deliberately mirrors `openRoomFor` in `routes/rooms.ts` step for step, including the
-   * `logDetail`. The two really should be one method on `RoomRegistry` — that is the file both
-   * transports already depend on, and a rule about who may open a room belongs next to the opening.
-   * Left duplicated here only because this change could not touch either of those files; if you are
-   * editing one of these two functions, move both.
+   * Rebuilds a room this process has never seen. Membership is read from the durable rows BEFORE
+   * anything is built, so a guessed room id cannot make this process build a live table. Every
+   * refusal is the same `room_not_found_or_not_permitted`, so it cannot confirm a room exists.
+   * Mirrors `openRoomFor` in `routes/rooms.ts` step for step. Change both together.
    */
   private async reopenFor(roomId: string, userId: string): Promise<LiveRoom> {
     const live = this.registry.get(roomId);
@@ -750,8 +513,7 @@ export class WsRouter {
     const member = await this.registry.store.memberOf(roomId, userId);
     if (member === null && row?.owner_user_id !== userId) refuse();
 
-    // The row is durable, the table is not. This is what makes a room usable again after a restart:
-    // it rebuilds the table from the roster, re-taking the seats the database records.
+    // The row is durable, the table is not. This rebuilds the table from the roster after a restart.
     if ((await this.registry.ensureOpen(roomId)) === null) refuse();
     return this.registry.require(roomId, userId);
   }
@@ -779,11 +541,7 @@ export class WsRouter {
   }
 
   /**
-   * `action`: the one intent that changes a hand.
-   *
-   * Everything that decides whether it is legal is the table's and the engine's. The router's job
-   * is to hand over `actionId`, `expectedSequence` and the intent unchanged, and to report what
-   * came back — including `deduplicated: true` for a retry, which is a success and not an error.
+   * Legality belongs to the table and the engine. `deduplicated: true` for a retry is a success.
    */
   private async onAction(
     connection: WsConnection,
@@ -805,29 +563,10 @@ export class WsRouter {
   }
 
   /**
-   * `requestCoach`: the analysis for the caller's own decision.
-   *
-   * Built from the caller's own redacted view and nothing else, which is what makes it safe: the
-   * view carries that seat's own cards (and nobody else's), so answering it needs no new exit from
-   * the trust zone. A report for somebody else's decision is not representable here.
-   *
-   * ## The order of the four gates is load-bearing
-   *
-   * Difficulty, then the rate limit, then the hand, then the pool. The two refusals that cost
-   * nothing come first, so an Expert table — which sells "Coach in review only" — never queues a
-   * task it is going to refuse, and a session over its minute limit never occupies a thread. That
-   * ordering was already here for the rate-limit token; it matters more now that what follows it
-   * is a queue slot rather than a stretch of this thread's time.
-   *
-   * ## What crosses to the thread, and what comes back
-   *
-   * A `CoachTask`: two cards the caller already holds, the public board, the pot, the stacks, the
-   * street, the engine's own `legalActions` and a range DESCRIPTOR. No `HandState`, no deck, no
-   * salt, no other seat's cards — the calculator could not leak one if it wanted to, because it
-   * is never given one (see `equity-worker.ts`). What comes back is a `CoachReport`, and
-   * `WorkerPool.runCoach` checks it against the task's own legal set before it returns, so the
-   * socket path now gets the guarantee `assertReportStaysInsideItsLegalSet` was written for and
-   * previously only the REST path had.
+   * Built from the caller's own redacted view, so it cannot report on anybody else's cards. Gates run
+   * cheapest first (difficulty, rate limit, hand, pool), so a refused request never takes a queue
+   * slot. The `CoachTask` carries no `HandState`, deck, salt or other seat's cards, and
+   * `WorkerPool.runCoach` checks the report against the task's legal set.
    */
   private async onCoach(
     connection: WsConnection,
@@ -835,8 +574,7 @@ export class WsRouter {
   ): Promise<void> {
     const roomId = this.requireRoom(connection);
     const room = this.registry.require(roomId, connection.principal.userId);
-    // Expert Legends sells "Coach in review only". Refuse before spending a rate-limit token,
-    // and — since the analysis moved to a thread — before anything is queued.
+    // Expert Legends offers "Coach in review only". Refused before a rate-limit token is spent.
     if (!room.bots.coachDuringHand()) {
       throw new AppError('coach_not_available', {
         logDetail: `live Coach refused in ${roomId}: a seated bot plays a difficulty that turns it off`,
@@ -845,45 +583,27 @@ export class WsRouter {
     if (!this.takeCoachToken(connection)) {
       throw new AppError('rate_limited', {
         retryAfterSeconds: 5,
-        // "for this session", not "on this socket": the window is the session's, so closing this
-        // socket and opening another does not clear it. The log detail said the wrong one while
-        // the limiter did too.
+        // The window is the session's, so a new socket does not clear it.
         logDetail: 'coach requests per minute exceeded for this session',
       });
     }
     const view = room.table.viewFor(connection.principal.userId);
     if (view === null) throw new AppError('hand_not_active', { logDetail: 'no hand to analyse' });
-    // Everything that can refuse this request from the view alone happens here, on this thread,
-    // in microseconds: no seat, no cards, no decision to make, an unreadable range. A task is
-    // only built once the answer is known to be worth computing.
+    // Refusals that need only the view happen here, in microseconds, before a task is built.
     const task = coachTaskForView(view, {
       samples: this.coachSamples,
       names: room.table.dealtNames(),
       ...(message.opponentRange === undefined ? {} : { opponentRange: message.opponentRange }),
     });
-    // Timed and counted like the REST analyses. `scripts/load-test.mjs` states in its own header
-    // that the socket Coach feeds no server-side histogram and has to be measured client-side;
-    // it does now, under the same `kind="coach"` label, because it is the same work on the same
-    // threads and an operator asking "is the Coach slow?" should not have to know which transport
-    // asked for it.
+    // Same `kind="coach"` histogram as the REST analyses, because it is the same work on the same
+    // threads.
     const report = await observeAnalysis('coach', () => this.analyseCoach(task), this.metrics);
-    // The socket may have gone while the thread was working. Dropping the report is the whole
-    // handling: `send` would refuse it anyway, and saying so here is what stops a future reader
-    // adding a "deliver it somewhere" branch for a connection that no longer exists.
+    // The socket may have closed while the thread worked. Dropping the report is the whole handling.
     if (connection.closed) return;
     this.send(connection, { type: 'coach', requestId: message.requestId, report });
   }
 
-  // -----------------------------------------------------------------------
-  // Outbound
-  // -----------------------------------------------------------------------
-
-  /**
-   * Sends every socket in a room its own view.
-   *
-   * One `viewFor` call per socket. Never one object shared between recipients — see the file
-   * comment for why that is the shape this method exists to prevent.
-   */
+  /** One `viewFor` call per socket, never one shared object. See the file comment. */
   broadcast(roomId: string): void {
     this.broadcastExcept(roomId, null);
   }
@@ -900,35 +620,10 @@ export class WsRouter {
   }
 
   /**
-   * Closes the sockets of anyone who is no longer a member of the room they are watching.
-   *
-   * ## The defect
-   *
-   * `onHello` checks membership — `registry.require`, or `reopenFor`'s two durable reads — and the
-   * socket is never asked again. `POST /rooms/:roomId/leave` drops the membership durably and in
-   * memory, so a FRESH `hello` from the departed learner is correctly refused
-   * `room_not_found_or_not_permitted`; the socket they already had went on receiving the private
-   * table. Measured against the code this was written for, after `leaveRoom` for that learner:
-   *
-   *     ex-member's socket -> {"type":"event","event":{"kind":"playerJoined",...}}
-   *                        -> {"type":"state","room":{...members:[...]},...}
-   *     ex-member's fresh hello -> {"type":"error","error":{"code":"room_not_found_or_not_permitted"}}
-   *
-   * An invite-only table is invite-only for the duration, not only at the door. The frames carry
-   * the roster, the seats, the stacks and — once a hand is dealt — the spectator's view of it.
-   *
-   * ## Why it is checked here rather than announced by the registry
-   *
-   * Because the check is a `Map` lookup and this is the one place every outbound frame passes
-   * through. An event on the registry would have to be raised by `leaveRoom` and by every future
-   * path that ends a membership, and a path that forgot to raise it would be this defect again
-   * with no test to notice. Asking the question where the frame is about to go cannot be forgotten
-   * by a new caller.
-   *
-   * The cost is that a departure is acted on at the next table change rather than at the instant
-   * it happens. That is not a hole: nothing is SENT between the two, because the next thing sent
-   * is what triggers this. It is bounded, it is `O(sockets in the room)`, and it is the same
-   * comparison `registry.require` makes.
+   * Closes the sockets of anyone no longer a member. `onHello` checks membership once, so after
+   * `leaveRoom` the old socket kept receiving the private table. Checked here because every outbound
+   * frame passes through, so a new path that ends a membership cannot forget to announce it. Nothing
+   * is sent between a departure and this check.
    */
   private dropDepartedSockets(roomId: string): void {
     const room = this.registry.get(roomId);
@@ -937,10 +632,8 @@ export class WsRouter {
       if (connection.closed) continue;
       const userId = connection.principal.userId;
       if (room.member(userId) !== null || room.record.ownerUserId === userId) continue;
-      // 4403 and not 4401: the session is fine, the table is not theirs any more. That is what
-      // `describeClose` in `apps/web/src/lib/table-socket.ts` renders as "not your table", which is
-      // exactly right for somebody who has just left it, and it is permanent — a reconnect would
-      // be refused by `onHello` for the same reason.
+      // 4403, not 4401. The session is fine but the table is not theirs, and a reconnect would be
+      // refused.
       this.closeConnection(connection, WS_CLOSE.forbidden, 'no longer a member of this table');
     }
   }
@@ -954,15 +647,11 @@ export class WsRouter {
 
   private onTableChange(roomId: string, notice: TableNotice): void {
     const serverTimeMs = this.clock.now();
-    // BEFORE the events, not only before the state below: an `action` or `showdown` event is a
-    // frame about a private table like any other, and `broadcast` at the end of this method would
-    // be too late to keep it from somebody who has left. See `dropDepartedSockets`.
+    // Before the events too, since an event is also a frame about a private table.
     this.dropDepartedSockets(roomId);
     for (const connection of this.socketsIn(roomId)) {
       if (connection.closed) continue;
-      // Events first, then state. An event is for animation and the action log and is never
-      // load-bearing; the state that follows it is the truth, so a client that ignored every
-      // event would still render a correct table.
+      // Events first, then state. Events are for animation, and the state is the truth.
       for (const event of notice.events) this.send(connection, { type: 'event', event, serverTimeMs });
     }
     this.broadcast(roomId);
@@ -987,8 +676,7 @@ export class WsRouter {
     try {
       connection.sink.send(JSON.stringify(message));
     } catch (error) {
-      // A send that throws means the socket is gone; the close event will follow. Recorded rather
-      // than rethrown, because a dead socket must not fail the action that triggered the frame.
+      // The socket is gone and its close event follows. A dead socket must not fail the action.
       this.onProblem('a socket send failed', { event: 'socket-send', error: String(error) });
     }
   }
@@ -1016,17 +704,9 @@ export class WsRouter {
     this.handleClose(connection);
   }
 
-  // -----------------------------------------------------------------------
-  // Limits
-  // -----------------------------------------------------------------------
-
   /**
-   * The per-socket token bucket.
-   *
-   * Capacity `burstAllowance`, refilled at `messagesPerSecond`. A bucket rather than a fixed
-   * window because a client legitimately bursts — a reconnect sends `hello` and then several
-   * intents in the same tick — and a fixed window either forbids that or has to be set so high
-   * that it stops limiting anything.
+   * A token bucket, not a fixed window, because a reconnect legitimately bursts `hello` and several
+   * intents in one tick.
    */
   private takeToken(connection: WsConnection): boolean {
     const now = this.clock.now();
@@ -1042,30 +722,10 @@ export class WsRouter {
   }
 
   /**
-   * The Coach window, keyed on the SESSION rather than on the socket.
-   *
-   * ## What was wrong
-   *
-   * This used to filter and push `connection.coachRequests`, a `WsConnection` field. The contract
-   * has always said `coachRequestsPerMinute` is "per minute per session", and a session is
-   * permitted `WS_LIMITS.maxSocketsPerSession` sockets at once, so the enforced limit was four
-   * times the published one: one session opening its four permitted sockets could put
-   * 4 × 30 = 120 analyses a minute onto the shared worker pool — which is precisely the
-   * process-wide resource the number exists to protect, and which every other session is queuing
-   * behind. Measured before: 4 sockets, one session, 30 accepted on each, 120 total. After: 30
-   * accepted across all four, the 31st refused with `rate_limited` on whichever socket sent it.
-   *
-   * ## Why a session entry and not a `WsConnection` field
-   *
-   * The counter has to outlive any one socket, or a caller resets it by reconnecting — which is
-   * free and which a client already does on every network hiccup. It must also not outlive the
-   * session, or the map grows one entry per session forever; `open` and `handleClose` reference-
-   * count it, the same lifetime `hub.ts` gives `maxSocketsPerSession`.
-   *
-   * A missing entry means the socket has already been released, which `handleFrame`'s
-   * `connection.closed` guard makes unreachable. It is refused rather than lazily recreated: a
-   * recreated entry would be a fresh window for a caller whose bookkeeping we have already
-   * dropped, and re-adding it here is how the leak comes back.
+   * The Coach window, keyed on the SESSION. Per socket, one session's four permitted sockets got
+   * 4 x 30 = 120 analyses a minute onto the shared pool (measured). Now it is 30 across all four.
+   * A missing entry means the socket was released. It is refused, not recreated, because a recreated
+   * entry would be a fresh window and the leak coming back.
    */
   private takeCoachToken(connection: WsConnection): boolean {
     const session = this.bySession.get(connection.principal.sessionId);
@@ -1096,25 +756,16 @@ export interface CoachForViewOptions {
   readonly opponentRange?: string;
   /**
    * The names the table dealt in, so the Coach names opponents the way the seat plates do. Absent,
-   * opponents are `seat N` — which `test/coach-task-pin.test.ts` holds to the byte.
+   * opponents are `seat N`, which `test/coach-task-pin.test.ts` holds to the byte.
    */
   readonly names?: ReadonlyMap<number, string>;
 }
 
 /**
- * One redacted view, as the task a calculator thread runs.
- *
- * This is what `requestCoach` sends to the pool. Everything expensive is described rather than
- * computed: the range is an `AssumedRange` the thread expands, and the arithmetic is the thread's.
- * Everything cheap has already happened by the time this returns: the refusals, and the numbers
- * read off the view, both by `coachSpotForView` in `@prl/poker-math`, which is also what the chat
- * bot reads its Coach input with.
- *
- * A named notation range is parsed here once against hero's cards and the board, and the
- * expansion discarded. `parseRange` is microseconds, and running it here is what turns a range
- * this server cannot read into a `400` with a named field instead of a thread that dies of a
- * `RangeParseError` and a caller told `internal_error`. A `top:NN` range is only bounds-checked,
- * by `opponentRangeOption`: expanding it is the three-second stall this path exists to avoid.
+ * One redacted view as a calculator task. Refusals and the numbers come from `coachSpotForView`.
+ * A notation range is parsed here once, so an unreadable range is a `400` with a named field, not a
+ * thread that dies as `internal_error`. A `top:NN` range is only bounds-checked, because expanding it
+ * is the three-second stall this path avoids.
  */
 export function coachTaskForView(view: PlayerView, options: CoachForViewOptions): CoachTask {
   const range =
@@ -1158,10 +809,8 @@ export function coachTaskForView(view: PlayerView, options: CoachForViewOptions)
 }
 
 /**
- * A view with no decision in it, as the error frame the socket sends.
- *
- * `redactFor` fills in `legalActions` only for the seat that is to act, so `betting-closed` and
- * `not-to-act` are the two states in which every action, folding included, would be rejected.
+ * `redactFor` fills `legalActions` only for the seat to act, so `betting-closed` and `not-to-act`
+ * have no legal action at all.
  */
 function refusalError(refusal: CoachRefusal): AppError {
   switch (refusal.kind) {
