@@ -1,25 +1,6 @@
 /**
- * `apps/api/scripts/enrolments.mjs`, proved capable of refusing.
- *
- * ## What this covers and what it deliberately does not
- *
- * Everything the operator tool does to the DATABASE is asserted against a real schema in
- * `apps/api/test/enrolments-database.test.ts` — the window arithmetic, the partial unique index,
- * the transaction that binds a grant to its audit entry, and the grant that stops the request-path
- * role writing one. None of that is repeated here.
- *
- * What is here is the argument parser, because it is the layer between an operator's typing and
- * thirty rows, and because its failure mode is silent. `--refernce PO-4471` on a bulk grant, under
- * a parser that ignored what it did not recognise, would enrol thirty people with an empty
- * reference and no way afterwards to tell which run they came from — the enrolment is written, the
- * command exits 0, and the defect surfaces months later as a class nobody can account for.
- *
- * `parseInstant` is here for the same reason with a sharper edge: `new Date('26/06/2026')` is
- * `Invalid Date`, which would reach the database as NULL and silently produce an entitlement with
- * no end.
- *
- * Needs no database: both functions are pure. Importing the module does not run `main()` — see
- * `startedFromCommandLine` in that file.
+ * The enrolments.mjs argument and date parsers, whose failures are silent. No database.
+ * Database behaviour is covered in `apps/api/test/enrolments-database.test.ts`.
  */
 
 import assert from 'node:assert/strict';
@@ -50,14 +31,11 @@ describe('the enrolment CLI argument parser', () => {
   });
 
   it('refuses an option it does not know (NEGATIVE CONTROL)', () => {
-    // The whole reason the parser is not permissive. A tolerant parser would accept this and
-    // write thirty rows whose `reference` nobody chose.
     assert.throws(() => parseArgs(['grant', '--refernce', 'PO-4471']), /Unknown option "--refernce"/u);
   });
 
   it('refuses a value option with nothing after it (NEGATIVE CONTROL)', () => {
-    // `--reference --user usr_a` must not silently take `--user` as the reference and then enrol
-    // nobody, which is what a parser that read the next token unconditionally would do.
+    // A parser that read the next token unconditionally would take `--user` as the reference.
     assert.throws(() => parseArgs(['grant', '--reference']), /Option --reference needs a value/u);
     assert.throws(() => parseArgs(['grant', '--reference', '--user', 'usr_a']), /needs a value/u);
   });
@@ -68,8 +46,7 @@ describe('the enrolment CLI argument parser', () => {
   });
 
   it('keeps an empty string as a value rather than treating it as absent', () => {
-    // `--reference ''` must reach the required() check as an empty value and be refused there,
-    // not vanish into "not supplied" and take a default nobody wrote.
+    // It must reach required() as empty and be refused there, not fall back to a default.
     const options = parseArgs(['grant', '--reference', '']);
     assert.equal(options.values.get('reference'), '');
   });
@@ -82,8 +59,7 @@ describe('the enrolment CLI date parser', () => {
   });
 
   it('refuses anything Date cannot read (NEGATIVE CONTROL)', () => {
-    // Without this, `--expires 26/06/2026` becomes `Invalid Date`, reaches the column as NULL and
-    // produces an entitlement with no end — the exact mistake the cohort period exists to bound.
+    // An `Invalid Date` would reach the column as NULL and grant an entitlement with no end.
     assert.throws(() => parseInstant('26/06/2026', '--expires'), /is not a date this can read/u);
     assert.throws(() => parseInstant('next tuesday', '--expires'), /is not a date this can read/u);
   });

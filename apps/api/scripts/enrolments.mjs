@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * enrolments.mjs — the operator tool for cohorts and entitlements.
+ * Operator CLI for cohorts and entitlements, and the only way an enrolment is written.
  *
  *   pnpm run enrolments cohorts
  *   pnpm run enrolments cohort-create --key spring-2026 --name "Spring 2026" --starts 2026-03-02 \
@@ -13,63 +13,11 @@
  *   pnpm run enrolments list   --cohort spring-2026 [--all]
  *   pnpm run enrolments show   --user usr_...
  *
- * ############################################################################
- * ## THERE IS DELIBERATELY NO HTTP ADMIN API. THIS IS THE DECISION, NOT AN  ##
- * ## OMISSION, AND IT IS THE REASON THIS FILE EXISTS AT ALL.                ##
- * ############################################################################
- *
- * The obvious shape for this would have been `POST /admin/enrolments` behind a new role. It was
- * considered and rejected, at the end of a hardening run, for four reasons that are worth writing
- * down because the next person will think of it too:
- *
- *  1. **It is a new privilege level, and this product has never had one.** `prl.users.kind` is
- *     `'guest' | 'oidc'` and nothing else; there is no admin, no instructor, no staff flag. An
- *     authenticated surface that can grant access to a paid cohort needs an authorisation model, a
- *     way to appoint the people who hold it, a way to remove them, and an answer for what happens
- *     when one of their sessions is stolen. Every one of those is a design, and none of them can be
- *     done well in the last week before a cohort starts.
- *  2. **The attack surface is permanent and the audience is thirty people.** A route is reachable
- *     by everybody on the internet forever; the tool below is reachable by whoever already has the
- *     migrating credential and a shell. For a class of thirty enrolled a few times a year, a route
- *     is an enormous amount of new exposed surface for an operation that happens rarely.
- *  3. **The database says the same thing, so this is enforced rather than promised.**
- *     `db/migrations/0006` grants `prl_app` — the role the API connects as — SELECT and nothing
- *     else on `prl.cohorts` and `prl.enrolments`. So an injection that reaches the request path
- *     cannot enrol anybody, cannot extend its own access and cannot erase a revocation, and that
- *     is true whatever any future route handler tries to do. Adding the route would mean widening
- *     that grant, which is the part that would actually cost something.
- *  4. **Least authority beats most convenience here.** Everything this tool does is rare,
- *     deliberate and done by somebody who can already reach the database. A CLI is exactly the
- *     right amount of ceremony for that; a web form is the wrong amount.
- *
- * If a route is ever genuinely needed — self-service enrolment, say — this comment is not an
- * argument against it. It is a record that the absence was chosen, so that whoever adds one starts
- * by designing the authorisation model rather than by assuming nobody had thought about it.
- *
- * ## Design, following apps/api/scripts/migrate.mjs
- *
- * **Every SQL statement is in the repository, not here.** `apps/api/src/repositories/enrolments.ts`
- * holds the window arithmetic, the supersede-then-insert order and the audit writes; this file
- * parses arguments, resolves identifiers and prints. A second copy of the grant statement in a
- * script is how an operator tool and a request path come to disagree about who is entitled.
- *
- * **It connects as the migrating identity.** `DATABASE_MIGRATION_URL`, falling back to
- * `DATABASE_URL`, exactly as `migrate.mjs` does — and for a sharper reason: `DATABASE_URL` names a
- * member of `prl_app`, which holds SELECT only on both tables, so `grant` and `revoke` through it
- * fail with `permission denied`. The reads work either way.
- *
- * **Nothing secret is ever printed.** The connection string is read from the environment, never
- * echoed, and every line — including errors thrown from inside the driver — goes through the same
- * redactor `migrate.mjs` uses.
- *
- * **A bulk grant is one transaction.** Thirty enrolments and their thirty audit entries commit
- * together or not at all, so a terminal closed halfway through leaves a class either wholly
- * enrolled or wholly not, and never a state nobody can describe.
- *
- * **An identifier that resolves to nobody stops the run before anything is written.** A class list
- * with a typo in it is the normal case, and the useless behaviour is to enrol twenty-nine people
- * and mention the thirtieth in passing. `--skip-unknown` is the explicit way to say "go ahead
- * without them", and it names each one that was skipped.
+ * There is deliberately no HTTP admin API. The product has no admin role, a route is permanent
+ * surface for a rare operation, and 0006 grants `prl_app` SELECT only on both tables, so the request
+ * path cannot enrol, extend or un-revoke anybody. A future route starts by designing authorisation.
+ * All SQL lives in `src/repositories/enrolments.ts`, so this tool and the API cannot disagree.
+ * Writes need `DATABASE_MIGRATION_URL`. Every printed line is redacted.
  */
 
 import { realpathSync } from 'node:fs';
@@ -80,11 +28,7 @@ import * as enrolments from '../src/repositories/enrolments.ts';
 
 const COMMANDS = ['cohorts', 'cohort-create', 'grant', 'revoke', 'list', 'show'];
 
-// ---------------------------------------------------------------------------
-// Output. Colour only when a human is watching. Copied from migrate.mjs on
-// purpose: two operator tools in one repository that format differently are two
-// things to learn, and the redactor in particular must not be reimplemented.
-// ---------------------------------------------------------------------------
+// Copied from migrate.mjs on purpose, so both tools format and redact the same way.
 
 const NO_COLOR = process.env.NO_COLOR !== undefined || !process.stdout.isTTY;
 const paint = (code, text) => (NO_COLOR ? text : `\x1b[${code}m${text}\x1b[0m`);
@@ -94,10 +38,6 @@ const yellow = (text) => paint('33', text);
 const dim = (text) => paint('2', text);
 const bold = (text) => paint('1', text);
 
-/**
- * Strips anything that could be a credential from a string before it is printed.
- * Driver errors are written by code this script does not own, so they go through here too.
- */
 function redact(value) {
   return String(value ?? '')
     .replace(/\b(?:postgres|postgresql):\/\/\S*/gi, 'postgres://[redacted]')
@@ -109,19 +49,13 @@ const note = (text) => line(`${dim('  ·')} ${text}`);
 const ok = (text) => line(`${green('  ✓')} ${text}`);
 const warn = (text) => line(`${yellow('  !')} ${text}`);
 
-/** An error with a message meant for a human, printed without a stack trace. */
 class OperatorError extends Error {
   name = 'OperatorError';
 }
 
 /**
- * What each schema constraint means to the person who just typed a command.
- *
- * Not in `VIOLATION_CODES` in `repositories/sql.ts`, and deliberately: that map turns a constraint
- * into a wire code for an HTTP client, and none of these has a wire. What an operator needs is the
- * sentence, and the sentence is different from the 23514 the driver prints — the first one that
- * happened in real use was `--expires 2026-06-26` typed after that date had passed, which reports
- * itself as "violates check constraint enrolments_expiry_after_start" and a dump of the row.
+ * Operator sentences for constraint violations. Not in `VIOLATION_CODES` in `repositories/sql.ts`,
+ * which maps constraints to HTTP wire codes, and these have no wire.
  */
 const CONSTRAINT_HELP = {
   enrolments_expiry_after_start:
@@ -136,17 +70,7 @@ const CONSTRAINT_HELP = {
   cohorts_key_key: '--key is already taken by another cohort. `cohorts` lists them.',
 };
 
-// ---------------------------------------------------------------------------
-// Environment and connection.
-// ---------------------------------------------------------------------------
-
-/**
- * The connection string, preferring the migration identity over the runtime one.
- *
- * See the file header: the runtime identity can read these tables and cannot write them, so a
- * `grant` run with only `DATABASE_URL` set will fail at the first INSERT with `permission denied`.
- * That is the privilege model working; the message below is what makes it legible.
- */
+// With only `DATABASE_URL`, reads work and a grant fails with `permission denied`. That is intended.
 function databaseUrl() {
   const migrationUrl = process.env.DATABASE_MIGRATION_URL;
   if (typeof migrationUrl === 'string' && migrationUrl.trim() !== '') return migrationUrl;
@@ -181,11 +105,6 @@ function connect(url) {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Argument parsing.
-// ---------------------------------------------------------------------------
-
-/** Options that take a value, and the ones that are bare flags. Anything else is refused. */
 const VALUE_OPTIONS = new Set([
   'cohort',
   'key',
@@ -201,13 +120,7 @@ const VALUE_OPTIONS = new Set([
 ]);
 const FLAG_OPTIONS = new Set(['all', 'dry-run', 'skip-unknown', 'help']);
 
-/**
- * `--key value`, `--key=value` and repeatable `--user`.
- *
- * Deliberately not a general-purpose parser: an unknown option is refused rather than ignored,
- * because a typo in `--refernce` on a grant would otherwise write thirty rows with an empty
- * reference and no way to tell which run they came from.
- */
+// Unknown options are refused, so a typo like `--refernce` cannot write rows with no reference.
 export function parseArgs(argv) {
   const options = { command: null, users: [], flags: new Set(), values: new Map() };
   for (let index = 0; index < argv.length; index += 1) {
@@ -256,13 +169,7 @@ function required(options, name, why) {
   return value.trim();
 }
 
-/**
- * An ISO 8601 instant or a plain `YYYY-MM-DD` date, refused rather than guessed at.
- *
- * A plain date is read as UTC midnight, which is what `Date` does with it and what an operator
- * writing `--ends 2026-06-26` means closely enough. Anything `Date` cannot parse is refused: a
- * silent `Invalid Date` would reach the database as NULL and produce an entitlement with no end.
- */
+// An `Invalid Date` would reach the database as NULL and grant an entitlement with no end.
 export function parseInstant(raw, what) {
   const value = new Date(raw);
   if (Number.isNaN(value.getTime())) {
@@ -274,17 +181,6 @@ export function parseInstant(raw, what) {
   return value;
 }
 
-// ---------------------------------------------------------------------------
-// Identifiers.
-// ---------------------------------------------------------------------------
-
-/**
- * The identifiers to act on: `--user` repeated, `--file <path>`, or `--file -` for stdin.
- *
- * The file format is one identifier per line; blank lines and `#` comments are ignored, so a class
- * list can carry the name of the class and where it came from. Duplicates are collapsed, in first
- * appearance order, because a list assembled by hand from two other lists usually has some.
- */
 async function identifiersFor(options) {
   const collected = [...options.users];
   const file = options.values.get('file');
@@ -311,20 +207,8 @@ async function readStdin() {
 }
 
 /**
- * Turns operator-supplied identifiers into account ids, or refuses.
- *
- * Two kinds are accepted, and which one an identifier is decided by its shape rather than by a
- * flag: anything starting `usr_` is an account id, and everything else is looked up as an OIDC
- * subject — the identifier an institution's identity provider issues, which is the one an operator
- * enrolling a class actually has.
- *
- * ## Ambiguity is refused, never resolved
- *
- * A subject is unique only WITHIN an issuer (`users_oidc_identity_key` is on the pair), so the same
- * subject string can legitimately name two people from two providers. Picking one would enrol the
- * wrong person, and the wrong person in a paid cohort is exactly the mistake nobody notices until
- * somebody is refused. So an ambiguous identifier is reported with both account ids and the run
- * stops.
+ * An identifier is a `usr_` id or an OIDC subject. A subject is unique only within its issuer, so
+ * one matching two accounts is refused rather than guessed.
  */
 async function resolveIdentifiers(sql, identifiers) {
   const rows = await sql`
@@ -365,12 +249,7 @@ async function resolveIdentifiers(sql, identifiers) {
   return { resolved, unknown, ambiguous };
 }
 
-/**
- * Prints what could not be resolved and decides whether the run continues.
- *
- * Ambiguity always stops the run — there is no flag for it, because there is no safe guess. An
- * unknown identifier stops it unless `--skip-unknown` says otherwise.
- */
+// Ambiguity always stops the run. An unknown identifier stops it unless `--skip-unknown` is set.
 function refuseUnresolved(options, resolution) {
   for (const { identifier, candidates } of resolution.ambiguous) {
     warn(`"${identifier}" names ${candidates.length} accounts: ${candidates.map((c) => c.id).join(', ')}`);
@@ -394,13 +273,8 @@ function refuseUnresolved(options, resolution) {
   note(`--skip-unknown: continuing without ${resolution.unknown.length} identifier(s)`);
 }
 
-// ---------------------------------------------------------------------------
-// Formatting.
-// ---------------------------------------------------------------------------
-
 const iso = (value) => (value === null || value === undefined ? '—' : value.toISOString());
 
-/** One enrolment as one line: what it is, who said so, and whether it is live right now. */
 function describeEnrolment(record) {
   const who = record.displayName === null ? record.userId : `${record.displayName} (${record.userId})`;
   const state =
@@ -419,7 +293,6 @@ function describeCohort(cohort) {
   return `  ${bold(cohort.key)}  ${cohort.name}\n      ${dim(`starts ${iso(cohort.startsAt)}, ${ends}`)}`;
 }
 
-/** The cohort named by `--cohort`, or a refusal that lists what does exist. */
 async function requireCohort(sql, options) {
   const key = required(options, 'cohort', 'which cohort this is about, by its key');
   const cohort = await enrolments.cohortByKey(sql, key);
@@ -430,10 +303,6 @@ async function requireCohort(sql, options) {
   }
   return cohort;
 }
-
-// ---------------------------------------------------------------------------
-// Commands.
-// ---------------------------------------------------------------------------
 
 async function commandCohorts(sql) {
   const all = await enrolments.listCohorts(sql);
@@ -486,8 +355,7 @@ async function commandGrant(sql, options) {
     return;
   }
 
-  // One transaction for the whole list. Thirty rows and their thirty audit entries land together,
-  // so a closed terminal leaves a class either wholly enrolled or wholly not.
+  // One transaction for the whole list, so a closed terminal leaves a class wholly enrolled or not.
   const outcomes = await sql.begin(async (tx) => {
     const results = [];
     for (const { user } of resolution.resolved) {
@@ -619,10 +487,6 @@ async function commandShow(sql, options) {
   note(`${history.length} enrolment(s) in total, including withdrawn ones`);
 }
 
-// ---------------------------------------------------------------------------
-// Entry point.
-// ---------------------------------------------------------------------------
-
 function usage() {
   line(`${bold('enrolments.mjs')} — Poker Risk Lab cohorts and entitlements`);
   line();
@@ -647,16 +511,13 @@ function usage() {
   line(dim('  There is deliberately no HTTP admin API. The reasoning is at the top of this file.'));
 }
 
-/** True for the commands that write, which is what decides whether the target is announced. */
 const WRITING = new Set(['cohort-create', 'grant', 'revoke']);
 
 async function run(options) {
   const sql = connect(databaseUrl());
   try {
     if (WRITING.has(options.command)) {
-      // Named from the server rather than parsed out of the connection string, so nothing secret
-      // is anywhere near this line. `migrate.mjs` does the same before it applies role files: an
-      // operator about to write should be able to see which database is about to be written to.
+      // Named from the server, so the connection string is never parsed or printed.
       const [target] = await sql`select current_database() as database, current_user as role`;
       line(`${bold('Target')} database "${target.database}" as "${target.role}"`);
     }
@@ -666,8 +527,7 @@ async function run(options) {
     else if (options.command === 'revoke') await commandRevoke(sql, options);
     else if (options.command === 'list') await commandList(sql, options);
     else if (options.command === 'show') await commandShow(sql, options);
-    // No `else` fallthrough, for migrate.mjs's reason: a command added to COMMANDS without a
-    // branch here must fail rather than silently running whichever one happened to be last.
+    // No bare `else` fallthrough, so an unbranched command fails.
     else throw new OperatorError(`Command "${options.command}" has no implementation.`);
   } finally {
     await sql.end({ timeout: 5 });
@@ -686,14 +546,7 @@ async function main() {
   await run(options);
 }
 
-/**
- * True when this file was started from the command line rather than imported.
- *
- * `parseArgs` and `parseInstant` are exported so `enrolments-cli.test.mjs` can assert on them
- * without a database — an argument parser that silently accepts `--refernce` would write thirty
- * rows with no reference, and that is a behaviour, so it gets a test. Without this guard the
- * import would run `main()` as a side effect.
- */
+// Lets the tests import this module without running `main()`.
 function startedFromCommandLine() {
   const entry = process.argv[1];
   if (entry === undefined) return false;
@@ -715,11 +568,7 @@ if (startedFromCommandLine()) {
       const help = CONSTRAINT_HELP[error?.constraint_name];
       line(`${red('  ✗')} ${help ?? error?.message ?? String(error)}`);
       if (help !== undefined) {
-        // The raw message stays, dimmed and after the sentence: an operator who needs to search
-        // for the constraint name has it, and one who does not never has to read it. The driver's
-        // `detail` is deliberately NOT printed here — on a check violation it is a dump of the
-        // whole failing row, which puts every value of the attempted grant in a terminal for no
-        // benefit once the sentence above has explained the problem.
+        // `detail` is not printed. On a check violation it dumps the whole failing row.
         note(dim(`${error.constraint_name}: ${error?.message ?? ''}`));
       } else {
         const detail = [error?.detail, error?.hint, error?.where].filter(Boolean).join(' | ');
