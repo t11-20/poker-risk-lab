@@ -1,70 +1,10 @@
 #!/usr/bin/env node
 /**
- * Tests for the load and capacity harness.
- *
- * Run with:  node --test scripts/load-test.test.mjs
- * Also run by:  pnpm run test:scripts
- *
- * ## What these exist to prevent
- *
- * Everything in `scripts/load-test.mjs` that turns raw observations into a claim is pure and is
- * tested here, because the claims are the dangerous part. A load harness that is slightly wrong
- * does not crash — it prints a plausible number that somebody puts in a capacity plan.
- *
- * The four specific defects being guarded against:
- *
- * 1. **An off-by-one in the nearest-rank percentile.** `Math.ceil(fraction * n)` is a RANK and
- *    the array index is one less. Both plausible mistakes — dropping the `-1`, or using `floor`
- *    — shift every reported figure by one sample and look entirely reasonable at any
- *    concurrency. So the percentile is pinned against a known distribution AND both wrong
- *    variants are computed here and asserted to differ, which is what makes this a negative
- *    control rather than a restatement of the implementation.
- *
- * 2. **A hand-written exposition parser that silently mis-reads a scrape.** The fixture below is
- *    a verbatim excerpt of a real `GET /metrics` response from this service, captured with
- *    `curl -s -H 'Authorization: Bearer ...' http://127.0.0.1:3051/metrics`, so the format being
- *    parsed is the format the server emits rather than the format the parser's author imagined.
- *    A second, hand-written fixture carries the things a real scrape of a healthy process never
- *    contains and a scraper must still survive: escaped quotes and backslashes in a label value,
- *    a label value containing `}` and `,`, the `+Inf` / `-Inf` / `NaN` value tokens, a trailing
- *    timestamp, and outright malformed lines.
- *
- * 3. **A stop criterion that does not stop, or stops for the wrong reason.** "The ramp stopped at
- *    24 players because of p95" is the single most consequential sentence the harness produces.
- *    Every criterion is driven here with a level built to breach exactly one of them, and the
- *    healthy level is asserted NOT to stop — a criterion that always fires is as useless as one
- *    that never does.
- *
- * 4. **The JSON and the human output drifting apart.** They are one object rendered twice, and
- *    the test renders a fabricated report and finds the report's own numbers in the text. If
- *    somebody adds a figure to the printed output that is computed in the renderer rather than
- *    taken from the report, the `--json` consumer and the reader stop agreeing, and only one of
- *    them is auditable.
- *
- * ## Would this fail if the behaviour broke?
- *
- * Checked by breaking each one on purpose while writing them:
- *
- *   - percentile: the two off-by-one variants are computed in the test itself and asserted to
- *     produce DIFFERENT answers from the real one, so a regression to either is caught by
- *     construction, not by hope.
- *   - parser: `sampleValue` for a declared-but-never-incremented metric is asserted to be `null`
- *     and explicitly asserted NOT to be `0`. Returning `0` there is the exact mistake that would
- *     make the harness report missing instrumentation as an absence of load, and it passes every
- *     test that only checks the happy path.
- *   - stop criteria: a level that breaches nothing is asserted not to stop, and a level whose
- *     ONLY fault is a reconnect consistency failure is asserted to stop — proving correctness is
- *     not traded away for throughput.
- *   - saturation: a signal whose metric is absent is asserted never to fire, even though its
- *     numeric threshold (1 queued task) would be crossed by a naive `null >= 1` comparison —
- *     which is false in JavaScript for `null >= 1`, but `0 >= 1` is also false and `null` sorts
- *     as 0 in several plausible refactors, so the test pins the `exported` flag as well.
- *   - report: the renderer's output is asserted to contain the JSON's own values, and a failing
- *     report is asserted to print FAIL and not PASS.
- *
- * Every scan-style assertion also checks it scanned something: the parser fixture is asserted to
- * yield more than 12 samples and the renderer more than 12 lines, so a fixture that silently
- * emptied could not pass.
+ * Tests for the pure parts of `scripts/load-test.mjs` that turn observations into claims: the
+ * nearest-rank percentile (both off-by-one variants are computed and must differ), the exposition
+ * parser against a real scrape and a hostile fixture, the stop criteria (a healthy level must not
+ * stop), saturation (an absent metric never fires), resume consistency, and the report (the text
+ * must carry the JSON's own numbers).
  */
 
 import assert from 'node:assert/strict';
@@ -90,22 +30,10 @@ import {
   thinkTimePerHandMs,
 } from './load-test.mjs';
 
-// ---------------------------------------------------------------------------
-// Fixtures
-// ---------------------------------------------------------------------------
-
 /**
- * A verbatim excerpt of a real scrape of this service.
- *
- * Captured from a running `apps/api` on 2026-08-22 after a short load run, with
- * `curl -s -H 'Authorization: Bearer <token>' http://127.0.0.1:3051/metrics`. Lines are copied
- * unchanged, including the exact float formatting the registry produces; only whole metric
- * blocks that add nothing to these assertions have been left out.
- *
- * `prl_worker_tasks_total` is kept deliberately: it is declared in `observability/metrics.ts`,
- * has a HELP and TYPE preamble, and has NO sample line because nothing had incremented it. That
- * is the shape the "absent is not zero" assertions below depend on, and it is real rather than
- * contrived.
+ * A verbatim excerpt of a real scrape of `apps/api` on 2026-08-22, after a short load run.
+ * `prl_worker_tasks_total` has HELP and TYPE but no sample line, because nothing had incremented it.
+ * The "absent is not zero" assertions depend on that.
  */
 const REAL_SCRAPE = `# HELP prl_api_errors_total Error responses by contract error code.
 # TYPE prl_api_errors_total counter
@@ -169,17 +97,9 @@ prl_worker_pool_queued 0
 `;
 
 /**
- * Hand-written, and labelled as such because this service never emits any of it.
- *
- * Every line here is legal exposition that a scraper has to survive and that a healthy scrape of
- * a well-behaved process will not contain: the format's three label escapes, a label value
- * carrying the two characters a regex-based parser splits on, the non-finite value tokens, a
- * trailing timestamp (which the format permits and `registry.ts` does not write), a plain `#`
- * comment, and two lines that are not exposition at all.
- *
- * The escaping matters because `registry.ts` DOES escape backslash, double quote and newline in
- * a label value — see `escapeLabelValue` — so the day a label carries one of them, this parser
- * has to undo it correctly or every series with that label collides onto the wrong key.
+ * Hand-written legal exposition this service never emits: the three label escapes (`registry.ts`
+ * does escape them), `}` and `,` inside a value, non-finite values, a trailing timestamp, a bare
+ * comment, and two malformed lines.
  */
 const HOSTILE_EXPOSITION = `# a bare comment, which is legal and carries no metric
 # HELP prl_test_escapes Hand-written: the three escapes the exposition format defines.
@@ -197,16 +117,11 @@ this line is not exposition at all
 prl_test_unclosed{kind="missing brace 1
 `;
 
-// ---------------------------------------------------------------------------
-// Builders for the pure report machinery
-// ---------------------------------------------------------------------------
-
-/** A latency summary with the shape `summariseLatency` produces, for fabricated levels. */
 function latency({ count = 500, p50 = 5, p95 = 20, p99 = 40, max = 60, mean = 8 } = {}) {
   return { count, meanMs: mean, p50Ms: p50, p95Ms: p95, p99Ms: p99, maxMs: max };
 }
 
-/** A level summary in the shape `summariseLevel` produces. Healthy unless told otherwise. */
+/** Healthy unless told otherwise. */
 function level(overrides = {}) {
   const client = {
     action: latency(),
@@ -293,7 +208,6 @@ const THRESHOLDS = {
   dbProbeP99Ms: 50,
 };
 
-/** The arguments `buildReport` takes, with everything but `levels` held fixed. */
 function reportInput(levels, overrides = {}) {
   return {
     options: { ...parseArgs([]), metricsToken: 'a-real-token-that-must-not-be-echoed' },
@@ -341,20 +255,13 @@ function reportInput(levels, overrides = {}) {
 
 const textOf = (lines) => lines.map((line) => line.text).join('\n');
 
-// ---------------------------------------------------------------------------
-// Percentiles
-// ---------------------------------------------------------------------------
-
 describe('percentile', () => {
-  // 1..100 inclusive. Chosen because the nearest rank for each fraction lands on an integer, so
-  // the expected answers can be stated without a calculator and a reader can check them.
+  // 1..100, so each nearest rank lands on an integer.
   const hundred = Array.from({ length: 100 }, (_unused, index) => index + 1);
 
   it('reports the nearest-rank value for each fraction over a known distribution', () => {
     assert.equal(percentile(hundred, 0.5), 50);
     assert.equal(percentile(hundred, 0.9), 90);
-    // p95 is the figure the previous harness never reported at all, and the one every alert
-    // threshold in observability/metrics.ts is expressed in.
     assert.equal(percentile(hundred, 0.95), 95);
     assert.equal(percentile(hundred, 0.99), 99);
     assert.equal(percentile(hundred, 1), 100);
@@ -368,29 +275,27 @@ describe('percentile', () => {
   });
 
   it('is not the two plausible off-by-one variants (NEGATIVE CONTROL)', () => {
-    // Seven samples, so `fraction * n` is fractional for every interesting fraction and the two
-    // wrong index formulas cannot coincidentally agree with the right one — which is exactly what
-    // happens at n = 100, where floor and ceil of 95 are both 95.
+    // Seven samples, so the wrong index formulas cannot agree with the right one. At n = 100 floor
+    // and ceil of 95 are both 95.
     const seven = [1, 2, 3, 4, 5, 6, 7];
 
-    // The real implementation: index = ceil(fraction * n) - 1.
+    // index = ceil(fraction * n) - 1.
     assert.equal(percentile(seven, 0.5), 4);
     assert.equal(percentile(seven, 0.95), 7);
 
-    // Variant A: the `- 1` forgotten, so a rank is used as an index.
+    // Variant A: the rank used as an index.
     const missingTheMinusOne = (sorted, fraction) => sorted[Math.ceil(fraction * sorted.length)];
     assert.equal(missingTheMinusOne(seven, 0.5), 5);
     assert.notEqual(missingTheMinusOne(seven, 0.5), percentile(seven, 0.5));
 
-    // Variant B: `floor` instead of `ceil`, which is the other way people write nearest rank.
+    // Variant B: `floor` instead of `ceil`.
     const flooredRank = (sorted, fraction) => sorted[Math.floor(fraction * sorted.length) - 1];
     assert.equal(flooredRank(seven, 0.5), 3);
     assert.notEqual(flooredRank(seven, 0.5), percentile(seven, 0.5));
   });
 
   it('never interpolates a value no sample had', () => {
-    // Two widely separated samples. An interpolating percentile would answer somewhere in the
-    // middle, which is a latency no request experienced.
+    // An interpolating percentile would answer a latency no request had.
     const gap = [1, 1000];
     assert.equal(percentile(gap, 0.5), 1);
     assert.equal(percentile(gap, 0.51), 1000);
@@ -426,10 +331,6 @@ describe('summariseLatency', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// The Prometheus exposition parser
-// ---------------------------------------------------------------------------
-
 describe('parseExposition, against a real captured scrape', () => {
   const snapshot = parseExposition(REAL_SCRAPE);
 
@@ -459,7 +360,6 @@ describe('parseExposition, against a real captured scrape', () => {
 
   it('sums a labelled counter and can exclude the harness own traffic', () => {
     assert.equal(seriesTotal(snapshot, 'prl_http_requests_total'), 23);
-    // This is the filter the harness uses so that scraping and probing are not counted as load.
     const applied = seriesTotal(
       snapshot,
       'prl_http_requests_total',
@@ -469,15 +369,12 @@ describe('parseExposition, against a real captured scrape', () => {
   });
 
   it('an absent series is null, and NEVER zero (NEGATIVE CONTROL)', () => {
-    // `prl_worker_tasks_total` is declared, carries HELP and TYPE, and has no sample line because
-    // nothing had incremented it. Reporting that as `0` would turn missing instrumentation into a
-    // confident claim that no worker task ran.
+    // Declared but never incremented, so no sample line. `0` would claim no worker task ran.
     assert.equal(sampleValue(snapshot, 'prl_worker_tasks_total'), null);
     assert.notEqual(sampleValue(snapshot, 'prl_worker_tasks_total'), 0);
     assert.equal(seriesTotal(snapshot, 'prl_worker_tasks_total'), null);
     assert.equal(seriesByLabel(snapshot, 'prl_worker_tasks_total', 'outcome'), null);
-    // And a gauge that IS exported with the value zero must still read as zero, or the harness
-    // could not tell an idle worker pool from an uninstrumented one.
+    // An exported zero must still read as zero.
     assert.equal(sampleValue(snapshot, 'prl_worker_pool_queued'), 0);
     assert.equal(sampleValue(snapshot, 'prl_websocket_connections'), 0);
   });
@@ -502,7 +399,6 @@ describe('parseExposition, against a real captured scrape', () => {
     assert.equal(histogram.count, 1);
     assert.equal(histogram.sum, 0.017587666000001265);
     assert.equal(histogram.buckets.length, 12);
-    // The observation was between 10ms and 25ms, so the first two buckets are empty.
     assert.equal(histogram.buckets[0].cumulative, 0);
     assert.equal(histogram.buckets[2].cumulative, 1);
     assert.equal(histogramOf(snapshot, 'prl_http_request_duration_seconds', { route: 'nope' }), null);
@@ -510,13 +406,10 @@ describe('parseExposition, against a real captured scrape', () => {
 
   it('answers a quantile as a bucket BOUND rather than an interpolated number', () => {
     const histogram = histogramOf(snapshot, 'prl_db_probe_duration_seconds');
-    // count 10, so the 0.99 target is 9.9 observations: the first bucket whose cumulative count
-    // reaches it is le=0.05.
+    // count 10, so the 0.99 target is 9.9 observations, first reached at le=0.05.
     assert.equal(histogramBoundAtQuantile(histogram, 0.99), 0.05);
-    // The 0.5 target is 5: le=0.005 already holds 7.
+    // The 0.5 target is 5, and le=0.005 already holds 7.
     assert.equal(histogramBoundAtQuantile(histogram, 0.5), 0.005);
-    // A bound, never a decimal between two bounds — this is what makes the figure a statement the
-    // data supports rather than an assumption about how observations are spread inside a bucket.
     assert.ok(
       [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10].includes(histogramBoundAtQuantile(histogram, 0.9)),
     );
@@ -525,10 +418,7 @@ describe('parseExposition, against a real captured scrape', () => {
   });
 
   it('separates "above the top bound" from "nothing was measured"', () => {
-    // Everything landed above the top bound, so all that is known is "above 10 s". This used to
-    // return null, which is also what no observations returns — so the slowest reading the
-    // histogram can produce was indistinguishable from an absent metric, and the signal that
-    // exists to name it stayed quiet. Infinity is not an invented number: it is the bound.
+    // Everything landed above the top bound. This once returned null, which also means no data.
     const overflowing = {
       buckets: [
         { le: 1, cumulative: 0 },
@@ -553,8 +443,7 @@ describe('parseExposition, against hand-written hostile input', () => {
   });
 
   it('handles a label value containing a brace and a comma (NEGATIVE CONTROL for a regex parser)', () => {
-    // A parser that split the label block on `,` or terminated it at the first `}` would produce
-    // either a wrong key or a dropped sample here. Both are silent.
+    // Splitting on `,` or stopping at the first `}` would silently produce a wrong key or drop it.
     assert.equal(sampleValue(snapshot, 'prl_test_escapes', { note: 'brace } and comma , inside' }), 4);
   });
 
@@ -574,9 +463,7 @@ describe('parseExposition, against hand-written hostile input', () => {
   });
 
   it('discards a trailing timestamp instead of folding it into the value', () => {
-    // The failure this guards against multiplies every reading by about 10^13 and produces
-    // latency figures in the hundreds of years, which is at least obvious. The version where the
-    // sample is dropped entirely is not.
+    // A concatenated timestamp multiplies the reading by about 10^13.
     assert.equal(sampleValue(snapshot, 'prl_test_timestamped', { kind: 'with_timestamp' }), 42.5);
   });
 
@@ -598,13 +485,8 @@ describe('histogramDelta', () => {
   const before = parseExposition(REAL_SCRAPE);
 
   /**
-   * The same scrape, plus five FAST probes.
-   *
-   * Fast on purpose. The point of subtracting a baseline is that a level's own distribution is
-   * not the process's distribution since boot, and that only shows up when the two disagree —
-   * which they cannot when the new observations are the slow ones, because a cumulative
-   * histogram's tail is dominated by whatever arrived last. Five probes at or below 1 ms leave
-   * the cumulative 0.99 pinned at the old slow bound while the delta's is three bounds lower.
+   * The same scrape plus five fast probes. Only fast new observations make the delta's 0.99 bound
+   * differ from the cumulative one.
    */
   const AFTER_FIVE_FAST_PROBES = [
     ['{le="0.001"} 1', '{le="0.001"} 6'],
@@ -633,9 +515,7 @@ describe('histogramDelta', () => {
 
     assert.equal(cumulative.count, 15);
     assert.equal(delta.count, 5, 'five probes happened during the interval');
-    // Every one of the five was at or below 1 ms, so the DELTA's 0.99 bound is 0.001 while the
-    // cumulative histogram still reports 0.05 because of a slow probe from before the level
-    // started. Without the subtraction, level 8 would be reported carrying level 1's tail.
+    // A slow probe from before the level keeps the cumulative bound at 0.05.
     assert.equal(histogramBoundAtQuantile(delta, 0.99), 0.001);
     assert.equal(histogramBoundAtQuantile(cumulative, 0.99), 0.05);
     assert.notEqual(histogramBoundAtQuantile(delta, 0.99), histogramBoundAtQuantile(cumulative, 0.99));
@@ -647,10 +527,6 @@ describe('histogramDelta', () => {
     assert.equal(histogramDelta(only, null), null);
   });
 });
-
-// ---------------------------------------------------------------------------
-// Stop criteria
-// ---------------------------------------------------------------------------
 
 describe('evaluateStopCriteria', () => {
   it('does not stop a healthy level', () => {
@@ -733,14 +609,11 @@ describe('evaluateStopCriteria', () => {
       verdict.breaches.map((breach) => breach.criterion),
       ['no-progress'],
     );
-    // At think time 0 there is nothing to blame but the server, so no excuse is offered.
     assert.ok(!verdict.breaches[0].detail.includes('likely the hold'));
   });
 
   it('says so when a hold that is too short for one hand is the likely cause', () => {
-    // Observed for real: six seats at one second a decision needs about twenty-four seconds of
-    // think time per hand, and a twenty-second hold then reports "no hand completed" at every
-    // level, which reads as a saturated server and is a misconfigured run.
+    // Six seats at one second a decision need about 24 s per hand, so a 20 s hold completes none.
     const starved = level({ client: { handsCompleted: 0, handsPerMinute: 0 } });
     starved.thinkMs = 1000;
     starved.seats = 6;
@@ -751,17 +624,14 @@ describe('evaluateStopCriteria', () => {
     assert.match(verdict.breaches[0].detail, /very likely the hold rather than the server/);
     assert.equal(thinkTimePerHandMs(starved), 24_000);
 
-    // NEGATIVE CONTROL: a hold that comfortably fits a hand gets no excuse, so the message
-    // cannot be used to explain away a genuinely stalled server.
+    // A hold that fits a hand gets no excuse, so the message cannot explain away a stalled server.
     starved.holdSeconds = 120;
     assert.ok(!evaluateStopCriteria(starved, THRESHOLDS).breaches[0].detail.includes('likely the hold'));
     assert.equal(thinkTimePerHandMs({ thinkMs: 0, seats: 6 }), 0);
   });
 
   it('stops on a reconnect consistency failure even when every other number is perfect', () => {
-    // The point of the whole criterion: there is no concurrency at which a resumed client seeing
-    // the wrong hand is an acceptable trade for throughput, so this has no configurable
-    // threshold and cannot be tuned away.
+    // Consistency has no configurable threshold.
     const verdict = evaluateStopCriteria(
       level({
         client: { consistencyFailures: ['own hole cards changed on resume within hand hnd_1'] },
@@ -775,19 +645,8 @@ describe('evaluateStopCriteria', () => {
   });
 
   it('stops when the level had no usable server-side half, rather than passing on client timings', () => {
-    // This test used to assert the OPPOSITE — `verdict.stop === false` — on the reasoning that
-    // `rateLimitLimited` is undefined on an unusable summary and a comparison against undefined
-    // must not become a breach. The first half is true; the conclusion was the defect. Skipping
-    // every server-side criterion left the level passing on client timings alone, and
-    // `buildReport` then published it: four levels of `{usable:false, scrapes:1,
-    // scrapeFailures:5}` with healthy client numbers returned `passed:true`, `failures:[]`,
-    // `capacity.concurrentSeatedPlayers: 24`, `saturation.resource: null`. A capacity figure with
-    // no server-side evidence behind any of it, from a harness whose header says an unreachable
-    // /metrics is a hard failure — and whose preflight only guards the FIRST scrape.
-    //
-    // It matters most for `refusal-rate-limited`: a level with no scrapes cannot see a single
-    // refusal, so a ramp bounded by the LIMITER rather than by the machine — the bug that
-    // criterion exists for — was reachable again through this door.
+    // This test once asserted `stop === false`. That let a level with no usable scrapes pass on client
+    // timings and publish a capacity of 24, and it hid `refusal-rate-limited` entirely.
     const verdict = evaluateStopCriteria(
       level({
         server: {
@@ -810,13 +669,11 @@ describe('evaluateStopCriteria', () => {
   });
 
   it('does not fire server-side-blind on a healthy level, so it cannot fail every run', () => {
-    // The positive control. A criterion that fired unconditionally would satisfy the assertions
-    // above and would make the ramp incapable of producing any capacity figure at all.
+    // A criterion that always fired would satisfy the assertions above.
     assert.equal(evaluateStopCriteria(level(), THRESHOLDS).stop, false);
   });
 
   it('publishes no capacity from a run whose /metrics scrapes all failed', () => {
-    // The end-to-end shape of the same defect, through the report builder that CI reads.
     const blind = {
       scrapes: 1,
       scrapeFailures: 5,
@@ -842,16 +699,12 @@ describe('evaluateStopCriteria', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Saturation classification
-// ---------------------------------------------------------------------------
-
 describe('classifySaturation', () => {
   it('names nothing when every exported signal is below its threshold', () => {
     const verdict = classifySaturation(level(), THRESHOLDS);
     assert.equal(verdict.resource, 'not-identified');
     assert.ok(verdict.signals.every((signal) => !signal.fired));
-    // The signals are still all reported: "the database was fine" is part of an honest claim.
+    // Every signal is reported, fired or not.
     assert.ok(verdict.signals.length >= 5);
   });
 
@@ -885,11 +738,8 @@ describe('classifySaturation', () => {
   });
 
   it('does not blame the pool for a bound that MEETS the threshold (NEGATIVE CONTROL)', () => {
-    // The observed value is a bound: 50 ms means "99% of probes finished within 50 ms", which is
-    // the threshold being met, not exceeded. Firing on `>=` reported `resource: db-pool` for a
-    // three-player level at 0.4 requests per second, where the reading was the pool opening its
-    // first connection. The report printed `db probe p99 <= 50.0ms` and `FIRED 50.00 ms
-    // (threshold 50 ms)` on the same screen.
+    // 50 ms is a bound meaning "99% within 50 ms", so the threshold is met. `>=` once blamed db-pool
+    // for a three-player level at 0.4 requests per second.
     const verdict = classifySaturation(
       level({ server: { dbProbeP99BoundMs: THRESHOLDS.dbProbeP99Ms } }),
       THRESHOLDS,
@@ -899,8 +749,7 @@ describe('classifySaturation', () => {
   });
 
   it('blames the pool when the probe quantile is above the top bucket', () => {
-    // The worst reading the histogram can give. It must fire, and it must not be mistaken for an
-    // unexported metric.
+    // The `+Inf` reading must fire and must not read as an unexported metric.
     const verdict = classifySaturation(
       level({ server: { dbProbeP99BoundMs: Number.POSITIVE_INFINITY } }),
       THRESHOLDS,
@@ -912,9 +761,7 @@ describe('classifySaturation', () => {
   });
 
   it('a signal whose metric is not exported can never fire (NEGATIVE CONTROL)', () => {
-    // The worker pool threshold is 1 queued task. With the metric absent the observed value is
-    // null, and the harness must report "not exported" rather than blaming a subsystem it cannot
-    // see — the exact mistake that would let missing instrumentation masquerade as a diagnosis.
+    // An absent metric reports "not exported" rather than blaming a subsystem it cannot see.
     const verdict = classifySaturation(
       level({
         server: {
@@ -944,15 +791,9 @@ describe('classifySaturation', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Reconnect consistency
-// ---------------------------------------------------------------------------
-
 describe('snapshotOfView', () => {
   it('takes the caller own seat by isSelf, not by seat index', () => {
-    // `isSelf` is decided server-side by playerId, and a recipient may sit at an index that
-    // somebody else was dealt into. Reading `seats[viewerSeat]` would compare the wrong seat's
-    // cards after a resume and report a leak that never happened.
+    // `isSelf` is decided by playerId, so `seats[viewerSeat]` may be the wrong seat.
     const view = {
       handId: 'hnd_1',
       roomId: 'rm_1',
@@ -992,7 +833,7 @@ describe('compareAfterResume', () => {
 
   it('is silent when the resumed view agrees, and when it has only moved forward', () => {
     assert.deepEqual(compareAfterResume(before, { ...before }, welcome, 'rm_1'), []);
-    // The other seats kept playing: a later sequence and a bigger pot are correct, not a fault.
+    // A later sequence and a bigger pot are correct. The other seats kept playing.
     assert.deepEqual(
       compareAfterResume(
         before,
@@ -1049,10 +890,6 @@ describe('compareAfterResume', () => {
     assert.deepEqual(compareAfterResume(null, { ...before }, welcome, 'rm_1'), []);
   });
 });
-
-// ---------------------------------------------------------------------------
-// The report: one object, rendered twice
-// ---------------------------------------------------------------------------
 
 describe('buildReport', () => {
   it('names the highest passing level as the capacity, and the first failing one as saturation', () => {
@@ -1124,8 +961,7 @@ describe('buildReport', () => {
     const report = buildReport(reportInput([level()]));
     assert.equal(report.settings.metricsToken, 'set (not shown)');
     assert.ok(!JSON.stringify(report).includes('a-real-token-that-must-not-be-echoed'));
-    // A Map or a class instance anywhere in the report would survive this call and come back
-    // empty, which is how a `--json` consumer ends up with `"errors": {}` for a failing run.
+    // A Map or class instance would come back empty, as `"errors": {}` for a failing run.
     assert.deepEqual(JSON.parse(JSON.stringify(report)), report);
   });
 });
@@ -1205,8 +1041,6 @@ describe('renderReport', () => {
   });
 
   it('states what one "player" was, and warns when that is not a person', () => {
-    // A capacity figure in players is worthless without the load shape one player stood for.
-    // The default run has zero think time, which is a load shape and not a reader.
     assert.equal(report.capacity.virtualUserModel.thinkMs, 0);
     assert.match(text, /one "player" here = think time 0ms/);
     assert.match(text, /asks Coach in-hand/);
@@ -1217,17 +1051,14 @@ describe('renderReport', () => {
   });
 
   it('says a slow database probe is not a pool problem when the event loop also stalled', () => {
-    // Both fire together constantly, because the probe is timed inside the request handler and
-    // therefore includes the time the process could not reach the event loop. Printing the
-    // db-pool number without that sentence attached invites the wrong remediation.
+    // The probe is timed inside the handler, so a blocked loop fires both signals together.
     const confounded = buildReport(
       reportInput([level({ server: { eventLoopP99PeakMs: 3600, dbProbeP99BoundMs: 5000 } })]),
     );
     const printed = textOf(renderReport(confounded));
     assert.match(printed, /db-pool cannot be read as a db-pool problem here: event-loop also fired/);
 
-    // NEGATIVE CONTROL: with the event loop quiet, the caveat must NOT appear — otherwise it is
-    // decoration rather than a finding, and a real pool problem would be talked out of.
+    // With the event loop quiet, the caveat must not appear.
     const genuine = buildReport(
       reportInput([level({ server: { eventLoopP99PeakMs: 4, dbProbeP99BoundMs: 5000 } })]),
     );
@@ -1237,10 +1068,7 @@ describe('renderReport', () => {
   });
 
   it('warns when the gauge peaks came from a level that had already finished', () => {
-    // Real artefact: an eight-second level that hit its hand cap in under two seconds left one
-    // gauge reading, taken after the sockets were closed, and the report then said the level ran
-    // with zero connections. The number is not corrected — the fix is a longer hold — but it is
-    // never printed without the sentence that says what it describes.
+    // An eight-second level that hit its hand cap left one gauge reading, taken after teardown.
     const tornDown = buildReport(
       reportInput([
         level({
@@ -1256,8 +1084,7 @@ describe('renderReport', () => {
     );
     assert.match(textOf(renderReport(tornDown)), /describe a torn-down level/);
 
-    // NEGATIVE CONTROL: a level with enough readings must not carry the warning, or it becomes
-    // noise that a reader learns to skip past on the one run where it matters.
+    // A level with enough readings must not carry the warning.
     assert.ok(!text.includes('torn-down level'));
   });
 
@@ -1278,18 +1105,13 @@ describe('renderReport', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Option parsing
-// ---------------------------------------------------------------------------
-
 describe('parseArgs', () => {
   it('produces the documented defaults', () => {
     const options = parseArgs([]);
     assert.deepEqual(options.levels, [1, 2, 4, 8]);
     assert.equal(options.seats, 3);
     assert.equal(options.holdSeconds, 15);
-    // 0, not a number: the hold decides how long a level lasts. A default cap of 200 truncated
-    // every fast level after about two seconds and made the hands-per-minute column meaningless.
+    // A default cap of 200 once truncated every fast level after about two seconds.
     assert.equal(options.hands, 0);
     assert.equal(options.coach, true);
     assert.equal(options.reconnect, true);
@@ -1332,8 +1154,7 @@ describe('parseArgs', () => {
   });
 
   it('refuses a think time that would race the server turn clock', () => {
-    // Past half the clock the seat and the server's timer are in a race, and the loser is folded
-    // automatically — so the run would measure the timeout path while reporting a hand rate.
+    // Past half the clock the server's timer folds the seat.
     assert.equal(parseArgs([]).thinkMs, 0);
     assert.equal(parseArgs(['--think', '1000']).thinkMs, 1000);
     assert.equal(parseArgs(['--think', '7500']).thinkMs, 7500);
@@ -1342,9 +1163,7 @@ describe('parseArgs', () => {
   });
 
   it('refuses a scrape interval that would leave a level with one reading', () => {
-    // Two scrapes are the minimum for a counter delta, and the harness takes one before and one
-    // after regardless — but a scrape interval wider than the hold means no reading DURING the
-    // level, so every gauge peak would be sampled while the level was not running.
+    // A scrape interval wider than the hold takes no reading during the level.
     assert.throws(() => parseArgs(['--scrape', '20', '--hold', '10']), /exceeds --hold/);
     assert.throws(() => parseArgs(['--scrape', '0.1']), /at least 0\.5s/);
   });

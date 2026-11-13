@@ -1,173 +1,36 @@
 #!/usr/bin/env node
 /**
- * A dependency-free load and capacity harness that drives the real user journey against a
- * running API, ramps concurrency until a stated failure criterion is crossed, and reports what
- * saturated using the server's own `GET /metrics` rather than a guess.
+ * Load and capacity harness (`pnpm run test:load`). Drives the real user journey against ONE running
+ * API, ramps concurrency until a stated failure criterion is crossed, and names what saturated from
+ * the server's own `GET /metrics`. Every number is stamped with its environment, and `NOT_MEASURED`
+ * lists what a run cannot say (a cluster, a real network, a production database, browsers, hours).
  *
- * This is what `pnpm run test:load` does.
+ * Each series in `SERIES` is resolved at run time. A metric the process does not emit reads as
+ * `null`, goes into `server.missing`, and can never fire a saturation signal, because the registry
+ * renders no line for a counter that was never incremented and `0` would claim an absence of load.
+ * `prl_event_loop_delay_*` is a rolling window reset by every scrape, so a second scraper halves it.
+ * `prl_db_probe_duration_seconds` only advances on `GET /ready`, so the harness calls it per scrape.
  *
- * ## What this replaced, and why the old numbers were worthless
+ * Journey per virtual user: connect, join, sit, play, ask Coach mid-hand, disconnect mid-hand,
+ * resume, finish the hand, open Hand Review. Every resume is checked for the same seat, hand and
+ * hole cards and a non-decreasing sequence and pot, and a consistency failure fails the run. Clients
+ * only send actions from `legalActions`, sized at `minTo`, with the protocol's `expectedSequence` and
+ * a unique `actionId`. Coach and Hand Review are paced under their rate limits.
  *
- * The previous harness ran 1 table x 2 seats x 3 hands, finished in 0.11 s, and reported
- * p50/p90/p99 over 18 latency samples. Eighteen samples cannot carry a p99 — the 99th percentile
- * of eighteen numbers IS the maximum, so the figure was the slowest single request wearing a
- * percentile's name. It never drove Coach, never disconnected a client, never opened Hand
- * Review, and measured nothing on the server side at all: no memory, no CPU, no event-loop lag,
- * no database pool pressure. Its own footer admitted it was "a regression check, not a capacity
- * measurement", which was true and was also the whole problem, because a repository with no
- * capacity measurement anywhere quietly promotes that footer's numbers into planning documents.
+ * Action choice uses a seeded mulberry32 stream per seat so `--seed` repeats. It cannot touch an
+ * outcome, because the server deals from its own CSPRNG.
  *
- * ## What this measures, stated as precisely as it can be
+ * The WebSocket cookie goes in Node's non-standard options bag as the SECOND constructor argument,
+ * `new WebSocket(url, { headers })`. A third argument is silently ignored (verified on Node 24.18.0).
+ * Cookies are read with `getSetCookie()`, because `get('set-cookie')` comma-joins them and Expires
+ * contains commas.
  *
- * ONE API process, at whatever address `--base-url` names, driven by a generator that is
- * usually running on the same machine and therefore competing with it for CPU. Every reported
- * number is stamped with that environment (see `describeEnvironment` and the `Environment`
- * block in the report) because a latency figure without its environment is not a measurement,
- * it is a rumour. The report states the measured capacity of one instance as a specific number
- * of concurrent seated players with those caveats attached, and states which resource ran out.
- *
- * ## What this still does NOT measure, and no footer will let you forget it
- *
- * - **A cluster.** One process. Nothing here says anything about horizontal scaling, sticky
- *   sessions, or what happens when two API processes share one database.
- * - **A real network.** Over loopback there is no packet loss, no reordering, no RTT and no
- *   TLS handshake. Real clients pay all four, and the WebSocket path is where that hurts most.
- * - **A production database.** The compose Postgres holds a development-sized dataset on the
- *   same machine. Query plans change with data volume; these do not.
- * - **A proxy.** `--via-proxy` records an operator's assertion that one is present. It does not
- *   detect one, and a terminating proxy has its own connection limits which this never reaches.
- * - **Browser clients.** These sockets do no rendering, no React reconciliation and no layout,
- *   so a number here is an upper bound on what a browser at the same concurrency would see.
- * - **Sustained running.** The default hold is tens of seconds per level. Memory leaks, cache
- *   eviction and connection churn need hours. The RSS figure is a snapshot, not a trend.
- *
- * ## Where the server-side numbers come from, and what happens when one is missing
- *
- * `GET /metrics` (Prometheus text exposition; bearer token when `METRICS_TOKEN` is set) is
- * scraped before, during and after every level and parsed by `parseExposition` below. The series
- * this harness asks for are listed in `SERIES`, and every one of them is resolved AT RUN TIME
- * rather than assumed: a metric the scraped process does not emit reads as `null`, its name goes
- * into `server.missing` in the JSON and `not exported by this build` in the printed output, and
- * it can never fire a saturation signal.
- *
- * That distinction is the whole reason this is not a lookup table. `observability/registry.ts`
- * renders no line at all for a counter that has never been incremented, so a scraper cannot tell
- * `0` from "nothing in this build feeds this metric" — and a harness that printed the second as
- * the first would be reporting missing instrumentation as an absence of load, which is the worst
- * failure an observability-driven measurement has. It also means this file does not go stale
- * when the instrumentation grows: a metric that starts being fed starts being reported, with no
- * edit here.
- *
- * Two gaps worth knowing about while reading a report, because they change which numbers are the
- * client's and which are the server's:
- *
- *   - Live socket count and hands per minute are reported from THIS side of the wire as well,
- *     labelled as such, because the generator knows them exactly and does not need the server to
- *     agree.
- *   - The Coach analysis served over the WebSocket (`requestCoach`) IS now fed into
- *     `prl_analysis_duration_seconds{kind="coach"}`, as the REST calculation routes always were —
- *     it began going through the worker pool at the same time. The Coach latency in this report
- *     is still measured client-side, send to `coach` frame, because that is what a learner
- *     experiences and it includes the socket round trip the server-side histogram cannot see. The
- *     two are now worth comparing: a large gap between them is queueing or loop delay, not work.
- *
- * Three consequences of the metrics design that change how this harness behaves:
- *
- * 1. `prl_event_loop_delay_*` is a rolling window RESET BY EVERY SCRAPE. Each sample therefore
- *    describes the interval since the previous scrape, which is what makes it useful — and it
- *    means a second scraper running at the same time silently halves these windows. The report
- *    prints the scrape count so that is visible.
- * 2. `prl_db_probe_duration_seconds` only advances when `GET /ready` is called, because the
- *    readiness probe is the only thing that observes it. So this harness calls `/ready` once per
- *    scrape and the database figures describe THOSE probes — a `select 1` waiting for a pooled
- *    connection — not the application's own queries. That is still the right pool-pressure
- *    signal (see `DB_PROBE_BUCKETS` in observability/metrics.ts), and it is not the same thing
- *    as query latency.
- * 3. Those same three gauges are written only when the window HAS samples, so a scrape taken
- *    moments after another reports the previous window's numbers unchanged. The baseline scrape
- *    of a level sits milliseconds after the previous level's final one, so it carries the
- *    previous level's figures — which is why `gaugePeak` drops it. See the note there; it made
- *    two levels report an identical event-loop p99 to six decimal places on a run where one did
- *    a sixth of the work of the other.
- *
- * ## The journey each virtual user walks
- *
- * connect -> join room -> sit -> play hands -> ask Coach mid-hand -> disconnect mid-hand ->
- * reconnect -> finish the hand -> open Hand Review. The reconnect uses the real resume path
- * (`hello` on a fresh socket; the server answers `welcome` and the current view, because there
- * is no catch-up protocol) and every reconnect is CHECKED for consistency: same seat, same hand
- * id, identical own hole cards, a never-decreasing action sequence and a never-shrinking pot.
- * A load test that quietly loses correctness under load is measuring the wrong thing, so a
- * consistency failure fails the whole run regardless of how good the latency looked.
- *
- * ## The clients never guess an action
- *
- * The server sends `legalActions` in every `state` frame where it is that seat's turn, with
- * exact bounds (`minTo`, `maxTo`). This harness picks one of those entries and, for a bet or a
- * raise, sends `minTo` clamped into `[minTo, maxTo]`. It never constructs an action from its own
- * model of the rules. That is not politeness: a harness that guesses actions spends its time
- * measuring the server's rejection path and reports a latency figure for a request that was
- * never valid, while the interesting path goes untested.
- *
- * Likewise `expectedSequence` is copied from the `view.actionSequence` the client is responding
- * to, and `actionId` is unique per attempt, so a retry cannot double-apply. Both are the
- * protocol's own anti-race machinery (see @prl/contracts ws-protocol.ts) and using them
- * properly is part of what is being exercised.
- *
- * ## Why the harness paces Coach and Hand Review
- *
- * `WS_LIMITS.coachRequestsPerMinute` is 30 per SESSION — across every socket that session holds,
- * which this harness gives one each — and `GET /hands/:handId` sits behind the
- * expensive rate limit (20 per minute per session by default). A harness that ignores both
- * spends the whole run measuring the limiter and reports a capacity number for a server that
- * was refusing most of the offered work. So each socket holds off Coach for
- * `COACH_MIN_INTERVAL_MS` and each session holds off review for `REVIEW_MIN_INTERVAL_MS`,
- * which is also what a human does — nobody asks Coach five times a second. The server's own
- * `prl_rate_limit_events_total` is reported per level anyway, so a run that hit the limiter
- * despite the pacing is visible rather than hidden.
- *
- * ## Randomness
- *
- * Which legal action a synthetic client takes is chosen by a small seeded PRNG (mulberry32),
- * not by Math.random and not by a CSPRNG. Two deliberate reasons: a load run has to be
- * repeatable to be comparable, so `--seed` must produce the same decision sequence twice; and
- * this choice has nothing to do with fairness or secrecy, because the server deals every card
- * from its own CSPRNG and this side of the wire cannot influence any outcome. The repo's ban on
- * Math.random is about anything that could touch a game outcome — this cannot, and it still is
- * not Math.random, because reproducibility is worth more here than entropy. Each client gets its
- * OWN stream, derived from the seed and its level, table and seat, so two runs at the same
- * concurrency make the same decisions even though the interleaving between sockets does not
- * repeat.
- *
- * ## Two things that are easy to get wrong and are handled here
- *
- * 1. **The WebSocket handshake needs the session cookie.** The standard `WebSocket` constructor
- *    takes only (url, protocols) and has no way to set a header, which would make every socket
- *    here fail the upgrade with close code 4401. Node's implementation accepts a non-standard
- *    options bag as the SECOND argument — `new WebSocket(url, { headers })` — and forwards those
- *    headers on the upgrade request. Passing it as a third argument silently does nothing, which
- *    is a fun half hour. Verified on Node 24.18.0.
- *
- * 2. **`fetch` has no cookie jar.** Every session here keeps its own tiny jar, populated from
- *    `response.headers.getSetCookie()` — the plural accessor, because `get('set-cookie')` folds
- *    multiple cookies into one comma-joined string that cannot be reliably split (expiry dates
- *    contain commas).
- *
- * ## Usage
- *
+ * Usage:
  *     node scripts/load-test.mjs [options]        # see --help for every flag
  *     pnpm run test:load -- --ramp 1,2,4,8 --hold 20 --json
  *
- * ## Exit codes
- *
- *     0  every level that ran met every threshold, and the ramp completed
- *     1  a threshold was breached, a reconnect lost state, the metrics endpoint was
- *        unreachable, the run exceeded its budget, or an option was invalid
- *     0  --help
- *
- * A refused or unreachable `/metrics` is a FAILURE, not a warning: the server-side half of
- * every number below comes from there, and a run that silently degrades to client-side timings
- * is exactly the kind of "capacity measurement" this file exists to stop.
+ * Exit codes: 0 when every level met every threshold and the ramp completed, and for --help. 1 on a
+ * breach, a lost resume, an unreachable or refused `/metrics`, a blown budget, or a bad option.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -184,17 +47,10 @@ const red = (s) => paint('31', s);
 const green = (s) => paint('32', s);
 const yellow = (s) => paint('33', s);
 
-/** Protocol version this harness speaks. Must match WS_PROTOCOL_VERSION. */
+/** Must match WS_PROTOCOL_VERSION. */
 const WS_PROTOCOL_VERSION = 1;
 
-/**
- * The endpoints, as the server actually registers them.
- *
- * `/metrics` is NOT under the `/api/v1` prefix: `app.ts` registers it at the root, beside
- * `/health` and `/ready`, because it is not a feature of the product. Writing it as
- * `/api/v1/metrics` here would produce `content_not_found`, which reads like an authentication
- * problem and is why the path is named rather than derived.
- */
+/** `/metrics` is registered at the root beside `/health`, not under `/api/v1`. */
 const ROUTES = {
   health: '/api/v1/health',
   ready: '/api/v1/ready',
@@ -208,15 +64,7 @@ const ROUTES = {
   metrics: '/metrics',
 };
 
-/**
- * Server metric names this harness reads.
- *
- * Named as a table rather than inline so the report can say exactly which of them the scraped
- * process actually emitted and which it did not. Several are declared in
- * `observability/metrics.ts` and never incremented by anything, and a harness that printed a
- * confident `0` for those would be reporting the absence of instrumentation as the absence of
- * load — which is the worst failure mode an observability-driven measurement has.
- */
+/** Server metric names, kept in one table so the report can say which ones the process emitted. */
 const SERIES = {
   httpRequests: 'prl_http_requests_total',
   httpDuration: 'prl_http_request_duration_seconds',
@@ -245,42 +93,20 @@ const SERIES = {
 };
 
 /**
- * Minimum gap between one socket's Coach requests, in milliseconds.
- *
- * `WS_LIMITS.coachRequestsPerMinute` is 30, so 2100 ms allows at most 28 per minute and leaves
- * headroom for clock jitter and for the fact that the server's window is not aligned with ours.
- * Deliberately not 2000: at exactly the limit, a run that drifted a few milliseconds fast would
- * spend part of every level measuring the limiter instead of the analysis.
+ * `WS_LIMITS.coachRequestsPerMinute` is 30 per session. 2100 ms allows 28 per minute, so a run that
+ * drifts a few milliseconds fast does not measure the limiter.
  */
 const COACH_MIN_INTERVAL_MS = 2_100;
 
-/**
- * Minimum gap between one session's Hand Review reads, in milliseconds.
- *
- * `GET /hands/:handId` carries `app.expensiveRateLimit` — 20 per minute per caller by default —
- * because a review replays the hand and prices the actions that were not taken. 3500 ms is at
- * most 17 per minute, which is well inside that and is already far more attentive than a person
- * reviewing their own hands.
- */
+/** `GET /hands/:handId` allows 20 per minute per caller by default. 3500 ms is at most 17. */
 const REVIEW_MIN_INTERVAL_MS = 3_500;
 
-// ---------------------------------------------------------------------------
-// Options
-// ---------------------------------------------------------------------------
-
-/**
- * Defaults describe a ramp that finishes in about two minutes on a developer machine and is
- * still long enough for the numbers to mean something: four levels, fifteen seconds of steady
- * state each. That is a deliberate change from the old defaults, which finished in 0.11 s and
- * produced percentiles over eighteen samples. Every value below is printed before the run
- * starts, so what was measured is never in doubt.
- */
+/** About two minutes on a developer machine: four levels, fifteen seconds of steady state each. */
 const DEFAULTS = {
   baseUrl: process.env.PRL_API_ORIGIN ?? 'http://127.0.0.1:3001',
   /**
-   * Must match an entry in the server's `PUBLIC_WEB_ORIGIN` allowlist, which is compared as an
-   * exact string — `http://127.0.0.1:3000` and `http://localhost:3000` are different origins to
-   * it, and the shipped `.env.example` ships the latter.
+   * Must match a `PUBLIC_WEB_ORIGIN` entry exactly. `127.0.0.1` and `localhost` are different
+   * origins, and `.env.example` ships `localhost`.
    */
   origin: process.env.PUBLIC_WEB_ORIGIN ?? 'http://localhost:3000',
   wsPath: ROUTES.ws,
@@ -290,42 +116,21 @@ const DEFAULTS = {
   ramp: '1,2,4,8',
   /** Overrides the ramp with one level of this many tables. 0 means "use --ramp". */
   tables: 0,
-  /** Seats filled per table. The schema caps a room at 6 (createRoomBody, rooms.max_seats). */
+  /** The schema caps a room at 6 (createRoomBody, rooms.max_seats). */
   seats: 3,
-  /** Seconds of steady state per level, after every seat is sat and before the drain. */
   holdSeconds: 15,
-  /** Seconds to let in-flight hands finish once a level stops dealing. */
   drainSeconds: 20,
-  /** Seconds between `/metrics` scrapes (and the `/ready` probe that feeds the DB histogram). */
+  /** Seconds between `/metrics` scrapes, each preceded by the `/ready` probe that feeds the DB histogram. */
   scrapeSeconds: 3,
   /**
-   * Seconds of the throwaway warm-up level that runs before the ramp.
-   *
-   * It exists because the FIRST Coach analysis on a cold WORKER THREAD is enormously more
-   * expensive than every one after it — measured at roughly 3 s on this machine against 20-30 ms
-   * warm — because that thread has to build the preflop strength ordering before it can answer.
-   * Left in the ramp, that single number fails level 1 of every run and buries the concurrency
-   * signal under a one-off. So it is measured deliberately, reported as its own cold-start
-   * figure, and kept out of the levels. `--skip-warmup` measures the cold process instead.
-   *
-   * It used to block the EVENT LOOP for the whole of that, because the socket ran the Monte
-   * Carlo synchronously on the main thread. It now goes to the worker pool, so the cost is paid
-   * by the requester and by nobody else — measured across the same window, event-loop p99 fell
-   * from 3028.8 ms to 2.1 ms. One thread warms per level as the pool spins up, so a cold-thread
-   * requester still waits seconds while everybody else keeps playing; that trade is recorded in
-   * `docs/production/load-test.md` rather than hidden here.
+   * A throwaway warm-up level before the ramp. The first Coach analysis on a cold worker thread
+   * costs about 3 s against 20-30 ms warm, and left in level 1 it fails every run. It is reported as
+   * its own cold-start figure. `--skip-warmup` measures the cold process instead.
    */
   warmupSeconds: 5,
   /**
-   * Optional cap on hands per table per level. `0` means the hold decides, which is the default.
-   *
-   * It used to default to 200, and that quietly broke the ramp at low think times: a three-seat
-   * table with no think time finishes 200 hands in about two seconds, so a twenty-second level
-   * ended after two, the wall-clock denominator collapsed, and the level reported 7970
-   * hands/minute beside a level that reported 762. Neither number described the server. The hold
-   * is the thing that is supposed to decide how long a level lasts, so it now does, and the cap
-   * is a deliberate stop for someone who wants exactly N hands rather than a default that
-   * silently truncates every fast level.
+   * Optional cap on hands per table per level; 0 lets the hold decide. A default cap of 200 once
+   * ended fast levels after two seconds and reported 7970 hands/minute beside 762.
    */
   hands: 0,
   smallBlind: 1,
@@ -333,23 +138,9 @@ const DEFAULTS = {
   startingStack: 200,
   actionTimeoutSeconds: 15,
   /**
-   * Milliseconds a virtual user spends "thinking" before sending an action it has already chosen.
-   *
-   * Zero by default, and that is a measurement decision that has to be stated rather than
-   * defaulted quietly: a virtual user with no think time acts the instant the server asks, which
-   * is not a person. It is the most work one seat can possibly offer, so a ramp at zero finds the
-   * point at which the INSTANCE runs out of headroom, and the resulting figure is a number of
-   * virtual users rather than a number of players. A real learner takes seconds per decision —
-   * `LEARNER_TURN_SECONDS` defaults to 240 precisely because the Coach panel they are meant to
-   * read at that moment runs to about 950 words.
-   *
-   * `--think 1000` models people, and the same instance then holds many more seats because each
-   * offers far less work. The report prints this value beside the capacity figure and never
-   * restates that figure in terms of a think time the run did not use.
-   *
-   * The latency clock starts AFTER the delay, so this changes the offered rate and never the
-   * measured round trip. It must stay well below the turn clock or every seat is folded by the
-   * server instead of acting, which `parseArgs` enforces.
+   * Delay before sending an already-chosen action. At 0 a virtual user offers the most work one seat
+   * can, so the capacity figure counts virtual users, not people. `--think 1000` models people. The
+   * latency clock starts after the delay, and `parseArgs` keeps it below half the turn clock.
    */
   thinkMs: 0,
   /** Hands between one client's mid-hand disconnect/reconnect cycles. */
@@ -359,16 +150,16 @@ const DEFAULTS = {
   seed: 1,
   /** Whole-run budget across every level. The run fails if it has not finished by then. */
   timeoutSeconds: 900,
-  // --- stop criteria: crossing any of these ends the ramp and names itself ---
+  // Stop criteria. Crossing any of these ends the ramp and names itself.
   maxErrorRate: 0.01,
   maxP95Ms: 150,
   maxP99Ms: 250,
   minReconnectRate: 0.99,
-  // --- saturation classification thresholds, in the units the metric reports ---
+  // Saturation thresholds, in the units the metric reports.
   eventLoopP99Ms: 50,
   cpuCores: 0.9,
   dbProbeP99Ms: 50,
-  // --- honest labelling: asserted by the operator, never measured ---
+  // Asserted by the operator, never measured.
   serverEnv: 'unstated',
 };
 
@@ -484,7 +275,7 @@ const BOOLEAN_OPTIONS = new Map([
   ['--via-proxy', 'viaProxy'],
 ]);
 
-/** Flags that turn a leg of the journey off. Kept apart because they set `false`, not `true`. */
+/** These set `false`, not `true`. */
 const DISABLE_OPTIONS = new Map([
   ['--no-coach', 'coach'],
   ['--no-reconnect', 'reconnect'],
@@ -492,14 +283,7 @@ const DISABLE_OPTIONS = new Map([
   ['--skip-warmup', 'warmup'],
 ]);
 
-/**
- * Parses argv into a fully validated option set.
- *
- * Exported so `load-test.test.mjs` can assert the validation without starting a server. Every
- * rejection throws the REASON — "--seats must be an integer from 2 to 6 (rooms.max_seats CHECK)"
- * rather than "invalid --seats" — because the reason is the difference between a one-second fix
- * and reading the source.
- */
+/** Exported for `load-test.test.mjs`. Every rejection throws the reason, not "invalid --seats". */
 export function parseArgs(argv) {
   const options = {
     ...DEFAULTS,
@@ -515,8 +299,7 @@ export function parseArgs(argv) {
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    // `pnpm run test:load -- --ramp 1,2` forwards the `--` itself, so absorb it rather than
-    // rejecting the conventional invocation as an unknown option.
+    // `pnpm run test:load -- --ramp 1,2` forwards the `--` itself.
     if (arg === '--') continue;
     if (arg === '-h' || arg === '--help') {
       options.help = true;
@@ -550,8 +333,7 @@ export function parseArgs(argv) {
 
   if (options.help) return options;
 
-  // The seat bound is the database's: rooms.max_seats has a CHECK BETWEEN 2 AND 6, and
-  // createRoomBody repeats it.
+  // rooms.max_seats has a CHECK BETWEEN 2 AND 6, and createRoomBody repeats it.
   if (!Number.isInteger(options.seats) || options.seats < 2 || options.seats > 6) {
     throw new Error('--seats must be an integer from 2 to 6 (rooms.max_seats CHECK)');
   }
@@ -598,9 +380,8 @@ export function parseArgs(argv) {
     throw new Error('--reconnect-every must be a positive integer (use --no-reconnect to switch it off)');
   }
   if (options.thinkMs < 0) throw new Error('--think cannot be negative');
-  // Half the turn clock, not all of it. A think time close to the clock races the server's own
-  // timer, and the seat that loses that race is folded automatically — so the run would measure
-  // the timeout path and report a hand rate for a table nobody was actually playing.
+  // Half the turn clock. A think time near the clock races the server's timer, and the losing seat is
+  // folded automatically.
   if (options.thinkMs > options.actionTimeoutSeconds * 500) {
     throw new Error(
       `--think ${options.thinkMs}ms is more than half the ${options.actionTimeoutSeconds}s turn clock, ` +
@@ -613,12 +394,7 @@ export function parseArgs(argv) {
   return options;
 }
 
-/**
- * Turns `--ramp` (or `--tables`) into the ascending list of table counts to run.
- *
- * Ascending is required rather than merely conventional: the whole report is built on "the
- * highest level that met every threshold", and a ramp that went 8, 2, 4 has no such level.
- */
+/** Ascending is required, because the report is built on the highest level that met every threshold. */
 function parseRamp(options) {
   if (options.tables !== 0) {
     if (!Number.isInteger(options.tables) || options.tables < 1) {
@@ -649,21 +425,10 @@ function parseRamp(options) {
   return levels;
 }
 
-// ---------------------------------------------------------------------------
-// Percentiles
-// ---------------------------------------------------------------------------
-
 /**
- * Nearest-rank percentile: the smallest sample at or above the requested rank.
- *
- * No interpolation. Interpolated percentiles invent a latency that no request actually
- * experienced, which is exactly the wrong property for a tail metric — and the exposition
- * format's own `histogram_quantile` already does enough of that on the server side.
- *
- * `Math.ceil(fraction * n)` is the RANK (1-based); the array index is one less. Getting that
- * conversion wrong is the classic percentile bug and it is silent: it shifts every reported
- * figure by one sample, which looks plausible at any concurrency. `load-test.test.mjs` pins it
- * against a known distribution and feeds the two off-by-one variants in as negative controls.
+ * Nearest-rank percentile with no interpolation, so it never reports a latency no request had.
+ * `Math.ceil(fraction * n)` is the 1-based rank and the index is one less. `load-test.test.mjs`
+ * feeds both off-by-one variants as negative controls.
  */
 export function percentile(sortedSamples, fraction) {
   if (sortedSamples.length === 0) return null;
@@ -673,16 +438,9 @@ export function percentile(sortedSamples, fraction) {
 }
 
 /**
- * The full latency summary for one bucket of samples, in milliseconds.
- *
- * p95 is in here because it was missing from the old harness and is the figure most alerting
- * uses — `HTTP_BUCKETS` in observability/metrics.ts is chosen so that the 250 ms p95 warning
- * threshold lands on a bucket boundary, and a harness that never reports p95 cannot tell you
- * whether that alert would have fired.
- *
- * `count` is reported beside every percentile on purpose. A p99 over fewer than about 100
- * samples IS the maximum, and the report prints a warning when a level lands there rather than
- * letting the number pass as a percentile.
+ * Latency summary in milliseconds. p95 is here because `HTTP_BUCKETS` puts the 250 ms p95 alert on a
+ * bucket boundary. `count` sits beside every percentile because a p99 over fewer than about 100
+ * samples is the maximum.
  */
 export function summariseLatency(samples) {
   const sorted = [...samples].sort((a, b) => a - b);
@@ -701,39 +459,14 @@ export function summariseLatency(samples) {
   };
 }
 
-/**
- * Fewest samples for which a p99 is a percentile rather than a synonym for the maximum.
- *
- * At n = 100 the nearest rank for 0.99 is 99, so the reported figure is the second-largest
- * sample and the maximum is still visible separately. Below that the two collapse.
- */
+/** At n = 100 the nearest rank for 0.99 is 99, so p99 is the second-largest sample. */
 const MIN_SAMPLES_FOR_P99 = 100;
 
-// ---------------------------------------------------------------------------
-// Prometheus text exposition parser
-// ---------------------------------------------------------------------------
-
 /**
- * Parses the Prometheus text exposition format into samples this harness can query.
- *
- * Written here rather than pulled in, for the same reason `observability/registry.ts` renders it
- * by hand: the format is a documented, stable, line-oriented serialisation, and the repository's
- * dependency policy is deliberately hostile to a package that would need pinning, hashing,
- * IOC-scanning and re-reviewing on every bump.
- *
- * What it handles, all of which appear in a real scrape of this service:
- *
- *   - `# HELP name text` and `# TYPE name type`, and plain `#` comments, kept out of the samples
- *   - unlabelled samples (`prl_readiness_state 1`)
- *   - labelled samples, including the `le="+Inf"` bucket every histogram ends with
- *   - label values carrying the format's three escapes: backslash, double quote, and `\n`
- *   - `+Inf`, `-Inf` and `NaN` as VALUES, which a bare `Number()` would turn into NaN or null
- *   - an optional trailing millisecond timestamp, which this service never emits and the format
- *     permits; it is parsed off and discarded rather than being mistaken for part of the value
- *
- * A line it cannot parse is collected in `malformed` rather than thrown, because a scrape that
- * gained one unexpected line during an incident should still yield every other number. The
- * caller decides whether `malformed.length > 0` matters; this harness prints it.
+ * Parses Prometheus text exposition: HELP/TYPE/comment lines, labelled and unlabelled samples, the
+ * three label escapes, `+Inf`/`-Inf`/`NaN` values, and an optional trailing timestamp. Hand-written
+ * to avoid a dependency. An unparseable line goes into `malformed` instead of throwing, so one bad
+ * line still yields every other number.
  */
 export function parseExposition(text) {
   const samples = [];
@@ -743,8 +476,7 @@ export function parseExposition(text) {
   const malformed = [];
 
   for (const rawLine of text.split('\n')) {
-    // Trailing CR rather than a full trim: leading whitespace on a sample line is not legal
-    // exposition, and silently accepting it would hide a server that had started emitting it.
+    // Strip only a trailing CR. Leading whitespace is not legal exposition and must not be hidden.
     const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
     if (line === '') continue;
     if (line.startsWith('#')) {
@@ -768,7 +500,6 @@ export function parseExposition(text) {
   return { samples, index, help, types, malformed };
 }
 
-/** One sample line, or null when it is not one. */
 function parseSampleLine(line) {
   const nameMatch = /^[a-zA-Z_:][a-zA-Z0-9_:]*/.exec(line);
   if (nameMatch === null) return null;
@@ -785,22 +516,14 @@ function parseSampleLine(line) {
 
   const rest = line.slice(cursor).trim();
   if (rest === '') return null;
-  // The format is `value [timestamp]`. Splitting on whitespace and taking the first token keeps
-  // a timestamp from being concatenated into the value, which would silently multiply every
-  // reading by about 10^13.
+  // Take the first token, so a timestamp is not concatenated into the value (about 10^13 too large).
   const [valueToken] = rest.split(/\s+/);
   const value = parseExpositionValue(valueToken);
   if (value === null) return null;
   return { name, labels, value };
 }
 
-/**
- * Reads a `{a="1",b="two"}` label set starting at `open`, honouring the format's escapes.
- *
- * Hand-written rather than a regex because a label value may legally contain `}` , `,` and an
- * escaped `"`, and every regex that pretends otherwise fails on exactly the label somebody is
- * debugging at the time.
- */
+/** Hand-written because a label value may legally contain `}`, `,` and an escaped `"`. */
 function parseLabels(line, open) {
   const labels = {};
   let cursor = open + 1;
@@ -829,8 +552,7 @@ function parseLabels(line, open) {
       if (char === '\\') {
         const escaped = line[cursor + 1];
         if (escaped === undefined) return null;
-        // The exposition format defines exactly three escapes in a label value. Anything else
-        // after a backslash is passed through as itself, which is what a scraper does.
+        // The format defines three escapes. Anything else after a backslash passes through.
         value += escaped === 'n' ? '\n' : escaped;
         cursor += 2;
         continue;
@@ -850,7 +572,6 @@ function parseLabels(line, open) {
   }
 }
 
-/** A value token from the exposition format, or null when it is not a number at all. */
 export function parseExpositionValue(token) {
   if (token === '+Inf' || token === 'Inf' || token === '+inf') return Number.POSITIVE_INFINITY;
   if (token === '-Inf' || token === '-inf') return Number.NEGATIVE_INFINITY;
@@ -859,7 +580,6 @@ export function parseExpositionValue(token) {
   return Number.isNaN(value) ? null : value;
 }
 
-/** True when `sample` carries every label in `labels` with the same value. */
 function matchesLabels(sample, labels) {
   for (const [name, value] of Object.entries(labels)) {
     if (sample.labels[name] !== value) return false;
@@ -867,14 +587,7 @@ function matchesLabels(sample, labels) {
   return true;
 }
 
-/**
- * One series' value, or null when the process does not export it.
- *
- * Null, never zero. A metric that is declared and never incremented renders no line at all (see
- * `Counter.renderSamples` in observability/registry.ts), so `0` and "this build never feeds this
- * metric" are indistinguishable to a scraper — and reporting the second as the first turns
- * missing instrumentation into a confident claim of no load.
- */
+/** Null, never zero, when the process does not export the series. See the header. */
 export function sampleValue(snapshot, name, labels = {}) {
   const series = snapshot.index.get(name);
   if (series === undefined) return null;
@@ -883,11 +596,8 @@ export function sampleValue(snapshot, name, labels = {}) {
 }
 
 /**
- * The sum across every label combination of one metric, or null when it is not exported.
- *
- * `filter` drops series the caller does not want counted — used here to subtract this harness's
- * own `/metrics` and `/ready` traffic from the HTTP totals, so the reported request rate is the
- * load being applied rather than the load plus the measuring of it.
+ * Sum across every label combination, or null when not exported. `filter` drops this harness's own
+ * `/metrics` and `/ready` traffic from the HTTP totals.
  */
 export function seriesTotal(snapshot, name, filter = () => true) {
   const series = snapshot.index.get(name);
@@ -899,7 +609,6 @@ export function seriesTotal(snapshot, name, filter = () => true) {
   return total;
 }
 
-/** Every label combination of one counter, as `{ labelValue: count }` keyed on `labelName`. */
 export function seriesByLabel(snapshot, name, labelName) {
   const series = snapshot.index.get(name);
   if (series === undefined) return null;
@@ -911,12 +620,7 @@ export function seriesByLabel(snapshot, name, labelName) {
   return out;
 }
 
-/**
- * A histogram, as cumulative buckets plus its sum and count, or null when it is not exported.
- *
- * `le` is kept as a number, with the `+Inf` bucket becoming `Infinity`, so the buckets sort
- * correctly and the quantile search below needs no special case for the last one.
- */
+/** `le` is a number and `+Inf` becomes `Infinity`, so the buckets sort with no special case. */
 export function histogramOf(snapshot, name, labels = {}) {
   const buckets = (snapshot.index.get(`${name}_bucket`) ?? [])
     .filter((sample) => matchesLabels(sample, labels) && sample.labels.le !== undefined)
@@ -930,14 +634,8 @@ export function histogramOf(snapshot, name, labels = {}) {
 }
 
 /**
- * The difference between two readings of the same histogram.
- *
- * Cumulative bucket counters only ever go up, so subtracting a baseline gives the distribution
- * of the observations made DURING a level rather than since the process started. Without this,
- * level 8's numbers would be diluted by every observation from levels 1, 2 and 4.
- *
- * A bucket present in `after` but not in `before` is treated as having been zero, which is what
- * a counter that had no observations in that bucket yet means.
+ * Subtracts a baseline so a level's distribution covers only its own observations. A bucket missing
+ * from `before` counts as zero.
  */
 export function histogramDelta(before, after) {
   if (after === null) return null;
@@ -954,28 +652,10 @@ export function histogramDelta(before, after) {
 }
 
 /**
- * The bucket bound at or above which a quantile of the observations fell, in the metric's units.
- *
- * Deliberately NOT `histogram_quantile`'s linear interpolation. Interpolating inside a bucket
- * asserts the observations were uniformly distributed across it, which they are not, and
- * produces a decimal that reads like a measurement. This returns a BOUND — "99% of probes
- * finished within 0.05 s" — which is a statement the data actually supports.
- *
- * Three return values, and the distinction between the last two is a defect this function used
- * to have rather than a nicety:
- *
- *   * a finite number — the quantile fell at or below that bound;
- *   * `Infinity`      — it fell in the `+Inf` bucket, so all that is known is "above the top
- *                       bound";
- *   * `null`          — there were no observations at all.
- *
- * Both of the last two used to be `null`, on the reasoning that a number for the `+Inf` case
- * would be an invention. The number would be; the DISTINCTION is not. `null` is read downstream
- * as "this build does not export the metric", so a database probe slower than the top bucket —
- * the single most alarming reading the pool can produce — was indistinguishable from no data,
- * and the saturation signal that exists to name it stayed quiet. `Infinity` is not an invented
- * measurement, it is the bound itself, and every caller either compares it against a threshold
- * (where it is correct) or formats it (where it prints as "above the top bucket").
+ * The bucket bound at or above which a quantile fell, not an interpolated value. Returns a finite
+ * bound, `Infinity` when it fell in the `+Inf` bucket, or `null` when there were no observations.
+ * `null` reads downstream as "not exported", so `Infinity` keeps a database probe slower than the top
+ * bucket from looking like no data.
  */
 export function histogramBoundAtQuantile(histogram, quantile) {
   if (histogram === null || histogram.count <= 0) return null;
@@ -985,14 +665,9 @@ export function histogramBoundAtQuantile(histogram, quantile) {
     seen = bucket.cumulative;
     if (seen >= target) return bucket.le;
   }
-  // Past the last bucket. A well-formed exposition ends with `+Inf`, so this is reached only by
-  // a truncated one — where "above every bound I was given" is the same statement.
+  // Reached only by a truncated exposition with no `+Inf` bucket.
   return Number.POSITIVE_INFINITY;
 }
-
-// ---------------------------------------------------------------------------
-// Seeded PRNG — see the module comment for why this is not Math.random
-// ---------------------------------------------------------------------------
 
 export function mulberry32(seed) {
   let state = seed >>> 0;
@@ -1005,22 +680,9 @@ export function mulberry32(seed) {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Per-level accounting
-// ---------------------------------------------------------------------------
-
 /**
- * Counters and latency samples for ONE level of the ramp.
- *
- * A fresh instance per level, rather than one for the whole run, because the entire report is
- * built on comparing levels — a shared instance makes every level's numbers the average of it
- * and everything before it, and the saturation point disappears into the mean.
- *
- * Latency is stored as every individual sample rather than as a running summary, because you
- * cannot compute a p99 from a mean and a count, and the sample count here (tens of thousands at
- * most) makes the memory question irrelevant. If this is ever pointed at a run large enough for
- * that to matter, switch to a histogram with fixed buckets — and say so in the report, because
- * bucketed percentiles are approximations and the report should not pretend otherwise.
+ * Counters and latency samples for ONE level. A fresh instance per level, because a shared one would
+ * average the saturation point away. Every sample is kept, because a p99 needs them.
  */
 class LevelMetrics {
   constructor() {
@@ -1046,7 +708,7 @@ class LevelMetrics {
     this.latencies = { action: [], coach: [], review: [], connect: [], reconnect: [] };
     /** code -> count. Protocol error codes, transport codes, and consistency failures. */
     this.errors = new Map();
-    /** Human-readable consistency failures; any one of these fails the whole run. */
+    /** Any one of these fails the whole run. */
     this.consistencyFailures = [];
     this.startedAt = null;
     this.finishedAt = null;
@@ -1071,12 +733,7 @@ class LevelMetrics {
     return total;
   }
 
-  /**
-   * The denominator for the error rate: every operation that could have failed.
-   *
-   * Deliberately explicit and printed beside the rate — an error rate whose denominator is
-   * unstated is a number you can make say anything.
-   */
+  /** The error rate's denominator, printed beside it. */
   get operationCount() {
     return (
       this.roomsCreated +
@@ -1096,20 +753,10 @@ class LevelMetrics {
   }
 }
 
-// ---------------------------------------------------------------------------
-// REST
-// ---------------------------------------------------------------------------
-
 /**
- * One guest identity: its cookie jar, its CSRF token, and its display name.
- *
- * The jar is a plain Map of name -> value. It ignores Domain, Path, Expires and Secure, which is
- * correct for a harness talking to exactly one origin for a few minutes, and would be wrong for
- * anything else.
- *
- * `metrics` is settable because a session outlives a level: sessions are provisioned once for
- * the widest level and reused, so each level points them at its own `LevelMetrics` and the
- * provisioning cost lands in the setup accounting rather than in level one.
+ * One guest identity. The cookie jar ignores Domain, Path, Expires and Secure, which is fine for one
+ * origin for a few minutes. Sessions are provisioned once for the widest level, and each level sets
+ * `metrics` to its own `LevelMetrics`.
  */
 class Session {
   constructor(baseUrl, origin, name, metrics) {
@@ -1120,7 +767,6 @@ class Session {
     this.cookies = new Map();
     this.csrfToken = null;
     this.userId = null;
-    /** Wall-clock time of the last Hand Review, for the pacing described in the header. */
     this.lastReviewAt = 0;
   }
 
@@ -1129,9 +775,7 @@ class Session {
   }
 
   absorb(response) {
-    // getSetCookie(), not get('set-cookie'): the singular accessor joins multiple cookies with a
-    // comma, and cookie attributes legally contain commas ("Expires=Wed, 21 Oct 2026 ..."), so
-    // splitting it back apart is guesswork.
+    // getSetCookie(), because `get('set-cookie')` comma-joins cookies and Expires contains commas.
     for (const raw of response.headers.getSetCookie()) {
       const pair = raw.split(';', 1)[0] ?? '';
       const eq = pair.indexOf('=');
@@ -1140,19 +784,12 @@ class Session {
     }
   }
 
-  /**
-   * A request, with cookies, CSRF header and error accounting.
-   *
-   * Errors are classified into the protocol's own `error.code` where the server gave one, and
-   * into `transport:*` buckets otherwise, so the report can distinguish "the server said no"
-   * from "the server was not reachable".
-   */
+  /** Errors are bucketed by the server's `error.code`, or `transport:*` when there was none. */
   async request(path, { method = 'GET', body } = {}) {
     const headers = { accept: 'application/json', origin: this.origin };
     const cookie = this.cookieHeader();
     if (cookie) headers.cookie = cookie;
     if (body !== undefined) headers['content-type'] = 'application/json';
-    // Sent on every mutating request; paired with the SameSite=Strict cookie.
     if (this.csrfToken && method !== 'GET') headers['x-csrf-token'] = this.csrfToken;
 
     let response;
@@ -1191,13 +828,8 @@ class Session {
   }
 
   /**
-   * Creates the guest identity and captures the cookie and CSRF token.
-   *
-   * The GET comes first and that is the whole point: `POST /auth/guest` is a mutating request,
-   * so the CSRF hook demands the `x-csrf-token` header AND the matching secret cookie. Both come
-   * from `GET /auth/session`, which is exempt (GET changes nothing) and hands out a token to
-   * anyone. POSTing first is rejected `csrf_failed` every time, which reads like a client
-   * problem rather than an ordering one.
+   * GET first. `POST /auth/guest` is mutating, so the CSRF hook needs the token and cookie that
+   * `GET /auth/session` hands out. POSTing first fails `csrf_failed` every time.
    */
   async createGuest() {
     const seed = await this.request(ROUTES.session);
@@ -1207,9 +839,7 @@ class Session {
     }
 
     const created = await this.request(ROUTES.guest, { method: 'POST', body: { displayName: this.name } });
-    // The guest response is a SessionResponse and carries a fresh token bound to the new session
-    // cookie. Keep the seeded one if it ever stops doing so, rather than dropping to null and
-    // failing every later request.
+    // Keep the seeded token if the response ever stops carrying a fresh one.
     this.csrfToken = created?.csrfToken ?? this.csrfToken;
     this.userId = created?.user?.id ?? null;
     if (this.userId === null) {
@@ -1219,16 +849,9 @@ class Session {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Scraping the server's own metrics
-// ---------------------------------------------------------------------------
-
 /**
- * Reads `GET /metrics` and `GET /ready`, and keeps every reading of a level.
- *
- * `/ready` is called immediately BEFORE each scrape and not after, because the readiness probe
- * is the only thing that observes `prl_db_probe_duration_seconds` — calling it after the scrape
- * would put every probe in the next interval's window and leave the first one empty.
+ * Reads `GET /metrics` and `GET /ready`. `/ready` runs before each scrape, because it is the only
+ * thing that observes `prl_db_probe_duration_seconds`.
  */
 class MetricsScraper {
   constructor({ baseUrl, metricsPath, readyPath, token, origin }) {
@@ -1241,18 +864,14 @@ class MetricsScraper {
     this.failures = 0;
   }
 
-  /** One scrape. Returns the parsed snapshot, or an object carrying the reason it failed. */
   async scrape() {
-    // The readiness probe is load in its own right, and small: one `select 1` per scrape
-    // interval. It is reported as harness overhead rather than folded into the applied load.
+    // Reported as harness overhead, not applied load.
     try {
       await fetch(new URL(this.readyPath, this.baseUrl), {
         headers: { accept: 'application/json', origin: this.origin },
       });
     } catch {
-      // A failed readiness probe is not itself a scrape failure — the metrics endpoint below is
-      // the thing this class exists to read, and it answers from memory when the database does
-      // not. The db histogram simply gains no observation for this interval.
+      // Not a scrape failure. `/metrics` answers from memory when the database does not.
     }
 
     const headers = { accept: 'text/plain' };
@@ -1274,11 +893,8 @@ class MetricsScraper {
 }
 
 /**
- * Turns a level's scrapes into the server-side half of its numbers.
- *
- * Counters become deltas across the level; gauges become the peak seen during it. Anything the
- * process did not export is `null` and its name goes in `missing`, so the report can say "this
- * build does not instrument that" instead of printing a zero that reads like an absence of load.
+ * Counters become deltas across the level and gauges become the peak. Anything not exported is
+ * `null` and goes in `missing`.
  */
 function summariseServerSide(readings) {
   const good = readings.filter((reading) => reading.ok);
@@ -1301,7 +917,6 @@ function summariseServerSide(readings) {
   const last = good[good.length - 1].snapshot;
   const scrapeSpanSeconds = (good[good.length - 1].at - good[0].at) / 1000;
 
-  /** A counter's increase across the level, or null when the metric is not exported at all. */
   const counterDelta = (name, filter) => {
     const before = seriesTotal(first, name, filter);
     const after = seriesTotal(last, name, filter);
@@ -1312,21 +927,10 @@ function summariseServerSide(readings) {
     return after - before;
   };
 
-  /** The largest reading of a gauge across the level, or null when it is not exported. */
   /**
-   * The largest reading of a gauge DURING the level, or null when it is not exported.
-   *
-   * The baseline reading is excluded, and that is not tidiness — it is a correctness fix for a
-   * specific way `prl_event_loop_delay_*` lies. Those three gauges are only written when the
-   * native monitor has at least one sample in the window (`if (this.eventLoop.count > 0)` in
-   * observability/metrics.ts), and every scrape RESETS that window. The baseline scrape of a
-   * level happens milliseconds after the previous level's final scrape, so its window is
-   * effectively empty, the guard skips the write, and the gauge still holds the PREVIOUS
-   * level's numbers — which the registry then renders as though they were current.
-   *
-   * Including it made every level after the first report the worst event-loop delay of the level
-   * before it, identical to six decimal places. Observed exactly that way: level 1 and level 2
-   * both reported a 576.678271 ms p99 peak on a run where level 2 did a sixth of the work.
+   * Excludes the baseline reading. The event-loop gauges are only written when the window has samples,
+   * and the baseline comes milliseconds after the previous level's last scrape, so it still holds the
+   * previous level's numbers. Including it made level 1 and level 2 both report a 576.678271 ms p99.
    */
   const gaugePeak = (name) => {
     const during = good.length > 1 ? good.slice(1) : good;
@@ -1340,9 +944,7 @@ function summariseServerSide(readings) {
     return peak;
   };
 
-  // This harness's own traffic, kept out of the applied-load figures. Scraping and probing are
-  // measurement, not load, and counting them would inflate the request rate by a fixed amount
-  // per level that a reader would have no way to subtract.
+  // This harness's own scraping and probing are measurement, not load.
   const isHarnessOverhead = (labels) => labels.route === '/metrics' || labels.route === ROUTES.ready;
 
   const cpuSecondsDelta = counterDelta(SERIES.cpuSeconds);
@@ -1365,21 +967,8 @@ function summariseServerSide(readings) {
   }
 
   /**
-   * The rate-limit counters, or null when the process exports no such series at all.
-   *
-   * `?? {}` on both sides used to swallow the difference: a scrape with no
-   * `prl_rate_limit_events_total` in it produced `0 - 0 = 0`, a NUMBER, so `classifySaturation`
-   * reported `{observed: 0, exported: true, fired: false}` for a series the build had never
-   * rendered — the one shape this file's header promises never to produce ("a metric the scraped
-   * process does not emit reads as `null`, its name goes into `server.missing` … and it can never
-   * fire a saturation signal"). Every other series in `SERIES` obeys that; these two did not.
-   *
-   * It is masked today, not fixed: `metrics.ts` primes `rateLimitEvents` with
-   * `[{kind:'limited'},{kind:'banned'}]`, so both series exist from boot with the value 0 and the
-   * absent case does not arise. Dropping that priming — or renaming the metric — would have made
-   * the `refusal-rate-limited` stop criterion permanently unable to fire while the report went on
-   * saying the signal had been evaluated. That is the same shape as an alert rule that cannot
-   * fire behind checks that all pass.
+   * Null when the process exports no rate-limit series, so `refusal-rate-limited` cannot report a
+   * zero it never read. `metrics.ts` primes both series at 0 today, which masks the absent case.
    */
   const rateBefore = seriesByLabel(first, SERIES.rateLimitEvents, 'kind');
   const rateAfter = seriesByLabel(last, SERIES.rateLimitEvents, 'kind');
@@ -1395,16 +984,9 @@ function summariseServerSide(readings) {
     usable: true,
     scrapeSpanSeconds,
     /**
-     * How many readings the gauge peaks were actually taken from.
-     *
-     * Counters are fine with two readings — a delta needs a start and an end. Gauges are not:
-     * they are instantaneous, and `gaugePeak` drops the baseline, so a level that finished before
-     * the first interval scrape landed leaves exactly one gauge reading, taken AFTER the sockets
-     * were closed. Every gauge then reads zero and the report says the level ran with no
-     * connections and no memory growth, which is a confident description of a level that had
-     * already ended. Observed on an eight-second level that hit its 200-hand cap in under two
-     * seconds. Reported rather than corrected, because the fix is a longer hold and the harness
-     * cannot make that choice for the operator.
+     * Gauge readings after dropping the baseline. A level that ends before the first interval scrape
+     * leaves one reading taken after the sockets closed, and every gauge reads zero. Reported, not
+     * corrected, because the fix is a longer hold.
      */
     gaugeReadings: Math.max(good.length - 1, 0),
     gaugeNote:
@@ -1413,8 +995,7 @@ function summariseServerSide(readings) {
           'sockets, memory and event-loop figures below describe a torn-down level; raise --hold ' +
           'or lower --scrape'
         : null,
-    // Divided by the SCRAPE SPAN, not the level's wall clock: the counters were read at the
-    // first and last scrape, so the span between them is the only interval the delta describes.
+    // Divided by the scrape span, the only interval the counter delta describes.
     httpRequestsPerSecond:
       scrapeSpanSeconds > 0
         ? (counterDelta(SERIES.httpRequests, (labels) => !isHarnessOverhead(labels)) ?? 0) / scrapeSpanSeconds
@@ -1425,11 +1006,7 @@ function summariseServerSide(readings) {
     rateLimitLimited: rateLimited,
     rateLimitBanned: rateBanned,
     cpuSecondsDelta,
-    // Process CPU seconds per wall second: 1.0 means one core fully consumed. Reported rather
-    // than a percentage because "120% CPU" is meaningless without knowing the core count, and
-    // the core count of the machine is in the environment block. Divided by the scrape span
-    // rather than the level's wall clock for the same reason as the request rate above: the
-    // counter was read at the first and last scrape and describes only the interval between.
+    // CPU seconds per wall second, so 1.0 is one core. Same scrape-span denominator as above.
     cpuCores: cpuSecondsDelta !== null && scrapeSpanSeconds > 0 ? cpuSecondsDelta / scrapeSpanSeconds : null,
     residentMemoryPeakBytes: gaugePeak(SERIES.residentMemory),
     heapUsedPeakBytes: gaugePeak(SERIES.heapUsed),
@@ -1440,11 +1017,7 @@ function summariseServerSide(readings) {
     dbProbeCount: dbProbe === null ? null : dbProbe.count,
     dbProbeMeanMs: dbProbe === null || dbProbe.count <= 0 ? null : (dbProbe.sum / dbProbe.count) * 1000,
     dbProbeP99BoundMs: scaleOrNull(histogramBoundAtQuantile(dbProbe, 0.99), 1000),
-    /**
-     * `JSON.stringify(Infinity)` is `null`, which would put the above-the-top-bucket case back
-     * into the field it was just separated from as soon as the report is written to a file. This
-     * boolean is how the JSON keeps the distinction the number cannot.
-     */
+    /** `JSON.stringify(Infinity)` is `null`, so the JSON needs this boolean to keep the distinction. */
     dbProbeP99AboveTopBound: histogramBoundAtQuantile(dbProbe, 0.99) === Number.POSITIVE_INFINITY,
     readinessState: sampleValue(last, SERIES.readinessState),
     websocketConnectionsPeak: gaugePeak(SERIES.wsConnections),
@@ -1458,10 +1031,6 @@ function summariseServerSide(readings) {
 
 const scaleOrNull = (value, factor) => (value === null ? null : value * factor);
 
-// ---------------------------------------------------------------------------
-// One WebSocket client — the virtual user
-// ---------------------------------------------------------------------------
-
 class Client {
   constructor({ session, roomId, seat, options, metrics, random, hooks }) {
     this.session = session;
@@ -1474,7 +1043,6 @@ class Client {
 
     this.socket = null;
     this.welcomed = false;
-    /** The `welcome` frame of the current socket, kept for the resume check's room comparison. */
     this.welcomeFrame = null;
     this.welcomeSeat = null;
     this.sat = false;
@@ -1482,12 +1050,8 @@ class Client {
     /** requestId -> { sentAt, kind }, for round-trip measurement. */
     this.pending = new Map();
     /**
-     * The last decision point acted on, as `handId:actionSequence`.
-     *
-     * The hand id has to be in the key. `actionSequence` is per-hand and starts again at zero for
-     * every deal, so a bare sequence number matches the first decision of the *next* hand as well
-     * — which reads as "already acted", the seat never acts, the hand never advances, and the run
-     * sits there until the turn clock times every seat out. Found exactly that way.
+     * `handId:actionSequence`. The sequence restarts at zero every hand, so without the hand id the
+     * first decision of the next hand reads as already acted and the seat never acts.
      */
     this.lastActedKey = null;
     this.lastView = null;
@@ -1497,18 +1061,11 @@ class Client {
     this.coachedHandId = null;
     this.reconnectedHandId = null;
     this.reconnecting = false;
-    /** Resolvers waiting for the next `state` frame, used by the reconnect check. */
     this.stateWaiters = [];
     /**
-     * The most recent `state` frame received since the current socket's `welcome`.
-     *
-     * Kept because `welcome` and the state frame that follows it can arrive in ONE read and be
-     * dispatched as two message events in the same tick, while the promise `connect()` resolved
-     * on only resumes a microtask later. The reconnect cycle would then register its waiter
-     * after the frame it was waiting for had already gone past, wait the full five seconds,
-     * ignore every state frame in the meantime (`reconnecting` is still true), and never act —
-     * so the seat sat there until the server's turn clock folded it. That produced eight seat
-     * timeouts in a fifteen-second level and looked exactly like server-side stalling.
+     * The latest `state` frame since this socket's `welcome`. Both can be dispatched in one tick
+     * before `connect()` resumes, so a waiter registered afterwards would miss the frame. That race
+     * once caused eight seat timeouts in a fifteen-second level.
      */
     this.stateSinceWelcome = null;
   }
@@ -1520,12 +1077,8 @@ class Client {
   }
 
   /**
-   * Opens a socket, sends `hello`, and resolves on `welcome`.
-   *
-   * `purpose` decides which latency bucket and which pair of counters the attempt lands in, so
-   * a first connect and a resume are never averaged together — they are different code paths on
-   * the server (one builds a room, one only reads it) and reporting them as one number hides
-   * exactly the regression a reconnect test exists to catch.
+   * `purpose` keeps first connects and resumes in separate latency buckets, because they are
+   * different server paths.
    */
   connect(purpose) {
     const startedAt = performance.now();
@@ -1534,9 +1087,7 @@ class Client {
 
     return new Promise((resolve, reject) => {
       let settled = false;
-      // See the module comment: the options bag must be the SECOND argument, and the cookie is
-      // how the server authenticates the upgrade. The Origin header is checked too — a mismatch
-      // closes with WS_CLOSE.badOrigin (4406).
+      // The options bag is the second argument (see the header). A wrong Origin closes with 4406.
       const socket = new WebSocket(this.wsUrl(), {
         headers: { cookie: this.session.cookieHeader(), origin: this.options.origin },
       });
@@ -1551,8 +1102,7 @@ class Client {
 
       socket.addEventListener('open', () => {
         this.metrics.socketOpened();
-        // `hello` must be the first frame; a socket that does not send it within
-        // WS_LIMITS.handshakeTimeoutMs is closed with 4408.
+        // `hello` must arrive within WS_LIMITS.handshakeTimeoutMs or the server closes with 4408.
         this.send({
           type: 'hello',
           protocolVersion: WS_PROTOCOL_VERSION,
@@ -1562,8 +1112,7 @@ class Client {
       });
 
       socket.addEventListener('message', (message) => {
-        // A frame from a socket this client has already replaced is from the pre-reconnect
-        // socket. Counting it would credit the resumed session with state it did not receive.
+        // A frame from a socket this client already replaced must not be credited to the resume.
         if (this.socket !== socket) return;
         this.metrics.serverMessages += 1;
         let frame;
@@ -1590,8 +1139,7 @@ class Client {
       });
 
       socket.addEventListener('error', () => {
-        // The event carries no useful detail by design (it would be a cross-origin information
-        // leak in a browser), so the close frame that follows is where the reason comes from.
+        // The error event carries no detail by design. The close frame has the reason.
         fail('websocket error before welcome', 'transport:ws-error');
       });
 
@@ -1600,9 +1148,7 @@ class Client {
         if (event.code !== 1000 && event.code !== 1005) {
           this.metrics.error(`transport:close-${event.code}`);
         }
-        // 4401 before welcome almost always means the cookie did not arrive on the upgrade. Say
-        // so explicitly: the alternative is a wall of auth failures with no hint that the cause
-        // is a header, not a credential.
+        // 4401 before welcome almost always means the cookie did not reach the upgrade.
         if (!settled && event.code === 4401) {
           fail(
             'closed 4401 (unauthenticated) before welcome — the session cookie did not reach the ' +
@@ -1629,15 +1175,12 @@ class Client {
         this.welcomed = true;
         this.welcomeSeat = frame.seat ?? null;
         this.welcomeFrame = frame;
-        // Cleared here, not in `connect`, so that "a state frame has arrived on THIS socket
-        // since its welcome" is decided by the frames themselves rather than by when a promise
-        // happened to resume.
+        // Cleared per socket here, so the frames decide, not promise timing.
         this.stateSinceWelcome = null;
         return;
       case 'state':
         this.stateSinceWelcome = frame;
-        // Waiters next: the reconnect check needs the frame as it arrived, before `onState` has
-        // a chance to act on it and move the client's own bookkeeping on.
+        // Waiters first, so the reconnect check sees the frame before `onState` acts on it.
         for (const resolve of this.stateWaiters.splice(0)) resolve(frame);
         this.onState(frame);
         return;
@@ -1653,8 +1196,6 @@ class Client {
       case 'error': {
         const code = frame.error?.code ?? 'unknown';
         this.metrics.error(code);
-        // Resolve the waiter so a failed request does not sit in `pending` forever and quietly
-        // inflate nothing.
         if (frame.requestId) this.pending.delete(frame.requestId);
         return;
       }
@@ -1676,8 +1217,7 @@ class Client {
     this.pending.delete(frame.requestId);
     if (waiting.kind === 'action') {
       this.metrics.latencies.action.push(performance.now() - waiting.sentAt);
-      // A deduplicated ack means the server recognised a repeated actionId and did NOT apply
-      // anything new, so counting it as applied would overstate throughput.
+      // A deduplicated ack applied nothing new.
       if (frame.deduplicated !== true) this.metrics.actionsApplied += 1;
     }
     if (waiting.kind === 'sit') {
@@ -1706,12 +1246,7 @@ class Client {
     return this.send({ type: 'startHand', requestId });
   }
 
-  /**
-   * Reacts to one authoritative state frame: Coach, then maybe a reconnect, then the action.
-   *
-   * `view.legalActions` is empty in every frame that is not this seat's decision, which makes
-   * "is it my turn" and "what may I do" the same question with one answer from one authority.
-   */
+  /** `view.legalActions` is empty whenever it is not this seat's decision. */
   onState(frame) {
     const view = frame.view;
     if (view === null || view === undefined) return;
@@ -1726,44 +1261,31 @@ class Client {
     if (legal.length === 0) return;
     if (view.toAct === null || view.toAct !== view.viewerSeat) return;
 
-    // The same decision point can arrive more than once (a reconnect, or a state resend after an
-    // unrelated change). Acting twice on it would burn an actionId and earn a
-    // stale_action_sequence for the second.
+    // The same decision point can arrive twice, and acting twice earns `stale_action_sequence`.
     const key = `${String(view.handId)}:${view.actionSequence}`;
     if (key === this.lastActedKey) return;
 
     this.maybeRequestCoach(view);
 
-    // The disconnect happens HERE, on this seat's own decision, and not between hands: the
-    // journey being modelled is "lost the connection while it was my turn", which is the case a
-    // resume has to get right and the only one where the turn clock is running against you.
+    // Disconnect on this seat's own decision, the case where the turn clock runs against a resume.
     if (this.shouldReconnect(view)) {
       this.reconnectedHandId = view.handId;
       void this.reconnectCycle();
       return;
     }
 
-    // Claimed synchronously, before any think delay can suspend: a resent frame for the same
-    // decision arriving during the pause would otherwise schedule a second action for it, and
-    // the server would answer the second one `stale_action_sequence`.
+    // Claimed before the think delay, so a resent frame during the pause cannot schedule a second action.
     this.lastActedKey = key;
     const chosen = this.choose(legal);
     if (this.options.thinkMs > 0) {
-      // `unref` so a pending think delay cannot hold the process open after the level has torn
-      // its sockets down. The sockets keep the loop alive while a level is running, so the timer
-      // still fires whenever it is meant to.
+      // `unref` so a pending think delay cannot hold the process open after teardown.
       setTimeout(() => this.sendAction(view, chosen), this.options.thinkMs).unref();
       return;
     }
     this.sendAction(view, chosen);
   }
 
-  /**
-   * Sends one already-chosen action and starts its latency clock.
-   *
-   * Separated from `onState` so that `--think` delays the SEND and not the measurement: the
-   * round trip reported is server time, never the harness pretending to be a slow reader.
-   */
+  /** Split from `onState` so `--think` delays the send, never the measured round trip. */
   sendAction(view, chosen) {
     if (this.stopped || this.socket === null) return;
     const requestId = randomUUID();
@@ -1782,7 +1304,6 @@ class Client {
     if (!this.options.coach) return;
     if (this.coachedHandId === view.handId) return;
     const now = Date.now();
-    // See COACH_MIN_INTERVAL_MS: without this the run measures WS_LIMITS.coachRequestsPerMinute.
     if (now - this.lastCoachAt < COACH_MIN_INTERVAL_MS) return;
     this.lastCoachAt = now;
     this.coachedHandId = view.handId;
@@ -1799,14 +1320,9 @@ class Client {
   }
 
   /**
-   * Drops the socket mid-hand and resumes on a fresh one, then checks what came back.
-   *
-   * There is no catch-up protocol: `hello` on a new socket answers `welcome` plus the current
-   * view (ws/router.ts, "Reconnect is exactly this: send the current view"). So the check is
-   * whether that view is the SAME hand this seat was in, with the same cards and a sequence that
-   * has not gone backwards. A run whose latency looked fine while resumed clients silently saw a
-   * different hand would be a worse outcome than a slow run, which is why any failure here fails
-   * the whole run rather than counting towards an error rate.
+   * Drops the socket mid-hand and resumes on a fresh one. There is no catch-up protocol, so `hello`
+   * returns `welcome` plus the current view, which must be the same hand, cards and seat with a
+   * sequence that has not gone back. Any failure fails the whole run.
    */
   async reconnectCycle() {
     this.reconnecting = true;
@@ -1819,10 +1335,7 @@ class Client {
       if (problems.length === 0) {
         this.metrics.reconnectsConsistent += 1;
       } else if (problems.every((problem) => problem.kind === 'hand-advanced')) {
-        // Not a failure. Every other seat kept playing while this one was away, and a hand can
-        // legitimately finish in that window — most often when the remaining players all fold.
-        // Counted separately so a run where it happened constantly is visible rather than
-        // reported as a clean resume.
+        // Not a failure. The hand can finish while this seat is away. Counted separately.
         this.metrics.reconnectsConsistent += 1;
         this.metrics.reconnectsHandAdvanced += 1;
       } else {
@@ -1833,12 +1346,8 @@ class Client {
         }
       }
       this.reconnecting = false;
-      // The frame that came back with the resume is a real decision point if it is our turn, and
-      // nothing else will re-send it: the server broadcasts on CHANGE, and nothing changes while
-      // the table waits for this seat. Replaying it here is what "complete the hand after the
-      // reconnect" means. `stateSinceWelcome` rather than `frame` because a state frame that
-      // arrived while `reconnecting` was still true was deliberately not acted on, and that one
-      // is newer than the one the await returned.
+      // Nothing re-sends a decision point while the table waits for this seat, so act on it here.
+      // `stateSinceWelcome` may be newer than `frame`.
       const resume = this.stateSinceWelcome ?? frame;
       if (resume !== null) this.onState(resume);
     } catch (error) {
@@ -1848,14 +1357,7 @@ class Client {
     }
   }
 
-  /**
-   * Resolves with the state frame for the current socket, or null if none arrives in time.
-   *
-   * Answers immediately when one has ALREADY arrived since this socket's `welcome`. See
-   * `stateSinceWelcome` in the constructor for the race this closes: the two frames can be
-   * dispatched in one tick, and a waiter registered a microtask later would miss the only frame
-   * the server was going to send.
-   */
+  /** Answers at once when a state frame already arrived since `welcome`. See `stateSinceWelcome`. */
   awaitState(timeoutMs) {
     if (this.stateSinceWelcome !== null) return Promise.resolve(this.stateSinceWelcome);
     return new Promise((resolve) => {
@@ -1873,11 +1375,8 @@ class Client {
   }
 
   /**
-   * Closes the current socket and waits for the close to land.
-   *
-   * Waiting matters: `WS_LIMITS.maxSocketsPerSession` is 4, and a harness that opened the resumed
-   * socket before the old one had gone would spend a long run drifting towards that cap and then
-   * report the resulting 4429 closes as server instability.
+   * Waits for the close, because `WS_LIMITS.maxSocketsPerSession` is 4 and overlapping sockets would
+   * drift into 4429 closes.
    */
   closeAndWait(timeoutMs = 2_000) {
     const socket = this.socket;
@@ -1898,17 +1397,9 @@ class Client {
   }
 
   /**
-   * Picks one of the offered legal actions and shapes it into a WsAction payload.
-   *
-   * The policy is biased hard towards passive play, because the purpose is to complete hands: a
-   * table of maniacs ends most hands preflop with one all-in and measures almost no postflop
-   * code. Aggression is included at a low rate so that betting, raising and side-pot paths are
-   * exercised at all. Folding is only ever chosen when there is something to fold to, and never
-   * when checking is free — a fold with a free check available is legal but would just end hands
-   * without playing them.
-   *
-   * `to` for a bet or raise is `minTo` clamped into the server's own `[minTo, maxTo]`. Never a
-   * computed size: sizing rules are the server's.
+   * Picks an offered legal action, biased hard towards passive play so hands reach postflop, with a
+   * little aggression to exercise betting and side pots. Never folds when checking is free. A bet or
+   * raise is `minTo` clamped into `[minTo, maxTo]`.
    */
   choose(legal) {
     const byType = new Map(legal.map((action) => [action.type, action]));
@@ -1933,8 +1424,7 @@ class Client {
     const fold = byType.get('fold');
     if (fold !== undefined) return { type: 'fold' };
 
-    // Nothing recognised. Fall back to the first thing the server offered rather than inventing
-    // one; if it needs a size, use its own minimum.
+    // Fall back to the first offered action and its own minimum.
     const first = legal[0];
     if (first.type === 'bet' || first.type === 'raise') {
       return { type: first.type, to: Number(first.minTo) };
@@ -1955,12 +1445,8 @@ class Client {
 }
 
 /**
- * The parts of a view a resumed socket must still agree about.
- *
- * Deliberately small. Everything in here is either identity (which hand, which seat, which
- * cards) or monotonic (the action sequence and the pot only ever go up within a hand). A
- * comparison over the whole view would fail on every legitimate change made by the other seats
- * while this one was away, which is not a bug and would make the check useless.
+ * Only identity (hand, seat, cards) and monotonic fields (sequence, pot). The other seats change the
+ * rest of the view legitimately while this one is away.
  */
 export function snapshotOfView(view) {
   if (view === null || view === undefined) return null;
@@ -1978,14 +1464,8 @@ export function snapshotOfView(view) {
 }
 
 /**
- * Compares what a seat saw before it dropped with what the server sent back when it resumed.
- *
- * Returns a list of problems, each naming its own kind so the report can separate a benign
- * "the hand finished while you were away" from "you came back to somebody else's cards".
- *
- * Exported and pure so `load-test.test.mjs` can drive it with fabricated snapshots, which is the
- * only way to prove the check fires — a real run that never loses state proves nothing about
- * whether the check works.
+ * Problems after a resume, each with a `kind` so "the hand finished" is distinct from "wrong cards".
+ * Pure so tests can prove it fires.
  */
 export function compareAfterResume(before, after, welcome, expectedRoomId) {
   const problems = [];
@@ -1997,8 +1477,7 @@ export function compareAfterResume(before, after, welcome, expectedRoomId) {
     });
   }
   if (after === null) {
-    // No live hand at all after the resume. That is what a client sees when the hand it was in
-    // has finished and the next one has not been dealt, so it is the benign case.
+    // No live hand after the resume: the hand finished and the next is not dealt yet. Benign.
     problems.push({ kind: 'hand-advanced', detail: 'no hand was live after the resume' });
     return problems;
   }
@@ -2040,20 +1519,10 @@ export function compareAfterResume(before, after, welcome, expectedRoomId) {
   return problems;
 }
 
-// ---------------------------------------------------------------------------
-// Hand Review
-// ---------------------------------------------------------------------------
-
 /**
- * Opens Hand Review the way the review screen does: list, then read one hand in full.
- *
- * The reported latency covers BOTH requests, because that is what a reader waits for and
- * because the second one cannot be issued without the first. `GET /hands/:handId` is the
- * expensive one — it replays the hand and prices the actions that were not taken — and it is the
- * only route in this journey that carries `app.expensiveRateLimit`.
- *
- * Failures are counted by `Session.request` and swallowed here: a review that 429s must not take
- * the table down with it, because the table is what the rest of the level is measuring.
+ * Lists hands, then reads one in full, timed together. The second request carries
+ * `app.expensiveRateLimit`. Failures are counted in `Session.request` and swallowed, so a 429 cannot
+ * take the table down.
  */
 async function openHandReview(client) {
   const now = Date.now();
@@ -2071,13 +1540,9 @@ async function openHandReview(client) {
     client.metrics.latencies.review.push(performance.now() - startedAt);
     client.metrics.reviewsOpened += 1;
   } catch {
-    // Already counted, by code, inside `Session.request`.
+    // Already counted in `Session.request`.
   }
 }
-
-// ---------------------------------------------------------------------------
-// A table: a room, sockets, and hands
-// ---------------------------------------------------------------------------
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -2085,7 +1550,6 @@ function sleepUntil(deadline) {
   return sleep(Math.max(0, deadline - Date.now()));
 }
 
-/** Polls a predicate until true or the deadline passes. */
 async function waitFor(predicate, deadline, what) {
   while (!predicate()) {
     if (Date.now() >= deadline) throw new Error(`timed out waiting for ${what}`);
@@ -2094,12 +1558,8 @@ async function waitFor(predicate, deadline, what) {
 }
 
 /**
- * Runs one table for one level.
- *
- * The owner (seat 0) is the only client that sends `startHand`, because that is what the
- * protocol says: "Ask the owner's table to deal the next hand". Hand completion is counted from
- * the owner's socket only — every seated client receives the same `handComplete` event, so
- * counting all of them would multiply the hand count by the number of seats.
+ * Only the owner (seat 0) sends `startHand`. Hands are counted from the owner's socket, because every
+ * seat receives the same `handComplete`.
  */
 async function runTable({ level, index, sessions, options, metrics, dealUntil, drainDeadline, onProblem }) {
   const owner = sessions[0];
@@ -2122,10 +1582,7 @@ async function runTable({ level, index, sessions, options, metrics, dealUntil, d
     throw new Error('room creation did not return { room: { id }, inviteCode }');
   }
 
-  // The invite code is returned exactly once, at creation, and only a hash is stored — so it has
-  // to be carried from here to the joiners in memory. The room id is NOT in the path: the server
-  // looks the room up by the code, so a caller who does not hold the code cannot join by
-  // guessing an id.
+  // The invite code is returned once and only its hash is stored, so it is carried in memory.
   for (const session of sessions.slice(1)) {
     await session.request(ROUTES.joinRoom, { method: 'POST', body: { inviteCode } });
     metrics.joins += 1;
@@ -2145,10 +1602,7 @@ async function runTable({ level, index, sessions, options, metrics, dealUntil, d
         seat,
         options,
         metrics,
-        // One stream per seat, derived from the seed and the seat's coordinates, so a rerun at
-        // the same concurrency makes the same decisions. A single shared stream would be
-        // consumed in whatever order the sockets happened to be scheduled in, which is exactly
-        // the thing a load run cannot reproduce.
+        // One stream per seat, so a rerun at the same concurrency makes the same decisions.
         random: mulberry32(options.seed + level * 1_000_003 + index * 1_009 + seat),
         hooks: {
           onProblem,
@@ -2159,8 +1613,7 @@ async function runTable({ level, index, sessions, options, metrics, dealUntil, d
             if (client.seat !== 0) return;
             handsCompleted += 1;
             metrics.handsCompleted += 1;
-            // `options.hands > 0` first: a cap of zero means no cap, and without that guard every
-            // table would settle after its very first hand.
+            // A cap of zero means no cap.
             if (Date.now() >= dealUntil || (options.hands > 0 && handsCompleted >= options.hands)) {
               settleTable('complete');
               return;
@@ -2172,15 +1625,11 @@ async function runTable({ level, index, sessions, options, metrics, dealUntil, d
   );
 
   try {
-    // Sequential connect, not Promise.all: a rate limiter that sees N simultaneous upgrades from
-    // one machine is measuring the limiter, and a failure in the middle of a parallel connect is
-    // much harder to attribute.
+    // Sequential, so the limiter does not see N simultaneous upgrades and failures are attributable.
     for (const client of clients) await client.connect('initial');
     for (const client of clients) client.sit();
 
-    // Wait for every seat to be acknowledged before dealing. Sitting is what makes a player part
-    // of the hand, so dealing early produces a heads-up hand at a table that was meant to have
-    // six players.
+    // Dealing before every seat is acked produces a short-handed hand.
     await waitFor(() => clients.every((client) => client.sat), drainDeadline, 'all seats to be taken');
 
     clients[0].startHand();
@@ -2192,19 +1641,9 @@ async function runTable({ level, index, sessions, options, metrics, dealUntil, d
   }
 }
 
-// ---------------------------------------------------------------------------
-// One level of the ramp
-// ---------------------------------------------------------------------------
-
 /**
- * Runs one concurrency level start to finish and returns its summary.
- *
- * The shape of a level is setup, then steady state, then drain. Only the steady state is
- * measured against a threshold: connecting twenty-four sockets and creating eight rooms is a
- * burst of a kind no running deployment sees, and letting it into the latency distribution
- * would make every level look worse than it is in exactly the way that hides a real regression.
- * Setup failures are still reported, and a setup that cannot complete is a refusal, which is one
- * of the stop criteria.
+ * Setup, steady state, drain. Only the steady state is held to a threshold, because the setup burst
+ * is a shape no deployment sees. A setup that cannot complete is a refusal.
  */
 async function runLevel({ level, tables, allSessions, options, scraper, runDeadline, onProblem }) {
   const metrics = new LevelMetrics();
@@ -2220,8 +1659,7 @@ async function runLevel({ level, tables, allSessions, options, scraper, runDeadl
   const dealUntil = Date.now() + options.holdSeconds * 1000;
   const drainDeadline = Math.min(dealUntil + options.drainSeconds * 1000, runDeadline);
 
-  // A baseline scrape before any socket opens, so the level's counter deltas describe this level
-  // and not the tail of the previous one.
+  // Baseline before any socket opens, so deltas describe this level only.
   readings.push(await scraper.scrape());
 
   let scraping = true;
@@ -2241,9 +1679,7 @@ async function runLevel({ level, tables, allSessions, options, scraper, runDeadl
 
   scraping = false;
   await scrapeLoop;
-  // A final scrape AFTER the sockets are closed. Closing is where a leak shows: a room whose
-  // sockets have gone should stop costing memory, and the difference between this reading and
-  // the previous one is the only place that is visible.
+  // After the sockets close, where a leak shows.
   readings.push(await scraper.scrape());
   metrics.finishedAt = performance.now();
 
@@ -2266,13 +1702,7 @@ async function runLevel({ level, tables, allSessions, options, scraper, runDeadl
   return summariseLevel({ level, tables, options, metrics, tableSummaries, readings, wallSeconds });
 }
 
-/**
- * Turns one level's raw counters into the object the report is built from.
- *
- * Pure apart from reading the two arguments, so `load-test.test.mjs` can build a level summary
- * by hand and drive the stop criteria and the renderer with it — which is the only way to test
- * the criteria without a saturated server to hand.
- */
+/** Pure, so tests can drive the stop criteria and the renderer with a hand-built level. */
 function summariseLevel({ level, tables, options, metrics, tableSummaries, readings, wallSeconds }) {
   const reconnectRate =
     metrics.reconnectsAttempted === 0 ? null : metrics.reconnectsEstablished / metrics.reconnectsAttempted;
@@ -2283,9 +1713,7 @@ function summariseLevel({ level, tables, options, metrics, tableSummaries, readi
     seats: options.seats,
     virtualUsers: tables * options.seats,
     holdSeconds: options.holdSeconds,
-    // Carried on the level rather than left in `settings`, because the stop criteria need it:
-    // "no hand completed" means something entirely different at a think time of 0 than at one
-    // where the think time alone exceeds the hold.
+    // The stop criteria read it, because "no hand completed" depends on the think time.
     thinkMs: options.thinkMs,
     wallSeconds,
     client: {
@@ -2319,9 +1747,7 @@ function summariseLevel({ level, tables, options, metrics, tableSummaries, readi
       consistencyFailures: [...metrics.consistencyFailures],
     },
     server: summariseServerSide(readings),
-    // `tableOutcomes`, not `tables`: `tables` above is the COUNT this level ran, and it is what
-    // the capacity figure is stated in. The two shared a key for one revision and the array
-    // silently won, so the report printed "capacity: 24 players across [object Object] tables".
+    // Not `tables`, which is the count. Sharing the key once printed "across [object Object] tables".
     tableOutcomes: tableSummaries.map((table) => ({
       index: table.index,
       handsCompleted: table.handsCompleted,
@@ -2330,44 +1756,16 @@ function summariseLevel({ level, tables, options, metrics, tableSummaries, readi
   };
 }
 
-// ---------------------------------------------------------------------------
-// Stop criteria and saturation classification
-// ---------------------------------------------------------------------------
-
 /**
- * Decides whether this level crossed a stated failure criterion, and names which.
- *
- * Pure, and exported, because "the ramp stopped at 24 users" is the single most consequential
- * sentence this harness produces and it must be testable without a server. Every criterion
- * returns the observed value beside its limit so the report can show the margin rather than a
- * bare verdict.
- *
- * Consistency is in here as a criterion with no configurable threshold. A resumed client that
- * came back to the wrong state is a correctness failure, and there is no concurrency at which
- * that is an acceptable trade for throughput.
- */
-/**
- * Rough think time one hand costs, in milliseconds, at this level's shape.
- *
- * Four betting rounds (preflop, flop, turn, river) with roughly one decision per seated player
- * per round. Deliberately crude — it exists to answer one question, "could a hand even have
- * finished inside the hold", and a more careful model would be a poker simulator inside a load
- * harness with no better answer to that question.
+ * Rough think time one hand costs: four rounds, about one decision per seat per round. Crude on
+ * purpose. It only answers whether a hand could finish inside the hold.
  */
 export function thinkTimePerHandMs(level) {
   const think = level.thinkMs ?? 0;
   return think === 0 ? 0 : level.seats * think * 4;
 }
 
-/**
- * The sentence appended to "no hand completed" when the hold was the likely reason.
- *
- * Without it, a run at a realistic think time reports `no-progress` at every level and reads as
- * a saturated server, when what actually happened is that a six-handed hand at one second a
- * decision needs about twenty-four seconds of think time and the hold was twenty. That is a
- * misconfigured run, not a finding, and the difference has to be in the message rather than in
- * the reader's head.
- */
+/** Explains "no hand completed" when the hold was too short for the think time. */
 function describeHandBudget(level) {
   const budgetMs = thinkTimePerHandMs(level);
   if (budgetMs === 0 || budgetMs <= level.holdSeconds * 1000) return '';
@@ -2378,6 +1776,11 @@ function describeHandBudget(level) {
   );
 }
 
+/**
+ * Whether this level crossed a stated failure criterion, and which. Each criterion returns the
+ * observed value beside its limit. Consistency has no threshold, because a resume to the wrong state
+ * is never an acceptable trade.
+ */
 export function evaluateStopCriteria(level, thresholds) {
   const breaches = [];
   const client = level.client;
@@ -2431,26 +1834,9 @@ export function evaluateStopCriteria(level, thresholds) {
     });
   }
   /**
-   * The level had no usable server-side half at all.
-   *
-   * Before this, an unusable summary made every server-side criterion below unreachable and
-   * produced no breach of its own, so the level PASSED on client timings alone and could become
-   * the capacity figure. Reproduced against this file's own `buildReport`: four levels with
-   * `{usable:false, scrapes:1, scrapeFailures:5}` and healthy client numbers returned
-   * `passed:true`, `failures:[]`, `capacity.concurrentSeatedPlayers: 24` and
-   * `saturation.resource: null` — a published capacity for a run with no server-side evidence
-   * behind any of it.
-   *
-   * That is the exact degradation this file's header forbids ("a refused or unreachable
-   * `/metrics` is a FAILURE, not a warning … a run that silently degrades to client-side timings
-   * is exactly the kind of 'capacity measurement' this file exists to stop"), and the preflight
-   * in `main` enforces it only for the FIRST scrape. A `/metrics` that starts refusing mid-ramp —
-   * a token rotated, a proxy in front of it, the process restarting — lands here instead.
-   *
-   * It matters most for the criterion immediately below. `refusal-rate-limited` exists because a
-   * ramp bounded by the LIMITER rather than by the machine once had its number quoted as a
-   * capacity; a level with no scrapes cannot see a single refusal, so without this the fixed bug
-   * is reachable again through a door nobody was watching.
+   * No usable server-side half. Without this the level passed on client timings alone and became the
+   * capacity figure (reproduced through `buildReport` with `scrapeFailures: 5`). The preflight only
+   * covers the first scrape, and a level with no scrapes cannot see a rate-limit refusal.
    */
   if (level.server.usable !== true) {
     breaches.push({
@@ -2484,21 +1870,9 @@ export function evaluateStopCriteria(level, thresholds) {
 }
 
 /**
- * Names the resource that ran out at a level, with the evidence for and against each candidate.
- *
- * Every signal is reported whether it fired or not, because "the event loop was fine and the
- * database was fine" is as much a part of an honest saturation claim as the one that fired. A
- * signal the process does not export is reported as `not exported by this build` and can never
- * fire — this must not blame the worker pool on the basis of a metric nothing increments.
- *
- * Order matters: the first firing signal is the one named, and they are ordered by how directly
- * they cause the latency this harness measures. Event-loop delay is still first, but for a
- * weaker reason than it once had: the Coach and the hand review used to run their Monte Carlo
- * synchronously on the main thread, so a saturated instance showed up there first and everything
- * else was downstream of it. Both now go to the worker pool. The loop remains the signal that
- * explains the widest range of symptoms at once — it is the single thread every socket, timer
- * and turn clock shares — so it keeps the first position, and a saturated instance is now more
- * likely to name CPU or the pool instead. That is the fix working, not the classifier drifting.
+ * Names the resource that ran out, reporting every signal whether it fired or not. A signal that is
+ * not exported never fires. The first firing signal is named, so order matters. Event-loop delay is
+ * first because every socket, timer and turn clock shares that thread.
  */
 export function classifySaturation(level, thresholds) {
   const server = level.server;
@@ -2539,34 +1913,17 @@ export function classifySaturation(level, thresholds) {
       limit: thresholds.dbProbeP99Ms,
       unit: 'ms',
       /**
-       * Strictly greater, and this is the difference between a signal and a coin toss.
-       *
-       * The observed value is a BOUND, not a measurement: `50 ms` here means "99% of probes
-       * finished within 50 ms", which is the threshold being met. Firing on `>=` fired on every
-       * probe set whose p99 landed anywhere in the 25-50 ms bucket — including a three-player
-       * level at 0.4 requests per second, where the reading is the pool's first connection being
-       * opened and nothing is exhausted. It reported `resource: db-pool` for that run.
-       *
-       * `>` fires when 99% of probes did NOT finish within the threshold, which is the claim the
-       * signal's own text makes. `Infinity` — the quantile in the `+Inf` bucket — exceeds every
-       * threshold and fires, which is the case that most needed to.
+       * Strictly greater, because the value is a bucket bound. `>=` fired on every p99 in the
+       * 25-50 ms bucket and blamed `db-pool` for a three-player level at 0.4 requests per second.
+       * `Infinity` exceeds every threshold.
        */
       fired: exported(server.dbProbeP99BoundMs) && server.dbProbeP99BoundMs > thresholds.dbProbeP99Ms,
-      /**
-       * `JSON.stringify(Infinity)` is `null`, and the report is serialised — so without this the
-       * published signal reads `{observed: null, fired: true, exported: true}`, which is "it
-       * fired and there is no observation": exactly the conflation the `Infinity` return value
-       * was introduced to remove, reappearing one field later. `summariseServerSide` got a
-       * boolean for this; the signal record needed its own.
-       */
+      /** `JSON.stringify(Infinity)` is `null`, so the signal record needs its own boolean. */
       observedAboveTopBound: server.dbProbeP99BoundMs === Number.POSITIVE_INFINITY,
       meaning: 'select 1 waited for a pooled connection, which is pool exhaustion before any query fails',
       /**
-       * The probe is timed inside the request handler, so its duration includes any time the
-       * process spent unable to reach the event loop. When the event-loop signal has also fired,
-       * a slow probe is fully explained by that and says nothing about the pool — which is why
-       * event-loop is ordered first and why this caveat is printed rather than left implied. A
-       * five-second `select 1` against an idle database is a blocked process, not a busy pool.
+       * The probe is timed inside the handler, so a blocked event loop also slows it. A five-second
+       * `select 1` against an idle database is a blocked process, not a busy pool.
        */
       confoundedBy: 'event-loop',
     },
@@ -2593,20 +1950,9 @@ export function classifySaturation(level, thresholds) {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Environment — the label every number carries
-// ---------------------------------------------------------------------------
-
 /**
- * Everything about where this was measured that a reader needs before believing a number.
- *
- * The two fields that are ASSERTED rather than measured say so in their own values, not in a
- * footnote: a client cannot see the server's NODE_ENV and cannot detect a transparent proxy, so
- * `--server-env` and `--via-proxy` are an operator's claim and the report prints them as one.
- *
- * `generatorCpuSeconds` is filled in at the end of the run. It is the single most useful number
- * for judging a loopback measurement: if the generator burned as much CPU as the server, the two
- * were fighting over the same cores and every latency figure includes that fight.
+ * `--server-env` and `--via-proxy` are the operator's claim and print as one. `generatorCpuSeconds`
+ * is filled in at the end. If the generator burned as much CPU as the server, they shared cores.
  */
 function describeEnvironment(options) {
   const target = new URL(options.baseUrl);
@@ -2636,18 +1982,9 @@ function describeEnvironment(options) {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Report
-// ---------------------------------------------------------------------------
-
 /**
- * Builds the whole report from data.
- *
- * Pure: it reads its arguments and returns a plain object with no Maps, no class instances and
- * nothing that will not survive `JSON.stringify`. `renderReport` below is the only thing that
- * turns it into text. That split is the point — the human output and the `--json` output are the
- * same object seen twice, so the two cannot drift, and `load-test.test.mjs` asserts exactly that
- * by rendering a fabricated report and finding its numbers in the text.
+ * Pure and JSON-safe. `renderReport` is the only thing that turns it into text, so the human and
+ * `--json` outputs are one object and cannot drift.
  */
 export function buildReport({ options, environment, levels, thresholds, stopped, runSeconds, setup }) {
   const evaluated = levels.map((level) => {
@@ -2677,15 +2014,7 @@ export function buildReport({ options, environment, levels, thresholds, stopped,
           actionP99Ms: highestPassing.client.action.p99Ms,
           measuredOver: `${highestPassing.holdSeconds}s of steady state`,
           instances: 1,
-          /**
-           * What one "concurrent seated player" above actually was.
-           *
-           * Carried inside the capacity object rather than left in `settings`, because this is
-           * the sentence that decides whether the number means anything. A virtual user at
-           * `thinkMs: 0` acts the moment the server asks and reconnects every couple of hands;
-           * that is a load shape, not a person, and a reader who takes the player count without
-           * it will be wrong in whichever direction they happen to guess.
-           */
+          /** At `thinkMs: 0` a virtual user is a load shape, not a person. */
           virtualUserModel: {
             thinkMs: options.thinkMs,
             reconnectsEveryHands: options.reconnect ? options.reconnectEvery : null,
@@ -2700,8 +2029,7 @@ export function buildReport({ options, environment, levels, thresholds, stopped,
           },
         };
 
-  // Every level whose p99 came from too few samples to be a percentile. Reported rather than
-  // suppressed: the figure is still the worst observed round trip, it is just not a p99.
+  // Levels whose p99 came from too few samples. Reported, not suppressed.
   const thinTails = evaluated
     .filter((level) => level.client.action.count > 0 && level.client.action.count < MIN_SAMPLES_FOR_P99)
     .map((level) => ({ level: level.level, samples: level.client.action.count }));
@@ -2761,8 +2089,7 @@ function settingsFor(options) {
   const out = {};
   for (const [key, value] of Object.entries(options)) {
     if (key === 'help' || key === 'json' || key === 'out') continue;
-    // Never echoed. It is a credential, and a report is exactly the kind of file that gets
-    // pasted into an issue.
+    // A credential, and reports get pasted into issues.
     if (key === 'metricsToken') {
       out.metricsToken = value === '' ? 'not set' : 'set (not shown)';
       continue;
@@ -2772,13 +2099,7 @@ function settingsFor(options) {
   return out;
 }
 
-/**
- * The standing caveats, carried in the JSON as well as the printed footer.
- *
- * In the report object rather than only in the printed output, because the JSON is what gets
- * pasted into a planning document and a caveat that only exists in a terminal is a caveat that
- * does not exist.
- */
+/** In the JSON as well as the footer, because the JSON is what gets pasted into planning documents. */
 const NOT_MEASURED = [
   'more than one API instance: nothing here says anything about horizontal scaling',
   'a real network: over loopback there is no RTT, no loss, no reordering and no TLS handshake',
@@ -2798,11 +2119,8 @@ const num = (value, digits = 1) =>
       : 'above top bucket';
 
 /**
- * A histogram bound, which has one more state than a number: `<= 50.0ms`, `above the top
- * bucket`, or nothing measured. Printed rather than `ms()` wherever the value came from
- * `histogramBoundAtQuantile`, so the `<=` and the overflow case are never contradicted — the
- * report used to print `db probe p99 <= 50.0ms` on the same run whose signal table said the
- * threshold of 50 ms had been exceeded.
+ * A histogram bound: `<= 50.0ms`, above the top bucket, or nothing measured. The report once printed
+ * `db probe p99 <= 50.0ms` on the run whose signal said 50 ms was exceeded.
  */
 const boundMs = (value) =>
   value === null || value === undefined
@@ -2813,21 +2131,10 @@ const boundMs = (value) =>
 const mib = (bytes) =>
   bytes === null || bytes === undefined ? '  -  ' : `${(bytes / 1048576).toFixed(0)}MiB`;
 
-/**
- * The sample count beside a single figure, in plain text.
- *
- * Deliberately does NOT apply colour: `renderReport` returns the text a test asserts on, and an
- * escape sequence embedded mid-line would make every such assertion depend on whether the test
- * runner happened to be attached to a TTY.
- */
+/** No colour, so the text a test asserts on does not depend on a TTY. */
 const samplesNote = (count) => `(n=${count ?? 0})`;
 
-/**
- * Renders the report as tagged lines.
- *
- * Returns `{ tone, text }` rather than pre-coloured strings so that the text a test asserts on is
- * the text a reader sees, with no escape sequences in between. `printReport` applies the colour.
- */
+/** Returns `{ tone, text }` lines, and `printReport` applies the colour. */
 export function renderReport(report) {
   const lines = [];
   const plain = (text) => lines.push({ tone: 'plain', text });
@@ -2909,10 +2216,7 @@ export function renderReport(report) {
       lines.push({ tone: 'warn', text: `         ! ${level.server.gaugeNote}` });
     }
     if (level.client.seatTimeouts > 0) {
-      // A seat timeout is the server's turn clock acting FOR a player who did not act in time.
-      // It is never a neutral fact: those decisions were not the client's, the hand took the
-      // full turn clock instead of a round trip, and both the hand rate and the action rate at
-      // that level are describing a table that was partly played by the timer.
+      // A seat timeout is the turn clock acting for a player, so the level was partly played by the timer.
       lines.push({
         tone: 'warn',
         text:
@@ -2938,12 +2242,8 @@ export function renderReport(report) {
       text: `  ! resource: ${report.saturation.resource} — ${report.saturation.meaning}`,
     });
     /**
-     * The sentence above says "saturated at N seated players", and when the limiter is what
-     * stopped the ramp that number is a policy setting rather than a capacity. It has already
-     * been quoted as one: a release review of this project recorded "capacity saturated at 6
-     * seated players, conservative ceiling 3" from a run whose levels ended on rate-limit
-     * refusals, against a harness that had printed "no capacity figure" three lines further down.
-     * Saying it once, next to the number, is cheaper than the correction.
+     * When the limiter stopped the ramp, N is a policy setting. A release review once quoted such a
+     * run as "capacity saturated at 6 seated players".
      */
     if (report.saturation.stoppedBy.includes('refusal-rate-limited')) {
       lines.push({
@@ -2964,14 +2264,11 @@ export function renderReport(report) {
       continue;
     }
     const mark = signal.fired ? 'FIRED ' : 'quiet ';
-    // A non-finite observation is a histogram bound in the `+Inf` bucket, and "above the top
-    // bucket ms" is not a sentence. The unit belongs to a number.
+    // A non-finite value is the `+Inf` bucket and takes no unit.
     const observed = Number.isFinite(signal.observed)
       ? `${num(signal.observed, 2)} ${signal.unit}`
       : num(signal.observed, 2);
     detail(`      ${signal.name.padEnd(12)} ${mark} ${observed} (threshold ${signal.limit} ${signal.unit})`);
-    // A confounded signal is worse than a missing one: it fires, it is true, and it means
-    // something other than what its name says. Say so where the number is, not in a footnote.
     const confounder =
       signal.confoundedBy === undefined
         ? null
@@ -3066,34 +2363,14 @@ function printReport(report) {
   console.log('');
 }
 
-// ---------------------------------------------------------------------------
-// Run
-// ---------------------------------------------------------------------------
-
 /**
- * Creates every guest session the widest level will need, once.
+ * Clears the rate-limit counters before provisioning, when this process holds the token. CI runs
+ * `test:smoke` first, whose section 12 drains the guest bucket, so runs since 2026-10-11 created
+ * "only 0 of 3 guest sessions". The route exists only with `RATE_LIMIT_RESET_TOKEN`, which production
+ * refuses.
  *
- * Up front, and reused by every level, for two reasons. A ramp that created accounts per level
- * would spend a growing share of each level's budget on `POST /auth/guest` — measuring signup,
- * not play — and it would hit `RATE_LIMIT_GUEST_MAX`, which is address-keyed and low by design,
- * somewhere in the middle of the ramp for reasons that look like server instability.
- *
- * Sequential rather than parallel: a burst of N simultaneous guest creations from one address is
- * the exact shape the limiter exists to refuse, and a failure in the middle of a parallel burst
- * is much harder to attribute.
- */
-/**
- * Empties the API's rate-limit counters before provisioning, when this process holds the token.
- *
- * CI runs `test:smoke` and then this against one API from one address, and smoke's section 12
- * floods `POST /auth/guest` until the first 429 on purpose. So this harness met a spent bucket and
- * every CI run since at least 2026-10-11 ended "only 0 of 3 guest sessions could be created". The
- * smoke test already clears the counters with this control; this uses it the same way. The route
- * exists only on a process started with `RATE_LIMIT_RESET_TOKEN`, which `loadConfig` refuses in
- * production, so with no token nothing is attempted.
- *
- * Returns the number of counters cleared, null when there was no token, or throws: a token the
- * server refuses or a route it does not serve is a misconfigured run, not something to wait out.
+ * Returns the number cleared, null with no token, or throws when the server refuses the token or the
+ * route.
  */
 export async function resetRateLimits(baseUrl, origin, token) {
   if (token === '') return null;
@@ -3116,6 +2393,10 @@ export async function resetRateLimits(baseUrl, origin, token) {
   return JSON.parse(text).cleared;
 }
 
+/**
+ * Creates every guest session the widest level needs, once and sequentially. Per-level or parallel
+ * creation would hit the address-keyed `RATE_LIMIT_GUEST_MAX` mid-ramp.
+ */
 async function provisionSessions(count, options, metrics) {
   const sessions = [];
   const failures = [];
@@ -3171,9 +2452,7 @@ async function main() {
     `  ${'think time'.padEnd(24)} ${options.thinkMs}ms` +
       (options.thinkMs === 0 ? dim('  (a virtual user at 0 is not a person; see --help)') : ''),
   );
-  // Said before the run rather than diagnosed after it: at a realistic think time a hand costs
-  // more wall clock than a short hold has, every level reports "no hand completed", and the run
-  // reads as a saturated server when it is a misconfigured harness.
+  // Warn before the run when a hand needs more think time than the hold allows.
   const handThinkMs = thinkTimePerHandMs({ thinkMs: options.thinkMs, seats: options.seats });
   if (handThinkMs > options.holdSeconds * 1000) {
     console.log(
@@ -3185,8 +2464,6 @@ async function main() {
     );
   }
 
-  // Fail fast and legibly when the server is not there, rather than reporting a hundred identical
-  // connection errors.
   const probeMetrics = new LevelMetrics();
   try {
     const probe = new Session(options.baseUrl, options.origin, 'probe', probeMetrics);
@@ -3207,9 +2484,7 @@ async function main() {
     origin: options.origin,
   });
 
-  // A refused or unreachable /metrics is a hard failure, not a warning. The server-side half of
-  // every number below comes from there, and a harness that quietly degraded to client-side
-  // timings while still printing "capacity" would be the exact defect this file exists to end.
+  // A refused or unreachable /metrics is a hard failure, not a warning.
   const firstScrape = await scraper.scrape();
   if (!firstScrape.ok) {
     console.error(red(`\n  x cannot scrape ${options.baseUrl}${options.metricsPath}: ${firstScrape.reason}`));
@@ -3287,10 +2562,7 @@ async function main() {
     console.error(red(`  x ${message}`));
   };
 
-  // The cold-start measurement, taken once and kept out of the ramp. See `warmupSeconds` in
-  // DEFAULTS for why this exists at all; the short version is that the first Coach analysis on a
-  // fresh process costs seconds of blocked event loop and every one after it costs milliseconds,
-  // so leaving it in level 1 fails every run for a reason that has nothing to do with concurrency.
+  // The cold-start figure, kept out of the ramp. See `warmupSeconds`.
   if (options.warmup) {
     console.log(
       bold('\nWarm-up') +
@@ -3390,8 +2662,6 @@ async function main() {
     console.log(dim(`  wrote ${options.out}\n`));
   }
 
-  // Non-zero on any threshold breach, any consistency failure, or an unfinished ramp, so this can
-  // gate CI unchanged.
   process.exit(report.passed ? 0 : 1);
 }
 
