@@ -79,6 +79,9 @@ export const metadata: Metadata = {
  */
 const Z_95 = 1.96;
 
+/** The picker's heading, and the fragment the top of the page links to. One constant for both ends. */
+const PICKER_HEADING_ID = 'change-comparison';
+
 /** The widest a 95% interval on a sampled proportion gets, which is at p = 0.5. */
 function worstCaseHalfWidthPoints(trials: number): number {
   if (!Number.isFinite(trials) || trials <= 0) return Number.NaN;
@@ -146,6 +149,12 @@ export default async function ComparePage({
           <Chip>{`Setting: ${difficulty}`}</Chip>
         </div>
         <nav aria-label="Legends navigation" className="prl-legend-nav">
+          {/* First, because it is the one a reader who came here to compare different styles wants,
+              and the picker it leads to is at the foot of the page: measured at y=11996 of 15738 on
+              a phone, about fourteen screens down, with nothing at the top saying it existed. A plain
+              anchor rather than `Link`, so the browser's own fragment navigation scrolls (clear of the
+              sticky bar, via the root's `scroll-padding`) and moves focus to the heading. */}
+          <a href={`#${PICKER_HEADING_ID}`}>Change the styles</a>
           <Link href={LEGENDS_PATH}>All profiles</Link>
           <Link href={LEGENDS_HAND_REVIEW_PATH}>A finished hand, reviewed</Link>
         </nav>
@@ -277,7 +286,12 @@ export default async function ComparePage({
       )}
 
       <section className="prl-legend-section">
-        <h2>Change the comparison</h2>
+        {/* The target of "Change the styles" at the top. `tabIndex={-1}` so following it puts focus
+            here as well as scrolling here — the next Tab is the first style's checkbox, not the
+            link the reader left fourteen screens up. Same arrangement as a lesson's title. */}
+        <h2 id={PICKER_HEADING_ID} tabIndex={-1}>
+          Change the comparison
+        </h2>
         {/*
           Named, because a form with an accessible name is a `form` landmark and this page has two of
           them. Two unnamed landmarks with the same role are indistinguishable in a landmark list.

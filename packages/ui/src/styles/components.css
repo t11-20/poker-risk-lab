@@ -4653,6 +4653,26 @@ td.prl-candidates__ev,
   color: var(--prl-accent-text);
 }
 
+/**
+ * The figure as a link to the reader's record. It keeps the pill's own ink rather than taking the
+ * link colour and underline: it is the same readout it always was, and it says it is a link the way
+ * the `i` beside it says it is a button — by answering the pointer — and by its accessible name.
+ */
+.prl-units__link {
+  color: inherit;
+  text-decoration: none;
+  transition: border-color var(--prl-dur-instant) var(--prl-ease-hover);
+}
+
+.prl-units__link:hover {
+  border-color: var(--prl-accent-edge);
+}
+
+.prl-units__link:hover .prl-units__figure {
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
 .prl-units__note {
   flex: 1 1 var(--prl-space-16);
   margin: 0;

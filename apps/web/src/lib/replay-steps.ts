@@ -52,6 +52,37 @@ export function openingStepIndex(replay: Pick<HandReplay, 'steps'>): number {
 }
 
 /**
+ * How many decisions the replay steps through: every step but the terminal "settled" frame.
+ *
+ * The hand's summary and the transport both count from this, so they cannot disagree. They did: the
+ * summary printed `review.decisions.length` as "DECISIONS 13" while the transport counted steps,
+ * terminal frame included, as "STEP 2 / 14" — two numbers for one hand, side by side (audit at
+ * 6b3886e, `shots/d-dark-replay-0.png`).
+ */
+export function decisionCount(replay: Pick<HandReplay, 'steps'>): number {
+  return replay.steps.filter((step) => step.decision !== null).length;
+}
+
+/**
+ * What the transport's counter shows: "Decision 2 / 13", or "Result" on the terminal frame.
+ *
+ * The terminal frame is not a decision, so it is not given a number that would make it the
+ * fourteenth of thirteen. Its value slot still holds a word, so the counter keeps its height and the
+ * row does not move when the reader steps onto it.
+ *
+ * Visible text only. The live region still announces "Step N of M." over every frame, terminal
+ * included: that sentence is what `scripts/ax-assertions.mjs` (J6) holds the announcement to, and
+ * "step 14 of 14" is true of the frame it describes.
+ */
+export function stepCounter(
+  step: Pick<ReplayStep, 'index' | 'decision'>,
+  replay: Pick<HandReplay, 'steps'>,
+): { readonly label: string; readonly value: string } {
+  if (step.decision === null) return { label: 'Result', value: 'Settled' };
+  return { label: 'Decision', value: `${step.index + 1} / ${decisionCount(replay)}` };
+}
+
+/**
  * What the replay says about a decision the server made, as a sentence for the marker's description.
  *
  * ## The defect

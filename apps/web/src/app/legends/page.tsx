@@ -79,7 +79,7 @@ export default async function LegendsPage({
         <span className="prl-index" aria-hidden="true">
           04
         </span>
-        <h1 className="prl-legend-head__title prl-display-2">Opponent profiles</h1>
+        <h1 className="prl-legend-head__title prl-display-2">AI Legends: opponent profiles</h1>
         <p className="prl-legend-head__standfirst">
           Each profile is a set of sixteen trait values — how many hands it plays, how hard it bets, how much
           it cares about position — chosen to contrast with the others so you can feel the difference between

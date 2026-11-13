@@ -36,6 +36,7 @@
  */
 
 import { LEGAL_PATHS } from './legal-config.ts';
+import { RECORD_PATH } from './record-data.ts';
 
 export interface NavDestination {
   /** Route path. Matched exactly for `/`, by prefix for everything else. */
@@ -50,7 +51,11 @@ export const NAV_DESTINATIONS: readonly NavDestination[] = [
   { href: '/learn', label: 'Learn', summary: 'Lessons, quizzes and the glossary.' },
   { href: '/play', label: 'Play', summary: 'Tables against bots, AI Legends and private rooms.' },
   { href: '/lab', label: 'Lab', summary: 'The Scenario Lab: change one input, watch the maths move.' },
-  { href: '/legends', label: 'Legends', summary: 'The twelve opponent profiles, as trait vectors.' },
+  {
+    href: '/legends',
+    label: 'Legends',
+    summary: 'Twelve computer opponents, each a different style of play.',
+  },
   { href: '/review', label: 'Review', summary: 'Hand history, with every decision priced afterwards.' },
 ];
 
@@ -78,6 +83,26 @@ export const DOCUMENT_DESTINATIONS: readonly NavDestination[] = [
     summary: 'What play money cannot teach you, and how to stop.',
   },
 ];
+
+/**
+ * The reader's own record — progress, the units reset, and account deletion.
+ *
+ * Not one of the five, for the reason `/record`'s own header gives: the five are an argument about
+ * learning order and a sixth step that is not a step blunts it. But "not numbered" had become "not
+ * listed": the audit at 6b3886e found it in neither the header nor the menu sheet, with the
+ * footer's inline "reset to the starting amount" as the only way in on every page. So it is listed
+ * after the five, unnumbered, wherever they are — the sheet, the footer's site map and the 404 — and
+ * the header's units figure links to it.
+ *
+ * Exported AFTER `DOCUMENT_DESTINATIONS`, not between the two lists: `legal-pages.test.ts` counts the
+ * five by slicing from one `export const` to the next, and an entry between them would be counted
+ * as a sixth numbered destination.
+ */
+export const RECORD_DESTINATION: NavDestination = {
+  href: RECORD_PATH,
+  label: 'Your record',
+  summary: 'What you have read, tried and played, and the reset for your units.',
+};
 
 /**
  * Whether a destination is the one currently open.

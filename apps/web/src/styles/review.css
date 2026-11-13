@@ -396,7 +396,7 @@ td.prl-review-table__when {
 
 /**
  * The net cell. Four independent signals, and the colour is the fourth: the digits carry an
- * explicit `+`/`-`, the unit word is in the string, the word "gained"/"lost"/"level" sits beside it,
+ * explicit `+`/`-`, the unit word is in the string, the word "gained"/"lost"/"broke even" sits beside it,
  * and only then does `data-sign` change the ink. Remove the stylesheet and the column still reads.
  */
 .prl-review-net {
@@ -1002,10 +1002,16 @@ span.prl-review-table__cell-label {
   text-align: center;
 }
 
+/* Wraps only as a fallback. "Decision 1 / 13 Preflop" is about 30px wider than "Step 2 / 14
+   Preflop" was, in a middle track that is roughly 200px at 360 and again just above 600, where the
+   buttons gain their words. Where it fits nothing changes; where it does not, the street drops to a
+   line of its own rather than painting into the next button. */
 .prl-replay__position {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   align-items: baseline;
-  gap: var(--prl-space-4);
+  gap: 0 var(--prl-space-4);
   margin: 0;
 }
 

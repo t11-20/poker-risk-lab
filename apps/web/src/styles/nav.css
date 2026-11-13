@@ -527,6 +527,7 @@
  * `tokens.css`), and the outline still survives `forced-colors` where the halo does not.
  */
 .prl-pillbar .prl-units__toggle:focus-visible,
+.prl-pillbar .prl-units__link:focus-visible,
 .prl-pillbar__cta:focus-visible,
 .prl-nav-trigger:focus-visible {
   box-shadow: var(--prl-focus-ring), var(--prl-elevation-2);
@@ -916,6 +917,58 @@
 .prl-shell__header[data-stuck="true"] .prl-nav-trigger,
 .prl-shell__header[data-stuck="true"] .prl-shell__brand-index {
   border-color: var(--prl-line-strong);
+}
+
+/* The units pill is a link to the reader's record, and the rules above own its edge at (0,2,0) and
+   (0,3,0) — so its hover edge has to be stated after them, or it never shows in the bar. */
+.prl-shell__header .prl-units__link:hover {
+  border-color: var(--prl-accent-edge);
+}
+
+/* ==========================================================================================
+   8b. THE PENDING NAVIGATION PILL
+   ==========================================================================================
+   `NavigationPending` says a press was taken while a slow route loads. Fixed below the bar and
+   centred, so appearing moves nothing on the page; never a target, so it cannot swallow a press
+   meant for what is under it. The region itself is always present and empty at rest — see the
+   component for why — and only the pill inside it paints.
+   ========================================================================================== */
+
+.prl-pending {
+  position: fixed;
+  z-index: var(--prl-z-toast);
+  inset-block-start: calc(var(--prl-pillbar-h) + var(--prl-space-3));
+  inset-inline: var(--prl-space-6);
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.prl-pending__pill {
+  max-width: min(var(--prl-measure), 100%);
+  margin: 0;
+  padding: var(--prl-space-4) var(--prl-space-6);
+  border: 1px solid var(--prl-line-strong);
+  border-radius: var(--prl-radius-3);
+  background-color: var(--prl-surface-panel);
+  box-shadow: var(--prl-elevation-3);
+  color: var(--prl-text);
+  font-size: var(--prl-type-body-sm);
+  line-height: var(--prl-leading-snug);
+}
+
+/* A fade, and only for a reader who has not asked for less motion. Under `reduce` the pill simply
+   appears, which is still feedback: it is the words that say the press was taken, not the fade. */
+@media (prefers-reduced-motion: no-preference) {
+  .prl-pending__pill {
+    animation: prl-pending-in var(--prl-dur-base) var(--prl-ease-hover) both;
+  }
+}
+
+@keyframes prl-pending-in {
+  from {
+    opacity: 0;
+  }
 }
 
 /* ==========================================================================================

@@ -1024,6 +1024,16 @@ body {
   min-height: var(--prl-target-min);
 }
 
+/**
+ * The index slot of an unnumbered entry listed after the numbered five (`RECORD_DESTINATION`).
+ * Empty, so nothing is read or seen as a sixth number, and two figures wide, so its label lines up
+ * with the five above it instead of starting two digits further left.
+ */
+.prl-index--blank {
+  display: inline-block;
+  min-inline-size: 2ch;
+}
+
 .prl-footer__link-label {
   font-size: var(--prl-type-label);
   font-weight: var(--prl-weight-semibold);

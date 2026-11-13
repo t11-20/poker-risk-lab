@@ -30,8 +30,9 @@ describe('a scenario page is titled after its scenario', () => {
     assert.deepEqual(untitled, [], `${untitled.length} page(s) not titled after their scenario`);
   });
 
-  it('falls back to a plain title for an id the bundle does not carry', () => {
-    assert.deepEqual(scenarioPageMetadata('no-such-scenario'), { title: 'Scenario' });
+  it('says "not found" for an id the bundle does not carry (REGRESSION)', () => {
+    // It said "Scenario", announced over the 404 body at `/lab/nope` (audit at 6b3886e).
+    assert.deepEqual(scenarioPageMetadata('no-such-scenario'), { title: 'Scenario not found' });
     assert.equal(bundledScenarioTitle('no-such-scenario'), null);
   });
 

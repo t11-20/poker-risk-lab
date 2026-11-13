@@ -73,7 +73,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { isCurrentDestination, NAV_DESTINATIONS, NAV_SHEET_QUERY } from '@/lib/nav.ts';
+import { isCurrentDestination, NAV_DESTINATIONS, NAV_SHEET_QUERY, RECORD_DESTINATION } from '@/lib/nav.ts';
 import { ThemeToggle } from './ThemeToggle.tsx';
 
 /**
@@ -421,6 +421,20 @@ export function MobileNav(props: MobileNavProps): ReactElement {
                 </li>
               );
             })}
+            {/* After the five and unnumbered: see `RECORD_DESTINATION`. The blank index keeps its
+                label in the same column as the five above it. */}
+            <li className="prl-sheet__item">
+              <Link
+                aria-current={isCurrentDestination(RECORD_DESTINATION.href, pathname) ? 'page' : undefined}
+                className="prl-sheet__link"
+                href={RECORD_DESTINATION.href}
+                onClick={close}
+              >
+                <span aria-hidden="true" className="prl-sheet__index prl-index prl-index--blank" />
+                <span className="prl-sheet__label">{RECORD_DESTINATION.label}</span>
+                <span className="prl-sheet__summary">{RECORD_DESTINATION.summary}</span>
+              </Link>
+            </li>
           </ul>
         </nav>
 

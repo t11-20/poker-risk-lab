@@ -42,7 +42,7 @@
 import type { HandReviewResponse } from '@prl/contracts';
 import { Chip, formatSignedUnits, formatUnits } from '@prl/ui';
 import type { Metadata } from 'next';
-import type { ReactElement } from 'react';
+import { cache, type ReactElement } from 'react';
 import { HandReplay } from '../../../components/HandReplay.tsx';
 import { handReviewFixture } from '../../../fixtures/review.ts';
 import {
@@ -56,6 +56,9 @@ import {
 } from '../../../lib/api.ts';
 import { buildHandReplay } from '../../../lib/hand-replay.ts';
 import { formatTimestamp } from '../../../lib/lab-labels.ts';
+import { netWord } from '../../../lib/net-words.ts';
+import { decisionCount } from '../../../lib/replay-steps.ts';
+import { reviewPageMetadata } from '../../../lib/review-titles.ts';
 import { readerCallOptions } from '../../../lib/server-session.ts';
 import { NotFoundBody } from '../../not-found.tsx';
 import '../../../styles/page.css';
@@ -122,18 +125,27 @@ async function loadReview(handId: string): Promise<ReviewState> {
   return { state: 'unavailable', cause, detail: error.message };
 }
 
+/**
+ * One load per request, shared by `generateMetadata` and the page.
+ *
+ * The title has to know what the page found — see `lib/review-titles.ts` — and finding out is the
+ * slow request on this route: the server builds the replay, measured at 1722, 1771 and 1839 ms to
+ * first byte. Asked separately, the metadata and the page would build it twice. `cache` is React's
+ * per-request memo, which is the scope both run in.
+ */
+const loadReviewOnce = cache(loadReview);
+
 export async function generateMetadata({
   params,
 }: {
   readonly params: Promise<RouteParams>;
 }): Promise<Metadata> {
   const { handId } = await params;
-  const fixture = handReviewFixture(handId);
-  if (fixture === null) return { title: 'Hand replay' };
-  return {
-    title: `Hand ${fixture.hand.handNumber}`,
-    description: `Replay of hand ${fixture.hand.handNumber}, decision by decision, with the analysis for your own choices.`,
-  };
+  const data = await loadReviewOnce(handId);
+  if (data.state === 'live' || data.state === 'sampled') {
+    return reviewPageMetadata({ state: data.state, handNumber: data.review.hand.handNumber });
+  }
+  return reviewPageMetadata(data.state === 'missing' ? data : { state: data.state, cause: data.cause });
 }
 
 /**
@@ -211,7 +223,7 @@ export default async function HandReviewPage({
   readonly params: Promise<RouteParams>;
 }): Promise<ReactElement> {
   const { handId } = await params;
-  const data = await loadReview(handId);
+  const data = await loadReviewOnce(handId);
   // The ONLY route to the not-found screen: the API itself said 404 about this id. Every other way
   // of failing to produce a replay now has a screen that says what it was.
   // Next 16 `notFound()` from a page returns empty HTML. Hand ids cannot be enumerated at
@@ -250,11 +262,7 @@ export default async function HandReviewPage({
               data-sign={net === null ? 'unknown' : net > 0 ? 'positive' : net < 0 ? 'negative' : 'neutral'}
             >
               {net === null ? 'not settled' : formatSignedUnits(net)}
-              {net === null ? null : (
-                <span className="prl-review-net__word">
-                  {net > 0 ? 'gained' : net < 0 ? 'lost' : 'level'}
-                </span>
-              )}
+              {net === null ? null : <span className="prl-review-net__word">{netWord(net)}</span>}
             </span>
           </li>
           <li>
@@ -268,7 +276,9 @@ export default async function HandReviewPage({
           </li>
           <li>
             <span className="prl-label">Decisions</span>
-            <span className="prl-review-summary__value">{String(review.decisions.length)}</span>
+            {/* Counted the way the transport counts them, so "Decisions 13" here and "Decision 2 / 13"
+                there are one number. See `decisionCount`. */}
+            <span className="prl-review-summary__value">{String(decisionCount(replay))}</span>
           </li>
         </ul>
       </header>

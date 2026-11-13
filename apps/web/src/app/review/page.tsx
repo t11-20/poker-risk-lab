@@ -5,7 +5,7 @@
  *
  * `heroNet` is the one figure on this page somebody could get badly wrong, so it carries three
  * independent signals: an explicit `+` or `-` in the digits, the unit word ("units"), and the word
- * "gained", "lost" or "level" beside it. The semantic colour is the fourth signal and the only one a
+ * "gained", "lost" or "broke even" beside it (`netWord`). The semantic colour is the fourth signal and the only one a
  * reader could be unable to perceive. Thrown away, the column still reads correctly — which is the
  * test WCAG 1.4.1 actually asks.
  *
@@ -59,12 +59,13 @@ import { ScrollRegion } from '../../components/ScrollRegion.tsx';
 import { emptyHandListFixture, HAND_PAGE_SIZE, REVIEW_HAND_SUMMARIES } from '../../fixtures/review.ts';
 import { API_PATHS, apiGet, isApiUnavailable, isRejectedCursor, isSignedOut } from '../../lib/api.ts';
 import { formatTimestamp } from '../../lib/lab-labels.ts';
+import { netWord } from '../../lib/net-words.ts';
 import { readerCallOptions } from '../../lib/server-session.ts';
 import '../../styles/page.css';
 import '../../styles/review.css';
 
 export const metadata: Metadata = {
-  title: 'Hand history',
+  title: 'Review your hand history',
   description:
     'Every hand you have played, with the board, the net result and whether it ended by folding. Open one to replay it decision by decision.',
 };
@@ -274,7 +275,7 @@ function NetCell({ net }: { readonly net: number | null }): ReactElement {
   return (
     <span className="prl-review-net" data-sign={sign}>
       <span className="prl-review-net__value">{formatSignedUnits(net)}</span>
-      <span className="prl-review-net__word">{net > 0 ? 'gained' : net < 0 ? 'lost' : 'level'}</span>
+      <span className="prl-review-net__word">{netWord(net)}</span>
     </span>
   );
 }
@@ -324,7 +325,9 @@ export default async function ReviewIndexPage({
           </span>{' '}
           Review
         </p>
-        <h1 className="prl-display-2 prl-page-head__title">Hand history</h1>
+        {/* Carries the nav's word. It said "Hand history" under a nav that said "Review", and the
+            links into it said "Your hand history": three names for one place (audit at 6b3886e). */}
+        <h1 className="prl-display-2 prl-page-head__title">Review your hand history</h1>
         <p className="prl-page-head__standfirst">
           Every hand you have finished. Open one to step through it decision by decision, with the analysis
           for your own choices and the deck proof you can check yourself.

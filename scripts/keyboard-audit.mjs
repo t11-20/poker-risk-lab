@@ -1398,7 +1398,34 @@ async function auditNarrowViewport(page) {
           'Narrow viewport: the units explanation opens inside the viewport',
           `x=${placed.left} to ${placed.right} of ${placed.width}`,
         );
-      await page.press('Enter');
+
+      /**
+       * And it closes on Escape, with focus back on the `i`. It used to close only on a second press
+       * of the `i`: the audit at 6b3886e had `aria-expanded` still `true` after Escape, and at 390 the
+       * open panel covers the top of every page. Measured from the page rather than from the
+       * component's state, so a handler that flipped the attribute and left the panel showing fails.
+       */
+      if (placed !== null) {
+        await page.press('Escape');
+        await delay(200);
+        const dismissed = await page.evaluate(
+          `(() => {
+            const toggle = document.querySelector('.prl-shell__header .prl-units__toggle');
+            const panel = document.querySelector('.prl-shell__header .prl-units__note');
+            return {
+              shown: panel !== null && !panel.hidden && panel.getClientRects().length > 0,
+              expanded: toggle?.getAttribute('aria-expanded') ?? null,
+              onToggle: toggle !== null && document.activeElement === toggle,
+              activeTag: document.activeElement?.tagName ?? 'null',
+            };
+          })()`,
+        );
+        if (dismissed.shown || dismissed.expanded !== 'false')
+          bad('Narrow viewport: units', 'Escape did not close the units explanation');
+        else if (!dismissed.onToggle)
+          bad('Narrow viewport: units', `Escape closed it but left focus on <${dismissed.activeTag}>`);
+        else ok('Narrow viewport: the units explanation closes on Escape, focus back on the "i"');
+      }
     }
   } finally {
     await page.send('Emulation.clearDeviceMetricsOverride');
