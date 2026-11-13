@@ -1,134 +1,19 @@
 #!/usr/bin/env node
 /**
- * The PAINTED TEXT of this app, measured in real Chrome, on every route, in both themes, at five
- * widths. This is what `pnpm run test:layout` does.
+ * `pnpm run test:layout`: measures where text was painted, with `Range.getClientRects()` over each
+ * element's own text nodes, on every route in both themes at five widths. Bounding boxes do not
+ * overlap when a grid track collapses; the text overflows the box. That is how
+ * `grid-template-columns: minmax(0, 1fr) auto` on the Coach rail shipped past every other gate.
  *
- * ## The defect this exists for, and why nothing else here could see it
+ * Findings: `collision` (glyphs of two independent in-flow elements intersect), `escapes` (glyphs
+ * leave their own non-scrolling block), `clipped` (cut off by a non-scrolling ancestor without an
+ * ellipsis), `squeezed` (a block narrower than its longest word), and `page` (the document scrolls
+ * sideways). The page only measures. `findTextDefects()` judges in Node, so tests can feed it the
+ * collapsed row's real numbers.
  *
- * The Coach rail shipped with this rule:
- *
- *     .prl-play .prl-coach__section .prl-stat__pair { grid-template-columns: minmax(0, 1fr) auto; }
- *
- * A bare `auto` track is floored at max-content. The row whose value is a *sentence* — "100 units
- * in the middle, 35 units to call" — therefore asked for the whole track, and the `1fr` label
- * collapsed under it. On the deployed build "POT AND PRICE" was squeezed into a ~40px column with
- * the sentence painted across its glyphs:
- *
- *     PO100 units in the middle, 35 units
- *     AND                        to call
- *     PRICE
- *
- * Every gate in this repository was green on that build: `design:contrast` composites in real
- * Chrome, `test:a11y` runs axe over ten routes, `test:ax` makes 111 computed-accessibility-tree
- * assertions, and 3,555 unit tests passed. It was found by looking at a screenshot.
- *
- * The reason is one measurement error, and it is the error this file exists to not repeat. The
- * first probe written for it compared the label's and the value's **bounding boxes** and reported
- * "clear". That is the wrong thing to measure: when a grid track collapses, the boxes do not
- * overlap — **the text overflows the box**. `getBoundingClientRect()` describes where the layout
- * engine put a container. It says nothing about where the glyphs landed.
- *
- * ## What is measured instead
- *
- * `Range.getClientRects()` over an element's OWN text nodes: the rectangles the glyphs actually
- * occupy. Everything below is arithmetic on those rectangles, and on the padding boxes the text
- * was supposed to stay inside. Four findings, each a different shape of the same failure:
- *
- *   collision  the glyph rectangles of two INDEPENDENT, IN-FLOW elements intersect. Neither is an
- *              ancestor of the other and neither sits in a positioned layer the other does not, so
- *              nothing about this overlap was asked for. This is the shape above.
- *   escapes    glyph rectangles extend past the padding box of the block they are laid into, which
- *              is not a scroll container. The text is painted outside its own column.
- *   clipped    glyph rectangles extend past an ancestor that hides overflow and does not scroll,
- *              with no `text-overflow: ellipsis` on the text. Those glyphs are cut off, silently.
- *   squeezed   the block's content box is narrower than its own longest word. That is a column
- *              that has collapsed, and it is the finding that names the defect above directly:
- *              "PRICE" cannot fit in a 40px column, so the track is wrong however the glyphs
- *              happen to fall — and it fires at every width, where the collision does not.
- *
- * A fifth, per page rather than per element: `page` — the document scrolls sideways. At 360px that
- * is the same defect seen from the outside.
- *
- * ## Why the judgement is in Node and only the measuring is in the page
- *
- * The walker returns rectangles, boxes, words and flags. It decides nothing. `findTextDefects()`
- * below is a pure function over that data, and `scripts/text-layout-audit.test.mjs` feeds it the
- * exact numbers the collapsed Coach row produced and requires the finding back. A detector that
- * has only ever been shown a real page is a detector nobody has tested, and its failure mode is
- * silent: it reports "no collisions" for the rest of its life and everybody believes it.
- *
- * ## The negative controls run on every invocation
- *
- * Before the sweep, `--self-test` (on by default) loads a real page of this app once per control
- * with a stylesheet injected that RE-CREATES a defect of one shape — control 1 is literally the
- * `minmax(0, 1fr) auto` rule above, put back — and requires each to be caught, on the check it
- * belongs to. There is one for every check this file can report, so a detector that stops working
- * fails this gate on its own controls rather than going quiet over the app.
- * `pnpm run test:layout -- --controls-only` runs just that half.
- *
- * The controls are injected CSS because that is repeatable and costs no rebuild. The real defect
- * was ALSO put back into `apps/web/src/styles/play.css` and the app rebuilt, and the full sweep run
- * against that build. It reported 52 findings on two routes and nothing anywhere else:
- *
- *     squeezed   dt.prl-stat__label "Pot and price" — the column is 0px and the word "price"
- *                needs 42.25px. The `auto` track took the whole row; `1fr` is a share of what is
- *                left, and nothing was left.
- *     escapes    the same element — glyphs reach 42.25px past the right edge of their own box,
- *                which is the sentence in the header of this file, measured.
- *     collision  dd.prl-stat__value "100 units in the middle, 35 units to call" across
- *                dt.prl-stat__label — 147.52 px^2 of overlapping glyphs, 9.22 x 16.
- *
- * That is 20 + 20 + 12 findings over `/play?state=decision` and `/play?state=complete`, in both
- * themes. **The collision appears only at 1024, 1440 and 1920** — at 360 and 768 the rail is a
- * full-width column and the collapsed label's glyphs land in empty space rather than on the
- * sentence. A gate that measured one narrow viewport would have reported the column as collapsed
- * and never seen the thing the user actually saw; a gate that measured only bounding boxes would
- * have reported nothing at any width, which is what happened.
- *
- * ## Exemptions, and why the list is currently EMPTY
- *
- * Overlap that was asked for is not a defect: decorative pseudo-elements, deliberately stacked
- * layers, `aria-hidden` glyphs. Every one of those needs no rule at all, which is a property of the
- * measurement rather than luck:
- *
- *   - `::before` / `::after` generate no text NODES, so a decorative glyph is never a rectangle
- *     here in the first place;
- *   - two elements in different positioned layers are excluded structurally — see `flow` below;
- *   - text inside a horizontal scroll container is excluded structurally: overflowing a scroller
- *     is what a scroller is for.
- *
- * `aria-hidden`, the visually-hidden idiom and `[hidden]`/`[inert]`/closed `<details>` subtrees are
- * skipped by the walker and counted where they are skipped, and the letter-space a tracked
- * uppercase label adds after its last glyph is absorbed by `EDGE_TOLERANCE`, which was set from a
- * measurement of it.
- *
- * What is left over goes in `EXEMPTIONS`, keyed by a narrow selector with a reason — and today
- * that list is empty, because a full sweep of this app reports nothing. **A rule in it that matches
- * nothing anywhere in the sweep fails the gate**, because a stale exemption is a hole nobody can
- * see; that check deleted the one speculative rule this file was first written with.
- *
- * ## What this does NOT prove
- *
- *   - That the layout is good. Nothing here has an opinion about spacing, rhythm or hierarchy.
- *   - Anything about a hover, focus or open state, an animation mid-flight, or a route this gate
- *     could not load. A route that renders an error boundary is a failure here, never something to
- *     sweep around — same refusal as `scripts/check-contrast.mjs` and `scripts/ax-tree-audit.mjs`.
- *   - Anything about text a reader cannot reach at all: this measures the resting page.
- *
- * ## Usage
- *
- *     node scripts/text-layout-audit.mjs [--base-url http://127.0.0.1:3463] [--start]
- *          [--routes /a,/b] [--widths 360,1440] [--themes dark,light] [--no-self-test]
- *          [--controls-only] [--headful] [--out <file>]
- *
- * `pnpm run test:layout` is that command with `--start`, which builds nothing: it needs
- * `pnpm run build` to have happened, exactly as `design:contrast`, `test:csp` and `test:ax` do.
- *
- * ## Exit codes
- *
- *   0  every check passed, or `--help`
- *   1  any finding, any route that failed to load, any negative control that was NOT caught,
- *      any stale exemption, or a sweep that read nothing
+ * Negative controls run on every invocation (`--controls-only` runs only them). Each injects CSS that
+ * re-creates one defect shape and must be caught. With the real defect rebuilt into play.css the
+ * sweep reported 52 findings, and the collision showed only at 1024, 1440 and 1920.
  */
 
 import { spawn } from 'node:child_process';
@@ -149,21 +34,9 @@ const red = (s) => paint('31', s);
 const green = (s) => paint('32', s);
 const yellow = (s) => paint('33', s);
 
-// ===========================================================================
-// Scope
-// ===========================================================================
-
 /**
- * Every screen of the app, entered the way `scripts/check-contrast.mjs` enters them.
- *
- * `/play` through its fixture states rather than a live table: the fixture renders the same
- * component tree with the same Coach rail and needs no socket and no database row, so this gate
- * fails on a layout defect and never on Postgres being down. The Coach defect this file exists for
- * is on `?state=decision`.
- *
- * Bare `/play` as well, for the one state no fixture renders: the live table before "Deal me in" is
- * pressed. It fetches nothing until then, so it needs no API either, and its empty state and the
- * "Play with somebody you know" disclosure were otherwise only ever seen in screenshots.
+ * `/play` through fixture states, so no socket or database is needed. Bare `/play` covers the live
+ * table before "Deal me in", which fetches nothing until pressed.
  */
 const ROUTES = [
   '/',
@@ -185,28 +58,17 @@ const ROUTES = [
 ];
 
 /**
- * Five widths, and the reason there are five.
- *
- * The Coach defect appeared only where the rail is beside the table and narrow — it does not
- * reproduce at 360 or 768, where the rail becomes a full-width column, and it was never reproduced
- * locally because a developer's browser is one width. A gate that measures one viewport would have
- * shipped it again. 360 is the smallest phone this design claims, 768 and 1024 are the two sides
- * of the layout's own breakpoints, 1440 is the design canvas and 1920 is the widest common desktop.
+ * The Coach defect did not reproduce at 360 or 768, where the rail is full width. 360 is the smallest
+ * phone, 768 and 1024 straddle the breakpoints, 1440 is the design canvas, 1920 the widest desktop.
  */
 const WIDTHS = [360, 768, 1024, 1440, 1920];
 
-/** Tall enough that below-the-fold content lays out; the whole document is measured, not the fold. */
+/** Tall enough that below-the-fold content lays out. */
 const VIEWPORT_HEIGHT = 1200;
 
 const THEMES = ['dark', 'light'];
 
-/**
- * A route that rendered one of these did not render.
- *
- * Same list and same refusal as the contrast and accessibility-tree gates: an error boundary
- * returns HTTP 200 and perfectly good markup, so measuring one produces a confident PASS over a
- * page nobody meant to test.
- */
+/** An error boundary returns 200 with good markup, so it counts as a failed render. */
 const ERROR_BOUNDARY_HEADINGS = [
   'this screen did not load',
   'the application could not be displayed',
@@ -214,35 +76,18 @@ const ERROR_BOUNDARY_HEADINGS = [
   'this replay needs a session',
 ];
 
-// ===========================================================================
-// Thresholds
-//
-// Every one of these exists because a smaller value produced a false positive on the real app,
-// and each says which one. A gate that reports twenty things nobody will act on is worse than
-// no gate.
-// ===========================================================================
+// Each threshold was raised from a smaller value that produced a false positive on the real app.
 
 /**
- * How far past an edge glyphs may reach before it counts, in CSS pixels.
- *
- * Not zero, and the reason is `letter-spacing`: it is added AFTER the last character too, so an
- * uppercase label with `--prl-tracking-label` reports a rectangle up to one letter-space wider
- * than its ink. Measured on `.prl-stat__unit` at 12px/0.08em: 0.96px past the content edge, on a
- * row that is laid out correctly. Two pixels clears that and is far below the 6.6px the collapsed
- * Coach label overshot by.
+ * `letter-spacing` is added after the last glyph too. Measured 0.96px on `.prl-stat__unit` at
+ * 12px/0.08em. The collapsed Coach label overshot by 6.6px.
  */
 const EDGE_TOLERANCE = 2;
 
 /**
- * A glyph overlap must be at least this many px^2, this many px wide, and this share of the
- * shorter of the two rectangles' heights.
- *
- * The height share is the one that matters. Two stacked lines of text with a tight
- * `line-height` produce rectangles that touch and can cross by a pixel — `getClientRects` measures
- * the font's ascent and descent, not the line box, so `--prl-leading-tight` at 1.05 leaves the em
- * box slightly taller than its line. Measured on `/legends`: adjacent lines crossed by up to 1.4px
- * on a page with nothing wrong with it. A real column collision shares a text baseline and
- * therefore crosses by the FULL height; the collapsed Coach row crossed by 100% of it.
+ * The height share matters most. `getClientRects` measures ascent and descent, so tight
+ * line-height lines cross by up to 1.4px (measured on `/legends`). A real collision crosses the full
+ * height.
  */
 const OVERLAP_MIN_AREA = 8;
 const OVERLAP_MIN_WIDTH = 2;
@@ -252,13 +97,8 @@ const OVERLAP_MIN_HEIGHT_SHARE = 0.4;
 const WORD_TOLERANCE = 2;
 
 /**
- * Below these, the sweep has not swept. See "a sweep of nothing is not a pass" in CLAUDE.md.
- *
- * The per-detector floors are the half that is easy to leave out and the half that matters: a
- * detector that examined nothing reports exactly what a detector that found nothing reports. Each
- * is set at roughly a third of what the full sweep of this app measures today (values in the
- * PASS line of a clean run), so an honest change moves them and a detector quietly falling out of
- * the loop does not.
+ * Coverage floors, so a sweep or detector that examined nothing fails. Each is about a third of what
+ * a full sweep measures today.
  */
 const MIN_TEXT_BOXES_PER_PAGE = 15;
 const MIN_MEASUREMENTS = 100;
@@ -266,13 +106,6 @@ const MIN_TEXT_BOXES_TOTAL = 5000;
 const MIN_OWN_BOX_CHECKS = 8000;
 const MIN_CLIP_TESTS = 2000;
 const MIN_PAIRS_COMPARED = 8000;
-
-// ===========================================================================
-// Exemptions
-//
-// Each rule is keyed by a narrow selector and says WHY. A rule that matches nothing anywhere in
-// the sweep fails this gate: a stale exemption is a hole that looks like a decision.
-// ===========================================================================
 
 /**
  * @typedef {object} Exemption
@@ -285,29 +118,12 @@ const MIN_PAIRS_COMPARED = 8000;
 /**
  * @type {Exemption[]}
  *
- * Empty, and that is a measured result rather than an oversight.
- *
- * The sweep below reads 34,000 painted text elements over 150 measurements of this app and reports
- * nothing, so there is nothing to exempt. The four classes of legitimate overlap the brief for this
- * gate names are all excluded by the MEASUREMENT rather than by a list: a decorative
- * `::before`/`::after` generates no text node and therefore no rectangle; two elements in different
- * positioned layers never form a pair; `aria-hidden`, visually-hidden, `[hidden]`, `[inert]` and
- * closed-`<details>` subtrees are skipped by the walker and counted where they are skipped; and
- * uppercase letter-spacing is absorbed by `EDGE_TOLERANCE`, which was set from a measurement of it.
- *
- * The first version of this file shipped one speculative rule for playing-card faces. The sweep
- * reported it as matching nothing, which is exactly what the check below it is for, and it was
- * deleted rather than kept "just in case". Add a rule here only with a finding it suppresses.
+ * Empty because a full sweep (34,000 text elements, 150 measurements) reports nothing. Pseudo-element
+ * glyphs, separate positioned layers, hidden subtrees and letter-spacing are excluded by the
+ * measurement. A rule that matches nothing fails the gate, so add one only with the finding it
+ * suppresses.
  */
 const EXEMPTIONS = [];
-
-// ===========================================================================
-// The negative controls
-//
-// Injected stylesheets that RE-CREATE a defect of each shape on a real page of this app. They run
-// before the sweep on every invocation. If a detector stops working this gate fails here, loudly,
-// instead of going quiet over an app that has stopped being measured.
-// ===========================================================================
 
 /**
  * @typedef {object} Control
@@ -378,11 +194,7 @@ const CONTROLS = [
   },
 ];
 
-// ===========================================================================
-// The in-page walker
-//
-// It MEASURES and decides nothing. Every threshold above lives in Node, where a test can reach it.
-// ===========================================================================
+// The walker measures and decides nothing. Comments inside it are part of the page script.
 
 const WALKER = String.raw`(() => {
   const EXEMPT_SELECTORS = EXEMPT_SELECTORS_ARGUMENT;
@@ -691,14 +503,9 @@ const WALKER = String.raw`(() => {
   };
 })()`;
 
-// ===========================================================================
-// The judgement — pure, and therefore testable
-// ===========================================================================
-
 const right = (r) => r.x + r.w;
 const bottom = (r) => r.y + r.h;
 
-/** The intersection of two rectangles as `{ dx, dy, area }`; zeroes when they do not meet. */
 export function intersection(a, b) {
   const dx = Math.min(right(a), right(b)) - Math.max(a.x, b.x);
   const dy = Math.min(bottom(a), bottom(b)) - Math.max(a.y, b.y);
@@ -706,7 +513,6 @@ export function intersection(a, b) {
   return { dx, dy, area: dx * dy };
 }
 
-/** Whether an overlap is big enough to be a defect rather than two lines of type touching. */
 export function isRealOverlap(hit, a, b) {
   if (hit.area < OVERLAP_MIN_AREA) return false;
   if (hit.dx < OVERLAP_MIN_WIDTH) return false;
@@ -716,7 +522,7 @@ export function isRealOverlap(hit, a, b) {
 
 const isAncestor = (a, b) => a.i < b.i && b.end <= a.end;
 
-/** How far, in px, `rects` reach outside `box` on either side. Zero when they stay inside. */
+/** Zero when `rects` stay inside `box`. */
 export function escapeAmount(rects, box) {
   let worst = 0;
   let side = '';
@@ -735,19 +541,12 @@ export function escapeAmount(rects, box) {
   return { amount: Math.round(worst * 100) / 100, side };
 }
 
-/**
- * Every defect in one measurement of one page.
- *
- * `measurement` is exactly what `WALKER` returns. `context` names the route, theme and width so a
- * finding can be read without looking anywhere else.
- */
+/** `measurement` is what `WALKER` returns. `context` names route, theme and width. */
 export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIONS) {
   const findings = [];
   const usedExemptions = new Set();
   const { boxes, clippers } = measurement;
-  // What each detector actually looked at. Reported, and floored in `coverageFailures`: "no
-  // collisions" and "no pair was ever compared" print identically and only one of them is good
-  // news. See CLAUDE.md, "a sweep of nothing is not a pass".
+  // What each detector looked at, floored in `coverageFailures`.
   const counts = { ownBox: 0, scrollExcused: 0, ellipsisExcused: 0, clipTests: 0, pairs: 0 };
 
   const exemptFor = (box, check, otherSel) => {
@@ -767,13 +566,9 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
     findings.push({ check, ...context, ...detail });
   };
 
-  // ---- squeezed and escapes: one element against its own block -----------
   for (const box of boxes) {
-    // Only the block's OWN overflow excuses this, never an ancestor's. The Coach rail sits inside
-    // a horizontally scrollable column, and the first version of this loop skipped anything with a
-    // scrolling ancestor — which made it blind to the exact defect it was written for: the
-    // collapsed label reported a 0px content box and was passed over. A scroller further up does
-    // not make a zero-width column correct.
+    // Only the block's own overflow excuses this. The Coach rail sits inside a horizontal scroller,
+    // and skipping scrolling ancestors made this blind to the 0px column.
     if (box.blockScrolls) {
       counts.scrollExcused += 1;
       continue;
@@ -808,7 +603,6 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
     }
   }
 
-  // ---- clipped: text against an ancestor that hides overflow -------------
   for (const clipper of clippers) {
     for (const box of boxes) {
       if (box.i <= clipper.i || box.i >= clipper.end) continue;
@@ -828,19 +622,8 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
     }
   }
 
-  // ---- collision: glyphs of two independent, in-flow elements ------------
-  // Sorted by top edge so the scan can stop early; the app puts a few hundred text boxes on a
-  // page and the naive pairing is 100k comparisons, which is slower than the page load.
-  //
-  // Ordered by the TOPMOST rectangle, not by `rects[0]`. The walker pushes rectangles in text-node
-  // document order and, within a node, in line order — so `rects[0]` is the first rect of the first
-  // text node, which is *usually* the highest and is not guaranteed to be. The early exit below is
-  // only sound if the sort key is the true minimum: it stops the inner scan on the first box that
-  // begins below `first`'s lowest edge, and concludes that every box after it is lower still. Give
-  // it a key that can exceed the box's real top and that conclusion is false — the scan stops early
-  // and the pairs it never compared are reported as no collision. A detector that goes quiet reads
-  // exactly like one that found nothing, which is the failure mode this whole file is written
-  // against, so the invariant is made true here rather than assumed.
+  // Sorted by top edge so the scan can exit early. The key must be the TOPMOST rect, not `rects[0]`,
+  // or the early exit skips pairs and reports no collision.
   const topOf = (box) => Math.min(...box.rects.map((r) => r.y));
   const sorted = [...boxes].sort((a, b) => topOf(a) - topOf(b));
   const lowestOf = sorted.map((box) => Math.max(...box.rects.map(bottom)));
@@ -880,7 +663,6 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
     }
   }
 
-  // ---- page: the document itself scrolls sideways ------------------------
   const { page } = measurement;
   if (page.scrollWidth > page.clientWidth + EDGE_TOLERANCE) {
     add('page', {
@@ -895,7 +677,6 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
   return { findings, usedExemptions: [...usedExemptions], counts };
 }
 
-/** One finding as one line. */
 export function formatFinding(finding) {
   const where = `${finding.route}  ${finding.theme}  ${String(finding.width)}px`;
   const quote = finding.text === '' ? '' : `  "${finding.text}"`;
@@ -932,16 +713,9 @@ export function formatFinding(finding) {
   }
 }
 
-// ===========================================================================
-// Options
-// ===========================================================================
-
 const DEFAULTS = {
-  // 3463, because the rest of the map is taken: 3000/3001 are the app and the API, 3456 is
-  // `test:ax`, 3457 is `test:csp`, 3458 and 3459 are the age gate's two scopes, 3462 is the
-  // contrast sweep, 3464 is `test:keyboard` and 3465/3467 are `test:ax`'s third web app and the
-  // corrupting proxy behind it. A gate that binds a port another gate is holding fails for a
-  // reason that has nothing to do with what it measures.
+  // 3463 is free. 3000/3001 app and API, 3456/3465/3467 test:ax, 3457 test:csp, 3458/3459 age gate,
+  // 3462 contrast, 3464 test:keyboard.
   baseUrl: process.env.PRL_LAYOUT_ORIGIN ?? 'http://127.0.0.1:3463',
   start: false,
   headful: false,
@@ -1055,7 +829,6 @@ export function parseArgs(argv) {
   return options;
 }
 
-/** Every (route, theme, width) this run will measure. Exported so a test can count it. */
 export function sweepMatrix(options) {
   const routes = options.routes ?? ROUTES;
   const themes = options.themes ?? THEMES;
@@ -1069,12 +842,7 @@ export function sweepMatrix(options) {
   return out;
 }
 
-/**
- * Everything that makes a green result meaningless rather than good.
- *
- * A sweep that loaded no page, a page that produced fifteen text boxes because it rendered an
- * error boundary, an exemption nobody uses any more. Each is returned as a failure line.
- */
+/** Every condition that makes a green result meaningless, as failure lines. */
 export function coverageFailures(tally, exemptions = EXEMPTIONS) {
   const problems = [];
   if (tally.measurements < MIN_MEASUREMENTS) {
@@ -1116,13 +884,7 @@ export function coverageFailures(tally, exemptions = EXEMPTIONS) {
   return problems;
 }
 
-// ===========================================================================
-// A very small CDP client
-//
-// The same forty lines, for the same reason, as `scripts/ax-tree-audit.mjs` and
-// `scripts/keyboard-audit.mjs`: these are release gates, and a gate that imports from another
-// gate is a gate that can be broken from a distance.
-// ===========================================================================
+// CDP client copied, not shared, from ax-tree-audit.mjs so one gate cannot break another.
 
 class Page {
   #socket;
@@ -1173,11 +935,8 @@ class Page {
   }
 
   /**
-   * A device-metrics override, not a window resize.
-   *
-   * The layout of this app is decided by media queries AND by container queries on the play
-   * column. A headless window that was merely made smaller does not reliably move either, so a
-   * "narrow width" measurement taken that way measures the desktop layout and passes.
+   * A device-metrics override, not a window resize. A resized headless window does not reliably move
+   * media and container queries.
    */
   async setWidth(width) {
     await this.send('Emulation.setDeviceMetricsOverride', {
@@ -1229,8 +988,7 @@ function chromePath() {
 
 async function withChrome(headful, run) {
   const binary = chromePath();
-  // Offset by pid, and out of the ax-tree audit's range, so two gates on one machine do not fight
-  // over a debugging port.
+  // Clear of ax-tree-audit's debugging-port range.
   const port = 9650 + Math.floor(process.pid % 140);
   const child = spawn(
     binary,
@@ -1259,10 +1017,8 @@ async function withChrome(headful, run) {
     const page = await Page.open(target.webSocketDebuggerUrl);
     await page.send('Page.enable');
     await page.send('Runtime.enable');
-    // Motion off, for the reason `scripts/check-contrast.mjs` gives at length: the walk and the
-    // layout it describes are milliseconds apart, and an entrance animation between them moves the
-    // geometry out from under the measurement. It also removes the boot overlay, which
-    // `globals.css` hides under `prefers-reduced-motion: reduce` before it can paint.
+    // Motion off, so an entrance animation cannot move geometry between walk and layout. It also
+    // removes the boot overlay.
     await page.send('Emulation.setEmulatedMedia', {
       features: [{ name: 'prefers-reduced-motion', value: 'reduce' }],
     });
@@ -1276,29 +1032,11 @@ async function withChrome(headful, run) {
   }
 }
 
-// ===========================================================================
-// Servers
-// ===========================================================================
-
 /**
- * Refuses to go on when something already answers where this run's web app will be polled.
- *
- * `waitUntilReady` accepts the first 200 from its URL and cannot tell its own child's answer from a
- * stranger's, so with the port taken the sweep measures whatever IS there. Measured on 2026-11-10
- * with a production `next start` from this checkout started by hand on :3521: `--base-url
- * http://127.0.0.1:3521 --start` printed "starting the built web app on http://127.0.0.1:3521 ...",
- * then "PASS — 34646 painted text elements over 160 measurements" and exited 0, about a server this
- * run did not start. A `node:http` page on the port exited 1 only because its one `<h1>` is under
- * every coverage floor; the floors noticed, the lifecycle did not.
- *
- * It CONNECTS to where the poll will go, rather than binding 127.0.0.1 as `scripts/a11y-audit.mjs`
- * first did. Measured on macOS with Node 24.18: a bind of 127.0.0.1 succeeds beside a listener on
- * the wildcard address, so it called a `node:http` server free on its default address, on `0.0.0.0`
- * and on `::` (`lsof`: `TCP *:3533`), and refused only one bound to 127.0.0.1; a connect to
- * 127.0.0.1 reached all four. `next start` listens on the wildcard (`TCP *:3521`). A second `next
- * start` there exits `EADDRINUSE :::3521`; beside a stranger on 127.0.0.1 alone it binds `*:3522` and
- * stays up while the poll reaches the stranger. Only ECONNREFUSED counts as free, so a probe that
- * cannot decide refuses.
+ * `waitUntilReady` cannot tell its own child's answer from a stranger's, so an occupied port is
+ * refused (a hand-started `next start` on :3521 was measured passing this run). It connects rather
+ * than binds, because on macOS a bind to 127.0.0.1 succeeds beside a wildcard listener (Node 24.18,
+ * 2026-11-10). Only ECONNREFUSED counts as free.
  */
 async function refuseOccupiedPort(url) {
   const { hostname, port, protocol } = new URL(url);
@@ -1393,10 +1131,6 @@ class ManagedServer {
   }
 }
 
-// ===========================================================================
-// Run
-// ===========================================================================
-
 const walkerSource = () =>
   WALKER.replace('EXEMPT_SELECTORS_ARGUMENT', JSON.stringify(EXEMPTIONS.map((rule) => rule.selector)));
 
@@ -1404,16 +1138,11 @@ let dumpCount = 0;
 
 async function measure(page, route, theme, width) {
   await page.setWidth(width);
-  // The theme goes on the root element, which is where `tokens.css` keys its light scope — the
-  // same posture `scripts/check-contrast.mjs` takes, and it exercises the scope a reader who used
-  // the toggle actually gets.
+  // On the root element, where `tokens.css` keys its light scope.
   await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`);
   await delay(180);
   const measurement = await page.evaluate(walkerSource());
-  // Every rectangle this page produced, written out for inspection. Tuning a threshold means
-  // arguing with numbers, and the numbers are not in the findings — the ones that matter are the
-  // ones that did NOT become a finding. `PRL_LAYOUT_DUMP=<dir>` is how each threshold in this file
-  // got the value it has.
+  // `PRL_LAYOUT_DUMP=<dir>` writes every rectangle, for tuning thresholds.
   if (process.env.PRL_LAYOUT_DUMP !== undefined) {
     dumpCount += 1;
     writeFileSync(
@@ -1428,13 +1157,8 @@ async function measure(page, route, theme, width) {
 }
 
 /**
- * Put a control's stylesheet into the page.
- *
- * A `<style>` element does NOT work here and that is the app behaving correctly: its
- * Content-Security-Policy has no `'unsafe-inline'` for `style-src`, so an injected `<style>` is
- * parsed into an element whose `.sheet` is null and whose rules never apply — measured, and it is
- * exactly what `pnpm run test:csp` exists to prove. A CONSTRUCTED stylesheet is not a `style-src`
- * source and is adopted normally, so the controls use one and the page's policy is left alone.
+ * A constructed stylesheet, because the CSP has no `'unsafe-inline'` for `style-src` and an injected
+ * `<style>` never applies.
  */
 async function injectControl(page, css) {
   const applied = await page.evaluate(
@@ -1449,12 +1173,7 @@ async function injectControl(page, css) {
   await delay(250);
 }
 
-/**
- * The negative controls, run for real.
- *
- * Each returns whether the shape it re-creates was caught, and the measurement that proves it, so
- * a passing run PRINTS the evidence rather than asserting it happened.
- */
+/** Each control returns whether it was caught and the measurement, so a pass prints its evidence. */
 async function runControls(page, baseUrl) {
   const results = [];
   for (const control of CONTROLS) {
@@ -1641,7 +1360,6 @@ async function main() {
     for (const problem of coverageFailures(tally)) failures.push(problem);
   }
 
-  // ---- report ------------------------------------------------------------
   const byCheck = new Map();
   for (const finding of findings) {
     byCheck.set(finding.check, (byCheck.get(finding.check) ?? 0) + 1);
@@ -1680,8 +1398,7 @@ async function main() {
 
   if (findings.length > 0) {
     console.log(bold('\n  Findings'));
-    // Deduplicated by element and check: the same collapsed column at five widths is one defect
-    // reported five times, and a list nobody can read is a list nobody acts on.
+    // Deduplicated by element and check. One collapsed column at five widths is one defect.
     const seen = new Map();
     for (const finding of findings) {
       const key = `${finding.check}|${finding.sel}|${finding.other ?? ''}`;

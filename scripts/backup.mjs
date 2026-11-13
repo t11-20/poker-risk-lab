@@ -1,130 +1,26 @@
 #!/usr/bin/env node
 /**
- * backup.mjs — scheduled, encrypted, verifiable PostgreSQL backups for Poker Risk Lab.
+ * Encrypted, verifiable PostgreSQL backups (`pnpm run backup <command>`, see --help).
  *
- * This is what `pnpm run backup` runs. Subcommands:
+ *     create   dump, encrypt, checksum, sign a manifest
+ *     verify   prove an archive is intact, and (--deep) restorable
+ *     restore  restore into a NAMED target database
+ *     list     inventory, with retention class and integrity state
+ *     prune    apply the retention policy
+ *     keygen   print a fresh 32-byte archive key
  *
- *     pnpm run backup create      dump, encrypt, checksum, sign a manifest
- *     pnpm run backup verify      prove an archive is intact, and (--deep) restorable
- *     pnpm run backup restore     restore into a NAMED target database
- *     pnpm run backup list        inventory, with retention class and integrity state
- *     pnpm run backup prune       apply the retention policy
- *     pnpm run backup keygen      print a fresh 32-byte archive key
+ * Every payload, including the globals dump that holds the SCRAM verifiers, is AES-256-GCM
+ * encrypted before it touches disk. The key comes from PRL_BACKUP_KEY or --key-file, never a flag,
+ * and protects a stolen archive, not a compromised host. HKDF-SHA-256 with a per-archive salt
+ * derives a separate key per payload. No WAL archiving, so the RPO is the schedule interval, and
+ * live in-memory hands are not durable (ADR 0001). See docs/production/disaster-recovery.md.
  *
- * ## The defect this exists for
+ * The payload is a sequence of sealed frames so `restore` never feeds pg_restore an unauthenticated
+ * byte. Each frame's AAD binds the header hash, its index and a final flag, and an empty final frame
+ * makes truncation detectable. The manifest is HMAC-signed, because whoever can corrupt an archive
+ * can also rewrite a plain checksum.
  *
- * docs/RUNBOOK.md §11.4 documents dump-and-restore by hand, in detail, including four
- * traps that each cost a rehearsal to learn. What it documents is a **procedure a human
- * types**. Nothing in the repository ran it, nothing scheduled it, nothing checked that
- * yesterday's dump was still readable, and its own closing sentence said so: "No gate
- * enforces any of this … nothing in the repository restores a dump."
- *
- * Three concrete consequences, each of which this file closes:
- *
- *  1. **A plain `pg_dump` file is a full copy of every learner's account.** Display names,
- *     lesson progress, hand history, session token *hashes*, keyed IP hashes. Sitting on a
- *     backup host or an object store, unencrypted, it is the single highest-value artefact
- *     this system produces — higher than the live database, because the live database is
- *     behind an application that enforces authorisation and the dump is behind nothing.
- *     Worse, §11.4 also tells you to keep `pg_dumpall --globals-only` beside it, and that
- *     file contains the **SCRAM verifiers of `prl_api` and `prl_deployer`**. So the
- *     documented backup set was a credential store in plain text. Everything this script
- *     writes is AES-256-GCM encrypted before it touches the disk.
- *  2. **A checksum is not a restore.** A sha256 sidecar proves the bytes did not rot. It
- *     says nothing about whether `pg_restore` can read them — a dump truncated by a full
- *     disk hashes perfectly, every time, forever. `verify` therefore has four layers and
- *     labels which claim each one supports (see `commandVerify`).
- *  3. **Nothing produced the globals dump at all.** There was no command for it. `create`
- *     takes it every time, encrypted, and refuses to be quiet about skipping it.
- *
- * ## What this does NOT do, stated plainly
- *
- *  * **No point-in-time recovery.** There is no WAL archiving here. The RPO is therefore
- *    the schedule interval and nothing better — 24 hours with the shipped timer. Adding
- *    `archive_command` and a base backup would take it to minutes; that is a change to the
- *    database deployment, not to this script, and it is deliberately out of scope. See
- *    docs/production/disaster-recovery.md.
- *  * **It does not back up live table state, because live table state is not durable.**
- *    ADR 0001 puts the authoritative `HandState` in the API process's memory. A crash
- *    mid-hand loses that hand. No backup tool can recover it, and this one does not pretend
- *    to. Completed hands are archived to PostgreSQL and are covered.
- *  * **It does not prove the application works.** `verify --deep` proves `pg_restore`
- *    accepts the archive and the row census survives. Proving the API boots against the
- *    restored database, answers `/ready`, and still refuses one learner's room to another
- *    is a drill with commands and measured timings in docs/production/backup-restore.md.
- *  * **It is not a secrets manager.** See the key-management note below, which is honest
- *    about exactly what an environment variable does and does not buy.
- *
- * ## Key management, without the comfortable version
- *
- * The archive key is 32 bytes of key material read from `PRL_BACKUP_KEY` (base64url, base64
- * or hex) or from a file named by `--key-file`. There is deliberately **no `--key` flag**:
- * an argument is visible in `ps`, in the shell history and in any process listing the host
- * ships to a log collector.
- *
- * What that protects against: **an attacker who obtains the archive but not the machine.**
- * A stolen object-store bucket, a copied backup volume, a decommissioned disk, a snapshot
- * shared with the wrong account, a misdirected file transfer, a backup host restored from
- * its own backup by someone who should not have it. That is the realistic threat for
- * offsite backups and it is the one this closes.
- *
- * What it does NOT protect against, exactly:
- *
- *  * Anyone who can read the environment of the backup process — `/proc/<pid>/environ`, a
- *    core dump, `docker inspect` on a container given the variable, a CI job log that
- *    echoes its environment, an `EnvironmentFile` readable by more than root.
- *  * Anyone with code execution on the backup host at the moment a backup runs.
- *  * A compromised source database. Encryption at rest protects the copy; it cannot make a
- *    dump of poisoned data good.
- *  * Rotation and revocation. One static key encrypts every archive it is used for. There
- *    is no per-archive escrow, no key hierarchy you can revoke a branch of, and no audit
- *    trail of who decrypted what. Getting those means a KMS or an HSM holding a root key
- *    and this script asking it to unwrap a per-archive data key. The format has room for
- *    that — `encryption.keyId` in the manifest exists so a future envelope scheme can say
- *    which root key an archive belongs to — and it is not implemented.
- *  * Losing the key. There is no recovery. An archive whose key is gone is noise. Escrow
- *    the key somewhere that is not the backup host, and test the escrow.
- *
- * The key material is stretched per archive and per payload with HKDF-SHA-256 over a fresh
- * random 32-byte salt, so the database dump and the globals dump in one backup are
- * encrypted under different derived keys, and no two archives share a key even though they
- * share key material.
- *
- * ## The container archive format, and why it is framed rather than one AEAD stream
- *
- * A single `createCipheriv` over the whole dump would be simpler, and it has a property
- * that is unacceptable here: the GCM tag arrives at the *end*, so a streaming restore would
- * have to feed unauthenticated plaintext to `pg_restore` and only discover the forgery
- * after `pg_restore` had already executed it. Restoring attacker-chosen SQL and then saying
- * "the tag was wrong" is not integrity.
- *
- * So the payload is a sequence of independently sealed frames (`CHUNK_BYTES` of plaintext
- * each), and `restore` streams frame by frame: nothing reaches `pg_restore` that has not
- * already had its tag checked. Each frame's nonce is `noncePrefix || counter` and each
- * frame's AAD is `sha256(header bytes) || counter || finalFlag`, which binds every frame to
- * this exact header and to its position. Reordering, splicing frames between archives,
- * dropping the tail, or swapping the header all fail the tag rather than producing
- * plausible SQL. The stream ends with an empty final frame, so truncation is detectable —
- * without it, "the file just stops" is indistinguishable from "the file is complete".
- *
- * The cost, stated: 20 bytes of overhead per megabyte, and a format only this script reads.
- * `openssl enc` will not open it. That is why `restore` and `verify` are subcommands here
- * rather than a paragraph telling an operator to pipe things together at 3am.
- *
- * ## Why the manifest is signed and not merely written
- *
- * The manifest holds the checksums. An attacker who can corrupt an archive on the backup
- * host can equally rewrite a plain-JSON checksum to match — "the checksum matched" then
- * means nothing. So the manifest carries an HMAC-SHA-256 over its canonical form under a
- * key derived from the same material, and `verify` checks that first. It is unencrypted on
- * purpose: an operator has to be able to read what an archive *is* without the key, and
- * what it reveals is metadata (database name, timestamps, sizes, and per-table row counts)
- * rather than any row of any table.
- *
- * Usage:
- *   node scripts/backup.mjs <command> [options]   (see --help)
- *
- * Exit codes: 0 success, 1 any failure or refusal, 0 for --help.
+ * Exit codes: 0 success or --help, 1 any failure or refusal.
  */
 
 import { spawn } from 'node:child_process';
@@ -153,7 +49,6 @@ const red = (s) => paint('31', s);
 const green = (s) => paint('32', s);
 const yellow = (s) => paint('33', s);
 
-/** Thrown for every refusal and every operator-facing failure; the message is the reason. */
 export class BackupError extends Error {
   constructor(message, detail) {
     super(message);
@@ -162,42 +57,20 @@ export class BackupError extends Error {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Options
-// ---------------------------------------------------------------------------
-
 export const COMMANDS = ['create', 'verify', 'restore', 'list', 'prune', 'keygen'];
 
 export const DEFAULTS = {
-  /**
-   * Deliberately NOT inside the repository.
-   *
-   * A default of `./backups` puts a full, if encrypted, copy of every learner's account one
-   * `git add -A` away from a public remote, in a repository whose .gitignore this script is
-   * not allowed to edit. `/var/backups` is where a Debian host already keeps this kind of
-   * thing, and it is the path the shipped systemd unit uses, so the documented production
-   * layout and the default agree. On a developer machine it will not be writable, and the
-   * error names both ways to change it rather than silently falling back to somewhere worse.
-   */
+  // Outside the repository, so an archive is never one `git add -A` from a public remote. This is the
+  // path the shipped systemd unit uses.
   dir: '/var/backups/poker-risk-lab',
-  /** The maintenance database `restore` connects to in order to CREATE or DROP another one. */
   maintenanceDatabase: 'postgres',
-  /** Retention, in whole backups. The reasoning for these three numbers is in
-   * docs/production/backup-restore.md; changing them here without changing that is how a
-   * retention policy becomes folklore. */
+  // Retention in whole backups. The reasoning is in docs/production/backup-restore.md.
   daily: 7,
   weekly: 4,
   monthly: 6,
 };
 
-/**
- * Plaintext bytes per sealed frame.
- *
- * 1 MiB is a compromise. Smaller frames mean more tags (20 bytes each) and more cipher
- * setups; larger frames mean more plaintext buffered in memory during a streaming restore
- * and a coarser truncation granularity. At 1 MiB the overhead is 0.002% and a restore holds
- * at most one megabyte of decrypted dump in memory at a time.
- */
+// 1 MiB frames cost 0.002% in tags and bound a streaming restore to 1 MiB of plaintext in memory.
 export const CHUNK_BYTES = 1024 * 1024;
 
 const MAGIC = Buffer.from('PRLBAK1\n', 'ascii');
@@ -207,17 +80,11 @@ const NONCE_PREFIX_BYTES = 4;
 const NONCE_BYTES = 12;
 const SALT_BYTES = 32;
 const KEY_BYTES = 32;
-/**
- * Read-side ceiling on a declared frame length. Without it a corrupted or hostile length
- * prefix makes this process allocate whatever number is in those four bytes — up to 4 GiB —
- * before a single tag has been checked. Generous enough that a future larger CHUNK_BYTES
- * still opens old archives.
- */
+// Without a ceiling, a hostile length prefix allocates up to 4 GiB before any tag is checked. It
+// leaves room for a future larger CHUNK_BYTES.
 const MAX_FRAME_BYTES = 64 * 1024 * 1024;
-/** Same idea for the header: a plausible header is a few hundred bytes. */
 const MAX_HEADER_BYTES = 64 * 1024;
 
-/** Files are created 0600 and directories 0700: a backup readable by `other` is not a backup. */
 const FILE_MODE = 0o600;
 const DIR_MODE = 0o700;
 
@@ -306,9 +173,7 @@ export function parseArgs(argv) {
   };
 
   let index = 0;
-  // The subcommand is the first non-option argument, and only the first: `backup create
-  // restore` is a typo, not a request to do both, and it is caught below as an unknown
-  // option rather than silently running one of them.
+  // Only the first non-option argument is the subcommand. `backup create restore` is a typo.
   if (argv.length > 0 && !argv[0].startsWith('-')) {
     options.command = argv[0];
     index = 1;
@@ -322,8 +187,6 @@ export function parseArgs(argv) {
       index += 1;
       return value;
     };
-    // `pnpm run backup create -- --dir /x` forwards the `--` itself; absorb it so the
-    // conventional invocation is not rejected as an unknown option.
     if (arg === '--') continue;
     switch (arg) {
       case '-h':
@@ -407,16 +270,10 @@ function retentionCount(flag, raw) {
   if (!Number.isInteger(value) || value < 0) {
     throw new BackupError(`${flag} must be a whole number of backups to keep, not ${raw}`);
   }
-  // A four-figure retention is a typo, not a policy: 9999 dailies is 27 years of archives on
-  // a disk sized for weeks. Refusing here is cheaper than discovering it when prune keeps
-  // everything and the volume fills.
+  // A four-figure retention is a typo. 9999 dailies is 27 years of archives.
   if (value > 365) throw new BackupError(`${flag} of ${value} is implausible; the ceiling is 365`);
   return value;
 }
-
-// ---------------------------------------------------------------------------
-// Configuration: flag > environment > default
-// ---------------------------------------------------------------------------
 
 export function resolveDirectory(env, flag) {
   if (flag !== null && flag !== undefined) return { path: resolve(flag), source: '--dir' };
@@ -425,14 +282,7 @@ export function resolveDirectory(env, flag) {
   return { path: DEFAULTS.dir, source: 'default' };
 }
 
-/**
- * The source connection, parsed once so every tool invocation agrees about it.
- *
- * The password is carried in the returned object and never printed, never put in argv, and
- * never written to a manifest. It reaches the child process through PGPASSWORD in its
- * environment, which is the one channel `pg_dump` offers that is not a file or a command
- * line.
- */
+// The password reaches tools only through PGPASSWORD, never argv, a log or a manifest.
 export function resolveConnection(env, flag) {
   const raw = flag ?? env['DATABASE_URL'];
   if (raw === undefined || raw === '') {
@@ -452,34 +302,21 @@ export function resolveConnection(env, flag) {
     user: decodeURIComponent(parsed.username),
     password: decodeURIComponent(parsed.password),
     database,
-    /** Printable, password-free. Everything this script logs about the target uses this. */
     describe() {
       return `${this.user}@${this.host}:${this.port}/${this.database}`;
     },
   };
 }
 
-/**
- * The same, but `null` when nothing names a database at all.
- *
- * A malformed connection string still throws: a typo in DATABASE_URL that silently became
- * "no database configured" would turn `verify --deep` into `verify`, which is the difference
- * between proving an archive restorable and proving it merely intact.
- */
+// A malformed string still throws, or a DATABASE_URL typo would silently turn `verify --deep` into
+// `verify`.
 export function resolveOptionalConnection(env, flag) {
   const raw = flag ?? env['DATABASE_URL'];
   if (raw === undefined || raw === '') return null;
   return resolveConnection(env, flag);
 }
 
-/**
- * Reads the 32 bytes of key material.
- *
- * Accepts base64url, base64 or hex, decided by shape rather than by a flag: an operator
- * pasting a key out of a secret manager should not also have to tell us which encoding that
- * manager chose. Anything that does not decode to exactly 32 bytes is refused with the
- * length it actually got, because "invalid key" sends people looking in the wrong place.
- */
+// Accepts base64url, base64 or hex by shape, and reports the decoded length on a mismatch.
 export function decodeKeyMaterial(text, origin) {
   const trimmed = text.trim();
   if (trimmed === '') throw new BackupError(`${origin} is empty`);
@@ -517,18 +354,7 @@ async function resolveKey(env, keyFile) {
   return decodeKeyMaterial(fromEnv, 'PRL_BACKUP_KEY');
 }
 
-// ---------------------------------------------------------------------------
-// Canonical JSON and the manifest signature
-// ---------------------------------------------------------------------------
-
-/**
- * JSON with object keys in a fixed order.
- *
- * `JSON.stringify` preserves insertion order, so two manifests with identical content but
- * different construction order would serialise differently and produce different HMACs. The
- * signature has to be over a canonical form or verification depends on how the object
- * happened to be built.
- */
+// Fixed key order, so the HMAC does not depend on how the object was built.
 export function canonicalJson(value) {
   if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
@@ -544,13 +370,6 @@ export function manifestSignature(material, salt, body) {
   return createHmac('sha256', key).update(canonicalJson(body), 'utf8').digest('hex');
 }
 
-/**
- * True only when the manifest was signed by this key material.
- *
- * `timingSafeEqual` rather than `===`: a manifest signature is checked against an attacker-
- * supplied value, and while a timing oracle on an offline file is a stretch, writing the
- * comparison the other way teaches the next person the wrong reflex.
- */
 export function manifestSignatureValid(material, manifest) {
   const { hmac, ...body } = manifest;
   if (typeof hmac !== 'string' || !/^[0-9a-f]{64}$/.test(hmac)) return false;
@@ -563,21 +382,8 @@ export function manifestSignatureValid(material, manifest) {
   return timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(hmac, 'hex'));
 }
 
-// ---------------------------------------------------------------------------
-// The framed AEAD container
-// ---------------------------------------------------------------------------
-
-/**
- * The plaintext header that opens every archive file.
- *
- * Exported because scripts/backup.test.mjs seals and opens payloads directly: a container
- * format whose only construction path is `create` can only be tested by taking a backup, and a
- * test that needs a database is a test that does not run.
- *
- * Everything here is readable without the key, on purpose — an operator has to be able to tell
- * what a file is before deciding whether to go and find the key for it — and everything here is
- * covered by each frame's AAD, so none of it can be edited without every tag failing.
- */
+// Readable without the key, so an operator can tell what a file is, and covered by every frame's AAD,
+// so no field can be edited.
 export function archiveHeader({ archive, payload, salt, noncePrefix }) {
   return {
     format: FORMAT,
@@ -586,10 +392,7 @@ export function archiveHeader({ archive, payload, salt, noncePrefix }) {
     archive,
     payload,
     salt: salt.toString('base64'),
-    // One random prefix per archive, with a per-frame counter after it. The (key, nonce) pair
-    // is unique because the derived key is unique per archive AND per payload, so the counter
-    // alone would in fact be sufficient; the random prefix costs four bytes and removes any
-    // dependence on that argument staying true if the KDF info string ever changes.
+    // The derived key is unique per archive and payload, and the random prefix removes any reliance on that.
     noncePrefix: noncePrefix.toString('base64'),
     chunkBytes: CHUNK_BYTES,
   };
@@ -612,11 +415,7 @@ function frameNonce(prefix, index) {
   return nonce;
 }
 
-/**
- * Additional authenticated data for one frame: the header it belongs to, its position, and
- * whether it is the terminator. This is what makes frames non-interchangeable — a frame
- * lifted from another archive, or moved within this one, fails its tag.
- */
+// Binds a frame to its header and position, so a moved or transplanted frame fails its tag.
 function frameAad(binding, index, final) {
   const suffix = Buffer.alloc(9);
   suffix.writeBigUInt64BE(BigInt(index), 0);
@@ -642,13 +441,7 @@ function openFrame(key, prefix, binding, index, body, final) {
   return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
 }
 
-/**
- * Encrypts an async iterable of Buffers into the framed container.
- *
- * Yields the finished bytes, and reports both digests through `report` — the plaintext
- * digest so a restore can prove it reproduced exactly what was dumped, the ciphertext digest
- * so `verify` can detect bit rot without holding the key.
- */
+// Reports the plaintext digest, for restore, and the ciphertext digest, for keyless bit-rot checks.
 export async function* encryptFrames(source, { material, header, report }) {
   const prologue = serialiseHeader(header);
   const binding = headerBinding(prologue);
@@ -690,8 +483,7 @@ export async function* encryptFrames(source, { material, header, report }) {
     yield emit(sealFrame(key, prefix, binding, index, pending, false));
     index += 1;
   }
-  // The terminator. Empty plaintext, final flag set, its own index — so a truncated stream
-  // is missing something that cannot be manufactured without the key.
+  // The terminator, so a truncated stream lacks something only the key can make.
   yield emit(sealFrame(key, prefix, binding, index, Buffer.alloc(0), true));
 
   report({
@@ -703,14 +495,8 @@ export async function* encryptFrames(source, { material, header, report }) {
   });
 }
 
-/** A pull reader over an iterable of Buffers, synchronous or asynchronous. */
 function byteReader(source) {
-  // Both protocols, for the same reason `for await` accepts both: the production caller hands
-  // this a `fs.ReadStream` (async), and a caller with the bytes already in hand — a test, or a
-  // future in-memory verification path — hands it an array. Reaching only for
-  // Symbol.asyncIterator turns the second case into
-  // `TypeError: source[Symbol.asyncIterator] is not a function`, which reads like a bug in the
-  // archive rather than in the call.
+  // Accepts sync and async iterables, since tests pass an array and production a ReadStream.
   const iterator =
     typeof source[Symbol.asyncIterator] === 'function'
       ? source[Symbol.asyncIterator]()
@@ -718,7 +504,6 @@ function byteReader(source) {
   let buffered = Buffer.alloc(0);
   let done = false;
   return {
-    /** Exactly `count` bytes, or null at a clean end of stream when nothing was buffered. */
     async take(count, { optional = false } = {}) {
       while (buffered.length < count && !done) {
         const next = await iterator.next();
@@ -743,12 +528,7 @@ function byteReader(source) {
   };
 }
 
-/**
- * Decrypts the framed container, yielding plaintext frame by frame.
- *
- * Every yielded byte has already had its tag checked, which is the whole point: a consumer
- * may execute what this yields. Ends by refusing a stream that never presented a terminator.
- */
+// Every yielded byte has passed its tag, because a consumer may execute it.
 export async function* decryptFrames(source, { material, expectHeader } = {}) {
   const reader = byteReader(source);
   const magic = await reader.take(MAGIC.length);
@@ -773,9 +553,7 @@ export async function* decryptFrames(source, { material, expectHeader } = {}) {
     throw new BackupError(`unknown cipher ${String(header.cipher)}`);
   }
   if (expectHeader !== undefined && expectHeader !== null) {
-    // The manifest says which archive this file is. If the file's own header disagrees,
-    // somebody has swapped files between backups and the checksums would still "match"
-    // whichever manifest they were checked against.
+    // A file swapped in from another backup would still match that backup's checksums.
     if (header.archive !== expectHeader.archive || header.payload !== expectHeader.payload) {
       throw new BackupError(
         `archive header says ${header.archive}/${header.payload}, manifest says ` +
@@ -804,8 +582,7 @@ export async function* decryptFrames(source, { material, expectHeader } = {}) {
       throw new BackupError(`frame ${index} declares an impossible length of ${bodyLength} bytes`);
     }
     const body = await reader.take(bodyLength);
-    // An empty ciphertext IS the terminator; the flag is in the AAD, so this has to be
-    // derivable from the length before the tag can be checked.
+    // An empty ciphertext is the terminator. The flag is in the AAD, so it comes from the length.
     const final = bodyLength === TAG_BYTES;
     if (sawTerminator) {
       throw new BackupError(
@@ -834,36 +611,16 @@ export async function* decryptFrames(source, { material, expectHeader } = {}) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Running the PostgreSQL tools
-// ---------------------------------------------------------------------------
-
 /**
  * Builds the argv and environment for one PostgreSQL client invocation.
  *
- * Two shapes, one interface:
- *
- *  * **On PATH** (production): the tools run on the backup host. `pg_dump` must be at least
- *    the server's major version, which is the operator's problem and is checked at the start
- *    of `create`.
- *  * **Inside a container** (`--container`): the tools run in the database container itself,
- *    which is how the compose developer stack works — there is no local `pg_dump` there, and
- *    the one in the container is by construction the right version. In that shape the
- *    host/port from DATABASE_URL are the wrong coordinates (they describe the published
- *    port, seen from outside), so the connection goes over the container's unix socket by
- *    omitting --host entirely. That is the same path the compose healthcheck uses.
- *
- * The password travels as PGPASSWORD in the child's environment. `docker exec -e PGPASSWORD`
- * with no `=value` forwards it from this process rather than placing it in argv, so it never
- * appears in `ps` on the host either.
+ * On PATH, the tools run on the backup host. With `--container` they run inside the database
+ * container over its unix socket, so --host is omitted. `docker exec -e PGPASSWORD` with no value
+ * forwards the password without putting it in argv.
  */
 function toolCommand(tool, toolArgs, ctx, bare) {
   const connection = [];
-  // `bare` exists for one real constraint rather than for tidiness: pg_dump 16 refuses
-  // `--version` in the company of any other option — `pg_dump --username poker --version`
-  // exits 1 with nothing but "Try pg_dump --help", which is a spectacularly unhelpful way to
-  // fail a nightly backup at its first step. A version probe therefore carries no connection
-  // flags at all.
+  // pg_dump 16 refuses `--version` beside any other option, so a version probe carries no connection flags.
   if (!bare) {
     if (ctx.container === null) {
       connection.push('--host', ctx.connection.host, '--port', String(ctx.connection.port));
@@ -882,13 +639,9 @@ function startTool(tool, toolArgs, ctx, { stdin = 'pipe', stdout = 'pipe', bare 
     stdio: [stdin, stdout, 'pipe'],
     env: {
       ...process.env,
-      // `verify` without --deep runs `pg_restore --list`, which opens no connection, and is
-      // allowed to run with no connection configured at all. Spreading a conditional rather
-      // than reading `ctx.connection.password` unconditionally is what keeps that case from
-      // dying on a TypeError one line before it would have succeeded.
+      // `verify` without --deep may have no connection configured.
       ...(ctx.connection === null ? {} : { PGPASSWORD: ctx.connection.password }),
-      // A hung connect should fail the backup, not hold the timer unit open until somebody
-      // notices. Ten seconds is far longer than a healthy local or in-VPC connect.
+      // A hung connect fails the backup instead of holding the timer unit open.
       PGCONNECT_TIMEOUT: '10',
     },
   });
@@ -930,7 +683,6 @@ function startTool(tool, toolArgs, ctx, { stdin = 'pipe', stdout = 'pipe', bare 
   };
 }
 
-/** Runs a tool that produces a modest amount of stdout, and returns it. */
 async function captureTool(tool, toolArgs, ctx, input, bare = false) {
   const run = startTool(tool, toolArgs, ctx, { stdin: input === undefined ? 'ignore' : 'pipe', bare });
   const chunks = [];
@@ -942,20 +694,9 @@ async function captureTool(tool, toolArgs, ctx, input, bare = false) {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-/**
- * Streams plaintext into a started tool's stdin, and tolerates the tool closing that pipe.
- *
- * The tolerance is not defensive padding; it is required by `pg_restore --list`, which reads
- * the table of contents at the head of a custom-format archive and then exits, closing stdin
- * while there is still a great deal of archive to write. Measured: a 153 KiB archive finished
- * writing before pg_restore got round to exiting and passed; the 287.8 MiB archive failed
- * `4. pg_restore cannot read the archive: write EPIPE` on an archive that was, in fact,
- * perfectly readable. A verification that gets less reliable as the database gets bigger is
- * worse than none, because it passes for exactly as long as nobody depends on it.
- *
- * A broken pipe therefore is not the verdict. `settle()` is: the tool's own exit code decides,
- * and a tool that failed reports its stderr rather than our write error.
- */
+// Tolerates a closed stdin because `pg_restore --list` exits after reading the table of contents.
+// Measured, a 287.8 MiB archive failed with EPIPE while a 153 KiB one passed. The tool's exit code
+// decides.
 async function feedTool(run, source) {
   try {
     await pipeline(source, run.stdin);
@@ -969,7 +710,6 @@ async function feedTool(run, source) {
   await run.settle();
 }
 
-/** psql with the flags that make it a scripting tool rather than an interactive one. */
 const psqlArgs = (database, extra = []) => [
   '--dbname',
   database,
@@ -988,19 +728,9 @@ async function psqlScalar(ctx, database, sql) {
   return out.trim();
 }
 
-/**
- * Row counts for every base table in schema `prl`.
- *
- * `query_to_xml` is the trick that turns "count every table" into one round trip instead of
- * one per table. The alternative — reltuples from pg_class — is an estimate, and an estimate
- * cannot answer "did the restore actually land the rows".
- *
- * TIMING, stated because it decides how the result may be used: this runs in its own
- * transaction, immediately after pg_dump finished, so on a database taking writes it is a
- * DIFFERENT snapshot to the dump's. The census is therefore corroboration, not proof. What
- * it does catch, reliably, is the failure that matters: a restore that produced the schema
- * and none of the rows.
- */
+// One round trip via `query_to_xml`, with exact counts rather than reltuples estimates. It runs after
+// pg_dump in its own transaction, so it corroborates the dump and reliably catches a restore with
+// the schema and none of the rows.
 async function census(ctx, database) {
   const sql =
     "select table_name, (xpath('/row/cnt/text()', query_to_xml(format('select count(*) as cnt from %I.%I', " +
@@ -1016,11 +746,6 @@ async function census(ctx, database) {
   return counts;
 }
 
-// ---------------------------------------------------------------------------
-// Archive identity and inventory
-// ---------------------------------------------------------------------------
-
-/** `20260822T130000Z` — sortable, filename-safe, unambiguously UTC. */
 export function archiveStamp(date) {
   return `${date
     .toISOString()
@@ -1028,16 +753,8 @@ export function archiveStamp(date) {
     .replace(/\.\d{3}Z$/, 'Z')}`;
 }
 
-/**
- * A database name this script is willing to create, drop or restore into.
- *
- * The identifier cannot be a bind parameter — `CREATE DATABASE` takes none — so it is
- * interpolated by psql's `:"name"`, which quotes it as an identifier. This regex is defence
- * in depth on top of that, and it also rules out the names that merely *work* and then
- * surprise someone: mixed case (which PostgreSQL folds unless quoted, so the quoted form
- * would be a different database to the one they typed) and anything over 63 bytes (which
- * PostgreSQL silently truncates).
- */
+// psql's `:"name"` already quotes the identifier. This also refuses mixed case, which would name a
+// different database once quoted, and names over 63 bytes, which PostgreSQL truncates.
 export function isSafeDatabaseName(name) {
   return typeof name === 'string' && /^[a-z_][a-z0-9_]{0,62}$/.test(name);
 }
@@ -1046,50 +763,22 @@ const archiveFileName = (id, payload) => (payload === 'globals' ? `${id}.globals
 const manifestFileName = (id) => `${id}.manifest.json`;
 
 /**
- * True only for a name that can name a file directly inside the archive directory.
+ * True only for a plain basename, the only shape `archiveFileName` writes.
  *
- * ## The defect this exists for
- *
- * `prune --apply` used to take every `manifest.files[].name` straight to
- * `rm(join(directory, name))`. A manifest is a JSON file sitting in the archive directory
- * beside the payloads, so anybody who can write there can write a name into it — and a name of
- * `../VICTIM.txt` resolves through `join` to a file OUTSIDE the directory, which prune then
- * unlinked and reported as a successful, exit-0 PASS. The archives whose signature does NOT
- * verify are in the delete set by construction (that is what `prune` is for), so the manifest
- * signature protects nothing here: the attacker's manifest is the one being acted on.
- *
- * The containment idiom is `scripts/clean.mjs` (`isInsideRepo`, `verifySafe`), and this is the
- * same rule stated for a directory-relative name: a payload name is a BASENAME. There is no
- * legitimate archive in this format whose payload lives in a subdirectory or above the archive
- * directory — `archiveFileName` above only ever produces `<id>.dump.enc` or
- * `<id>.globals.sql.enc` — so anything else is not a formatting quirk, it is tampering, and
- * `unsafeArchiveFileNames` below makes it fail the command rather than skip the file.
- *
- * Checked explicitly rather than by comparing `resolve(join(dir, name))` against the directory:
- * a resolve-and-compare accepts `sub/../file.enc` and `./file.enc`, which are contained but are
- * still not names this format writes, and every extra shape accepted is a shape a future reader
- * has to reason about.
+ * `prune --apply` once took a manifest name of `../VICTIM.txt` to `rm(join(directory, name))`,
+ * deleted a file outside the directory and exited 0. The signature does not help, since unverified
+ * archives are exactly the delete set. Contained shapes like `./file.enc` are refused too.
  */
 export function isPlainArchiveFileName(name) {
   if (typeof name !== 'string' || name === '') return false;
-  // NUL truncates the path at the syscall boundary on some platforms, so a name carrying one is
-  // not the name that would be unlinked. `\` is rejected as well as `/`: this script is expected
-  // to run on Linux, but an archive directory can be read on a developer's machine, and on
-  // Windows `..\` is the same escape.
+  // NUL truncates a path at the syscall boundary. `\` is refused because `..\` escapes on Windows.
   if (name.includes('\0') || name.includes('/') || name.includes('\\')) return false;
   if (name === '.' || name === '..') return false;
   if (isAbsolute(name)) return false;
-  // Belt and braces against a separator this platform recognises that the two above do not.
   return basename(name) === name;
 }
 
-/**
- * Every payload name in `backups` that is not a plain basename, with the archive it came from.
- *
- * Exported and pure so `prune` can check the WHOLE delete set before it unlinks anything: a
- * tampered manifest discovered halfway through would otherwise leave a half-applied prune, and
- * the operator would have to work out which archives had already gone.
- */
+// Checked over the whole delete set before any unlink, so a tampered manifest cannot half-apply a prune.
 export function unsafeArchiveFileNames(backups) {
   const offences = [];
   for (const backup of backups) {
@@ -1102,14 +791,8 @@ export function unsafeArchiveFileNames(backups) {
   return offences;
 }
 
-/**
- * Reads every manifest in the directory and reports what is actually on disk beside it.
- *
- * A backup is "good" only when its manifest signature verifies AND every file it names is
- * present at the recorded size. That definition is load-bearing: `prune` refuses to delete
- * the newest GOOD backup, and a definition that counted a signed manifest whose dump file
- * had been deleted would let it delete the last real one.
- */
+// "Good" means the signature verifies and every named file is present at its recorded size. `prune`
+// never deletes the newest good backup, so this definition is what protects the last real one.
 export async function readInventory(directory, material) {
   let entries;
   try {
@@ -1142,11 +825,7 @@ export async function readInventory(directory, material) {
     let bytes = 0;
     if (manifest !== null && Array.isArray(manifest.files)) {
       for (const file of manifest.files) {
-        // Checked BEFORE the stat, not only before the unlink in `prune`: `join(directory,
-        // '../VICTIM.txt')` is a path outside the archive directory whichever syscall it is
-        // handed to, and a manifest that names one is tampered with. Recording it as a problem
-        // is what stops such an archive being "good", which is the definition `prune`'s
-        // never-delete-the-newest-good rule is built on.
+        // Before the stat too, so a traversal name makes the archive not good.
         if (!isPlainArchiveFileName(file?.name)) {
           problems.push(
             `${String(file?.name)} is not a plain file name — a manifest that names a path is tampered with`,
@@ -1177,8 +856,7 @@ export async function readInventory(directory, material) {
       good: signatureOk && problems.length === 0,
     });
   }
-  // Newest first. A backup whose createdAt is unparseable sorts last rather than throwing:
-  // `list` has to be able to show a broken backup, that being the point of `list`.
+  // An unparseable createdAt sorts last, so `list` can still show a broken backup.
   backups.sort((a, b) => {
     const left = Number.isNaN(a.createdAtMs) ? -1 : a.createdAtMs;
     const right = Number.isNaN(b.createdAtMs) ? -1 : b.createdAtMs;
@@ -1187,17 +865,9 @@ export async function readInventory(directory, material) {
   return backups;
 }
 
-/**
- * Which database an archive was taken FROM, or null when the manifest does not say.
- *
- * Read from the manifest body rather than parsed out of the id. The id is
- * `prl-<database>-<stamp>`, and a database name may itself contain a hyphen — no, it may not
- * (`isSafeDatabaseName`), but the id is also the field an attacker who can write to the
- * archive directory controls most cheaply, and `source.database` is under the HMAC.
- */
+// From the HMAC-covered manifest body, not the id, which is cheap for an attacker to control.
 export const sourceDatabaseOf = (backup) => backup?.manifest?.source?.database ?? null;
 
-/** Every distinct source database in an inventory, in first-seen order. Null groups as `null`. */
 export function sourceDatabases(inventory) {
   const seen = [];
   for (const backup of inventory) {
@@ -1207,27 +877,9 @@ export function sourceDatabases(inventory) {
   return seen;
 }
 
-/**
- * The archive a command should act on.
- *
- * ## The defect this exists for
- *
- * "The newest archive" is only a meaningful default while every archive in the directory came
- * from the SAME database. docs/production/disaster-recovery.md §5.5 makes the opposite the
- * required posture — "the archives and the key must not live only on the host being backed
- * up" — and the cheapest way to satisfy that is one archive store fed by more than one host.
- *
- * Measured, with two source databases in one directory: a 149.8 MiB archive of
- * `poker_risk_lab` (944,297 rows) taken at 18:28 and a 77.6 KiB archive of an empty
- * `poker_risk_lab_restored` taken at 18:38. `restore --target …` with no `--id` chose the
- * empty one, restored it, compared it against ITS OWN manifest's census, and printed PASS.
- * Nothing in the output said the archive was of a different database — the id says so and
- * nothing reads it.
- *
- * So an ambiguous directory is refused rather than resolved by timestamp. Naming the sources
- * is the whole point of the message: an operator who did not know two hosts shared a directory
- * finds out here rather than after the restore.
- */
+// An ambiguous directory is refused rather than resolved by timestamp. Measured, with two source
+// databases in one directory, `restore` with no `--id` restored an empty newer archive of the other
+// database and printed PASS. A shared store is what disaster-recovery.md §5.5 recommends.
 function selectArchive(inventory, id) {
   if (id !== null && id !== undefined) {
     const found = inventory.find((backup) => backup.id === id);
@@ -1247,26 +899,12 @@ function selectArchive(inventory, id) {
   return inventory[0];
 }
 
-// ---------------------------------------------------------------------------
-// Retention
-// ---------------------------------------------------------------------------
-
-/** UTC calendar day, e.g. 2026-08-22. */
 const dayBucket = (date) => date.toISOString().slice(0, 10);
-/** UTC month, e.g. 2026-08. */
 const monthBucket = (date) => date.toISOString().slice(0, 7);
 
-/**
- * ISO-8601 week bucket, e.g. 2026-W34.
- *
- * Computed rather than approximated by dividing epoch-milliseconds by 604800000, because
- * that puts the week boundary on a Thursday (the epoch was a Thursday) and produces weekly
- * buckets that no operator's calendar agrees with. ISO weeks start on Monday and belong to
- * the year containing their Thursday.
- */
+// ISO weeks start on Monday. Dividing epoch-milliseconds by 604800000 starts them on Thursday.
 export function weekBucket(date) {
   const shifted = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
-  // Sunday is 0 in JavaScript and 7 in ISO-8601.
   const isoWeekday = shifted.getUTCDay() === 0 ? 7 : shifted.getUTCDay();
   shifted.setUTCDate(shifted.getUTCDate() + 4 - isoWeekday);
   const yearStart = new Date(Date.UTC(shifted.getUTCFullYear(), 0, 1));
@@ -1277,52 +915,12 @@ export function weekBucket(date) {
 /**
  * Decides which backups the retention policy keeps, and why.
  *
- * Grandfather-father-son over UTC buckets: within each day, week and month that has any
- * backup, the NEWEST one is that bucket's representative, and the most recent `daily`,
- * `weekly` and `monthly` buckets are kept. A backup can be its day's, its week's and its
- * month's representative at once; it is kept once, with every reason recorded, which is what
- * makes `list` able to explain a decision to an operator.
+ * Grandfather-father-son over UTC buckets, applied per source database. The newest good backup of
+ * each source is never deleted, whatever the policy says, so an all-zero policy, a skewed clock or a
+ * corrupt newest file cannot remove the last recovery. Only good backups can represent a bucket.
  *
- * ## The rule that overrides the policy
- *
- * **The newest good backup is never deleted, whatever the policy says.** Not the newest
- * backup — the newest *good* one, meaning its manifest signature verified and every file it
- * names is present at the recorded size. Three ways the plain reading gets somebody hurt:
- *
- *  * `--daily 0 --weekly 0 --monthly 0` is a legal policy, and without this rule it deletes
- *    everything and leaves the system with no backups at all.
- *  * A clock skew, a timezone mistake or a machine that came back with the wrong date puts
- *    every bucket in the past, and every backup falls out of the window on one run.
- *  * The newest backup is corrupt. Deleting the newest *good* one because a broken newer
- *    file occupies today's bucket is precisely the moment retention destroys the recovery.
- *
- * Bucket representatives are chosen from good backups only, for the same reason: a corrupt
- * archive must not be able to hold a slot and evict the intact one beneath it. Broken
- * backups are still deletable — they are what `--apply` is for once an operator has looked
- * at them — but they can never displace something that works.
- *
- * ## The policy is applied per source database, and the defect that is for
- *
- * Every rule above says "the newest", and until this existed "the newest" meant the newest
- * file in the directory regardless of which database it was a copy of. Measured, with two
- * source databases in one archive directory and the shipped 7/4/6 policy:
- *
- *     ✓ keep    prl-poker_risk_lab_restored-20260825T183852Z   77.6 KiB
- *           newest good backup (never deleted), daily 2026-08-25, weekly 2026-W35, monthly 2026-08
- *     · would delete prl-poker_risk_lab-20260825T182844Z      149.8 MiB
- *           outside the 7/4/6 daily/weekly/monthly window
- *
- * The 149.8 MiB archive was the ONLY copy of a 944,297-row database, and the summary under
- * that plan still read "The newest good backup is never in the delete set, whatever the policy
- * says." It was true of the directory and false of every database in it. Two hosts writing to
- * one archive store — which §5.5 of docs/production/disaster-recovery.md effectively requires,
- * since the archives must not live only on the host being backed up — is enough, and a weekly
- * `prune --apply` then destroys one host's entire backup set on its first run.
- *
- * So each source database gets its own buckets and its own never-deleted newest good archive.
- * An archive whose manifest names no source groups under `null`, which is what a manifest this
- * script wrote before `source.database` existed would do — grouping it with the named ones
- * would be a guess, and the safe direction is a group of its own that keeps its own newest.
+ * Grouping by directory once planned the only copy of a 944,297-row database for deletion because
+ * another host's newer archive shared the directory. A manifest with no source groups under `null`.
  */
 export function selectForRetention(backups, policy) {
   const usable = backups
@@ -1359,8 +957,6 @@ export function selectForRetention(backups, policy) {
         const key = tier.bucket(new Date(backup.createdAtMs));
         if (!representatives.has(key)) representatives.set(key, backup);
       }
-      // Buckets are inserted newest-first because `usable` is sorted that way, so the first
-      // `limit` entries are the most recent ones.
       let kept = 0;
       for (const [key, backup] of representatives) {
         if (kept >= tier.limit) break;
@@ -1386,28 +982,12 @@ function reasonToDelete(backup, policy) {
   return `outside the ${policy.daily}/${policy.weekly}/${policy.monthly} daily/weekly/monthly window`;
 }
 
-// ---------------------------------------------------------------------------
-// Restore safety
-// ---------------------------------------------------------------------------
-
 /**
- * Every reason this restore must be refused, as a list rather than a boolean.
+ * Every reason this restore must be refused, as a list so an operator sees them all at once.
  *
- * A list because an operator who is refused for two reasons and fixes one should see the
- * second immediately, not on the next attempt. Pure, and exported, so the refusals have
- * tests that do not need a database.
- *
- * The three dangers are genuinely different and each gets its own acknowledgement:
- *
- *  1. **The target already exists.** Restoring into it means dropping it. `--drop-existing`.
- *  2. **The target IS the live database.** Every session, every hand and every lesson
- *     recorded since the backup is destroyed, and the API is holding connections to it.
- *     `--overwrite-live-database`, which is deliberately unmistakable and deliberately not
- *     implied by --drop-existing: the common case is a fat-fingered `--target` naming the
- *     developer's own database, and one flag protecting two very different mistakes means
- *     the person who wanted the first one gets the second for free.
- *  3. **NODE_ENV=production.** `--yes-i-am-restoring-production`, in addition to whichever
- *     of the above apply.
+ * An existing target needs `--drop-existing`. The live database needs `--overwrite-live-database`,
+ * which --drop-existing does not imply, because a mistyped `--target` is the common mistake.
+ * NODE_ENV=production also needs `--yes-i-am-restoring-production`.
  */
 export function assessRestoreSafety({
   target,
@@ -1451,10 +1031,6 @@ export function assessRestoreSafety({
   return refusals;
 }
 
-// ---------------------------------------------------------------------------
-// Output helpers
-// ---------------------------------------------------------------------------
-
 let quiet = false;
 const say = (line = '') => {
   if (!quiet) console.log(line);
@@ -1486,27 +1062,14 @@ const CAVEAT =
   '  works against the restored data: that is the drill in docs/production/backup-restore.md.\n' +
   '  There is no WAL archiving here, so the RPO is the schedule interval and nothing better.';
 
-// ---------------------------------------------------------------------------
-// create
-// ---------------------------------------------------------------------------
-
 async function ensureDirectory(directory) {
   await mkdir(directory, { recursive: true, mode: DIR_MODE });
-  // mkdir's mode is subject to the process umask, and an existing directory keeps whatever
-  // mode it already had. An explicit chmod is the only way to be sure the archives are not
-  // world-readable on a host with a permissive umask.
+  // mkdir's mode is subject to the umask and an existing directory keeps its mode.
   await chmod(directory, DIR_MODE);
 }
 
-/**
- * Writes one encrypted payload, streaming, to a `.partial` file that is renamed into place
- * only after the producing tool has exited 0.
- *
- * The rename is what stops a failed run leaving a file that looks like a backup. A dump
- * interrupted by a full disk or an OOM kill produces a perfectly well-formed prefix; without
- * the staging name it would sit in the directory, sort as the newest archive, and be the one
- * `prune` protects and `restore` reaches for by default.
- */
+// A `.partial` file renamed only after the tool exits 0, so an interrupted dump never sorts as the
+// newest archive.
 async function writeEncryptedPayload({ ctx, tool, toolArgs, payload, header, material, destination }) {
   const staging = `${destination}.partial`;
   const run = startTool(tool, toolArgs, ctx, { stdin: 'ignore' });
@@ -1537,14 +1100,10 @@ async function commandCreate(options, ctx, material, directory) {
   await ensureDirectory(directory.path);
 
   const serverVersion = await psqlScalar(ctx, ctx.connection.database, 'show server_version;\n');
-  // `pg_dump (PostgreSQL) 16.15 (Debian 16.15-1.pgdg12+2)` — take the first dotted number and
-  // nothing else. Splitting on whitespace and taking the last token yields "16.15-1.pgdg12+2)",
-  // trailing bracket included, which then parses as a major version by luck rather than by rule.
+  // Takes the first dotted number. The last token of `16.15 (Debian 16.15-1.pgdg12+2)` is not a version.
   const versionBanner = await captureTool('pg_dump', ['--version'], ctx, undefined, true);
   const dumpVersion = (/\d+(?:\.\d+)?/.exec(versionBanner) ?? ['unknown'])[0];
-  // pg_dump refuses a server newer than itself, and produces an archive an older pg_restore
-  // cannot read when it is newer. Checking the majors here turns that into a sentence now
-  // rather than an obscure failure in the middle of a nightly run.
+  // pg_dump refuses a newer server, and a newer pg_dump writes archives an older pg_restore cannot read.
   const serverMajor = Number.parseInt(serverVersion, 10);
   const dumpMajor = Number.parseInt(dumpVersion ?? '0', 10);
   if (!Number.isNaN(serverMajor) && !Number.isNaN(dumpMajor) && dumpMajor < serverMajor) {
@@ -1566,10 +1125,8 @@ async function commandCreate(options, ctx, material, directory) {
     await writeEncryptedPayload({
       ctx,
       tool: 'pg_dump',
-      // --format=custom for selective restore and compression. NO --no-owner and NO
-      // --no-privileges: docs/RUNBOOK.md §11.4 measured what that costs — a restore that
-      // exits 0 and hands the runtime role ownership of every table it serves, inverting the
-      // entire least-privilege posture in a database that has every row.
+      // No --no-owner and no --no-privileges. RUNBOOK §11.4 measured a restore that then handed the runtime
+      // role ownership of every table.
       toolArgs: ['--format=custom', '--dbname', ctx.connection.database],
       payload: 'database',
       header: headerFor('database'),
@@ -1588,9 +1145,7 @@ async function commandCreate(options, ctx, material, directory) {
       await writeEncryptedPayload({
         ctx,
         tool: 'pg_dumpall',
-        // --globals-only: roles, role memberships and tablespaces. NOT in a single-database
-        // pg_dump, which is why a restore onto a fresh cluster fails with "role prl_migrator
-        // does not exist" without it.
+        // Roles and memberships are not in a single-database dump, so a fresh cluster needs this.
         toolArgs: ['--globals-only', '--database', ctx.connection.database],
         payload: 'globals',
         header: headerFor('globals'),
@@ -1632,8 +1187,7 @@ async function commandCreate(options, ctx, material, directory) {
       kdf: 'hkdf-sha256',
       salt: salt.toString('base64'),
       chunkBytes: CHUNK_BYTES,
-      // Reserved for an envelope scheme that does not exist yet: a KMS-wrapped data key
-      // would name the root key here. Null is honest about there being one static key today.
+      // Reserved for a KMS-wrapped data key. Null means one static key.
       keyId: null,
     },
     files: files.map((file) => ({
@@ -1664,30 +1218,14 @@ async function commandCreate(options, ctx, material, directory) {
   return 0;
 }
 
-// ---------------------------------------------------------------------------
-// verify
-// ---------------------------------------------------------------------------
-
 /**
- * Four layers, each supporting a strictly different claim. The distinction is the entire
- * reason this command exists rather than a `sha256sum -c`:
+ * Four layers, each supporting a different claim.
  *
- *   1. **Manifest signature.** The checksums below are worth checking. Without this, an
- *      attacker who can write to the backup directory rewrites both the archive and the
- *      recorded checksum and every layer under this one agrees with them.
- *   2. **Ciphertext checksum.** The bytes on disk are the bytes that were written. This is
- *      the bit-rot check, and it is the ONLY thing a checksum proves. It does not need the
- *      key, so a monitoring job can run it without one.
- *   3. **Decryption, frame by frame, to the terminator.** Every frame authenticates under the
- *      real key, in its recorded position, and the stream ends where it said it would. This
- *      is what catches truncation — which a checksum, computed over whatever is left, never
- *      will — and it proves the plaintext digest recorded at dump time.
- *   4. **`pg_restore --list`, and with --deep an actual restore.** Layer 3 proves we
- *      recovered the bytes pg_dump produced. It does not prove pg_dump produced a usable
- *      archive: a dump killed by the OOM reaper mid-write is a valid prefix, and it will
- *      decrypt perfectly. --list makes pg_restore parse the table of contents; --deep makes
- *      it execute the whole thing into a scratch database and compares the row census.
- *      Only layer 4 with --deep supports the sentence "this archive is restorable".
+ *   1. Manifest signature, so the recorded checksums can be trusted.
+ *   2. Ciphertext checksum, the keyless bit-rot check.
+ *   3. Decryption to the terminator, which catches truncation and proves the plaintext digest.
+ *   4. `pg_restore --list`, and with --deep a scratch restore plus a census comparison. Only --deep
+ *      supports "this archive is restorable", since a dump killed mid-write decrypts perfectly.
  */
 async function verifyArchive(backup, { ctx, material, directory, deep, target }) {
   const results = [];
@@ -1770,8 +1308,6 @@ async function verifyArchive(backup, { ctx, material, directory, deep, target })
     return results;
   }
 
-  // `bare`: --list parses an archive and connects to nothing, so it must not be handed a
-  // --host or a --username it would have to have been configured with.
   const listRun = startTool('pg_restore', ['--list'], ctx, { stdin: 'pipe', bare: true });
   const listChunks = [];
   listRun.stdout.on('data', (chunk) => listChunks.push(chunk));
@@ -1783,18 +1319,14 @@ async function verifyArchive(backup, { ctx, material, directory, deep, target })
   }
   const toc = Buffer.concat(listChunks).toString('utf8');
   const entries = toc.split('\n').filter((line) => line !== '' && !line.startsWith(';')).length;
-  // `\bACL\b`, not `'ACL - '`: pg_restore --list writes the schema grant as
-  // `ACL - SCHEMA prl prl_migrator` but every table grant as `ACL prl TABLE users prl_migrator`,
-  // with no dash. Matching the dashed form found 2 of the 16 entries in this dump, which is
-  // 2 more than zero and would therefore have passed the check below on a dump that had lost
-  // every table grant.
+  // `\bACL\b`, because table grants print as `ACL prl TABLE ...` with no dash. The dashed form matched
+  // 2 of 16 entries and would pass a dump that lost every table grant.
   const acl = toc.split('\n').filter((line) => /\bACL\b/.test(line)).length;
   record(
     '4',
     entries > 0,
     entries > 0 ? `pg_restore parsed ${entries} table-of-contents entries` : 'pg_restore found no entries',
-    // The ACL count is the cheap detector for the §11.4 trap: a dump taken with
-    // --no-privileges parses perfectly and restores a database the API cannot read.
+    // A dump taken with --no-privileges restores a database the API cannot read (RUNBOOK §11.4).
     `${acl} ACL entries — a dump with 0 of these restores a database prl_app has no rights in`,
   );
   if (entries === 0) return results;
@@ -1828,23 +1360,14 @@ async function verifyArchive(backup, { ctx, material, directory, deep, target })
   }
   const startedAt = Date.now();
   let restored = null;
-  /** null when the scratch database is gone; the reason it is still there when it is not. */
   let dropFailure = null;
   try {
     await createDatabase(ctx, scratch);
     await restoreInto(ctx, scratch, join(directory, dumpFile.name), material);
     restored = await census(ctx, scratch);
   } finally {
-    // Always. A verification run that leaves a copy of the production database lying around
-    // on the cluster has created the exact exposure the encryption exists to prevent.
-    //
-    // The failure is captured rather than printed here. `cross()` in THIS file is a pure
-    // printer (see the output helpers) — unlike the same-named helper in staging.mjs, it feeds
-    // no verdict — so the previous `.catch(cross)` wrote a red line to stderr and let the
-    // command go on to print PASS, exit 0, and claim in so many words that it had "restored
-    // into a scratch database and dropped it". A plaintext copy of the database surviving on
-    // the cluster is the one outcome this command exists to prevent, so it is a verdict, and
-    // the verdict is recorded through `record` below like every other layer-4 claim.
+    // Always dropped. A failed drop leaves a plaintext copy on the cluster, so it is a recorded verdict.
+    // `cross()` here only prints, and the old `.catch(cross)` let the command print PASS.
     await dropDatabase(ctx, scratch).catch((err) => {
       dropFailure = err.message;
     });
@@ -1861,16 +1384,7 @@ async function verifyArchive(backup, { ctx, material, directory, deep, target })
   return results;
 }
 
-/**
- * The two claims a `--deep` verification makes, as data.
- *
- * Split into two records rather than folded into one line because they are two different
- * statements — "the restore carried the rows" and "no plaintext copy is left on the cluster" —
- * and an operator reading the output needs to know which of them failed. Pure and exported so
- * `scripts/backup.test.mjs` can assert the property that actually regressed: that no message
- * this function can produce claims a drop that did not happen, and that a failed drop is never
- * `ok`.
- */
+// Two records, so a message can never claim a drop that failed and a failed drop is never `ok`.
 export function deepVerifyResults({ comparison, dropFailure, scratch, elapsedMs }) {
   const dropped = dropFailure === null || dropFailure === undefined;
   return [
@@ -1896,15 +1410,8 @@ export function deepVerifyResults({ comparison, dropFailure, scratch, elapsedMs 
   ];
 }
 
-/**
- * Compares a recorded census against a restored one.
- *
- * The hard rule is deliberately narrow: a table the census recorded as non-empty must not
- * come back empty. That is the failure this can actually detect — schema restored, data not.
- * Any other delta is reported and is NOT a failure, because the census and the dump are two
- * different snapshots of a database that may have been taking writes (see `census`), and a
- * check that fires on ordinary drift is a check people learn to ignore.
- */
+// Fails only when a table recorded non-empty comes back empty. Other deltas are reported, because the
+// census and the dump are different snapshots.
 export function compareCensus(recorded, restored) {
   if (recorded === undefined || recorded === null) {
     return { ok: true, summary: 'no census recorded in this manifest; nothing to compare' };
@@ -1963,10 +1470,6 @@ async function commandVerify(options, ctx, material, directory) {
   return failed === 0 ? 0 : 1;
 }
 
-// ---------------------------------------------------------------------------
-// restore
-// ---------------------------------------------------------------------------
-
 async function databaseExists(ctx, name) {
   const out = await captureTool(
     'psql',
@@ -1978,9 +1481,7 @@ async function databaseExists(ctx, name) {
 }
 
 async function createDatabase(ctx, name) {
-  // psql's `:"name"` quotes the value as an SQL identifier. Variable interpolation only
-  // happens for input read from stdin — psql does NOT interpolate into -c — which is why
-  // every statement here is piped rather than passed as an argument.
+  // psql interpolates `:"name"` only for stdin input, not -c, so every statement is piped.
   await captureTool(
     'psql',
     psqlArgs(ctx.maintenanceDatabase, ['--set', `name=${name}`]),
@@ -1994,9 +1495,7 @@ async function dropDatabase(ctx, name) {
     'psql',
     psqlArgs(ctx.maintenanceDatabase, ['--set', `name=${name}`]),
     ctx,
-    // WITH (FORCE) terminates other sessions. Without it a single idle connection — a
-    // developer's psql, a pooler that has not noticed — makes the drop fail, and a restore
-    // that half-happened is worse than one that refused.
+    // WITH (FORCE) ends other sessions, so one idle connection cannot fail the drop.
     'DROP DATABASE IF EXISTS :"name" WITH (FORCE);\n',
   );
 }
@@ -2007,12 +1506,9 @@ async function restoreInto(ctx, database, encryptedPath, material) {
     [
       '--dbname',
       database,
-      // --exit-on-error, always. docs/RUNBOOK.md §11.4 measured the alternative: pg_restore
-      // carries on past every rejected statement, finishes with "errors ignored on restore:
-      // 20", and leaves a database that has every row and the wrong owner on every relation.
+      // RUNBOOK §11.4 measured the alternative, "errors ignored on restore: 20" and the wrong owner.
       '--exit-on-error',
-      // Single transaction: the database is either restored or untouched. It also makes
-      // --exit-on-error actually mean something, since a rollback undoes the partial work.
+      // Restored or untouched, and a rollback gives --exit-on-error its meaning.
       '--single-transaction',
     ],
     ctx,
@@ -2024,35 +1520,10 @@ async function restoreInto(ctx, database, encryptedPath, material) {
 /**
  * Removes the `GRANTED BY <role>` clause from role-membership grants.
  *
- * ## The defect this exists for
- *
- * PostgreSQL 16 records a grantor for every role membership, and `pg_dumpall --globals-only`
- * emits it. This cluster's globals dump ends with, verbatim:
- *
- *     GRANT prl_app TO prl_api WITH INHERIT TRUE GRANTED BY poker;
- *     GRANT prl_migrator TO prl_deployer WITH INHERIT TRUE GRANTED BY poker;
- *
- * `poker` is the SOURCE cluster's bootstrap superuser, and on a fresh cluster the roles were
- * created by the NEW cluster's superuser, so nobody holds the admin option as `poker`. Measured
- * against a virgin `postgres:16-bookworm`, running the shipped `restore --with-globals`:
- *
- *     ✗ psql exited 3
- *         ERROR:  permission denied to grant privileges as role "poker"
- *         DETAIL:  The grantor must have the ADMIN option on role "prl_app".
- *
- * Being a superuser does not help: the same statement fails as `postgres`, and it fails again
- * after `SET ROLE poker` even though the dump has just made `poker` a superuser too. So the
- * one command docs/production/disaster-recovery.md §5.4 offers for "a genuinely fresh cluster"
- * — the RTO-defining path in §5.5 — could not have worked anywhere, and it left the cluster
- * with five roles and no memberships, which is `prl_api` able to log in and read nothing.
- *
- * Dropping the clause makes the restoring superuser the grantor. That is a real difference and
- * it is the right one: the grantor is a fact about how the OLD cluster was administered, and
- * `pg_auth_members.grantor` on the new cluster should name whoever actually rebuilt it. Every
- * membership is restored; nothing is widened.
- *
- * Applied only to lines that begin a GRANT, so a password or a role name that happens to
- * contain the words cannot be rewritten.
+ * PostgreSQL 16 dumps the source cluster's grantor, `poker`, and a fresh cluster refuses it even
+ * for a superuser. Measured on postgres:16-bookworm, `restore --with-globals` failed with
+ * `permission denied to grant privileges as role "poker"` and left five roles with no memberships.
+ * Without the clause the restoring superuser is the grantor. Only lines that begin a GRANT change.
  */
 export function neutraliseGrantedBy(sqlText) {
   let stripped = 0;
@@ -2068,13 +1539,10 @@ export function neutraliseGrantedBy(sqlText) {
   return { sql: out, stripped };
 }
 
-/** A globals dump is roles and nothing else; anything near this size is not one. */
 const MAX_GLOBALS_BYTES = 8 * 1024 * 1024;
 
 async function applyGlobals(ctx, encryptedPath, material) {
-  // Buffered rather than streamed, unlike the database payload. A globals dump is kilobytes
-  // (1.9 KiB for this cluster), it has to be rewritten before psql sees it, and a rewrite that
-  // has to work across frame boundaries would be a second thing to get wrong.
+  // Buffered, because a globals dump is kilobytes (1.9 KiB here) and must be rewritten before psql.
   const parts = [];
   let bytes = 0;
   for await (const chunk of decryptFrames(createReadStream(encryptedPath), { material })) {
@@ -2095,9 +1563,7 @@ async function applyGlobals(ctx, encryptedPath, material) {
         'one on any cluster that did not create the role — see `neutraliseGrantedBy`',
     );
   }
-  // --single-transaction, for the same reason `restoreInto` has it: without it a refusal partway
-  // through leaves the cluster with some of the roles, some of the memberships and no way to
-  // tell which. That was the observed state after the failure above.
+  // --single-transaction, or a failure leaves some roles and some memberships.
   const run = startTool('psql', psqlArgs(ctx.maintenanceDatabase, ['--single-transaction']), ctx, {
     stdin: 'pipe',
   });
@@ -2119,8 +1585,6 @@ async function commandRestore(options, ctx, material, directory) {
     );
   }
 
-  // The existence probe runs before the safety assessment so the refusal can name the real
-  // situation rather than "it might exist".
   const targetExists =
     options.target !== null && isSafeDatabaseName(options.target)
       ? await databaseExists(ctx, options.target)
@@ -2186,10 +1650,6 @@ async function commandRestore(options, ctx, material, directory) {
   return comparison.ok ? 0 : 1;
 }
 
-// ---------------------------------------------------------------------------
-// list and prune
-// ---------------------------------------------------------------------------
-
 async function commandList(options, _ctx, material, directory) {
   say(bold('\nbackup list'));
   say(dim(`  directory ${directory.path}  (from ${directory.source})\n`));
@@ -2200,8 +1660,7 @@ async function commandList(options, _ctx, material, directory) {
 
   for (const backup of inventory) {
     const reasons = keptIds.get(backup.id);
-    // The source database is printed on every line because retention and `restore`'s default
-    // are now per-database: a reader who cannot see the grouping cannot check the decision.
+    // Retention and restore are per database, so each line shows its source.
     const label = `${backup.id}  ${humanBytes(backup.bytes)}  ${dim(
       `of ${sourceDatabaseOf(backup) ?? '<unnamed>'}`,
     )}`;
@@ -2250,21 +1709,8 @@ async function commandPrune(options, _ctx, material, directory) {
 
   for (const backup of plan.keep) tick(`keep    ${backup.id}`, backup.reasons.join(', '));
 
-  // Every name in the WHOLE delete set is checked before a single file is unlinked. See
-  // `isPlainArchiveFileName`: a payload name that is not a basename escapes the archive
-  // directory through `join`, and `prune --apply` used to unlink whatever it landed on and
-  // still print PASS. Two properties matter and both are deliberate:
-  //
-  //   * it is a hard failure of the command, not a skipped file. The archives in the delete set
-  //     are exactly the ones whose signature did not have to verify, so a manifest that names a
-  //     path is evidence somebody wrote to the archive directory. That is an incident, and an
-  //     incident must not exit 0 with a tidy summary above it.
-  //   * it happens before any deletion, so the operator investigating is looking at the
-  //     directory as the attacker left it rather than at a directory this script half-pruned.
-  //
-  // Checked in plan mode too, and failing there as well. Plan mode deletes nothing, so it is not
-  // dangerous — but it is the run an operator does FIRST, and a compromised archive directory
-  // that exits 0 with a tidy plan is the worst possible moment to say nothing.
+  // Every name in the whole delete set is checked before any unlink, in plan mode too. A path name is
+  // evidence of tampering, so it fails the command and leaves the directory as the attacker left it.
   const offences = unsafeArchiveFileNames(plan.delete);
   if (offences.length > 0) {
     for (const offence of offences) {
@@ -2290,10 +1736,7 @@ async function commandPrune(options, _ctx, material, directory) {
     if (options.apply) {
       const names = (backup.manifest?.files ?? []).map((file) => file.name);
       for (const name of names) {
-        // Belt and braces to the gate above, and deliberately a throw rather than a skip: if
-        // that gate is ever removed or moved, this line must stop the deletion rather than
-        // quietly resume unlinking whatever `join` produces. `BackupError` is caught at the
-        // entry point and exits 1.
+        // A throw, not a skip, in case the gate above ever moves.
         if (!isPlainArchiveFileName(name)) {
           throw new BackupError(
             `refusing to delete ${String(name)} named by ${backup.manifestPath}`,
@@ -2315,16 +1758,13 @@ async function commandPrune(options, _ctx, material, directory) {
   say(`    kept        ${plan.keep.length} (${survivors} good)`);
   say(`    ${options.apply ? 'deleted    ' : 'deletable  '} ${plan.delete.length}`);
   say(`    freed       ${humanBytes(plan.delete.reduce((sum, backup) => sum + backup.bytes, 0))}`);
-  // A prune that ends with no good backup left is a failure whatever the policy said, and
-  // the only way to reach it is an archive directory that had none to begin with.
   if (inventory.length > 0 && survivors === 0) {
     cross('no good backup survives this prune', 'the directory contained none — nothing was protected');
     say(`\n  ${red(bold('FAIL'))} prune\n`);
     return 1;
   }
   say(`\n  ${green(bold('PASS'))} ${options.apply ? 'prune applied' : 'prune plan (nothing deleted)'}`);
-  // "of every source database" is the load-bearing half. Without it this line was true of the
-  // directory and false of each database in it — see `selectForRetention`.
+  // Per source database, see `selectForRetention`.
   say(
     dim(
       '\n  The newest good backup OF EVERY SOURCE DATABASE is never in the delete set, whatever\n' +
@@ -2350,10 +1790,6 @@ function commandKeygen() {
   return 0;
 }
 
-// ---------------------------------------------------------------------------
-// Entry point
-// ---------------------------------------------------------------------------
-
 async function run(options) {
   quiet = options.quiet;
   if (options.command === 'keygen') return commandKeygen();
@@ -2361,12 +1797,8 @@ async function run(options) {
   const directory = resolveDirectory(process.env, options.dir);
   const material = await resolveKey(process.env, options.keyFile);
 
-  // Which commands genuinely need somewhere to connect, and no more than that. `list` and
-  // `prune` never touch a database. `verify` without --deep does not either: layers 1-3 are
-  // file arithmetic, and `pg_restore --list` reads an archive on stdin without opening a
-  // connection. Demanding DATABASE_URL for those would make the ordinary case — an operator
-  // inspecting an archive directory on a machine that is not the database host, which is
-  // where offsite copies live — impossible.
+  // `list`, `prune` and `verify` without --deep never connect, so an offsite archive can be inspected
+  // without DATABASE_URL.
   const needsConnection =
     options.command === 'create' ||
     options.command === 'restore' ||
@@ -2384,19 +1816,11 @@ async function run(options) {
   if (options.command === 'restore') return commandRestore(options, ctx, material, directory);
   if (options.command === 'list') return commandList(options, ctx, material, directory);
   if (options.command === 'prune') return commandPrune(options, ctx, material, directory);
-  // No `else` fallthrough, for the same reason migrate.mjs has none: adding a name to
-  // COMMANDS without a branch here must fail loudly rather than run whichever command
-  // happened to be last.
+  // No fallthrough, so a new command without a branch fails loudly.
   throw new BackupError(`command ${options.command} has no implementation`);
 }
 
-/**
- * True when this file was started from the command line rather than imported.
- *
- * scripts/backup.test.mjs imports the pure halves — the retention selector, the container
- * format, the refusal assessment — and without this guard the import would run `main()` and
- * try to reach a database.
- */
+// Tests import the pure halves, and this keeps the import from running `main()`.
 function startedFromCommandLine() {
   const entry = process.argv[1];
   if (entry === undefined) return false;

@@ -1,62 +1,14 @@
 #!/usr/bin/env node
 /**
- * Gate: every contrast ratio the design system CLAIMS is measured here, in both themes.
+ * `pnpm run design:contrast`: recomputes every contrast ratio the design system claims, in both
+ * themes, with no dependencies. The WCAG 2.x formulas reproduce every ratio in the design doc
+ * (14.00, 9.94, 7.07, ...).
  *
- * `docs/frontend-design-system.md` asserts a table of ratios, and tokens.css repeats several of
- * them in comments ("worst 6.10:1", "9.39:1", "AA body"). A number in a comment is a number
- * nobody checks. This script recomputes all of them from the stylesheets themselves, so the doc
- * cannot drift from the tokens and the tokens cannot drift from WCAG.
- *
- * ## Why it is written this way
- *
- * Dependency-free, standard library only. A contrast checker that pulls in a colour library is a
- * contrast checker whose correctness depends on a package nobody in this repo has read, and the
- * whole formula is fifteen lines. It is implemented from the WCAG 2.x definitions of relative
- * luminance and contrast ratio, and it reproduces every ratio printed in the design doc exactly
- * (14.00, 9.94, 7.07, 4.99, 9.39, 2.07, 4.34, 1.44, 12.77, ...), which is the evidence that the
- * implementation is right rather than merely plausible.
- *
- * ## Two passes, and why the distinction matters
- *
- *   PASS 1  THE TOKEN LAYER - tokens.css alone. This is what the design doc claims, so a failure
- *           here is a defect in the token set, independent of what any component does with it.
- *   PASS 2  THE RENDERED LAYER - tokens.css plus the derived pairings and light-theme repairs
- *           declared at the top of base.css. This is what a browser actually paints, so a failure
- *           here is a defect a reader would meet.
- *
- * Both are fatal. Reporting them separately is what makes the output actionable: "the light theme
- * of tokens.css has four bad pairings and the component layer already routes around all of them"
- * is a different message from "the UI is broken", and a single pass/fail count cannot tell them
- * apart. When the token layer is fixed, the two passes converge and the repairs in base.css can
- * be deleted - this script will say so.
- *
- * ## What is asserted
- *
- *   - body text >= 4.5:1 on every surface                            (WCAG 1.4.3, AA)
- *   - meaningful borders and focus rings >= 3:1 on every surface     (WCAG 1.4.11)
- *   - --prl-text-on-accent on every accent step used as a FILL >= 4.5:1
- *   - each of the four suits >= 4.5:1 on both card faces
- *   - every chart series >= 3:1 on every surface                     (WCAG 1.4.11)
- *   - a control on the ink-on-accent rule: of the only two candidates for text on an accent fill,
- *     near-black and white, `--prl-text-on-accent` must BE the better one. That is the rule the
- *     design doc writes as "never white on accent", expressed so it cannot go stale when the
- *     palette moves - and it has already moved once: the light theme inverts the pairing.
- *   - GLASS: every translucent material tint, composited over BOTH bounding backdrops (black and
- *     white), asserted on the WORSE of the two. See section 3b - this is the part that most
- *     design systems stop measuring the moment they adopt translucency, because a translucent
- *     surface has no contrast ratio until something bounds what can be behind it.
- *   - THE TWO-TONE FOCUS INDICATOR, solved in closed form over every backdrop luminance in
- *     [0, 1] rather than sampled. A single-colour ring on a floating pane is only as visible as
- *     its contrast with a backdrop the design does not own; `accent-300` measures 1.52:1 against
- *     white. The assertion is that the ring's and the halo's failure intervals do not intersect.
- *   - the page wash, as a derived surface: the brightest stop of `--prl-page-wash` composited
- *     over the page ground, then measured like any other content surface.
- *
- * Disabled text is reported but not asserted: WCAG explicitly exempts inactive controls, and
- * asserting it would force a disabled label to be indistinguishable from an enabled one.
- *
- * Usage:  node scripts/check-contrast.mjs        (also `pnpm run design:contrast`)
- * Exit:   0 if every assertion in both passes holds, 1 otherwise.
+ * Pass 1 reads tokens.css alone (what the doc claims). Pass 2 adds base.css's derived pairings and
+ * light-theme repairs (what a browser paints). Pass 3 composites every text element's real
+ * background in Chrome. Glass tints are composited over black and white and asserted on the worse.
+ * The two-tone focus ring is solved in closed form over every backdrop luminance. Disabled text is
+ * reported but not asserted (WCAG exempts inactive controls). Exits 1 if any pass fails.
  */
 
 import { spawn } from 'node:child_process';
@@ -81,28 +33,19 @@ const yellow = (s) => paint('33', s);
 const dim = (s) => paint('2', s);
 const bold = (s) => paint('1', s);
 
-/* ==========================================================================================
-   1. COLOUR MATHS - WCAG 2.x, implemented from the definitions
-   ========================================================================================== */
-
 /**
- * sRGB channel to linear light.
- *
- * The threshold is 0.04045, matching the sRGB standard and the current WCAG text. WCAG 2.0 wrote
- * 0.03928 in one place; the two branches of the function agree to eleven decimal places either
- * side of the boundary, so the choice cannot change a reported ratio.
+ * The 0.04045 threshold matches sRGB. WCAG 2.0's 0.03928 agrees to eleven decimal places either side
+ * of the boundary, so it cannot change a ratio.
  */
 function toLinear(channel8Bit) {
   const c = channel8Bit / 255;
   return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
 }
 
-/** WCAG relative luminance: the ITU-R BT.709 luma coefficients applied to linear light. */
 function relativeLuminance({ r, g, b }) {
   return 0.2126 * toLinear(r) + 0.7152 * toLinear(g) + 0.0722 * toLinear(b);
 }
 
-/** WCAG contrast ratio: (lighter + 0.05) / (darker + 0.05). Always >= 1. */
 function contrastRatio(foreground, background) {
   const a = relativeLuminance(foreground);
   const b = relativeLuminance(background);
@@ -111,14 +54,7 @@ function contrastRatio(foreground, background) {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
-/**
- * Alpha compositing, source-over, in sRGB space.
- *
- * Needed because two tokens (`--prl-scrim`, `--prl-veil-*`) are translucent, and "the contrast of
- * a translucent colour" is meaningless until it is composited over something. Compositing in
- * gamma-encoded sRGB rather than linear light is deliberate: it is what a browser does, and the
- * point of this script is to predict the browser.
- */
+/** Source-over in gamma-encoded sRGB, because that is what a browser does. */
 function composite(source, backdrop) {
   if (source.a >= 1) return source;
   const mix = (s, b) => Math.round(s * source.a + b * (1 - source.a));
@@ -129,8 +65,7 @@ const HEX_SHORT = /^#([\da-f])([\da-f])([\da-f])([\da-f])?$/i;
 const HEX_LONG = /^#([\da-f]{2})([\da-f]{2})([\da-f]{2})([\da-f]{2})?$/i;
 const RGB_FN = /^rgba?\(([^)]+)\)$/i;
 
-/** Parses the colour syntaxes tokens.css actually uses. Returns null for anything else - a
-    system colour keyword, a font stack, a duration - so callers can skip non-colours. */
+/** Returns null for anything that is not a colour, so callers can skip it. */
 function parseColor(value) {
   const text = value.trim().toLowerCase();
   if (text === 'transparent') return { r: 0, g: 0, b: 0, a: 0 };
@@ -159,7 +94,6 @@ function parseColor(value) {
 
   const fn = RGB_FN.exec(text);
   if (fn) {
-    // Both the legacy comma syntax and the modern space-with-slash syntax appear in the wild.
     const [channels, alpha] = fn[1].split('/');
     const parts = channels
       .trim()
@@ -187,19 +121,9 @@ function parseColor(value) {
   return null;
 }
 
-/* ==========================================================================================
-   2. A VERY SMALL CSS DECLARATION SCANNER
-   ==========================================================================================
-
-   Not a CSS parser, and it does not need to be. It needs to answer one question: for each
-   `--prl-*` declaration, which selector scope was it in? So it tracks brace depth and keeps the
-   text before each `{` as the scope, which is enough for the three shapes these files use:
-   `:root { }`, `:root[data-theme="light"] { }` and `@media (...) { :root... { } }`.
-
-   Custom property VALUES cannot contain `{`, `}` or `;` in these files, so a character scan is
-   safe. Comments are stripped first because a commented-out token would otherwise be read as a
-   real one - which is exactly the kind of quiet wrongness a gate must not have.
-   ========================================================================================== */
+/* A brace-depth scanner, not a CSS parser. It records the selector scope of each `--prl-*`
+   declaration. Values here never contain `{`, `}` or `;`. Comments are stripped first so a
+   commented-out token is not read. */
 
 function stripComments(css) {
   return css.replace(/\/\*[\s\S]*?\*\//g, '');
@@ -235,13 +159,8 @@ function scanDeclarations(css) {
 }
 
 /**
- * Which theme a scope belongs to.
- *
- * `dark` is the bare `:root`, because dark is the designed default and the light theme is
- * expressed as overrides. The two light scopes - the `prefers-color-scheme` media query and the
- * explicit `[data-theme="light"]` selector - are tracked separately so they can be compared: they
- * are meant to be identical, and if they drift the app renders differently depending on how the
- * reader chose their theme. That is a bug this gate can catch for free.
+ * `dark` is the bare `:root`. The two light scopes are kept apart so drift between the media query
+ * and `[data-theme="light"]` is caught.
  */
 function classifyScope(scope) {
   const inner = scope.at(-1) ?? '';
@@ -253,8 +172,7 @@ function classifyScope(scope) {
   return null;
 }
 
-/** Builds `{ dark, light }` token maps from a list of stylesheets, later files overriding
-    earlier ones exactly as the cascade would. Also returns the two light scopes for comparison. */
+/** Later files override earlier ones, as the cascade does. Also returns the two light scopes. */
 function buildThemes(files) {
   const dark = new Map();
   const lightMedia = new Map();
@@ -274,7 +192,6 @@ function buildThemes(files) {
 
 const VAR_REF = /^var\(\s*(--[\w-]+)\s*(?:,([\s\S]*))?\)$/;
 
-/** Resolves a token to a literal value, following `var()` chains and their fallbacks. */
 function resolveToken(name, map, seen = new Set()) {
   if (seen.has(name)) return null;
   seen.add(name);
@@ -287,15 +204,8 @@ function resolveToken(name, map, seen = new Set()) {
   return ref[2] === undefined ? null : ref[2].trim();
 }
 
-/* ==========================================================================================
-   3. THE PAIRINGS
-   ==========================================================================================
-
-   Surfaces are split into two groups because a token's permitted backgrounds are part of its
-   definition. `hover` and `active` only ever sit behind an interactive control's own label, so
-   the tokens asserted against them are the ones a control may use; every other text token is
-   asserted against the surfaces that hold content.
-   ========================================================================================== */
+/* `hover` and `active` only sit behind a control's own label, so they are asserted against control
+   tokens. Every other text token is asserted against the content surfaces. */
 
 const CONTENT_SURFACES = [
   '--prl-surface-page',
@@ -303,9 +213,7 @@ const CONTENT_SURFACES = [
   '--prl-surface-panel',
   '--prl-surface-inset',
   '--prl-surface-table',
-  // Derived, not declared: the page ground with the brightest stop of `--prl-page-wash`
-  // composited onto it. See DERIVED SURFACES below - the wash is a gradient, so the only
-  // honest way to assert it is to measure its worst stop as if it covered the whole page.
+  // The brightest page-wash stop over the ground. See `deriveSurfaces`.
   '--prl-surface-wash',
 ];
 
@@ -315,22 +223,13 @@ const ALL_SURFACES = [...CONTENT_SURFACES, ...INTERACTION_SURFACES];
 const AA_TEXT = 4.5;
 const AA_NON_TEXT = 3;
 
-/**
- * Accent steps used as a FILL behind `--prl-text-on-accent`.
- *
- * 200 to 500 are the bright end of the ramp - the steps a highlighter-like fill comes from. 600
- * and below are border and shadow-adjacent steps that never carry text, so asserting text on them
- * would be asserting a pairing the design forbids. The whole ramp is printed either way, with
- * each step marked fill-eligible or not, because that table is the thing a reader needs when they
- * are about to pick an accent for a button.
- */
+/** 200 to 500 carry text. 600 and below never do, so they are printed but not asserted. */
 const ACCENT_FILL_STEPS = [
   '--prl-accent-200',
   '--prl-accent-300',
   '--prl-accent-400',
   '--prl-accent-500',
-  // Declared in base.css, so it is absent from pass 1 and prints as `-` there. That is the
-  // point: pass 1 is the token layer exactly as tokens.css ships it.
+  // Declared in base.css, so it prints as `-` in pass 1.
   '--prl-accent-fill',
 ];
 
@@ -403,9 +302,7 @@ const GROUPS = [
   },
 ];
 
-/** Reported, never asserted. Disabled text is exempt from 1.4.3 (inactive user interface
-    components), and a decorative hairline is exempt from 1.4.11 by definition - both are here so
-    that "exempt" is a measured claim rather than an assumption. */
+/** Reported, never asserted. Disabled text and decorative hairlines are exempt. */
 const INFORMATIONAL = [
   {
     id: 'exempt',
@@ -416,28 +313,9 @@ const INFORMATIONAL = [
   },
 ];
 
-/* ==========================================================================================
-   3b. GLASS - THE PART THAT CANNOT BE EXPRESSED AS A PAIRING
-   ==========================================================================================
-
-   A translucent surface has no contrast ratio. It has a RANGE of them, one per backdrop, and
-   the range is unbounded until something bounds it. That is the whole difficulty with glass,
-   and the reason most design systems that adopt it quietly stop measuring.
-
-   It is bounded here by construction rather than by convention: no display paints outside
-   [#000000, #ffffff], so every glass tint is composited over BOTH extremes and the WORSE of
-   the two results is the ratio this system claims. A pairing that holds at both holds over a
-   playing-card face, an accent fill, a chart, a photograph, and over whatever is added next
-   year - without anyone having to remember a rule about where glass may float.
-
-   The two extremes are read from the stylesheet (`--prl-glass-backdrop-min` / `-max`) rather
-   than hard-coded here, so the claim lives with the tokens.
-
-   Which extreme binds FLIPS with the theme, which is the detail that makes this worth
-   automating: dark theme paints light text on a dark tint, so its enemy is a bright backdrop
-   lifting the composite; light theme paints dark text on a light tint, so its enemy is a dark
-   backdrop pulling it down. Measuring one extreme would pass one theme and miss the other.
-   ========================================================================================== */
+/* Glass has no single ratio. Every tint is composited over the bounding backdrops
+   (`--prl-glass-backdrop-min`/`-max`, black and white) and the worse result is asserted. Which
+   extreme binds flips with the theme. */
 
 const GLASS_LEVELS = [
   { tint: '--prl-glass-floating', title: 'L3 floating  - pills, toolbars, chips, action bar' },
@@ -448,16 +326,8 @@ const GLASS_LEVELS = [
 ];
 
 /**
- * Every text token a component may put on glass - which is the WHOLE content ramp, including
- * `--prl-text-faint`.
- *
- * That was not the plan. `faint` was excluded on the reasoning that it is the dimmest step and
- * has no headroom for a backdrop it does not control, and at the first tint values it did fail:
- * 4.00:1 over the bright extreme. The tints then had to get more opaque for an unrelated reason
- * (`--prl-line-strong` on a hovered pane), and the negative control below reported that the
- * exclusion had stopped being true. It is asserted now instead of documented, which is the
- * stronger of the two: at 4.55:1 worst it has the least room of anything here, so it is the row
- * that will notice first if a tint is ever made more transparent.
+ * The whole content ramp, `--prl-text-faint` included. At 4.55:1 worst it has the least headroom, so
+ * it is the row that notices first if a tint gets more transparent.
  */
 const GLASS_TEXT = [
   '--prl-text',
@@ -471,32 +341,17 @@ const GLASS_TEXT = [
   '--prl-info',
 ];
 
-/** Meaningful borders and the ring, at the 1.4.11 threshold. */
 const GLASS_NON_TEXT = ['--prl-line-strong', '--prl-accent-edge', '--prl-focus-color'];
 
 /**
- * Measured, and expected to FAIL. The negative control for everything above.
- *
- * A permitted set nobody has watched exclude anything is a permitted set nobody can justify -
- * and this list has already earned its keep once: it held `--prl-text-faint`, reported that the
- * exclusion had stopped being true after the tints were made more opaque, and that token is now
- * asserted in GLASS_TEXT instead. An exclusion that quietly becomes vacuous is exactly the shape
- * of check that reads green over nothing.
- *
- * What is here now cannot become vacuous by accident, because both tokens are decorative BY
- * DEFINITION (tokens.css rule B): they draw an object's edge and never its meaning. If either
- * ever cleared 3:1 on glass it would still not be allowed to carry meaning - the gate would be
- * reporting that the palette had moved, not that the rule had.
- *
- * If a row here starts clearing its floor the gate says so and does not fail. A tint that got
- * more opaque is a legitimate change; the response is to read the note, not to fight the gate.
+ * Expected to FAIL: the negative control for the glass rows. Both tokens are decorative by definition
+ * (tokens.css rule B). A row that starts clearing its floor is reported, not failed.
  */
 const GLASS_EXCLUDED = [
   { tint: '--prl-line', floor: AA_NON_TEXT },
   { tint: '--prl-line-subtle', floor: AA_NON_TEXT },
 ];
 
-/** The composite of a translucent tint over one bounding backdrop. */
 function glassOver(tintToken, backdropToken, map) {
   const backdrop = colorOf(backdropToken, map);
   const tint = colorOf(tintToken, map);
@@ -505,44 +360,23 @@ function glassOver(tintToken, backdropToken, map) {
 }
 
 /**
- * The two-tone focus ring, proved rather than eyeballed.
- *
- * A single-colour indicator is only as visible as its contrast with the backdrop, and on a
- * floating pane the backdrop is not ours. So the ring is `--prl-focus-color` with a 1px
- * `--prl-focus-halo` of the opposite polarity outside it, and the claim is that NO backdrop
- * defeats both.
- *
- * That claim is checkable in closed form. A foreground of relative luminance `Lf` clears 3:1
- * against a backdrop of luminance `Lb` when `Lb <= (Lf + 0.05) / 3 - 0.05` (backdrop darker)
- * or `Lb >= 3 * (Lf + 0.05) - 0.05` (backdrop lighter) - so each colour covers `[0, lo]` and
- * `[hi, 1]` and fails only strictly inside `(lo, hi)`. The indicator works everywhere exactly
- * when the two open failure intervals do not intersect inside [0, 1].
+ * Each colour clears 3:1 for `Lb <= (Lf + 0.05) / 3 - 0.05` or `Lb >= 3 * (Lf + 0.05) - 0.05`, so it
+ * fails only inside `(lo, hi)`. The ring and halo work everywhere when their failure intervals do not
+ * intersect in [0, 1].
  */
 function ringCoverage(color) {
   const l = relativeLuminance(color);
   return { lo: (l + 0.05) / AA_NON_TEXT - 0.05, hi: AA_NON_TEXT * (l + 0.05) - 0.05 };
 }
 
-/* ==========================================================================================
-   4. EVALUATION AND OUTPUT
-   ========================================================================================== */
-
 const shortName = (token) => token.replace('--prl-', '');
 
 const toHex = ({ r, g, b }) => `#${[r, g, b].map((n) => n.toString(16).padStart(2, '0')).join('')}`;
 
 /**
- * DERIVED SURFACES - opaque colours a browser paints that no token declares.
- *
- * `--prl-page-wash` is two radial gradients, and a gradient has no single colour to assert.
- * What CAN be asserted is its worst case: the brightest stop either gradient reaches, treated
- * as if it covered the whole page. `--prl-wash-tint` is that stop, declared as a token for
- * this purpose, and the composite is injected here under a surface name so that every text
- * pairing in every group is measured against the wash as well as against the flat ground.
- *
- * Injected into the resolved theme maps only, never into the two light SCOPES - those are
- * compared against each other for drift, and a derived value in one of them would read as a
- * declaration the other is missing.
+ * `--prl-page-wash` is a gradient, so its brightest stop (`--prl-wash-tint`) is composited over the
+ * ground and treated as covering the page. Injected into the theme maps only, never the light scopes
+ * compared for drift.
  */
 function deriveSurfaces(map) {
   const page = colorOf('--prl-surface-page', map);
@@ -558,7 +392,6 @@ function colorOf(token, map, backdrop) {
   return backdrop === undefined ? parsed : composite(parsed, backdrop);
 }
 
-/** One group, one theme: a matrix of ratios with the failures marked. */
 function evaluateGroup(group, map) {
   const rows = [];
   const failures = [];
@@ -605,13 +438,7 @@ function printMatrix(group, result) {
   }
 }
 
-/**
- * Every glass level, every permitted foreground, both bounding backdrops.
- *
- * Prints `min` (the tint over black), `max` (the tint over white) and `worst`, and asserts on
- * `worst`. Reporting all three rather than only the verdict is what makes the output usable
- * when a level is close: it says which direction the tint has to move.
- */
+/** Prints the tint over black, over white, and the worse of the two, and asserts on the worse. */
 function evaluateGlass(map, themeName) {
   const failures = [];
   const min = '--prl-glass-backdrop-min';
@@ -654,7 +481,7 @@ function evaluateGlass(map, themeName) {
       const line = `  ${shortName(row.fg).padEnd(LABEL)}${cells.join('')}`;
 
       if (!row.asserted) {
-        // The negative control. Expected to fail; reported either way, never asserted.
+        // The negative control. Reported either way, never asserted.
         const note = bad
           ? dim(`  decorative only, as expected (a meaningful border needs ${row.floor.toFixed(1)}:1)`)
           : yellow(`  now clears ${row.floor.toFixed(1)}:1 - re-read the exclusion, it may be stale`);
@@ -679,13 +506,7 @@ function evaluateGlass(map, themeName) {
   return failures;
 }
 
-/**
- * The two-tone focus indicator, proved over the whole backdrop range.
- *
- * See `ringCoverage`. Each colour fails only strictly inside its own `(lo, hi)` interval, so
- * the indicator is defeated exactly where the two intervals overlap inside [0, 1]. The
- * assertion is that the overlap is empty - not that it is small.
- */
+/** The assertion is that the ring's and halo's failure intervals do not overlap at all. */
 function evaluateFocusIndicator(map, themeName) {
   const ringColor = colorOf('--prl-focus-color', map);
   const haloColor = colorOf('--prl-focus-halo', map);
@@ -755,8 +576,7 @@ function runPass(label, files, note) {
       printMatrix(group, evaluateGroup(group, map));
     }
 
-    // The accent ramp, annotated. Not an assertion - a lookup table for whoever picks the next
-    // accent fill, and the reason `--prl-accent-fill` exists as a named pairing.
+    // The accent ramp, printed as a lookup table for picking an accent fill. Not an assertion.
     console.log('');
     console.log('  Accent ramp: is this step safe to put --prl-text-on-accent on?');
     const onAccent = colorOf('--prl-text-on-accent', map);
@@ -770,17 +590,8 @@ function runPass(label, files, note) {
     }
 
     /**
-     * The ink-on-accent control.
-     *
-     * There are only two candidates for text on an accent fill - near-black or white - and the
-     * design doc's rule ("never white on accent") is really the DARK theme's answer to a
-     * measurement: ink-900 on bright cyan is 9.39:1 while white on it is 2.07:1. The light theme
-     * inverts the fill and therefore has to invert the ink.
-     *
-     * So rather than asserting one of the two colours, this asserts that `--prl-text-on-accent`
-     * IS the better of the two on whatever the fill currently is. That check cannot go stale when
-     * the palette moves, and it catches the exact mistake the rule was written to prevent -
-     * carrying the other theme's ink onto this theme's fill.
+     * `--prl-text-on-accent` must be the better of near-black and white on the current fill. The light
+     * theme inverts the fill, so it must invert the ink (dark: ink-900 9.39:1, white 2.07:1).
      */
     const fill = colorOf('--prl-accent-fill', map) ?? colorOf('--prl-accent-500', map);
     const ink = colorOf('--prl-text-on-accent', map);
@@ -791,7 +602,6 @@ function runPass(label, files, note) {
       const whiteRatio = contrastRatio(white, fill);
       const blackRatio = contrastRatio(nearBlack, fill);
       const best = Math.max(whiteRatio, blackRatio);
-      // A hair of tolerance so an equal-but-not-identical ink is not reported as a defect.
       const isBest = chosen >= best - 0.01;
 
       console.log('');
@@ -839,129 +649,21 @@ function runPass(label, files, note) {
   return failures;
 }
 
-/* ==========================================================================================
-   5. PASS 3 - THE PAINTED LAYER: COMPOSITED BACKGROUNDS, MEASURED IN REAL CHROME
-   ==========================================================================================
+/* Pass 3: the painted layer, in real Chrome. Token pairs cannot see `opacity` on a container (folded
+   seats at 0.9 opacity measured 4.09:1 while the token pair was unchanged). For each text element the
+   walk collects ancestor backgrounds and covering positioned pseudo-elements, composites them as
+   nested opacity groups, and paints the glyph with and without the text colour.
 
-   Passes 1 and 2 read token PAIRS. A pair is a claim about two colours; a reader meets a STACK.
+   The walk stops at the first opaque layer. BOUNDED: a still-translucent stack crossing a floating
+   element is composited over black and white, and gradients are bounded on their stop path.
+   UNMEASURED: `url()` images, `background-clip: text`, blend modes and filters are fatal. EXEMPT:
+   disabled controls are printed, not asserted. Unpainted and visually-hidden text is counted.
 
-   The defect that produced this section, in full, because it is the whole argument. An agent
-   proposed fading folded seats on the poker table with `opacity`, measured the result by hand,
-   and declined the change on its own arithmetic rather than on this gate's verdict:
-
-       opacity 1.0    5.95:1     what ships
-       opacity 0.9    4.09:1     FAIL
-       opacity 0.8    3.10:1     FAIL
-
-   Every ratio in that table was invisible to passes 1 and 2, because `opacity` on a container is
-   neither a token nor a pairing: it composites the label AND the plate under it with the felt
-   behind them, while the two tokens named in the pairing do not change at all. The change would
-   have gone in green. That is a gate manufacturing confidence about the property it does not
-   measure - and this app has just been through a redesign that put translucency everywhere, so
-   the blind spot was not one seat. It was every glass material, every veil, every tinted surface
-   over another tinted surface, and every `opacity` in the tree.
-
-   ## What this pass does instead
-
-   It asks the browser. For every element carrying text, on every route, in both themes:
-
-     1. walk the ancestor chain outward from the text element, collecting every painted layer -
-        each element's own `background-color` and `background-image`, and each POSITIONED
-        `::before` / `::after` whose box actually covers the text. That last one is not an edge
-        case here: the plate under every seat at the table is an `::after`, so a walk that ignored
-        pseudo-elements would measure the wrong background on the densest screen in the app;
-     2. composite them the way a browser does - source-over in sRGB - as NESTED GROUPS, so an
-        `opacity` anywhere in the chain fades everything inside it against everything outside it,
-        which is exactly the arithmetic the table above records;
-     3. paint the glyph twice: once with the text colour, once without. The first is the pixel a
-        reader's eye lands on, the second is the pixel beside it, and the ratio between them is
-        the contrast. Computed this way it needs no special case for a translucent text colour,
-        for an `opacity`, or for a scrim over both - they all fall out of the same two paints.
-
-   ## Where the walk stops, and what it says when it cannot finish
-
-   A walk outward stops at the first OPAQUE layer: nothing under an opaque fill can be seen, so
-   the composite from there inward is exact. Three things stop it earlier, and each gets a verdict
-   rather than a silent skip:
-
-     BOUNDED    the stack is still translucent when it crosses an element that FLOATS - absolute,
-                fixed or sticky, or carrying a `backdrop-filter`. What is behind a floating pane
-                is not its ancestors, it is whatever the page happened to put there, and no walk
-                of the DOM can know it. So the construction section 3b uses for glass applies
-                here: composite over BOTH bounding backdrops, black and white, and assert the
-                worse of the two. That bound also absorbs `backdrop-filter`, because a blur and a
-                saturate cannot produce a colour outside the range they are given.
-                A gradient is bounded on its own stop path. Compositing a premultiplied gradient
-                over a uniform backdrop is the linear interpolation of the composited stops, so
-                sampling the stops and the points between them brackets every pixel it can paint.
-     UNMEASURED a layer this walk cannot turn into a colour at all: a `url()` image, a
-                `background-clip: text` fill, a `mix-blend-mode`, a `filter`. NOT skipped -
-                reported by element, counted, and FATAL. An unmeasurable background under real
-                text is the exact shape of the blind spot this pass exists to remove, and
-                inheriting it quietly would be inheriting it.
-     EXEMPT     a disabled control. WCAG 1.4.3 exempts inactive user interface components, so
-                these are measured and printed and never asserted - the same posture pass 1 takes
-                for `--prl-text-disabled`. Two are real and worth knowing about: the quiz's
-                "Previous" and the onboarding's "Back" are `disabled` at step 0, and measure
-                2.27:1 dark / 2.27:1 light there.
-
-   Text that is not painted at all is counted and named rather than dropped: `display: none`, a
-   zero-area box, and the visually-hidden idiom (a clipped 1px box, or `clip-path: inset(50%)`).
-   That last one is not cosmetic bookkeeping - the radar tables on `/legends` put 657 clipped
-   cells in the tree, and counting them as measured text would have padded this pass with 657
-   rows nobody can see.
-
-   ## The model is checked against the renderer, not trusted
-
-   Compositing arithmetic that agrees with itself is not evidence. So rows are PROBED: a 5x5 patch
-   of a real screenshot is captured at a point inside the element that no glyph, no child box and
-   no rounded corner covers, and the painted pixel is compared with the prediction. The patch must
-   be one colour or the point is discarded and the probe moves - a patch that is not uniform is a
-   point that was not clear, and comparing against it would invent a disagreement. The ratio is
-   then RE-MEASURED on the painted pixel, which is the reader's real background including
-   everything this walk does not model.
-
-   What each probe proves depends on the row it landed on, and the two are not the same claim:
-
-     a row whose composite is a SINGLE colour must match the painted pixel to within one 8-bit
-     step. It is a prediction about a renderer and it is either right or the pass is worthless.
-     a BOUNDED row has no single predicted colour, so what is asserted is that the painted pixel
-     lies inside the envelope the enumeration produced. A bound that does not bound the renderer
-     is not a bound, and every worst-case ratio computed the same way is then unproven.
-
-   Probes are ranked by how much compositing the row actually needed, which is a correction the
-   first version of this pass needed badly: it probed only the rows it could predict exactly, and
-   the result was 44 probes of 44 opaque backgrounds - 44 confirmations that an opaque colour is
-   its own colour, and no evidence at all about the arithmetic this pass exists for.
-
-   Measured on the tree this was written against: 145 probes over 38 pages, every one in
-   agreement - 99 matching the predicted composite exactly, 46 landing inside a bounded row's
-   envelope, and 46 of them over a stack that had to be composited to predict at all.
-
-   Two things had to be true for that. `prefers-reduced-motion: reduce` is emulated, because the
-   walk and the screenshot are milliseconds apart and an entrance animation between them moves the
-   geometry out from under the probe: with motion on, `/` reported the home guardrail's background
-   10/255 too light in both themes, and the pixel it had probed belonged to the page behind a
-   panel that had not finished arriving. And a probe point must clear the ROUNDED CORNERS of its
-   box and not only its straight edges, because a corner paints nothing outside its arc.
-
-   What this pass does not model is therefore stated where it can be checked rather than assumed:
-   `box-shadow`. A drop shadow is painted over the surface BEHIND the element that casts it, so a
-   point near an elevated pane is darker than any ancestor declares. Every probe point records
-   whether a shadow can reach it, an exact match is DEMANDED where none can, and where one can
-   the painted pixel is what gets asserted.
-
-   ## What this pass still does not measure, said plainly so nobody reads it as more
-
-     - hover, focus and active states, and anything behind a pointer. Passes 1 and 2 assert the
-       tokens for those (`surface-hover`, `surface-active`, the focus ring over every backdrop
-       luminance in [0, 1]); this pass sees the resting page.
-     - borders, rings and graphic marks. 1.4.11 is asserted at the token layer, not per element.
-     - text over a sibling that overlaps it without being an ancestor. The walk goes up the tree.
-       A floating pane over unknown content is BOUNDED, which is the case that matters; two
-       in-flow boxes overlapping by accident is a layout defect and a different gate's business.
-     - a route this gate could not load. That is a failure here, not something to audit around.
-   ========================================================================================== */
+   The model is checked against 5x5 screenshot patches. A single-colour composite must match within
+   one 8-bit step, a bounded row must contain the painted pixel, and the ratio is re-measured on the
+   pixel. `box-shadow` is not modelled, so shadowed points assert the painted pixel only. Motion is
+   off so animations cannot move geometry between walk and screenshot. Not covered: hover, focus and
+   active states, per-element borders, overlapping siblings. */
 
 /**
  * The routes this pass sweeps.
@@ -997,19 +699,11 @@ const PAINTED_ROUTES = [
 ];
 
 /**
- * The two accessibility preferences that REPLACE the material set, swept on two routes each.
- *
- * `tokens.css` collapses every glass token to an opaque surface under
- * `prefers-reduced-transparency: reduce`, and again under `prefers-contrast: more`, and says of
- * that path: "this is not a degraded fallback, it is the design's own flat mode, and every ratio
- * it produces is already asserted". That sentence was true of the token pairs and unproven of the
- * page, because the collapse changes which token each pane resolves to and nothing had ever
- * rendered it. Two routes under each preference is what turns the claim into a measurement.
+ * tokens.css collapses glass to opaque surfaces under these preferences, which changes which token
+ * each pane resolves to. Two routes each.
  */
 const PAINTED_CONDITIONS = [
-  // `id` rather than `key`: `scripts/supply-chain/secret-scan.mjs` reads any name ending in `key`
-  // that is assigned a quoted literal of twenty characters or more as a credential, and it is
-  // right to - `PRL_BACKUP_KEY` is the one secret here that has no prefix of its own to match on.
+  // `id`, not `key`: secret-scan.mjs reads a `key` name with a 20+ character literal as a credential.
   { id: 'default', media: [], routes: PAINTED_ROUTES },
   {
     id: 'reduced-transparency',
@@ -1024,12 +718,7 @@ const PAINTED_CONDITIONS = [
 ];
 
 /**
- * A route that rendered one of these did not render.
- *
- * Same refusal as `scripts/ax-tree-audit.mjs`: an error boundary returns HTTP 200 and correct
- * markup, so a contrast sweep over one produces a confident PASS about a page nobody meant to
- * test. The fixture banner on `/play` is NOT one of these - it says "Fixture - no server is
- * connected" in a `.prl-error` box and the page under it is the real component tree.
+ * An error boundary returns 200 and correct markup. The `/play` fixture banner is not one of these.
  */
 const ERROR_BOUNDARY_HEADINGS = [
   'this screen did not load',
@@ -1040,30 +729,19 @@ const ERROR_BOUNDARY_HEADINGS = [
 
 const PAINTED_VIEWPORT = { width: 1440, height: 900 };
 
-/** Below this, a page has not been swept - it has been glanced at. See "a sweep of nothing". */
 const MIN_ROWS_PER_PAGE = 20;
 
-/** Probe points offered per page, and how many must come back uniform before the page is done. */
 const PROBE_CANDIDATES = 12;
 const PROBES_PER_PAGE = 4;
 
-/** Fewer probes than this across the whole pass and the model has not been checked at all. */
 const MIN_PROBES = 24;
 
 /** A predicted background must match the painted pixel to within this, per 8-bit channel. */
 const PROBE_TOLERANCE = 2;
 
 /**
- * The in-page walk, as source.
- *
- * It runs IN THE PAGE because the page is the only place that knows what the cascade resolved to.
- * `getComputedStyle` has already done every part of this job that is not compositing - the
- * cascade, custom properties, container queries, the theme, `@supports`, the preference media
- * queries - and re-deriving that from the stylesheets would be re-implementing a browser inside a
- * gate whose entire purpose is to stop trusting a model of one.
- *
- * Written without backticks and without a dollar-brace so it can live inside a template literal,
- * which is the idiom this repo already uses to avoid a `biome-ignore`.
+ * Runs in the page because only `getComputedStyle` knows what the cascade resolved. Written without
+ * backticks or a dollar-brace so it can live in a template literal without a `biome-ignore`.
  */
 const PAINT_WALKER = String.raw`
 (() => {
@@ -1674,15 +1352,8 @@ const PAINT_WALKER = String.raw`
 })()
 `;
 
-/* ------------------------------------------------------------------------------------------
-   PNG, decoded here rather than depended on.
-
-   `Page.captureScreenshot` answers in PNG and the whole decoder is forty lines of `zlib` plus the
-   five filter predictors from the spec, so the argument the header of this file makes about a
-   colour library applies unchanged: a gate whose correctness rests on a package nobody here has
-   read is a gate nobody here can defend. Only what Chrome emits is handled - 8 bits a channel,
-   colour type 2 or 6, not interlaced - and anything else throws rather than guessing.
-   ------------------------------------------------------------------------------------------ */
+/* PNG decoder, about forty lines of `zlib`, so the gate has no dependency. Only what Chrome emits is
+   handled (8-bit, colour type 2 or 6, not interlaced). Anything else throws. */
 
 function decodePng(buffer) {
   if (buffer.readUInt32BE(0) !== 0x89504e47) throw new Error('not a PNG');
@@ -1734,8 +1405,7 @@ function decodePng(buffer) {
   return { width, height, bpp, pixels };
 }
 
-/** The colour of a patch, or null if the patch is not one colour - which means the point was not
-    clear after all and the probe must move rather than report a disagreement it invented. */
+/** Null when the patch is not one colour, so the probe moves instead of inventing a disagreement. */
 function uniformColour(image) {
   const at = (x, y) => {
     const i = y * image.width * image.bpp + x * image.bpp;
@@ -1751,13 +1421,7 @@ function uniformColour(image) {
   return first;
 }
 
-/* ------------------------------------------------------------------------------------------
-   A very small CDP client.
-
-   Lifted from `scripts/ax-tree-audit.mjs` rather than shared through a helper module, for the
-   reason that file gives at its own copy: these are release gates, and a gate that depends on a
-   file another gate can change is a gate that can be broken from a distance.
-   ------------------------------------------------------------------------------------------ */
+// CDP client copied, not shared, from ax-tree-audit.mjs so one gate cannot break another.
 
 class Page {
   #socket;
@@ -1816,8 +1480,7 @@ class Page {
         '(() => ({ ready: document.readyState, url: location.href }))()',
       ).catch(() => null);
       if (state !== null && state.ready === 'complete' && state.url.startsWith(path)) {
-        // React has to hydrate before the tree is the one a reader meets: the server's markup has
-        // no client-rendered panes in it, and half this app's translucency is on those.
+        // Half the translucency is on client-rendered panes, so wait for hydration.
         await delay(450);
         return;
       }
@@ -1825,7 +1488,7 @@ class Page {
     throw new Error(`${url} did not finish loading`);
   }
 
-  /** One 5x5 patch of the real page, at device scale 1 so a CSS pixel is an image pixel. */
+  /** Device scale 1, so a CSS pixel is an image pixel. */
   async patch(x, y) {
     const shot = await this.send('Page.captureScreenshot', {
       format: 'png',
@@ -1860,8 +1523,7 @@ function chromePath() {
 
 async function withChrome(headful, run) {
   const binary = chromePath();
-  // Offset by pid so two runs on one machine do not fight over a port, and kept out of the ranges
-  // `keyboard-audit.mjs` and `ax-tree-audit.mjs` use for the same reason.
+  // Clear of the keyboard-audit and ax-tree-audit port ranges.
   const port = 9650 + Math.floor(process.pid % 140);
   const child = spawn(
     binary,
@@ -1888,10 +1550,8 @@ async function withChrome(headful, run) {
     const page = await Page.open(target.webSocketDebuggerUrl);
     await page.send('Page.enable');
     await page.send('Runtime.enable');
-    // A device-metrics override rather than a window size: the width decides which container
-    // queries and which media queries the redesign resolves, and a headless window that was
-    // merely asked for a size does not reliably move either. `deviceScaleFactor: 1` is what makes
-    // a probe's CSS pixel the same pixel the screenshot returns.
+    // A device-metrics override, because a resized headless window does not reliably move media or
+    // container queries. `deviceScaleFactor: 1` makes a CSS pixel a screenshot pixel.
     await page.send('Emulation.setDeviceMetricsOverride', {
       width: PAINTED_VIEWPORT.width,
       height: PAINTED_VIEWPORT.height,
@@ -1909,24 +1569,10 @@ async function withChrome(headful, run) {
 }
 
 /**
- * Refuses to go on when something already answers where this gate's web app will be polled.
- *
- * `waitUntilReady` accepts the first 200 from its URL and cannot tell its own child's answer from a
- * stranger's, so with the port taken the painted layer composites whatever IS there. Measured on
- * 2026-11-10 with a production `next start` from this checkout started by hand on :3521:
- * `--base-url http://127.0.0.1:3521` printed "starting the built web app on http://127.0.0.1:3521
- * ...", then "PASS  painted layer  (real Chrome, every ancestor composited)" and exited 0, about a
- * server this gate did not start. A `node:http` page on the port exited 1 only because its one black
- * `<h1>` is under the coverage floors and was painted on no opaque ground (77 findings).
- *
- * It CONNECTS to where the poll will go, rather than binding 127.0.0.1 as `scripts/a11y-audit.mjs`
- * first did. Measured on macOS with Node 24.18: a bind of 127.0.0.1 succeeds beside a listener on
- * the wildcard address, so it called a `node:http` server free on its default address, on `0.0.0.0`
- * and on `::` (`lsof`: `TCP *:3533`), and refused only one bound to 127.0.0.1; a connect to
- * 127.0.0.1 reached all four. `next start` listens on the wildcard (`TCP *:3521`). A second `next
- * start` there exits `EADDRINUSE :::3521`; beside a stranger on 127.0.0.1 alone it binds `*:3522` and
- * stays up while the poll reaches the stranger. Only ECONNREFUSED counts as free, so a probe that
- * cannot decide refuses.
+ * `waitUntilReady` cannot tell its own child's answer from a stranger's, so an occupied port is
+ * refused (a hand-started `next start` on :3521 was measured passing this gate). It connects rather
+ * than binds, because on macOS a bind to 127.0.0.1 succeeds beside a wildcard listener (Node 24.18,
+ * 2026-11-10). Only ECONNREFUSED counts as free.
  */
 async function refuseOccupiedPort(url) {
   const { hostname, port, protocol } = new URL(url);
@@ -1956,13 +1602,7 @@ async function refuseOccupiedPort(url) {
   );
 }
 
-/**
- * A child server this gate owns and must clean up.
- *
- * Detached and signalled by process group, for the same reason as `scripts/a11y-audit.mjs`:
- * `pnpm --filter ... start` is a wrapper, so killing the wrapper leaves the real server holding
- * the port, and an orphan makes the next run measure a build nobody meant to test.
- */
+/** `pnpm --filter ... start` is a wrapper, so the server is detached and signalled by process group. */
 class ManagedServer {
   constructor(label, args, readyUrl, env) {
     this.label = label;
@@ -2025,33 +1665,22 @@ class ManagedServer {
   }
 }
 
-/* ------------------------------------------------------------------------------------------
-   THE PASS ITSELF
-   ------------------------------------------------------------------------------------------ */
-
 const walkerSource = (measureAll, probeBudget) =>
   PAINT_WALKER.replace('MEASURE_ALL_ARGUMENT', String(measureAll)).replace(
     'PROBE_BUDGET_ARGUMENT',
     String(probeBudget),
   );
 
-/** One page: navigate, theme it, walk it, probe it. Returns failures, never throws for content. */
+/** Returns failures. Never throws for content. */
 async function measurePage(page, url, label, theme, failures, tally) {
   await page.goto(url);
-  // The theme is set on the root element, which is where `tokens.css` keys both of its light
-  // scopes. Setting it AFTER load rather than emulating `prefers-color-scheme` is deliberate: it
-  // exercises the explicit `[data-theme]` scope, which is the one a reader who used the toggle
-  // gets, and the media-query scope is asserted against it for drift in passes 1 and 2.
+  // Set on the root after load, which exercises the explicit `[data-theme]` scope the toggle uses.
+  // The media-query scope is checked against it for drift in passes 1 and 2.
   await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`);
   await delay(250);
-  // Then two rendered frames, because 250ms is wall-clock time and the theme lands in frames. Under
-  // the emulated reduced motion, base.css's backstop gives every element `transition-duration: 1ms`
-  // with `transition-property` at its initial `all`, so the theme's colours are 1ms transitions,
-  // and a transition reports its before-change value until a frame starts it. On CI's runners
-  // `/legends`, the heaviest page, had not rendered that frame: its dark sweep walked light-theme
-  // text over dark surfaces, "#10141a on #171b22", 0/4 probes agreed, 340 findings, on every run
-  // since at least 2026-10-11. Reproduced here with Chrome's CPU throttled 6x; with these frames
-  // the same throttled run measures 5.84 with 4/4 probes agreeing.
+  // Two rendered frames. Under reduced motion base.css makes theme colours 1ms transitions, which
+  // report the old value until a frame starts them. Without this, CI's `/legends` dark sweep walked
+  // light-theme text (340 findings, 0/4 probes agreed).
   await page.evaluate(
     'new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => done(true))))',
   );
@@ -2095,9 +1724,7 @@ async function measurePage(page, url, label, theme, failures, tally) {
     }
   }
 
-  // The probes. A point whose patch is not one colour was not clear, so it moves rather than
-  // reporting a disagreement it invented; a point that never comes back clear is not a failure,
-  // it is one fewer probe, and the pass asserts on how many came back overall.
+  // A point whose patch is not one colour moves. One that never comes clear is one fewer probe.
   let taken = 0;
   let discarded = 0;
   let matched = 0;
@@ -2126,15 +1753,12 @@ async function measurePage(page, url, label, theme, failures, tally) {
       painted.g <= probe.high.g + PROBE_TOLERANCE &&
       painted.b >= probe.low.b - PROBE_TOLERANCE &&
       painted.b <= probe.high.b + PROBE_TOLERANCE;
-    // A bound wide enough to hold anything holds nothing. Only a narrow envelope counts as a
-    // check, and the wide ones are the rows the both-extremes assertion already covers.
+    // Only a narrow envelope counts as a check. Wide ones are covered by the both-extremes bound.
     const tight =
       probe.high.r - probe.low.r < 48 && probe.high.g - probe.low.g < 48 && probe.high.b - probe.low.b < 48;
 
     if (!probe.single && !probe.shadow && tight && !inEnvelope) {
-      // The row was BOUNDED, and the pixel Chrome painted is outside the bound. That is not a
-      // near miss, it is the bound failing to bound - every worst-case ratio computed the same
-      // way is then unproven.
+      // The painted pixel is outside the bound, so every bounded ratio is unproven.
       fail(
         `THE BOUND DOES NOT BOUND THE RENDERER at ${probe.x},${probe.y}: predicted ` +
           `${toHex(probe.low)}..${toHex(probe.high)}, Chrome painted ${toHex(painted)}  ${probe.sel}`,
@@ -2145,33 +1769,23 @@ async function measurePage(page, url, label, theme, failures, tally) {
         tally.bracketed += 1;
         bracketed += 1;
       }
-      // A bounded row has no single predicted colour to match, so the exact-match arithmetic below
-      // does not apply to it. What is asserted for it is the envelope above and, always, the
-      // ratio measured on the painted pixel itself.
     } else if (delta <= PROBE_TOLERANCE) {
       matched += 1;
       tally.matched += 1;
     } else if (probe.shadow) {
-      // A drop shadow from a neighbouring pane can land here, and this pass does not composite
-      // shadows. Reported, and the painted pixel below is what gets asserted.
+      // A neighbouring pane's shadow can land here. The painted pixel is asserted below.
       tally.shadowed += 1;
     } else if (probe.floated) {
-      // The stack was still translucent when it crossed a floating element, so the ancestor
-      // background this walk used was a guess about what is behind the pane. The probe says it
-      // guessed wrong - which is a fact about the page, not an error in the arithmetic, and the
-      // reason the ASSERTION for these rows is the both-extremes bound and the painted pixel.
+      // A guess about what is behind a floating pane was wrong. The bound and the pixel are asserted.
       tally.floated += 1;
     } else {
-      // Nothing floats, nothing can cast a shadow here, and the composite was a single colour:
-      // the two are measuring the same thing and the model is wrong. Every ratio in this pass is
-      // worth nothing while that is true.
+      // Nothing floats or casts a shadow, and the composite was one colour, so the model is wrong.
       fail(
         `MODEL DISAGREES WITH THE RENDERER at ${probe.x},${probe.y}: predicted ${toHex(probe.expected)}, ` +
           `Chrome painted ${toHex(painted)} (${delta}/255)  ${probe.sel}`,
       );
     }
-    // The painted pixel is the reader's background whatever the model thinks, so it is asserted
-    // in its own right - this is the one measurement in the pass that models nothing at all.
+    // The painted pixel is the reader's real background, so it is asserted in its own right.
     if (probe.solidInk) {
       const ratio = contrastRatio(composite(probe.ink, painted), painted);
       if (ratio < AA_TEXT) {
@@ -2235,10 +1849,8 @@ async function runPaintedPass(options) {
 
     await withChrome(options.headful, async (page) => {
       for (const condition of PAINTED_CONDITIONS) {
-        // Motion is disabled for every condition, not only the default one: the walk and the
-        // screenshot that checks it are milliseconds apart, and an entrance animation between
-        // them moves the geometry out from under the probe. Measured: without this, `/` reported
-        // the home guardrail 10/255 light in both themes because the panel had not landed yet.
+        // Motion off for every condition. With it on, `/` reported the home guardrail 10/255 light
+        // because the panel had not landed.
         await page.send('Emulation.setEmulatedMedia', {
           features: [{ name: 'prefers-reduced-motion', value: 'reduce' }, ...condition.media],
         });
@@ -2253,9 +1865,7 @@ async function runPaintedPass(options) {
       }
     });
   } catch (err) {
-    // Chrome missing, the server refusing to start, a route that never loaded: all of these are
-    // failures of this gate. A contrast gate that cannot reach the app reports that it could not,
-    // and exits non-zero, because the alternative is a green tick over nothing.
+    // A gate that cannot reach the app fails.
     failures.push({ group: 'painted', line: `the painted layer could not be measured: ${err.message}` });
   } finally {
     for (const server of servers) server.stop();
@@ -2277,13 +1887,11 @@ async function runPaintedPass(options) {
         : ''),
   );
 
-  // Every one of these is the same rule as the token passes': a check that read nothing is not a
-  // check. The pass can fail because the app is wrong; it must also fail because it never looked.
+  // A check that read nothing fails.
   if (tally.rows === 0) {
     failures.push({ group: 'painted', line: 'no text was composited at all - the sweep found nothing' });
   }
-  // Two per page or MIN_PROBES, whichever is smaller, so that `--routes` narrows the sweep
-  // without turning the check off: a one-route run still has to prove the model on that route.
+  // Capped by page count, so a one-route `--routes` run still has to prove the model.
   const probesNeeded = Math.min(MIN_PROBES, 2 * tally.pages);
   if (tally.probes < probesNeeded) {
     failures.push({
@@ -2318,13 +1926,10 @@ const PAINTED_USAGE = `Usage: node scripts/check-contrast.mjs [options]
 Passes 1 and 2 read the stylesheets and need nothing. PASS 3 needs the web app BUILT
 (\`pnpm run build\`) and a Chrome (\`CHROME_PATH\`); without either it fails rather than skipping.`;
 
-/** `--base-url`, `--no-start`, `--routes a,b`, `--headful`. Everything else is the default sweep. */
 function parsePaintedOptions(argv) {
   const options = {
-    // 3462, because the rest of the map is taken: 3000/3001 are the app and the API, 3456 is
-    // `test:ax`, 3457 is `test:csp`, 3458/3459 are the age-gate audit, 3463 is `test:layout`,
-    // 3464 is `test:keyboard` and 3465/3467 are `test:ax`'s third web app and the corrupting proxy
-    // behind it. Two gates on one port is one gate measuring the other's server.
+    // 3462 is free. 3000/3001 app and API, 3456/3465/3467 test:ax, 3457 test:csp, 3458/3459 age gate,
+    // 3463 test:layout, 3464 test:keyboard.
     baseUrl: process.env.PRL_CONTRAST_ORIGIN ?? 'http://127.0.0.1:3462',
     start: true,
     headful: false,
@@ -2341,17 +1946,11 @@ function parsePaintedOptions(argv) {
     else throw new Error(`unknown argument ${arg}`);
   }
   if (options.routes !== null && options.routes.length === 0) {
-    // `--routes ''` is a sweep of nothing, and a sweep of nothing is not a pass.
     throw new Error('--routes was given no routes');
   }
   return options;
 }
 
-/* ==========================================================================================
-   6. MAIN
-   ========================================================================================== */
-
-// Arguments first: a bad flag or a `--help` should not have to sit through two passes of matrices.
 let paintedOptions;
 try {
   paintedOptions = parsePaintedOptions(process.argv.slice(2));
@@ -2380,21 +1979,13 @@ const renderedFailures = runPass(
   'What a browser paints, including the derived pairings and repairs in base.css.',
 );
 
-/**
- * PASS 3 runs last, and runs even when the token passes have already failed.
- *
- * Same reason `pnpm run verify` runs every gate after the first failure: a reader who has just
- * been handed four bad token pairings still needs to know whether the page they are about to ship
- * is legible, and those are different questions with different repairs.
- */
+/** Pass 3 runs even when the token passes failed. The two have different repairs. */
 const paintedFailures = await runPaintedPass(paintedOptions);
 
 console.log('');
 console.log(bold('SUMMARY'));
 
 const describe = (f) => {
-  // A painted-layer finding is about one element on one route, not a pairing of two tokens, so it
-  // arrives with its own line already written.
   if (f.line !== undefined) return f.line;
   if (f.group === 'theme-drift') return `${f.theme ?? 'light'}  ${f.fg}  ${f.bg}`;
   const ratio = f.ratio.toFixed(2);

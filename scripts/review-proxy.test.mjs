@@ -1,29 +1,8 @@
 #!/usr/bin/env node
 /**
- * Tests for the deck-reveal corrupting proxy.
- *
- * Run with:  node --test scripts/review-proxy.test.mjs
- *
- * ## What these are written against
- *
- * The proxy is the fixture behind certification assertion 6.7, and a fixture has two failure modes
- * that a green check cannot tell apart from a healthy application:
- *
- *  1. **It forwards the bytes unchanged and says nothing.** The review page then renders a
- *     perfectly good proof, `J6.7` looks at a screen with no alert on it, and the failure reads as
- *     an application defect. Every path that cannot corrupt the payload must therefore REFUSE, in
- *     words, and the common case — a hand everybody folded out of, whose reveal proves nothing —
- *     is the one most likely to arrive.
- *  2. **It changes more than it claims to.** The whole argument for this fixture is that it never
- *     authors a payload, so it cannot go stale against `packages/contracts`. A `JSON.parse` /
- *     `JSON.stringify` round trip would quietly make key order, number formatting and string
- *     escaping this repository's choices rather than the API's. So the edit is a splice into the
- *     response TEXT, and the test that matters is a byte count.
- *
- * The end-to-end claim — that a flipped salt reaches `mismatch` rather than `other-hand` or
- * `unreadable` — is not asserted here and deliberately so: it is a fact about the real engine on a
- * real hand, and `J6.7` asserts it in real Chrome on every run of `pnpm run test:ax` rather than
- * against a payload this file wrote.
+ * Tests for the deck-reveal corrupting proxy behind certification assertion 6.7.
+ * They pin the two ways the fixture can fail silently: forwarding the bytes unchanged without a
+ * refusal, and changing more than one byte. `J6.7` asserts the end-to-end `mismatch` in real Chrome.
  */
 
 import assert from 'node:assert/strict';
@@ -31,10 +10,8 @@ import { createServer } from 'node:http';
 import { after, describe, it } from 'node:test';
 import { corruptOneByteOfReveal, REVIEW_REQUEST, startReviewProxy } from './review-proxy.mjs';
 
-/** 32 hex bytes, in the shape `DeckReveal.cards[].saltHex` is pinned to by the engine. */
 const salt = (seed) => seed.repeat(64).slice(0, 64);
 
-/** A review body in the shape `HandReviewResponse` publishes, as TEXT — the proxy edits text. */
 function reviewBody(overrides = {}) {
   return JSON.stringify({
     hand: { id: 'prl-hand-1', roomId: 'prl-room-1' },
@@ -69,8 +46,7 @@ describe('the edit is one byte, inside the reveal, and nowhere else', () => {
   });
 
   it('leaves a salt that is still 32 hex bytes, so the engine reaches the HASH check', () => {
-    // A salt the engine refuses on SHAPE produces `salt for position N is not 32 hex bytes`, which
-    // is a parse-shaped refusal and not the mismatch 6.7 is about.
+    // A salt with a bad shape fails as a parse error, not the mismatch 6.7 is about.
     const result = corruptOneByteOfReveal(reviewBody());
     const after = JSON.parse(result.corrupted).reveal.cards[0].saltHex;
     assert.match(after, /^[0-9a-f]{64}$/u);
@@ -80,8 +56,7 @@ describe('the edit is one byte, inside the reveal, and nowhere else', () => {
   it('touches the FIRST proof only, and leaves the commitment and the server verdict alone', () => {
     const before = JSON.parse(reviewBody());
     const after = JSON.parse(corruptOneByteOfReveal(reviewBody()).corrupted);
-    // The binding must survive: a changed root or context would reach `other-hand`, which says
-    // "this proof is for a different hand" — a different sentence, a different row, a different bug.
+    // A changed root or context would reach `other-hand`, a different failure.
     assert.equal(after.commitmentRoot, before.commitmentRoot);
     assert.equal(after.commitmentContext, before.commitmentContext);
     assert.deepEqual(after.reveal.commitment, before.reveal.commitment);
@@ -101,9 +76,7 @@ describe('the edit is one byte, inside the reveal, and nowhere else', () => {
 
 describe('every payload it cannot corrupt is REFUSED, in words', () => {
   it('a hand that proves no deck position (NEGATIVE CONTROL — the common case)', () => {
-    // A hand everybody folded out of. `CommitmentVerifier` treats an empty reveal as the CORRECT
-    // outcome, so this is the payload most likely to arrive and the one that must never be mistaken
-    // for a successful corruption.
+    // An empty reveal is the most common payload and must never pass as a corruption.
     const result = corruptOneByteOfReveal(reviewBody({ cards: [] }));
     assert.ok('refused' in result);
     assert.match(result.refused, /no deck position/u);
@@ -140,9 +113,6 @@ describe('every payload it cannot corrupt is REFUSED, in words', () => {
 describe('the request pattern selects reviews and only reviews', () => {
   it('matches a hand review and not the list beside it (REGRESSION)', () => {
     assert.ok(REVIEW_REQUEST.test('/api/v1/hands/prl-hand-1'));
-    // The list endpoint shares the prefix and carries no reveal. A pattern that matched it would
-    // record a refusal on every page that lists hands, which is noise indistinguishable from the
-    // refusal that matters.
     assert.equal(REVIEW_REQUEST.test('/api/v1/hands'), false);
     assert.equal(REVIEW_REQUEST.test('/api/v1/rooms/abc'), false);
   });
@@ -154,7 +124,6 @@ describe('everything that is not a review is forwarded byte for byte', () => {
     for (const stop of started) stop();
   });
 
-  /** An upstream that answers three shapes: a review, a list, and some bytes that are not JSON. */
   async function upstream() {
     const server = createServer((request, response) => {
       if (request.url === '/api/v1/hands/prl-hand-1') {
@@ -208,9 +177,7 @@ describe('everything that is not a review is forwarded byte for byte', () => {
   });
 
   it('records a refusal and forwards the ORIGINAL bytes when it cannot corrupt (NEGATIVE CONTROL)', async () => {
-    // The dangerous shape: the page renders a good proof and the check would see no alert. What
-    // makes that decidable is this log entry, which `J6.7` requires to be absent for the hand it
-    // scores.
+    // `J6.7` requires this log entry to be absent for the hand it scores.
     const empty = reviewBody({ cards: [] });
     const server = createServer((_request, response) => {
       response.writeHead(200, { 'content-type': 'application/json' });
@@ -233,9 +200,7 @@ describe('everything that is not a review is forwarded byte for byte', () => {
   });
 
   it('answers an unreachable upstream with an empty 502 rather than a payload of its own', async () => {
-    // 127.0.0.1:1 needs root to bind, so "nothing is listening" is a property of the operating
-    // system rather than an assumption about this host — the same argument `ax-tree-audit.mjs`
-    // makes for 8.2's dead API origin.
+    // Nothing can bind 127.0.0.1:1 without root.
     const proxy = await startReviewProxy({ upstream: 'http://127.0.0.1:1', port: 0 });
     started.push(proxy.close);
     const response = await fetch(`${proxy.origin}/api/v1/hands/x`);
@@ -245,8 +210,7 @@ describe('everything that is not a review is forwarded byte for byte', () => {
   });
 
   it('refuses an upstream that is not an http origin', () => {
-    // Before it listens, so a misconfigured caller gets a boot failure rather than a proxy that
-    // answers 502 to everything. "Prefer refusing to warning", applied to a fixture.
+    // The proxy refuses at boot rather than answering 502 to everything.
     assert.throws(() => startReviewProxy({ upstream: 'ftp://example.test', port: 0 }), /not an http/u);
   });
 });

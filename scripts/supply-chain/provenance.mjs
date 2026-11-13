@@ -1,40 +1,10 @@
 #!/usr/bin/env node
 /**
- * Gate: integrity, release age and provenance of every resolved package version.
- *
- * Three independent assertions per package:
- *
- *  1. INTEGRITY — the hash recorded in our lockfile must equal the hash the
- *     registry reports for that exact version. A mismatch means the lockfile was
- *     written against a different artefact than the registry now serves, i.e. the
- *     tarball was replaced or the lockfile was tampered with.
- *
- *  2. RELEASE AGE — the version must have been published at least
- *     `minimumReleaseAge` ago. pnpm already enforces this at install time; this
- *     re-checks it independently so a lockfile produced elsewhere (or with the
- *     setting disabled) still fails here.
- *
- *  3. PROVENANCE — records whether npm holds a signed attestation for the version.
- *
- * On (3), read docs/security/shai-hulud-snapshot-2026-08-17.md §2: the Mini
- * Shai-Hulud worm *forges SLSA provenance attestations through Sigstore*. A
- * present attestation is therefore recorded as evidence but is NOT treated as
- * proof of integrity, and a missing attestation is NOT a failure — most of the
- * ecosystem still does not publish them. Treating "has provenance" as "is safe"
- * would be exactly the wrong lesson from this campaign.
- *
- * A fourth assertion, for the versions that are in the graph but not on disk:
- *
- *  4. INSTALL HOOKS OF THE UNINSTALLED — pnpm skips optional dependencies whose
- *     `os`/`cpu`/`libc` do not match the current machine, so `dep-shapes.mjs`
- *     can read the manifests of 104 of the 162 resolved versions and no more.
- *     The remaining 58 were being covered by nothing: on macOS that silently
- *     excluded every Linux binary — precisely the set that IS installed in the
- *     release container. This gate already fetches the registry document for
- *     every version, and that document carries the published `scripts` block, so
- *     the platform-skipped set is checked for install hooks here. Between the two
- *     gates every resolved version is inspected, and the audit says which
- *     inspected what.
+ * Gate: per resolved package version, the lockfile integrity hash equals the registry's, the
+ * version is older than `minimumReleaseAge` (re-checked independently of pnpm), and npm's
+ * provenance attestation is recorded. An attestation is not proof, because Mini Shai-Hulud forges
+ * SLSA provenance (snapshot §2), and its absence is not a failure. It also checks install hooks of
+ * versions pnpm skipped for this platform, which `dep-shapes.mjs` cannot read from disk.
  */
 
 import { writeFileSync } from 'node:fs';
@@ -57,22 +27,10 @@ const gate = new Gate('integrity-and-release-age');
 const REPORT_PATH = join(REPO_ROOT, 'docs', 'sbom', 'provenance-report.json');
 
 /**
- * Judges the `scripts` block of a published version for install-time hooks.
- *
- * Used only for versions that are NOT in `node_modules` on this machine —
- * `dep-shapes.mjs` reads the on-disk manifest for everything else, and disk is
- * better evidence than a registry document. This closes the platform-skipped
- * gap: on macOS, 58 of 162 resolved versions (36%) were inspected by nothing,
- * and every one of them was a Linux or Windows binary — the set that IS
- * installed in the release container.
- *
- * npm returns the published `scripts` block verbatim when the package.json had
- * one (verified against esbuild and sharp, which both declare install hooks), so
- * an absent `scripts` means the package declared none. Anything that is present
- * but not an object is unverifiable and fails closed.
- *
- * Exported so `provenance.test.mjs` can feed it a hostile manifest without a
- * network round trip.
+ * Judges a published `scripts` block for install-time hooks, only for versions not on disk. On macOS
+ * that is 58 of 162 versions, all Linux or Windows binaries, which the release container installs.
+ * npm returns `scripts` verbatim (checked against esbuild and sharp), so an absent block means none.
+ * A non-object fails closed.
  *
  * @param {Gate} gate
  * @param {string} key  `name@version`
@@ -103,7 +61,6 @@ export function checkPublishedInstallHooks(gate, key, meta) {
   return true;
 }
 
-/** The whole gate. Guarded so the checks above can be imported by the test file. */
 export function runProvenanceGate() {
   return runGate(gate, async () => {
     const lock = parseLockPackages(lockfileText());
@@ -118,7 +75,7 @@ export function runProvenanceGate() {
     }
     gate.note(`lockfile records ${lock.size} package versions`);
 
-    // Read the configured cooldown so this gate and pnpm cannot disagree.
+    // Read the configured cooldown so this gate and pnpm agree.
     const minReleaseAgeMinutes = Number(/^minimumReleaseAge:\s*(\d+)/m.exec(workspaceYamlText())?.[1] ?? '0');
     if (!Number.isFinite(minReleaseAgeMinutes) || minReleaseAgeMinutes < 10_080) {
       gate.fail(
@@ -129,9 +86,7 @@ export function runProvenanceGate() {
     const cooldownMs = minReleaseAgeMinutes * 60_000;
     const now = Date.now();
 
-    // Which versions `dep-shapes.mjs` could not read a manifest for on this
-    // machine. Those are the ones whose install hooks have to come from the
-    // registry instead.
+    // Versions with no manifest on disk, whose hooks must come from the registry.
     const installed = installedManifests();
     const targets = [...packages.values()].map((p) => ({
       name: p.name,
@@ -150,12 +105,7 @@ export function runProvenanceGate() {
     let hooksCheckedFromRegistry = 0;
     let hooksUnverifiable = 0;
 
-    /**
-     * name -> a *promise* of the registry document, cached so that a scoped family
-     * costs one request even when several of its packages are fetched concurrently.
-     * Deliberately not `async`: it hands back the shared in-flight promise rather
-     * than awaiting and re-wrapping it, which is what makes the dedup work.
-     */
+    // Returns the shared in-flight promise, not an awaited one, so a scoped family costs one request.
     const docCache = new Map();
     const getDoc = (name) => {
       if (!docCache.has(name)) {
@@ -192,7 +142,6 @@ export function runProvenanceGate() {
       const publishedAt = doc.time?.[target.version] ?? null;
       const hasAttestation = Boolean(meta.dist?.attestations);
 
-      // (1) integrity
       if (!lockEntry) {
         gate.fail(
           `no lockfile entry for resolved package ${key}`,
@@ -212,7 +161,6 @@ export function runProvenanceGate() {
         );
       }
 
-      // (2) release age
       if (!publishedAt) {
         gate.warn(
           `registry reports no publish time for ${key}`,
@@ -229,7 +177,6 @@ export function runProvenanceGate() {
         }
       }
 
-      // (4) install hooks for versions no gate can read from disk
       if (!target.onDisk) {
         if (checkPublishedInstallHooks(gate, key, meta)) hooksCheckedFromRegistry += 1;
         else hooksUnverifiable += 1;
@@ -246,13 +193,11 @@ export function runProvenanceGate() {
         integrityMatchesRegistry: Boolean(
           lockIntegrity && registryIntegrity && lockIntegrity === registryIntegrity,
         ),
-        // Recorded for incident response only — forgeable, see the header comment.
+        // For incident response only. Forgeable.
         npmAttestationPresent: hasAttestation,
       });
     });
 
-    // The count is stated out loud: "N versions were inspected" is a claim a
-    // reader can check, where a silent pass is not.
     if (notOnDisk.length > 0) {
       gate.note(
         `install hooks read from the registry for ${hooksCheckedFromRegistry}/${notOnDisk.length} ` +

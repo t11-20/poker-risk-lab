@@ -1,15 +1,8 @@
 #!/usr/bin/env node
 /**
- * Gate: no denied package may appear anywhere in the resolved dependency graph.
- *
- * Checks the logical graph (what we depend on) *and* the installed store (what is
- * actually on disk), because a lockfile can be correct while the store is not.
- *
- * The on-disk half used to print `installed store: 0 package versions on disk`
- * and pass. Two facts are indistinguishable in that line — "nothing denied is
- * installed" and "nothing is installed" — and only one of them is evidence. It
- * now refuses to report success over a store that cannot account for the
- * resolved graph; see `requireStoreCoverage` in lib.mjs.
+ * Gate: no denied package appears in the resolved graph or in the installed store, since a correct
+ * lockfile does not imply a correct store. It once passed over 0 installed versions, so it now
+ * requires store coverage (`requireStoreCoverage` in lib.mjs).
  */
 
 import { denyReason } from './denied-packages.mjs';

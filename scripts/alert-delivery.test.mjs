@@ -1,42 +1,12 @@
 #!/usr/bin/env node
 /**
- * Tests for the parsers, the config renderer and the SMTP sink behind
- * `pnpm run alerts:verify`.
+ * Tests for the parsers, the config renderer and the SMTP sink behind `pnpm run alerts:verify`.
+ * Run with `node --test scripts/alert-delivery.test.mjs`.
  *
- * Run with:  node --test scripts/alert-delivery.test.mjs
- *
- * The verification itself needs a running staging stack, a Prometheus, an
- * Alertmanager and about six minutes, so it is not a unit test and does not
- * pretend to be. What IS testable here is everything the checks are built on:
- * three small parsers that read the rules file and the document, the renderer that
- * turns `alertmanager.template.yml` into the file Alertmanager loads, and the SMTP
- * server the email proof depends on. Their failures are silent in the worst way —
- * a parser that returns fewer alerts than exist makes every check pass by looking
- * at less, and a renderer that emits a blank destination produces an Alertmanager
- * that starts, routes correctly and notifies nobody.
- *
- * ## Why the SMTP sink is driven over a real socket here
- *
- * Because the alternative place to find a protocol bug in it is six minutes into a
- * verification run, after the staging API has already been stopped. The dialogue
- * test opens a TCP connection to the sink on an ephemeral port and speaks the same
- * sequence Alertmanager's client does, including the two things a naive
- * implementation gets wrong: multi-line `250` framing after `EHLO`, and undoing
- * dot-stuffing in the captured body.
- *
- * ## The defect these were written against
- *
- * `expressionsInRulesFile` recognised a folded block scalar (`expr: >-`) with a
- * negative lookahead. The lookahead backtracked over the space after `expr:`, so
- * seven rules — every multi-line expression in the file — were recorded as the
- * literal string ` >-` and sent to Prometheus, which answered 400 to all seven.
- * The check caught it on its first real run, which is the argument for having
- * check 4 at all; this file is the argument for not needing a container to find
- * it next time.
- *
- * The last two cases are the ones that matter most: a parser that finds NOTHING
- * must not read as agreement. Two empty sets are identical, and a check built on
- * that comparison would report "the two sets are identical — 0 alerts" and pass.
+ * The verification needs a staging stack and six minutes, so this covers what it is built on. A
+ * parser that finds fewer alerts makes every check pass by looking at less, and a blank destination
+ * renders an Alertmanager that notifies nobody. The SMTP sink is driven over a real socket. An empty
+ * parse must not read as agreement.
  */
 
 import assert from 'node:assert/strict';
@@ -74,15 +44,7 @@ const RULES = readFileSync(join(OBSERVABILITY, 'alert-rules.yml'), 'utf8');
 const TEMPLATE = readFileSync(join(OBSERVABILITY, 'alertmanager.template.yml'), 'utf8');
 const DOC = readFileSync(join(REPO_ROOT, 'docs', 'production', 'alerts.md'), 'utf8');
 
-/**
- * `${NAME}`, assembled rather than typed.
- *
- * Everywhere else in this repository a literal `${…}` inside an ordinary quoted
- * string is a template literal somebody forgot to backtick, and the linter says so.
- * This file is the one place the sequence is data — it is the substitution syntax
- * under test — so it is built, which keeps that rule earning its keep rather than
- * being switched off for a file that legitimately needs the characters.
- */
+/** Built rather than typed, so the linter's rule against `${…}` in plain strings stays on. */
 const ref = (name) => `\${${name}}`;
 
 describe('alertsInRulesFile', () => {
@@ -122,8 +84,7 @@ describe('expressionsInRulesFile', () => {
   });
 
   it('joins a folded block scalar into one expression (REGRESSION)', () => {
-    // The bug: this returned ' >-' — the block indicator itself — for every rule
-    // written this way, and Prometheus answered 400 to all of them.
+    // The bug returned ' >-' for every rule written this way, and Prometheus answered 400.
     const parsed = expressionsInRulesFile(
       [
         '      - alert: HttpErrorRateHigh',
@@ -168,16 +129,10 @@ describe('expressionsInRulesFile', () => {
 });
 
 describe('the parsers are scoped to the rule they belong to', () => {
-  /**
-   * Three sibling bugs of the folded-scalar one above, all found by adversarially fuzzing the
-   * parsers rather than by a container. Each makes a parser return something WRONG rather than
-   * nothing, which is worse: the checks built on it then pass against text nobody deployed.
-   */
+  // Bugs found by fuzzing the parsers. Each returned something wrong rather than nothing.
 
   it("does not let a `- record:` rule steal the previous alert's expression (REGRESSION)", () => {
-    // `current` was never cleared, so any `expr:` not preceded by a recognised `- alert:` line
-    // overwrote the last alert's. A recording rule is an ordinary thing to add to a rules file,
-    // and the map size stayed the same, so even a count assertion would not have noticed.
+    // A recording rule's `expr:` overwrote the previous alert's, and the map size did not change.
     const parsed = expressionsInRulesFile(
       [
         '      - alert: A',
@@ -191,7 +146,6 @@ describe('the parsers are scoped to the rule they belong to', () => {
   });
 
   it('does not read an expr-shaped line inside an annotation as the expression (REGRESSION)', () => {
-    // `alerts.md`'s prose quotes PromQL, and annotations quote `alerts.md`.
     const parsed = expressionsInRulesFile(
       [
         '      - alert: A',
@@ -205,7 +159,6 @@ describe('the parsers are scoped to the rule they belong to', () => {
   });
 
   it('does not read a severity inside an annotation as the label (REGRESSION)', () => {
-    // This one defeats the two-tier routing assertion the whole script exists to make.
     const parsed = alertsInRulesFile(
       [
         '      - alert: A',
@@ -221,9 +174,7 @@ describe('the parsers are scoped to the rule they belong to', () => {
   });
 
   it('keeps a folded expression whole across a blank line (REGRESSION)', () => {
-    // A blank line inside `>-` is a paragraph break, not a terminator. Breaking on it truncated
-    // the expression to its numerator — still valid PromQL, so the evaluation check passed and
-    // the threshold the alert is about was never seen by anything.
+    // A blank line inside `>-` is a paragraph break. Stopping there truncated it to its numerator.
     const parsed = expressionsInRulesFile(
       [
         '      - alert: A',
@@ -238,8 +189,7 @@ describe('the parsers are scoped to the rule they belong to', () => {
   });
 
   it('strips surrounding quotes, which Prometheus would otherwise evaluate as a string', () => {
-    // `query="prl_a > 1"` parses as a string literal and answers `status: success`, so the
-    // evaluation check went green for a rule that was never evaluated.
+    // A quoted `expr` parses as a string literal and answers `status: success`.
     const parsed = expressionsInRulesFile(['      - alert: A', '        expr: "prl_a > 1"'].join('\n'));
     assert.equal(parsed.get('A'), 'prl_a > 1');
   });
@@ -262,9 +212,7 @@ describe('seriesReferencedBy', () => {
 });
 
 describe('the document and the rules describe the same alerts', () => {
-  // This is check 2 of `alerts:verify`, run here without a container, because the
-  // way these two drift is somebody editing one of them — and that happens in a
-  // pull request, not during a release rehearsal.
+  // Check 2 of `alerts:verify`, run without a container so drift is caught in the pull request.
   it('agrees on every name and every severity', () => {
     const documented = alertsInDocument(DOC);
     const declared = alertsInRulesFile(RULES);
@@ -289,17 +237,7 @@ describe('the document and the rules describe the same alerts', () => {
     }
   });
 
-  /**
-   * The half of check 1 that a file existing does not answer.
-   *
-   * Run here as well as in `alerts:verify` deliberately, and it is the same argument
-   * as the check above it: an annotation is edited in a pull request, and a release
-   * rehearsal is a very late place to discover that six of them point at runbooks
-   * that had never heard of their alert. `runbookNamingProblems`'s own comment
-   * records what that cost — `HandsFailing`, a page, opening the hidden-card
-   * incident runbook and its "roll back to the last digest, notify the incident
-   * owner, even out of hours".
-   */
+  // Also run here so a wrong annotation is caught in the pull request. See `runbookNamingProblems`.
   it('every runbook names the alert that opens it, in its Detection section', () => {
     const declared = alertsInRulesFile(RULES);
     assert.ok(declared.size >= 20, `only ${declared.size} alerts parsed out of the rules file`);
@@ -326,14 +264,7 @@ describe('runbookSection', () => {
   });
 });
 
-/**
- * NEGATIVE CONTROL: the check refusing a runbook that does not cover its alert.
- *
- * Without these, `runbookNamingProblems` returning `[]` for everything would look
- * exactly like a tree in which every annotation is right — which is precisely the
- * state the repository was in for six rules while `existsSync` reported a green
- * check over all of them.
- */
+/** Without these, `runbookNamingProblems` returning `[]` would look like a correct tree. */
 describe('NEGATIVE CONTROL: runbookNamingProblems refusing a mismatched runbook', () => {
   const rules = (runbook) => new Map([['HandsFailing', { severity: 'page', runbook }]]);
   const DETECTION_WITH = ['# R', '## Detection', '', '| `HandsFailing` | hands abandoned |', ''].join('\n');
@@ -354,8 +285,7 @@ describe('NEGATIVE CONTROL: runbookNamingProblems refusing a mismatched runbook'
   });
 
   it('refuses a runbook that mentions the alert only in a cross-reference', () => {
-    // The failure a whole-file substring search would have passed: a "see also" line
-    // in Escalation is not somebody deciding this runbook treats this alert.
+    // A "see also" line in Escalation must not count.
     const text = ['# R', '## Detection', '', 'nothing', '', '## Escalation', '', 'see `HandsFailing`'].join(
       '\n',
     );
@@ -374,9 +304,7 @@ describe('NEGATIVE CONTROL: runbookNamingProblems refusing a mismatched runbook'
   });
 
   it('is not satisfied by a name this one is a substring of', () => {
-    // `TableActorFailing` contains neither `HandsFailing` nor `Failing` as a word, and
-    // must not stand in for either. A plain `includes` gets the general case of this
-    // wrong in both directions.
+    // `TableActorFailing` must not stand in for `HandsFailing` or `Failing`.
     const text = ['# R', '## Detection', '', '| `TableActorFailing` | a seat cannot act |'].join('\n');
     assert.equal(runbookNamingProblems(rules('r.md'), () => text).length, 1);
     assert.deepEqual(
@@ -398,13 +326,6 @@ describe('NEGATIVE CONTROL: runbookNamingProblems refusing a mismatched runbook'
 });
 
 describe('renderAlertmanagerConfig', () => {
-  /**
-   * The renderer is the thing standing between "an operator set a variable" and
-   * "Alertmanager notifies somebody". Every failure mode it has is silent in the
-   * same way the parsers above are silent: a config that renders, loads, routes
-   * and drops. So the cases below are all about what must NOT survive a render.
-   */
-
   it('substitutes a value', () => {
     const rendered = renderAlertmanagerConfig(`      - url: '${ref('A')}'`, {
       A: 'http://example.test/page',
@@ -435,9 +356,7 @@ describe('renderAlertmanagerConfig', () => {
   });
 
   it('refuses an empty value rather than emitting a destination that is blank', () => {
-    // `url: ''` is accepted by Alertmanager. It notifies nobody, reports no error,
-    // and looks exactly like a working configuration from every API it exposes —
-    // which is the shape of the blocker this whole feature exists to close.
+    // `url: ''` is accepted by Alertmanager and notifies nobody.
     assert.throws(() => renderAlertmanagerConfig(`      - url: '${ref('A')}'`, { A: '' }), /is empty/);
   });
 
@@ -455,10 +374,7 @@ describe('renderAlertmanagerConfig', () => {
   });
 
   it('leaves a comment line untouched, so the documentation table stays a table', () => {
-    // The template's header documents every variable by name. Substituting there
-    // would turn the reference table in the rendered file into a list of one
-    // deployment's real destinations — including, on a production host, the
-    // address of somebody's phone.
+    // The header documents variables by name and must not become a list of real destinations.
     const documented = `# | \`${ref('A')}\` | what it is |`;
     const rendered = renderAlertmanagerConfig([documented, `  url: '${ref('A')}'`].join('\n'), {
       A: 'http://example.test/page',
@@ -476,10 +392,7 @@ describe('the real alertmanager.template.yml', () => {
     for (const key of ['smtp_smarthost:', 'webhook_configs:', 'email_configs:']) {
       assert.ok(rendered.includes(key), `the rendered config has no ${key}`);
     }
-    // Both human tiers, both transports, plus the heartbeat's webhook. Counting is the
-    // point: one `email_configs` would mean a receiver quietly lost its mail
-    // destination, and two `webhook_configs` would mean the dead man's switch had no
-    // way to ping anything — which is the failure that reports itself to nobody.
+    // Both human tiers, both transports, plus the heartbeat's webhook.
     assert.equal(rendered.match(/webhook_configs:/g).length, 3);
     assert.equal(rendered.match(/email_configs:/g).length, 2);
     assert.ok(rendered.includes(values.PRL_ALERT_PAGE_EMAIL_TO));
@@ -487,8 +400,6 @@ describe('the real alertmanager.template.yml', () => {
   });
 
   it('keeps the two-tier route tree exactly as it was, whatever the destinations are', () => {
-    // The routing is the part that is verified in both directions against a live
-    // Alertmanager, and making the receivers configurable must not have cost it.
     const { values } = alertmanagerValues({});
     const rendered = renderAlertmanagerConfig(TEMPLATE, values);
     assert.match(rendered, /severity = "page"\n {6}receiver: paging\n {6}continue: false/);
@@ -497,10 +408,7 @@ describe('the real alertmanager.template.yml', () => {
   });
 
   it('renders an email-only deployment with no webhook blocks for either human tier', () => {
-    // One webhook block survives, and it is the heartbeat's. That is not a leak in the
-    // conditional: a dead man's switch pings an HTTP endpoint that counts pings, and
-    // the one destination it must never have is an inbox. "Email-only" is a statement
-    // about how humans are reached, and the heartbeat does not reach a human.
+    // The one surviving webhook is the heartbeat's. "Email-only" is about how humans are reached.
     const { values } = alertmanagerValues({
       PRL_ALERT_PAGE_WEBHOOK_URL: '',
       PRL_ALERT_TICKET_WEBHOOK_URL: '',
@@ -558,8 +466,7 @@ describe('alertmanagerValues and destinationProblems', () => {
   });
 
   it('refuses a require_tls that is not a YAML boolean', () => {
-    // `smtp_require_tls: yes` is a string to Alertmanager's parser and the container
-    // refuses to start on it — six minutes into a run, after the API has been stopped.
+    // `smtp_require_tls: yes` is a string to Alertmanager and the container refuses to start.
     const { values } = alertmanagerValues({ PRL_ALERT_SMTP_REQUIRE_TLS: 'yes' });
     assert.match(destinationProblems(values).join(' '), /must be exactly true or false/);
   });
@@ -567,9 +474,6 @@ describe('alertmanagerValues and destinationProblems', () => {
 
 describe('decodeQuotedPrintable', () => {
   it('rejoins a word split by a soft line break', () => {
-    // Alertmanager's default HTML body is one very long line, so the alert name in
-    // it is genuinely likely to be split mid-word. An assertion on the raw bytes
-    // would fail against a message that contains exactly what it is looking for.
     assert.equal(decodeQuotedPrintable('Api=\r\nDown'), 'ApiDown');
     assert.equal(decodeQuotedPrintable('Api=\nDown'), 'ApiDown');
   });
@@ -607,14 +511,6 @@ describe('parseMessage', () => {
 });
 
 describe('the SMTP sink speaks the protocol', () => {
-  /**
-   * The one part of `alerts:verify` that is a network protocol implementation, driven
-   * here over a real socket with no containers. A defect in the state machine below
-   * would otherwise surface six minutes into a run that had already stopped the
-   * staging API — which is the most expensive place in this repository to find a bug.
-   */
-
-  /** Sends each line as the previous reply completes, and returns every reply in order. */
   function dialogue(port, script) {
     return new Promise((done, failed) => {
       const socket = connect(port, '127.0.0.1');
@@ -625,9 +521,7 @@ describe('the SMTP sink speaks the protocol', () => {
       socket.on('error', failed);
       socket.on('data', (chunk) => {
         buffer += chunk;
-        // A reply is complete when its LAST line puts a space after the code rather
-        // than a hyphen. That is the whole of SMTP's multi-line framing, and reading
-        // it wrongly here would make this test hang rather than fail.
+        // Complete when the last line has a space after the code. Getting this wrong hangs the test.
         const lines = buffer.split('\r\n').filter((line) => line !== '');
         if (lines.length === 0 || !/^\d{3} /.test(lines[lines.length - 1])) return;
         if (!buffer.endsWith('\r\n')) return;
@@ -653,8 +547,7 @@ describe('the SMTP sink speaks the protocol', () => {
         'RCPT TO:<oncall@example.test>\r\n',
         'RCPT TO:<duty@example.test>\r\n',
         'DATA\r\n',
-        // The doubled dot on the last body line is dot-stuffing: a body line starting
-        // with `.` is sent with two so it cannot be read as the terminator.
+        // `..hidden` is dot-stuffing.
         'Subject: [FIRING:1] ApiDown\r\n\r\nAlert: ApiDown\r\n..hidden\r\n.\r\n',
         'QUIT\r\n',
       ]);
@@ -680,9 +573,7 @@ describe('the SMTP sink speaks the protocol', () => {
   });
 
   it('takes two messages on one connection, as a client with a queue would', async () => {
-    // Alertmanager opens a connection per notification today. Handling a second
-    // transaction after the first `250` costs one line of state and means the sink
-    // cannot silently swallow a page because a ticket shared its socket.
+    // A second transaction on one socket must not be swallowed.
     const sink = await startSmtpSink(0);
     try {
       await dialogue(sink.port, [
@@ -722,15 +613,13 @@ describe('emailsFor', () => {
   it('matches on the envelope recipient, the status, the subject and the body together', () => {
     const received = [message(['oncall@example.test'], '[FIRING:1] ApiDown', '<p>Alert: ApiDown</p>')];
     assert.equal(emailsFor(received, 'oncall@example.test', 'ApiDown', 'firing').length, 1);
-    // Every one of these is a real way the email path breaks while still delivering.
     assert.equal(emailsFor(received, 'tickets@example.test', 'ApiDown', 'firing').length, 0);
     assert.equal(emailsFor(received, 'oncall@example.test', 'ApiDown', 'resolved').length, 0);
     assert.equal(emailsFor(received, 'oncall@example.test', 'RateLimitBans', 'firing').length, 0);
   });
 
   it('does not accept a subject that names the alert with an empty body', () => {
-    // A mail template that renders to nothing still produces a correct-looking
-    // subject, because the subject comes from a different template.
+    // The subject comes from a different template, so an empty body still looks correct.
     const received = [message(['oncall@example.test'], '[FIRING:1] ApiDown', '')];
     assert.equal(emailsFor(received, 'oncall@example.test', 'ApiDown', 'firing').length, 0);
   });
@@ -747,9 +636,7 @@ describe('emailsFor', () => {
 
 describe('emailsFor with no address configured', () => {
   it('matches nothing at all (REGRESSION-shaped)', () => {
-    // `every` over an empty recipient list is vacuously true, so an unconfigured tier
-    // used to match EVERY captured message — which turns "a ticket did not also page"
-    // into a guaranteed failure for a deployment that pages by webhook alone.
+    // An empty recipient list used to match every message.
     const received = [
       {
         from: 'alertmanager@example.test',
@@ -765,10 +652,7 @@ describe('emailsFor with no address configured', () => {
 
 describe('alertmanagerSeriesReferencedBy', () => {
   it('finds the series the alerting-itself rules are built on', () => {
-    // `seriesReferencedBy` matches `prl_*` and only `prl_*`, so before this existed the
-    // rules watching the alerting system were the one part of the file check 3 never
-    // grounded — an expression on a misspelled `alertmanager_*` series would have
-    // loaded, evaluated without error, and been permanently false.
+    // Without this, a misspelled `alertmanager_*` series would load, evaluate, and never fire.
     assert.deepEqual(
       [...alertmanagerSeriesReferencedBy('sum(increase(alertmanager_notifications_failed_total[15m])) > 0')],
       ['alertmanager_notifications_failed_total'],
@@ -803,20 +687,9 @@ describe('probeSeriesReferencedBy', () => {
   });
 
   /**
-   * The regression guard on the blind spot itself.
-   *
-   * Prometheus scrapes the API directly on the compose network and the API's healthcheck
-   * targets its own container, so a dead proxy, unreadable TLS material, an expired
-   * certificate or a dead page server leaves `up{job="prl-api"}` at 1,
-   * `prl_readiness_state` at 1 and every counter merely flat — a total user-facing outage
-   * that fires nothing at all. The probe is the only thing that looks at the deployment
-   * from outside the application, so a rules file that names no `probe_*` series is a
-   * rules file with that hole open again, and it looks exactly like a healthy one.
-   *
-   * Measured while this was written: with the exporter running and a throwaway TLS target
-   * stopped, `probe_success == 0` went pending in 10 s and fired at 2m10s, and
-   * `probe_ssl_earliest_cert_expiry` read 1795200901 — Nov 20 2026 18:55:01 UTC, which is
-   * to the second the `notAfter` of `deploy/staging/tls/staging-cert.pem`.
+   * The API is scraped directly on the compose network, so a dead proxy, TLS or page server fires
+   * nothing. Only the probe sees the deployment from outside. Measured when written: `probe_success
+   * == 0` fired at 2m10s, and `probe_ssl_earliest_cert_expiry` matched the staging cert's `notAfter`.
    */
   it('is used by at least one shipped rule, so the public origin is watched at all', () => {
     const named = new Set();
@@ -832,7 +705,6 @@ describe('probeSeriesReferencedBy', () => {
 });
 
 describe('the counts docs/production/alerts.md states about itself', () => {
-  /** The number words that document uses, which is all it will ever need. */
   const WORDS = new Map(
     [
       'zero',
@@ -858,10 +730,8 @@ describe('the counts docs/production/alerts.md states about itself', () => {
       'twenty',
     ].map((word, index) => [word, index]),
   );
-  // The tens above twenty, added when the rules file passed thirty. `spelled` returns null for a
-  // word it does not know, and `assert.equal(null, 35)` fails with a message about the wrong
-  // thing — so a counter that outgrows this map turns a count check into a spelling check. Extend
-  // it rather than rewording the document to stay inside it.
+  // Tens above twenty. `spelled` returns null for an unknown word, so extend this map rather than
+  // rewording the document.
   for (const [word, value] of [
     ['thirty', 30],
     ['forty', 40],
@@ -877,10 +747,7 @@ describe('the counts docs/production/alerts.md states about itself', () => {
   };
 
   it('agrees with the number of rules that actually exist', () => {
-    // This control was already rotten when it was written: the document said
-    // "all twenty-two rules" while the rules file held twenty-three, because a rule was
-    // added and the prose was not. A stated count nobody checks is a claim that decays
-    // silently, and this document's counts are quoted straight into release reports.
+    // The document once said "all twenty-two rules" while the file held twenty-three.
     const total = alertsInRulesFile(RULES).size;
     const stated = /establishes four things about \*\*all ([a-z-]+)\*\* rules/.exec(DOC);
     assert.ok(stated !== null, 'the document no longer states how many rules it covers');
@@ -888,12 +755,7 @@ describe('the counts docs/production/alerts.md states about itself', () => {
   });
 
   it('agrees about how many of them have never been provoked', () => {
-    // THREE are driven end to end by `alerts:verify`, not two: `ApiDown` for the paging
-    // tier, `RateLimitBans` for the ticket tier, and `Watchdog` for the heartbeat —
-    // which is provoked by nothing at all, because it is always firing, and is then
-    // followed through its own receiver, through a deliberate silence and back.
-    // Everything else is loaded, agreed, grounded and evaluable, which is not the same
-    // as tested, and the document says so with a number.
+    // Three are driven end to end: `ApiDown`, `RateLimitBans` and `Watchdog`.
     const total = alertsInRulesFile(RULES).size;
     const stated = /\*\*([A-Za-z-]+) rules have not been provoked\.\*\*/.exec(DOC);
     assert.ok(stated !== null, 'the document no longer states how many rules are unprovoked');
@@ -903,11 +765,7 @@ describe('the counts docs/production/alerts.md states about itself', () => {
 
 describe("the dead man's switch", () => {
   it('is exactly one rule, is named Watchdog, and cannot stop firing for any other reason', () => {
-    // Three properties in one test because they are one property: a heartbeat that can
-    // go quiet for a reason other than the deployment dying is a heartbeat whose
-    // watcher gets a longer grace period the first time it cries wolf, and then it is
-    // decoration. `vector(1)` depends on no scrape, no metric and no subsystem; a `for:`
-    // would delay the first ping after every restart for no benefit at all.
+    // `vector(1)` depends on nothing that can go quiet. A `for:` would delay the first ping after a restart.
     const rules = alertsInRulesFile(RULES);
     const heartbeats = [...rules].filter(([, rule]) => rule.severity === 'heartbeat');
     assert.deepEqual(
@@ -922,11 +780,7 @@ describe("the dead man's switch", () => {
   });
 
   it('is documented as a heartbeat and not as a page, which check 2 would otherwise allow', () => {
-    // The tempting mistake, and the expensive one: `severity: page` on a permanently
-    // firing rule is a notification to a human every repeat_interval, forever. The
-    // document and the rules file are compared by severity, so the two spellings have
-    // to agree — and this asserts the parser can even see the third value, which it
-    // could not before the switch existed.
+    // `severity: page` on a permanently firing rule notifies a human every repeat_interval.
     assert.equal(alertsInDocument(DOC).get('Watchdog'), 'heartbeat');
     assert.equal(alertsInRulesFile(RULES).get('Watchdog').severity, 'heartbeat');
   });
@@ -935,18 +789,14 @@ describe("the dead man's switch", () => {
     const { values } = alertmanagerValues({});
     const rendered = renderAlertmanagerConfig(TEMPLATE, values);
     assert.match(rendered, /severity = "heartbeat"\n {6}receiver: heartbeat\n {6}continue: false/);
-    // `send_resolved: false` on this receiver only. A resolved heartbeat would be the
-    // last thing a watcher heard and would look like a clean shutdown.
+    // A resolved heartbeat would look like a clean shutdown to the watcher.
     assert.match(rendered, /- url: '[^']*\/heartbeat'\n(?: *#[^\n]*\n)* *send_resolved: false/);
-    // And the paging receiver must not contain the heartbeat URL under any rendering.
     const paging = rendered.slice(rendered.indexOf('- name: paging'), rendered.indexOf('- name: tickets'));
     assert.ok(!paging.includes(values.PRL_ALERT_HEARTBEAT_WEBHOOK_URL));
   });
 
   it('refuses to render without a heartbeat destination, or with a malformed interval', () => {
-    // The one destination that may not be dropped, and the reason is asymmetric: an
-    // unset pager is discovered during the first incident by the person who was not
-    // woken. An unset heartbeat is discovered never.
+    // An unset heartbeat is never discovered, unlike an unset pager.
     const empty = alertmanagerValues({ PRL_ALERT_HEARTBEAT_WEBHOOK_URL: '' }).values;
     assert.match(destinationProblems(empty).join(' '), /PRL_ALERT_HEARTBEAT_WEBHOOK_URL is empty/);
     const bad = alertmanagerValues({ PRL_ALERT_HEARTBEAT_INTERVAL: '20 seconds' }).values;
@@ -965,10 +815,7 @@ describe("the dead man's switch", () => {
 });
 
 describe("NEGATIVE CONTROL: the dead man's switch alarming", () => {
-  // A dead man's switch that has never been observed to fire is the purest possible
-  // decoration, and the live run's negative control costs a stopped Alertmanager and
-  // two minutes. These are the same alarm, constructed, so that a change to the
-  // arithmetic is caught in a pull request instead of in a rehearsal.
+  // The live negative control costs a stopped Alertmanager and two minutes. These construct the same alarm.
   const at = (...seconds) => seconds.map((second) => 1_700_000_000_000 + second * 1_000);
 
   it('passes a steady rhythm inside the deadline', () => {
@@ -981,9 +828,7 @@ describe("NEGATIVE CONTROL: the dead man's switch alarming", () => {
   });
 
   it('refuses a single ping, which proves the route and not the rhythm', () => {
-    // The failure this is against: a `repeat_interval` Alertmanager rounded up, or a
-    // receiver that fired once at `group_wait` and never again. Both deliver a first
-    // ping that looks perfect, and both are already broken when they are installed.
+    // A rounded-up `repeat_interval` or a single `group_wait` ping both look perfect at first.
     assert.match(heartbeatProblem(at(0), { deadlineMs: 60_000 }), /only 1 heartbeat/);
     assert.match(heartbeatProblem(at(0, 20), { deadlineMs: 60_000 }), /only 2 heartbeat/);
   });
@@ -994,17 +839,14 @@ describe("NEGATIVE CONTROL: the dead man's switch alarming", () => {
   });
 
   it('detects silence from the last ping, not from the moment somebody started watching', async () => {
-    // What an external watcher can actually see. It has no idea when anybody started
-    // looking; it knows only how long since it was last told anything, which is the
-    // number its grace period is compared against.
+    // Measured from the last ping, which is what an external watcher sees.
     const lastPing = Date.now() - 5_000;
     const silence = await watchForSilence(() => [lastPing], 3_000, 10_000);
     assert.ok(silence >= 5_000, `silence was ${silence}`);
   });
 
   it('does not report silence when a ping arrives inside the deadline', async () => {
-    // The other half, and the half that keeps this from being a timer that always
-    // rings: a watcher stuck in the alarm state is as useless as one stuck quiet.
+    // A watcher stuck in the alarm state is as useless as one stuck quiet.
     const arrivals = [Date.now() - 1_000];
     setTimeout(() => arrivals.push(Date.now()), 200);
     assert.equal(await watchForSilence(() => arrivals, 3_000, 6_000), null);
@@ -1013,43 +855,10 @@ describe("NEGATIVE CONTROL: the dead man's switch alarming", () => {
 
 describe('every rule is covered by a promtool unit test, in both directions', () => {
   /**
-   * The guard that closes the gap this whole directory was created for.
-   *
-   * ## The measurement it exists because of
-   *
-   * A mutation audit compared the `- alert:` names in `alert-rules.yml` against
-   * every `alertname=` in `deploy/staging/observability/rule-tests/`: **nineteen
-   * of thirty-five rules had no unit test at all**, and the rules file's own
-   * header claimed two of them — `SeatReleaseFailing` and `RoomOwnershipRefused` —
-   * were covered "in both directions". They were not. The sentence describing the
-   * coverage was the only evidence of it, which is the same class of defect as a
-   * runbook that names the wrong alert: a claim nothing was checking.
-   *
-   * The auditor named this check and declined to add it, because it would have
-   * failed immediately for those nineteen. That is the right reason to write a
-   * guard and the wrong reason to skip one, so it is here now that they are
-   * covered, and it is what stops the gap reopening one convenient rule at a
-   * time.
-   *
-   * ## Why here and not in `run.sh`
-   *
-   * `promtool test rules` reads the cases and the rules and cannot see that a
-   * rule has no case — silence and absence are the same to it. This is also why
-   * the check runs under `test:scripts`, and therefore under `pnpm run verify`,
-   * rather than only under `alerts:unit`: `alerts:unit` needs Docker, and a
-   * coverage claim that only holds on machines with a daemon running is a
-   * coverage claim that lapses on the machine that matters.
-   *
-   * ## Both directions, and what this can honestly assert about them
-   *
-   * A name appearing in a file is not proof that both directions were asserted —
-   * only a reader can judge that. What this CAN do is refuse the two states that
-   * make the question moot, and it does both: a rule with no case anywhere, and a
-   * case naming a rule that does not exist. The second is not hypothetical
-   * bookkeeping. `ALERTS{alertname="ApiDwon"}` with `exp_samples: []` passes
-   * against any rules file ever written, so a typo in a silent assertion is a
-   * green test over nothing — and `exp_samples: []` is precisely the spelling of
-   * the "stays silent" half.
+   * Every rule must have a case in `rule-tests/`, and every case must name a real rule. An audit found
+   * nineteen of thirty-five rules untested while the rules file claimed coverage. `promtool` cannot
+   * see a missing case, and `ALERTS{alertname="ApiDwon"}` with `exp_samples: []` passes against any
+   * file. Runs under `test:scripts` because `alerts:unit` needs Docker.
    */
   const RULE_TESTS = join(OBSERVABILITY, 'rule-tests');
   const caseFiles = readdirSync(RULE_TESTS)
@@ -1058,10 +867,7 @@ describe('every rule is covered by a promtool unit test, in both directions', ()
   const declared = alertsInRulesFile(RULES);
 
   it('read a non-empty rules file and a non-empty set of case files', () => {
-    // A sweep of nothing is not a pass. A renamed directory, a glob that stopped
-    // matching or a parser that quietly returned an empty map would make every
-    // assertion below vacuously true — which is the exact shape of the defect
-    // this suite exists to catch, one level up.
+    // A sweep of nothing is not a pass.
     assert.ok(caseFiles.length >= 7, `only ${caseFiles.length} *.test.yml files were read`);
     assert.ok(declared.size >= 35, `only ${declared.size} rules parsed out of alert-rules.yml`);
   });

@@ -1,37 +1,10 @@
 /**
- * The drills that break the calculation threads: one that dies without warning, and one that
- * refuses to finish.
+ * The drills that break the calculation threads.
  *
- * ## Why the crash drill runs the pool in a child rather than in the API
- *
- * A worker thread cannot be killed from outside its own process — there is no pid, no signal,
- * and no handle. The only ways to make one die are to be inside the process, or to give it a
- * script that kills itself. `WorkerPool` has a documented seam for the second (`workerUrl`, "test
- * seam: a different worker script"), so this drill writes a worker that exits mid-task, points a
- * REAL `WorkerPool` at it in a child process, and checks what the pool does about it.
- *
- * That is a real failure injection against the real production class, and it is worth being
- * precise about what it is not: it does not prove the shipped `equity-worker.ts` can crash. It
- * cannot, as far as this drill can tell — every path in that file catches and replies with a
- * `WorkerFailure`, which is a *handled* failure and a different code path entirely. So the drill
- * also asks the live server for a real calculation afterwards, and reports that the surface a
- * user touches is unaffected.
- *
- * ## The timeout drill is the opposite shape
- *
- * `slow-simulation` needs no seam at all: the heaviest calculation the endpoint will accept,
- * against a budget measured to be well below what it costs, genuinely overruns — and the pool's
- * answer to that is `worker.terminate()`, which is a thread dying mid-task inside the real
- * server, on the real path, with a real client waiting. So between them the two drills cover both
- * halves: a thread that dies unexpectedly, and a thread the server itself kills.
- *
- * That budget is MEASURED and not written down, because writing it down is how this drill first
- * passed while proving nothing: at a fixed 150 ms the heaviest permitted request finished in
- * 134 ms on this machine and the drill reported a timeout that never happened.
- *
- * Both check the same three things afterwards: the process survived, the pool refilled, and the
- * next caller got an answer. A pool that leaks a thread per failure is invisible until the day
- * it has none left.
+ * A worker thread has no pid, so `worker-crash` points a real `WorkerPool` at a stub worker via its
+ * `workerUrl` seam, in a child process. It does not prove `equity-worker.ts` can crash, since that
+ * file replies with a handled `WorkerFailure`. `slow-simulation` overruns the real server's budget,
+ * so the pool calls `worker.terminate()`. Both check the process survived and the pool refilled.
  */
 
 import { spawn } from 'node:child_process';
@@ -43,17 +16,9 @@ import { pathToFileURL } from 'node:url';
 import { newReport, REPO_ROOT, ROUTES, Session, sleep } from './harness.mjs';
 import { logLine, scanForSecrets, scanTextForSecrets } from './invariants.mjs';
 
-/**
- * The seed the stub worker treats as "die now".
- *
- * A value rather than "always crash", because the point of the drill is RECOVERY: a worker that
- * crashes on every task proves the pool notices and nothing else. One poisoned task followed by
- * a healthy one is what distinguishes a pool that replaces a dead thread from one that merely
- * survives the first death.
- */
+/** One poisoned task then a healthy one, so the drill proves the pool replaces a dead thread. */
 const POISON_SEED = 999;
 
-/** A worker script that exits mid-task, the way an OOM or a native fault would. */
 const CRASH_WORKER = `import { parentPort } from 'node:worker_threads';
 
 // A calculator stub, and a deliberately fatal one for a single task. Exiting rather than throwing
@@ -70,7 +35,6 @@ parentPort.on('message', (request) => {
 });
 `;
 
-/** The driver: a real `WorkerPool`, the stub worker, one poisoned task and one healthy one. */
 function driverSource(poolPath, workerPath) {
   return `import { WorkerPool } from ${JSON.stringify(poolPath)};
 
@@ -104,10 +68,6 @@ console.log(JSON.stringify(out));
 await pool.close();
 `;
 }
-
-// ---------------------------------------------------------------------------
-// 8. A simulation worker that crashes
-// ---------------------------------------------------------------------------
 
 export const workerCrash = {
   name: 'worker-crash',
@@ -203,7 +163,6 @@ export const workerCrash = {
     }
     report.failures.push(...scanForSecrets(outcome, 'the pool driver output'));
 
-    // The live surface, in the real server, with the real worker script.
     const server = await ctx.startServer();
     const session = new Session(server.origin, ctx.webOrigin, 'Worker drill');
     await session.createGuest();
@@ -221,23 +180,13 @@ export const workerCrash = {
   },
 };
 
-// ---------------------------------------------------------------------------
-// 9. A simulation that exceeds COACH_TIMEOUT_MS
-// ---------------------------------------------------------------------------
-
-/** The smallest `COACH_TIMEOUT_MS` that `config.ts` accepts. The budget cannot go below it. */
+/** The smallest `COACH_TIMEOUT_MS` that `config.ts` accepts. */
 const MINIMUM_BUDGET_MS = 100;
 
 /**
- * The two heaviest requests `POST /math/equity` will accept, and they are heavy in different ways.
- *
- * The first is planned as an EXACT enumeration: two known hands preflop is 3.42 million hand
- * evaluations, under `maxExactEvaluations` (4 million), so the sample count is ignored entirely.
- * The second is genuinely sampled — five players is far past the exact ceiling — and 200,000
- * samples against five players is exactly `maxSampledEvaluations` (1 million). Between them they
- * are the most work a caller can buy through this endpoint, which is what the drill needs: the
- * budget has a floor of 100 ms, so a request that cannot be made to take meaningfully longer
- * than that cannot exercise the timeout at all.
+ * The most work a caller can buy. Two known hands preflop is an exact enumeration of 3.42 million
+ * evaluations, under `maxExactEvaluations` (4 million). Five players at 200,000 samples is exactly
+ * `maxSampledEvaluations` (1 million).
  */
 const HEAVY_REQUESTS = [
   { label: 'exact enumeration', body: { heroCards: 'AhAd', opponents: ['KsKc'], samples: 200_000 } },
@@ -253,24 +202,18 @@ export const slowSimulation = {
   async run(ctx) {
     const report = newReport();
 
-    /** One equity request against a given server, timed from the caller's side. */
     const ask = async (session, body) => {
       const startedAt = performance.now();
       const response = await session.request(ROUTES.equity, { method: 'POST', body });
       return { ...response, waitedMs: performance.now() - startedAt };
     };
 
-    // --- calibration ---------------------------------------------------------
-    //
-    // The budget is measured rather than guessed, and that is the whole reason this drill has two
-    // servers. A fixed budget is a bet on how fast the machine is: written at 150 ms it passed on
-    // one machine and, on this one, watched the heaviest permitted request finish in 134 ms and
-    // report a timeout drill that had timed nothing out. So the first server measures what the
-    // heaviest request actually costs here, and the second is configured from that measurement.
+    // The budget is measured on a first server, not fixed. At a fixed 150 ms the heaviest request
+    // finished in 134 ms and the drill reported a timeout that never happened.
     const calibrationServer = await ctx.startServer({ env: { COACH_TIMEOUT_MS: '25000' } });
     const calibrationSession = new Session(calibrationServer.origin, ctx.webOrigin, 'Calibration');
     await calibrationSession.createGuest();
-    // Once to warm a thread, so the measurement is of the calculation and not of a module import.
+    // Warm a thread so the measurement excludes module import.
     await ask(calibrationSession, HEAVY_REQUESTS[0].body);
 
     let heaviest = null;
@@ -306,7 +249,6 @@ export const slowSimulation = {
       return report;
     }
 
-    // --- the drill -----------------------------------------------------------
     const server = await ctx.startServer({ env: { COACH_TIMEOUT_MS: String(coachTimeoutMs) } });
     const session = new Session(server.origin, ctx.webOrigin, 'Slow simulation drill');
     await session.createGuest();
@@ -337,8 +279,7 @@ export const slowSimulation = {
       );
     }
 
-    // Bounded: the caller must not wait meaningfully longer than the budget. Ten times it is
-    // generous and still catches "the deadline never fired".
+    // Ten times the budget still catches a deadline that never fired.
     const bound = coachTimeoutMs * 10 + 2_000;
     if (slow.waitedMs > bound) {
       report.failures.push(
@@ -354,13 +295,8 @@ export const slowSimulation = {
     if (noticed.found) report.evidence.push({ label: 'the pool reported it', text: noticed.line });
     else report.failures.push('nothing in the log says a calculation was abandoned');
 
-    // --- recovery, inside the same process, on a replacement thread ----------
-    //
-    // A request naming a `top:NN` range gets `STRENGTH_TABLE_ALLOWANCE_MS` (12 s) on top of the
-    // budget, because building the preflop strength table legitimately takes about three seconds.
-    // That is what makes recovery observable at a budget this tight: this request has the room to
-    // run, so if it succeeds the pool must have spawned a replacement for the thread it just
-    // terminated and served real Monte Carlo work on it.
+    // A `top:NN` range gets `STRENGTH_TABLE_ALLOWANCE_MS` (12 s) extra, so this request can succeed
+    // only on a replacement thread for the one just terminated.
     await sleep(200);
     const recovered = await ask(session, { heroCards: 'AhAd', opponents: ['top:40'], samples: 20_000 });
     report.measurements.recoveryRequestMs = Math.round(recovered.waitedMs);
@@ -377,8 +313,7 @@ export const slowSimulation = {
       );
     }
 
-    // And the timeout path is stable rather than a one-off. A pool that leaked its terminated
-    // threads would answer service_unavailable here instead, having run out of threads to lose.
+    // A pool that leaked terminated threads would answer service_unavailable here.
     const again = await ask(session, heaviest.body);
     report.measurements.secondTimeoutStatus = again.status;
     report.measurements.secondTimeoutCode = again.body?.error?.code ?? null;
@@ -391,7 +326,7 @@ export const slowSimulation = {
       report.observations.push('a second overrun times out identically, so no thread was leaked');
     }
 
-    // Graceful degradation: only the expensive endpoint is affected. A learner can still play.
+    // Only the expensive endpoint is affected.
     const table = await session.request(ROUTES.rooms, {
       method: 'POST',
       body: { name: 'Slow simulation drill', maxSeats: 2, smallBlind: 1, bigBlind: 2, startingStack: 200 },

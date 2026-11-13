@@ -1,37 +1,8 @@
 #!/usr/bin/env node
 /**
- * Tests for the accessibility-tree checkers.
- *
- * Run with:  node --test scripts/ax-tree-audit.test.mjs
- * Also run by: pnpm run test:scripts
- *
- * ## What is being tested, and why it is worth testing
- *
- * `scripts/ax-tree-audit.mjs` drives Chrome, and a test cannot. What it CAN test — and what actually
- * decides whether that script is worth anything — is the pure half: the functions that look at a
- * computed accessibility tree and decide what is wrong with it. A checker that has only ever been
- * shown correct input is a checker nobody has tested, and the failure mode is silent: it reports
- * "no violations" for the rest of its life and everybody believes it.
- *
- * ## Would this fail if the behaviour broke?
- *
- * Yes, and that was checked by breaking it rather than by reasoning about it. Every `describe` block
- * below feeds the detector a tree containing a REAL violation of the kind the audit exists to catch —
- * a button with no computed name, a face-down card whose accessible name says "queen of hearts", a
- * heading outline that skips a level, two navigation landmarks with the same name, a live region
- * buried in an `aria-hidden` subtree — and asserts the specific finding comes back. The
- * `well-formed tree` block is the other half of the control: the same detectors, on a tree modelled
- * on a real page of this app, must report nothing. A detector that fires on everything is as useless
- * as one that fires on nothing, and only having both halves rules both out.
- *
- * Additionally, every block that scans asserts on the COUNT of what was examined
- * (`counts.interactive`), because "zero findings" and "zero nodes looked at" are indistinguishable in
- * the output and only one of them is good news.
- *
- * The node shapes below are not invented: they are the shape `Accessibility.getFullAXTree` returns,
- * as observed against this app in Chrome 151 — `role: { value }`, `name: { value }`,
- * `properties: [{ name, value: { value } }]`, `childIds`, and `ignored` with `notRendered` for an
- * element inside a `display: none` subtree.
+ * Tests for the pure checkers in `scripts/ax-tree-audit.mjs`. Each block feeds a real violation and
+ * asserts the finding, and the well-formed tree must report nothing. Node shapes are what
+ * `Accessibility.getFullAXTree` returns in Chrome 151.
  */
 
 import assert from 'node:assert/strict';
@@ -46,12 +17,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, '..');
 const SCRIPT = join(HERE, 'ax-tree-audit.mjs');
 
-// ---------------------------------------------------------------------------
-// Builders for the CDP node shape
-// ---------------------------------------------------------------------------
-
 let nextId = 0;
-/** One AX node, in the shape `Accessibility.getFullAXTree` actually returns. */
 function node(role, name, extra = {}) {
   nextId += 1;
   return {
@@ -67,17 +33,12 @@ function node(role, name, extra = {}) {
   };
 }
 
-/** Makes `parent` own `children`, so the walk recovers document order rather than array order. */
 function withChildren(parent, children) {
   parent.childIds = children.map((child) => child.nodeId);
   return [parent, ...children];
 }
 
-/**
- * A tree shaped like a real page of this app: a shell with four landmarks, an `h1`, an `h2`, and
- * fourteen named controls. Fourteen, because a scan that examined three things and found nothing
- * has proved nothing, and the count is asserted below.
- */
+// Fourteen named controls, so the scan count assertion below means something.
 function wellFormedTree(overrides = {}) {
   const buttons = Array.from({ length: 8 }, (_, index) => node('button', `Control ${String(index + 1)}`));
   const links = Array.from({ length: 6 }, (_, index) => node('link', `Destination ${String(index + 1)}`));
@@ -100,8 +61,6 @@ function wellFormedTree(overrides = {}) {
   ];
 }
 
-// ---------------------------------------------------------------------------
-
 describe('a well-formed tree', () => {
   it('produces no findings, and says how much it looked at', () => {
     const { findings, counts } = auditAxTree(wellFormedTree());
@@ -110,8 +69,7 @@ describe('a well-formed tree', () => {
       [],
       `a tree modelled on a real page must be clean: ${JSON.stringify(findings, null, 2)}`,
     );
-    // The "did it actually scan anything" guard. Without it, a checker that returned early would
-    // pass this whole file.
+    // Guards against a checker that returns early.
     assert.ok(
       counts.interactive > 12,
       `only ${counts.interactive} interactive node(s) were examined; a clean result over an empty ` +
@@ -137,9 +95,7 @@ describe('NEGATIVE CONTROL — a button with no computed accessible name', () =>
   });
 
   it('does not fire for a control that is not rendered', () => {
-    // Chrome reports an element inside a `display:none` subtree as ignored/notRendered, with no
-    // computed name because it has no box. Flagging those was the first thing the real audit got
-    // wrong, and it would have sent somebody to "fix" markup that is already correct.
+    // A `display:none` subtree is ignored/notRendered with no name, which is not a defect.
     const offscreen = node('button', '', { ignored: true });
     const { findings } = auditAxTree(wellFormedTree({ extraNodes: [offscreen] }));
     assert.deepEqual(findings, []);
@@ -189,10 +145,8 @@ describe('NEGATIVE CONTROL — a hidden card that names its rank and suit', () =
   });
 
   it('catches a value that is only in the markup', () => {
-    // The case that matters most: the name is correct today, and the value is sitting in a
-    // `data-` attribute one ARIA change away from being announced. `PlayingCard` short-circuits
-    // before it decodes a face-down card precisely so this cannot happen; this is the check that
-    // would notice if that short-circuit were ever removed.
+    // The value in a `data-` attribute is one ARIA change from being announced. `PlayingCard` skips
+    // decoding a face-down card so this cannot happen.
     const findings = checkHiddenCards([
       {
         name: 'face-down card',
@@ -210,7 +164,6 @@ describe('NEGATIVE CONTROL — a hidden card that names its rank and suit', () =
         name: 'face-down card',
         html: '<span class="prl-card prl-card--sm prl-card--face-down" role="img" aria-label="face-down card"><span class="prl-card__back" aria-hidden="true"></span></span>',
       },
-      // No computed name because it has no box. Not a naming defect; still checked for a leak.
       { name: '', html: '<span class="prl-card--face-down"></span>', rendered: false },
     ]);
     assert.deepEqual(findings, [], JSON.stringify(findings));
@@ -243,7 +196,6 @@ describe('NEGATIVE CONTROL — landmarks', () => {
   });
 
   it('fires when a required landmark is absent', () => {
-    // Everything except the main landmark, which is the one `landmark-one-main` exists for.
     const nodes = wellFormedTree().filter((entry) => entry.role.value !== 'main');
     const { findings } = auditAxTree(nodes);
     const hit = findings.find((finding) => finding.check === 'landmark-missing');
@@ -368,7 +320,6 @@ describe('the script itself', () => {
     });
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /no journey named "nope"/u);
-    // The message must list what IS available, or the reader has to open the file to find out.
     assert.match(result.stderr, /learn, practice, table, lab, legends, review/u);
   });
 

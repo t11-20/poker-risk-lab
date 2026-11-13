@@ -1,165 +1,16 @@
 #!/usr/bin/env node
 /**
- * REAL keyboard navigation, in a real browser, driven by real key events.
+ * Real keyboard navigation in real Chrome over the DevTools Protocol, with Node built-ins only
+ * (`pnpm run test:keyboard`). Keys go through `Input.dispatchKeyEvent`, because a synthesised
+ * `KeyboardEvent` does not move focus. Per route it checks reachability, document order, a visible
+ * focus indicator, no trap and the skip link, then plays a hand at a live table by keyboard.
  *
- * ## Why this exists
+ * `--start` uses web port 3464. The API must stay on 3001, because `apps/web/next.config.ts` freezes the
+ * `/api/*` rewrite destination into `.next/routes-manifest.json` at build time, and a build without
+ * `PRL_API_REWRITE_ORIGIN` points at `http://localhost:3001`.
  *
- * `scripts/a11y-audit.mjs` is a *static* audit and says so at length: it parses server-rendered
- * HTML and applies the checks that can be decided from markup alone. It is honest and it is not
- * enough. The release audit left **A11Y-001 UNVERIFIED** for exactly the reason that file states
- * about itself — "keyboard-only primary journeys were not Tab-tested in a real browser" — and a
- * DOM approximation cannot settle it, because the things that go wrong are things markup does not
- * contain:
- *
- *   - `Tab` order is decided by layout and by `display`/`visibility`, not by source order;
- *   - a focus ring is a computed style under `:focus-visible`, which needs a rendering engine;
- *   - a keyboard trap only exists once something has stolen focus at runtime;
- *   - a control that hydrates into an event handler is inert in static HTML and live in a browser.
- *
- * ## How it is a real browser with no new dependency
- *
- * Adding Playwright or Puppeteer to this repository is release-blocking (see
- * `pnpm-workspace.yaml`: `minimumReleaseAge`, `ignoreScripts`, an empty `onlyBuiltDependencies` —
- * a browser driver's whole install is a postinstall download). So this drives Chrome over the
- * **DevTools Protocol** using nothing but Node built-ins: `child_process` to start it,
- * `fetch` for the `/json` endpoints, and Node 22+'s built-in `WebSocket` for the protocol itself.
- *
- * Keys go through `Input.dispatchKeyEvent`, which is the same path a physical keypress takes into
- * the renderer. This is not a synthesised `KeyboardEvent` from page script — a synthesised Tab does
- * not move focus, which is precisely why a jsdom-shaped test cannot answer this question.
- *
- * ## What is checked, per route
- *
- *   1. **Every interactive control is reachable.** The tab walk is compared against the set of
- *      elements the page says are focusable. Anything in the second set and not the first is
- *      unreachable by keyboard.
- *   2. **Focus order is logical.** Asserted as document order, which is what "logical" means for
- *      a page whose visual order is its source order. A jump backwards is reported with both ends.
- *   3. **Focus is visible.** Each stop is measured under `:focus-visible` by comparing the element
- *      and its ancestors' computed styles focused against blurred. Any difference counts, because
- *      an app may legitimately draw the ring on a parent — this one does. A stop with no computed
- *      difference anywhere is a failure.
- *   4. **There is no keyboard trap.** The walk must return to where it started within one cycle,
- *      and `Shift+Tab` must walk back out of every stop.
- *   5. **The skip link works.** First stop, and `Enter` on it must move focus into `<main>`.
- *
- * And per journey, the interactions that are not just tabbing: `Escape` closes the menu and returns
- * focus, arrow keys move a slider, `Enter`/`Space` operate a poker action.
- *
- * The last journey is the one no fixture can stand in for: a PRIVATE TABLE, opened, sat down at,
- * dealt and folded — every step reached by Tab and pressed with Enter, against a real socket and a
- * real server. See `playOneHandByKeyboard`.
- *
- * ## The table's controls are matched by accessible NAME, never by `textContent`
- *
- * An action button in this app is two spans — the word and its cost — so `button.textContent` is
- * the run-together string `Fold0 units`. The first version of `checkPokerActions` filtered
- * `/^(fold|check|call|…)\b/i` over exactly that string, and `\b` does not match between `d` and
- * `0`. It therefore selected only the buttons whose label happens to carry a space (`Raise to 70`)
- * and reported **"no action controls are on screen in this state"** as a WARNING on the routes that
- * render the whole row. A release report recorded those warnings as a benign idle state; they were
- * a detector that could not fire, which is worse than no detector because it reads as a pass.
- *
- * The second half of the same defect was in the follow-up probe: `\b` written inside a template
- * literal is the BACKSPACE escape, not the regex assertion, so the expression injected into the
- * page carried a control character and matched nothing whatsoever.
- *
- * Both halves are fixed by `actionControlName` and `isPokerActionName` below. The name comes from
- * `aria-label` when there is one — what a screen reader announces, and what `scripts/ax-tree-audit.mjs`
- * already matches on after finding this same defect from the other side — and the word boundary is
- * an explicit "not followed by a letter" so that `Fold0 units` matches and `Folding costs nothing`
- * does not. They are real functions injected with `String(fn)` rather than regexes written into a
- * string, because source that is compiled as source cannot be mangled by string escaping.
- *
- * ## A check that finds nothing to check must FAIL where there was something to find
- *
- * Every route handed to `checkPokerActions` declares `actionControls`, and a route that reaches it
- * without one is a failure rather than a lenient default:
- *
- *   - `'required'` — the route renders a decision row. Finding none is a FAILURE, whether the
- *     defect is in the app or in the matcher above. This is the line that stops the silent version
- *     of this check ever coming back.
- *   - `'until-seated'` — the live table before a seat is taken legitimately offers no actions. That
- *     is reported as NOT APPLICABLE, counted separately, and never as a pass: the operable half of
- *     this question belongs to `playOneHandByKeyboard`, which sits down at a real table.
- *
- * ## The age gate
- *
- * `apps/web/src/lib/age-gate.ts` can put an interstitial in front of `/play` (`PRL_AGE_GATE=on`),
- * or in front of everything (`PRL_AGE_GATE_SCOPE=site`). Two things are done about it, and both are
- * needed, because they answer different questions:
- *
- *   1. **A declaration cookie is seeded into the browser profile before the first navigation.** The
- *      value is `AGE_GATE_MINIMUM_CEILING`, the highest threshold the configuration can clamp to,
- *      so one cookie satisfies any gate this app can be configured with. Seeding beats running with
- *      `PRL_AGE_GATE=off` because this harness does not start the server: it is pointed at one that
- *      is already running (staging, a container, another agent's `next start`), whose environment
- *      it cannot change. It audits the deployment as configured, which is the point.
- *   2. **The landing URL is checked on every navigation anyway.** A seeded cookie can be refused —
- *      a raised threshold, a `__Host-` name over plain HTTP — and the failure mode without this
- *      check is a confusing timeout in `goto`, or worse, an audit of the interstitial reported
- *      under the name of the page it replaced. Landing on `/age-check` is now an explicit failure
- *      naming the gate.
- *
- * The cookie is not a bypass of anything: the gate is a self-declaration that any reader can make
- * by pressing its button, and nothing is verified anywhere. What the harness gives up by seeding it
- * is a keyboard audit of the interstitial ITSELF, which is a real page with a real control; run
- * this against a deployment with the gate on and `/age-check` in the route list to cover it.
- *
- * ## Usage
- *
- *     node scripts/keyboard-audit.mjs [--web http://127.0.0.1:3464] [--start] [--with-api]
- *                                     [--api http://127.0.0.1:3001] [--headful] [--json <path>]
- *
- * Exits non-zero on any failure, so it is usable as a release gate. Run it against a PRODUCTION
- * build (`next start`): a development build ships extra dev-only overlays that are not what ships.
- *
- * ## `--start`, and why this gate ran nowhere until it had one
- *
- * For most of this file's life it had no server lifecycle: the RUNBOOK said it "needs a running
- * production build on :3000 and a running API — it is not started for you", and the mechanical
- * consequence was that `grep -rl 'test:keyboard' .github/workflows/` matched NOTHING and
- * `pnpm run verify` did not list it. A gate that only runs when a person remembers is not a gate,
- * and on a product about to onboard students, keyboard operability is not a thing to leave to
- * memory. `--start`/`--with-api` are the same lifecycle `scripts/ax-tree-audit.mjs` has, for the
- * same reason, so this can be one of `verify`'s gates rather than a paragraph in a runbook.
- *
- * The port is **3464**, and the whole rest of the map is taken: 3000/3001 are the dev app and the
- * dev API, 3456 is `test:ax`, 3457 is `test:csp`, 3458/3459 are the age gate's two scopes, 3462 is
- * `design:contrast`, 3463 is `test:layout` and 3465/3467 are `test:ax`'s third web app and the
- * corrupting proxy behind it. Two gates sharing a port is a flake that only
- * appears when somebody runs them at once, which is precisely what `verify` does.
- *
- * The API stays on **3001** and that is not a free choice: `apps/web/next.config.ts` freezes the
- * `/api/*` rewrite destination into `.next/routes-manifest.json` at BUILD time, and a build made
- * without `PRL_API_REWRITE_ORIGIN` points at `http://localhost:3001`. The browser calls its own
- * origin, Next proxies to that frozen destination, so an API started anywhere else is an API the
- * page cannot reach — the live-table journey would then fail with a socket that never opens and
- * the report would blame the app. `test:ax` starts its API on 3001 for exactly this reason.
- *
- * ## Is it stable enough to BLOCK a release?
- *
- * Measured, because a flaky release gate is worse than an unwired one — it teaches people to re-run
- * until green, and then a real failure gets one more `pnpm run verify` instead of a reader. On
- * 2026-08-26, on this machine, against a production build with `--start --with-api`: **twelve
- * consecutive runs, every one exit 0, every one exactly 146 checks passed, 1 not-applicable, 0
- * warnings, 0 failures, 56-59s each.**
- *
- * The interesting half is WHY, because "a real hand at a real table" sounds like the definition of
- * flaky. The cards are random and reach no assertion: the audit takes the first seat and acts first
- * preflop, so the decision it is driven to is always the same shape — fold / call the blind / raise
- * to the minimum — and all six of the private-table checks are structural (is it named, is it
- * tabbable, does the slider move, did the server accept a Fold). Across those twelve runs the
- * offered-action list and the slider range came back byte-identical every time. What varies is which
- * two cards are on screen, and nothing here reads them.
- *
- * The one intermittency that HAS been seen was the audit's own and is fixed: reading focus on "no
- * enabled action" caught the in-flight moment when the row is disabled and the browser has blurred
- * it. It now waits for `.prl-action-bar__idle`. See the comment at that wait.
- *
- * The checkers that are pure — the two matchers, and the route declarations they are driven by —
- * are exported and covered by `scripts/keyboard-audit.test.mjs`, so the run block below is guarded
- * by `import.meta.main`.
+ * An age declaration cookie is seeded before the first navigation, so a gated deployment can be
+ * audited as configured. Landing on `/age-check` anyway is a failure.
  */
 
 import { spawn } from 'node:child_process';
@@ -170,22 +21,13 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
-// The gate's own constants, imported rather than re-typed. `age-gate.ts` is a leaf module with no
-// imports of its own precisely so that things outside the Next runtime can read it, and a second
-// copy of a cookie name here is the failure its header describes: a harness that seeds
-// `prl_age_gate` while the proxy reads `prl_age_check` would sail past this whole feature and
-// report a clean run against the interstitial. `scripts/regenerate-web-fixtures.mjs` sets the
-// precedent for a script importing application TypeScript by path.
+// Imported from the gate itself, so a renamed cookie cannot leave this harness seeding the old one.
 import {
   AGE_GATE_COOKIE_NAMES,
   AGE_GATE_MINIMUM_CEILING,
   AGE_GATE_PATH,
 } from '../apps/web/src/lib/age-gate.ts';
 import { waitForDevtools } from './chrome-devtools.mjs';
-
-// ---------------------------------------------------------------------------
-// Arguments
-// ---------------------------------------------------------------------------
 
 const args = process.argv.slice(2);
 const flag = (name, fallback) => {
@@ -200,7 +42,6 @@ const WITH_API = args.includes('--with-api');
 const API_ORIGIN = flag('--api', process.env['PRL_API_ORIGIN'] ?? 'http://127.0.0.1:3001');
 const READY_TIMEOUT_SECONDS = Number(flag('--ready-timeout', '120'));
 
-/** Chrome, wherever this platform keeps it. */
 const CHROME_CANDIDATES = [
   process.env['CHROME_PATH'],
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
@@ -238,14 +79,7 @@ const warn = (label, detail) => {
   record.push({ level: 'warn', label, detail });
   console.log(`${YELLOW}  !${RESET} ${label} ${DIM}${detail}${RESET}`);
 };
-/**
- * A check that had nothing to examine BECAUSE THE ROUTE SAYS SO, which is not a pass.
- *
- * Kept out of `passed` on purpose. "69 checks passed" that silently includes a check which
- * examined nothing is the shape of report this file has already produced once, and the whole point
- * of the `actionControls` declaration is that "there was nothing here" has to be a claim somebody
- * wrote down rather than an outcome the run can drift into.
- */
+// A check the route declares has nothing to examine. Kept out of `passed`.
 const skip = (label, detail) => {
   notApplicable.push(`${label} — ${detail}`);
   record.push({ level: 'skip', label, detail });
@@ -253,56 +87,25 @@ const skip = (label, detail) => {
 };
 const section = (title) => console.log(`\n${BOLD}${title}${RESET}`);
 
-/**
- * True when THIS process started the API, so "the table never came up" is a defect and not an
- * environment.
- *
- * The live-table journey used to report every one of its abort points as a warning — "could not
- * reach 'Open the table' by keyboard; is the API running?" — and a warning does not fail the run.
- * That was right while this harness was pointed at somebody else's deployment: it cannot tell a
- * broken keyboard from an API nobody started, and guessing in the failing direction makes a gate
- * that cries wolf. Under `--start --with-api` there is nothing to guess. This process started the
- * API, waited for `/api/v1/health`, and owns the port — so a table that never went live is the
- * app's problem, and letting it pass as a warning would mean the ONLY journey here that touches a
- * real socket could go dark without turning the gate red. That is the exact shape of the defect
- * that made `checkPokerActions` decoration for two releases.
- */
+// Under `--start --with-api` this process owns the API, so a table that never goes live is a failure
+// rather than a warning.
 const OWNS_API = START && WITH_API;
 
-/** A step of the live journey that did not happen: a failure when we own the stack, else a warning. */
 const unproven = (label, detail) => {
   if (OWNS_API) bad(label, `${detail} (this run started the API itself, so there is nothing else to blame)`);
   else warn(label, detail);
 };
 
-// ---------------------------------------------------------------------------
-// The age gate
-// ---------------------------------------------------------------------------
-
-/**
- * True when a navigation ended up on the gate's interstitial instead of where it was sent.
- *
- * Segment matching, never `includes`, for the reason `age-gate.ts` gives: `/age-checkers` is not
- * the gate. The second half — that the REQUEST was not for the gate — is what allows the gate page
- * to be audited as itself when somebody puts it in the route list.
- */
+// Segment matching, because `/age-checkers` is not the gate. Requesting the gate itself is allowed.
 export function landedOnAgeGate(requestedPath, landedPath) {
   const isGate = (path) => path === AGE_GATE_PATH || path.startsWith(`${AGE_GATE_PATH}/`);
   return isGate(landedPath) && !isGate(requestedPath);
 }
 
 /**
- * The declaration cookie(s) to seed into the browser profile, as `Network.setCookie` parameters.
- *
- * The value is `AGE_GATE_MINIMUM_CEILING`, which is the highest threshold `readAgeGateConfig` can
- * ever hold — anything larger is clamped down to it — so one value satisfies every configuration
- * without this harness having to know which one is in force. It is not an assertion about anybody's
- * age: the gate is a self-declaration with nothing behind it, and this is the same declaration its
- * own button makes.
- *
- * The `__Host-` name is seeded only over HTTPS, because the prefix means exactly "Secure, and set
- * by this host" and Chrome refuses it otherwise. Over plain HTTP the proxy reads the unprefixed
- * name, which is the whole reason `age-gate.ts` carries two.
+ * `AGE_GATE_MINIMUM_CEILING` is the highest threshold the config can clamp to, so one value satisfies
+ * every configuration. The `__Host-` name is seeded only over HTTPS, because Chrome refuses it
+ * otherwise.
  */
 export function ageDeclarationCookies(origin) {
   const url = new URL(origin);
@@ -316,17 +119,6 @@ export function ageDeclarationCookies(origin) {
   }));
 }
 
-// ---------------------------------------------------------------------------
-// A very small CDP client
-// ---------------------------------------------------------------------------
-
-/**
- * One page target, spoken to over its own WebSocket.
- *
- * Deliberately tiny: `send` and the two helpers built on it are the whole surface. Everything a
- * driver library adds — auto-waiting, selector engines, retries — is either not needed here or is
- * exactly the kind of implicit behaviour that makes an accessibility result hard to trust.
- */
 class Page {
   #socket;
   #nextId = 1;
@@ -363,7 +155,6 @@ class Page {
     });
   }
 
-  /** Evaluates an expression in the page and returns its value. Throws on a page-side throw. */
   async evaluate(expression) {
     const result = await this.send('Runtime.evaluate', {
       expression,
@@ -376,15 +167,8 @@ class Page {
     return result.result.value;
   }
 
-  /**
-   * A real key press.
-   *
-   * `rawKeyDown` then `keyUp`, with the Windows virtual key code, is what Chrome's own input
-   * pipeline receives from a keyboard. `Input.dispatchKeyEvent` is the only way to make focus
-   * actually move: a `KeyboardEvent` constructed in page script is `isTrusted: false` and the
-   * browser ignores it for default actions, which is the whole reason a DOM-level test cannot
-   * answer any question on this page.
-   */
+  // `Input.dispatchKeyEvent` with the Windows virtual key code. A page-script event is untrusted and
+  // gets no default action.
   async press(key, { shift = false } = {}) {
     const KEYS = {
       Tab: { windowsVirtualKeyCode: 9, text: '\t' },
@@ -407,38 +191,28 @@ class Page {
       nativeVirtualKeyCode: spec.windowsVirtualKeyCode,
       modifiers: shift ? 8 : 0,
     };
-    // `keyDown` (carrying `text`) rather than `rawKeyDown` for a key that types something.
-    //
-    // This distinction is the difference between a test that works and one that silently proves
-    // nothing, and it cost a debugging session: with `rawKeyDown`, Enter on a link produced a
-    // `keydown` event the page could see but NO default action, so the link was never activated.
-    // The skip-link check then reported focus still on the anchor — correctly — and the failure
-    // looked like an application bug. Chrome only performs the default action for `keyDown`.
+    // `keyDown` (carrying `text`), not `rawKeyDown`. With `rawKeyDown` Enter on a link fires `keydown`
+    // but Chrome performs no default action.
     await this.send('Input.dispatchKeyEvent', {
       type: spec.text === undefined ? 'rawKeyDown' : 'keyDown',
       ...base,
       ...(spec.text === undefined ? {} : { text: spec.text, unmodifiedText: spec.text }),
     });
     await this.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
-    // One frame, so a focus change and any transition it triggers have landed before it is read.
     await delay(30);
   }
 
   async goto(url) {
     await this.send('Page.navigate', { url });
     const requested = new URL(url).pathname;
-    // Poll for the document being interactive AND hydrated. `next start` streams, so `load` alone
-    // can fire before the client bundle has attached its handlers — and a control with no handler
-    // yet is a control this audit would wrongly call inert.
+    // `next start` streams, so `load` can fire before the client bundle attaches its handlers.
     for (let attempt = 0; attempt < 100; attempt += 1) {
       await delay(100);
       const state = await this.evaluate(
         `(() => ({ ready: document.readyState, url: location.href, path: location.pathname, hydrated: document.documentElement.dataset.boot !== undefined || document.querySelectorAll('script[src]').length > 0 }))()`,
       ).catch(() => null);
       if (state === null || state.ready !== 'complete') continue;
-      // The age gate answers a navigation with a 303 to its own interstitial. Said out loud, here,
-      // rather than left to time out below as "did not finish loading" — which is what it did, and
-      // which sends the reader of the report looking at the network instead of at the gate.
+      // Name the age gate's 303 here rather than timing out below.
       if (landedOnAgeGate(requested, state.path)) {
         throw new Error(
           `the age gate intercepted ${requested} and served ${AGE_GATE_PATH} instead. The audit ` +
@@ -449,7 +223,6 @@ class Page {
         );
       }
       if (state.url.startsWith(url.split('?')[0])) {
-        // A further beat for React to attach. Cheap, and it removes a whole class of flake.
         await delay(250);
         return;
       }
@@ -462,16 +235,6 @@ class Page {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Page-side helpers, injected as expressions
-// ---------------------------------------------------------------------------
-
-/**
- * A short, stable description of the focused element.
- *
- * Includes the accessible name where one is cheap to compute, because "which control is this" is
- * the question a reader of the report actually has.
- */
 const DESCRIBE_ACTIVE = `(() => {
   const el = document.activeElement;
   if (el === null || el === document.body) return { tag: 'body', name: '', id: '', path: 'body' };
@@ -510,30 +273,9 @@ const DESCRIBE_ACTIVE = `(() => {
 })()`;
 
 /**
- * Whether focusing this element changed anything a sighted keyboard user can see.
- *
- * ## Why it is a before/after comparison and not "does it have an outline"
- *
- * The first version of this check read the focused element's own `outline` and `box-shadow`, and
- * it reported 36 false failures on the Scenario Lab in its first run. The reason is a legitimate
- * and rather good design decision in `apps/web/src/styles/lab.css`:
- *
- *     .prl-lab-card:has(.prl-lab-card__link:focus-visible) { outline: … }
- *     .prl-lab-card__link:focus-visible { outline: none; }
- *
- * The ring is drawn on the CARD, because the card is what the link's pseudo-element covers — so
- * the focused element itself correctly has no outline at all. A check that reads only the focused
- * node calls that a WCAG 2.4.7 failure, which would have sent somebody to "fix" a design that is
- * already right, and would have taught the next reader that this audit cries wolf.
- *
- * So: snapshot the element and its first few ancestors while focused, blur, snapshot again, and
- * report visible when ANY of those computed values differ. That is the property WCAG actually
- * states — the focus indicator must be perceivable — without an opinion about which element in the
- * subtree draws it or which property it uses.
- *
- * `:focus-visible` is what the app styles, and a real Tab press satisfies it, which is the other
- * reason this has to happen in a browser: forcing the pseudo-class is not something page script can
- * do, and a click-driven focus would legitimately show no ring at all.
+ * Whether focusing this element changed anything visible. It compares the element and its first
+ * few ancestors focused against blurred, because `lab.css` draws the ring on the card while the
+ * focused link itself has `outline: none`. Reading only the focused node gave 36 false failures.
  */
 const FOCUS_STYLE = `(() => {
   const el = document.activeElement;
@@ -571,14 +313,7 @@ const FOCUS_STYLE = `(() => {
   };
 })()`;
 
-/**
- * Every element the page believes is focusable, in document order.
- *
- * The comparison target for "is everything reachable". Deliberately built from the standard
- * focusable selector rather than from anything this app knows about itself, and filtered by actual
- * visibility — a control inside a closed `<details>` or a `display:none` menu is correctly absent
- * from the tab order and must not be reported as unreachable.
- */
+// Built from the standard focusable selector and filtered by visibility.
 const FOCUSABLE_SET = `(() => {
   const SELECTOR = [
     'a[href]', 'button', 'input', 'select', 'textarea', 'summary',
@@ -624,23 +359,9 @@ const FOCUSABLE_SET = `(() => {
   });
 })()`;
 
-// ---------------------------------------------------------------------------
-// Finding the table's own controls
-// ---------------------------------------------------------------------------
-
 /**
- * What this control is called, as far as a reader is concerned.
- *
- * `aria-label` first, and `textContent` only when there is none. That order is the whole fix: an
- * action button here is a `<span>` for the word and a `<span>` for the cost, so its `textContent`
- * is `Fold0 units`, while its label is the sentence `ActionBar` writes for assistive technology —
- * "fold, costs 0 units, gives up the hand and any claim on the pot". Matching the label is both
- * more likely to be right and closer to the question being asked, which is whether the control a
- * SCREEN READER announces as "fold" can be operated from the keyboard.
- *
- * Written against `getAttribute`/`textContent` alone so that it runs unchanged in the page (see
- * `MATCHER_SOURCE`) and against a plain object in `keyboard-audit.test.mjs`. Nothing here may
- * reference a module-scope binding: in the page there is no module scope.
+ * `aria-label` first, then `textContent`. An action button's `textContent` is `Fold0 units`.
+ * It runs in the page via `MATCHER_SOURCE`, so it may not reference any module-scope binding.
  */
 export function actionControlName(button) {
   const label = button.getAttribute('aria-label');
@@ -648,58 +369,19 @@ export function actionControlName(button) {
   return raw.replace(/\s+/gu, ' ').trim();
 }
 
-/**
- * Whether a control's name is a poker action.
- *
- * The boundary is `(?![\p{L}])` — "not followed by a letter" — rather than `\b`, and that single
- * character class is the difference between this file checking the decision row and skipping it:
- *
- *   `Fold0 units`     `\b` does NOT match between `d` and `0`; the lookahead does.
- *   `Folding costs…`  both correctly refuse it, because `i` is a letter.
- *
- * The cost of the looser boundary, stated honestly: a control named `Fold the summary` would now
- * be taken for a poker action. Nothing in this app has one, the routes this runs on are declared
- * one by one below, and every matched name is printed in the report — so a false positive is
- * visible rather than silent, which is the trade this file cares about after the failure that
- * produced it.
- */
+// `(?![\p{L}])` rather than `\b`, because `\b` does not match between `d` and `0` in `Fold0 units`.
 export function isPokerActionName(name) {
   return /^(fold|check|call|bet|raise|all[\s-]?in)(?![\p{L}])/iu.test(name);
 }
 
-/**
- * The two matchers as source, for injection into the page.
- *
- * `String(fn)` rather than a copy of the same logic inside a template literal. The copy is what
- * this file had, and one of the two copies contained `\b` — which inside a template literal is
- * U+0008 BACKSPACE and not the regex assertion at all, so the probe it was in could never match
- * anything. One definition, compiled by the same parser in both places, cannot drift and cannot be
- * re-escaped by accident.
- */
+// `String(fn)`, because `\b` inside a template literal is U+0008 BACKSPACE.
 const MATCHER_SOURCE = `const prlActionName = ${String(actionControlName)};
 const prlIsAction = ${String(isPokerActionName)};`;
 
 /**
- * Every `<button>` on the page, with its name and whether it is usable, plus the SIZE of the set
- * that was examined — and, separately, the decision row as the APP groups it.
- *
- * ## Why two views of the same thing
- *
- * `scanned` is not decoration: "no action controls found" and "no buttons on the page at all" are
- * different defects with the same symptom, and a report that cannot tell them apart sends somebody
- * to look at the app when the fault is in the matcher.
- *
- * `rowUnmatched` is the stronger half, and it exists because of what the broken matcher actually
- * did. It did not find nothing — it found ONE of three controls, because `Raise to 70` happens to
- * carry a space where `Fold0 units` does not, and a check that silently examines a third of its
- * subject reports a pass. So the names are matched the way assistive technology sees them, the row
- * is collected the way the app builds it (`.prl-action-bar__actions`, which is `ActionBar`'s own
- * container), and the two have to agree. A control sitting in the decision row that the matcher
- * does not recognise is a failure of this file, and it now says so.
- *
- * The cost is a class name in an audit: rename `.prl-action-bar__actions` and this reports every
- * route as having no row. That is a loud, immediate failure with the class in the message, which is
- * the trade this file exists to make — the alternative is the silence it had.
+ * Every `<button>` with its name and state, the size of the set examined, and the decision row as
+ * `ActionBar` groups it (`.prl-action-bar__actions`). A row control the matcher does not recognise
+ * fails, because the old matcher found one of three buttons and reported a pass.
  */
 const ACTION_CONTROLS = `(() => {
   ${MATCHER_SOURCE}
@@ -722,26 +404,8 @@ const ACTION_CONTROLS = `(() => {
   };
 })()`;
 
-// ---------------------------------------------------------------------------
-// The walk
-// ---------------------------------------------------------------------------
-
-/**
- * Stamps every focusable element with a stable id, once, before a walk.
- *
- * ## Why a stamp and not a DOM path
- *
- * The first version identified elements by their ancestor-index path
- * (`footer[3]>div[0]>p[2]>a[1]`). That is only stable if the DOM does not change between capturing
- * the focusable set and finishing the walk — and on this app it does: `BootSequence` renders an
- * overlay that unmounts a moment after first paint, which shifts every sibling index below it. The
- * result was an intermittent "1 focusable element is never reached by Tab" on the home page,
- * naming an element Tab had in fact visited, under a path that no longer described it. An audit
- * that reports a defect on one run in three teaches its reader to disbelieve it, so identity has to
- * be something the DOM cannot renumber.
- *
- * Idempotent: re-stamping only fills in elements that arrived since.
- */
+// Identity is a stamp, not a DOM path. `BootSequence` unmounts an overlay after first paint and
+// shifts sibling indices. Idempotent.
 const STAMP_FOCUSABLE = `(() => {
   const SELECTOR = [
     'a[href]', 'button', 'input', 'select', 'textarea', 'summary',
@@ -758,19 +422,13 @@ const STAMP_FOCUSABLE = `(() => {
   return next;
 })()`;
 
-/** Puts focus at the very start of the document, so a walk is reproducible. */
 async function resetFocus(page) {
   await page.evaluate(
     '(() => { if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); window.scrollTo(0, 0); })()',
   );
 }
 
-/**
- * Tabs forward until focus returns to the first stop, or until the cap.
- *
- * The cap is the trap detector: a page whose tab order never comes back round has something
- * holding focus, and reporting the stop it kept returning to is what makes that debuggable.
- */
+// The cap is the trap detector.
 async function tabWalk(page, { limit = 120 } = {}) {
   await resetFocus(page);
   const stops = [];
@@ -779,8 +437,7 @@ async function tabWalk(page, { limit = 120 } = {}) {
     await page.press('Tab');
     const active = await page.evaluate(DESCRIBE_ACTIVE);
     if (active.tag === 'body') {
-      // Focus left the document — the browser's own UI. One more Tab brings it back in, and that
-      // is a complete cycle rather than a trap.
+      // Focus left for the browser UI. That completes a cycle.
       if (firstPath !== null) return { stops, cycled: true };
       continue;
     }
@@ -792,19 +449,13 @@ async function tabWalk(page, { limit = 120 } = {}) {
   return { stops, cycled: false };
 }
 
-// ---------------------------------------------------------------------------
-// Per-route checks
-// ---------------------------------------------------------------------------
-
 async function auditRoute(page, route) {
   section(`${route.title}  ${DIM}${route.path}${RESET}`);
   await page.goto(`${WEB_ORIGIN}${route.path}`);
 
   await page.evaluate(STAMP_FOCUSABLE);
   const { stops, cycled } = await tabWalk(page);
-  // Read the focusable set AFTER the walk, and stamp again first: anything that appeared while the
-  // walk was running — a `<details>` opening, an overlay leaving — is then judged against the DOM
-  // the walk actually saw, rather than against one that no longer exists.
+  // Re-stamp and read the set after the walk, so it matches the DOM the walk saw.
   await page.evaluate(STAMP_FOCUSABLE);
   const declared = await page.evaluate(FOCUSABLE_SET);
 
@@ -814,7 +465,6 @@ async function auditRoute(page, route) {
   }
   ok(`${route.title}: ${stops.length} control(s) reached by Tab`);
 
-  // 4. No keyboard trap.
   if (cycled) ok(`${route.title}: the tab order cycles — no keyboard trap`);
   else {
     bad(
@@ -823,7 +473,6 @@ async function auditRoute(page, route) {
     );
   }
 
-  // 1. Everything focusable is reached.
   const reached = new Set(stops.map((stop) => stop.stamp).filter((stamp) => stamp !== null));
   const unreachable = declared.filter((entry) => entry.stamp === null || !reached.has(entry.stamp));
   if (unreachable.length === 0) {
@@ -838,7 +487,6 @@ async function auditRoute(page, route) {
     );
   }
 
-  // 2. Focus order follows the document.
   const outOfOrder = [];
   for (let index = 1; index < stops.length; index += 1) {
     const previous = stops[index - 1];
@@ -855,7 +503,6 @@ async function auditRoute(page, route) {
     );
   }
 
-  // 3. Every stop shows a focus indicator.
   const invisible = stops.filter((stop) => stop.focus === null || stop.focus.visible !== true);
   if (invisible.length === 0) ok(`${route.title}: every stop has a visible focus indicator`);
   else {
@@ -868,15 +515,11 @@ async function auditRoute(page, route) {
     );
   }
 
-  // 5. The skip link, which is the first stop by design.
   const first = stops[0];
   if (first !== undefined && /skip to main/i.test(first.name)) {
     ok(`${route.title}: the skip link is the first stop`);
-    // A CLEAN load before this one check, which is not fussiness: a fragment link to the fragment
-    // the URL already carries is a no-op in Chrome, and the tab walk above may have left
-    // `#prl-main` on the address. Testing from a dirty URL made this check alternate pass/fail down
-    // the route list in a way that looked exactly like an application bug and was not. A reader
-    // arriving at a page has a clean URL, so that is the state the skip link is tested in.
+    // A clean load, because the walk may have left `#prl-main` on the URL and a link to the current
+    // fragment is a no-op in Chrome.
     await page.goto(`${WEB_ORIGIN}${route.path}`);
     await resetFocus(page);
     await page.press('Tab');
@@ -885,10 +528,7 @@ async function auditRoute(page, route) {
     const afterSkip = await page.evaluate(
       `(() => { const el = document.activeElement; const main = document.getElementById('prl-main'); return { inMain: main !== null && (main === el || main.contains(el)), hash: location.hash, tag: el === null ? 'null' : el.tagName.toLowerCase() }; })()`,
     );
-    // FOCUS, not the hash. An earlier version accepted `location.hash === '#prl-main'` as evidence
-    // and that made the check worthless: the hash survives an in-page navigation, so half the
-    // routes passed on a fragment left behind by the route before them while focus had not moved at
-    // all. Moving focus is the entire job of a skip link.
+    // Check focus, not the hash. The hash survives from the previous route.
     if (afterSkip.inMain) {
       ok(`${route.title}: Enter on the skip link moves focus into <main>`);
     } else {
@@ -898,7 +538,6 @@ async function auditRoute(page, route) {
     bad(`${route.title}: skip link`, `the first stop is "${first?.name ?? '(none)'}", not the skip link`);
   }
 
-  // Shift+Tab must walk back out of the last stop, which is the other half of "no trap".
   await resetFocus(page);
   for (let step = 0; step < 3; step += 1) await page.press('Tab');
   const forward = await page.evaluate(DESCRIBE_ACTIVE);
@@ -910,11 +549,6 @@ async function auditRoute(page, route) {
   if (route.extra !== undefined) await route.extra(page, route);
 }
 
-// ---------------------------------------------------------------------------
-// Journey-specific interactions
-// ---------------------------------------------------------------------------
-
-/** A `<details>` disclosure has to open on Enter and close again, from the keyboard alone. */
 async function checkDisclosures(page, route) {
   const count = await page.evaluate(`document.querySelectorAll('details > summary').length`);
   if (count === 0) return;
@@ -939,12 +573,6 @@ async function checkDisclosures(page, route) {
     );
 }
 
-/**
- * Every range input must move with the arrow keys, and must announce its value.
- *
- * A bet-size slider that only responds to a pointer is the single most common way a poker UI
- * becomes unusable without a mouse, so this is checked wherever one appears.
- */
 async function checkSliders(page, route) {
   const sliders = await page.evaluate(
     `[...document.querySelectorAll('input[type="range"], [role="slider"]')].map((el, index) => ({
@@ -990,12 +618,7 @@ async function checkSliders(page, route) {
   }
 }
 
-/**
- * Arms a click probe on the first ENABLED action control, focuses it, and names it.
- *
- * Returns `null` when the row is there but every control in it is disabled, which is a different
- * answer from "there is no row" and is reported differently by the caller.
- */
+// Returns `null` when the row is present but every control is disabled.
 const ARM_FIRST_ACTION = `(() => {
   ${MATCHER_SOURCE}
   const target = [...document.querySelectorAll('button')]
@@ -1009,25 +632,8 @@ const ARM_FIRST_ACTION = `(() => {
 })()`;
 
 /**
- * The table's own controls: fold, check/call, bet/raise.
- *
- * ## What the outcomes mean, which is the part that was wrong
- *
- * A route declares whether it has a decision row (`actionControls`, see ROUTES), and this refuses
- * to run for a route that declares nothing — a permissive default is how the previous version of
- * this check spent two releases reporting a warning nobody read on the one route that renders the
- * whole row. `'required'` and finding nothing is now a FAILURE. `'until-seated'` and finding
- * nothing is NOT APPLICABLE, counted apart from the passes, because an unseated table has no
- * decision to offer and `playOneHandByKeyboard` is where that question is really answered.
- *
- * ## Why it reloads between the three probes
- *
- * Pressing an action on the fixture route is not free: `TableStage` records the press and disables
- * the whole row to show the state a real table would be in while it waited for a server. So the
- * Space probe and the slider probe would both run against a row this function had just switched
- * off — the Space probe silently did nothing, and the sizer would have been reported as
- * pointer-only when in truth it was disabled. A fresh document before each probe costs about a
- * second and makes each answer independent.
+ * A route must declare `actionControls`. `'required'` with nothing found fails. `'until-seated'`
+ * is not applicable. Each probe reloads, because `TableStage` disables the row after a press.
  */
 async function checkPokerActions(page, route) {
   const expectation = route.actionControls;
@@ -1043,9 +649,6 @@ async function checkPokerActions(page, route) {
   const found = await page.evaluate(ACTION_CONTROLS);
   const actions = found.actions;
 
-  // The agreement check, before anything is decided from the matched set: a matcher that sees part
-  // of the row makes every assertion below true of a subset, which is how this check spent two
-  // releases reporting a pass over one button out of three.
   if (found.rowUnmatched.length > 0) {
     bad(
       `${route.title}: poker actions`,
@@ -1097,13 +700,8 @@ async function checkPokerActions(page, route) {
     );
   }
 
-  // Reachable is not the same as operable. Focus the first enabled action and press it, then check
-  // the page acknowledged the press — a control that takes focus and ignores Enter is exactly the
-  // failure "keyboard-operable" is meant to exclude, and it is invisible to a markup audit.
   const operable = await page.evaluate(ARM_FIRST_ACTION);
   if (operable === null) {
-    // Not a warning on a route that promised a decision row: the operable half of this check is the
-    // half a static audit cannot do, and a row that is entirely disabled means it did not run.
     const detail = `all ${actions.length} action control(s) are disabled, so neither Enter nor Space was tested`;
     if (expectation === 'required') bad(`${route.title}: poker actions`, detail);
     else skip(`${route.title}: poker actions`, detail);
@@ -1114,8 +712,7 @@ async function checkPokerActions(page, route) {
   if (viaEnter) ok(`${route.title}: "${operable}" activates on Enter`);
   else bad(`${route.title}: poker actions`, `"${operable}" took focus but did not respond to Enter`);
 
-  // And Space, which is the other key a button must answer to. From a fresh document: the Enter
-  // above has already been accepted, and on the fixture path that disables the row.
+  // From a fresh document, because the Enter above disabled the row.
   await page.goto(`${WEB_ORIGIN}${route.path}`);
   const rearmed = await page.evaluate(ARM_FIRST_ACTION);
   if (rearmed === null) {
@@ -1134,13 +731,6 @@ async function checkPokerActions(page, route) {
   await checkSliders(page, route);
 }
 
-/**
- * Card and table information has to be readable as text, not only as a picture.
- *
- * The check is that every card element carries an accessible name — a rank and a suit in words is
- * the app's own convention — because a suit conveyed by a glyph and a colour is conveyed twice
- * visually and not at all otherwise.
- */
 async function checkCardText(page, route) {
   const cards = await page.evaluate(
     `(() => {
@@ -1166,13 +756,6 @@ async function checkCardText(page, route) {
   }
 }
 
-/**
- * Focus must survive a dynamic update.
- *
- * The failure this catches: a component that re-renders and replaces its DOM node throws focus to
- * `<body>`, and a keyboard user is silently returned to the top of the page mid-task. Provoked by
- * focusing a control and forcing a re-render through the app's own interaction.
- */
 async function checkFocusSurvivesUpdate(page, route) {
   const setup = await page.evaluate(
     `(() => {
@@ -1194,16 +777,9 @@ async function checkFocusSurvivesUpdate(page, route) {
   else bad(`${route.title}: focus lost`, `activating "${setup}" dropped focus to <body>`);
 }
 
-/**
- * The whole navigation, at the width where it becomes a modal sheet.
- *
- * Below 860px the destinations move out of the bar and into a `role="dialog"` sheet with a focus
- * trap. That is the only dialog in the product, so it is the only place the audit's brief about
- * "modal/dialog focus management" has anything to test — and it is invisible at desktop width.
- */
+// Below 860px the destinations move into a `role="dialog"` sheet with a focus trap.
 async function auditNarrowViewport(page) {
   section(`Narrow viewport — the menu sheet  ${DIM}390x844${RESET}`);
-  // A phone, with a device pixel ratio, so the media query resolves the way it does on one.
   await page.send('Emulation.setDeviceMetricsOverride', {
     width: 390,
     height: 844,
@@ -1259,16 +835,8 @@ async function auditNarrowViewport(page) {
       ok('Narrow viewport: focus moves into the sheet on open', `on "${opened.activeName}"`);
     else bad('Narrow viewport: menu', `focus stayed outside the sheet, on "${opened.activeName}"`);
 
-    /**
-     * The sheet must be the size of the viewport, and its links must be the thing under a finger.
-     *
-     * Everything above passed while the menu was unusable. The header carried a `backdrop-filter`,
-     * which makes it the containing block for `position: fixed` descendants, so the sheet — `fixed;
-     * inset: 0`, mounted inside the header — was 76px tall with a 684px scroll height. Focus moved
-     * in, Tab stayed in, Escape closed it: a keyboard walk sees none of that, and a finger sees a
-     * strip reading "NAVIGATE ×" with every destination behind it. `elementFromPoint` is the check
-     * that matches what a tap does.
-     */
+    // The sheet must fill the viewport. A header `backdrop-filter` once made the fixed sheet 76px tall
+    // while every keyboard check passed. `elementFromPoint` checks what a tap hits.
     const geometry = await page.evaluate(
       `(() => {
         const dialog = document.querySelector('[role="dialog"]');
@@ -1306,7 +874,6 @@ async function auditNarrowViewport(page) {
         `${geometry.height}px, ${geometry.links} links`,
       );
 
-    // The trap: Tab must never leave the sheet while it is open.
     let escaped = null;
     for (let step = 0; step < 25 && escaped === null; step += 1) {
       await page.press('Tab');
@@ -1324,7 +891,6 @@ async function auditNarrowViewport(page) {
     if (escaped === null) ok('Narrow viewport: Tab is held inside the open sheet — the trap works');
     else bad('Narrow viewport: menu', `Tab escaped the open sheet onto "${escaped}"`);
 
-    // And Shift+Tab, which is the half a naive trap forgets.
     let escapedBack = null;
     for (let step = 0; step < 25 && escapedBack === null; step += 1) {
       await page.press('Tab', { shift: true });
@@ -1339,8 +905,6 @@ async function auditNarrowViewport(page) {
     if (escapedBack === null) ok('Narrow viewport: Shift+Tab is held inside the sheet too');
     else bad('Narrow viewport: menu', 'Shift+Tab escaped the open sheet');
 
-    // Escape closes it AND puts focus back where it came from. A trap you cannot leave and a trap
-    // that abandons you on the way out are the same bug from a keyboard user's side.
     await page.press('Escape');
     await delay(300);
     const closed = await page.evaluate(
@@ -1361,12 +925,7 @@ async function auditNarrowViewport(page) {
     if (closed.onTrigger) ok('Narrow viewport: focus returns to the trigger that opened it');
     else bad('Narrow viewport: menu', `focus went to <${closed.activeTag}> instead of back to the trigger`);
 
-    /**
-     * The units disclosure must open on screen. It was anchored to the end of the units pill, which
-     * on a phone stops short of the edge because the menu trigger sits beyond it: at 360 and 411
-     * the panel began at x=-40 and every line lost its first 40px. `test:layout` never sees it,
-     * because it measures the page with every disclosure closed.
-     */
+    // The units disclosure must open on screen. At 360 and 411 it began at x=-40.
     const note = await page.evaluate(
       `(() => {
         const toggle = document.querySelector('.prl-shell__header .prl-units__toggle');
@@ -1399,12 +958,7 @@ async function auditNarrowViewport(page) {
           `x=${placed.left} to ${placed.right} of ${placed.width}`,
         );
 
-      /**
-       * And it closes on Escape, with focus back on the `i`. It used to close only on a second press
-       * of the `i`: the audit at 6b3886e had `aria-expanded` still `true` after Escape, and at 390 the
-       * open panel covers the top of every page. Measured from the page rather than from the
-       * component's state, so a handler that flipped the attribute and left the panel showing fails.
-       */
+      // It must close on Escape with focus back on the `i`, measured from the page.
       if (placed !== null) {
         await page.press('Escape');
         await delay(200);
@@ -1433,40 +987,10 @@ async function auditNarrowViewport(page) {
 }
 
 /**
- * A control the keyboard reached must not be delivered UNDERNEATH the sticky bar.
- *
- * ## The defect this exists for
- *
- * The bar is `position: sticky`, so `scroll-padding-block-start` on the root is the only thing
- * that stops the browser scrolling a newly focused control to y=0 and leaving it behind the
- * glass. `apps/web/src/styles/nav.css` derived that padding from `--prl-pillbar-h`, which
- * described a ONE-ROW bar — and below 382px `.prl-shell__header-tools` wraps, so the bar is two
- * rows and 129px tall while the padding was 92px. Every control the browser had to scroll up to
- * arrived with its top edge at exactly 92px and 37px of it behind the bar; a 25px link arrived
- * entirely behind it. Measured on `/review`, `/lab`, `/record` and `/learn/pot-odds`.
- *
- * ## Why 360x640 and not the 390x844 the section above uses
- *
- * Because at 390 the bar does not wrap. The narrow-viewport journey has always run nine pixels
- * past the width where this is visible, which is why every keyboard gate in this repo passed over
- * it. 360x640 is the most common Android portrait size and it was inside the wrapped range; the
- * sheet journey above keeps 390 so the two are not testing the same width.
- *
- * Since 2026-11-11 the bar is one row at 360 too (the menu trigger drops its word below 412px),
- * and `--prl-pillbar-h` reserves one row from 360 to 411px. 360 is that band's lowest width, so
- * this is the check that fails if the bar ever wraps back to two rows under a one-row padding.
- *
- * ## Why backwards
- *
- * Forward tabbing from the top mostly walks INTO the page, and the browser only scrolls when it
- * has to — a control already on screen is left where it is, and the padding is never consulted.
- * Scrolling to the bottom and walking back up is what makes every stop a scroll-into-view, which
- * is the path a reader takes when they Shift+Tab out of the footer. It is also the path that was
- * broken.
- *
- * The skip link is excluded by ancestry rather than by name: it is `position: fixed` at
- * `--prl-z-toast` (500) against the bar's 200, so it is painted OVER the bar and its geometry
- * says "under" while a reader sees it perfectly well.
+ * A keyboard-focused control must not land under the sticky bar. `scroll-padding-block-start` is
+ * derived from `--prl-pillbar-h`, and the bar wrapped to 129px below 382px against a 92px padding.
+ * 360x640 is the lowest width of the one-row band. The walk goes backwards from the bottom so every
+ * stop scrolls. The skip link is excluded because it paints over the bar.
  */
 async function auditStickyBarOcclusion(page) {
   section(`Narrow viewport — nothing focusable lands under the bar  ${DIM}360x640${RESET}`);
@@ -1483,21 +1007,8 @@ async function auditStickyBarOcclusion(page) {
     for (const path of ['/review', '/lab', '/record', '/learn/pot-odds']) {
       await page.goto(`${WEB_ORIGIN}${path}`);
 
-      /**
-       * Scrolling is forced instant for the length of this walk.
-       *
-       * `reset.css` sets `scroll-behavior: smooth` on the root under `prefers-reduced-motion:
-       * no-preference`, so every Tab-driven scroll is asynchronous and a rectangle read straight
-       * after the key is a rectangle from mid-flight. The first version of this check measured
-       * mid-flight and produced both false passes and a false failure ("top=-22.9"). The property
-       * under test is `scroll-padding-block-start`, not the animation, and an instant scroll
-       * consults exactly the same padding.
-       *
-       * Then: to the bottom of the page, and onto the last control that is really on screen. The
-       * 4px floor is not fussiness — the last focusable in the document is a theme radio wearing
-       * `.prl-visually-hidden`, a 1px box, and focusing it took the page back to y=0, so the walk
-       * started at the top, never scrolled, and reported a confident pass.
-       */
+      // Force instant scrolling. `reset.css` sets `scroll-behavior: smooth`, so a rectangle read after a
+      // key is mid-flight. The 4px floor skips a 1px visually hidden radio that scrolls the page to y=0.
       const started = await page.evaluate(
         `(() => {
           const root = document.documentElement;
@@ -1521,8 +1032,7 @@ async function auditStickyBarOcclusion(page) {
         bad(`Sticky bar: ${path}`, `${started.why}, so nothing could be walked`);
         continue;
       }
-      // A walk that begins at the top of a long page never scrolls, so it never consults the
-      // padding. Refuse rather than report a pass over it.
+      // A walk that starts at the top never scrolls. Refuse it.
       if (started.scrollY < started.viewport) {
         bad(
           `Sticky bar: ${path}`,
@@ -1572,15 +1082,11 @@ async function auditStickyBarOcclusion(page) {
         stops += 1;
         barHeight = stop.barHeight;
         padding = stop.padding;
-        // Off the bottom of the screen is a different question and not this check's business. A
-        // control whose top edge is above the bar's bottom edge, while any of it is on screen, is.
         if (stop.top < stop.barBottom - 1 && stop.bottom > 0) {
           offenders.push(stop);
         }
       }
 
-      // A walk that reached nothing is not a pass: a route that stopped offering controls, or a
-      // Shift+Tab that stopped moving focus, would otherwise report success over zero stops.
       if (stops === 0) {
         bad(`Sticky bar: ${path}`, 'Shift+Tab reached no control outside the bar, so nothing was checked');
       } else if (offenders.length === 0) {
@@ -1611,34 +1117,13 @@ async function auditStickyBarOcclusion(page) {
 }
 
 /**
- * The one journey that cannot be done with a fixture: sitting down and acting.
- *
- * ## Why it is here and not left to the fixture route
- *
- * `/play?state=decision` renders the action row and its controls do respond to Enter and Space —
- * but the press goes nowhere: `TableStage` records it, disables the row, and says in its own copy
- * that no server was asked. So the fixture proves the controls are in the tab order and that they
- * answer the keyboard, and proves nothing about a decision being ACCEPTED. "Poker actions operable"
- * is one of the things the audit specifically asked for, and the second half of it needs a table
- * that is really dealing.
- *
- * So this walks the product's own path with the keyboard only: "Deal me in", which opens the table,
- * takes the seat and deals by itself, and then act — each press by tabbing to a control and pressing
- * Enter, never by clicking. Then the manual controls that "Deal me in" no longer needs for the first
- * hand, because every later hand still does: stand up, take the seat back, deal the next hand. If any
- * step does not arrive, the journey reports that it could not be completed rather than passing.
- *
- * ## What it needs
- *
- * A running API with a database. Without one the table never goes live and this reports a warning:
- * a keyboard audit is not the right place to fail a run because Postgres is down, and
- * `scripts/smoke-test.mjs` is the gate that does fail on that.
+ * Sits down at a real table by keyboard with "Deal me in", then acts. The fixture route only proves the
+ * controls answer keys, because `TableStage` sends nothing to a server. Without an API this warns.
  */
 async function playOneHandByKeyboard(page) {
   section(`Private table, keyboard only  ${DIM}/play?profile=…${RESET}`);
   await page.goto(`${WEB_ORIGIN}/play?profile=adaptive-exploiter&difficulty=realistic`);
 
-  /** Tabs until a control whose label matches lands under focus, then presses Enter on it. */
   const activateByLabel = async (pattern, { limit = 60 } = {}) => {
     await resetFocus(page);
     for (let step = 0; step < limit; step += 1) {
@@ -1654,7 +1139,6 @@ async function playOneHandByKeyboard(page) {
     return { found: false, activated: false, name: '' };
   };
 
-  /** Polls until the page satisfies `expression`, or gives up. */
   const waitFor = async (expression, seconds) => {
     for (let attempt = 0; attempt < seconds * 4; attempt += 1) {
       await delay(250);
@@ -1680,9 +1164,7 @@ async function playOneHandByKeyboard(page) {
   }
   ok('Private table: the socket went live');
 
-  // The same two matchers the per-route check uses, for the same reason: a hand-rolled regex in a
-  // template literal here is where the `\b`-as-BACKSPACE half of the original defect lived, and a
-  // second copy of "what counts as an action" would rot at a different rate from the first.
+  // The same matchers as the per-route check, so `\b` cannot creep back in a template literal.
   const ANY_ENABLED_ACTION = `(() => {
     ${MATCHER_SOURCE}
     return [...document.querySelectorAll('button')].some(
@@ -1703,7 +1185,6 @@ async function playOneHandByKeyboard(page) {
   }
   ok('Private table: the hand reached this seat');
 
-  // Every action the engine offered, reachable and enabled.
   const offered = (await page.evaluate(ACTION_CONTROLS)).actions;
   const unusable = offered.filter((action) => action.disabled || !action.tabbable);
   if (offered.length > 0 && unusable.length === 0) {
@@ -1718,7 +1199,6 @@ async function playOneHandByKeyboard(page) {
     );
   }
 
-  // The bet-size control, which is where a poker UI most often becomes pointer-only.
   const sizer = await page.evaluate(
     `(() => {
       const slider = document.querySelector('input[type="range"]');
@@ -1753,7 +1233,6 @@ async function playOneHandByKeyboard(page) {
       bad('Private table: slider', 'the only way to choose a size is the slider itself');
     }
 
-    // And it must actually move on an arrow key, from a REAL key press.
     const before = await page.evaluate(
       `(() => { const s = document.querySelector('input[type="range"]'); s.focus(); return s.value; })()`,
     );
@@ -1765,7 +1244,6 @@ async function playOneHandByKeyboard(page) {
       ok('Private table: the slider moves with the arrow keys', `${before} → ${after}`);
     else bad('Private table: slider', `did not move on ArrowRight/ArrowUp (${before}) — it is pointer-only`);
 
-    // End should jump to the maximum, which is the "all in" shortcut a keyboard user needs.
     await page.press('End');
     const atEnd = await page.evaluate(`document.querySelector('input[type="range"]').value`);
     if (atEnd === sizer.max) ok('Private table: End reaches the maximum size');
@@ -1773,8 +1251,7 @@ async function playOneHandByKeyboard(page) {
     await page.press('Home');
   }
 
-  // Finally: act. Fold, because it is the one action legal in every spot and it ends the hand
-  // cleanly rather than leaving a table mid-street for the next run to inherit.
+  // Fold is legal in every spot and leaves no hand mid-street for the next run.
   const acted = await activateByLabel(/^fold/i);
   if (!acted.activated) {
     bad('Private table: actions', 'could not reach and activate Fold by keyboard');
@@ -1784,11 +1261,8 @@ async function playOneHandByKeyboard(page) {
   if (accepted) ok('Private table: Fold, pressed with Enter, was accepted by the server');
   else bad('Private table: actions', 'Fold was activated by keyboard and the table did not move on');
 
-  // Wait for the bar to reach its IDLE state before reading focus, not merely for the buttons to be
-  // gone or disabled. Pressing an action disables the row while the request is in flight — and a
-  // disabled button is blurred by the browser at once — so a check that fired on "no enabled
-  // action" caught that intermediate moment and reported a focus loss the component corrected a
-  // frame later. That intermittency was the audit's, not the app's.
+  // Wait for the idle bar. A disabled in-flight button is blurred at once, and reading focus then
+  // reported a focus loss that the component corrected a frame later.
   await waitFor(`document.querySelector('.prl-action-bar__idle') !== null`, 20);
   await delay(200);
   const survived = await page.evaluate(
@@ -1800,17 +1274,8 @@ async function playOneHandByKeyboard(page) {
   await playManualStepsByKeyboard(activateByLabel, waitFor);
 }
 
-/**
- * Stand up, take the seat back and deal the next hand — by keyboard, between hands.
- *
- * These three used to be proven on the way IN, because a first hand needed all of them. "Deal me in"
- * now sends the seat and the deal itself, so without this they would be proven nowhere — and they
- * are the only way to every hand after the first, and to any hand at a table reached by invite code.
- *
- * Done after the fold so the table is between hands, which is the one state where all three are
- * offered. The hand it deals is left to the server's turn timer: every run of this journey opens a
- * fresh Legends match (`openPracticeRoom` never reuses one), so no later run sits down at it.
- */
+// Stand up, sit back and deal, proven between hands because "Deal me in" does all three for the
+// first hand. Each run opens a fresh Legends match, so the dealt hand is left to the turn timer.
 async function playManualStepsByKeyboard(activateByLabel, waitFor) {
   const between = await waitFor(
     `[...document.querySelectorAll('button')].some((b) => /^Deal the next hand$/.test(b.textContent.trim()) && !b.disabled)`,
@@ -1851,15 +1316,7 @@ async function playManualStepsByKeyboard(activateByLabel, waitFor) {
     bad('Private table: manual steps', '"Deal the next hand" was activated by keyboard and no hand started');
 }
 
-// ---------------------------------------------------------------------------
-// The journeys
-// ---------------------------------------------------------------------------
-
-/**
- * Exported so `keyboard-audit.test.mjs` can hold the list to its own rule: any route wired to
- * `checkPokerActions` declares what it expects to find. That test is the reason a future route
- * cannot quietly re-introduce the permissive default this check used to have.
- */
+// `keyboard-audit.test.mjs` asserts every route wired to `checkPokerActions` declares `actionControls`.
 export const ROUTES = [
   { title: 'Onboarding (home)', path: '/' },
   { title: 'Learn index', path: '/learn', extra: checkDisclosures },
@@ -1870,56 +1327,28 @@ export const ROUTES = [
   { title: 'AI Legends (a profile)', path: '/legends/adaptive-exploiter' },
   { title: 'Legends hand review', path: '/legends/hand-review' },
   { title: 'Legends hand review (demo)', path: '/legends/hand-review/demo', extra: checkCardText },
-  // `?state=decision` renders the fixture of a table waiting on the learner: the action controls,
-  // the bet-size slider and the Coach panel, all present, hydrated and ENABLED. That is the only
-  // way to Tab to a fold/call/raise control without sitting down at a socket-backed table — which
-  // needs an opponent and belongs to `scripts/smoke-test.mjs`. It is the same component tree the
-  // live route renders, so what is asserted here about the keyboard is true of the live table too,
-  // and it is the one route in this list where a missing decision row is a defect rather than a
-  // state. Hence `required`.
+  // The fixture of a table waiting on the learner, with every control enabled. A missing decision
+  // row here is a defect.
   {
     title: 'Poker table + Coach (decision)',
     path: '/play?state=decision',
     extra: checkPokerActions,
     actionControls: 'required',
   },
-  // The live table before anybody sits down: "Deal me in", and nothing to decide. Declared
-  // `until-seated` so that finding no actions is recorded as not-applicable instead of passing
-  // quietly — and so that it can never stand in for the seated case, which `playOneHandByKeyboard`
-  // is the only thing here that reaches.
+  // Before anybody sits there is nothing to decide. `playOneHandByKeyboard` covers the seated case.
   { title: 'Poker table (live)', path: '/play', extra: checkPokerActions, actionControls: 'until-seated' },
   { title: 'Poker table (hand complete)', path: '/play?state=complete', extra: checkCardText },
   { title: 'Hand review', path: '/review', extra: checkDisclosures },
   { title: 'Your record', path: '/record' },
 ];
 
-// ---------------------------------------------------------------------------
-// Servers
-// ---------------------------------------------------------------------------
-
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 /**
- * Refuses to go on when something already answers where a server this run starts will be polled.
- *
- * `waitUntilReady` accepts the first 200 from its URL and cannot tell its own child's answer from a
- * stranger's. The `prl-app` marker check below catches a stranger that is not this app, and that is
- * all it can catch: a sibling checkout's `next start` carries the same shell class. Measured on
- * 2026-11-10 with a production `next start` from this checkout started by hand on :3521 and a
- * `node:http` page answering 200 on :3529: `--start --with-api --web http://127.0.0.1:3521 --api
- * http://127.0.0.1:3529` printed "starting the API on http://127.0.0.1:3529..." and "starting the web
- * app on http://127.0.0.1:3521...", passed 133 checks against servers it did not start, and failed one
- * with "this run started the API itself, so there is nothing else to blame" while the API it blamed
- * was the `node:http` page.
- *
- * It CONNECTS to where the poll will go, rather than binding 127.0.0.1 as `scripts/a11y-audit.mjs`
- * first did. Measured on macOS with Node 24.18: a bind of 127.0.0.1 succeeds beside a listener on
- * the wildcard address, so it called a `node:http` server free on its default address, on `0.0.0.0`
- * and on `::` (`lsof`: `TCP *:3533`), and refused only one bound to 127.0.0.1; a connect to
- * 127.0.0.1 reached all four. `next start` listens on the wildcard (`TCP *:3521`). A second `next
- * start` there exits `EADDRINUSE :::3521`; beside a stranger on 127.0.0.1 alone it binds `*:3522` and
- * stays up while the poll reaches the stranger. Only ECONNREFUSED counts as free, so a probe that
- * cannot decide refuses.
+ * Refuse to start when something already answers on a port this run will poll. On 2026-11-10 a
+ * hand-started server on the port made the run pass 133 checks against servers it did not start.
+ * It connects rather than binds, because a bind of 127.0.0.1 succeeds beside a wildcard listener.
+ * Only ECONNREFUSED counts as free.
  */
 async function refuseOccupiedPort(url) {
   const { hostname, port, protocol } = new URL(url);
@@ -1949,26 +1378,14 @@ async function refuseOccupiedPort(url) {
   );
 }
 
-/** The port `next start` should bind, taken from the origin this audit will drive. */
 function portFromOrigin(origin) {
   const port = new URL(origin).port;
   return port === '' ? '3000' : port;
 }
 
 /**
- * A child server this script owns and must clean up.
- *
- * The SIXTH copy of this class, and copied on purpose. `scripts/ax-tree-audit.mjs` carries the
- * argument in full and the others cross-reference it: the alternative is a shared module that five
- * release gates import, so that a mistake in it takes out contrast, markup, the accessibility tree,
- * the age gate, the painted text and now the keyboard at once. Sixty lines of duplication buys six
- * gates that fail independently, which is the property `verify` is built around.
- *
- * The behaviour that matters and is easy to get wrong: `pnpm --filter ... start` is a WRAPPER, so
- * killing the wrapper leaves the real server holding the port, and the orphan then answers the next
- * run — which audits a build nobody meant to test, from a checkout that may since have changed.
- * Detached, so the child gets its own process group; signalled by NEGATIVE pid, so the group goes
- * with it; ESRCH tolerated, because a server that already exited is the outcome asked for.
+ * Copied on purpose so release gates fail independently. `pnpm --filter ... start` is a wrapper, so
+ * the child is detached and signalled by negative pid to take the real server with it. ESRCH is fine.
  */
 class ManagedServer {
   constructor(label, args, readyUrl, env) {
@@ -1989,8 +1406,7 @@ class ManagedServer {
       env: { ...process.env, ...this.env },
     });
     const keep = (chunk) => {
-      // Kept, not printed: a healthy Next boot is twenty lines of noise, and it is only wanted when
-      // the server fails to come up.
+      // Kept for the failure message only.
       this.output.push(chunk.toString());
       if (this.output.length > 200) this.output.shift();
     };
@@ -2011,7 +1427,6 @@ class ManagedServer {
       }
       try {
         const response = await fetch(this.readyUrl, { signal: AbortSignal.timeout(2000) });
-        // Any HTTP answer means it is listening; a 404 on the ready URL is still a live server.
         if (response.status > 0) return;
       } catch {
         // Not up yet.
@@ -2037,10 +1452,6 @@ class ManagedServer {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Run
-// ---------------------------------------------------------------------------
-
 function chromePath() {
   const found = CHROME_CANDIDATES.find((path) => existsSync(path));
   if (found === undefined) {
@@ -2054,16 +1465,7 @@ function chromePath() {
 async function withChrome(run) {
   const binary = chromePath();
   const port = 9222 + Math.floor(process.pid % 500);
-  /**
-   * A profile directory per run, removed afterwards.
-   *
-   * It used to be the fixed path `/tmp/prl-keyboard-audit-profile`, and a fixed profile is state
-   * that outlives the run. Two runs at once fight over the lock; and now that this harness seeds an
-   * age declaration COOKIE, a shared profile would carry that declaration into the next run — so a
-   * later run against a gated deployment would pass on a cookie it never set and nobody could tell
-   * the seeding from the leftovers. A temporary directory costs a few megabytes for the length of
-   * one audit.
-   */
+  // A profile per run, because a shared one would carry the seeded age cookie into the next run.
   const profile = mkdtempSync(join(tmpdir(), 'prl-keyboard-audit-'));
   const child = spawn(
     binary,
@@ -2091,11 +1493,7 @@ async function withChrome(run) {
     await page.send('Page.enable');
     await page.send('Runtime.enable');
     await page.send('DOM.enable');
-    // `Network` is enabled for one reason: `Network.setCookie`. Seeding the age declaration before
-    // the first navigation is what stops a gated deployment serving the interstitial to every
-    // route in the list below. `goto` still checks where it landed — see `landedOnAgeGate` — because
-    // a cookie the deployment refuses must be a loud failure and not a silent audit of the wrong
-    // page.
+    // Enabled for `Network.setCookie`.
     await page.send('Network.enable');
     for (const cookie of ageDeclarationCookies(WEB_ORIGIN)) await page.send('Network.setCookie', cookie);
     try {
@@ -2105,11 +1503,7 @@ async function withChrome(run) {
     }
   } finally {
     child.kill('SIGTERM');
-    // Chrome writes its profile out as it exits, so removing it races the browser: the first
-    // version of this threw ENOTEMPTY out of a `finally` and turned a PASSING audit into a
-    // non-zero exit with a filesystem error where the summary should have been. `maxRetries` gives
-    // Chrome its moment, and the catch means the worst case is a few megabytes left in the system
-    // temp directory rather than a false failure.
+    // Chrome writes its profile as it exits, so removal retries and never fails the run.
     try {
       rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     } catch (error) {
@@ -2120,13 +1514,7 @@ async function withChrome(run) {
   }
 }
 
-/**
- * Whether this origin is serving the age gate, asked before Chrome is even started.
- *
- * `redirect: 'manual'` so the 303 itself is visible rather than followed. `/play` is the probe
- * because it is gated under BOTH scopes — `play` and `site` — so one request answers the question
- * for either configuration.
- */
+// `/play` is gated under both scopes, so one manual-redirect request answers for either.
 async function probeAgeGate() {
   const response = await fetch(`${WEB_ORIGIN}/play`, {
     headers: { accept: 'text/html' },
@@ -2144,9 +1532,7 @@ async function main() {
     `${DIM}  Real Chrome, real Input.dispatchKeyEvent. This is the check scripts/a11y-audit.mjs says it cannot do.${RESET}`,
   );
 
-  // `--with-api` alone is a caller who believes they asked for an API and did not get one. Refusing
-  // beats the alternative this repository keeps finding: a flag that quietly does nothing, and a
-  // green run over a live-table journey that never had a server behind it.
+  // `--with-api` without `--start` would do nothing, so refuse it.
   if (WITH_API && !START) {
     console.error(
       `\n${RED}--with-api only means anything with --start; without it there is no API to start.${RESET}\n`,
@@ -2165,15 +1551,9 @@ async function main() {
     if (START) {
       for (const url of WITH_API ? [WEB_ORIGIN, API_ORIGIN] : [WEB_ORIGIN]) await refuseOccupiedPort(url);
       if (WITH_API) {
-        // Inherit `DATABASE_URL` and the rest from the parent, exactly as `ax-tree-audit.mjs`
-        // does, and do NOT force `NODE_ENV=production`: that refuses the development secrets in
-        // `.env`, the API then serves an error page, and the live-table journey below scores it.
-        //
-        // `PUBLIC_WEB_ORIGIN` must be THIS audit's origin. It is one allowlist for CORS and for the
-        // WebSocket `Origin` check, and `.env` holds a developer's `http://localhost:3000`; with it
-        // inherited, the upgrade from `http://127.0.0.1:3464` is answered `forbidden` and the
-        // socket never opens. Measured on `ax-tree-audit.mjs` first, where the table simply said
-        // "You do not have access to that. (forbidden)".
+        // Inherit DATABASE_URL and do not force NODE_ENV=production, which refuses `.env`'s dev secrets.
+        // PUBLIC_WEB_ORIGIN must be this audit's origin, or CORS and the WebSocket Origin check answer
+        // `forbidden`.
         const api = new ManagedServer(
           'api',
           ['--filter', '@prl/api', 'start'],
@@ -2207,29 +1587,8 @@ async function main() {
       throw new Error(`${WEB_ORIGIN} is not serving`);
     }
 
-    // Is this even our app? Asked before a single key is pressed.
-    //
-    // This harness does not start the server it measures, and the default origin is
-    // `localhost:3000` — the most contended port on any developer's machine. An adversarial review
-    // ran this exactly as documented, attached to an unrelated process holding that port, and got
-    // thirty specific, product-shaped failures out of it: "42 focusable elements never reached",
-    // "no visible menu trigger at 390px". Every one was true of somebody else's application, and
-    // nothing in the output said so.
-    //
-    // The failing direction is survivable — somebody investigates and finds the port. The PASSING
-    // direction is the dangerous one: a green keyboard audit against a page that happens to have a
-    // reachable tab order is a gate reporting on nothing at all, which is the shape this repository
-    // spends most of its guards refusing.
-    //
-    // The marker is the shell class the root layout always emits. It is not a version and does not
-    // need to be: the question is "is this the app", not "is this the build". `age-gate-audit.mjs`
-    // answers the build question separately, from `.next/BUILD_ID`, and refuses `next dev`.
-    //
-    // `--start` does not retire this check, it sharpens it. `next start` binds the port it is given
-    // or exits, so a foreign process already on 3464 makes THIS run's web server die and the audit
-    // then measures the squatter — which is the same failure with a different first step. Measured
-    // on 2026-08-26 against an unrelated Vite app holding :3000 on this machine: exit 1, "No
-    // 'prl-app' or 'prl-shell' in the landing HTML (828 bytes)", zero keys pressed.
+    // Is this our app? The marker is the shell class the root layout always emits. Against an unrelated
+    // app on :3000 a review got thirty failures that were true of somebody else's page.
     const landing = await probe.text();
     if (!landing.includes('prl-app') && !landing.includes('prl-shell')) {
       console.error(`\n${RED}${WEB_ORIGIN} is serving, but it is not Poker Risk Lab.${RESET}`);
@@ -2241,9 +1600,6 @@ async function main() {
       throw new Error(`${WEB_ORIGIN} is serving something that is not Poker Risk Lab`);
     }
 
-    // Said before anything else, and said in colour: a run whose routes were all reached past a
-    // gate is a different run, and the reader of the output has to be told which one they are
-    // holding. Silence here is what would let a gated deployment be audited as if it were open.
     if (await probeAgeGate()) {
       console.log(
         `${YELLOW}  The age gate is ON at this origin: ${AGE_GATE_PATH} stands in front of /play.${RESET}`,
@@ -2258,9 +1614,7 @@ async function main() {
       );
     }
 
-    // A sweep of nothing is not a pass, and this is the cheap half of saying so: an empty `ROUTES`
-    // — a merge that lost the array, an edit that left it behind a filter — would otherwise walk no
-    // page, press no key, and print a summary of zero failures.
+    // A sweep of nothing is not a pass.
     if (ROUTES.length === 0) {
       throw new Error('the route list is empty, so this run would audit no page at all');
     }
@@ -2292,15 +1646,12 @@ async function main() {
         bad('Private table: audit', error instanceof Error ? error.message : String(error));
       }
     });
-    // The expensive half. `withChrome` swallowing its callback would leave `journeys` at zero, and
-    // so would a browser that opened and closed without driving anything.
     if (journeys === 0) bad('scope', 'no journey ran, so nothing was audited');
   } catch (error) {
     console.error(`\n${RED}${error instanceof Error ? error.message : String(error)}${RESET}\n`);
     exitCode = 1;
   } finally {
-    // Before any `process.exit`, because `process.exit` does not run a `finally`. That is the
-    // difference between this and an orphaned `next start` holding 3464 until somebody reboots.
+    // Before any `process.exit`, which skips `finally`.
     for (const server of servers) server.stop();
   }
 
@@ -2313,8 +1664,6 @@ async function main() {
 
   console.log(`\n${BOLD}Summary${RESET}`);
   console.log(`  ${GREEN}${passed} check(s) passed${RESET}`);
-  // Printed even when it is zero, because "how much did this run decline to check" is the number
-  // the previous version of this file hid inside its warning list.
   console.log(`  ${DIM}${notApplicable.length} check(s) not applicable on the route they ran on${RESET}`);
   for (const entry of notApplicable) console.log(`${DIM}    - ${entry}${RESET}`);
   if (warnings.length > 0) {
@@ -2327,9 +1676,7 @@ async function main() {
     console.log('');
     process.exit(1);
   }
-  // Zero failures over zero checks reads exactly like a clean run, and is the report this file has
-  // already produced once from a matcher that could not fire. The route list being non-empty is not
-  // the same claim: every route can load and every check can still decline to examine anything.
+  // Zero failures over zero checks is not a clean run.
   if (passed === 0) {
     console.log(`\n${RED}${BOLD}FAIL — no check ran at all, so nothing was proven.${RESET}\n`);
     process.exit(1);
@@ -2337,5 +1684,4 @@ async function main() {
   console.log(`${GREEN}${BOLD}\nKeyboard audit passed.${RESET}\n`);
 }
 
-// Guarded so that `keyboard-audit.test.mjs` can import the matchers without starting Chrome.
 if (import.meta.main) await main();

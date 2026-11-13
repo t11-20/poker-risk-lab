@@ -1,40 +1,9 @@
 #!/usr/bin/env node
 /**
- * Tests for the keyless signing identity: the policy, the certificate parse, and the gate that
- * holds the committed policy and the signing workflow to the same answer.
- *
- * Run with:  node --test scripts/keyless-identity.test.mjs
- *
- * ## What is testable here, and what genuinely is not
- *
- * Keyless signing has three moving parts, and they are testable to very different degrees. Being
- * precise about which is which is the point of this header, because the temptation is to run these
- * tests green and describe the whole mechanism as verified.
- *
- *   1. **The identity policy, and its agreement with the workflow.** Fully testable offline, and
- *      fully tested below. Every case is a mutation of the REAL committed workflow — renamed,
- *      retriggered on a tag, `id-token: write` moved to the top level, a second job granted it —
- *      fed to the same function the gate calls. Each one must fail.
- *   2. **cosign's certificate identity matching.** Testable offline, but not from here: it needs a
- *      registry, a minted certificate and cosign itself, so it lives in
- *      `node scripts/supply-chain/image-provenance.mjs --negative-control`, which mints a throwaway
- *      CA and demonstrates four refusals with real cosign output. This file covers the parse of the
- *      certificate that demonstration reads back.
- *   3. **The OIDC exchange with Fulcio and the Rekor entry.** NOT testable here, or anywhere on a
- *      workstation, at all. The identity in a keyless signature IS the GitHub Actions job; there is
- *      nothing on a laptop for Fulcio to bind a certificate to, and no amount of local machinery
- *      changes that. Until `.github/workflows/release-sign.yml` runs for real, no certificate and
- *      no log entry exist for this repository. Nothing in this file should be read as evidence
- *      that they do.
- *
- * ## Would these fail if the behaviour broke?
- *
- * The agreement tests are written as mutations of the real file rather than of a fixture, so they
- * fail if the workflow drifts from the policy in either direction — which is the failure mode being
- * guarded, not a hypothetical shape. The one that would have been easiest to get wrong is the
- * `id-token` scope test: an implementation that merely grepped for `id-token: write` would pass the
- * "top level" mutation, because the string is present either way. The parse distinguishes scope,
- * and the test asserts the message names the top level.
+ * Tests for the keyless signing identity: the policy, the certificate parse, and the agreement
+ * between the committed policy and the real signing workflow. Each agreement test mutates the real
+ * workflow. cosign's identity matching is shown by `image-provenance.mjs --negative-control`.
+ * The Fulcio exchange and the Rekor entry cannot be tested off a GitHub Actions job.
  */
 
 import assert from 'node:assert/strict';
@@ -70,7 +39,6 @@ const parsed = () => {
   assert.deepEqual(problems, [], 'the committed policy must parse');
   return policy;
 };
-/** The real workflow, handed to the gate's own function. */
 const agree = (policy, text = WORKFLOW_TEXT, filename = 'release-sign.yml') =>
   workflowAgreementProblems(policy, { filename, text, declared: DECLARED });
 
@@ -83,8 +51,7 @@ describe('the committed policy', () => {
   });
 
   it('builds the identity GitHub would actually mint', () => {
-    // The SAN format is `https://github.com/<owner>/<repo>/<workflow path>@<ref>` — not a URL of
-    // our choosing. Getting it wrong produces a policy that accepts nothing, and looks fine.
+    // A wrong SAN format gives a policy that accepts nothing and looks fine.
     assert.equal(
       expectedCertificateIdentity(parsed(), 'example-org/poker-risk-lab'),
       'https://github.com/example-org/poker-risk-lab/.github/workflows/release-sign.yml@refs/heads/main',
@@ -141,9 +108,7 @@ describe('resolving the owner, which this repository does not yet have', () => {
   });
 
   it('REFUSES an environment that names a DIFFERENT repository', () => {
-    // The bound on the fallback. Without it, an ambient variable could point the verification at
-    // any repository at all, which would make the environment — not the committed policy — the
-    // thing that decides whose signature is acceptable.
+    // Without this bound an ambient variable would decide whose signature is acceptable.
     const resolved = resolveRepository(parsed(), { GITHUB_REPOSITORY: 'attacker-org/something-else' });
     assert.ok('problem' in resolved);
     assert.match(resolved.problem, /not a repository called poker-risk-lab/);
@@ -172,9 +137,7 @@ describe('identity matching — the check that turns arithmetic into provenance'
   });
 
   it("REJECTS the same workflow in somebody else's repository", () => {
-    // The case that matters most, and the one a maths-only verification accepts: Fulcio issues a
-    // certificate to anybody's GitHub Actions job, so a signature made by a fork — or by an
-    // unrelated repository that copied this workflow file — is cryptographically perfect.
+    // Fulcio certifies any GitHub Actions job, so a fork's signature is cryptographically valid.
     const other = { ...good, identity: expectedCertificateIdentity(policy, 'attacker-org/poker-risk-lab') };
     const problems = identityProblems(other, policy, repository);
     assert.equal(problems.length, 1);
@@ -193,8 +156,7 @@ describe('identity matching — the check that turns arithmetic into provenance'
   });
 
   it('REJECTS a wrong ISSUER even when the identity is right', () => {
-    // An identity string is not self-authenticating. Any OIDC provider can assert any subject;
-    // the issuer is what makes the SAN GitHub's statement rather than somebody else's.
+    // The issuer is what makes the SAN GitHub's statement.
     const other = { ...good, issuer: 'https://token.actions.githubusercontent.com.evil.example' };
     const problems = identityProblems(other, policy, repository);
     assert.equal(problems.length, 1);
@@ -212,9 +174,7 @@ describe('the policy and the signing workflow must agree', () => {
   });
 
   it('FAILS when the workflow is RENAMED and the policy is not', () => {
-    // The headline case from the brief: a rename that breaks the binding must fail a check rather
-    // than silently widen what is accepted. Two directions, both covered — the policy naming a file
-    // that is not there, and a file whose name is not the one in the certificate SAN.
+    // A rename must fail rather than widen what is accepted.
     const problems = agree(parsed(), WORKFLOW_TEXT, 'release-sign-v2.yml');
     assert.ok(problems.some((p) => /must be the same string/.test(p)));
   });
@@ -252,9 +212,7 @@ describe('the policy and the signing workflow must agree', () => {
   });
 
   it('FAILS when the trigger block cannot be read at all, rather than assuming a ref', () => {
-    // `[].every(…)` is true, so an unreadable `on:` block would otherwise pass the default-branch
-    // check and report a workflow that can run on any ref as pinned to one. The exact shape of the
-    // silent pass this repository keeps finding.
+    // `[].every(…)` is true, so an unreadable `on:` block would otherwise pass.
     const text = WORKFLOW_TEXT.replace(
       "on:\n  # Follows a completed `Release` run. Never `push`, `pull_request` or\n  # `pull_request_target`: a workflow that can mint a signing identity must never\n  # run on a ref a contributor controls.\n  workflow_run:\n    workflows: ['Release']\n    types: [completed]",
       'on:',
@@ -270,8 +228,7 @@ describe('the policy and the signing workflow must agree', () => {
   });
 
   it('FAILS when id-token: write moves to the WORKFLOW TOP LEVEL', () => {
-    // The scope test. A grep for the string passes this mutation happily — it is present either
-    // way — so the parse has to distinguish where it sits.
+    // A grep passes this mutation, because the string is present either way.
     const text = WORKFLOW_TEXT.replace(
       'permissions:\n  contents: read',
       'permissions:\n  contents: read\n  id-token: write',
@@ -317,8 +274,7 @@ describe('parsing a workflow, which is where a silent pass would come from', () 
   });
 
   it('reads ci.yml and release.yml as granting no id-token anywhere', () => {
-    // The promise those two files make in prose, checked. A signing capability in the test workflow
-    // would be worse than one in the signing workflow: that job installs a dependency graph.
+    // A signing grant in the test workflow would be worse, because that job installs a dependency graph.
     for (const name of ['ci.yml', 'release.yml']) {
       const text = readFileSync(join(REPO_ROOT, '.github/workflows', name), 'utf8');
       const structure = parseWorkflowStructure(text);
@@ -331,10 +287,7 @@ describe('parsing a workflow, which is where a silent pass would come from', () 
 });
 
 describe('reading the identity back out of a real certificate', () => {
-  // A certificate is minted here with openssl rather than fixtured, so the parse is exercised
-  // against bytes an X.509 tool actually produced. `certificateIdentity` is what lets the negative
-  // control say the refusals it demonstrates were about the IDENTITY rather than about a broken
-  // chain — the same reason `verifiedDigests` re-reads the digest out of a signed payload.
+  // Minted with openssl so the parse runs on bytes a real X.509 tool produced.
   const scratch = mkdtempSync(join(tmpdir(), 'prl-keyless-cert-'));
   after(() => rmSync(scratch, { recursive: true, force: true }));
 
@@ -461,7 +414,7 @@ describe('the two postures cannot be confused', () => {
   });
 
   it('REFUSES a record in NEITHER posture — which is what unsigned looks like', () => {
-    // The requirement in one test: "unsigned" must never be silently read as "the other posture".
+    // "Unsigned" must never read as "the other posture".
     const { problems, meta } = parseSignatureRecord(base);
     assert.equal(meta.posture, null);
     assert.ok(problems.some((p) => /names no signing posture/.test(p)));
@@ -504,8 +457,7 @@ describe('the keyless signer refuses where it cannot possibly work', () => {
   });
 
   it('refuses in an Actions job without id-token: write', () => {
-    // What that job looks like from the inside: the two request variables are simply absent. Left
-    // to itself, cosign would open an interactive OAuth flow and hang the release.
+    // Without the request variables cosign would open an interactive OAuth flow and hang.
     const problems = keylessPreflight({ GITHUB_ACTIONS: 'true' });
     assert.equal(problems.length, 1);
     assert.match(problems[0], /ACTIONS_ID_TOKEN_REQUEST_URL/);
@@ -538,34 +490,12 @@ describe('the policy schema is checked before the shape is trusted', () => {
   });
 });
 
-/**
- * WHAT may be signed, as distinct from WHO signed it.
- *
- * Everything above this point is about identity: the certificate names this
- * repository's `release-sign.yml` on `refs/heads/main`, and a signature from
- * anywhere else is refused. All of it was true of a release built from an
- * arbitrary branch, because the only question the signing job asked about the run
- * that triggered it was whether it concluded successfully.
- *
- * A REHEARSAL concludes successfully. `release.yml` offers `workflow_dispatch`
- * with `dry_run: true` as the default — deliberately, so that clicking Run without
- * reading is the safe choice — and such a run builds images from the chosen
- * branch, scans them, brings the whole staging stack up against them, skips
- * promotion, and goes green. The signing workflow then pushed those images to
- * GHCR and bound a Fulcio certificate naming this repository to them. The safe
- * default made the rehearsal the likely way in.
- *
- * Two independent guards now, because they fail differently. The `if:` reasons
- * about how the run STARTED and prevents the job existing at all — a `push`, which
- * for `release.yml` means a `v*` tag. `release-promotable.json` records what the
- * run DECIDED, is written only by the `promote` job, and is checked inside the
- * job so that a loosened condition fails in a log somebody is reading rather than
- * skipping a job nobody looks for.
- */
+// What may be signed. A `workflow_dispatch` rehearsal of release.yml (`dry_run: true` by default)
+// concludes successfully, so the signer used to sign rehearsal images. The `if:` allows only a `push`
+// run (a `v*` tag), and the job checks `release-promotable.json`, which only `promote` writes.
 describe('a rehearsal must not be signed', () => {
   const RELEASE_TEXT = readFileSync(join(REPO_ROOT, '.github/workflows/release.yml'), 'utf8');
 
-  /** The `if:` on the `sign` job — read from the file, not assumed. */
   const signCondition = (text) => /\n {4}if:\s*(.+)\n/u.exec(text)?.[1] ?? '';
 
   it('signing requires BOTH a successful conclusion and a tag push (REGRESSION)', () => {
@@ -578,9 +508,7 @@ describe('a rehearsal must not be signed', () => {
         'default is `dry_run: true` — concludes success and gets its branch images pushed to GHCR ' +
         "and signed under this repository's identity",
     );
-    // One line. In a folded scalar a more-indented continuation keeps its newline
-    // rather than folding to a space, which hands GitHub's expression parser a
-    // literal line break; this caught exactly that while the change was written.
+    // In a folded scalar a more-indented continuation keeps its newline, which GitHub reads as a break.
     assert.ok(!condition.includes('\n'), 'the condition spans lines; fold it or GitHub sees a break');
   });
 
@@ -605,8 +533,7 @@ describe('a rehearsal must not be signed', () => {
       /if-no-files-found: error/u,
       'an absent attestation must fail where it is produced, not silently at the signer',
     );
-    // The whole value of the artefact is that the job writing it cannot run for a
-    // rehearsal. If that condition goes, the artefact means nothing.
+    // The artefact means nothing if the job writing it can run for a rehearsal.
     assert.match(
       RELEASE_TEXT,
       /if: \$\{\{ github\.event_name == 'push' \|\| inputs\.dry_run == false \}\}/u,

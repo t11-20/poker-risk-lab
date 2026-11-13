@@ -1,135 +1,12 @@
 #!/usr/bin/env node
 /**
- * Proof, against a running production build and in a real browser, that the age gate actually GATES
- * — and that it lets everything else through while it does.
- *
- * This is what `pnpm run test:age-gate` does.
- *
- * ## The gap this closes, and why it was worth a harness of its own
- *
- * `docs/production/legal-review-requirements.md` follow-up 5 named it: "The gate has no
- * browser-level test. The pure decisions are covered by `apps/web/test/age-gate.test.ts`; that a
- * redirect and a `Set-Cookie` actually reach a browser, and that an in-app router navigation is
- * gated as well as a document navigation, needs a running server and is not covered anywhere yet."
- *
- * That is a worse gap than an ordinary coverage hole, for three reasons that compound:
- *
- *   - The gate is a LEGAL control, on a product about to take paying students.
- *   - It is OFF by default (`src/lib/age-gate.ts` argues that at length and the argument stands),
- *     so the shipped configuration exercises none of this. Every other gate in this repository runs
- *     against the shipped configuration; this one cannot.
- *   - A gate that silently fails looks exactly like a gate that is off, which is the shipped state.
- *     There is no error, no log line and no failed request — a reader simply arrives at the tables.
- *     A deployer who switched it on gets no signal at all.
- *
- * ## It found the defect it was written to look for, on its first run — and a second one beside it
- *
- * **One.** The proxy's test for an in-app router navigation was `request.headers.get('rsc') !==
- * null`. That is the header the App Router really sends. It is also one of Next's `FLIGHT_HEADERS`,
- * and Next DELETES all of them from the request before middleware runs —
- * `next/dist/server/web/adapter.js`, commented "Headers should only be stripped for middleware". So
- * the branch was dead: with the gate switched on, a reader who clicked "Play" in the site header
- * from any page walked straight past it, every time, and only a hard document navigation was ever
- * gated. The fix is `isRouterNavigation` in `apps/web/src/lib/guest-bootstrap.ts`.
- *
- * **Two.** The proxy `matcher` excluded two prefetch headers, on the stated reasoning that a
- * prefetch is not a document. That is true of `next-router-prefetch`, which Next answers with 264
- * bytes of routing stub. It is false of `purpose: prefetch`, which changes nothing on the server:
- * the same request carrying it is answered with the complete 38KB page, table and all. So a client
- * that set that one header was served the whole of a gated route — with no gate applied and no
- * Content-Security-Policy on it. Narrowing the exclusion to the header Next honours closes both
- * halves; `isRouterPrefetch` is where the distinction lives.
- *
- * Nothing in the repository could have caught either. The decision functions are correct and their
- * unit tests build headers by hand, so they cannot reproduce a deletion that happens upstream of
- * the function under test, nor a matcher that decides the function is not called at all. This is
- * the shape of defect only a running server shows you, and the first of them is the exact half the
- * follow-up predicted would be wrong.
- *
- * Neither was a way past a control that could not be walked past anyway — the gate is a
- * self-declaration and the button that satisfies it is right there on the page. What was wrong is
- * narrower and still worth the fix: the code claimed there was no path through the proxy that
- * renders a gated page, and there were two.
- *
- * ## What this proves
- *
- * Five properties, each of them a request made and an answer read:
- *
- *   1. A DOCUMENT navigation to a gated route with no declaration is redirected to the interstitial
- *      — real status, real `Location` — and the interstitial really renders.
- *   2. The declaration writes a cookie that WORKS: the same navigation afterwards reaches the page,
- *      over HTTP by replaying the cookie the server set, and in Chrome by pressing the real button
- *      and letting the browser keep the cookie itself.
- *   3. An IN-APP ROUTER navigation is gated too. Measured twice: as the request shape Chrome sends,
- *      and by clicking the real `<Link>` in real Chrome and asserting where the browser ended up.
- *   4. A ROUTER PREFETCH is NOT gated, and prefetching or previously visiting a gated route does
- *      not let a later navigation past the gate. The wider `purpose: prefetch` spelling IS gated,
- *      because Next answers it with the page rather than with a stub — see defect two below.
- *   5. `PRL_AGE_GATE_SCOPE=site` gates the whole site, and still leaves the legal pages open.
- *
- * ## What it deliberately does NOT prove
- *
- *   - Nothing about the shipped configuration, which has no gate. Every server this script starts
- *     has `PRL_AGE_GATE=on` in its environment, because a gate that is off cannot be measured.
- *   - Nothing about whether a threshold is CORRECT, or lawful, or needed. That is the question the
- *     legal register exists to hold open and this file has no opinion on it.
- *   - Nothing about verification. The gate is a self-declaration and says so on its own page; what
- *     is measured here is that the declaration is asked for, recorded and honoured — not that it is
- *     true. A reader who lies passes, by design.
- *   - Nothing about any browser other than the Chrome it found. Safari and Firefox send
- *     `Sec-Fetch-Dest` too and the gate now turns on it, but that is an argument, not a run.
- *   - Nothing about the `__Host-` cookie name. That requires TLS and these servers are plain HTTP,
- *     so what is asserted here is the OTHER half: that over plain HTTP the cookie is NOT `__Host-`
- *     and NOT `Secure`, which is the case that would otherwise be a silent redirect loop.
- *   - Nothing about a deployment behind a proxy. `isSecureRequest` trusts `x-forwarded-proto` and
- *     that path is not exercised.
- *
- * ## What would make this silently pass, and what is done about each
- *
- * This is a negative-control harness — most of its checks assert that something was REFUSED — and
- * the standing failure mode of those is that nothing was refused because nothing happened at all.
- *
- *   - **The server never came up.** Every gated check is paired with an OPEN check: a request that
- *     must succeed, usually the same URL differing by one cookie or one header. `buildVerdict`
- *     refuses to pass a run with no passing check of either kind.
- *   - **The gate was never switched on.** Then the open checks pass and the gated ones fail. The
- *     configuration is also asserted directly: the threshold is set to 21 rather than left at the
- *     default 18, so a server that ignored its environment would accept the wrong declaration value
- *     and fail. A configuration that did not arrive cannot look like a configuration that did.
- *   - **It audited a server somebody else started, in an unknown configuration.** The ports are
- *     probed before anything is started and an answer on one is a failure, not a reuse. There is
- *     deliberately no `--base-url`-only mode for the same reason: this harness must own the
- *     environment of the thing it measures.
- *   - **It audited a stale build.** `next build` is required before this runs — `.next/BUILD_ID` is
- *     checked and its value is printed and recorded, so a report can be tied to a build.
- *   - **The browser click was really a full page load.** A router navigation that fails falls back
- *     to a hard navigation, which is gated by the document path — the gate would hold and property
- *     3 would still be unproven. So the network is watched: the request that carried the click must
- *     have been a `Fetch`, and no `Document` request for the gated route may have been made.
- *   - **The browser was already past the gate.** Each browser phase runs in a fresh profile
- *     directory and clears the cookie jar before the phase that needs it clear, and the jar is read
- *     back and asserted on rather than assumed.
- *
- * ## Usage
- *
- *     node scripts/age-gate-audit.mjs [--port 3458] [--site-port 3459] [--headful] [--out <file>]
- *
- * Requires a production build (`pnpm --filter @prl/web build`). `next dev` is a different runtime
- * with a different proxy compilation path and a pass against it would not be evidence about what
- * ships. The two servers are started by this script, one per scope, and stopped by it.
- *
- * ## Exit codes
- *
- *   0  every check passed, or `--help`
- *   1  any check failed, or any check could not be run
- *
- * There is no warning-with-exit-0 anywhere in this file. A legal control that skips itself when
- * Chrome is missing is worse than no control, because the gate goes green either way. The yellow
- * lines are context about the run and can never change the outcome.
- *
- * The pure parts — the argument parser, the request shapes, the cookie parser, the landing test and
- * the verdict builder — are exported and covered by `scripts/age-gate-audit.test.mjs`, so the run
- * block is guarded by `import.meta.main`.
+ * `pnpm run test:age-gate`: proves in a production build and real Chrome that the age gate, switched
+ * on, refuses document navigations, router navigations and `purpose: prefetch` requests, honours the
+ * declaration cookie, leaves router prefetches and the legal pages open, and gates the whole site
+ * under `PRL_AGE_GATE_SCOPE=site`. Every refusal is paired with a request that must succeed.
+ * It does not cover the shipped (gate off) configuration, `__Host-` cookies over TLS, other browsers
+ * or `x-forwarded-proto`. Next deletes the `rsc` header before middleware runs, which unit tests
+ * cannot reproduce; that defect is why this harness exists.
  */
 
 import { spawn } from 'node:child_process';
@@ -139,10 +16,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
-// The gate's own constants rather than copies of them, for the reason `age-gate.ts` states in its
-// header and every other harness here repeats: a script that seeds or asserts on a name the proxy
-// does not read sails past the whole feature and reports a clean run. That module imports nothing
-// precisely so things outside the Next runtime can read it.
+// The gate's own constants, so a renamed cookie or parameter cannot leave this harness passing.
 import {
   AGE_GATE_COOKIE_NAMES,
   AGE_GATE_DECLARE_PARAM,
@@ -162,33 +36,15 @@ const red = (s) => paint('31', s);
 const green = (s) => paint('32', s);
 const yellow = (s) => paint('33', s);
 
-// ===========================================================================
-// Constants
-// ===========================================================================
-
 /**
- * The threshold these servers are configured with, and it is deliberately NOT the default.
- *
- * `AGE_GATE_DEFAULT_MINIMUM` is 18. If this harness used 18 it could not tell "the deployment read
- * my configuration" from "the deployment ignored my configuration and fell back to its default",
- * and every check below would pass either way. 21 is inside the 13–25 band the module clamps to,
- * so it survives the read intact, and it makes the declaration value, the cookie value and the
- * words on the interstitial all three of them things that could only have come from the
- * environment this script set.
+ * Deliberately not the default 18, so a server that ignored its environment fails. It sits inside the
+ * 13 to 25 band the module clamps to.
  */
 export const AUDIT_MINIMUM_AGE = 21;
 
-/**
- * A declaration against a LOWER threshold, used as a negative control on the cookie's value.
- *
- * The cookie records the threshold it was given, not a boolean, so a deployment that raises its
- * threshold re-asks everyone. This is that property at the wiring level: a cookie saying 18, sent
- * to a server asking for 21, must not open the tables. It is the difference between the gate
- * reading the cookie and the gate merely noticing that a cookie exists.
- */
+/** A cookie declaring 18 sent to a server asking 21 must not open the tables. */
 export const STALE_DECLARATION = 18;
 
-/** Chrome, wherever this platform keeps it. The same candidate list as the sibling audits. */
 const CHROME_CANDIDATES = [
   process.env.CHROME_PATH,
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
@@ -198,34 +54,17 @@ const CHROME_CANDIDATES = [
   '/usr/bin/chromium-browser',
 ].filter((path) => typeof path === 'string' && path !== '');
 
-/**
- * How long to wait after a navigation or a click before reading where the browser ended up.
- *
- * Generous, because an impatient positive control is a false failure that sends somebody looking
- * for a gate defect that is really a slow machine. A router navigation on this app completes in
- * well under 300ms locally.
- */
+/** Generous, so a slow machine is not reported as a gate defect. A router navigation takes <300ms. */
 const NAVIGATION_SETTLE_MS = 2_500;
 
-/** The beat after a hover, so anything the router wanted to prefetch has had its chance to leave. */
 const PREFETCH_SETTLE_MS = 1_500;
 
-/** Where a document navigation is sent when it is refused, as this harness expects to see it. */
 const CHALLENGE_FOR = (path) =>
   `${AGE_GATE_PATH}?${new URLSearchParams({ [AGE_GATE_RETURN_PARAM]: path }).toString()}`;
 
-// ===========================================================================
-// Options
-// ===========================================================================
-
 /**
- * Two ports, kept clear of everything else that listens in this repository.
- *
- * 3000/3001 are the app and the API, 3456 is `test:ax`, 3457 is `test:csp`, and the staging and
- * observability stacks hold 8443/9090/9093/9099. Two are needed rather than one because the scope
- * is read from the process environment on every request: proving that `site` gates more than `play`
- * means two differently configured servers, and running them side by side rather than in sequence
- * keeps the browser phase from having to be repeated.
+ * Two servers because the scope is read from the environment. 3000/3001 are the app and API, 3456 is
+ * `test:ax`, 3457 is `test:csp`.
  */
 const DEFAULTS = {
   port: Number(process.env.PRL_AGE_GATE_AUDIT_PORT ?? 3458),
@@ -262,8 +101,7 @@ export function parseArgs(argv) {
   const options = { ...DEFAULTS, help: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    // `pnpm run test:age-gate -- --headful` passes the `--` through rather than swallowing it, so
-    // both spellings work instead of one of them dying on "unknown option --".
+    // `pnpm run test:age-gate -- --headful` passes the `--` through.
     if (arg === '--') continue;
     const value = argv[i + 1];
     const need = () => {
@@ -285,8 +123,6 @@ export function parseArgs(argv) {
       case '--site-port':
         options.sitePort = Number(need());
         break;
-      // One option, two spellings, because `test:a11y` calls it `--out` and `test:ax` calls it
-      // `--json` and a reader of either should not have to find out which one this is.
       case '--out':
       case '--json':
         options.out = need();
@@ -314,21 +150,6 @@ export function parseArgs(argv) {
   return options;
 }
 
-// ===========================================================================
-// The request shapes
-//
-// The whole feature turns on these differing by one header, so they are written out here as data
-// rather than assembled at each call site. `apps/web/src/lib/guest-bootstrap.ts` is the other end
-// of this conversation and its comments explain what each header means to the proxy.
-// ===========================================================================
-
-/**
- * A top-level document navigation: what the browser sends when a URL is opened or a form submits.
- *
- * `sec-fetch-dest: document` is the signal the proxy reads. It is sent explicitly rather than left
- * absent, even though an absent header is also treated as a document, because a harness that
- * exercised only the absent case would prove nothing about what a browser sends.
- */
 export function documentHeaders() {
   return {
     accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -340,13 +161,8 @@ export function documentHeaders() {
 }
 
 /**
- * An in-app router navigation: what the App Router sends when a reader clicks a `<Link>`.
- *
- * Captured from a real Chrome 151 against this app rather than imagined. `withRsc` exists because
- * of the defect this harness found: Chrome DOES send `rsc: 1`, and Next deletes it before the
- * proxy can see it, so the shape the browser sends and the shape the proxy is handed are two
- * different things and both have to be checked. A gate that only passed with `rsc` present would
- * be a gate that never fires in production.
+ * Captured from Chrome 151. Chrome sends `rsc: 1` and Next deletes it before the proxy sees it, so both
+ * shapes are checked.
  */
 export function routerNavigationHeaders({ from = '/learn', withRsc = true } = {}) {
   const headers = {
@@ -361,15 +177,8 @@ export function routerNavigationHeaders({ from = '/learn', withRsc = true } = {}
 }
 
 /**
- * A prefetch: the router filling its cache for a page nobody has opened.
- *
- * Identical to a router navigation but for `next-router-prefetch`, which is the point. This one
- * must NOT be gated — a redirect here would put the interstitial into the router's cache under the
- * gated route's name, and the reader would then be shown it (or not) according to a cache rather
- * than according to the gate. The proxy `matcher` excludes it before the middleware even runs.
- *
- * `purpose: prefetch` is the older, wider spelling, sent by some browsers and intermediaries on
- * their own. Both are checked because the matcher lists both.
+ * Must NOT be gated. A redirect would cache the interstitial in the router under the gated route's
+ * name. The proxy `matcher` excludes `next-router-prefetch` before the middleware runs.
  */
 export function prefetchHeaders({ from = '/learn', spelling = 'next-router-prefetch' } = {}) {
   const headers = routerNavigationHeaders({ from });
@@ -378,18 +187,7 @@ export function prefetchHeaders({ from = '/learn', spelling = 'next-router-prefe
   return headers;
 }
 
-// ===========================================================================
-// Reading the answers
-// ===========================================================================
-
-/**
- * The declaration cookie out of a response's `Set-Cookie` values, parsed into name and attributes.
- *
- * Returns null when there is no age cookie among them, which is a finding rather than an error:
- * the caller decides whether the absence is a failure. Attribute names are lower-cased and
- * valueless attributes (`HttpOnly`, `Secure`) map to `true`, so a caller asserts on presence the
- * same way it asserts on a value.
- */
+/** Null when there is no age cookie. Valueless attributes map to `true`. */
 export function parseDeclarationCookie(setCookieValues) {
   for (const raw of setCookieValues) {
     const [pair, ...rest] = raw.split(';');
@@ -408,41 +206,22 @@ export function parseDeclarationCookie(setCookieValues) {
   return null;
 }
 
-/**
- * True when a response is the gate's challenge for `path`.
- *
- * The status is asserted as well as the location. 303 is the gate's own choice and the reason is
- * in `src/proxy.ts`: it is "fetch this other URL with GET", it is correct for both a form
- * submission and a plain navigation, and it is not cacheable by default — a cached 302 for `/play`
- * would outlive the declaration that was supposed to end it.
- */
+/** 303, because a cached 302 for `/play` would outlive the declaration (see `src/proxy.ts`). */
 export function isChallenge(status, location, path) {
   if (status !== 303) return false;
   if (location === null) return false;
   return location === CHALLENGE_FOR(path);
 }
 
-/**
- * True when a navigation ended up on the interstitial instead of where it was sent.
- *
- * Segment matching, never `includes`, for the reason `age-gate.ts` gives at its own `matchesPrefix`:
- * `/age-checkers` is not the gate. Lifted from `scripts/csp-negative-control.mjs`, which needs the
- * same answer for the opposite reason — it has to know when the gate has swallowed the page it was
- * trying to attack.
- */
+/** Segment matching, never `includes`, because `/age-checkers` is not the gate. */
 export function landedOnAgeGate(requestedPath, landedPath) {
   const isGate = (path) => path === AGE_GATE_PATH || path.startsWith(`${AGE_GATE_PATH}/`);
   return isGate(landedPath) && !isGate(requestedPath);
 }
 
 /**
- * The verdict, from the recorded checks.
- *
- * Pass requires four things, not one. No failure; at least one GATED check that passed, so a run
- * that never refused anything cannot report that the gate works; at least one OPEN check that
- * passed, so a run against a server that refuses everything — or against no server at all — cannot
- * either; and at least one check from the BROWSER, because "the gate has no browser-level test" is
- * the sentence this whole file exists to delete, and an HTTP-only run has not deleted it.
+ * Pass needs no failure, at least one gated pass, one open pass and one browser pass, so a run that
+ * refused nothing, allowed nothing or never opened a browser cannot pass.
  */
 export function buildVerdict(record) {
   const failures = record.filter((entry) => entry.level === 'fail');
@@ -467,18 +246,8 @@ export function buildVerdict(record) {
   };
 }
 
-// ===========================================================================
-// Reporting
-// ===========================================================================
-
 const record = [];
 
-/**
- * `kind` is `gated` for a request that had to be refused and `open` for one that had to succeed;
- * `layer` is `http` or `browser`. `buildVerdict` requires a passing check of each kind and at
- * least one from the browser, which is what stops a run that fell over early from reporting a
- * clean sheet.
- */
 const ok = (kind, layer, label, detail = '') => {
   record.push({ level: 'pass', kind, layer, label, detail });
   console.log(`  ${green('✓')} ${label}${detail === '' ? '' : ` ${dim(detail)}`}`);
@@ -487,31 +256,20 @@ const bad = (kind, layer, label, detail) => {
   record.push({ level: 'fail', kind, layer, label, detail });
   console.log(`  ${red('✗')} ${label}\n${dim(`      ${detail}`)}`);
 };
-/** Context about the run, never the outcome of a check. Nothing here can change the exit code. */
+/** Context about the run. Never changes the exit code. */
 const note = (label, detail) => {
   record.push({ level: 'note', kind: 'context', layer: 'context', label, detail });
   console.log(`  ${yellow('!')} ${label} ${dim(detail)}`);
 };
 const section = (title) => console.log(`\n${bold(title)}`);
 
-/** `ok` or `bad` from a boolean, so a check reads as one statement rather than as an if. */
 const judge = (held, kind, layer, label, passDetail, failDetail) => {
   if (held) ok(kind, layer, label, passDetail);
   else bad(kind, layer, label, failDetail);
   return held;
 };
 
-// ===========================================================================
-// HTTP
-// ===========================================================================
-
-/**
- * One request, with redirects NOT followed, returned as plain data.
- *
- * `redirect: 'manual'` is the whole point: this harness asserts on the status and the `Location` a
- * gated request is answered with, and a client that quietly followed the redirect would report the
- * interstitial's 200 and prove nothing about how it got there.
- */
+/** Redirects are not followed, so the status and `Location` of a refusal can be asserted. */
 async function request(url, { headers = {}, cookie = null, method = 'GET' } = {}) {
   const sent = { ...headers };
   if (cookie !== null) sent.cookie = cookie;
@@ -533,13 +291,8 @@ async function request(url, { headers = {}, cookie = null, method = 'GET' } = {}
 }
 
 /**
- * A request and every redirect it is answered with, as a chain.
- *
- * Needed because Next answers an RSC request whose `_rsc` cache-busting parameter it does not like
- * with its OWN 307 before the proxy has said anything, so "was this gated" cannot be read from the
- * first response alone. The chain is returned whole and the caller asserts on what is in it —
- * which also makes "the gate appeared somewhere in here" a thing that can be asserted NEGATIVELY,
- * for the prefetch, where the interesting claim is that the gate never appeared at all.
+ * Next can answer an RSC request with its own 307 before the proxy runs, so the whole redirect chain is
+ * returned and asserted on.
  */
 async function requestChain(url, options = {}, limit = 5) {
   const chain = [];
@@ -553,7 +306,6 @@ async function requestChain(url, options = {}, limit = 5) {
   return chain;
 }
 
-/** True when any hop in a chain was a redirect to the gate's interstitial. */
 function chainHitTheGate(chain) {
   return chain.some((hop) => {
     if (hop.location === null) return false;
@@ -565,16 +317,7 @@ function chainHitTheGate(chain) {
 const describeChain = (chain) =>
   chain.map((hop) => `${hop.status}${hop.location === null ? '' : ` -> ${hop.location}`}`).join(' ');
 
-// ===========================================================================
-// A very small CDP client
-//
-// Lifted from `scripts/csp-negative-control.mjs`, which lifted it from `scripts/ax-tree-audit.mjs`,
-// on purpose rather than shared through a helper module — for the reason those files state: these
-// are release gates, and a gate that depends on a file another gate can change is a gate that can
-// be broken from a distance. The additions here are `on`, because this script has to answer
-// protocol EVENTS to watch the network, and `click`, because the property that matters most is
-// what happens when a reader presses a link.
-// ===========================================================================
+// CDP client copied, not shared, from csp-negative-control.mjs so one gate cannot break another.
 
 class Page {
   #socket;
@@ -634,14 +377,7 @@ class Page {
     return result.result.value;
   }
 
-  /**
-   * A real mouse press at a point, through Chrome's own input pipeline.
-   *
-   * Not `element.click()`: that is a synthetic event dispatched from a DevTools evaluation, and
-   * while React would honour it, it would leave the harness proving that React's onClick works
-   * rather than that a reader pressing a link is gated. The difference has mattered before —
-   * `scripts/keyboard-audit.mjs` records the same distinction for keys.
-   */
+  /** A real press through `Input.dispatchMouseEvent`, not a synthetic `element.click()`. */
   async click(x, y) {
     const base = { x, y, button: 'left', clickCount: 1 };
     await this.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...base });
@@ -669,16 +405,9 @@ function chromePath() {
 
 async function withChrome(headful, run) {
   const binary = chromePath();
-  // Offset by pid so two runs on one machine do not fight over a port, and kept clear of the ranges
-  // the keyboard audit (9222+), the AX audit (9800+) and the CSP control (9400+) use.
+  // Clear of keyboard-audit (9222+), ax-tree-audit (9800+) and csp-negative-control (9400+).
   const port = 9600 + Math.floor(process.pid % 150);
-  /**
-   * A profile directory per run, removed afterwards.
-   *
-   * Not a fixed path, and here the reason is the feature itself: this harness's whole subject is a
-   * cookie that lets a reader past a gate. A profile shared with a previous run would carry that
-   * cookie in, and the run would report a gate holding for a reader it had already let through.
-   */
+  // A fresh profile per run, so no declaration cookie survives from a previous run.
   const profile = mkdtempSync(join(tmpdir(), 'prl-age-gate-audit-'));
   const child = spawn(
     binary,
@@ -705,8 +434,7 @@ async function withChrome(headful, run) {
     const page = await Page.open(target.webSocketDebuggerUrl);
     await page.send('Page.enable');
     await page.send('Runtime.enable');
-    // Enabled to WATCH, not to seed: the cookie this harness cares about is one the browser is
-    // supposed to store for itself, and a seeded one would prove nothing about the `Set-Cookie`.
+    // Watched, never seeded. The cookie under test must come from the server's `Set-Cookie`.
     await page.send('Network.enable');
     try {
       return await run(page, version.Browser);
@@ -715,9 +443,7 @@ async function withChrome(headful, run) {
     }
   } finally {
     child.kill('SIGTERM');
-    // Chrome writes its profile out as it exits, so removing it races the browser. `maxRetries`
-    // gives it its moment, and the catch means the worst case is a few megabytes in the system temp
-    // directory rather than a passing run turned into a filesystem error.
+    // Chrome writes its profile as it exits, so removal retries and tolerates failure.
     try {
       rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     } catch (error) {
@@ -728,18 +454,7 @@ async function withChrome(headful, run) {
   }
 }
 
-// ===========================================================================
-// Servers
-// ===========================================================================
-
-/**
- * A child server this script owns and must clean up.
- *
- * The same class, for the same reason, as `scripts/a11y-audit.mjs` and its siblings: `pnpm --filter
- * ... start` is a wrapper, so killing the wrapper leaves the real server holding the port, and an
- * orphan makes the next run measure a build nobody meant to measure. Detached, signalled by process
- * group, ESRCH tolerated.
- */
+/** `pnpm ... start` is a wrapper, so the server is detached and signalled by process group. */
 class ManagedServer {
   constructor(label, args, readyUrl, env) {
     this.label = label;
@@ -759,8 +474,6 @@ class ManagedServer {
       env: { ...process.env, ...this.env },
     });
     const keep = (chunk) => {
-      // Kept, not printed: a healthy Next boot is twenty lines of noise, and it is only wanted when
-      // the server fails to come up.
       this.output.push(chunk.toString());
       if (this.output.length > 200) this.output.shift();
     };
@@ -781,7 +494,6 @@ class ManagedServer {
       }
       try {
         const response = await fetch(this.readyUrl, { signal: AbortSignal.timeout(2000) });
-        // Any HTTP answer means it is listening; a 404 on the ready URL is still a live server.
         if (response.status > 0) return;
       } catch {
         // Not up yet.
@@ -808,14 +520,8 @@ class ManagedServer {
 }
 
 /**
- * The environment one of these servers runs with, spelled out in full every time.
- *
- * Every gate variable is set, including the ones being left at their default, because this process
- * inherits the developer's environment and a stray `PRL_AGE_GATE_MINIMUM_AGE` in somebody's `.env`
- * would otherwise silently change what this harness is measuring. An empty string for the
- * jurisdiction is not the same as leaving it unset in `readAgeGateConfig`'s eyes — it cleans to
- * nothing and is ignored — and that is what is wanted: a label from the ambient environment must
- * not leak onto the interstitial this run reads.
+ * Every gate variable is set, so a stray value in the developer's environment cannot change what is
+ * measured. An empty jurisdiction is ignored by `readAgeGateConfig`.
  */
 function serverEnv(port, scope) {
   return {
@@ -829,20 +535,8 @@ function serverEnv(port, scope) {
 }
 
 /**
- * Refuses to continue if anything is already listening on a port this run wants.
- *
- * A harness that quietly reused whatever was on its port would be auditing a server in an unknown
- * configuration and reporting the result under this script's name. That is the failure the a11y
- * audit's `landedOnAgeGate` exists for, one level up: not "the wrong page under the right name" but
- * "the wrong server under the right port".
- *
- * It CONNECTS to 127.0.0.1, where the poll will go. The first version BOUND 127.0.0.1 instead, and on
- * macOS that bind succeeds beside a listener on the wildcard address, which is where `next start` and
- * a default `node:http` server listen. Measured on 2026-11-10 with a `node:http` page on `*:3534`,
- * `--port 3534 --site-port 3535` printed "starting web (scope=play) on 3534...", then scored the
- * stranger ("GET /terms is served, gate or no gate 200, 107 bytes of HTML") and exited 1 only
- * because the stranger has no gate. Only ECONNREFUSED counts as free, so a probe that cannot decide
- * refuses.
+ * Connects rather than binds, because on macOS a bind to 127.0.0.1 succeeds beside a wildcard listener
+ * (measured 2026-11-10, the run then scored a stranger's server). Only ECONNREFUSED counts as free.
  */
 async function refuseOccupiedPort(port) {
   const outcome = await new Promise((done) => {
@@ -869,7 +563,6 @@ async function refuseOccupiedPort(port) {
   }
 }
 
-/** The build this run will measure, or a refusal. `next dev` is a different runtime and is not it. */
 function buildId() {
   const path = join(REPO_ROOT, 'apps', 'web', '.next', 'BUILD_ID');
   if (!existsSync(path)) {
@@ -882,23 +575,11 @@ function buildId() {
   return readFileSync(path, 'utf8').trim();
 }
 
-// ===========================================================================
-// The checks — over HTTP
-// ===========================================================================
-
-/**
- * Properties 1, 2, 3 and 4, against the play-scope server, as bare HTTP.
- *
- * Every gated check here has an open one beside it that differs by exactly one thing — one cookie,
- * or one header — so a failure says which of the two mattered. A run where the server is simply
- * absent fails both halves of every pair, and `buildVerdict` refuses it for having allowed nothing.
- */
+/** Properties 1 to 4 over HTTP. Each gated check has an open check that differs by one cookie or header. */
 async function checkPlayScopeOverHttp(origin) {
   section('The server is up, and the gate is not simply refusing everything');
 
-  // The positive control that everything below leans on. `/terms` is on the gate's always-open
-  // list — a reader must be able to read what a deployment claims about them BEFORE being asked to
-  // declare anything — so this is both "the server answers" and property 5's first half.
+  // `/terms` is always open, so this is both the server-is-up control and half of property 5.
   const terms = await request(new URL('/terms', origin), { headers: documentHeaders() });
   judge(
     terms.status === 200 && terms.body.includes('<html'),
@@ -957,8 +638,6 @@ async function checkPlayScopeOverHttp(origin) {
       'precisely because a redirect is a response the browser handles.',
   );
 
-  // The query string has to survive, or a reader sent to `/play?state=decision` comes back to a
-  // different page than the one they asked for.
   const withQuery = await request(new URL('/play?state=decision', origin), { headers: documentHeaders() });
   judge(
     withQuery.status === 303 && withQuery.location === CHALLENGE_FOR('/play?state=decision'),
@@ -988,10 +667,8 @@ async function checkPlayScopeOverHttp(origin) {
   );
 
   if (cookie !== null) {
-    // Over plain HTTP the cookie must NOT be `__Host-` and must NOT be `Secure`, and this is not a
-    // tidiness point: a browser silently discards a `Secure` cookie delivered over http, so the
-    // declaration would never stick and the gate would ask again on every request for ever. It is
-    // the one failure mode `age-gate.ts` calls "a redirect loop and not a subtlety".
+    // Over plain HTTP the cookie must not be `__Host-` or `Secure`. Browsers discard a `Secure` cookie
+    // sent over http, so the gate would ask for ever.
     const attributes = cookie.attributes;
     const shaped =
       cookie.name === AGE_GATE_COOKIE_NAMES[1] &&
@@ -1022,8 +699,7 @@ async function checkPlayScopeOverHttp(origin) {
 
     const admitted = await request(new URL('/play', origin), {
       headers: documentHeaders(),
-      // Replayed exactly as the server set it, name and all, rather than assembled from constants:
-      // the thing under test is that what the server sends back is what opens the door.
+      // Replayed exactly as the server set it.
       cookie: `${cookie.name}=${cookie.value}`,
     });
     judge(
@@ -1053,10 +729,7 @@ async function checkPlayScopeOverHttp(origin) {
 
   section('3. An in-app router navigation is gated as well as a document navigation');
 
-  // Both shapes, and the difference between them is the defect this harness found. Chrome sends
-  // `rsc: 1`; Next strips it before the proxy is handed the request. So the first of these is what
-  // the browser sends and the second is what the proxy actually sees, and a gate that only holds
-  // for the first is a gate that never fires in production.
+  // Chrome sends `rsc: 1` and Next strips it before the proxy, so both shapes are checked.
   for (const [label, headers] of [
     ['as Chrome sends it (rsc: 1 present)', routerNavigationHeaders({ withRsc: true })],
     ['as the proxy is handed it (rsc stripped by Next)', routerNavigationHeaders({ withRsc: false })],
@@ -1090,9 +763,7 @@ async function checkPlayScopeOverHttp(origin) {
       'refusing a declared reader, which breaks every in-app link to the tables.',
   );
 
-  // The `_rsc` cache-busting parameter Next appends must not survive into the return path, or the
-  // reader is sent back to a URL whose response is an RSC payload rather than a page — a blank
-  // screen at the end of an otherwise working gate.
+  // A surviving `_rsc` parameter would return the reader to an RSC payload, a blank screen.
   const withRscParam = await request(new URL('/play?_rsc=abc123', origin), { headers: documentHeaders() });
   judge(
     withRscParam.status === 303 && withRscParam.location === CHALLENGE_FOR('/play'),
@@ -1107,10 +778,6 @@ async function checkPlayScopeOverHttp(origin) {
 
   section('4. A router prefetch is NOT gated — and the other spelling is not a prefetch at all');
 
-  // The router's own prefetch. This one must be left alone: Next answers it with a routing stub and
-  // no page content, and a redirect here would put the interstitial into the router's cache under
-  // the gated route's name — a reader would then be shown it, or not, according to a cache rather
-  // than according to the gate.
   const routerPrefetch = await requestChain(new URL('/play', origin), { headers: prefetchHeaders() });
   const stub = routerPrefetch.at(-1);
   judge(
@@ -1135,19 +802,8 @@ async function checkPlayScopeOverHttp(origin) {
   );
 
   /*
-   * `purpose: prefetch` is the OTHER spelling, and it is not the same thing at all — which is the
-   * second defect this harness found.
-   *
-   * That header changes nothing on the server. Next answers a request carrying it with the whole
-   * page: 38KB of document with the table in it, or a full RSC payload, against 264 bytes of stub
-   * for the header above. The proxy `matcher` used to exclude both spellings on the stated
-   * reasoning that "prefetches are not a document" — so any client that set this one header was
-   * served the complete gated page, with no gate applied to it and no Content-Security-Policy on
-   * it. Both halves are now closed by narrowing that exclusion to the header Next honours.
-   *
-   * A self-declaration gate is not a security boundary and nobody needed a header to get past this
-   * one — the button is right there. What was wrong is narrower and still worth fixing: the code
-   * claimed there was no path through the proxy that renders a gated page, and there was one.
+   * `purpose: prefetch` changes nothing on the server. Next answers it with the whole page (38KB against
+   * a 264-byte stub), so the matcher no longer excludes it and it is gated.
    */
   for (const [label, headers] of [
     ['as a document', { ...documentHeaders(), purpose: 'prefetch' }],
@@ -1201,8 +857,7 @@ async function checkSiteScopeOverHttp(origin) {
     );
   }
 
-  // The always-open list, and it is the half of scope=site that matters most. A reader has to be
-  // able to read what a deployment claims about their data BEFORE being asked to declare anything.
+  // A reader must be able to read the privacy terms before declaring anything.
   for (const path of [AGE_GATE_PATH, '/terms', '/privacy', '/responsible-use']) {
     const response = await request(new URL(path, origin), { headers: documentHeaders() });
     judge(
@@ -1231,28 +886,9 @@ async function checkSiteScopeOverHttp(origin) {
   );
 }
 
-// ===========================================================================
-// The checks — in a browser
-// ===========================================================================
-
-/** Where a link is on the page, so it can be pressed rather than followed by script. */
 /**
- * The centre of an element, in viewport coordinates, ready for a real mouse press.
- *
- * ## Why the scroll is `instant`
- *
- * `packages/ui/src/styles/reset.css` sets `scroll-behavior: smooth` globally, and
- * `scrollIntoView`'s default `behavior: 'auto'` honours it. So the rect below was being read WHILE
- * the page was still scrolling, and the press landed wherever the control had been mid-flight.
- *
- * That is exactly how this harness came to report a declaration that set no cookie: the button was
- * found, the click was dispatched, and it hit nothing. Every HTTP-level check passed — the
- * `Set-Cookie` was the right shape — because the failure was in the press, not the server.
- *
- * It was latent for as long as the control happened to be in view already, which made
- * `scrollIntoView` a no-op and left no race to lose. A layout change that pushed it below the fold
- * is what surfaced it — which is the worst way for a gate to go wrong: silently, on an edit that
- * had nothing to do with it.
+ * The scroll is `instant` because reset.css sets `scroll-behavior: smooth`, and a rect read mid-scroll
+ * made the press miss the declaration button.
  */
 const LINK_BOX = (selector) => `(() => {
   const link = document.querySelector(${JSON.stringify(selector)});
@@ -1262,16 +898,9 @@ const LINK_BOX = (selector) => `(() => {
   return { x: box.x + box.width / 2, y: box.y + box.height / 2, href: link.getAttribute('href') };
 })()`;
 
-/**
- * The in-app link to the gated route: the header's call-to-action, which is on every page.
- *
- * A `next/link`, so pressing it is a router navigation and not a document request — which is the
- * whole point. It is found by class rather than by href so that the check fails loudly if the
- * header stops carrying it, instead of quietly matching some other link to the same place.
- */
+/** Found by class so the check fails loudly if the header stops carrying the link. */
 const PLAY_CTA = 'a.prl-pillbar__cta';
 
-/** The interstitial's own submit control, so the declaration is made the way a reader makes it. */
 const DECLARE_BUTTON = 'form.prl-gate__form button[type=submit]';
 
 async function checkInBrowser(page, origin) {
@@ -1358,9 +987,7 @@ async function checkInBrowser(page, origin) {
 
   section('3 (browser). An in-app click, which makes no document request at all');
 
-  // First the positive control, while the declaration still stands: the same click, from the same
-  // page, must WORK. Without it, a gate that had broken every in-app link would look identical to
-  // a gate that was doing its job.
+  // Positive control first. The same click must work while the declaration stands.
   await goto('/learn');
   const cta = await page.evaluate(LINK_BOX(PLAY_CTA));
   if (cta === null) {
@@ -1389,8 +1016,7 @@ async function checkInBrowser(page, origin) {
       'admitted — and the refusal below would prove nothing.',
   );
 
-  // Now the same click with no declaration. The jar is cleared and read back rather than assumed:
-  // a browser still holding the cookie would sail through and the run would report a pass.
+  // The jar is read back, not assumed empty.
   await page.send('Network.clearBrowserCookies');
   const emptied = await cookies();
   judge(
@@ -1406,8 +1032,7 @@ async function checkInBrowser(page, origin) {
   await goto('/learn');
   const gatedCta = await page.evaluate(LINK_BOX(PLAY_CTA));
   requests.length = 0;
-  // Hover first, and wait. Anything the router intends to prefetch for this link leaves now, so
-  // the click that follows is a click on a link the router has had every chance to warm.
+  // Hover first, so the router has every chance to prefetch before the click.
   await page.hover(gatedCta.x, gatedCta.y);
   await delay(PREFETCH_SETTLE_MS);
   const prefetches = requests.filter(
@@ -1434,10 +1059,8 @@ async function checkInBrowser(page, origin) {
     );
   }
 
-  // Everything from here to the moment the browser reaches the interstitial is what carried the
-  // click. Traffic AFTER that — the interstitial's own header carries the same link, and the router
-  // may go looking at it — is not evidence about how the click travelled, and counting it would
-  // fail this check for a reason that has nothing to do with the gate.
+  // Only traffic before the browser reaches the interstitial carried the click. The interstitial's
+  // own header links to /play too.
   const beforeClick = requests.length;
   await page.click(gatedCta.x, gatedCta.y);
   await delay(NAVIGATION_SETTLE_MS);
@@ -1478,12 +1101,7 @@ async function checkInBrowser(page, origin) {
 
   section('4 (browser). Having been to /play before does not carry a reader past the gate');
 
-  // The reader visited /play with a declaration earlier in this very session, so the browser's HTTP
-  // cache and the router's client-side cache have both seen that route's payload. The repository's
-  // own analysis says the default `staleTimes` means a dynamic payload is never reused; this is the
-  // measurement that turns that argument into a fact. The check above already navigated from a
-  // page loaded after the cookie was cleared, so this asserts the other half: nothing served here
-  // was a cached rendering of the page.
+  // The session already loaded /play declared. Nothing on the refused page may come from that cache.
   const servedFromCache = await page.evaluate(
     'document.body.textContent.includes("Six-handed table") || document.querySelector("[data-prl-table]") !== null',
   );
@@ -1498,10 +1116,6 @@ async function checkInBrowser(page, origin) {
       'once been prefetched — past the gate for as long as the cache lived.',
   );
 }
-
-// ===========================================================================
-// The run
-// ===========================================================================
 
 async function main() {
   let options;

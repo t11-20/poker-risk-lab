@@ -1,20 +1,9 @@
 #!/usr/bin/env node
 /**
- * Gate: no resolved package version may have a known vulnerability in OSV.dev.
- *
- * Uses the public OSV batch API directly rather than a scanner package, for the
- * same reason as the rest of this directory: the auditor should not inherit the
- * risk it is auditing. OSV's `querybatch` already filters by version, so a hit
- * means "this exact version is affected", not "this package has ever had a CVE".
- *
- * Failure policy:
- *   - a vulnerability affecting a production dependency fails the build
- *   - a vulnerability affecting only a dev dependency fails the build too, unless
- *     it is listed in `osv-allowlist.json` with a reason and an expiry date
- *   - withdrawn advisories are ignored
- *
- * The allowlist is the only escape hatch, it is a reviewed file, and every entry
- * expires. There is no flag that turns this gate off.
+ * Gate: no resolved package version has a known OSV.dev vulnerability. `querybatch` filters by
+ * version, so a hit means this exact version is affected. Any hit fails, except a dev-only one
+ * listed in `osv-allowlist.json` with a reason and expiry. Withdrawn advisories are ignored. There
+ * is no off flag.
  */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -81,7 +70,6 @@ await runGate(gate, async () => {
     gate.note('no advisories matched any resolved version');
   }
 
-  // Fetch full advisory records only for the hits.
   const uniqueIds = [...new Set(hits.flatMap((h) => h.ids))];
   const details = new Map();
   await mapLimit(uniqueIds, 6, async (id) => {

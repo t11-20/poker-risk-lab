@@ -1,39 +1,8 @@
 /**
- * The machinery every reliability drill borrows: a real server, a real client, a real database,
- * and the ability to break all three.
- *
- * Not a script — it has no shebang and is never invoked directly. `scripts/reliability-drills.mjs`
- * is the entry point and this is what it stands on. It is split out because the drills
- * themselves should read as "do this awful thing, then check these properties", and sixteen
- * copies of "spawn a server and wait for its listening line" would bury that entirely.
- *
- * ## Everything here talks to the real thing
- *
- * There is no in-process `buildApp` anywhere in this suite. A drill kills a process, pauses a
- * container, or drops a TCP connection, and none of those can be simulated by a test double:
- * the whole class of defect being hunted lives in the seam between the process and the
- * operating system. So the API is a spawned child of the real entry point, the database is a
- * real Postgres, and the client speaks HTTP and WebSocket over loopback exactly as a browser
- * does.
- *
- * ## Only node: builtins
- *
- * The repo's script convention, and here it earns its keep twice over. The WebSocket client is
- * Node's own global (Node 24), and SQL goes through `docker exec ... psql` rather than through
- * the `postgres` package, which means the drills can create and drop databases and pause
- * containers without this file depending on anything the API depends on. A harness that shared
- * the application's driver could be broken by the same defect it is meant to find.
- *
- * ## What this file does NOT do
- *
- * It makes no assertions. Everything it returns is evidence — output text, frames, timings,
- * exit codes — and `invariants.mjs` is what decides whether the evidence is acceptable. The
- * split is deliberate: a harness that both breaks the system and judges the result is one
- * refactor away from judging it kindly.
- *
- * If this file were removed, every drill would have to open its own sockets and spawn its own
- * children, and the suite's guarantee that each drill cleans up after itself — which is what
- * makes the suite re-runnable — would become sixteen separate promises instead of one.
+ * Shared machinery for `scripts/reliability-drills.mjs`: a spawned real API, a real Postgres, and a
+ * real HTTP and WebSocket client. Only node: builtins, and SQL goes through `docker exec psql`, so
+ * a defect in the application's driver cannot also break the harness. It makes no assertions;
+ * `invariants.mjs` judges the evidence it returns.
  */
 
 import { spawn } from 'node:child_process';
@@ -55,16 +24,12 @@ export const red = (s) => paint('31', s);
 export const green = (s) => paint('32', s);
 export const yellow = (s) => paint('33', s);
 
-/** The protocol version this harness speaks. Must match `WS_PROTOCOL_VERSION` in @prl/contracts. */
+/** Must match `WS_PROTOCOL_VERSION` in @prl/contracts. */
 export const WS_PROTOCOL_VERSION = 1;
 
 /**
- * The routes, as the server registers them.
- *
- * Copied rather than imported because this file may not import from the workspace: the point of
- * the suite is to exercise a built, running server, and importing its source would tie the
- * harness to a build. `scripts/reliability-drills.test.mjs` cross-checks every path here against
- * `apps/api/test/wiring.test.ts`'s manifest, so a rename breaks a test rather than the suite.
+ * Copied, not imported, so the harness does not depend on a build. `reliability-drills.test.mjs`
+ * cross-checks every path against `apps/api/test/wiring.test.ts`.
  */
 export const ROUTES = {
   health: '/api/v1/health',
@@ -84,14 +49,7 @@ export const ROUTES = {
 
 export const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
-/**
- * Polls until a predicate holds, returning how long it took.
- *
- * Returns `null` rather than throwing on expiry, because "it never recovered" is a result a
- * drill has to report rather than an error that aborts it — the drill still has cleanup to do
- * and other properties to check. `recoveryBound` in `invariants.mjs` turns the null into the
- * finding.
- */
+/** Returns elapsed ms, or `null` on expiry so the drill can still clean up and report it. */
 export async function measureUntil(predicate, budgetMs, pollMs = 50) {
   const startedAt = performance.now();
   const deadline = startedAt + budgetMs;
@@ -100,8 +58,7 @@ export async function measureUntil(predicate, budgetMs, pollMs = 50) {
     try {
       held = await predicate();
     } catch {
-      // A predicate that throws is a predicate that is not yet true: during an outage every
-      // probe here is expected to fail with ECONNREFUSED for a while, and that is the point.
+      // During an outage every probe fails with ECONNREFUSED for a while.
       held = false;
     }
     if (held) return performance.now() - startedAt;
@@ -110,14 +67,7 @@ export async function measureUntil(predicate, budgetMs, pollMs = 50) {
   }
 }
 
-/**
- * A port the kernel has just told us is free.
- *
- * `config.ts` refuses `PORT=0` on purpose — a server that binds an arbitrary port is almost
- * always a mistake — so the port has to be chosen out here. The window between closing this
- * listener and the child binding is a race in principle; in practice consecutive `listen(0)`
- * calls do not repeat, and a collision surfaces as a loud EADDRINUSE rather than a wrong result.
- */
+/** `config.ts` refuses `PORT=0`, so the port is chosen here. A collision is a loud EADDRINUSE. */
 export function freePort() {
   return new Promise((done, fail) => {
     const probe = createServer();
@@ -135,16 +85,7 @@ export function freePort() {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Child processes
-// ---------------------------------------------------------------------------
-
-/**
- * Runs a command to completion, capturing both streams.
- *
- * Never throws on a non-zero exit: several drills deliberately run commands that must fail
- * (a migration against a poisoned database, for one), and the exit code is the evidence.
- */
+/** Never throws on a non-zero exit, because several drills run commands that must fail. */
 export function run(command, args, options = {}) {
   return new Promise((done, fail) => {
     const child = spawn(command, args, {
@@ -165,18 +106,7 @@ export function run(command, args, options = {}) {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Postgres, through the container rather than through a driver
-// ---------------------------------------------------------------------------
-
-/**
- * The pieces of a `postgres://` DSN the harness needs.
- *
- * Parsed with `URL` rather than a regex, and the password is decoded because a DSN carries it
- * percent-encoded. Nothing here logs the password, and it never travels in argv: `psqlCommand`
- * below passes it through the child's ENVIRONMENT via a bare `docker exec -e PGPASSWORD`. The
- * `DATABASE_URL` a spawned server receives is an environment variable too, for the same reason.
- */
+/** The password is decoded from percent-encoding and never logged or put in argv. */
 export function parseDsn(dsn) {
   const url = new URL(dsn);
   return {
@@ -185,7 +115,6 @@ export function parseDsn(dsn) {
     host: url.hostname,
     port: url.port === '' ? '5432' : url.port,
     database: url.pathname.replace(/^\//, ''),
-    /** The same DSN pointed at a different database on the same server. */
     withDatabase(name) {
       const next = new URL(dsn);
       next.pathname = `/${name}`;
@@ -195,22 +124,9 @@ export function parseDsn(dsn) {
 }
 
 /**
- * The argv and environment for one `docker exec ... psql`, as data.
- *
- * ## The defect this exists for
- *
- * This used to pass `'-e', \`PGPASSWORD=${parts.password}\`` — the password, in argv. Process
- * arguments are world-readable on Linux (`/proc/<pid>/cmdline`), so for as long as the exec ran,
- * every user on the host could read the database password out of `ps`. It also reaches the
- * shell's history, any process accounting, and any `ps` output pasted into a bug report.
- *
- * `docker exec -e PGPASSWORD` with NO `=value` is the fix, and it is the same one
- * `scripts/backup.mjs` uses (see the comment above its `toolCommand`): the bare form tells
- * Docker to forward the variable from the calling process's environment, so the secret travels
- * through the environment the whole way and never appears in anybody's argv.
- *
- * Exported separately from `psql` so `scripts/reliability-drills.test.mjs` can assert the
- * property directly — that no element of the argv contains the password — without a container.
+ * `-e PGPASSWORD` with no `=value` makes Docker forward the variable from this process's
+ * environment. The password in argv would be readable by every user via `/proc/<pid>/cmdline`.
+ * Exported so `reliability-drills.test.mjs` can assert no argv element contains it.
  */
 export function psqlCommand(container, dsn, database, sql) {
   const parts = parseDsn(dsn);
@@ -218,7 +134,7 @@ export function psqlCommand(container, dsn, database, sql) {
     command: 'docker',
     args: [
       'exec',
-      // Bare, deliberately. Adding `=${parts.password}` here is the bug this comment exists for.
+      // Bare on purpose. Adding `=${parts.password}` puts the password in argv.
       '-e',
       'PGPASSWORD',
       container,
@@ -232,34 +148,19 @@ export function psqlCommand(container, dsn, database, sql) {
       '-tAc',
       sql,
     ],
-    // `run` merges this over `process.env` for the child only, so the value is not exported into
-    // this process either.
     env: { PGPASSWORD: parts.password },
   };
 }
 
-/**
- * One SQL statement, run inside the Postgres container as the DSN's own user.
- *
- * `docker exec` rather than a client library, for the reason in the file header, and `-tAc` so
- * the result is bare tab-separated values that a drill can compare without parsing a table.
- * `ON_ERROR_STOP=1` makes a failing statement a non-zero exit rather than a warning buried in
- * stdout, which is what several drills assert on.
- */
-// Not `async`: it has nothing to await, and the promise `run` returns is the one the caller wants.
+/** `-tAc` gives bare tab-separated values, and `ON_ERROR_STOP=1` makes a failing statement exit non-zero. */
 export function psql(container, dsn, database, sql) {
   const { command, args, env } = psqlCommand(container, dsn, database, sql);
   return run(command, args, { env });
 }
 
 /**
- * Creates a database for this run to destroy.
- *
- * The developer's own database is never touched by any drill: every one of them connects to a
- * database this function made, and `dropScratchDatabase` removes it even when the drill failed.
- * `create database` cannot run inside a transaction and cannot be parameterised, so the name is
- * checked against a strict pattern here rather than escaped — it is generated by this suite and
- * a name that does not match is a bug in the suite, not untrusted input.
+ * Every drill uses a database made here, never the developer's. `create database` cannot be
+ * parameterised, so the generated name is checked against a strict pattern.
  */
 export async function createScratchDatabase(container, dsn, name) {
   if (!/^prl_drills_[a-z0-9_]{1,40}$/.test(name)) {
@@ -273,21 +174,18 @@ export async function createScratchDatabase(container, dsn, name) {
   return parseDsn(dsn).withDatabase(name);
 }
 
-/** Removes a scratch database. Tolerant of every failure: this runs on the cleanup path. */
+/** Never rejects, because this runs on the cleanup path. */
 export function dropScratchDatabase(container, dsn, name) {
-  // Resolved rather than thrown, so a cleanup path never turns a refusal into a second failure.
   if (!/^prl_drills_[a-z0-9_]{1,40}$/.test(name)) {
     return Promise.resolve({ code: 1, stdout: '', stderr: 'refused' });
   }
   return psql(container, dsn, 'postgres', `drop database if exists ${name} with (force)`);
 }
 
-/** Applies every migration to a DSN. Returns the runner's own exit code and output. */
 export function migrate(dsn, command = 'up') {
   return run(process.execPath, [MIGRATE_SCRIPT, command], { env: { DATABASE_URL: dsn } });
 }
 
-/** Docker, for the drills that pause and restart the database. */
 export function docker(args) {
   return run('docker', args);
 }
@@ -303,23 +201,9 @@ export async function containerHealth(container) {
   return result.stdout.trim();
 }
 
-// ---------------------------------------------------------------------------
-// The API under test
-// ---------------------------------------------------------------------------
-
 /**
- * Starts the real entry point and waits for its own `listening` line.
- *
- * `NODE_ENV=development` because `logging.ts` switches the logger off entirely under `test`, and
- * the log is a large part of the evidence every drill collects — "useful logging" is one of the
- * properties being checked, and it cannot be checked against silence.
- *
- * Values passed here beat `.env`: Node's `--env-file` never overrides a variable that is already
- * in the environment. That is what lets a drill point the same code at its own scratch database
- * while the developer's `.env` still supplies the cookie secret and everything else.
- *
- * The whole output is buffered and printed only when a drill fails, per the repo's script
- * convention. A passing drill that dumps a server's log makes the next failing one invisible.
+ * `NODE_ENV=development` because `logging.ts` silences the logger under `test`, and the log is
+ * evidence. Values passed here beat `.env`, since `--env-file` never overrides a set variable.
  */
 export async function startServer(options = {}) {
   const port = await freePort();
@@ -335,19 +219,15 @@ export async function startServer(options = {}) {
       PUBLIC_WEB_ORIGIN: options.webOrigin ?? 'http://localhost:3000',
       SHUTDOWN_GRACE_MS: String(graceMs),
       DATABASE_URL: options.databaseUrl,
-      // The suite drives one machine hard: several drills open dozens of sessions in a few
-      // seconds, and the shipped guest limit of ten per minute would refuse them. Raised rather
-      // than disabled, so a drill that trips a limiter by accident still sees a 429 rather than
-      // nothing at all, and `malformed-ws-traffic` still has a working limiter to be closed by.
+      // Raised, not disabled, so drills that open many sessions pass and `malformed-ws-traffic`
+      // still has a limiter to trip.
       RATE_LIMIT_MAX: options.rateLimitMax ?? '5000',
       RATE_LIMIT_GUEST_MAX: options.guestRateLimitMax ?? '2000',
       RATE_LIMIT_EXPENSIVE_MAX: options.expensiveRateLimitMax ?? '2000',
       METRICS_TOKEN: options.metricsToken ?? '',
       ...(options.env ?? {}),
     },
-    // `detached` so the child leads its own process group and `stop()` below can signal the
-    // whole group: the API spawns worker threads rather than child processes today, but a
-    // harness that can only kill one pid is one refactor away from leaking a process tree.
+    // Leads its own process group so `stop()` can signal the whole tree.
     detached: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -364,7 +244,7 @@ export async function startServer(options = {}) {
     exited = { code, signal };
   });
 
-  /** Cleanup. Safe to call twice, and on a process that has already gone. */
+  /** Safe to call twice, and on a process that has already gone. */
   const stop = async () => {
     if (exited !== null) return exited;
     try {
@@ -374,11 +254,8 @@ export async function startServer(options = {}) {
     }
   };
 
-  // Handed to the caller SYNCHRONOUSLY, before the 30-second wait below can reject. A detached
-  // child that never printed a listening line is otherwise unreachable — the rejection carries a
-  // message, not a pid — and it survives the run holding a port and a connection pool. See the
-  // matching comment in `scripts/reliability-drills.mjs`, which registers this for cleanup here
-  // rather than after the await.
+  // Handed over before the 30 s wait can reject, because a rejection carries no pid and a detached
+  // child would survive the run holding a port.
   options.onSpawn?.({ child, stop, output: () => text });
 
   let listeningPort;
@@ -402,13 +279,9 @@ export async function startServer(options = {}) {
       check();
     });
   } catch (error) {
-    // Belt and braces to `onSpawn`, and the layer that protects callers who did not pass one:
-    // the child is killed here before the rejection leaves this function, so no path out of
-    // `startServer` leaves a process behind. `stop()` is idempotent, so a caller that ALSO
-    // registered it for cleanup runs it twice harmlessly.
+    // Kill before rethrowing so no path out of `startServer` leaves a process. `stop()` is idempotent.
     await stop().catch(() => {
-      // Nothing useful to do: the start already failed, and the reason for THAT is the error
-      // being rethrown below. A kill that also fails must not replace it.
+      // Keep the original start error.
     });
     throw error;
   }
@@ -420,19 +293,12 @@ export async function startServer(options = {}) {
     output: () => text,
     exited: () => exited,
     origin: `http://127.0.0.1:${listeningPort}`,
-    /** Sends a signal to the process group and resolves with the exit, timing it. */
     signal: (name) => signalAndWait(child, name, graceMs * 4, () => text),
     stop,
   };
 }
 
-/**
- * Signals a server's process group and waits for it to go, timing it.
- *
- * The negative pid signals the group. ESRCH is tolerated because the process may have exited
- * between the check and the call, which is a race no amount of care removes and which means
- * exactly what the caller wanted.
- */
+/** Signals the process group (negative pid). ESRCH means it already exited, which is the goal. */
 function signalAndWait(child, name, budgetMs, output) {
   const startedAt = performance.now();
   return new Promise((done, fail) => {
@@ -460,20 +326,9 @@ function signalAndWait(child, name, budgetMs, output) {
   });
 }
 
-// ---------------------------------------------------------------------------
-// A client that behaves like a browser
-// ---------------------------------------------------------------------------
-
 /**
- * One guest identity: cookie jar, CSRF token, and a record of everything it received.
- *
- * The transcript is the point. Every drill has to answer "did anything leak while this was
- * failing", and the only honest way to answer it is to keep every byte the client was sent and
- * scan the lot afterwards — including the bodies of error responses served while the database
- * was down, which is where a driver message naming a host or a query would surface.
- *
- * The jar ignores Domain, Path, Expires and Secure. Correct for a client talking to one origin
- * for a few seconds; wrong for anything else.
+ * One guest identity that keeps every response body, including error bodies served during an
+ * outage, for the leak scan. The cookie jar ignores Domain, Path, Expires and Secure.
  */
 export class Session {
   constructor(origin, webOrigin, name) {
@@ -483,7 +338,6 @@ export class Session {
     this.cookies = new Map();
     this.csrfToken = null;
     this.userId = null;
-    /** Every response body this session received, for the leak scan. */
     this.transcript = [];
   }
 
@@ -492,8 +346,7 @@ export class Session {
   }
 
   absorb(response) {
-    // `getSetCookie()`, not `get('set-cookie')`: the singular accessor comma-joins multiple
-    // cookies and cookie attributes legally contain commas.
+    // `get('set-cookie')` comma-joins cookies, and cookie attributes may contain commas.
     for (const raw of response.headers.getSetCookie()) {
       const pair = raw.split(';', 1)[0] ?? '';
       const eq = pair.indexOf('=');
@@ -502,10 +355,7 @@ export class Session {
     }
   }
 
-  /**
-   * A request. Never throws for a non-2xx: a drill usually WANTS the 503, and turning it into
-   * an exception would make the interesting case the hard one to write.
-   */
+  /** Never throws for a non-2xx, because a drill usually wants the 503. */
   async request(path, options = {}) {
     const headers = { accept: 'application/json', origin: this.webOrigin };
     const cookie = this.cookieHeader();
@@ -554,13 +404,7 @@ export class Session {
     };
   }
 
-  /**
-   * Creates the guest identity.
-   *
-   * The GET comes first and that is load-bearing: `POST /auth/guest` is mutating, so the CSRF
-   * hook demands both the header and the matching secret cookie, and both come from
-   * `GET /auth/session`, which is exempt. POSTing first is rejected `csrf_failed` every time.
-   */
+  /** `GET /auth/session` first: it issues the CSRF cookie and token that `POST /auth/guest` requires. */
   async createGuest() {
     const seed = await this.request(ROUTES.session);
     this.csrfToken = seed.body?.csrfToken ?? null;
@@ -582,12 +426,8 @@ export class Session {
 }
 
 /**
- * One WebSocket client at a table, keeping every frame it was sent.
- *
- * Node's global `WebSocket` accepts a non-standard options bag as its SECOND argument and
- * forwards those headers on the upgrade — which is the only way to send the session cookie,
- * without which every socket here would be refused 4401. Passing it third silently does
- * nothing.
+ * Node's `WebSocket` takes a non-standard options bag as its SECOND argument and sends its headers
+ * on the upgrade. That is how the session cookie travels. Passed third, it is silently ignored.
  */
 export class TableClient {
   constructor(session, roomId, options = {}) {
@@ -599,9 +439,8 @@ export class TableClient {
     this.closed = false;
     this.closeCode = null;
     this.closeReason = '';
-    /** Every frame, raw and parsed, in arrival order. This is the leak-scan corpus. */
+    /** The leak-scan corpus. */
     this.frames = [];
-    /** Views in arrival order, for the chip ledger. */
     this.views = [];
     this.errors = [];
     this.events = [];
@@ -616,12 +455,7 @@ export class TableClient {
     return url.toString();
   }
 
-  /**
-   * Opens the socket and completes the handshake.
-   *
-   * `expectWelcome: false` is for the drills that expect to be refused: they still want the
-   * close code, and waiting for a welcome that will never arrive would just be a timeout.
-   */
+  /** `expectWelcome: false` is for drills that expect to be refused and want the close code. */
   connect(options = {}) {
     const expectWelcome = options.expectWelcome ?? true;
     const protocolVersion = options.protocolVersion ?? WS_PROTOCOL_VERSION;
@@ -674,8 +508,7 @@ export class TableClient {
       });
 
       socket.addEventListener('error', () => {
-        // Deliberately empty of detail: the event carries none by design, and the close frame
-        // that follows is where the reason is.
+        // The event carries no detail. The close frame has the reason.
       });
 
       socket.addEventListener('close', (event) => {
@@ -724,7 +557,6 @@ export class TableClient {
     return true;
   }
 
-  /** Raw bytes or text, for the malformed-traffic drill. Bypasses JSON entirely. */
   sendRaw(payload) {
     if (this.socket === null || this.socket.readyState !== WebSocket.OPEN) return false;
     this.socket.send(payload);
@@ -732,14 +564,8 @@ export class TableClient {
   }
 
   /**
-   * Waits for a frame matching a predicate, or null on expiry.
-   *
-   * `from` is the index in `frames` to start looking at, and it is not an optimisation. The scan
-   * begins at the start of the whole transcript by default, so calling this twice with the same
-   * predicate returns the SAME frame twice — which is how the out-of-order drill quietly re-read
-   * a decision it had already acted on, submitted against a spot that had moved on, and was
-   * answered `not_your_turn` instead of the `stale_action_sequence` it was written to prove. A
-   * caller that wants the NEXT match must record `client.frames.length` first and pass it here.
+   * Returns the first match at or after `from`. To get the NEXT match, pass `client.frames.length`
+   * recorded beforehand, or a repeat call returns the same frame again.
    */
   async waitForFrame(predicate, budgetMs = 10_000, from = 0) {
     const startedAt = performance.now();
@@ -756,7 +582,6 @@ export class TableClient {
     }
   }
 
-  /** Waits until the socket is closed, returning the close code or null on expiry. */
   async waitForClose(budgetMs = 10_000) {
     const startedAt = performance.now();
     while (!this.closed) {
@@ -766,13 +591,7 @@ export class TableClient {
     return this.closeCode;
   }
 
-  /**
-   * Waits until it is this client's turn to act, returning the view or null.
-   *
-   * `view.legalActions` is empty in every frame that is not this seat's decision, which makes
-   * "is it my turn" and "what may I do" the same question with one answer from one authority.
-   * `from` is the transcript index to look forward from; see `waitForFrame`.
-   */
+  /** `view.legalActions` is non-empty only on this seat's decision. */
   async waitForTurn(budgetMs = 20_000, from = 0) {
     const frame = await this.waitForFrame(
       (f) =>
@@ -797,30 +616,16 @@ export class TableClient {
     }
   }
 
-  /** Drops the TCP connection without a close handshake, the way a lost network does. */
   terminate() {
-    // Node's WebSocket has no `terminate`, so the abrupt path is a close with a code the server
-    // will not have sent a handshake for. `close(1006)` is refused by the API (reserved), so the
-    // socket is closed with 4000, which no server code path uses, and the drill asserts on what
-    // the SERVER does next rather than on the code the client chose.
+    // Node's WebSocket has no `terminate`, and the API refuses 1006, so 4000 stands in. Drills
+    // assert on what the server does next.
     if (this.socket !== null && this.socket.readyState === WebSocket.OPEN) this.socket.close(4000, 'gone');
   }
 }
 
-// ---------------------------------------------------------------------------
-// Table setup, shared by every drill that needs a live hand
-// ---------------------------------------------------------------------------
-
 /**
- * A two-seat table: the caller in seat 0, one bot in seat 1, connected and seated.
- *
- * A bot opponent rather than a second human client, for one reason that matters to the drills:
- * a bot acts on its own, so a hand keeps moving while the harness is busy killing something.
- * A table of two synthetic humans stalls the moment the harness stops driving it, and a stalled
- * hand is not a hand in progress.
- *
- * `actionTimeoutSeconds` is the server's own turn clock, left at a value long enough that no
- * drill's failure window can be mistaken for a seat timing out.
+ * Seat 0 for the caller and one bot, because a bot keeps the hand moving while the harness is busy
+ * breaking something.
  */
 export async function seatWithBot(session, options = {}) {
   const created = await session.request(ROUTES.rooms, {
@@ -850,7 +655,6 @@ export async function seatWithBot(session, options = {}) {
   return { roomId, client, inviteCode: created.body?.inviteCode ?? null };
 }
 
-/** Asks the owner's table to deal, and waits until the hand is under way. */
 export async function dealHand(client, budgetMs = 15_000) {
   const requestId = randomUUID();
   client.send({ type: 'startHand', requestId });
@@ -862,14 +666,7 @@ export async function dealHand(client, budgetMs = 15_000) {
   return started.event;
 }
 
-/**
- * Plays one legal action from a view, the way `load-test.mjs` does: never a guessed action.
- *
- * `expectedSequence` is copied from the view being responded to and `actionId` is fresh, so
- * the two pieces of the protocol's anti-race machinery are exercised rather than bypassed.
- * Returns the identifiers so a drill can replay exactly the same action — which is what the
- * duplicate and out-of-order drills do.
- */
+/** Copies `expectedSequence` and uses a fresh `actionId`, and returns both so a drill can replay. */
 export function actOn(client, view, choose = passive) {
   const action = choose(view.legalActions);
   const requestId = randomUUID();
@@ -884,7 +681,7 @@ export function actOn(client, view, choose = passive) {
   return { requestId, actionId, expectedSequence: view.actionSequence, action };
 }
 
-/** Check if it is free, otherwise call, otherwise fold. Chosen to keep hands going. */
+/** Check, else call, else fold, to keep hands going. */
 export function passive(legal) {
   const byType = new Map(legal.map((entry) => [entry.type, entry]));
   if (byType.has('check')) return { type: 'check' };
@@ -895,11 +692,6 @@ export function passive(legal) {
   return { type: first.type };
 }
 
-// ---------------------------------------------------------------------------
-// Metrics
-// ---------------------------------------------------------------------------
-
-/** Fetches the exposition text, or null when the scrape was refused. */
 export async function scrapeMetrics(origin, token) {
   const response = await fetch(new URL(ROUTES.metrics, origin), {
     headers: token === null || token === '' ? {} : { authorization: `Bearer ${token}` },
@@ -908,15 +700,7 @@ export async function scrapeMetrics(origin, token) {
   return response.text();
 }
 
-/**
- * One sample from the exposition text.
- *
- * Deliberately a plain scan rather than a parser: the drills need three numbers out of this
- * format and a full Prometheus parser in a harness is a second implementation of something the
- * API already has tests for. Returns null when the series is absent, which several drills
- * distinguish from zero — a metric that is never fed and a metric that is zero look identical
- * on a graph and mean completely different things.
- */
+/** Returns null for an absent series, which drills distinguish from zero. */
 export function metricValue(text, series) {
   if (text === null) return null;
   for (const line of text.split('\n')) {
@@ -924,8 +708,7 @@ export function metricValue(text, series) {
     const trimmed = line.trim();
     if (!trimmed.startsWith(series)) continue;
     const rest = trimmed.slice(series.length);
-    // Either the series name is followed by whitespace (no labels) or by the exact label set
-    // the caller included in `series`. Anything else is a different series with a shared prefix.
+    // Only whitespace or the exact label set may follow, else it is another series with this prefix.
     if (rest.length > 0 && !/^\s/.test(rest)) continue;
     const value = Number(rest.trim());
     return Number.isFinite(value) ? value : null;
@@ -933,49 +716,26 @@ export function metricValue(text, series) {
   return null;
 }
 
-/**
- * The count in a histogram bucket, by upper bound.
- *
- * Buckets are cumulative in this format, so "how many probes took longer than 50 ms" is
- * `_count` minus the `le="0.05"` bucket. That subtraction is the saturation signal the pool
- * drill asserts on, and doing it here keeps the drill readable.
- */
+/** Buckets are cumulative, so "slower than 50 ms" is `_count` minus `le="0.05"`. */
 export function histogramBucket(text, name, upperBound) {
   return metricValue(text, `${name}_bucket{le="${upperBound}"}`);
 }
 
-/**
- * The shape every drill returns.
- *
- * Deliberately a bag of arrays rather than a class with methods: a drill collects evidence in
- * whatever order it happens and the runner formats it, and anything cleverer would tempt a
- * drill into deciding its own verdict. `failures` non-empty is the only thing that fails a
- * drill, and `skipped` non-null is the only thing that makes it a skip — which the runner
- * treats as a failure unless the caller excluded the drill by name.
- */
+/** `failures` non-empty fails a drill. `skipped` non-null skips it, which fails unless excluded by name. */
 export function newReport() {
   return {
     observations: [],
     failures: [],
     warnings: [],
-    /** Real quoted lines from a real log, so the report is the system's own words. */
     evidence: [],
-    /** Named numbers, printed in the summary: recovery bounds, exit codes, elapsed times. */
     measurements: {},
     skipped: null,
   };
 }
 
 /**
- * Plays one hand to its `handComplete` event, acting only on decision points the server offers.
- *
- * The `handId:actionSequence` key is not decoration. `actionSequence` restarts at zero for every
- * deal, so a bare sequence number matches the first decision of the NEXT hand as well — which
- * reads as "already acted", the seat never acts, and the drill sits there until the turn clock
- * folds it. `load-test.mjs` found that exact bug and this is the same guard.
- *
- * Returns whether the hand completed, so a drill can distinguish "the table stalled" from "the
- * table played on", which is the difference between a recovered process and a hung one.
+ * `actionSequence` restarts at zero each deal, so the key includes `handId`. A bare sequence
+ * matched the next hand's first decision and the seat never acted.
  */
 export async function playHandToCompletion(client, options = {}) {
   const budgetMs = options.budgetMs ?? 40_000;
@@ -990,9 +750,7 @@ export async function playHandToCompletion(client, options = {}) {
       return { completed: true, actions };
     }
     if (client.closed) {
-      // The close code is the whole diagnosis — 4429 is a rate limit, 4503 a shutdown, 1006 a
-      // dropped connection — and a drill that reported only "the socket closed" sent whoever read
-      // it back to the server log to find out which.
+      // 4429 is a rate limit, 4503 a shutdown, 1006 a dropped connection.
       return { completed: false, actions, reason: `the socket closed with ${String(client.closeCode)}` };
     }
     const view = client.lastView;
@@ -1010,7 +768,6 @@ export async function playHandToCompletion(client, options = {}) {
   return { completed: false, actions, reason: 'the hand did not complete inside its budget' };
 }
 
-/** Every event of one kind this client has seen since an index. */
 export function eventsSince(client, index, kind) {
   return client.events.slice(index).filter((event) => event?.kind === kind);
 }

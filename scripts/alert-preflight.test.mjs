@@ -1,41 +1,11 @@
 #!/usr/bin/env node
 /**
- * Tests for the refusals behind `pnpm run alerts:preflight`.
+ * Tests for `pnpm run alerts:preflight`. Run with `node --test scripts/alert-preflight.test.mjs`.
  *
- * Run with:  node --test scripts/alert-preflight.test.mjs
- *
- * ## Why every case here is a NEGATIVE control
- *
- * `alert-preflight.mjs` exists to refuse four configurations that are otherwise
- * indistinguishable from a working one: a placeholder receiver, a missing
- * credential, a tier that routes nowhere, and a relay that will not accept these
- * credentials. Every one of them produces an Alertmanager that starts, reports
- * itself healthy, routes by severity exactly as designed, and notifies nobody. There
- * is no observation from inside the deployment that tells them apart from a quiet
- * night, which is why the gate has to be a refusal rather than a warning.
- *
- * A gate like that is worth precisely what its failing cases are worth. So the tests
- * below are not "does a good configuration pass" — that is one case at the top and
- * it is the cheap half. They are constructions of each bad configuration, asserting
- * that the specific check that owns it goes red and that the message names the
- * variable somebody has to change. Against the code as it was before this file
- * existed — no preflight at all — every one of them was a promotion.
- *
- * ## Why the SMTP dialogue is driven over a real socket
- *
- * The same reason `alert-delivery.test.mjs` gives for its sink: the alternative
- * place to discover a bug in a protocol implementation is in production, at the
- * moment somebody is trying to find out why they were not paged. The relay below is
- * a few dozen lines of `node:net` that answers `235` to one credential and `535` to
- * every other, so "the handshake reports a rejected password" is an observed
- * behaviour rather than a claim about a code path.
- *
- * The STARTTLS case needs a certificate, so it makes one with `openssl` — the same
- * dependency `scripts/staging.mjs` already has for the staging origin. If openssl is
- * missing the test FAILS rather than skipping: a TLS upgrade that was never
- * exercised is exactly the kind of thing that is discovered to have never worked,
- * and a green suite that quietly checked less is the failure mode this whole
- * repository is written against.
+ * Each case builds one bad configuration and asserts that the owning check goes red and names the
+ * variable to change. The SMTP dialogue runs over a real socket against a relay that accepts one
+ * credential. The STARTTLS case makes a certificate with `openssl` and FAILS, rather than skips,
+ * when openssl is missing, so the TLS leg is always exercised.
  */
 
 import assert from 'node:assert/strict';
@@ -64,20 +34,11 @@ const OBSERVABILITY = join(REPO_ROOT, 'deploy', 'staging', 'observability');
 const RULES = readFileSync(join(OBSERVABILITY, 'alert-rules.yml'), 'utf8');
 const TEMPLATE = readFileSync(join(OBSERVABILITY, 'alertmanager.template.yml'), 'utf8');
 
-/**
- * A configuration a real deployment could plausibly have, used as the baseline every
- * case below breaks exactly one thing in.
- *
- * The domain is `acme-poker.io` rather than `example.com` on purpose: the preflight
- * refuses reserved documentation domains, so a fixture built on one would make every
- * test pass for the wrong reason and the negative controls would prove nothing.
- */
+/** `acme-poker.io`, not `example.com`, because the preflight refuses reserved domains. */
 const CONFIGURED = {
   PRL_ALERT_PAGE_WEBHOOK_URL: 'https://events.pagerduty.com/v2/enqueue',
   PRL_ALERT_TICKET_WEBHOOK_URL: 'https://hooks.jira.acme-poker.io/intake/alerts',
-  // A snitch outside the deployment, which is the only kind there is. `https`,
-  // because a ping URL is a credential — the token is the path — and the preflight
-  // refuses a cleartext one for that reason rather than for the body it carries.
+  // `https`, because a ping URL is a credential.
   PRL_ALERT_HEARTBEAT_WEBHOOK_URL: 'https://nosnch.in/c7f2a1b93d',
   PRL_ALERT_HEARTBEAT_INTERVAL: '1m',
   PRL_ALERT_PAGE_EMAIL_TO: 'oncall@acme-poker.io',
@@ -89,13 +50,11 @@ const CONFIGURED = {
   PRL_ALERT_SMTP_USERNAME: 'prl-alerts',
 };
 
-/** The static half of the preflight, over an environment this test invents. */
 function analyse(overrides = {}, { password = 'a-real-looking-secret', template = TEMPLATE } = {}) {
   const { values, overridden } = alertmanagerValues({ ...CONFIGURED, ...overrides });
   return staticChecks({ values, overridden, password, rulesText: RULES, template });
 }
 
-/** The named check, or a failure that says which names do exist. */
 function check(checks, fragment) {
   const found = checks.find((entry) => entry.name.includes(fragment));
   assert.ok(found !== undefined, `no check matching ${fragment}; have: ${checks.map((c) => c.name)}`);
@@ -112,9 +71,7 @@ describe('a configured deployment passes every static check', () => {
   });
 
   it('accepts a deployment that pages by webhook alone', () => {
-    // Dropping a transport must not read as dropping a destination: a tier keeps its
-    // other one. Asserted because the placeholder sweep counts what it examined, and
-    // an off-by-one there would refuse a legitimate webhook-only deployment.
+    // Dropping one transport keeps the tier's other one, so a webhook-only deployment must pass.
     const checks = analyse({ PRL_ALERT_PAGE_EMAIL_TO: '', PRL_ALERT_TICKET_EMAIL_TO: '' });
     for (const entry of checks) {
       assert.ok(entry.ok, `${entry.name} — ${(entry.problems ?? []).join('; ')}`);
@@ -124,8 +81,7 @@ describe('a configured deployment passes every static check', () => {
 
 describe('NEGATIVE CONTROL: a placeholder receiver', () => {
   it('refuses a run in which nothing at all was configured', () => {
-    // The shipped state of a fresh checkout, and the single most likely thing to be
-    // promoted by accident. Every destination is `alerts:verify`'s own sink.
+    // A fresh checkout. Every destination is `alerts:verify`'s own sink.
     const { values, overridden } = alertmanagerValues({});
     const checks = staticChecks({
       values,
@@ -139,9 +95,7 @@ describe('NEGATIVE CONTROL: a placeholder receiver', () => {
   });
 
   it('refuses each rehearsal default individually, by name', () => {
-    // One at a time, so that a deployment which configured five of six is still
-    // refused on the sixth. The failure this models is a partial edit, which is more
-    // likely than a total one and much harder to see.
+    // One at a time, so five of six configured is still refused on the sixth.
     for (const name of SWEPT_DESTINATIONS) {
       const checks = analyse({ [name]: ALERT_DESTINATION_DEFAULTS[name] });
       assert.equal(check(checks, 'no destination is a placeholder').ok, false, name);
@@ -155,8 +109,6 @@ describe('NEGATIVE CONTROL: a placeholder receiver', () => {
   });
 
   it('refuses an address that names the machine the rehearsal ran on', () => {
-    // The one that actually happens: `host.docker.internal` works perfectly on the
-    // laptop and is not a name at all on the deploy host.
     const checks = analyse({ PRL_ALERT_SMTP_SMARTHOST: 'host.docker.internal:1025' });
     assert.match(problemText(checks, 'no destination is a placeholder'), /names the machine this runs on/);
   });
@@ -172,24 +124,19 @@ describe('NEGATIVE CONTROL: a placeholder receiver', () => {
   });
 
   it('does not refuse a real host whose name merely contains those letters', () => {
-    // The other half of the guard, and the reason the word list uses lookaround
-    // rather than substring matching. A gate that refuses correct configurations is a
-    // gate somebody switches off, and then it protects nothing.
+    // A false refusal gets the gate switched off, which is why the word list uses lookaround.
     for (const value of ['alerts@foobar-systems.io', 'oncall@barclay.io', 'x@sampler.dev']) {
       assert.equal(placeholderProblem('PRL_ALERT_PAGE_EMAIL_TO', value), null, value);
     }
   });
 
   it('checks every address in a comma-separated recipient list, not just the first', () => {
-    // One real address beside one placeholder is not half a working pager. It is a
-    // pager whose second recipient bounces on every notification.
     const checks = analyse({ PRL_ALERT_PAGE_EMAIL_TO: 'oncall@acme-poker.io, oncall@example.com' });
     assert.match(problemText(checks, 'no destination is a placeholder'), /example\.com/);
   });
 
   it('refuses a sweep that examined nothing', () => {
-    // Every destination empty satisfies "no placeholder found" vacuously. The same
-    // principle `secret-scan.mjs` states for itself: a sweep of nothing is not a pass.
+    // All destinations empty must not pass the sweep vacuously.
     const checks = analyse({
       PRL_ALERT_PAGE_WEBHOOK_URL: '',
       PRL_ALERT_TICKET_WEBHOOK_URL: '',
@@ -206,8 +153,6 @@ describe('NEGATIVE CONTROL: a placeholder receiver', () => {
 
 describe('NEGATIVE CONTROL: a missing credential', () => {
   it('refuses a username with no password', () => {
-    // Alertmanager authenticates with the empty string, the relay answers 535, and
-    // the only record of it is a line in a log nobody is watching at 3am.
     const checks = analyse({}, { password: '' });
     assert.equal(check(checks, 'credentials the relay will ask for').ok, false);
     assert.match(
@@ -222,8 +167,7 @@ describe('NEGATIVE CONTROL: a missing credential', () => {
   });
 
   it('refuses a submission port with no credentials at all', () => {
-    // RFC 6409 submission requires authentication. A deployment pointed at :587 with
-    // no username has a relay that will refuse every notification it is ever sent.
+    // RFC 6409 submission requires authentication.
     const checks = analyse({ PRL_ALERT_SMTP_USERNAME: '' }, { password: '' });
     assert.match(problemText(checks, 'credentials the relay will ask for'), /RFC 6409/);
   });
@@ -236,9 +180,7 @@ describe('NEGATIVE CONTROL: a missing credential', () => {
   });
 
   it('accepts an unauthenticated relay on this host, which is a legitimate deployment', () => {
-    // A relay on the same machine, reached over loopback, needs no credential and no
-    // TLS. Refusing it would be wrong, and the checks that guard the remote case must
-    // not fire here.
+    // A loopback relay needs no credential and no TLS.
     const checks = analyse(
       {
         PRL_ALERT_SMTP_SMARTHOST: '127.0.0.1:25',
@@ -249,17 +191,14 @@ describe('NEGATIVE CONTROL: a missing credential', () => {
     );
     assert.equal(check(checks, 'credentials the relay will ask for').ok, true);
     assert.equal(check(checks, 'in the clear').ok, true);
-    // …but the smarthost is still a local name, so the placeholder sweep refuses it
-    // as a destination. That is the correct split: the credential rules are satisfied
-    // and the destination is still not one a deployment can page through.
+    // The smarthost is still a local name, so the placeholder sweep refuses it.
     assert.equal(check(checks, 'no destination is a placeholder').ok, false);
   });
 });
 
 describe('NEGATIVE CONTROL: a tier that routes nowhere', () => {
   it('refuses a paging receiver left with no destination in it', () => {
-    // Renders to `- name: paging` with nothing underneath. Alertmanager loads that
-    // without complaint, routes `severity: page` to it, and drops the notification.
+    // Renders to `- name: paging` with nothing underneath, which Alertmanager loads.
     const checks = analyse({ PRL_ALERT_PAGE_WEBHOOK_URL: '', PRL_ALERT_PAGE_EMAIL_TO: '' });
     assert.equal(check(checks, 'resolves to a receiver with a destination').ok, false);
     assert.match(
@@ -269,9 +208,7 @@ describe('NEGATIVE CONTROL: a tier that routes nowhere', () => {
   });
 
   it('refuses a route tree with no branch for the paging tier', () => {
-    // The template with its `severity = "page"` branch deleted. Everything else is
-    // valid: the receiver exists, has two destinations, and is never reached — every
-    // page falls to the catch-all and is filed as a ticket instead of waking anybody.
+    // Without the `severity = "page"` branch, every page falls to the catch-all as a ticket.
     const withoutPage = TEMPLATE.replace(
       /- matchers:\n\s+- severity = "page"\n\s+receiver: paging\n\s+continue: false\n\s+group_wait: 5s\n/,
       '',
@@ -295,9 +232,7 @@ describe('NEGATIVE CONTROL: a tier that routes nowhere', () => {
   });
 
   it('requires both tiers to resolve even if the rules file stopped using one', () => {
-    // A rules file with no paging rule left in it would make "every severity the
-    // rules use resolves" vacuously true for the paging tier. The two-tier rule is a
-    // property of the deployment, not of whichever rules happen to exist today.
+    // Both tiers must resolve even when no rule uses one.
     const ticketsOnly = RULES.replace(/severity: page/g, 'severity: ticket');
     const { values, overridden } = alertmanagerValues({
       ...CONFIGURED,
@@ -331,8 +266,6 @@ describe('NEGATIVE CONTROL: a tier that routes nowhere', () => {
 
 describe('NEGATIVE CONTROL: the two tiers collapse into one', () => {
   it('refuses a pager and a ticket queue that are the same address', () => {
-    // Two identical real addresses are individually valid, present and non-placeholder.
-    // What they are is the two-tier rule deleted: every ticket wakes somebody.
     const checks = analyse({ PRL_ALERT_TICKET_EMAIL_TO: 'oncall@acme-poker.io' });
     assert.equal(check(checks, 'different destinations').ok, false);
     assert.match(problemText(checks, 'different destinations'), /every ticket would wake somebody/);
@@ -341,11 +274,7 @@ describe('NEGATIVE CONTROL: the two tiers collapse into one', () => {
 
 describe("NEGATIVE CONTROL: a dead man's switch that watches nothing", () => {
   it('refuses a heartbeat still pointed at the machine somebody rehearsed on', () => {
-    // The refusal with the least visible failure of any in this file. A rehearsal
-    // default in the PAGER is discovered during the first incident, by the person who
-    // was not woken. A rehearsal default in the HEARTBEAT is discovered never: the
-    // rule keeps firing, Alertmanager keeps routing it correctly, and the ping keeps
-    // arriving at a URL on a laptop. Everything looks exactly as it does when it works.
+    // A placeholder heartbeat is never discovered from inside the deployment.
     const checks = analyse({
       PRL_ALERT_HEARTBEAT_WEBHOOK_URL: ALERT_DESTINATION_DEFAULTS.PRL_ALERT_HEARTBEAT_WEBHOOK_URL,
     });
@@ -354,26 +283,19 @@ describe("NEGATIVE CONTROL: a dead man's switch that watches nothing", () => {
   });
 
   it('refuses a heartbeat pointed at a human tier', () => {
-    // Not one extra notification: `Watchdog` fires permanently and repeats on
-    // PRL_ALERT_HEARTBEAT_INTERVAL, so this is a notification about nothing every
-    // interval until the person receiving it mutes the channel — and the channel they
-    // mute is the pager.
+    // `Watchdog` repeats every interval, so the pager would get muted.
     const checks = analyse({ PRL_ALERT_HEARTBEAT_WEBHOOK_URL: CONFIGURED.PRL_ALERT_PAGE_WEBHOOK_URL });
     assert.equal(check(checks, 'different destinations').ok, false);
     assert.match(problemText(checks, 'different destinations'), /heartbeat fires\s+forever/);
   });
 
   it('refuses a snitch pinged over plaintext, because the ping URL is the credential', () => {
-    // The token is the path. Read off the wire it can be replayed, and a dead man's
-    // switch somebody else can keep alive is one with the pin taped down.
     const checks = analyse({ PRL_ALERT_HEARTBEAT_WEBHOOK_URL: 'http://nosnch.in/c7f2a1b93d' });
     assert.equal(check(checks, 'in the clear').ok, false);
     assert.match(problemText(checks, 'in the clear'), /ping URL is its credential/);
   });
 
   it('refuses a deployment with no heartbeat destination at all', () => {
-    // An empty heartbeat renders a receiver Alertmanager accepts, routes to, and drops
-    // the notification inside. From every dashboard here that is a healthy month.
     const checks = analyse({ PRL_ALERT_HEARTBEAT_WEBHOOK_URL: '' });
     assert.equal(check(checks, 'every tier has a destination').ok, false);
     assert.match(
@@ -383,9 +305,6 @@ describe("NEGATIVE CONTROL: a dead man's switch that watches nothing", () => {
   });
 
   it('follows severity: heartbeat to a receiver that has somewhere to send', () => {
-    // The generic routing check, exercised on the third severity: the rules file names
-    // it, so the rendered route tree has to resolve it to a receiver with a
-    // destination in it. Before the switch existed this check swept two severities.
     const checks = analyse();
     assert.equal(check(checks, 'resolves to a receiver with a destination').ok, true);
     assert.match(check(checks, 'resolves to a receiver with a destination').detail, /3 severities/);
@@ -395,9 +314,6 @@ describe("NEGATIVE CONTROL: a dead man's switch that watches nothing", () => {
 
 describe('NEGATIVE CONTROL: an alert body in the clear', () => {
   it('refuses cleartext SMTP to a relay that is not on this host', () => {
-    // Alertmanager's default body names the instance, the job, the threshold that
-    // tripped and the runbook — a description of how to attack this deployment,
-    // written at the moment it is least able to cope.
     const checks = analyse({ PRL_ALERT_SMTP_REQUIRE_TLS: 'false' });
     assert.equal(check(checks, 'in the clear').ok, false);
     assert.match(problemText(checks, 'in the clear'), /PRL_ALERT_SMTP_REQUIRE_TLS is "false"/);
@@ -418,8 +334,7 @@ describe('malformed values', () => {
       wellFormedProblem('PRL_ALERT_PAGE_EMAIL_TO', 'oncall@localdomain'),
       /is not an email address/,
     );
-    // The one that reaches production: Alertmanager does not default the SMTP port,
-    // and a bare hostname makes it fail at notification time rather than at load.
+    // Alertmanager does not default the SMTP port, so a bare hostname fails at notification time.
     assert.match(wellFormedProblem('PRL_ALERT_SMTP_SMARTHOST', 'smtp.acme-poker.io'), /needs host:port/);
     assert.match(wellFormedProblem('PRL_ALERT_SMTP_SMARTHOST', 'smtp.acme-poker.io:0'), /is not host:port/);
     assert.match(
@@ -438,8 +353,7 @@ describe('malformed values', () => {
 
 describe('routingInRenderedConfig', () => {
   it('counts destinations rather than transport headers', () => {
-    // A `webhook_configs:` with nothing under it is valid YAML and is exactly the
-    // shape of a receiver that notifies nobody, so counting headers would pass it.
+    // Counting `webhook_configs:` headers would pass an empty one.
     const parsed = routingInRenderedConfig(
       [
         'route:',
@@ -463,9 +377,7 @@ describe('routingInRenderedConfig', () => {
   });
 
   it('ignores the template prose, which quotes the keys it documents', () => {
-    // The rendered file keeps the template's comment header, and that header contains
-    // lines like `# | PRL_ALERT_PAGE_EMAIL_TO | … |`. A scanner that read comments
-    // would find receivers and routes that do not exist.
+    // The rendered header contains lines like `# | PRL_ALERT_PAGE_EMAIL_TO | … |`, which must not be read.
     const parsed = routingInRenderedConfig(
       ['# receivers:', '#   - name: ghost', 'route:', '  receiver: tickets', 'receivers:'].join('\n'),
     );
@@ -473,18 +385,9 @@ describe('routingInRenderedConfig', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// The handshake, over real sockets
-// ---------------------------------------------------------------------------
-
 /**
- * A submission relay that accepts exactly one credential.
- *
- * `secure` swaps `net` for `tls`, which is how the implicit-TLS path (port 465) is
- * exercised. There is deliberately no STARTTLS here and no way to turn certificate
- * verification off in `smtpHandshake` — a preflight that accepted an unverified
- * relay would pass against a machine in the middle, which is a worse outcome than
- * failing to check at all, because it would be recorded as proof.
+ * `secure` swaps `net` for `tls` to exercise port 465. `smtpHandshake` has no way to turn certificate
+ * verification off, so an unverified relay can never pass.
  */
 function startRelay({
   username = 'prl-alerts',
@@ -499,8 +402,7 @@ function startRelay({
     const say = (line) => socket.write(`${line}\r\n`);
     say('220 relay-under-test ESMTP ready');
     socket.on('error', () => {
-      // A client that vanishes mid-dialogue is the case under test in one of these,
-      // and an unhandled ECONNRESET would take the whole test run down with it.
+      // A client that vanishes is under test here, and an unhandled ECONNRESET would end the run.
     });
     socket.on('data', (chunk) => {
       buffer += chunk.toString('latin1');
@@ -551,13 +453,8 @@ function startRelay({
 }
 
 /**
- * A relay that offers STARTTLS in cleartext and AUTH only after the upgrade.
- *
- * That ordering is the point and it is what real submission relays do: a client that
- * did not re-`EHLO` after the upgrade would see no AUTH mechanism, send the
- * notification unauthenticated, and be refused. `ehlos()` records which side of the
- * upgrade each greeting arrived on, so the test asserts the sequence rather than
- * only the outcome.
+ * Offers AUTH only after the upgrade, as real relays do. `ehlos()` records which side each greeting
+ * arrived on, so the test asserts the sequence.
  */
 function startStartTlsRelay({ key, cert, username = 'prl-alerts', password = 'right' }) {
   const expected = Buffer.from(`\0${username}\0${password}`, 'utf8').toString('base64');
@@ -566,7 +463,7 @@ function startStartTlsRelay({ key, cert, username = 'prl-alerts', password = 'ri
     let buffer = '';
     const say = (line) => socket.write(`${line}\r\n`);
     socket.on('error', () => {
-      // See `startRelay`: a client that vanishes is one of the cases under test.
+      // See `startRelay`.
     });
     socket.on('data', (chunk) => {
       buffer += chunk.toString('latin1');
@@ -614,14 +511,7 @@ function startStartTlsRelay({ key, cert, username = 'prl-alerts', password = 'ri
   });
 }
 
-/**
- * A throwaway self-signed certificate for 127.0.0.1, made with openssl.
- *
- * A hard failure rather than a skip when openssl is absent, for the reason at the
- * top of this file: the TLS leg is the half of the handshake that cannot be reasoned
- * about from the code, and a suite that silently stopped exercising it would report
- * the same green as one that did.
- */
+/** Fails hard when openssl is absent. See the header. */
 function selfSignedCertificate() {
   const version = spawnSync('openssl', ['version'], { encoding: 'utf8' });
   assert.equal(
@@ -681,8 +571,7 @@ describe('the handshake stops at AUTH and reports what the relay said', () => {
       assert.equal(result.ok, true, result.problem ?? '');
       assert.equal(result.authenticated, true);
       assert.ok(result.steps.some((step) => step.includes('AUTH accepted')));
-      // The credential must not survive into the report: this JSON is meant to be
-      // attachable to a promotion record.
+      // The report is attached to promotions, so the password must not be in it.
       assert.ok(!JSON.stringify(result).includes('right'), 'the password reached the report');
     } finally {
       relay.close();
@@ -690,9 +579,7 @@ describe('the handshake stops at AUTH and reports what the relay said', () => {
   });
 
   it('REFUSES a credential the relay rejects, and quotes the 535', async () => {
-    // The negative control the whole handshake exists for. Before it, a wrong
-    // submission password was indistinguishable from a working one until an alert
-    // fired and was not delivered.
+    // Without the handshake, a wrong password looks healthy until an alert is not delivered.
     const relay = await startRelay();
     try {
       const result = await smtpHandshake({
@@ -728,8 +615,7 @@ describe('the handshake stops at AUTH and reports what the relay said', () => {
   });
 
   it('REFUSES a relay that advertises no mechanism this deployment can use', async () => {
-    // CRAM-MD5 or XOAUTH2 only. Alertmanager's `smtp_auth_password_file` cannot
-    // satisfy either, so it would send unauthenticated and be refused.
+    // `smtp_auth_password_file` satisfies neither, so Alertmanager would send unauthenticated.
     const relay = await startRelay({ mechanisms: 'CRAM-MD5' });
     try {
       const result = await smtpHandshake({
@@ -747,8 +633,7 @@ describe('the handshake stops at AUTH and reports what the relay said', () => {
   });
 
   it('REFUSES a relay with no STARTTLS when TLS is required', async () => {
-    // Alertmanager would refuse to send rather than downgrade, so this configuration
-    // delivers nothing — and it looks completely healthy from every other angle.
+    // Alertmanager refuses to send rather than downgrade.
     const relay = await startRelay({ mechanisms: '' });
     try {
       const result = await smtpHandshake({
@@ -783,10 +668,7 @@ describe('the handshake stops at AUTH and reports what the relay said', () => {
         implicitTls: true,
         username: 'prl-alerts',
         password: 'right',
-        // The trust anchor is the throwaway root this test just made. Passing a `ca`
-        // EXERCISES verification; there is deliberately no option that turns it off,
-        // because a preflight that accepted an unverified relay would pass against a
-        // machine in the middle and be recorded as proof that it had not.
+        // Passing a `ca` exercises verification against the throwaway root.
         ca: tls.cert,
       });
       assert.equal(result.ok, true, result.problem ?? '');
@@ -798,9 +680,7 @@ describe('the handshake stops at AUTH and reports what the relay said', () => {
   });
 
   it('REFUSES a TLS relay whose certificate does not verify', async () => {
-    // The machine-in-the-middle case: something answers on the right port with an
-    // identity nothing vouches for. Same relay as the test above, with the trust
-    // anchor withheld, so the system store is used and the self-signed leaf fails.
+    // Trust anchor withheld, so the self-signed leaf fails as a machine in the middle would.
     const tls = selfSignedCertificate();
     cleanup.push(() => rmSync(tls.directory, { recursive: true, force: true }));
     const relay = await startRelay({ secure: { key: tls.key, cert: tls.cert } });
@@ -821,9 +701,7 @@ describe('the handshake stops at AUTH and reports what the relay said', () => {
   });
 
   it('upgrades a cleartext connection with STARTTLS before it authenticates', async () => {
-    // RFC 3207: the client must discard everything the cleartext session advertised
-    // and re-EHLO. Relays routinely offer AUTH only after the upgrade, so a client
-    // that skipped the second EHLO would find no mechanism and send unauthenticated.
+    // RFC 3207 requires a second EHLO after the upgrade.
     const tls = selfSignedCertificate();
     cleanup.push(() => rmSync(tls.directory, { recursive: true, force: true }));
     const relay = await startStartTlsRelay({ key: tls.key, cert: tls.cert });
@@ -840,8 +718,6 @@ describe('the handshake stops at AUTH and reports what the relay said', () => {
       assert.equal(result.tls, 'starttls');
       assert.equal(result.authenticated, true);
       assert.ok(result.steps.some((step) => step.includes('STARTTLS negotiated')));
-      // AUTH was advertised only after the upgrade, so this could not have succeeded
-      // without the second EHLO.
       assert.deepEqual(relay.ehlos(), ['cleartext', 'secure']);
     } finally {
       relay.close();

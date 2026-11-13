@@ -1,122 +1,38 @@
 #!/usr/bin/env node
 /**
- * Sends a REAL page through this deployment's Alertmanager and refuses to exit 0
- * until somebody types back, at a terminal and within a bounded number of attempts,
- * a code that was carried in that page.
+ * Sends a real `severity: page` alert through this deployment's Alertmanager and exits 0 only if
+ * somebody types back, at a terminal and within MAX_ATTEMPTS tries, a code carried in that page.
+ * This is `pnpm run alerts:ack`. Run it before go-live and after any change to paging destinations.
+ * It closes the gap the other alert checks leave. `alerts:verify` proves the pipeline and
+ * `--handshake` proves the relay accepts credentials, but neither proves a person is reached.
  *
- * This is what `pnpm run alerts:ack` does. It is a rehearsal with a pass/fail, and
- * it is meant to be run before go-live and after any change to the paging
- * destinations.
+ * What a pass proves. The code travels as an alert label, and Alertmanager's unauthenticated
+ * `GET /api/v2/alerts` echoes labels back (measured against `prom/alertmanager:v0.28.1`). The caller
+ * also chooses `--alertmanager`, so an automated caller can read the code out of its own POST, type
+ * it into a pty and get exit 0. A pass is evidence a cooperating operator produces for themselves.
+ * It is not an attestation that survives a caller who wants a green result.
  *
- * ## The gap this exists for, stated exactly
+ * What is closed:
+ *   * The code is never printed on the passing path. Delivered subjects are redacted, because a
+ *     robot once scraped the code off this command's own stdout.
+ *   * Attempts are capped. Uncapped, a pty drove ~106,000 guesses/s, ~383 million inside
+ *     `--within 1h` against a 2^30 code space.
+ *   * `rehearsal` is decided from where the page went, never from `PRL_ALERT_*`, which only say
+ *     what this checkout would render. Both stages must hold.
+ *     1. Read. `GET /api/v2/status` returns the target's loaded config. Every email destination must
+ *        be this process's SMTP sink and every receiver must use only `webhook_configs` or
+ *        `email_configs`. Anything unreadable makes the run real. Fail closed.
+ *     2. Observed. The page must arrive at this process's own webhook and SMTP sinks with this
+ *        run's code.
+ *   Alertmanager redacts webhook URLs as `<secret>`, so a second webhook beside the sink cannot be
+ *   ruled out. The banner says so.
  *
- * `docs/production/final-readiness-report.md` has carried the same sentence for
- * several candidates: *"a handshake proves a relay accepts credentials; it does not
- * prove a human wakes up."* That was true and it stayed true through everything
- * built around it. `alerts:verify` proves the pipeline — rule, route, both tiers,
- * both transports, a real SMTP transaction. `alerts:preflight` refuses a
- * destination a stranger's relay would not accept and blocks a promotion on it.
- * `--handshake` gets a `235` out of the real relay. Every one of those stops one
- * hop short of the only hop that matters, and the hop they stop short of is a
- * person.
+ * It posts to Alertmanager rather than sending its own mail, so the real route tree, receiver and
+ * credentials are under test. It skips Prometheus because `alerts:verify` already proves rule
+ * evaluation and that takes four minutes.
  *
- * The gap is not a missing check. It is that no check can close it: from inside a
- * deployment, an email-to-SMS gateway decommissioned last year is byte-for-byte
- * indistinguishable from one somebody is holding. The only thing that can tell the
- * difference is the person, and the only way to ask them is to send something and
- * see whether they answer.
- *
- * ## What a pass proves — and the claim this file used to make and could not keep
- *
- * This file used to say the code "appears nowhere except in the delivered
- * notification", and `CLAUDE.md` repeated it. **That was false, and it is false for
- * a structural reason no amount of code here can fix.** The code travels as an alert
- * LABEL, and Alertmanager's `GET /api/v2/alerts` is unauthenticated and echoes
- * labels back. Measured against a genuine `prom/alertmanager:v0.28.1`:
- *
- *     $ curl -s http://127.0.0.1:19094/api/v2/alerts
- *     [{"annotations":{"summary":"TEST PAGE"},…,"labels":{"ack_code":"SENTINELACK7",
- *      "alertname":"OperatorTestPage","severity":"page"}}]
- *
- * So anyone who can reach the Alertmanager can read the code without ever seeing a
- * page — and the person running this command can always reach it, because they
- * chose the URL. Measured: an automated caller pointed `--alertmanager` at an
- * Alertmanager it controlled, read `ack_code` out of its own POST body, typed it
- * into a pty, and got `EXIT=0` with a record stamped `"attended": true`.
- *
- * There is no way to push a secret through Alertmanager to a receiver without
- * Alertmanager holding it, and no way to keep a secret from the process that mints
- * it. So the claim changed rather than the mechanism. **A pass proves: somebody was
- * at a terminal, inside a bounded window, and had a code this run generated and sent
- * as a `severity: page` alert through the Alertmanager this run named.** It does not
- * prove they read a page rather than the Alertmanager API. It is evidence a
- * cooperating operator produces for themselves; it is not an attestation that
- * survives a caller who wants a green result.
- *
- * What IS closed, because it could be:
- *
- *   * **The code is never printed by this command on the passing path.** It used to
- *     be: a networked rehearsal printed the delivered `Subject:` — which contains the
- *     code, by construction, because that is what the subject assertion is about —
- *     six lines above the sentence "the code is deliberately not on this screen".
- *     Measured: a robot scraped the code off this command's own stdout and typed it
- *     back. Subjects are now redacted before they are shown.
- *   * **The attempts are bounded.** There was no cap. Measured through a real pty:
- *     ~106,000 counted guesses per second, which is ~383 million inside `--within
- *     1h` against a 2^30 code space — better than a one-in-three chance of guessing
- *     it, with nobody reading anything. `MAX_ATTEMPTS` is 5.
- *   * **`rehearsal` is derived from where the page went**, not from this checkout's
- *     environment variables. See below.
- *
- * A pass is also not a promise about 3am next Tuesday. It says nothing about the
- * holiday nobody put in the rota, the phone that is face-down in another room, the
- * gateway that is decommissioned three months from now, or the second person who was
- * never on the test. An acknowledgement is a measurement of one moment.
- *
- * ## Why it goes through Alertmanager rather than sending its own mail
- *
- * Because the thing under test is the deployment's paging path, not SMTP. Posting to
- * `/api/v2/alerts` with `severity: page` exercises the real route tree, the real
- * receiver, the real credentials and the real destinations — every part of the
- * configuration that a promotion turns on. A script that opened its own SMTP session
- * would prove that this script can send mail.
- *
- * It deliberately does NOT go through Prometheus. `alerts:verify` already proves the
- * rule-evaluation half by stopping the API and following `ApiDown` for four minutes,
- * and repeating that here would make a command an operator is meant to run under
- * time pressure take four minutes before it could even ask the question.
- *
- * ## The rehearsal, and how it is decided now
- *
- * `rehearsal` used to be computed from three `PRL_ALERT_*` environment variables and
- * nothing else — which says what THIS CHECKOUT would render, and nothing whatever
- * about the Alertmanager the run is pointed at. Measured: a run with every variable
- * at its default printed *"this run pages NOBODY"* while posting to an Alertmanager
- * that would have delivered somewhere else entirely.
- *
- * It is now decided from evidence, in two stages, and both must hold:
- *
- *   1. **Read** — `GET /api/v2/status` on the targeted Alertmanager returns its own
- *      loaded configuration. Every email destination in it must be routed through
- *      this process's own SMTP sink, and every receiver must use only integrations
- *      this command can read (`webhook_configs`, `email_configs`). Anything it
- *      cannot read at all — a `url_file`, a PagerDuty or Opsgenie receiver, a status
- *      endpoint that does not answer — makes the run REAL. Fail closed: this test
- *      can refuse a rehearsal that was one, and must never bless a real page.
- *   2. **Observed** — the page must then actually arrive at this process's own
- *      webhook sink and its own SMTP sink, carrying THIS run's code. A rehearsal
- *      that cannot be seen arriving is not a rehearsal.
- *
- * One thing that cannot be established and is therefore said out loud rather than
- * assumed away: **Alertmanager redacts webhook URLs in its own API** — they come
- * back as `url: <secret>` — so this command cannot enumerate them and cannot prove
- * there is no second webhook destination beside its sink. The banner says that
- * instead of saying "pages NOBODY".
- *
- * `PRL_ALERT_ACK_UNATTENDED=1` is permitted only when both stages hold, which is how
- * this repository's own tests and release captures exercise the passing path. An
- * unattended run is stamped `attended: false` and prints a banner saying it is not a
- * rehearsal of the on-call arrangement, because a skip that is quiet is a pass.
+ * `PRL_ALERT_ACK_UNATTENDED=1` is allowed only when both rehearsal stages hold. Such a run is
+ * stamped `attended: false` and says so in a banner.
  *
  * Usage:
  *     pnpm run alerts:ack
@@ -142,104 +58,46 @@ import {
 } from './alert-delivery.mjs';
 import { bold, dim, green, measureUntil, red, yellow } from './drills/harness.mjs';
 
-/**
- * The alert name a locked screen will show.
- *
- * Chosen to be unmistakable at a glance and impossible to confuse with an incident.
- * Somebody woken by this must know within one word that nothing is broken —
- * otherwise the rehearsal costs more than it proves, and the next one gets skipped.
- */
+/** Unmistakable on a locked screen, so somebody woken by it knows nothing is broken. */
 const ALERT_NAME = 'OperatorTestPage';
 
 /**
- * The label the code travels in.
- *
- * A LABEL and not an annotation, and that is still the right call for the reason it
- * always was: Alertmanager's default subject template renders the common labels that
- * are not group labels, so a label puts the code in the `Subject:` line — the part
- * that shows on a locked screen without unlocking it. An annotation would put it in
- * the body, which is one more action away at the exact moment somebody is least
- * willing to take one. It also makes each run a distinct alert, because labels are
- * an alert's identity, and two rehearsals half an hour apart must not deduplicate
- * into one notification.
- *
- * What it is NOT is a secret channel. Alertmanager echoes labels back on an
- * unauthenticated `GET /api/v2/alerts`; an annotation would be echoed there too.
- * See the header: the code being readable from the Alertmanager is a property of
- * Alertmanager, not a choice made here, and it is disclosed rather than papered over.
+ * A label, not an annotation, so the default subject template puts the code in the `Subject:`
+ * line a locked screen shows. Labels are also an alert's identity, so two runs never deduplicate.
+ * It is not secret. See the header.
  */
 const CODE_LABEL = 'ack_code';
 
-/**
- * The alphabet, and the four characters that are not in it.
- *
- * No `I`, `O`, `0` or `1`. The code is read off a phone screen, at night, by somebody
- * who has just been woken, and typed into a terminal — and a rehearsal that fails
- * because a zero was read as an O has measured the font rather than the on-call
- * arrangement. `normaliseCode` forgives spacing and case; it cannot forgive an
- * ambiguous glyph, so the ambiguity is removed at the source.
- */
+/** No `I`, `O`, `0` or `1`. The code is read off a phone at night and must not be misread. */
 const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 /**
- * How many wrong codes end the run.
- *
- * There was no limit, and a six-character code out of a 32-character alphabet is
- * about thirty bits — which sounds like plenty until somebody measures how fast a
- * terminal can be typed into by something that is not a person. Measured, through a
- * real pty, against this command with no cap:
- *
- *     [driver] window --within 1h; drove guesses for 8.0s through a real pty
- *     [driver] the command counted 852123 wrong attempts and never stopped accepting them
- *     [driver] ~106,450 counted guesses/s -> 383,221,393 in a --within 1h window
- *
- * 383 million guesses against 2^30 possibilities is a better-than-one-in-three
- * chance of a green acknowledgement with nobody reading anything at all. Five is
- * generous for the case this exists to be kind to — the person this is meant to
- * prove was reached, mistyping a code off a phone screen at night — and it takes the
- * guessing attack from "a third of the time" to about one in two hundred million.
+ * Six characters of this alphabet is about 30 bits. Uncapped, a pty drove ~106,450 guesses/s, which
+ * is ~383 million in a 1h window and a better than one-in-three chance. Five allows for typos and
+ * cuts the guessing odds to about one in two hundred million.
  */
 export const MAX_ATTEMPTS = 5;
 
-/** A fresh single-use code. Six characters of this alphabet is about thirty bits. */
 export function makeCode(length = 6, pick = (bound) => randomInt(bound)) {
   let code = '';
   for (let index = 0; index < length; index += 1) code += ALPHABET[pick(ALPHABET.length)];
   return code;
 }
 
-/**
- * What two people typing the same code can disagree about, removed.
- *
- * Case, spaces and any punctuation somebody adds while transcribing — a hyphen in the
- * middle is the common one. Nothing else: this must not be so forgiving that a
- * DIFFERENT code matches, which is why it strips rather than fuzzily compares.
- */
+/** Strips case, spaces and punctuation, never fuzzily compares, so a different code never matches. */
 export const normaliseCode = (text) =>
   String(text ?? '')
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, '');
 
-/** The code, replaced by dots, wherever it appears in something about to be printed. */
 export const redactCode = (text, code) =>
   String(text ?? '')
     .split(code)
     .join('·'.repeat(code.length));
 
 /**
- * Waits for the code to be typed, or for the window to close, or for the attempts to
- * run out.
- *
- * Taking the input stream as a parameter rather than reaching for `process.stdin` is
- * what makes the failure path testable: `alert-ack-page.test.mjs` drives this with a
- * stream that stays silent and asserts that it FAILS, which is the one behaviour of
- * this whole file that must never regress. A command that passes when nobody answers
- * is worse than no command, because it produces a record saying somebody did.
- *
- * A wrong code does not end the run immediately — the realistic wrong-code case is a
- * transcription slip by exactly the person this is meant to prove was reached, and
- * failing them on a typo measures nothing — but there are only `maxAttempts` of them.
- * See MAX_ATTEMPTS for the measurement that put a number there.
+ * Resolves when the code is typed, the window closes or the attempts run out. The input stream is a
+ * parameter so `alert-ack-page.test.mjs` can drive it with silence and assert that it FAILS.
  *
  * @param {{input: NodeJS.ReadableStream, expected: string, deadlineMs: number,
  *          maxAttempts?: number, onAttempt?: (typed: string, attempts: number) => void}} options
@@ -251,15 +109,12 @@ export async function awaitAcknowledgement({
   deadlineMs,
   maxAttempts = MAX_ATTEMPTS,
   onAttempt = () => {
-    // A caller that does not want to be told about wrong attempts. The default is a
-    // no-op rather than a console write so that the test can count attempts without
-    // printing a wall of red into a passing run.
+    // A no-op, so the test can count attempts without printing into a passing run.
   },
 }) {
   const wanted = normaliseCode(expected);
   if (wanted === '') {
-    // An empty expectation matches the first blank line, which would turn this whole
-    // command into a green light nobody earned.
+    // An empty expectation would match the first blank line.
     throw new Error('awaitAcknowledgement: the expected code is empty');
   }
   const startedAt = Date.now();
@@ -285,8 +140,7 @@ export async function awaitAcknowledgement({
           };
         }
       }
-      // Reached when stdin closes — a pipe that ran dry, or `< /dev/null`. Not an
-      // acknowledgement, and it must not read as one.
+      // stdin closed, from a dry pipe or `< /dev/null`. That is not an acknowledgement.
       return { ok: false, reason: 'the input ended without a matching code' };
     })();
     const outcome = await Promise.race([typed, expired]);
@@ -297,7 +151,6 @@ export async function awaitAcknowledgement({
   }
 }
 
-/** The code carried by a webhook notification for this alert, or null. */
 export function codeInNotification(payload) {
   for (const alert of payload?.alerts ?? []) {
     const code = alert?.labels?.[CODE_LABEL];
@@ -306,27 +159,11 @@ export function codeInNotification(payload) {
   return null;
 }
 
-// ---------------------------------------------------------------------------
-// Where the page actually goes
-// ---------------------------------------------------------------------------
-
-/**
- * The two ports this process's own sinks listen on, read off the rehearsal defaults.
- *
- * Derived rather than repeated, because the defaults ARE the sinks: `alert-delivery.mjs`
- * points the rehearsal at `host.docker.internal:9099` and `…:9098` and starts servers
- * there. A second copy of those numbers here would be a second thing to keep in step,
- * and the failure mode of it drifting is a run that calls a real destination a sink.
- */
+/** Derived from the rehearsal defaults, because those defaults are the sinks `alert-delivery.mjs` starts. */
 export const SINK_WEBHOOK_PORT = new URL(ALERT_DESTINATION_DEFAULTS.PRL_ALERT_PAGE_WEBHOOK_URL).port;
 export const SINK_SMTP_PORT = ALERT_DESTINATION_DEFAULTS.PRL_ALERT_SMTP_SMARTHOST.split(':').pop();
 
-/**
- * Host names that mean "the machine this command is running on".
- *
- * `host.docker.internal` is in the list because that is how a container reaches back
- * out to this process, and `host-gateway` is the compose spelling of the same idea.
- */
+/** `host.docker.internal` and `host-gateway` are how a container reaches back to this process. */
 const LOCAL_HOSTS = new Set([
   '127.0.0.1',
   'localhost',
@@ -336,7 +173,6 @@ const LOCAL_HOSTS = new Set([
   'host-gateway',
 ]);
 
-/** Does this `host:port` name this process's own SMTP sink? */
 export function isLocalSmtpSink(smarthost) {
   const text = String(smarthost ?? '').replace(/^['"]|['"]$/g, '');
   const at = text.lastIndexOf(':');
@@ -344,7 +180,6 @@ export function isLocalSmtpSink(smarthost) {
   return LOCAL_HOSTS.has(text.slice(0, at)) && text.slice(at + 1) === SINK_SMTP_PORT;
 }
 
-/** Does this URL name this process's own webhook sink? */
 export function isLocalWebhookSink(url) {
   try {
     const parsed = new URL(String(url ?? '').replace(/^['"]|['"]$/g, ''));
@@ -354,38 +189,13 @@ export function isLocalWebhookSink(url) {
   }
 }
 
-/**
- * Receiver integrations this command knows how to read a destination out of.
- *
- * Everything else — `pagerduty_configs`, `opsgenie_configs`, `slack_configs`, the
- * dozen others Alertmanager ships — sends somewhere this cannot inspect, and their
- * destination is frequently a compiled-in vendor URL that does not appear in the
- * config at all. A receiver this cannot read is a run that must be treated as real.
- */
+/** Every other integration sends somewhere this cannot inspect, so its receiver makes the run real. */
 export const READABLE_INTEGRATIONS = new Set(['webhook_configs', 'email_configs']);
 
 /**
- * Every destination in an Alertmanager's OWN loaded configuration.
- *
- * Read from `GET /api/v2/status`, which returns the config Alertmanager actually
- * parsed — not this checkout's environment, and not the template this repository
- * would have rendered. That distinction is the whole point: `--alertmanager` is a
- * caller-supplied URL and a run pointed at a different Alertmanager used to print a
- * banner describing destinations that Alertmanager had never heard of.
- *
- * One field comes back useless and it is the important one. Alertmanager marshals a
- * webhook URL as `url: <secret>`, so the webhook destinations can be COUNTED and not
- * READ. Measured against `prom/alertmanager:v0.28.1` with a plain local URL in the
- * file:
- *
- *     webhook_configs:
- *     - send_resolved: true
- *       url: <secret>
- *       url_file: ""
- *
- * So `webhooks` below is a count and a list of what could be read, `redactedWebhooks`
- * is how many could not, and nothing downstream is allowed to conclude "there is no
- * other webhook" from either.
+ * Every destination in the targeted Alertmanager's own loaded config, from `GET /api/v2/status`.
+ * Alertmanager returns webhook URLs as `url: <secret>` (measured on v0.28.1), so webhooks can be
+ * counted but not read. Nothing downstream may conclude "there is no other webhook".
  */
 export function alertmanagerDestinations(configText) {
   const integrations = new Set();
@@ -413,12 +223,7 @@ export function alertmanagerDestinations(configText) {
 }
 
 /**
- * Could this run be a rehearsal — as far as the targeted Alertmanager's own
- * configuration can say?
- *
- * Stage one of two; see the header. It answers "is there anything here that a page
- * could reach that is not one of this process's sinks", and every unknown counts as
- * yes. Stage two is observing the page arrive, and `rehearsal` requires both.
+ * Stage one of the rehearsal decision. Every unknown counts as a possible real destination.
  *
  * @returns {{sinkOnly: boolean, reasons: string[], destinations: object}}
  */
@@ -448,20 +253,13 @@ export function rehearsalCandidate(configText) {
     );
   }
   if (destinations.recipients.size === 0) {
-    // Nothing readable pins the delivery. The email half is the only half whose
-    // destination Alertmanager will actually disclose, so a config with no email
-    // destination at all leaves this command with no evidence to reason from — and
-    // no evidence means real.
+    // Only email destinations are disclosed, so with none there is no evidence, and no evidence means real.
     reasons.push(
       'no email destination is configured, and the email half is the only one Alertmanager discloses',
     );
   }
   return { sinkOnly: reasons.length === 0, reasons, destinations };
 }
-
-// ---------------------------------------------------------------------------
-// Options
-// ---------------------------------------------------------------------------
 
 const flag = (name, fallback = null) => {
   const at = process.argv.indexOf(`--${name}`);
@@ -500,18 +298,7 @@ const asDuration = (ms) => {
     : `${Math.floor(seconds / 60)}m${String(seconds % 60).padStart(2, '0')}s`;
 };
 
-// ---------------------------------------------------------------------------
-// Alertmanager
-// ---------------------------------------------------------------------------
-
-/**
- * The configuration the targeted Alertmanager is actually running, and a digest of it.
- *
- * The digest goes in the record. A record that names an Alertmanager URL says where
- * the run was pointed; a record that also carries the sha256 of that Alertmanager's
- * own config says what was there at the time, and two runs a month apart can be
- * compared without trusting anybody's memory of what the destinations were.
- */
+/** The sha256 goes in the record so runs a month apart can be compared on what was configured. */
 async function readAlertmanagerConfig(base) {
   const response = await fetch(`${base}/api/v2/status`, { signal: AbortSignal.timeout(15_000) });
   if (!response.ok) throw new Error(`${base}/api/v2/status answered ${response.status}`);
@@ -520,13 +307,7 @@ async function readAlertmanagerConfig(base) {
   return { text: original, sha256: createHash('sha256').update(original).digest('hex') };
 }
 
-/**
- * Posts the alert, or the same alert with `endsAt` in the past to resolve it.
- *
- * The resolve half is not tidiness. This alert is `severity: page`, so while it is
- * active it is an open incident in whatever the deployment pages with, and a
- * rehearsal that leaves one behind is a rehearsal people stop agreeing to run.
- */
+/** Resolving matters. An open `severity: page` alert is an open incident in the pager. */
 async function postAlert(base, { code, endsAt, startsAt }) {
   const response = await fetch(`${base}/api/v2/alerts`, {
     method: 'POST',
@@ -553,10 +334,6 @@ async function postAlert(base, { code, endsAt, startsAt }) {
   if (!response.ok) throw new Error(`${base}/api/v2/alerts answered ${response.status}`);
 }
 
-// ---------------------------------------------------------------------------
-// The run
-// ---------------------------------------------------------------------------
-
 async function main() {
   say(bold('\nPoker Risk Lab — acknowledged test page'));
   say(
@@ -572,8 +349,6 @@ async function main() {
     return 1;
   }
 
-  // Stage one: read the Alertmanager's own configuration, before anything is sent.
-  // Where a page goes is a property of THAT, and of nothing in this checkout.
   let configured = { text: '', sha256: null };
   let unreadable = null;
   try {
@@ -621,9 +396,6 @@ async function main() {
   }
 
   if (options.unattended && !candidate.sinkOnly) {
-    // The fence, and it now stands on what the Alertmanager said rather than on what
-    // this checkout's environment says. There is no supported way to produce a green
-    // acknowledgement against a configured pager without a person.
     say('');
     cross(
       'PRL_ALERT_ACK_UNATTENDED is set and this Alertmanager can reach a destination that is not a sink',
@@ -662,13 +434,10 @@ async function main() {
 
   const code = makeCode();
   const sentAt = new Date();
-  // Half an hour, and then explicitly resolved in the `finally`. Long enough that the
-  // alert cannot self-resolve out from under a long window (Alertmanager expires an
-  // alert with no `endsAt` after `resolve_timeout`, which is a minute here), short
-  // enough that a run killed with SIGKILL leaves an incident that closes itself.
+  // Alertmanager expires an alert with no `endsAt` after `resolve_timeout` (a minute here). Thirty
+  // minutes outlasts a long window, and a SIGKILLed run leaves an incident that closes itself.
   const endsAt = new Date(sentAt.getTime() + 30 * 60_000);
 
-  /** Stage two: was the page SEEN arriving at this process's own two sinks? */
   const observed = { webhook: false, mail: false };
   let outcome = { ok: false, attempts: 0, elapsedMs: 0, reason: 'the page was never sent' };
   try {
@@ -688,14 +457,8 @@ async function main() {
     tick('Alertmanager accepted the alert', `${ALERT_NAME}, severity=page, code in the ${CODE_LABEL} label`);
 
     if (sink !== null) {
-      /**
-       * The delivery is observed rather than assumed, and this is what makes both the
-       * rehearsal classification and an unattended run mean anything: the code that
-       * unlocks the command is READ OUT OF what was actually delivered, and the
-       * "rehearsal" stamp is only earned by the page being seen at this process's own
-       * sinks. If the page never arrived, there is no code to read and the run fails
-       * on the same clock a person would have failed on.
-       */
+      // The code is read out of what was delivered, so a page that never arrived fails on the
+      // same clock a person would.
       const delivered = await measureUntil(
         () => notificationsFor(sink.received, '/page', ALERT_NAME, 'firing').length > 0,
         Math.min(deadlineMs, 60_000),
@@ -720,15 +483,8 @@ async function main() {
       } else {
         const [message] = emailsFor(mail.received, values.PRL_ALERT_PAGE_EMAIL_TO, ALERT_NAME, 'firing');
         const subject = message.headers.get('subject') ?? '';
-        // The subject is the assertion, not the delivery. A locked screen shows the
-        // subject and nothing else, so a code that is only in the body is a code
-        // somebody has to unlock a phone to read at 3am.
-        //
-        // It is REDACTED before it is printed. This line used to print the subject
-        // verbatim — which contains the code, necessarily, because that is what is
-        // being asserted — six lines above the promise that the code is not on this
-        // screen. Measured: a robot scraped it off this command's own stdout and
-        // typed it back for a green result.
+        // A locked screen shows only the subject, so the code must be there. The subject is
+        // redacted before printing because it contains the code.
         if (subject.includes(code)) {
           observed.mail = true;
           tick('and over SMTP, with the code in the subject', redactCode(subject, code));
@@ -789,8 +545,6 @@ async function main() {
       });
     }
   } finally {
-    // Resolve whatever happened, including on the failure path: a rehearsal that
-    // leaves an open page behind is a rehearsal that gets refused next time.
     await postAlert(options.alertmanager, {
       code,
       startsAt: sentAt.toISOString(),
@@ -810,11 +564,7 @@ async function main() {
     code,
     by: options.by,
     attended: !options.unattended,
-    /**
-     * Measured, not configured. True only when the targeted Alertmanager's own
-     * configuration disclosed nothing but this process's sinks AND the page was seen
-     * arriving at both of them.
-     */
+    /** True only when the config disclosed nothing but this process's sinks and the page reached both. */
     rehearsal,
     rehearsalBasis: rehearsal
       ? [
@@ -829,7 +579,6 @@ async function main() {
     alertmanager: options.alertmanager,
     alertmanagerFrom,
     alertmanagerConfigSha256: configured.sha256,
-    /** What the Alertmanager itself disclosed. Webhook URLs come back as `<secret>`. */
     disclosedDestinations: {
       smarthosts: [...candidate.destinations.smarthosts],
       recipients: [...candidate.destinations.recipients],
@@ -837,7 +586,7 @@ async function main() {
       redactedWebhooks: candidate.destinations.redactedWebhooks,
       integrations: [...candidate.destinations.integrations],
     },
-    /** What this checkout's environment WOULD render. It decides nothing here. */
+    /** What this checkout's environment would render. It decides nothing. */
     localEnvironmentWouldRender: {
       webhook: values.PRL_ALERT_PAGE_WEBHOOK_URL,
       email: values.PRL_ALERT_PAGE_EMAIL_TO,
@@ -850,10 +599,6 @@ async function main() {
     elapsedMs: outcome.elapsedMs,
     attempts: outcome.attempts,
     ok: outcome.ok,
-    /**
-     * In the record, because a record gets quoted long after the terminal output is
-     * gone, and this is the sentence that stops it being quoted as more than it is.
-     */
     caveat:
       'The code travels as an alert label and Alertmanager echoes labels back on an unauthenticated ' +
       'GET /api/v2/alerts, so a caller who chose the --alertmanager URL could read this code without ' +
@@ -863,10 +608,7 @@ async function main() {
 
   say('');
   if (outcome.ok && options.unattended) {
-    // A different paragraph, not the same one with a caveat bolted on. An unattended
-    // run establishes that the pipeline carries a code intact to a receiver, and
-    // NOTHING about a person — and the claim it does not make must not be printed
-    // above the disclaimer, where it is the sentence that gets quoted.
+    // An unattended run proves nothing about a person, so it gets its own paragraph.
     say(yellow(bold('ACK REHEARSED — the mechanism works. NO PERSON WAS INVOLVED.')));
     say(
       dim(

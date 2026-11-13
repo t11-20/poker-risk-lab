@@ -1,39 +1,8 @@
 #!/usr/bin/env node
 /**
- * Tests for the certification-assertion checks.
- *
- * Run with:  node --test scripts/ax-assertions.test.mjs
- * Also run by: pnpm run test:scripts
- *
- * ## What is being tested
- *
- * `scripts/ax-assertions.mjs` splits every check into a `gather` that drives Chrome and a `decide`
- * that is a pure function of what was gathered. The `gather` half needs a browser and a running app
- * and is exercised by `pnpm run test:ax`. The `decide` half is the half that says whether something
- * is wrong, and it is testable here.
- *
- * ## Would these fail if the behaviour broke?
- *
- * Yes, and it was checked by breaking things rather than by reasoning about them. There are two
- * layers:
- *
- *   1. **A blanket control over every check in the registry.** Every `decide` is handed a page that
- *      produced nothing — no landmarks, no headings, no controls, no announcements — and must
- *      refuse it. A check that passed an empty page is a check that can never fail, and that
- *      failure mode is silent: it reports a green assertion for the rest of its life. This is the
- *      control that catches a `decide` written with an early `return pass(...)`, or one reading a
- *      field `gather` no longer produces.
- *   2. **Targeted controls on a representative sample**, each fed evidence containing one REAL
- *      defect of the kind the assertion exists to catch — an unnamed contentinfo, a card whose
- *      accessible name says "queen of hearts", an action button announcing "Fold0 units", a verdict
- *      in an assertive region, a Tab that escapes a modal — asserting the specific refusal comes
- *      back, and that the clean version of the same evidence passes. A detector that fires on
- *      everything is as useless as one that fires on nothing, and only having both halves rules
- *      both out.
- *
- * The real components are broken and restored against a live browser in the same spirit; that
- * evidence is in the change's report rather than in a test, because it cannot be automated without
- * shipping a deliberately broken build.
+ * Tests for the pure `decide` half of `scripts/ax-assertions.mjs`. Every check must refuse a page
+ * that rendered nothing, and a sample is fed one real defect each and must refuse it while the clean
+ * evidence passes.
  */
 
 import assert from 'node:assert/strict';
@@ -65,7 +34,6 @@ const checkFor = (id) => {
   return found;
 };
 
-/** A `decide` refuses when it returns `{ok:false}` OR throws — the runner treats both as a failure. */
 function refuses(check, evidence) {
   try {
     const verdict = check.decide(evidence);
@@ -74,8 +42,6 @@ function refuses(check, evidence) {
     return true;
   }
 }
-
-// ---------------------------------------------------------------------------
 
 describe('the registry itself', () => {
   it('is well formed, and every check names an assertion exactly once', () => {
@@ -95,15 +61,8 @@ describe('the registry itself', () => {
 });
 
 describe('NEGATIVE CONTROL — every check refuses a page that produced nothing', () => {
-  /**
-   * The control against a check that cannot fail.
-   *
-   * Each `decide` is given the shape it expects with every field emptied: no landmarks, no
-   * headings, no controls, no live regions, nothing focused, no interaction having happened. A page
-   * in that state is a page that did not render, and there is no assertion in the certification
-   * document that such a page satisfies. Any `decide` that answers `ok` to it is either reading a
-   * field its `gather` no longer produces, or returning a pass before it has looked at anything.
-   */
+  // Every field emptied. A `decide` that passes this reads a field `gather` no longer produces, or
+  // returns before it looks.
   const nothing = {
     title: '',
     announcerOnLoad: [],
@@ -127,8 +86,6 @@ describe('NEGATIVE CONTROL — every check refuses a page that produced nothing'
     promptHeading: null,
     answerGroup: null,
     answerOptions: [],
-    // 2.9's two walks of the quiz. Empty is "the quiz was never reached twice", which is exactly
-    // the state in which a differential proves nothing.
     runs: [],
     choiceAnswered: false,
     choiceVerdict: null,
@@ -181,8 +138,6 @@ describe('NEGATIVE CONTROL — every check refuses a page that produced nothing'
     afterDestination: undefined,
     prose: [],
     wayOut: [],
-    // The live table, the API-down page and the replay. Every one of these is the shape its
-    // `gather` returns when the page never got going: no live-region write, no step taken, no hand.
     log: [],
     mutations: [],
     steps: [],
@@ -209,8 +164,6 @@ describe('NEGATIVE CONTROL — every check refuses a page that produced nothing'
     figures: null,
     situation: null,
     analysisFigures: null,
-    // 4.2's two submits and 7.4's sweep. Empty is "the form was never submitted" and "the page had
-    // nothing behind the sheet" — the two states in which each of them proves nothing at all.
     summary: null,
     fields: [],
     narrowed: {},
@@ -229,10 +182,6 @@ describe('NEGATIVE CONTROL — every check refuses a page that produced nothing'
   }
 });
 
-// ---------------------------------------------------------------------------
-// The pure helpers
-// ---------------------------------------------------------------------------
-
 describe('isBareName', () => {
   it('accepts a name a reader can act on', () => {
     for (const name of ['Fold', 'Lesson 3: All-Ins and Side Pots', 'Skip to main content', 'ace of hearts']) {
@@ -241,9 +190,7 @@ describe('isBareName', () => {
   });
 
   it('NEGATIVE CONTROL — refuses nothing, a bare index, a glyph and the role word', () => {
-    // Every one of these is a real shape from this app's markup: the `01` index spans, the `›`
-    // chevrons and the `×` close glyph are all `aria-hidden`, and each of them becomes a control's
-    // whole accessible name the moment that attribute is dropped.
+    // Real shapes from this app, from `aria-hidden` index spans, chevrons and the close glyph.
     for (const name of ['', '   ', '3', '01', '›', '×', 'link', 'Button', 'image']) {
       assert.equal(isBareName(name), true, JSON.stringify(name));
     }
@@ -264,8 +211,6 @@ describe('announcesActionAndCost', () => {
   });
 
   it('NEGATIVE CONTROL — refuses the run-together string the aria-label exists to prevent', () => {
-    // "Fold0 units" is this button's real `textContent`: the word and the cost are two spans. It is
-    // what a reader hears the moment the `aria-label` is removed, and 3.14 names it as a FAIL.
     assert.equal(announcesActionAndCost('Fold0 units'), false);
     assert.equal(announcesActionAndCost('Raise to 70'), false, 'no cost, so nothing about the price');
     assert.equal(announcesActionAndCost('Fold'), false, 'no cost at all');
@@ -304,10 +249,6 @@ describe('the card vocabulary', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Targeted controls, on a representative sample
-// ---------------------------------------------------------------------------
-
 const HEALTHY_LANDMARKS = [
   { role: 'banner', name: 'Site' },
   { role: 'navigation', name: 'Primary' },
@@ -325,9 +266,7 @@ describe('NEGATIVE CONTROL — G3, the landmark inventory', () => {
   });
 
   it('fires on the contentinfo losing its name — the defect writing this check found', () => {
-    // For as long as the footer's visually-hidden `h2` merely sat inside the landmark, the computed
-    // name was the empty string, and G3 quoted a name the app did not have. A heading INSIDE a
-    // landmark does not name it.
+    // A heading inside a landmark does not name it.
     const landmarks = HEALTHY_LANDMARKS.map((landmark) =>
       landmark.role === 'contentinfo' ? { ...landmark, name: '' } : landmark,
     );
@@ -401,8 +340,7 @@ describe('NEGATIVE CONTROL — G8, the title announced twice', () => {
   });
 
   it('fires when the framework announcer survives the stand-down', () => {
-    // Next 16's own announcer is assertive and lives in a shadow root, so a reader hears the title
-    // twice and the second one interrupts. Invisible to every static check.
+    // Next 16's own announcer is assertive and in a shadow root.
     const verdict = check.decide({ ...healthy, frameworkAnnouncersAfterNav: 1 });
     assert.equal(verdict.ok, false);
     assert.match(verdict.detail, /announced twice/u);
@@ -446,8 +384,6 @@ describe('NEGATIVE CONTROL — 3.8, a hidden card that names itself', () => {
   });
 
   it('fires on a value that is only in the markup', () => {
-    // The case that matters most: the name is correct today and the value is sitting in a `data-`
-    // attribute, one ARIA change away from being read out.
     const verdict = check.decide({
       faceDown: [
         {
@@ -483,10 +419,8 @@ describe('NEGATIVE CONTROL — 3.14, an action button named from its own content
   });
 
   it('fires when the aria-label is removed, even though the computed name still reads well', () => {
-    // The regression this check was rewritten for. With the label gone Chrome names the button from
-    // its two spans and produces "Fold 0 units" — a joined name that satisfies any pattern written
-    // against the name alone, while the reader has lost the sentence saying what folding does. The
-    // first version of this check passed a build with every action label deleted.
+    // Without the label Chrome names the button "Fold 0 units" from its two spans, which a name-only
+    // check passes.
     const stripped = healthy.actionButtons.map((button) => ({ ...button, ariaLabel: '' }));
     const verdict = check.decide({ actionButtons: stripped });
     assert.equal(verdict.ok, false);
@@ -600,7 +534,6 @@ describe('NEGATIVE CONTROL — 7.2, a modal that leaks', () => {
 
 describe('NEGATIVE CONTROL — 7.4, a background the sheet only ASKED to be left alone', () => {
   const check = checkFor('J7.4');
-  /** One content-bearing element behind the sheet, ignored by the tree because it is inert. */
   const gone = (tag, text) => ({
     tag,
     ancestor: false,
@@ -613,8 +546,7 @@ describe('NEGATIVE CONTROL — 7.4, a background the sheet only ASKED to be left
   });
   const healthy = {
     background: [
-      // The sheet's own ancestors, which cannot be inerted without inerting the sheet: in the tree,
-      // and carrying no text of their own.
+      // The sheet's own ancestors cannot be inert. They stay in the tree with no text of their own.
       {
         tag: 'header',
         ancestor: true,
@@ -635,7 +567,6 @@ describe('NEGATIVE CONTROL — 7.4, a background the sheet only ASKED to be left
         role: '',
         name: '',
       },
-      // The one exemption, empty.
       {
         tag: 'div',
         ancestor: false,
@@ -866,8 +797,6 @@ describe('NEGATIVE CONTROL — 2.6, the correction announced after the rule', ()
   });
 
   it('fires when the two are described the other way round', () => {
-    // Not a nicety: the reader hears the tolerance rule for an answer that was never a number, and
-    // the sentence explaining why arrives after it.
     const described = [...healthy.numericInvalid.described].reverse();
     const verdict = check.decide({
       ...healthy,
@@ -905,8 +834,7 @@ describe('NEGATIVE CONTROL — 2.4, the answer group that reads the question aga
   });
 
   it('fires when the legend repeats the prompt — the defect `QuizRunner` names in place', () => {
-    // The one shape inside the tree that makes a reader say the question twice: the group is
-    // announced on entry, so a group named by the prompt is the prompt again.
+    // A group named by the prompt is the prompt again on entry.
     const verdict = check.decide({ ...healthy, answerGroup: { ...healthy.answerGroup, name: PROMPT } });
     assert.equal(verdict.ok, false);
     assert.match(verdict.detail, /in the accessibility tree 2 times/u);
@@ -971,8 +899,7 @@ describe('NEGATIVE CONTROL — 2.9, a score at the end of a quiz', () => {
   });
 
   it('fires on a verdict that carries no number at all — which no wording scan would catch', () => {
-    // The whole reason this row is decided by difference. "Every answer matched." has no digit, no
-    // percentage, no "out of", and is a mark on the learner all the same.
+    // "Every answer matched." has no digit and is still a mark.
     const runs = [
       run(true, 1, MATCHED, ' Every answer matched.'),
       run(false, 0, MISSED, ' Some answers did not match.'),
@@ -1001,8 +928,7 @@ describe('NEGATIVE CONTROL — 2.9, a score at the end of a quiz', () => {
   });
 
   it('refuses two runs that never diverged, rather than reading their agreement as a pass', () => {
-    // The control against the control. Two identical runs agree about a scoreboard too, so a
-    // differential that did not prove its own divergence would pass the very app it exists to fail.
+    // Two identical runs would agree about a scoreboard too.
     const runs = [run(true, 1, MATCHED), run(false, 1, MATCHED)];
     const verdict = check.decide({ runs });
     assert.equal(verdict.ok, false);
@@ -1017,24 +943,10 @@ describe('NEGATIVE CONTROL — 2.9, a score at the end of a quiz', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// The live table, the API-down page and the replay
-//
-// Every fixture below is a hand-built copy of what the real `gather` produced against the running
-// app — the sentences are the ones measured in Chrome 151 on a real hand — and each control breaks
-// exactly one thing in it. The blanket "refuses a page that rendered nothing" suite above cannot
-// catch the interesting failures here: a live table that says the wrong thing, in the wrong order,
-// or twice, is a page that rendered perfectly.
-// ---------------------------------------------------------------------------
+// Fixtures copied from real `gather` output in Chrome 151, each control breaking one thing.
 
-/**
- * One write into one live region, as `SPEECH_PROBE` records it.
- *
- * `recovered` is false here because these are texts a region was observed HOLDING. The recovered
- * case — a value read back out of a `characterData` old value, which existed inside one React
- * commit and never painted — has its own control under 3.3, and it is the difference between a
- * sentence a reader could hear and one that was only ever in a component's props.
- */
+// `recovered` is false, because these texts were observed held. The recovered case has its own control
+// under 3.3.
 const wrote = (key, text, at, live = 'polite') => ({
   text,
   live,
@@ -1044,22 +956,14 @@ const wrote = (key, text, at, live = 'polite') => ({
   recovered: false,
 });
 
-/**
- * A region key, composed rather than written whole.
- *
- * `SPEECH_PROBE` keys a region by its nearest three ancestor class names joined with `>`, and the
- * result is a 25-to-50 character `prl-…` token — which `scripts/supply-chain/secret-scan.mjs`
- * reports as a `secret-literal`, correctly by its own rules. Silencing that with a
- * `prl-allow-secret` pragma would be a person asserting something about a credential; there is no
- * credential here, so the literal is built from its parts instead.
- */
+// Composed from parts, because a whole `prl-` key of 25 to 50 characters is a `secret-literal` to
+// `scripts/supply-chain/secret-scan.mjs`.
 const regionKey = (...classNames) => classNames.join('>');
 
 const CONNECTION = regionKey('prl-panel__body', 'prl-play__connection-lines', 'prl-note');
 const NARRATION = regionKey('prl-play__main', 'prl-play__table', 'prl-live-region');
 const TURN = regionKey('prl-play__main', 'prl-play__decision', 'prl-live-region');
 
-/** A healthy hand, as measured: connect, blinds, a bot, the turn, the Coach, a fold, the end. */
 const HEALTHY_HAND = () => ({
   opened: 'Deal me in',
   dealt: 'Deal me in',
@@ -1083,8 +987,6 @@ const HEALTHY_HAND = () => ({
   ],
   foldFocus: { onDocument: false, role: 'status', name: 'Your decision is with the server' },
   mutations: [],
-  // 3.3: the narration region has to be in the document BEFORE the hand is dealt, or its first
-  // sentence arrives inside the node that holds it and nothing is notified of a change.
   regionsBeforeDeal: [CONNECTION, NARRATION, TURN],
   log: [
     wrote(CONNECTION, 'Preparing: reading your session, then finding or creating your private room.', 502),
@@ -1119,9 +1021,6 @@ describe('NEGATIVE CONTROL — 3.1, the connection that never says it is live', 
   });
 
   it('fires when the cleared tab reconnected instead of offering a first visit', () => {
-    // A drive with a cleared cookie jar that still came back to a table resumed one with no session
-    // behind it. Said as that, rather than as "no Deal me in control", which sends a reader looking
-    // for a page that did not render.
     const evidence = { ...HEALTHY_HAND(), path: 'reconnected', opened: null };
     const verdict = check.decide(evidence);
     assert.equal(verdict.ok, false);
@@ -1157,8 +1056,7 @@ describe('NEGATIVE CONTROL — 3.2, the caret dropped while setting the table up
   });
 
   it('fires when the landing place has no computed name — the defect this found for real', () => {
-    // `role="status"` takes no name from its own contents, so before the `aria-label` in
-    // LiveTable.tsx the caret arrived at a node the tree describes as an unnamed status.
+    // `role="status"` takes no name from its contents.
     const evidence = HEALTHY_HAND();
     evidence.steps[0].focus = { onDocument: false, role: 'status', name: '' };
     assert.ok(refuses(check, evidence));
@@ -1185,18 +1083,14 @@ describe('NEGATIVE CONTROL — 3.3, the deal nobody hears', () => {
   });
 
   it('fires when the narration region was not there yet — the first half of the real defect', () => {
-    // Measured before the fix: at the moment "Deal the next hand" was pressed the document held the
-    // route announcer, the connection line and the turn region, and no table narration region at
-    // all. A live region inserted already holding its sentence is announced by nothing.
+    // A live region inserted already holding its sentence is announced by nothing.
     const evidence = HEALTHY_HAND();
     evidence.regionsBeforeDeal = [CONNECTION, TURN];
     assert.ok(refuses(check, evidence));
   });
 
   it('fires when the deal stands alone and the blinds take it back — the second half', () => {
-    // Two writes for ONE table notice. A polite region is read when the notification is serviced
-    // rather than when it is posted, so the reader hears the blinds and never hears the deal. A
-    // first version of this check passed exactly this evidence.
+    // Two writes for one notice. The reader hears the blinds and never the deal.
     const evidence = HEALTHY_HAND();
     const at = evidence.log.findIndex((entry) => /^A new hand was dealt\./u.test(entry.text));
     evidence.log.splice(
@@ -1236,9 +1130,7 @@ describe('NEGATIVE CONTROL — 3.3, the deal nobody hears', () => {
   });
 
   it('fires when the deal is left stapled to the front of the events after it', () => {
-    // The defect on the other side, and the one 3.17 exists for: `role="status"` is atomic, so a
-    // sentence left in front of later narration is read again on every event for the rest of the
-    // hand.
+    // `role="status"` is atomic, so a sentence left in front is re-read on every event (3.17).
     const evidence = HEALTHY_HAND();
     evidence.log = evidence.log.map((entry) =>
       entry.key === NARRATION && entry.at > 2368
@@ -1329,8 +1221,7 @@ describe('NEGATIVE CONTROL — 3.6, the turn announced again on every state fram
   });
 
   it('fires on a rewrite with IDENTICAL text, which changes nothing on screen', () => {
-    // The half a text-only check cannot see, and the reason `SPEECH_PROBE` counts mutations: a
-    // region rewritten with the same sentence is announced again by several readers.
+    // A same-text rewrite is re-announced by several readers.
     const evidence = HEALTHY_HAND();
     evidence.mutations = [
       { key: TURN, at: 5000 },
@@ -1428,23 +1319,15 @@ describe('NEGATIVE CONTROL — 3.18, the hand that ends in silence', () => {
 describe('NEGATIVE CONTROL — 3.19, a refusal nobody is interrupted for', () => {
   const check = checkFor('J3.19');
   const DECISION = regionKey('prl-play__stage', 'prl-play__main', 'prl-play__decision');
-  // Measured in Chrome 151 with "(not_your_turn)" after the server's sentence; the page has since
-  // stopped printing contract codes (audit at 308fadf), and this is the same alert without it.
+  // The page stopped printing contract codes after the audit at 308fadf.
   const REFUSAL = '▲Watch outThe server refused itIt is not your turn to act. Nothing was applied.';
 
-  /**
-   * The hand 3.19's fixture plays: everything `HEALTHY_HAND` records, plus a second decision out of
-   * the same seat and the refusal it earned. The strings are the ones measured in Chrome 151
-   * against the running server.
-   */
   const REFUSED_HAND = () => {
     const evidence = HEALTHY_HAND();
     evidence.doubleAct = { name: 'fold, costs 0 units, gives up the hand', stillEnabled: true };
     evidence.log = [
       ...evidence.log,
-      // The `role="status"` wrapper takes the same text politely; the alert inside it is the one
-      // that interrupts. Both are in the log, which is why the check looks for an assertive ONE
-      // rather than for the absence of a polite one.
+      // The `role="status"` wrapper repeats the text politely, so the check looks for one assertive write.
       wrote(`${DECISION}#What happened to your decision`, REFUSAL, 14_010),
       { text: REFUSAL, live: 'assertive', role: 'alert', key: DECISION, at: 14_011, recovered: false },
     ];
@@ -1492,8 +1375,6 @@ describe('NEGATIVE CONTROL — 3.19, a refusal nobody is interrupted for', () =>
   });
 
   it('fires when something else on the screen interrupts as well', () => {
-    // "…and it is the only thing on this screen that interrupts." A second assertive region is how
-    // a reader learns to switch the surface off, which costs them this one.
     const evidence = REFUSED_HAND();
     evidence.log = evidence.log.map((entry) =>
       /^The hand is complete\./u.test(entry.text) ? { ...entry, live: 'assertive', role: 'alert' } : entry,
@@ -1504,10 +1385,7 @@ describe('NEGATIVE CONTROL — 3.19, a refusal nobody is interrupted for', () =>
   });
 
   it('refuses a run whose second press met a disabled control, rather than reading it as silence', () => {
-    // The control against the fixture rotting. If the client ever disabled the button synchronously
-    // the second decision would never be sent, there would be nothing for the server to refuse, and
-    // a check that only looked for a refusal would report the app broken — or, worse, a later edit
-    // could make it report a pass over a hand where nothing was ever refused.
+    // If the client disabled the button synchronously, nothing would be sent to refuse.
     const evidence = REFUSED_HAND();
     evidence.doubleAct = { name: 'fold, costs 0 units, gives up the hand', stillEnabled: false };
     const verdict = check.decide(evidence);
@@ -1552,8 +1430,6 @@ describe('NEGATIVE CONTROL — 3.20, an outage the status line talks over', () =
   });
 
   it('fires when the polite status line still says the table is live', () => {
-    // The exact defect the alert was added for: an assertive alert and a polite status that
-    // disagree is worse than either alone.
     const evidence = OUTAGE();
     evidence.log.push(
       wrote(CONNECTION, 'Live. Everything on this screen is the server’s own view of the table.', 900),
@@ -1562,7 +1438,6 @@ describe('NEGATIVE CONTROL — 3.20, an outage the status line talks over', () =
   });
 });
 
-/** A replay of a hand that was really played: hero's two cards up, five sealed hands down. */
 const HEALTHY_REPLAY = () => ({
   hand: 'hand_kape52cnpf7535n7jrgptkqe7j',
   attempts: ['hand_kape52cnpf7535n7jrgptkqe7j'],
@@ -1723,7 +1598,6 @@ describe('NEGATIVE CONTROL — 6.6, a sealed hand named in the replay', () => {
 describe('NEGATIVE CONTROL — 8.2, a fallback notice a reader cannot hear', () => {
   const check = checkFor('J8.2');
 
-  /** `/learn` served by the second web app, the one with no API behind it. */
   const BUNDLED_COPY = () => ({
     notice: {
       text:
@@ -1753,9 +1627,7 @@ describe('NEGATIVE CONTROL — 8.2, a fallback notice a reader cannot hear', () 
   });
 
   it('fires when the page rendered live data after all — the harness lying to itself', () => {
-    // The control that matters most here. If the second web app reaches an API, this assertion
-    // audits the ordinary page and proves nothing, so "no notice" has to be a failure rather than
-    // a pass. Demonstrated for real by pointing the offline app at the live API.
+    // If the second web app reaches an API, "no notice" must fail.
     const evidence = BUNDLED_COPY();
     evidence.notice = null;
     evidence.noticeAx = null;
@@ -1764,8 +1636,6 @@ describe('NEGATIVE CONTROL — 8.2, a fallback notice a reader cannot hear', () 
   });
 
   it('fires when the sentence is a visual-only badge', () => {
-    // The row's own words. Strip the decorative glyphs and a tone marker plus a title is what is
-    // left; a reader who cannot see the colour is told nothing about what they are reading.
     const evidence = BUNDLED_COPY();
     evidence.notice.spoken = 'Watch outThis index is not live';
     assert.ok(refuses(check, evidence));
@@ -1811,13 +1681,7 @@ describe('NEGATIVE CONTROL — 8.2, a fallback notice a reader cannot hear', () 
 describe('NEGATIVE CONTROL — 6.7, a failing deck proof nobody is interrupted for', () => {
   const check = checkFor('J6.7');
 
-  /**
-   * One hand seen twice: honestly, and again through the corrupting proxy.
-   *
-   * Modelled on a real run — hand `hand_ebv…`, nine proved positions, salt byte 703 `6`->`7` at
-   * deck position 1 — because the shape of this evidence is the shape of the fixture, and a
-   * synthetic that drifted from it would be testing a `decide` nothing produces.
-   */
+  // Modelled on a real run with nine proved positions, salt byte 703 `6`->`7` at deck position 1.
   const SEEN_TWICE = () => ({
     hand: 'hand_ebvsgm6k5snqqbwofbus52xjgn',
     tried: [{ id: 'hand_ebvsgm6k5snqqbwofbus52xjgn', mutated: true, why: null }],
@@ -1886,8 +1750,6 @@ describe('NEGATIVE CONTROL — 6.7, a failing deck proof nobody is interrupted f
   });
 
   it("fires when the failure is not an alert — the row's own subject", () => {
-    // Demonstrated for real: `role="alert"` deleted from `CommitmentVerifier`'s `mismatch` branch
-    // and the web app rebuilt failed exactly this, and nothing else.
     const evidence = SEEN_TWICE();
     evidence.corrupted.alert = null;
     assert.ok(refuses(check, evidence));
@@ -1918,9 +1780,7 @@ describe('NEGATIVE CONTROL — 6.7, a failing deck proof nobody is interrupted f
   });
 
   it('fires when the PROXY corrupted nothing — the fixture failing, not the app (REGRESSION)', () => {
-    // The one that matters most. A proxy that silently forwards the bytes unchanged renders a
-    // perfectly good proof, and a screen with no alert on it cannot be told apart from a defect.
-    // Demonstrated for real by stubbing the corruption out: 0 reviews across 4 hands, named.
+    // A proxy that forwards bytes unchanged renders a good proof. That must fail, not pass.
     const evidence = SEEN_TWICE();
     evidence.hand = null;
     evidence.record = null;
@@ -1929,8 +1789,7 @@ describe('NEGATIVE CONTROL — 6.7, a failing deck proof nobody is interrupted f
   });
 
   it('says, when it fails, how many DISTINCT hands it saw and what each drive pressed (REGRESSION)', () => {
-    // CI run 43245665934: "Of 1 hand(s) in this session 3 dealt no board card", after two drives
-    // that found no "Deal me in" on a reconnected page and pressed nothing. Neither half was said.
+    // CI run 43245665934.
     const evidence = SEEN_TWICE();
     evidence.hand = null;
     evidence.record = null;
@@ -1975,8 +1834,7 @@ describe('NEGATIVE CONTROL — 6.7, a failing deck proof nobody is interrupted f
   });
 
   it('fires when the corruption moved the BINDING rather than the hash', () => {
-    // `other-hand` says "this proof is for a different hand", which is a different sentence about a
-    // different situation. A fixture that reached it would be checking the wrong branch.
+    // `other-hand` is a different branch.
     const evidence = SEEN_TWICE();
     evidence.corrupted.chip = 'different hand';
     assert.ok(refuses(check, evidence));
@@ -1990,17 +1848,13 @@ describe('NEGATIVE CONTROL — 6.7, a failing deck proof nobody is interrupted f
   });
 
   it('fires when a proof that HOLDS interrupts', () => {
-    // The other direction, and it is a real defect rather than a fixture one: an alert on the
-    // ordinary page teaches a reader to turn the surface off before the one that matters arrives.
     const evidence = SEEN_TWICE();
     evidence.honest.alert = { spoken: 'Error — the proof did not check out', markup: null };
     assert.ok(refuses(check, evidence));
   });
 
   it('fires when the verdict was computed by the SERVER, so the alert arrives with its document', () => {
-    // An alert that is in the document the server sent announces nothing — the platform is notified
-    // of a change to a region it already knows about. That is the 3.3 defect, in the one branch on
-    // this screen that is allowed to interrupt.
+    // An alert already in the server HTML announces nothing (3.3).
     const evidence = SEEN_TWICE();
     evidence.html = { ...evidence.html, pending: false, carriesAlert: true, carriesReason: true };
     assert.ok(refuses(check, evidence));
@@ -2075,17 +1929,11 @@ describe('figureDefect — a number a reader cannot place', () => {
 
 describe('SPEECH_PROBE', () => {
   it('is installed before the page runs and records both writes and mutations', () => {
-    // Not a behavioural test — it runs in Chrome, not here. What is asserted is the contract
-    // `ax-tree-audit.mjs` and every live-table check depend on: the two logs exist under one global,
-    // and the probe records the OLD value of a region that was overwritten in the same frame, which
-    // is the only way a sentence React coalesced away can be told from one that was never written.
+    // Runs in Chrome, not here. This pins the probe's contract.
     assert.match(SPEECH_PROBE, /window\.__prlSpeech = \{ log, mutations \}/u);
     assert.match(SPEECH_PROBE, /characterDataOldValue: true/u);
     assert.match(SPEECH_PROBE, /role="alert"/u);
     assert.match(SPEECH_PROBE, /window\.__prlSpeechReset/u);
-    // The two additions 3.3 rests on: a recovered old value is MARKED as one, so a check cannot
-    // count a string that never painted as an announcement; and the set of regions that exist right
-    // now is readable, so "was the region there before the event" is a question with an answer.
     assert.match(SPEECH_PROBE, /recovered: recovered === true/u);
     assert.match(SPEECH_PROBE, /window\.__prlSpeechRegions/u);
   });
@@ -2094,16 +1942,9 @@ describe('SPEECH_PROBE', () => {
 describe('NEGATIVE CONTROL — 3.6, ten seconds of state frames on one turn', () => {
   const check = checkFor('J3.6');
 
-  /*
-    The `SPEECH_PROBE` key for the decision band's live region, assembled from its two parts.
-
-    Written as a join rather than as one literal because `security:secrets` flags any 34-character
-    `prl-`-prefixed string as a possible credential — which this is not, and which is a better
-    trade than teaching the scanner an exception.
-  */
+  // Joined, because `security:secrets` flags a 34-character `prl-` string as a credential.
   const TURN_REGION_KEY = ['prl-play__decision', 'prl-live-region'].join('>');
 
-  /** A turn that opened at t=1000 and was sat on without the region being touched. */
   const dwelt = (dwellMs) => ({
     reachedTurn: true,
     turnOpenedAt: 1_000,
@@ -2116,24 +1957,13 @@ describe('NEGATIVE CONTROL — 3.6, ten seconds of state frames on one turn', ()
     assert.equal(check.decide(dwelt(10_000)).ok, true);
   });
 
-  /**
-   * The flake this tolerance exists for.
-   *
-   * One run of `pnpm run test:ax` failed with "waited 9999ms on its own turn, not the 10000ms this
-   * assertion asks for". The dwell is `setTimeout(10_000)` between two `Date.now()` reads:
-   * `setTimeout` is a minimum by specification, timer resolution is coarsened, and the wall clock
-   * can be stepped mid-measurement. Nothing the assertion is about can differ between 9,999ms and
-   * 10,000ms of whole-state frames, and a release gate that goes red on a 1ms shortfall costs more
-   * than it catches.
-   */
+  // One `test:ax` run failed on a 9999ms dwell.
   it('passes a dwell one millisecond short, which is what it used to fail on', () => {
     assert.equal(check.decide(dwelt(9_999)).ok, true);
     assert.equal(check.decide(dwelt(9_800)).ok, true, 'within the stated tolerance');
   });
 
   it('still refuses a dwell that was genuinely cut short', () => {
-    // The guard is real: a short wait can miss a re-announcement and then report a silence it
-    // never observed. Anything that actually shortened the dwell is off by seconds.
     for (const dwellMs of [0, 500, 5_000, 9_000, 9_700]) {
       const verdict = check.decide(dwelt(dwellMs));
       assert.equal(verdict.ok, false, `${dwellMs}ms should not count as ten seconds`);
@@ -2142,8 +1972,7 @@ describe('NEGATIVE CONTROL — 3.6, ten seconds of state frames on one turn', ()
   });
 
   it('still fires on the defect itself, at a dwell inside the tolerance', () => {
-    // The tolerance must not have bought a pass for the thing being checked. A region rewritten
-    // during the dwell is refused whether the dwell was 10,000ms or 9,999ms.
+    // The tolerance must not pass a region rewritten during the dwell.
     const repeated = {
       ...dwelt(9_999),
       log: [
@@ -2155,7 +1984,6 @@ describe('NEGATIVE CONTROL — 3.6, ten seconds of state frames on one turn', ()
     assert.equal(verdict.ok, false);
     assert.match(verdict.detail, /rewritten/u);
 
-    // And the same for the mutation half, which is the stronger of the two.
     const churned = {
       ...dwelt(9_999),
       mutations: [{ key: TURN_REGION_KEY, at: 5_000 }],
@@ -2165,13 +1993,8 @@ describe('NEGATIVE CONTROL — 3.6, ten seconds of state frames on one turn', ()
   });
 });
 
-/**
- * J2.5 and J2.7 find the quiz's verdict by the opening of its sentence, so the opening they look for
- * has to be the one the app writes. The numeric sentence was reworded — "35.0 % is outside the
- * tolerance of 33.3 %" named the target as the tolerance — and an opening pattern left on the old
- * wording finds no region, which J2.7 reports as "checking a numeric answer wrote no comparison".
- * So the pattern is driven by the app's own sentence-builder rather than by a copy of its output.
- */
+// The opening patterns are driven by the app's own sentence builder, so a reworded verdict cannot
+// leave J2.5 and J2.7 matching nothing.
 describe('the quiz verdict openings match what the app writes', () => {
   const tail = ' The server could not be reached, so this comparison was made in your browser.';
 
@@ -2191,13 +2014,8 @@ describe('the quiz verdict openings match what the app writes', () => {
   });
 });
 
-/**
- * J2.5 used to click a radio and read the verdict, because a radio change answered the question —
- * and so a keyboard reader arrowing through four options answered and posted three of them (UX audit
- * at 6b3886e, Minor 2). The quiz now answers only on "Check answer", and J2.5 reads the region
- * between the two steps: a verdict that is already there after a mere selection is the old
- * behaviour back, and must fail rather than pass on the strength of the later press.
- */
+// The quiz answers only on "Check answer" (UX audit at 6b3886e, Minor 2). A verdict after a mere
+// selection must fail.
 describe('J2.5: selecting is not answering', () => {
   const check = checkFor('J2.5');
   const answered = {
@@ -2246,8 +2064,6 @@ describe('NEGATIVE CONTROL — the live-hand fixture, from either state /play op
   });
 
   it('reads a reconnect off the manual controls, a disabled deal included', () => {
-    // "Deal the next hand" renders disabled until a frame says the table is between hands, and it
-    // is still the page telling us it reconnected.
     assert.equal(
       tableStartPath(snapshot({ controls: [button('Deal the next hand', false), button('Stand up')] })),
       'reconnected',
@@ -2256,10 +2072,7 @@ describe('NEGATIVE CONTROL — the live-hand fixture, from either state /play op
   });
 
   it('waits while the page says it is reconnecting, though "Deal me in" is enabled (REGRESSION)', () => {
-    // `phase` is still `idle` during the reconnect, so "Deal me in" is on screen and pressable. A
-    // reader of the controls alone records a first visit for a page that was reconnecting.
-    // Demonstrated: with the `reconnecting` test removed from `tableStartPath`, this returns
-    // 'first visit'.
+    // `phase` is still `idle` during the reconnect, so "Deal me in" is pressable.
     assert.equal(tableStartPath(snapshot({ reconnecting: true, controls: [button('Deal me in')] })), null);
   });
 
@@ -2271,7 +2084,7 @@ describe('NEGATIVE CONTROL — the live-hand fixture, from either state /play op
   });
 
   it('counts a boardless hand once however many times the list is read (REGRESSION)', () => {
-    // The old tally added one per read and took the list length as a maximum: 1 hand, 3 boardless.
+    // The old tally counted 1 hand read three times as 3 boardless.
     const board0 = [{ id: 'hand_a', board: 0 }];
     assert.deepEqual(tallyListedHands([board0, board0, board0]), { looks: 3, listed: 1, boardless: 1 });
     assert.deepEqual(tallyListedHands([board0, [{ id: 'hand_b', board: 3 }, ...board0]]), {

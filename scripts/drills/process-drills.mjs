@@ -1,37 +1,10 @@
 /**
- * The drills that kill, restart or half-deploy the process, and check what a learner at a table
- * experienced while it happened.
+ * The drills that kill, restart or half-deploy the process while a learner is at a table.
  *
- * ## Why these are not covered by `apps/api/test/shutdown.test.ts`
- *
- * That suite is excellent and it stops one step short. It proves a drain finishes — an idle
- * socket, a socket that never said hello, a keep-alive request mid-flight, a peer that ignores
- * the close frame — and every one of its cases kills a process whose tables are EMPTY. Nothing
- * in the repository has ever signalled a process that was holding chips in a pot. The two
- * questions that only a mid-hand kill can answer are the two that matter to a learner:
- *
- *   1. does the hand's money survive the restart, or does a seat come back with the wrong stack;
- *   2. does a client learn that the server is restarting, or does it see a dropped network.
- *
- * So `sigterm-mid-hand` deals a real hand against a real bot, commits chips to a real pot,
- * signals the process at a decision point, and then reads the chips back out of a SECOND process
- * that was started against the same database. `sigterm-idle` and `silent-tcp-during-drain` are
- * deliberately the same shape as two of the shutdown suite's cases: they are the control that
- * says the drain itself is still healthy on the day a mid-hand drill fails, which is what turns
- * "the deploy broke a hand" into a diagnosis rather than a mystery.
- *
- * ## Why the restart half is always a second process
- *
- * A drill that killed a server and asserted things about the same server's memory would be
- * asserting about a corpse. Every recovery assertion here is made through a new process that
- * has nothing but the durable rows — which is exactly the carry a real deploy gets, and the
- * only way to catch state that lived in memory and was quietly assumed to be persisted.
- *
- * ## What these drills do NOT prove
- *
- * Nothing about a multi-instance deployment: there is one API process at a time here, so
- * nothing about a rolling deploy in which two versions serve the same table concurrently is
- * exercised, and nothing about a load balancer's own draining behaviour is either.
+ * `apps/api/test/shutdown.test.ts` only drains empty tables. These signal a process holding chips
+ * in a pot and check, through a SECOND process on the same database, that the money survived and
+ * that the client was told 4503 rather than seeing a dropped network. One API process at a time,
+ * so rolling deploys and load balancer draining are not exercised.
  */
 
 import { spawn } from 'node:child_process';
@@ -64,28 +37,16 @@ import {
 } from './invariants.mjs';
 
 /**
- * The WebSocket close code the server owes a client during a deploy.
- *
- * `WS_CLOSE.serverShuttingDown` in @prl/contracts. Written out rather than imported for the
- * reason in `harness.mjs`: this suite may not import the workspace. A client that receives
- * 1006 instead cannot tell a deploy from a lost network, which is the entire reason the code
- * exists — `apps/web/src/lib/table-socket.ts` has a "the server is restarting" state keyed on
- * exactly this number.
+ * `WS_CLOSE.serverShuttingDown` in @prl/contracts, written out because this suite may not import
+ * the workspace. `apps/web/src/lib/table-socket.ts` keys its "restarting" state on it.
  */
 const WS_SERVER_SHUTTING_DOWN = 4503;
 
-/** How long a fresh process may take to become ready before that is itself a finding. */
 const READY_BUDGET_MS = 20_000;
 
-/** The seat the drills' own client always takes, so an opponent's action is identifiable. */
 const LEARNER_SEAT = 0;
 
-/**
- * Every check a drill makes on the transcript of one client.
- *
- * Collected in one place because every drill needs all of it and a drill that quietly omitted
- * the hole-card check would look identical in the report to one that ran it.
- */
+/** All checks in one place, so no drill can quietly omit the hole-card check. */
 function scanClient(client, label, findings) {
   for (const [index, entry] of client.frames.entries()) {
     findings.push(...scanForSecrets(entry.frame, `${label} frame ${index}`));
@@ -98,13 +59,7 @@ function scanClient(client, label, findings) {
   }
 }
 
-/**
- * The published hashes a server log or transcript is allowed to contain.
- *
- * Commitment roots and Merkle proof nodes are 64 hex characters and are published on purpose;
- * a deck salt is also 64 hex characters and is not. Without this set the text scan would fire
- * on every hand, so it is built from the roots the client was actually shown.
- */
+/** Roots and proof nodes are public 64-hex values, like a salt, so only those this client saw pass. */
 function publishedHashes(client) {
   const allowed = new Set();
   const collect = (node, depth) => {
@@ -124,20 +79,14 @@ function publishedHashes(client) {
   return allowed;
 }
 
-/** `GET /rooms/:roomId`, with the id substituted the way the server's route pattern spells it. */
 function roomPath(roomId) {
   return ROUTES.room.replace(':roomId', roomId);
 }
 
-/** The units held by every member of a room, as the API reports them. */
 function memberUnits(room) {
   const members = Array.isArray(room?.members) ? room.members : [];
   return members.reduce((total, member) => total + (typeof member.stack === 'number' ? member.stack : 0), 0);
 }
-
-// ---------------------------------------------------------------------------
-// 1. SIGTERM while idle
-// ---------------------------------------------------------------------------
 
 export const sigtermIdle = {
   name: 'sigterm-idle',
@@ -173,9 +122,7 @@ export const sigtermIdle = {
     else report.evidence.push({ label: 'clean stop', text: complete.line });
     if (timedOut.found) report.failures.push(`the drain hit its deadline: ${timedOut.line}`);
 
-    // Correct readiness behaviour after the process is gone: the port must refuse, not hang.
-    // A socket that accepts and never answers is what turns one dead instance into a stalled
-    // load balancer.
+    // The port must refuse, not hang. A socket that accepts and never answers stalls a load balancer.
     const afterwards = await session.request(ROUTES.ready);
     if (afterwards.status !== 0) {
       report.failures.push(`/ready answered ${afterwards.status} after the process exited`);
@@ -185,7 +132,6 @@ export const sigtermIdle = {
       );
     }
 
-    // Bounded recovery: a replacement process on the same database.
     const replacement = await ctx.startServer();
     const readyIn = await measureUntil(async () => {
       const probe = await new Session(replacement.origin, ctx.webOrigin, 'Recovery probe').request(
@@ -202,10 +148,6 @@ export const sigtermIdle = {
     return report;
   },
 };
-
-// ---------------------------------------------------------------------------
-// 2. SIGTERM during an active hand
-// ---------------------------------------------------------------------------
 
 export const sigtermMidHand = {
   name: 'sigterm-mid-hand',
@@ -225,8 +167,7 @@ export const sigtermMidHand = {
       return report;
     }
 
-    // Act once, so there is money in the pot and an `actionSequence` past zero when the signal
-    // lands. A hand that has been dealt but never acted on is not meaningfully "in progress".
+    // Act once, so there is money in the pot and `actionSequence` is past zero.
     const view = await table.client.waitForTurn(20_000);
     if (view === null) {
       report.failures.push('the server never offered a decision, so the hand was not under way');
@@ -276,17 +217,15 @@ export const sigtermMidHand = {
     if (!complete.found) report.failures.push('the process never logged "shutdown complete"');
     else report.evidence.push({ label: 'clean stop', text: complete.line });
 
-    // Chips: nothing may have been created or destroyed in anything the client was shown.
     const ledger = chipLedger(table.client.views);
     report.failures.push(...ledger.findings);
     report.measurements.chipsInPlay = ledger.totals.at(-1) ?? null;
     scanClient(table.client, 'mid-hand client', report.failures);
     report.failures.push(...scanTextForSecrets(output, 'the API log', publishedHashes(table.client)));
 
-    // --- recovery, in a process that only has the rows ---
     const replacement = await ctx.startServer();
     const recovered = new Session(replacement.origin, ctx.webOrigin, 'Recovery');
-    // The same cookies, so this is the same learner returning to the same table.
+    // The same cookies, so this is the same learner returning.
     recovered.cookies = new Map(session.cookies);
     recovered.csrfToken = session.csrfToken;
     recovered.userId = session.userId;
@@ -324,8 +263,6 @@ export const sigtermMidHand = {
     const abandoned = logLine(replacement.output(), /interrupted/i);
     if (abandoned.found) report.evidence.push({ label: 'interrupted hand reconciled', text: abandoned.line });
 
-    // The strongest statement available: play a whole new hand on the recovered table and check
-    // the durable record of it balances.
     const dealt = await dealHand(reconnect, 20_000);
     if (dealt === null) {
       report.failures.push('the recovered table would not deal a new hand');
@@ -353,10 +290,6 @@ export const sigtermMidHand = {
   },
 };
 
-// ---------------------------------------------------------------------------
-// 3. WebSocket disconnect mid-hand
-// ---------------------------------------------------------------------------
-
 export const wsDisconnectMidHand = {
   name: 'ws-disconnect-mid-hand',
   title: 'WebSocket disconnect mid-hand',
@@ -381,12 +314,10 @@ export const wsDisconnectMidHand = {
     await sleep(400);
 
     const before = table.client.lastView;
-    // Dropped without a protocol-level goodbye, the way a lost network does it.
     table.client.terminate();
     await table.client.waitForClose(5_000);
     report.observations.push('the socket was dropped mid-hand without a shutdown handshake');
 
-    // The server must still be there and still know the hand.
     const health = await session.request(ROUTES.health);
     if (health.status !== 200) {
       report.failures.push(`the API answered ${health.status} on /health after a client vanished`);
@@ -416,7 +347,6 @@ export const wsDisconnectMidHand = {
       report.observations.push('the reconnected socket resumed the same hand, whole, with no delta protocol');
     }
 
-    // The two sockets saw the same money: one ledger across both transcripts.
     const ledger = chipLedger([...table.client.views, ...reconnect.views]);
     report.failures.push(...ledger.findings);
     report.measurements.chipsInPlay = ledger.totals.at(-1) ?? null;
@@ -443,10 +373,6 @@ export const wsDisconnectMidHand = {
   },
 };
 
-// ---------------------------------------------------------------------------
-// 4. A raw TCP connection opened during shutdown
-// ---------------------------------------------------------------------------
-
 export const silentTcpDuringDrain = {
   name: 'silent-tcp-during-drain',
   title: 'Raw TCP connections that say nothing, open at the signal and during the drain',
@@ -454,7 +380,6 @@ export const silentTcpDuringDrain = {
     const report = newReport();
     const server = await ctx.startServer();
 
-    /** Opens a connection and sends not one byte. */
     const openSilent = () =>
       new Promise((done, fail) => {
         const socket = connect(server.port, '127.0.0.1');
@@ -463,10 +388,7 @@ export const silentTcpDuringDrain = {
         socket.once('error', fail);
       });
 
-    // One before the signal and one after it. `trackConnections` in `server.ts` is installed
-    // before `listen()`, so both must be visible to the sweep; the second is the harder case,
-    // because it arrives while the server is already closing and is the one a port scanner or a
-    // load balancer's health probe produces during a deploy.
+    // One before the signal and one during the drain, which is what a health probe produces in a deploy.
     const early = await openSilent();
     report.observations.push(
       'a connection was open, accepted, and had sent nothing at the instant of SIGTERM',
@@ -478,7 +400,6 @@ export const silentTcpDuringDrain = {
       late = await openSilent();
       report.observations.push('a connection opened DURING the drain and sent nothing');
     } catch (error) {
-      // The listener may already be closed by then, which is also correct behaviour.
       report.observations.push(`a connection opened during the drain was refused (${error.code ?? 'error'})`);
     }
 
@@ -511,10 +432,6 @@ export const silentTcpDuringDrain = {
   },
 };
 
-// ---------------------------------------------------------------------------
-// 13. Restart with active and recoverable rooms, including every Legend
-// ---------------------------------------------------------------------------
-
 export const restartWithActiveRooms = {
   name: 'restart-with-active-rooms',
   title: 'Restart with active rooms, and all twelve AI Legend profiles rehydrating',
@@ -524,8 +441,7 @@ export const restartWithActiveRooms = {
     const session = new Session(server.origin, ctx.webOrigin, 'Legends drill');
     await session.createGuest();
 
-    // The server's own list, not a copy of it: a profile added or renamed must change what this
-    // drill covers, and a hard-coded list is how a thirteenth Legend goes untested for a year.
+    // The server's own list, so a new Legend is covered without editing this drill.
     const listed = await session.request('/api/v1/legends/profiles');
     const profileIds = (listed.body?.profiles ?? []).map((profile) => profile.id).filter(Boolean);
     report.measurements.profilesDeclared = profileIds.length;
@@ -534,7 +450,7 @@ export const restartWithActiveRooms = {
       return report;
     }
 
-    // At most five opponents fit at a table, so the twelve are spread over three matches.
+    // At most five opponents fit at a table.
     const rooms = [];
     for (let index = 0; index < profileIds.length; index += 5) {
       const group = profileIds.slice(index, index + 5);
@@ -558,7 +474,6 @@ export const restartWithActiveRooms = {
       `${profileIds.length} Legend profiles seated across ${rooms.length} rooms before the restart`,
     );
 
-    // One of the rooms gets a hand in flight, so the restart is not merely a restart of idle rows.
     const first = rooms[0];
     const client = new TableClient(session, first.roomId);
     await client.connect();
@@ -589,8 +504,7 @@ export const restartWithActiveRooms = {
 
     const restored = new Set();
     for (const [index, room] of rooms.entries()) {
-      // Reopening is what `RoomRegistry.ensureOpen` does, and it only happens when somebody asks
-      // for the room — so the read below is the recovery, not a check of it.
+      // `RoomRegistry.ensureOpen` reopens a room only when it is requested, so this read is the recovery.
       const body = await recovered.request(roomPath(room.roomId));
       if (!body.ok) {
         report.failures.push(`room ${room.roomId} could not be read after the restart: ${body.status}`);
@@ -623,9 +537,7 @@ export const restartWithActiveRooms = {
       report.failures.push(`a seat came back inert: ${unrecoverable.line}`);
     }
 
-    // A rehydrated row is not a rehydrated opponent. The only proof that the runner came back is
-    // that a bot acts on its own, so the recovered table is asked to deal and the hand is played
-    // out: a seat that is merely a row would sit there until the turn clock folded it.
+    // Only a bot acting on its own proves the runner came back. An inert seat waits for the turn clock.
     const reconnect = new TableClient(recovered, first.roomId);
     await reconnect.connect();
     const eventsFrom = reconnect.events.length;
@@ -635,12 +547,8 @@ export const restartWithActiveRooms = {
     } else {
       const played = await playHandToCompletion(reconnect, { budgetMs: 60_000 });
       const timeouts = eventsSince(reconnect, eventsFrom, 'seatTimedOut');
-      // A bot's action is NOT flagged `wasAutomatic`: that flag means the server acted for a
-      // seat that did not (a turn-clock fold), which is precisely what an inert seat produces.
-      // So a restored opponent is an `action` event from a seat that is not the learner's, and
-      // an inert one is a `seatTimedOut` — the two are checked separately below and mean
-      // opposite things. Asserting on `wasAutomatic` looked right and passed for the wrong
-      // reason on a table where every bot had failed to come back.
+      // `wasAutomatic` marks a turn-clock fold, which is what an inert seat produces. A restored bot
+      // is an `action` from a non-learner seat. Asserting on `wasAutomatic` passed with every bot dead.
       const botActions = eventsSince(reconnect, eventsFrom, 'action').filter(
         (event) => event.seat !== LEARNER_SEAT,
       );
@@ -672,17 +580,9 @@ export const restartWithActiveRooms = {
   },
 };
 
-// ---------------------------------------------------------------------------
-// 15. Partial deployment
-// ---------------------------------------------------------------------------
-
 /**
- * Starts the built Next server on a chosen port.
- *
- * `next start` and not `next dev`: a dev server compiles on demand and would measure the
- * compiler rather than the deployment. It needs `apps/web/.next` to exist, which is what
- * `pnpm run build` produces — and this suite must not run a repo-wide build, so a missing build
- * is reported as a skip with the command that fixes it rather than papered over.
+ * `next start`, not `next dev`, which would measure the compiler. A missing `apps/web/.next` is a
+ * skip with the fix, because this suite must not run a repo-wide build.
  */
 async function startWeb(port, apiOrigin) {
   const bin = join(REPO_ROOT, 'apps', 'web', 'node_modules', '.bin', 'next');
@@ -729,7 +629,6 @@ export const partialDeployment = {
   async run(ctx) {
     const report = newReport();
 
-    // --- API up, web down ---
     const server = await ctx.startServer();
     const session = new Session(server.origin, ctx.webOrigin, 'Partial deploy');
     const health = await session.request(ROUTES.health);
@@ -741,15 +640,13 @@ export const partialDeployment = {
     } else {
       report.observations.push('the API is fully healthy with nothing serving the web origin');
     }
-    // And it still serves a real request from a client claiming that origin, because the CORS
-    // allowlist names an origin rather than a reachable service.
+    // The CORS allowlist names an origin, not a reachable service.
     await session.createGuest();
     const rooms = await session.request(ROUTES.rooms);
     if (!rooms.ok)
       report.failures.push(`an authenticated API call failed while the web was down: ${rooms.status}`);
     else report.observations.push('an authenticated API journey completes with the web tier absent');
 
-    // --- web up, API down ---
     const nextBuild = join(REPO_ROOT, 'apps', 'web', '.next', 'BUILD_ID');
     const { existsSync } = await import('node:fs');
     if (!existsSync(nextBuild)) {
@@ -759,7 +656,6 @@ export const partialDeployment = {
       return report;
     }
 
-    // A port with nothing behind it stands in for an API that has not been deployed yet.
     const deadApiPort = await freePort();
     const webPort = await freePort();
     const web = await startWeb(webPort, `http://127.0.0.1:${deadApiPort}`);
@@ -769,10 +665,7 @@ export const partialDeployment = {
         report.failures.push(`the web tier did not answer within 45s. Output:\n${web.output().slice(-800)}`);
         return report;
       }
-      // Two pages, and the second is the one that matters. `/` is largely prerendered and can
-      // answer without the API at all, so a drill that only asked for it would report a healthy
-      // degradation it never tested. `/record` is server-rendered through
-      // `lib/server-session.ts`, so rendering it REQUIRES an API call that cannot succeed here.
+      // `/` is largely prerendered. `/record` renders through `lib/server-session.ts` and needs the API.
       for (const path of ['/', '/record']) {
         const startedAt = performance.now();
         const response = await fetch(`http://127.0.0.1:${webPort}${path}`, { redirect: 'manual' });
@@ -795,8 +688,6 @@ export const partialDeployment = {
         if (elapsed > 15_000) {
           report.failures.push(`${path} took ${Math.round(elapsed)} ms, so the API call is not bounded`);
         }
-        // A stack trace or an internal host name on an error page is an information leak in its
-        // own right, and it is exactly what an unhandled fetch rejection renders.
         if (/ECONNREFUSED|at async|node_modules|\/Users\//.test(body)) {
           report.failures.push(`${path} exposed an internal error detail (stack, path or errno)`);
         } else {

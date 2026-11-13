@@ -1,26 +1,9 @@
 #!/usr/bin/env node
 /**
- * Tests for the `policy-in-effect` supply-chain gate.
- *
- * Run with:  node --test scripts/supply-chain/policy-check.test.mjs
- *
- * The gate had a defect that only manifested through its documented entry point:
- * `pnpm run security:policy` failed 100% of the time while `node
- * scripts/supply-chain/policy-check.mjs` passed, because pnpm injects
- * `pnpm_config_verify_deps_before_run=false` into the environment of every script
- * it spawns and the gate read that as the repository's policy. Every check the
- * project had invoked the gate the way that happened to work.
- *
- * So the discrimination these tests exist to make is:
- *
- *   - the verdict must be identical through `pnpm run` and through `node`; and
- *   - the gate must still FAIL when a policy is genuinely absent or genuinely
- *     overridden, so "stop asserting" can never be mistaken for a fix.
- *
- * The negative cases that need a mutated workspace run against a throwaway copy of
- * the gate in a temp directory: `REPO_ROOT` is derived from the script's own
- * location, so a copied gate audits the copy and the real repository is never
- * touched.
+ * Tests for the `policy-in-effect` gate. It once failed every run through `pnpm run` and passed
+ * through `node`, because it read pnpm's injected `pnpm_config_verify_deps_before_run=false` as
+ * policy. The verdict must match on both paths, and the gate must still fail on a real absence or
+ * override. Mutated-workspace cases run on a copy of the gate in a temp dir.
  */
 
 import assert from 'node:assert/strict';
@@ -35,10 +18,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, '..', '..');
 const GATE = join(HERE, 'policy-check.mjs');
 
-/**
- * A bare environment: no pnpm/npm variables at all, so a test controls exactly
- * what the gate sees. PATH and HOME are kept because pnpm needs them.
- */
+/** No pnpm/npm variables. PATH and HOME are kept because pnpm needs them. */
 function bareEnv(extra = {}) {
   const env = {};
   for (const [key, value] of Object.entries(process.env)) {
@@ -63,10 +43,7 @@ function runGate({ cwd = REPO_ROOT, gate = GATE, env = bareEnv() } = {}) {
   return { status: res.status, out: `${res.stdout ?? ''}${res.stderr ?? ''}` };
 }
 
-/**
- * A minimal standalone workspace containing a copy of the gate, so a test can
- * mutate `pnpm-workspace.yaml` / `.npmrc` without touching the real repository.
- */
+/** A standalone workspace with a copy of the gate, so a test can mutate its config. */
 const sandboxes = [];
 function sandbox({ workspaceYaml, npmrc } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'prl-policy-gate-'));
@@ -106,7 +83,6 @@ describe('policy-in-effect gate', () => {
       bare.status,
       `pnpm-wrapped run disagreed with the bare run:\n${wrapped.out}`,
     );
-    // And it must say so, rather than silently swallowing the variable.
     assert.match(wrapped.out, /re-entrancy suppression: pnpm_config_verify_deps_before_run/);
   });
 
@@ -157,8 +133,7 @@ describe('policy-in-effect gate', () => {
   });
 
   it('asserts every policy setting the workspace file declares', () => {
-    // A guard against the fix regressing into "stop asserting": the gate must keep
-    // covering each key the supply-chain policy names.
+    // The gate must keep covering each key the policy names.
     const source = readFileSync(GATE, 'utf8');
     for (const key of [
       'ignoreScripts',

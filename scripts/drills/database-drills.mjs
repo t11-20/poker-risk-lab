@@ -1,34 +1,10 @@
 /**
  * The drills that take the database and the identity provider away.
  *
- * ## Where the damage is done, and why it is not done to the shared container
- *
- * `poker-risk-lab-postgres-1` is the container every other developer and every other agent on
- * this machine is using. Freezing or restarting it fails their queries too, and a drill that
- * breaks somebody else's work to prove a point about ours is a bad trade. So the two drills that
- * genuinely need to stop a database — `postgres-outage` and `postgres-restart` — start a
- * container of their OWN, migrate a database into it, break that, and remove it afterwards. The
- * shared container is used only for the drills that need nothing more than a database to write
- * to, and even then every one of them writes to a scratch database this suite created and drops.
- *
- * If the private container cannot be started, those two drills SKIP with the reason rather than
- * quietly falling back to freezing the shared one behind the operator's back.
- *
- * ## What "the database is down" is actually being asked
- *
- * Not "does it error". Three specific things, in order of how much they matter:
- *
- *   1. `/health` must keep answering 200. It exists so an orchestrator can tell whether the
- *      PROCESS is alive, and a process that is alive but cannot reach Postgres must not be
- *      killed and replaced — the replacement will not be able to reach Postgres either.
- *   2. `/ready` must answer 503, promptly, with a fixed reason. An orchestrator that gets no
- *      answer at all takes the instance out on a probe timeout, which is the same outcome by a
- *      slower and less legible route.
- *   3. Recovery must need no human. When the database comes back the instance must go back into
- *      service on its own.
- *
- * Each of those is measured below rather than asserted in prose, and the probe is given a
- * deadline of its own so that a `/ready` which HANGS is a finding rather than a hung drill.
+ * `postgres-outage` and `postgres-restart` break a private container of their own, never the
+ * shared `poker-risk-lab-postgres-1`, and skip with the reason if they cannot start one. During an
+ * outage `/health` must stay 200 (a replacement could not reach Postgres either), `/ready` must
+ * answer 503 inside a probe deadline, and service must return with no human.
  */
 
 import { createServer } from 'node:net';
@@ -53,21 +29,14 @@ import {
 } from './harness.mjs';
 import { logLine, recoveryBound, scanForSecrets, scanTextForSecrets } from './invariants.mjs';
 
-/** The image the compose file already pulls, so no drill has to reach the network for one. */
 const POSTGRES_IMAGE = 'postgres:16-bookworm';
-/** Credentials for the throwaway container. Not a secret: it exists for seconds, bound to loopback. */
+/** Not a secret. The container lives for seconds, bound to loopback. */
 const PRIVATE_USER = 'drills';
 const PRIVATE_PASSWORD = 'drills-throwaway';
 
-/**
- * How long any single probe of a failing dependency may take before the drill gives up on it.
- *
- * This is the number that turns "the endpoint hung" into evidence. Without a deadline on the
- * probe itself, a `/ready` that never answers looks exactly like a slow drill.
- */
+/** A deadline on each probe, so a `/ready` that hangs is a finding rather than a hung drill. */
 const PROBE_TIMEOUT_MS = 4_000;
 
-/** One probe with a deadline, reporting the outcome rather than throwing. */
 async function probe(origin, path) {
   const startedAt = performance.now();
   try {
@@ -94,18 +63,11 @@ async function probe(origin, path) {
   }
 }
 
-/**
- * A Postgres container belonging to this run alone, with the schema already migrated.
- *
- * Bound to 127.0.0.1 so nothing outside the machine can reach it, given a name that carries this
- * process's pid so two concurrent runs cannot collide, and removed by the caller's cleanup even
- * when the drill throws.
- */
+/** Bound to 127.0.0.1, named with this pid so runs cannot collide, and removed by the caller's cleanup. */
 async function startPrivatePostgres(register) {
   const name = `prl-drills-pg-${process.pid}`;
   const port = await freePort();
-  // Any earlier run that died before its cleanup left one of these behind; removing by name
-  // first is what makes the suite re-runnable without a human clearing up.
+  // Removes a container left by an earlier run that died before cleanup.
   await docker(['rm', '-f', name]);
   const started = await docker([
     'run',
@@ -133,14 +95,8 @@ async function startPrivatePostgres(register) {
   });
 
   const serverDsn = `postgresql://${PRIVATE_USER}:${PRIVATE_PASSWORD}@127.0.0.1:${port}/postgres`;
-  // Two consecutive successful queries, half a second apart, and not `pg_isready`.
-  //
-  // The official Postgres entrypoint runs a TEMPORARY server on a unix socket to initialise the
-  // cluster, shuts it down, and only then starts the real one. `pg_isready` answers yes to the
-  // temporary server, so a run that trusted it created its database into a server that was about
-  // to be stopped and then failed with "connection to server on socket ... No such file or
-  // directory" — which is exactly what the second full run of this suite did, on the drill after
-  // the one that had just worked. Two successes with a gap between them span the shutdown.
+  // Two successes half a second apart, not `pg_isready`. The entrypoint runs a temporary server
+  // during init, and `pg_isready` answered for it, so a database was created in a server about to stop.
   let consecutive = 0;
   const up = await measureUntil(
     async () => {
@@ -165,10 +121,6 @@ async function startPrivatePostgres(register) {
   return { ok: true, container: name, serverDsn, dsn, startupMs: Math.round(up) };
 }
 
-// ---------------------------------------------------------------------------
-// 5. A temporary Postgres outage
-// ---------------------------------------------------------------------------
-
 export const postgresOutage = {
   name: 'postgres-outage',
   title: 'PostgreSQL frozen mid-flight, then released',
@@ -190,7 +142,6 @@ export const postgresOutage = {
     if (before.status !== 200) report.failures.push(`/ready answered ${before.status} before the outage`);
 
     let frozen = false;
-    /** The probe held open across the freeze, and how long the freeze lasted. Read after it ends. */
     let latchedProbe = null;
     let frozenForMs = 0;
     try {
@@ -202,14 +153,8 @@ export const postgresOutage = {
       frozen = true;
       report.observations.push('the database container is frozen (cgroup freezer, sockets left open)');
 
-      // One probe issued the instant the freeze starts, with a deadline long enough to outlive it.
-      //
-      // This is the sharpest question the drill can ask, and it is different from the bounded
-      // probes below. Those ask "does /ready answer 503 promptly". This one asks what a patient
-      // caller is eventually TOLD about a window it already knows was an outage. An answer of 200
-      // means the endpoint reported the instance healthy for a period in which it could not reach
-      // its database at all — which is worse than no answer, because a monitoring system that
-      // waits will record the outage as healthy.
+      // Held open across the freeze. A 200 here means the endpoint reported healthy for a window in
+      // which the database was unreachable, so a patient monitor records the outage as healthy.
       const frozenAt = performance.now();
       const latched = fetch(new URL(ROUTES.ready, server.origin), {
         headers: { accept: 'application/json' },
@@ -218,8 +163,7 @@ export const postgresOutage = {
         .then(async (response) => ({ status: response.status, ms: performance.now() - frozenAt }))
         .catch((error) => ({ status: 0, error: error?.name ?? 'failed', ms: performance.now() - frozenAt }));
 
-      // Liveness first, and repeatedly: this is the property an orchestrator uses to decide
-      // whether to kill the process, and one lucky 200 proves nothing.
+      // Repeated, because one lucky 200 proves nothing.
       const liveness = [];
       for (let attempt = 0; attempt < 4; attempt++) {
         liveness.push(await probe(server.origin, ROUTES.health));
@@ -240,7 +184,6 @@ export const postgresOutage = {
         );
       }
 
-      // Readiness. The interesting failure is not 200 — it is no answer at all.
       const readiness = [];
       for (let attempt = 0; attempt < 3; attempt++) {
         readiness.push(await probe(server.origin, ROUTES.ready));
@@ -280,12 +223,8 @@ export const postgresOutage = {
         }
       }
 
-      // A feature route, AUTHENTICATED, to be sure the degradation is graceful rather than a 500
-      // with a stack. Through the session client rather than the bare probe: an unauthenticated
-      // request to `/rooms` is refused 401 before it reaches the database, so the first version of
-      // this check recorded a clean 401 during every outage and was measuring the CSRF and session
-      // layer rather than the database at all. Given a deadline of its own for the same reason
-      // `/ready` is: an answer that never comes is the interesting case.
+      // Authenticated, because an unauthenticated `/rooms` is refused 401 before it reaches the
+      // database. It has its own deadline because no answer is the interesting case.
       const rooms = await session.request(ROUTES.rooms, {
         signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
       });
@@ -318,8 +257,6 @@ export const postgresOutage = {
       if (frozen) await docker(['unpause', postgres.container]);
     }
 
-    // Read after the unpause, because that is when a probe held open across the freeze finally
-    // resolves. The window it spans is known, so what it says about that window can be judged.
     if (latchedProbe !== null) {
       const latchedResult = await latchedProbe;
       report.measurements.probeHeldAcrossTheFreezeMs = Math.round(latchedResult.ms);
@@ -338,7 +275,6 @@ export const postgresOutage = {
       }
     }
 
-    // Recovery, with no human and no restart.
     const recovered = await measureUntil(
       async () => {
         const entry = await probe(server.origin, ROUTES.ready);
@@ -371,10 +307,6 @@ export const postgresOutage = {
   },
 };
 
-// ---------------------------------------------------------------------------
-// 6. A Postgres restart
-// ---------------------------------------------------------------------------
-
 export const postgresRestart = {
   name: 'postgres-restart',
   title: 'PostgreSQL restarted underneath a running API',
@@ -399,7 +331,6 @@ export const postgresRestart = {
     }
     report.observations.push('the private database container was restarted, closing every pooled connection');
 
-    // Liveness must not blink, whatever happened to the pool.
     const health = await probe(server.origin, ROUTES.health);
     report.measurements.healthDuringRestart = health.status;
     if (health.status !== 200) {
@@ -420,7 +351,7 @@ export const postgresRestart = {
     report.measurements.readyAgainMs = readyAgain === null ? null : Math.round(readyAgain);
     report.failures.push(...recoveryBound('/ready after the database restart', readyAgain, 90_000));
 
-    // A read is the real proof: the pool has to have reconnected, not merely answered a probe.
+    // A read proves the pool reconnected.
     const after = await measureUntil(
       async () => {
         const response = await session.request(ROUTES.rooms);
@@ -437,8 +368,7 @@ export const postgresRestart = {
       );
     }
 
-    // A guest session created after the restart proves writes work too, and that the pool did not
-    // come back holding connections to a database that no longer has the schema.
+    // Proves writes work and the pool does not hold connections to a database without the schema.
     const fresh = new Session(server.origin, ctx.webOrigin, 'After restart');
     try {
       await fresh.createGuest();
@@ -455,17 +385,12 @@ export const postgresRestart = {
   },
 };
 
-// ---------------------------------------------------------------------------
-// 7. Connection pool exhaustion
-// ---------------------------------------------------------------------------
-
 export const poolExhaustion = {
   name: 'pool-exhaustion',
   title: 'Connection pool exhaustion, and whether the probe histogram shows it',
   async run(ctx) {
     const report = newReport();
-    // A pool of two, so exhausting it takes three requests rather than eleven — the defect being
-    // looked for is "the saturation is invisible", not "a large pool can be filled".
+    // Small enough that three requests exhaust it.
     const poolMax = 2;
     const server = await ctx.startServer({
       env: { DATABASE_POOL_MAX: String(poolMax) },
@@ -473,23 +398,17 @@ export const poolExhaustion = {
     });
     const session = new Session(server.origin, ctx.webOrigin, 'Pool drill');
     await session.createGuest();
-    // A room, so `GET /rooms` has rows to read and takes the lock path rather than short-circuiting.
     await session.request(ROUTES.rooms, {
       method: 'POST',
       body: { name: 'Pool drill', maxSeats: 2, smallBlind: 1, bigBlind: 2, startingStack: 200 },
     });
 
-    // Three probes before the baseline, because a histogram with no observations is not in the
-    // exposition text at all — the first run of this drill read "not exported" and reported it as
-    // a missing metric when the truth was that nothing had scraped `/ready` yet. Sampling it
-    // deliberately also gives the comparison below a healthy-pool baseline to move away from.
+    // A histogram with no observations is absent from the exposition text, so prime it first.
     for (let attempt = 0; attempt < 3; attempt++) await probe(server.origin, ROUTES.ready);
 
     const baseline = await scrapeMetrics(server.origin, ctx.metricsToken);
     if (baseline === null) {
-      // The status separates the two very different reasons a scrape comes back empty: 401 is a
-      // token this drill got wrong, and 404 is `/metrics` not being registered by `app.ts` at all
-      // — in which case pool saturation has no external signal whatever the histogram declares.
+      // 401 means a wrong token. 404 means `/metrics` is not registered, so saturation has no signal.
       const raw = await probe(server.origin, ROUTES.metrics);
       report.measurements.metricsScrapeStatus = raw.status;
       report.failures.push(
@@ -513,9 +432,7 @@ export const poolExhaustion = {
       `${seriesName} is exported and has ${baselineCount} observations before the squeeze`,
     );
 
-    // Every pooled connection is made to wait on a lock nothing else needs. `select 1` does not
-    // need the lock either — which is exactly the point: what the probe measures under this load
-    // is time spent QUEUEING for a connection, with no slow query anywhere.
+    // Every pooled connection waits on a lock, so the probe measures queueing for a connection.
     const holdSeconds = 4;
     const lockHeld = psql(
       ctx.container,
@@ -568,7 +485,6 @@ export const poolExhaustion = {
       );
     }
 
-    // Everything must come back on its own once the lock is released.
     await lockHeld;
     const settled = await Promise.allSettled(blocked);
     const answered = settled.filter((entry) => entry.status === 'fulfilled' && entry.value.status !== 0);
@@ -594,21 +510,11 @@ export const poolExhaustion = {
       report.warnings.push(`prl_db_pool_max reports ${String(gauge)} for a pool configured at ${poolMax}`);
     }
     report.failures.push(...scanTextForSecrets(server.output(), 'the API log'));
-    // `scanTextForSecrets`, not `scanForSecrets`. The metrics body is Prometheus text exposition,
-    // not JSON, and `scanForSecrets` is a KEY-walker: its first act is `if (node === null ||
-    // typeof node !== 'object') return`, so wrapping the text in `{ metrics: '...' }` handed it an
-    // object with exactly one key — `metrics`, which is not forbidden — and one string value it
-    // returned from immediately. The scan was structurally incapable of producing a finding, and
-    // had been reporting a clean metrics body on every run since it was written. The line above
-    // is the correct shape and always was.
+    // Text, not `scanForSecrets`, which walks keys and returned immediately on a wrapped string.
     report.failures.push(...scanTextForSecrets(saturated ?? '', 'the metrics body'));
     return report;
   },
 };
-
-// ---------------------------------------------------------------------------
-// 14. A failed migration
-// ---------------------------------------------------------------------------
 
 export const failedMigration = {
   name: 'failed-migration',
@@ -621,11 +527,7 @@ export const failedMigration = {
       await dropScratchDatabase(ctx.container, ctx.adminDsn, database);
     });
 
-    // --- a migration that cannot apply ---
-    // The object it is about to create already exists, so `0001_initial.sql` fails partway
-    // through. This is what a genuinely broken migration file does from the runner's point of
-    // view, produced without putting a broken file into db/migrations, which this suite does not
-    // own and which another agent may be editing.
+    // The object already exists, so `0001_initial.sql` fails partway, without editing db/migrations.
     const poison = await psql(
       ctx.container,
       ctx.adminDsn,
@@ -650,9 +552,7 @@ export const failedMigration = {
       const named = logLine(combined, /0001_initial/);
       report.evidence.push({ label: 'the runner named the file', text: named.line.slice(0, 160) });
     }
-    // Atomicity: `applyFile` runs each file inside a transaction, so a failure must leave the
-    // ledger with no row for it. A half-applied migration is the failure mode that turns one bad
-    // deploy into a database nobody can move forwards or backwards.
+    // `applyFile` runs each file in a transaction, so the ledger must have no row for the failed one.
     const ledger = await psql(
       ctx.container,
       ctx.adminDsn,
@@ -667,7 +567,6 @@ export const failedMigration = {
       report.observations.push('the failed migration left no row in the ledger; the transaction rolled back');
     }
 
-    // --- a ledger that has drifted from the files ---
     const clean = `${database}_clean`;
     const cleanDsn = await createScratchDatabase(ctx.container, ctx.adminDsn, clean);
     ctx.cleanup(async () => {
@@ -705,10 +604,7 @@ export const failedMigration = {
       report.observations.push('`migrate status` reports the drift rather than claiming to be up to date');
     }
 
-    // --- a ledger row with no file ---
-    // Its own database, because the drifted checksum above cannot be repaired: the row records a
-    // file whose real checksum this drill has thrown away, so anything done to that ledger next
-    // would be testing the drift check again rather than the orphan check.
+    // Its own database, because the drifted ledger above cannot be repaired.
     const orphanDb = `${database}_orphan`;
     const orphanDsn = await createScratchDatabase(ctx.container, ctx.adminDsn, orphanDb);
     ctx.cleanup(async () => {
@@ -734,7 +630,6 @@ export const failedMigration = {
       }
     }
 
-    // --- an attempted rollback ---
     const down = await migrate(dsn, 'down');
     report.measurements.downExit = down.code;
     const downText = `${down.stdout}\n${down.stderr}`;
@@ -753,11 +648,7 @@ export const failedMigration = {
   },
 };
 
-// ---------------------------------------------------------------------------
-// 16. A dependency service that is unavailable
-// ---------------------------------------------------------------------------
-
-/** A TCP listener that accepts connections and never says anything. A black hole with a port. */
+/** Accepts connections and never answers. */
 function blackHole() {
   return new Promise((done, fail) => {
     const sockets = new Set();
@@ -786,7 +677,6 @@ export const dependencyUnavailable = {
     const report = newReport();
     const deadPort = await freePort();
     const hole = await blackHole();
-    // Synchronous, and the cleanup contract takes any function: closing a listener needs no await.
     ctx.cleanup(() => {
       hole.close();
     });
@@ -804,8 +694,7 @@ export const dependencyUnavailable = {
     ]) {
       const server = await ctx.startServer({ env: oidcEnv(testCase.port) });
 
-      // The API must be healthy: a sign-in provider being down is not a reason to take the whole
-      // instance out of the load balancer, because everything except sign-in still works.
+      // An IdP outage must not take the instance out of the load balancer.
       const health = await probe(server.origin, ROUTES.health);
       const ready = await probe(server.origin, ROUTES.ready);
       if (health.status !== 200 || ready.status !== 200) {
@@ -817,7 +706,6 @@ export const dependencyUnavailable = {
         report.observations.push(`${testCase.label}: the instance stays healthy and ready`);
       }
 
-      // Graceful degradation: guest play is the product's main path and must be untouched.
       const guest = new Session(server.origin, ctx.webOrigin, 'IdP drill');
       try {
         await guest.createGuest();
@@ -826,7 +714,6 @@ export const dependencyUnavailable = {
         report.failures.push(`${testCase.label}: guest sign-in broke: ${String(error).slice(0, 160)}`);
       }
 
-      // And the sign-in route itself must fail inside a bound, with nothing internal in the body.
       const startedAt = performance.now();
       let response;
       try {
@@ -871,9 +758,7 @@ export const dependencyUnavailable = {
         report.failures.push(...scanForSecrets(body, `${testCase.label} error body`));
       }
 
-      // Deliberately narrow. `/oidc/i` also matches the boot line, which carries `oidcEnabled`,
-      // so the evidence quoted was the server saying it had started rather than the server
-      // saying the provider was unreachable.
+      // Narrow, because `/oidc/i` also matched the boot line's `oidcEnabled`.
       const noticed = logLine(server.output(), /discovery|exchange_failed|could not be fetched/i);
       if (noticed.found) report.evidence.push({ label: `${testCase.label}: the log`, text: noticed.line });
       report.failures.push(...scanTextForSecrets(server.output(), `${testCase.label} log`));

@@ -1,160 +1,35 @@
 #!/usr/bin/env node
 /**
- * Gate: no shipped config may write a secret to a log, and no container log may be
- * unbounded.
+ * Gate: no shipped config may write a secret to a log, and no container log may be unbounded
+ * (D2 in docs/production/legal-register.md).
  *
- * Two rules, one gate, because they are the two halves of the same defect (D2 in
- * docs/production/legal-register.md) and they fail in the same file. The first is
- * about WHAT is written; the second is about HOW MUCH.
+ * Both shipped nginx configs once used `combined`, which logs `$request` verbatim, so every OIDC
+ * sign-in wrote `?code=<authorization code>` to the proxy log. The API already logs only query
+ * keys; the proxy undid that with nothing going red.
  *
- * ## The incident this exists to prevent, and the one it is closing
+ * A `log_format` may name only variables on a reviewed allowlist. A thirteen-name denylist was
+ * defeated five ways in a real container: `$arg_code`, a `;` inside a quoted format, a laundering
+ * `map`, open families like `$sent_http_location`, and configs outside the two files it read.
  *
- * Both shipped nginx configurations used the stock `combined` format:
+ * Refused:
+ *  1. An `access_log` not naming `prl_privacy`, including a bare one (which is `combined`).
+ *  2. A `log_format` variable not on ALLOWED_LOG_VARIABLES, a derived variable whose `map` no longer
+ *     reduces its source, or `escape=none` (`$uri` is percent-decoded and can forge a line).
+ *  3. An `error_log` looser than `crit`, including via `nginx -g`, because nginx appends the request
+ *     line to its own error messages at any level.
+ *  4. No `location = /api/v1/auth/oidc/callback` with `error_log /dev/null`, since a real `[crit]`
+ *     still carries the request line.
+ *  5. That block routing anywhere other than `location /api/`.
+ *  6. `proxy_intercept_errors` absent, or `on` anywhere, since `error_page` is a second logging pass.
+ *  7. `include`, which this gate cannot follow, and an `nginx -c` path not in
+ *     REVIEWED_NGINX_CONFIG_PATHS.
+ *  8. Any service in any compose file without a `logging:` cap. Docker's json-file driver is
+ *     unbounded without `max-size`, and a full host disk stops Postgres writing.
+ *  9. A service capped differently in two files, or a `max-size`/`max-file` Docker would refuse.
  *
- *     deploy/staging/nginx.conf   access_log /dev/stdout combined;
- *     docker-compose.yml          access_log /dev/stdout combined;
- *
- * `combined` logs `"$request"`, which is the request line VERBATIM — method, URI
- * *including the query string*, protocol. `/api/v1/auth/oidc/callback` is routed
- * by `location /api/` in both files, and an OIDC provider returns to that path as
- * `?code=<authorization code>&state=<state>`. So every sign-in wrote an OAuth
- * authorization code — a bearer credential that can be exchanged for a session —
- * to the proxy log in the clear. Measured, before the fix, against a throwaway
- * container running that exact config:
- *
- *     172.22.0.1 - - [25/Aug/2026:07:50:49 +0000] "GET /api/v1/auth/oidc/callback
- *     ?code=SENTINELCODE123&state=SENTINELSTATE456 HTTP/1.1" 502 157 "-" "curl/8.7.1"
- *
- * That is D2 / E2 in docs/production/legal-register.md. The reason it needs a gate
- * rather than a fixed config is that the API one hop downstream ALREADY prevents
- * this — `queryKeysOf` in apps/api/src/logging.ts logs query parameter names and
- * never values, `clientKeyFor` in apps/api/src/plugins/request-context.ts stores
- * an HMAC rather than an address — and the proxy silently undid both of them for
- * however long it shipped. Nothing failed. Nothing went red. A control that the
- * layer in front of it can undo, with no test that notices, is not a control, and
- * `access_log ... combined;` is one line and the most-copied line on the internet.
- *
- * ## Why this is an ALLOWLIST, and the review that made it one
- *
- * The first version of this gate was a DENYLIST: thirteen variable names no
- * `log_format` could mention, matched with a right-hand word boundary. An
- * adversarial review defeated it five ways, every one of them measured against a
- * real `nginxinc/nginx-unprivileged` container with this gate printing
- * `✓ log policy — pass` and exiting 0:
- *
- *   1. `$arg_code`. `$args` was banned; `$arg_code` is a different variable with the
- *      same contents, one parameter at a time. Measured in the container's access
- *      log: `code=SENTINELCODE123`. That is the exact string this format exists to
- *      keep off disk.
- *   2. One `;` inside the quoted format string. The old matcher was
- *      `/log_format\s+(\w+)([\s\S]*?);/g` — lazy, and blind to quotes — so
- *      `log_format prl_privacy escape=default 'boundary;' '$request' ' $http_cookie';`
- *      read as a format whose whole body was `boundary`. nginx read it as a format
- *      that logs the request line and the session cookie, and that is what the
- *      container wrote:
- *      `boundary;GET /api/v1/auth/oidc/callback?code=SENTINELCODE123&… prl_session=SENTINELCOOKIE789`
- *   3. A `map`. `map $request_uri $prl_path_detail { default "$request_uri"; }` and
- *      then `$prl_path_detail` in the format. The gate read `log_format` bodies and
- *      nothing else, so the laundering step was invisible.
- *   4. `$sent_http_location`, `$http_x_forwarded_uri`, `$http_x_original_uri`,
- *      `$arg_state`, `$request_body_file`. `$http_<anything>` is an open class with
- *      five names denied. Measured: a 302 back to the callback put the code in the
- *      access log through `$sent_http_location`.
- *   5. Reach. `include` was never resolved or flagged; the nginx sources were a
- *      fixed list of two, so a config inlined into `docker-compose.staging.yml` was
- *      invisible; `nginx -g 'error_log /dev/stderr info;'` on a service's entrypoint
- *      was unread (measured: the request line, query string and all, back in the
- *      error log of a container running the SHIPPED, reviewed config); and
- *      `proxy_intercept_errors` was read with `.exec()`, so only the first one in a
- *      file was checked.
- *
- * The lesson is not that five more names belong on the list. nginx has hundreds of
- * variables and four open-ended families (`$arg_*`, `$http_*`, `$sent_http_*`,
- * `$upstream_http_*`), and any denylist over an open set is a list of the leaks
- * somebody has already thought of. So the rule is inverted: **a `log_format` is
- * refused unless every variable in it is on a reviewed allowlist.** A variable
- * nobody has reviewed fails the build instead of reaching a log, and the cost of
- * being wrong moves from "a credential is on disk and nothing is red" to "somebody
- * adds a line to ALLOWED_LOG_VARIABLES and says why".
- *
- * The denylist is kept, but demoted: it no longer decides anything, it only supplies
- * the specific sentence for the thirteen names whose incident is already written
- * down. Everything else is refused with the allowlist's own reason.
- *
- * ## What this gate refuses, and why each one
- *
- *  1. Any `access_log` naming a stock format (`combined`, `main`), or naming
- *     anything other than the reviewed `prl_privacy` — the defect verbatim, and the
- *     defect spelled as an omission (a bare `access_log /dev/stdout;` IS `combined`).
- *  2. Any `log_format` naming a variable that is not on ALLOWED_LOG_VARIABLES, or a
- *     variable on REVIEWED_DERIVED_VARIABLES whose `map` no longer reduces what it
- *     was reviewed for reducing. `escape=none` is refused too: `$uri` is
- *     percent-DECODED, so unescaped it can carry a newline and forge a log line.
- *  3. An `error_log` level looser than `crit`, at any nesting level, including one
- *     supplied on the command line with `nginx -g`. This is the half of the fix that
- *     is easy to lose: `ngx_http_log_error` stamps `request: "<full request line>"`
- *     onto its own messages at any level, in a shape no `log_format` controls, so
- *     fixing the access log alone leaves the credential in the error log. The level
- *     is the only lever nginx offers.
- *  4. A missing `location = /api/v1/auth/oidc/callback` with `error_log /dev/null`.
- *     `crit` is a reduction, not a proof — a genuine `[crit]` such as `open()
- *     failed (13: Permission denied) while reading upstream` still carries the
- *     request line — and on the one path where a query-string value is a
- *     credential by construction, a reduction is not enough.
- *  5. That block routing somewhere other than `location /api/`. It exists ONLY to
- *     narrow the error log, so if it ever routes differently it has silently
- *     become a routing change nobody reviewed. Two blocks carrying the same
- *     traffic are two blocks that can drift.
- *  6. `proxy_intercept_errors` absent, or `on` ANYWHERE in the file. On, an upstream
- *     4xx/5xx is handled by nginx's own `error_page`, which is an internal redirect:
- *     a second pass with a rewritten `$uri` and another opportunity to log a request
- *     that already has a line.
- *  7. `include`, anywhere. This gate cannot follow one — the file it names does not
- *     exist until the image is built — and an `include` is a hole exactly the size
- *     of the file behind it. `nginx -c` naming a path this repository cannot account
- *     for is refused for the same reason, against REVIEWED_NGINX_CONFIG_PATHS.
- *  8. **Any** service, in **any** of the three compose files, with no `logging:`
- *     cap — not just the proxy. The other half of D2 is not privacy at all.
- *     Docker's default `json-file` driver is UNBOUNDED without `max-size`, and
- *     logrotate is not an option here because the daemon owns those files (see
- *     docker-compose.yml's header). An uncapped container log fills the Docker
- *     host's disk; a full host disk stops Postgres extending a relation or writing
- *     WAL; and the learner-visible symptom is data loss. That is a
- *     data-availability incident reached entirely through a logging setting, and
- *     `read_only: true` does not help at all, because the log is written outside
- *     the container.
- *
- *     The proxy was never the worst of it. The API writes a structured JSON line
- *     per request and per WebSocket event, and Postgres becomes the loudest
- *     service in the stack the moment somebody sets `log_min_duration_statement`
- *     to chase a slow query and forgets.
- *  9. A service capped differently in two files that both define it, and a
- *     `max-size`/`max-file` value Docker would refuse. Both are ways for a cap to
- *     look applied and not be.
- *
- * ## Everything, discovered — never a list of today's names
- *
- * Two shipped nginx configs are LISTED and must both be found, because the whole of
- * D2 is that those two files drift and "I found one and it was fine" must never be a
- * pass. Everything else is DISCOVERED, because bypass 5 was reach rather than rules:
- * every `KEY: |` block scalar in every compose file that looks like nginx
- * configuration is audited wherever it sits, and every `nginx` command line in those
- * files has its `-g` global directives audited as configuration and its `-c` path
- * checked against the reviewed set.
- *
- * The compose SERVICES are enumerated from the files for the same reason: the
- * service that matters is the one added next month: it will arrive with no
- * `logging:` block, and a gate that only knew today's names would wave it through
- * in silence. That silence is precisely how `access_log ... combined;` shipped for
- * as long as it did.
- *
- * Exemptions are explicit and named — see `EXEMPT_SERVICES`, which is empty and
- * documents what would justify an entry. A service must never leave this gate's
- * scope by being quietly absent from a list.
- *
- * The negative controls live in log-policy.test.mjs: every rule above is asserted
- * to FAIL against mutations of the real shipped text, and all five defeated
- * bypasses above are pinned there as fixtures.
+ * The two shipped nginx configs are listed and must both exist. Everything else (inline block
+ * scalars, `nginx -g`/`-c` arguments, compose services) is discovered, so a new service or config
+ * cannot slip past by being absent from a list. Negative controls are in log-policy.test.mjs.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -168,40 +43,19 @@ export const OIDC_CALLBACK_PATH = '/api/v1/auth/oidc/callback';
 export const REQUIRED_FORMAT = 'prl_privacy';
 
 /**
- * Error-log levels at or above `crit`. nginx's levels, loosest first, are
- * debug info notice warn error crit alert emerg; every message class nginx emits
- * WITH a request line during normal operation is `error` or quieter.
+ * Error-log levels at or above `crit`. Every class nginx emits with a request line in normal
+ * operation is `error` or quieter.
  */
 export const STRICT_ERROR_LEVELS = new Set(['crit', 'alert', 'emerg']);
 
-/**
- * `escape=` values a shipped `log_format` may use.
- *
- * `none` is the one that matters. `$uri` is percent-DECODED by the time a format
- * sees it, so with escaping off a request for `/a%0a<forged line>` writes two lines
- * into the access log and the second one is whatever the caller wanted it to say.
- */
+/** `none` is refused because `$uri` is percent-decoded, so `/a%0a<forged line>` writes two lines. */
 export const ALLOWED_ESCAPES = new Set(['default', 'json']);
 
 /**
- * **Every variable a shipped `log_format` may name, and why it is safe.**
- *
- * This list is the gate. A variable that is not on it fails the build — not because
- * it is known to leak, but because nobody has said it does not. That is the whole
- * inversion: `$arg_code` reached a container's access log with an OAuth
- * authorization code in it while this gate printed a green tick, and it did so
- * because a denylist can only ever hold the leaks somebody already imagined. nginx
- * has four open-ended variable families (`$arg_*`, `$http_*`, `$sent_http_*`,
- * `$upstream_http_*`); no list of forbidden names can cover an open set, and a list
- * of PERMITTED names does not have to.
- *
- * Adding an entry is cheap and is meant to be: write the name and one clause saying
- * what it can and cannot contain. Two questions decide it — can a caller put bytes
- * of their choosing in it, and is it personal data? `$uri` is here despite being
- * caller-controlled because it is the reviewed compromise D2 was fixed with (the
- * path, never the query string) and because `escape=default` neutralises its bytes.
- * `$remote_addr` is not here despite being neither, because it is personal data the
- * API deliberately stores only as an HMAC.
+ * Every variable a shipped `log_format` may name, and why it is safe. This list is the gate. To add
+ * one, say whether a caller can choose its bytes and whether it is personal data. `$uri` is allowed
+ * as the reviewed D2 fix (path, never query string) and `escape=default` neutralises its bytes.
+ * `$remote_addr` is not, because the API stores only an HMAC of it.
  *
  * @type {Map<string, string>}
  */
@@ -210,9 +64,6 @@ export const ALLOWED_LOG_VARIABLES = new Map([
   ['time_iso8601', 'the time nginx wrote the line'],
   ['time_local', 'the same, in the stock format'],
   ['msec', 'the same, as a unix timestamp'],
-  // What was asked for, reduced. `$uri` is the path with the query string ALREADY
-  // GONE — that removal is the fix for D2 — and `$is_args` says only whether there
-  // was a query string, never what was in it.
   ['uri', 'the normalised path, with the query string already stripped — this is the D2 fix'],
   ['is_args', '"?" or the empty string: whether there was a query string, never its content'],
   ['request_method', 'a method token; `escape=default` neutralises a hostile one'],
@@ -229,16 +80,12 @@ export const ALLOWED_LOG_VARIABLES = new Map([
   ['connection', "nginx's own connection serial number"],
   ['connection_requests', 'how many requests have used that connection'],
   ['request_id', "nginx's own generated id — not anything a caller sent"],
-  // Which server answered. None of these is caller-controlled: `$server_name` is
-  // the matched `server_name` directive, not the Host header.
   ['server_name', 'the matched server_name directive, not the Host header'],
   ['server_port', 'the port this server is listening on'],
   ['hostname', "the container's own hostname"],
   ['ssl_protocol', 'the negotiated TLS version'],
   ['ssl_cipher', 'the negotiated cipher suite'],
-  // Where it went, and what came back. Upstream diagnostics are what replaced the
-  // error log when its level went to `crit`; every one of them is generated by
-  // nginx or by our own API, never by a caller.
+  // Upstream diagnostics replaced the error log when its level went to `crit`.
   ['upstream_addr', 'the upstream this proxy chose'],
   ['upstream_status', "the upstream's status code"],
   ['upstream_response_time', 'a duration'],
@@ -255,22 +102,10 @@ export const ALLOWED_LOG_VARIABLES = new Map([
 ]);
 
 /**
- * Variables a `map` computes, and the variable each one is reviewed to REDUCE.
- *
- * These are the redactions themselves: `$prl_client_net` is `$remote_addr` truncated
- * to a network, `$prl_ua_class` is `$http_user_agent` collapsed to one of five
- * words. Both read a source that is forbidden in a log format and both are legal in
- * one, which is exactly the shape a laundering bypass wears — `map $request_uri
- * $prl_path_detail { default "$request_uri"; }` is four words away from the real
- * thing and put the full query string into a container's access log with this gate
- * green.
- *
- * So a derived variable is accepted only against the map it was reviewed with:
- * exactly one map defines it, that map reads the source named here, and every `$…`
- * the map RETURNS is a named capture from the same rule's own regex — never the
- * source variable passed through. A capture whose pattern can match any character is
- * refused too, because `"~^(?<all>.*)$" "$all"` is the identity function wearing a
- * redaction's clothes.
+ * Variables a `map` computes, and the variable each is reviewed to reduce. A derived variable is
+ * accepted only if exactly one map defines it, that map reads the named source, and every value it
+ * returns is a named capture that cannot match any character. `map $request_uri $x { default
+ * "$request_uri"; }` once leaked the full query string with this gate green.
  *
  * @type {Map<string, {from: string, why: string}>}
  */
@@ -296,13 +131,8 @@ export const REVIEWED_DERIVED_VARIABLES = new Map([
 ]);
 
 /**
- * Variables whose specific incident is already written down.
- *
- * **This list no longer decides anything.** The allowlist above refuses every
- * variable that is not on it, these thirteen included; what this adds is the
- * sentence. A failure that says "logs $http_cookie — the session cookie, a
- * credential outright" is read; one that says "not on the reviewed allowlist" is
- * argued with. Both are refusals.
+ * Variables whose incident is already written down. The allowlist refuses these anyway; this list
+ * only supplies a specific failure sentence.
  */
 export const FORBIDDEN_LOG_VARIABLES = [
   { name: 'request', why: 'the request line verbatim — this is the OIDC authorization code (D2)' },
@@ -324,12 +154,8 @@ export const FORBIDDEN_LOG_VARIABLES = [
 export const STOCK_FORMATS = new Set(['combined', 'main']);
 
 /**
- * The `-c` paths a shipped `nginx` command line may name, and what fills each.
- *
- * An allowlist for the same reason the variables are one: `nginx -c /some/other.conf`
- * runs a configuration this gate has never read, and there is no way to tell from
- * here whether it is the reviewed file or a copy of the pre-fix one. A new path has
- * to arrive with a sentence saying what puts it there.
+ * The `-c` paths a shipped `nginx` command line may name, and what fills each. Any other path is a
+ * config this gate never read.
  *
  * @type {Map<string, string>}
  */
@@ -345,13 +171,8 @@ export const REVIEWED_NGINX_CONFIG_PATHS = new Map([
 ]);
 
 /**
- * Strip `#` comments from nginx configuration text.
- *
- * This gate reads files whose comments discuss `$request`, `combined` and the
- * exact leaking log line at length — deliberately, because that is where the
- * reasoning belongs. Without this the gate would fail on its own documentation,
- * and the obvious "fix" would be to delete the explanation. Quotes are tracked so
- * a `#` inside a string is left alone.
+ * Strip `#` comments from nginx config, so the configs' own explanations of `$request` and
+ * `combined` do not fail the gate. A `#` inside quotes is kept.
  */
 export function stripNginxComments(text) {
   const out = [];
@@ -374,7 +195,7 @@ export function stripNginxComments(text) {
   return out.join('\n');
 }
 
-/** Strip whole-line `#` comments from YAML, for the same reason. */
+/** Strip whole-line `#` comments from YAML. */
 export function stripYamlComments(text) {
   return text
     .split('\n')
@@ -383,22 +204,10 @@ export function stripYamlComments(text) {
 }
 
 /**
- * Read an nginx configuration the way nginx reads it: as tokens, not as lines.
- *
- * Written because a regex could not. The old gate found log formats with
- * `/log_format\s+(\w+)([\s\S]*?);/g`, which is lazy and quote-unaware, so a single
- * `;` inside the first quoted fragment of a format ended the match three arguments
- * early and hid `$request` and `$http_cookie` from the rule that exists to find
- * them. That was not a bug in the regex. nginx's configuration is a token stream
- * where `;`, `{` and `}` are terminators OUTSIDE quotes and ordinary characters
- * INSIDE them, and nothing that does not track quotes can agree with it about where
- * a directive ends.
- *
- * Quotes are stripped from the token, and a quoted empty string still produces a
- * token — `map $http_upgrade $connection_upgrade { default upgrade; '' close; }`
- * has an entry whose key is the empty string, and dropping it would lose the rule
- * that matters. Backslash escapes are kept as written, because the tokens this gate
- * inspects most closely are regexes and `\.` must not silently become `.`.
+ * Read nginx config as tokens, the way nginx does. `;`, `{` and `}` terminate only outside quotes;
+ * a quote-blind regex once ended a `log_format` at a `;` inside a string and hid `$http_cookie`.
+ * A quoted empty string is still a token (a `map` key can be `''`). Backslash escapes are kept, so
+ * a regex's `\.` stays `\.`.
  *
  * @param {string} text nginx configuration, comments already stripped
  * @returns {{name: string, args: string[], id: number|null, parent: number|null}[]}
@@ -482,12 +291,8 @@ export function variablesIn(text) {
 const bareName = (token) => token.replace(/^\$\{?/, '').replace(/\}$/, '');
 
 /**
- * Every `map` in a configuration, keyed by the variable it DEFINES.
- *
- * Keyed by the target rather than listed, because the question this gate asks is
- * always "where did the value in `$prl_client_net` come from" — and because a
- * variable defined by two maps is itself a finding: nginx takes the last one and a
- * reviewer reads the first.
+ * Every `map`, keyed by the variable it defines. Two maps defining one variable is a finding,
+ * because nginx takes the last and a reviewer reads the first.
  *
  * @returns {Map<string, {source: string, entries: {key: string, value: string}[]}[]>}
  */
@@ -506,13 +311,7 @@ export function nginxMaps(directives) {
   return maps;
 }
 
-/**
- * What is wrong with the `map` behind a reviewed derived variable, or null.
- *
- * See REVIEWED_DERIVED_VARIABLES for why this is checked at all. The short version:
- * `$prl_client_net` is only a redaction for as long as the map behind it truncates
- * an address, and nothing about the NAME says it still does.
- */
+/** What is wrong with the `map` behind a reviewed derived variable, or null. */
 export function derivedVariableProblem(name, reviewed, maps) {
   const defined = maps.get(name) ?? [];
   if (defined.length === 0) return `no \`map\` in this configuration defines $${name}`;
@@ -540,12 +339,8 @@ export function derivedVariableProblem(name, reviewed, maps) {
 }
 
 /**
- * The inline nginx config `docker-compose.yml` passes in `PRL_PROXY_NGINX_CONF`.
- *
- * Read from the raw compose text rather than from `docker compose config`, so the
- * gate needs no docker daemon and audits what is COMMITTED. Compose's `$$` escape
- * for a literal `$` is undone, because `$$request` in the file is `$request` in
- * the container and a rule that missed that would be trivially bypassed.
+ * The inline nginx config `docker-compose.yml` passes in `PRL_PROXY_NGINX_CONF`, read from the
+ * committed text so no docker daemon is needed.
  *
  * @returns {string | null} the config, or null if the variable is not there.
  */
@@ -555,14 +350,8 @@ export function inlineNginxConfigFrom(composeText) {
 }
 
 /**
- * Every `KEY: |` block scalar in a compose file, with compose's `$$` undone.
- *
- * Generalised out of `inlineNginxConfigFrom` because the fixed two-element source
- * list was bypass 5: an nginx configuration inlined into `docker-compose.staging.yml`
- * under any name at all was invisible to this gate, and the one that was measured
- * shipped `error_log /dev/stderr info;` and a format logging `$request $http_cookie`.
- * A block scalar is where an nginx config hides in a compose file, so all of them
- * are read and the ones that look like configuration are audited.
+ * Every `KEY: |` block scalar in a compose file, with compose's `$$` undone, since `$$request` in
+ * the file is `$request` in the container.
  *
  * @returns {{key: string, text: string}[]}
  */
@@ -594,25 +383,9 @@ export function looksLikeNginx(text) {
 }
 
 /**
- * Every `nginx` command line in a compose file, and what it puts on it.
- *
- * `nginx -g '<directives>'` prepends directives to the MAIN configuration context —
- * which means a service's `entrypoint:` can set the error-log level of a
- * configuration this gate has already read and approved. Measured against a
- * throwaway container running the SHIPPED `deploy/staging/nginx.conf` with
- * `-g 'daemon off; error_log /dev/stderr info;'`:
- *
- *     2026/08/25 17:25:07 [error] 29#29: *3 connect() failed (111: Connection refused)
- *     while connecting to upstream, client: 172.17.0.1, server: _, request:
- *     "GET /api/v1/session?code=SENTINELCODE123&state=SENTINELSTATE456 HTTP/1.1"
- *
- * The same run with `-g 'daemon off;'` alone logged the sentinel zero times. The
- * config was never edited; the level was supplied beside it, in a file this gate
- * read for something else entirely.
- *
- * Both spellings are matched, because compose has two: the shell form
- * `nginx -c /tmp/nginx.conf -g 'daemon off;'` and the exec-array form
- * `['nginx', '-c', '/etc/nginx/nginx.conf', '-g', 'daemon off;']`.
+ * Every `nginx` command line in a compose file, in shell and exec-array form. `nginx -g` sets
+ * directives beside a reviewed config; measured, `-g 'error_log /dev/stderr info;'` on the shipped
+ * staging config logged the full request line with the query string.
  *
  * @returns {{configPaths: string[], globals: string[]}}
  */
@@ -620,10 +393,7 @@ export function nginxInvocationsIn(composeText) {
   const configPaths = new Set();
   const globals = new Set();
   for (const line of stripYamlComments(composeText).split('\n')) {
-    // From the `nginx` word onwards, never the whole line: the development stack
-    // starts its proxy with `sh -c "exec nginx -c /tmp/nginx.conf …"`, and a scan of
-    // the whole line reads the SHELL's `-c` as nginx's and reports `exec` as a
-    // configuration file. A gate whose failures are nonsense gets switched off.
+    // From the `nginx` word onwards, so the shell's `sh -c` is not read as nginx's `-c`.
     const at = line.search(/\bnginx\b/);
     if (at === -1) continue;
     const tail = line.slice(at);
@@ -637,13 +407,7 @@ export function nginxInvocationsIn(composeText) {
   return { configPaths: [...configPaths], globals: [...globals] };
 }
 
-/**
- * The text between the brace at `open` and its match.
- *
- * Quote-aware, because a brace inside a `map` regex (`"~*(bot){2}"`) is a character
- * and not a block, and a brace counter that disagreed with nginx about that would
- * hand the callback-block rules the wrong text.
- */
+/** The text between the brace at `open` and its match. Quote-aware, for braces in `map` regexes. */
 function blockAt(text, open) {
   let depth = 0;
   let quote = null;
@@ -678,14 +442,8 @@ export function upstreamOf(body) {
 }
 
 /**
- * Audit one nginx configuration, or one fragment of one.
- *
- * `complete` distinguishes a whole server configuration from a fragment such as the
- * directives on an `nginx -g` command line. Every rule about what a directive SAYS
- * applies to both; the rules about what must be PRESENT (an access log, the reviewed
- * format, the callback block) apply only to a configuration that serves traffic,
- * because "this `-g 'daemon off;'` has no OIDC callback block" is a finding about
- * nothing.
+ * Audit one nginx configuration. `complete: false` is for a fragment such as `nginx -g`
+ * directives, where rules about what must be present do not apply.
  *
  * @returns {{message: string, detail: string}[]} empty when the config is clean.
  */
@@ -696,8 +454,7 @@ export function nginxFindings(rawText, label, { complete = true } = {}) {
   const findings = [];
   const fail = (message, detail) => findings.push({ message: `${label}: ${message}`, detail });
 
-  // 7. An include is a hole the size of the file behind it, and this gate cannot
-  // open that file: it does not exist until the image is built.
+  // 7. An included file is not committed here, so this gate cannot read it.
   for (const directive of directives.filter((entry) => entry.name === 'include')) {
     fail(
       `include ${directive.args.join(' ')}`,
@@ -715,8 +472,7 @@ export function nginxFindings(rawText, label, { complete = true } = {}) {
   for (const directive of accessLogs) {
     const target = directive.args[0] ?? '';
     if (target === 'off') continue;
-    // `buffer=`, `gzip`, `flush=` and `if=` are parameters, not a format name; an
-    // access_log with only those has no format, which IS `combined`.
+    // An access_log with only parameters has no format, which is `combined`.
     const second = directive.args[1] ?? '';
     const format = /^(?:buffer=|gzip|flush=|if=)/.test(second) ? '' : second;
     if (STOCK_FORMATS.has(format)) {
@@ -810,9 +566,7 @@ export function nginxFindings(rawText, label, { complete = true } = {}) {
     );
   }
 
-  // 6. proxy_intercept_errors on = an internal redirect = a second chance to log.
-  // Every occurrence, not the first: a `location` block can turn back on what the
-  // `server` block turned off, and reading only the first said nothing about it.
+  // 6. Every occurrence, since a `location` can turn back on what `server` turned off.
   const intercepts = directives.filter((entry) => entry.name === 'proxy_intercept_errors');
   if (complete && intercepts.length === 0) {
     fail(
@@ -872,18 +626,8 @@ export function nginxFindings(rawText, label, { complete = true } = {}) {
 }
 
 /**
- * Every service defined in a compose file, with its body.
- *
- * Enumerated from the text rather than from a hand-maintained list, which is the
- * whole point: this gate has to fail for a service that does not exist yet. A
- * service added next month arrives with no `logging:` block, and if the gate only
- * knew the names of today's services it would pass it in silence — which is
- * exactly how `access_log ... combined;` shipped for as long as it did.
- *
- * Two-space keys under `services:`, four-space bodies. That is the shape of all
- * three compose files in this repository and `docker compose config -q` is what
- * validates the YAML itself; re-implementing a YAML parser here to be general
- * about indentation would be more code and more ways to be wrong.
+ * Every service in a compose file, enumerated from the text so a service added later is checked.
+ * Assumes two-space keys and four-space bodies, the shape of all three compose files here.
  *
  * @returns {{name: string, body: string}[]}
  */
@@ -895,7 +639,6 @@ export function composeServices(rawText) {
   let current = null;
   for (let i = start + 1; i < lines.length; i++) {
     const line = lines[i];
-    // A non-indented, non-blank line ends the services block (`volumes:` etc.).
     if (line.trim() !== '' && !/^\s/.test(line)) break;
     const head = /^ {2}([A-Za-z0-9][A-Za-z0-9._-]*):\s*$/.exec(line);
     if (head !== null) {
@@ -927,29 +670,15 @@ export function logCapOf(serviceBody) {
 }
 
 /**
- * Services this gate deliberately does not require a cap on.
- *
- * **It is empty, and that is a finding rather than an oversight.** Every service
- * in all three compose files is a long-running container whose stdout the Docker
- * daemon collects, so every one of them can fill the host disk and every one of
- * them is capped. Nothing here qualifies for an exemption today.
- *
- * The map exists so that the first service that does qualify has to say so out
- * loud, keyed `<compose file>:<service>`, with a reason a reviewer can disagree
- * with — rather than being dropped from a list of names and never noticed. The
- * only shapes that would plausibly earn an entry are a one-shot `restart: no`
- * container that runs for seconds and exits, or a service that already ships its
- * logs elsewhere through a non-json-file driver. "It is quiet" is NOT a reason:
- * `web` and `postgres` are both quiet, both capped, and the comments beside their
- * caps say exactly why quiet and bounded are different properties.
+ * Services exempt from a log cap, keyed `<compose file>:<service>`. Empty, because every service
+ * here is long-running and capped. A one-shot container or a non-json-file shipping driver might
+ * qualify. "It is quiet" does not.
  *
  * @type {Map<string, string>}
  */
 export const EXEMPT_SERVICES = new Map();
 
 /**
- * Audit every service in one compose file for a bounded container log.
- *
  * @returns {{findings: {message: string, detail: string}[], caps: Map<string, object>}}
  */
 export function composeLoggingFindings(rawText, label) {
@@ -1022,24 +751,13 @@ export function composeLoggingFindings(rawText, label) {
   return { findings, caps };
 }
 
-/**
- * Where a shipped nginx config lives.
- *
- * Listed rather than discovered, and the gate fails if one is missing: the whole
- * point of D2 is that these two files drift, so "I found one and it was fine" must
- * never be a pass. Everything BEYOND these two is discovered — see
- * `discoveredNginxConfigs`, which exists because a fixed list of two was bypass 5.
- */
+/** The two shipped nginx configs, listed so a missing one fails. Others are discovered. */
 export const NGINX_SOURCES = [
   { file: 'deploy/staging/nginx.conf', read: (text) => text },
   { file: 'docker-compose.yml', read: inlineNginxConfigFrom },
 ];
 
-/**
- * Every compose file in the repository. All three, not just the two that ship a
- * proxy: the disk-exhaustion half of D2 is about every container, and the
- * observability stack is the one most likely to be left running and forgotten.
- */
+/** All three compose files. The disk-exhaustion half of D2 is about every container. */
 export const COMPOSE_SOURCES = [
   'docker-compose.yml',
   'docker-compose.staging.yml',
@@ -1047,18 +765,8 @@ export const COMPOSE_SOURCES = [
 ];
 
 /**
- * Every nginx configuration a compose file carries, found rather than listed.
- *
- * Three kinds, and each of them was a way past the old gate:
- *
- *   * `inline` — a `KEY: |` block scalar whose text looks like nginx configuration,
- *     under ANY key, in ANY of the compose files. The old gate read one variable in
- *     one file by name.
- *   * `global` — the directives on an `nginx -g '…'` command line, audited as a
- *     FRAGMENT: what it says is checked, what it omits is not.
- *   * `configPath` — the `-c` argument, which is not audited but must be a path
- *     REVIEWED_NGINX_CONFIG_PATHS accounts for, because a configuration this gate
- *     has never read is not a configuration this gate can vouch for.
+ * Every nginx config a compose file carries. `inline` block scalars are audited wherever they are,
+ * and `nginx -g` globals are audited as fragments.
  *
  * @returns {{label: string, text: string, kind: 'inline'|'global', complete: boolean}[]}
  */
@@ -1080,14 +788,8 @@ export function discoveredNginxConfigs(file, composeText) {
 }
 
 /**
- * Services whose caps must be identical wherever they appear.
- *
- * `docker-compose.yml` and `docker-compose.staging.yml` define the same four
- * services, and D2 exists because those two files drifted: one of them was fixed
- * and the other was not, for as long as nobody diffed them. A per-service cap that
- * is 20m×5 in one file and 10m×3 in the other is the same drift in a new place, so
- * a service appearing in more than one file must carry the same numbers in each.
- * A deployment that genuinely wants different sizes should change both and say why.
+ * A service in more than one compose file must carry the same cap in each, since D2 came from
+ * these files drifting.
  */
 export function crossFileCapFindings(capsByFile) {
   const findings = [];
@@ -1114,7 +816,6 @@ export function crossFileCapFindings(capsByFile) {
 const gate = new Gate('log policy');
 
 export function runLogPolicyGate(root = REPO_ROOT, target = gate) {
-  /** Configurations already audited, by text, so discovery does not report them twice. */
   const audited = new Set();
 
   for (const source of NGINX_SOURCES) {
@@ -1148,7 +849,6 @@ export function runLogPolicyGate(root = REPO_ROOT, target = gate) {
     }
     const raw = readFileSync(path, 'utf8');
 
-    // Everything nginx in this file, whether or not anybody told this gate about it.
     for (const found of discoveredNginxConfigs(file, raw)) {
       if (found.kind === 'inline') discoveredInline += 1;
       else discoveredInvocations += 1;
@@ -1177,10 +877,7 @@ export function runLogPolicyGate(root = REPO_ROOT, target = gate) {
   }
   for (const finding of crossFileCapFindings(capsByFile)) target.fail(finding.message, finding.detail);
 
-  // A sweep of nothing is not a pass, and discovery is the half of this gate with
-  // nothing listed to fall back on. If the inline config is renamed out of reach, or
-  // the proxy stops being started by an `nginx` command line this can read, the
-  // right answer is a failure and not a quieter report.
+  // A sweep of nothing is not a pass, and discovery has no list to fall back on.
   if (discoveredInline === 0) {
     target.fail(
       'no inline nginx configuration was discovered in any compose file',

@@ -1,108 +1,17 @@
 #!/usr/bin/env node
 /**
- * Proof, in a real browser, that this app's Content-Security-Policy actually BLOCKS injected script
- * — and that the page still works while it does.
+ * `pnpm run test:csp`: proves in real Chrome that the production Content-Security-Policy blocks five
+ * script injections and that the page still hydrates and responds. csp-policy.test.ts checks the
+ * policy string and smoke-test.mjs §10 checks it arrives; neither runs a browser.
  *
- * This is what `pnpm run test:csp` does.
+ * Injections arrive in the document bytes. The Fetch domain pauses the document response, splices
+ * markup before `</body>` and fulfils it with the server's own headers and nonce. The obvious routes
+ * prove nothing (all measured): `Runtime.evaluate` is exempt from the page's CSP, `'strict-dynamic'`
+ * lets `createElement('script')` run with any nonce, and `innerHTML` scripts never execute.
+ * Violations are read from the `securitypolicyviolation` event, not console text.
  *
- * ## The gap this closes, concretely
- *
- * There were two CSP checks in this repository and neither of them was this one:
- *
- *   - `apps/web/test/csp-policy.test.ts` asserts the policy's VALUE. It proves the string is right.
- *     It has never met a browser.
- *   - `scripts/smoke-test.mjs` §10 asserts the header ARRIVED at a browser-shaped client, and that
- *     every rendered `<script>` tag carries the per-response nonce. It proves the header is served
- *     and the nonce plumbing is connected. It has never met a browser either — `fetch` does not
- *     enforce a policy, it just receives one.
- *
- * Nothing proved that a browser ENFORCES it. The only evidence of that was four rows of a table in
- * `docs/audit/blocker-remediation.md` recording a manual check somebody did once, by hand, on one
- * machine. A control whose evidence is a memory is not a control, and this repository says so about
- * every other control it owns. This file replaces that memory with a run.
- *
- * ## What it does NOT prove
- *
- *   - Nothing about any browser other than the Chrome it found. A policy is enforced by the client,
- *     and Firefox and Safari have their own CSP implementations with their own gaps.
- *   - Nothing about routes it did not visit. The proxy puts the same policy on every HTML response
- *     (`apps/web/src/proxy.ts`), so one route is representative of the policy — but "representative"
- *     is an argument about the code, not a measurement.
- *   - Nothing about the API origin. That serves its own headers through `@fastify/helmet` and is
- *     covered by `apps/api/test/security-headers.test.ts`.
- *   - Nothing about whether the app has an XSS. A CSP is what limits the damage of one; this file
- *     measures the limit, not the absence of the hole.
- *   - Nothing about `style-src-attr 'unsafe-inline'`, which is a real and deliberate widening that
- *     `apps/web/src/lib/csp.ts` states and bounds. Only script injection is exercised here.
- *
- * ## How the injections are performed, and why every obvious way is wrong
- *
- * This was determined empirically against this policy, in this browser, and each finding below
- * changed the design. Getting it wrong produces a script that proves nothing while printing PASS.
- *
- *   1. **`Runtime.evaluate` is not subject to the page's CSP.** A DevTools evaluation is allowed to
- *      call `eval` on a page whose policy forbids it, and — measured — the exemption lasts for the
- *      whole synchronous evaluation, so even a `<script>` element that the evaluation creates and
- *      appends runs its `eval` unblocked. So `Runtime.evaluate` is used here to INSTALL and to
- *      INSPECT, and never to perform an injection or to run one.
- *
- *   2. **`document.createElement('script')` + `appendChild` is allowed BY THIS POLICY, on purpose.**
- *      The policy carries `'strict-dynamic'`, whose entire meaning is that a script the policy
- *      already trusts may create further scripts. A non-parser-inserted script element therefore
- *      executes with no nonce at all, and with a deliberately wrong one — measured: both ran, and no
- *      violation was reported. That is correct CSP3 behaviour and not a defect. A negative control
- *      built on it would have reported this policy as broken.
- *
- *   3. **`innerHTML` / `insertAdjacentHTML` proves nothing.** HTML says a `<script>` inserted that
- *      way never executes, whatever the policy. Measured: it did not run AND no violation fired.
- *      That is the exact trap this file exists to avoid — "nothing happened" is also what a working
- *      control looks like, and here it means the control never ran.
- *
- * So the injections arrive the way a real one does: **in the bytes of the document, parsed by the
- * HTML parser.** The Fetch domain pauses the top-level document response, the attack markup is
- * spliced in before `</body>`, and the response is fulfilled with the server's own headers —
- * including the server's own `Content-Security-Policy` and its own per-response nonce, untouched.
- * The browser then parses and enforces exactly what the deployment sent. Parser-inserted scripts are
- * outside `'strict-dynamic'`'s trust propagation, which is what makes them the honest test.
- *
- * The one script in the injection that is NOT an attack is the harness's own probe, stamped with the
- * response's REAL nonce. It installs the violation listener from inside the page (so the listener is
- * in place before the attacks are parsed), and it is where `eval()` is called from — page code, with
- * no DevTools exemption anywhere near it. Its running is itself an assertion: an inline script the
- * policy names by nonce must run, or the negative results below would only mean the injection never
- * arrived.
- *
- * ## Violations are read from the DOM event, not from the console
- *
- * A CSP violation surfaces twice: as a `securitypolicyviolation` DOM event, and as a
- * `Log.entryAdded` console error. The DOM event is what is asserted on, because it is structured —
- * `effectiveDirective`, `violatedDirective`, `blockedURI` — and asserting a directive means reading
- * a field rather than pattern-matching an English sentence that Chrome is free to reword. The log
- * entries are captured anyway and written into the JSON report, because they are what a person
- * reading a browser console would have seen.
- *
- * ## Usage
- *
- *     node scripts/csp-negative-control.mjs [--base-url http://127.0.0.1:3000] [--start] [--with-api]
- *                                           [--route /] [--headful] [--out <file>]
- *
- * Run it against a PRODUCTION build (`next build && next start`). The development policy adds
- * `'unsafe-eval'` and an HMR websocket on purpose, so a pass against `next dev` would be worthless —
- * and case 4 below would legitimately fail.
- *
- * ## Exit codes
- *
- *   0  every check passed, or `--help`
- *   1  any check failed, or any check could not be run
- *
- * There is no warning-with-exit-0 anywhere in this file, and that rule matters here more than
- * anywhere else in the repository: a CSP control that skips itself when Chrome is missing, or when
- * the server is not up, is worse than no control at all, because the gate goes green either way.
- * The yellow lines below are context about the run, never the outcome of a check.
- *
- * The pure parts — argument parsing, the markup builder, the violation matcher and the verdict
- * builder — are exported and covered by `scripts/csp-negative-control.test.mjs`, so the run block is
- * guarded by `import.meta.main`.
+ * Run against a production build. The dev policy adds `'unsafe-eval'`. Only Chrome, one route, and
+ * script injection are covered.
  */
 
 import { spawn } from 'node:child_process';
@@ -113,10 +22,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
-// The gate's own constants rather than copies of them, for the reason `age-gate.ts` states in its
-// own header and `scripts/keyboard-audit.mjs` repeats: a harness that seeds `prl_age_gate` while the
-// proxy reads `prl_age_check` sails past the whole feature and reports a clean run against the
-// interstitial. That module imports nothing precisely so things outside the Next runtime can read it.
+// The gate's own constants, so the seeded cookie name is the one the proxy reads.
 import {
   AGE_GATE_COOKIE_NAMES,
   AGE_GATE_MINIMUM_CEILING,
@@ -134,37 +40,17 @@ const red = (s) => paint('31', s);
 const green = (s) => paint('32', s);
 const yellow = (s) => paint('33', s);
 
-// ===========================================================================
-// Constants
-// ===========================================================================
-
 /**
- * The nonce put on the "wrong nonce" injection.
- *
- * Deliberately WELL-FORMED — 16 base64 zero bytes, the same shape `src/proxy.ts` mints — so that a
- * block is attributable to the VALUE being wrong rather than to the attribute being malformed. This
- * is the case that catches a policy which has quietly started serving a static nonce: if the
- * deployment's nonce ever equalled this constant the run refuses to continue rather than reporting a
- * block it could not attribute, which is why `attackMarkup` checks for it.
+ * Well-formed (16 base64 zero bytes, the shape `src/proxy.ts` mints) so a block is attributable to the
+ * value. `attackMarkup` refuses a deployment whose nonce equals it.
  */
 export const WRONG_NONCE = 'AAAAAAAAAAAAAAAAAAAAAA==';
 
-/** The id of the injected element carrying the inline event handler, so the run can find and press it. */
 export const EVENT_HANDLER_ELEMENT_ID = 'prl-csp-negative-control-onclick';
 
 /**
- * The five injections, and what each one must be refused BY.
- *
- * `directives` is a LIST rather than one string because CSP Level 3 splits `script-src` into
- * `script-src-elem` (a `<script>` element, inline or with a src) and `script-src-attr` (an inline
- * event handler), and reports the split name even when the policy only declares `script-src` —
- * which is what this policy does. A CSP Level 2 client would report `script-src` for all of them.
- * Both are correct answers to "which directive refused this", so both are accepted, and the value
- * the browser actually reported is printed and recorded rather than merely checked off.
- *
- * `blockedUri` is `'inline'` for anything the policy refused to compile, `'eval'` for a string
- * evaluated as code, and the URL itself for a script the policy refused to fetch. Asserting it is
- * what stops one case's violation being accepted as another's.
+ * `directives` is a list because CSP3 reports `script-src-elem`/`script-src-attr` while CSP2 reports
+ * `script-src`. `blockedUri` stops one case's violation satisfying another's.
  */
 export const CASES = [
   {
@@ -200,12 +86,11 @@ export const CASES = [
     title: 'a <script src> on an origin the policy does not allow does not load',
     flag: '__prlCspRemoteScriptRan',
     directives: ['script-src-elem', 'script-src'],
-    // Filled in per run: the address the harness's own disallowed origin ended up on.
+    // Filled in per run with the disallowed origin's address.
     blockedUri: null,
   },
 ];
 
-/** Chrome, wherever this platform keeps it. The same candidate list as the two sibling audits. */
 const CHROME_CANDIDATES = [
   process.env.CHROME_PATH,
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
@@ -215,35 +100,16 @@ const CHROME_CANDIDATES = [
   '/usr/bin/chromium-browser',
 ].filter((path) => typeof path === 'string' && path !== '');
 
-/**
- * How long to wait for the app to hydrate before calling it dead.
- *
- * Generous, because the positive control must never fail for being impatient — a false failure here
- * would send somebody looking for a CSP defect that is really a slow machine. `next start` on this
- * app hydrates in well under a second locally; fifteen is roughly twenty times that.
- */
+/** About twenty times local hydration, so a slow machine is not reported as a CSP defect. */
 const HYDRATION_TIMEOUT_MS = 15_000;
 
-/** The settle beat after `load`, so violations raised during parsing have all been dispatched. */
+/** After `load`, so violations raised during parsing have been dispatched. */
 const SETTLE_MS = 500;
 
-// ===========================================================================
-// Options
-// ===========================================================================
-
-/**
- * Defaults mirror the two sibling browser audits: the web app on 3000, the API on 3001, and
- * `PRL_WEB_ORIGIN` honoured so a developer who set it for one harness does not set a second name.
- *
- * `start` is false by default, like `scripts/ax-tree-audit.mjs`: this runs against a production
- * build, and the common case is pointing it at one that is already up.
- */
 const DEFAULTS = {
   baseUrl: process.env.PRL_WEB_ORIGIN ?? 'http://127.0.0.1:3000',
   apiUrl: process.env.PRL_API_ORIGIN ?? 'http://127.0.0.1:3001',
-  // `/` renders without the API, carries the whole app shell — the boot overlay and the theme
-  // control both positive controls below depend on — and gets the same policy as every other HTML
-  // route, because the proxy matcher covers all of them.
+  // `/` renders without the API and carries the boot overlay and theme control the positive controls use.
   route: '/',
   start: false,
   withApi: false,
@@ -283,8 +149,7 @@ export function parseArgs(argv) {
   const options = { ...DEFAULTS, help: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    // `pnpm run test:csp -- --headful` passes the `--` through rather than swallowing it, so both
-    // spellings work instead of one of them dying on "unknown option --".
+    // `pnpm run test:csp -- --headful` passes the `--` through.
     if (arg === '--') continue;
     const value = argv[i + 1];
     const need = () => {
@@ -315,8 +180,6 @@ export function parseArgs(argv) {
       case '--route':
         options.route = need();
         break;
-      // One option, two spellings, because `test:a11y` calls it `--out` and `test:ax` calls it
-      // `--json` and a reader of either should not have to find out which one this is.
       case '--out':
       case '--json':
         options.out = need();
@@ -340,16 +203,9 @@ export function parseArgs(argv) {
   return options;
 }
 
-// ===========================================================================
-// The age gate
-// ===========================================================================
-
 /**
- * True when a navigation ended up on the gate's interstitial instead of where it was sent.
- *
- * Segment matching, never `includes`, for the reason `age-gate.ts` gives at its own `matchesPrefix`:
- * `/age-checkers` is not the gate. The second half — that the REQUEST was not for the gate — is what
- * lets somebody point `--route` at the interstitial and attack it as itself.
+ * Segment matching, never `includes`, because `/age-checkers` is not the gate. A request FOR the gate
+ * does not count, so `--route` can target the interstitial.
  */
 export function landedOnAgeGate(requestedPath, landedPath) {
   const isGate = (path) => path === AGE_GATE_PATH || path.startsWith(`${AGE_GATE_PATH}/`);
@@ -357,13 +213,8 @@ export function landedOnAgeGate(requestedPath, landedPath) {
 }
 
 /**
- * The declaration cookie(s) to seed into the browser profile, as `Network.setCookie` parameters.
- *
- * `AGE_GATE_MINIMUM_CEILING` is the highest threshold the gate can hold — anything larger is clamped
- * down to it — so one value satisfies every configuration without this harness knowing which is in
- * force. The `__Host-` name is seeded only over HTTPS, because the prefix means "Secure, and set by
- * this host" and Chrome refuses it otherwise; over plain HTTP the proxy reads the unprefixed name,
- * which is why `age-gate.ts` carries two.
+ * `AGE_GATE_MINIMUM_CEILING` satisfies any configured threshold. The `__Host-` name is seeded only over
+ * HTTPS, because Chrome refuses it otherwise.
  */
 export function ageDeclarationCookies(origin) {
   const url = new URL(origin);
@@ -377,28 +228,11 @@ export function ageDeclarationCookies(origin) {
   }));
 }
 
-// ===========================================================================
-// The injection
-// ===========================================================================
-
 /**
- * The markup spliced into the document, in the order the parser will meet it.
- *
- * The first element is the harness's own probe and is the only one the policy should admit: it
- * carries the response's real nonce. It has to come FIRST, because a listener registered after an
- * attack has been parsed cannot hear that attack's violation, and it has to be an inline script in
- * the document rather than a `Runtime.evaluate` call for the `eval` case — page code, compiled under
- * the page's policy, with no DevTools exemption anywhere near it.
- *
- * Every attack writes a distinct global by plain assignment. Nothing in an attack may dereference a
- * harness object: if a probe were somehow absent, an attack that threw on `undefined.x` would look
- * exactly like an attack the policy refused.
- *
- * The `<script src>` points at an origin this harness itself is serving on a spare port — a
- * different origin from the app by port alone. That is better than a public URL in two ways: the run
- * needs no internet, and the check is demonstrably able to fire, because if the policy did not block
- * it the script would really be fetched and would really set its flag. The run asserts both that the
- * flag is unset and that that server was never asked for anything.
+ * The probe comes first with the real nonce, so its violation listener hears every attack, and it
+ * calls `eval` as page code. Attacks only assign globals and never dereference a harness object, so a
+ * missing probe cannot look like a block. The `<script src>` points at a local off-policy port, so the
+ * check needs no internet and a policy failure is positively detected.
  */
 export function attackMarkup({ nonce, remoteScriptUrl }) {
   if (typeof nonce !== 'string' || nonce.length === 0) {
@@ -439,15 +273,8 @@ export function attackMarkup({ nonce, remoteScriptUrl }) {
 }
 
 /**
- * Splice the attack markup into a document, immediately before `</body>`.
- *
- * Before `</body>` because it is the one position that is both inside the parsed document and after
- * everything the app rendered — measured, and React hydrates the page around it without removing it.
- * Injecting into `<head>` would race the app's own scripts for no benefit.
- *
- * A document with no `</body>` is a document this cannot attack, and that THROWS rather than
- * returning the input unchanged. A silent no-op here is the precise failure this whole file exists
- * to make impossible: five injections that were never made are five injections that never ran.
+ * Before `</body>`, measured as a position React hydrates around without removing. A document with
+ * no `</body>` throws, because a silent no-op would mean no injection ran.
  */
 export function injectAttackMarkup(html, markup) {
   const at = html.lastIndexOf('</body>');
@@ -461,15 +288,8 @@ export function injectAttackMarkup(html, markup) {
 }
 
 /**
- * Whether one reported violation is the one a case is waiting for.
- *
- * Both halves are required. Matching only the directive would let the `eval` case be satisfied by
- * the inline-script violation that arrives a line earlier — both are `script-src` on a Level 3
- * client — and a matcher that can be satisfied by the wrong evidence is a matcher that will one day
- * pass with four of the five injections not made at all.
- *
- * `violatedDirective` is read as a fallback for `effectiveDirective` because the two are aliases in
- * current browsers and only the older name exists in CSP Level 2.
+ * Directive and blocked URI must both match, or the inline-script violation could satisfy the eval
+ * case. `violatedDirective` is the CSP2 name for `effectiveDirective`.
  */
 export function matchesViolation(report, expectation) {
   if (report === null || typeof report !== 'object') return false;
@@ -481,13 +301,7 @@ export function matchesViolation(report, expectation) {
   return String(report.blockedURI ?? '') === expectation.blockedUri;
 }
 
-/**
- * The verdict, from the recorded checks.
- *
- * Pass requires three things and not two: no failure, at least one negative-control check, and at
- * least one positive-control check. A run that failed before it injected anything has no failures
- * either, and "0 failures" must never be reachable by never having looked.
- */
+/** Pass needs no failure, one negative-control pass and one positive-control pass. */
 export function buildVerdict(record) {
   const failures = record.filter((entry) => entry.level === 'fail');
   const passes = record.filter((entry) => entry.level === 'pass');
@@ -508,15 +322,7 @@ export function buildVerdict(record) {
   };
 }
 
-// ===========================================================================
-// A very small CDP client
-//
-// Lifted from `scripts/keyboard-audit.mjs` and `scripts/ax-tree-audit.mjs` on purpose rather than
-// shared through a helper module, for the reason the latter states: these are release gates, and a
-// gate that depends on a file another gate can change is a gate that can be broken from a distance.
-// The one addition is `on`, because this script has to answer protocol EVENTS — `Fetch.requestPaused`
-// is a conversation, not a call.
-// ===========================================================================
+// CDP client copied, not shared, from keyboard-audit.mjs so one gate cannot break another.
 
 class Page {
   #socket;
@@ -564,12 +370,7 @@ class Page {
     });
   }
 
-  /**
-   * Evaluates an expression in the page and returns its value.
-   *
-   * Used only to INSTALL and to INSPECT. Never to inject: a DevTools evaluation is exempt from the
-   * page's policy — see the file header, where that exemption is measured rather than assumed.
-   */
+  /** Install and inspect only. A DevTools evaluation is exempt from the page's policy. */
   async evaluate(expression) {
     const result = await this.send('Runtime.evaluate', {
       expression,
@@ -582,14 +383,7 @@ class Page {
     return result.result.value;
   }
 
-  /**
-   * A real key press, through Chrome's own input pipeline.
-   *
-   * `keyDown` rather than `rawKeyDown` for a key that types something: with `rawKeyDown` the page
-   * sees the event and the browser performs no default action, so Enter on a button does nothing at
-   * all. That distinction is documented at length in `scripts/keyboard-audit.mjs`, where it cost a
-   * debugging session.
-   */
+  /** `keyDown`, not `rawKeyDown`, which suppresses the default action so Enter on a button does nothing. */
   async press(key) {
     const KEYS = {
       Enter: { windowsVirtualKeyCode: 13, text: '\r' },
@@ -631,16 +425,9 @@ function chromePath() {
 
 async function withChrome(headful, run) {
   const binary = chromePath();
-  // Offset by pid so two runs on one machine do not fight over a port, and kept clear of the ranges
-  // the keyboard audit (9222+) and the AX audit (9800+) use.
+  // Clear of keyboard-audit (9222+) and ax-tree-audit (9800+).
   const port = 9400 + Math.floor(process.pid % 150);
-  /**
-   * A profile directory per run, removed afterwards.
-   *
-   * Not a fixed path: this harness seeds an age declaration COOKIE, and a shared profile would carry
-   * that declaration into the next run, so a later run against a gated deployment would pass on a
-   * cookie it never set. The keyboard audit records the same reasoning.
-   */
+  // A fresh profile per run, so a seeded age cookie cannot carry into a later run.
   const profile = mkdtempSync(join(tmpdir(), 'prl-csp-negative-control-'));
   const child = spawn(
     binary,
@@ -667,11 +454,9 @@ async function withChrome(headful, run) {
     const page = await Page.open(target.webSocketDebuggerUrl);
     await page.send('Page.enable');
     await page.send('Runtime.enable');
-    // The console side of a violation. Not what anything is asserted on — see the file header — but
-    // recorded, because it is what a person looking at a browser console would have seen.
+    // Console violations are recorded for the report but never asserted on.
     await page.send('Log.enable');
-    // Enabled for `Network.setCookie` only: seeding the age declaration before the first navigation
-    // is what stops a gated deployment serving the interstitial instead of the page.
+    // For `Network.setCookie`, so a gated deployment serves the page.
     await page.send('Network.enable');
     try {
       return await run(page, version.Browser);
@@ -680,9 +465,7 @@ async function withChrome(headful, run) {
     }
   } finally {
     child.kill('SIGTERM');
-    // Chrome writes its profile out as it exits, so removing it races the browser. `maxRetries`
-    // gives it its moment, and the catch means the worst case is a few megabytes in the system temp
-    // directory rather than a passing run turned into a filesystem error.
+    // Chrome writes its profile as it exits, so removal retries and tolerates failure.
     try {
       rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     } catch (error) {
@@ -693,18 +476,7 @@ async function withChrome(headful, run) {
   }
 }
 
-// ===========================================================================
-// The disallowed origin
-// ===========================================================================
-
-/**
- * A one-file HTTP server on a spare port, which the policy does not allow and must never be asked.
- *
- * A different port is a different origin, so this is genuinely off-policy without needing a second
- * hostname, a certificate, or the internet. It records every request it receives, and the body it
- * would serve sets a flag — so "the policy failed" is something this run can positively DETECT
- * rather than infer from an absence.
- */
+/** A different port is a different origin. It records every request, so a policy failure is detected. */
 async function startDisallowedOrigin() {
   const requests = [];
   const server = createServer((request, response) => {
@@ -724,29 +496,11 @@ async function startDisallowedOrigin() {
   };
 }
 
-// ===========================================================================
-// Servers
-// ===========================================================================
-
 /**
- * Refuses to go on when something already answers where a server this run starts will be polled.
- *
- * `waitUntilReady` accepts the first 200 from its URL and cannot tell its own child's answer from a
- * stranger's, so with the port taken the control injects into whatever IS there. Measured on
- * 2026-11-10 with a production `next start` from this checkout started by hand on :3521: `--start
- * --base-url http://127.0.0.1:3521` printed "starting the web app...", then "PASS — the browser
- * refused every injection, and the page still worked." and exited 0, about a policy served by a
- * server this run did not start. A `node:http` page on the port exited 1 only because it served no
- * CSP nonce to inject with.
- *
- * It CONNECTS to where the poll will go, rather than binding 127.0.0.1 as `scripts/a11y-audit.mjs`
- * first did. Measured on macOS with Node 24.18: a bind of 127.0.0.1 succeeds beside a listener on
- * the wildcard address, so it called a `node:http` server free on its default address, on `0.0.0.0`
- * and on `::` (`lsof`: `TCP *:3533`), and refused only one bound to 127.0.0.1; a connect to
- * 127.0.0.1 reached all four. `next start` listens on the wildcard (`TCP *:3521`). A second `next
- * start` there exits `EADDRINUSE :::3521`; beside a stranger on 127.0.0.1 alone it binds `*:3522` and
- * stays up while the poll reaches the stranger. Only ECONNREFUSED counts as free, so a probe that
- * cannot decide refuses.
+ * `waitUntilReady` cannot tell its own child's answer from a stranger's, so an occupied port is
+ * refused (a hand-started `next start` on :3521 was measured passing this run). It connects rather
+ * than binds, because on macOS a bind to 127.0.0.1 succeeds beside a wildcard listener (Node 24.18,
+ * 2026-11-10). Only ECONNREFUSED counts as free.
  */
 async function refuseOccupiedPort(url) {
   const { hostname, port, protocol } = new URL(url);
@@ -776,15 +530,6 @@ async function refuseOccupiedPort(url) {
   );
 }
 
-/**
- * A child server this script owns and must clean up.
- *
- * The same class, for the same reason, as `scripts/a11y-audit.mjs` and `scripts/ax-tree-audit.mjs`:
- * `pnpm --filter ... start` is a wrapper, so killing the wrapper leaves the real server holding the
- * port, and an orphan makes the next run test a build nobody meant to test. Detached, signalled by
- * process group, ESRCH tolerated.
- */
-/** The port `next start` should bind, taken from the origin this control will probe. */
 function portFromOrigin(origin) {
   const port = new URL(origin).port;
   return port === '' ? '3000' : port;
@@ -809,8 +554,6 @@ class ManagedServer {
       env: { ...process.env, ...this.env },
     });
     const keep = (chunk) => {
-      // Kept, not printed: a healthy Next boot is twenty lines of noise, and it is only wanted when
-      // the server fails to come up.
       this.output.push(chunk.toString());
       if (this.output.length > 200) this.output.shift();
     };
@@ -831,7 +574,6 @@ class ManagedServer {
       }
       try {
         const response = await fetch(this.readyUrl, { signal: AbortSignal.timeout(2000) });
-        // Any HTTP answer means it is listening; a 404 on the ready URL is still a live server.
         if (response.status > 0) return;
       } catch {
         // Not up yet.
@@ -857,17 +599,8 @@ class ManagedServer {
   }
 }
 
-// ===========================================================================
-// Reporting
-// ===========================================================================
-
 const record = [];
 
-/**
- * `kind` is `negative` for an injection that had to be refused and `positive` for the page still
- * working. `buildVerdict` requires at least one passing check of each, which is what stops a run
- * that fell over early from reporting a clean sheet.
- */
 const ok = (kind, label, detail = '') => {
   record.push({ level: 'pass', kind, label, detail });
   console.log(`  ${green('✓')} ${label}${detail === '' ? '' : ` ${dim(detail)}`}`);
@@ -876,24 +609,16 @@ const bad = (kind, label, detail) => {
   record.push({ level: 'fail', kind, label, detail });
   console.log(`  ${red('✗')} ${label}\n${dim(`      ${detail}`)}`);
 };
-/** Context about the run, never the outcome of a check. Nothing here can change the exit code. */
+/** Context about the run. Never changes the exit code. */
 const note = (label, detail) => {
   record.push({ level: 'note', kind: 'context', label, detail });
   console.log(`  ${yellow('!')} ${label} ${dim(detail)}`);
 };
 const section = (title) => console.log(`\n${bold(title)}`);
 
-// ===========================================================================
-// The run
-// ===========================================================================
-
 /**
- * Navigate, intercepting the document response so the attack markup is in the bytes the parser sees.
- *
- * The server's own headers are put back untouched apart from the three that describe the body's
- * encoding and length, which no longer describe it. The `Content-Security-Policy` in particular is
- * the deployment's, nonce and all — the whole point is to make the browser enforce what the app
- * really served, against markup the app really did not.
+ * The server's headers are returned untouched, CSP and nonce included, apart from those describing the
+ * body's encoding and length.
  */
 async function navigateWithInjection(page, pageUrl, remoteScriptUrl) {
   const outcome = { injected: false, nonce: null, policy: null, status: null, error: null, serverHtml: '' };
@@ -902,9 +627,7 @@ async function navigateWithInjection(page, pageUrl, remoteScriptUrl) {
     try {
       const headers = params.responseHeaders ?? [];
       const status = params.responseStatusCode ?? 0;
-      // A redirect has no body to attack. Let it through; where it landed is checked afterwards,
-      // because an interstitial served under the route's name is the failure `a11y-audit.mjs`
-      // describes at length.
+      // A redirect has no body to attack. Where it landed is checked afterwards.
       if (status < 200 || status >= 300) {
         await page.send('Fetch.continueRequest', { requestId: params.requestId });
         return;
@@ -918,9 +641,7 @@ async function navigateWithInjection(page, pageUrl, remoteScriptUrl) {
       const html = body.base64Encoded ? Buffer.from(body.body, 'base64').toString('utf8') : body.body;
       outcome.serverHtml = html;
       const injected = injectAttackMarkup(html, attackMarkup({ nonce: outcome.nonce, remoteScriptUrl }));
-      // `content-length` and `content-encoding` described the server's body and no longer describe
-      // this one; leaving either in place makes Chrome truncate the page or try to gunzip plain
-      // text. Everything else — the policy above all — is handed back exactly as it arrived.
+      // The old length and encoding would make Chrome truncate the page or gunzip plain text.
       const keep = headers.filter(
         (header) =>
           !['content-encoding', 'content-length', 'transfer-encoding'].includes(header.name.toLowerCase()),
@@ -933,19 +654,15 @@ async function navigateWithInjection(page, pageUrl, remoteScriptUrl) {
       });
       outcome.injected = true;
     } catch (error) {
-      // Recorded and then let through, rather than left paused: a hung navigation reports itself as
-      // a timeout somewhere else, and the reader has to be told the injection is what failed.
+      // Let through, not left paused, so the injection failure is what gets reported.
       outcome.error = error instanceof Error ? error.message : String(error);
       await page.send('Fetch.continueRequest', { requestId: params.requestId }).catch(() => {
-        // The request may already be gone; `outcome.error` above is the failure that gets reported,
-        // and a second error raised while trying to recover would replace it with a worse message.
+        // The request may already be gone. Keep the first error.
       });
     }
   });
 
-  // Only the top-level document is paused. Every subresource — including the disallowed script, if
-  // the policy ever let it through — travels its normal path, so what is measured is the browser's
-  // behaviour and not the harness's.
+  // Only the top-level document is paused. Subresources travel their normal path.
   await page.send('Fetch.enable', {
     patterns: [{ urlPattern: '*', requestStage: 'Response', resourceType: 'Document' }],
   });
@@ -983,7 +700,6 @@ async function navigateWithInjection(page, pageUrl, remoteScriptUrl) {
   return outcome;
 }
 
-/** The five injections, judged against what the page reported. */
 function judgeNegativeControls(state, executed, disallowedRequests, cases) {
   for (const testCase of cases) {
     const expectation = { directives: testCase.directives, blockedUri: testCase.blockedUri };
@@ -1022,8 +738,7 @@ function judgeNegativeControls(state, executed, disallowedRequests, cases) {
     );
   }
 
-  // The remote case has a second, independent witness that no assertion about the DOM can give: the
-  // origin the policy forbids was never asked for anything.
+  // A second witness: the forbidden origin was never asked for anything.
   if (disallowedRequests.length === 0) {
     ok('negative', 'the disallowed origin was never contacted', 'no request reached it at all');
   } else {
@@ -1037,33 +752,10 @@ function judgeNegativeControls(state, executed, disallowedRequests, cases) {
 }
 
 /**
- * The page still works.
- *
- * ## The hydration signal, and why it is trustworthy
- *
- * `.prl-boot` is the `BootSequence` overlay. It is rendered BY THE SERVER — deliberately, so it is
- * in the first paint rather than fading in over a shell the reader can already read — and it is
- * removed from the DOM by client-side React, which returns `null` once the boot state reaches
- * `gone`. So the element's ABSENCE is a fact only the client bundle can produce.
- *
- * That makes it a better signal than any generic one:
- *
- *   - It is checked against the bytes this very run received, not against an assumption: the server
- *     HTML captured at interception must CONTAIN it, or the signal is reported as unavailable and
- *     the run fails rather than reading a missing element as success.
- *   - It cannot be satisfied by CSS. Elements are counted in the DOM, so `display: none` — which is
- *     what `globals.css` does under reduced motion — does not fake it.
- *   - It cannot be satisfied by a page that failed to load, which is the trap this control exists
- *     for: a blank page, an error boundary or a document whose every script was blocked all keep the
- *     server's overlay exactly where the server put it.
- *   - And it is this app's own code rather than a framework internal, so it cannot be quietly
- *     invalidated by a React or Next upgrade.
- *
- * Under `'strict-dynamic'` the `'self'` in `script-src` is IGNORED for the parser-inserted tags the
- * document carries, so every one of this app's own `<script src>` bundles is admitted by its nonce
- * and by nothing else. Hydration having happened at all is therefore also proof that the nonce
- * mechanism worked end to end — the same nonce, in the same response, that the wrong-nonce injection
- * above was refused for not having.
+ * Hydration signal: `.prl-boot` is server-rendered and removed by client React, so its absence is
+ * something only the client bundle can produce. It is counted in the DOM, so `display: none` cannot
+ * fake it, and the captured server HTML must contain it. Under `'strict-dynamic'` the app's own
+ * bundles load only by nonce, so hydration also proves the nonce worked.
  */
 async function checkPositiveControls(page, serverHtml) {
   const serverRenderedOverlay = serverHtml.includes('prl-boot');
@@ -1139,17 +831,8 @@ async function checkPositiveControls(page, serverHtml) {
 }
 
 /**
- * The page is interactive: something that needs JavaScript actually responds.
- *
- * The theme control, driven by a REAL key press through Chrome's input pipeline. It is the right
- * control for this because its whole effect is JavaScript: `ThemeToggle`'s `onChange` calls
- * `applyTheme`, which writes `data-theme` on `<html>`. There is no form post and no CSS that can
- * produce that attribute, so a changed value is proof that a React event handler ran.
- *
- * A visible, not-currently-checked option is chosen on purpose. Two instances of the control are
- * rendered — the header and the mobile sheet — and the sheet's copy has no layout boxes at this
- * viewport; pressing Space on an already-checked radio fires no `change` at all, so a check that
- * picked either would report a dead page on a live one.
+ * The theme control, by a real key press. `data-theme` can only change if a React handler ran. A
+ * visible unchecked option is chosen, because Space on a checked radio fires no `change`.
  */
 async function checkInteractivity(page) {
   const before = await page.evaluate("document.documentElement.getAttribute('data-theme')");
@@ -1255,8 +938,7 @@ async function main() {
     } else {
       const probe = await fetch(pageUrl, { headers: { accept: 'text/html' } }).catch(() => null);
       if (probe === null || !probe.ok) {
-        // Not a warning. A CSP control that cannot reach the deployment has proved nothing, and
-        // exiting 0 here would put a green tick on a gate that never ran.
+        // Not a warning. A control that cannot reach the deployment has proved nothing.
         console.error(red(`\n${pageUrl} is not serving. Start it, or pass --start.`));
         console.error(dim('  pnpm --filter @prl/web build && pnpm --filter @prl/web start\n'));
         process.exit(1);
@@ -1286,9 +968,7 @@ async function main() {
       }
       note('policy under test', `${policy.length} chars, nonce ${injection.nonce}`);
 
-      // The event-handler case needs the handler to be REACHED, which needs an activation. Enter on
-      // a focused button is a real one and, unlike a click at coordinates, does not depend on where
-      // the injected element ended up on the page.
+      // Enter on a focused button activates the handler wherever the element landed.
       const focused = await page.evaluate(
         `(() => {
            const button = document.getElementById(${JSON.stringify(EVENT_HANDLER_ELEMENT_ID)});
@@ -1322,17 +1002,14 @@ async function main() {
       );
 
       section('Negative control — every injection is refused');
-      // When the button could not be focused the event-handler case has already been failed above
-      // with the reason. Judging it again here would print a second, less accurate failure for the
-      // same one case and would double-count it in the summary.
+      // When focus failed, the case already failed above. Judging it again would double-count it.
       judgeNegativeControls(
         state,
         executed,
         disallowed.requests,
         focused ? cases : cases.filter((testCase) => testCase.id !== 'event-handler-attribute'),
       );
-      // The eval case has a second witness the DOM event cannot give: what the page's own `try`
-      // block caught. A violation with no throw would mean the evaluation happened anyway.
+      // A violation with no EvalError would mean the evaluation happened anyway.
       if (/^EvalError/.test(String(state.evalOutcome ?? ''))) {
         ok('negative', 'eval() threw in page code', String(state.evalOutcome).slice(0, 90));
       } else {
@@ -1374,8 +1051,6 @@ async function main() {
           policy,
           generatedAt: new Date().toISOString(),
           record,
-          // What a person watching the browser console would have seen, kept because it is the
-          // other half of the evidence even though nothing is asserted on it.
           consoleSecurityLog: logEntries
             .filter((entry) => /content security policy/i.test(entry.text ?? ''))
             .map((entry) => ({ level: entry.level, text: entry.text })),

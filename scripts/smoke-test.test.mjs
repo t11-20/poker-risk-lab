@@ -1,73 +1,9 @@
 #!/usr/bin/env node
 /**
- * Tests for the parts of `scripts/smoke-test.mjs` that decide things.
- *
- * Run with:  node --test scripts/smoke-test.test.mjs
- * Also run by:  pnpm run test:scripts
- *
- * ## What these exist to prevent
- *
- * The smoke script is a release gate, and a release gate that cannot be run twice in a row is a
- * gate nobody trusts. Section 12 deliberately exhausts the guest-creation limiter, that limiter is
- * keyed on the caller's ADDRESS (it has to be — the route issues the session an address-free key
- * would rotate), and its window is fixed rather than sliding. So a run ends with the counter over
- * the limit and most of a window still to go, and the next run is refused at section 2.
- *
- * The script now recovers from that: it resets the counters when the deployment has the reset
- * control, and waits out the window when it does not. Every decision in that recovery is pure and
- * is tested here, because every one of them can be wrong in a way that still looks like a working
- * script:
- *
- * 1. **The Retry-After parser.** `Number('-5')` is -5 and `Number('12.7')` is 12.7. A parser that
- *    uses `Number` alone turns a malformed or hostile header into an instant retry that fails
- *    again, or into a fractional-second wait, and the run then reports the wrong cause. So the
- *    parser accepts only a run of digits, and the negative controls below feed it every shape a
- *    naive parser would accept.
- *
- * 2. **The classifier.** Reading "the limiter is working" as "leftover quota from last run" costs
- *    one bounded wait. Reading it the other way round is the defect this whole change exists to
- *    remove: the run fails at section 2 and then four later sections fail for a reason that has
- *    nothing to do with rooms, hand history or progress. Both directions are asserted, including
- *    the exact boundary (a 429 on attempt N with a limit of N is leftover; on attempt N+1 it is
- *    the limiter).
- *
- * 3. **The bound.** A fallback that waits without a ceiling is a release gate that hangs. The
- *    bound is asserted to refuse, and — the part that matters — the healthy case is asserted to
- *    WAIT, because a planner that refuses everything would pass a file full of "assert refused".
- *
- * 4. **Argument parsing.** `--origin` is passed by `scripts/staging.mjs` on every staging smoke
- *    run, so a regression here breaks a gate rather than a convenience. Precedence (flag, then
- *    environment, then default) is asserted at each layer, and every refusal is asserted to name
- *    its reason rather than to say "invalid".
- *
- * 5. **The reset path, against the server's own constant.** The harness composes the path from
- *    `API_PREFIX` instead of writing one literal, because `apps/api/test/harness-paths.test.ts`
- *    extracts every `'/api/v1/...'` literal from the script and demands the server route it —
- *    which this route deliberately is not, unless RATE_LIMIT_RESET_TOKEN is configured. That
- *    dodge would have removed a real guard against drift, so the drift is caught here instead, by
- *    reading the exported constant out of the API source and comparing.
- *
- * ## Would these fail if the behaviour broke?
- *
- * Checked by breaking each one on purpose while writing them:
- *
- *  * Parser: reverting `parseDeltaSeconds` to `Number(raw)` makes the `-5`, `12.7`, `1e3` and
- *    HTTP-date cases return numbers, and each of those is asserted `null` here. Confirmed by
- *    computing the naive answer inside the test and asserting it DIFFERS, so the negative control
- *    is a property of the test rather than of the current implementation.
- *  * Classifier: a version that always returns 'leftover' fails the boundary case; one that always
- *    returns 'working' fails the first-attempt case. Both are present.
- *  * Planner: a planner that ignored `maxWaitSeconds` fails the bound case; one that refused
- *    everything fails `waits out a window that fits inside the bound`.
- *  * Argument parsing: each refusal asserts on the MESSAGE, so a change that throws a generic
- *    'invalid' still fails.
- *  * Path drift: the extractor is fed a doctored source with a different path and asserted to
- *    return that different value, which is what proves it reads the file rather than restating a
- *    constant. It is also fed a source with the declaration deleted and asserted to return null.
- *
- * Every scan-style assertion also checks that it scanned something: the API source is asserted to
- * be substantial and to contain the neighbouring code, so a truncated or wrong file could not pass
- * quietly.
+ * Tests for the decisions in `scripts/smoke-test.mjs`: the Retry-After parser, the leftover-quota
+ * classifier, the bounded recovery plan, argument parsing, the reset path against the API's own
+ * constant, and the confidentiality checks. Each negative control writes out the old expression and
+ * asserts it disagrees with the new one, so a revert fails here by construction.
  */
 
 import assert from 'node:assert/strict';
@@ -94,29 +30,20 @@ import {
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-/** An environment with nothing set, so a default is genuinely a default and not an inherited value. */
 const EMPTY_ENV = Object.freeze({});
-
-// ---------------------------------------------------------------------------
-// The Retry-After parser
-// ---------------------------------------------------------------------------
 
 describe('parseDeltaSeconds', () => {
   it('reads the delta-seconds form this API actually sends', () => {
     assert.equal(parseDeltaSeconds('42'), 42);
     assert.equal(parseDeltaSeconds('0'), 0);
-    // Whitespace around a header value is not part of it (RFC 9110 field values are trimmed).
     assert.equal(parseDeltaSeconds('  30  '), 30);
   });
 
   it('refuses every malformed shape a Number() parser would accept', () => {
-    // The negative control. Each of these has a NUMERIC value under `Number`, which is exactly how
-    // a malformed header becomes a wait of the wrong length or an instant retry.
+    // Each of these is numeric under `Number`, which is how a malformed header becomes a bad wait.
     for (const malformed of ['-5', '12.7', '1e3', '0x10', ' +7', 'Infinity']) {
       assert.equal(parseDeltaSeconds(malformed), null, `"${malformed}" must not parse`);
-      // And the property the assertion depends on: a naive parser really would have accepted it.
-      // `!Number.isNaN` rather than `Number.isFinite`, because "Infinity" is precisely the case a
-      // finite-only guard would already have caught and the others are the cases it would not.
+      // `!Number.isNaN`, not `Number.isFinite`, so "Infinity" counts as a value a naive parser accepts.
       assert.ok(
         !Number.isNaN(Number(malformed.trim())),
         `"${malformed}" is not a useful negative control unless Number() accepts it`,
@@ -125,8 +52,7 @@ describe('parseDeltaSeconds', () => {
   });
 
   it('refuses the HTTP-date form rather than guessing at clock skew', () => {
-    // RFC 9110 allows it, this API never sends it, and converting one needs both clocks to agree.
-    // Returning null makes the run say "there is nothing to wait for" instead of waiting wrong.
+    // This API never sends an HTTP-date, and converting one needs both clocks to agree.
     assert.equal(parseDeltaSeconds('Wed, 21 Oct 2026 07:28:00 GMT'), null);
   });
 
@@ -137,17 +63,14 @@ describe('parseDeltaSeconds', () => {
   });
 
   it('refuses a value too large to be a safe integer', () => {
-    // A header of 25 nines parses as a finite Number and loses precision. A wait computed from it
-    // is meaningless, and `--max-wait` would refuse it anyway — but silently rounding first is how
-    // a bound gets compared against a number nobody produced.
+    // 25 nines parse as a finite Number with lost precision.
     assert.equal(parseDeltaSeconds('9'.repeat(25)), null);
   });
 });
 
 describe('recoveryWaitSeconds', () => {
   it('takes the largest of the three sources a 429 carries', () => {
-    // Retry-After and x-ratelimit-reset come from one ttl rounded in opposite directions, and the
-    // harness gets exactly one retry. Believing the smaller one spends it a second early.
+    // Both headers come from one ttl rounded in opposite directions, and the harness gets one retry.
     assert.equal(recoveryWaitSeconds({ retryAfter: '30', rateLimitReset: '31', bodySeconds: 29 }), 31);
     assert.equal(recoveryWaitSeconds({ retryAfter: '31', rateLimitReset: '30', bodySeconds: 29 }), 31);
   });
@@ -166,33 +89,25 @@ describe('recoveryWaitSeconds', () => {
       null,
     );
     assert.equal(recoveryWaitSeconds({}), null);
-    // A negative body value is not a duration either; `Math.max` would happily return it.
+    // `Math.max` would return a negative body value.
     assert.equal(recoveryWaitSeconds({ bodySeconds: -4 }), null);
   });
 });
 
-// ---------------------------------------------------------------------------
-// Leftover quota versus a working limiter
-// ---------------------------------------------------------------------------
-
 describe('classifyGuestLimit', () => {
   it('calls a 429 leftover when this run cannot have caused it', () => {
-    // Section 2 is the first guest creation of the run. A 429 there, against a limit of 10, can
-    // only mean the previous run's section 12 drained the bucket.
+    // The first guest creation of the run, so the previous run's section 12 drained the bucket.
     assert.equal(classifyGuestLimit({ attempt: 1, limit: 10 }), 'leftover');
   });
 
   it('calls a 429 the limiter working once this run has spent the budget', () => {
-    // The negative control for the case above, and the one that matters: if this ever returns
-    // 'leftover', the harness would wait out a limit that is genuinely too low and report a pause
-    // instead of a misconfiguration.
+    // If this returned 'leftover', a limit that is too low would be waited out as a pause.
     assert.equal(classifyGuestLimit({ attempt: 11, limit: 10 }), 'working');
     assert.equal(classifyGuestLimit({ attempt: 60, limit: 10 }), 'working');
   });
 
   it('puts the boundary where the limiter puts it', () => {
-    // `max: 10` allows ten and refuses the eleventh. So a 429 on the tenth means somebody else
-    // spent one, and a 429 on the eleventh is the documented behaviour.
+    // `max: 10` allows ten and refuses the eleventh.
     assert.equal(classifyGuestLimit({ attempt: 10, limit: 10 }), 'leftover');
     assert.equal(classifyGuestLimit({ attempt: 11, limit: 10 }), 'working');
   });
@@ -207,10 +122,6 @@ describe('classifyGuestLimit', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// The recovery plan and its bound
-// ---------------------------------------------------------------------------
-
 const HEALTHY = Object.freeze({
   verdict: 'leftover',
   waitSeconds: 30,
@@ -220,8 +131,7 @@ const HEALTHY = Object.freeze({
 
 describe('planRecovery', () => {
   it('waits out a window that fits inside the bound', () => {
-    // The positive control for every refusal below. A planner that refused everything would pass
-    // all of them and break every fallback run.
+    // A planner that refused everything would pass every refusal below.
     const plan = planRecovery(HEALTHY);
     assert.equal(plan.action, 'wait');
     assert.equal(plan.waitMs, (30 + RECOVERY_PADDING_SECONDS) * 1_000);
@@ -229,8 +139,7 @@ describe('planRecovery', () => {
   });
 
   it('pads the wait past the window boundary rather than landing on it', () => {
-    // The store restarts a window when `iterationStartMs + timeWindow <= now`, and Retry-After is
-    // already rounded to whole seconds. Waiting exactly the reported time can land inside.
+    // Retry-After is whole seconds, and a wait of exactly that can land on the window boundary.
     assert.ok(RECOVERY_PADDING_SECONDS >= 1, 'the padding must actually pad');
     assert.equal(planRecovery({ ...HEALTHY, waitSeconds: 0 }).waitMs, RECOVERY_PADDING_SECONDS * 1_000);
   });
@@ -241,7 +150,7 @@ describe('planRecovery', () => {
     assert.match(plan.reason, /exceeds the --max-wait bound of 90s/);
     assert.match(plan.reason, /RATE_LIMIT_RESET_TOKEN/, 'the refusal must name the deterministic fix');
     assert.equal(plan.waitMs, 0);
-    // Exactly at the bound is still a wait; an off-by-one here silently halves the useful range.
+    // Exactly at the bound is still a wait.
     assert.equal(planRecovery({ ...HEALTHY, waitSeconds: 90 }).action, 'wait');
   });
 
@@ -267,22 +176,16 @@ describe('planRecovery', () => {
   });
 
   it('checks the working verdict before the missing-header case', () => {
-    // Order matters: a working limiter that also stripped its headers must be reported as a limit
-    // that is too low, not as a header problem, because only the first is actionable.
+    // A working limiter must be reported as too low, not as a header problem.
     const plan = planRecovery({ ...HEALTHY, verdict: 'working', waitSeconds: null });
     assert.match(plan.reason, /limiter working as documented/);
   });
 
   it('accepts a bound of zero as "never wait"', () => {
-    // `--max-wait 0` is the honest way to say "fail immediately rather than pause a pipeline".
     const plan = planRecovery({ ...HEALTHY, waitSeconds: 1, maxWaitSeconds: 0 });
     assert.equal(plan.action, 'abandon');
   });
 });
-
-// ---------------------------------------------------------------------------
-// Which bucket a run consumes
-// ---------------------------------------------------------------------------
 
 describe('originBucketNote', () => {
   it('says a literal address pins the bucket', () => {
@@ -293,14 +196,9 @@ describe('originBucketNote', () => {
   it('warns that a hostname hands the bucket to DNS', () => {
     const note = originBucketNote('http://localhost:3001');
     assert.match(note, /hostname/);
-    // The specific trap: the API deliberately does NOT fold ::1 into 127.0.0.1.
     assert.match(note, /::1 and 127\.0\.0\.1 are deliberately separate/);
   });
 });
-
-// ---------------------------------------------------------------------------
-// Argument parsing
-// ---------------------------------------------------------------------------
 
 describe('parseArgs', () => {
   it('defaults to the literal loopback address and the dev web origin', () => {
@@ -327,8 +225,7 @@ describe('parseArgs', () => {
   });
 
   it('reads the reset token from the flag, then PRL_, then the server variable', () => {
-    // The last of those is deliberate: a developer whose local .env already carries the SERVER's
-    // RATE_LIMIT_RESET_TOKEN gets deterministic isolation for free under --env-file.
+    // A local .env that carries the server's RATE_LIMIT_RESET_TOKEN gives isolation for free.
     assert.equal(parseArgs([], { RATE_LIMIT_RESET_TOKEN: 'server' }).resetToken, 'server');
     assert.equal(
       parseArgs([], { RATE_LIMIT_RESET_TOKEN: 'server', PRL_RATE_LIMIT_RESET_TOKEN: 'harness' }).resetToken,
@@ -346,25 +243,23 @@ describe('parseArgs', () => {
   it('takes --strict from either the flag or the environment', () => {
     assert.equal(parseArgs(['--strict'], EMPTY_ENV).strict, true);
     assert.equal(parseArgs([], { PRL_SMOKE_STRICT: '1' }).strict, true);
-    // Anything other than exactly "1" is not strict; a stray "true" must not silently arm a gate.
+    // Only exactly "1" arms strict mode.
     assert.equal(parseArgs([], { PRL_SMOKE_STRICT: 'true' }).strict, false);
   });
 
   it('absorbs the -- that pnpm forwards', () => {
-    // `pnpm run test:smoke -- --strict` passes the separator through as an argument.
     const options = parseArgs(['--', '--strict'], EMPTY_ENV);
     assert.equal(options.strict, true);
   });
 
   it('prints help without validating anything else', () => {
-    // --help must work on a machine whose environment is nonsense, or it cannot explain how to fix
-    // the environment.
+    // --help must work when the environment is broken.
     const options = parseArgs(['--help'], { PRL_API_ORIGIN: 'not-a-url' });
     assert.equal(options.help, true);
   });
 
   it('names the reason for every refusal', () => {
-    // "invalid --origin" would send the reader to the source. Each of these says what is wrong.
+    // Each refusal says what is wrong.
     assert.throws(() => parseArgs(['--nope'], EMPTY_ENV), /unknown option --nope \(try --help\)/);
     assert.throws(() => parseArgs(['--origin'], EMPTY_ENV), /--origin needs a value/);
     assert.throws(() => parseArgs(['--max-wait'], EMPTY_ENV), /--max-wait needs a value/);
@@ -378,8 +273,7 @@ describe('parseArgs', () => {
   });
 
   it('normalises an origin to scheme://host:port so two spellings cannot fork a bucket', () => {
-    // A trailing slash is not a different origin, and the whole point of pinning the origin is
-    // that one run and the next agree about which rate-limit bucket they are in.
+    // A trailing slash is the same origin and the same rate-limit bucket.
     assert.equal(
       parseArgs(['--origin', 'http://127.0.0.1:3001/'], EMPTY_ENV).apiOrigin,
       'http://127.0.0.1:3001',
@@ -393,17 +287,7 @@ describe('parseArgs', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// The reset path, against the server's own constant
-// ---------------------------------------------------------------------------
-
-/**
- * Reads `export const RATE_LIMIT_RESET_PATH = '...'` out of a TypeScript source.
- *
- * A text scan rather than an import because this is a `.mjs` test and the constant lives in a
- * `.ts` module with the repository's whole dependency graph behind it. The scan is narrow enough
- * to be unambiguous and is negative-controlled below.
- */
+/** A text scan, because importing the `.ts` module would pull in the API's dependency graph. */
 function exportedResetPath(source) {
   return /export const RATE_LIMIT_RESET_PATH = '([^']+)'/.exec(source)?.[1] ?? null;
 }
@@ -412,8 +296,7 @@ describe('the reset path the harness posts to', () => {
   const securitySource = readFileSync(join(REPO_ROOT, 'apps/api/src/plugins/security.ts'), 'utf8');
 
   it('scanned the file it meant to scan', () => {
-    // The scanned-set check. A truncated read, a moved file or a wrong path would otherwise make
-    // every assertion below vacuous.
+    // A truncated read or a moved file would make every assertion below vacuous.
     assert.ok(securitySource.length > 12_000, `security.ts is only ${securitySource.length} bytes`);
     assert.match(securitySource, /clientKeyedRateLimit/, 'this is not the security plugin');
     assert.match(securitySource, /registerRateLimitResetRoute/, 'the reset control is not in this file');
@@ -425,7 +308,6 @@ describe('the reset path the harness posts to', () => {
   });
 
   it('would notice a rename: the extractor reads the file rather than restating a constant', () => {
-    // The negative control. Feed it a doctored source and it must report the doctored value.
     const doctored = securitySource.replace(
       "export const RATE_LIMIT_RESET_PATH = '/api/v1/_test/rate-limit/reset'",
       "export const RATE_LIMIT_RESET_PATH = '/api/v1/_test/rate-limit/moved'",
@@ -440,15 +322,11 @@ describe('the reset path the harness posts to', () => {
   });
 });
 
-/**
- * Removes comments, exactly as `apps/api/test/harness-paths.test.ts` does, so that a path
- * discussed in prose is not read as a path the script calls.
- */
+/** The same comment stripping as `apps/api/test/harness-paths.test.ts`. */
 function stripComments(source) {
   return source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
 }
 
-/** Every `'/api/v1/...'` literal in a source, using harness-paths.test.ts's own extractor. */
 function apiPathLiterals(source) {
   return [...stripComments(source).matchAll(/['"`](\/api\/v1\/[^'"`\s]*)['"`]/g)].map((match) => match[1]);
 }
@@ -458,46 +336,27 @@ describe('the harness does not hand harness-paths.test.ts a route that must not 
   const literals = apiPathLiterals(harnessSource);
 
   it('scanned a real set of paths', () => {
-    // Without this, an extractor that silently matched nothing would make the assertion below
-    // pass for the wrong reason.
     assert.ok(literals.length > 12, `expected the harness to name many API paths, found ${literals.length}`);
     assert.ok(literals.includes('/api/v1/auth/guest'), 'the guest route is the one this whole file is about');
   });
 
   it('never writes the reset path as a single literal', () => {
-    // `harness-paths.test.ts` extracts these literals and asserts the server routes every one.
-    // That guard is right for all of them except this route, which is ABSENT unless
-    // RATE_LIMIT_RESET_TOKEN is configured — its absence is the shipped state. Composing the path
-    // from API_PREFIX keeps that guard honest instead of forcing it to demand a route production
-    // must never serve.
+    // `harness-paths.test.ts` asserts the server routes every literal, and this route is absent unless
+    // RATE_LIMIT_RESET_TOKEN is configured.
     const offenders = literals.filter((path) => path.startsWith('/api/v1/_test/'));
     assert.deepEqual(offenders, [], 'compose the test-control path from API_PREFIX instead');
   });
 
   it('would notice if somebody inlined it', () => {
-    // The negative control: the same detector, fed a source that really does inline the path.
     const doctored = `const p = '${RATE_LIMIT_RESET_PATH}';`;
     const offenders = apiPathLiterals(doctored).filter((path) => path.startsWith('/api/v1/_test/'));
     assert.deepEqual(offenders, [RATE_LIMIT_RESET_PATH]);
   });
 });
 
-// ---------------------------------------------------------------------------
-// Assertions that must not evaporate when the field is absent
-// ---------------------------------------------------------------------------
-
 /**
- * Section 5's checks on the coach report and the equity result were written so that a MISSING
- * field produced neither a pass nor a failure. That is the worst of the three outcomes: an
- * empty list is a coach that stated nothing, and an absent block is a coach that has stopped
- * modelling the thing at all — and the run said neither.
- *
- * ## Would these fail against the old code?
- *
- * Yes, and it was checked that way rather than assumed. Each block below states the OLD
- * expression as well as the new one and asserts they DISAGREE on the absent case, so the
- * negative control is a property of this test rather than of the current implementation — a
- * revert to `?.length === 0` or `=== null` fails here, not merely a rename.
+ * Section 5 once let a missing field produce neither a pass nor a failure. Each case states the old
+ * expression and asserts it disagrees with the new one on the absent case.
  */
 describe('assertions about absence', () => {
   it('treats an empty list as missing, which is what it was already doing', () => {
@@ -508,16 +367,14 @@ describe('assertions about absence', () => {
     const report = { suggestion: {} };
     assert.equal(listIsMissingOrEmpty(report.uncertainty?.limitations), true);
 
-    // The old test, spelled out. It is false for `undefined`, and section 5 had no `else`, so
-    // the check produced nothing at all — neither `ok` nor `bad`.
+    // The old test. It is false for `undefined`, and section 5 had no `else`.
     const asItWasWritten = report.uncertainty?.limitations?.length === 0;
     assert.equal(asItWasWritten, false, 'the fixture must actually reproduce the old blind spot');
     assert.notEqual(listIsMissingOrEmpty(report.uncertainty?.limitations), asItWasWritten);
   });
 
   it('is false for a list that has something in it, so it cannot fire on every report', () => {
-    // The positive control. A predicate that returned true unconditionally would pass both
-    // assertions above.
+    // A predicate that always returned true would pass the assertions above.
     assert.equal(listIsMissingOrEmpty(['sampling error is not modelled']), false);
     assert.equal(listIsMissingOrEmpty([0]), false);
   });
@@ -531,7 +388,6 @@ describe('assertions about absence', () => {
 
 describe('the confidence-interval check on a sampled equity', () => {
   it('passes a sampled result that carries its interval', () => {
-    // Positive control: a predicate that always fired would pass every other case here.
     assert.equal(
       sampledEquityMissesInterval({ method: 'monte-carlo', confidenceHalfWidthPoints: 0.4 }),
       false,
@@ -554,33 +410,17 @@ describe('the confidence-interval check on a sampled equity', () => {
     const equity = { method: 'monte-carlo' };
     assert.equal(sampledEquityMissesInterval(equity), true);
 
-    // The old test, spelled out, disagreeing on exactly this case. A serialiser that drops
-    // undefined fields — or a route that stopped computing the half-width — produces this
-    // shape, and the run then printed a Monte Carlo percentage that reads as exact.
+    // The old test, which passed an absent half-width.
     const asItWasWritten = equity.confidenceHalfWidthPoints === null;
     assert.equal(asItWasWritten, false, 'the fixture must actually reproduce the old blind spot');
     assert.notEqual(sampledEquityMissesInterval(equity), asItWasWritten);
   });
 });
 
-// ---------------------------------------------------------------------------
-// The hostile-input negative control
-// ---------------------------------------------------------------------------
-
 /**
- * Section 5 sends six deliberately invalid bodies to `POST /math/equity` and reports "all 6
- * hostile calculation inputs rejected". It used to accept ANY 4xx as a rejection.
- *
- * Section 12 exhausts the expensive-rate-limit budget on purpose, and that limiter answers
- * before the request reaches a route. So a run in which the budget was already spent — a second
- * run inside one window, a shared bucket, a deployment without the reset control — answered all
- * six probes with 429 and printed the claim anyway, having reached no validator at all.
- *
- * ## Would these fail against the old code?
- *
- * The old rule is written out below as `oldRuleCountedItRejected` and asserted to DISAGREE with
- * the classifier on the 429 case. Restoring `status >= 400 && status < 500` therefore fails
- * here by construction rather than by coincidence.
+ * Section 5 once counted any 4xx as a rejection, so six 429s from a spent expensive-rate-limit
+ * budget printed "all 6 hostile calculation inputs rejected". `oldRuleCountedItRejected` writes out
+ * the old rule and must disagree on the 429 case.
  */
 describe('classifyHostileRefusal', () => {
   const response = (status, code) => ({
@@ -603,8 +443,6 @@ describe('classifyHostileRefusal', () => {
     assert.equal(verdict.kind, 'untested');
     assert.match(verdict.why, /before any validator/);
 
-    // The old rule, spelled out. It counted this as a pass, which is how six 429s became
-    // "all 6 hostile calculation inputs rejected".
     const oldRuleCountedItRejected = limited.status >= 400 && limited.status < 500;
     assert.equal(oldRuleCountedItRejected, true, 'the fixture must reproduce what the old rule saw');
     assert.notEqual(verdict.kind, 'rejected');
@@ -615,50 +453,23 @@ describe('classifyHostileRefusal', () => {
   });
 
   it('does not count a 4xx that carries no validation code', () => {
-    // 401 and 403 are 4xx and are not validation: a session that expired mid-section would
-    // otherwise have read as six successful refusals.
+    // A session that expired mid-section must not read as six refusals.
     assert.equal(classifyHostileRefusal(response(401, 'not_authenticated')).kind, 'wrong-refusal');
     assert.equal(classifyHostileRefusal(response(403, 'csrf_failed')).kind, 'wrong-refusal');
     assert.equal(classifyHostileRefusal(response(404, undefined)).kind, 'wrong-refusal');
   });
 
   it('calls a 200 accepted, which is the failure the section was written for', () => {
-    // The positive control for the other direction: a classifier that returned 'rejected' for
-    // everything would pass the three cases above, and a classifier that never did would pass
-    // this one.
+    // A classifier that returned 'rejected' for everything would pass the three cases above.
     assert.equal(classifyHostileRefusal(response(200)).kind, 'accepted');
     assert.equal(classifyHostileRefusal(response(500, 'internal_error')).kind, 'accepted');
   });
 });
 
-// ---------------------------------------------------------------------------
-// The confidentiality property, on the wire
-// ---------------------------------------------------------------------------
-
 /**
- * Section 7's live scan used to read, in full:
- *
- *     if (frame.view.street === 'complete') return false;
- *     return seats.some((seat) => seat.holeCards !== null && seat.seat !== view.viewerSeat);
- *
- * — every frame of a finished hand exempted, on the reasoning that a showdown makes cards
- * public. A showdown does; a FOLD does not, and `HandResult.showdowns` is documented as "empty
- * when the hand ended before showdown (everyone else folded)". The smoke run's own client checks
- * or calls when it can and folds when it cannot, so a hand that ends without a showdown is the
- * ORDINARY outcome here.
- *
- * Measured, before the fix, against a stub API that served the opponent's hole cards in the
- * `street: 'complete'` frame of a hand nobody showed down: section 7 printed
- * `✓ no live frame carried another seat's hole cards mid-hand`, section 8 printed
- * `✓ an archived hand carries no opponent's unshown hole cards` (the archive was honest — only
- * the wire was not), and the whole run reported no failure. The one claim this script exists to
- * make, green over a live leak.
- *
- * ## Would these fail against the old code?
- *
- * The old expression is written out below as `oldScanExemptedIt` and asserted to DISAGREE on the
- * fold-ended case, so restoring the `street === 'complete'` exemption fails here by construction
- * rather than by coincidence.
+ * Section 7 once skipped every `street === 'complete'` frame, which exempts a hand that ended by
+ * fold, the ordinary outcome here. A stub API that served the opponent's cards in that frame left
+ * the whole run green. `oldScanExemptedIt` must disagree on the fold-ended case.
  */
 describe('unentitledHoleCardSeats', () => {
   const frame = (street, { opponentCards = null, showdowns = null } = {}) => ({
@@ -686,16 +497,13 @@ describe('unentitledHoleCardSeats', () => {
     const leaking = frame('complete', { opponentCards: ['Qs', 'Qc'] });
     assert.deepEqual(unentitledHoleCardSeats(leaking), [1]);
 
-    // The old expression, spelled out. It returned early on every completed frame, so this leak
-    // produced neither a pass nor a failure — it produced a tick.
     const oldScanExemptedIt = leaking.view.street === 'complete';
     assert.equal(oldScanExemptedIt, true, 'the fixture must reproduce what the old scan skipped');
     assert.notEqual(unentitledHoleCardSeats(leaking).length, 0);
   });
 
   it('exempts a seat that genuinely showed down, so the check is not just "never send cards"', () => {
-    // The positive control. A predicate that flagged every foreign holeCards would pass every
-    // assertion above and would fail every honest showdown this product is built to display.
+    // A predicate that flagged every foreign holeCards would fail every honest showdown.
     const shown = frame('complete', { opponentCards: ['Qs', 'Qc'], showdowns: [{ seat: 0 }, { seat: 1 }] });
     assert.deepEqual(unentitledHoleCardSeats(shown), []);
   });
@@ -707,8 +515,7 @@ describe('unentitledHoleCardSeats', () => {
   });
 
   it('treats an ABSENT holeCards key as absent rather than as a leak', () => {
-    // `!== null` reported a leak here — a serialiser that drops nulls would have failed the gate
-    // for emitting nothing at all. `!= null` is the idiom section 8 already used.
+    // An absent key is safe. `!== null` would fail a serialiser that drops nulls.
     const dropped = frame('flop');
     dropped.view.seats[1].holeCards = undefined;
     assert.deepEqual(unentitledHoleCardSeats(dropped), []);
@@ -719,7 +526,6 @@ describe('unentitledHoleCardSeats', () => {
     renamed.view.seats[0].isSelf = undefined;
     assert.deepEqual(unentitledHoleCardSeats(renamed), [], "the viewer's own seat is still exempt");
 
-    // …and the other way: with viewerSeat gone, isSelf still carries it.
     const noViewerSeat = frame('flop');
     noViewerSeat.view.viewerSeat = null;
     assert.deepEqual(unentitledHoleCardSeats(noViewerSeat), []);
@@ -732,55 +538,20 @@ describe('unentitledHoleCardSeats', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// The archive's confidentiality check — the one that examined nothing
-// ---------------------------------------------------------------------------
-
 /**
- * Section 8's card check, and the defect it replaced.
- *
- * ## What was there
- *
- *     const foreignCards = aliceRows.filter((hand) => {
- *       const seats = Array.isArray(hand.seats) ? hand.seats : [];
- *       return seats.some((seat) => seat.holeCards != null && seat.isSelf !== true && ...);
- *     });
- *
- * `aliceRows` are the rows of `GET /api/v1/hands`, whose contract is `HandListResponse` — rows of
- * `HandSummary`, which has no `seats` field, because `routes/hands.ts` deliberately never projects
- * `hand_seats.hole_cards` into a summary. So `hand.seats` was `undefined` on every row, `[]` was
- * substituted, `.some()` over `[]` is false, and section 8 printed
- * `✓ an archived hand carries no opponent's unshown hole cards` having walked zero seats.
- *
- * Measured on 2026-08-27 against the real routes and a real database, with a two-seat fold-out
- * hand archived: `row keys: ["id","roomId","handNumber","startedAt","completedAt","board",
- * "heroNet","endedByFold","potTotal"]`, `row.seats is undefined`, `foreignCards=0, seats actually
- * examined=0`. `GET /hands/:handId` — the one route in this API that ever serves a hole card — was
- * never fetched by the script for a hand that exists.
- *
- * ## Would this fail against the old code?
- *
- * Measured, on the same real routes, with BOTH server-side redaction layers removed — the SQL
- * `case` in `routes/hands.ts` and `toReviewSeat`'s `maySeeCards` in `build-review.ts` — so that
- * the route genuinely served the opponent's cards on a hand nobody showed down:
- *
- *     served seats: [{"seat":0,…,"holeCards":["Ah","Ks"],"showedDown":false},
- *                    {"seat":1,…,"holeCards":["7c","2d"],"showedDown":false}]
- *     auditReviewSeats -> {"leaked":[1],"overclaimed":[],"examined":2,"ownCards":true}
- *     the OLD check, same run: rows=1 foreignCards=0  -> a green tick
- *
- * `oldSectionEightSaidClean` below is that expression, spelled out, so restoring it fails here by
- * construction rather than by coincidence.
+ * Section 8 once scanned `hand.seats` on `GET /hands` rows. Those are `HandSummary`, with no `seats`
+ * field, so it walked zero seats and passed (measured on 2026-08-27). With both server-side redaction
+ * layers removed, `auditReviewSeats` reported `leaked: [1]` while the old check stayed clean.
+ * `oldSectionEightSaidClean` is that old expression.
  */
 describe('auditReviewSeats', () => {
-  /** The old expression, verbatim, so the two can be compared on one payload. */
   const oldSectionEightSaidClean = (listRows) =>
     listRows.filter((hand) => {
       const seats = Array.isArray(hand.seats) ? hand.seats : [];
       return seats.some((seat) => seat.holeCards != null && seat.isSelf !== true && seat.showedDown !== true);
     }).length === 0;
 
-  /** What `GET /api/v1/hands` really returns, measured against the live routes. */
+  /** A `GET /hands` row as the live routes return it. */
   const LIST_ROW = {
     id: 'hand_realshapeaaaaaaaaaaa',
     roomId: 'room_realshapeaaaaaaaaaaa',
@@ -815,19 +586,16 @@ describe('auditReviewSeats', () => {
   });
 
   it('finds the leak the old check could not see, on the payload the old check was given', () => {
-    // The server leaks; the review carries the opponent's cards on a hand nobody showed down.
     const review = { seats: [seat(0, ['Ah', 'Ks']), seat(1, ['7c', '2d'])] };
     assert.deepEqual(auditReviewSeats(review, truth).leaked, [1]);
 
-    // And the old check, handed the list response that accompanies exactly this leak, is clean.
-    // It is not that it disagrees — it never looked. `seats` is not a field of a hand summary.
+    // The old check never looked. `seats` is not a field of a hand summary.
     assert.equal(LIST_ROW.seats, undefined, 'the fixture must reproduce the shape that has no seats');
     assert.equal(oldSectionEightSaidClean([LIST_ROW]), true, 'the old expression printed a tick here');
   });
 
   it('exempts a seat that genuinely showed down, so the rule is not "never send cards"', () => {
-    // The positive control. A predicate that flagged every foreign holeCards would fail every
-    // honest showdown, which is the product working.
+    // A predicate that flagged every foreign holeCards would fail every honest showdown.
     const shown = { seats: [seat(0, ['Ah', 'Ks']), seat(1, ['7c', '2d'], true)] };
     const showdownTruth = { ...truth, shownSeats: [0, 1] };
     assert.deepEqual(auditReviewSeats(shown, showdownTruth), {
@@ -839,9 +607,8 @@ describe('auditReviewSeats', () => {
   });
 
   it('refuses to take showedDown on trust when the wire named no such showdown', () => {
-    // `showedDown` is the server's own assertion, and it is the flag that opens the column. A
-    // server that marked every seat as having shown would open every hand ever played and satisfy
-    // `leaked === []` while doing it. Held to `result.showdowns` from the live hand instead.
+    // A server that marked every seat as shown would open every hand, so `showedDown` is held to
+    // `result.showdowns` from the live hand.
     const overclaiming = { seats: [seat(0, ['Ah', 'Ks']), seat(1, ['7c', '2d'], true)] };
     const audit = auditReviewSeats(overclaiming, truth);
     assert.deepEqual(audit.leaked, [], 'the flag does exempt it from the card rule');
@@ -849,7 +616,7 @@ describe('auditReviewSeats', () => {
   });
 
   it('reports a sweep of nothing as a sweep of nothing, rather than as clean', () => {
-    // The whole defect, in two shapes. Neither may read as a pass: `leaked` is empty for both.
+    // Neither shape may read as a pass, although `leaked` is empty for both.
     const noSeats = auditReviewSeats({ seats: [] }, truth);
     assert.deepEqual(noSeats.leaked, []);
     assert.equal(noSeats.examined, 0, 'section 8 fails on this');
@@ -858,7 +625,6 @@ describe('auditReviewSeats', () => {
     assert.deepEqual(noCards.leaked, []);
     assert.equal(noCards.ownCards, false, 'and on this');
 
-    // And a response that is not a review at all.
     assert.equal(auditReviewSeats(undefined, truth).examined, 0);
     assert.equal(auditReviewSeats({ hands: [] }, truth).examined, 0);
   });
@@ -869,9 +635,8 @@ describe('auditReviewSeats', () => {
   });
 
   it('does not exempt anybody when the caller’s own seat is unknown', () => {
-    // `HandReviewSeat` has no `isSelf`, so the own seat comes from the wire. If it went missing the
-    // scan would call every seat foreign — stricter, and wrong, which is why section 8 refuses to
-    // run at all rather than reporting on it. Pinned here so the shape of that failure is known.
+    // `HandReviewSeat` has no `isSelf`, so the own seat comes from the wire. Section 8 refuses to run
+    // without it.
     const review = { seats: [seat(0, ['Ah', 'Ks']), seat(1, null)] };
     const audit = auditReviewSeats(review, { ...truth, viewerSeat: null });
     assert.deepEqual(audit.leaked, [0]);
@@ -908,9 +673,7 @@ describe('liveHandTruth', () => {
   });
 
   it('reports a missing viewerSeat as null rather than letting undefined stand in for a seat', () => {
-    // `seat.seat === truth.viewerSeat` against `undefined` is false for every seat, which widens
-    // the scan to "no seat is your own" — stricter by accident and a broken check. Section 8 fails
-    // on a null instead.
+    // An undefined viewerSeat would call every seat foreign. Section 8 fails on a null instead.
     const truth = liveHandTruth([stateFrame({ handId: 'h', street: 'complete', result: null })]);
     assert.equal(truth.viewerSeat, null);
     assert.deepEqual(truth.shownSeats, [], 'a null result exempts nobody');

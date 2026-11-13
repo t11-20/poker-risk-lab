@@ -1,99 +1,22 @@
 #!/usr/bin/env node
 /**
- * The screen-reader certification, run as a session rather than filled in as a form.
+ * `pnpm run certify:screen-reader`: a guided VoiceOver session for the certification rows a person
+ * must listen to. `osascript` error -1743 blocks an agent from driving VoiceOver, not a person.
  *
- * This is what `pnpm run certify:screen-reader` does.
- *
- * ## Why this exists
- *
- * `docs/production/accessibility-certification.md` is a long document of 72 assertions, and every
- * release report this project has produced records the same result for it: **UNVERIFIED**. The
- * reason given each time is `osascript` error **-1743** — macOS refusing an agent permission to
- * send Apple events to System Events, so nothing automated can drive VoiceOver or read back what
- * it said.
- *
- * That reason is true and it is also, for this purpose, beside the point. **-1743 blocks an agent.
- * It does not block a person.** A human sitting at the machine needs no Automation grant to press
- * Command + F5 and listen; what they have needed, and not had, is a way to work through dozens of
- * assertions without losing their place, and a way to leave behind something a release report can
- * cite. A markdown table with blank cells is not that.
- *
- * So this harness does the parts a machine can do — check the environment, hold the place, read
- * the assertions out of the document, refuse an incomplete result, stamp it with the commit it was
- * run against — and leaves the one part a machine cannot do, which is listening, to the person.
- *
- * ## It asks for 1 of the 72, and says so
- *
- * A large share of those 72 were never really about speech. "The theme control announces as a radio
- * group with three options, the current one selected" is a fact about the accessibility tree, and a
- * machine reads that tree better than a person listening to it can. **71 of the 72 are now checked
- * on every run of `pnpm run test:ax`** (`scripts/ax-assertions.mjs`, one check per assertion ID),
- * and this session presents only the **1** that is left: one state no fixture reaches honestly.
- * Twenty of those 71 were in this session until the gate grew four fixtures — a live table over
- * a real socket, a hand it played and replayed at `/review/<handId>`, a second web app with no
- * API behind it, and a third behind a proxy that flips one byte of that hand's real deck reveal —
- * because "needs a live table", "needs the API down" and "needs a bad proof" were statements about
- * the gate rather than about speech. Three more moved because they were application DEFECTS filed as
- * certification limits, and three more on 2026-08-26 because the reason each had been left was
- * answerable: a prompt read twice has exactly one cause inside the tree (2.4), "no score anywhere"
- * is decidable by running the quiz twice and requiring the two ends to read the same (2.9), and a
- * server refusal needs one task rather than a second actor (3.19). Two more moved on the same day
- * because they were product defects rather than certification limits and the document had already
- * said so: the Lab's filtered count is now in the document title, which is the one channel a full
- * page load announces (4.2), and the background behind the navigation sheet is now `inert` rather
- * than merely declared out of scope with `aria-modal` (7.4). And 6.7 moved on 2026-08-27, when the
- * pass-through proxy section 5 had costed was finally built: it forwards the real API's real review
- * response with one hex digit of one salt flipped, so a failing deck proof is a state the gate can
- * reach without the product containing a code path that can lie about a deal. Section 5 of the
- * document names every one of them.
- *
- * Which set a row is in is decided by the document's own `Checked by` column, not by anything here,
- * so re-marking a row moves it with no code change — and `screen-reader-certify.test.mjs` asserts
- * that the `auto` rows are exactly the rows `ax-assertions.mjs` has a check for, in both
- * directions. A check deleted while the document still says `auto` would take that row out of the
- * automated set AND out of this session at once, leaving it covered by nobody. That is the failure
- * the mapping test exists to prevent.
- *
- * **This does not weaken the blocker.** The 1 still needs a person, and until somebody has worked
- * through it the certification is UNVERIFIED. What changed is that it is now two minutes rather than
- * an afternoon, and that a regression in any of the other 71 fails `pnpm run verify` on the day it
- * lands instead of waiting for a session nobody has scheduled. The 1 is a limit of what a fixture
- * can honestly reach, not a defect this session is holding: the two that WERE defects, 4.2 and 7.4,
- * were fixed in the product rather than left here. See section 5 of the document.
- *
- * ## It reads the document; it does not restate it
- *
- * Every assertion presented here is parsed out of the certification document at run time. That is
- * deliberate and it is the whole reason this file is short. A harness that carried its own copy of
- * the assertions would be a second source of truth that drifts from the first the moment
- * somebody edits either — and the failure would be silent, because a certification that asks the
- * wrong questions still produces a filled-in form. Edit the document; this follows.
- *
- * ## A certification is only valid for the commit it was run against
- *
- * The artefact records the SHA and whether the tree was clean. `--check` re-reads it and refuses
- * to call it current if `HEAD` has moved, which is what stops a passing certification from being
- * quoted at a build nobody listened to. That is the same rule
- * `deploy/staging/staging-verified.json` already applies to a smoke run, for the same reason.
- *
- * ## What this does NOT do
- *
- * It does not certify anything. It records what a person heard. If the person clicks through
- * without listening, the artefact is worthless and nothing here can tell. The defence against that
- * is the same as for any manual QA: the reviewer's name is on it, `--check` shows what build it
- * covers, and a `FAIL` or a `SILENT` requires a quoted announcement, so a careless PASS is at
- * least a deliberate one.
+ * Rows are parsed from `docs/production/accessibility-certification.md` at run time, so the document
+ * is the only copy. Its `Checked by` column decides which rows are `auto` (asserted by
+ * `pnpm run test:ax`) and which need a person. The test pins `auto` rows to the checks in
+ * `ax-assertions.mjs` in both directions. The artefact records the commit, and `--check` refuses it
+ * once HEAD moves. It records what a person heard and certifies nothing by itself.
  *
  * Usage:
- *     pnpm run certify:screen-reader                 # start or resume a session (the 10)
+ *     pnpm run certify:screen-reader                 # start or resume a session
  *     pnpm run certify:screen-reader -- --all        # every row, machine-covered ones included
  *     pnpm run certify:screen-reader -- --check      # is the recorded result current?
  *     pnpm run certify:screen-reader -- --preflight  # environment only, answer nothing
  *     pnpm run certify:screen-reader -- --section J3 # one journey
  *
- * Exit codes:
- *     0  a complete session with no FAIL and no SILENT, or a `--check` that is current
- *     1  incomplete, or any FAIL/SILENT, or a `--check` against a moved HEAD
+ * Exit 0 for a complete session with no FAIL or SILENT, or a current `--check`. Otherwise 1.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -116,37 +39,13 @@ const green = (s) => paint('32', s);
 const yellow = (s) => paint('33', s);
 const cyan = (s) => paint('36', s);
 
-// ---------------------------------------------------------------------------
-// Reading the document
-// ---------------------------------------------------------------------------
-
-/** The two values the document's `Checked by` column may hold. Anything else is a parse failure. */
+/** Anything else in the `Checked by` column is a parse failure. */
 export const COVERAGE_MARKERS = new Set(['auto', 'person']);
 
 /**
- * Every assertion in the certification document, in order.
- *
- * The document uses two table shapes and this reads both, because reading only one is how a
- * harness silently certifies a tenth of the document:
- *
- *   * the global table — `| G1 | <auto|person> | <assertion> | <result> |`
- *   * the journey tables — `| 1.4 | <auto|person> | <step, with keys> | <assertion> | <result> |`
- *
- * The journey shape carries the STEP as well as the assertion, and the step is the half that tells
- * a reviewer which keys to press. Dropping it would leave them holding an assertion about
- * something they were never told to do.
- *
- * The second cell is the `Checked by` marker, and it is REQUIRED rather than optional. A row
- * without one is thrown, not defaulted, because both defaults are wrong: defaulting to `person`
- * hides a check that was supposed to exist, and defaulting to `auto` drops a row out of the human
- * session on the strength of a typo. The only safe answer to "somebody added a row and did not
- * classify it" is to stop.
- *
- * The trailing result column is the blank a reviewer used to fill in by hand and is ignored: it is
- * what this harness replaces.
- *
- * A section is the `##`/`###` heading the row sits under, taken from the document rather than
- * hard-coded, so adding Journey 9 needs no edit here.
+ * Reads both table shapes: global `| G1 | marker | assertion | result |` and journey
+ * `| 1.4 | marker | step | assertion | result |`. The marker is required, because defaulting either
+ * way hides a row. The trailing result column is ignored. Sections come from the headings.
  *
  * @returns {Array<{id: string, section: string, coverage: string, step: string|null, text: string}>}
  */
@@ -165,7 +64,6 @@ export function assertionsIn(markdown) {
       .slice(1, -1)
       .map((cell) => cell.trim());
     if (cells.length < 3) continue;
-    // A separator row, and the header row whose first cell is `#` or `ID`.
     if (/^:?-+:?$/.test(cells[0])) continue;
 
     const globalId = /^([A-Z]+\d+)$/.exec(cells[0]);
@@ -183,7 +81,7 @@ export function assertionsIn(markdown) {
       found.push({ id: globalId[1], section, coverage, step: null, text: cells[2] });
       continue;
     }
-    // `1.4`, `3.11` — a journey step. Four cells at minimum: id, marker, step, assertion.
+    // A journey step needs at least id, marker, step and assertion.
     if (stepId !== null && cells.length >= 4 && cells[3] !== '') {
       found.push({ id: `J${stepId[1]}`, section, coverage, step: cells[2], text: cells[3] });
     }
@@ -191,10 +89,8 @@ export function assertionsIn(markdown) {
   return found;
 }
 
-/** The rows a person still has to listen to. The rest are asserted by `pnpm run test:ax`. */
 export const needsAPerson = (assertions) => assertions.filter((entry) => entry.coverage === 'person');
 
-/** Markdown emphasis and links, flattened for a terminal. */
 export function plainText(markdown) {
   return markdown
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
@@ -204,10 +100,6 @@ export function plainText(markdown) {
     .trim();
 }
 
-// ---------------------------------------------------------------------------
-// Environment
-// ---------------------------------------------------------------------------
-
 function git(args) {
   try {
     return execFileSync('git', args, { cwd: REPO_ROOT, encoding: 'utf8' }).trim();
@@ -216,13 +108,7 @@ function git(args) {
   }
 }
 
-/**
- * What a reviewer needs to know before they start, and what a stale result needs to be judged by.
- *
- * The `-1743` probe is here for one reason: to say plainly that it does NOT block this session.
- * Every readiness report so far has recorded it as the reason the certification is unverified, and
- * a reviewer who has read those reports will reasonably expect to be stopped by it. They are not.
- */
+/** The -1743 probe is reported to say plainly that it does not block this session. */
 function environment() {
   const sha = git(['rev-parse', 'HEAD']);
   const dirty = (git(['status', '--porcelain']) ?? '').length > 0;
@@ -243,10 +129,6 @@ function environment() {
   return { sha, dirty, platform: process.platform, appleEvents };
 }
 
-// ---------------------------------------------------------------------------
-// The session
-// ---------------------------------------------------------------------------
-
 const VERDICTS = new Map([
   ['p', 'PASS'],
   ['f', 'FAIL'],
@@ -257,9 +139,7 @@ const VERDICTS = new Map([
 const options = {
   check: process.argv.includes('--check'),
   preflight: process.argv.includes('--preflight'),
-  // `--all` puts the machine-covered rows back in front of the reviewer. It exists for somebody who
-  // does not take the automated half on trust and wants to hear it, and it is not the normal
-  // session — the artefact records which of the two was run so the two are never confused.
+  // `--all` adds the machine-covered rows back. The artefact records which session was run.
   all: process.argv.includes('--all'),
   section: (() => {
     const at = process.argv.indexOf('--section');
@@ -282,7 +162,6 @@ function summarise(answers) {
   return counts;
 }
 
-/** A session is only a pass when every assertion was answered and none failed or was silent. */
 function verdictOf(total, counts, answered) {
   if (answered < total) return { ok: false, why: `${total - answered} assertion(s) unanswered` };
   if (counts.FAIL > 0) return { ok: false, why: `${counts.FAIL} FAIL` };
@@ -343,9 +222,6 @@ async function main() {
 
   const env = environment();
   const everyRow = assertionsIn(readFileSync(DOC, 'utf8'));
-  // The session is the `person` rows. The rest are asserted on every run of `pnpm run test:ax` and
-  // a reviewer's half-hour is the scarcest thing here — spending it re-deciding what a gate already
-  // decides is how the whole procedure stays unexecuted.
   const all = options.all ? everyRow : needsAPerson(everyRow);
   const machineCovered = everyRow.length - needsAPerson(everyRow).length;
   const coverage = {
@@ -410,10 +286,7 @@ async function main() {
     return 0;
   }
   if (assertions.length === 0) {
-    // "No assertions matched" is the wrong report for a section every row of which is machine
-    // covered — a reviewer who ran `--section G` and read that would reasonably conclude the
-    // harness had lost the global assertions, when what happened is that all ten of them are now
-    // checked by a gate. Say which of the two it is.
+    // Say whether the section has no rows or only machine-covered rows.
     const inSection =
       options.section === null ? everyRow : everyRow.filter((a) => a.id.startsWith(options.section));
     if (!options.all && inSection.length > 0) {
@@ -464,8 +337,7 @@ async function main() {
         verdict = VERDICTS.get(key) ?? null;
         if (verdict === null) console.log(dim('   one of p, f, s, n, q'));
       }
-      // A failure without the words is a failure nobody can act on: "it announced the wrong thing"
-      // is not a defect report, and the announcement is the entire subject matter here.
+      // A FAIL or SILENT needs the quoted announcement, or nobody can act on it.
       let heard = '';
       if (verdict === 'FAIL' || verdict === 'SILENT') {
         heard = (await rl.question(dim('   quote what was announced (empty if nothing) > '))).trim();
@@ -510,12 +382,8 @@ async function main() {
 }
 
 /**
- * The artefact.
- *
- * `total` is the size of the set this session was asked, not the size of the document, and `scope`
- * plus `machineCovered` are what stop those two being confused by whoever quotes the file later. A
- * release report that read "7 of 7" with no scope would look like a certification of a 72-row
- * document that had shrunk without explanation.
+ * `total` is the size of the set asked, not the document. `scope` and `machineCovered` keep the two
+ * apart when the file is quoted later.
  */
 function writeResult(env, total, answers, identity, coverage) {
   const payload = {

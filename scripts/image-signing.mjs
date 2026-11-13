@@ -1,79 +1,11 @@
 /**
- * The signing half of "build once, promote the same bytes, and be able to say who built them".
+ * Signs release image digests with cosign and reads the signature records back.
+ * A keyed signature binds a digest to a key on the release machine. It does not prove who built the
+ * image, there is no transparency log (`--tlog-upload=false`), and nothing binds it to a source tree.
  *
- * `scripts/registry-digest.mjs` closed the CONTENT IDENTITY question: a registry digest names one
- * set of bytes, the manifest was re-fetched and re-hashed in process, and the image was pulled back
- * by digest after every local reference to it had been deleted. Its own header ends with the
- * sentence this module exists to delete:
- *
- *     "Signatures. `cosign` is not installed and this module does not sign, verify or attest
- *      anything."
- *
- * ## The gap that left, stated precisely
- *
- * A content address proves that two parties hold the same bytes. It says nothing about whether the
- * bytes a deployer pulls are the bytes THIS repository built. Concretely, before this module
- * existed, all of the following were indistinguishable to every gate in the repository:
- *
- *   * the artefact `pnpm run release:artifacts` built and `pnpm run staging up` smoke-tested;
- *   * an artefact somebody else pushed to `127.0.0.1:5001/prl-api` over any tag they liked — the
- *     lab registry has no authentication, which `deploy/registry/README.md` says out loud;
- *   * an artefact a deployer typed the wrong digest for.
- *
- * All three resolve. All three pull. All three would have been deployed. `docs/production/
- * final-readiness-report.md` carried that as open residual #3: *"Images carry a registry digest but
- * no signature … nothing is signed, there is no transparency log, and a local registry is not a
- * third party."*
- *
- * A signature over the digest closes exactly one of those three, and it is worth being clear about
- * WHICH: it binds a digest to a private key. `pnpm run security:image-provenance` then refuses any
- * release image whose digest is not signed by the key whose PUBLIC half is committed at
- * `deploy/signing/cosign.pub`. An attacker who pushes different bytes gets a different digest, and
- * that digest carries no signature the committed key accepts.
- *
- * ## What a locally-held key does NOT prove, and this is the part that gets overclaimed
- *
- * Read this before quoting "the images are signed" anywhere.
- *
- *   * **It proves possession of a key, not the identity of a builder.** The key lives on the
- *     release machine, in `deploy/signing/cosign.key`, unlocked by a passphrase in
- *     `deploy/signing/signing.env`. Anybody who can read both can mint a signature this gate
- *     accepts, over any bytes at all. Keyless/OIDC signing exists precisely because that sentence
- *     is unavoidable for a long-lived local key: Fulcio issues a short-lived certificate bound to a
- *     workload identity (a GitHub Actions job in a named repository on a named ref), so the
- *     verifier can demand a builder rather than a key.
- *   * **There is no transparency log.** These signatures are made with `--tlog-upload=false` and
- *     verified with `--insecure-ignore-tlog`, because Rekor is a public log and this is a loopback
- *     registry holding a lab artefact. Without a log there is no third-party record that the
- *     signature existed at a time, so key compromise is not detectable after the fact and a
- *     signature cannot be shown to predate a revocation. cosign prints a warning saying so on every
- *     verification and this repository does not suppress it.
- *   * **Nothing here binds the artefact to a source tree.** The SBOM attestation describes what is
- *     INSIDE the image, which is a different question from what built it. A SLSA provenance
- *     predicate produced by the builder itself is what answers that, and this repository has no CI
- *     builder that can produce one.
- *
- * So the honest one-line summary, and the one the docs use: **the digest a deployer pulls is now
- * bound to a key this repository controls; it is not yet bound to a builder anybody else can
- * check.** Residual, not closed — and named as a residual rather than folded into the pass.
- *
- * ## Why the record is a sidecar and not a field in release-manifest.json
- *
- * `deploy/staging/release-manifest.json` is `release-artifacts.mjs`'s output and nothing else may
- * write it. Two concrete reasons, both load-bearing:
- *
- *   1. `scripts/staging.mjs` reads `images.<service>.registry` and switches the running stack from
- *      `pull_policy: never` to `pull_policy: always` when it is present. A signing step that wrote
- *      that block would silently change how a live staging stack resolves its images, which is a
- *      deployment change disguised as a security improvement.
- *   2. `existingManifestFor` in `release-artifacts.mjs` treats the manifest as the record of one
- *      build. A second writer means the file can describe a state no single build produced.
- *
- * So signatures live in `deploy/staging/release-signatures.json`, and the tie between the two files
- * is checked rather than assumed: `reconcileWithManifest` below fails unless every service in the
- * manifest has a signature record whose `buildDigest` is byte-identical to the manifest's digest for
- * that service. That check is the entire point of the sidecar. Without it the signatures could be
- * over some other, correctly-signed image, and every cosign verification would still pass.
+ * Signatures live in `deploy/staging/release-signatures.json`, not in release-manifest.json, because
+ * `staging.mjs` switches `pull_policy` when the manifest has a `registry` block, and the manifest is
+ * the record of one build. `reconcileWithManifest` ties the two files by build digest.
  */
 
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -85,51 +17,27 @@ import { DIGEST, REGISTRY_DIGEST_REFERENCE } from './registry-digest.mjs';
 
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-/** The schema string the gate checks before trusting the sidecar's shape. */
 export const SIGNATURES_SCHEMA = 'prl.release-signatures.v1';
 
-/** Committed. The trust anchor, and the only key the verification gate needs. */
+// Committed. The trust anchor.
 export const PUBLIC_KEY_PATH = 'deploy/signing/cosign.pub';
 
-/** Never committed — `.gitignore` and `secret-scan.mjs` both assert that. */
+// Never committed. `.gitignore` and `secret-scan.mjs` both assert that.
 export const PRIVATE_KEY_PATH = 'deploy/signing/cosign.key';
 
-/** Where the passphrase for the private key lives on a release machine. Never committed. */
 export const SIGNING_ENV_PATH = 'deploy/signing/signing.env';
 
-/** The sidecar this module writes and the gate reads. */
 export const SIGNATURES_PATH = 'deploy/staging/release-signatures.json';
 
-/** What `release-artifacts.mjs` writes, and the only source of "what this repo built". */
 export const MANIFEST_PATH = 'deploy/staging/release-manifest.json';
 
-/**
- * The in-toto predicate type an SBOM attestation carries, and the `--type` shorthand cosign takes
- * for it. Both are asserted on the way out: `cosign attest --type cyclonedx` is what produced the
- * statement, and the gate re-derives the predicate type from the SIGNED payload rather than from
- * the flag it passed, so a cosign that quietly changed the mapping is a failure and not a silent
- * pass over a predicate nobody looked at.
- */
+// The gate re-derives the predicate type from the signed payload, so a changed cosign mapping fails.
 export const ATTESTATION_TYPE = 'cyclonedx';
 export const ATTESTATION_PREDICATE_TYPE = 'https://cyclonedx.org/bom';
 
 /**
- * The flags that turn cosign 3.x's Sigstore-by-default behaviour off, on BOTH sides.
- *
- * cosign 3 reads a TUF-provided signing config unless told not to, and then refuses
- * `--tlog-upload=false` as contradicting it:
- *
- *     Error: --tlog-upload=false is not supported with --signing-config or --use-signing-config
- *
- * `--use-signing-config=false` is what makes a keyed, log-free signature expressible at all. It is
- * written here once, as a named constant used by the signer and by the gate, so that the two can
- * never drift into signing under one policy and verifying under another — which would fail closed,
- * loudly, but for a reason that looks like a broken signature rather than a flag mismatch.
- *
- * `--allow-http-registry` and `--allow-insecure-registry` are the loopback registry's plain HTTP.
- * cosign's own help calls them testing-only flags and it is right to: they are acceptable here for
- * exactly the reason `deploy/registry/README.md` gives for the registry itself running without TLS
- * or auth on 127.0.0.1, and they would not be acceptable against a real registry.
+ * cosign 3 reads a TUF signing config by default and then refuses `--tlog-upload=false`. One constant
+ * serves signer and gate so they cannot drift. The HTTP flags are for the loopback lab registry only.
  */
 export const COSIGN_SIGN_FLAGS = [
   '--use-signing-config=false',
@@ -145,32 +53,11 @@ export const COSIGN_VERIFY_FLAGS = [
   '--allow-insecure-registry',
 ];
 
-/**
- * The keyless flags, and every difference from the keyed set above is deliberate.
- *
- * No `--key`, because there is none: the private key exists for ten minutes inside a GitHub Actions
- * job and is never written down. No `--use-signing-config=false`, because the Sigstore signing
- * config is exactly what we want — it is what names Fulcio and Rekor. And, most importantly, **no
- * `--tlog-upload=false` and no `--insecure-ignore-tlog`**: the keyed posture turns Rekor off
- * because it signs a loopback lab artefact, and pays for that with the residual it states out loud
- * (no third-party record, so a compromise is undetectable after the fact). Keyless signing without
- * Rekor would keep the cost and throw away the benefit, so the transparency log is not optional
- * here and `deploy/signing/keyless-policy.json` requires it.
- */
+// Keyless keeps the Sigstore signing config and Rekor on purpose. `deploy/signing/keyless-policy.json`
+// requires the transparency log.
 export const COSIGN_KEYLESS_SIGN_FLAGS = ['--yes'];
 
-/**
- * `cosign verify` arguments for a keyless signature, built from the POLICY.
- *
- * A function rather than a constant because the identity is the argument that matters, and it must
- * come from the committed policy on every call — never from the signature record being checked,
- * which would let a record choose what it is compared against.
- *
- * cosign refuses to run a keyless verification with neither `--certificate-identity` nor
- * `--certificate-identity-regexp` ("required for verification in keyless mode", measured), so the
- * failure mode this guards is not a verification that asserts nothing. It is one that asserts
- * something wider than what was reviewed.
- */
+// The identity comes from the committed policy on every call, never from the record being checked.
 export function keylessVerifyFlags({ identity, issuer }) {
   return [
     '--certificate-identity',
@@ -182,17 +69,7 @@ export function keylessVerifyFlags({ identity, issuer }) {
   ];
 }
 
-// ---------------------------------------------------------------------------
-// cosign
-// ---------------------------------------------------------------------------
-
-/**
- * cosign's version string, or null when it is not installed.
- *
- * Null is never a reason to skip anything. Both callers turn it into a refusal, for the reason
- * `container-scan.mjs` states about trivy: a verifier that exits 0 when it did not run converts
- * "nobody checked" into a green tick in a release report.
- */
+// Null is never a reason to skip. Both callers refuse on it.
 export function cosignVersion() {
   const result = spawnSync('cosign', ['version', '--json'], { encoding: 'utf8' });
   if (result.status !== 0) return null;
@@ -204,14 +81,7 @@ export function cosignVersion() {
   }
 }
 
-/**
- * Runs cosign and hands back everything, including a non-zero exit.
- *
- * Deliberately never throws on a non-zero status. Every caller here has a case where cosign
- * failing is the DESIRED outcome — the negative controls in `image-provenance.mjs` assert three
- * refusals — and a helper that threw would make "it refused" and "the harness broke" the same
- * event.
- */
+// Never throws on a non-zero exit, because the negative controls expect cosign to refuse.
 export function runCosign(args, { env = process.env } = {}) {
   const result = spawnSync('cosign', args, {
     encoding: 'utf8',
@@ -226,17 +96,8 @@ export function runCosign(args, { env = process.env } = {}) {
   };
 }
 
-// ---------------------------------------------------------------------------
-// The public key
-// ---------------------------------------------------------------------------
-
 /**
- * The SHA-256 of a PEM public key's DER body — a real key fingerprint, not a hash of the file.
- *
- * The distinction matters because the value is recorded in the sidecar and compared on every
- * verification. Hashing the FILE would make a trailing newline, a CRLF checkout or a re-export look
- * like a key rotation, and a gate that cries rotation at a line ending is a gate somebody stops
- * reading. Hashing the decoded SPKI bytes compares the key itself.
+ * SHA-256 of the PEM's DER body. Hashing the file would report a line-ending change as a key rotation.
  *
  * @param {string} pem
  * @returns {{fingerprint: string, der: Buffer} | {problem: string}}
@@ -265,7 +126,7 @@ export function publicKeyFingerprint(pem) {
   return { fingerprint: createHash('sha256').update(der).digest('hex'), der };
 }
 
-/** Reads and fingerprints the committed public key. Missing is a failure, never a skip. */
+// Missing is a failure, never a skip.
 export function readPublicKey(path = PUBLIC_KEY_PATH) {
   const full = resolve(REPO_ROOT, path);
   if (!existsSync(full)) {
@@ -281,13 +142,7 @@ export function readPublicKey(path = PUBLIC_KEY_PATH) {
   return { ...parsed, path, full };
 }
 
-// ---------------------------------------------------------------------------
-// The two records, and the tie between them
-// ---------------------------------------------------------------------------
-
 /**
- * Reads a JSON file and says why it could not, rather than throwing.
- *
  * @param {string} path repo-relative
  */
 export function readJsonFile(path) {
@@ -301,14 +156,8 @@ export function readJsonFile(path) {
 }
 
 /**
- * Validates the shape of a signature sidecar without touching a registry.
- *
- * Pure, so `image-signing.test.mjs` can drive every malformed shape — including the ones that
- * matter most, a record that names no images and a record whose digest is not a digest. Both used
- * to be expressible: the first version of this reader iterated `Object.entries(record.images)` and
- * an empty object iterated zero times, verified zero images, and reported a pass. "A sweep of
- * nothing is not a pass" is the rule this function exists to hold; `problems` gets an entry when
- * there is nothing to check.
+ * Validates a signature sidecar's shape without a registry. A record with no images is a problem,
+ * not a pass over zero images.
  *
  * @param {unknown} raw
  * @returns {{images: Array<object>, meta: object, problems: string[]}}
@@ -339,19 +188,7 @@ export function parseSignatureRecord(raw) {
   meta.signedAt = typeof raw.signedAt === 'string' ? raw.signedAt : null;
   meta.registry = typeof raw.registry === 'string' ? raw.registry : null;
 
-  // ## Which posture is this record in, and the answer is never "either"
-  //
-  // Two things can sign a release image here: a long-lived key on a release machine, or a GitHub
-  // Actions job holding a ten-minute Fulcio certificate. They are verified with completely
-  // different arguments — a public key against a fingerprint, or an identity and an issuer against
-  // a committed policy — so a reader that guesses wrong does not verify the wrong thing, it
-  // verifies NOTHING and says so.
-  //
-  // The failure this shape exists to prevent is subtler than a wrong guess: a record carrying
-  // NEITHER a public key nor a keyless block reads, to a lazily-written reader, as "the other
-  // posture, whichever that is" — and an unsigned release looks exactly like that. Absent is not
-  // the other posture. Both present is not a posture either: it would let a verification that
-  // failed under one be reported as a pass under the other.
+  // A record is keyed or keyless, never both and never neither. An unsigned release carries neither.
   const hasKey = raw.publicKey != null;
   const hasKeyless = raw.keyless != null;
   if (hasKey && hasKeyless) {
@@ -400,8 +237,7 @@ export function parseSignatureRecord(raw) {
           'compromise is undetectable after the fact — and throws away the reason for the exercise.',
       );
     }
-    // Recorded, and checked against the committed policy by the gate. Never used AS the policy:
-    // a record that chose what it is compared against would assert nothing at all.
+    // Recorded and checked against the committed policy. Never used as the policy.
     meta.keyless = {
       identity: typeof identity === 'string' ? identity : null,
       issuer: typeof issuer === 'string' ? issuer : null,
@@ -470,22 +306,9 @@ export function parseSignatureRecord(raw) {
 }
 
 /**
- * The tie: every service the release manifest describes must have a signature record over THAT
- * service's build digest, and no other.
- *
- * ## Why this is the load-bearing check and cosign is not
- *
- * `cosign verify` answers "is this digest signed by this key". It cannot answer "is this digest the
- * one this repository built", because it has never seen the release manifest. Without this
- * function, a sidecar pointing at a correctly-signed but DIFFERENT image — an older release, a
- * probe image, anything the key has ever touched — passes every cosign check in the gate, and the
- * gate reports that the shipping artefacts are signed. That is the failure this whole exercise
- * exists to prevent, one level up.
- *
- * It runs in both directions on purpose. A service in the manifest with no signature entry is an
- * UNSIGNED release image, which is the original blocker. A service in the sidecar that the manifest
- * does not describe is a record that has drifted from the build, and a reader who trusts one file
- * to describe the other should be told rather than left to notice.
+ * Every manifest service must have a signature over that service's build digest, and the sidecar may
+ * name no other service. `cosign verify` cannot see the manifest, so without this a correctly signed
+ * but different image would pass.
  *
  * @param {Array<{service: string, buildDigest: string}>} signatures
  * @param {unknown} manifest parsed release-manifest.json
@@ -538,18 +361,9 @@ export function reconcileWithManifest(signatures, manifest) {
   return { problems, matched };
 }
 
-// ---------------------------------------------------------------------------
-// Reading what cosign said
-// ---------------------------------------------------------------------------
-
 /**
- * The digests a successful `cosign verify` reported it had checked.
- *
- * cosign already refuses a signature whose payload names a different digest — measured, and
- * recorded in `image-provenance.mjs`'s negative-control section as the transplant case. This
- * re-derives the digest from the payload anyway, for one reason worth the twelve lines: the gate's
- * claim is "this exact digest is signed", and reading that back out of the signed statement is the
- * difference between checking the claim and trusting the tool's exit code.
+ * The digests a successful `cosign verify` reports. Read back from the signed payload so the gate
+ * checks the claim rather than the exit code.
  *
  * @param {string} stdout
  * @returns {{digests: string[], problem: string|null}}
@@ -576,18 +390,8 @@ export function verifiedDigests(stdout) {
 }
 
 /**
- * Reads the SIGNED in-toto statements out of `cosign verify-attestation` output.
- *
- * The output is newline-delimited Sigstore bundles; the statement is base64 in `payload`. Parsing
- * it is not decoration: `cosign verify-attestation` exiting 0 means the envelope's signature
- * checked out, and the questions this gate has to answer are about the CONTENTS of that envelope —
- * does the statement's subject name the digest we asked about, is the predicate a CycloneDX SBOM,
- * and does that SBOM describe anything at all.
- *
- * That last one is the one with teeth. `cosign attest --predicate` will happily sign `{}`. An
- * attestation over an empty predicate verifies perfectly and describes nothing, which is the
- * file-exists-therefore-pass failure mode in cryptographic clothing. `componentCount` is what the
- * gate asserts on.
+ * Reads the signed in-toto statements from `cosign verify-attestation` output (base64 `payload` in
+ * newline-delimited bundles). `cosign attest` signs `{}` happily, so the gate asserts `componentCount`.
  *
  * @param {string} stdout
  * @returns {{statements: Array<object>, problem: string|null}}
@@ -624,11 +428,7 @@ export function parseAttestationStatements(stdout) {
 }
 
 /**
- * Judges one verified in-toto statement against the digest it is supposed to describe.
- *
- * Separate from the parsing above, and pure, so the tests can hand it a statement whose subject
- * names somebody else's image — the shape a transplanted or mis-recorded attestation has — without
- * a registry in the loop.
+ * Pure, so tests can pass a statement whose subject names another image.
  *
  * @param {object} statement
  * @param {string} digest `sha256:…`
@@ -667,10 +467,6 @@ export function attestationProblems(statement, digest) {
   return { problems, components };
 }
 
-// ---------------------------------------------------------------------------
-// Small shared bits
-// ---------------------------------------------------------------------------
-
 /** Trimmed stdout of a command expected to succeed, or null. */
 export function capture(command, args) {
   try {
@@ -685,7 +481,6 @@ export function capture(command, args) {
   }
 }
 
-/** Repo-relative path to an absolute one. */
 export function repoPath(...parts) {
   return join(REPO_ROOT, ...parts);
 }

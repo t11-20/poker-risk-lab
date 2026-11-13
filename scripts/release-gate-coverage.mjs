@@ -1,56 +1,10 @@
 #!/usr/bin/env node
 /**
- * Gate: the release pipeline actually runs the release gate.
- *
- * ## The hole this closes
- *
- * `pnpm run verify` is *defined* as the release gate — fourteen named gates, run
- * one after another, every one of them after a failure so a run reports all of
- * them rather than the first. `docs/production/go-live.md` says a release is a
- * commit that passed it.
- *
- * `.github/workflows/release.yml` did not run it. Its `tests` job ran
- * `pnpm run test`, which is `test:unit && test:integration && test:scripts`.
- * Measured with this parser against the workflow as it stood, EIGHT of the
- * fourteen ran nowhere in the release pipeline:
- *
- *     security:hygiene  design:contrast  test:a11y  test:ax
- *     test:csp          test:age-gate    test:exhaustive  test:simulation
- *
- * So a commit that fails the contrast budget, ships an inaccessible control,
- * loses the CSP negative control or breaks the age gate — a LEGAL control — was
- * built into an immutable artefact, scanned, staged and offered for signing, and
- * the release pipeline was green throughout. `ci.yml` would have gone red in a
- * different workflow, which is a thing a person has to notice.
- *
- * ## Why a guard and not just a fix
- *
- * The eight were not omitted on purpose. They accumulated: each gate was added to
- * `verify` and wired into `ci.yml`, and `release.yml` — a separate file, with a
- * separate job graph — was not touched. `ci.yml` already carries the scar of the
- * same drift in a header comment: `test:ax` was one of the fourteen gates for
- * some time while `grep -n 'test:ax' .github/workflows/*.yml` matched nothing.
- *
- * Fixing the eight without a guard buys silence until the fifteenth gate is
- * written. This reads BOTH lists — the `for gate in ...` clause in the `verify`
- * script, and the workflow's job graph — and fails when they disagree, so adding
- * a gate is a two-file change by construction.
- *
- * ## What "runs it" means here, and why the needs-graph matters
- *
- * A gate running in a job that sits BESIDE `build` is not enough. The workflow
- * would go red, but the artefact is built, scanned and pushed through staging
- * regardless, and `release-sign.yml` signs a digest from the manifest. The
- * invariant worth having is stronger: no artefact exists unless every gate has
- * already passed. So a gate counts only when it runs in the artefact-producing
- * job or in a job that job transitively `needs`.
- *
- * `pnpm run verify` in a job counts as running all of them, which is the shape a
- * pipeline that simply calls the gate should be allowed to take.
- *
- * Comment lines are stripped before the search, because this whole file is full
- * of gate names and a parser that reads prose finds whatever it hopes to find —
- * a mistake made twice on this branch already.
+ * Gate: the release pipeline runs every gate in `pnpm run verify`.
+ * It reads the `for gate in ...` clause of `verify` and fails when a gate does not run in release.yml's
+ * artefact job or a job it transitively `needs`, or nowhere in ci.yml. Gates drifted out of
+ * release.yml before (eight of fourteen once ran nowhere in it), so adding a gate is a three-file change.
+ * Comment lines are stripped before the search, because prose full of gate names matches anything.
  *
  * Run with:  node scripts/release-gate-coverage.mjs
  */
@@ -61,15 +15,9 @@ import { fileURLToPath } from 'node:url';
 
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-/** The job whose output is an immutable artefact. Everything must pass before it. */
 export const ARTEFACT_JOB = 'build';
 
-/**
- * The gate list, read from the `verify` script rather than copied.
- *
- * A copy is a third list to forget. `verify` is a shell loop whose gates are the
- * words in its `for gate in ... ; do` clause, so that clause IS the list.
- */
+// The `for gate in ... ; do` clause is the list, so it is read rather than copied.
 export function gatesInVerify(packageJson) {
   const verify = packageJson?.scripts?.verify;
   if (typeof verify !== 'string') throw new Error('package.json has no `verify` script to read gates from');
@@ -86,17 +34,8 @@ export function gatesInVerify(packageJson) {
   return gates;
 }
 
-/**
- * Jobs, their `needs`, and their non-comment body text.
- *
- * A hand-rolled parser rather than a YAML dependency: the repository has none,
- * adding one to the supply chain to read its own workflow is a poor trade, and
- * `ci-pinning.mjs` already reads these files by line. The shapes accepted are the
- * three GitHub allows for `needs` — a scalar, a flow sequence, and a block
- * sequence — and `assertParserSawTheFile` below refuses a parse that found
- * nothing, so a workflow written in a shape this does not understand fails loudly
- * instead of reporting universal coverage over zero jobs.
- */
+// A hand-rolled parser, to avoid a YAML dependency. It accepts the three `needs` shapes GitHub
+// allows, and `assertParserSawTheFile` refuses a parse that found no jobs.
 function unquote(value) {
   return value.trim().replace(/^["']|["']$/gu, '');
 }
@@ -120,11 +59,7 @@ export function parseWorkflow(text) {
     if (/^\s*#/u.test(raw)) continue; // a comment is not a command
     current.body.push(raw);
 
-    // `.*?`, not `.+?`. A bare `needs:` introducing a block sequence has NOTHING
-    // after the colon, so a one-or-more match never saw it, `needsBlockOpen` was
-    // never set, and every job that used that spelling was read as depending on
-    // nothing. The gating set then shrinks silently, which reports gates as
-    // uncovered — or, with the dependency pointing the other way, as covered.
+    // `.*?`, not `.+?`. A bare `needs:` opening a block sequence has nothing after the colon.
     const declaration = /^ {4}needs:\s*(.*?)\s*$/u.exec(raw);
     if (declaration !== null) {
       const value = declaration[1];
@@ -152,7 +87,6 @@ export function parseWorkflow(text) {
   return jobs;
 }
 
-/** Every job `id` transitively depends on, plus `id` itself. */
 export function withAncestors(jobs, id) {
   const seen = new Set();
   const stack = [id];
@@ -165,14 +99,7 @@ export function withAncestors(jobs, id) {
   return seen;
 }
 
-/**
- * Does this text run `pnpm run <gate>`?
- *
- * The trailing guard is what stops `pnpm run test` matching inside
- * `pnpm run test:a11y`. Without it every `test:*` gate would be reported as
- * covered by the one `pnpm run test` step, which is precisely the false pass this
- * file exists to prevent — and is how the parser behaved when first written.
- */
+// The trailing guard stops `pnpm run test` matching inside `pnpm run test:a11y`.
 export function runsGate(text, gate) {
   const escaped = gate.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
   return new RegExp(String.raw`pnpm run ${escaped}(?![\w:-])`, 'u').test(text);
@@ -195,7 +122,6 @@ export function coverage(jobs, gates, sink = ARTEFACT_JOB) {
   };
 }
 
-/** A sweep of nothing is not a pass. */
 export function assertParserSawTheFile(jobs, label) {
   if (jobs.size < 2) {
     throw new Error(
@@ -232,9 +158,7 @@ function main() {
     );
   }
 
-  // The weaker claim, for the pull-request workflow: a gate must run SOMEWHERE in
-  // ci.yml. `test:ax` was in `verify` while matching nothing in any workflow, and
-  // nothing noticed; this is the check that would have.
+  // The weaker claim for the pull-request workflow: every gate runs somewhere in ci.yml.
   const ciPath = join(REPO_ROOT, '.github', 'workflows', 'ci.yml');
   const ci = parseWorkflow(readFileSync(ciPath, 'utf8'));
   assertParserSawTheFile(ci, 'ci.yml');

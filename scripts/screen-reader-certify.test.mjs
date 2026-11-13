@@ -1,25 +1,8 @@
 #!/usr/bin/env node
 /**
- * Tests for the screen-reader certification harness.
- *
- * Run with:  node --test scripts/screen-reader-certify.test.mjs
- *
- * ## The failure this is written against
- *
- * The harness reads its assertions out of `docs/production/accessibility-certification.md` rather
- * than carrying a copy, which is the right design and has one dangerous failure mode: a parser
- * that matches FEWER rows than the document contains still produces a complete-looking session and
- * a filled-in artefact. A reviewer would work through what they were shown, see "73 of 73", and
- * certify a tenth of the document.
- *
- * That is not hypothetical — the first version of this parser matched only the global table's
- * `| G1 |` shape and found **10** of the 73, because the journey tables number their rows `1.4`
- * and put the assertion in the third cell rather than the second.
- *
- * So the control is not "does it find some assertions". It is that the parse agrees with the
- * document's OWN declared totals, which §8 states per section and in a total row. Two independent
- * statements in one file, and this asserts they match. If somebody adds Journey 9 and forgets to
- * update §8, or updates §8 and writes the table in a third shape, this fails.
+ * Tests for the screen-reader certification harness. The parse must agree with the totals the
+ * document declares about itself. The first parser read only the `| G1 |` shape and found 10 of 73
+ * rows while the session still looked complete.
  */
 
 import assert from 'node:assert/strict';
@@ -34,12 +17,8 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DOC = readFileSync(join(REPO_ROOT, 'docs', 'production', 'accessibility-certification.md'), 'utf8');
 
 /**
- * The per-section counts the document states about itself in §9.
- *
- * Three numbers per row now — the assertions in the section, how many are machine-covered, and how
- * many still need a person — because the split has the same failure mode the total had. A section
- * that quietly moved two rows from `person` to `auto` without a check behind them would still add
- * up to 73.
+ * The per-section counts the document declares: total, machine-covered, and needing a person. The
+ * split is checked too, because moving rows between markers keeps the total at 73.
  */
 function declaredTotals(markdown) {
   const totals = new Map();
@@ -73,8 +52,7 @@ describe('the harness reads the whole document', () => {
   });
 
   it('agrees with the per-section counts, so a shortfall cannot hide in an average', () => {
-    // The total alone is a weak control: losing six from one journey and gaining six of something
-    // else nets to zero. The section breakdown is what makes it specific.
+    // Per section, because a loss in one journey and a gain elsewhere net to zero.
     const { totals } = declaredTotals(DOC);
     assert.ok(totals.size >= 8, 'the §9 breakdown is missing; the per-section control is gone');
     const parsed = new Map();
@@ -93,9 +71,6 @@ describe('the harness reads the whole document', () => {
   });
 
   it('agrees with the per-section auto/person split (REGRESSION)', () => {
-    // Same control, one level down. The split is what decides which rows the human session asks
-    // for, so a section whose markers drift from its declared breakdown silently changes the size
-    // of that session while the document still reads 73.
     const { totals, grandSplit } = declaredTotals(DOC);
     const parsed = new Map();
     for (const entry of assertionsIn(DOC)) {
@@ -129,8 +104,6 @@ describe('the harness reads the whole document', () => {
   });
 
   it('carries the journey step, not only the assertion', () => {
-    // A journey row's second cell is the keys to press. An assertion presented without it tells a
-    // reviewer what should have been announced and nothing about how to make it happen.
     const journey = assertionsIn(DOC).filter((entry) => entry.id.startsWith('J'));
     assert.ok(journey.length > 50);
     assert.ok(
@@ -163,15 +136,8 @@ describe('the harness reads the whole document', () => {
 
 describe('the auto/person split is a mapping, not a claim', () => {
   /**
-   * The control the whole split rests on.
-   *
-   * A row marked `auto` is DROPPED from the human session. If the check behind it is deleted,
-   * renamed, or never written, that row is checked by nobody: the document still says a machine has
-   * it, and the reviewer is never asked. It reads as covered twice and is covered zero times, and
-   * nothing else in the repository would notice.
-   *
-   * So this asserts set equality in BOTH directions, and the message on each half names the
-   * specific rows, because "the sets differ" sends somebody diffing two files by hand.
+   * An `auto` row is dropped from the human session, so a missing check leaves it covered by nobody.
+   * Set equality is asserted in both directions and each failure names the rows.
    */
   it('every row marked auto has a check, and every check has a row marked auto (REGRESSION)', () => {
     const rows = assertionsIn(DOC);
@@ -198,7 +164,6 @@ describe('the auto/person split is a mapping, not a claim', () => {
   });
 
   it('the checked set is a real share of the document, not a token one', () => {
-    // A guard against the split being satisfied by deleting checks until the sets happen to agree.
     const rows = assertionsIn(DOC);
     assert.ok(
       ASSERTION_IDS.length >= 40,
@@ -209,9 +174,7 @@ describe('the auto/person split is a mapping, not a claim', () => {
   });
 
   it('NEGATIVE CONTROL — a row with no "Checked by" marker is refused, not defaulted', () => {
-    // Both defaults are wrong. Defaulting to `person` hides a check that was meant to exist;
-    // defaulting to `auto` drops a row out of the human session on the strength of a typo. The only
-    // safe answer is to stop, so this asserts it stops.
+    // A missing marker must stop the parse. Both defaults hide a row.
     const table = [
       '| # | Checked by | Step | Assertion | Result |',
       '|---|---|---|---|---|',

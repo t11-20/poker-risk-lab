@@ -1,136 +1,23 @@
 #!/usr/bin/env node
 /**
- * A STATIC accessibility audit of the server-rendered HTML of the web app.
+ * `pnpm run test:a11y`: a STATIC accessibility audit of server-rendered HTML. It parses the markup
+ * itself and takes rule ids, help URLs and the ARIA tables from axe-core, because `axe.run()` needs a
+ * live DOM.
  *
- * This is what `pnpm run test:a11y` does. Read the coverage section before you
- * trust it, and read the limitations section before you tell anyone the app is
- * accessible.
+ * Checked (axe rule ids): html-has-lang, html-lang-valid, document-title, meta-viewport, image-alt,
+ * input-image-alt, area-alt, frame-title, label, button-name, link-name, select-name, heading-order,
+ * page-has-heading-one, empty-heading, duplicate-id-aria, tabindex, landmark-one-main,
+ * landmark-unique, list, definition-list, aria-roles, aria-valid-attr, aria-allowed-attr,
+ * aria-valid-attr-value, aria-required-attr, aria-hidden-focus, presentation-role-conflict.
  *
- * ## What this is, precisely
+ * NOT checked: colour contrast, focus order, keyboard operability, anything decided by CSS
+ * (visibility, reading order, reflow, target size, focus indicators), hydrated-only controls, full
+ * accname 1.2, required owned/context roles, live regions and media. Elements whose role markup
+ * cannot decide are counted as unchecked. A pass does not mean the app is accessible.
  *
- * axe-core 4.13.0 is a devDependency of this repo and it is used here — but NOT by
- * calling `axe.run()`. `axe.run()` requires a live DOM: given plain Node it throws
- *
- *     Required "window" or "document" globals not defined and cannot be deduced
- *     from the context.
- *
- * Supplying a DOM faithful enough for axe to be correct means jsdom or a headless
- * browser, and neither is available — adding one is release-blocking in this repo,
- * and a half-built fake DOM is worse than no DOM at all: axe's checks would run
- * against an environment where `getComputedStyle` lies, silently return "pass" for
- * rules that depend on layout and visibility, and produce a report that reads like
- * a full audit while having tested almost nothing.
- *
- * So this file does two honest things instead:
- *
- *   1. It parses the server-rendered HTML with a small tolerant parser and applies
- *      a fixed set of checks that CAN be decided from markup alone.
- *
- *   2. It gets its facts from axe-core rather than from a hand-written table. The
- *      rule ids, descriptions and help URLs come from `axe.getRules()`, and the
- *      ARIA logic comes from `axe.commons.aria.lookupTable` — the same 120-role,
- *      49-attribute standards tables axe itself uses, including which aria-*
- *      attributes each role allows, which it requires, each attribute's value type
- *      and permitted values, and the implicit-role mapping for HTML elements. Both
- *      are available in plain Node with no DOM. That means when axe-core is
- *      upgraded, the ARIA rules here move with it instead of quietly going stale.
- *
- * Every finding therefore cites a real axe rule id and a real Deque help URL, and
- * every finding is one this script actually decided for itself.
- *
- * ## What IS checked (rule ids are axe-core's)
- *
- *   html-has-lang, html-lang-valid       a lang attribute, and its shape
- *   document-title                       a non-empty <title>
- *   meta-viewport                        zoom not disabled
- *   image-alt, input-image-alt, area-alt alternative text
- *   frame-title                          iframes named
- *   label                                form controls have an accessible name
- *   button-name, link-name, select-name  controls have an accessible name
- *   heading-order, page-has-heading-one, empty-heading
- *   duplicate-id-aria                    ids referenced by ARIA/labels are unique
- *   tabindex                             no positive tabindex
- *   landmark-one-main, landmark-unique   landmark structure
- *   list, definition-list                list markup nesting
- *   aria-roles                           role values exist
- *   aria-valid-attr                      aria-* names exist
- *   aria-allowed-attr                    aria-* allowed for the element's role
- *   aria-valid-attr-value                aria-* values match their declared type
- *   aria-required-attr                   explicit roles carry their required aria-*
- *   aria-hidden-focus                    aria-hidden subtrees contain no tabbables
- *   presentation-role-conflict           role=presentation with conflicting ARIA
- *
- * ## What is NOT checked — a browser-based run is required for all of it
- *
- *   - Colour contrast (`color-contrast`). Needs computed styles. Not attempted.
- *   - Anything decided by CSS: visibility, display:none subtrees, off-screen or
- *     clipped text, reading order, reflow, target size, focus indicators.
- *   - Keyboard operability, focus order and focus management.
- *   - Anything rendered or changed by client-side JavaScript. Routes are audited
- *     exactly as the server delivered them, so a control that only exists after
- *     hydration is invisible to this script.
- *   - Full accessible-name computation. The implementation here handles
- *     aria-labelledby, aria-label, <label>, alt, title and text content. It does
- *     not handle CSS generated content, or the full recursion and traversal rules
- *     of accname 1.2. A name it reports as missing is very likely missing; a name
- *     it accepts is not proof that a screen reader announces something useful.
- *   - ARIA required-owned and required-context relationships (`aria-required-children`,
- *     `aria-required-parent`), nested interactive controls, table header
- *     association, and role/element validity (`aria-allowed-role`).
- *   - Live regions, motion, timing, media captions.
- *   - Elements whose ARIA role cannot be determined from markup alone (`<td>`,
- *     `<th>`, custom elements). These are counted and reported as unchecked rather
- *     than guessed at, because a guessed role produces confident false positives.
- *
- * A passing run here means "no violation of the subset above was found in the
- * delivered HTML". It does not mean the app is accessible.
- *
- * The keyboard half of what this file cannot do is now covered:
- * `scripts/keyboard-audit.mjs` (`pnpm run test:keyboard`) drives real Chrome over the
- * DevTools Protocol and presses real Tab, Enter, Escape and arrow keys — focus order,
- * focus visibility, keyboard traps, the modal sheet, the bet-size slider, and a whole
- * hand folded from the keyboard at a live table. What remains outside both scripts is a
- * screen-reader pass and a browser-based axe run.
- *
- * ## Route discovery
- *
- * Rather than hard-code a route list that silently rots, the audit starts at the
- * seed routes (`--routes`, default `/`) and follows same-origin links found in the
- * delivered HTML, up to `--max-routes`. So the set audited is the set the app
- * actually links to. A route that does not return 2xx fails the run instead of
- * being audited, because auditing an error page produces both false findings and
- * false confidence.
- *
- * ## The age gate, and why crawling made it dangerous
- *
- * `apps/web/src/lib/age-gate.ts` can be configured to put an interstitial in front
- * of `/play` (`PRL_AGE_GATE=on`) or in front of the whole site
- * (`PRL_AGE_GATE_SCOPE=site`). `fetch` follows the 303 by default, so without the
- * two measures below this audit would have fetched `/play`, been handed
- * `/age-check`, found no violations in a short and perfectly accessible
- * interstitial, and reported **PASS for a route it never saw** — while the crawl
- * harvested the interstitial's links instead of the table's. That is the same class
- * of defect as a check that cannot fire, and it is worse here because the output
- * still names the route.
- *
- *   1. **A declaration cookie is sent with every request.** Its value is
- *      `AGE_GATE_MINIMUM_CEILING`, the highest threshold the gate can be configured
- *      with (anything larger is clamped down to it), so one cookie satisfies any
- *      deployment. This is chosen over running the server with `PRL_AGE_GATE=off`
- *      because `--no-start` points this audit at a server whose environment it does
- *      not own — staging, a container — and because it audits the deployment as it
- *      is actually configured. The cookie is not a bypass: the gate is a
- *      self-declaration that any reader makes by pressing its button, and nothing
- *      about it is verified anywhere.
- *   2. **Where the response actually came from is checked anyway.** A cookie can be
- *      refused — a threshold raised past the ceiling, a `__Host-` name over plain
- *      HTTP — and a route that answered from `/age-check` is recorded as
- *      UNAUDITABLE with the gate named, which fails the run. It is never audited
- *      under the name of the route that was asked for.
- *
- * What is given up by seeding the cookie: this audit no longer sees what an
- * undeclared reader sees. The interstitial is a real page with a real control, so
- * audit it as itself — `--routes /age-check` — rather than by accident.
+ * Routes are crawled from `--routes` through same-origin links. A declaration cookie at the gate's
+ * ceiling is sent so an age-gated deployment serves its pages, and a response that landed on
+ * `/age-check` is recorded as unauditable. Audit the interstitial with `--routes /age-check`.
  */
 
 import { spawn } from 'node:child_process';
@@ -139,11 +26,7 @@ import { createRequire } from 'node:module';
 import { connect } from 'node:net';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-// The gate's own constants rather than copies of them. `age-gate.ts` imports nothing and says in
-// its header that this is deliberate, so that things outside the Next runtime can read it; a second
-// copy of a cookie name in a harness is a harness that seeds one name while the proxy reads
-// another, and passes. `scripts/regenerate-web-fixtures.mjs` is the precedent for a script
-// importing application TypeScript by path.
+// The gate's own constants, so the cookie this seeds is the one the proxy reads.
 import {
   AGE_GATE_COOKIE_NAMES,
   AGE_GATE_MINIMUM_CEILING,
@@ -162,19 +45,11 @@ const green = (s) => paint('32', s);
 const yellow = (s) => paint('33', s);
 const cyan = (s) => paint('36', s);
 
-// ---------------------------------------------------------------------------
-// axe-core: rule metadata and the ARIA standards tables
-// ---------------------------------------------------------------------------
-
-/**
- * axe-core loads in plain Node — it guards its own DOM access at import time. Only
- * `axe.run()` needs a document, and this file never calls it.
- */
+/** axe-core loads in plain Node. Only `axe.run()` needs a document, and this file never calls it. */
 const axe = require('axe-core');
 const ARIA = axe.commons.aria;
 const LOOKUP = ARIA.lookupTable;
 
-/** ruleId -> { description, help, helpUrl, tags }. */
 const AXE_RULES = new Map(axe.getRules().map((rule) => [rule.ruleId, rule]));
 
 /** Fails loudly if a rule id cited below has been renamed by an axe upgrade. */
@@ -189,14 +64,9 @@ function rule(ruleId) {
   return found;
 }
 
-/** 'wcag' when a rule maps to a WCAG success criterion, else 'best-practice'. */
 function severityOf(ruleId) {
   return rule(ruleId).tags.some((tag) => tag.startsWith('wcag2')) ? 'wcag' : 'best-practice';
 }
-
-// ---------------------------------------------------------------------------
-// Options
-// ---------------------------------------------------------------------------
 
 const DEFAULTS = {
   baseUrl: 'http://127.0.0.1:3000',
@@ -243,10 +113,7 @@ function parseArgs(argv) {
   const options = { ...DEFAULTS, help: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    // `pnpm run test:a11y -- --with-api` passes the `--` through to the script
-    // rather than swallowing it, so the conventional invocation would otherwise
-    // die on "unknown option --". Absorbing it here means both
-    // `pnpm run test:a11y --with-api` and the `--` form work.
+    // `pnpm run test:a11y -- --with-api` passes the `--` through.
     if (arg === '--') continue;
     const value = argv[i + 1];
     const need = () => {
@@ -306,17 +173,8 @@ function parseArgs(argv) {
   return options;
 }
 
-// ===========================================================================
-// HTML parser
-//
-// Tolerant on purpose: it must produce a usable tree from whatever the server
-// sent, including markup this audit is about to complain about. It implements the
-// parts of the HTML tree-construction algorithm that change the ANSWERS here —
-// void elements, raw-text elements, and the implied end tags that decide whether
-// an <li> is a child of its <ul> — and nothing else. It is not a conforming HTML
-// parser and does not try to be; where it differs from a browser, it differs by
-// keeping elements where the author wrote them.
-// ===========================================================================
+// A tolerant HTML parser. It implements only the tree-construction rules that change answers here
+// (void elements, raw-text elements, implied end tags) and keeps elements where the author wrote them.
 
 const VOID_ELEMENTS = new Set([
   'area',
@@ -335,17 +193,9 @@ const VOID_ELEMENTS = new Set([
   'wbr',
 ]);
 
-/** Content is text, not markup, until the matching end tag. */
 const RAW_TEXT_ELEMENTS = new Set(['script', 'style', 'textarea', 'title']);
 
-/**
- * Implied end tags: which open element a start tag closes.
- *
- * Without these, `<ul><li>a<li>b</ul>` parses as an li nested inside an li, and
- * the `list` check reports a violation that a browser would never see. This is the
- * single place where being sloppy about parsing would produce wrong findings, so it
- * is the one place the real algorithm is followed.
- */
+/** Implied end tags. Without them `<ul><li>a<li>b</ul>` nests an li in an li and `list` misfires. */
 const CLOSES_ON_START = new Map([
   ['li', new Set(['li'])],
   ['dt', new Set(['dt', 'dd'])],
@@ -360,7 +210,6 @@ const CLOSES_ON_START = new Map([
   ['tfoot', new Set(['thead', 'tbody', 'tr', 'td', 'th'])],
 ]);
 
-/** A start tag in this set closes an open <p>. */
 const CLOSES_PARAGRAPH = new Set([
   'address',
   'article',
@@ -398,9 +247,7 @@ const NAME_START = /[a-zA-Z]/;
 const NAME_CHAR = /[^\s/>]/;
 
 function decodeEntities(text) {
-  // Only the handful that change whether text is empty or what an id looks like.
-  // A full entity table is not needed to decide any check here, and pretending to
-  // have one would be a lie in the other direction.
+  // Only the entities that change whether text is empty or what an id looks like.
   if (!text.includes('&')) return text;
   return text
     .replace(/&(#x[0-9a-fA-F]+|#\d+);/g, (whole, code) => {
@@ -424,7 +271,6 @@ function parseHtml(html) {
     top().children.push({ type: 'text', value: decodeEntities(value), parent: top(), start });
   };
 
-  /** Pops until `name` is closed. A stray end tag with no open element is dropped. */
   const closeTag = (name) => {
     for (let depth = stack.length - 1; depth > 0; depth--) {
       if (stack[depth].name === name) {
@@ -443,7 +289,6 @@ function parseHtml(html) {
     }
     if (lt > i) addText(html.slice(i, lt), i);
 
-    // --- comment / doctype / processing instruction ---
     if (html.startsWith('<!--', lt)) {
       const end = html.indexOf('-->', lt + 4);
       i = end === -1 ? html.length : end + 3;
@@ -455,7 +300,6 @@ function parseHtml(html) {
       continue;
     }
 
-    // --- end tag ---
     if (html.startsWith('</', lt)) {
       let cursor = lt + 2;
       let name = '';
@@ -466,14 +310,12 @@ function parseHtml(html) {
       continue;
     }
 
-    // Not a tag at all — a bare "<" in text.
     if (!NAME_START.test(html[lt + 1] ?? '')) {
       addText('<', lt);
       i = lt + 1;
       continue;
     }
 
-    // --- start tag ---
     let cursor = lt + 1;
     let name = '';
     while (cursor < html.length && NAME_CHAR.test(html[cursor])) name += html[cursor++];
@@ -510,14 +352,13 @@ function parseHtml(html) {
           while (cursor < html.length && !/[\s>]/.test(html[cursor])) attrValue += html[cursor++];
         }
       }
-      // First occurrence wins, which is what browsers do with a duplicated attribute.
+      // First occurrence wins, as in browsers.
       const lower = attrName.toLowerCase();
       if (!attrs.has(lower)) attrs.set(lower, decodeEntities(attrValue));
     }
     const tagEnd = html.indexOf('>', cursor);
     i = tagEnd === -1 ? html.length : tagEnd + 1;
 
-    // Implied end tags before the element is inserted.
     const closes = CLOSES_ON_START.get(name);
     if (closes?.has(top().name)) closeTag(top().name);
     if (CLOSES_PARAGRAPH.has(name) && top().name === 'p') closeTag('p');
@@ -528,9 +369,7 @@ function parseHtml(html) {
     if (VOID_ELEMENTS.has(name) || selfClosing) continue;
 
     if (RAW_TEXT_ELEMENTS.has(name)) {
-      // Find the matching end tag without interpreting anything in between: a "<"
-      // inside a script is not markup, and treating it as markup is how naive
-      // parsers produce a tree with half the page inside a <script>.
+      // A `<` inside a script is not markup.
       const pattern = new RegExp(`</${name}\\s*>`, 'i');
       const rest = html.slice(i);
       const match = pattern.exec(rest);
@@ -548,7 +387,6 @@ function parseHtml(html) {
   return root;
 }
 
-/** Byte offset -> 1-based line number, so findings point at a place in the file. */
 function lineIndex(html) {
   const offsets = [0];
   for (let i = 0; i < html.length; i++) if (html[i] === '\n') offsets.push(i + 1);
@@ -563,10 +401,6 @@ function lineIndex(html) {
     return low + 1;
   };
 }
-
-// ===========================================================================
-// Tree helpers
-// ===========================================================================
 
 function* walk(node) {
   for (const child of node.children ?? []) {
@@ -592,19 +426,12 @@ function ancestors(element) {
   return chain;
 }
 
-/** True when this element or an ancestor is aria-hidden="true". */
 function inAriaHidden(element) {
   if (attr(element, 'aria-hidden') === 'true') return true;
   return ancestors(element).some((a) => attr(a, 'aria-hidden') === 'true');
 }
 
-/**
- * Text content for name-from-contents.
- *
- * Skips script/style and aria-hidden subtrees, and folds in the alt text of
- * descendant images — an anchor whose only content is `<img alt="Home">` is named
- * "Home", and a check that ignored that would report a violation on correct markup.
- */
+/** Skips script, style and aria-hidden subtrees, and includes descendant image alt text. */
 function textContent(element) {
   let out = '';
   const visit = (node) => {
@@ -631,7 +458,6 @@ function textContent(element) {
   return out.replace(/\s+/g, ' ').trim();
 }
 
-/** The single short snippet shown with a finding. Long tags are truncated. */
 function snippet(element) {
   const parts = [element.name];
   for (const [name, value] of element.attrs) {
@@ -641,17 +467,9 @@ function snippet(element) {
   return text.length > 140 ? `${text.slice(0, 137)}...` : text;
 }
 
-// ===========================================================================
-// Roles
-// ===========================================================================
-
 /**
- * Implicit roles that axe resolves with element-specific logic rather than from its
- * flat `implicitHtmlRole` table (which covers only unconditional mappings).
- *
- * Everything here is straight from HTML-AAM. Anything genuinely
- * context-dependent is resolved from the tree below, or returned as `undetermined`
- * so that role-dependent checks skip the element instead of guessing.
+ * Implicit roles that need element-specific logic, from HTML-AAM. Context-dependent cases return
+ * `undetermined` so role-dependent checks skip the element.
  */
 const INPUT_TYPE_ROLES = new Map([
   ['button', 'button'],
@@ -667,11 +485,9 @@ const INPUT_TYPE_ROLES = new Map([
   ['tel', 'textbox'],
   ['text', 'textbox'],
   ['url', 'textbox'],
-  // color, date, datetime-local, file, month, password, time, week and hidden have
-  // no ARIA role mapping. They are `undetermined` rather than guessed.
+  // Types with no ARIA role mapping are `undetermined`.
 ]);
 
-/** Landmark roles, for the landmark checks. */
 const LANDMARK_ROLES = new Set([
   'banner',
   'complementary',
@@ -683,34 +499,19 @@ const LANDMARK_ROLES = new Set([
   'search',
 ]);
 
-/** Elements that scope <header>/<footer> out of banner/contentinfo. */
 const SECTIONING = new Set(['article', 'aside', 'main', 'nav', 'section']);
 
 /**
- * The element's role, or `undetermined` when markup alone cannot decide it.
- *
- * `undetermined` is load-bearing: `aria-allowed-attr` compares against the role's
- * allowed list, so an unknown role would mean "globals only" and would flag
- * perfectly valid ARIA on any element this script does not model. Returning
- * `undetermined` makes those elements visibly unchecked instead.
- */
-/**
- * Roles that are real in ARIA 1.2 but absent from axe 4.13's `lookupTable.role`,
- * and which support only the global ARIA attributes.
- *
- * `generic` is the one that matters: `axe.commons.aria.isValidRole('generic')`
- * returns false, so without this an author who correctly writes `role="generic"`
- * would be told it is not a role. It is also the resolved role for div, span and p
- * below, and treating an unlisted role as "no information" would mean
- * `aria-allowed-attr` never fired on the most common elements on the page — a
- * silent hole in the check that looks exactly like a pass.
+ * ARIA 1.2 roles missing from axe 4.13's `lookupTable.role` that allow only globals. axe rejects
+ * `generic`, and it is the resolved role of div, span and p, so without it `aria-allowed-attr` would
+ * never fire on the commonest elements.
  */
 const GLOBALS_ONLY_ROLES = new Set(['generic']);
 
 function roleOf(element) {
   const explicit = attr(element, 'role');
   if (explicit !== null) {
-    // A role attribute is a space-separated fallback list; the first valid token wins.
+    // The first valid token of the fallback list wins.
     for (const token of explicit.trim().split(/\s+/)) {
       const lower = token.toLowerCase();
       if (ARIA.isValidRole(lower) || GLOBALS_ONLY_ROLES.has(lower)) {
@@ -738,7 +539,6 @@ function roleOf(element) {
       : { role: mapped, explicit: false };
   }
   if (name === 'select') {
-    // combobox unless it is a multi-select or shows more than one row.
     const size = Number(attr(element, 'size') ?? '0');
     const multiple = hasAttr(element, 'multiple');
     return { role: multiple || size > 1 ? 'listbox' : 'combobox', explicit: false };
@@ -751,13 +551,11 @@ function roleOf(element) {
     return { role: name === 'header' ? 'banner' : 'contentinfo', explicit: false };
   }
   if (name === 'section') {
-    // A <section> is a region only when it has an accessible name.
     const named = attr(element, 'aria-label') !== null || attr(element, 'aria-labelledby') !== null;
     return { role: named ? 'region' : 'generic', explicit: false };
   }
   if (name === 'div' || name === 'span' || name === 'p') return { role: 'generic', explicit: false };
   if (name === 'td' || name === 'th' || name === 'caption') {
-    // Depends on the containing table's role. Not modelled.
     return { role: 'undetermined', explicit: false };
   }
 
@@ -766,11 +564,7 @@ function roleOf(element) {
   return { role: 'undetermined', explicit: false };
 }
 
-/**
- * Accessible name, in precedence order, for the subset of accname this can do.
- *
- * Deliberately NOT the full algorithm — see the limitations in the file header.
- */
+/** The subset of accname this can do. See the limitations in the file header. */
 function accessibleName(element, byId) {
   const labelledby = attr(element, 'aria-labelledby');
   if (labelledby !== null) {
@@ -801,7 +595,6 @@ function accessibleName(element, byId) {
     if (type === 'submit' || type === 'reset') {
       const value = attr(element, 'value');
       if (value !== null && value.trim().length > 0) return value.trim();
-      // The browser supplies "Submit"/"Reset" when there is no value.
       return type === 'submit' ? 'Submit' : 'Reset';
     }
     if (type === 'button') {
@@ -810,7 +603,6 @@ function accessibleName(element, byId) {
     }
   }
 
-  // A <label for> pointing here, or a <label> wrapping this control.
   const id = attr(element, 'id');
   if (id !== null) {
     const forLabel = byId.labelsFor?.get(id);
@@ -828,7 +620,6 @@ function accessibleName(element, byId) {
   const title = attr(element, 'title');
   if (title !== null && title.trim().length > 0) return title.trim();
 
-  // Name from contents, for the roles that allow it.
   const { role } = roleOf(element);
   const spec = role === null || role === 'undetermined' ? null : LOOKUP.role[role];
   if (
@@ -843,13 +634,7 @@ function accessibleName(element, byId) {
   return null;
 }
 
-/**
- * Focusable-by-keyboard, as far as markup can tell.
- *
- * `disabled` and a negative tabindex remove an element from the tab order.
- * Anything CSS does about it is invisible here, which is why aria-hidden-focus is
- * a static approximation.
- */
+/** Markup-only. CSS can change focusability, so aria-hidden-focus is an approximation. */
 function isTabbable(element) {
   const tabindex = attr(element, 'tabindex');
   if (tabindex !== null) {
@@ -864,18 +649,11 @@ function isTabbable(element) {
   return false;
 }
 
-// ===========================================================================
-// The checks
-//
-// Each returns an array of { ruleId, message, snippet, line }. A check that cannot
-// decide something must not report anything: silence here is correct, and a guess
-// is not.
-// ===========================================================================
+// Each check returns { ruleId, message, snippet, line }. A check that cannot decide reports nothing.
 
 const FORM_CONTROL_TYPES_WITHOUT_LABELS = new Set(['hidden', 'submit', 'reset', 'button', 'image']);
 
 function buildIndex(root) {
-  /** id -> element, first occurrence. Also records every duplicate. */
   const byId = new Map();
   const duplicates = new Map();
   const labelsFor = new Map();
@@ -899,14 +677,7 @@ function runChecks(html, root) {
   const { byId, duplicates } = buildIndex(root);
   const all = elementsOf(root);
   const findings = [];
-  /**
-   * Checks that were skipped, not elements that were skipped.
-   *
-   * An earlier version counted every element whose role could not be resolved,
-   * which meant `<head>`, `<meta>` and `<script>` inflated the figure into
-   * something alarming and meaningless. What a reader needs to know is how many
-   * ARIA attributes went unjudged, because that is the size of the hole.
-   */
+  /** Counts ARIA attributes that went unjudged, which is the size of the hole. */
   const unchecked = { ariaAttributesSkipped: 0 };
 
   const report = (ruleId, element, message) => {
@@ -918,8 +689,6 @@ function runChecks(html, root) {
     });
   };
 
-  // --- document level ------------------------------------------------------
-
   const htmlElement = all.find((element) => element.name === 'html') ?? null;
   const lang = htmlElement === null ? null : attr(htmlElement, 'lang');
   if (htmlElement === null) {
@@ -927,8 +696,7 @@ function runChecks(html, root) {
   } else if (lang === null || lang.trim().length === 0) {
     report('html-has-lang', htmlElement, '<html> has no lang attribute');
   } else if (!/^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})*$/.test(lang.trim())) {
-    // A shape check, not a registry lookup: this catches "english" and "en_GB",
-    // not an unregistered-but-well-formed subtag.
+    // A shape check, not a registry lookup.
     report('html-lang-valid', htmlElement, `lang="${lang}" is not a well-formed BCP 47 tag`);
   }
 
@@ -949,13 +717,9 @@ function runChecks(html, root) {
     }
   }
 
-  // --- duplicate ids -------------------------------------------------------
-
   for (const [id, count] of duplicates) {
     report('duplicate-id-aria', byId.get(id) ?? null, `id="${id}" appears ${count} times`);
   }
-
-  // --- per element ---------------------------------------------------------
 
   const headings = [];
   const landmarks = [];
@@ -964,22 +728,16 @@ function runChecks(html, root) {
     const hidden = inAriaHidden(element);
     const resolved = roleOf(element);
 
-    // --- tabindex ---
     const tabindex = attr(element, 'tabindex');
     if (tabindex !== null && Number(tabindex) > 0) {
       report('tabindex', element, `tabindex="${tabindex}" forces this element ahead of the document order`);
     }
 
-    // --- invalid role ---
     if (resolved.explicit && resolved.role === null) {
       report('aria-roles', element, `role="${resolved.invalid}" is not a valid ARIA role`);
     }
 
-    // --- aria-* names, values, and whether the role allows them ---
-    //
-    // `allowed === null` means "the role could not be determined, so do not judge
-    // which attributes it permits". Every attribute skipped that way is counted, so
-    // the report says how much was not checked instead of implying it passed.
+    // `allowed === null` means the role is undetermined. Each skipped attribute is counted.
     const allowed = allowedAriaFor(resolved);
 
     for (const [name, value] of element.attrs) {
@@ -991,7 +749,6 @@ function runChecks(html, root) {
       }
       const spec = LOOKUP.attributes[name];
 
-      // Value type, from axe's own table.
       if (spec !== undefined && spec.type !== undefined) {
         const problem = checkAttrValue(name, value, spec, byId);
         if (problem !== null) report('aria-valid-attr-value', element, problem);
@@ -1010,10 +767,7 @@ function runChecks(html, root) {
       }
     }
 
-    // --- required aria-* for an EXPLICIT role only ---
-    // An implicit role gets its required values from the host language: <h2> does
-    // not need aria-level, but role="heading" does. Checking implicit roles here
-    // would flag every heading on every page.
+    // Required aria-* for EXPLICIT roles only. <h2> needs no aria-level, role="heading" does.
     if (resolved.explicit && resolved.role !== null) {
       for (const required of ARIA.requiredAttr(resolved.role) ?? []) {
         if (!element.attrs.has(required)) {
@@ -1022,7 +776,6 @@ function runChecks(html, root) {
       }
     }
 
-    // --- role=presentation with conflicting ARIA ---
     if (resolved.explicit && (resolved.role === 'presentation' || resolved.role === 'none')) {
       const conflicting = [...element.attrs.keys()].filter(
         (name) => name.startsWith('aria-') && name !== 'aria-hidden',
@@ -1039,7 +792,6 @@ function runChecks(html, root) {
       }
     }
 
-    // --- aria-hidden must not contain anything tabbable ---
     if (attr(element, 'aria-hidden') === 'true') {
       const tabbable = [element, ...walk(element)].filter(isTabbable);
       if (tabbable.length > 0) {
@@ -1054,7 +806,6 @@ function runChecks(html, root) {
 
     if (hidden) continue; // Nothing below matters for a subtree hidden from AT.
 
-    // --- alternative text ---
     if (element.name === 'img') {
       const hasName =
         hasAttr(element, 'alt') ||
@@ -1082,7 +833,6 @@ function runChecks(html, root) {
       if (!named) report('frame-title', element, `<${element.name}> has no title`);
     }
 
-    // --- names for controls ---
     if (element.name === 'button' || (resolved.explicit && resolved.role === 'button')) {
       if (accessibleName(element, byId) === null) {
         report('button-name', element, 'this button has no accessible name');
@@ -1104,7 +854,6 @@ function runChecks(html, root) {
       }
     }
 
-    // --- headings ---
     if (/^h[1-6]$/.test(element.name) || resolved.role === 'heading') {
       const level = /^h([1-6])$/.exec(element.name)?.[1];
       const ariaLevel = attr(element, 'aria-level');
@@ -1115,12 +864,10 @@ function runChecks(html, root) {
       }
     }
 
-    // --- landmarks ---
     if (resolved.role !== null && resolved.role !== 'undetermined' && LANDMARK_ROLES.has(resolved.role)) {
       landmarks.push({ element, role: resolved.role, name: accessibleName(element, byId) });
     }
 
-    // --- list structure ---
     if (element.name === 'ul' || element.name === 'ol' || element.name === 'menu') {
       for (const child of element.children) {
         if (child.type === 'text') {
@@ -1151,8 +898,6 @@ function runChecks(html, root) {
     }
   }
 
-  // --- heading order -------------------------------------------------------
-
   if (headings.length > 0 && !headings.some((heading) => heading.level === 1)) {
     report('page-has-heading-one', null, 'the page has headings but no level-1 heading');
   }
@@ -1164,8 +909,6 @@ function runChecks(html, root) {
     }
     previous = heading.level;
   }
-
-  // --- landmarks -----------------------------------------------------------
 
   const mains = landmarks.filter((landmark) => landmark.role === 'main');
   if (mains.length === 0) {
@@ -1190,10 +933,7 @@ function runChecks(html, root) {
   return { findings, unchecked, elementCount: all.length };
 }
 
-/**
- * The set of aria-* attributes a role permits: the globals plus the role's own.
- * `null` when the role could not be determined, which means "do not judge".
- */
+/** `null` when the role is undetermined, which means do not judge. */
 function allowedAriaFor(resolved) {
   if (resolved.role === null || resolved.role === 'undetermined') return null;
   if (GLOBALS_ONLY_ROLES.has(resolved.role)) return new Set(LOOKUP.globalAttributes);
@@ -1202,13 +942,11 @@ function allowedAriaFor(resolved) {
   return new Set([...LOOKUP.globalAttributes, ...(spec.attributes?.allowed ?? [])]);
 }
 
-/** input types that legitimately have no separate label. */
 function isUnlabellable(element) {
   const type = (attr(element, 'type') ?? 'text').toLowerCase();
   return FORM_CONTROL_TYPES_WITHOUT_LABELS.has(type);
 }
 
-/** Value validation driven by axe's own attribute table. */
 function checkAttrValue(name, value, spec, byId) {
   const trimmed = value.trim();
   if (trimmed.length === 0) {
@@ -1242,47 +980,21 @@ function checkAttrValue(name, value, spec, byId) {
         : null;
     }
     default:
-      // 'string' and anything unstandardised: nothing decidable here.
       return null;
   }
 }
 
-// ===========================================================================
-// Servers
-// ===========================================================================
-
-/**
- * The port an origin names, or `fallback` when it names none.
- *
- * Both servers are started with an explicit `PORT` rather than letting them pick
- * their own default: `--base-url`/`--api-url` say where the audit will look, and a
- * server listening somewhere else is a run that scores whatever else answered.
- */
+/** Servers get an explicit `PORT` so they listen where the audit looks. */
 function portFromOrigin(origin, fallback) {
   const port = new URL(origin).port;
   return port === '' ? fallback : port;
 }
 
 /**
- * Refuses to start a server on a port something else already holds.
- *
- * `waitUntilReady` accepts the first 200 from its URL, and it cannot tell its own child's answer
- * from a stranger's. With another process on the port, the audit scores whatever IS there.
- * Reproduced: a twelve-line `node:http` server on 127.0.0.1:3472, then
- * `node scripts/a11y-audit.mjs --base-url http://127.0.0.1:3472` printed "starting the web app...",
- * "ready at http://127.0.0.1:3472", audited one route of the stranger's page and exited 0 with
- * "PASS". A delegate's log on this machine shows the same sequence on :3000 while another
- * project's container held that port, and its PASS was reported as this gate's. The same check as
- * `refuseOccupiedPort` in `scripts/age-gate-audit.mjs`.
- *
- * It CONNECTS to 127.0.0.1, where the poll will go. The first version BOUND 127.0.0.1 instead, and
- * that missed the commonest stranger: on macOS a bind of 127.0.0.1 succeeds beside a listener on the
- * wildcard address, which is where `next start` listens (`TCP *:3521`). Measured on 2026-11-10 with
- * a production `next start` from this checkout started by hand on :3521, that version printed
- * "starting the web app...", "ready at http://127.0.0.1:3521", "PASS — no violation of the checked
- * rules." and exited 0. The bind also called a `node:http` server free on its default address, on
- * `0.0.0.0` and on `::`, and refused only one bound to 127.0.0.1; a connect reached all four. Only
- * ECONNREFUSED counts as free, so a probe that cannot decide refuses.
+ * `waitUntilReady` cannot tell its own child's answer from a stranger's, so an occupied port is
+ * refused (a stranger on :3472 was audited and passed). It connects rather than binds, because on
+ * macOS a bind to 127.0.0.1 succeeds beside a wildcard listener such as `next start` (measured
+ * 2026-11-10). Only ECONNREFUSED counts as free.
  */
 async function refuseOccupiedPort(port) {
   const outcome = await new Promise((done) => {
@@ -1310,14 +1022,7 @@ async function refuseOccupiedPort(port) {
   }
 }
 
-/**
- * A child server this script owns and must clean up.
- *
- * Detached, and signalled by process group, for the same reason as
- * scripts/dev.mjs: `pnpm --filter ... start` is a wrapper, and killing the wrapper
- * leaves the real server holding the port. An orphaned Next server after a failed
- * audit makes the next audit pass against stale markup.
- */
+/** `pnpm --filter ... start` is a wrapper, so the server is detached and signalled by process group. */
 class ManagedServer {
   constructor(label, args, readyUrl, env) {
     this.label = label;
@@ -1337,9 +1042,7 @@ class ManagedServer {
       env: { ...process.env, ...this.env },
     });
     const keep = (chunk) => {
-      // Kept, not printed: a healthy Next boot is twenty lines of noise. It is
-      // printed only if the server fails to become ready, which is exactly when
-      // somebody needs it.
+      // Printed only if the server fails to become ready.
       this.output.push(chunk.toString());
       if (this.output.length > 200) this.output.shift();
     };
@@ -1360,8 +1063,7 @@ class ManagedServer {
       }
       try {
         const response = await fetch(this.readyUrl, { signal: AbortSignal.timeout(2000) });
-        // Any HTTP answer means the server is listening. A 404 on the ready URL is
-        // still a live server, and treating it as "not ready" would spin forever.
+        // Any HTTP answer means the server is listening.
         if (response.status > 0) return;
       } catch {
         // Not up yet.
@@ -1387,45 +1089,23 @@ class ManagedServer {
   }
 }
 
-// ===========================================================================
-// The age gate
-// ===========================================================================
-
 /**
- * The `Cookie` header sent with every page request: a declaration against the highest threshold
- * the gate can hold.
- *
- * Both names, unconditionally. The proxy accepts either and takes the LOWER value when both are
- * present, so sending both is correct over HTTP and over HTTPS — this is a request header being
- * composed by a client, not a `Set-Cookie` being stored, so the `__Host-` prefix rules (which
- * constrain how a cookie may be SET) do not apply to it.
+ * Both cookie names. The proxy takes the lower value when both are present, and `__Host-` rules
+ * constrain `Set-Cookie`, not a request header.
  */
 const AGE_DECLARATION_COOKIE = AGE_GATE_COOKIE_NAMES.map(
   (name) => `${name}=${String(AGE_GATE_MINIMUM_CEILING)}`,
 ).join('; ');
 
 /**
- * True when a request came back from the gate's interstitial instead of from the route asked for.
- *
- * Segment matching, never `includes`, for the reason `age-gate.ts` gives at its own `matchesPrefix`:
- * `/age-checkers` is not the gate. That function is private to that module and this is a different
- * question — not "does this path need the gate" but "did my request land on it" — so the four lines
- * live here and in `scripts/keyboard-audit.mjs`, which asks the same question of a browser rather
- * than of a response.
- *
- * The second half, that the REQUEST was not for the gate, is what lets `--routes /age-check` audit
- * the interstitial as itself.
+ * Segment matching, never `includes`, because `/age-checkers` is not the gate. A request FOR the gate
+ * does not count, so `--routes /age-check` audits the interstitial.
  */
 function landedOnAgeGate(requestedPath, landedPath) {
   const isGate = (path) => path === AGE_GATE_PATH || path.startsWith(`${AGE_GATE_PATH}/`);
   return isGate(landedPath) && !isGate(requestedPath);
 }
 
-// ===========================================================================
-// Route discovery
-// ===========================================================================
-
-/** Same-origin links in this HTML, normalised to path-only routes. */
 function linksIn(html, baseUrl, pageUrl) {
   const found = new Set();
   const base = new URL(baseUrl);
@@ -1439,17 +1119,11 @@ function linksIn(html, baseUrl, pageUrl) {
       continue;
     }
     if (url.origin !== base.origin) continue;
-    // Query strings and fragments do not change server-rendered markup enough to
-    // be worth auditing as separate routes, and including them makes the route
-    // list unbounded.
+    // Query strings and fragments are dropped, or the route list is unbounded.
     found.add(url.pathname);
   }
   return found;
 }
-
-// ===========================================================================
-// Run
-// ===========================================================================
 
 let options;
 try {
@@ -1481,20 +1155,9 @@ try {
         'api',
         ['--filter', '@prl/api', 'start'],
         new URL('/api/v1/health', options.apiUrl).toString(),
-        // Do NOT force NODE_ENV=production on the API. `loadConfig` refuses a
-        // production process that has no `SESSION_COOKIE_SECRET` and no
-        // `PUBLIC_WEB_ORIGIN`, and `--with-api` is used by exactly one caller —
-        // the `a11y` job in ci.yml — which supplies neither. Measured with that
-        // job's environment: `NODE_ENV=production DATABASE_URL=… node
-        // apps/api/dist/server.js` prints "Refusing to start: 2 configuration
-        // problems" and exits 78, so `waitUntilReady` threw "api exited (78)
-        // before it was ready" and the job could never go green. `verify` runs
-        // this gate WITHOUT `--with-api`, which is why nothing local ever saw it.
-        // `ax-tree-audit.mjs` reached the same conclusion for the same reason.
-        //
-        // `PUBLIC_WEB_ORIGIN` is this audit's own web origin: it is one allowlist
-        // for CORS and the WebSocket Origin check, so without it the pages the
-        // audit scores render their error state rather than their content.
+        // No NODE_ENV=production on the API. `loadConfig` then requires SESSION_COOKIE_SECRET and
+        // PUBLIC_WEB_ORIGIN, which the ci.yml `a11y` job does not supply, and the API exits 78.
+        // PUBLIC_WEB_ORIGIN is set to this audit's web origin for CORS and the WebSocket Origin check.
         {
           PORT: portFromOrigin(options.apiUrl, '3001'),
           HOST: '127.0.0.1',
@@ -1507,8 +1170,7 @@ try {
       api.start();
       await api.waitUntilReady(options.readyTimeoutSeconds);
     }
-    // The WEB server keeps NODE_ENV=production: its production build is the
-    // markup this audit exists to score. Only the API drops it, above.
+    // The web server keeps NODE_ENV=production. Its production markup is what this scores.
     const web = new ManagedServer('web', ['--filter', '@prl/web', 'start'], options.baseUrl, {
       NODE_ENV: 'production',
       PRL_API_ORIGIN: options.apiUrl,
@@ -1524,13 +1186,8 @@ try {
     console.log(dim(`  auditing the server already running at ${options.baseUrl}\n`));
   }
 
-  // --- is there a gate in front of this deployment? ---
-  //
-  // Asked once, before the first route, with the redirect NOT followed and no declaration sent —
-  // which is the only way to see the gate rather than the page behind it. A run that reached its
-  // pages past a gate is a different run from one where there was no gate, and the reader of the
-  // report has to be told which one they are holding. `/play` is the probe because it is gated
-  // under both scopes, so one request answers for either configuration.
+  // Probe /play once without following redirects or declaring, to record whether a gate is in front.
+  // /play is gated under both scopes.
   const gateProbe = await fetch(new URL('/play', options.baseUrl), {
     headers: { accept: 'text/html' },
     redirect: 'manual',
@@ -1549,7 +1206,6 @@ try {
     console.log(dim(`  The interstitial is a page too: audit it with --routes ${AGE_GATE_PATH}.\n`));
   }
 
-  // --- fetch and audit, discovering routes as we go ---
   const queue = options.routes.map((route) => ({ route, depth: 0 }));
   const seen = new Set(options.routes);
   const results = [];
@@ -1562,8 +1218,6 @@ try {
     let html;
     try {
       response = await fetch(pageUrl, {
-        // The declaration cookie goes on every request, so a gated deployment serves the pages
-        // themselves rather than the interstitial. See "The age gate" in the file header.
         headers: { accept: 'text/html', cookie: AGE_DECLARATION_COOKIE },
         signal: AbortSignal.timeout(options.requestTimeoutSeconds * 1000),
       });
@@ -1573,15 +1227,12 @@ try {
       continue;
     }
     if (!response.ok) {
-      // Not audited on purpose: an error page is not the markup this app ships,
-      // and findings from it would be noise attributed to a real route.
+      // An error page is not the markup this app ships.
       fetchFailures.push({ route, reason: `HTTP ${response.status}` });
       continue;
     }
-    // WHERE the body came from, not what it says. `fetch` follows the gate's 303 silently, so a
-    // 200 here is no evidence that this is the route that was asked for — and an interstitial
-    // audited under the name of `/play` is a PASS for a page nobody looked at. The landing URL is
-    // the only thing that can tell the two apart.
+    // `fetch` follows the gate's 303 silently, so only the landing URL shows whether this is the
+    // route that was asked for.
     const landedPath = new URL(response.url === '' ? pageUrl : response.url).pathname;
     if (landedOnAgeGate(new URL(pageUrl).pathname, landedPath)) {
       fetchFailures.push({
@@ -1613,7 +1264,6 @@ try {
     }
   }
 
-  // --- report ---
   const byRule = new Map();
   let totalFindings = 0;
   let suppressed = 0;
@@ -1648,8 +1298,6 @@ try {
         ),
       );
     }
-    // Grouped by rule, so a systemic problem reads as one entry with a count
-    // rather than forty identical lines.
     const grouped = new Map();
     for (const finding of result.shown) {
       if (!grouped.has(finding.ruleId)) grouped.set(finding.ruleId, []);
@@ -1699,9 +1347,7 @@ try {
       'required and is not automated anywhere.',
     baseUrl: options.baseUrl,
     wcagOnly: options.wcagOnly,
-    // Recorded, not just printed: "these routes were reached past an age gate, with a declaration
-    // this harness supplied" is a fact about how the run was obtained, and a report that omits it
-    // cannot be told apart from one taken against an ungated deployment.
+    // Recorded so a run past an age gate can be told apart from one against an ungated deployment.
     ageGate: { detected: ageGateOn, declarationSent: AGE_DECLARATION_COOKIE },
     generatedAt: new Date().toISOString(),
     routes: results.map((result) => ({

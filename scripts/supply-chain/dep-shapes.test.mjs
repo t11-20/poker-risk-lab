@@ -1,26 +1,8 @@
 #!/usr/bin/env node
 /**
- * Tests for the `dependency-shapes` gate.
- *
- * Run with:  node --test scripts/supply-chain/dep-shapes.test.mjs
- *
- * ## What these exist to prevent
- *
- * The acquisition-channel check was six regexes over the raw lockfile and it was
- * **dead code**. Four patterns were anchored to the start of a line while pnpm
- * writes `resolution:` inline on one line; the other two looked for `git+ssh://`
- * and an off-registry `.tgz` URL while pnpm records git as
- * `repo: github.com/owner/repo` (no scheme) and a directory dependency with no
- * URL at all. Fed a lockfile carrying a real pnpm-format git resolution and a
- * real pnpm-format directory resolution, **0 of the 6 patterns matched** — and
- * the gate printed `✓ dependency-shapes — pass`. It had a positive test once, in
- * the sense that somebody had watched it fire; but the input they fired it with
- * was hand-written in a format pnpm does not emit.
- *
- * So the fixtures below are the bytes pnpm actually writes. Every one of them is
- * a negative control: feed the gate the real attack, assert it FAILS. A test that
- * only ever asserts the clean repo passes cannot tell a working gate from a gate
- * that has stopped matching anything.
+ * Tests for the `dependency-shapes` gate. The old regex check passed a real pnpm git and directory
+ * resolution because its own positive test used a format pnpm does not emit. So every fixture here
+ * is the bytes pnpm writes, fed to the gate as a negative control that must fail.
  */
 
 import assert from 'node:assert/strict';
@@ -46,16 +28,11 @@ function scratch() {
   return dir;
 }
 
-/** All failure messages a gate produced, joined for `assert.match`. */
 function failureText(gate) {
   return gate.failures.map((f) => `${f.message} ${f.detail ?? ''}`).join('\n');
 }
 
-/**
- * A lockfile in the exact format pnpm 9/10/11 emits, into which a caller can
- * splice hostile entries. The clean part is copied in shape from the real
- * pnpm-lock.yaml so a fixture cannot drift away from the format being audited.
- */
+/** A lockfile in pnpm 9/10/11 format, shaped like the real one, into which hostile entries splice. */
 function lockfile({ importerDeps = '', packageEntries = '' } = {}) {
   return `lockfileVersion: '9.0'
 
@@ -97,8 +74,7 @@ describe('acquisition-channel checks (the check that could not fail)', () => {
   });
 
   it('FAILS on a git resolution written the way pnpm actually writes it', () => {
-    // The exact shape pnpm emits for `optionalDependencies: {g2: "antvis/G2#<sha>"}`,
-    // which is the campaign's documented delivery Pattern B.
+    // pnpm's shape for `optionalDependencies: {g2: "antvis/G2#<sha>"}`, delivery Pattern B.
     const gate = new Gate('t');
     checkLockfileShape(
       gate,
@@ -119,8 +95,6 @@ describe('acquisition-channel checks (the check that could not fail)', () => {
     assert.match(text, /git repository resolution/);
     assert.match(text, /git commit resolution/);
     assert.match(text, /non-registry resolution type/);
-    // …and there is no `git+ssh://` anywhere in it, which is why the old
-    // scheme-matching pattern missed.
     assert.doesNotMatch(text, /git\+ssh/);
   });
 
@@ -163,8 +137,6 @@ describe('acquisition-channel checks (the check that could not fail)', () => {
   });
 
   it('FAILS on a block-style resolution, which pnpm does not emit but a hand edit can', () => {
-    // A checker that only understands its generator's preferred formatting is a
-    // checker an attacker reformats their way past.
     const gate = new Gate('t');
     checkLockfileShape(
       gate,
@@ -193,7 +165,6 @@ describe('acquisition-channel checks (the check that could not fail)', () => {
   });
 
   it('FAILS on a workspace link whose specifier is not the workspace: protocol', () => {
-    // The lockfile half of the dependency-confusion fix.
     const gate = new Gate('t');
     checkLockfileShape(
       gate,
@@ -249,7 +220,6 @@ describe('acquisition-channel checks (the check that could not fail)', () => {
 });
 
 describe('first-party specifiers must use the workspace: protocol', () => {
-  /** A throwaway workspace whose manifests the check reads from disk. */
   function workspace(manifests) {
     const root = scratch();
     const projects = [];
@@ -279,8 +249,6 @@ describe('first-party specifiers must use the workspace: protocol', () => {
   });
 
   it('FAILS on `"@prl/poker-math": "1.0.0"` — one character from correct, and dependency confusion', () => {
-    // The @prl scope is unclaimed on npm (404) and .npmrc maps it to the PUBLIC
-    // registry, so this specifier fetches whatever a stranger has published.
     const gate = new Gate('t');
     checkWorkspaceManifests(
       gate,
@@ -298,8 +266,6 @@ describe('first-party specifiers must use the workspace: protocol', () => {
   });
 
   it('FAILS on a first-party name that is not a workspace project at all', () => {
-    // The scope is derived from the workspace, so a name nobody publishes is
-    // still caught: `@prl/anything` cannot come from anywhere but the registry.
     const gate = new Gate('t');
     checkWorkspaceManifests(
       gate,
@@ -383,46 +349,9 @@ describe('the install-hook scan refuses to pass over nothing', () => {
     assert.match(gate.notes.join('\n'), /inspected from the registry/);
   });
 
-  // -------------------------------------------------------------------------
-  // Why a gate failed, not just that it did
-  //
-  // `storeCoverage` computed `skippedManifestPresent` — whether
-  // `node_modules/.modules.yaml`, pnpm's own record of the optional dependencies
-  // it skipped for this platform, could be read — and nothing read it. A computed
-  // value nothing reads is the shape of the four gates that judged fewer things
-  // than they claimed, so it had to become load-bearing or be deleted.
-  //
-  // It is load-bearing, but not as a VERDICT. When the record is unreadable the
-  // skipped set is empty, so every version absent from disk lands in
-  // `uninspected` and the gate fails there regardless; a second failure for the
-  // same condition would be decoration. What it decides is the DIAGNOSIS, and the
-  // two diagnoses send an operator to two different places:
-  //
-  //   * record readable, these versions not in it   the store and the lockfile
-  //                                                 really have diverged
-  //   * record unreadable                           the store may be intact and
-  //                                                 only pnpm's account of it
-  //                                                 gone, and the list is now
-  //                                                 EVERY absent version rather
-  //                                                 than the unexplained ones
-  //
-  // Printing the first in the second situation sends somebody hunting a
-  // divergence that is not there — on this machine, past 58 platform-skipped
-  // Linux binaries it would name as evidence of it.
-  //
-  // So the control below is the real condition rather than a hand-written
-  // coverage object: three throwaway repository roots, each with a real
-  // `node_modules/.pnpm` and a real `.modules.yaml` (parsed / absent / present
-  // but carrying no `skipped:` key), fed through the real `storeCoverage` into
-  // the real `requireStoreCoverage`. Each asserts its own text AND the absence of
-  // the other's, because a message that misattributes a failure is worse than no
-  // message at all.
-  //
-  // `platformSkippedVersions` and `storeCoverage` take a root for exactly this;
-  // see the note on `platformSkippedVersions` in lib.mjs.
-  // -------------------------------------------------------------------------
+  // `skippedManifestPresent` decides only the diagnosis. Each root is real on disk (record parsed,
+  // absent, present without `skipped:`), and each case asserts its own text and not the other's.
 
-  /** A throwaway repository root with a real virtual store, and the record or not. */
   function repoWithStore(modulesYaml) {
     const root = scratch();
     mkdirSync(join(root, 'node_modules', '.pnpm'), { recursive: true });
@@ -439,7 +368,6 @@ describe('the install-hook scan refuses to pass over nothing', () => {
   ]);
   const installed = new Map([['fastify@5.11.3', {}]]);
 
-  /** The detail `requireStoreCoverage` prints for a root in a given state. */
   function detailFor(root) {
     const gate = new Gate('t');
     const coverage = storeCoverage(resolved, installed, root);
@@ -466,9 +394,8 @@ describe('the install-hook scan refuses to pass over nothing', () => {
     const { coverage, passed, text } = detailFor(repoWithStore(undefined));
     assert.equal(coverage.skippedManifestPresent, false);
     assert.deepEqual(coverage.platformSkipped, []);
-    // The misattribution risk, made visible: the platform-skipped optional is now
-    // in the unexplained list, and the old text would have offered it as proof
-    // that the store and the lockfile disagree.
+    // The platform-skipped optional is now in the unexplained list, and must not be offered as
+    // proof that store and lockfile disagree.
     assert.deepEqual(coverage.uninspected, [SHARP, 'evil@1.0.0'].sort());
     assert.equal(passed, false);
     assert.match(text, RECORD_MISSING);
@@ -476,8 +403,7 @@ describe('the install-hook scan refuses to pass over nothing', () => {
   });
 
   it('does not mistake a .modules.yaml that exists for one it could read', () => {
-    // `present` is "the skipped set was found", not "the file was there". A
-    // block-YAML record with no `skipped:` key parses as neither JSON nor a list.
+    // A block-YAML record with no `skipped:` key parses as neither JSON nor a list.
     const { coverage, text } = detailFor(repoWithStore("hoistPattern:\n  - '*'\nvirtualStoreDir: .pnpm\n"));
     assert.equal(coverage.skippedManifestPresent, false);
     assert.match(text, RECORD_MISSING);
@@ -485,9 +411,6 @@ describe('the install-hook scan refuses to pass over nothing', () => {
   });
 
   it('reads a block-YAML skipped list, and blames the store again once it can', () => {
-    // The fallback path in `platformSkippedVersions`, which exists because a
-    // future pnpm could stop writing JSON. If it broke, this root would silently
-    // become the "record missing" case and the diagnosis would flip.
     const { coverage, text } = detailFor(repoWithStore(`skipped:\n  - ${SHARP}\nvirtualStoreDir: .pnpm\n`));
     assert.equal(coverage.skippedManifestPresent, true);
     assert.deepEqual(coverage.platformSkipped, [SHARP]);
@@ -496,9 +419,7 @@ describe('the install-hook scan refuses to pass over nothing', () => {
   });
 
   it('changes only the reason: both states still FAIL, with the same headline', () => {
-    // The flag must not become a verdict of its own. The gate fails either way —
-    // `uninspected` is non-empty in both — and the headline is identical; only
-    // the remedy differs.
+    // The gate fails and the headline is identical either way. Only the remedy differs.
     const withRecord = detailFor(repoWithStore(JSON.stringify({ skipped: [SHARP] })));
     const without = detailFor(repoWithStore(undefined));
     assert.equal(withRecord.passed, false);
@@ -509,8 +430,6 @@ describe('the install-hook scan refuses to pass over nothing', () => {
   });
 
   it('says nothing about the record when there is nothing unexplained to explain', () => {
-    // A complete store: the diagnosis is for the failure path only, and must not
-    // leak into a passing run.
     const root = repoWithStore(JSON.stringify({ skipped: [SHARP] }));
     const gate = new Gate('t');
     const passed = requireStoreCoverage(

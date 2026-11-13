@@ -1,101 +1,16 @@
 #!/usr/bin/env node
 /**
- * Tests for the `log policy` gate.
+ * Tests for the `log policy` gate. Run with `node --test scripts/supply-chain/log-policy.test.mjs`.
  *
- * Run with:  node --test scripts/supply-chain/log-policy.test.mjs
+ * D2 had two halves: `combined` logging the OIDC authorization code, and no compose service having a
+ * `logging:` cap. Every rule gets a positive control on the real files and a negative control that
+ * mutates the real text in memory back towards the pre-fix shape. The one hand-written fixture is
+ * the verbatim pre-fix `http` block. The five bypasses a review measured against a real container
+ * are pinned below as mutations, each with the line the container wrote.
  *
- * ## What these are controls FOR
- *
- * D2 in docs/production/legal-register.md had two halves, and this gate has a rule
- * for each.
- *
- * The first was one word: both shipped nginx configs said
- * `access_log /dev/stdout combined;`, and `combined` logs `"$request"` — the
- * request line including `?code=<OAuth authorization code>` on the OIDC callback.
- *
- * The second was an ABSENCE, which is harder to test for and easier to reintroduce:
- * not one service in any of the three compose files had a `logging:` block, so
- * every container log grew without limit on Docker's default json-file driver
- * until the host's disk filled and took Postgres — and therefore the data — with
- * it. An absence has no word to grep for, which is why the compose half of this
- * suite removes each service's cap one at a time rather than checking that "a"
- * cap exists somewhere.
- *
- * Both halves shipped, and nothing in the repository went red, because nothing
- * read those files at all.
- *
- * So a gate that only says "the current files are fine" would be worth very
- * little: the state it is asserting is the state it was written against, and it
- * would pass just as happily if its own matcher had stopped matching. Every rule
- * below is therefore checked twice —
- *
- *   * a POSITIVE control on the real shipped files, so the gate cannot pass by
- *     finding nothing; and
- *   * a NEGATIVE control that mutates the real shipped text back towards the
- *     pre-fix shape and asserts the gate FAILS, so "stopped asserting" can never
- *     be mistaken for "passed".
- *
- * The negative controls mutate the REAL files (read, changed in memory, never
- * written) rather than a hand-written fixture, because a fixture drifts from the
- * thing it stands in for and a gate can quietly stop matching the real file while
- * still matching its own fixture. The one hand-written fixture here is the
- * verbatim pre-fix `http` block, kept so the specific historical defect stays
- * pinned even if the current files are rewritten entirely.
- *
- * ## Would these fail if the behaviour broke, and how was that checked?
- *
- * Each was checked by breaking the rule it covers in the gate and watching the
- * assertion fail:
- *
- *   * `STOCK_FORMATS` emptied → 26 of 34 failed, "refuses the stock `combined`
- *     format" among them.
- *   * the `(?![A-Za-z0-9_])` boundary deleted from the forbidden-variable matcher →
- *     6 failed, including "accepts the safe $request_* variables the shipped format
- *     uses" and both positive controls: without the boundary, `$request` matches
- *     `$request_method` and the gate rejects the very format it enforces. The
- *     lookahead is load-bearing in both directions.
- *   * `STRICT_ERROR_LEVELS` widened to include `warn` → 26 failed, "refuses an
- *     error_log looser than crit" among them.
- *   * the upstream comparison changed from `here !== api` to `here === null` → the
- *     two "drifting the callback block's upstream fails" cases failed, and nothing
- *     else did.
- *   * `stripNginxComments` made the identity function → 5 failed, "does not trip on
- *     its own documentation" among them. That is the trap worth naming: a gate that
- *     read comments would fail on the explanation of the incident, and the cheapest
- *     way to make it green would be to delete the explanation.
- *
- * The compose rules were checked the same way, against the full 62-test suite:
- *
- *   * `composeServices` truncated to return only the FIRST service → 5 failed. This
- *     is the mutation that matters most: it is what "the gate checks the proxy and
- *     nothing else" looks like from the inside, and it is the state this suite was
- *     widened to make impossible.
- *   * the `driver !== 'json-file'` check disabled → 3 failed, all of them
- *     "switching a service to the `none` driver fails". `none` bounds the disk
- *     perfectly and destroys the log; a gate that only asked whether a `logging:`
- *     block existed would call that a fix.
- *   * `crossFileCapFindings` made to return `[]` → exactly 1 failed, "a service
- *     capped differently in two files fails", and nothing else. Narrow, which is
- *     what a rule about drift between two files should be.
- *   * the `EXEMPT_SERVICES` lookup replaced with an unconditional `continue`
- *     (i.e. every service silently exempt) → 26 failed. That is the shape of the
- *     original defect — a check that runs, reports success, and covers nothing.
- *
- * ## The five bypasses, pinned
- *
- * An adversarial review then defeated the whole variable half of this gate five
- * ways, every one of them measured against a real container while this gate printed
- * `✓ log policy — pass` and exited 0. Those five are pinned in
- * `describe('negative control: the five measured bypasses')` below, as mutations of
- * the real shipped text rather than as prose — a bypass written down only in a
- * comment is a bypass that comes back — and each carries the line the container
- * actually wrote.
- *
- * They are why rule 2 is now an ALLOWLIST and why this gate reads configuration with
- * a tokenizer instead of a regex. The two properties those changes buy are asserted
- * directly rather than inferred: a variable nobody has reviewed is refused even
- * though nothing knows it is dangerous, and a `;` inside a quoted string does not
- * end a directive.
+ * Mutation checks run against the gate: emptying `STOCK_FORMATS` failed 26 tests, returning only the
+ * first compose service failed 5, disabling the `json-file` driver check failed 3, and an
+ * unconditional `EXEMPT_SERVICES` skip failed 26.
  */
 
 import assert from 'node:assert/strict';
@@ -142,32 +57,24 @@ const STAGING_COMPOSE = readFileSync(join(REPO_ROOT, 'docker-compose.staging.yml
 const OBSERVABILITY_COMPOSE = readFileSync(join(REPO_ROOT, 'docker-compose.observability.yml'), 'utf8');
 const DEV_CONF = inlineNginxConfigFrom(DEV_COMPOSE);
 
-/** Every compose file, read from disk, so every rule below is checked against all three. */
 const COMPOSE_FILES = [
   ['docker-compose.yml', DEV_COMPOSE],
   ['docker-compose.staging.yml', STAGING_COMPOSE],
   ['docker-compose.observability.yml', OBSERVABILITY_COMPOSE],
 ];
 
-/** Every shipped nginx config, so each rule below is checked against both. */
 const SHIPPED = [
   ['deploy/staging/nginx.conf', STAGING_CONF],
   ['docker-compose.yml (inline)', DEV_CONF],
 ];
 
-/** Did the gate report a failure whose message contains this fragment? */
 function complainsAbout(findings, fragment) {
   return findings.some((finding) => finding.message.includes(fragment));
 }
 
 /**
- * Return `compose` with exactly one service's `logging:` block deleted.
- *
- * This works on the RAW text — comments and all — rather than on the body
- * `composeServices` hands back, which is comment-stripped and therefore does not
- * occur verbatim in the file. Mutating the raw text is the point: the gate has to
- * be shown failing on something that could really be committed, and every one of
- * these caps ships with a comment above it explaining its numbers.
+ * Return `compose` with one service's `logging:` block deleted, from the raw text, so the failure is
+ * shown on something that could really be committed.
  */
 function withoutCapFor(compose, service) {
   const lines = compose.split('\n');
@@ -191,14 +98,8 @@ function withoutCapFor(compose, service) {
 }
 
 /**
- * `deploy/staging/nginx.conf` as it shipped before this fix, reduced to the four
- * lines that carried the defect — the `error_log ... warn`, the `access_log ...
- * combined`, and a `location /api/` with no callback block beside it. Every one of
- * those is copied character-for-character from
- * `git show 5e3cbbc:deploy/staging/nginx.conf` (the commit this fix was written
- * against); what is dropped is the TLS, timeout and header configuration this gate
- * does not read. Kept so the historical defect stays pinned to a text rather than
- * to a memory of one, even if the shipped files are later rewritten entirely.
+ * The defect lines of `deploy/staging/nginx.conf` at commit 5e3cbbc, copied verbatim. TLS, timeout
+ * and header config the gate does not read is dropped.
  */
 const PRE_FIX_CONFIG = `
 pid /tmp/nginx.pid;
@@ -240,19 +141,12 @@ describe('positive control: the shipped configuration passes', () => {
   }
 
   it('the services this gate found are the services that are actually there', () => {
-    // The load-bearing property is that services are DISCOVERED, not listed: a
-    // service added next month arrives uncapped, and a gate that knew only today's
-    // names would pass it in silence. So assert the discovery really enumerates,
-    // and assert against names read independently of `composeServices` itself —
-    // a test that re-used the parser could not catch a parser that stopped
-    // parsing, which is exactly the defect this gate exists to prevent elsewhere.
+    // Expected names are written by hand, not read through `composeServices`, so a parser that
+    // stops parsing fails here.
     const expected = {
       'docker-compose.yml': ['postgres', 'api', 'web', 'proxy'],
       'docker-compose.staging.yml': ['postgres', 'api', 'web', 'proxy'],
-      // `blackbox` is the third service in the observability overlay. It is written
-      // here by hand, off the file, for the reason above — and it is also the proof
-      // that this assertion works: it was added to that compose file by somebody
-      // else and this list went red until a person read the file and agreed.
+      // `blackbox` was added by somebody else and this list went red until a person agreed.
       'docker-compose.observability.yml': ['prometheus', 'blackbox', 'alertmanager'],
     };
     for (const [label, compose] of COMPOSE_FILES) {
@@ -272,9 +166,6 @@ describe('positive control: the shipped configuration passes', () => {
   });
 
   it('every exemption is named and reasoned, and there are none today', () => {
-    // The point of EXEMPT_SERVICES is that leaving a service uncapped has to be an
-    // act somebody performed and can be argued with, not a name missing from a
-    // list. If it is ever non-empty, each entry still has to carry a real reason.
     for (const [key, reason] of EXEMPT_SERVICES) {
       assert.match(key, /^[^:]+:[^:]+$/, `exemption key ${key} is not <compose file>:<service>`);
       assert.ok(String(reason).length > 30, `exemption ${key} has no real reason`);
@@ -290,15 +181,11 @@ describe('positive control: the shipped configuration passes', () => {
   });
 
   it('the inline config is actually found in docker-compose.yml', () => {
-    // If PRL_PROXY_NGINX_CONF is ever renamed, `inlineNginxConfigFrom` returns
-    // null and every nginx rule in this gate silently stops running. That is the
-    // failure mode D2 came from, so it is asserted rather than assumed.
+    // If PRL_PROXY_NGINX_CONF is renamed, every nginx rule silently stops running.
     assert.ok(DEV_CONF?.includes('access_log'), 'no inline nginx config extracted');
   });
 
   it('compose $$ escapes are undone before the config is judged', () => {
-    // `$$request` in the file is `$request` in the container. A gate reading the
-    // raw text would see `$$request` and a `$request` rule would miss it.
     assert.ok(DEV_COMPOSE.includes('$$uri'), 'the compose file no longer uses $$ escaping');
     assert.ok(!DEV_CONF.includes('$$'), 'inlineNginxConfigFrom left compose escapes in place');
   });
@@ -343,9 +230,7 @@ describe('negative control: each rule, against the real shipped text', () => {
     });
 
     it(`${label}: logging the raw address or user agent fails`, () => {
-      // Mutate the pair as it appears in the log_format, not the map that DEFINES
-      // `$prl_client_net`: `map $remote_addr $prl_client_net` is the redaction and
-      // must stay legal, while the same name inside a log_format must not.
+      // Mutate the log_format, not the map that defines `$prl_client_net`, which must stay legal.
       for (const [safe, raw] of [
         ['$prl_client_net $prl_ua_class', '$remote_addr $prl_ua_class'],
         ['$prl_client_net $prl_ua_class', '$prl_client_net $http_user_agent'],
@@ -386,11 +271,7 @@ describe('negative control: each rule, against the real shipped text', () => {
   }
 
   for (const [label, compose] of COMPOSE_FILES) {
-    // Every service, one at a time. The old version of this suite removed the
-    // FIRST `logging:` block in the file and was satisfied; that would still pass
-    // with five of six services uncapped, which is the state this whole item was
-    // opened to fix. Removing each service's cap in turn is the only shape that
-    // proves the gate reads all of them.
+    // Every service, one at a time. Removing only the first cap would pass with the rest uncapped.
     for (const { name } of composeServices(compose)) {
       it(`${label}: removing \`${name}\`'s log cap fails`, () => {
         const broken = withoutCapFor(compose, name);
@@ -416,9 +297,7 @@ describe('negative control: each rule, against the real shipped text', () => {
     });
 
     it(`${label}: switching a service to the \`none\` driver fails`, () => {
-      // `driver: none` bounds the disk perfectly and destroys the log. It would
-      // satisfy a gate that only asked "is there a logging: block", which is why
-      // the driver is checked by name and why the failure text says so.
+      // `driver: none` bounds the disk and destroys the log.
       const broken = compose.replace(/^ {6}driver: json-file$/m, '      driver: none');
       assert.notEqual(broken, compose, 'the mutation did not apply');
       assert.ok(complainsAbout(composeLoggingFindings(broken, label).findings, 'rather than json-file'));
@@ -433,8 +312,7 @@ describe('negative control: each rule, against the real shipped text', () => {
     });
 
     it(`${label}: a service with no logging: block at all is caught wherever it sits`, () => {
-      // Appending a new service is the "added next month" case: the gate must fail
-      // on a name it has never seen, in a file it did not expect it in.
+      // The "added next month" case: a name the gate has never seen.
       const broken = `${compose.trimEnd()}\n`.replace(
         /^volumes:$/m,
         '  newcomer:\n    image: example:1@sha256:0\n    restart: unless-stopped\n\nvolumes:',
@@ -463,10 +341,7 @@ describe('negative control: each rule, against the real shipped text', () => {
 
 describe('the gate reads configuration, not prose', () => {
   it('accepts the safe $request_* variables the shipped format uses', () => {
-    // `$request_method`, `$request_time`, `$request_length` and `$request_id` are
-    // all safe and all distinct from `$request`. A rule that matched by substring
-    // would reject the very format it is meant to enforce, and the fix a hurried
-    // maintainer would reach for is to stop logging useful fields.
+    // A substring match on `$request` would reject the very format it enforces.
     const config = `
       log_format ok escape=default '$request_method $uri $request_time $request_length $request_id';
       access_log /dev/stdout prl_privacy;
@@ -480,13 +355,8 @@ describe('the gate reads configuration, not prose', () => {
   });
 
   it('does not trip on its own documentation', () => {
-    // The shipped configs quote the leaking line — `"$request"`, `combined`, and
-    // the sentinel access-log entry — at length in comments, because that is where
-    // the reasoning belongs. If the gate read comments it would fail on the
-    // explanation, and the cheapest way to make it green would be to delete the
-    // explanation. Both shipped SOURCE files are asserted to still carry that prose —
-    // the staging config in its own header, the dev config in the compose service
-    // comment that sits above the inline block.
+    // The shipped configs explain the leak in comments. A gate that read comments would fail on
+    // them, so both sources are asserted to still carry that prose.
     for (const [label, source] of [
       ['deploy/staging/nginx.conf', STAGING_CONF],
       ['docker-compose.yml', DEV_COMPOSE],
@@ -500,11 +370,8 @@ describe('the gate reads configuration, not prose', () => {
   });
 
   it('reads a cap out of a service body, and distinguishes absent from malformed', () => {
-    // Three states that must not be confused: no block at all (uncapped, the
-    // original defect), a block with a field missing (looks capped, is not), and a
-    // complete block. `logCapOf` returns null only for the first, so the caller can
-    // report "no logging: block" and "logging: block with no max-file" as the
-    // different mistakes they are.
+    // `logCapOf` returns null only for a missing block, so "no logging: block" and "no max-file"
+    // are reported as different mistakes.
     assert.equal(logCapOf('    image: x\n    restart: unless-stopped\n'), null);
     assert.deepEqual(logCapOf("    logging:\n      driver: json-file\n        max-size: '10m'\n"), {
       driver: 'json-file',
@@ -525,26 +392,18 @@ describe('the gate reads configuration, not prose', () => {
   });
 
   it('an access_log with no format at all is refused', () => {
-    // Bare `access_log /dev/stdout;` IS `combined` — nginx's default. A gate that
-    // only banned the word would miss the identical leak spelled as an omission.
+    // Bare `access_log /dev/stdout;` is nginx's default, `combined`.
     const findings = nginxFindings('access_log /dev/stdout;\nerror_log /dev/stderr crit;', 'bare');
     assert.ok(complainsAbout(findings, 'rather than `prl_privacy`'), JSON.stringify(findings, null, 2));
   });
 
   it('a gate that finds no config must not pass', () => {
-    // The original defect survived because nothing read these files. "Read nothing,
-    // found nothing, reported success" must therefore be a failure, not a pass.
     assert.equal(inlineNginxConfigFrom('services:\n  proxy:\n    image: nginx\n'), null);
     const run = spawnSync(process.execPath, [GATE], { cwd: '/', encoding: 'utf8' });
     assert.equal(run.status, 0, 'the gate resolves its own repo root, so cwd must not change the verdict');
   });
 });
 
-// ---------------------------------------------------------------------------
-// The five measured bypasses
-// ---------------------------------------------------------------------------
-
-/** The four files `runLogPolicyGate` reads, so a mutation can be judged by the WHOLE gate. */
 const GATE_INPUTS = [
   'deploy/staging/nginx.conf',
   'docker-compose.yml',
@@ -553,13 +412,8 @@ const GATE_INPUTS = [
 ];
 
 /**
- * Run the real gate — not one exported rule — against a throwaway copy of the repo.
- *
- * Every bypass below was reported the same way: "measured against a real container,
- * with the gate printing `✓ log policy — pass`, exit 0". So the assertion has to be
- * about the gate's verdict and not about a helper's return value: three of the five
- * were defeats of REACH rather than of a rule, and a test that called `nginxFindings`
- * directly would have handed the rule the text the real run never gave it.
+ * Run the real gate against a throwaway copy of the repo. Three of the five bypasses defeated reach,
+ * not a rule, so calling `nginxFindings` directly would hand the rule text the real run never saw.
  */
 function gateVerdictFor(mutate) {
   const root = mkdtempSync(join(tmpdir(), 'prl-log-policy-'));
@@ -581,9 +435,7 @@ function gateVerdictFor(mutate) {
 
 describe('positive control: an unmutated copy of the repo still passes', () => {
   it('the gate finds nothing to complain about', () => {
-    // The control for every test below. If `gateVerdictFor` itself broke the tree —
-    // a file not copied, a path wrong — every "this is refused" case would pass for
-    // the wrong reason, and the suite would be measuring its own harness.
+    // The control for every test below, so a broken harness cannot pass them.
     const verdict = gateVerdictFor(() => {
       // Deliberately mutates nothing.
     });
@@ -593,14 +445,10 @@ describe('positive control: an unmutated copy of the repo still passes', () => {
 
 describe('negative control: the five measured bypasses', () => {
   it('1. $arg_code — a denied $args and an allowed $arg_code are the same string', () => {
-    // Measured, before this fix, in a real nginxinc/nginx-unprivileged container
-    // running the shipped config with this one addition:
+    // Measured before the fix, in a real nginxinc/nginx-unprivileged container:
     //
     //   2026-08-25T17:23:19+00:00 172.17.0.0/24 tool "GET /api/v1/auth/oidc/callback?"
     //   code=SENTINELCODE123 502 157 rt=30.007 up=- us=- urt=- rid=-
-    //
-    // The old rule denied `$args` with a right-hand word boundary, which is correct
-    // and irrelevant: `$arg_code` is a different variable carrying the same value.
     const verdict = gateVerdictFor(({ read, write }) =>
       write(
         'deploy/staging/nginx.conf',
@@ -614,15 +462,10 @@ describe('negative control: the five measured bypasses', () => {
   });
 
   it('2. a `;` inside the quoted format string hid the rest of the format', () => {
-    // Measured: the container wrote the request line AND the session cookie.
+    // Measured, the container wrote the request line and the session cookie:
     //
     //   boundary;GET /api/v1/auth/oidc/callback?code=SENTINELCODE123&state=SENTINELSTATE456
     //   HTTP/1.1 prl_session=SENTINELCOOKIE789
-    //
-    // nginx read three quoted arguments; the old `/log_format\s+(\w+)([\s\S]*?);/g`
-    // read one, because it was lazy and did not know what a quote was. Both halves
-    // are asserted: the tokenizer sees the whole format, and the two variables in
-    // the part that used to be invisible are named.
     const verdict = gateVerdictFor(({ read, write }) =>
       write(
         'deploy/staging/nginx.conf',
@@ -637,10 +480,7 @@ describe('negative control: the five measured bypasses', () => {
   });
 
   it('3. a map launders $request_uri into an innocent-looking name', () => {
-    // Measured: `"GET /api/v1/auth/oidc/callback?code=SENTINELCODE123&state=…"` in
-    // the access log, through a variable whose name contains nothing to grep for.
-    // The old gate read `log_format` bodies and nothing else, so the laundering step
-    // — four words of `map` — was invisible to it.
+    // Measured, the full query string reached the access log through an innocent-looking name.
     const verdict = gateVerdictFor(({ read, write }) => {
       const original = read('deploy/staging/nginx.conf');
       write(
@@ -655,8 +495,7 @@ describe('negative control: the five measured bypasses', () => {
       );
     });
     assert.ok(verdict.complains('logs $prl_path_detail'), verdict.text);
-    // And the failure has to SAY it is laundered, or the fix a hurried maintainer
-    // reaches for is to add the name to the allowlist.
+    // The failure must say it is laundered, or the quick fix is to allowlist the name.
     assert.ok(
       verdict.failures.some((failure) => (failure.detail ?? '').includes('map $request_uri')),
       verdict.text,
@@ -664,14 +503,10 @@ describe('negative control: the five measured bypasses', () => {
   });
 
   it('4. $sent_http_location and the rest of an open class', () => {
-    // Measured: a 302 back to the callback put the code in the access log through
-    // the RESPONSE header, which no rule about request variables could ever reach.
+    // Measured, a 302 back to the callback put the code in the access log:
     //
     //   … 302 145 … loc=http://127.0.0.1:8080/signed-in?code=SENTINELCODE123&state=…
     //   xfu=/cb?code=SENTINELCODE123 bf=-
-    //
-    // `$http_*` had five names denied out of an unbounded family, and `$sent_http_*`,
-    // `$arg_*` and `$upstream_http_*` are three more families exactly like it.
     const leaky = [
       'sent_http_location',
       'http_x_forwarded_uri',
@@ -707,8 +542,6 @@ describe('negative control: the five measured bypasses', () => {
   });
 
   it('5b. an nginx config inlined into a compose file the gate did not list', () => {
-    // The old NGINX_SOURCES was two elements long, so a whole second proxy
-    // configuration living in docker-compose.staging.yml was outside the gate.
     const verdict = gateVerdictFor(({ read, write }) =>
       write(
         'docker-compose.staging.yml',
@@ -729,9 +562,7 @@ describe('negative control: the five measured bypasses', () => {
   });
 
   it("5c. `nginx -g 'error_log … info;'` beside a config the gate approved", () => {
-    // The nastiest of the five, because the reviewed file is untouched. Measured
-    // against a container running the SHIPPED deploy/staging/nginx.conf with
-    // `-g 'daemon off; error_log /dev/stderr info;'`:
+    // The reviewed file is untouched. Measured with the shipped staging config:
     //
     //   2026/08/25 17:25:07 [error] 29#29: *3 connect() failed … request:
     //   "GET /api/v1/session?code=SENTINELCODE123&state=SENTINELSTATE456 HTTP/1.1"
@@ -751,8 +582,7 @@ describe('negative control: the five measured bypasses', () => {
   });
 
   it('5d. a second proxy_intercept_errors, turned on where the first is off', () => {
-    // `.exec()` reads one match. A `location` block can turn back on what the
-    // `server` block turned off, and the old rule said nothing about it.
+    // `.exec()` once read only the first match.
     const verdict = gateVerdictFor(({ read, write }) =>
       write(
         'deploy/staging/nginx.conf',
@@ -780,7 +610,6 @@ describe('negative control: the five measured bypasses', () => {
 });
 
 describe('the allowlist, and why it is one', () => {
-  /** A minimal but COMPLETE configuration, so only the format under test can fail. */
   const around = (format, extra = '') => `
     ${extra}
     ${format}
@@ -792,10 +621,7 @@ describe('the allowlist, and why it is one', () => {
   `;
 
   it('refuses a variable nobody has reviewed, without knowing anything about it', () => {
-    // The property the whole inversion is for. `$prl_something_new` is not dangerous
-    // as far as this gate knows — that is the point. It is refused because nobody
-    // has written down that it is safe, which is the only rule that can hold against
-    // a variable family nginx has not shipped yet.
+    // Refused only because nobody wrote down that it is safe.
     const findings = nginxFindings(around("log_format prl_privacy '$prl_something_new';"), 'unknown');
     assert.ok(complainsAbout(findings, 'logs $prl_something_new, which is not on the reviewed allowlist'));
   });
@@ -811,9 +637,7 @@ describe('the allowlist, and why it is one', () => {
   });
 
   it('allows no variable that the incident list forbids', () => {
-    // The two lists are allowed to disagree in only one direction. If a name ever
-    // appears on both, the allowlist wins silently and D2 comes back through the
-    // rule that was written to stop it.
+    // A name on both lists would let the allowlist win silently.
     for (const { name } of FORBIDDEN_LOG_VARIABLES) {
       assert.ok(!ALLOWED_LOG_VARIABLES.has(name), `$${name} is both allowed and forbidden`);
       assert.ok(!REVIEWED_DERIVED_VARIABLES.has(name), `$${name} is both derived and forbidden`);
@@ -821,9 +645,6 @@ describe('the allowlist, and why it is one', () => {
   });
 
   it('still says WHY for the thirteen names whose incident is written down', () => {
-    // The denylist no longer decides; it supplies the sentence. A refusal that says
-    // "the session cookie — a credential outright" gets read. One that says "not on
-    // the allowlist" gets argued with.
     const findings = nginxFindings(around("log_format prl_privacy '$http_cookie';"), 'known');
     const cookie = findings.find((finding) => finding.message.includes('logs $http_cookie'));
     assert.ok(cookie, JSON.stringify(findings, null, 2));
@@ -831,11 +652,7 @@ describe('the allowlist, and why it is one', () => {
   });
 
   it('accepts the safe $request_* variables the shipped format uses', () => {
-    // `$request_method`, `$request_time`, `$request_length` and `$request_id` are all
-    // safe and all distinct from `$request`. Under a denylist this needed a lookahead
-    // and the lookahead was load-bearing in both directions; under an allowlist it
-    // needs four entries, and the four are asserted here so that trimming the list
-    // cannot quietly reject the very format this gate enforces.
+    // Pins the four allowlist entries the shipped format needs.
     const findings = nginxFindings(
       around(
         "log_format prl_privacy escape=default '$request_method $uri $request_time $request_length $request_id';",
@@ -851,9 +668,6 @@ describe('the allowlist, and why it is one', () => {
   });
 
   it('every reviewed derived variable is really derived, in both shipped configs', () => {
-    // `$prl_client_net` and `$prl_ua_class` are the two redactions. The assertion is
-    // that they are still computed from what they were reviewed as reducing — the
-    // name is not the redaction, the map is.
     for (const [label, config] of SHIPPED) {
       const maps = nginxMaps(nginxDirectives(stripNginxComments(config)));
       for (const [name, reviewed] of REVIEWED_DERIVED_VARIABLES) {
@@ -863,8 +677,6 @@ describe('the allowlist, and why it is one', () => {
   });
 
   it('refuses a redaction whose map has stopped redacting', () => {
-    // Four ways for `$prl_client_net` to keep its name and lose its meaning. Each is
-    // a config that would pass a gate checking only the log_format.
     const maps = (text) => nginxMaps(nginxDirectives(stripNginxComments(text)));
     const reviewed = REVIEWED_DERIVED_VARIABLES.get('prl_client_net');
     assert.match(
@@ -897,15 +709,12 @@ describe('the allowlist, and why it is one', () => {
 
 describe('reading configuration the way nginx reads it', () => {
   it('a `;` inside quotes does not end a directive', () => {
-    // Bypass 2, as the one-line property behind it.
     const [directive] = nginxDirectives(`log_format x 'a;b' '$request';`);
     assert.equal(directive.name, 'log_format');
     assert.deepEqual(directive.args, ['x', 'a;b', '$request']);
   });
 
   it('a `{` inside quotes does not open a block', () => {
-    // `"~*(bot){2}"` in a map is a regex quantifier, not a nested block. A brace
-    // counter that disagreed would hand every later rule the wrong text.
     const directives = nginxDirectives(
       'map $a $b { "~*(bot){2}" "bot"; }\naccess_log /dev/stdout prl_privacy;',
     );
@@ -948,8 +757,7 @@ describe('reading configuration the way nginx reads it', () => {
   });
 
   it('discovers the inline config and the command line without being told either name', () => {
-    // The sweep-of-nothing control for the half of this gate that has no list to
-    // fall back on. Both must be found in docker-compose.yml by discovery ALONE.
+    // Both must be found by discovery alone.
     const found = discoveredNginxConfigs('docker-compose.yml', DEV_COMPOSE);
     assert.ok(
       found.some((entry) => entry.kind === 'inline' && entry.complete && entry.text.includes('log_format')),
@@ -962,9 +770,6 @@ describe('reading configuration the way nginx reads it', () => {
   });
 
   it('does not mistake a block scalar of something else for nginx configuration', () => {
-    // Every compose file has block scalars that are shell, SQL or prose. Auditing one
-    // as nginx would produce failures nobody can act on, and the usual fix for a
-    // noisy gate is to switch it off.
     const found = discoveredNginxConfigs(
       'fixture.yml',
       'services:\n  x:\n    environment:\n      SCRIPT: |\n        set -e\n        echo hello\n',
@@ -973,10 +778,7 @@ describe('reading configuration the way nginx reads it', () => {
   });
 
   it('the braced spelling of a variable is the same variable', () => {
-    // Written by concatenation rather than as a literal: the repository's linter
-    // refuses a `${` inside a plain string, and the braced spelling is exactly what
-    // has to be asserted here — `${args}` is `$args` and a rule that missed it would
-    // be one character away from bypass 1.
+    // Built by concatenation because Biome refuses `${` in a plain string.
     const braced = `$${'{args}'}`;
     assert.deepEqual(variablesIn(`$uri$is_args ${braced} $request_method`), [
       'uri',

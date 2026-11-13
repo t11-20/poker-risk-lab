@@ -1,36 +1,10 @@
 #!/usr/bin/env node
 /**
  * Every glob in a `test` script matches files, and every filter matches projects.
+ * `pnpm -r --filter "./nosuchdir/**" test` and `node --test 'nosuch/**\/*.test.mjs'` both exit 0, so
+ * a renamed directory would give a green Tests job over nothing. This does not pin a test total.
  *
  * Run with:  node --test scripts/test-inventory.test.mjs
- *
- * ## The defect this exists for
- *
- * An adversarial review of the CI workflows executed these two, and they are the whole reason this
- * file is here:
- *
- *     pnpm -r --filter "./nosuchdir/**" test   ->  "No projects matched the filters"   EXIT 0
- *     node --test 'nosuch/**\/*.test.mjs'      ->  "pass 0"                            EXIT 0
- *
- * `pnpm run test` composes four such invocations. A renamed directory, a workspace that stops
- * matching a filter, or a glob that quietly matches nothing produces a **green `Tests` job over
- * nothing at all** — which is the "a sweep of nothing is not a pass" rule this repository applies
- * to every scanner it owns, applied for the first time to the thing that runs the scanners.
- *
- * It is the most dangerous instance of that shape, because every other guard in the repo is
- * downstream of it: a test runner that silently runs zero tests makes every other green tick a
- * statement about nothing.
- *
- * ## What this does NOT do
- *
- * It does not count assertions or pin a total. A total drifts on every honest change and would be
- * edited to whatever the run produced, which is a number that agrees with itself. This asserts the
- * weaker, stable property: **the runner was pointed at something that exists.**
- *
- * ## Would it fail if the behaviour broke?
- *
- * The negative controls below run the real resolvers against a directory that does not exist and a
- * filter that matches no workspace, and require each to be reported as empty.
  */
 
 import assert from 'node:assert/strict';
@@ -41,7 +15,6 @@ import { fileURLToPath } from 'node:url';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-/** Files under `dir` matching `test/**\/*.test.<ext>`, resolved without a glob library. */
 function testFilesUnder(dir, extensions) {
   const out = [];
   const walk = (path) => {
@@ -64,7 +37,6 @@ function testFilesUnder(dir, extensions) {
   return out;
 }
 
-/** The workspaces `pnpm -r --filter "./packages/**"` would select. */
 function workspacePackages(relativeDir) {
   const root = join(REPO, relativeDir);
   return readdirSync(root, { withFileTypes: true })
@@ -97,8 +69,7 @@ describe('the test runner is pointed at something that exists', () => {
   });
 
   it('test:scripts globs match files in both of the directories they name', () => {
-    // 'scripts/**/*.test.mjs' and 'apps/api/scripts/*.test.mjs'. The second is the one that would
-    // vanish unnoticed: it is one directory, named once, in one script.
+    // 'scripts/**/*.test.mjs' and 'apps/api/scripts/*.test.mjs'. The second is easy to lose unnoticed.
     const scripts = testFilesUnder(join(REPO, 'scripts'), ['mjs']);
     const apiScripts = testFilesUnder(join(REPO, 'apps', 'api', 'scripts'), ['mjs']);
     assert.ok(scripts.length >= 20, `scripts/**/*.test.mjs matched ${scripts.length} files`);
@@ -116,8 +87,7 @@ describe('the test runner is pointed at something that exists', () => {
   });
 
   it('reports an absent directory and an unmatched filter as empty (NEGATIVE CONTROL)', () => {
-    // The two shapes the CI review executed, run here against the real resolvers. Without this,
-    // every assertion above passes on a walker that always returned a non-empty list.
+    // Negative controls. Without them every assertion above passes on a walker that never returns empty.
     assert.deepEqual(testFilesUnder(join(REPO, 'nosuchdir'), ['ts']), []);
     assert.deepEqual(testFilesUnder(join(REPO, 'scripts'), ['nosuchext']), []);
     assert.throws(

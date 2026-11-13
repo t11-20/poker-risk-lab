@@ -1,59 +1,10 @@
 #!/usr/bin/env node
 /**
- * The failure-injection suite: sixteen drills that break a running Poker Risk Lab on purpose and
- * check what a learner at a table experienced while it was broken.
- *
- * This is what `pnpm run test:drills` does.
- *
- * ## The defect this exists for
- *
- * Everything in this repository that tests failure tests it from the inside. `shutdown.test.ts`
- * signals a real process, and it is the closest thing here to a drill — but every one of its
- * cases kills a server whose tables are empty, and the evidence trail for "the API survives a
- * restart" has never once included a hand that was in progress at the moment of the signal. The
- * same gap runs through the rest of the failure surface: nothing has ever frozen the database
- * under a live pool, exhausted the pool and looked for the signal in the metrics, dropped a
- * socket in the middle of a hand, or asked what a migration that fails halfway leaves behind.
- *
- * Each of those is a plausible Tuesday, and each is invisible to a unit test because the failure
- * lives in the seam between the process and the operating system. So every drill here spawns the
- * real entry point, speaks HTTP and WebSocket over loopback the way a browser does, breaks
- * something with a signal or a container command, and then asks the same five questions:
- *
- *   - were any chips created or destroyed;
- *   - did anything the client received name a card, a deck, a salt or a cursor it should not have;
- *   - did recovery happen, and inside what measured bound;
- *   - did the log say anything an operator could act on;
- *   - did readiness report the truth while it was happening.
- *
- * ## What this suite does NOT prove
- *
- * One machine, one API process, loopback, and a development database. So: nothing about a
- * rolling deploy in which two versions serve the same table; nothing about a real network, its
- * partitions or its latency; nothing about a load balancer's own behaviour; and no capacity
- * figure of any kind. It is a check that named failures are handled, not a measure of how much
- * failure the system can take.
- *
- * ## What it touches
- *
- * A scratch database named `prl_drills_<pid>` that it creates and drops, plus one or two more for
- * the migration drill. Two drills need to stop a database outright, and they start a Postgres
- * container of their own to do it to — the shared `poker-risk-lab-postgres-1` is never paused,
- * restarted or written to outside the scratch databases above. Every drill cleans up after
- * itself, including on failure, so the suite is re-runnable with no manual tidying.
- *
- * Usage:
- *     pnpm run test:drills
- *     pnpm run test:drills -- --only sigterm-mid-hand --only ws-disconnect-mid-hand
- *     pnpm run test:drills -- --list
- *     pnpm run test:drills -- --exclude postgres-restart --json
- *
- * Exit codes:
- *     0  every selected drill passed
- *     1  any drill failed, OR any drill could not run and was not explicitly excluded
- *     0  --help and --list
- *
- * A skipped drill is a failure on purpose. A suite that silently skips is a suite that lies.
+ * `pnpm run test:drills`: sixteen drills that break a running API on purpose and check chips,
+ * leaks, recovery bound, logging and readiness while it is broken. One machine, one API process,
+ * loopback, so it proves nothing about rolling deploys, real networks or capacity. It writes only
+ * to `prl_drills_*` scratch databases and its own Postgres containers, and cleans up on failure.
+ * A skipped drill fails the run unless it was excluded by name.
  */
 
 import { randomBytes } from 'node:crypto';
@@ -81,33 +32,15 @@ import {
 import { processDrills } from './drills/process-drills.mjs';
 import { protocolDrills } from './drills/protocol-drills.mjs';
 
-/**
- * Every drill, in the order they run.
- *
- * Order matters only for legibility: the process drills come first because a failure there
- * explains failures everywhere else, and the database drills come last because they are the ones
- * that start containers.
- */
+/** Process drills first, since their failure explains others. Database drills start containers, so last. */
 const ALL_DRILLS = [...processDrills, ...protocolDrills, ...analysisDrills, ...databaseDrills];
 
-/**
- * Defaults, mirroring `.env.example` where one exists.
- *
- * `PRL_DRILL_CONTAINER` names the compose Postgres because that is what `docker-compose.yml`
- * calls it on the default project. `DATABASE_URL` is read rather than defaulted: a wrong guess
- * here would point the suite at somebody's real database, and the whole point is that it never
- * does.
- */
+/** `DATABASE_URL` is read, never defaulted, so a wrong guess cannot point the suite at a real database. */
 const DEFAULTS = {
   container: process.env.PRL_DRILL_CONTAINER ?? 'poker-risk-lab-postgres-1',
   databaseUrl: process.env.DATABASE_URL ?? '',
   webOrigin: process.env.PUBLIC_WEB_ORIGIN?.split(',')[0] ?? 'http://localhost:3000',
-  /**
-   * The API's shutdown grace for every drill that does not set its own.
-   *
-   * Short enough that a drain which hangs is obvious in seconds rather than tedious, long enough
-   * that a healthy drain finishes far inside it — the assertions allow a third of it.
-   */
+  /** The assertions allow a third of this, so a hung drain shows in seconds. */
   graceMs: 5_000,
 };
 
@@ -158,8 +91,7 @@ function parseArgs(argv) {
 
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
-    // `pnpm run test:drills -- --only x` forwards the `--` itself, so absorb it rather than
-    // rejecting the conventional invocation as an unknown option.
+    // `pnpm run test:drills -- --only x` forwards the `--` itself.
     if (arg === '--') continue;
     if (arg === '-h' || arg === '--help') {
       options.help = true;
@@ -209,19 +141,12 @@ function parseArgs(argv) {
   return options;
 }
 
-/** The drills this invocation will attempt, in declaration order. */
 export function selectDrills(all, options) {
   const wanted = options.only.length === 0 ? all : all.filter((drill) => options.only.includes(drill.name));
   return wanted.filter((drill) => !options.exclude.includes(drill.name));
 }
 
-/**
- * Whether a run's outcomes mean success.
- *
- * Exported and pure so `scripts/reliability-drills.test.mjs` can hold the exit-code contract
- * still: the rule that a SKIP fails the run unless it was excluded is the one thing about this
- * suite that is easiest to soften by accident and most damaging when softened.
- */
+/** Pure so the test can pin that a skip fails the run unless it was excluded. */
 export function runPassed(outcomes) {
   return outcomes.every((outcome) => outcome.status === 'pass');
 }
@@ -252,14 +177,7 @@ function printOutcome(outcome) {
   console.log(dim(`      ${(outcome.elapsedMs / 1000).toFixed(1)}s`));
 }
 
-/**
- * The context object a drill is handed: the run's settings, plus the two ways it registers work
- * for cleanup.
- *
- * Exported and parameterised on `spawnServer` so `scripts/reliability-drills.test.mjs` can drive
- * the ordering below with a stub. See the comment inside `startServer`: the ordering is the
- * whole point of this function existing, and it is not observable from outside without one.
- */
+/** Parameterised on `spawnServer` so `reliability-drills.test.mjs` can check the cleanup ordering. */
 export function drillContext(ctx, cleanups, spawnServer = startServer) {
   return {
     ...ctx,
@@ -272,22 +190,9 @@ export function drillContext(ctx, cleanups, spawnServer = startServer) {
         metricsToken: ctx.metricsToken,
         ...extra,
         /**
-         * Registered from inside `onSpawn`, which the harness calls synchronously with the child
-         * in hand — BEFORE it waits up to thirty seconds for the server's listening line.
-         *
-         * ## The defect this exists for
-         *
-         * The push used to sit after `await startServer(...)`, so it was only ever reached when
-         * the start SUCCEEDED. A server that never printed a listening address — a bad
-         * DATABASE_URL, a port lost to a race, a machine slow enough under a drill's own load to
-         * miss the thirty-second budget — rejected with the child still running, `detached: true`
-         * and in its own process group. Nothing held a reference to it: the rejection carries a
-         * message, not a pid. It outlived the drill, the suite and the terminal, holding its port
-         * and a pool of database connections, and made the NEXT run fail somewhere unrelated.
-         *
-         * The file header promises that every drill cleans up after itself, INCLUDING ON FAILURE.
-         * That promise was false in precisely the case it was written for. Do not move this back
-         * outside the call.
+         * Registered in `onSpawn`, before the 30 s wait for the listening line. Registered after
+         * the await, a server that never listened survived the run detached, holding its port and
+         * pool, and broke the next run. Do not move this outside the call.
          */
         onSpawn: (handle) => {
           cleanups.push(async () => {
@@ -298,17 +203,7 @@ export function drillContext(ctx, cleanups, spawnServer = startServer) {
   };
 }
 
-/**
- * Runs one drill, then everything it registered for cleanup, in reverse order.
- *
- * Cleanup runs whether the drill passed, failed or threw, and a cleanup that itself fails is
- * recorded as a warning rather than allowed to mask the drill's own result. That ordering is what
- * makes the suite re-runnable: a drill that left a container or a database behind would make the
- * next run's first failure somebody else's mess.
- *
- * What gets INTO `cleanups`, and when, is `drillContext`'s job — and the "when" is the part that
- * was wrong: a server the drill never managed to start was not registered at all.
- */
+/** Cleanups run in reverse order whatever the drill did, and a failing cleanup is only a warning. */
 async function runDrill(drill, ctx) {
   const cleanups = [];
   const startedAt = performance.now();
@@ -345,18 +240,7 @@ async function runDrill(drill, ctx) {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Run
-// ---------------------------------------------------------------------------
-
-/**
- * Everything the command line does, in a function.
- *
- * Wrapped rather than left at the top level so that `scripts/reliability-drills.test.mjs` can
- * import `selectDrills` and `runPassed` without the import spawning servers and calling
- * `process.exit`. `apps/api/scripts/migrate.mjs` and `apps/api/src/server.ts` both do this for
- * the same reason, and the guard below is the same one.
- */
+/** Wrapped so the test can import `selectDrills` and `runPassed` without spawning servers. */
 async function main() {
   let options;
   try {
@@ -398,7 +282,6 @@ async function main() {
   );
   console.log(dim(`  ${selected.length} of ${ALL_DRILLS.length} drills, container ${options.container}`));
 
-  // --- preflight ---------------------------------------------------------------
   const state = await containerHealth(options.container);
   if (state === '') {
     console.error(
@@ -408,13 +291,7 @@ async function main() {
   }
   console.log(dim(`  ${options.container} is ${state}`));
 
-  /**
-   * The scrape token for the spawned servers.
-   *
-   * Generated per run rather than fixed, because a token checked into a repository is a token that
-   * ends up in a deployment. `config.ts` demands at least 32 characters and real entropy, which is
-   * what 32 random bytes of base64url provides.
-   */
+  /** Generated per run so no token is committed. `config.ts` requires 32+ characters of entropy. */
   const metricsToken = randomBytes(32).toString('base64url');
   const scratchName = `prl_drills_${process.pid}`;
   let scratchUrl;
@@ -442,19 +319,12 @@ async function main() {
     metricsToken,
   };
 
-  /**
-   * Removes everything this run made, whatever happened.
-   *
-   * Registered for the signals as well as the normal path: a run stopped with Ctrl-C that left a
-   * Postgres container and a scratch database behind would make the next run start from a mess,
-   * which is exactly the manual cleanup the suite promises not to need.
-   */
+  /** Also runs on signals, so Ctrl-C does not leave a container or database behind. */
   let tidied = false;
   async function tidyUp() {
     if (tidied) return;
     tidied = true;
     await dropScratchDatabase(options.container, options.databaseUrl, scratchName);
-    // Any private Postgres a drill started carries this run's pid in its name.
     await docker(['rm', '-f', `prl-drills-pg-${process.pid}`]);
   }
   for (const signal of ['SIGINT', 'SIGTERM']) {
@@ -477,7 +347,6 @@ async function main() {
   await tidyUp();
   const finalState = await containerHealth(options.container);
 
-  // --- report ------------------------------------------------------------------
   const passed = outcomes.filter((outcome) => outcome.status === 'pass').length;
   const failed = outcomes.filter((outcome) => outcome.status === 'fail').length;
   const skipped = outcomes.filter((outcome) => outcome.status === 'skip').length;
@@ -538,11 +407,7 @@ async function main() {
   process.exit(report.passed ? 0 : 1);
 }
 
-/**
- * True when this file was started from the command line rather than imported.
- *
- * realpath on both sides so a checkout reached through a symlink still recognises itself.
- */
+/** realpath on both sides so a checkout reached through a symlink still recognises itself. */
 function startedFromCommandLine() {
   const entry = process.argv[1];
   if (entry === undefined) return false;

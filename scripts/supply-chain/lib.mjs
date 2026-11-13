@@ -1,17 +1,9 @@
 /**
- * Shared helpers for the supply-chain gates.
+ * Shared helpers for the supply-chain gates. Node standard library only, because a checker that
+ * depends on third-party packages is checking the thing it depends on.
  *
- * Deliberately dependency-free: a supply-chain checker that pulls in third-party
- * packages to do its job is checking the thing it depends on. Everything here uses
- * only the Node standard library.
- *
- * Three sources of truth, used for different questions:
- *   1. `pnpm list -r --depth Infinity --json` — the *logical* resolved graph
- *      (names, versions, registry URLs, dev vs prod). Authoritative for "what do we depend on".
- *   2. The on-disk manifests under `node_modules/.pnpm` — the *actual installed* packages.
- *      Authoritative for "what does this code declare" (lifecycle scripts, bin entries).
- *   3. `pnpm-lock.yaml` text — authoritative for "how was this acquired"
- *      (registry tarball vs git vs remote tarball) and for integrity hashes.
+ * `pnpm list -r` answers what we depend on, the manifests under `node_modules/.pnpm` answer what is
+ * installed, and `pnpm-lock.yaml` answers how it was acquired and with which integrity hash.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -52,7 +44,6 @@ export class Gate {
     this.notes.push(message);
   }
 
-  /** Print a human-readable report and return the process exit code. */
   report() {
     const head = `${bold(this.name)}`;
     for (const n of this.notes) console.log(`${dim('  ·')} ${n}`);
@@ -91,7 +82,6 @@ export function runGate(gate, fn) {
     });
 }
 
-/** Read the pnpm lockfile as text. Fails closed if it is missing. */
 export function lockfileText() {
   if (!existsSync(LOCKFILE)) {
     throw new Error(`pnpm-lock.yaml not found at ${LOCKFILE}. Run \`pnpm install\` first.`);
@@ -107,34 +97,24 @@ export function workspaceYamlText() {
 const STORE_SEGMENT = `${join('node_modules', '.pnpm')}${sep}`;
 
 /**
- * `pnpm list -r` reports a root devDependency, as seen from a child workspace
- * project, as a `link:` into the virtual store rather than as a registry
- * resolution — e.g. version `link:../../node_modules/.pnpm/axe-core@4.13.0/...`.
- * That is not a real off-registry dependency, so decode it back to the true
- * name@version instead of treating it as a policy violation.
- *
- * A `link:` whose realpath is NOT inside this repo's virtual store is a genuine
- * finding and is returned unchanged so the caller fails on it.
- *
- * @returns {{version: string, viaStoreLink: boolean} | null}
+ * Decodes a `link:` into the virtual store (how `pnpm list -r` reports a root devDependency seen
+ * from a child project) back to its real version. A link outside the store is returned unchanged
+ * so the caller fails on it.
  */
 export function decodeStoreLink(version, nodePath) {
   if (typeof version !== 'string' || !version.startsWith('link:')) return null;
   if (typeof nodePath !== 'string') return { version, viaStoreLink: false };
   const storeRoot = join(REPO_ROOT, STORE_SEGMENT);
   if (!nodePath.startsWith(storeRoot)) return { version, viaStoreLink: false };
-  // <storeRoot><dirName>/node_modules/<pkg name>
   const dirName = nodePath.slice(storeRoot.length).split(sep)[0];
   if (!dirName) return { version, viaStoreLink: false };
-  // Strip the peer-dependency suffix pnpm appends after the first underscore,
-  // e.g. `next@16.3.0_@types+node@24.13.3_react@19.2.8`.
+  // Strip pnpm's peer suffix, e.g. `next@16.3.0_@types+node@24.13.3_react@19.2.8`.
   const withoutPeers = dirName.split('_')[0] ?? dirName;
   const at = withoutPeers.lastIndexOf('@');
   if (at <= 0) return { version, viaStoreLink: false };
   return { version: withoutPeers.slice(at + 1), viaStoreLink: true };
 }
 
-/** Best-effort realpath: an unresolvable path is returned as given. */
 function realpathOr(path) {
   try {
     return realpathSync(path);
@@ -144,44 +124,20 @@ function realpathOr(path) {
 }
 
 /**
- * True when a `pnpm list` node is genuinely a link to a workspace project in
- * this repository, rather than a third-party package that merely *looks* like
- * one.
- *
- * ## Why this is not `name.startsWith('@prl/')`
- *
- * It used to be. Every name in the first-party scope was dropped from the
- * resolved graph, which meant it was invisible to the deny list, the resolution
- * host check, the integrity and release-age checks, the OSV query and the
- * third-party half of the SBOM. Meanwhile the `@prl` scope is **unclaimed on
- * npm** (404 for every name), `.npmrc` maps `@prl:registry` to the *public*
- * registry, and pnpm ≥ 10 defaults `link-workspace-packages` to false — so a
- * specifier of `"@prl/x": "1.0.0"` instead of `"workspace:*"` resolves a
- * stranger's package off the public registry, and not one of the eight gates
- * would have looked at it. That is textbook dependency confusion, made worse by
- * the auditor going quiet at exactly the moment it mattered.
- *
- * A name is what an attacker controls. The *resolution* is not. So the test is:
- * pnpm resolved this to a `link:`, the link does not point into the virtual
- * store (which is how a real registry package can appear as a link), and the
- * directory it points at is one of this repository's own workspace projects.
- *
- * @param {{version?: string, path?: string, resolved?: string}} node
- * @param {boolean} viaStoreLink  the link decodes to a package in node_modules/.pnpm
- * @param {Set<string>} projectPaths  realpaths of every workspace project
+ * True only for a link to one of this repository's workspace projects. Not `@prl/` by name: the
+ * scope is unclaimed on npm, `.npmrc` maps it to the public registry, and pnpm 10 defaults
+ * `link-workspace-packages` to false, so a name check would hide a dependency-confusion package
+ * from every gate. An attacker controls the name, not the resolution.
  */
 function isWorkspaceProjectLink(node, viaStoreLink, projectPaths) {
   if (viaStoreLink) return false;
   if (typeof node.version !== 'string' || !node.version.startsWith('link:')) return false;
-  // A workspace link is resolved from disk, never downloaded.
   if (typeof node.resolved === 'string' && node.resolved !== '') return false;
   if (typeof node.path !== 'string' || node.path === '') return false;
   return projectPaths.has(realpathOr(node.path));
 }
 
 /**
- * Flattened resolved dependency graph.
- *
  * @returns {{
  *   packages: Map<string, {name: string, version: string, resolved: string|null, path: string|null, dev: boolean, viaStoreLink: boolean, importers: Set<string>}>,
  *   edges: Set<string>,
@@ -205,16 +161,12 @@ export function resolvedGraph() {
   const edges = new Set();
   const workspaceProjects = [];
 
-  // Collected before the walk, because deciding whether a node is a workspace
-  // link needs the full set of project directories.
   const projectPaths = new Set();
   for (const project of projects) {
     if (typeof project.path === 'string') projectPaths.add(realpathOr(project.path));
   }
 
   const visit = (node, name, dev, importer, parentKey) => {
-    // A workspace link has no `resolved` registry URL; recurse but do not treat it
-    // as a third-party package.
     const decoded = decodeStoreLink(node.version, node.path);
     const version = decoded ? decoded.version : (node.version ?? '0.0.0');
     const viaStoreLink = decoded?.viaStoreLink === true;
@@ -226,7 +178,6 @@ export function resolvedGraph() {
       if (existing) {
         existing.dev = existing.dev && dev;
         existing.importers.add(importer);
-        // Prefer a real registry URL over a store link, in whichever order we met them.
         if (!existing.resolved && node.resolved) existing.resolved = node.resolved;
         if (!viaStoreLink) existing.viaStoreLink = false;
       } else {
@@ -267,10 +218,7 @@ export function resolvedGraph() {
   return { packages, edges, workspaceProjects };
 }
 
-/**
- * Every package.json physically installed under node_modules/.pnpm, deduplicated
- * by name@version. This is what would actually execute.
- */
+/** Every package.json installed under node_modules/.pnpm, deduplicated by name@version. */
 export function installedManifests() {
   const store = join(REPO_ROOT, 'node_modules', '.pnpm');
   const found = new Map();
@@ -313,20 +261,10 @@ export function installedManifests() {
 }
 
 /**
- * Every *physical* package root in the virtual store, deduplicated by realpath.
- *
- * `installedManifests()` deduplicates by `name@version`, which is right for
- * "what would execute" but wrong for "sweep every directory on disk": pnpm gives
- * a package one physical directory per peer-dependency variant, and the sweep
- * has to look inside all of them.
- *
- * The distinction is exactly the bug this exists to fix. `ioc-scan.mjs` checked
- * for persistence artefacts at `<store>/<pkg>@<ver>/.claude/setup.mjs`, a
- * directory level pnpm never populates — the package's files live one level
- * further down, at `<store>/<pkg>@<ver>/node_modules/<pkg>/`. So the check that
- * the gate's own header gives as its reason to exist ("it writes
- * `.claude/setup.mjs` and `.vscode/tasks.json` into repositories") could not see
- * a dependency shipping either file.
+ * Every physical package root in the virtual store, deduplicated by realpath. pnpm gives one
+ * directory per peer-dependency variant, and a file sweep must look inside each, at
+ * `<store>/<pkg>@<ver>/node_modules/<pkg>/`. `ioc-scan.mjs` once checked one level too high and
+ * could not see `.claude/setup.mjs` in any dependency.
  *
  * @returns {Map<string, {name: string|null, version: string|null, dir: string}>} keyed by realpath
  */
@@ -361,8 +299,7 @@ export function installedPackageDirs() {
         name = typeof manifest.name === 'string' ? manifest.name : null;
         version = typeof manifest.version === 'string' ? manifest.version : null;
       } catch {
-        // An unparseable manifest is reported by the deny-list gate; here we
-        // still want the directory swept.
+        // The deny-list gate reports an unparseable manifest; the directory is still swept.
       }
       dirs.set(real, { name, version, dir: real });
     }
@@ -377,29 +314,13 @@ export function installedPackageDirs() {
 }
 
 /**
- * Versions pnpm deliberately did not install because they do not apply to this
- * platform — the `os`/`cpu`/`libc`-gated optional dependencies. pnpm records them
- * in `node_modules/.modules.yaml` under `skipped:`.
+ * Versions pnpm skipped for this platform (`os`/`cpu`/`libc` optionals), from the `skipped:` list in
+ * `node_modules/.modules.yaml`. On macOS that is every Linux binary, which is what the release
+ * container installs. Takes a root so `dep-shapes.test.mjs` can build the present, absent and
+ * no-`skipped:` states on disk.
  *
- * They matter because they are the difference between "the store contains
- * everything" and "the store contains 104 of 162 versions". On macOS the skipped
- * set is every Linux binary — precisely the set that IS installed in the release
- * container.
- *
- * ## Why this takes a root
- *
- * `present` is the only part of the answer a test cannot fabricate honestly: it
- * is a fact about a file on disk, and the failure text it drives is a *diagnosis*
- * rather than a verdict. Handing it a root lets `dep-shapes.test.mjs` build the
- * three real states — the file present and parsed, the file absent, the file
- * present but carrying no `skipped:` key — and watch what each one makes the gate
- * say, instead of asserting on a hand-written return value that agrees with
- * whatever the function happens to do.
- *
- * @param {string} root  repository root; the real one unless a test says otherwise
- * @returns {{present: boolean, skipped: Set<string>}} `present:false` when the
- *   file is missing or unreadable, which is itself a reason not to trust a
- *   coverage claim.
+ * @returns {{present: boolean, skipped: Set<string>}} `present:false` when the file is missing or
+ *   unreadable.
  */
 export function platformSkippedVersions(root = REPO_ROOT) {
   const path = join(root, 'node_modules', '.modules.yaml');
@@ -410,16 +331,12 @@ export function platformSkippedVersions(root = REPO_ROOT) {
   } catch {
     return { present: false, skipped: new Set() };
   }
-  // pnpm 11 writes this file as JSON (a subset of YAML), so it parses directly.
-  // If a future pnpm reverts to block YAML, fall back to reading the `skipped:`
-  // list line by line rather than pretending the set is empty.
+  // pnpm 11 writes JSON, a subset of YAML. Block YAML falls back to a line read.
   try {
     const parsed = JSON.parse(raw);
     const skipped = Array.isArray(parsed.skipped) ? parsed.skipped : [];
     return { present: true, skipped: new Set(skipped.map(String)) };
   } catch {
-    // Block-YAML fallback, read line by line: `skipped:` on its own line
-    // followed by an indented `- name@version` list.
     const skipped = new Set();
     let sawKey = false;
     let inList = false;
@@ -441,14 +358,7 @@ export function platformSkippedVersions(root = REPO_ROOT) {
   }
 }
 
-/**
- * How much of the resolved graph the on-disk store actually accounts for.
- *
- * @param {Map<string, unknown>} resolvedPackages  keyed `name@version`
- * @param {Map<string, unknown>} installed         keyed `name@version`
- * @param {string} root  repository root; see `platformSkippedVersions` for why
- *   this is an argument rather than a constant
- */
+/** How much of the resolved graph the on-disk store accounts for. */
 export function storeCoverage(resolvedPackages, installed, root = REPO_ROOT) {
   const storePresent = existsSync(join(root, 'node_modules', '.pnpm'));
   const { present: manifestPresent, skipped } = platformSkippedVersions(root);
@@ -461,53 +371,20 @@ export function storeCoverage(resolvedPackages, installed, root = REPO_ROOT) {
   }
   return {
     storePresent,
-    /**
-     * Whether `node_modules/.modules.yaml` could be read.
-     *
-     * Computed here and, for a while, read by nobody. That is the same shape as
-     * the gates that judged fewer things than they claimed, so it either had to
-     * become load-bearing or be deleted. It is load-bearing, but NOT as a
-     * verdict: when the file is unreadable `platformSkippedVersions()` returns an
-     * empty skipped set, so every version absent from disk lands in `uninspected`
-     * and the gate already fails there. Adding a second failure for the same
-     * condition would be decoration.
-     *
-     * What it decides is the DIAGNOSIS `requireStoreCoverage` prints, and that is
-     * worth its own control: the two states send an operator to two different
-     * places, and the wrong one sends them hunting a store/lockfile divergence
-     * that does not exist. `dep-shapes.test.mjs` builds all three real states on
-     * disk — file parsed, file absent, file present with no `skipped:` key — and
-     * asserts each produces its own text and NOT the other's.
-     */
+    // Drives only the diagnosis `requireStoreCoverage` prints. An unreadable file already fails
+    // through `uninspected`. `dep-shapes.test.mjs` pins each state's text.
     skippedManifestPresent: manifestPresent,
     resolvedCount: resolvedPackages.size,
     installedCount: installed.size,
-    /** In the resolved graph, absent from disk, and pnpm says it skipped them for this platform. */
     platformSkipped: platformSkipped.sort(),
-    /** In the resolved graph, absent from disk, and nothing explains why. */
     uninspected: uninspected.sort(),
   };
 }
 
 /**
- * Refuses to let a store-reading gate report success over an empty or
- * unexplained-partial store.
- *
- * `repo-hygiene.mjs` already states the principle for its own scan — *"a scan of
- * nothing proves nothing"* — and it is the only gate that applied it. Three
- * others read the installed store and, with no `node_modules`, passed having
- * examined zero packages: the install-time lifecycle-hook scan (the control
- * against the campaign's delivery Pattern A) printed `✓ dependency-shapes —
- * pass` with no note and no warning. A green light that means "I found nothing"
- * and "I looked at nothing" indistinguishably is not a gate.
- *
- * Platform-skipped optionals are reported by name rather than waved through:
- * they are not inspected *here*, and `provenance.mjs` inspects them against the
- * registry, so the audit as a whole still covers every version.
- *
- * @param {Gate} gate
- * @param {ReturnType<typeof storeCoverage>} coverage
- * @param {string} what  what this gate reads the store for, named in the message
+ * Refuses a pass over an empty or unexplained-partial store. Without it the lifecycle-hook scan
+ * passed with no `node_modules`, having examined zero packages. Platform-skipped optionals are named,
+ * and `provenance.mjs` inspects them from the registry.
  */
 export function requireStoreCoverage(gate, coverage, what) {
   if (!coverage.storePresent || coverage.installedCount === 0) {
@@ -520,15 +397,8 @@ export function requireStoreCoverage(gate, coverage, what) {
   }
   if (coverage.uninspected.length > 0) {
     const sample = coverage.uninspected.slice(0, 10).join(', ');
-    // Two different failures wear the same headline, and telling them apart is
-    // the whole job of `skippedManifestPresent`. If pnpm's record of what it
-    // skipped is readable and these versions are not in it, the store really has
-    // diverged from the lockfile. If that record could not be read at all, the
-    // store may be perfectly intact and only pnpm's account of it missing — and
-    // the list above is then every absent version rather than the unexplained
-    // ones. Printing the first diagnosis in the second situation sends the reader
-    // hunting a store/lockfile divergence that is not there, which is the same
-    // class of defect as a gate that reports a pass it did not establish.
+    // The same headline has two causes. A readable skipped record means the store diverged from the
+    // lockfile; an unreadable one means only pnpm's record is missing.
     const diagnosis = coverage.skippedManifestPresent
       ? 'pnpm DOES record a platform-skipped set for this machine and these versions are not in it, ' +
         'so the store and the lockfile genuinely disagree — reinstall with ' +
@@ -558,12 +428,9 @@ export function requireStoreCoverage(gate, coverage, what) {
   return true;
 }
 
-/** Lifecycle hooks that a package manager may execute at install time. */
 export const INSTALL_HOOKS = ['preinstall', 'install', 'postinstall'];
-/** Hooks that run for git/local installs (not registry tarballs) but still matter. */
 export const SOURCE_HOOKS = ['prepare', 'preprepare', 'postprepare', 'prepack', 'postpack'];
 
-/** Small concurrency-limited map, for the network-backed gates. */
 export async function mapLimit(items, limit, fn) {
   const results = new Array(items.length);
   let index = 0;
@@ -578,7 +445,6 @@ export async function mapLimit(items, limit, fn) {
   return results;
 }
 
-/** fetch with a hard timeout and bounded retries; no third-party HTTP client. */
 export async function fetchJson(
   url,
   { method = 'GET', body, timeoutMs = 20_000, retries = 2, headers = {} } = {},

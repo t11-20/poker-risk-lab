@@ -1,48 +1,9 @@
 #!/usr/bin/env node
 /**
- * Tests for the `pinned-action-advisories` gate.
- *
- * Run with:  node --test scripts/supply-chain/action-advisories.test.mjs
- *
- * Hermetic on purpose. The gate itself is a network gate, but this file runs
- * inside `pnpm run test` — and therefore inside `verify` and on every push — so
- * every case here feeds fixture advisories to the exported matcher rather than
- * asking OSV. The live half is covered by the gate's own `ADVISORY_CONTROLS`,
- * which run on every invocation of the gate against the real corpus.
- *
- * ## Would these fail if the behaviour broke, and how was that checked?
- *
- * The gate was run against the real repository with one deliberate defect at a
- * time, and the whole run recorded. All eight fired:
- *
- *   | one `uses: actions/download-artifact@018cc2cf… # v6.0.0` repinned to
- *     `f44cd7b4… # v4.1.0`, a real release with a real published advisory
- *                                        | ✗ GHSA-cxww-7g56-2vh6 … severity=HIGH, exit 1 |
- *   | the correct checkout SHA relabelled `# v9.9.9`
- *                                        | ✗ labelled `# v9.9.9` and GitHub says v7, v7.0.1, exit 1 |
- *   | checkout repinned to the head of `main`, a real commit no tag names
- *                                        | ✗ no tag … points at the pinned commit, exit 1 |
- *   | every HTTP request sent to a dead proxy
- *                                        | ✗ the advisory corpus could not be read, exit 1 |
- *   | `git` alone sent to a dead proxy    | ✗ could not read the tags of …, exit 1 |
- *   | the reference floor raised to 64    | ✗ found 63 … refuses to run below 64, exit 1 |
- *     (measured when there were 63; since 2026-10-11 there are 60 and the floor is 60)
- *   | the corpus floor raised to 999      | ✗ holds 55 record(s) … refuses fewer than 999, exit 1 |
- *   | `actions/upload-artifact` pinned to a real SHA belonging to `actions/checkout`
- *                                        | ✗ no tag of actions/upload-artifact points at it, exit 1 |
- *
- * The important one is the first: it is a real advisory (arbitrary file write via
- * artifact extraction, HIGH) against a real version of an action this repository
- * really uses, resolved from the pinned SHA by asking GitHub — not by reading the
- * trailing comment, which in that run said `v4.1.0` and was believed by nothing.
- *
- * ## The case this file exists to hold
- *
- * `versionsForTags` is where a plausible implementation invents findings. The
- * pinned checkout commit carries BOTH `v7` and `v7.0.1`, because the major alias
- * currently points at the release. Checking both would make every advisory ever
- * fixed inside the current major fire against a pin that is not affected, because
- * the string `7` zero-extends to 7.0.0. A gate that cries wolf gets waived.
+ * Tests for the `pinned-action-advisories` gate. Hermetic: fixture advisories go to the exported
+ * matcher, and the gate's `ADVISORY_CONTROLS` cover the live corpus. Each of eight deliberate
+ * defects (a repin to `actions/download-artifact` v4.1.0, a relabelled comment, an untagged SHA,
+ * dead proxies, raised floors, a SHA from another repository) was run against the gate and fired.
  */
 
 import assert from 'node:assert/strict';
@@ -96,10 +57,7 @@ const advisory = (id, name, ranges, extra = {}) => ({
 
 describe('the reference set this gate scans', () => {
   it('reads exactly what ci-pinning.mjs judges, and it is not empty', () => {
-    // Both gates have to see the same references or one of them is quietly
-    // scanning less than it claims. This is the positive control: it compares the
-    // collector against the gate's own counter over the real workflows, so a
-    // collector that stopped matching cannot agree with it by also being empty.
+    // The positive control: the collector against the gate's own counter over the real workflows.
     const collected = collectActionReferences(REPO_ROOT);
     assert.ok(collected.length >= 60, `only ${collected.length} action references collected`);
 
@@ -182,21 +140,16 @@ describe('resolving a commit to the version it is', () => {
 
   it('prefers the peeled commit of an annotated tag over the tag object', () => {
     const byCommit = tagsByCommit(LS_REMOTE);
-    // v6.1.0 is annotated: its tag OBJECT is 1111…, the commit it dereferences to
-    // is aaaa…, and `uses:` resolves to the commit. Reading the unpeeled line
-    // would leave every annotated release looking like an unknown SHA.
+    // v6.1.0 is annotated: tag object 1111…, commit aaaa…, and `uses:` resolves to the commit.
     assert.deepEqual(byCommit.get('a'.repeat(40)), ['v6.1.0', 'v7', 'v7.0.1']);
     assert.equal(byCommit.get('1'.repeat(40)), undefined);
     assert.deepEqual(byCommit.get('f'.repeat(40)), ['v6.0.0']);
   });
 
   it('takes the most specific tag and NOT the moving major alias (REGRESSION)', () => {
-    // The pin is v7.0.1; `v7` is another name for the same commit today. Reading
-    // `7` as a version too would zero-extend it to 7.0.0 and make any advisory
-    // "fixed in 7.0.1" fire against a pin that is not affected.
+    // `v7` zero-extends to 7.0.0, so reading it would make "fixed in 7.0.1" fire against v7.0.1.
     assert.deepEqual(versionsForTags(['v7', 'v7.0.1']), ['7.0.1']);
     assert.deepEqual(versionsForTags(['v6', 'v6.0', 'v6.0.0']), ['6.0.0']);
-    // A genuine tie is ambiguous and both are checked.
     assert.deepEqual(versionsForTags(['v1.2.3', 'v1.2.4']).sort(), ['1.2.3', '1.2.4']);
     // Nothing readable is not "no advisories", and the gate refuses on an empty list.
     assert.deepEqual(versionsForTags(['latest', 'stable']), []);
@@ -226,8 +179,7 @@ describe('comparing versions', () => {
   });
 
   it('returns null rather than a verdict for anything it cannot read', () => {
-    // Null is the whole safety property: it is not "equal" and not "less than",
-    // and every caller turns it into a gate failure.
+    // Null is the safety property. Every caller turns it into a gate failure.
     assert.equal(compareVersions('main', '1.0.0'), null);
     assert.equal(compareVersions('1.0.0', 'latest'), null);
     assert.equal(parseVersion(''), null);
@@ -253,9 +205,7 @@ describe('evaluating an advisory range', () => {
   });
 
   it('is not fooled by events listed out of order', () => {
-    // Two affected intervals in one range, written back to front. Reading the
-    // events in file order would call 2.285.0 affected — it sits in the gap
-    // between the first fix and the second regression.
+    // Two intervals written back to front. File order would call 2.285.0, in the gap, affected.
     const shuffled = range(
       { introduced: '2.290.0' },
       { fixed: '2.293.1' },
@@ -294,13 +244,10 @@ describe('evaluating one affected entry', () => {
   });
 
   it('refuses an entry whose coverage it did not fully read', () => {
-    // A range type this gate does not evaluate is coverage that was NOT read, and
-    // must never share an answer with coverage that was read and came out clean.
     const gitRange = { ranges: [{ type: 'GIT', events: [{ introduced: '0' }] }] };
     assert.equal(versionAffected('1.0.0', gitRange), null);
     assert.equal(versionAffected('1.0.0', { ranges: [] }), null);
     assert.equal(versionAffected('1.0.0', { versions: ['not-a-version'] }), null);
-    // …but a readable range that matches still wins over an unreadable sibling.
     const mixed = {
       ranges: [{ type: 'GIT', events: [{ introduced: '0' }] }, range({ introduced: '0' }, { fixed: '2' })],
     };
@@ -331,9 +278,8 @@ describe('the advisory index', () => {
   const index = buildAdvisoryIndex(CORPUS);
 
   it('folds case, because GitHub resolves uses: case-insensitively and OSV does not', () => {
-    // Measured against api.osv.dev on 2026-08-27: a name-only query for
-    // `Azure/setup-kubectl` returns GHSA-p756-rfxh-x63h and the same query for
-    // `azure/setup-kubectl` returns `{}`. `uses: azure/setup-kubectl@…` runs fine.
+    // Measured against api.osv.dev on 2026-08-27: the name query for `azure/setup-kubectl` returns
+    // `{}` while `Azure/setup-kubectl` returns GHSA-p756-rfxh-x63h.
     assert.deepEqual(
       advisoriesAffecting(index, 'azure/setup-kubectl', ['2.0.0']).findings.map((f) => f.id),
       ['GHSA-case'],
@@ -353,8 +299,6 @@ describe('the advisory index', () => {
   });
 
   it('applies a repository advisory to an action in its subdirectory', () => {
-    // Same repository, same commit: an advisory against the repo covers the
-    // action nested inside it.
     assert.deepEqual(
       advisoriesAffecting(index, 'super-linter/super-linter/slim', ['7.0.0']).findings.map((f) => f.id),
       ['GHSA-sub'],
@@ -377,7 +321,6 @@ describe('the advisory index', () => {
 });
 
 describe('the every-invocation controls', () => {
-  /** Exactly the advisories the control table names, and nothing else. */
   const CONTROL_CORPUS = [
     advisory('GHSA-cxww-7g56-2vh6', 'actions/download-artifact', [
       range({ introduced: '4.0.0' }, { fixed: '4.1.3' }),
@@ -398,8 +341,6 @@ describe('the every-invocation controls', () => {
   });
 
   it('reports when the advisory source goes quiet (REGRESSION)', () => {
-    // This is the control on the control. An empty or truncated corpus is the way
-    // this gate would go green over nothing, and it is why the controls exist.
     const problems = runAdvisoryControls(buildAdvisoryIndex([]));
     assert.equal(problems.length, 3, problems.join('\n'));
     assert.match(problems[0], /must match GHSA-cxww-7g56-2vh6 and the matcher reported nothing/u);
@@ -417,10 +358,7 @@ describe('the every-invocation controls', () => {
 });
 
 describe('the ZIP reader', () => {
-  /**
-   * Builds a ZIP by hand rather than by round-tripping the reader, so a reader
-   * that agrees with itself cannot pass. Deflate-compressed, one entry.
-   */
+  /** Builds a ZIP by hand so a reader that agrees with itself cannot pass. */
   function buildZip(entries) {
     const locals = [];
     const central = [];
@@ -462,9 +400,7 @@ describe('the ZIP reader', () => {
     return Buffer.concat([localBlock, centralBlock, eocd]);
   }
 
-  // node:zlib's crc32 is what the gate checks with; using it here would make the
-  // test agree with the reader by construction, so the table-driven original is
-  // written out instead.
+  // Not node:zlib's crc32, which the reader uses, so the test cannot agree by construction.
   function crc32of(buffer) {
     let table = crc32of.table;
     if (table === undefined) {
@@ -492,9 +428,6 @@ describe('the ZIP reader', () => {
   });
 
   it('throws rather than returning a short list', () => {
-    // Every one of these is a way the corpus arrives incomplete, and an
-    // incomplete corpus that parses is a clean-looking run over missing
-    // advisories.
     const zip = buildZip([['GHSA-a.json', '{}']]);
     assert.throws(() => readZipEntries(zip.subarray(0, 8)), /no end-of-central-directory/u);
 

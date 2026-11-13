@@ -1,33 +1,13 @@
 #!/usr/bin/env node
 /**
- * Regenerates the computed figures inside `apps/web/src/fixtures/`.
- *
- * ## Why this script exists
- *
- * `apps/web/src/fixtures/*` is the copy the web client renders when the API is unreachable. Every
- * number in it is a *computed* figure — an equity, an out count, a price, an expected value — and
- * the product's whole claim is that such a figure is never stale and never hand-written.
- *
- * `apps/api/test/web-fixture-figures.test.ts` enforces that by recomputing each figure and
- * comparing. Its failure message has always been "regenerate the fixture rather than editing the
- * number" — and until now **the repository contained nothing that could do so**. The result was
- * exactly what you would expect: the engine was fixed, the fixture was not regenerated, and the
- * Scenario Lab shipped a rule-of-2-and-4 estimate of `1.6` that the panel rendered as
- * "160.0%" — a probability above 100% in an application whose subject is probability. A guard
- * whose remedy is not executable is a guard that gets left red.
- *
- * So: this is the remedy, and it is deliberately the *same* computation the guard performs. If the
- * two ever disagree, the guard wins and this script is wrong.
+ * Regenerates the computed figures inside `apps/web/src/fixtures/`, the copy the web client renders
+ * when the API is unreachable.
  *
  *   node scripts/regenerate-web-fixtures.mjs            # rewrite the fixtures
  *   node scripts/regenerate-web-fixtures.mjs --check    # report drift, change nothing
  *
- * ## The reconstruction is duplicated, on purpose
- *
- * The hand-review rebuild below mirrors `web-fixture-figures.test.ts`'s own helpers. Importing them
- * would couple the remedy to the guard's internals and let a single edit move both together —
- * which is how a fixture and its check drift into agreeing with each other and disagreeing with the
- * engine. They are kept separate so that agreement is evidence.
+ * `apps/api/test/web-fixture-figures.test.ts` is the guard; if the two disagree, the guard wins.
+ * The hand-review rebuild duplicates the guard's helpers on purpose, so one edit cannot move both.
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -38,24 +18,11 @@ const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const FIXTURES = join(REPO, 'apps/web/src/fixtures');
 const CHECK_ONLY = process.argv.includes('--check');
 
-// Imported by path, not by bare specifier: this script lives at the repository root, which is not
-// a workspace project and therefore cannot resolve `@prl/*`. Each package's own directory can, so
-// resolution of their internal imports still works normally.
+// By path, because the repository root is not a workspace project and cannot resolve `@prl/*`.
 const fromRepo = (rel) => import(pathToFileURL(join(REPO, rel)).href);
 
-//
-// FROM `src/`, NOT `dist/`. These two read `dist/index.js` until 2026-08-27, which made this
-// script answer its question — "are the fixtures what the engine produces today?" — against
-// whatever the engine was the last time somebody ran `tsc`. A fix landed in `coach.ts` (the Coach
-// told a hero with no equity "You clear that with 0.0% equity, a -24.3 point shortfall") and both
-// `fixtures:check` and `fixtures:regenerate` reported the fixtures current while they still
-// carried the wrong sentence. Building the two packages surfaced drift in five places at once.
-//
-// A staleness check was written first and thrown away: `tsc` does not rewrite an output whose
-// content has not changed, so `dist` legitimately stays older than `src` and the guard refused a
-// tree that was perfectly built. Reading the source removes the question instead of policing it —
-// and `build-review.ts` below has always been imported this way, so nothing new is being asked of
-// the runtime.
+// From `src/`, not `dist/`, so a stale build cannot make stale fixtures look current. An mtime
+// staleness check was rejected because `tsc` leaves an unchanged output's timestamp alone.
 const { buildCoachReport, deriveContestablePot, exactRange } = await fromRepo(
   'packages/poker-math/src/index.ts',
 );
@@ -65,26 +32,8 @@ const { readSituation, SCENARIO_ANALYSIS_SAMPLES, SCENARIO_ANALYSIS_SEED } = awa
 );
 const { buildHandReview } = await fromRepo('apps/api/src/review/build-review.ts');
 
-/**
- * Refuse a `dist/` that disagrees with the `src/` beside it.
- *
- * Reading the engine from `src` above fixes only HALF of this script. `buildHandReview` is a
- * module, and its own `import { buildCoachReport } from '@prl/poker-math'` resolves through
- * `node_modules` to `packages/poker-math/dist/index.js` — verified with `createRequire(...).resolve`.
- * So the two halves of one gate read two different artifacts: the Lab scenarios track `src`, and
- * the hand-review fixtures track the last `tsc`. A Coach prose fix in `src/coach.ts` without a
- * rebuild left `review.ts` carrying the old sentence while this script called the fixtures current
- * — the exact incident the earlier commit said it had removed, still live in the other half.
- *
- * A CONTENT comparison, not an mtime one. The first attempt at this class of guard compared
- * `dist` and `src` timestamps and had to be thrown away: `tsc` does not rewrite an output whose
- * content has not changed, so `dist` legitimately stays older and the guard refused a correctly
- * built tree. Running one deterministic report through both and comparing the result asks the
- * question directly and cannot produce that false positive.
- */
-// By path, like everything else here: this script sits at the repository root, which is not a
-// workspace project, so a bare `@prl/*` specifier does not resolve. The header says so; I tried it
-// anyway and got ERR_MODULE_NOT_FOUND.
+// `buildHandReview` still imports `@prl/poker-math` through node_modules, which resolves to `dist/`.
+// So refuse a `dist/` whose output differs from `src/` on one deterministic report.
 const distMath = await fromRepo('packages/poker-math/dist/index.js');
 const PROBE = {
   heroCards: parseCards('Ah 6h'),
@@ -114,11 +63,7 @@ const PROBE = {
 
 const load = (file) => import(pathToFileURL(join(FIXTURES, file)).href);
 
-// --- the Scenario Lab -------------------------------------------------------
-
-// Imported, not restated. These must equal what `routes/content.ts` serves, because the fixture
-// stands in for that route — and the comment here used to assert that agreement over two literals
-// that nothing joined. `@prl/content` owns the pair now and all four consumers read it from there.
+// Imported from `@prl/content`, which owns the pair that `routes/content.ts` also serves.
 const SCENARIO_SAMPLES = SCENARIO_ANALYSIS_SAMPLES;
 const SCENARIO_SEED = SCENARIO_ANALYSIS_SEED;
 
@@ -134,10 +79,8 @@ function reportForScenario(scenario) {
     street: scenario.street,
     opponents: [{ label: opponentLabelFor(scenario), range: situation.opponentRange }],
     pot: situation.pot,
-    // The pot hero can actually win. Below `situation.pot` only when a scenario's hero is all-in
-    // for less than the bet in front of them, which is a side pot hero is not in. Derived rather
-    // than layered because a scenario carries no complete per-seat record of the street — see
-    // `routes/content.ts`, which this mirrors.
+    // The pot hero can win, which is below `situation.pot` only when hero is all-in for less than the
+    // bet. Mirrors `routes/content.ts`.
     contestablePot: deriveContestablePot({
       pot: situation.pot,
       toCall: situation.toCall,
@@ -154,8 +97,6 @@ function reportForScenario(scenario) {
     seed: SCENARIO_SEED,
   });
 }
-
-// --- the hand review --------------------------------------------------------
 
 const REVIEW_CONFIG = { smallBlind: 10, bigBlind: 20, ante: 0, maxSeats: 6 };
 const REVIEW_BUTTON_SEAT = 0;
@@ -230,9 +171,6 @@ const rebuildReview = (review) =>
     { budgetMs: 600_000, maxAnalysedDecisions: 32 },
   );
 
-// --- emitting ---------------------------------------------------------------
-
-/** A TypeScript object literal. Keys are quoted only where they must be, so the output reads. */
 function emit(value, indent = 0) {
   const pad = '  '.repeat(indent);
   const inner = '  '.repeat(indent + 1);
@@ -254,7 +192,7 @@ function emit(value, indent = 0) {
   return `{\n${body},\n${pad}}`;
 }
 
-/** Replaces the body of `export const <name>...= { … };` leaving every comment around it intact. */
+// Replaces the body of `export const <name>...= { … };` and leaves the comments around it intact.
 function spliceConstant(source, name, literal) {
   const lines = source.split('\n');
   const start = lines.findIndex((l) => l.startsWith(`export const ${name}`));
@@ -270,8 +208,6 @@ function spliceConstant(source, name, literal) {
   const header = lines[start].replace(/\{\s*$/, '').trimEnd();
   return [...lines.slice(0, start), `${header} ${literal};`, ...lines.slice(end + 1)].join('\n');
 }
-
-// --- run --------------------------------------------------------------------
 
 const drift = [];
 

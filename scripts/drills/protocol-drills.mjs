@@ -1,27 +1,10 @@
 /**
- * The drills that abuse the wire protocol: rubbish frames, repeated actions, and actions
- * submitted against a spot that has already moved on.
+ * The drills that abuse the wire protocol: rubbish frames, repeated actions and stale actions.
  *
- * ## Why these are drills and not only unit tests
- *
- * `apps/api/test/ws-router.test.ts` already drives the router with a fake sink and covers the
- * oversized frame, the duplicate `actionId` and the stale sequence. It cannot cover any of the
- * following, because none of them exist above the socket:
- *
- *   - a BINARY frame. The router is handed bytes by `hub.ts`'s `toBytes`, and a unit test that
- *     passes a string never exercises the decode;
- *   - a frame larger than the `ws` library's own `maxPayload`, which is refused by the library
- *     before the router sees it and produces a completely different close code (1009, not 4429);
- *   - what the process does afterwards. Every case here re-probes the server and, at the end,
- *     plays a real hand, because "rejected the frame" and "still able to serve" are two claims
- *     and only the first has ever been tested.
- *
- * ## The property that binds all three
- *
- * A malformed, repeated or stale submission must change nothing. So each drill records the
- * table's committed chips before and after the abuse and compares them, rather than trusting the
- * error code it was sent — an error code is what the server SAYS it did, and the ledger is what
- * it did.
+ * `apps/api/test/ws-router.test.ts` cannot send a binary frame through `hub.ts`'s `toBytes`, nor a
+ * frame over the `ws` library's `maxPayload` (closed 1009, not 4429), nor check the process still
+ * serves afterwards. Each drill compares the table's committed chips before and after, because an
+ * error code is what the server says it did and the ledger is what it did.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -45,18 +28,17 @@ import {
   visibleCardCheck,
 } from './invariants.mjs';
 
-/** `WS_LIMITS.maxMessageBytes` in @prl/contracts. See `harness.mjs` on why it is copied. */
+/** `WS_LIMITS.maxMessageBytes` in @prl/contracts, copied for the reason in `harness.mjs`. */
 const MAX_MESSAGE_BYTES = 8 * 1024;
 /** `LIBRARY_PAYLOAD_CEILING` in `ws/hub.ts`: four times ours, enforced by the `ws` library. */
 const LIBRARY_PAYLOAD_CEILING = MAX_MESSAGE_BYTES * 4;
-/** `WS_CLOSE.rateLimited` — what the router closes an oversending socket with. */
+/** `WS_CLOSE.rateLimited`. */
 const WS_RATE_LIMITED = 4429;
 /** `WS_CLOSE.protocolMismatch`. */
 const WS_PROTOCOL_MISMATCH = 4400;
-/** RFC 6455's "message too big", which is the LIBRARY's answer, not the protocol's. */
+/** RFC 6455 "message too big", sent by the library, not the protocol. */
 const WS_MESSAGE_TOO_BIG = 1009;
 
-/** Every frame this client received, scanned for anything it should never have been sent. */
 function scanFrames(client, label, findings) {
   for (const [index, entry] of client.frames.entries()) {
     findings.push(...scanForSecrets(entry.frame, `${label} frame ${index}`));
@@ -66,13 +48,7 @@ function scanFrames(client, label, findings) {
   }
 }
 
-/**
- * An error frame must carry a contract code and the contract's own wording, and nothing else.
- *
- * The specific leak this guards against is an internal message reaching the wire: `errors.ts`
- * keeps `logDetail` for the log and sends `ERROR_MESSAGES[code]`, and the failure mode when that
- * inverts is a client being told which file threw.
- */
+/** `errors.ts` logs `logDetail` and sends `ERROR_MESSAGES[code]`, so a frame carrying anything else leaks. */
 function checkErrorFrame(frame, label, findings) {
   const message = frame?.error?.message ?? '';
   if (/\.ts|node_modules|at async|Error:|ECONNREFUSED|select |insert /i.test(message)) {
@@ -80,10 +56,6 @@ function checkErrorFrame(frame, label, findings) {
   }
   findings.push(...scanForSecrets(frame, label));
 }
-
-// ---------------------------------------------------------------------------
-// 10. Malformed WebSocket traffic
-// ---------------------------------------------------------------------------
 
 export const malformedWsTraffic = {
   name: 'malformed-ws-traffic',
@@ -95,7 +67,7 @@ export const malformedWsTraffic = {
     await session.createGuest();
     const table = await seatWithBot(session, { name: 'Malformed traffic' });
 
-    /** A socket of its own for each case, so one close cannot mask the next case's behaviour. */
+    /** A socket per case, so one close cannot mask the next case. */
     const freshClient = async (options = {}) => {
       const client = new TableClient(session, table.roomId);
       await client.connect(options);
@@ -139,7 +111,7 @@ export const malformedWsTraffic = {
       }
     }
 
-    // --- invalid JSON, an unknown type, and binary garbage: rejected, socket kept ---
+    // Rejected, with the socket kept open.
     const softCases = [
       { label: 'invalid JSON', payload: '{"type":"ping", "nonce":' },
       {
@@ -197,7 +169,6 @@ export const malformedWsTraffic = {
       if (client.welcomed) report.failures.push('a client speaking the wrong version was welcomed anyway');
     }
 
-    // --- and the table is untouched by any of it ---
     const survivor = await freshClient();
     const health = await session.request(ROUTES.health);
     if (health.status !== 200) report.failures.push(`/health answered ${health.status} after the abuse`);
@@ -223,10 +194,6 @@ export const malformedWsTraffic = {
   },
 };
 
-// ---------------------------------------------------------------------------
-// 11. Duplicate actions
-// ---------------------------------------------------------------------------
-
 export const duplicateActions = {
   name: 'duplicate-actions',
   title: 'The same action submitted twice',
@@ -251,8 +218,7 @@ export const duplicateActions = {
     const committedBefore = view.seats.reduce((total, seat) => total + (seat.committedTotal ?? 0), 0);
     const stackBefore = view.seats.find((seat) => seat.isSelf)?.stack ?? null;
 
-    // The first submission, kept so the second is byte-for-byte the same retry a client makes
-    // when it never saw the answer to the first.
+    // Kept so the retry is byte-for-byte the one a client makes when it never saw the answer.
     const first = actOn(client, view);
     const firstAck = await client.waitForFrame(
       (f) => f.type === 'ack' && f.requestId === first.requestId,
@@ -301,7 +267,6 @@ export const duplicateActions = {
       }
     }
 
-    // The ledger is the real check: the same action applied twice would have moved the chips twice.
     await sleep(300);
     const afterViews = client.views.filter((entry) => entry.view?.handId === view.handId);
     const ledger = chipLedger(afterViews);
@@ -314,7 +279,6 @@ export const duplicateActions = {
       report.measurements.paidByTheSubmitter = paidOnce;
       report.measurements.committedBefore = committedBefore;
       report.measurements.committedAfter = committedNow;
-      // A doubled call shows up as the submitter having paid twice the amount they owed.
       const owed = view.amountToCall ?? 0;
       if (owed > 0 && paidOnce > owed) {
         report.failures.push(
@@ -341,10 +305,6 @@ export const duplicateActions = {
   },
 };
 
-// ---------------------------------------------------------------------------
-// 12. Out-of-order actions
-// ---------------------------------------------------------------------------
-
 export const outOfOrderActions = {
   name: 'out-of-order-actions',
   title: 'Actions submitted against a spot that has already moved on',
@@ -361,21 +321,15 @@ export const outOfOrderActions = {
       return report;
     }
 
-    // The stale case has to be submitted while it is still this seat's turn, because
-    // `LiveTable.submit` checks whose turn it is BEFORE it checks the sequence — so a stale
-    // submission sent out of turn would be answered `not_your_turn` and would prove nothing
-    // about the sequence guard at all. The first decision of a hand is at sequence 0, where
-    // "one behind" is not expressible, so the drill acts once and waits for the next turn.
+    // Submitted on this seat's turn, because `LiveTable.submit` checks the turn before the sequence.
+    // At sequence 0 "one behind" cannot be expressed, so the drill acts once first.
     let view = await client.waitForTurn(20_000);
     if (view === null) {
       report.failures.push('the server never offered a decision');
       return report;
     }
     if (view.actionSequence === 0) {
-      // The transcript index is recorded BEFORE acting, so the wait below returns the next
-      // decision rather than re-matching the one just acted on. Without it the drill submits
-      // against a spot it has already left, the server answers `not_your_turn` — correctly — and
-      // the sequence guard goes untested while the report claims otherwise.
+      // Recorded before acting, so the wait returns the next decision, not the one just acted on.
       const mark = client.frames.length;
       actOn(client, view);
       view = await client.waitForTurn(30_000, mark);
@@ -431,7 +385,6 @@ export const outOfOrderActions = {
     }
     report.measurements.staleCasesTried = cases.length;
 
-    // Nothing moved: a refused submission must not have folded the hand or paid a chip.
     await sleep(250);
     const after = client.lastView;
     if (after !== null && after.handId === view.handId) {
@@ -448,7 +401,6 @@ export const outOfOrderActions = {
       }
     }
 
-    // The hand is still playable, and its record still balances.
     const played = await playHandToCompletion(client, { budgetMs: 40_000 });
     if (!played.completed) report.failures.push(`the hand did not complete afterwards: ${played.reason}`);
     else report.observations.push('the hand played on normally after the stale submissions');

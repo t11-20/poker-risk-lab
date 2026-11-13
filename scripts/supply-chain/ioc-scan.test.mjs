@@ -1,23 +1,8 @@
 #!/usr/bin/env node
 /**
- * Tests for the `ioc-sweep` gate.
- *
- * Run with:  node --test scripts/supply-chain/ioc-scan.test.mjs
- *
- * ## The defect these were written against
- *
- * The persistence-artefact sweep walked `node_modules/.pnpm` and joined each IOC
- * path onto `<store>/<pkg>@<ver>/`. pnpm never puts package files there: the
- * package's own tree lives at `<store>/<pkg>@<ver>/node_modules/<pkg>/`, and the
- * level the sweep read contains a single `node_modules` entry and nothing else.
- * So a dependency shipping `.claude/setup.mjs` — the scenario this gate's header
- * gives as its reason to exist — could not be detected by path. The first test
- * below builds that exact store layout and asserts both halves: the old level
- * finds nothing, the package root finds the payload.
- *
- * A second defect: a missing store produced a *warning* and exit 0, so "the
- * dependencies are clean" and "there are no dependencies here" were the same
- * green light.
+ * Tests for the `ioc-sweep` gate. The first builds pnpm's real store layout and asserts that
+ * `<store>/<pkg>@<ver>/` finds nothing while the package root finds the payload. A missing store
+ * once warned and exited 0.
  */
 
 import assert from 'node:assert/strict';
@@ -46,10 +31,7 @@ function write(root, relative, contents) {
   return full;
 }
 
-/**
- * A repository with a pnpm store in it, laid out exactly as pnpm lays one out.
- * `evil@1.0.0` ships the campaign's Claude Code persistence pair.
- */
+/** A repository with a pnpm-shaped store. `evil@1.0.0` ships the Claude Code persistence pair. */
 function repoWithPoisonedDependency() {
   const root = scratch();
   const storeDir = join(root, 'node_modules', '.pnpm', 'evil@1.0.0');
@@ -77,8 +59,6 @@ describe('persistence-artefact sweep', () => {
   });
 
   it('finds NOTHING at the store level the gate used to read — the defect, reproduced', () => {
-    // <store>/evil@1.0.0/ contains only `node_modules`. Joining an IOC path onto
-    // it can never match, which is why the sweep passed over a poisoned tree.
     const { root, storeDir } = repoWithPoisonedDependency();
     const hits = findPersistenceArtefacts({
       repoRoot: root,
@@ -105,9 +85,8 @@ describe('persistence-artefact sweep', () => {
   });
 
   it("covers the artefacts the gate's own documentation names", () => {
-    // `ioc-scan.mjs`'s header names `.vscode/tasks.json` verbatim as the reason
-    // the gate exists, and the advisory snapshot §3 names `.claude/settings.json`.
-    // Both were absent from IOC_PATHS.
+    // `ioc-scan.mjs`'s header names `.vscode/tasks.json`, and snapshot §3 names
+    // `.claude/settings.json`. Both were once absent from IOC_PATHS.
     for (const path of [
       '.claude/setup.mjs',
       '.claude/settings.json',
@@ -129,15 +108,11 @@ describe('string and hash markers', () => {
     });
     assert.ok(filesScanned > 0, 'the sweep must actually read files');
     const markers = stringHits.map((h) => h.marker).sort();
-    // The fingerprint in index.js, and the second-stage invocation the fixture's
-    // .claude/settings.json uses to re-run the payload on session start.
     assert.deepEqual(markers, ['Shai-Hulud: Here We Go Again', 'bun run .claude/']);
   });
 
   it('FAILS on a known payload hash', () => {
-    // The recorded SHA-256 of the Mini Shai-Hulud Python backdoor is a hash of
-    // bytes we do not have, so this asserts the mechanism on a file whose hash we
-    // can compute: an IOC string plus a real read proves the scanner reaches the
+    // The recorded backdoor SHA-256 is of bytes we do not have, so this proves the scanner reads the
     // file, and the hash path shares that read.
     const root = scratch();
     write(root, 'cat.py', 'import os\n# /proc/self/mem\n');

@@ -1,49 +1,14 @@
 /**
  * The assertions every reliability drill makes about what it saw, as pure functions.
  *
- * `pnpm run test:drills` breaks a running system on purpose. That is only worth doing if the
- * evidence collected while it is broken is checked by something more exacting than a human
- * reading a log, so every claim the suite makes reduces to one of the functions below:
- *
- *   - `chipLedger`      — no chips were created or destroyed while the failure was happening;
- *   - `settledHandCheck` — the hand that survived the failure settled to a zero-sum ledger;
- *   - `scanForSecrets`  — nothing the client received named a deck, a salt or a cursor;
- *   - `visibleCardCheck` — no client saw more cards than the rules let it see;
- *   - `recoveryBound`   — the recovery actually finished, and the measured bound is stated.
- *
- * ## Why these are here and not inline in the drills
- *
- * Two reasons, and the second is the important one. First, a drill that inlines its assertions
- * cannot be tested, and an untested assertion is a comfort rather than a check — see the
- * negative controls in `scripts/reliability-drills.test.mjs`, every one of which feeds a real
- * violation to the function below that must catch it. Second, sixteen drills asserting chip
- * conservation sixteen slightly different ways is sixteen chances for one of them to assert
- * something weaker than it looks. There is one definition of each property here and every
- * drill uses it.
- *
- * ## What these functions deliberately do NOT do
- *
- * They do not talk to a network, a database, a clock or a child process; they take data that a
- * drill already collected and return findings. Nothing here throws on a violation either — a
- * drill that stopped at the first failure would hide the other fifteen things that also went
- * wrong during the same outage, which is precisely the information an incident needs. Every
- * function returns an array of human-readable strings, empty meaning "nothing found".
- *
- * If this file were removed, the drills would still break things and would report success on
- * the strength of nothing having thrown.
+ * Each one takes data a drill already collected and returns findings as strings, empty meaning
+ * nothing found. Nothing throws, so one outage reports every violation rather than the first.
+ * The negative controls in `scripts/reliability-drills.test.mjs` feed each a real violation.
  */
 
 /**
- * Object keys that must never appear anywhere in anything a client receives.
- *
- * These are the field names of the server's own secrets, spelled exactly as the source spells
- * them: `DeckSecret` in `packages/poker-engine/src/commitment.ts` is `{ deck, salts }`, the
- * shuffle's read position is a cursor, and the session and CSRF secrets are stored as digests
- * whose field names are below. Matching on the KEY rather than on the value is what makes this
- * check meaningful: a leak is a field that got serialised, and the field arrives with its name.
- *
- * Matched case-insensitively against the key with `_` and `-` removed, so `hole_card_salt`,
- * `holeCardSalt` and `HOLECARDSALT` are one entry.
+ * Field names of the server's own secrets (`DeckSecret` is `{ deck, salts }`). A leak is a field
+ * that got serialised, so the key is matched, case-insensitively with `_` and `-` removed.
  */
 const FORBIDDEN_KEYS = new Set([
   'deck',
@@ -66,24 +31,8 @@ const FORBIDDEN_KEYS = new Set([
 ]);
 
 /**
- * The one salt a client is allowed to hold, and the shape it has to arrive in.
- *
- * `RevealedCard` (commitment.ts) is `{ index, card, saltHex, proof }` and it is published on
- * purpose: a Merkle proof nobody can check is not a proof, so the salt of a card that has
- * ALREADY become public travels with it. The salt of an unrevealed position has no path to a
- * client and must not acquire one.
- *
- * So `saltHex` is permitted only inside an object carrying the other three fields of a
- * `RevealedCard`. A bare `saltHex`, or one attached to something that is not a proof, is a
- * finding. The check is on the shape rather than on the field name alone, because "we send a
- * salt but only sometimes" is exactly the rule that decays into "we send a salt".
- *
- * `card` is accepted as a number OR a string, and that is not laziness. `Card` in
- * `packages/poker-engine/src/cards.ts` is a number, and the two transports serialise it
- * differently: a WebSocket `state` frame carries the engine's `PlayerView` as it is, so its
- * cards arrive as integers, while `HandSummary.board` over REST is notation. Requiring a string
- * made this function reject every genuine socket proof — which it did, loudly, the first time
- * this suite ran a hand to showdown.
+ * `saltHex` is public only inside a `RevealedCard` (`{ index, card, saltHex, proof }`), whose card
+ * is already public. `card` is a number on a socket frame and notation over REST, so both pass.
  */
 function isRevealedCard(node) {
   const card = node?.['card'];
@@ -97,22 +46,11 @@ function isRevealedCard(node) {
   );
 }
 
-/** `deck_secret` and `deckSecret` are the same key for the purposes of this scan. */
 function normaliseKey(key) {
   return key.toLowerCase().replaceAll('_', '').replaceAll('-', '');
 }
 
-/**
- * Walks a decoded JSON value looking for a field that should never have been serialised.
- *
- * @param {unknown} value the decoded frame, response body or log record
- * @param {string} label what this value is, so a finding names its source
- * @returns {string[]} one line per finding, empty when nothing was found
- *
- * Depth is bounded because this runs over data a drill collected from a server that is in the
- * middle of failing, and a cyclic or pathologically deep structure must produce a finding
- * rather than a stack overflow inside the checker.
- */
+/** Depth is bounded so a cyclic or very deep structure yields a finding, not a stack overflow. */
 export function scanForSecrets(value, label = 'payload') {
   const findings = [];
   const seen = new Set();
@@ -151,22 +89,9 @@ export function scanForSecrets(value, label = 'payload') {
 }
 
 /**
- * The same scan over raw text, for the things that are not JSON.
- *
- * A server log line is the case this exists for: `logging.ts` redacts by field name, and a
- * message string that has had a deck interpolated into it carries no field name at all. Two
- * patterns are enough to catch that, and both are deliberately narrow so a run does not drown
- * in false positives from ordinary prose:
- *
- *   - a 64-hex-character run that is NOT a commitment root or a proof node. Root and proof
- *     hashes are published, so those are excluded by the caller passing them in `allowed`;
- *   - a run of six or more card notations in a row, which is more cards than any legitimate
- *     view contains (five board cards plus a pair of hole cards never appear as one unbroken
- *     sequence in this protocol's JSON, because they live in different fields).
- *
- * @param {string} text
- * @param {string} label
- * @param {ReadonlySet<string>} allowed hex strings that are legitimately public
+ * The same scan over raw text such as log lines, which `logging.ts` cannot redact by field name.
+ * Flags a 64-hex run not in `allowed` (published roots and proof nodes), and six or more card
+ * notations in a row, which no legitimate frame contains because board and hole cards are separate.
  */
 export function scanTextForSecrets(text, label = 'text', allowed = new Set()) {
   const findings = [];
@@ -184,20 +109,8 @@ export function scanTextForSecrets(text, label = 'text', allowed = new Set()) {
 }
 
 /**
- * Every card any one recipient can legitimately see, against what the frame actually contains.
- *
- * The rule, from `redactFor` in `packages/poker-engine/src/redact.ts`: a recipient sees their
- * own two cards, the board, and — only once the street is `complete` — the cards of seats that
- * showed down. Anything else is null. So the count of non-null hole-card pairs in a view is
- * checked directly, and every pair is checked against who it belongs to.
- *
- * This is the structural half of the hidden-information check and `scanForSecrets` is the
- * lexical half. Both are needed: a leak that reuses the protocol's own field names (an
- * opponent's `holeCards` populated during play) has no forbidden key in it at all, and a leak
- * that invents a field has no seat attached to it.
- *
- * @param {unknown} view a `PlayerView`, or null between hands
- * @param {string} label
+ * Per `redactFor`: a recipient sees its own cards, the board, and only on a `complete` street the
+ * cards of seats that showed down. This is the structural half of the hidden-information check.
  */
 export function visibleCardCheck(view, label = 'view') {
   if (view === null || typeof view !== 'object') return [];
@@ -207,25 +120,9 @@ export function visibleCardCheck(view, label = 'view') {
   const complete = street === 'complete';
   const viewerSeat = view['viewerSeat'];
 
-  /**
-   * The seats that actually tabled a hand, from the view's own `result.showdowns`.
-   *
-   * ## The defect this exists for
-   *
-   * The rule has two clauses — complete AND showed down — and this function used to implement
-   * only the first: any non-null `holeCards` on a `street: 'complete'` view passed. So a hand
-   * that ended by folding, whose showdown list is EMPTY by construction (`machine.ts` builds it
-   * from the seats still in at the end), could carry a folder's cards to every recipient and
-   * the structural half of the hidden-information check would have said nothing. That leak is
-   * worse than an ordinary one: it tells every observer whether the player who folded was
-   * bluffing, which is the single fact the fold was meant to keep.
-   *
-   * An absent or unparseable `result` yields an EMPTY set, so cards on a completed view with no
-   * showdown list to justify them are a finding rather than a free pass. `redactFor` populates
-   * `result` on exactly the views where `street === 'complete'`, so there is no legitimate
-   * completed view this treats unfairly — and "I cannot tell whether this was shown, therefore
-   * it is fine" is the reasoning that produced the gap in the first place.
-   */
+  // A completed hand shows only the seats in `result.showdowns`. A missing `result` yields an empty
+  // set, so a folder's cards on a completed view are a finding. This check once passed any cards on
+  // a complete street, which would have leaked whether the folder was bluffing.
   const result = view['result'];
   const showdowns = Array.isArray(result?.['showdowns']) ? result['showdowns'] : [];
   const showedDown = new Set(
@@ -265,34 +162,12 @@ export function visibleCardCheck(view, label = 'view') {
 }
 
 /**
- * Chip conservation across a sequence of views of ONE hand.
+ * Chip conservation across views of one hand. During play `sum(stack) + sum(committedTotal)` is
+ * constant and `potTotal` equals the commitments.
  *
- * The quantity that must not move is `sum(stack) + sum(committedTotal)` over the seats dealt
- * into the hand: a chip is either in front of a player or in the pot, and an action moves it
- * from one to the other. A hand that creates a chip shows up as this total rising, one that
- * destroys a chip as it falling, and a pot awarded incorrectly as it changing at the moment of
- * settlement — which is the specific corruption a mid-hand crash could produce and the reason
- * this is measured across the failure rather than only at the end.
- *
- * `potTotal` is checked against the same seats' `committedTotal` in every view, because the
- * pot is built from the commitments (`buildPots`) and a disagreement between the two means the
- * side-pot construction lost or invented a chip even though every stack still looks right.
- *
- * ## The settled view counts its chips differently, and that is not an exemption
- *
- * At `street === 'complete'` the pot has been paid into the stacks and `committedTotal` is NOT
- * zeroed — it stays as the record of what each seat put in during the hand. Measured on a real
- * heads-up hand: river `stacks 198,198 committed 2,2` (total 400), complete `stacks 202,198
- * committed 2,2` (total 404). Adding the commitments to the settled stacks therefore double-counts
- * the pot, and a checker that did it would report chip creation on every hand that ever finished —
- * which is exactly what the first run of this suite did.
- *
- * So the settled view is checked against the SAME baseline using stacks alone. That is a stronger
- * statement rather than a weaker one: it says every chip that went into the pot came back out to
- * somebody, which is the property a mid-hand crash could break.
- *
- * @param {readonly {label: string, view: unknown}[]} samples views in the order they arrived
- * @returns {{findings: string[], totals: number[]}}
+ * At `complete` the pot is paid into the stacks but `committedTotal` is not zeroed. Measured on a
+ * heads-up hand, river 198,198 + 2,2 = 400 and complete 202,198 + 2,2 = 404. So the settled view
+ * is compared to the baseline using stacks alone.
  */
 export function chipLedger(samples) {
   const findings = [];
@@ -329,10 +204,6 @@ export function chipLedger(samples) {
     if (typeof potTotal !== 'number') {
       findings.push(`${sample.label}: potTotal was not a number`);
     } else if (potTotal !== committed) {
-      // True in both phases, for different reasons: during play the pot IS the commitments, and
-      // at completion `committedTotal` is the historical record of the pot that was played for.
-      // A disagreement means the side-pot construction lost or invented a chip even though every
-      // stack still looks right.
       findings.push(
         `${sample.label}: potTotal ${potTotal} does not equal the ${committed} committed by the seats`,
       );
@@ -360,21 +231,9 @@ export function chipLedger(samples) {
 }
 
 /**
- * What a settled hand must satisfy, read back from `GET /hands/:id`.
- *
- * `sum(net) === 0` is the whole of chip conservation in one line, and it is the check that
- * survives a restart: the live view is gone, but the durable record of who won and lost is
- * exactly what a learner will read afterwards, and it is what a corrupted settlement would be
- * visible in. `startingStack + net >= 0` catches the other direction — a seat that ended
- * owing chips it never had.
- *
- * The reveal is bounded here too, because a hand review is the one response that legitimately
- * carries salts: at most the five board cards plus two per seat that showed down may appear,
- * and `complete` must be false. A full-deck reveal attached to an ordinary hand would hand the
- * reader every card nobody was ever shown.
- *
- * @param {unknown} review a `HandReviewResponse`
- * @param {string} label
+ * `sum(net) === 0` is chip conservation that survives a restart, and `startingStack + net >= 0`
+ * catches a seat that ended owing chips. The reveal may carry at most the board plus two cards per
+ * showdown seat, and never `complete`.
  */
 export function settledHandCheck(review, label = 'hand review') {
   const findings = [];
@@ -427,19 +286,8 @@ export function settledHandCheck(review, label = 'hand review') {
 }
 
 /**
- * States a recovery bound, and fails when the recovery did not happen inside it.
- *
- * Every drill has to answer "bounded recovery, with the actual measured bound", and the
- * temptation in a harness is to report the measurement and leave the reader to judge it. That
- * is how a regression arrives unnoticed: 400 ms becomes 40 s and both are "measured". So the
- * budget is declared with the drill and the measurement is checked against it here.
- *
- * `null` for `elapsedMs` means the recovery never completed, which is a different sentence
- * from "it was slow" and is reported as one.
- *
- * @param {string} what
- * @param {number|null} elapsedMs
- * @param {number} budgetMs
+ * The budget is declared with the drill so a regression from 400 ms to 40 s fails instead of being
+ * merely measured. `null` means the recovery never completed.
  */
 export function recoveryBound(what, elapsedMs, budgetMs) {
   if (elapsedMs === null) return [`${what}: never recovered (budget ${budgetMs} ms)`];
@@ -449,18 +297,7 @@ export function recoveryBound(what, elapsedMs, budgetMs) {
   return [];
 }
 
-/**
- * Whether a body of collected log text contains a line that explains what happened.
- *
- * "Useful logging" is a requirement of every drill, and the only way to check it that is not a
- * matter of opinion is to name the line the operator would search for and assert it is there.
- * The drills quote the matched line in their report, so the evidence is the log's own words
- * rather than this function's summary of them.
- *
- * @param {string} log
- * @param {RegExp} pattern
- * @returns {{found: boolean, line: string}}
- */
+/** Finds the log line an operator would search for, so the report quotes the log's own words. */
 export function logLine(log, pattern) {
   for (const line of log.split('\n')) {
     if (pattern.test(line)) return { found: true, line: line.trim() };
