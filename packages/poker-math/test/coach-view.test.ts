@@ -32,7 +32,13 @@ import { test } from 'node:test';
 import type { CoachReport } from '@prl/contracts';
 import type { PlayerView } from '@prl/poker-engine';
 import { buildCoachReport } from '../src/coach.ts';
-import { type CoachPolicy, coachInputFor, coachSpotForView, LIVE_COACH_POLICY } from '../src/coach-view.ts';
+import {
+  type CoachPolicy,
+  type CoachSpot,
+  coachInputFor,
+  coachSpotForView,
+  LIVE_COACH_POLICY,
+} from '../src/coach-view.ts';
 
 interface PinnedView {
   readonly name: string;
@@ -170,4 +176,88 @@ test('falls back to the seat number for a seat with no usable name, and never to
   assert.equal(bySeat.get(first.seat), `seat ${String(first.seat + 1)}`);
   assert.equal(bySeat.get(second.seat), `seat ${String(second.seat + 1)}`);
   assert.equal(bySeat.get(third.seat), `seat ${String(third.seat + 1)}`, 'a seat the caller has no name for');
+});
+
+/** Each opponent's label by seat index, from a reading of the pinned six-handed preflop view. */
+function labelsBySeat(names: ReadonlyMap<number, string>): {
+  readonly bySeat: ReadonlyMap<number, string | undefined>;
+  readonly spot: CoachSpot;
+} {
+  const { view } = pinnedAt('preflop');
+  const reading = coachSpotForView(view, LIVE_COACH_POLICY, (seat) => names.get(seat));
+  assert.ok(reading.kind === 'spot');
+  const opponents = view.seats.filter((seat) => !seat.isSelf && seat.status === 'active');
+  // Seats 0, 1, 3 and 4 are live, the reader is seat 2 and seat 5 has folded.
+  assert.deepEqual(
+    opponents.map((seat) => seat.seat),
+    [0, 1, 3, 4],
+  );
+  const bySeat = new Map(opponents.map((seat, index) => [seat.seat, reading.spot.opponents[index]?.label]));
+  return { bySeat, spot: reading.spot };
+}
+
+// Review on PR #36 (Devin): guest names are not unique, and two opponents called Alex came back as two
+// "Alex" equity rows and two "Alex holds any of…" assumptions, with nothing to say which was which.
+test('opponents who share a name are told apart by seat, in the equity rows and the assumptions alike', () => {
+  const names = new Map([
+    [0, 'Alex'],
+    [1, 'Sam'],
+    [3, 'Alex'],
+    [4, 'Kim'],
+  ]);
+  const { bySeat, spot } = labelsBySeat(names);
+  assert.deepEqual(
+    [...bySeat],
+    [
+      [0, 'Alex (seat 1)'],
+      [1, 'Sam'],
+      [3, 'Alex (seat 4)'],
+      [4, 'Kim'],
+    ],
+  );
+
+  const report = buildCoachReport(coachInputFor({ ...spot, samples: 50 }));
+  const rows = report.equity.perPlayer.slice(1).map((player) => player.label);
+  assert.deepEqual(rows, [...bySeat.values()]);
+  assert.equal(new Set(rows).size, rows.length, `equity rows repeat a label: ${JSON.stringify(rows)}`);
+  for (const label of rows) {
+    const lines = report.assumptions.filter((line) => line.startsWith(`${String(label)} holds any of`));
+    assert.equal(lines.length, 1, `${String(label)} opens ${String(lines.length)} assumptions`);
+  }
+});
+
+test('a name is shared ignoring case, and with a seat that has folded', () => {
+  // `holdsClause` capitalises, so "alex" and "Alex" read as the same "Alex holds any of…"; and the
+  // Alex who folded in seat 6 is still on a plate beside the Coach.
+  const { bySeat } = labelsBySeat(
+    new Map([
+      [0, 'alex'],
+      [1, 'Sam'],
+      [5, 'Alex'],
+    ]),
+  );
+  assert.equal(bySeat.get(0), 'alex (seat 1)');
+  assert.equal(bySeat.get(1), 'Sam');
+});
+
+test('a name in the shape of a seat label falls back to its own seat, so it cannot take another', () => {
+  // Seat 1 has no name and is labelled "seat 2"; a guest in seat 4 who calls themselves "seat 2", or
+  // "Alex (seat 1)", would otherwise have been a second "seat 2" or the first Alex's label.
+  const { bySeat } = labelsBySeat(
+    new Map([
+      [0, 'Alex'],
+      [3, 'seat 2'],
+      [4, 'Alex (seat 1)'],
+      [5, 'Alex'],
+    ]),
+  );
+  assert.deepEqual(
+    [...bySeat],
+    [
+      [0, 'Alex (seat 1)'],
+      [1, 'seat 2'],
+      [3, 'seat 4'],
+      [4, 'seat 5'],
+    ],
+  );
 });
