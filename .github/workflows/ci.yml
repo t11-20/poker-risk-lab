@@ -493,7 +493,9 @@ jobs:
       # allowlist) and with the port the web app is started on below, and three
       # things that must agree should be visible in one place.
       PRL_WEB_ORIGIN: http://localhost:3000
-      SESSION_COOKIE_SECRET: ci-only-not-a-secret-32-chars-xx
+      # The API test suite's shared secret (published on purpose; see secret-scan.mjs). The old literal
+      # contained "secret", so config.ts's placeholder warning fired on every boot of this job.
+      SESSION_COOKIE_SECRET: Zk7pQ2vR9tX4bN6mL1sD8gH3jF5wC0yA
       # A multi-table load run opens one guest session per seat, so the shipped limits
       # refuse it — correctly. Raised here for the harness rather than lowered in the
       # server, and the harness now prints the figure it needs when it sees a 429.
