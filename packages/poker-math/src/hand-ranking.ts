@@ -1,52 +1,10 @@
 /**
- * A *computed* strength ordering of the 169 starting-hand classes.
- *
- * `ranges.ts` can express "the top 15% of hands", and that phrase is meaningless
- * without an ordering. The obvious way to get one is to copy a published preflop
- * chart. This file deliberately does not: a chart is somebody else's material, its
- * provenance cannot be shown to a learner, and the numbers on it cannot be checked.
- * So the ordering is measured here, from first principles, by one narrow question:
- *
- *     all-in, heads-up, against a hand drawn uniformly from the rest of the deck,
- *     what share of the pot does this class win?
- *
- * That question has a single right answer, this package can compute it, and a test
- * can check it against structural facts (a pair beats its offsuit namesake; suited
- * beats offsuit) rather than against a table nobody can audit.
- *
- * ## What this ordering is NOT
- *
- * All-in equity is not playability, and the UI must never let the two be confused.
- * 22 beats AKo in an all-in more often than it loses, and is still much the worse
- * hand to take into a deep-stacked pot: it flops a set one time in eight and is
- * otherwise almost unplayable, whereas AKo flops something usable constantly. The
- * ordering below is a defensible answer to a narrow question, not a ranking of how
- * good hands are. Every consumer gets `assumptions` saying so.
- *
- * ## One representative combination per class
- *
- * AsAh, AsAd, AsAc, AhAd, AhAc and AdAc are all "AA", and their exact equity
- * against a random hand is *identical* — relabelling the suits is a bijection on
- * the remaining 1,225 opposing combinations and on every run-out, and hand strength
- * does not depend on which suit is which. So measuring one combination per class is
- * not an approximation of the exact figure; it is the exact figure, and it saves a
- * factor of up to twelve.
- *
- * The residual approximation is the sampling, not the representative: Monte Carlo
- * draws a finite set of run-outs, which are not suit-symmetric, so a different
- * representative would land a fraction of a point away. That noise is small next to
- * the gaps between distant classes and comparable to the gaps between neighbouring
- * ones, which is why the tail of the table reorders slightly with the sample count.
- *
- * ## Why every class is measured with the SAME seed
- *
- * Common random numbers. Each class is sampled from an identically seeded stream, so
- * the classes share their run-out draws instead of each getting independent noise.
- * The absolute equities are no more accurate for it, but the *differences* between
- * classes — the only thing an ordering depends on — are far more reliable at a given
- * sample count, because the shared component of the error cancels. This is what lets
- * the structural checks in the tests hold at a sample count small enough to run in a
- * test suite.
+ * A computed strength ordering of the 169 starting-hand classes, so "the top 15%" has a checkable meaning
+ * instead of one copied from a published chart. Strength is all-in, heads-up equity against a uniformly
+ * random hand. That is not playability, and every consumer gets `assumptions` saying so.
+ * One combo per class is exact, because relabelling suits is a bijection on opponents and run-outs.
+ * Every class uses the same seed (common random numbers), so the differences an ordering depends on
+ * share their noise and the structural tests hold at a small sample count.
  */
 
 import type { Card } from '@prl/poker-engine';
@@ -64,10 +22,7 @@ export interface HandClassStrength {
   readonly equityVsRandom: number;
   /** 1 = strongest. Every class has a distinct rank. */
   readonly rank: number;
-  /**
-   * Share of all 1,326 two-card combinations held by this class and every stronger
-   * one, as a percentage. Weighted by combinations, not by labels — see below.
-   */
+  /** Percent of the 1,326 combos held by this class and every stronger one, weighted by combos. */
   readonly cumulativePercent: number;
 }
 
@@ -81,24 +36,15 @@ export interface StrengthTable {
 }
 
 /**
- * 20,000 samples per class is a deliberate compromise. It puts the 95% interval on a
- * class between ±0.49 points (AA, where the outcome is nearly certain and the variance
- * is low) and ±0.68 points (a hand near a coin flip against random, where it is
- * highest). That resolves every distinction worth drawing except neighbouring classes
- * in the weak tail, and the whole 169-class table takes a little over three seconds on
- * a laptop. Raising the count buys accuracy as the square root of the extra work, and
- * the tail ordering it would settle is not a distinction any learner should act on.
+ * 95% interval of ±0.49 points (AA) to ±0.68 points (near a coin flip), which resolves everything but
+ * neighbours in the weak tail. The 169-class table takes a little over three seconds on a laptop.
  */
 const DEFAULT_SAMPLES_PER_CLASS = 20_000;
 
-/** Fixed so the table — and therefore every `topPercent` range — is reproducible. */
+/** Fixed so the table and every `topPercent` range are reproducible. */
 const DEFAULT_SEED = 20_260_817;
 
-/**
- * Bounds on the sample count. The floor keeps a caller from asking for a table so
- * noisy that the ordering is close to arbitrary; the ceiling keeps a single call from
- * turning into minutes of work in a request handler.
- */
+/** The floor keeps the ordering from being near arbitrary. The ceiling bounds work in a request handler. */
 const MIN_SAMPLES_PER_CLASS = 200;
 const MAX_SAMPLES_PER_CLASS = 200_000;
 
@@ -107,13 +53,7 @@ const TOTAL_COMBOS = 1326;
 
 const EXPECTED_CLASS_COUNT = 169;
 
-/**
- * Measures every class and returns them strongest first.
- *
- * Pure apart from the memo in `strengthTable()`: the result is a function of
- * `samplesPerClass` and `seed` alone, and the same arguments always give a
- * bit-identical table.
- */
+/** Pure apart from the memo in `strengthTable()`. Same arguments give a bit-identical table. */
 export function computeStrengthTable(
   options: { samplesPerClass?: number; seed?: number } = {},
 ): StrengthTable {
@@ -145,10 +85,7 @@ export function computeStrengthTable(
       throw new HandRankingError(`class ${handClass.label} produced no combinations`);
     }
     const heroCards: readonly Card[] = representative;
-    // The opponent's range is every hand EXCEPT the two cards hero holds. Passing
-    // hero's cards as blockers is what makes "uniformly random" mean uniform over
-    // the 1,225 combinations actually available, and it removes the need for the
-    // sampler to reject illegal matchups — so every trial does useful work.
+    // Hero's cards as blockers make "random" uniform over the 1,225 available combos with no rejection.
     const result = monteCarloEquity(
       {
         players: [
@@ -164,11 +101,7 @@ export function computeStrengthTable(
     return { handClass, canonicalIndex, equityVsRandom: hero.equity };
   });
 
-  // Strongest first. The tie-break on `canonicalIndex` is not decoration: two
-  // classes CAN sample to the same equity, and a comparator that returns 0 would
-  // leave their order up to the sort implementation. Breaking on the canonical
-  // order (high card descending, then low card, suited before offsuit) makes the
-  // ordering total and reproducible without relying on sort stability.
+  // The canonical-index tie-break makes the order total when two classes sample to the same equity.
   measured.sort((a, b) =>
     b.equityVsRandom === a.equityVsRandom
       ? a.canonicalIndex - b.canonicalIndex
@@ -178,11 +111,7 @@ export function computeStrengthTable(
   const entries: HandClassStrength[] = [];
   let combosSoFar = 0;
   for (const [index, item] of measured.entries()) {
-    // Weighted by combinations, NOT by class count. A pair is 6 of the 1,326
-    // combinations and an offsuit class is 12, so the 169 labels are not equally
-    // likely and treating them as if they were makes a top-percentage mean the wrong
-    // thing. Concretely: 1% of the labels is AA alone, but AA is only 0.45% of the
-    // hands you are actually dealt, so the top 1% of DEALS is AA, KK and QQ.
+    // Weighted by combos, not labels. AA is 1% of the 169 labels but 0.45% of deals.
     combosSoFar += item.handClass.comboCount;
     entries.push({
       label: item.handClass.label,
@@ -223,19 +152,8 @@ export function computeStrengthTable(
 }
 
 /**
- * The default table, computed once per process.
- *
- * The rest of this package is pure in the strict sense — no cached state anywhere.
- * This one memo is the exception and it is worth being explicit about why it is
- * safe: `strengthTable()` takes no arguments, so it is a constant function, and the
- * cache can only ever hand back the value the call would have produced anyway. It
- * changes when the work happens, never what the answer is. The default table costs a
- * few seconds, `topPercentRange` needs it, and a request handler cannot afford to
- * rebuild it per call.
- *
- * Callers that want a table with different parameters call `computeStrengthTable`
- * directly and get no caching, which keeps the cache from ever being keyed on
- * something a caller could vary.
+ * The package's only cached state. Safe because `strengthTable()` takes no arguments, so the memo
+ * changes when the work happens, never the answer. The table costs a few seconds per build.
  */
 let memoisedDefaultTable: StrengthTable | null = null;
 
@@ -245,17 +163,9 @@ export function strengthTable(): StrengthTable {
 }
 
 /**
- * The strongest classes covering at least `percent` of all dealt hands.
- *
- * Classes are taken in rank order until the cumulative share reaches the target,
- * *including* the class that crosses it — so the returned range covers at least the
- * requested share rather than stopping just short of it. Because the classes come in
- * lumps of 6, 4 or 12 combinations, an exact hit is usually impossible; the range's
- * own `fractionOfAllHands` reports what was actually covered.
- *
- * The result is built by handing the labels to `parseRange`, so range construction
- * has exactly one code path. A second builder that assembled combinations directly
- * would be one more place for a blocker bug or a combination-count bug to hide.
+ * The strongest classes covering at least `percent` of dealt hands, including the class that crosses it.
+ * Classes come in lumps of 6, 4 or 12 combos, so `fractionOfAllHands` reports what was covered.
+ * Built through `parseRange` so range construction has one code path.
  */
 export function topPercentRange(percent: number): ParsedRange {
   if (typeof percent !== 'number' || !Number.isFinite(percent)) {

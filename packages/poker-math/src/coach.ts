@@ -1,60 +1,18 @@
 /**
- * The Coach: everything shown at a decision point, assembled from the pure maths.
- *
- * This is the product. Every other module here computes one figure; this one puts them
- * side by side so a learner can see *why* a decision is what it is rather than being
- * told what to do.
- *
- * ## Three rules the type system enforces, so a reviewer does not have to
- *
- * 1. **`assumptions` is never empty.** A number without its assumptions is a guess
- *    dressed as a fact. `buildCoachReport` throws rather than return an empty list.
- * 2. **`uncertainty` always states the method**, and for a sampled figure always
- *    carries the interval. An exact enumeration reports `confidenceInterval: null` —
- *    not a fabricated zero, because "no sampling error" and "zero error" are different
- *    claims.
- * 3. **There is no way to say "correct".** `CoachSuggestion` has fields for an action,
- *    a size *range*, a confidence that may be `'low'`, a reason, and a non-empty
- *    `whatWouldChangeIt`. It has no field capable of expressing certainty, so the UI
- *    cannot render one even by accident.
- * 4. **Every size it can emit is one the table would accept.** `CoachInput` carries
- *    hero's own street commitment, and optionally the engine's own minimum, because
- *    without them a legal `to` is not computable and the Coach was reduced to guessing
- *    one. A panel that recommends an action the server rejects has taught a learner
- *    something false about the rules on top of whatever it said about the maths.
- * 5. **Every ACTION it can emit is one the engine offers.** The size being legal is not
- *    the same claim as the action being available. `CoachInput.legalActions` carries the
- *    engine's own list and nothing outside it is published. A caller that has no
- *    `HandState` to ask gets `deriveLegalActions` instead — the betting rules a described
- *    spot *does* determine, chief among them that `bet`/`raise` is withheld when no
- *    opponent has chips behind. What the absent case never means again is "everything is
- *    permitted": that reading is what let four of the five surfaces publish raises the
- *    table refuses, and the filter now has no branch that can express it.
- * 5a. **No candidate costs more than hero can put in.** `assertAffordable` checks every
- *    published row against `heroStack` — chips BEHIND — and every total against
- *    `heroCommittedThisStreet + heroStack`. Both are invariants of the arithmetic above
- *    rather than clamps applied after the fact, which is why a violation is a loud
- *    `CoachError` and not a silently corrected figure.
- * 6. **A free check is never ranked below a fold.** `evOfCheck` prices a check at
- *    `equity x pot` rather than at a hard-coded zero, ties are broken against giving up
- *    the hand, and `buildSuggestion` asserts the ordering rather than trusting it.
- *
- * ## Units on this contract
- *
- * Every probability that leaves this file is a FRACTION in 0..1 — `heroEquity`,
- * `breakEvenEquity`, `potShareIfCalled`, `foldEquityAssumed` and `ruleOfThumb.estimate`
- * — and the UI multiplies by 100 to render it. Percentage POINTS appear only in fields
- * whose names say so (`errorPoints`, `confidenceHalfWidthPoints`). `ruleOfThumb.estimate`
- * was the one exception, publishing 36 where every neighbour published 0.36, and the
- * panel rendered it as "3,600.0%".
- *
- * ## What the Coach deliberately does not do
- *
- * It does not solve the spot. It evaluates the actions available against one stated
- * range assumption, with no future-street modelling beyond an explicit fold-equity
- * parameter, and it says so in the limitations. A learner who takes these numbers as
- * "the answer" has been taught the wrong lesson, so the output is shaped to make that
- * reading hard.
+ * The Coach assembles everything shown at a decision point from the pure maths, so a learner sees why.
+ * Invariants it enforces:
+ * 1. `assumptions` is never empty. `buildCoachReport` throws instead.
+ * 2. `uncertainty` always states the method. Exact enumeration reports `confidenceInterval: null`,
+ *    because "no sampling error" and "zero error" are different claims.
+ * 3. `CoachSuggestion` has no field that can express "correct", so the UI cannot render one.
+ * 4. Every size it emits is one the table would accept.
+ * 5. Every action it emits is one the engine offers. Absent `legalActions` falls back to
+ *    `deriveLegalActions`, never to "everything is permitted".
+ * 5a. No candidate costs more than `heroStack`. `assertAffordable` throws a `CoachError` on a violation.
+ * 6. A free check never ranks below a fold. `evOfCheck` is `equity x pot`, and ties go against folding.
+ * Every probability that leaves this file is a fraction in 0..1. Percentage points appear only in fields
+ * named for them (`errorPoints`, `confidenceHalfWidthPoints`).
+ * It does not solve the spot. It evaluates the available actions against one stated range assumption.
  */
 
 import type {
@@ -92,32 +50,19 @@ export type Street = 'preflop' | 'flop' | 'turn' | 'river';
 /** The five things a seat can do. Identical to `ActionCandidate['action']` by design. */
 export type CoachAction = ActionCandidate['action'];
 
-/**
- * The part of a spot that determines which action *kinds* the betting rules allow.
- *
- * A subset of `CoachInput` by design, so `deriveLegalActions(input)` type-checks and a
- * caller that has these four numbers and nothing else can ask the same question.
- */
+/** The part of a spot that fixes which action kinds are legal. `CoachInput` satisfies it structurally. */
 export interface DescribedSpot {
   /** What hero must add to continue. 0 when hero can check. */
   readonly toCall: number;
   /** Chips hero has ALREADY put out on this street. */
   readonly heroCommittedThisStreet: number;
-  /** Chips hero has BEHIND — remaining, not counting anything already committed. */
+  /** Chips hero has BEHIND, not counting anything already committed. */
   readonly heroStack: number;
   /** Chips BEHIND for each opponent still in the hand, one entry per opponent. */
   readonly opponentStacks: readonly number[];
 }
 
-/**
- * A described spot, plus the two things that fix a legal *size* rather than a legal action.
- *
- * Separate from `DescribedSpot` because the two questions have different inputs and different
- * answers: which action kinds the rules allow needs neither the stakes nor the engine's `minTo`,
- * and `deriveLegalActions` should not start asking for figures it does not read. `CoachInput`
- * satisfies this structurally, so the Coach's own floor and a caller holding only these six
- * numbers are answered by the same function.
- */
+/** A described spot plus what fixes a legal size, kept apart so `deriveLegalActions` reads only its four. */
 export interface SizedSpot extends DescribedSpot {
   readonly bigBlind: number;
   /** The engine's own `minTo` when there is a `HandState` to read it from. See `CoachInput`. */
@@ -125,47 +70,16 @@ export interface SizedSpot extends DescribedSpot {
 }
 
 /**
- * The actions the betting rules allow in a spot that has been *described* rather than
- * dealt. **A derivation, and the engine is the authority wherever a `HandState` exists.**
- *
- * Read that sentence as a rule about callers, not as a disclaimer. `legalActions(state,
- * seat)` in `@prl/poker-engine` is this codebase's single definition of legality; anyone
- * holding a `HandState`, or a `PlayerView` carrying the engine's own list, passes that
- * and this function is not involved. It exists for the surfaces that genuinely have no
- * hand state — the ad-hoc calculator, the Scenario Lab, the hand review rebuilt from
- * stored rows, the profile comparison — because the alternative those callers used to
- * get was no filter at all.
- *
- * ## What is derived, and from which rule
- *
- * - **`fold`** is always offered. The engine offers it at every decision point, including
- *   the one where checking is free — where it attaches a note saying so rather than
- *   hiding it.
- * - **`check` exactly when `toCall === 0`, `call` exactly when `toCall > 0`.** The engine
- *   splits on `amountToCall`; this splits on the same quantity.
- * - **`bet`/`raise` only when some opponent still has chips behind.** This is the rule
- *   that was being violated. `legalActions` withholds aggression unless
- *   `state.seats.some(other => other.status === 'active' && other.stack > 0)`: a bet
- *   nobody can call is simply returned, so there is nothing to size and nothing to price.
- *   Pricing one anyway is worse than useless — the fold-equity term charges an opponent
- *   with no chips behind a 35% chance of folding, which is a probability of an event that
- *   cannot happen.
- * - **`bet` when the bet level is zero, `raise` otherwise**, which is the engine's own
- *   test (`state.betLevel === 0`) rather than a test on `toCall`: a big blind facing a
- *   limped pot owes nothing and still cannot *bet*, because their own blind is a live bet.
- * - **and only when hero can actually get past the level in force**: `maxTo > betLevel`,
- *   with `maxTo = heroCommittedThisStreet + heroStack`, the same comparison `legalActions`
- *   makes. A short stack that cannot reach the minimum may still shove, which is why the
- *   test is against the bet level and not against the minimum.
- *
- * ## What cannot be derived, and what that costs
- *
- * `mayRaise` — the rule that a short all-in below the minimum does not reopen the action
- * to a seat that has already acted at that level — depends on `lastFullRaiseBetLevel` and
- * `lastActedAtBetLevel`, neither of which survives into a description of a spot. So this
- * function can be too generous by exactly that one case, and a caller that can supply the
- * engine's list should. It is never too generous in the case this fix is about, and it is
- * never *stricter* than the engine either, so nothing legal is withheld from a learner.
+ * The actions the betting rules allow in a described spot. The engine's `legalActions` is the authority
+ * wherever a `HandState` exists. This serves the calculator, Scenario Lab, hand review and profile
+ * comparison, which have none.
+ * - `fold` always. `check` when `toCall === 0`, else `call`.
+ * - `bet`/`raise` only when some opponent has chips behind, or fold equity would be charged against an
+ *   opponent who cannot fold.
+ * - `bet` when the bet level is 0, else `raise`. A big blind in a limped pot cannot bet.
+ * - Only when `maxTo > betLevel`, so a short stack may still shove below the minimum.
+ * `mayRaise` (a short all-in does not reopen the action) cannot be derived, so this can be too generous
+ * in that one case. It is never stricter than the engine.
  */
 export function deriveLegalActions(spot: DescribedSpot): readonly CoachAction[] {
   const actions: CoachAction[] = ['fold'];
@@ -178,74 +92,32 @@ export function deriveLegalActions(spot: DescribedSpot): readonly CoachAction[] 
   return actions;
 }
 
-/**
- * A described spot, plus the chips it says are in the middle.
- *
- * Separate from `DescribedSpot` for the same reason `SizedSpot` is: which action kinds the
- * rules allow does not depend on the pot, and `deriveLegalActions` should not start asking
- * for a figure it never reads. `CoachInput` satisfies this structurally.
- */
+/** A described spot plus the pot, kept apart from `DescribedSpot` for the same reason as `SizedSpot`. */
 export interface PricedSpot extends DescribedSpot {
   /** Chips in the middle, excluding hero's pending call. */
   readonly pot: number;
 }
 
 /**
- * The pot hero can win in a spot that has been *described* rather than dealt. **A
- * derivation, and the engine is the authority wherever seat states exist.**
- *
- * Read that as a rule about callers. `contestablePotFor(...)` in `@prl/poker-engine` asks
- * `buildPotLayers` about the real table and sums, over every opponent, the chips above
- * hero's reach. Anyone holding a `PlayerView`, a `HandState` or a replay of one passes
- * that. This exists for the two surfaces that genuinely have no seat states — the ad-hoc
- * calculator (`POST /math/coach`) and the profile comparison — because the alternative
- * they used to get was the whole middle.
- *
- * ## What is derived, and from which rule
- *
- * A described spot states one price, `toCall`, and one stack, `heroStack`. What it therefore
- * establishes is beyond hero's reach is `toCall - heroStack`: the part of the bet facing hero
- * that hero's stack cannot cover, which is in `pot` and which no call hero can make will ever
- * win. Everything else in `pot` is left contestable.
- *
- * ## What cannot be derived, and what that costs
- *
- * Whether a *second* opponent also has chips above hero's reach. Multiway, the real excess
- * is a sum over opponents (see `contestablePotFor`), and a description carries no per-seat
- * commitments to sum. So this is exact heads-up — where one opponent is the only opponent
- * there is — and can leave a second opponent's excess in the pot multiway, understating
- * the price by that much. It is never *worse* than the whole middle, and it is never
- * wrong in the other direction: it cannot subtract chips that are not above hero's reach.
- *
- * The honest fix for a multiway described spot is per-seat commitments in the request, not
- * a guess here. Until a caller has them, a caller that can supply seat states should.
+ * The pot hero can win in a described spot. `contestablePotFor` in `@prl/poker-engine` is the authority
+ * wherever seat states exist.
+ * It removes `toCall - heroStack`, the part of the bet hero's stack cannot cover. Exact heads-up.
+ * Multiway it can leave a second opponent's excess in the pot, but it never subtracts chips within
+ * hero's reach.
  */
 export function deriveContestablePot(spot: PricedSpot): number {
   const beyondReach = Math.max(0, spot.toCall - spot.heroStack);
   return Math.max(0, spot.pot - beyondReach);
 }
 
-/**
- * The level in force on this street: what hero would have out there after calling.
- *
- * One expression, named once, because three separate places compare a size against it and
- * `heroCommittedThisStreet + toCall` written out by hand is indistinguishable from
- * `heroCommittedThisStreet + heroStack` at a glance.
- */
+/** The street level after calling. Named once because it reads like `maximumTo` at a glance. */
 function betLevelOf(spot: DescribedSpot): number {
   return spot.heroCommittedThisStreet + spot.toCall;
 }
 
 /**
- * The largest street total hero can reach: everything already out plus everything behind.
- *
- * The engine's `maxTo`, and the ceiling every published size is clamped to. Exported because
- * the ceiling is not only a fact about what the Coach may *publish*: whoever accepts a size
- * from a learner has to hold it to the same figure, and a second hand-written
- * `heroCommittedThisStreet + heroStack` somewhere else is how the two drift apart.
- *
- * Note which stack this is. `heroStack` is chips BEHIND, so this is a total, not a doubling of
- * anything hero has already committed.
+ * The engine's `maxTo`, which every published size is clamped to. Exported so code that accepts a size
+ * from a learner holds it to the same figure. `heroStack` is chips behind, so this is a total.
  */
 export function maximumTo(spot: DescribedSpot): number {
   return spot.heroCommittedThisStreet + spot.heroStack;
@@ -260,142 +132,46 @@ export interface CoachInput {
   /** Chips in the middle, excluding hero's pending call. Every chip, contestable or not. */
   readonly pot: number;
   /**
-   * The part of `pot` hero could actually win. **Required, and required for a reason.**
-   *
-   * Equal to `pot` in every ordinary spot. It differs when hero is all-in for less than
-   * the bet in front of them: the part of that bet hero's stack does not reach is a side
-   * pot hero is not eligible for, and pricing the call against it prices a pot hero
-   * cannot win.
-   *
-   * Measured through the real engine, heads-up at 5/10 with hero holding 40 and villain
-   * shoving 310 — `potTotal 320`, `amountToCall 30`, the engine's own layers an 80-chip
-   * main pot both seats can win and a 270-chip side pot only villain can. The Coach
-   * quoted "the pot is laying you 10.7 to 1, so you need 8.6% to break even" and priced
-   * the call at **+82.8 chips**. The price is 30 into 80: **1.67 to 1, 37.5%**, and the
-   * call is worth **-4.2**. The requirement was understated 4.4x and a losing call was
-   * headlined as the suggestion. It corrupted grading too: `judgeConsistency` scored a
-   * learner's correct fold as an 82.8-chip error and wrote `matched_expected: false`.
-   * It is not a rare shape. `packages/poker-engine/test/invariants.test.ts` plays 4,000
-   * random hands at 2-6 seats and mixed depths and reports it: 5,793 decision points had
-   * a call the engine capped, 5,650 of those left chips beyond hero's reach, and the worst
-   * understated the equity a call needs by 271x.
-   *
-   * ## Why it is required rather than optional
-   *
-   * An optional field defaulting to `pot` is the defect, spelled as a default. The next
-   * caller — and there have been five — would silently reintroduce it by not thinking
-   * about it, which is exactly how `legalActions` came to be absent on four of five
-   * surfaces. A caller holding seat states computes it with `contestablePotFor` in
-   * `@prl/poker-engine`, which asks `buildPotLayers` rather than re-deriving the layering
-   * rule. A caller that only has a *described* spot passes `deriveContestablePot`, and
-   * that function's doc says what a description can and cannot establish.
-   *
-   * `validate` refuses a value above `pot`, and refuses any subtraction at all while
-   * `toCall < heroStack` — a hero who can cover the bet leaves nothing above their reach,
-   * so a report that claims otherwise has a caller computing this against the wrong spot.
+   * The part of `pot` hero could win. It differs from `pot` when hero is all-in for less than the bet,
+   * because the uncovered part is a side pot hero cannot win. Heads-up at 5/10, hero calling 40 into a
+   * 310 shove was priced at +82.8 chips. The truth is 30 into 80, 37.5%, -4.2. `invariants.test.ts` in
+   * the engine finds 5,650 such spots in 4,000 random hands.
+   * Required, because a default of `pot` is the defect. Seat-state callers use `contestablePotFor`, and
+   * described spots use `deriveContestablePot`. `validate` refuses a value above `pot`, and any
+   * subtraction while `toCall < heroStack`.
    */
   readonly contestablePot: number;
   /** What hero must add to continue. 0 when hero can check. */
   readonly toCall: number;
   /**
-   * Chips hero has ALREADY put out on this street — a posted blind, an earlier bet on
-   * this street that has since been raised, a limp.
-   *
-   * Required, and required for a reason. The engine's `to` is a seat's *total* street
-   * commitment, so a raise's total is `heroCommittedThisStreet + toCall + raiseBy`.
-   * Without this field that total is not computable, and the Coach used to guess it as
-   * `toCall + raiseBy` — which is right only when hero has nothing out there yet, and
-   * silently publishes a size the table would reject the rest of the time. Making the
-   * caller state it is the difference between a report that is correct by construction
-   * and one that is correct when the caller happens to have pre-adjusted its inputs.
-   *
-   * It is 0 in the ordinary postflop case: hero has not acted on this street and faces
-   * a bet.
+   * Chips hero has ALREADY put out on this street (a blind, a raised bet, a limp). Required, because the
+   * engine's `to` is a total, `heroCommittedThisStreet + toCall + raiseBy`. 0 in the usual postflop case.
    */
   readonly heroCommittedThisStreet: number;
   /**
-   * Chips hero has BEHIND: what is left to put in, not counting
-   * `heroCommittedThisStreet` and not counting anything carried in from earlier streets.
-   *
-   * Spelled out because two invariants read it and a reviewer has already misread it
-   * once. Hero's whole street total is `heroCommittedThisStreet + heroStack` — the
-   * `maxTo` every size is clamped to — and no candidate may cost more than `heroStack`
-   * on its own. Read this as a starting stack instead and both of those become
-   * double-counts.
+   * Chips hero has BEHIND, not counting `heroCommittedThisStreet` or earlier streets. Hero's street total
+   * is `heroCommittedThisStreet + heroStack`, and no candidate may cost more than `heroStack`.
    */
   readonly heroStack: number;
   /** Chips BEHIND for each opponent still in the hand, on the same reading. */
   readonly opponentStacks: readonly number[];
   readonly bigBlind: number;
   /**
-   * The engine's own minimum legal total for a bet or raise here — `legalActions`'
-   * `minTo`, equivalently `minimumRaiseTo(state)`.
-   *
-   * Optional because two callers legitimately have no hand state: the ad-hoc
-   * calculator describes a spot rather than a table, and a profile comparison
-   * reconstructs one. When it is absent the Coach derives a floor from the betting
-   * rules that is never below the engine's — see `minimumAggressiveTo`. When it is
-   * present the engine is the single authority and no derivation happens at all.
+   * The engine's `minTo` for a bet or raise here. Absent for callers with no hand state, and the Coach
+   * then derives a floor never below the engine's (`minimumAggressiveTo`). Present, it is the authority.
    */
   readonly minimumRaiseTo?: number;
   /**
-   * The action *kinds* the engine says hero may take at this exact decision point —
-   * `legalActions(state, seat).map(entry => entry.type)`.
-   *
-   * The Coach may publish nothing outside this set. Legality is not a property of the
-   * pot and the price alone: the engine withholds `bet`/`raise` when no opponent has
-   * chips behind (nobody could call it), and again when the last increase was a short
-   * all-in and hero has already acted at that level (`mayRaise`), and it returns an empty
-   * list altogether once betting is closed for the hand. The old `if (maxRaiseBy > 0)`
-   * guard could see none of them, and published raises the table refuses — measured: a
-   * spot where every live opponent was all-in, the engine offering `fold, call`, and the
-   * Coach recommending "raise to 80-100" as its highest-EV line.
-   *
-   * Of those three, the first is recoverable from a described spot and the other two are
-   * not, which is what `deriveLegalActions` does and does not claim. Pass this whenever
-   * there is a `HandState` or a `PlayerView` to read it from; the derivation is the
-   * fallback for callers that have neither, not an equal alternative.
-   *
-   * ## Absent means "there is no engine to ask", never "everything is permitted"
-   *
-   * This field used to be filtered with `input.legalActions === undefined ||
-   * input.legalActions.includes(action)`, so an absent list disabled the guard
-   * completely. `CoachTask` — the wire type behind the Scenario Lab, the hand review,
-   * the profile comparison and `POST /math/coach` — had no field to put one in, so four
-   * of the five surfaces analysed with the guard off. Measured on the shipped Scenario
-   * Lab: two scenarios headlined an all-in raise, at `reasonable` confidence, priced
-   * with 35% fold equity against an opponent holding no chips behind and therefore
-   * unable to fold. A guard that is skipped whenever it is not handed its input is not a
-   * guard, and it inverts ADR 0003, which exists to make this class of type fail closed.
-   *
-   * So absence is now answered by `deriveLegalActions`, which applies the betting rules a
-   * described spot does determine — including the one that was being violated. There is
-   * no code path left that treats an action as permitted merely because nobody said
-   * otherwise.
-   *
-   * Every caller now supplies one: the live table from the engine's own
-   * `legalActions(state, seat)`, and the four describing callers — the Scenario Lab, the
-   * hand review, `POST /math/coach` and the profile comparison — from
-   * `deriveLegalActions`. `CoachTask.legalActions` is required, so the wire cannot lose it.
-   *
-   * It stays optional *here* deliberately, and the distinction matters: absence is
-   * answered by `deriveLegalActions`, which is conservative, not permissive. Making the
-   * field required would move the failure to compile time for first-party callers while
-   * removing the safety net for anyone constructing an input directly — and it would
-   * delete the two tests that prove the absent case still withholds a raise nobody could
-   * call. A guard that holds when its input is missing is worth more than a signature
-   * that forbids the input from being missing.
-   *
-   * An empty array is rejected rather than producing an empty report: when the engine
-   * offers nothing there is no decision to analyse, and a report whose every candidate
-   * is illegal teaches worse than no report at all.
+   * The action kinds the engine offers here, `legalActions(state, seat).map(entry => entry.type)`.
+   * Nothing outside it is published. The engine also withholds a raise after a short all-in
+   * (`mayRaise`) and offers nothing once betting closes, which a described spot cannot show.
+   * Absent means there is no engine to ask, and `deriveLegalActions` answers. It never means everything
+   * is permitted (ADR 0003). That reading once let four of five surfaces headline an all-in raise with
+   * 35% fold equity against an opponent who could not fold.
+   * Optional so a direct caller still gets the conservative derivation. An empty array is rejected.
    */
   readonly legalActions?: readonly CoachAction[];
-  /**
-   * How often hero's aggressive line is assumed to win uncontested. Used only for the
-   * bet/raise candidates, and reported as an assumption because it is an input, not a
-   * measurement — nothing here can know how often a real opponent folds.
-   */
+  /** How often a bet or raise is assumed to win uncontested. An input, so it is reported as an assumption. */
   readonly assumedFoldEquity?: number;
   /** Caps Monte Carlo work when the exact path does not fit. */
   readonly samples?: number;
@@ -433,19 +209,15 @@ function validate(input: CoachInput): void {
     }
   }
   if (input.bigBlind === 0) throw new CoachError('bigBlind must be positive');
-  // The two halves of the pot, checked in both directions, because a caller that gets this
-  // wrong publishes a price rather than an error.
+  // Checked both ways, because a wrong caller publishes a wrong price rather than an error.
   if (input.contestablePot > input.pot) {
     throw new CoachError(
       `contestablePot ${input.contestablePot} is above the ${input.pot} in the middle — it is the ` +
         'part of the pot hero can win, never a pot of its own',
     );
   }
-  // The negative control, in the code. Hero can only be shut out of chips by failing to
-  // cover the bet, and `toCall` is capped at `heroStack` by every caller that has an
-  // engine to cap it — so a strict inequality here means hero covers the bet in full and
-  // nothing in the middle is beyond reach. A subtraction in that case is a caller pricing
-  // one spot with another spot's side pot.
+  // Hero is shut out of chips only by failing to cover the bet. A subtraction here means a caller
+  // priced this spot with another spot's side pot.
   if (input.toCall < input.heroStack && input.contestablePot !== input.pot) {
     throw new CoachError(
       `contestablePot ${input.contestablePot} is below the ${input.pot} in the middle while hero can ` +
@@ -453,11 +225,7 @@ function validate(input: CoachInput): void {
         'for less leaves nothing above their reach, so there is no side pot to subtract.',
     );
   }
-  // A supplied minimum has to be a total in the same "raise to" units the engine uses,
-  // and any legal raise is strictly above the level in force. A figure at or below it
-  // is not a stricter floor, it is a different quantity — most likely an increment
-  // passed where a total was wanted, which would put every emitted size below the
-  // minimum again.
+  // A minimum at or below the bet level is most likely an increment passed where a total was wanted.
   const betLevel = betLevelOf(input);
   const minimum = input.minimumRaiseTo;
   if (minimum !== undefined) {
@@ -469,8 +237,7 @@ function validate(input: CoachInput): void {
     }
   }
   if (input.toCall > input.heroStack) {
-    // Not an error — a short stack facing a bigger bet is normal. The call is simply
-    // capped at the stack, which is what the engine does too.
+    // Not an error. A short stack's call is capped at the stack, as the engine does.
   }
   const legal = input.legalActions;
   if (legal !== undefined) {
@@ -481,11 +248,8 @@ function validate(input: CoachInput): void {
           'report whose every candidate is illegal is worse than no report.',
       );
     }
-    // A list that disagrees with `toCall` is a caller that has paired a stale action
-    // list with a fresh spot (or the reverse). Silently filtering against it would
-    // drop the one candidate hero actually has, so it is an error rather than a
-    // preference. Both directions are checked because both have to be wrong for a
-    // mismatch to be harmless, and neither is.
+    // A list that disagrees with `toCall` is stale, and filtering against it would drop hero's real
+    // option. Both directions are errors.
     if (input.toCall === 0 && legal.includes('call')) {
       throw new CoachError(
         'legalActions offers "call" with nothing to call — the action list and the spot describe ' +
@@ -507,13 +271,7 @@ function validate(input: CoachInput): void {
   }
 }
 
-/**
- * Why the rule of 2 and 4 does not apply here, or `null` when it does.
- *
- * Three separate ways the shortcut stops meaning anything, kept apart because each one
- * gets a different sentence in front of the learner. It is a shortcut for *a draw with
- * clean outs still to come*, and every clause below is one of those words failing.
- */
+/** Why the rule of 2 and 4 does not apply, or `null` when it does. Each kind gets its own sentence. */
 export type RuleOfThumbRefusal =
   | { readonly kind: 'no-cards-to-come' }
   | { readonly kind: 'already-ahead'; readonly equityNow: number }
@@ -525,17 +283,8 @@ export function ruleOfThumbRefusalFor(
   cardsToCome: 1 | 2 | null,
 ): RuleOfThumbRefusal | null {
   if (outs === null || cardsToCome === null) return { kind: 'no-cards-to-come' };
-  // "Drawing" is defined with the same yardstick `computeOuts` uses to decide whether a
-  // CARD is an out: a card counts once it puts hero at or above `aheadThreshold`. A hand
-  // already there does not need one. Using one threshold for both halves is what stops
-  // the two definitions drifting into contradiction — the state the panel was in, where
-  // a hand with 45 "outs" was 100% to win and the shortcut called it 180%.
-  //
-  // Asked through `outs.refusal` rather than by re-testing `equityNow` against the
-  // default threshold, which is what this line used to do. The result already carries the
-  // answer, computed against the thresholds THAT result was actually produced with — so a
-  // caller who moved `aheadThreshold` can no longer end up with a shortcut that thinks
-  // hero is drawing and an outs count that says hero is not.
+  // "Drawing" uses the threshold `computeOuts` uses for an out, read from `outs.refusal` so a moved
+  // `aheadThreshold` cannot split them. Two thresholds once called a 100%-to-win hand 180%.
   if (outs.refusal !== null) {
     return { kind: 'already-ahead', equityNow: outs.refusal.equityNow };
   }
@@ -548,90 +297,20 @@ export function ruleOfThumbRefusalFor(
 }
 
 /**
- * The rule-of-2-and-4 figure, or `null` where the shortcut cannot mean anything.
- *
- * ## Units: this publishes a FRACTION
- *
- * `EquitySummary.ruleOfThumb.estimate` is a probability in 0..1, exactly like
- * `heroEquity`, `breakEvenEquity`, `potShareIfCalled` and every other probability that
- * crosses this contract; `errorPoints` beside it stays in percentage POINTS, as its
- * name says. That boundary used to sit in the other place — the producer emitted 36 and
- * `@prl/ui`'s `formatPercent` multiplied by 100 again — and the shipped panel told
- * learners a flush draw was "3,600.0%". The bug was not the multiplication. It was a
- * field called `estimate`, typed `number`, that could equally have been either, so
- * nothing on either side of the wire was wrong to assume what it assumed.
- *
- * The field name cannot carry the unit (it is declared in `@prl/contracts` and read by
- * fixtures outside this package), so the unit is carried here instead: `ruleOf24`
- * returns POINTS in a field spelled `estimatePercent`, this function converts once,
- * through a named local, and `assertProbabilityFraction` refuses to publish anything
- * outside 0..1. A regression is a loud `CoachError` rather than a four-figure
- * percentage on an authoritative-looking panel.
- *
- * ## Clean outs only
- *
- * The shortcut's own explanation tells the reader to count clean outs only — "a card
- * that improves hero but hands an opponent a better hand at the same time is not an
- * out". The Coach used to pass `totalOuts`, clean plus dirty, and so contradicted the
- * sentence printed directly underneath it. It passes `cleanCount` now.
- *
- * ## What it is compared against
- *
- * The exact figure is `probabilityOfHitting(cleanOuts, unseen, cardsToCome)` — the true
- * chance of one of those same clean cards arriving — not hero's equity. They are
- * different quantities: equity is the chance of *winning*, which differs from the
- * chance of *hitting* by everything the dirty outs and the run-down represent. Measured
- * against equity, `errorPoints` mixed the shortcut's own error with that gap and
- * reported the sum as though the shortcut were responsible for all of it. Against the
- * hit probability it is the shortcut's error and nothing else, which is the figure a
- * learner needs to decide whether to trust it at the table.
- *
- * ## …and out of WHICH cards, which is the same question asked twice
- *
- * "The shortcut's error and nothing else" is a promise about the denominator as much as
- * about the numerator, and this function used to break it. It derived the unseen count
- * from the street — `52 - 2 - (5 - cardsToCome)`, so 47 on the flop — while
- * `computeOuts` had counted those same outs out of `cardsConsidered`, which is 45 when
- * the opponent is a known hand, because two of the cards the shortcut was dividing by
- * are face down in front of the opponent and cannot come.
- *
- * The report then carried both denominators for one event, three paragraphs apart: "Of
- * the 45 cards that can come next, 8 are clean…" beside "Two cards to come, 8 outs, 47
- * cards unseen … = 31.5%". Worse than untidy, it inverted the teaching point. Measured
- * against 9s8s on 7s6d2c facing exactly AhAd: the shortcut's 32% was published as
- * **overstating by 0.55 points**, when conditional on the very model that produced those
- * 8 outs the exact figure is `1 - (37/45)(36/44)` = 32.727% and the shortcut
- * **understates by 0.73**. The stated direction of the error — the one thing a learner
- * takes away from an error bar — was wrong, and the denominator mismatch it came from
- * was larger than the error being reported.
- *
- * So `unseen` is now `outs.cardsConsidered`: the card set the outs were literally
- * counted from, carried on the result rather than re-derived here. Re-deriving it is the
- * defect; there is no arithmetic in this function that could notice the two disagreeing,
- * because both were valid probabilities and `assertProbabilityFraction` only bounds
- * 0..1. Passing the same number to both halves is the only thing that makes them the
- * same question.
- *
- * `cardsConsidered` also absorbs, for free, the two smaller cases that had the same
- * shape: `deadCards`, and the cards `computeOuts` skips because every combination left
- * in the range uses them. Both shrink the set a card can actually come from, and both
- * used to be divided away.
- *
- * The bound this relies on: `cardsConsidered` is at least 45 on the flop and 44 on the
- * turn, and the two subtractions cannot both apply. Either the range is a single
- * combination, and those two cards are removed while nothing can be skipped (every
- * remaining card leaves that combination legal), or the range is wider, nothing is
- * removed, and at most two cards can be skipped — a skipped card is one that EVERY
- * remaining combination uses, and two cards is all a two-card hand has. A caller passing
- * `deadCards` to `computeOuts` shrinks it further; the Coach passes none, and even a
- * pathological dead list leaves the count far above `cardsToCome`. So
- * `probabilityOfHitting`'s guards on `unseen` cannot fire from here.
+ * The rule-of-2-and-4 figure, published as a fraction in 0..1. `ruleOf24` returns points in
+ * `estimatePercent`, this converts once, and `assertProbabilityFraction` refuses anything else. The
+ * producer once emitted 36 and the panel showed a flush draw as "3,600.0%".
+ * It counts clean outs only, as the shortcut's own explanation says.
+ * It is compared with `probabilityOfHitting`, not equity, so `errorPoints` is the shortcut's error alone.
+ * `unseen` is `outs.cardsConsidered`, the set the outs were counted from. Deriving 47 from the street
+ * against a known hand (45 cards) reversed the error's sign. 9s8s on 7s6d2c against AhAd showed the
+ * shortcut's 32% overstating by 0.55, when it understates `1 - (37/45)(36/44)` = 32.727% by 0.73.
+ * `cardsConsidered` is at least 45 on the flop and 44 on the turn. A single-combo range removes two
+ * cards and skips none, and a wider one removes none and skips at most two. So the guards in
+ * `probabilityOfHitting` on `unseen` cannot fire from here.
  */
 function buildRuleOfThumb(outs: OutsResult, cardsToCome: 1 | 2): NonNullable<EquitySummary['ruleOfThumb']> {
-  // The cards this spot's outs were counted out of, taken from the result that counted
-  // them. Not `DECK_SIZE - 2 - (5 - cardsToCome)`, which is what this line used to be:
-  // that is 47 on the flop whatever the spot, and against a known opponent hand the outs
-  // beside it had been counted out of 45. See the "out of WHICH cards" note above.
+  // The set the outs were counted from, not 47 derived from the street.
   const unseen = outs.cardsConsidered;
   const exact = probabilityOfHitting(outs.cleanCount, unseen, cardsToCome);
   const accuracy = ruleOf24Accuracy(outs.cleanCount, cardsToCome, exact.probability);
@@ -653,19 +332,8 @@ function buildRuleOfThumb(outs: OutsResult, cardsToCome: 1 | 2): NonNullable<Equ
 }
 
 /**
- * The rule-of-2-and-4 figure for a spot, or `null` where the shortcut cannot mean
- * anything. **The only way anything outside this file may compute it.**
- *
- * Exported because there are two producers of this figure — the Coach, and
- * `@prl/content`'s scenario analysis — and they had two copies of the same mistake:
- * both multiplied `totalOuts`, clean plus dirty, by 2 or 4 and published the result
- * whatever it came to. `@prl/content` had a shipped scenario that came out at
- * **47 x 4 = 188%**. One gate, one definition, both callers behind it, so the next
- * producer inherits the fix instead of the bug.
- *
- * `ruleOf24` itself now refuses an out count whose multiple exceeds 100, so a caller
- * that skips this function gets a loud `OddsError` rather than a four-figure percentage.
- * This is the function that turns that refusal into an answer a report can carry.
+ * The rule-of-2-and-4 figure, or `null` where the shortcut means nothing. The only way outside this file
+ * to compute it. The Coach and `@prl/content` once each multiplied total outs and shipped 47 x 4 = 188%.
  */
 export function ruleOfThumbFor(
   outs: OutsResult | null,
@@ -676,10 +344,7 @@ export function ruleOfThumbFor(
   return buildRuleOfThumb(outs, cardsToCome);
 }
 
-/**
- * The invariant the whole unit boundary rests on. A probability that is not one is a
- * bug in this file, and it says so rather than travelling to a panel.
- */
+/** A probability outside 0..1 is a bug in this file, and it throws instead of reaching a panel. */
 function assertProbabilityFraction(value: number, what: string): void {
   if (!Number.isFinite(value) || value < 0 || value > 1) {
     throw new CoachError(
@@ -697,8 +362,7 @@ function buildEquitySummary(
   const hero = result.players[0];
   if (hero === undefined) throw new CoachError('equity result has no hero');
 
-  // The rule of 2/4 is a teaching aid, so show it *with* its actual error rather than
-  // presenting the shortcut as if it were the figure — and only where it has one.
+  // Shown with its actual error, and only where it has one.
   const ruleOfThumb = ruleOfThumbFor(outs, cardsToCome);
 
   return {
@@ -728,15 +392,7 @@ function buildOutsBreakdown(outs: OutsResult | null): OutsBreakdown | null {
   };
 }
 
-/**
- * The sentence a learner needs when the chips in front of them are not the chips they are
- * playing for, or `''` when the two are the same thing.
- *
- * Never silent. A panel that quietly prices 30 into 50 while 320 sits in the middle has
- * given the reader two numbers that cannot both be right and no way to tell which is. The
- * side pot is named, its size is stated, and the reason hero cannot win it is stated —
- * because "you are all-in for less" is the whole lesson of the spot.
- */
+/** Names the side pot hero cannot win, or `''` when the whole pot is contestable. Never silent. */
 function sidePotNote(pot: number, contestablePot: number, toCall: number): string {
   const beyondReach = pot - contestablePot;
   if (beyondReach <= 0) return '';
@@ -749,26 +405,8 @@ function sidePotNote(pot: number, contestablePot: number, toCall: number): strin
 }
 
 /**
- * The price hero is being laid, against the pot hero can win.
- *
- * `PotOddsSummary.pot` is that contestable figure and not the whole middle — the price and
- * the pot it is a price *into* have to be the same pot, or the ratio is a ratio of two
- * different things. `CoachReport.potTotal` carries the whole middle beside it, so a caller
- * that wants to show both has both and neither has to be re-derived.
- */
-/**
- * Whether hero's equity beats the price, said in the right direction.
- *
- * WHY THIS IS A FUNCTION. It used to be one template with only the last word conditional:
- * "You clear that with X% equity, a Y point ${ok ? 'surplus' : 'shortfall'}". The lead clause was
- * not conditional and neither was the sign of Y, so a hero who missed the price read
- *
- *     "You clear that with 0.0% equity, a -24.3 point shortfall."
- *
- * — the opposite of the fact, followed by a negated negative. Twelve of the thirty-six Lab
- * scenarios rendered it, `fl-top-pair-weak-kicker-river` among them, where hero has no equity at
- * all. A verdict word appended to a sentence that has already asserted the verdict cannot fix it;
- * the sentence has to be chosen, so it is chosen here.
+ * Chooses the whole sentence by direction. A fixed lead clause once told twelve of thirty-six Lab
+ * scenarios "You clear that with 0.0% equity, a -24.3 point shortfall."
  */
 function describePriceGap(heroEquity: number, breakEvenEquity: number): string {
   const points = (Math.abs(heroEquity - breakEvenEquity) * 100).toFixed(1);
@@ -778,6 +416,10 @@ function describePriceGap(heroEquity: number, breakEvenEquity: number): string {
     : `You do not clear that: ${equity}% equity is ${points} points short of it.`;
 }
 
+/**
+ * `PotOddsSummary.pot` is the contestable pot, so the price and the pot it is into are the same pot.
+ * `CoachReport.potTotal` carries the whole middle beside it.
+ */
 function buildPotOddsSummary(
   pot: number,
   contestablePot: number,
@@ -801,8 +443,7 @@ function buildPotOddsSummary(
 
 function buildStackContext(input: CoachInput): StackContext {
   const effective = effectiveStack(input.heroStack, input.opponentStacks);
-  // SPR is undefined with an empty pot; preflop before blinds is the only case, and
-  // the Coach is never asked for one there.
+  // SPR is undefined with an empty pot, which only happens preflop before blinds.
   const pot = Math.max(1, input.pot);
   const spr = stackToPotRatio(effective.effective, pot);
   const potSizedPrice = priceLaidByBet(pot, pot);
@@ -815,54 +456,13 @@ function buildStackContext(input: CoachInput): StackContext {
 }
 
 /**
- * The smallest total a bet or raise may legally reach here, in the engine's `to` units.
- *
- * When the caller has a hand state it passes the engine's own figure and this returns
- * it unchanged: `legalActions` is the single definition of "legal" and nothing here is
- * entitled to a second opinion.
- *
- * Without one, the floor is derived from the two rules that fix it — and derived so
- * that it can never land *below* the engine's. The engine's minimum is
- *
- *     betLevel + max(lastFullRaiseIncrement, bigBlind)
- *
- * and `lastFullRaiseIncrement` is not knowable from a described spot. But it is always
- * at most `toCall`: hero's own street commitment can never exceed the bet level that
- * was in force before the last complete raise (hero either matched that level or set
- * it), so `increment = betLevel - previousLevel <= betLevel - heroCommitted = toCall`.
- * Substituting `toCall` for the unknown increment therefore gives a floor at or above
- * the real one — legal in every case, and exactly equal in the ordinary one where the
- * bet faced *is* the last raise. On a street where nobody has bet, `betLevel` and
- * `toCall` are both 0 and the expression collapses to one big blind, which is the
- * engine's minimum opening bet.
- *
- * Erring upward is the only safe direction *for what gets published*. A floor that is too
- * low publishes a size the table rejects; a floor that is too high publishes a legal size
- * that is larger than it strictly had to be, and says so in chips a learner can read. Be
- * aware that the direction inverts for a caller that uses this to *refuse* a size — see
- * below.
- *
- * ## The all-in clamp is part of the floor, not part of the caller
- *
- * A stack that cannot reach the minimum may still shove: a short all-in is a legal
- * (incomplete) raise, and `legalActions` allows it for exactly that reason. That clamp used
- * to live at the one call site, which was fine while there was one call site. There is now a
- * second — `apps/api/src/routes/content.ts` holds a learner's submitted size to this same
- * floor before grading it — and a floor whose callers have to remember to clamp it is a floor
- * that will eventually refuse a legal shove.
- *
- * ## What a refusing caller is signing up for
- *
- * The derivation can sit *above* the engine's true minimum, in the one case the derivation
- * names: a spot where the bet hero faces is not itself the last full raise. A caller that
- * refuses everything below this floor therefore refuses, in that case, a size a real table
- * might have accepted. That is the right trade for the Scenario Lab — every spot there is a
- * described one facing a single bet, where the two figures coincide — but it is a refusal
- * with a stated number rather than a silent one, and it must stay that way: quoting the floor
- * back to the learner is what makes the rare over-strict case visible instead of mysterious.
- *
- * `minimumRaiseTo` removes the question entirely, which is why any caller holding a
- * `HandState` should pass it.
+ * The smallest legal bet or raise total, in the engine's `to` units. `minimumRaiseTo` wins when given.
+ * Otherwise `betLevel + max(toCall, bigBlind)`. The last full raise increment is unknown but at most
+ * `toCall`, because hero matched or set the level before it. So the floor is always legal, and exact
+ * when the bet faced is the last raise. Erring upward is the safe direction for what gets published.
+ * The all-in clamp lives here because `apps/api/src/routes/content.ts` holds a learner's size to this
+ * floor too, and a short shove is legal. A caller refusing below this floor may refuse a size a real
+ * table accepts, so it must quote the floor back.
  */
 export function minimumAggressiveTo(spot: SizedSpot): number {
   const derived = spot.minimumRaiseTo ?? betLevelOf(spot) + Math.max(spot.toCall, spot.bigBlind);
@@ -870,36 +470,10 @@ export function minimumAggressiveTo(spot: SizedSpot): number {
 }
 
 /**
- * A raise's sizing note.
- *
- * The ladder's own note cannot be used for a raise: it reads "Risks {amount} to win
- * {pot}", which is true of a bet and false of a raise, where the risk also includes
- * the call. Getting that sentence wrong is how a mispriced raise hides in plain sight,
- * so the risk is stated by `evOfRaise` and this note carries the price the extra chips
- * lay a caller, which the ladder computes correctly.
- *
- * ## The defence frequency is recomputed here, and the ladder's is wrong for a raise
- *
- * `sizingLadder(potAfterCall, …)` calls `defenceFrequency(pot, betSize)`, which returns
- * `pot / (pot + betSize)` — the right answer for a BET, where the aggressor risks `betSize` to
- * win `pot` and the two are the whole story. A raise is not that shape. Raising by `r` while
- * facing `c` risks `c + r` to win the pot as it stood BEFORE hero called, which is exactly what
- * `evOfRaise` insists on and what this note used to contradict two clauses later.
- *
- * Handing the ladder `potAfterCall` makes it answer `(pot + c) / (pot + c + r)`, which counts
- * hero's own call as money hero wins when the opponent folds. Measured on a real report (pot 150,
- * toCall 50): a raise to 100 published 80.0% where the answer is 60.0%; a 950-chip shove
- * published 17.4% where the answer is 13.0%. Bisecting this package's own
- * `evOfRaise(..., equityWhenCalled: 0)` for the fold frequency at which EV is zero agrees with
- * the corrected figure to the digit, in all three cases.
- *
- * The published sentence reads "…has to continue with X% of their range for a raise of this size
- * not to print automatically", so an overstated X tells the learner to defend far wider than the
- * arithmetic requires. `priceLaidToCaller` in the same sentence was and is correct, which is why
- * the whole thing read plausibly.
- *
- * It is recomputed here rather than fixed in `defenceFrequency` because that function is right:
- * its parameters are a pot and a bet into it, and this is the caller that was passing a raise.
+ * A raise's sizing note. The ladder's "Risks X to win pot" is false for a raise.
+ * Minimum defence is `pot / (pot + c + r)` against the pot before the call. The ladder given
+ * `potAfterCall` counts hero's own call as winnings. At pot 150 and toCall 50, a raise to 100 showed
+ * 80.0% where the answer is 60.0%. `defenceFrequency` is right for a bet, so it stays as it is.
  */
 function raiseSizingNote(
   option: SizingOption,
@@ -928,13 +502,7 @@ function raiseSizingNote(
   );
 }
 
-/**
- * How each offered size is named in a derivation: the button a learner would press for it.
- *
- * Named after the control rather than after the fraction it works out to, because the fraction is
- * printed beside it and the two can differ — a preset is rounded to a whole chip, and one that
- * clamps to the floor or the stack is listed under the floor or the stack instead.
- */
+/** Named for the button, not the fraction, because presets round and clamp to the floor or the stack. */
 const SIZE_WORDS: Readonly<Record<OfferedSize['id'], string>> = {
   minimum: 'minimum',
   third: '⅓-pot',
@@ -952,66 +520,25 @@ function betSizeSentence(sizeId: OfferedSize['id']): string {
 }
 
 /**
- * Candidate actions with their expected value.
- *
- * EV is measured **relative to folding**, which is defined as zero. Chips already in
- * the pot are sunk and do not appear — including them is the arithmetic form of the
- * sunk-cost fallacy, and it makes every call look better than it is.
- *
- * ## A raise is not a bet, in three places at once
- *
- * The Coach used to price every aggressive line with `evOfBet` and label its total as
- * `toCall + increment`. That is three separate errors sharing one root — pretending
- * the money already on the table is not there:
- *
- *   1. **The EV.** Raising by `r` while facing `c` risks `c + r`, so the figure comes
- *      from `evOfRaise`, not `evOfBet`. Charging only `r` overstates every raise by
- *      `(1 - f) x c x (1 - e)` — most of all when hero is weakest.
- *   2. **The total.** `to` is a seat's whole street commitment, so it is
- *      `heroCommittedThisStreet + toCall + r`. Dropping the first term is what
- *      published raises the table would refuse.
- *   3. **The floor.** A raise must reach a minimum, so no size below it is offered at
- *      all — and the floor itself is, because it is what an untouched sizer sends and
- *      so exactly the size a learner is most likely to try.
- *
- * Which of a bet and a raise is on offer is decided by the bet level, not by `toCall`:
- * a big blind facing a limped pot owes nothing and still cannot *bet*, because there
- * is already a live bet — their own blind — on the table. `betLevel === 0` is the
- * engine's own test and it is the one used here.
- *
- * ## Legality is asked, never inferred
- *
- * Everything above prices actions correctly. It says nothing about whether they are
- * *available*, and three of the engine's rules are invisible from the pot and the price:
- * no bet or raise when every live opponent is all-in, none when a short all-in has closed
- * the action to a seat that already acted, and no action at all once betting is closed
- * for the hand. So when the caller has a hand state, `input.legalActions` carries the
- * engine's own answer and every candidate below is filtered through it. Without one the
- * filter is `deriveLegalActions` — the betting rules a described spot does determine —
- * and never an unconditional yes.
+ * Candidate actions with EV relative to folding, which is zero. Sunk chips do not appear.
+ * Raising by `r` facing `c` risks `c + r` (`evOfRaise`), and its total is
+ * `heroCommittedThisStreet + toCall + r`. The floor itself is offered, because an untouched sizer
+ * sends it. Bet versus raise follows the engine's `betLevel === 0`, not `toCall`.
+ * Every candidate passes `input.legalActions`, or `deriveLegalActions` when it is absent.
  */
 function buildCandidates(input: CoachInput, heroEquity: number, foldEquity: number): ActionCandidate[] {
   const candidates: ActionCandidate[] = [];
-  // One list, resolved once, and never an `undefined` short-circuit. The previous form was
-  // `input.legalActions === undefined || input.legalActions.includes(action)`, which reads
-  // as "the engine has not ruled it out" and behaves as "nobody asked, so yes" — the
-  // difference between those two is the whole defect. `deriveLegalActions` answers for the
-  // callers with no hand state; see its doc for what it can and cannot establish.
+  // Resolved once. An `undefined` short-circuit here once meant "nobody asked, so yes".
   const legal = input.legalActions ?? deriveLegalActions(input);
   const permitted = (action: CoachAction): boolean => legal.includes(action);
 
   const betLevel = betLevelOf(input);
   const isOpening = betLevel === 0;
 
-  // Every EV below is measured against `contestablePot`, never `pot`. They are the same
-  // number in every ordinary spot; where they differ, `pot` contains a side pot no line
-  // hero can take wins any of, so pricing against it prices a pot hero cannot reach. See
-  // `CoachInput.contestablePot` for the measurement.
+  // Every EV uses `contestablePot`, never `pot`. See `CoachInput.contestablePot`.
   const pot = input.contestablePot;
 
-  // Check first, then fold. The order is the ranking's first tiebreak (the sort below
-  // is stable), and when both are worth the same — a dead hand in an empty pot — the
-  // one that keeps the hand has to be the one that wins the tie.
+  // Check before fold. The sort is stable, so on a tie the line that keeps the hand wins.
   if (input.toCall === 0 && permitted('check')) {
     const check = evOfCheck({ pot, equity: heroEquity });
     candidates.push({
@@ -1019,9 +546,7 @@ function buildCandidates(input: CoachInput, heroEquity: number, foldEquity: numb
       cost: 0,
       ev: check.ev,
       derivation: check.derivation,
-      // No `potShareIfCalled`: nothing is being called, and the UI renders that field
-      // as "wins X% of the pot when called", which would be a sentence about an event
-      // that cannot happen.
+      // No `potShareIfCalled`, because nothing is called.
     });
   }
 
@@ -1040,8 +565,7 @@ function buildCandidates(input: CoachInput, heroEquity: number, foldEquity: numb
     const call = evOfCall({ pot, toCall: cappedCall, equity: heroEquity });
     candidates.push({
       action: 'call',
-      // The total this street, matching the engine: what is already out there plus
-      // what goes in now.
+      // The street total, matching the engine.
       to: input.heroCommittedThisStreet + cappedCall,
       cost: cappedCall,
       ev: call.ev,
@@ -1050,37 +574,19 @@ function buildCandidates(input: CoachInput, heroEquity: number, foldEquity: numb
     });
   }
 
-  // Aggressive candidates. `maxRaiseBy` is the increment an all-in would be: the whole
-  // stack goes out, and the part of it that merely matches the bet is not a raise.
+  // The increment an all-in would be. The part that matches the bet is not a raise.
   const maxRaiseBy = input.heroStack - input.toCall;
   if (maxRaiseBy > 0 && permitted(isOpening ? 'bet' : 'raise')) {
-    // Already clamped at `maximumTo` by `minimumAggressiveTo`, because a stack that cannot reach
-    // the minimum may still shove — a short all-in is a legal (incomplete) raise, and that is
-    // the clamp `legalActions` applies. It moved into the floor itself when a second caller
-    // appeared that has to hold a learner's submitted size to the same figure.
+    // Already clamped at `maximumTo`, because a short all-in is a legal incomplete raise.
     const floorTo = minimumAggressiveTo(input);
 
-    // Sizes are fractions of the pot as it stands *after* the call, which is both how
-    // a raise is described at a table and the pot the raise actually lays a price
-    // into. For an opening bet there is nothing to call and this is just the pot.
+    // Sizes are fractions of the pot after the call. For an opening bet that is the pot.
     const potAfterCall = Math.max(1, pot + input.toCall);
 
-    // The sizes the table's own bar offers — its default (the floor) and every preset —
-    // and no others. They used to be three rungs of `sizingLadder`, rounded down, while the
-    // bar offered a floor default and ⅓/½/⅔/pot presets rounded to the nearest chip, and a
-    // sized action is graded only on an exact match: over the 36 Lab scenarios the bar's
-    // default was unpriced in 23 of the 31 that offer aggression, and 97 of the sizes the
-    // bar offered by a button were sizes this table never priced. `offeredSizes` is the one
-    // definition both sides read. See `./table-sizing.ts`.
-    //
-    // Up to six rows rather than three. The extra rows are the sizes a learner can actually
-    // press, which is the only reason to price a size at all; on a short stack they clamp
-    // together and the table shrinks with them.
-    //
-    // Sized against `pot`, which is `contestablePot`. The bar sizes against the whole middle,
-    // and the two are equal wherever this branch runs: raising needs chips behind the call
-    // (`maxRaiseBy > 0`), so hero covers the bet and nothing in the middle is above hero's
-    // reach. `apps/web/test/lab-sizes-priced.test.ts` asserts the equality over the bundle.
+    // Exactly the sizes the bar offers, because a sized action is graded only on an exact match.
+    // A separate ladder once left the bar's default unpriced in 23 of 31 Lab scenarios.
+    // `pot` equals the whole middle here, because `maxRaiseBy > 0` means hero covers the bet.
+    // `apps/web/test/lab-sizes-priced.test.ts` asserts the equality.
     const offered = offeredSizes({
       bounds: { min: floorTo, max: maximumTo(input) },
       pot,
@@ -1139,23 +645,9 @@ function buildCandidates(input: CoachInput, heroEquity: number, foldEquity: numb
 }
 
 /**
- * No published row may cost more than hero has, or reach a total hero cannot reach.
- *
- * Both figures follow from the arithmetic above — the call is clamped at the stack, an
- * opening bet's ladder is capped at `heroStack`, and a raise's risk is
- * `toCall + raiseBy` with `raiseBy <= heroStack - toCall` — so this asserts rather than
- * clamps. That direction is deliberate. A clamp would quietly publish a *different*
- * action from the one it priced, and the EV, the derivation sentence and the size range
- * would all still describe the size the clamp discarded; a throw says the arithmetic
- * disagrees with itself and stops.
- *
- * ## The two quantities, because they are one word apart
- *
- * `cost` is chips leaving the stack for this action alone, so it is compared against
- * `heroStack` — chips BEHIND. `to` is the seat's whole commitment for the street, so it
- * is compared against `heroCommittedThisStreet + heroStack`, which is the same `maxTo`
- * the engine clamps a size to. Comparing either against the other's ceiling looks almost
- * right and is a double-count in one direction or a needless refusal in the other.
+ * Asserts rather than clamps, because a clamp would publish a different action from the one priced.
+ * `cost` is chips leaving the stack, compared with `heroStack`. `to` is the street total, compared
+ * with `maximumTo`.
  */
 function assertAffordable(candidates: readonly ActionCandidate[], input: CoachInput): void {
   const maxTo = maximumTo(input);
@@ -1177,13 +669,8 @@ function assertAffordable(candidates: readonly ActionCandidate[], input: CoachIn
 }
 
 /**
- * How a tie on EV is broken. Lower sorts later, so folding is last.
- *
- * Two actions worth the same number of chips are not equally good advice. Folding gives
- * up every future branch of the hand for exactly the same zero that checking pays for
- * keeping them, so on a tie it must lose — and a tie is reachable: `EV(check)` is
- * `equity x pot`, which is 0 for a hand drawing stone dead. Everything else keeps the
- * hand alive and is ranked above a fold on the same reasoning.
+ * Lower sorts later, so folding is last. A tie is reachable because `EV(check)` is 0 for a dead hand,
+ * and folding gives up the hand for the same zero.
  */
 const TIEBREAK_RANK: Readonly<Record<CoachAction, number>> = {
   raise: 4,
@@ -1200,20 +687,8 @@ function byExpectedValue(left: ActionCandidate, right: ActionCandidate): number 
 }
 
 /**
- * Picks the highest-EV candidate, then deliberately weakens the claim.
- *
- * Confidence is downgraded when the margin between the best and second-best action is
- * small relative to a big blind, or when the equity figure itself was sampled with a
- * wide interval. A decision that is nearly a coin-flip between two actions should not
- * be presented as a recommendation, and this is where that honesty is enforced.
- *
- * One thing this function is not allowed to conclude: **fold, while checking is free**.
- * That is the single action the engine, the lessons and the scenarios all agree can
- * never be right — nothing beats free — and it used to be reachable, because a check
- * was priced at a hard-coded 0 alongside a fold's 0 and a stable sort put fold first.
- * The fix is the arithmetic (`evOfCheck` prices a check at `equity x pot`, which is
- * never below zero) plus the tiebreak above; the assertion at the end is there because
- * an invariant nobody checks is a comment.
+ * Picks the highest-EV candidate, then weakens the claim when the margin is small against a big blind
+ * or the equity interval is wide. It may never conclude fold while checking is free, and asserts so.
  */
 function buildSuggestion(
   candidates: readonly ActionCandidate[],
@@ -1224,13 +699,8 @@ function buildSuggestion(
   const ranked = [...candidates].sort(byExpectedValue);
   const best = ranked[0];
   if (best === undefined) throw new CoachError('no candidate actions were produced');
-  // The next-best ACTION, not the next row. Several rows can share an action at different sizes,
-  // and since the Coach prices the bar's own sizes (`offeredSizes`) two of them can sit three chips
-  // apart — the floor and the ⅓-pot preset — and price within a chip of each other. Against
-  // `ranked[1]` that read as a near-indifferent decision: over the 36 Lab scenarios, 12 changed
-  // confidence when the sizes changed, nearly all at a same-action neighbour, and a raise two big
-  // blinds clear of folding was published as "only just — treat this as close to indifferent".
-  // How close two sizes of the chosen action are is what `sizeRange` below reports.
+  // The next-best action, not the next row. Two sizes of one action can price within a chip, which
+  // made 12 of 36 Lab scenarios read as indifferent. `sizeRange` reports how close sizes are.
   const second = ranked.find((candidate) => candidate.action !== best.action);
 
   if (input.toCall === 0) {
@@ -1253,14 +723,8 @@ function buildSuggestion(
   if (marginInBigBlinds < 0.25 || intervalPoints > 2) confidence = 'low';
   else if (marginInBigBlinds < 1 || intervalPoints > 0.75) confidence = 'moderate';
 
-  // The published range is a range of *defensible* sizes, which is what the words
-  // "size range" claim. It used to be the whole sizing ladder for the chosen action,
-  // top to bottom — a span whose upper end the Coach itself priced hundreds of chips
-  // below its lower end, printed as though anything inside it were fine. A size only
-  // belongs here if it is within the same one-big-blind indifference margin used just
-  // above to downgrade confidence: near enough to the best that the choice between
-  // them is not the decision being taught. Every size in it is a real candidate, so
-  // every size in it is one the table would accept.
+  // Only sizes within the one-big-blind margin of the best, so the range holds defensible sizes.
+  // It was once the whole ladder, whose top the Coach priced hundreds of chips below its bottom.
   const sizeMargin = input.bigBlind;
   const sameActionSizes = candidates
     .filter(
@@ -1289,9 +753,7 @@ function buildSuggestion(
     whatWouldChangeIt.push('Being raised is not modelled here, so treat the figure as optimistic.');
   }
   if (outs !== null && outs.dirtyCount > 0) {
-    // Two sentences for two different spots, because "N of your M outs are dirty" is
-    // false whenever `refusal` is set: there are no outs to be a fraction of. See the
-    // "When hero is already in front" section of `outs.ts`.
+    // "N of your M outs" is false when `refusal` is set, because there are no outs (see `outs.ts`).
     whatWouldChangeIt.push(
       outs.refusal === null
         ? `${outs.dirtyCount} of your ${outs.totalOuts} outs are dirty — they improve you without making you safe, so counting all of them would overstate your chances.`
@@ -1312,9 +774,7 @@ function buildSuggestion(
     whatWouldChangeIt.push('A different assumption about the opponent range would change the numbers.');
   }
 
-  // The action word opens the sentence, so it is capitalised, and the margin is in units, which is
-  // what every figure beside it on the panel says. Both read "raise has ... by 45.2 chips" under
-  // "225.1 UNITS" on /legends/compare.
+  // Capitalised to open the sentence, and in units to match every figure beside it on the panel.
   const actionWord = `${best.action.charAt(0).toUpperCase()}${best.action.slice(1)}`;
   const reason =
     confidence === 'low'
@@ -1377,19 +837,12 @@ function pluralCards(count: number): string {
   return `${count} ${count === 1 ? 'card' : 'cards'}`;
 }
 
-/**
- * Why the rule of 2 and 4 is missing from this report, in words a learner can use.
- *
- * Silence would be the second mistake: a panel that simply drops the shortcut teaches
- * nothing about *when* a shortcut stops working, which is the more valuable half of
- * knowing it at all. So every refusal says which word of "a draw with clean outs still
- * to come" failed here.
- */
+/** Why the rule of 2 and 4 is missing, naming which part of "a draw with clean outs to come" failed. */
 function refusalNote(refusal: RuleOfThumbRefusal | null): string | null {
   if (refusal === null) return null;
   switch (refusal.kind) {
     case 'no-cards-to-come':
-      return null; // Nothing to explain: there is no draw and no outs section either.
+      return null; // No draw and no outs section, so nothing to explain.
     case 'already-ahead':
       return (
         `No rule-of-2-and-4 figure here, deliberately: at ${(refusal.equityNow * 100).toFixed(1)}% you are ` +
@@ -1425,23 +878,11 @@ function buildTeachingNotes(
 ): string[] {
   const notes: string[] = [];
 
-  // Both halves of the condition are real. `toCall > 0` is what makes this note worth
-  // writing; `oddsRatio !== null` is what makes it *writable*, because a free call has
-  // no "X to 1" form at all. The two agree by construction — `buildPotOddsSummary` is
-  // handed this same `toCall` — but the null check is what stops a future caller who
-  // passes a different pair from rendering "Infinity to 1" or "null to 1" at a learner,
-  // which is exactly what the old `oddsRatio.toFixed(1)` on a `number` could do.
+  // `oddsRatio !== null` keeps a future caller from rendering "Infinity to 1" at a learner.
   if (input.toCall > 0 && potOddsSummary.oddsRatio !== null) {
-    // The pot named here is `potOddsSummary.pot` — the contestable one — and the ratio is
-    // that pot divided by the price. Quoting a ratio computed from one pot beside a
-    // sentence about another is how a learner all-in for less came to be told they needed
-    // 8.6% where they needed 37.5%. The two figures come from the same summary so they
-    // cannot be taken from two different pots again.
+    // Ratio and pot come from one summary. Mixing pots once told an all-in-for-less hero 8.6%, not 37.5%.
     const beyondReach = input.pot - input.contestablePot;
-    // The clause is added only where the two pots differ. An ordinary spot keeps the sentence it
-    // has always had — "on the 150 you can win" in front of a learner who can win all of it is a
-    // distinction without a difference, and it would put a qualification on every panel in the
-    // product to serve the spots where hero is short.
+    // Only where the pots differ, so ordinary spots carry no qualification.
     const againstWhat = beyondReach > 0 ? ` on the ${chips(potOddsSummary.pot)} you can win` : '';
     notes.push(
       `The pot is laying you ${potOddsSummary.oddsRatio.toFixed(1)} to 1${againstWhat}, so you need ${(potOddsSummary.breakEvenEquity * 100).toFixed(1)}% to break even on a call. That number depends only on the price — not on your cards.`,
@@ -1455,11 +896,7 @@ function buildTeachingNotes(
       );
     }
   }
-  // Two wordings for the same teaching point, because the word "outs" is only earned by
-  // one of them. `refusal` set means hero is already in front, no card rescues anything,
-  // and there is no outs count for these two figures to be a split of — which is exactly
-  // how "47 outs in total" ended up over a flopped two pair. See the "When hero is
-  // already in front" section of `outs.ts`.
+  // Two wordings, because with `refusal` set there is no outs count to split. See `outs.ts`.
   if (outs !== null && outs.dirtyCount > 0) {
     notes.push(
       outs.refusal === null
@@ -1480,9 +917,7 @@ function buildTeachingNotes(
   if (ruleOfThumb !== null && outs !== null) {
     const sign = ruleOfThumb.errorPoints >= 0 ? 'over' : 'under';
     notes.push(
-      // `estimate` is a fraction, so it is multiplied here exactly once. Read it as a
-      // percentage without the x100 and this sentence says "0% here", which is how a
-      // unit error hides in prose rather than in a figure.
+      // `estimate` is a fraction, multiplied here exactly once.
       `The rule of 2 and 4 gives ${(ruleOfThumb.estimate * 100).toFixed(0)}% on your ` +
         `${pluralCards(outs.cleanCount)} of clean outs, ${sign}stating the exact chance of hitting one ` +
         `of them by ${Math.abs(ruleOfThumb.errorPoints).toFixed(1)} points. Your equity here is ` +
@@ -1503,12 +938,8 @@ function buildTeachingNotes(
       `At an SPR of ${stacks.spr.toFixed(1)} there is a lot of money left behind, so hands that can keep improving are worth more than their current strength suggests.`,
     );
   }
-  // Keyed to hero's equity, which is what the sentence is ABOUT. Keyed instead to the break-even
-  // point — `equitySurplus > 0` alone — it fired on 23 of the 36 Lab scenarios and was false on 15
-  // of them, including `fl-small-straight-beats-trips`, whose own reasoning says "hero's hand wins
-  // this showdown outright, not partially" and which then told the reader the call "still loses
-  // more often than it wins". A profitable call CAN lose more often than it wins; it does so only
-  // when hero is under 50%, and that is the spot the note is worth making.
+  // Keyed to hero's equity under 50%, the only case where a profitable call loses more often than it
+  // wins. Keyed to `equitySurplus > 0` alone, it was false on 15 of the 23 Lab scenarios it fired on.
   if (potOddsSummary.equitySurplus > 0 && potOddsSummary.toCall > 0 && equitySummary.heroEquity < 0.5) {
     notes.push(
       'A profitable call can still lose more often than it wins: you are under 50% here and the price is lower than that. Losing this hand would not make the call wrong.',
@@ -1521,13 +952,8 @@ function buildTeachingNotes(
 export function buildCoachReport(input: CoachInput): CoachReport {
   validate(input);
 
-  // `exactRange` rather than a hand-built object. The literal that used to sit here
-  // was a second, worse implementation of the same thing: it left `classes` empty (so
-  // "AsKh" claimed to belong to no starting-hand class), hard-coded 1326, kept the
-  // cards in whatever order the caller passed them, and needed two `as Card`
-  // assertions to get past `noUncheckedIndexedAccess`. Ranges have exactly one
-  // constructor in this package, and `validate` above has already established that
-  // there are two distinct cards for it to accept.
+  // `exactRange`, not a range literal. The literal that sat here left `classes` empty, hard-coded 1326
+  // and kept the caller's card order. `validate` has already checked the two cards.
   const heroRange: ParsedRange = exactRange(input.heroCards);
 
   const spec: EquitySpec = {
@@ -1570,19 +996,14 @@ export function buildCoachReport(input: CoachInput): CoachReport {
     assumptions.push(
       `Bet and raise figures assume the line wins uncontested ${(foldEquity * 100).toFixed(0)}% of the time. That is an assumption, not something measured: the Scenario Lab lets you change it and watch these figures move.`,
     );
-    // `contestablePot`, like every other figure in a bet's arithmetic: a bet is priced into
-    // the pot it can win. The two are equal wherever a bet is on offer at all — hero has to
-    // have chips behind the call to raise — so this is correctness by construction rather
-    // than a case that has been observed.
+    // `contestablePot`, which equals `pot` wherever a bet is on offer.
     const halfPot = Math.max(1, Math.round(input.contestablePot / 2));
     const needed = requiredFoldEquity({
       pot: input.contestablePot,
       betSize: halfPot,
       equityWhenCalled: hero.equity,
     });
-    // The two degenerate cases read badly if stated as a bare percentage: "needs 0%"
-    // sounds like a mistake, and "needs 120%" sounds like one too. Say what each
-    // actually means.
+    // "Needs 0%" and "needs 120%" both read as mistakes, so each degenerate case says what it means.
     if (needed.foldEquityNeeded <= 0) {
       assumptions.push(
         `A half-pot bet of ${halfPot} is already break-even or better here purely on the equity you have when called — it does not need to win uncontested at all.`,
@@ -1602,9 +1023,7 @@ export function buildCoachReport(input: CoachInput): CoachReport {
   );
 
   if (assumptions.length === 0) {
-    // Unreachable — equityResult always supplies assumptions — but the invariant is
-    // worth asserting rather than trusting, because an empty list would silently
-    // present every figure as unconditional fact.
+    // Unreachable, but an empty list would present every figure as unconditional fact.
     throw new CoachError('a Coach report must never be produced without assumptions');
   }
 

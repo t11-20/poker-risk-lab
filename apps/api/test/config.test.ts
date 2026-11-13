@@ -1,14 +1,7 @@
 /**
- * Configuration tests.
- *
- * These are the tests that decide whether a bad deployment starts. They are written against
- * `loadConfig(env)` rather than `process.env` on purpose — a pure function of an environment
- * record is the only way to assert "production refuses this" without setting NODE_ENV inside
- * a test runner and hoping nothing else notices.
- *
- * Two things every case checks: that a bad value is rejected, and that the *message* names
- * the variable. A boot failure that says "invalid configuration" and nothing else costs the
- * next person an hour.
+ * Tests that decide whether a bad deployment starts. Written against `loadConfig(env)` so
+ * "production refuses this" needs no NODE_ENV in the runner. Every case checks that the bad value
+ * is rejected and that the message names the variable.
  */
 
 import assert from 'node:assert/strict';
@@ -37,7 +30,7 @@ function productionEnv(overrides: EnvRecord = {}): EnvRecord {
   });
 }
 
-/** Asserts that loading fails and that at least one problem mentions `needle`. */
+/** Loading fails and at least one problem mentions `needle`. */
 function expectProblem(env: EnvRecord, needle: string): readonly string[] {
   try {
     loadConfig(env);
@@ -60,10 +53,8 @@ describe('loadConfig — a valid environment', () => {
     assert.equal(config.nodeEnv, 'test');
     assert.equal(config.isTest, true);
     assert.equal(config.isProduction, false);
-    // 3001, not 8080. The fallback was changed deliberately: .env.example, docker-compose.yml,
-    // the README, the runbook and apps/web/src/lib/api.ts all said 3001, while only this fallback
-    // said 8080 — so following the documented dev flow started the API on 8080 while the browser
-    // called 3001, and every request from the web app failed with nothing explaining why.
+    // 3001, the port every document and apps/web/src/lib/api.ts use. An 8080 fallback broke every
+    // request from the web app in the documented dev flow.
     assert.equal(config.port, 3001);
     assert.equal(config.host, '127.0.0.1');
     assert.equal(config.logLevel, 'silent');
@@ -139,7 +130,7 @@ describe('loadConfig — invalid values are named', () => {
   });
 
   it('rejects a non-integer PORT rather than parsing a prefix of it', () => {
-    // parseInt('8080abc') would be 8080. Number() is NaN, which is the point.
+    // parseInt('8080abc') would be 8080.
     const problems = expectProblem(baseEnv({ PORT: '8080abc' }), 'PORT');
     assert.ok(
       problems.some((p) => p.includes('8080abc')),
@@ -160,15 +151,13 @@ describe('loadConfig — invalid values are named', () => {
   });
 
   it('refuses LOG_LEVEL=silent in production, and names the level that still logs a crash', () => {
-    // `silent` gives Fastify no logger at all, so a production process that failed to start exited
-    // 1 with nothing on stdout or stderr. Measured on a port another process held; see readLogLevel.
+    // `silent` gives Fastify no logger, so a failed production start wrote nothing. See readLogLevel.
     const problems = expectProblem(productionEnv({ LOG_LEVEL: 'silent' }), 'LOG_LEVEL=silent');
     assert.ok(
       problems.some((problem) => problem.includes('fatal')),
       'the refusal should name the fix',
     );
     assert.equal(loadConfig(productionEnv({ LOG_LEVEL: 'fatal' })).logLevel, 'fatal');
-    // Outside production `silent` is how a test or a quiet local run asks for no output.
     assert.equal(loadConfig(baseEnv({ LOG_LEVEL: 'silent' })).logLevel, 'silent');
     assert.equal(loadConfig(baseEnv({ NODE_ENV: 'development', LOG_LEVEL: 'silent' })).logLevel, 'silent');
   });
@@ -263,8 +252,8 @@ describe('loadConfig — the session cookie secret', () => {
   });
 
   /**
-   * The value a developer has after `cp .env.example .env` and forgetting the paste. It is read out
-   * of the file rather than copied here, so a new placeholder there is the one tested.
+   * The value after `cp .env.example .env` without the paste, read from the file so a new
+   * placeholder there is the one tested.
    */
   function envExampleSecret(): string {
     const text = readFileSync(new URL('../../../.env.example', import.meta.url), 'utf8');
@@ -275,8 +264,7 @@ describe('loadConfig — the session cookie secret', () => {
   }
 
   it('boots outside production on the .env.example value, and says the secret is public', () => {
-    // It used to boot SILENTLY: the value is 55 characters, so the only check this branch made —
-    // length — passed, and nothing on the boot log said sessions were signed with a public string.
+    // The 55-character value passes the length check, so this branch once booted with no warning.
     for (const nodeEnv of ['development', 'test']) {
       const config = loadConfig(baseEnv({ NODE_ENV: nodeEnv, SESSION_COOKIE_SECRET: envExampleSecret() }));
       const lines = config.warnings.filter((warning) => warning.includes('SESSION_COOKIE_SECRET'));

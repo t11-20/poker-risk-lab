@@ -1,100 +1,12 @@
 /**
- * Outs: which cards actually rescue a hand, and which ones only look like they do.
- *
- * ## The thing most material gets wrong
- *
- * "You have nine outs to the flush." That sentence is true about the *deck* and
- * often false about the *hand*. Nine cards complete the flush; how many of them win
- * depends entirely on what the opponent can hold. Put hero's nut flush draw against
- * a set and every one of those nine cards leaves the opponent live to a full house.
- * Put two of hero's flush cards where they also complete a straight for part of the
- * opponent's range and those two are not outs in the same sense as the other seven.
- * Counting all nine as if they were identical is how a learner ends up calling a
- * price the situation does not offer: the pot-odds arithmetic is fine, the input to
- * it was a fiction.
- *
- * So this module never returns a single number. Every candidate card is evaluated
- * individually against the opponent's range, and comes back with hero's equity once
- * it lands plus a sentence saying why it is or is not good enough.
- *
- * ## The definitions, exactly as implemented
- *
- * For each card `c` still available — not in hero's hand, not on the board, not in
- * `deadCards`, and (when the opponent's range has collapsed to a single possible
- * combination) not one of the two cards the opponent is then known to hold:
- *
- *   equityBefore  hero's equity on the current board, before any card arrives.
- *   equityAfter(c) hero's equity with `c` appended to the board.
- *
- *   clean    equityAfter(c) >= cleanThreshold   (default 0.90)
- *   dirty    aheadThreshold <= equityAfter(c) < cleanThreshold  (default 0.50)
- *   neutral  equityAfter(c) < aheadThreshold — not an out at all
- *
- *   totalOuts = cleanCount + dirtyCount
- *
- * A clean out does not merely put hero in front, it puts hero in front and keeps
- * hero there. A dirty out puts hero in front but leaves a way to lose: either the
- * remaining card can run hero down, or the same card improved part of the opponent's
- * range too.
- *
- * ## The thresholds are a modelling choice, not a law
- *
- * There is no rule of poker that says 90%. The pair (0.90, 0.50) is a convention
- * chosen here because it separates "in front and safe" from "in front and sweating"
- * in a way that matches how players talk. They are function parameters precisely so
- * that nobody mistakes them for facts: raise `cleanThreshold` to 0.95 and cards that
- * were clean become dirty without a single card changing. Every result says which
- * thresholds produced it, in `assumptions`.
- *
- * ## Why the equity numbers here are exact
- *
- * `equity()` picks exact enumeration when the work fits its budget and bounded Monte
- * Carlo otherwise. At the sizes this module produces it always picks exact, and that
- * is arithmetic rather than hope. Two players, and a board of four or five cards:
- *
- *   - board of 4 → one card to come → C(44, 1) = 44 boards per matchup;
- *   - board of 5 → nothing to come → 1 board per matchup;
- *   - at most C(45, 2) = 990 legal combinations for the opponent.
- *
- * The worst case is 990 x 44 = 43,560 units of work against a default budget of
- * 4,000,000. The method returned by every call is still checked rather than assumed,
- * and any call that somehow came back sampled is named in `assumptions` — a figure
- * that quietly changed method is exactly the kind of thing this app exists to stop.
- *
- * ## One card at a time
- *
- * Only the immediate next card is considered. A backdoor draw needing both the turn
- * and the river is not an out here, because it is not a card, it is a pair of cards
- * — and folding "backdoor outs" into the same count is another way the number gets
- * inflated. On a flop, `equityAfter` does account for the river; it just does not
- * count river-only improvements as outs.
- *
- * ## When hero is already in front, this result HAS NO OUTS COUNT
- *
- * An out is a card that rescues a hand that is behind. Hero who is already in front is
- * not behind, so no card rescues anything and there is no count to report — however
- * many cards happen to clear the thresholds. Applied to a made hand the definitions
- * above degenerate: on a flop with two pair against a range, every one of the 47
- * unseen cards leaves hero at or above `aheadThreshold`, and the module used to
- * publish that as "47 outs in total" while the app's own lesson — *Outs: clean, dirty
- * and imaginary* — teaches the standard meaning. A learner saw a textbook 15 on a real
- * draw and a nonsensical 47 one spot later, from the same panel.
- *
- * So `computeOuts` refuses, the way `coach.ts` already refuses the rule of 2 and 4
- * (`already-ahead` / `no-clean-outs` / `not-a-probability`): the result carries a typed
- * `refusal`, and every sentence it generates stops calling the counts outs. What the
- * counts still are is worth reading and is still reported — `cleanCount` cards leave
- * hero at or above `cleanThreshold`, `dirtyCount` leave hero in front but beatable —
- * they are simply cards that KEEP hero ahead rather than the size of a draw, and the
- * explanation says so in those words.
- *
- * `totalOuts` deliberately stays `cleanCount + dirtyCount` rather than going null or
- * zero. Zero would read as "drawing dead", which is the opposite of the truth here, and
- * a null would only move the decision to whichever consumer forgot to handle it. The
- * number is honest arithmetic on the classifications; `refusal` is what says the word
- * "outs" does not apply to it. Consumers that print the word must check it — `coach.ts`
- * does, in the explanation, the teaching notes and the suggestion, and `@prl/ui`'s
- * `CoachPanel` refuses the same headline independently at the render boundary.
+ * Classifies every card that can come next as a clean out, a dirty out or neither, against the
+ * opponent's range, with hero's equity once it lands and a sentence saying why.
+ * clean is equityAfter >= cleanThreshold (0.90), dirty is >= aheadThreshold (0.50), neutral is below.
+ * The thresholds are a modelling choice, so they are parameters and every result names them.
+ * Only the next card counts as an out. Equity is exact. At most 990 combos x 44 boards = 43,560 units,
+ * far under `equity()`'s 4,000,000 budget, and any sampled call is still named in `assumptions`.
+ * A hand already in front has no outs count, so the result carries `refusal` and its sentences stop
+ * saying "outs". `totalOuts` stays clean + dirty, because zero would read as drawing dead.
  */
 
 import {
@@ -122,36 +34,20 @@ export class OutsError extends Error {
 export type OutClassification = 'clean' | 'dirty' | 'neutral';
 
 /**
- * Why this result carries no outs count, or `null` when it carries one.
- *
- * Modelled on `RuleOfThumbRefusal` in `coach.ts`, and for the same reason: a shortcut
- * that has stopped meaning anything should say which of its own preconditions failed,
- * not return a number and hope the caveat underneath is read. "An out is a card that
- * rescues a hand that is behind" has exactly one precondition — that hero is behind —
- * so this union has exactly one member. It is written as a union anyway so that adding
- * a second reason later is an additive change rather than a shape change at every call
- * site.
- *
- * A discriminated `kind` rather than a boolean because the *reason* is what the reader
- * needs. `refusal !== null` tells a consumer to stop saying "outs"; `refusal.kind` tells
- * it what to say instead.
+ * Why this result carries no outs count. Modelled on `RuleOfThumbRefusal` in `coach.ts`.
+ * One member today, written as a union so a second reason is an additive change.
  */
 export type OutsCountRefusal = {
   readonly kind: 'already-ahead';
-  /** Hero's equity before any card arrives — the figure that cleared the bar. */
+  /** Hero's equity before any card arrives, the figure that cleared the bar. */
   readonly equityNow: number;
-  /** The bar: the equity a card has to reach to count as an out at all. */
+  /** The equity a card has to reach to count as an out at all. */
   readonly threshold: number;
 };
 
 /**
- * The one definition of "this spot has no outs to count", so nothing re-derives it.
- *
- * Deliberately the SAME yardstick a card is judged by. A card counts as an out once it
- * puts hero at or above `aheadThreshold`; a hand already there does not need one. Using
- * two different bars for the two halves is how the panel ended up saying a hand was
- * 100% to win and had 45 outs at the same time — see the note above
- * `ruleOfThumbRefusalFor`, which now asks this same question through `OutsResult.refusal`.
+ * The one definition of "this spot has no outs to count". It uses the same `aheadThreshold` a card
+ * is judged by, because two bars let the panel say 100% to win and 45 outs at once.
  */
 export function outsCountRefusalFor(equityNow: number, aheadThreshold: number): OutsCountRefusal | null {
   if (equityNow >= aheadThreshold) return { kind: 'already-ahead', equityNow, threshold: aheadThreshold };
@@ -177,21 +73,9 @@ export interface OutsResult {
   readonly neutral: readonly CardOutcome[];
   readonly cleanCount: number;
   readonly dirtyCount: number;
-  /**
-   * `cleanCount + dirtyCount`. Neutral cards are not outs.
-   *
-   * **An outs count only while `refusal` is null.** When hero is already in front this is
-   * still the honest sum of the two classifications, and it is still not a number of
-   * outs — see the file comment. Anything that prints it beside the word "outs" has to
-   * check `refusal` first.
-   */
+  /** `cleanCount + dirtyCount`. A number of outs only while `refusal` is null. */
   readonly totalOuts: number;
-  /**
-   * Why the counts above are not outs, or `null` when they are.
-   *
-   * Read this before the numbers, not after them. The counts are always computed; this
-   * is what says whether the word "outs" may be attached to them.
-   */
+  /** Why the counts above are not outs, or `null` when they are. */
   readonly refusal: OutsCountRefusal | null;
   readonly equityNow: number;
   /** Candidate cards actually evaluated. */
@@ -206,7 +90,7 @@ export interface OutsInput {
   readonly heroCards: readonly Card[];
   /** 3 cards (flop) or 4 cards (turn). */
   readonly board: readonly Card[];
-  /** A single known hand or a whole range — the counts depend on which. */
+  /** A single known hand or a whole range. The counts depend on which. */
   readonly opponent: ParsedRange;
   readonly deadCards?: readonly Card[];
   /** Equity at or above this makes a card clean. Default 0.90. */
@@ -221,10 +105,6 @@ export const DEFAULT_AHEAD_THRESHOLD = 0.5;
 /** Tolerance for the "did this card help the range" comparison of two fractions. */
 const SHARE_EPSILON = 1e-9;
 
-// ---------------------------------------------------------------------------
-// Small shared helpers
-// ---------------------------------------------------------------------------
-
 function formatPercent(value: number): string {
   // One decimal below 10% so a 4-out draw does not render as a flat "9%".
   const digits = value > 0 && value < 0.1 ? 1 : 0;
@@ -235,11 +115,7 @@ function pluralCombos(count: number): string {
   return count === 1 ? '1 combination' : `${count} combinations`;
 }
 
-/**
- * True for the categories English wants an article in front of: "a flush" but
- * "two pair". Used by both the category names and the full hand descriptions so
- * generated notes read like a sentence someone would say out loud.
- */
+/** True for the categories English wants an article in front of, "a flush" but "two pair". */
 function takesArticle(category: HandCategory): boolean {
   switch (category) {
     case HAND_CATEGORY.pair:
@@ -259,22 +135,13 @@ function categoryLabel(category: HandCategory): string {
   return takesArticle(category) ? `a ${name}` : name;
 }
 
-/**
- * The hand named the way a player would say it, e.g. "a flush, ace high" or
- * "two pair, sixes and fives".
- */
+/** "a flush, ace high" or "two pair, sixes and fives". */
 function handPhrase(score: HandScore): string {
   const text = describeScore(score);
   return takesArticle(categoryOf(score)) ? `a ${text}` : text;
 }
 
-/**
- * What can still beat a made hand of this category, as a noun phrase.
- *
- * Used for the run-down warning on a flop card, where hero can be ahead of the whole
- * range and still lose to the river. Naming the shape of the danger teaches more
- * than a bare probability does.
- */
+/** What can still beat a made hand of this category, for the run-down warning on a flop card. */
 function whatStillBeats(category: HandCategory): string {
   switch (category) {
     case HAND_CATEGORY.highCard:
@@ -309,34 +176,22 @@ function legalCombos(combos: readonly Combo[], blocked: readonly Card[]): Combo[
   return combos.filter((combo) => !seen.has(combo[0]) && !seen.has(combo[1]));
 }
 
-// ---------------------------------------------------------------------------
-// Where hero stands on a given board
-// ---------------------------------------------------------------------------
-
 interface CategoryCount {
   readonly category: HandCategory;
   readonly combos: number;
 }
 
 /**
- * Hero's made hand on one board, and how the opponent's possible hands compare to it
- * *at that moment*.
- *
- * On a five-card board this is the showdown. On a four-card board it is "who is
- * ahead with one card to come", which is a different question from equity and is
- * exactly what makes a dirty out dirty: hero can be ahead of every combination in
- * the range and still be a long way from safe.
+ * How the opponent's possible hands compare to hero's on one board at that moment. On four cards
+ * this differs from equity, which is what makes a dirty out dirty.
  */
 interface Standing {
   readonly combos: number;
   readonly heroScore: HandScore;
   readonly heroCategory: HandCategory;
-  /** Hero's hand as a phrase, e.g. "a flush, ace high". */
   readonly heroPhrase: string;
-  /** Combinations hero's hand currently beats. */
   readonly ahead: number;
   readonly tied: number;
-  /** Combinations that currently beat hero. */
   readonly behind: number;
   /** The categories those beating combinations make, strongest first. */
   readonly beaters: readonly CategoryCount[];
@@ -385,7 +240,7 @@ function standingAt(heroCards: readonly Card[], board: readonly Card[], combos: 
   };
 }
 
-/** "2 make a full house, 1 makes a flush" — what is beating hero, by shape. */
+/** "2 make a full house, 1 makes a flush". */
 function describeBeaters(beaters: readonly CategoryCount[]): string {
   return beaters
     .map(
@@ -394,28 +249,18 @@ function describeBeaters(beaters: readonly CategoryCount[]): string {
     .join(', ');
 }
 
-// ---------------------------------------------------------------------------
-// The note: why this card is clean, dirty or neutral
-// ---------------------------------------------------------------------------
-
-/**
- * A category change is the only improvement worth a verb. A kicker moving up inside
- * the same category is real but rarely relevant, and calling it an improvement makes
- * a dead card sound like progress, so those cards get the neutral wording.
- */
+/** Only a category change gets "gives you", so a kicker upgrade does not make a dead card sound useful. */
 function heroHandClause(before: Standing, after: Standing): string {
   if (after.heroCategory > before.heroCategory) return `gives you ${after.heroPhrase}`;
   return `leaves you with ${after.heroPhrase}`;
 }
 
-/** How the opponent's one known hand compares. Only used when the range is a hand. */
 function soleOpponentClause(after: Standing, sole: NonNullable<Standing['soleOpponent']>): string {
   if (after.behind > 0) return `but ${sole.label} has ${sole.phrase}, which is better`;
   if (after.tied > 0) return `and ${sole.label} has the same hand, so the pot chops`;
   return `and beats ${sole.label}, which has ${sole.phrase}`;
 }
 
-/** How a multi-combination range compares. */
 function rangeClause(after: Standing): string {
   if (after.behind === after.combos) {
     return `but every one of the ${after.combos} combinations the range can still hold beats it (${describeBeaters(after.beaters)})`;
@@ -432,10 +277,6 @@ function rangeClause(after: Standing): string {
   return `and beats all ${pluralCombos(after.combos)} the range can still hold`;
 }
 
-/**
- * The sentence about the card still to come. Only meaningful when the board is not
- * yet complete: on the river there is nothing left to run hero down.
- */
 function riskSentence(after: Standing, equityAfter: number, boardComplete: boolean): string | null {
   if (boardComplete) return null;
   if (equityAfter >= 1) return 'No river card can change that';
@@ -443,10 +284,7 @@ function riskSentence(after: Standing, equityAfter: number, boardComplete: boole
   return `With the river still to come, ${whatStillBeats(after.heroCategory)} can still get there`;
 }
 
-/**
- * Stated only when the card measurably improved the opponent's side of it — the
- * counterfeit case, and the reason a card that helps hero can still be a bad card.
- */
+/** Stated only when the card raised the share of the range that beats hero, the counterfeit case. */
 function rangeHelpSentence(before: Standing, after: Standing): string | null {
   const shareBefore = before.combos === 0 ? 0 : before.behind / before.combos;
   const shareAfter = after.combos === 0 ? 0 : after.behind / after.combos;
@@ -479,10 +317,6 @@ function buildNote(args: {
 
   return `${sentences.join('. ')}.`;
 }
-
-// ---------------------------------------------------------------------------
-// Validation
-// ---------------------------------------------------------------------------
 
 interface ValidatedInput {
   readonly heroCards: readonly Card[];
@@ -553,10 +387,7 @@ function validateInput(input: OutsInput): ValidatedInput {
     );
   }
 
-  // Enough of the deck has to be left for a candidate card, the opponent's two cards
-  // and the run-out. Only reachable with an absurd number of dead cards, but checking
-  // it here keeps every failure an OutsError rather than letting an EquityError about
-  // empty enumerations surface from two layers down.
+  // Reachable only with absurd dead cards, but it keeps the failure an OutsError, not an EquityError.
   const unseen = DECK_SIZE - input.heroCards.length - input.board.length - deadCards.length;
   if (unseen < 4) {
     throw new OutsError(
@@ -574,10 +405,6 @@ function validateInput(input: OutsInput): ValidatedInput {
     aheadThreshold,
   };
 }
-
-// ---------------------------------------------------------------------------
-// Equity, with the method checked rather than assumed
-// ---------------------------------------------------------------------------
 
 interface HeroEquity {
   readonly value: number;
@@ -610,15 +437,11 @@ function classify(equityAfter: number, cleanThreshold: number, aheadThreshold: n
   return 'neutral';
 }
 
-/** Best cards first, then by card id, so a result is stable and displayable as-is. */
+/** Best cards first, then by card id, so a result is stable. */
 function byStrengthThenCard(left: CardOutcome, right: CardOutcome): number {
   if (right.equityAfter !== left.equityAfter) return right.equityAfter - left.equityAfter;
   return left.card - right.card;
 }
-
-// ---------------------------------------------------------------------------
-// Explanation and assumptions
-// ---------------------------------------------------------------------------
 
 function describeOpponent(opponent: ParsedRange, legal: readonly Combo[]): string {
   const sole = legal.length === 1 ? legal[0] : undefined;
@@ -627,18 +450,8 @@ function describeOpponent(opponent: ParsedRange, legal: readonly Combo[]): strin
 }
 
 /**
- * Outs are a concept for a hand that is behind. When hero is already in front the
- * definitions still classify every card, and the counts are still literally correct,
- * but reading "38 clean outs" as a draw would be a serious misunderstanding — so a
- * result computed for a hand that is already ahead says so in as many words. Graded,
- * because "already ahead of the clean threshold" and "ahead but not safe" are
- * different situations and deserve different sentences.
- *
- * This returns a sentence for exactly the spots `outsCountRefusalFor` refuses — both
- * ask `equityNow >= aheadThreshold`, the higher branch being a sharper case of the
- * same thing. The two must stay in step: this is the paragraph that explains the
- * refusal, and a refusal with no explanation, or an explanation with no refusal, would
- * be half the fix.
+ * The sentence that explains the refusal. It must return non-null for exactly the spots
+ * `outsCountRefusalFor` refuses, `equityNow >= aheadThreshold`.
  */
 function alreadyAheadNote(equityNow: number, cleanThreshold: number, aheadThreshold: number): string | null {
   if (equityNow >= cleanThreshold) {
@@ -657,24 +470,14 @@ function alreadyAheadNote(equityNow: number, cleanThreshold: number, aheadThresh
   return null;
 }
 
-/**
- * The sentence carrying the two counts.
- *
- * The whole point of the refusal lives in this one string. It used to read "…which is 47
- * outs in total" whatever the spot was, and 47 is every unseen card: a headline number
- * that contradicted the lesson naming it. Refused, it states the same two counts — they
- * are real and they are informative — and says in the same breath that neither is a
- * number of outs, so a reader who stops at this sentence has still not been misled.
- */
+/** Refused, it still states both counts and says in the same sentence that neither is a number of outs. */
 function countSentence(args: {
   readonly cleanCount: number;
   readonly dirtyCount: number;
   readonly cardsConsidered: number;
   readonly refusal: OutsCountRefusal | null;
 }): string {
-  // `is`/`are` and `out`/`outs` agree with their counts. They did not: a spot with a single clean
-  // card read "1 are clean and 0 are dirty, which is 1 outs in total", on nine of the thirty-six
-  // Lab scenarios. The idiom is `coach.ts`'s, which has agreed with its counts all along.
+  // Verbs and nouns agree with their counts. "1 are clean ... 1 outs" reached 9 of 36 Lab scenarios.
   const total = args.cleanCount + args.dirtyCount;
   const preamble =
     `Of the ${args.cardsConsidered} cards that can come next, ${args.cleanCount} ` +
@@ -714,9 +517,6 @@ function buildExplanation(args: {
     `Clean means your equity after that card is at least ${formatPercent(args.cleanThreshold)}; dirty ` +
       `means at least ${formatPercent(args.aheadThreshold)} but below ${formatPercent(args.cleanThreshold)}`,
   ];
-  // The honest paragraph that was already here, kept. It is the sentence that explains
-  // WHY the counts are what they are; the refusal above is what stops the headline
-  // number contradicting it.
   const ahead = alreadyAheadNote(args.equityNow, args.cleanThreshold, args.aheadThreshold);
   if (ahead !== null) sentences.push(ahead);
   return `${sentences.join('. ')}.`;
@@ -757,11 +557,7 @@ function buildAssumptions(args: {
   notes.push(
     'Only the next single card counts as an out. A draw that needs both the turn and the river is not counted here, though the equity figures do account for the river.',
   );
-  // Counted from the range's CLASSES rather than from the combinations handed in,
-  // because `parseRange` may already have removed blockers before the range reached
-  // this function. Counting what is left against what the notation names is the only
-  // way to state the blocker effect regardless of who applied it — and the blocker
-  // effect is the single most commonly dropped step in range arithmetic.
+  // Counted from the notation's classes, because `parseRange` may already have removed blockers.
   const declared = comboCountOf(args.opponent);
   const blocked = declared - args.legalNow.length;
   if (args.legalNow.length > 1 && blocked > 0) {
@@ -791,16 +587,7 @@ function buildAssumptions(args: {
   return notes;
 }
 
-// ---------------------------------------------------------------------------
-// The entry point
-// ---------------------------------------------------------------------------
-
-/**
- * Classifies every card that can come next as a clean out, a dirty out or neither.
- *
- * Pure and deterministic: same input, same output, byte for byte. There is no
- * randomness anywhere in here — every figure comes from full enumeration.
- */
+/** Pure and deterministic. Every figure comes from full enumeration. */
 export function computeOuts(input: OutsInput): OutsResult {
   const checked = validateInput(input);
   const { heroCards, board, deadCards, opponent, cleanThreshold, aheadThreshold } = checked;
@@ -814,9 +601,7 @@ export function computeOuts(input: OutsInput): OutsResult {
     );
   }
 
-  // A range with exactly one possible combination *is* a known hand, however it was
-  // written. Those two cards are then behind the opponent rather than in the deck,
-  // so they are not candidates to come. Getting this wrong shifts every denominator.
+  // A range down to one combination is a known hand, so its two cards cannot come off the deck.
   const sole = legalNow.length === 1 ? legalNow[0] : undefined;
   const opponentHeld: Card[] = sole === undefined ? [] : [sole[0], sole[1]];
 
@@ -833,9 +618,7 @@ export function computeOuts(input: OutsInput): OutsResult {
   for (const card of remainingDeck([...known, ...opponentHeld])) {
     const legalAfter = legalCombos(opponent.combos, [...known, card]);
     if (legalAfter.length === 0) {
-      // Every hand the range can hold uses this card, so the card and the range
-      // cannot both be true. Counting it either way would be a claim about a
-      // situation that does not exist.
+      // Every hand the range can hold uses this card, so the card and the range cannot both be true.
       skipped.push(cardToString(card));
       continue;
     }
@@ -863,10 +646,7 @@ export function computeOuts(input: OutsInput): OutsResult {
   const dirty = sorted.filter((outcome) => outcome.classification === 'dirty');
   const neutral = sorted.filter((outcome) => outcome.classification === 'neutral');
 
-  // Decided once, from the same threshold every card was judged against, and then
-  // carried on the result. Every sentence below and every consumer downstream asks this
-  // one value rather than re-testing the equity, so there is no second place for the two
-  // definitions of "drawing" to drift apart.
+  // Decided once and carried on the result, so no consumer re-tests the equity against another bar.
   const refusal = outsCountRefusalFor(nowEquity.value, aheadThreshold);
 
   const explanation = buildExplanation({
@@ -910,15 +690,8 @@ export function computeOuts(input: OutsInput): OutsResult {
 }
 
 /**
- * The shape the Coach renders. Deliberately flat and plain: the Coach shows the two
- * counts, the two card lists and one sentence, and never a bare "outs" number
- * without the split behind it.
- *
- * `refusal` travels with the counts rather than being left behind on the full result,
- * because this is the flattened shape a display layer reaches for and the flattening is
- * exactly where "these are not outs" gets lost. A caller that renders `total` beside the
- * word "outs" without consulting `refusal` is reintroducing the defect this field exists
- * to close.
+ * The flat shape the Coach renders. `refusal` travels with the counts because flattening is where
+ * "these are not outs" gets lost, so check it before printing `total` beside the word "outs".
  */
 export function outsSummaryFor(result: OutsResult): {
   clean: number;

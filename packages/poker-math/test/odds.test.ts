@@ -1,12 +1,6 @@
 /**
- * Tests for the price-of-a-call family.
- *
- * Every expected value below comes from somewhere other than `odds.ts`: arithmetic
- * worked out longhand in the comment above the assertion, a closed-form identity, a
- * brute-force count over an urn, or — for the one that matters most — an exhaustive
- * enumeration of real run-outs through `@prl/poker-engine`. Nothing here is compared
- * against the implementation's own output, because that would only prove the code
- * agrees with itself.
+ * Every expected value comes from outside `odds.ts`. Longhand arithmetic, a closed-form identity, a
+ * brute-force urn count, or run-outs enumerated through `@prl/poker-engine`.
  */
 
 import assert from 'node:assert/strict';
@@ -33,12 +27,8 @@ import {
 } from '../src/odds.ts';
 
 /**
- * A deliberately loose view of the two functions that take `cardsToCome`.
- *
- * The parameter is typed `1 | 2`, so TypeScript will never let a 3 reach them — but
- * a JSON request body will, which is why the runtime guard exists and why it has to
- * be tested. Parameters of method-shorthand signatures are compared bivariantly even
- * under `strictFunctionTypes`, so this assignment is legal with no cast and no `any`.
+ * Lets a test pass a 3 as a JSON body would. Method-shorthand parameters are bivariant even under
+ * `strictFunctionTypes`, so this needs no cast.
  */
 interface LooseCardsToCome {
   ruleOf24(outs: number, cardsToCome: number): unknown;
@@ -46,15 +36,9 @@ interface LooseCardsToCome {
 }
 const loose: LooseCardsToCome = { ruleOf24, probabilityOfHitting };
 
-// ---------------------------------------------------------------------------
-// Pot odds and the price a bet lays
-// ---------------------------------------------------------------------------
-
 test('a pot-sized bet lays 2 to 1, so the caller needs exactly one third', () => {
-  // Longhand: a bet of 100 into a pot of 100 leaves 200 in the middle. The caller
-  // puts in 100 to win that 200, so calling is 100 to win 200 — 2 to 1. Break even
-  // where the two sides are equal: p * 200 = (1 - p) * 100, so 300p = 100, p = 1/3.
-  // The closed form must agree: 100 / (100 + 2 * 100) = 100/300 = 1/3.
+  // 100 into 100 leaves 200, and calling 100 to win 200 is 2 to 1.
+  // p * 200 = (1 - p) * 100, so 300p = 100, p = 1/3. Closed form 100 / (100 + 2 * 100) = 1/3.
   const price = priceLaidByBet(100, 100);
   assert.equal(price.breakEvenEquity, 1 / 3);
   assert.equal(price.oddsRatio, 2);
@@ -64,17 +48,15 @@ test('a pot-sized bet lays 2 to 1, so the caller needs exactly one third', () =>
 });
 
 test('a half-pot bet lays 3 to 1, so the caller needs exactly one quarter', () => {
-  // Longhand: 50 into 100 leaves 150 in the middle, and the call costs 50, so the
-  // caller is getting 150 to 50 = 3 to 1. Break even: p * 150 = (1 - p) * 50, so
-  // 200p = 50, p = 1/4. Closed form: 50 / (100 + 2 * 50) = 50/200 = 0.25.
+  // 50 into 100 leaves 150, and 150 to 50 is 3 to 1.
+  // p * 150 = (1 - p) * 50, so 200p = 50, p = 1/4. Closed form 50 / (100 + 2 * 50) = 0.25.
   const price = priceLaidByBet(100, 50);
   assert.equal(price.breakEvenEquity, 0.25);
   assert.equal(price.oddsRatio, 3);
   assert.equal(price.breakEvenEquity, 50 / (100 + 2 * 50));
 
-  // A quarter-pot bet: 25 into 100 leaves 125, so 125 to 25 = 5 to 1, needing
-  // 25 / (100 + 50) = 1/6. A two-thirds bet: 80 into 120 leaves 200, so 200 to 80 =
-  // 2.5 to 1, needing 80 / (120 + 160) = 80/280 = 2/7.
+  // 25 into 100 leaves 125, 5 to 1, needing 25 / (100 + 50) = 1/6.
+  // 80 into 120 leaves 200, 2.5 to 1, needing 80 / (120 + 160) = 2/7.
   assert.equal(priceLaidByBet(100, 25).oddsRatio, 5);
   assert.equal(priceLaidByBet(100, 25).breakEvenEquity, 1 / 6);
   assert.equal(priceLaidByBet(120, 80).oddsRatio, 2.5);
@@ -82,9 +64,7 @@ test('a half-pot bet lays 3 to 1, so the caller needs exactly one quarter', () =
 });
 
 test('breakEvenEquity for a pot of 100 with 50 to call is exactly one third', () => {
-  // `pot` excludes hero's own call, so this is "100 in the middle, 50 to call".
-  // Risking 50 to win 100 is 2 to 1: p * 100 = (1 - p) * 50 gives 150p = 50, p = 1/3.
-  // Closed form: 50 / (100 + 50) = 50/150 = 1/3.
+  // `pot` excludes hero's call. p * 100 = (1 - p) * 50 gives 150p = 50, p = 1/3 = 50 / (100 + 50).
   const odds = potOdds(100, 50);
   assert.equal(odds.breakEvenEquity, 1 / 3);
   assert.equal(odds.oddsRatio, 2);
@@ -93,18 +73,13 @@ test('breakEvenEquity for a pot of 100 with 50 to call is exactly one third', ()
 });
 
 test('the price a bet lays the caller is 1 / (ratio + 1) for every sizing', () => {
-  // Independent identity: "getting R to 1" means risking 1 to win R, which breaks
-  // even at 1 / (R + 1) by definition of the odds notation. Any implementation where
-  // breakEvenEquity and oddsRatio disagree about that has one of the two wrong.
-  // Checked to a tolerance rather than exactly: both sides are separately rounded
-  // divisions, and 1/(R+1) can land one ulp away from bet/(pot + 2*bet).
+  // "R to 1" breaks even at 1 / (R + 1) by definition. A tolerance, because 1/(R+1) can land one
+  // ulp from bet/(pot + 2*bet).
   let checked = 0;
   for (let pot = 0; pot <= 200; pot += 1) {
     for (let bet = 1; bet <= 200; bet += 1) {
       const price = priceLaidByBet(pot, bet);
-      // A bet is positive by construction — `priceLaidByBet` refuses 0 — so there is
-      // always a price here. Asserted rather than assumed, because that is what turns
-      // `number | null` into the `number` the identity below needs, with no cast.
+      // Asserted rather than assumed, so `number | null` narrows to `number` with no cast.
       assert.notEqual(price.oddsRatio, null, `pot ${pot}, bet ${bet}: a real bet always lays a price`);
       if (price.oddsRatio === null) return;
       assert.ok(
@@ -120,20 +95,12 @@ test('the price a bet lays the caller is 1 / (ratio + 1) for every sizing', () =
 test('checking is free: nothing to call needs no equity and has no price', () => {
   const odds = potOdds(120, 0);
   assert.equal(odds.breakEvenEquity, 0);
-  // This assertion used to read `Number.POSITIVE_INFINITY`, and that expectation was
-  // wrong — not about the maths, which has no answer here either way, but about what a
-  // value of this type is allowed to be. `oddsRatio` crosses an HTTP and a WebSocket
-  // boundary, `JSON.stringify(Infinity)` is `"null"`, and so every free-call spot
-  // arrived at the browser as `null` against a contract that declared `number`. The
-  // sentinel is now the value JSON itself produces, which is the only one that can make
-  // the round trip. See the header of `src/odds.ts`.
+  // `null`, because `oddsRatio` crosses HTTP and WebSocket and `JSON.stringify(Infinity)` is "null".
   assert.equal(odds.oddsRatio, null, 'there is no "X to 1" price on a free look');
   assert.match(odds.explanation, /free/i);
   assert.equal(odds.explanation.includes('Infinity'), false, 'no sentinel leaks into the prose');
 
-  // The degenerate case that would otherwise produce 0/0. NaN would compare false
-  // against itself and quietly poison every figure downstream, so it must not appear —
-  // and neither must 0, which is a real price rather than the absence of one.
+  // 0/0 must give neither NaN nor a ratio of 0, which would read as a real price.
   const empty = potOdds(0, 0);
   assert.equal(empty.breakEvenEquity, 0);
   assert.equal(Number.isNaN(empty.breakEvenEquity), false);
@@ -142,9 +109,6 @@ test('checking is free: nothing to call needs no equity and has no price', () =>
 });
 
 test('the free-call price survives the wire, which the old sentinel could not', () => {
-  // The regression test for the actual defect. `Infinity` is not JSON: it serialises to
-  // `null` and comes back as `null`, so a member typed `number` was a lie the moment it
-  // was serialised. `null` is a fixed point of the round trip.
   const free = potOdds(120, 0);
   const priced = potOdds(100, 50);
 
@@ -155,31 +119,21 @@ test('the free-call price survives the wire, which the old sentinel could not', 
   assert.ok(typeof parsed === 'object' && parsed !== null);
   assert.equal((parsed as { readonly oddsRatio: unknown }).oddsRatio, null);
 
-  // And the shape of the failure, so nobody restores the old sentinel: this is what the
-  // wire did to it.
+  // What the wire did to the old `Infinity` sentinel.
   assert.equal(JSON.stringify({ oddsRatio: Number.POSITIVE_INFINITY }), '{"oddsRatio":null}');
 });
 
-// ---------------------------------------------------------------------------
-// Minimum defence frequency and alpha
-// ---------------------------------------------------------------------------
-
 test('MDF and alpha are hand-derivable and always add to exactly 1', () => {
-  // A bluff of 50 into 100 risks 50 to win 100, so it breaks even when it works
-  // 50 / (100 + 50) = 1/3 of the time: that is alpha. The defence that removes the
-  // free profit is the rest, 100/150 = 2/3.
+  // A bluff of 50 into 100 breaks even at alpha = 50 / (100 + 50) = 1/3. MDF is 100/150 = 2/3.
   const half = defenceFrequency(100, 50);
   assert.equal(half.alpha, 1 / 3);
   assert.equal(half.minimumDefenceFrequency, 2 / 3);
 
-  // A pot-sized bluff risks 100 to win 100, so it breaks even at 50%.
   const potSized = defenceFrequency(100, 100);
   assert.equal(potSized.alpha, 0.5);
   assert.equal(potSized.minimumDefenceFrequency, 0.5);
 
-  // The complement identity, over every integer pot/bet pair up to 120. Integer chip
-  // amounts make pot + bet exact, and the two rounded halves come back to exactly 1
-  // for every pair here.
+  // Integer chips make pot + bet exact, so the two halves sum to exactly 1 for every pair here.
   let checked = 0;
   for (let pot = 0; pot <= 120; pot += 1) {
     for (let bet = 1; bet <= 120; bet += 1) {
@@ -194,9 +148,7 @@ test('MDF and alpha are hand-derivable and always add to exactly 1', () => {
   }
   assert.equal(checked, 121 * 120);
 
-  // Fractional amounts (an averaged pot, say) cannot promise bit-exactness: two
-  // separately rounded divisions can land an ulp or two off 1. The identity still
-  // holds to any precision anyone can act on.
+  // Fractional chips can land an ulp or two off 1.
   for (const [pot, bet] of [
     [0.5, 1.5],
     [33.33, 66.67],
@@ -209,36 +161,27 @@ test('MDF and alpha are hand-derivable and always add to exactly 1', () => {
 });
 
 test('alpha is not the price the bet lays the caller', () => {
-  // Same pot, same bet, two different questions. Alpha asks how often a bluff has to
-  // work: 100 / (100 + 100) = 50%. The caller's break-even asks what equity a call
-  // needs: 100 / (100 + 2 x 100) = 33.3%. Quoting one as the other is the classic
-  // error, so this test exists to keep the two numbers apart.
+  // Alpha is 100 / (100 + 100) = 50%. The caller's break-even is 100 / (100 + 2 x 100) = 33.3%.
   const defence = defenceFrequency(100, 100);
   const price = priceLaidByBet(100, 100);
   assert.equal(defence.alpha, 0.5);
   assert.equal(price.breakEvenEquity, 1 / 3);
   assert.notEqual(defence.alpha, price.breakEvenEquity);
 
-  // The caveat has to say where the number comes from, not just wave at it.
   assert.match(defence.caveat, /polarised/);
   assert.match(defence.caveat, /never bluffs/);
 });
 
-// ---------------------------------------------------------------------------
-// The exact hit probability
-// ---------------------------------------------------------------------------
-
 test('one card to come is outs over unseen, exactly', () => {
-  // A flush draw on the flop, counting only the river: 9 of the 47 unseen cards.
+  // A flop flush draw, river only.
   assert.equal(probabilityOfHitting(9, 47, 1).probability, 9 / 47);
-  // The same draw with the turn already dealt and missed: 9 of 46.
   assert.equal(probabilityOfHitting(9, 46, 1).probability, 9 / 46);
   assert.equal(probabilityOfHitting(0, 47, 1).probability, 0, 'no outs is no chance');
   assert.equal(probabilityOfHitting(47, 47, 1).probability, 1, 'every card an out is certainty');
 });
 
 test('two cards to come matches the hand-computed complement', () => {
-  // Hand arithmetic for a nine-out draw with 47 cards unseen:
+  // Nine outs, 47 unseen.
   //   the turn misses 38/47, then the river misses 37/46,
   //   so both miss (38 x 37) / (47 x 46) = 1406/2162 = 0.650324,
   //   so at least one hits 1 - 0.650324 = 0.349676 = 34.97%.
@@ -257,9 +200,7 @@ test('two cards to come matches the hand-computed complement', () => {
 });
 
 test('two cards to come never double counts, and the boundary cases are exact', () => {
-  // The wrong way to do it is to add the two streets: 9/47 + 9/46 = 38.7%, which
-  // counts every run-out that hits on both cards twice. The complement is 35.0%, so
-  // the naive sum is nearly four points too high — the derivation says so out loud.
+  // Adding the streets, 9/47 + 9/46 = 38.7%, counts double hits twice. The complement is 35.0%.
   const naive = 9 / 47 + 9 / 46;
   const result = probabilityOfHitting(9, 47, 2);
   assert.ok(naive > result.probability + 0.03, 'the additive shortcut overstates by more than 3 points');
@@ -269,8 +210,6 @@ test('two cards to come never double counts, and the boundary cases are exact', 
   assert.equal(probabilityOfHitting(47, 47, 2).probability, 1, 'every card an out is still certainty');
   // With 46 of 47 cards live, only one card misses, so two cards cannot both miss.
   assert.equal(probabilityOfHitting(46, 47, 2).probability, 1);
-  // Two cards to come is never worse than one, and strictly better whenever there is
-  // an out to hit and a card that can miss.
   for (const outs of [1, 4, 9, 15, 21]) {
     const one = probabilityOfHitting(outs, 47, 1).probability;
     const two = probabilityOfHitting(outs, 47, 2).probability;
@@ -279,9 +218,7 @@ test('two cards to come never double counts, and the boundary cases are exact', 
 });
 
 test('the closed form matches a brute-force count over the urn', () => {
-  // Independent ground truth: enumerate every unordered pair of positions out of
-  // `unseen`, treat the first `outs` positions as the winning cards, and count. This
-  // is C(unseen, 2) additions with no probability theory in it at all.
+  // Every unordered pair of `unseen` positions, the first `outs` of them winners, counted.
   const cases = [
     [1, 2],
     [2, 5],
@@ -312,16 +249,9 @@ test('the closed form matches a brute-force count over the urn', () => {
 });
 
 test('the closed form matches real run-outs enumerated with the engine', () => {
-  // Hero holds Ah Kh on a flop of Qh 7h 2c: four hearts, so nine hearts are still
-  // out there and 47 cards are unseen. Enumerate every one of the C(47,2) = 1081
-  // two-card run-outs and count two independent ways:
-  //   (a) does the run-out contain a heart, by suit;
-  //   (b) does the ENGINE score the resulting seven cards as a flush.
-  // (a) and (b) must agree here, because with two hearts in hand and two on the
-  // board any heart completes the flush, and no other suit can reach five cards
-  // (clubs top out at three, diamonds and spades at two). Counting via `evaluate`
-  // is what makes this a check against the engine rather than against my own suit
-  // arithmetic.
+  // Ah Kh on Qh 7h 2c leaves nine hearts in 47 cards. Each of the 1081 run-outs is counted by suit
+  // and by the engine's own flush score. They must agree, because any heart makes the flush and no
+  // other suit can reach five.
   const hero = parseCards('AhKh');
   const flop = parseCards('Qh7h2c');
   const stub = remainingDeck([...hero, ...flop]);
@@ -346,8 +276,7 @@ test('the closed form matches real run-outs enumerated with the engine', () => {
     }
   }
 
-  // C(47,2) = 47 x 46 / 2 = 1081. Run-outs with no heart: C(38,2) = 38 x 37 / 2 =
-  // 703. So run-outs with at least one heart: 1081 - 703 = 378.
+  // C(47,2) = 47 x 46 / 2 = 1081. No heart, C(38,2) = 38 x 37 / 2 = 703. At least one, 1081 - 703 = 378.
   assert.equal(total, 1081);
   assert.equal(withFlushCard, 378);
   assert.equal(scoredAsFlush, 378, 'the engine agrees that a heart, and only a heart, makes the flush');
@@ -359,10 +288,6 @@ test('the closed form matches real run-outs enumerated with the engine', () => {
     `enumerated ${enumerated} (378/1081) vs closed form ${closedForm}`,
   );
 });
-
-// ---------------------------------------------------------------------------
-// The rule of 2 and 4
-// ---------------------------------------------------------------------------
 
 test('the rule of 2 and 4 multiplies by 2 for one card and 4 for two', () => {
   const river = ruleOf24(9, 1);
@@ -376,8 +301,6 @@ test('the rule of 2 and 4 multiplies by 2 for one card and 4 for two', () => {
 });
 
 test('the caveat names the specific error rather than warning vaguely', () => {
-  // This is release-blocking content, not prose: the shortcut is taught here, so the
-  // place where it breaks has to be stated with numbers attached.
   const both = ruleOf24(9, 2);
   assert.match(both.caveat, /turn/, 'the x4 form assumes both cards arrive for this price');
   assert.match(both.caveat, /15 outs/);
@@ -389,7 +312,7 @@ test('the caveat names the specific error rather than warning vaguely', () => {
 });
 
 test('the x4 error grows with the out count above four outs, and changes sign between six and seven', () => {
-  // Exact figures, hand-derived from the complement with 47 cards unseen:
+  // From the complement, 47 unseen.
   //    4 outs: 1 - (43/47)(42/46) = 1 - 1806/2162 = 16.4662%  → x4 says 16, so -0.47
   //    9 outs: 1 - (38/47)(37/46) = 1 - 1406/2162 = 34.9676%  → x4 says 36, so +1.03
   //   15 outs: 1 - (32/47)(31/46) = 1 -  992/2162 = 54.1166%  → x4 says 60, so +5.88
@@ -403,8 +326,6 @@ test('the x4 error grows with the out count above four outs, and changes sign be
   assert.ok(Math.abs(nine.exactPercent - 34.9676) < 1e-3);
   assert.ok(Math.abs(fifteen.exactPercent - 54.1166) < 1e-3);
 
-  // Sign: at 4 outs the shortcut understates slightly, and from about 7 outs upward
-  // it overstates. Magnitudes to the tenth of a point.
   assert.ok(four.errorPoints < 0, 'at 4 outs x4 is a little low');
   assert.ok(Math.abs(four.errorPoints + 0.4662) < 1e-3);
   assert.ok(nine.errorPoints > 0, 'at 9 outs x4 is a little high');
@@ -412,18 +333,13 @@ test('the x4 error grows with the out count above four outs, and changes sign be
   assert.ok(fifteen.errorPoints > 0, 'at 15 outs x4 is badly high');
   assert.ok(Math.abs(fifteen.errorPoints - 5.8834) < 1e-3);
 
-  // The error has a closed form, which is worth deriving because it says exactly
-  // where the shortcut goes wrong and why. With u unseen cards fixed at 47:
+  // With 47 unseen.
   //   exact%  = 100 * (1 - (47-o)(46-o)/2162) = 100 * (93o - o^2) / 2162
   //   error   = 4o - 100 * (93o - o^2) / 2162
   //           = o * (4 * 2162 - 9300 + 100o) / 2162
   //           = o * (100o - 652) / 2162
-  // That is an upward parabola through the origin: negative for o < 6.52, positive
-  // above it, with its minimum at o = 3.26 and growing without limit after that. So
-  // the error is NOT monotone across the whole range — it dips slightly more negative
-  // up to three outs before turning — and the honest claim is that it rises from four
-  // outs upward. That is the range every real draw lives in, and it is exactly where
-  // the shortcut is trusted most.
+  // An upward parabola, negative below o = 6.52 with its minimum at o = 3.26, so the error rises
+  // only from four outs upward.
   const predicted = (outs: number): number => (outs * (100 * outs - 652)) / 2162;
   for (let outs = 1; outs <= 20; outs += 1) {
     assert.ok(
@@ -440,12 +356,11 @@ test('the x4 error grows with the out count above four outs, and changes sign be
   assert.ok(four.errorPoints < nine.errorPoints);
   assert.ok(nine.errorPoints < fifteen.errorPoints);
 
-  // The sign flips where the algebra says it does, between 6 and 7 outs (100o = 652).
+  // 100o = 652 puts the sign change between 6 and 7 outs.
   assert.ok(at(6).errorPoints < 0, 'six outs: x4 still understates');
   assert.ok(at(7).errorPoints > 0, 'seven outs: x4 has started to overstate');
   assert.ok(at(3).errorPoints < at(2).errorPoints, 'the dip before the turn, as the parabola predicts');
 
-  // The verdict has to name the direction and the size, and it must escalate.
   assert.match(four.verdict, /within half a point/);
   assert.match(nine.verdict, /overstates by 1\.0 points/);
   assert.match(fifteen.verdict, /overstates by 5\.9 points/);
@@ -453,8 +368,7 @@ test('the x4 error grows with the out count above four outs, and changes sign be
 });
 
 test('the x2 form understates, always in the same direction', () => {
-  // One card to come off a 46-card stub: each out is 1/46 = 2.174%, not 2%. So the
-  // shortcut is low by 0.174 points per out — 9 outs is 19.5652%, not 18%.
+  // Off 46 cards each out is 1/46 = 2.174%, so 9 outs is 19.5652%, not 18%.
   const nine = ruleOf24Accuracy(9, 1, probabilityOfHitting(9, 46, 1).probability);
   assert.ok(Math.abs(nine.exactPercent - 19.5652) < 1e-3);
   assert.ok(Math.abs(nine.errorPoints + 1.5652) < 1e-3);
@@ -468,26 +382,18 @@ test('the x2 form understates, always in the same direction', () => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// Implied and reverse implied odds
-// ---------------------------------------------------------------------------
-
 test('implied odds lower the required equity by the money still to come', () => {
-  // 100 in the middle, 50 to call, and hitting is worth another 150 later. The call
-  // is playing for 100 + 50 + 150 = 300, so it needs 50/300 = 1/6 = 16.7% instead of
-  // the 50/150 = 33.3% the pot alone demands.
+  // 100 + 50 + 150 = 300, so 50/300 = 1/6 against the pot's 50/150 = 1/3.
   const implied = impliedOdds({ pot: 100, toCall: 50, expectedAdditionalWinnings: 150 });
   assert.equal(implied.effectiveBreakEvenEquity, 1 / 6);
   assert.ok(implied.effectiveBreakEvenEquity < potOdds(100, 50).breakEvenEquity);
 
-  // With nothing extra expected it must collapse back onto the pot price exactly.
   assert.equal(
     impliedOdds({ pot: 100, toCall: 50, expectedAdditionalWinnings: 0 }).effectiveBreakEvenEquity,
     potOdds(100, 50).breakEvenEquity,
   );
 
-  // Closed-form identity: counting W of future money is the same arithmetic as
-  // playing for a pot that is already W bigger. Exact with integer chip amounts.
+  // W expected later is the same arithmetic as a pot already W bigger.
   for (const extra of [0, 1, 25, 150, 1000]) {
     assert.equal(
       impliedOdds({ pot: 100, toCall: 50, expectedAdditionalWinnings: extra }).effectiveBreakEvenEquity,
@@ -496,7 +402,6 @@ test('implied odds lower the required equity by the money still to come', () => 
     );
   }
 
-  // Monotone: more expected winnings can only ever make the call cheaper.
   let previous = Number.POSITIVE_INFINITY;
   for (const extra of [0, 10, 50, 200, 800]) {
     const current = impliedOdds({
@@ -508,7 +413,6 @@ test('implied odds lower the required equity by the money still to come', () => 
     previous = current;
   }
 
-  // The forecast has to be flagged as a forecast, every time.
   assert.ok(implied.assumptions.length > 0);
   assert.ok(
     implied.assumptions.some((note) => /estimate about future streets, not a fact/.test(note)),
@@ -517,9 +421,7 @@ test('implied odds lower the required equity by the money still to come', () => 
 });
 
 test('reverse implied odds raise the required equity by the money still to be lost', () => {
-  // 100 in the middle, 50 to call, and the hand tends to cost another 100 later. The
-  // call is really 150 to win 100 + 50 + 100 = 250, so it needs 150/250 = 60%, far
-  // worse than the 33.3% the pot advertises.
+  // 150 to win 100 + 50 + 100 = 250 needs 150/250 = 60%, against the pot's 33.3%.
   const reverse = reverseImpliedOdds({ pot: 100, toCall: 50, expectedAdditionalLosses: 100 });
   assert.equal(reverse.effectiveBreakEvenEquity, 0.6);
   assert.ok(reverse.effectiveBreakEvenEquity > potOdds(100, 50).breakEvenEquity);
@@ -530,8 +432,7 @@ test('reverse implied odds raise the required equity by the money still to be lo
     'with nothing extra expected it is just the pot price',
   );
 
-  // Closed-form identity: money that is going in later costs the same as money going
-  // in now, so the effective price equals the pot price on a larger call.
+  // L lost later is the same arithmetic as a call already L bigger.
   for (const loss of [0, 5, 100, 400]) {
     assert.equal(
       reverseImpliedOdds({ pot: 100, toCall: 50, expectedAdditionalLosses: loss }).effectiveBreakEvenEquity,
@@ -540,7 +441,6 @@ test('reverse implied odds raise the required equity by the money still to be lo
     );
   }
 
-  // Monotone the other way, and never below the pot price.
   let previous = Number.NEGATIVE_INFINITY;
   for (const loss of [0, 10, 60, 300, 900]) {
     const current = reverseImpliedOdds({
@@ -561,9 +461,6 @@ test('reverse implied odds raise the required equity by the money still to be lo
 });
 
 test('implied and reverse implied odds bracket the pot price', () => {
-  // The same spot seen three ways. The pot price sits between the two adjustments,
-  // which is the shape a learner should end up with: the pot price is the only one of
-  // the three that is a fact.
   const base = potOdds(60, 20).breakEvenEquity;
   const optimistic = impliedOdds({
     pot: 60,
@@ -582,10 +479,6 @@ test('implied and reverse implied odds bracket the pot price', () => {
   assert.equal(base, 0.25);
   assert.equal(pessimistic, 0.7);
 });
-
-// ---------------------------------------------------------------------------
-// Validation and the no-bare-numbers rule
-// ---------------------------------------------------------------------------
 
 test('bad chip amounts throw OddsError naming what was expected', () => {
   assert.throws(() => potOdds(-1, 50), { name: 'OddsError', message: /pot cannot be negative/ });
@@ -610,7 +503,6 @@ test('bad chip amounts throw OddsError naming what was expected', () => {
     name: 'OddsError',
     message: /expectedAdditionalLosses must be a finite/,
   });
-  // The error type is the named class, so callers can catch this and nothing else.
   assert.throws(() => potOdds(-1, 0), OddsError);
 });
 
@@ -638,7 +530,6 @@ test('bad card counts throw OddsError naming what was expected', () => {
     message: /unseen must be at least cardsToCome/,
   });
   assert.throws(() => ruleOf24(2.5, 2), { name: 'OddsError', message: /whole number of cards/ });
-  // 47 unseen cards is the most there can be while cards are still to come.
   assert.throws(() => ruleOf24(48, 2), { name: 'OddsError', message: /outs cannot exceed 47/ });
   assert.throws(() => ruleOf24Accuracy(9, 2, 35), {
     name: 'OddsError',
@@ -649,20 +540,11 @@ test('bad card counts throw OddsError naming what was expected', () => {
 });
 
 test('the shortcut refuses an out count whose multiple is not a probability', () => {
-  // The defect this guard exists for was measured, not imagined: a Coach panel published
-  // "180%" for a flopped set (45 cards classified as outs, times 4) and a shipped scenario
-  // in `@prl/content` reached "188%" at 47. A probability above 100% is not a rounding
-  // problem to be tolerated at one decimal place; it is the shortcut being applied where
-  // it approximates nothing, and the honest answer is to refuse rather than to clamp — a
-  // clamped 100% would be a fabricated certainty.
-  //
-  // The ceiling is where `outs x multiplier` reaches exactly 100: 25 outs with two cards
-  // to come, 50 with one (unreachable, since at most 46 cards are unseen with one to come,
-  // which is why only the x4 form can actually cross it).
+  // The Coach once published "180%" for a flopped set (45 outs x 4), and a scenario reached "188%".
+  // The x2 ceiling of 50 is unreachable, because at most 46 cards are unseen with one to come.
   assert.equal(maximumOutsForRuleOf24(2), 25);
   assert.equal(maximumOutsForRuleOf24(1), 50);
 
-  // Exactly at the ceiling is still a probability and is still answered.
   assert.equal(ruleOf24(25, 2).estimatePercent, 100);
   assert.equal(ruleOf24(46, 1).estimatePercent, 92);
 
@@ -672,11 +554,7 @@ test('the shortcut refuses an out count whose multiple is not a probability', ()
       message: /is not a probability/,
     });
   }
-  // And the message names the figure that would have been published, so the failure reads
-  // like the bug rather than like a validation rule.
   assert.throws(() => ruleOf24(47, 2), { name: 'OddsError', message: /47 x 4 is 188%/ });
-  // `ruleOf24Accuracy` validates the shortcut's own inputs first, so it refuses too rather
-  // than reporting a mismatch against an exact figure.
   assert.throws(() => ruleOf24Accuracy(47, 2, 0.99), {
     name: 'OddsError',
     message: /is not a probability/,
@@ -684,8 +562,6 @@ test('the shortcut refuses an out count whose multiple is not a probability', ()
 });
 
 test('cardsToCome outside 1 or 2 throws, even though the type forbids it', () => {
-  // The guard exists for values that arrive as JSON, where the type system was never
-  // consulted. See `LooseCardsToCome` at the top of this file.
   assert.throws(() => loose.probabilityOfHitting(9, 47, 3), {
     name: 'OddsError',
     message: /cardsToCome must be 1 \(the river only\) or 2/,
@@ -697,9 +573,6 @@ test('cardsToCome outside 1 or 2 throws, even though the type forbids it', () =>
 });
 
 test('every figure in the family arrives with words attached', () => {
-  // The house rule for this package: no bare numbers. A figure a learner cannot
-  // interrogate is a figure they will misuse, so this is a structural check that the
-  // explanation, derivation, caveat and assumption fields are actually populated.
   const texts: string[] = [
     potOdds(100, 50).explanation,
     potOdds(100, 0).explanation,
@@ -724,10 +597,6 @@ test('every figure in the family arrives with words attached', () => {
     assert.ok(text.length > 40, `too short to explain anything: "${text}"`);
     assert.equal(text.includes('NaN'), false, 'no NaN can reach a learner-facing string');
     assert.equal(text.includes('undefined'), false);
-    // This line used to allow one exception — the free-call explanation, which said the
-    // ratio "is reported as Infinity". That was a sentence naming an implementation
-    // sentinel to a learner, and the sentinel it named is gone. No exception now: nothing
-    // a learner reads mentions Infinity, null, or a price of 0 where there is no price.
     assert.equal(text.includes('Infinity'), false, 'no sentinel can reach a learner-facing string');
     assert.equal(text.includes('null'), false);
   }
