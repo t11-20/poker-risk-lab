@@ -1,138 +1,26 @@
 #!/usr/bin/env node
 
 /**
- * Gate: every release image is signed, by digest, by whichever posture the release is actually in —
- * the key this repository committed, or the CI workflow identity the committed policy names.
+ * Gate: every release image is signed, by digest, in whichever posture its signature record is in.
+ * KEY posture verifies against `deploy/signing/cosign.pub`. KEYLESS posture verifies a Fulcio
+ * certificate against the identity and issuer in `deploy/signing/keyless-policy.json`, never against
+ * values from the record itself. `parseSignatureRecord` refuses a record in neither posture, because
+ * that is what an unsigned release looks like, and a record in both.
  *
- * Invoked by `pnpm run security:image-provenance`, and by `scripts/supply-chain/audit.mjs`.
+ * The keyless posture is implemented and unexercised. No signing workflow run has happened, so every
+ * release image today is in the KEY posture.
  *
- * ## Two postures, and never "either"
+ * This file reads only the public key. `scripts/release-sign.mjs` holds the signer, so a machine that
+ * can check a signature cannot mint one. `--negative-control` generates an ephemeral keypair and must
+ * see each forged case refused: an unsigned digest (cosign exits 10), a different key, a signature
+ * transplanted onto another digest, and for keyless a wrong owner, wrong workflow file, wrong issuer
+ * and no asserted identity. `reconcileWithManifest` ties each signed digest to the release manifest.
  *
- * A release built on a workstation is signed with a long-lived key and verified against
- * `deploy/signing/cosign.pub`. A release signed by `.github/workflows/release-sign.yml` carries no
- * key at all: a ten-minute Fulcio certificate naming the workflow, verified against the identity
- * and issuer in `deploy/signing/keyless-policy.json`, with a Rekor entry behind it. The gate reads
- * the signature record, decides which posture it is in, and verifies THAT one.
+ * KEY posture proves possession of a key, with no transparency log. KEYLESS posture proves which
+ * workflow signed, recorded in Rekor. Neither proves what went into the image. See
+ * `deploy/signing/README.md`.
  *
- * The rule that makes this safe is in `parseSignatureRecord`: a record carrying neither a public
- * key nor a keyless identity is REFUSED, because that is precisely what an unsigned release looks
- * like, and "absent" must never be read as "the other posture, presumably". A record carrying both
- * is refused too — it would let a check that failed under one be reported as a pass under the other.
- *
- * ## What the keyless posture adds, and what it does not
- *
- * A keyless signature verifies against SOME Fulcio certificate, and Fulcio issues one to anybody's
- * GitHub Actions job. What makes it provenance is that this gate demands a specific
- * `--certificate-identity` and `--certificate-oidc-issuer`, taken from the committed policy and
- * never from the record being checked. A verification that omitted them would accept a signature
- * made by a workflow in a repository nobody has heard of — see `runKeylessNegativeControl`, which
- * demonstrates the refusals with real cosign output and no network.
- *
- * **Status: the keyless posture is IMPLEMENTED AND UNEXERCISED.** No run of the signing workflow
- * has happened, so no Fulcio certificate and no Rekor entry exist for this repository, and every
- * release image today is in the KEY posture. Nothing here should be read as saying otherwise.
- *
- * ## The defect this exists for
- *
- * `docs/production/final-readiness-report.md` carried this as open residual 3, and the wording is
- * worth keeping because it is exactly right about what was and was not proven:
- *
- *     "Images carry a registry digest but no signature. `release:artifacts --push` publishes to a
- *      registry and the round trip is proven — the manifest is re-fetched and re-hashed in process,
- *      and every local reference is deleted and pulled back by digest before the ids are compared.
- *      So content identity across a push/pull boundary holds … What does not exist is provenance:
- *      nothing is signed, there is no transparency log, and a local registry is not a third party."
- *
- * Content identity answers "do two machines hold the same bytes". It does not answer "are these the
- * bytes this repository built", and the lab registry has no authentication at all — anything that
- * can reach 127.0.0.1:5001 can push under `prl-api`. A deployer pulling `prl-api@sha256:…` got
- * precisely the bytes they named and no way whatsoever to tell whose they were.
- *
- * ## What this gate refuses, and each one is a demonstrated refusal
- *
- * `--negative-control` runs all of these against throwaway images in the registry and FAILS THE
- * GATE unless each one is refused. This is not decoration: before this file existed, every one of
- * the three key states below produced no output from anything, which is indistinguishable from a
- * pass. A guard that has never been shown refusing is a guard nobody has tested.
- *
- *   1. **An UNSIGNED digest.** `cosign verify` exits 10 with "no signatures found".
- *   2. **A digest signed by a DIFFERENT key.** Exits 1: "accepted signatures do not match
- *      threshold, Found: 0, Expected 1".
- *   3. **A TAMPERED digest carrying a transplanted signature.** An attacker who re-pushes different
- *      content gets a different digest, so control 1 already covers the naive case. Control 3 is
- *      the interesting one: copy the valid signature index from image A onto image B's
- *      `sha256-<digest>` fallback tag, which the unauthenticated registry accepts with a 201, and
- *      verify B. Exits 1: "provided artifact digest does not match any digest in statement" —
- *      because the digest is inside the SIGNED payload, so moving the signature does not move what
- *      it says.
- *
- * And four more for the keyless posture, against a certificate minted by a throwaway CA that stands
- * in for Fulcio (`runKeylessNegativeControl` is explicit about what that substitution does and does
- * not demonstrate):
- *
- *   4. **A certificate identity from ANOTHER OWNER.** Exits 1: `expected SAN value "…attacker-org…",
- *      got "…prl-negative-control…"`.
- *   5. **A certificate identity naming ANOTHER WORKFLOW FILE.** Same refusal — the file name is
- *      part of the identity, which is why renaming the signing workflow is release-blocking.
- *   6. **A certificate from ANOTHER ISSUER.** Exits 1: `expected issuer value "https://gitlab…"`.
- *   7. **A verification that asserts NO identity at all.** cosign's own rule, and worth knowing:
- *      `--certificate-identity or --certificate-identity-regexp is required for verification in
- *      keyless mode`. The dangerous verifier is not one that asserts nothing — it is one that
- *      asserts something wider than what was reviewed.
- *
- * A further refusal has nothing to do with cosign and is the one that actually ties this to the
- * release: `reconcileWithManifest` in `scripts/image-signing.mjs` fails unless the signed digest is
- * byte-identical to the digest `deploy/staging/release-manifest.json` records for that service.
- * Without it, a sidecar pointing at some OTHER correctly-signed image passes every cryptographic
- * check here and the gate reports that the shipping artefacts are signed.
- *
- * ## Public key only. This is a property, not a convenience.
- *
- * Nothing in this file reads `deploy/signing/cosign.key` and nothing may. The signer is a separate
- * script (`scripts/release-sign.mjs`) precisely so that a machine which can CHECK a signature
- * cannot MINT one. `--negative-control` needs a signing key to produce its own probe signature and
- * generates an EPHEMERAL keypair in a temp directory for it, discarded at the end; the release key
- * is never involved, and the ephemeral public key doubles as the wrong key for control 2.
- *
- * ## Refusing is the whole point
- *
- *   * cosign missing            → FAIL, with how to install it. Never a skip.
- *   * no signature record       → FAIL. "The file is absent" is the unsigned state, not an
- *                                 exemption from being checked.
- *   * record names no images    → FAIL. A verification with no subject proves nothing.
- *   * registry unreachable      → FAIL. A signature nobody can fetch is a signature nobody has.
- *   * attestation over an empty
- *     predicate                 → FAIL. `cosign attest` signs `{}` happily; the signature over it
- *                                 verifies perfectly and describes nothing.
- *
- * ## What this gate does NOT prove
- *
- * Read this before quoting it, and read which posture the run reported first — the gate prints it,
- * and the two claims are genuinely different.
- *
- * **KEY posture** (every release image as things stand). These signatures are made with a
- * long-lived key held on the release machine, with no transparency log behind them. The gate proves
- * the digests were signed by whoever holds that key. It does NOT identify a builder, a source tree
- * or a build environment, and without a log there is no third-party record that a signature existed
- * at a time, so key compromise is not detectable after the fact.
- *
- * **KEYLESS posture** (what a CI-built release gets, once the workflow has ever run). The signature
- * identifies the workflow, the repository and the ref, and Rekor is a witness that the certificate
- * was issued when it says. It still does NOT describe what went INTO the image: that is a SLSA
- * provenance predicate emitted by the builder, and nothing here emits one. The SBOM attestation
- * says what is inside the artefact, which is a third question again.
- *
- * `deploy/signing/README.md` § "What this does not prove" is the long version, and
- * `docs/production/final-readiness-report.md` keeps the remainder as a named residual rather than
- * folding it into the pass.
- *
- * Usage:
- *     node scripts/supply-chain/image-provenance.mjs [--manifest <path>] [--signatures <path>]
- *                 [--public-key <path>] [--policy <path>] [--require-attestation]
- *                 [--negative-control] [--json]
- *
- * Exit codes: 0 every release image verified; 1 anything else, including a refusal to run.
- * 0 for --help.
+ * Exit codes: 0 every release image verified (and for --help); 1 anything else.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -255,17 +143,9 @@ export function parseArgs(argv) {
   return options;
 }
 
-// ---------------------------------------------------------------------------
-// Verifying one image
-// ---------------------------------------------------------------------------
-
 /**
- * `cosign verify --key <pub>` against one registry digest reference.
- *
- * Returns the digests the SIGNED payloads named rather than a boolean, so the caller can compare
- * them to the digest it asked about. cosign already makes that comparison itself — control 3 above
- * is the measurement — and re-deriving it here is the difference between checking the claim and
- * trusting an exit code.
+ * Returns the digests the signed payloads name, so the caller compares them to the digest it asked
+ * about instead of trusting the exit code.
  */
 export function verifySignature(reference, publicKeyPath) {
   const result = runCosign(['verify', '--key', publicKeyPath, ...COSIGN_VERIFY_FLAGS, reference]);
@@ -283,23 +163,10 @@ export function verifySignature(reference, publicKeyPath) {
 }
 
 /**
- * `cosign verify` against a KEYLESS signature, asserting the identity the committed policy demands.
- *
- * The two flags this passes are the entire difference between provenance and arithmetic. Without
- * them cosign will not even run — "--certificate-identity or --certificate-identity-regexp is
- * required for verification in keyless mode" — and with a WIDER version of them it accepts a
- * signature made by a workflow in a repository nobody has heard of, because Fulcio issues a
- * certificate to anybody's GitHub Actions job. The values come from `deploy/signing/
- * keyless-policy.json` and never from the record being checked.
- *
- * Note what is NOT passed: `--insecure-ignore-tlog`. The keyed posture turns Rekor off and states
- * the cost as a residual; a keyless signature that skipped the log would keep that cost and lose
- * the point, so the log verification is mandatory here and a signature that is not in Rekor fails.
- *
- * @param {string} reference
- * @param {{identity: string, issuer: string}} demanded
- * @param {string[]} extraFlags used only by the negative control, which verifies against a
- *   throwaway certificate authority instead of the real Fulcio roots
+ * Keyless verify. The identity and issuer come from the committed policy. Without them cosign
+ * refuses to run, and with wider ones it accepts any GitHub Actions job Fulcio certified.
+ * `--insecure-ignore-tlog` is never passed, so a signature missing from Rekor fails.
+ * `extraFlags` is only for the negative control's throwaway CA.
  */
 export function verifyKeylessSignature(reference, demanded, extraFlags = []) {
   const result = runCosign(['verify', ...keylessVerifyFlags(demanded), ...extraFlags, reference]);
@@ -316,7 +183,6 @@ export function verifyKeylessSignature(reference, demanded, extraFlags = []) {
   return { ok: true, digests };
 }
 
-/** `cosign verify-attestation --key <pub> --type cyclonedx` against one reference. */
 export function verifyAttestation(reference, publicKeyPath) {
   const result = runCosign([
     'verify-attestation',
@@ -340,13 +206,7 @@ export function verifyAttestation(reference, publicKeyPath) {
   return { ok: true, statements };
 }
 
-/**
- * `cosign verify-attestation` against a KEYLESS attestation, with the same identity assertion.
- *
- * Separate from the keyed function above rather than a flag on it, so that the keyed path is
- * byte-identical to what it was: this change adds a posture, and a change that also rewrites the
- * working one is a change whose failures cannot be attributed.
- */
+// Separate from `verifyAttestation` so the keyed path stays byte-identical.
 export function verifyKeylessAttestation(reference, demanded, extraFlags = []) {
   const result = runCosign([
     'verify-attestation',
@@ -369,14 +229,7 @@ export function verifyKeylessAttestation(reference, demanded, extraFlags = []) {
   return { ok: true, statements };
 }
 
-// ---------------------------------------------------------------------------
-// The negative control
-// ---------------------------------------------------------------------------
-
-/**
- * A minimal HTTP call to the registry. `node:http` and not `fetch` because the tamper control PUTs
- * raw manifest bytes back and the whole point is that they are unaltered.
- */
+// `node:http` and not `fetch`: the tamper control PUTs raw manifest bytes back unaltered.
 function registryCall({ host, port, method, path, headers = {}, body = null }) {
   return new Promise((resolveCall) => {
     const req = request({ method, host, port, path, headers, timeout: 10_000 }, (res) => {
@@ -396,16 +249,8 @@ function registryCall({ host, port, method, path, headers = {}, body = null }) {
 const digestOf = (bytes) => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 
 /**
- * Uploads a synthetic OCI image to the registry and returns its digest.
- *
- * Synthetic, over HTTP, rather than `docker build` of a `FROM scratch` image. Two reasons and the
- * second is the one that decided it: it needs no docker daemon, so the refusal demonstration runs
- * on a machine that can only verify; and the tamper control has to PUT a manifest by hand anyway,
- * so the HTTP path is code this file needs regardless.
- *
- * The blobs are never pulled by anything — cosign signs a manifest, and a manifest is what this
- * creates. `unique` guarantees two calls produce two different digests, which is what makes "image
- * B is not image A" true rather than assumed.
+ * Pushes a synthetic OCI image over HTTP so the control needs no docker daemon. `unique` makes two
+ * calls produce two different digests.
  */
 async function pushSyntheticImage({ host, port, repository, unique }) {
   const putBlob = async (bytes) => {
@@ -479,19 +324,9 @@ async function pushSyntheticImage({ host, port, repository, unique }) {
 }
 
 /**
- * The three refusals, demonstrated against a real registry rather than asserted in prose.
- *
- * Every case here failed to be a failure before this gate existed: an unsigned digest, a digest
- * signed by somebody else's key, and a digest carrying a transplanted signature all deployed
- * identically, because nothing looked. "A sweep of nothing is not a pass" applies to the guard as
- * much as to the thing it guards, so a control that PASSES is a gate failure — it would mean the
- * verifier accepted something it must refuse.
- *
- * The positive control at the end is not padding. Three refusals prove nothing on their own: a
- * cosign that refused everything, a registry that answered 500 to every request, or a typo in the
- * reference would produce exactly the same three failures. Signing image A with the ephemeral key
- * and verifying it with the ephemeral public key is what distinguishes "the verifier discriminates"
- * from "the verifier is broken".
+ * The three key-posture refusals, demonstrated against the registry. A control the verifier accepts
+ * fails the gate. The positive control at the end shows the verifier discriminates rather than
+ * refusing everything.
  */
 async function runNegativeControl(gate, releasePublicKeyPath, registryHost) {
   const parsed = parseRegistryHost(registryHost);
@@ -505,9 +340,7 @@ async function runNegativeControl(gate, releasePublicKeyPath, registryHost) {
   const scratch = mkdtempSync(join(tmpdir(), 'prl-provenance-nc-'));
 
   try {
-    // An EPHEMERAL keypair. The release private key is never read by this file, and this one is
-    // discarded below — so the demonstration runs on a machine that holds only the public trust
-    // anchor, which is the property the gate is supposed to have.
+    // Ephemeral keypair, discarded below. The release private key is never read.
     const passphrase = randomBytes(18).toString('base64url');
     const generated = spawnSync('cosign', ['generate-key-pair'], {
       cwd: scratch,
@@ -543,7 +376,6 @@ async function runNegativeControl(gate, releasePublicKeyPath, registryHost) {
       return;
     }
 
-    /** A control passes when the verifier REFUSES. Accepting is the gate failure. */
     const mustRefuse = (label, result, why) => {
       if (result.ok) {
         gate.fail(
@@ -568,8 +400,8 @@ async function runNegativeControl(gate, releasePublicKeyPath, registryHost) {
       "The probe image is validly signed — by the ephemeral key, not by this repository's key.",
     );
 
-    // Control 3: transplant. The registry has no authentication, so the valid signature index for
-    // image A can simply be PUT under image B's `sha256-<digest>` fallback tag. It answers 201.
+    // The registry has no authentication, so image A's signature index can be PUT under image B's
+    // `sha256-<digest>` fallback tag. It answers 201.
     const fallbackTag = `sha256-${good.digest.replace('sha256:', '')}`;
     const signatureIndex = await registryCall({
       host,
@@ -615,8 +447,6 @@ async function runNegativeControl(gate, releasePublicKeyPath, registryHost) {
         'with a 201 because it has no authentication.',
     );
 
-    // The positive control. Without it, three refusals are equally consistent with a verifier that
-    // refuses everything.
     const positive = verifySignature(goodReference, probePub);
     if (!positive.ok) {
       gate.fail(
@@ -636,37 +466,12 @@ async function runNegativeControl(gate, releasePublicKeyPath, registryHost) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// The keyless negative control
-// ---------------------------------------------------------------------------
-
 /**
- * The keyless refusals, demonstrated offline against a THROWAWAY certificate authority.
- *
- * ## Why this is possible without a network, and exactly what it does and does not show
- *
- * A real keyless signature needs Fulcio and Rekor, and neither exists on a workstation. But the
- * property that makes a keyless signature *provenance* rather than arithmetic is not the network
- * round trip — it is that the verifier demands a specific certificate identity and a specific OIDC
- * issuer, and refuses a certificate carrying anything else. That is a decision cosign makes locally
- * about bytes in a certificate, so it can be demonstrated locally with a certificate this function
- * mints itself:
- *
- *   * a throwaway CA plays Fulcio (`--trusted-root` substitutes it for the real Sigstore roots);
- *   * a leaf certificate carries a SAN URI naming a workflow, and Fulcio's OIDC-issuer extension
- *     (1.3.6.1.4.1.57264.1.8) naming GitHub's issuer — the same two fields a real Fulcio
- *     certificate carries, in the same places;
- *   * `cosign sign --certificate/--certificate-chain` attaches it to a real signature over a real
- *     image in the registry.
- *
- * **What this therefore proves:** cosign refuses a signature whose certificate identity is not the
- * one demanded, refuses a wrong issuer, and refuses to verify at all when no identity is asserted.
- * Those are the three ways a keyless verification silently becomes worthless.
- *
- * **What it does NOT prove, and must not be quoted as proving:** that the OIDC exchange works, that
- * Fulcio would issue this repository a certificate, or that a Rekor entry exists. Nothing offline
- * can show any of that. The real thing is unexercised until `.github/workflows/release-sign.yml`
- * runs, and the trusted-root substitution below is exactly the part that would be Fulcio's job.
+ * The keyless refusals, demonstrated offline. A throwaway CA stands in for Fulcio via
+ * `--trusted-root`, and the leaf carries a SAN URI and the OIDC-issuer extension
+ * (1.3.6.1.4.1.57264.1.8) as a real Fulcio certificate does. This proves cosign refuses a wrong
+ * identity, a wrong issuer and an unasserted identity. It does NOT prove the OIDC exchange, Fulcio
+ * issuance or a Rekor entry.
  */
 async function runKeylessNegativeControl(gate, options, registryHost) {
   const parsedHost = parseRegistryHost(registryHost);
@@ -698,8 +503,7 @@ async function runKeylessNegativeControl(gate, options, registryHost) {
   const port = parsedHost.port ?? 5000;
   const repository = 'prl-keyless-probe';
   const scratch = mkdtempSync(join(tmpdir(), 'prl-keyless-nc-'));
-  // The owner in the probe identity. Never a real one: this certificate must not be mistakable for
-  // anything, and the policy's own owner is null until this repository is published.
+  // Never a real owner, so the probe certificate cannot be mistaken for anything.
   const probeRepository = `prl-negative-control/${policy.repositoryName}`;
   const probeIdentity = expectedCertificateIdentity(policy, probeRepository);
 
@@ -710,11 +514,8 @@ async function runKeylessNegativeControl(gate, options, registryHost) {
     };
     const write = (name, text) => writeFileSync(join(scratch, name), text);
 
-    // The extensions are what make this a Fulcio-SHAPED certificate rather than any old leaf: a URI
-    // SAN carrying the workflow identity, and the OIDC-issuer extension. Both values come from the
-    // committed policy, whose fields are already constrained to safe character sets by
-    // `parseKeylessPolicy` — an identity assembled from arbitrary text would be config injection
-    // into openssl's own parser.
+    // Both values come from the committed policy, which `parseKeylessPolicy` limits to safe
+    // character sets. Arbitrary text here would be config injection into openssl's parser.
     write(
       'ext.cnf',
       '[ca_ext]\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\n' +
@@ -795,9 +596,7 @@ async function runKeylessNegativeControl(gate, options, registryHost) {
       return;
     }
 
-    // `--trusted-root` is what stands in for Fulcio: a Sigstore trusted-root document naming the
-    // throwaway CA. Without it cosign has no root that would accept this certificate and every case
-    // below would fail identically — which would look like three refusals and prove nothing.
+    // Without this trusted root every case below would fail identically and prove nothing.
     const caPem = readFileSync(join(scratch, 'ca.pem'), 'utf8');
     const caDer = Buffer.from(caPem.replace(/-----[^-]+-----/g, '').replace(/\s+/g, ''), 'base64');
     write(
@@ -848,9 +647,8 @@ async function runKeylessNegativeControl(gate, options, registryHost) {
       return;
     }
 
-    // The substitutions that replace Fulcio and Rekor for this demonstration, and nothing else. The
-    // REAL verification path (`verifyKeylessSignature` with no extra flags) passes none of these:
-    // it uses the shipped Sigstore roots and requires a transparency-log entry.
+    // Substitutions for Fulcio and Rekor. The real path (`verifyKeylessSignature` with no extra
+    // flags) passes none of them.
     const asIfFulcio = [
       '--trusted-root',
       join(scratch, 'trusted-root.json'),
@@ -914,9 +712,7 @@ async function runKeylessNegativeControl(gate, options, registryHost) {
     mustRefuse(
       'a verification that asserts NO identity at all',
       (() => {
-        // Not `verifyKeylessSignature`: this deliberately omits the flags that function always
-        // passes, to show what cosign does when a verifier does not assert an identity. It is the
-        // one refusal here that is cosign's own rule rather than a comparison it performed.
+        // Omits the identity flags on purpose. This refusal is cosign's own rule.
         const result = runCosign([
           'verify',
           '--allow-http-registry',
@@ -931,9 +727,7 @@ async function runKeylessNegativeControl(gate, options, registryHost) {
       'This is the shape of a verifier that checks the maths and calls it provenance.',
     );
 
-    // Corroboration: read the certificate back out of the registry and parse it here, so the three
-    // refusals above are demonstrably ABOUT the identity rather than about a broken chain. Same
-    // reasoning as `verifiedDigests` — checking the claim, not the exit code.
+    // Read the certificate back and parse it, so the refusals are shown to be about the identity.
     const readBack = await readCertificateFromRegistry({ host, port, repository, digest: image.digest });
     if ('problem' in readBack) {
       gate.fail('the keyless negative control could not read its own certificate back', readBack.problem);
@@ -963,8 +757,6 @@ async function runKeylessNegativeControl(gate, options, registryHost) {
       }
     }
 
-    // The positive control. Three refusals are equally consistent with a verifier that refuses
-    // everything — a broken trusted root would produce exactly this.
     const positive = verifyKeylessSignature(
       reference,
       { identity: probeIdentity, issuer: policy.issuer },
@@ -989,13 +781,8 @@ async function runKeylessNegativeControl(gate, options, registryHost) {
 }
 
 /**
- * The signing certificate a cosign v0.3 bundle in the registry carries.
- *
- * Three hops — the fallback `sha256-<digest>` tag is an index, the index names a manifest, the
- * manifest's single layer IS the bundle — over plain HTTP, which is why this is used by the
- * negative control against the loopback registry and NOT by the gate against GHCR. `fetchManifest`
- * in `registry-digest.mjs` says the same thing about credentials: this module implements no token
- * flow, so it reports what it could not do rather than pretending.
+ * Reads the certificate from a cosign v0.3 bundle over plain HTTP (index, manifest, bundle layer).
+ * Used only against the loopback registry, because this module implements no token flow.
  */
 async function readCertificateFromRegistry({ host, port, repository, digest }) {
   const accept = [
@@ -1024,10 +811,6 @@ async function readCertificateFromRegistry({ host, port, repository, digest }) {
   if ('problem' in bundle) return bundle;
   return bundleCertificate(bundle.value);
 }
-
-// ---------------------------------------------------------------------------
-// The gate
-// ---------------------------------------------------------------------------
 
 export function runImageProvenanceGate(options) {
   const gate = new Gate('release-image-signatures');
@@ -1063,18 +846,7 @@ export function runImageProvenanceGate(options) {
     if (problems.length > 0) return;
     report.posture = meta.posture;
 
-    // ## The two postures, and why the gate follows the record rather than a flag
-    //
-    // A release built on a workstation is signed with the key committed at `deploy/signing/
-    // cosign.pub`. A release built in CI is signed keylessly, by a workflow identity, with no key
-    // anywhere. Both are legitimate, they are verified with completely different arguments, and the
-    // one thing that must never happen is a record in NEITHER posture being read as one of them —
-    // `parseSignatureRecord` refuses that above, in as many words, because an unsigned release is
-    // exactly what "neither" looks like.
-    //
-    // `verifier` is chosen here and used below, so the per-image loop is identical in both
-    // postures. The alternative — two loops — is how one of them quietly stops checking the
-    // attestation, or the registry tie, or the digest inside the payload.
+    // The verifier is chosen by the record's posture, so one per-image loop serves both.
     let publicKey = null;
     let verifier = null;
     if (meta.posture === 'key') {
@@ -1133,9 +905,8 @@ export function runImageProvenanceGate(options) {
             'record while it is null.',
         );
       }
-      // The record states an identity too. It is not what the verification asserts — the policy is
-      // — but the two must agree, because a record naming a different workflow is a record
-      // describing a signature this gate is not verifying.
+      // The policy is what verification asserts, but a record naming a different workflow describes
+      // a signature this gate is not verifying.
       const recordProblems = identityProblems(meta.keyless ?? {}, policy, resolved.repository);
       for (const problem of recordProblems) {
         gate.fail('the signature record claims an identity the policy does not accept', problem);
@@ -1154,8 +925,7 @@ export function runImageProvenanceGate(options) {
       };
     }
 
-    // The tie to the build. This is the check cosign cannot make, and the one an attacker with a
-    // valid signature over SOME image would walk straight past.
+    // The tie to the build. cosign cannot check this.
     const reconciled = reconcileWithManifest(images, manifestRead.value);
     for (const problem of reconciled.problems) gate.fail('signatures do not match the release', problem);
     if (reconciled.problems.length > 0) return;
@@ -1165,10 +935,8 @@ export function runImageProvenanceGate(options) {
         `${reconciled.matched.join(', ')}`,
     );
 
-    // cosign is required here, at the first step that needs it, and not first. Every refusal above
-    // is about files and needs no tool: asked first, a machine without cosign answered every one of
-    // them "cosign is not installed", which hid an unsigned release behind a missing binary and
-    // failed all five of `image-provenance.test.mjs`'s refusal tests on CI's runners.
+    // cosign is required only here. Asked first, a machine without it answered every file-level
+    // refusal with "cosign is not installed" and failed five image-provenance.test.mjs cases on CI.
     const version = cosignVersion();
     if (version === null) {
       gate.fail(
@@ -1185,9 +953,6 @@ export function runImageProvenanceGate(options) {
 
     let verified = 0;
     for (const image of images) {
-      // The registry must actually serve those bytes under that digest, checked by re-hashing here
-      // rather than by asking docker. A signature over a digest the registry no longer holds is a
-      // signature nobody can use.
       const parsedHost = parseRegistryHost(meta.registry ?? '');
       if ('problem' in parsedHost) {
         gate.fail(`${image.service}: the signature record's registry host is unusable`, parsedHost.problem);
@@ -1200,11 +965,8 @@ export function runImageProvenanceGate(options) {
         localDigest: image.buildDigest,
       });
       if (!present.ok && present.unauthenticated === true) {
-        // A registry that wants credentials — GHCR, which is where the keyless posture publishes.
-        // This module deliberately implements no token flow (see `fetchManifest`), so the
-        // independent re-hash is NOT PERFORMED rather than performed and passed. Said out loud
-        // rather than swallowed: the cosign verification below still fails if the registry does not
-        // hold this digest, because cosign resolves the same reference through the docker keychain.
+        // GHCR wants credentials and this module has no token flow, so the re-hash is not performed.
+        // cosign below still fails if the registry does not hold the digest.
         gate.warn(
           `${image.service}: the registry answered ${present.status}, so the manifest was not re-hashed here`,
           `${present.problem}\n      What still holds: cosign resolves this digest through the ` +
@@ -1291,9 +1053,6 @@ export function runImageProvenanceGate(options) {
 
     if (options.negativeControl) {
       console.log(bold('\n  negative control — the verifier must refuse every one of these'));
-      // The key controls need a key to forge WITH, and generate an ephemeral one; the keyless
-      // controls need a certificate authority to forge with, and mint a throwaway one. Neither
-      // touches the release key, and both run against the loopback registry with no network.
       const anchor = publicKey ?? readPublicKey(options.publicKey);
       if ('problem' in anchor) {
         gate.fail('the negative control could not read the public key it forges against', anchor.problem);
@@ -1305,13 +1064,8 @@ export function runImageProvenanceGate(options) {
   }).then((code) => {
     if (options.json) console.log(JSON.stringify(report, null, 2));
     if (code !== 0) {
-      // The epilogue below is a claim in the present tense — "each release digest IS signed by" —
-      // and it used to print on a FAILED run, word for word, under a red FAIL. Demonstrated by an
-      // adversarial review: a record whose identity resolved to `attacker-org` and whose cosign
-      // verification failed outright still printed "each release digest was signed by a GitHub
-      // Actions workflow whose certificate identity is https://github.com/attacker-org/…". That is
-      // the same class of defect `scripts/readiness-report.test.mjs` was written for — a claim
-      // about a release, in the place a reviewer reads, that nothing joined to the result.
+      // The pass epilogue must not print on a failed run. It once did, naming an attacker-org identity
+      // under a red FAIL.
       const anchor = report.posture === 'keyless' ? 'the committed identity policy' : 'the committed key';
       console.log(
         red(

@@ -1,17 +1,8 @@
 #!/usr/bin/env node
 /**
- * Gate: first-party source files must be clean UTF-8 text.
- *
- * Added after a real incident during development: a stray NUL byte was written
- * into `scripts/supply-chain/lib.mjs` inside a template literal. It was invisible
- * in every editor and in `git diff`, the file still parsed, and the code still
- * ran — it silently changed a map key separator. Control characters are also a
- * classic way to hide code: a bidirectional override or a zero-width character
- * can make a line read as something other than what the parser sees.
- *
- * So: no NUL bytes, no unexpected C0 control characters, no Unicode bidi
- * overrides, no zero-width characters, no invalid UTF-8, and no CRLF drift in
- * first-party source.
+ * Gate: first-party source is clean UTF-8 text. No NUL bytes, unexpected C0 controls, bidi
+ * overrides, zero-width characters, invalid UTF-8 or CRLF drift. Added after a stray NUL inside a
+ * template literal in `lib.mjs` silently changed a map key separator and was invisible in `git diff`.
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -38,35 +29,17 @@ const CHECK_EXTENSIONS = new Set([
   '.md',
   '.sh',
   '.html',
-  // Proxy and server configuration. `deploy/staging/nginx.conf` is the file that
-  // decides how TLS terminates and how X-Forwarded-For is set; it is first-party
-  // source in every sense that matters here.
+  // `deploy/staging/nginx.conf` decides how TLS terminates and how X-Forwarded-For is set.
   '.conf',
 ]);
 
 /**
- * First-party files whose NAME, not extension, is what identifies them.
- *
- * `extensionOf` splits on the last dot, so `Dockerfile.api` has extension `.api`
- * and `Dockerfile` has none. Neither is in the set above, which meant the two
- * files describing the artefact this project actually ships were never
- * encoding-checked by this gate — a bidi override or a NUL inside a `RUN` line
- * would have passed it, in exactly the files where a hidden character is most
- * consequential and least likely to be noticed. `.dockerignore`, the file that
- * decides what enters the build context, was invisible for the same reason: its
- * "extension" is `.dockerignore`.
- *
- * Compose files need no entry: they end in `.yml`/`.yaml` under either the v1 or
- * the v2 naming convention and were already covered.
+ * Files identified by name. `extensionOf` gives `Dockerfile.api` the extension `.api`, so both
+ * Dockerfiles and `.dockerignore` were once never checked.
  */
 const CHECK_NAMES = /^(?:Dockerfile(?:\..+)?|\.dockerignore|Caddyfile)$/;
 
-/**
- * Is this path one this gate is responsible for?
- *
- * Both separators, because `walk` yields native paths and the rest of this file
- * normalises to `/` only when it prints one.
- */
+/** Both separators, because `walk` yields native paths. */
 function isChecked(path) {
   const name = path.split(/[\\/]/).pop() ?? path;
   return CHECK_NAMES.test(name) || CHECK_EXTENSIONS.has(extensionOf(path));
@@ -111,7 +84,6 @@ function extensionOf(path) {
   return dot > slash ? path.slice(dot) : '';
 }
 
-/** Line/column of a byte offset, for an actionable error message. */
 function positionOf(buf, offset) {
   let line = 1;
   let col = 1;
@@ -127,14 +99,8 @@ function positionOf(buf, offset) {
 }
 
 /**
- * Proves the file selector can tell the files it is responsible for from the ones
- * it is not, before it is used to claim a clean repository.
- *
- * The gate's own principle is "a scan of nothing proves nothing", and a selector
- * that silently stopped matching `Dockerfile.api` would produce exactly that: a
- * green light over a file it never opened. That is not hypothetical — it is what
- * this gate did, for both Dockerfiles and for `.dockerignore`, until the
- * name-based rule above was added.
+ * Proves the selector tells its files from others before the gate claims a clean repository. It
+ * once silently skipped both Dockerfiles and `.dockerignore`.
  */
 function checkFileSelector(gate) {
   for (const path of [
@@ -173,7 +139,6 @@ await runGate(gate, () => {
     const buf = readFileSync(full);
     checked += 1;
 
-    // --- raw byte checks ---
     for (let i = 0; i < buf.length; i++) {
       const byte = buf[i];
       if (byte === 0) {
@@ -195,7 +160,7 @@ await runGate(gate, () => {
       }
     }
 
-    // --- UTF-8 validity: decoding with fatal:true rejects malformed sequences ---
+    // fatal:true rejects malformed sequences.
     let text;
     try {
       text = new TextDecoder('utf-8', { fatal: true }).decode(buf);
@@ -204,7 +169,6 @@ await runGate(gate, () => {
       continue;
     }
 
-    // --- dangerous codepoints ---
     for (const [index, char] of [...text].entries()) {
       const cp = char.codePointAt(0);
       if (cp === undefined) continue;
@@ -220,7 +184,6 @@ await runGate(gate, () => {
       }
     }
 
-    // --- line endings ---
     if (buf.includes(0x0d)) {
       gate.fail(
         `CRLF or lone CR line endings in ${rel}`,
@@ -228,7 +191,6 @@ await runGate(gate, () => {
       );
     }
 
-    // --- trailing newline ---
     if (buf.length > 0 && buf[buf.length - 1] !== 0x0a) {
       gate.warn(`${rel} does not end with a newline`);
     }
@@ -236,10 +198,8 @@ await runGate(gate, () => {
 
   gate.note(`checked ${checked} first-party source files for encoding and hidden-character defects`);
 
-  // Stated as a lower bound rather than an equality so adding a Dockerfile does
-  // not fail the gate, but losing one does — a container file that drops out of
-  // the scan is precisely the defect the name rule above was written for. Three
-  // today: Dockerfile.api, Dockerfile.web and .dockerignore.
+  // A lower bound, so adding a container file passes and losing one fails. Three today:
+  // Dockerfile.api, Dockerfile.web and .dockerignore.
   if (containerFiles < 3) {
     gate.fail(
       `only ${containerFiles} container file(s) were encoding-checked`,
@@ -253,42 +213,15 @@ await runGate(gate, () => {
   checkRandomnessBan(gate);
 });
 
-// ---------------------------------------------------------------------------
-// The repo-wide Math.random ban
-// ---------------------------------------------------------------------------
-
 /**
- * `Math.random` must not appear in any first-party `src/` tree.
- *
- * ## Why this is a repo gate and not (only) a test
- *
- * The ban was enforced over TWO of the repository's eight source trees: `apps/api/src`
- * (`test/server-randomness.test.ts`) and `packages/poker-engine/src`
- * (`packages/poker-engine/test/rng.test.ts`). Unscanned were `packages/poker-math/src` — which
- * holds `monteCarloEquity` and the variance simulations, precisely where reaching for
- * `Math.random()` is most tempting — plus `packages/poker-ai/src`, `packages/ui/src`,
- * `packages/content/src`, `packages/contracts/src` and `apps/web/src`. Two of those packages have
- * no place to put such a test at all: `apps/web` had no test script until recently, and a
- * cross-package scan from inside one package's suite would be reaching across a boundary that
- * exists for a reason.
- *
- * A repository gate is the right home for a repository-wide rule. The per-package tests remain,
- * because a package's own suite should prove its own claims — `packages/poker-ai/src/policy.ts`
- * says "`Math.random` is banned in this package and asserted absent", and
- * `packages/poker-ai/test/no-math-random.test.ts` is now what makes that sentence true.
- *
- * ## The detector proves it can fail
- *
- * `gate.fail` on a violation is only half of a check. The self-test below feeds the detector a
- * violation and a prose mention and fails the gate if it cannot tell them apart, so a scan that
- * silently stopped matching cannot pass as a clean repository.
+ * `Math.random` must not appear in any first-party `src/` tree. Tests covered only two of eight
+ * trees, and `packages/poker-math/src` holds the Monte Carlo code where it is most tempting. The
+ * per-package tests stay. The self-test below must tell a violation from a prose mention.
  */
 function checkRandomnessBan(gate) {
   const trees = sourceTrees();
-  // Eight trees today: apps/api, apps/web, and the six packages. Stated as a lower bound rather
-  // than an equality so adding a package does not fail the gate for the wrong reason — but losing
-  // one does, because a tree that stops being scanned is exactly this defect. The bound read 7
-  // while the scan printed 8, so it could not have fired for the one tree that mattered.
+  // Eight trees today, as a lower bound. It once read 7 while the scan printed 8, so it could not
+  // fire for the tree that mattered.
   if (trees.length < 8) {
     gate.fail(
       `found only ${trees.length} src/ trees to scan for Math.random`,
@@ -323,7 +256,6 @@ function checkRandomnessBan(gate) {
   gate.note(`scanned ${scanned} source files across ${trees.length} src/ trees for Math.random`);
 }
 
-/** Every first-party source tree: the `src` directory of each apps/ and packages/ member. */
 function sourceTrees() {
   const trees = [];
   for (const group of ['apps', 'packages']) {
@@ -341,11 +273,8 @@ function sourceTrees() {
 }
 
 /**
- * Removes block and line comments, so a prose mention of a banned API is not read as a use of it.
- *
- * The same function the two existing guard tests use, limitation included: it is not a parser, so a
- * line comment or a block-comment opener inside a string literal would confuse it. The `[^:]` before the line-comment match is
- * what stops it eating the rest of a line after `https://`.
+ * Removes comments so a prose mention is not read as a use. Not a parser: a comment opener inside a
+ * string literal confuses it. The `[^:]` stops the line-comment rule eating a line after `https://`.
  */
 function stripComments(source) {
   return source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1');

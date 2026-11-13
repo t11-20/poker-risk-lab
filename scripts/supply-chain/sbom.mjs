@@ -1,23 +1,8 @@
 #!/usr/bin/env node
 /**
- * Generates a CycloneDX 1.6 SBOM from the resolved dependency graph.
- *
- * Hand-rolled rather than using @cyclonedx/cyclonedx-npm, for two reasons:
- * that generator pulls a sizeable dependency tree of its own into a repo whose
- * whole policy is dependency minimisation, and it would have to be exempted from
- * the release-age cooldown to stay current.
- *
- * The output is validated against the CycloneDX 1.6 JSON schema shape in
- * `scripts/supply-chain/sbom.test.mjs`, which regenerates this file and checks
- * required fields, enum values, purl form, hash algorithms and digest lengths,
- * and the referential integrity of the `dependencies` graph — and which proves
- * its validator can fail by feeding it ten broken documents. That sentence was
- * in this header for a long time while the file it named did not exist; it is
- * the kind of claim a reviewer takes at face value and stops checking, so if you
- * ever have to delete the test, delete the sentence in the same commit.
- *
- * Component identity comes from the lockfile integrity hash (subresource
- * integrity → CycloneDX `hashes`), so the SBOM names the exact artefacts.
+ * Generates a CycloneDX 1.6 SBOM from the resolved graph, with hashes from the lockfile integrity.
+ * Hand-rolled because @cyclonedx/cyclonedx-npm brings its own dependency tree. `sbom.test.mjs`
+ * validates the output's shape and proves its validator can fail; delete this sentence with it.
  */
 
 import { createHash } from 'node:crypto';
@@ -29,7 +14,6 @@ import { parseLockPackages } from './lockfile-integrity.mjs';
 const gate = new Gate('sbom');
 const OUT_PATH = join(REPO_ROOT, 'docs', 'sbom', 'poker-risk-lab.cdx.json');
 
-/** Convert an npm SRI string to CycloneDX hash entries. */
 function sriToHashes(integrity) {
   if (!integrity) return [];
   const out = [];
@@ -44,7 +28,7 @@ function sriToHashes(integrity) {
   return out;
 }
 
-/** package URL per the npm purl spec: scope goes in the namespace. */
+/** npm purl: the scope goes in the namespace. */
 function purlFor(name, version) {
   if (name.startsWith('@')) {
     const slash = name.indexOf('/');
@@ -60,8 +44,7 @@ await runGate(gate, () => {
   const lock = parseLockPackages(lockfileText());
   const rootManifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'));
 
-  // A stable, content-derived serial number: regenerating an unchanged graph
-  // produces an identical SBOM, so the file is diffable in review.
+  // Content-derived, so an unchanged graph produces an identical, diffable SBOM.
   const graphFingerprint = createHash('sha256')
     .update([...packages.keys()].sort().join('\n'))
     .update('\n--\n')
@@ -111,7 +94,6 @@ await runGate(gate, () => {
     components.push(component);
   }
 
-  // CycloneDX `dependencies` graph.
   const byRef = new Map();
   const refFor = (nodeKey) => {
     const at = nodeKey.lastIndexOf('@');
@@ -148,10 +130,8 @@ await runGate(gate, () => {
     serialNumber,
     version: 1,
     metadata: {
-      // No wall-clock `timestamp` field on purpose: a content-derived SBOM stays
-      // byte-identical across runs, so `git diff` shows dependency changes only
-      // rather than a fresh timestamp on every build. The generation time is
-      // recorded in docs/sbom/provenance-report.json instead.
+      // No `timestamp`, so `git diff` shows only dependency changes. Generation time is in
+      // docs/sbom/provenance-report.json.
       lifecycles: [{ phase: 'build' }],
       tools: {
         components: [

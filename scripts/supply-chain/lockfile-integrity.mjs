@@ -1,54 +1,15 @@
 /**
- * Minimal reader for a pnpm lockfile.
+ * Minimal line-oriented reader for a pnpm lockfile (lockfileVersion 9.0 to 11.0). No YAML
+ * dependency, because the code that audits dependencies must not add one.
  *
- * A full YAML parser is deliberately avoided: adding a YAML dependency to the
- * code that audits dependencies inverts the trust relationship. The lockfile is
- * machine-generated and has a fixed shape, so a line-oriented reader is both
- * sufficient and auditable.
- *
- * ## Why this reads *structure* and not just text
- *
- * `dep-shapes.mjs` used to answer "was anything acquired from somewhere other
- * than the registry?" with six regexes over the raw lockfile text. Four of them
- * were anchored to the start of a line (`/^\s*repo:/`, `/^\s*commit:/`, …) and
- * pnpm writes `resolution:` as an *inline flow mapping on one line*, so those
- * four could never match. The two unanchored ones looked for `git+ssh://` and
- * `https://….tgz`, and pnpm records a git dependency as
- * `repo: github.com/owner/repo` — no scheme — and a directory dependency with no
- * URL at all. Fed a lockfile containing a real pnpm-format git resolution and a
- * real pnpm-format directory resolution, **0 of the 6 patterns matched**. The
- * gate the threat model names against the campaign's delivery Pattern B could
- * not fail.
- *
- * So the resolution is parsed into an object and the *keys* are inspected. A
- * pattern cannot silently stop matching a shape it never looks at as text.
- *
- * Shapes being parsed (lockfileVersion 9.0 / 10.0 / 11.0):
- *
- *   packages:
- *
- *     '@fastify/error@4.2.0':
- *       resolution: {integrity: sha512-AAA==}
- *       engines: {node: '>=20'}
- *
- *     fastify@5.11.3:
- *       resolution: {integrity: sha512-BBB==}
- *
- *     gitdep@github.com/attacker/evil:
- *       resolution: {commit: 9f1a…, repo: github.com/attacker/evil, type: git}
- *
- *     outside@file:../../../evil:
- *       resolution: {directory: ../../../evil, type: directory}
- *
- * Block-style resolutions (`resolution:` on its own line, keys indented beneath)
- * are accepted too. pnpm does not emit them, but a hand-edited lockfile can
- * contain them and a checker that only understands the generator's preferred
- * style is a checker an attacker formats their way past.
+ * Resolutions are parsed into objects and their keys inspected. `dep-shapes.mjs` once used six
+ * regexes over the text, and 0 of 6 matched a real pnpm git or directory resolution, because pnpm
+ * writes `resolution:` as a one-line flow mapping and a git repo with no scheme. Block-style
+ * resolutions are accepted too, since a hand-edited lockfile can use them.
  */
 
 /**
- * Splits the body of a YAML flow mapping on top-level commas, respecting quotes
- * and nesting. `integrity: sha512-A==, tarball: https://x/y.tgz` → two entries.
+ * Splits a flow mapping body on top-level commas, respecting quotes and nesting.
  *
  * @param {string} inner
  * @returns {string[]}
@@ -80,7 +41,6 @@ function splitFlowEntries(inner) {
   return entries.map((e) => e.trim()).filter((e) => e.length > 0);
 }
 
-/** Strips one layer of matching surrounding quotes. */
 function unquote(value) {
   const trimmed = value.trim();
   if (trimmed.length >= 2) {
@@ -93,8 +53,6 @@ function unquote(value) {
 }
 
 /**
- * Parses the body of an inline flow mapping into a plain object.
- *
  * @param {string} inner e.g. `integrity: sha512-A==, tarball: https://x/y.tgz`
  * @returns {Record<string, string>}
  */
@@ -112,8 +70,7 @@ export function parseFlowMapping(inner) {
 }
 
 /**
- * Splits a lockfile package key (`name@version`, with an optional peer suffix)
- * into its parts. Returns null for a key that is not in that shape.
+ * Splits `name@version` (optional peer suffix) into parts, or null for any other shape.
  *
  * @param {string} key
  * @returns {{name: string, version: string} | null}
@@ -149,8 +106,6 @@ export function splitPackageKey(key) {
  */
 
 /**
- * The `packages:` section, keyed by `name@version`.
- *
  * @param {string} lockText
  * @returns {Map<string, LockPackage>}
  */
@@ -159,8 +114,6 @@ export function parseLockPackages(lockText) {
 }
 
 /**
- * The whole lockfile, as much of it as the gates need.
- *
  * @param {string} lockText
  * @returns {{lockfileVersion: string|null, packages: Map<string, LockPackage>, importers: LockImporterDependency[]}}
  */
@@ -173,10 +126,8 @@ export function parseLockfile(lockText) {
 
   const lockfileVersion = /^lockfileVersion:\s*'?([\d.]+)'?/m.exec(lockText)?.[1] ?? null;
 
-  /** Which top-level section we are inside. */
   let section = /** @type {'packages'|'importers'|null} */ (null);
 
-  // --- `packages:` accumulator ---------------------------------------------
   /** @type {string|null} */
   let packageKey = null;
   /** @type {Record<string, string>|null} */
@@ -202,7 +153,6 @@ export function parseLockfile(lockText) {
     inResolutionBlock = false;
   };
 
-  // --- `importers:` accumulator --------------------------------------------
   /** @type {string|null} */
   let importerPath = null;
   /** @type {string|null} */

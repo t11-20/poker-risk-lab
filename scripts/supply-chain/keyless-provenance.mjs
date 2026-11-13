@@ -1,51 +1,13 @@
 #!/usr/bin/env node
 /**
- * Gate: the committed keyless-signing identity policy and the workflow it names agree.
+ * Gate: the committed keyless-signing identity policy and the workflow it names agree. The identity
+ * is built from the repository, the workflow file name and the ref. Renaming the workflow, adding a
+ * `push:` trigger, or granting `id-token: write` at workflow level each breaks it, and none needs a
+ * network to detect, so this runs hermetically on every push. `scripts/keyless-identity.test.mjs`
+ * drives all three.
  *
- * Invoked by `pnpm run security:keyless`, and by `scripts/supply-chain/audit.mjs`.
- *
- * ## Why a gate rather than a comment
- *
- * A keyless signature is only worth something because a verifier demands a specific
- * `--certificate-identity` and `--certificate-oidc-issuer`. That identity is a string built out of
- * three facts — the repository, the workflow FILE NAME, and the ref the workflow ran on — and every
- * one of them can be changed by an ordinary-looking edit:
- *
- *   * rename `.github/workflows/release-sign.yml`, and the identity the policy demands can no
- *     longer be minted by anything. Verification fails closed, which is survivable, but the policy
- *     now points at a file nobody has and reads as though it were still binding something.
- *   * add a `push:` trigger, and the same workflow can run with `github.ref = refs/tags/v1.2.3`.
- *     The policy names one ref; a signature made on another is refused (loud) — and the obvious
- *     "fix" is to widen the policy to a regexp, at which point signatures made from any branch a
- *     contributor can push are accepted (silent).
- *   * grant `id-token: write` at the WORKFLOW level instead of the job, and every job in the file
- *     can mint a certificate carrying this repository's identity — including any that installs
- *     dependencies or runs a third-party action.
- *
- * None of those three needs a network, a registry or a signature to detect, which is why this gate
- * is hermetic and runs on every push alongside the other supply-chain gates. It is also the part of
- * keyless signing that is fully testable on a laptop: `scripts/keyless-identity.test.mjs` drives
- * each of the three above and asserts this refuses.
- *
- * ## The rule about every OTHER workflow
- *
- * `ci.yml` and `release.yml` declare `permissions: contents: read` and no `id-token` anywhere, and
- * their headers say so as a promise. This gate makes it a rule: exactly one workflow file in this
- * repository may hold an `id-token: write` grant, and it is the one the policy names. A signing
- * capability that appears in the test workflow is not a smaller problem than one in the signing
- * workflow — it is a larger one, because that job runs a dependency graph.
- *
- * ## What this gate does NOT do
- *
- * It does not verify a signature, reach Fulcio, or read Rekor. It cannot: no keyless signature
- * exists yet, and nothing on a workstation can produce one — the identity IS the workflow.
- * `scripts/supply-chain/image-provenance.mjs` is where a signature is verified against this policy,
- * and its `--negative-control` demonstrates the identity matching itself, offline, against a
- * certificate minted by a throwaway CA. Until a real run of `release-sign.yml` exists, the keyless
- * posture is IMPLEMENTED AND UNEXERCISED and every document in this repository says so.
- *
- * Usage:
- *     node scripts/supply-chain/keyless-provenance.mjs [--policy <path>] [--json]
+ * Exactly one workflow may hold `id-token: write`, the one the policy names. This gate verifies no
+ * signature; `image-provenance.mjs` does. The keyless posture is implemented and unexercised.
  *
  * Exit codes: 0 the policy and the workflow agree; 1 anything else, including a refusal to run.
  */
@@ -88,20 +50,13 @@ export function parseArgs(argv) {
   return options;
 }
 
-/**
- * Every workflow that grants `id-token: write`, at either scope.
- *
- * Returned as a list rather than a boolean because the message has to name the file and the job: an
- * OIDC grant in an unexpected place is not a lint finding, it is a workflow that can sign as this
- * repository, and a reader needs to know which one without going to look.
- */
+/** Every workflow granting `id-token: write`, at either scope, so the message can name file and job. */
 export function workflowsThatCanMintTokens(files) {
   const found = [];
   for (const { name, text } of files) {
     const structure = parseWorkflowStructure(text);
-    // `grantsIdTokenWrite` rather than a direct lookup, because `permissions: write-all` grants
-    // id-token without ever writing the words: an adversarial review found this reader blind to it,
-    // and to the flow-mapping and quoted forms. See `permissionsFrom` in keyless-identity.mjs.
+    // `permissions: write-all` grants id-token without the words, as do flow-mapping and quoted
+    // forms. See `permissionsFrom` in keyless-identity.mjs.
     if (grantsIdTokenWrite(structure.topLevelPermissions)) {
       found.push({ name, scope: 'the workflow top level', job: null });
     }
@@ -117,9 +72,7 @@ export function runKeylessPolicyGate(options) {
   const report = { checkedAt: new Date().toISOString(), policy: null, identity: null, workflows: [] };
 
   return runGate(gate, () => {
-    // `resolve`, not `join`: an absolute --policy path joined onto the repo root produces a
-    // nonsense path inside the repository, and the gate would report "there is no policy" for a file
-    // that is plainly there. Measured by the gate's own test, which passes a temp directory.
+    // `resolve`, not `join`, so an absolute --policy path works. The gate's test passes a temp dir.
     const policyPath = resolve(REPO_ROOT, options.policy);
     if (!existsSync(policyPath)) {
       gate.fail(
@@ -142,14 +95,10 @@ export function runKeylessPolicyGate(options) {
     if (policy === null) return;
     report.policy = policy;
 
-    // The identity the policy demands, spelled out. A gate that checks a string nobody can read is
-    // a gate whose finding nobody can act on.
     const resolved = resolveRepository(policy, process.env);
     if ('problem' in resolved) {
-      // NOT a failure: `repository: null` is a legal, documented state for a repository with no git
-      // remote, and this gate is hermetic. It IS reported every single run, because a policy whose
-      // owner is unknown is a policy an outsider cannot check, and the day that stops being said
-      // out loud is the day it stops being true that anybody knows.
+      // Not a failure: `repository: null` is legal with no git remote. Reported every run, because an
+      // outsider cannot check a policy with no owner.
       gate.warn(
         'the policy names no repository owner, so the exact identity is not yet pinned',
         `${resolved.problem}\n      Everything else below is checked. What is NOT checked is the ` +
@@ -192,7 +141,6 @@ export function runKeylessPolicyGate(options) {
       gate.fail('the policy and the signing workflow do not agree', problem);
     }
 
-    // Exactly one workflow may hold an OIDC grant, and it is the one the policy names.
     const minting = workflowsThatCanMintTokens(files);
     for (const entry of minting) {
       if (entry.name === expectedFile && entry.job === policy.workflow.job) continue;
@@ -212,9 +160,8 @@ export function runKeylessPolicyGate(options) {
       );
     }
 
-    // The dangerous state: a committed keyless record whose identity nobody outside this machine
-    // can reconstruct. Checked here, statically, rather than only at verification time, because
-    // this gate runs on every push and the verifier only runs where release images exist.
+    // A committed keyless record nobody outside this machine can reconstruct. Checked here because
+    // the verifier only runs where release images exist.
     const signaturesPath = resolve(REPO_ROOT, SIGNATURES_PATH);
     if (existsSync(signaturesPath) && policy.repository === null) {
       let record = null;

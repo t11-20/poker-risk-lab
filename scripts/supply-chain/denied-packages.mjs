@@ -1,22 +1,12 @@
 /**
- * The blocklist. Fail-closed: if any of these appear anywhere in the resolved
- * dependency graph — direct or transitive, prod or dev — the build fails.
- *
- * Provenance for every entry is recorded so that a future maintainer can tell
- * *why* something is blocked and what evidence would justify unblocking it.
- * See docs/security/shai-hulud-snapshot-2026-08-17.md.
- *
- * Adding an exception requires a human edit to this file plus an ADR. There is
- * deliberately no environment variable or CLI flag that bypasses it.
+ * The blocklist. Any of these anywhere in the resolved graph fails the build. Sources are in
+ * docs/security/shai-hulud-snapshot-2026-08-17.md. An exception needs an edit here plus an ADR;
+ * there is no bypass flag or variable.
  */
 
-/** Exact package names that are denied outright, at every version. */
 export const DENIED_NAMES = new Map([
-  // --- Project guardrail: the whole caching family, regardless of version. ---
-  // CSA Singapore AD-2026-009 reported an ongoing Shai-Hulud wave through keyv
-  // and related caching packages. The guardrail denies the family, not just the
-  // known-bad versions, because the maintainer account compromise is the root
-  // cause and re-compromise of the same family is the expected failure mode.
+  // The whole caching family (CSA Singapore AD-2026-009, a wave through keyv). The root cause is a
+  // maintainer account compromise, so the family is denied, not just the known-bad versions.
   ['keyv', 'guardrail: Shai-Hulud caching family (CSA AD-2026-009)'],
   ['cacheable', 'guardrail: Shai-Hulud caching family (CSA AD-2026-009)'],
   ['flat-cache', 'guardrail: Shai-Hulud caching family (CSA AD-2026-009)'],
@@ -24,7 +14,6 @@ export const DENIED_NAMES = new Map([
   ['cacheable-request', 'guardrail: Shai-Hulud caching family (CSA AD-2026-009)'],
   ['cache-manager', 'guardrail: Shai-Hulud caching family (CSA AD-2026-009)'],
 
-  // --- Campaign-implicated packages named in reporting. ---
   ['echarts-for-react', 'Mini Shai-Hulud: compromised 3.0.7/3.1.7/3.2.7 (Microsoft, StepSecurity)'],
   ['size-sensor', 'Mini Shai-Hulud: compromised (Microsoft)'],
   ['timeago.js', 'Mini Shai-Hulud: compromised 4.1.2/4.2.2 (StepSecurity)'],
@@ -32,20 +21,8 @@ export const DENIED_NAMES = new Map([
 ]);
 
 /**
- * Scope prefixes that are denied outright.
- *
- * Scopes, not versions, deliberately: the campaign is reported at roughly 1,300
- * package *versions* across ~2B monthly downloads, and the root cause in every
- * wave is a maintainer-account compromise, so re-compromise of the same scope is
- * the expected failure mode rather than the surprising one. A version-granular
- * list against a campaign that mints new versions is a list that is always one
- * publish out of date.
- *
- * The last three were named in this repository's own cited sources (Snyk on
- * TanStack; Expel and Arctic Wolf on TanStack, Mistral AI and OpenSearch — see
- * docs/security/shai-hulud-snapshot-2026-08-17.md §1 and Sources) and were
- * missing from this file. None of them is in the resolved graph today, which is
- * the point: a blocklist is for the dependency somebody adds next week.
+ * Scopes, not versions: the campaign mints new versions faster than a version list can follow. The
+ * last three are named in the snapshot's §1 sources and are not in the graph today.
  */
 export const DENIED_SCOPES = new Map([
   ['@cacheable/', 'guardrail: Shai-Hulud caching family (CSA AD-2026-009)'],
@@ -55,24 +32,12 @@ export const DENIED_SCOPES = new Map([
   ['@opensearch-project/', 'Mini Shai-Hulud: OpenSearch ecosystem compromised (Expel, Arctic Wolf)'],
 ]);
 
-/**
- * Hosts that must never appear as a dependency resolution target. The registry
- * is the only permitted acquisition channel; a git/tarball/CDN resolution is a
- * documented Mini Shai-Hulud delivery path (Pattern B) and also defeats the
- * release-age cooldown.
- */
+/** Resolution hosts that are never allowed. Off-registry resolution is delivery Pattern B. */
 export const ALLOWED_RESOLUTION_HOSTS = new Set(['registry.npmjs.org']);
 
 /**
- * On-disk artefacts left by the campaign. `ioc-scan.mjs` sweeps the working tree
- * and the installed store for these. Paths are matched relative to a root.
- *
- * `.vscode/tasks.json` and `.claude/settings.json` were missing from this list
- * even though `ioc-scan.mjs`'s own header names `.vscode/tasks.json` verbatim as
- * the reason the gate exists, and the snapshot names both in §3 under "Claude
- * Code persistence" / "VS Code persistence". They are the *re-execution* half of
- * the persistence pair: `setup.mjs` is the payload, `tasks.json` /
- * `settings.json` is what makes an editor or an agent run it on open.
+ * Campaign artefacts, relative to a root. `setup.mjs` is the payload; `tasks.json` and
+ * `settings.json` make an editor or agent run it on open.
  */
 export const IOC_PATHS = [
   '.claude/setup.mjs',
@@ -84,28 +49,10 @@ export const IOC_PATHS = [
 ];
 
 /**
- * Workflow files this repository is known to have.
- *
- * The campaign injects `.github/workflows/codeql.yml` — a name-squat on a
- * workflow people expect to see — to mint publish tokens from CI. A repository
- * that knows its own workflows can say so, and an undeclared file is then a
- * failure rather than a warning nobody reads. `ci-pinning.mjs` enforces this;
- * adding a workflow means adding it here, in a reviewed diff. That two-file diff
- * IS the control — a workflow that could add itself is not declared, it is
- * announced.
- *
- * `release.yml` is the build-once / promote-the-same-digest pipeline. It is the
- * one workflow here that will ever hold a deployment credential, so its arrival
- * in this list is exactly the reviewed diff this mechanism exists to force.
- *
- * `release-sign.yml` is the keyless signer, and it is the single most
- * privilege-bearing file in this list: it is the only workflow that may hold
- * `id-token: write`, which is the permission that lets a job obtain a
- * certificate carrying this repository's identity. Two gates hold it to that.
- * `ci-pinning.mjs` refuses the file if it is not declared here;
- * `keyless-provenance.mjs` refuses if the file's name, trigger or permission
- * block stops matching `deploy/signing/keyless-policy.json`, and refuses an
- * `id-token: write` grant found in ANY other workflow.
+ * The workflows this repository declares. The campaign injects `.github/workflows/codeql.yml` to
+ * mint publish tokens, so `ci-pinning.mjs` fails on any undeclared file and adding one is a
+ * reviewed two-file diff. `release-sign.yml` is the only workflow allowed `id-token: write`, which
+ * `keyless-provenance.mjs` enforces against `deploy/signing/keyless-policy.json`.
  */
 export const EXPECTED_WORKFLOWS = new Set(['ci.yml', 'release.yml', 'release-sign.yml']);
 
@@ -125,7 +72,6 @@ export const IOC_STRINGS = [
   { marker: '/proc/self/mem', why: 'credential harvesting from process memory' },
 ];
 
-/** Known payload hashes (SHA-256). */
 export const IOC_HASHES = new Map([
   ['a68dd1e6a6e35ec3771e1f94fe796f55dfe65a2b94560516ff4ac189390dfa1c', 'Mini Shai-Hulud payload'],
   ['fb5c97557230a27460fdab01fafcfabeaa49590bafd5b6ef30501aa9e0a51142', 'Mini Shai-Hulud Python backdoor'],

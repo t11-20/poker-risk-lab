@@ -1,25 +1,7 @@
 #!/usr/bin/env node
 /**
- * Tests for the `integrity-and-release-age` gate's fourth assertion: install
- * hooks of the versions that are not installed on this machine.
- *
- * Run with:  node --test scripts/supply-chain/provenance.test.mjs
- *
- * ## Why this assertion had to exist
- *
- * pnpm does not install optional dependencies whose `os`/`cpu`/`libc` do not
- * match the host, and records them in `node_modules/.modules.yaml` under
- * `skipped:`. On this repository that is **58 of 162 resolved versions (36%)**.
- * `dep-shapes.mjs` reads manifests off disk, so those 58 were scanned for
- * install-time lifecycle hooks by nothing at all — and on macOS the skipped set
- * is every Linux binary, which is precisely the set that IS installed in the
- * release container. The gate said "pass" over 64% coverage without mentioning
- * the number.
- *
- * These tests do not hit the network: the decision under test is "given this
- * published manifest, is there an install hook", and a fixture manifest states
- * that better than a live fetch, which would also make the suite fail when npm
- * is slow.
+ * Tests for install hooks of versions not installed on this machine: 58 of 162 here, every Linux
+ * binary on macOS, which the gate once passed over without naming. Fixture manifests, no network.
  */
 
 import assert from 'node:assert/strict';
@@ -66,8 +48,7 @@ describe('install hooks read from the published manifest', () => {
   });
 
   it('passes a package that publishes no scripts block at all', () => {
-    // What every platform binary in this graph actually looks like on the
-    // registry — the absence of the field is the evidence.
+    // Platform binaries in this graph carry no `scripts` field on the registry.
     const gate = new Gate('t');
     assert.equal(checkPublishedInstallHooks(gate, '@next/swc-linux-x64-gnu@16.3.0', {}), true);
     assert.deepEqual(gate.failures, []);
@@ -88,16 +69,13 @@ describe('the platform-skipped set is real and is accounted for', () => {
     const { present, skipped } = platformSkippedVersions();
     assert.equal(present, true, 'node_modules/.modules.yaml was not readable — run pnpm install');
     assert.ok(skipped.size > 0, 'expected pnpm to have skipped some platform-specific optionals');
-    // Every entry is a `name@version`, which is what the coverage maths joins on.
     for (const entry of skipped) {
       assert.match(entry, /^@?[^@]+@\d/, `unexpected skipped entry shape: ${entry}`);
     }
   });
 
   it('accounts for every resolved version as either on disk or platform-skipped', () => {
-    // The claim the audit makes: 104 inspected here + 58 inspected from the
-    // registry = 162, with nothing unexplained. If this ever fails, some version
-    // is being checked by neither gate.
+    // 104 on disk plus 58 from the registry is 162, with nothing unexplained.
     const resolved = new Map();
     const installed = new Map();
     const { skipped } = platformSkippedVersions();

@@ -1,44 +1,14 @@
 #!/usr/bin/env node
 /**
- * Gate: the supply-chain policy is actually in effect.
+ * Gate: the supply-chain policy is in effect. pnpm 11 reads only auth and registry settings from
+ * `.npmrc`, so this asks pnpm for its effective configuration and fails on a policy key in `.npmrc`.
  *
- * This gate exists because of a real footgun: pnpm 11 reads ONLY auth and registry
- * settings from `.npmrc`. A policy written into `.npmrc` — `ignore-scripts=true`,
- * `minimum-release-age=...` — is silently ignored, and the repo looks hardened
- * while being wide open. So rather than trusting the file, this asks pnpm for its
- * *effective* configuration and asserts on that.
- *
- * It also fails if a policy setting appears in `.npmrc`, where it would be inert.
- *
- * READ THIS BEFORE CHANGING THE SUBPROCESS BELOW.
- *
- * `pnpm run <script>` injects configuration into the environment of the child it
- * spawns. Most of that injection reflects real configuration, but pnpm also uses
- * the same channel to suppress its *own* re-entrant behaviour in nested
- * invocations. Measured on pnpm 11.10.0 (`pnpm exec env | grep -iE '^(p?npm)_'`):
- *
- *   PNPM_PACKAGE_NAME=poker-risk-lab
- *   npm_command=exec
- *   npm_config_user_agent=pnpm/11.10.0 npm/? node/v24.18.0 darwin arm64
- *   pnpm_config_verify_deps_before_run=false      <-- self-suppression, not policy
- *
- * That last line is pnpm telling its own children "do not re-verify node_modules,
- * the parent already did". It is not a statement about this repository's policy.
- * A nested `pnpm config list --json` inherits it and reports
- * `verifyDepsBeforeRun: false`, so a gate that reads the child's answer verbatim
- * measures its own wrapper and fails 100% of the time when invoked the documented
- * way (`pnpm run security:policy` / `pnpm run security:audit`).
- *
- * The fix is deliberately narrow: exactly the keys pnpm is known to self-suppress
- * are removed from the child environment, and only when this process really is a
- * pnpm-spawned child. Every other `pnpm_config_*` override is left in place, so an
- * operator or a CI job that genuinely weakens a policy through the environment is
- * still caught. `npm_config_*`-prefixed variables do not override
- * pnpm-workspace.yaml at all and are therefore left alone.
- *
- * If a future pnpm release self-suppresses a different key, this gate fails loudly
- * (the safe direction) and prints the environment variable responsible — see the
- * `from the environment` hint below. Add the key to PNPM_SELF_SUPPRESSED then.
+ * Read before changing the subprocess below. `pnpm run` sets
+ * `pnpm_config_verify_deps_before_run=false` on its children to suppress its own re-verification
+ * (measured on pnpm 11.10.0). A nested `pnpm config list` inherits it, so reading the child verbatim
+ * failed every run through `pnpm run security:policy`. Only the keys in PNPM_SELF_SUPPRESSED are
+ * removed, and only for a pnpm-spawned child, so a real environment override is still caught. A new
+ * self-suppressed key fails loudly with the variable named; add it to the list then.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -120,13 +90,8 @@ const INERT_IN_NPMRC = [
 ];
 
 /**
- * Environment variables pnpm sets on its own script children purely to suppress
- * re-entrant behaviour. Keyed by the (lower-case) variable name pnpm actually
- * writes; the value is the camelCase config key it shadows.
- *
- * Keep this list minimal. Every entry is a value this gate stops being able to
- * observe from the environment, so an entry must be justified by pnpm genuinely
- * writing it for its own bookkeeping rather than as configuration.
+ * Variables pnpm sets on its children to suppress re-entrant behaviour, keyed by the lower-case name
+ * pnpm writes. Each entry is a value this gate stops observing, so keep the list minimal.
  */
 const PNPM_SELF_SUPPRESSED = new Map([['pnpm_config_verify_deps_before_run', 'verifyDepsBeforeRun']]);
 
@@ -135,17 +100,12 @@ function envNameFor(key) {
   return `pnpm_config_${key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)}`;
 }
 
-/**
- * True when this process was spawned by pnpm itself (`pnpm run`, `pnpm exec`,
- * a lifecycle script). Only then is pnpm's self-suppression variable pnpm's own,
- * rather than something a human or a CI job exported.
- */
+/** True when pnpm spawned this process. Only then is the self-suppression variable pnpm's own. */
 function insidePnpmChild(env) {
   const agent = env['npm_config_user_agent'] ?? '';
   return agent.startsWith('pnpm/') || typeof env['npm_command'] === 'string';
 }
 
-/** The parent environment minus pnpm's self-suppression variables. */
 function sanitisedEnv(env) {
   if (!insidePnpmChild(env)) return { env, stripped: [] };
   const child = { ...env };
@@ -174,8 +134,7 @@ await runGate(gate, () => {
     });
     effective = JSON.parse(raw);
   } catch {
-    // Older/newer pnpm may not accept --json for `config list`; fall back to the
-    // default output, which is already JSON-shaped in pnpm 11.
+    // Fall back for a pnpm that rejects --json; pnpm 11's default output is JSON-shaped.
     const raw = execFileSync('pnpm', ['config', 'list'], {
       cwd: REPO_ROOT,
       encoding: 'utf8',
@@ -193,10 +152,8 @@ await runGate(gate, () => {
   for (const { key, expect, why } of REQUIRED) {
     const value = effective[key];
     if (!expect(value)) {
-      // If an environment variable is what produced the bad value, say so: that
-      // turns "the policy is missing" into "this variable is overriding it".
-      // Read from the sanitised environment, so a variable this gate deliberately
-      // ignored is never blamed for a value pnpm did not take from it.
+      // Blame an environment variable when it produced the bad value, reading from the sanitised
+      // environment so a deliberately ignored variable is never blamed.
       const envName = envNameFor(key);
       const fromEnv = childEnv[envName] ?? childEnv[envName.toUpperCase()];
       const provenance =
@@ -233,8 +190,7 @@ await runGate(gate, () => {
     }
   }
 
-  // The packageManager pin should carry an integrity hash so Corepack verifies the
-  // package manager binary itself.
+  // The packageManager pin carries an integrity hash so Corepack verifies pnpm itself.
   const rootManifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'));
   const pm = rootManifest.packageManager;
   if (typeof pm !== 'string') {

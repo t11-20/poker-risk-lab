@@ -1,104 +1,20 @@
 #!/usr/bin/env node
 /**
- * Gate: the container images this project ships are scanned for known
- * vulnerabilities.
+ * Gate: the shipped container images are scanned for known vulnerabilities with trivy. The npm gates
+ * cannot see OS packages, and the first run against the Debian web image found 38 HIGH or CRITICAL.
+ * The unfixable count it printed (60 across two images) moved both Dockerfiles to Alpine on
+ * 2026-08-25, which cleared all 60.
  *
- * Invoked by `pnpm run security:containers`, and by `scripts/supply-chain/audit.mjs`.
+ * It fails when trivy is missing, its database is unreachable, it identified no OS, or there are no
+ * images. A finding blocks at or above `--severity` (default HIGH) when a fix exists. Unfixable
+ * findings are counted and printed but do not block unless `--include-unfixed`, because a gate red
+ * for reasons this project cannot act on gets turned off. Exceptions live in
+ * `container-allowlist.json` with a reason, approver and expiry, and are still printed.
  *
- * ## The defect this exists for
+ * It runs `--scanners vuln` only and proves nothing beyond what the database knew when it ran.
+ * Nothing re-runs it on a schedule, so scan again before a release.
  *
- * Nine supply-chain gates examined the npm dependency graph in forensic detail —
- * denied packages, install-time lifecycle hooks, integrity hashes, release age,
- * OSV advisories, an SBOM, IOC sweeps — and **nothing looked inside the artefact
- * that actually ships**. The images were Debian bookworm-slim with a Node runtime
- * and roughly a hundred OS packages in them, none of which appear in
- * pnpm-lock.yaml and none of which any of those gates could see. A CVE in zlib or
- * perl-base was, as far as this repository's release audit was concerned, not a
- * thing that could exist.
- *
- * The first run of this gate against the then-current web image found 38 HIGH or
- * CRITICAL findings. That is not a scandal — most were Debian packages Debian had
- * marked `fix_deferred` or `will_not_fix` — but "we did not know" and "we knew
- * and decided" are different states, and only one of them is a security posture.
- * It also found eight findings with fixes available, all of them inside npm's own
- * bundled dependency tree at `/usr/local/lib/node_modules/npm`, in an image that
- * has never run npm. Both Dockerfiles now delete it.
- *
- * ## What this gate then caused
- *
- * Worth recording, because it is the point of having the gate at all. The
- * unfixable count it kept printing — 60 HIGH/CRITICAL across the two images, 14
- * distinct CVEs, every one of them from the base and none from an application
- * layer — is what moved both Dockerfiles from `node:24.18.0-bookworm-slim` to
- * `node:24.18.0-alpine3.24` on 2026-08-25: 88 OS packages down to 18, and all 60
- * findings gone. The paragraph below says "the right response to a growing number
- * is a different base image, not a bigger allowlist". That is what happened.
- *
- * The gate is OS-family agnostic and needed no change for it: it requires trivy
- * to report SOME `Metadata.OS`, not a Debian one, and Alpine's apk database is
- * deliberately left in the runtime images so trivy can still identify them.
- *
- * ## Refusing is the whole point
- *
- * A scanner that exits 0 when it did not run is worse than no scanner, because it
- * converts "nobody checked" into a green tick in a release report. So:
- *
- *   * trivy missing            → FAIL, with how to install it. Never a skip.
- *   * trivy cannot reach its
- *     vulnerability database   → FAIL. A scan against no database finds nothing,
- *                                which is indistinguishable from a clean image.
- *   * trivy did not identify
- *     the image's OS           → FAIL. It looked at something, but not at an OS
- *                                package set, so "no OS findings" means nothing.
- *   * no images to scan        → FAIL. A scan of nothing proves nothing —
- *                                repo-hygiene.mjs states the same principle.
- *
- * ## What blocks, and what is reported without blocking
- *
- * A finding blocks when it is at or above the severity floor (`--severity`,
- * default HIGH, which means HIGH and CRITICAL) **and** an upstream fix exists.
- *
- * A finding with no available fix is reported in its own section, counted, and
- * does not block. That is a deliberate trade and it deserves its reasoning
- * written down rather than assumed: the only remediation for `zlib1g
- * CVE-2023-45853`, which Debian marked `will_not_fix`, was to stop using Debian —
- * which is eventually what this project did, but not on the timescale of a build.
- * Blocking on it makes this gate permanently red through no action of this
- * project, and a permanently red gate is a gate somebody turns off — which costs
- * the fixable findings too. `--include-unfixed` makes them block, for a
- * deployment that has somewhere else to go. The Alpine images now report zero in
- * both columns, so `--include-unfixed` is currently free; if that stops being
- * true, this paragraph is the reasoning to re-read rather than re-derive.
- *
- * The cost of that choice, stated plainly: an unfixable CRITICAL in a shipped
- * image is a real vulnerability that this gate lets through. The number is printed
- * in the summary and in the JSON so it cannot be lost, and the right response to a
- * growing number is a different base image, not a bigger allowlist.
- *
- * ## The allowlist
- *
- * `container-allowlist.json`, same shape and same rules as `osv-allowlist.json`:
- * every entry needs a reason, an approver and an expiry, and the gate fails on a
- * malformed or lapsed one. An allowed finding is still printed — an exception
- * nobody can see is an exception nobody reviews.
- *
- * ## What this does NOT prove
- *
- * That the images are safe. It reports what a vulnerability database knew at the
- * moment it ran, about packages a scanner could identify. It runs `--scanners
- * vuln` only: no secret scanning, no misconfiguration scanning, no licence
- * checking. It says nothing about this project's own code, which is what the
- * other nine gates and the test suite are for. And a clean run tomorrow is not a
- * clean run today. Nothing re-runs it on a schedule any more (`supply-chain.yml` was removed on
- * 2026-10-11), so scan again before a release.
- *
- * Usage:
- *     node scripts/supply-chain/container-scan.mjs [--manifest <path>]
- *                [--image <ref>]... [--severity LOW|MEDIUM|HIGH|CRITICAL]
- *                [--include-unfixed] [--allowlist <path>] [--json] [--out <file>]
- *
- * Exit codes: 0 every image scanned and nothing blocking; 1 anything else,
- * including a refusal to run. 0 for --help.
+ * Exit codes: 0 every image scanned and nothing blocking (and for --help); 1 anything else.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -112,11 +28,7 @@ const DEFAULTS = {
   severity: 'HIGH',
 };
 
-/**
- * Ordered weakest to strongest. `UNKNOWN` is deliberately at the bottom rather
- * than the top: trivy uses it for advisories with no vendor rating, and treating
- * an unrated finding as maximal would make the floor meaningless.
- */
+/** `UNKNOWN` is lowest: trivy uses it for unrated advisories, and ranking them high voids the floor. */
 const SEVERITIES = ['UNKNOWN', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
 
 const HELP = `
@@ -195,23 +107,11 @@ export function parseArgs(argv) {
   return options;
 }
 
-// ---------------------------------------------------------------------------
-// The allowlist
-// ---------------------------------------------------------------------------
-
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
- * Validates the allowlist and returns the entries that may suppress a finding.
- *
- * Pure, and separate from reading the file, so `container-scan.test.mjs` can feed
- * it every malformed shape without a fixture directory. Every problem is a gate
- * failure rather than a skipped entry: an allowlist the gate half-understood is
- * an allowlist that silently stopped suppressing something, and the operator
- * would find out from a red build with no explanation.
- *
- * @param {unknown} raw parsed JSON
- * @param {Date} now
+ * Validates the allowlist and returns the usable entries. Pure, so the tests can feed every malformed
+ * shape. Every problem fails the gate, because a half-understood allowlist stops suppressing silently.
  */
 export function parseAllowlist(raw, now) {
   const problems = [];
@@ -235,8 +135,7 @@ export function parseAllowlist(raw, now) {
       continue;
     }
     if (typeof entry.reason !== 'string' || entry.reason.trim().length < 12) {
-      // Twelve characters, because "n/a" and "later" are not reasons and the
-      // entire point of this file is that somebody wrote down a decision.
+      // "n/a" and "later" are not reasons.
       problems.push(`${where} (${id}) has no usable \`reason\` — say why this is being shipped anyway`);
     }
     if (typeof entry.approvedBy !== 'string' || entry.approvedBy.trim() === '') {
@@ -271,7 +170,6 @@ export function parseAllowlist(raw, now) {
   return { entries, problems };
 }
 
-/** The allowlist entry that covers this finding, or null. */
 function allowFor(entries, finding) {
   return (
     entries.find(
@@ -283,28 +181,14 @@ function allowFor(entries, finding) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Classifying a trivy report
-// ---------------------------------------------------------------------------
-
-/**
- * Turns one trivy JSON report into findings and a verdict.
- *
- * Pure, so the tests can drive every branch — including the one that matters most,
- * "trivy produced a report that proves it did not look at anything".
- *
- * @param {{image: string, report: unknown, allowlist: Array<object>, severityFloor: string,
- *          includeUnfixed: boolean}} options
- */
+/** Turns one trivy JSON report into findings and a verdict. Pure, so the tests drive every branch. */
 export function classifyReport({ image, report, allowlist, severityFloor, includeUnfixed }) {
   const floor = SEVERITIES.indexOf(severityFloor);
   const findings = [];
   const problems = [];
 
   const results = Array.isArray(report?.Results) ? report.Results : [];
-  // trivy reports the OS it identified in Metadata. A report without one means it
-  // did not recognise a package database, so "no OS findings" is a statement about
-  // trivy rather than about the image — the exact silent pass this gate refuses.
+  // No `Metadata.OS` means trivy recognised no package database, so "no OS findings" says nothing.
   const os = report?.Metadata?.OS;
   if (os === undefined || os === null || typeof os.Family !== 'string') {
     problems.push(
@@ -341,9 +225,8 @@ export function classifyReport({ image, report, allowlist, severityFloor, includ
       };
       const allowed = allowFor(allowlist, finding);
       finding.allowedBy = allowed;
-      // The order here is the policy: an allowlist entry wins, then the
-      // fixability rule. Reversed, an allowlist entry for an unfixable finding
-      // would look effective while doing nothing.
+      // Allowlist first, then fixability. Reversed, an entry for an unfixable finding would look
+      // effective while doing nothing.
       finding.blocking = allowed === null && (fixedVersion !== null || includeUnfixed);
       findings.push(finding);
     }
@@ -352,19 +235,9 @@ export function classifyReport({ image, report, allowlist, severityFloor, includ
   return { image, findings, problems, packagesConsidered, os: os ?? null };
 }
 
-// ---------------------------------------------------------------------------
-// trivy
-// ---------------------------------------------------------------------------
-
 /**
- * Phrases in trivy's stderr that mean "the vulnerability database is not usable",
- * as opposed to any other failure.
- *
- * Matching on text is unpleasant and it is the only signal available: trivy exits
- * 1 for a database failure and for an unreadable image alike, and telling an
- * operator "the scan failed" when the real problem is that they are offline sends
- * them to the wrong place. Any unrecognised failure is still a refusal, so a
- * phrase that stops matching costs a worse message and never a false pass.
+ * trivy exits 1 for a database failure and an unreadable image alike, so its stderr text is the
+ * only way to tell an offline operator the right thing. An unmatched failure is still a refusal.
  */
 const DATABASE_FAILURE_MARKERS = [
   'failed to download vulnerability DB',
@@ -381,19 +254,15 @@ function runTrivy(image, severityFloor) {
     [
       'image',
       '--quiet',
-      // Vulnerabilities only. Secret and misconfiguration scanning are useful and
-      // are a different gate with a different false-positive profile; mixing them
-      // in here would make one noisy gate that gets ignored instead of two that do
-      // not.
+      // Vulnerabilities only. Secret and misconfiguration scanning belong in a separate gate.
       '--scanners',
       'vuln',
       '--format',
       'json',
       '--severity',
       severities,
-      // trivy's own --exit-code is deliberately left at 0: this script decides what
-      // blocks, using the allowlist and the fixability rule, and a non-zero exit
-      // from trivy must therefore mean "the scan did not happen".
+      // trivy's --exit-code stays 0. This script decides what blocks, so a non-zero trivy exit means
+      // the scan did not happen.
       image,
     ],
     { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 },
@@ -419,7 +288,6 @@ function runTrivy(image, severityFloor) {
   }
 }
 
-/** trivy's own version line, or null when it is not installed. */
 function trivyVersion() {
   const result = spawnSync('trivy', ['--version', '--quiet'], { encoding: 'utf8' });
   if (result.status !== 0) return null;
@@ -429,16 +297,9 @@ function trivyVersion() {
     : line.replace('Version:', '').trim();
 }
 
-// ---------------------------------------------------------------------------
-// Which images
-// ---------------------------------------------------------------------------
-
 /**
- * The images to scan: the release manifest's digests, or `--image` references.
- *
- * The manifest is the default because it is the artefact that ships. Scanning
- * `prl-api:latest` would scan whatever happens to carry that tag, which is the
- * category of mistake this whole release pipeline is built to remove.
+ * Defaults to the release manifest's digests. Scanning `prl-api:latest` scans whatever carries the
+ * tag.
  */
 export function imagesToScan(options) {
   if (options.images.length > 0) {
@@ -469,10 +330,6 @@ export function imagesToScan(options) {
   }
   return { images, problem: null };
 }
-
-// ---------------------------------------------------------------------------
-// The gate
-// ---------------------------------------------------------------------------
 
 export function runContainerScanGate(options) {
   const gate = new Gate('container-image-cves');
@@ -531,16 +388,7 @@ export function runContainerScanGate(options) {
     let blocking = 0;
     let unfixable = 0;
     let allowed = 0;
-    /**
-     * Unfixable findings counted by severity, and the distinct CRITICAL ids.
-     *
-     * The total on its own has already been misread. Two independent release
-     * reviews of this project recorded this gate's result as "60 unfixable HIGH",
-     * and the number was right while the sentence was not: 52 were HIGH and 8 were
-     * CRITICAL, including a `will_not_fix` in zlib1g. "Sixty HIGH" and "eight
-     * CRITICAL among sixty" are different facts to somebody deciding whether to
-     * ship, and a summary that only prints the total invites the first reading.
-     */
+    // Counted by severity because two reviews misread "60 unfixable" as 60 HIGH when 8 were CRITICAL.
     const unfixableBySeverity = new Map();
     const unfixableCriticalIds = new Set();
     const usedAllowlistIds = new Set();
@@ -607,7 +455,6 @@ export function runContainerScanGate(options) {
       );
     }
 
-    // Highest first, so the sentence a reader quotes starts with the worst of it.
     const bySeverity = SEVERITIES.filter((severity) => unfixableBySeverity.has(severity))
       .reverse()
       .map((severity) => `${unfixableBySeverity.get(severity)} ${severity}`)
@@ -615,9 +462,7 @@ export function runContainerScanGate(options) {
     report.unfixableBySeverity = Object.fromEntries(unfixableBySeverity);
 
     if (unfixableCriticalIds.size > 0) {
-      // A separate line from the total, and above it, because an unfixable
-      // CRITICAL in a shipped image is the finding most likely to be summarised
-      // away — and naming it costs one line.
+      // Unfixable CRITICALs get their own line, above the total.
       gate.warn(
         `${unfixableBySeverity.get('CRITICAL')} CRITICAL finding(s) ship unfixed in these images`,
         [...unfixableCriticalIds].join(', '),

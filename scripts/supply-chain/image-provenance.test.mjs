@@ -1,27 +1,8 @@
 #!/usr/bin/env node
 /**
- * Tests for the release-image signature gate.
- *
- * Run with:  node --test scripts/supply-chain/image-provenance.test.mjs
- *
- * ## What is tested here and what is deliberately not
- *
- * The library's pure decisions — the record shape, the tie to the release manifest, the attestation
- * payload — are covered in `scripts/image-signing.test.mjs`, which needs nothing but Node. This
- * file covers the GATE: the states in which it must refuse to run at all.
- *
- * Every case below is a way the old world looked from the outside. Before this gate existed, an
- * unsigned release image, a missing signature record and a missing trust anchor all produced
- * exactly the same thing — no output from anything — and a release audit that reported eleven of
- * eleven gates passing. So each test asserts a NON-ZERO exit and the sentence that explains it: a
- * gate that answers "fine" to any of these is a gate that has never refused anything.
- *
- * The live three-refusal demonstration against a real registry — unsigned digest, wrong key,
- * transplanted signature — is `--negative-control`, and it is not run from here. It needs a running
- * `registry:2` on loopback, which `pnpm run test` must not require; a test that silently passes
- * when the registry is absent would be the very thing this repository refuses. It is run by hand
- * and by `deploy/signing/README.md`'s procedure, and its output is recorded in
- * `docs/production/final-readiness-report.md`.
+ * Tests for the release-image signature gate: the states in which it must refuse to run. The pure
+ * library decisions are in `scripts/image-signing.test.mjs`. `--negative-control` needs a loopback
+ * `registry:2`, so it is run by hand and not from here.
  */
 
 import assert from 'node:assert/strict';
@@ -66,9 +47,8 @@ describe('argument parsing', () => {
 
 describe('refusals — every one of these used to be indistinguishable from a pass', () => {
   it('FAILS when there is no signature record', () => {
-    // The unsigned state. The file being absent is what an unsigned release looks like; treating it
-    // as "not applicable" would make `rm deploy/staging/release-signatures.json` a way to turn the
-    // gate green.
+    // The unsigned state. Treating an absent record as "not applicable" would let deleting it turn
+    // the gate green.
     const dir = scratch();
     const manifest = join(dir, 'manifest.json');
     writeFileSync(manifest, JSON.stringify({ images: { api: { digest: `sha256:${'a'.repeat(64)}` } } }));
@@ -79,10 +59,7 @@ describe('refusals — every one of these used to be indistinguishable from a pa
   });
 
   it('FAILS when there is no trust anchor', () => {
-    // A verification step with no key is not a weaker check, it is no check. The record is written
-    // here rather than read from deploy/staging, which holds a release only on a machine that built
-    // one: on CI's runners the default paths do not exist and this asserted against a different
-    // refusal.
+    // The record is written here because deploy/staging holds no release on CI's runners.
     const dir = scratch();
     const manifest = join(dir, 'manifest.json');
     const signatures = join(dir, 'signatures.json');
@@ -137,8 +114,6 @@ describe('refusals — every one of these used to be indistinguishable from a pa
   });
 
   it('FAILS when the committed key is not the key the record was signed with', () => {
-    // Rotation without re-signing. Every artefact becomes unverifiable at the moment the gate would
-    // otherwise go quiet, so this says so by name rather than surfacing as a signature error.
     const dir = scratch();
     const manifest = join(dir, 'manifest.json');
     const signatures = join(dir, 'signatures.json');
@@ -168,8 +143,7 @@ describe('refusals — every one of these used to be indistinguishable from a pa
   });
 
   it('FAILS when a release image has no signature entry', () => {
-    // The blocker in its original form, and the check cosign cannot make: the sidecar is internally
-    // perfect and covers one of the two images that ship.
+    // The sidecar is internally perfect and covers only one of the two images that ship.
     const dir = scratch();
     const manifest = join(dir, 'manifest.json');
     const signatures = join(dir, 'signatures.json');
@@ -178,8 +152,6 @@ describe('refusals — every one of these used to be indistinguishable from a pa
       manifest,
       JSON.stringify({ images: { api: { digest }, web: { digest: `sha256:${'b'.repeat(64)}` } } }),
     );
-    // The public key on disk is the real committed one, so the fingerprint check has to pass for
-    // this test to reach the reconciliation it is about. Read it the same way the gate does.
     const fingerprint = spawnSync(
       process.execPath,
       [

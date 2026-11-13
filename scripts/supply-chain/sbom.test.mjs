@@ -1,30 +1,9 @@
 #!/usr/bin/env node
 /**
- * Validates the generated SBOM against the CycloneDX 1.6 JSON schema *shape*.
- *
- * Run with:  node --test scripts/supply-chain/sbom.test.mjs
- *
- * ## Why this file exists
- *
- * `scripts/supply-chain/sbom.mjs:9` has always said: "The output here is
- * validated against the CycloneDX 1.6 JSON schema shape in
- * `scripts/supply-chain/sbom.test.mjs`." That file did not exist. The statement
- * is the kind a reviewer takes at face value and stops checking, which is worse
- * than saying nothing: it converts an untested generator into a tested one in the
- * reader's head. `pnpm run test:scripts` globbed every `.test.mjs` under
- * `scripts/` and found exactly one file, and it was about a different gate.
- *
- * "Shape", not the published schema document: fetching cyclonedx-1.6.schema.json
- * at test time would make an offline test suite network-dependent, and vendoring
- * a 3,000-line schema into a repository whose policy is dependency minimisation
- * buys less than the assertions below. What is checked here is every structural
- * rule the spec imposes that this generator could plausibly break — required
- * fields, enum values, purl well-formedness, hash algorithm names and hex digest
- * lengths, and the referential integrity of the `dependencies` graph.
- *
- * `validateCycloneDx16` is exercised in both directions: against the real output,
- * and against deliberately broken copies of it. A validator that has never
- * rejected anything is not evidence.
+ * Validates the generated SBOM against the CycloneDX 1.6 schema shape: required fields, enums, purl
+ * form, hash algorithms and digest lengths, and `dependencies` integrity. Not the published schema,
+ * which would need the network or a 3,000-line vendored file. The validator is also run against
+ * broken copies, because one that never rejects anything is not evidence.
  */
 
 import assert from 'node:assert/strict';
@@ -179,8 +158,7 @@ describe('CycloneDX 1.6 output', () => {
   let bom;
 
   before(() => {
-    // Generate rather than read whatever a previous run left behind: the claim in
-    // sbom.mjs is about what the generator produces now.
+    // Generate fresh, since the claim is about what the generator produces now.
     const res = spawnSync(process.execPath, [join(HERE, 'sbom.mjs')], {
       cwd: REPO_ROOT,
       encoding: 'utf8',
@@ -196,8 +174,7 @@ describe('CycloneDX 1.6 output', () => {
   });
 
   it('describes the whole graph, not a fragment of it', () => {
-    // A validator is happy with an empty document. The SBOM's purpose is incident
-    // response, so "it parses" is not the assertion that matters.
+    // The SBOM serves incident response, so "it parses" is not enough.
     assert.ok(bom.components.length > 100, `only ${bom.components.length} components`);
     assert.ok(
       bom.components.filter((c) => Array.isArray(c.hashes) && c.hashes.length > 0).length > 100,
@@ -207,8 +184,6 @@ describe('CycloneDX 1.6 output', () => {
   });
 
   it('regenerates byte-identically from an unchanged graph', () => {
-    // The generator derives its serial number from the graph and writes no
-    // timestamp, so a diff of this file is a diff of the dependencies.
     const first = readFileSync(OUT_PATH, 'utf8');
     const res = spawnSync(process.execPath, [join(HERE, 'sbom.mjs')], {
       cwd: REPO_ROOT,

@@ -1,13 +1,7 @@
 #!/usr/bin/env node
 /**
- * Tests for the `deny-list` gate.
- *
- * Run with:  node --test scripts/supply-chain/deny-list.test.mjs
- *
- * Two things need proving about a blocklist whose entries cannot occur in the
- * current graph: that it would fire if one did, and that its on-disk half is not
- * quietly reporting a clean store when there is no store. The second was real —
- * the gate printed `installed store: 0 package versions on disk` and passed.
+ * Tests for the `deny-list` gate: it fires on an entry that cannot occur in the current graph, and
+ * its on-disk half does not pass over a missing store.
  */
 
 import assert from 'node:assert/strict';
@@ -75,9 +69,7 @@ describe('denied names and scopes', () => {
 
 describe("coverage of the campaign named in the repository's own sources", () => {
   it('denies every ecosystem the advisory snapshot names', () => {
-    // docs/security/shai-hulud-snapshot-2026-08-17.md §1 records Expel and Arctic
-    // Wolf on "TanStack, Mistral AI, OpenSearch ecosystems" and Snyk on TanStack.
-    // All three were missing from DENIED_SCOPES while the file cited the sources.
+    // Snapshot §1 names TanStack, Mistral AI and OpenSearch. They were once missing from DENIED_SCOPES.
     for (const scope of ['@antv/', '@tanstack/', '@mistralai/', '@opensearch-project/', '@cacheable/']) {
       assert.ok(DENIED_SCOPES.has(scope), `${scope} is named in the cited sources but not denied`);
     }
@@ -96,8 +88,7 @@ describe("coverage of the campaign named in the repository's own sources", () =>
   });
 
   it('does not deny anything this repository actually depends on', () => {
-    // A guardrail against a scope being added carelessly: if this ever fails, the
-    // dependency has to go, not the deny-list entry.
+    // If this fails, the dependency goes, not the deny-list entry.
     for (const name of ['fastify', 'react', 'next', 'typescript', 'postgres', 'toad-cache']) {
       assert.equal(denyReason(name), null, `${name} is a real dependency and must not be denied`);
     }

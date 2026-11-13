@@ -1,142 +1,20 @@
 #!/usr/bin/env node
 /**
- * Gate: no pinned GitHub Action may be a version with a published advisory.
+ * Gate: no pinned GitHub Action may be a version with a published advisory. Pinning to a SHA stops a
+ * repointed tag but not a pinned version that later got an advisory.
  *
- * ## Why this gate exists
+ * A pin resolves to a version through `git ls-remote --tags`, peeled `^{}` line included, never
+ * through the trailing `# v7.0.1` comment. A gate keyed on a comment is turned green by editing it,
+ * so the comment is instead checked against GitHub and a mislabelled pin fails. A SHA no tag points
+ * at has no version and fails.
  *
- * `ci-pinning.mjs` proves every `uses:` in this repository is a full 40-character
- * commit SHA, which stops the attack it was written for: a tag is a pointer its
- * owner — or whoever compromises them — can repoint at new code that then runs in
- * this repository's CI, and `docs/security/shai-hulud-snapshot-2026-08-17.md` §1
- * lists **GitHub Actions** among the supply chains that campaign compromised while
- * §2 says it hijacks workflows to mint publish tokens.
- *
- * But pinning is not safety. **A pinned SHA of a version that was later found
- * vulnerable stays pinned, and stays vulnerable, silently and for ever.** Nothing
- * in this repository re-checked that surface: `osv-scan.mjs` queries the `npm`
- * ecosystem only, and `container-scan.mjs` reads the Alpine package database in
- * the built images — which is how CVE-2026-14456 was caught, and is also why the
- * gap was easy to mistake for coverage. `docs/VERIFICATION.md` said in as many
- * words that an advisory against a pinned action "still reaches this repository
- * only through a person". This is the gate that changes that sentence.
- *
- * It runs inside `security:audit`, so on every push (ci.yml) and every release.
- * Until 2026-10-11 `.github/workflows/supply-chain.yml` also ran it daily against
- * the unchanged repository; the owner removed that workflow. An advisory published
- * against a pin nobody touches is now caught at the next push, or sooner by
- * Dependabot security updates, if enabled in the repository settings — not by this gate.
- *
- * ## Resolving a pinned SHA to a version, without trusting the comment
- *
- * OSV's `GitHub Actions` ecosystem is keyed on `owner/repo` plus a **version
- * range** — measured, from the published corpus: 55 advisories carrying 64
- * affected-entries in that ecosystem, 63 of them a `ranges[].type: ECOSYSTEM` over
- * version strings and the last a bare `versions: ["1"]` list. **Not one is keyed on
- * a commit** — there is no `GIT` range anywhere in it. So an advisory source that
- * exists is only usable here if a pinned SHA can be turned into a version.
- *
- * The obvious key is the trailing comment this repository already writes —
- * `uses: actions/checkout@3d3c42e5… # v7.0.1`. **It is not used as the key, and
- * that is the central decision in this file.** The comment is a human-maintained
- * label sitting beside the thing it labels; nothing verifies it; and a gate whose
- * answer comes from a comment can be turned green by editing the comment. Keying
- * a security check on the one part of the line an attacker (or a careless rebase)
- * can change without changing what runs would be decoration.
- *
- * What is authoritative is GitHub's own tag graph. `git ls-remote --tags <repo>`
- * returns every tag with the commit it resolves to — including the `^{}` peeled
- * line that dereferences an annotated tag to its commit, which is exactly what
- * `uses:` resolves. Measured against this repository's four pinned actions:
- *
- *     3d3c42e5aac5ba805825da76410c181273ba90b1  refs/tags/v7
- *     3d3c42e5aac5ba805825da76410c181273ba90b1  refs/tags/v7.0.1
- *
- * So the pinned commit *is* v7.0.1, established by asking GitHub rather than by
- * reading a comment. It needs no token, has no API rate limit, and took 0.75 s.
- *
- * The comment is then used for the one thing it is good for: it is a **claim to
- * be checked**. A trailing `# v7.0.1` beside a SHA that GitHub says is some other
- * version is a release-blocking failure here — the pin and its label disagree, and
- * every reviewer who reads that line afterwards is being told the wrong thing
- * about what runs in CI. A comment that merely says nothing is a note, because the
- * version never came from it.
- *
- * ## Where a version cannot be determined, this refuses
- *
- * A pinned SHA that no tag points at — a branch head, a commit between releases —
- * has no version, so no advisory range can be evaluated against it. That is a
- * FAILURE, not a pass, for the reason `ci-pinning.mjs` had to learn twice: "I
- * could not read it" and "I read it and it was fine" must not produce the same
- * exit code. The remedy is to pin the SHA of a tagged release.
- *
- * ## Why the corpus is downloaded whole, rather than queried per action
- *
- * OSV's query API serves this ecosystem in a shape that cannot be used, and the
- * shape is quiet about it. Measured against `api.osv.dev` on 2026-08-27, with
- * `canonical/get-workflow-version-action`, whose only advisory covers everything
- * below 1.0.1:
- *
- *   | `{"package":{…,"ecosystem":"GitHub Actions"},"version":"1.0.0"}` | `{}` |
- *   | the same query with no `version` key                             | the advisory |
- *   | `{"package":{"name":"lodash","ecosystem":"npm"},"version":"4.17.15"}` | 6 advisories |
- *   | `{"package":{…,"ecosystem":"NotARealEcosystem"},…}`              | `invalid ecosystem` |
- *
- * A version-qualified query returns an empty result for a version squarely inside
- * a published range. The ecosystem is real — a garbage one is rejected outright —
- * so a gate built on `querybatch`, the way `osv-scan.mjs` is, would have queried
- * successfully, matched nothing, ever, and printed a green tick over an empty
- * answer. That is the exact failure this directory keeps finding in itself, and it
- * was one API call away from being shipped again.
- *
- * The second measurement rules out the name-only query as a workaround:
- *
- *   | `{"package":{"name":"Azure/setup-kubectl",…}}` | GHSA-p756-rfxh-x63h |
- *   | `{"package":{"name":"azure/setup-kubectl",…}}` | `{}`                |
- *
- * The API is **case-sensitive on the action name while GitHub is not**, so
- * `uses: azure/setup-kubectl@…` — which runs perfectly well — would be checked
- * against nothing. Downloading the ecosystem's published corpus and indexing it
- * case-insensitively removes both problems, costs one HTTP request, and has the
- * property the per-name route cannot have: the gate can assert that its advisory
- * source is **non-empty**, so a source that goes quiet fails the build instead of
- * clearing every action in the repository.
- *
- * ## The negative control runs on every invocation
- *
- * `ADVISORY_CONTROLS` below is a table of real actions at real versions with real
- * published advisories, run through the same matcher the real references go
- * through, on every run. Each must produce its advisory, and the not-affected rows
- * must produce nothing. A corpus that arrives empty, a ZIP reader that drops
- * entries, a version comparator that stops comparing, an index that loses its
- * case-folding — every one of those turns the gate green over nothing, and every
- * one of them is caught here instead. It is the same posture as `test:layout`'s
- * injected stylesheets: a detector that stops working fails the gate rather than
- * going quiet.
- *
- * These rows are pinned to live upstream data on purpose. If an advisory is
- * withdrawn or its range revised, this gate goes red and a person re-reads the
- * advisory and updates the table in a reviewed diff. That is the correct direction
- * for a change in what the security database says.
- *
- * ## There is no allowlist
- *
- * `osv-scan.mjs` has one because a transitive npm dependency can be affected with
- * no fixed version available and nothing this repository can do about it. An
- * action reference is not that: it is one line in a workflow this repository owns,
- * and the remedy — repin to a fixed release, or stop using the action — is always
- * directly available. If that ever stops being true, add the allowlist then, with
- * expiry, the way the OSV one has it. Do not add a flag.
- *
- * ## Offline
- *
- * This is a network gate. `security:audit --offline` skips it and exits **2**,
- * which is the existing contract: an audit that did not run its gates has not
- * passed. Run standalone with no network, it FAILS — it does not skip, and it does
- * not pass. The safe direction here is red: an unreachable advisory database means
- * "unknown", and unknown is not clean.
- *
- * Usage:
- *     node scripts/supply-chain/action-advisories.mjs
+ * The whole OSV corpus is downloaded and indexed case-insensitively. Measured on 2026-08-27, OSV's
+ * version-qualified query returns `{}` for this ecosystem even inside a published range, and its
+ * name query is case-sensitive (`azure/setup-kubectl` finds nothing) while `uses:` is not.
+ * `ADVISORY_CONTROLS` runs through the same matcher on every invocation, so a broken corpus, ZIP
+ * reader or comparator fails the gate. There is no allowlist, because the fix (repin or drop the
+ * action) is always in this repository. With no network it fails, and `security:audit --offline`
+ * skips it with exit 2.
  *
  * Exit codes: 0 pass, 1 a finding or an unreachable source.
  */
@@ -148,43 +26,21 @@ import { crc32, inflateRawSync } from 'node:zlib';
 import { collectActionReferences } from './ci-pinning.mjs';
 import { Gate, REPO_ROOT, runGate } from './lib.mjs';
 
-/** The published OSV corpus for the ecosystem, as one object. */
 const CORPUS_URL = 'https://osv-vulnerabilities.storage.googleapis.com/GitHub%20Actions/all.zip';
 const REPORT_PATH = join(REPO_ROOT, 'docs', 'sbom', 'action-advisory-report.json');
 
 /**
- * The floor `ci-pinning.mjs` reports today, and the number this gate refuses to
- * scan below.
- *
- * A sweep of nothing is not a pass, and the way this one would go quiet is
- * specific: both gates find their references with the same `uses:` regex over the
- * same discovery, so a parse that stops matching — a YAML style change, a renamed
- * workflow directory, a `collectActionReferences` that returns `[]` — produces a
- * green tick over zero actions. Zero is caught by any non-empty assertion; a
- * partial collapse from 60 to 4 is not, and is the likelier accident.
- *
- * It was 63 until 2026-10-11, when removing supply-chain.yml took its three
- * references with it; lowered in that same diff, as the refusal below asks.
+ * Refuses to scan fewer references than `ci-pinning.mjs` reports. Zero is caught anywhere; a partial
+ * collapse from 60 to 4 is the likelier accident. Lowered from 63 when supply-chain.yml was removed.
  */
 const MINIMUM_ACTION_REFERENCES = 60;
 
-/**
- * Measured at 55 on 2026-08-27. A published ecosystem does not shrink by a third;
- * a number below this means the download or the ZIP reader lost entries, and a
- * corpus that quietly lost the advisory covering an action in this repository is
- * indistinguishable from a clean run.
- */
+/** Measured at 55 on 2026-08-27. Fewer means the download or ZIP reader lost entries. */
 const MINIMUM_ADVISORIES = 40;
 
 /**
- * Real actions, real versions, real published advisories — run through the same
- * matcher as the real references on every invocation. See the header.
- *
- * `expect: null` means "this exact version must produce NO finding", which is the
- * half that catches a matcher that has started firing on everything. The
- * deliberately lower-cased `azure/setup-kubectl` is the case-folding control: the
- * advisory is published against `Azure/setup-kubectl`, GitHub resolves `uses:`
- * case-insensitively, and OSV's own query API does not.
+ * `expect: null` means the version must produce NO finding, which catches a matcher that fires on
+ * everything. Lower-case `azure/setup-kubectl` is the case-folding control.
  */
 export const ADVISORY_CONTROLS = [
   { name: 'actions/download-artifact', version: '4.1.0', expect: 'GHSA-cxww-7g56-2vh6' },
@@ -195,23 +51,9 @@ export const ADVISORY_CONTROLS = [
   { name: 'actions/checkout', version: '4.1.0', expect: null },
 ];
 
-// ---------------------------------------------------------------------------
-// Reading the corpus
-// ---------------------------------------------------------------------------
-
 /**
- * A minimal ZIP reader over the central directory.
- *
- * Hand-rolled for the reason the rest of this directory is dependency-free: an
- * auditor that installs a package to do its job is checking the thing it depends
- * on. The risk of a hand-rolled parser is that it silently drops entries, so it
- * refuses rather than truncates at every point it could: an entry count that does
- * not match the directory header, a compression method it does not implement, a
- * ZIP64 marker, or a CRC32 that does not match the inflated bytes all throw. The
- * advisory-count floor and the controls above are the other two nets under it.
- *
- * @param {Buffer} buffer
- * @returns {Map<string, Buffer>} entry name to uncompressed bytes
+ * A minimal ZIP reader, dependency-free like the rest of this directory. It throws rather than
+ * truncating on an entry-count mismatch, an unknown compression method, ZIP64 or a CRC32 mismatch.
  */
 export function readZipEntries(buffer) {
   const EOCD_SIGNATURE = 0x0605_4b50;
@@ -249,9 +91,7 @@ export function readZipEntries(buffer) {
     if (buffer.readUInt32LE(localOffset) !== 0x0403_4b50) {
       throw new Error(`${name}: local header signature missing`);
     }
-    // The local header carries its OWN name and extra lengths, which may differ
-    // from the central directory's; reading the directory's would land the data
-    // pointer in the middle of the payload.
+    // The local header has its own name and extra lengths, which may differ from the directory's.
     const localNameLength = buffer.readUInt16LE(localOffset + 26);
     const localExtraLength = buffer.readUInt16LE(localOffset + 28);
     const dataStart = localOffset + 30 + localNameLength + localExtraLength;
@@ -272,12 +112,8 @@ export function readZipEntries(buffer) {
 }
 
 /**
- * An OSV package name reduced to the `owner/repo[/path]` form a `uses:` writes.
- *
- * The corpus contains all three spellings in the wild — `Azure/setup-kubectl`,
- * `https://github.com/pytorch/pytorch/.github/actions/filter-test-configs`, and
- * `super-linter/super-linter/slim` — so a lookup keyed on the literal string
- * would miss two of them.
+ * Reduces an OSV package name to the `owner/repo[/path]` a `uses:` writes. The corpus has
+ * `Azure/setup-kubectl`, full `https://github.com/...` URLs, and `owner/repo/sub` forms.
  */
 export function normaliseActionName(name) {
   if (typeof name !== 'string') return null;
@@ -291,15 +127,8 @@ export function normaliseActionName(name) {
 }
 
 /**
- * Case-insensitive index from action name to the advisory entries about it.
- *
- * Only `GitHub Actions` affected-entries are indexed: a single advisory can carry
- * entries for several ecosystems — GHSA-69fq-xp46-6x23 covers `aquasecurity/trivy`
- * the Go module and `aquasecurity/trivy-action` the action, and their version
- * lines are unrelated.
- *
- * @param {Array<object>} records
- * @returns {Map<string, Array<{record: object, entry: object}>>}
+ * Indexes only `GitHub Actions` affected-entries. One advisory can cover several ecosystems with
+ * unrelated version lines (GHSA-69fq-xp46-6x23 covers a Go module and an action).
  */
 export function buildAdvisoryIndex(records) {
   const index = new Map();
@@ -316,10 +145,6 @@ export function buildAdvisoryIndex(records) {
   }
   return index;
 }
-
-// ---------------------------------------------------------------------------
-// Versions
-// ---------------------------------------------------------------------------
 
 /** `v7.0.1` and `7.0.1` and `46` all parse; `main` and `latest` do not. */
 export function parseVersion(value) {
@@ -359,12 +184,8 @@ function comparePrerelease(left, right) {
 }
 
 /**
- * `-1`, `0`, `1` — or **null** when either side cannot be read as a version.
- *
- * Null is not "equal" and not "less than". Every caller propagates it up to a
- * gate failure, because a comparison that did not happen must not read as a
- * comparison that came out clean. Shorter versions are zero-extended, which is
- * what the advisory database means by `fixed: "6"`.
+ * Returns -1, 0, 1, or null when either side is not a version. Callers turn null into a failure.
+ * Shorter versions are zero-extended, which is what `fixed: "6"` means.
  */
 export function compareVersions(left, right) {
   const a = parseVersion(left);
@@ -381,10 +202,7 @@ export function compareVersions(left, right) {
   return comparePrerelease(a.prerelease, b.prerelease);
 }
 
-/**
- * Is `version` inside one OSV range? `null` means the range could not be read,
- * which its caller turns into a failure rather than a "no".
- */
+/** Returns null when the range cannot be read, and the caller fails rather than clears it. */
 export function versionInRange(version, range) {
   const events = [];
   for (const event of range?.events ?? []) {
@@ -396,8 +214,7 @@ export function versionInRange(version, range) {
   }
   if (events.length === 0) return null;
 
-  // `introduced: "0"` is OSV's universal lower bound and is not a version, so it
-  // is sorted first by construction rather than by comparison.
+  // `introduced: "0"` is OSV's universal lower bound, not a version.
   const ordered = events.map((event) => ({
     ...event,
     zero: event.kind === 'introduced' && event.value === '0',
@@ -428,10 +245,7 @@ export function versionInRange(version, range) {
   return affected;
 }
 
-/**
- * Is `version` covered by one advisory's affected-entry? `null` means part of the
- * entry could not be read, and the caller must refuse rather than clear it.
- */
+/** Returns null when part of the entry cannot be read. */
 export function versionAffected(version, entry) {
   const listed = Array.isArray(entry?.versions) ? entry.versions : [];
   let listUnreadable = false;
@@ -450,21 +264,15 @@ export function versionAffected(version, entry) {
   }
 
   if (listUnreadable) return null;
-  // A range type this gate does not evaluate — `GIT`, or something new — is not
-  // an absence of coverage, it is coverage that was not read.
+  // An unevaluated range type such as `GIT` is coverage that was not read, not an absence of it.
   if (readable.length !== ranges.length) return null;
   if (readable.length === 0 && listed.length === 0) return null;
   return false;
 }
 
 /**
- * Every advisory in the index that covers any of `versions` of `name`.
- *
- * Looked up under the full `owner/repo/sub/dir` and under `owner/repo`, because
- * an advisory published against the repository covers the action in its
- * subdirectory too — it is the same commit.
- *
- * @returns {{findings: Array<object>, unreadable: Array<object>}}
+ * Also looks up `owner/repo` for a `owner/repo/sub/dir` action, since an advisory against the
+ * repository covers the action at the same commit.
  */
 export function advisoriesAffecting(index, name, versions) {
   const keys = new Set();
@@ -508,10 +316,6 @@ function severityOf(record) {
   return record?.database_specific?.severity ?? cvss?.score ?? 'UNKNOWN';
 }
 
-// ---------------------------------------------------------------------------
-// Resolving a pinned SHA to a version
-// ---------------------------------------------------------------------------
-
 /** `owner/repo[/sub]@ref`, `./local`, `docker://image@sha256:…`. */
 export function parseActionReference(reference) {
   if (typeof reference !== 'string' || reference === '') return { kind: 'unreadable' };
@@ -528,16 +332,8 @@ export function parseActionReference(reference) {
 }
 
 /**
- * `git ls-remote --tags` output as commit SHA to the tag names that resolve to it.
- *
- * An ANNOTATED tag has two lines: the tag object under `refs/tags/x` and the
- * commit it dereferences to under `refs/tags/x^{}`. `uses:` resolves to the
- * commit, so the peeled line wins wherever there is one. Reading only the first
- * line would leave every annotated release looking like an unknown SHA — and this
- * gate treats an unknown SHA as a failure, so the mistake would be loud rather
- * than silent, but it would be loud on every correctly pinned action.
- *
- * @returns {Map<string, string[]>}
+ * Maps commit SHA to tag names. For an annotated tag the peeled `^{}` line names the commit `uses:`
+ * resolves to, so it wins.
  */
 export function tagsByCommit(lsRemoteOutput) {
   const direct = new Map();
@@ -562,19 +358,8 @@ export function tagsByCommit(lsRemoteOutput) {
 }
 
 /**
- * Which of the tags at a commit name the version that commit IS.
- *
- * `actions/checkout@3d3c42e5…` carries both `v7` and `v7.0.1`, because the
- * major-version alias currently points at the same commit as the release. They
- * are not equally good answers and taking both would be actively wrong: an
- * advisory reading `introduced: 0, fixed: 7.0.1` does not affect this pin, but it
- * does "affect" the string `7` — which zero-extends to 7.0.0 — so checking the
- * alias as well would invent a finding for every advisory ever fixed inside the
- * current major. The most specific tag is the release; the shorter ones are other
- * names for it.
- *
- * A tie at maximum specificity (a commit carrying two full releases) is genuinely
- * ambiguous and both are returned, so the gate reports if either is affected.
+ * Returns only the most specific tags at a commit. `v7` beside `v7.0.1` zero-extends to 7.0.0 and
+ * would invent a finding for every advisory fixed inside the current major. A tie returns both.
  */
 export function versionsForTags(tags) {
   const parsed = tags
@@ -592,10 +377,6 @@ export function versionFromComment(comment) {
   return match === null ? null : comment.trim();
 }
 
-// ---------------------------------------------------------------------------
-// The gate
-// ---------------------------------------------------------------------------
-
 async function fetchBuffer(url, { timeoutMs = 45_000, retries = 2 } = {}) {
   let lastError;
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -612,11 +393,8 @@ async function fetchBuffer(url, { timeoutMs = 45_000, retries = 2 } = {}) {
 }
 
 /**
- * Retried twice, and that is not a softening of the refusal below: a repository
- * that is genuinely unreachable is still unreachable on the third attempt and
- * still fails the gate. What it buys is that one dropped TLS handshake does not
- * turn the release gate red for a reason nobody can reproduce, which is how a
- * gate earns the reputation that gets it waived.
+ * Two retries so one dropped TLS handshake does not turn the gate red. A repository that is really
+ * unreachable still fails.
  */
 function lsRemoteTags(repository) {
   let lastError;
@@ -627,8 +405,7 @@ function lsRemoteTags(repository) {
         timeout: 60_000,
         maxBuffer: 32 * 1024 * 1024,
         stdio: ['ignore', 'pipe', 'pipe'],
-        // Without this a repository that has been deleted or renamed turns into a
-        // credential prompt on a TTY and a hang in CI, rather than an error.
+        // A deleted or renamed repository would otherwise become a credential prompt or a CI hang.
         env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: 'true' },
       });
     } catch (err) {
@@ -638,11 +415,7 @@ function lsRemoteTags(repository) {
   throw lastError;
 }
 
-/**
- * The every-invocation negative control. See the header.
- *
- * @returns {string[]} problems; empty means every control behaved
- */
+/** The every-invocation negative control. Returns problems; empty means every control behaved. */
 export function runAdvisoryControls(index) {
   const problems = [];
   for (const control of ADVISORY_CONTROLS) {
@@ -673,7 +446,6 @@ export function runAdvisoryControls(index) {
 function runActionAdvisoryGate() {
   const gate = new Gate('pinned-action-advisories');
   return runGate(gate, async () => {
-    // --- the references, and the floor under them -------------------------
     const references = collectActionReferences(REPO_ROOT);
     if (references.length < MINIMUM_ACTION_REFERENCES) {
       gate.fail(
@@ -693,9 +465,7 @@ function runActionAdvisoryGate() {
       const parsed = parseActionReference(reference.reference);
       if (parsed.kind === 'local' || parsed.kind === 'docker') continue;
       if (parsed.kind !== 'pinned') {
-        // Unreachable in a passing build — `ci-pinning.mjs` fails on exactly this
-        // — and stated anyway, because "could not read it" must never share an
-        // exit code with "read it and it was clean".
+        // Unreachable in a passing build, since `ci-pinning.mjs` fails on it first.
         gate.fail(
           `cannot check advisories for an unpinned action at ${reference.at}: ${reference.reference}`,
           'a version can only be established for a reference pinned to a full commit SHA; see ci-pinning.mjs',
@@ -724,7 +494,6 @@ function runActionAdvisoryGate() {
       return;
     }
 
-    // --- the advisory corpus ----------------------------------------------
     let index;
     let advisoryCount = 0;
     try {
@@ -758,7 +527,6 @@ function runActionAdvisoryGate() {
     }
     gate.note(`${advisoryCount} GitHub Actions advisories from OSV; ${index.size} distinct action(s) named`);
 
-    // --- the control, before any verdict ----------------------------------
     const controlProblems = runAdvisoryControls(index);
     if (controlProblems.length > 0) {
       for (const problem of controlProblems) {
@@ -776,7 +544,6 @@ function runActionAdvisoryGate() {
     }
     gate.note(`${ADVISORY_CONTROLS.length} advisory controls behaved (matcher and corpus both live)`);
 
-    // --- resolve every pin to a version, from GitHub -----------------------
     /** @type {Map<string, Map<string, string[]>>} */
     const tagsByRepository = new Map();
     for (const entry of pinned.values()) {
@@ -812,7 +579,7 @@ function runActionAdvisoryGate() {
         continue;
       }
 
-      // The trailing comment is a claim, checked against GitHub — never the key.
+      // The trailing comment is a claim, checked against GitHub. It is never the key.
       for (const comment of entry.comments) {
         const claimed = versionFromComment(comment);
         if (claimed === null) continue;
