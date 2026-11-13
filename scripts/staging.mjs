@@ -1,92 +1,13 @@
 #!/usr/bin/env node
 /**
- * Brings up, verifies and gates promotion of the staging stack.
+ * Brings up, verifies and gates promotion of the staging stack (`pnpm run staging <command>`).
  *
- * Invoked by `pnpm run staging <command>`.
- *
- * ## The defect this exists for
- *
- * There was no way to run this application the way it ships. `docker-compose.yml`
- * is a development stack and says so: plaintext on loopback,
- * `NODE_ENV=development`, dev credentials in plain sight, and `build:` sections
- * that make a new image every time. So every production-only behaviour — the
- * `Secure`, `__Host-`-prefixed session cookie; the config refusals that fire only
- * when `NODE_ENV=production`; TLS termination; `TRUST_PROXY` and the rate-limit
- * bucketing that depends on it; the WebSocket upgrade through a real proxy — was
- * first exercised in production, by users.
- *
- * This script is the rehearsal. It runs the artefacts
- * `pnpm run release:artifacts` built, by digest, against a production-shaped
- * stack, then proves four things that only a running deployment can prove:
- *
- *   1. the containers docker actually started are running the manifest's digests
- *      and nothing else;
- *   2. the https origin serves, and its certificate chain verifies against the
- *      local CA rather than being waved through;
- *   3. the proxy OVERWRITES `X-Forwarded-For` rather than appending to it, which
- *      is the single assumption that makes `TRUST_PROXY=true` safe;
- *   4. the smoke test passes end to end over TLS, including a real WebSocket
- *      upgrade and a hand played to completion.
- *
- * ## `promote` is a verifier, not a deployer
- *
- * There is no deployment target in this project today. `promote` therefore checks
- * what can be checked here — that the digest about to go to production is
- * byte-for-byte the digest staging tested, that staging's verification actually
- * passed, and, when the artefacts were pushed, that the registry still serves
- * those exact bytes under those exact digests — and then says so and stops. It
- * does not deploy and it does not pretend to. When a target exists, the deploy
- * step goes AFTER this check and consumes its output; the check itself does not
- * change.
- *
- * ## And a second question, which is not about the bytes at all
- *
- * `promote` also runs `scripts/alert-preflight.mjs`. Everything else here asks "are
- * these the bytes staging tested"; that one asks "if these bytes misbehave, does
- * anybody find out". They are separate questions and only the second one can be
- * answered wrongly in a way that looks completely healthy: a deployment whose
- * `PRL_ALERT_*` variables still hold the rehearsal defaults passes `alerts:verify`
- * (which renders and asserts against those same defaults), starts an Alertmanager
- * that routes by severity exactly as designed, and posts every page to a sink that
- * ceased to exist when the verification run ended. Nothing in band can report that,
- * because the channel that would carry the report is the channel that is broken.
- *
- * ## The registry, and being precise about what it bought
- *
- * `pnpm run release:artifacts --push` publishes both artefacts to a registry
- * (`deploy/registry/docker-compose.registry.yml` runs one on loopback) and
- * records the digest the registry returned beside the local BuildKit one. Where a
- * manifest carries those references, this script deploys THEM — `pull_policy`
- * becomes `always`, because a digest pull cannot return different bytes — and
- * verifies before doing so that the registry really serves each digest, by
- * fetching the manifest and re-hashing it here.
- *
- * That closes "cannot be promoted across machines": the artefact now has a
- * reference another machine can resolve, and resolving it can only produce these
- * bytes or an error. It does NOT by itself make the artefact attested. A local
- * registry is content-addressed storage, not a notary: it can prove two parties
- * hold the same bytes and it cannot say where they came from.
- *
- * Since 2026-08-25 the digests ARE signed — `pnpm run release:sign` signs each one
- * with cosign and attests a CycloneDX SBOM to it, and
- * `pnpm run security:image-provenance` verifies both against the committed public
- * key. That is a separate command and a separate record
- * (`deploy/staging/release-signatures.json`); nothing in THIS file signs, verifies
- * or consults a signature, so `promote` still prints the split rather than letting
- * a green tick imply the larger claim. What the signature adds and what it still
- * does not is `deploy/signing/README.md`.
- *
- * ## What this does NOT prove
- *
- * Capacity, of anything. One replica on one machine with a database on the same
- * kernel is not a load test; `scripts/load-test.mjs` says the same about itself.
- * It does not rehearse a deploy identity either: migrations here run as the
- * cluster owner, the way `.github/workflows/ci.yml` does, because this stack
- * creates its own throwaway cluster on every bring-up. A real deployment migrates
- * as `prl_deployer` (docs/RUNBOOK.md §5, §11.3). The RUNTIME identity IS
- * rehearsed — the API connects as `prl_api`, a member of `prl_app` and nothing
- * else — and that is the one whose missing GRANT would otherwise surface in
- * production.
+ * It runs the digests `pnpm run release:artifacts` built against a production-shaped stack and
+ * proves the running containers match the manifest, the TLS chain verifies against the local CA,
+ * the proxy overwrites `X-Forwarded-For`, and the smoke test passes over TLS. `promote` verifies and
+ * deploys nothing. It also runs `alert-preflight.mjs`, because rehearsal `PRL_ALERT_*` defaults pass
+ * `alerts:verify` and page nobody. Nothing here signs or checks a signature (see `release:sign`).
+ * Migrations run as the cluster owner, and the API connects as `prl_api`.
  *
  * Usage:
  *     node scripts/staging.mjs init      [--rotate] [--origin https://localhost:8443]
@@ -97,8 +18,7 @@
  *     node scripts/staging.mjs down      [--volumes]
  *     node scripts/staging.mjs promote   [--manifest <path>] [--json]
  *
- * Exit codes: 0 the command succeeded, 1 anything else (including a refused
- * promotion). 0 for --help.
+ * Exit codes: 0 success or --help, 1 anything else (including a refused promotion).
  */
 
 import { spawnSync } from 'node:child_process';
@@ -129,8 +49,6 @@ const red = (s) => paint('31', s);
 const green = (s) => paint('32', s);
 const yellow = (s) => paint('33', s);
 
-// --- layout ---------------------------------------------------------------
-
 const STAGING_DIR = join(REPO_ROOT, 'deploy', 'staging');
 const TLS_DIR = join(STAGING_DIR, 'tls');
 const ENV_FILE = join(STAGING_DIR, '.env.staging');
@@ -149,24 +67,14 @@ const DEFAULTS = {
   tail: 200,
 };
 
-/** The schema `release-artifacts.mjs` writes. A manifest of any other shape is refused. */
 const MANIFEST_SCHEMA = 'prl.release-artifacts.v1';
-/** The schema this script writes into the attestation, and `promote` reads back. */
 const ATTESTATION_SCHEMA = 'prl.staging-verified.v1';
 
-/** A deployable image reference: a name with a content digest and no tag doing the work. */
 const DIGEST_REFERENCE = /^[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}$/;
 
-/** The services this stack deploys from the manifest, in the order they are reported. */
 const RELEASE_SERVICES = ['api', 'web'];
 
-/**
- * How long the local CA and its leaf are good for.
- *
- * 90 days rather than ten years. A staging certificate that never expires is a
- * staging certificate somebody eventually copies somewhere it matters, and an
- * expiry is the cheapest way to make `staging init` a thing that gets re-run.
- */
+// 90 days, so a staging certificate cannot be copied somewhere it matters for ever.
 const CERT_DAYS = 90;
 
 const HELP = `
@@ -220,8 +128,6 @@ ${bold('pnpm run staging')} — the production-shaped rehearsal stack
   Exit codes: 0 success, 1 failure or a refused promotion.
 `;
 
-// --- options --------------------------------------------------------------
-
 const COMMANDS = ['init', 'up', 'status', 'smoke', 'logs', 'down', 'promote'];
 
 function parseArgs(argv) {
@@ -245,7 +151,6 @@ function parseArgs(argv) {
       i += 1;
       return value;
     };
-    // `pnpm run staging -- up` forwards the `--` itself.
     if (arg === '--') continue;
     if (!arg.startsWith('-')) {
       if (options.command !== null)
@@ -295,13 +200,7 @@ function parseArgs(argv) {
   return options;
 }
 
-/**
- * Parses the public origin and refuses anything the API would refuse.
- *
- * `config.ts` rejects a plaintext `PUBLIC_WEB_ORIGIN` in production, rejects a
- * path, and matches origins exactly. Catching those here means the operator is
- * told which variable is wrong instead of watching every WebSocket close 4406.
- */
+// Mirrors `config.ts`'s origin refusals so the operator learns which variable is wrong.
 function parseHttpsOrigin(raw) {
   let url;
   try {
@@ -318,8 +217,6 @@ function parseHttpsOrigin(raw) {
   return { origin: url.origin, hostname: url.hostname, port: url.port === '' ? '443' : url.port };
 }
 
-// --- output ---------------------------------------------------------------
-
 const failures = [];
 const tick = (line, detail) => {
   console.log(`${green('  ✓')} ${line}`);
@@ -335,8 +232,6 @@ const bang = (line, detail) => {
   if (detail) console.log(dim(`      ${detail}`));
 };
 const section = (name) => console.log(bold(`\n${name}`));
-
-// --- processes ------------------------------------------------------------
 
 function run(command, args, { stream = false, input, env = process.env, cwd = REPO_ROOT } = {}) {
   const result = spawnSync(command, args, {
@@ -361,58 +256,18 @@ function capture(command, args) {
   return result.status === 0 ? result.stdout.trim() : null;
 }
 
-/**
- * Every compose invocation, with the environment file attached.
- *
- * Compose interpolation is file-wide, so `ps` and `down` need the same variables
- * `up` does — see the header of docker-compose.staging.yml. Attaching the file
- * here rather than at each call site is what makes `pnpm run staging down` work
- * when a bare `docker compose -f docker-compose.staging.yml down` would refuse
- * with "required variable PRL_API_IMAGE is missing".
- */
+// Compose interpolation is file-wide, so `ps` and `down` need the same env file as `up`.
 function compose(args, options = {}) {
   return run('docker', ['compose', '--env-file', ENV_FILE, '-f', COMPOSE_FILE, ...args], options);
 }
 
-/**
- * The HSTS policy `deploy/staging/nginx.conf` sets, and the path it is probed on.
- *
- * These two constants are a pair and they exist because of a real defect. The
- * check used to probe `/api/v1/health`, read `res.headers`, and tick as soon as
- * *something* came back. Two things were wrong with that:
- *
- *   * `/api/v1/health` is an API route, and the API sets its own HSTS through
- *     helmet whenever `NODE_ENV=production` — which staging is. nginx's
- *     `add_header` APPENDS, so every `/api/*` response carried two headers and a
- *     browser obeyed only the first (RFC 6797 §8.1), which was the API's
- *     `includeSubDomains` variant. The proxy's deliberate no-`includeSubDomains`
- *     policy was in force on the page path and silently overridden on the API
- *     path.
- *   * Because the API was answering, the check would have ticked green with the
- *     `add_header` line deleted from nginx.conf entirely. It was not testing the
- *     proxy at all. Its own failure message — "the app cannot set it; only the
- *     TLS terminator knows" — was the false claim that hid the defect.
- *
- * So: probe a path the API does not serve, and assert EXACTLY ONE header with
- * EXACTLY the expected value. `/` is the page server (nginx's `location /`), and
- * `nginx.conf` now carries `proxy_hide_header Strict-Transport-Security` so the
- * terminator really is the single source on every path.
- *
- * HSTS_EXPECTED must stay in step with the `add_header` line in
- * `deploy/staging/nginx.conf`. If you change one, this check fails until you
- * change the other, which is the intended coupling.
- */
+// The HSTS probe uses a path the API does not serve. On `/api/v1/health` the API set its own header,
+// nginx's `add_header` appended a second, and the check passed with nginx's line deleted.
+// HSTS_EXPECTED must match the `add_header` line in `deploy/staging/nginx.conf`.
 export const HSTS_PROBE_PATH = '/';
 export const HSTS_EXPECTED = 'max-age=31536000';
 
-/**
- * Every `Strict-Transport-Security` value in a raw header list, in wire order.
- *
- * `res.rawHeaders` is a flat [name, value, name, value, …] array that preserves
- * duplicates; `res.headers` folds them into one comma-joined string, which is
- * exactly the information this check needs and cannot get there. Exported so the
- * test can drive the duplicate case without a running proxy.
- */
+// `res.headers` folds duplicates into one string, so the raw list is the only way to count them.
 export function hstsFromRawHeaders(rawHeaders) {
   const values = [];
   const list = Array.isArray(rawHeaders) ? rawHeaders : [];
@@ -423,47 +278,24 @@ export function hstsFromRawHeaders(rawHeaders) {
   return values;
 }
 
-/**
- * Compose argv that restarts nginx so it re-reads the bind-mounted certificate.
- *
- * `staging init` can renew the leaf while this stack is already up. The cert
- * directory is a bind mount, but nginx reads it only at start; a plain
- * `compose up` sees no image or config change and keeps serving the old leaf.
- * Recreate **only** the proxy: API/web containers and their digests stay put.
- *
- * Exported so the test can drive this path with a fake compose runner instead of
- * grepping this file. Changing the service list here is what the test would
- * catch — a comment would not.
- */
+// nginx reads the bind-mounted certificate only at start, so a renewed leaf needs the proxy recreated.
+// Only the proxy: the API and web containers stay pinned by digest.
 export const PROXY_REFRESH_COMPOSE_ARGS = Object.freeze(['up', '-d', '--force-recreate', 'proxy']);
 
-/**
- * Recreate the TLS terminator. `runCompose` is `compose` in production and a
- * recorder in tests. Returns the compose result so `staging up` can abort.
- */
 export function refreshStagingProxy(runCompose) {
   if (typeof runCompose !== 'function') {
     throw new Error('refreshStagingProxy requires the compose runner this file uses in production');
   }
   const args = [...PROXY_REFRESH_COMPOSE_ARGS];
   const services = args.filter((arg) => !arg.startsWith('-'));
-  // `up` is the command; everything after the flags is a service name. The only
-  // service this may name is `proxy`. Naming `api` or `web` would recreate the
-  // artefacts `staging up` just pinned by digest.
+  // Naming `api` or `web` would recreate the artefacts `staging up` just pinned by digest.
   if (!args.includes('--force-recreate') || services[0] !== 'up' || services.slice(1).join() !== 'proxy') {
     throw new Error(`proxy refresh must be \`up -d --force-recreate proxy\`; got ${JSON.stringify(args)}`);
   }
   return runCompose(args);
 }
 
-// --- the environment file -------------------------------------------------
-
-/**
- * Reads `KEY=value` lines. Deliberately not a dotenv implementation: no quoting,
- * no interpolation, no `export` prefix, because this file is written by this
- * script and read by compose, and both of those agree on the simple form. A value
- * that needed quoting would be a value that should not be here.
- */
+// Plain `KEY=value` lines with no quoting or interpolation, the form compose and this script share.
 function readEnvFile() {
   if (!existsSync(ENV_FILE)) return new Map();
   const entries = new Map();
@@ -500,21 +332,8 @@ function writeEnvFile(entries) {
   writeFileSync(ENV_FILE, `${header}${body}\n`, { mode: 0o600 });
 }
 
-/**
- * A generated secret, in hex.
- *
- * Hex and not base64url, and the reason is not aesthetic. `config.ts` refuses any
- * secret containing "change", "example", "placeholder", "insecure", "password",
- * "secret", "default", "todo", "xxxx", "test" or "dev-only", and it applies that
- * rule to METRICS_TOKEN in every environment, not just production. The hex
- * alphabet cannot spell any of those words — every one of them needs a letter
- * outside a-f — so a hex secret can never be rejected as a placeholder, while a
- * random base64url string can be, rarely, and only on somebody else's machine.
- *
- * 32 bytes is 64 hex characters, comfortably past the 32-character floor, and the
- * distinct-character check (12 minimum) is satisfied by any realistic draw; it is
- * asserted rather than assumed below.
- */
+// Hex, because the hex alphabet cannot spell any placeholder word `config.ts` refuses ("change",
+// "test", "dev-only" and the rest), while random base64url occasionally can.
 function generateSecret() {
   for (let attempt = 0; attempt < 8; attempt++) {
     const value = randomBytes(32).toString('hex');
@@ -523,44 +342,13 @@ function generateSecret() {
   throw new Error('could not generate a secret with enough distinct characters, which should be impossible');
 }
 
-// --- TLS ------------------------------------------------------------------
-
 function opensslAvailable() {
   return capture('openssl', ['version']) !== null;
 }
 
-/**
- * Generates a local CA and a leaf certificate for the staging origin.
- *
- * ## Why a generated CA rather than the proxy's own
- *
- * Caddy would mint this itself with `tls internal` and no host tooling at all.
- * It cannot be used here — see the header of deploy/staging/nginx.conf for the
- * measured reason (its binary carries `cap_net_bind_service`, and Linux refuses
- * to exec such a file under `cap_drop: ALL`). So the certificate is generated
- * here instead, into a directory that is gitignored and dockerignored, and the
- * smoke test is pointed at the CA through `NODE_EXTRA_CA_CERTS` so that the chain
- * is actually VERIFIED rather than skipped. A rehearsal that disables certificate
- * verification has not rehearsed TLS.
- *
- * ## RSA, not an elliptic curve
- *
- * P-256 would be smaller and faster. RSA-2048 is what every OpenSSL and LibreSSL
- * in the wild spells the same way, and this runs on developer machines and on CI
- * runners. A key generated in 200 ms once every 90 days is not worth a
- * portability question.
- *
- * ## The leaf key's permissions
- *
- * 0644, and that deserves a sentence rather than a shrug. nginx runs as uid 101
- * inside the container and reads the key through a bind mount; on Linux a
- * 0600 file owned by the host user is unreadable to it, and the container fails
- * to start with a message about a missing key rather than a permissions problem.
- * This is a throwaway certificate for a loopback origin, regenerated by
- * `staging init`, in a directory git will not accept. A real deployment injects
- * its key through the platform's secret mechanism and never through a bind mount;
- * that is the shape to copy, not this one.
- */
+// Caddy's `tls internal` cannot run under `cap_drop: ALL` (see deploy/staging/nginx.conf), so the CA
+// is generated here and the smoke test verifies the chain through NODE_EXTRA_CA_CERTS.
+// The leaf key is 0644 because nginx runs as uid 101 and cannot read a host user's 0600 file.
 function generateTls(origin) {
   const scratch = mkdtempSync(join(tmpdir(), 'prl-tls-'));
   try {
@@ -581,8 +369,7 @@ function generateTls(origin) {
       CA_CERT,
       '-subj',
       caSubject,
-      // pathlen:0 — this CA may sign leaves and may not sign another CA. A local
-      // CA that can mint intermediates is a local CA that can mint anything.
+      // pathlen:0, so this CA cannot sign another CA.
       '-addext',
       'basicConstraints=critical,CA:TRUE,pathlen:0',
       '-addext',
@@ -605,9 +392,7 @@ function generateTls(origin) {
     ]);
     if (key.status !== 0) return { problem: `openssl could not create the leaf key: ${key.stderr.trim()}` };
 
-    // The SANs are what a browser and Node actually check; the CN is legacy and
-    // is ignored by both. 127.0.0.1 is listed as an IP SAN because a reader who
-    // types the address rather than the name is not a different user.
+    // Browsers and Node check the SANs and ignore the CN.
     const sans = [`DNS:${origin.hostname}`];
     if (origin.hostname !== 'localhost') sans.push('DNS:localhost');
     sans.push('IP:127.0.0.1');
@@ -643,15 +428,12 @@ function generateTls(origin) {
     ]);
     if (sign.status !== 0) return { problem: `openssl could not sign the leaf: ${sign.stderr.trim()}` };
 
-    // Leaf first, then the CA: the order a TLS server must present a chain in.
+    // Leaf first, then the CA, the order a TLS server presents a chain in.
     writeFileSync(CHAIN, `${readFileSync(LEAF_CERT, 'utf8')}${readFileSync(CA_CERT, 'utf8')}`);
     chmodSync(CA_KEY, 0o600);
     chmodSync(LEAF_KEY, 0o644);
     chmodSync(CHAIN, 0o644);
 
-    // Verified here rather than trusted: a chain that does not verify would show
-    // up much later as an opaque UNABLE_TO_VERIFY_LEAF_SIGNATURE from the smoke
-    // test, three layers away from the thing that is actually wrong.
     const verify = run('openssl', ['verify', '-CAfile', CA_CERT, LEAF_CERT]);
     if (verify.status !== 0) {
       return {
@@ -664,7 +446,6 @@ function generateTls(origin) {
   }
 }
 
-/** Days until the leaf expires, or null if that cannot be read. */
 function certificateDaysRemaining() {
   if (!existsSync(LEAF_CERT)) return null;
   const raw = capture('openssl', ['x509', '-in', LEAF_CERT, '-noout', '-enddate']);
@@ -676,24 +457,8 @@ function certificateDaysRemaining() {
   return Math.floor((expiry - Date.now()) / 86_400_000);
 }
 
-// --- HTTPS against the local CA ------------------------------------------
-
-/**
- * One request to the staging origin, trusting the local CA and nothing else.
- *
- * `node:https` rather than `fetch`, because the certificate authority has to be
- * supplied per request: `NODE_EXTRA_CA_CERTS` is read once at process start and
- * this process starts before the CA exists on a first run. Trusting exactly the
- * generated CA — rather than disabling verification — is what makes the TLS check
- * a check.
- *
- * `rawHeaders` is returned alongside `headers` because `headers` cannot answer
- * "how many of these were there?". Node folds repeated headers into one
- * comma-joined string for every field except a short special-cased list, and
- * `strict-transport-security` is not on it — so two HSTS headers and one
- * malformed one are indistinguishable there. Counting duplicates is the whole
- * point of the check at `hstsFromRawHeaders`, so it needs the unfolded list.
- */
+// `node:https` with an explicit `ca`, because NODE_EXTRA_CA_CERTS is read at process start, before
+// a first run has made the CA. `rawHeaders` is returned because Node folds duplicate HSTS headers.
 function httpsCall(origin, path, { method = 'GET', headers = {}, body } = {}) {
   const url = new URL(path, origin.origin);
   return new Promise((resolveCall) => {
@@ -705,8 +470,6 @@ function httpsCall(origin, path, { method = 'GET', headers = {}, body } = {}) {
         path: url.pathname + url.search,
         headers: body === undefined ? headers : { ...headers, 'content-length': Buffer.byteLength(body) },
         ca: readFileSync(CA_CERT),
-        // The certificate is issued for `origin.hostname`; asking for it by any
-        // other name should fail, and does.
         servername: url.hostname,
         timeout: 15_000,
       },
@@ -743,11 +506,8 @@ function httpsCall(origin, path, { method = 'GET', headers = {}, body } = {}) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// --- compose state --------------------------------------------------------
-
 const SERVICES = ['postgres', 'api', 'web', 'proxy'];
 
-/** Container id, state, health and running image digest for one service. */
 function serviceState(name) {
   const id = capture('docker', ['compose', '--env-file', ENV_FILE, '-f', COMPOSE_FILE, 'ps', '-q', name]);
   if (id === null || id === '') return { name, id: null, state: 'absent', health: 'none', image: null };
@@ -762,13 +522,7 @@ function serviceState(name) {
   return { name, id, state: state ?? 'unknown', health: health ?? 'none', image: image ?? null };
 }
 
-/**
- * Waits until every named service is running and (where it has one) healthy.
- *
- * A service that has exited is reported immediately rather than waited out: a
- * container that is never coming back is not a slow container, and the eight
- * minutes spent discovering that is eight minutes nobody spends reading its log.
- */
+// An exited service is reported at once rather than waited out.
 async function waitForHealthy(names, timeoutSeconds) {
   const deadline = Date.now() + timeoutSeconds * 1000;
   let last = '';
@@ -791,8 +545,6 @@ async function waitForHealthy(names, timeoutSeconds) {
     await sleep(2_000);
   }
 }
-
-// --- the manifest ---------------------------------------------------------
 
 function readManifest(path) {
   const full = resolve(REPO_ROOT, path);
@@ -824,10 +576,7 @@ function readManifest(path) {
     }
     const registry = manifest?.images?.[service]?.registry;
     if (registry === undefined || registry === null) continue;
-    // A registry block is optional — the default release path does not push — but
-    // a MALFORMED one is refused rather than ignored. Ignoring it would mean
-    // quietly deploying the local digest while the manifest, and anybody reading
-    // it, believed the artefact was fetchable.
+    // A malformed registry block is refused, not ignored, or the local digest would deploy silently.
     if (
       typeof registry.reference !== 'string' ||
       !REGISTRY_DIGEST_REFERENCE.test(registry.reference) ||
@@ -851,59 +600,17 @@ function readManifest(path) {
 /**
  * Whether the manifest was built from the checkout `staging up` is running in.
  *
- * ## The incident
+ * The manifest is gitignored, and on 2026-11-11 one 161 commits behind main would have deployed
+ * three-month-old images under this checkout's migrations. Refused: a different commit, no commit,
+ * a clean manifest over uncommitted or untracked changes, and a checkout git cannot report on. A
+ * `dirty: true` manifest is only warned about, because `promote` is where dirty is refused.
  *
- * `deploy/staging/release-manifest.json` is gitignored, so it survives every `git pull`. On
- * 2026-11-11 the one in the main checkout still recorded `0b01f90ce510` from 2026-08-26 while `main`
- * was 161 commits past it — including `db/migrations/0007` — and `docs/production/go-live.md` told
- * the reader to skip the rebuild and "Start at 2.3". Nothing in `staging up` compared the two: it
- * would have printed "built … from 0b01f90…" and deployed three-month-old images, migrated by THIS
- * checkout's migration runner to a schema the API inside them had never seen, then run this
- * checkout's smoke test against them. A line of output nobody is obliged to read is not a check.
+ * `changedPaths` excludes `release-images/`, where the release workflow loads image tarballs. A
+ * clean manifest may sit behind HEAD by commits that touch only RELEASE_RECORD_PATHS, which are in
+ * no image. A dirty one may not, because its images hold edits no commit records.
  *
- * ## What is refused, and what is deliberately not
- *
- *   - **A different commit.** The images describe `manifest.commit.sha`, the migrations, the smoke
- *     test and the compose file describe HEAD. Refused, with the distance between them.
- *   - **No commit at all.** A manifest that names none cannot be shown to describe this one.
- *   - **A clean manifest over an edited checkout.** `dirty: false` and uncommitted files now means
- *     the edits postdate the build, so the images provably do not contain them. Untracked files
- *     count: a new migration nobody has committed yet is exactly a file `migrate.mjs` applies to
- *     staging while the API image predates it (Devin Review on #20).
- *   - **A checkout whose state git would not report.** `git status` failing is the absence of a
- *     check, so a clean manifest is refused rather than waved through (Devin Review on #20).
- *   - **NOT a manifest that says `dirty: true`.** `release-artifacts.mjs` records a dirty build
- *     rather than refusing it, because rehearsing an uncommitted change on staging is the normal
- *     case; `promote` is where a dirty manifest is refused. Refusing it here would contradict that
- *     decision and teach people a flag. It stays a printed warning.
- *
- * `changedPaths` is `git status --porcelain --untracked-files=all` with ONE path excluded,
- * `release-images/`: the release workflow's staging job `docker load`s the images from
- * `release-images/*.tar` inside the checkout and nothing ignores that path, so counting it would
- * refuse every release run on a tree nobody edited. Everything else untracked counts, the same
- * definition of "uncommitted" `release-artifacts.mjs` uses when it records `dirty`.
- *
- * **NOT a HEAD whose only commits since the build are release records.** Signing a build writes
- * `deploy/staging/release-signatures.json`, and re-freezing the readiness report against it edits
- * `docs/production/final-readiness-report.md`; committing either moves HEAD one commit past the
- * commit the images were built from, by construction. Refusing that made every signed release
- * undeployable from the branch that records its signature (Devin Review on #30). Neither file is in
- * an image, read by a migration, or read by the smoke test, so a HEAD that differs from the build
- * in those paths alone deploys exactly what was built. `committedSince` is `git diff --name-only
- * <manifest> HEAD`, probed only when HEAD is strictly ahead; any other path in it is refused as
- * before, and so is a diff git would not produce. **Clean manifests only**: a `dirty: true` build
- * holds edits no commit records, so once they are reverted and a record committed, the committed
- * trees differ by the record alone while the images still carry the discarded edits (Devin Review
- * on #30). A dirty rehearsal deploys from the commit it was built on or not at all.
- *
- * Pure, so the arithmetic is tested without git or docker; `commandUp` does the probing.
- *
- * @param {{ sha?: string | null, dirty?: boolean | null } | null | undefined} manifestCommit
- * @param {{ headSha: string | null, behind: number | null, ahead: number | null, changedPaths: string[] | null, committedSince?: string[] | null }} checkout
- *   `behind` is `git rev-list --count <manifest>..HEAD`, `ahead` is `HEAD..<manifest>`; `null` when
- *   git could not answer (most often: the manifest's commit is not in this clone at all).
- *   `changedPaths` is `null` when `git status` gave no answer.
- * @returns {{ ok: true } | { problem: string }}
+ * `behind` and `ahead` are `git rev-list --count` in each direction, and any field is `null` when git
+ * gave no answer.
  */
 export function manifestMatchesCheckout(manifestCommit, checkout) {
   const rebuild = 'Rebuild for this commit, then run this again:\n      pnpm run release:artifacts';
@@ -959,11 +666,7 @@ export function manifestMatchesCheckout(manifestCommit, checkout) {
   return { ok: true };
 }
 
-/**
- * Files written ABOUT a build after it is made, so committing them cannot change what the build
- * contains. See `manifestMatchesCheckout`. A list of exact paths, not a directory or a pattern: a
- * new entry is a claim that somebody checked the file is in no image and read by no deploy step.
- */
+// Exact paths. A new entry claims somebody checked the file is in no image and read by no deploy step.
 export const RELEASE_RECORD_PATHS = Object.freeze([
   'deploy/staging/release-signatures.json',
   'docs/production/final-readiness-report.md',
@@ -976,14 +679,12 @@ function onlyReleaseRecordsSince(checkout) {
   return since.every((path) => RELEASE_RECORD_PATHS.includes(path));
 }
 
-/** `git rev-list --count` output as a number, or `null` when git gave no answer. */
 function countOf(output) {
   if (output === null) return null;
   const number = Number(output);
   return Number.isInteger(number) ? number : null;
 }
 
-/** Probes the checkout for `manifestMatchesCheckout`. */
 function probeCheckout(builtSha) {
   const headSha = capture('git', ['rev-parse', 'HEAD']);
   // Only a full sha is handed to rev-list: anything else in a hand-edited manifest could be an option.
@@ -1020,38 +721,10 @@ function probeCheckout(builtSha) {
 /**
  * Which reference each service is deployed by, and the resulting `pull_policy`.
  *
- * ## Why `pull_policy` is a decision and not a constant
- *
- * `docker-compose.staging.yml` used to hard-code `pull_policy: never`, with a
- * comment saying why: there was no registry, the image existed only because it
- * was built on this machine, and a pull would have gone to Docker Hub for a
- * repository called `prl-api` that belongs to somebody else. That comment also
- * predicted this function — "with a registry in play this becomes `always` and
- * the digest still guarantees identity".
- *
- * Both halves are now reachable, so the file interpolates the policy and this
- * decides it:
- *
- *   * **No registry block** (the default, and the common case — a developer who
- *     never started a registry): the local digest, `never`. Byte-identical
- *     behaviour to before, which is a requirement rather than a nicety: that path
- *     must not regress.
- *   * **Registry block that VERIFIES**: the registry reference, `always`. Pulling
- *     is then not a risk but the point — the reference is a content address, so
- *     the pull either produces those exact bytes or fails.
- *   * **Registry block that does not verify** (the registry is down, or no longer
- *     holds the digest): the local digest, `never`, and the caller says so. Not a
- *     hard failure, because the artefact is right here and the stack should come
- *     up; not a silent switch either, because the manifest claimed something that
- *     is not currently true.
- *
- * Both services move together. A mixed deployment — one service by registry
- * reference and one by local digest — would need two pull policies to describe
- * it, and `pnpm run release:artifacts --push` writes both blocks or neither, so
- * the mixed state means a hand-edited manifest and is not worth honouring.
- *
- * @param {Record<string, unknown>} manifest
- * @param {Record<string, boolean|null>} verified per service: true, false, or null for "not attempted"
+ * No registry block deploys the local digest with `never`. A verified registry block deploys the
+ * registry reference with `always`, which is safe because a digest pull returns those bytes or fails.
+ * An unverified block falls back to the local digest and the caller reports it. Both services move
+ * together, since `--push` writes both blocks or neither.
  */
 export function deploymentPlan(manifest, verified) {
   const images = manifest?.images ?? {};
@@ -1066,32 +739,12 @@ export function deploymentPlan(manifest, verified) {
     references,
     pullPolicy: registryBacked ? 'always' : 'never',
     registryBacked,
-    // What the caller reports. `declared > 0 && !registryBacked` is the case that
-    // must never pass silently: the manifest says fetchable, the registry says
-    // otherwise, and the operator is about to deploy the local copy instead.
     degraded: declared.length > 0 && !registryBacked,
   };
 }
 
-/**
- * Asks the registry whether it still serves each artefact, and re-hashes what it
- * answers with.
- *
- * "Still" is the load-bearing word, exactly as it is in
- * `release-artifacts.mjs`'s `existingManifestFor`. A registry reference recorded
- * three days ago describes a registry somebody may since have wiped, restarted
- * without its volume, or garbage-collected. Deploying `pull_policy: always`
- * against a digest the registry no longer holds turns a working stack into a
- * failed pull, and promising a cross-machine promotion nobody can perform is
- * worse than promising nothing.
- *
- * The manifest bytes are hashed HERE (see `verifyRegistryDigest`), so what this
- * establishes is not "the registry said yes" but "the bytes the registry serves
- * under this digest hash to this digest and tie to the artefact the manifest
- * describes".
- *
- * @returns {Promise<Record<string, boolean|null>>} null where no registry reference was declared
- */
+// A registry may have been wiped since the reference was recorded, and `always` against a missing
+// digest fails the stack. The served manifest bytes are re-hashed here, not trusted.
 async function verifyRegistryCopies(manifest, report) {
   const verified = {};
   for (const service of RELEASE_SERVICES) {
@@ -1111,8 +764,6 @@ async function verifyRegistryCopies(manifest, report) {
   }
   return verified;
 }
-
-// --- commands -------------------------------------------------------------
 
 function commandInit(options) {
   section('staging init');
@@ -1135,20 +786,16 @@ function commandInit(options) {
     return false;
   };
 
-  // Non-secret settings. Rewritten on every init so that `--origin` takes effect.
   entries.set('PRL_STAGING_PUBLIC_ORIGIN', origin.origin);
   entries.set('PRL_STAGING_HTTPS_PORT', origin.port);
-  // Not 5432: the development stack publishes that one, and staging exists to be
-  // compared against the development stack, which means both have to run at once.
+  // Not 5432, so staging can run beside the development stack.
   if (!entries.has('PRL_STAGING_DB_PORT')) entries.set('PRL_STAGING_DB_PORT', '55432');
   if (!entries.has('PRL_STAGING_DB_NAME')) entries.set('PRL_STAGING_DB_NAME', 'poker_risk_lab_staging');
   if (!entries.has('PRL_STAGING_DB_SUPERUSER')) entries.set('PRL_STAGING_DB_SUPERUSER', 'prl_staging_owner');
-  // The runtime identity, and the name matters: RUNBOOK §5 calls it prl_api and
-  // development should rehearse the deployment's shape rather than a parallel one.
+  // RUNBOOK §5 names the runtime identity prl_api.
   if (!entries.has('PRL_STAGING_API_DB_USER')) entries.set('PRL_STAGING_API_DB_USER', 'prl_api');
   if (!entries.has('PRL_STAGING_LOG_LEVEL')) entries.set('PRL_STAGING_LOG_LEVEL', 'info');
-  // Placeholders until `staging up` reads the manifest. Written so that compose
-  // commands do not fail on a missing variable before the first build.
+  // Placeholders so compose commands work before the first build.
   if (!entries.has('PRL_API_IMAGE')) entries.set('PRL_API_IMAGE', 'prl-api@sha256:0'.padEnd(23, '0'));
   if (!entries.has('PRL_WEB_IMAGE')) entries.set('PRL_WEB_IMAGE', 'prl-web@sha256:0'.padEnd(23, '0'));
 
@@ -1188,17 +835,8 @@ function commandInit(options) {
   );
 }
 
-/**
- * Creates the login identities the way a deployment does.
- *
- * `db/seeds/0002_dev_login_roles.sql` does this for development with a password
- * from version control, and refuses to run when `NODE_ENV=production` — which is
- * exactly right, and is why staging cannot use it. So the same shape is applied
- * here with a generated password, through psql inside the postgres container.
- *
- * The SQL arrives on stdin and the superuser password never leaves the container,
- * so neither credential appears in any process's argv on the host.
- */
+// `db/seeds/0002_dev_login_roles.sql` refuses NODE_ENV=production, so the same roles get a generated
+// password here. The SQL goes on stdin, so no credential appears in a host argv.
 function provisionRoles(entries) {
   const apiUser = entries.get('PRL_STAGING_API_DB_USER');
   const apiPassword = entries.get('PRL_STAGING_API_DB_PASSWORD');
@@ -1252,34 +890,10 @@ $prl$;
 /**
  * Proves the proxy overwrites `X-Forwarded-For` instead of appending to it.
  *
- * ## Why this needs proving at all
- *
- * The API runs with `TRUST_PROXY=true` here, which means Fastify takes
- * `request.ip` from the leftmost `X-Forwarded-For` value. Guest creation is rate
- * limited on that address (`clientKeyedRateLimit`, ten per minute) precisely
- * because the endpoint hands out a fresh session cookie and a session-keyed limit
- * would never accumulate. So if the proxy used `$proxy_add_x_forwarded_for` — the
- * spelling most nginx configurations on the internet use — a client could send
- * its own `X-Forwarded-For`, land in a fresh bucket on every request, and create
- * guests without limit. The header comment in the nginx config asserts this is
- * handled; a comment is not a control.
- *
- * ## The experiment
- *
- * Send more than the limit's worth of guest creations through the proxy, each
- * with a DIFFERENT forged `X-Forwarded-For`. If the forged header were believed,
- * every request would be its own bucket and none would ever be refused. Observing
- * a 429 therefore proves the forged values were discarded.
- *
- * It runs AFTER the smoke test, which has already exhausted the real bucket for
- * this client. That makes the proof strictly stronger: with the genuine bucket
- * known to be empty, a success from a forged address could ONLY have come from
- * bucket-hopping.
- *
- * The 403 case is not a hole: CSRF is a `preHandler` and the rate limit is an
- * `onRequest` hook, so a refused request is counted before it is rejected — which
- * is why a token is fetched first anyway, so that the requests are legitimate in
- * every respect except the header under test.
+ * Under `TRUST_PROXY=true` the guest-creation limit (ten per minute) keys on the leftmost value, so
+ * `$proxy_add_x_forwarded_for` would let each forged header land in a fresh bucket. More requests
+ * than the limit, each with a different forged value, must still produce a 429. It runs after the
+ * smoke test has emptied the real bucket. The rate limit runs `onRequest`, before CSRF.
  */
 async function proveForwardedForIsOverwritten(origin) {
   const seed = await httpsCall(origin, '/api/v1/auth/session', { headers: { accept: 'application/json' } });
@@ -1300,8 +914,7 @@ async function proveForwardedForIsOverwritten(origin) {
   let refused = 0;
   let acceptedFromForgedAddress = null;
   for (let i = 0; i < attempts; i++) {
-    // TEST-NET-3 (203.0.113.0/24, RFC 5737). Documentation addresses, so nothing
-    // here can be mistaken for a real client if it turns up in a log.
+    // TEST-NET-3 documentation addresses (RFC 5737).
     const forged = `203.0.113.${(i % 250) + 1}`;
     const response = await httpsCall(origin, '/api/v1/auth/guest', {
       method: 'POST',
@@ -1363,8 +976,7 @@ async function commandUp(options) {
     return;
   }
   const manifest = read.manifest;
-  // Before the registry probe and before anything is written to .env.staging, so a manifest from
-  // another commit is refused while nothing has been touched. See `manifestMatchesCheckout`.
+  // Before the registry probe and any write to .env.staging, so a refusal touches nothing.
   const matches = manifestMatchesCheckout(manifest.commit, probeCheckout(manifest.commit?.sha));
   if ('problem' in matches) {
     cross('the release manifest is not this checkout', matches.problem);
@@ -1387,7 +999,6 @@ async function commandUp(options) {
   const entries = readEnvFile();
   entries.set('PRL_API_IMAGE', plan.references.api);
   entries.set('PRL_WEB_IMAGE', plan.references.web);
-  // See `deploymentPlan`, and the pull_policy comment in docker-compose.staging.yml.
   entries.set('PRL_PULL_POLICY', plan.pullPolicy);
   writeEnvFile(entries);
   tick(
@@ -1423,9 +1034,8 @@ async function commandUp(options) {
     return;
   }
 
-  // The database first and on its own: migrations run from the host against it
-  // before the API is allowed to connect (RUNBOOK §11.3 — the serving image does
-  // not ship apps/api/scripts, so it cannot migrate and must not be able to).
+  // The database first, so migrations run from the host before the API connects. The serving image
+  // does not ship apps/api/scripts (RUNBOOK §11.3).
   const dbUp = compose(['up', '-d', 'postgres']);
   if (dbUp.status !== 0) {
     cross('could not start postgres', dbUp.stderr.trim() || dbUp.stdout.trim());
@@ -1489,14 +1099,8 @@ async function commandUp(options) {
   }
   tick('every service is running and healthy', 'api reports both /api/v1/health and /api/v1/ready');
 
-  // The identity check. Everything above could be true of a stack running some
-  // other build; this is the line that says it is running THIS one.
-  //
-  // The expected value is the manifest's LOCAL digest even when the containers
-  // were pulled from the registry, and that is correct rather than an oversight:
-  // `--push` refuses to record a registry block unless pulling that digest back
-  // produced an image whose id is exactly this value, so a registry pull cannot
-  // land on anything else. If it ever did, this comparison is what would say so.
+  // The expected value is the local digest even after a registry pull, because `--push` records a
+  // registry block only when pulling it back produced exactly this image id.
   let digestsMatch = true;
   for (const service of RELEASE_SERVICES) {
     const state = serviceState(service);
@@ -1519,7 +1123,6 @@ async function commandUp(options) {
     );
   }
 
-  // Readiness through the proxy, over TLS, verified against the local CA.
   let readyStatus = 0;
   for (let attempt = 0; attempt < 30; attempt++) {
     const probe = await httpsCall(origin, '/api/v1/ready');
@@ -1534,8 +1137,6 @@ async function commandUp(options) {
     cross(`${origin.origin}/api/v1/ready did not answer 200`, `last status ${readyStatus}`);
   }
 
-  // See HSTS_PROBE_PATH: a path the API does not serve, so the only header that
-  // can come back is the proxy's, and exactly one of them.
   const hstsValues = hstsFromRawHeaders((await httpsCall(origin, HSTS_PROBE_PATH)).rawHeaders);
   if (hstsValues.length === 1 && hstsValues[0] === HSTS_EXPECTED) {
     tick(
@@ -1570,10 +1171,8 @@ async function commandUp(options) {
         '--origin',
         origin.origin,
         '--strict',
-        // This stack runs `PRL_ENROLMENT_REQUIRED=enforced` (docker-compose.staging.yml), so the
-        // smoke run must PROVE the seat guard rather than discover whichever posture it finds. With
-        // this, a run that sees an unenrolled learner seated fails the deploy — which is the whole
-        // point of staging carrying a switch whose shipped default is off. See `sectionEnrolment`.
+        // Staging runs `PRL_ENROLMENT_REQUIRED=enforced`, so the smoke run must prove the seat guard
+        // (see `sectionEnrolment`).
         '--expect-enrolment',
         'enforced',
       ],
@@ -1582,18 +1181,9 @@ async function commandUp(options) {
         env: {
           ...process.env,
           PRL_WEB_ORIGIN: origin.origin,
-          // The migrating identity, so the smoke run can WRITE the enrolment the enforced direction
-          // needs. It cannot get one any other way: migration 0006 grants prl_app — the role the API
-          // connects as — SELECT and nothing else on prl.cohorts and prl.enrolments, so no request
-          // to the running server can enrol anybody. The run drives
-          // `apps/api/scripts/enrolments.mjs` with this, exactly as an operator would, and revokes
-          // what it granted at the end. Same value as the migration step above; never on a command
-          // line, where `ps` would show it.
+          // prl_app holds SELECT only on the enrolment tables, so the smoke run needs the migrating
+          // identity to write an enrolment via `apps/api/scripts/enrolments.mjs`. Never on a command line.
           DATABASE_MIGRATION_URL: migrationUrl,
-          // Read once at process start, which is why the polls above use
-          // node:https with an explicit `ca` instead. The smoke test is a fresh
-          // process, so the variable works there and the whole run — including the
-          // wss:// upgrade — verifies the chain properly.
           NODE_EXTRA_CA_CERTS: CA_CERT,
         },
       },
@@ -1622,10 +1212,8 @@ async function commandUp(options) {
         api: {
           digest: manifest.images.api.digest,
           reference: manifest.images.api.reference,
-          // The registry reference this run actually deployed, or null. `promote`
-          // compares it: an attestation that says nothing about the registry is
-          // an attestation that cannot be used to justify a cross-machine
-          // promotion, and it should not be read as if it could.
+          // `promote` compares this. An attestation silent on the registry cannot justify a cross-machine
+          // promotion.
           registry: plan.registryBacked ? manifest.images.api.registry : null,
         },
         web: {
@@ -1639,8 +1227,7 @@ async function commandUp(options) {
         tlsChainVerified: true,
         forwardedForOverwritten: true,
         smokeTestStrict: true,
-        // Not "the registry was up": the digests were fetched back and re-hashed
-        // here, and the containers were started from those references.
+        // The digests were fetched back and re-hashed, and the containers started from those references.
         deployedFromRegistryByDigest: plan.registryBacked,
       },
     };
@@ -1685,9 +1272,7 @@ function commandStatus(options) {
       const expected = manifest.images[service].digest;
       if (running === null) continue;
       if (running === expected) {
-        // Whether the manifest carries a registry reference is reported without
-        // asking the registry anything: `status` is the command an operator runs
-        // when something is wrong, and it must not hang on a network call.
+        // No network call, so `status` cannot hang when something is wrong.
         const registry = manifest.images[service].registry ?? null;
         tick(
           `${service} matches the manifest`,
@@ -1705,22 +1290,8 @@ function commandStatus(options) {
   );
 }
 
-/**
- * Refuses to let a digest reach production unless staging tested that exact digest.
- *
- * This is the whole reason the manifest and the attestation exist as separate
- * files. The manifest says "these are the artefacts for this commit". The
- * attestation says "a staging run brought THOSE UP and everything passed". A
- * promotion is only meaningful when the two agree, so this compares them and
- * prints both digests whenever they do not — because "the digests differ" without
- * the digests is a message that sends somebody to the wrong file.
- *
- * Where the artefacts were pushed, it asks the registry a third question — does
- * it still serve these exact bytes under these exact digests — because the value
- * of a registry reference is entirely in somebody else being able to resolve it,
- * and a reference that no longer resolves is a promise this command would
- * otherwise be making on the registry's behalf.
- */
+// Refuses a promotion unless the attestation's digests equal the manifest's, printing both when they
+// differ. Where the artefacts were pushed, the registry must still serve those exact bytes.
 async function commandPromote(options) {
   section('staging promote');
 
@@ -1767,9 +1338,6 @@ async function commandPromote(options) {
     );
   }
 
-  // The registry leg. Only meaningful where the artefacts were pushed, and where
-  // they were, a reference that has stopped resolving must not be promoted: the
-  // whole claim being made is that another machine can fetch it.
   const registryVerified = await verifyRegistryCopies(manifest, (service, registry, result) => {
     if (result.ok !== true) {
       cross(`${service}: the registry no longer serves the digest this manifest promotes`, result.problem);
@@ -1794,24 +1362,8 @@ async function commandPromote(options) {
   });
   const promotableAcrossMachines = RELEASE_SERVICES.every((service) => registryVerified[service] === true);
 
-  /**
-   * The paging destinations, checked before this command will call anything promotable.
-   *
-   * Everything above this line asks "are these the bytes staging tested". That is a
-   * complete answer to the question it asks and no answer at all to the one that
-   * decides whether the deployment can be operated: if these bytes go out and then
-   * misbehave, does anybody find out? A release whose `PRL_ALERT_*` variables still
-   * hold the rehearsal defaults answers no — `alerts:verify` will have passed, because
-   * it renders and asserts against those same defaults, and Alertmanager will start,
-   * route by severity exactly as designed, and post every page to a sink that stopped
-   * existing when the verification run ended.
-   *
-   * Run as a subprocess rather than imported, the same way the strict smoke test is
-   * run above: the preflight owns its own exit code and its own report, and a
-   * promotion should refuse on that exit code rather than on this file's reading of
-   * somebody else's checks. `--json --out` is deliberately not passed — the operator
-   * needs to see the reasons, and a promotion is not a place to hide them in a file.
-   */
+  // A subprocess, so the preflight owns its exit code and its report. `--json --out` is not passed,
+  // so the operator sees the reasons.
   section('the paging destinations');
   const preflight = run(process.execPath, ['scripts/alert-preflight.mjs'], { stream: true });
   if (preflight.status !== 0) {
@@ -1846,9 +1398,7 @@ async function commandPromote(options) {
     attestation.commit?.sha != null &&
     manifest.commit.sha !== attestation.commit.sha
   ) {
-    // The digests could still match — the same bytes can come from two commits if
-    // nothing in the build context changed — so this is reported beside the digest
-    // comparison rather than instead of it.
+    // The same bytes can come from two commits, so this is reported beside the digest comparison.
     bang(
       'the manifest and the attestation name different commits',
       `manifest ${manifest.commit.sha}\n      staging  ${attestation.commit.sha}\n      ` +
@@ -1862,10 +1412,7 @@ async function commandPromote(options) {
       JSON.stringify(
         {
           promotable: identical && failures.length === 0,
-          // Deliberately a separate field from `promotable`. A manifest with no
-          // registry reference is still promotable — the digest it names is the
-          // digest staging tested — but it is promotable HERE, on this machine.
-          // Collapsing the two would make a consumer read one as the other.
+          // A manifest with no registry reference is promotable only on this machine.
           promotableAcrossMachines: promotableAcrossMachines && identical && failures.length === 0,
           verifiedAt: attestation.verifiedAt,
           images: manifest.images,
@@ -1921,12 +1468,7 @@ async function commandPromote(options) {
   }
 }
 
-// --- run ------------------------------------------------------------------
-
-/**
- * True when this file was started from the command line rather than imported.
- * realpath on both sides so a checkout reached through a symlink still matches.
- */
+// realpath on both sides, so a checkout reached through a symlink still matches.
 function startedFromCommandLine() {
   const entry = process.argv[1];
   if (entry === undefined) return false;
@@ -1983,11 +1525,7 @@ async function main() {
         cross('PRL_STAGING_PUBLIC_ORIGIN is unusable', origin.problem);
         break;
       }
-      // The same two arguments `commandUp` passes, and for the same reasons: this stack runs
-      // `PRL_ENROLMENT_REQUIRED=enforced`, so the run must PROVE the seat guard rather than report
-      // whichever posture it finds, and it needs the migrating identity to write the enrolment the
-      // enforced direction depends on. A `staging smoke` that was weaker than the one inside
-      // `staging up` would be a second, quieter gate over the same stack.
+      // The same two arguments `commandUp` passes, so `staging smoke` is not a weaker gate.
       const smokeMigrationUrl =
         `postgres://${encodeURIComponent(entries.get('PRL_STAGING_DB_SUPERUSER') ?? '')}:` +
         `${encodeURIComponent(entries.get('PRL_STAGING_DB_SUPERUSER_PASSWORD') ?? '')}` +
@@ -2024,8 +1562,7 @@ async function main() {
         tick(
           options.volumes ? 'the stack is down and its database volume is destroyed' : 'the stack is down',
         );
-        // The attestation describes a stack that no longer exists. Leaving it in
-        // place would let `promote` vouch for something nobody can look at any more.
+        // The attestation describes a stack that no longer exists.
         if (existsSync(ATTESTATION_FILE)) {
           rmSync(ATTESTATION_FILE);
           console.log(
@@ -2039,8 +1576,6 @@ async function main() {
       await commandPromote(options);
       break;
     default:
-      // Unreachable: parseArgs rejects anything outside COMMANDS. Present so the
-      // switch is total rather than relying on that from a distance.
       console.error(red(`staging — unhandled command ${options.command}`));
       process.exit(1);
   }

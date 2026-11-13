@@ -1,8 +1,3 @@
-/**
- * Tests for `chrome-devtools.mjs`, with a stand-in for Chrome: a child process that lives or exits,
- * and a local HTTP server that answers `/json/version` when told to.
- */
-
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
@@ -16,7 +11,6 @@ function liveChild() {
   return spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60_000)'], { stdio: 'ignore' });
 }
 
-/** A port nothing listens on yet, and a function that starts answering on it. */
 async function laterServer() {
   const probe = createServer();
   await new Promise((resolve) => probe.listen(0, '127.0.0.1', resolve));
@@ -33,7 +27,6 @@ async function laterServer() {
   };
 }
 
-/** A port that accepts connections and never answers them. */
 async function stalledServer() {
   const sockets = new Set();
   // No request listener, so a request is accepted and never answered.
@@ -66,8 +59,7 @@ describe('waitForDevtools', () => {
   });
 
   it('waits past nine seconds, the budget that failed on CI (REGRESSION)', { timeout: 30_000 }, async () => {
-    // The six gates gave Chrome 60 x 150ms. On the merge of PR #7 the contrast fixture's Chrome
-    // took longer than that on a busy runner, and both PASS 3 tests failed at 9.2s.
+    // The old budget was 60 x 150ms, and a busy runner's Chrome took longer than that.
     const server = await laterServer();
     const child = liveChild();
     const opened = delay(9_500).then(server.open);
@@ -75,8 +67,7 @@ describe('waitForDevtools', () => {
       assert.deepEqual(await waitForDevtools(child, server.port), VERSION);
     } finally {
       child.kill();
-      // Awaited before closing on the failing path too, or a server opened after the wait gave up
-      // keeps this process alive.
+      // Awaited on the failing path too, or a server opened after the wait gave up keeps the process alive.
       await opened;
       await server.close();
     }
@@ -104,8 +95,6 @@ describe('waitForDevtools', () => {
   });
 
   it('reports an exit while something on the port accepts and never answers', async () => {
-    // From review on #11: the poll's fetch had no timeout, so a stalled listener kept it pending
-    // past the deadline and past Chrome exiting.
     const stalled = await stalledServer();
     const child = spawn(process.execPath, ['-e', 'setTimeout(() => process.exit(3), 500)'], {
       stdio: 'ignore',
