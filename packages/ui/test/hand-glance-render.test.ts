@@ -1,21 +1,8 @@
 /**
  * `HandGlance`, and the slot in `ActionBar` that draws it between the price and the sizer.
- *
- * ## The defect
- *
- * On a phone, a decision with a raise legal scrolls the page to the sizer, and that took the reader's
- * own plate and the board off the top: at 390x844 on the live table, plate at -174..46 and board at
- * -303..-203 under a 77px header, while the reader sized a bet. Nothing in the band said what they
- * held or what the board was.
- *
- * ## What is checked
- *
- * Rendered for real, through `loadComponent`: the glance is ONE named image whose name is the hand
- * and the board as a sentence, with the seven card images inside it hidden — not two figures and
- * seven names for a reader to step through on the way to the sizer — and the bar draws it after the
- * price strip and before the sizer, which is the placement `apps/web/src/lib/follow-the-table.ts`
- * does its arithmetic for. The negative control is the bar without the slot: its markup carries no
- * glance at all, which is what the old `ActionBar.tsx`, copied back, rendered.
+ * Scrolling to the sizer on a 390x844 phone took the reader's plate and the board off the top.
+ * The glance is one named image so a reader does not step through seven card names to reach the sizer.
+ * `apps/web/src/lib/follow-the-table.ts` does its arithmetic for this placement.
  */
 
 import assert from 'node:assert/strict';

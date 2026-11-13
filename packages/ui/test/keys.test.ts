@@ -1,10 +1,6 @@
 /**
- * Tests for the React key helper.
- *
- * Small, but worth testing: the whole point of `withKeys` is that duplicate values still
- * get distinct keys and that the same input always produces the same keys. Both of those
- * are silent when broken — React does not warn about a *stable-looking* wrong key, it just
- * reuses the wrong DOM node — so the guarantees are pinned here rather than trusted.
+ * `withKeys` must give duplicates distinct keys and give the same input the same keys.
+ * Both fail silently. React does not warn about a stable-looking wrong key, it reuses the wrong DOM node.
  */
 
 import assert from 'node:assert/strict';

@@ -1,43 +1,9 @@
 /**
- * The Coach panel, actually rendered, read as a learner would read it.
- *
- * ## Why a rendering test and not a formatter test
- *
- * `format.test.ts` proves `formatPercent(0.36)` is `"36.0%"`. That was true throughout the
- * period in which a shipped page told a learner a nine-out flush draw was **"3,600.0%"**,
- * and elsewhere that a flopped set was **"18,000.0%"**. The formatter was never wrong. The
- * *pairing* was: `@prl/poker-math` published `ruleOfThumb.estimate` in percentage points
- * (36) while `CoachPanel` rendered it with `formatPercent`, which multiplies by 100. Two
- * correct halves, one bare `number` between them, and nothing in either package's tests
- * could see the join.
- *
- * So this file asserts on the STRING A READER SEES. It renders the whole panel to static
- * markup and reads every percentage out of the result. A probability above 100% — or below
- * 0% — is not a rounding problem to be tolerated at one decimal place, it is a claim that
- * cannot be true, and no rendering of this panel may contain one.
- *
- * ## What changed when the panel gained its own guard
- *
- * This file used to prove its scan had teeth by feeding the panel `estimate: 36` and
- * asserting the panel *rendered* "3,600.0%". That assertion was correct and it now cannot
- * hold, because the panel refuses such a value instead of formatting it (`CoachPanel` rule
- * 5, `src/probability.ts`). Both halves of the original intent are kept, and separated:
- *
- *  - **the scan can fail** — proved against markup directly, so it no longer depends on the
- *    component being capable of the defect (`the percentage scan has teeth`);
- *  - **the component refuses** — proved by feeding the real panel the real bad values and
- *    reading the result (`the panel refuses …`), which is a strictly stronger claim than
- *    the one it replaces.
- *
- * The second is the guard the audit asked for. The first is why the second is believable.
- *
- * ## The fixtures are literals, on purpose
- *
- * Nothing here calls `@prl/poker-math`. The figures are hand-derived and written out: a
- * nine-out flush draw is 9 x 4 = 36 percentage points, which is 0.36 as the fraction this
- * contract carries, and 0.36 must render as "36.0%". Asserting against a fraction the
- * producer computed would only prove the two agree, which is the thing that was already
- * true when the panel said 3,600%.
+ * The Coach panel, rendered, read as a learner reads it.
+ * A percentage-point value once reached `formatPercent` and printed "3,600.0%", with both halves
+ * passing their own tests. So this reads every percentage out of the markup, and none may be above
+ * 100 or below 0. Fixtures are hand-derived literals, because figures from `@prl/poker-math` would
+ * only prove the two agree.
  */
 
 import assert from 'node:assert/strict';
@@ -47,10 +13,6 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { loadComponent } from './support/render-component.ts';
 
-// ---------------------------------------------------------------------------
-// Rendering the real component
-// ---------------------------------------------------------------------------
-
 async function render(report: CoachReport): Promise<string> {
   const CoachPanel = await loadComponent<{ readonly report: CoachReport }>(
     'components/CoachPanel',
@@ -59,17 +21,7 @@ async function render(report: CoachReport): Promise<string> {
   return renderToStaticMarkup(createElement(CoachPanel, { report }));
 }
 
-// ---------------------------------------------------------------------------
-// Reading percentages back out of the markup
-// ---------------------------------------------------------------------------
-
-/**
- * Every percentage in the rendered output, attributes included.
- *
- * Attributes are deliberately in scope: an `aria-label` is user-facing to exactly the
- * readers least able to notice that a figure is absurd, and a bar sized `width: 3600%`
- * would be a visible defect too.
- */
+/** Every percentage in the rendered output, attributes included, because an `aria-label` is read aloud. */
 function percentagesIn(markup: string): readonly { readonly text: string; readonly value: number }[] {
   const found: { text: string; value: number }[] = [];
   for (const match of markup.matchAll(/(-?\d[\d,]*(?:\.\d+)?)\s*%/g)) {
@@ -79,32 +31,17 @@ function percentagesIn(markup: string): readonly { readonly text: string; readon
   return found;
 }
 
-/**
- * Every percentage that cannot be a probability: above 100, or below 0.
- *
- * Both ends, because a unit error has two directions and only one of them was ever caught.
- * "3,600.0%" is the famous one; "-50.0%" is the same defect with a sign, and a scan that
- * looks only upwards would pass it.
- */
+/** Every percentage that cannot be a probability. Both ends, because a unit error can carry a sign. */
 function impossiblePercentagesIn(markup: string): readonly string[] {
   return percentagesIn(markup)
     .filter((entry) => entry.value > 100 || entry.value < 0)
     .map((entry) => entry.text);
 }
 
-// ---------------------------------------------------------------------------
-// Fixtures, every figure derived by hand
-// ---------------------------------------------------------------------------
-
 /**
- * A real draw: hero Th 9h on Kh 7h 2c against Ks Qd, facing 50 into 100.
- *
- *   - nine unseen hearts, every one of them clean;
- *   - the rule of 2 and 4 gives 9 x 4 = **36 percentage points**, i.e. **0.36** as the
- *     fraction this contract carries, and must render as **"36.0%"**;
- *   - the exact chance of one of the nine arriving over two cards is
- *     1 - (38/47) x (37/46) = 34.967622571693%, so the shortcut overstates by
- *     **1.032377428307 points** — rendered as "1.0 points", not as "103.2%".
+ * Hero Th 9h on Kh 7h 2c against Ks Qd, facing 50 into 100, with nine clean hearts.
+ * The rule of 2 and 4 gives 9 x 4 = 36 points, carried as 0.36. The exact two-card chance is
+ * 1 - (38/47) x (37/46) = 34.967622571693%, so the shortcut overstates by 1.032377428307 points.
  */
 const NINE_OUT_DRAW: CoachReport = {
   street: 'flop',
@@ -228,13 +165,7 @@ const CHECKED_TO: CoachReport = {
   teachingNotes: ['No rule-of-2-and-4 figure here: there is nothing to draw to.'],
 };
 
-/**
- * The defect, preserved as a fixture rather than as a memory.
- *
- * `estimate: 36` is what `@prl/poker-math` used to publish for this exact hand — the rule
- * of 2 and 4 in percentage POINTS, on a field the panel renders as a fraction. Formatted
- * without a guard it becomes "3,600.0%".
- */
+/** `estimate: 36` is the rule of 2 and 4 in percentage points, on a field the panel reads as a fraction. */
 const WRONG_UNIT: CoachReport = {
   ...NINE_OUT_DRAW,
   equity: {
@@ -243,14 +174,7 @@ const WRONG_UNIT: CoachReport = {
   },
 };
 
-/**
- * The value the release audit actually found sitting in a shipped fixture: `estimate: 1.6`.
- *
- * Worth its own fixture beside `WRONG_UNIT`, because it is a *different* failure and the
- * more dangerous of the two. "3,600.0%" is so obviously broken that a reader discounts the
- * whole panel; "160.0%" is close enough to a real number to be believed by someone who is
- * here precisely because they are still learning what a probability is.
- */
+/** `estimate: 1.6`, found in a shipped fixture. "160.0%" is close enough to real to be believed. */
 const STALE_FIXTURE: CoachReport = {
   ...NINE_OUT_DRAW,
   equity: {
@@ -260,24 +184,9 @@ const STALE_FIXTURE: CoachReport = {
 };
 
 /**
- * The spot the outs count degenerates on: hero already in front, before any card arrives.
- *
- * Hero holds Ac 5d on Ah 5s 2c — two pair, aces and fives — against a wide continuing range,
- * and is 88.2% before the turn. Fifty-two cards, less hero's two and the flop's three, leaves
- * **47** that can come next, and at 88% every one of them leaves hero above the equity bar a
- * card has to clear to count as an out. So the report carries `clean: 10`, `dirty: 37`,
- * `total: 47` — and the panel used to head the section
- *
- *     OUTS — 47 CARDS IN TOTAL
- *
- * which is every unseen card in the deck, published as a property of hero's hand.
- *
- * The `explanation` here is deliberately the OLD one, word for word: it still ends "which is
- * 47 outs in total". That is the point of this fixture. The producer no longer writes that
- * sentence, but fixtures in this repo are regenerated on their own schedule and a report
- * reaches this panel past a cache, a file and a deserialiser. The panel must refuse the
- * headline on the strength of the equity it was handed, not on the strength of the prose
- * agreeing with it.
+ * Hero already in front (two pair, 88.2% on the flop), so all 47 unseen cards clear the outs bar.
+ * The `explanation` is deliberately the old prose ("47 outs in total"), because a report can reach
+ * the panel from a stale cache or file. The panel must refuse on the equity, not on the prose.
  */
 const ALREADY_AHEAD: CoachReport = {
   ...NINE_OUT_DRAW,
@@ -294,8 +203,7 @@ const ALREADY_AHEAD: CoachReport = {
   equity: {
     ...NINE_OUT_DRAW.equity,
     heroEquity: 0.882,
-    // Withheld by the Coach for this spot — a made hand is one of the three reasons the
-    // rule of 2 and 4 declines — which is the refusal this one is modelled on.
+    // The Coach withholds the rule of 2 and 4 on a made hand.
     ruleOfThumb: null,
     perPlayer: [
       { label: 'you', equity: 0.882, win: 0.882, tie: 0 },
@@ -306,29 +214,9 @@ const ALREADY_AHEAD: CoachReport = {
 };
 
 /**
- * Every figure the panel renders as a percentage, out of range at once.
- *
- * Not a realistic report — deliberately. The guard is defence in depth against inputs
- * nobody has predicted, so the fixture that proves it has to be one nobody would predict.
- * Each field is broken in the way its own type allows:
- *
- *   - `heroEquity: 1.6`               a probability above 1
- *   - `perPlayer[0].equity: 1.6`      the same, in the readout under the bar
- *   - `perPlayer[0].win: 1.6`         and in its detail line
- *   - `perPlayer[1].equity: NaN`      non-finite, which `EquityBar` coerces to 0 for the geometry
- *   - `breakEvenEquity: 2.4`          the figure the call/fold decision turns on
- *   - `equitySurplus: -3.2`           a difference outside -1..1, rendered as the metric's delta
- *   - `potOddsOfferedByPotSizedBet: 4` a probability rendered inside a stat tile
- *   - `foldEquityAssumed: 3`          an assumption stated in the EV table
- *   - `potShareIfCalled: 9`           likewise
- *   - `ruleOfThumb.estimate: 1.6`     the P0
- *   - `confidenceHalfWidthPoints: 5000` an error bar wider than the range it sits on
- *   - `confidenceInterval.level: 1.6` a 160% confidence level
- *
- * The prose fields are left clean on purpose. Free text the report supplies is rendered
- * verbatim and cannot be range-checked — see `CoachPanel` rule 5 — so putting an impossible
- * percentage in an `explanation` would fail this test for a reason the guard does not claim
- * to cover, and would teach the next reader that the guard is unreliable.
+ * Every figure the panel renders as a percentage, out of range at once, each in the way its type allows.
+ * Prose fields stay clean, because free text is rendered verbatim and cannot be range-checked
+ * (`CoachPanel` rule 5).
  */
 const EVERY_FIGURE_IMPOSSIBLE: CoachReport = {
   ...NINE_OUT_DRAW,
@@ -378,21 +266,13 @@ const EVERY_FIGURE_IMPOSSIBLE: CoachReport = {
   teachingNotes: ['A fixture built to be impossible.'],
 };
 
-// ---------------------------------------------------------------------------
-// The tests
-// ---------------------------------------------------------------------------
-
 test('the percentage scan has teeth', () => {
-  // The scan is the instrument every assertion below depends on, so it is calibrated
-  // against markup directly rather than against a component. It used to be calibrated by
-  // rendering a panel known to be broken — which was honest, but tied the instrument's
-  // credibility to the component staying capable of the defect. It no longer is.
+  // Calibrated against markup, because the panel can no longer produce the defect.
   const impossible = impossiblePercentagesIn(
     '<p>the rule of 2 and 4 estimates 3,600.0%</p><span aria-label="160.0%"></span><i>-50.0%</i>',
   );
   assert.deepEqual(impossible, ['3,600.0%', '160.0%', '-50.0%']);
 
-  // And it does not cry wolf: the two endpoints are reachable and real.
   assert.deepEqual(impossiblePercentagesIn('<p>0.0% to 100.0%, and 41.2%</p>'), []);
 });
 
@@ -415,8 +295,6 @@ test('no percentage the panel renders is above 100% or below 0%', async () => {
 });
 
 test('the panel refuses the percentage-point unit error rather than rendering it', async () => {
-  // `estimate: 36` is the exact value the producer used to publish for this hand. It must
-  // not reach the reader in any form: not as "3,600.0%", and not as a bare "3,600" either.
   const markup = await render(WRONG_UNIT);
 
   assert.deepEqual(impossiblePercentagesIn(markup), [], 'no impossible percentage may reach the page');
@@ -428,8 +306,7 @@ test('the panel refuses the percentage-point unit error rather than rendering it
 });
 
 test('a hand already in front is not given an outs count', async () => {
-  // Rule 6, asserted on the string a learner reads. The report says 47; the panel must not
-  // put 47 next to the word "outs" anywhere, in the heading or in the disclosure summary.
+  // Rule 6. The report says 47, and the panel must not put 47 next to the word "outs" anywhere.
   const markup = await render(ALREADY_AHEAD);
 
   assert.ok(
@@ -445,9 +322,7 @@ test('a hand already in front is not given an outs count', async () => {
     'the section still has to be there, still labelled, and still say what is missing',
   );
 
-  // Refusing is not licence to drop the section. The counts are true and useful — 10 cards
-  // leave hero comfortably in front, 37 leave hero in front and beatable — so they stay,
-  // and so does the card-by-card list behind them.
+  // The counts are true and stay, with the card-by-card list.
   assert.ok(markup.includes('10 cards'), 'the clean count survives the refusal');
   assert.ok(markup.includes('37 cards'), 'and so does the dirty count');
   assert.ok(
@@ -455,7 +330,7 @@ test('a hand already in front is not given an outs count', async () => {
     'the breakdown is still reachable, under a name that describes what is in it',
   );
 
-  // The "dirty" bucket's stock sentence is FALSE here: a blank does not improve two pair.
+  // The "dirty" bucket's stock sentence is false here, because a blank does not improve two pair.
   assert.ok(
     !markup.includes('These improve your hand but can still lose'),
     'a card that leaves hero in front has not necessarily improved anything',
@@ -465,8 +340,6 @@ test('a hand already in front is not given an outs count', async () => {
     'the bucket still has to say what it means, in words that are true of this spot',
   );
 
-  // And the panel says why, in its own voice, without waiting for the report's prose to
-  // agree with it — the prose in this fixture still says "47 outs in total".
   assert.ok(
     markup.includes('An out is a card that rescues a hand that is behind, and you are not behind'),
     'the refusal has to carry its reason, exactly as the rule-of-thumb refusal does',
@@ -474,9 +347,7 @@ test('a hand already in front is not given an outs count', async () => {
 });
 
 test('a real draw keeps its outs count', async () => {
-  // The control. Suppression that fires everywhere is not a fix, it is the same defect with
-  // the sign flipped: a nine-out flush draw at 39.5% is behind, so nine cards genuinely
-  // rescue the hand and the panel must say so.
+  // The control. A nine-out flush draw at 39.5% is behind, so the count must stay.
   const markup = await render(NINE_OUT_DRAW);
 
   assert.ok(markup.includes('Outs — 9 cards in total'), 'a hand that is behind keeps its count');
@@ -492,8 +363,6 @@ test('a real draw keeps its outs count', async () => {
 });
 
 test('the panel refuses the stale fixture value the audit found', async () => {
-  // `estimate: 1.6` rendered as "The rule of 2 and 4 estimates 160.0%" — a 160% probability
-  // stated in the app's own voice. This is the P0, asserted on the string a learner reads.
   const markup = await render(STALE_FIXTURE);
 
   assert.deepEqual(impossiblePercentagesIn(markup), [], 'no impossible percentage may reach the page');
@@ -518,26 +387,18 @@ test('no figure the panel renders as a percentage can be impossible, whatever it
     `every percentage-bearing field was out of range and the panel rendered ${impossible.length} of them: ${JSON.stringify(impossible)}`,
   );
 
-  // Refusing must not become a way of quietly dropping half the panel. The sections whose
-  // figures were withheld still have to be present, still labelled, and still say why —
-  // an absent tile reads as "this app does not compute that", which is a second untruth.
+  // Withheld sections stay labelled, because an absent tile reads as a figure the app never computes.
   for (const label of ['Your share of the pot', 'Break-even equity', 'Price a pot-sized bet would offer']) {
     assert.ok(markup.includes(label), `the "${label}" figure should still be labelled`);
   }
   assert.equal(
     markup.split('not a probability').length - 1,
-    // Counted rather than merely "present", so a change that silently stops refusing one of
-    // them fails here. Nine, made up of:
-    //   3  refused stat tiles — equity, break-even, the pot-sized-bet price
-    //   2  `EquityBar` readout rows — the 1.6 equity and the NaN one
-    //   1  `EquityBar` detail — the 1.6 win rate (the 0 tie rate is a real 0.0%)
-    //   2  EV-table assumptions — fold equity and pot share when called
-    //   1  the rule-of-2-and-4 refusal
+    // 3 stat tiles, 2 `EquityBar` rows, 1 `EquityBar` detail (the 0 tie rate is real),
+    // 2 EV-table assumptions and the rule-of-2-and-4 refusal.
     9,
     'every refused figure should say so, and the count is fixed so a lost refusal is visible',
   );
 
-  // The caveats are never collapsible and never droppable, however bad the figures were.
   assert.ok(markup.includes('Every hand in the opponent range is weighted equally.'), 'assumptions survive');
   assert.ok(markup.includes('How certain is this?'), 'the uncertainty note survives');
   assert.ok(
@@ -547,27 +408,19 @@ test('no figure the panel renders as a percentage can be impossible, whatever it
 });
 
 test('the rule-of-2-and-4 figure for a real draw renders as 36.0%', async () => {
-  // Nine clean outs, two cards to come: 9 x 4 = 36 percentage points. The contract carries
-  // that as the fraction 0.36, and the reader must see "36.0%" — not "3,600.0%" and not
-  // "0.4%", the two ways a unit can be wrong.
   const markup = await render(NINE_OUT_DRAW);
 
   assert.ok(markup.includes('The rule of 2 and 4 estimates 36.0%'), 'the shortcut is stated as 36.0%');
   assert.ok(!markup.includes('3,600'), 'the percentage-point unit must never reach the page');
   assert.ok(!markup.includes('0.4%'), 'nor the fraction rendered as though it were already a percentage');
 
-  // Its error is in POINTS, so it is NOT multiplied: 1.032377... rounds to "1.0 point"
-  // (`formatPoints` pluralises from the rounded figure). Had it gone through
-  // `formatPercent` instead it would read "103.2%", which is the same unit error in the
-  // other direction and just as wrong.
+  // The error is in points, so it is not multiplied. `formatPoints` pluralises from the rounded figure.
   assert.ok(markup.includes('off by 1.0 point'), 'the error is a difference in points, not a percentage');
   assert.ok(!markup.includes('103.2'), 'the error must not be multiplied by 100 either');
 });
 
 test('a withheld shortcut is explained rather than silently dropped', async () => {
-  // `null` is now a real answer — the Coach refuses the shortcut on a made hand, on a draw
-  // with no clean outs, and where the multiple would exceed 100% — so the panel has to say
-  // that rather than leave a gap a reader reads as a missing feature.
+  // The Coach refuses the shortcut on a made hand, a draw with no clean outs, or a multiple over 100.
   const markup = await render(CHECKED_TO);
   assert.ok(
     markup.includes('No rule-of-thumb comparison for this spot'),
@@ -577,9 +430,8 @@ test('a withheld shortcut is explained rather than silently dropped', async () =
 });
 
 test('the reading of the spot comes after the price and before the detail', async () => {
-  // At a live table the Coach is a scroll pane beside the decision. The suggestion was its LAST
-  // always-visible block, below outs and stack context, several screens down the rail. Equity and
-  // the price stay first, because the reading says it follows from them.
+  // At a live table the Coach is a scroll pane, so the suggestion must not sit screens down the rail.
+  // Equity and the price stay first, because the reading follows from them.
   const markup = await render(NINE_OUT_DRAW);
   const at = (text: string): number => {
     const index = markup.indexOf(text);
@@ -609,7 +461,6 @@ test('explanatory prose under outs and stack is behind a disclosure, and the fig
   assert.ok(inDisclosure('Nine hearts complete the flush'), 'the outs prose is collapsible');
   assert.ok(inDisclosure('The effective stack is 400 against a pot of 100.'), 'and so is the stack prose');
 
-  // The boundary in the module comment: counts, figures and the price are never collapsed.
   assert.ok(!inDisclosure('Outs — 9 cards in total'), 'the outs count stays visible');
   assert.ok(!inDisclosure('Effective stack'), 'the stack figure stays visible');
   assert.ok(!inDisclosure('Risking 50 to win 100'), 'the price explanation stays visible');
@@ -617,7 +468,6 @@ test('explanatory prose under outs and stack is behind a disclosure, and the fig
 });
 
 test('a size range whose two ends are one figure prints it once', async () => {
-  // "Raise — 700 units to 700 units" on /legends/compare, where every raise size was the all-in.
   const single = await render({
     ...NINE_OUT_DRAW,
     suggestion: { ...NINE_OUT_DRAW.suggestion, sizeRange: { min: 50, max: 50 } },
@@ -632,8 +482,7 @@ test('a size range whose two ends are one figure prints it once', async () => {
 });
 
 test('a negative margin over break-even is said to be under it (REGRESSION)', async () => {
-  // Measured on the Lab at 308fadf: "▼ −27.0 points over the break-even equity". The glyph and the
-  // sign said under and the words said over; a reader who trusts the words reads the opposite.
+  // The Lab once printed "▼ −27.0 points over the break-even equity".
   const label = (markup: string): string | undefined =>
     /class="prl-metric__delta-label">([^<]*)</u.exec(markup)?.[1];
   const priced = (surplus: number): CoachReport => ({

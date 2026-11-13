@@ -1,15 +1,6 @@
 /**
- * Tests for the formatters.
- *
- * These are the only unit-testable files in this package — JSX cannot be run under
- * `node:test` without a renderer, and adding one is a dependency this repo will not
- * take. So the coverage here is deliberately heavy: exact expected strings, the sign
- * and rounding boundaries, the non-finite cases, and the two units traps (percent vs
- * percentage points, `-0`).
- *
- * The assertions are on exact strings rather than "contains a 6". A formatter's whole
- * contract is its output, and a test that only checks the digits would not have caught
- * the `Intl` locale drift that made these functions hand-rolled in the first place.
+ * The formatters. Assertions are on exact strings, because a formatter's contract is its output and a
+ * digits-only check would miss the `Intl` locale drift that made these functions hand-rolled.
  */
 
 import assert from 'node:assert/strict';
@@ -184,13 +175,8 @@ describe('formatOdds', () => {
   });
 
   it('describes a free continuation in words, and never as a price', () => {
-    // The user-facing half of the fix. `null` is what `@prl/poker-math` and `@prl/contracts`
-    // now report when there is nothing to call, and it is the only such value that survives
-    // JSON — which is why this argument is nullable at all.
-    //
-    // The three things this line must never render are the three the panel used to be at
-    // risk of: "Infinity to 1" (the old sentinel, printed), "0 to 1" (a real price, and the
-    // worst one), and "null" (the wire value, leaked).
+    // `null` is what `@prl/poker-math` and `@prl/contracts` report when there is nothing to call,
+    // because it is the only such value that survives JSON.
     const free = formatOdds(null);
     assert.equal(free, 'no cost to continue');
     assert.equal(free.includes('Infinity'), false);
@@ -203,10 +189,7 @@ describe('formatOdds', () => {
     assert.equal(formatOdds(-1), NOT_AVAILABLE);
     assert.equal(formatOdds(Number.NaN), NOT_AVAILABLE);
     assert.equal(formatOdds(Number.NEGATIVE_INFINITY), NOT_AVAILABLE);
-    // This used to assert `'no cost to continue'`, and that expectation was wrong once the
-    // free-call case became `null`. `Infinity` cannot arrive from the contract any more — it
-    // cannot cross JSON — so a positive infinity here is a live division by zero in the
-    // caller, which is a bug rather than a free call and must not be dressed up as one.
+    // `Infinity` cannot cross JSON, so here it is a division by zero in the caller, not a free call.
     assert.equal(formatOdds(Number.POSITIVE_INFINITY), NOT_AVAILABLE);
   });
 });
@@ -245,15 +228,8 @@ describe('formatConfidenceInterval', () => {
 
 describe('describeSpr', () => {
   it('bands a ratio at the shared edges, not its own (REGRESSION)', () => {
-    // These edges are `sprBandFor` in `@prl/poker-math`, and this module no longer has any of its
-    // own. It used to: 1/4/8/15 here against 1/3/6/13 there, while `CoachPanel` renders this
-    // label directly above the sentence that module generates. So one panel read "3.3 — low" over
-    // prose saying 'which is the "medium" band', on five of the thirty-six Lab scenarios, and at
-    // 6.82 the two disagreed about the meaning rather than the word — "roughly two streets of
-    // betting" against "several streets fit".
-    //
-    // The boundary values are asserted on both sides because that is where a re-divergence would
-    // start, and `high` closes INCLUSIVELY at 13, which is the one edge a rewrite gets wrong.
+    // The edges are `sprBandFor` in `@prl/poker-math`, because `CoachPanel` renders this label above
+    // that module's sentence. Both sides of each edge are asserted, and `high` closes inclusively at 13.
     assert.equal(describeSpr(0.5).band, 'committed');
     assert.equal(describeSpr(0.99).band, 'committed');
     assert.equal(describeSpr(1).band, 'low');
@@ -267,8 +243,7 @@ describe('describeSpr', () => {
   });
 
   it('agrees with @prl/poker-math on every band, so the two cannot drift again', () => {
-    // The join itself. Sampling rather than spot-checking, because the defect was an edge that
-    // moved on one side only.
+    // Sampled, because the defect was an edge that moved on one side only.
     const vocabulary: Readonly<Record<string, string>> = {
       'very-low': 'committed',
       low: 'low',
@@ -304,8 +279,7 @@ describe('describeSpr', () => {
   });
 
   it('never tells the reader what to do', () => {
-    // The product guardrails forbid claiming universal optimality. Every band's meaning
-    // describes the situation; none of them issues an instruction.
+    // The product guardrails forbid claiming universal optimality.
     const forbidden = [' should ', ' must ', 'always ', 'never ', 'correct', 'optimal', 'best play'];
     for (const value of [0.5, 2, 5, 10, 40, Number.NaN]) {
       const meaning = describeSpr(value).meaning.toLowerCase();
@@ -328,8 +302,6 @@ describe('describeSpr', () => {
 
 describe('formatIndex', () => {
   it('pads to two digits, because the motif is fixed-width', () => {
-    // The `01 02 03` numbering only reads as a system when every user of it pads the same way,
-    // which is the whole reason this is a shared function and not a `padStart` per component.
     assert.equal(formatIndex(1), '01');
     assert.equal(formatIndex(9), '09');
     assert.equal(formatIndex(10), '10');
@@ -401,19 +373,14 @@ describe('pluralise', () => {
 });
 
 describe('argument validation', () => {
-  /**
-   * The `FormatError` guards exist for values that arrive from JSON rather than from
-   * TypeScript, so the test reproduces that path honestly — `JSON.parse` is the real source of
-   * an unchecked value — instead of reaching for a cast the house rules forbid.
-   */
+  /** The `FormatError` guards exist for values from JSON, so the fixture comes from `JSON.parse`. */
   const fromWire = JSON.parse('{"equity":"0.62","chips":null}') as {
     readonly equity: number;
     readonly chips: number;
   };
 
   it('throws for a value that is not a number at all', () => {
-    // A string equity is a server or contract bug. Rendering "0.62%" from it would hide that;
-    // throwing surfaces it at the component that passed it.
+    // A string equity is a contract bug, and throwing surfaces it at the component that passed it.
     assert.throws(() => formatPercent(fromWire.equity), FormatError);
     assert.throws(() => formatPoints(fromWire.equity), FormatError);
     assert.throws(() => formatChips(fromWire.chips), FormatError);
@@ -426,8 +393,7 @@ describe('argument validation', () => {
   });
 
   it('distinguishes "not a number" from "a number with no value"', () => {
-    // NaN and Infinity are real arithmetic outcomes — an SPR with an empty pot, an odds ratio
-    // with nothing to call — so they render as the not-available marker rather than throwing.
+    // NaN and Infinity are real arithmetic outcomes (an SPR with an empty pot), so they do not throw.
     assert.equal(formatPercent(Number.NaN), NOT_AVAILABLE);
     assert.doesNotThrow(() => formatChips(Number.POSITIVE_INFINITY));
   });
@@ -435,8 +401,7 @@ describe('argument validation', () => {
 
 describe('cross-cutting guarantees', () => {
   it('produces no locale-dependent separators', () => {
-    // The whole reason these are hand-rolled: output must be byte-identical wherever it
-    // runs, or server and client markup disagree and React reports a hydration mismatch.
+    // Output must be byte-identical on server and client, or React reports a hydration mismatch.
     const samples = [
       formatChips(1234567),
       formatUnits(1234567),
@@ -451,9 +416,8 @@ describe('cross-cutting guarantees', () => {
   });
 
   it('never renders a negative zero', () => {
-    // Anything that ROUNDS to zero at the chosen precision loses its sign. Note this is a
-    // per-formatter question, not a per-value one: -0.004 rounds to `0` chips but to
-    // `-0.4%`, and -0.4% is a real negative figure that must keep its minus.
+    // Anything that rounds to zero at the formatter's precision loses its sign. -0.004 rounds to
+    // `0` chips, but as a percent it is a real negative figure and keeps its minus.
     for (const tiny of [-0, -1e-9]) {
       assert.ok(!formatChips(tiny).includes('-'), `formatChips(${tiny})`);
       assert.ok(!formatUnits(tiny).includes('-'), `formatUnits(${tiny})`);

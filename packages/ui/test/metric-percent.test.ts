@@ -1,6 +1,4 @@
-/**
- * `Metric format="percent"` is a probability. It must not print 160%.
- */
+/** `Metric format="percent"` is a probability. It must not print 160%. */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createElement } from 'react';

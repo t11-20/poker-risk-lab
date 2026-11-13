@@ -1,14 +1,7 @@
 /**
- * Tests for the bet sizer's arithmetic.
- *
- * This file exists because of one promise `ActionBar` makes: **no out-of-range amount can
- * leave it**. The component cannot be tested here (no JSX under `node:test`), so the
- * arithmetic was pulled into `src/bet-sizing.ts` and the promise is pinned down here instead.
- *
- * The important test is the last one: a brute-force sweep over every combination of typed
- * input, preset and bounds asserting that the resolved amount is always an integer inside
- * `[min, max]`. A hand-written table of cases would miss exactly the case that matters —
- * which is always the one nobody thought of.
+ * The bet sizer's arithmetic, which holds `ActionBar`'s promise that no out-of-range amount leaves it.
+ * The last test sweeps every combination of draft, preset and bounds, because a hand-written table
+ * misses the case nobody thought of.
  */
 
 import assert from 'node:assert/strict';
@@ -51,9 +44,7 @@ describe('clampBetTo', () => {
   it('rounds to a whole chip before pinning, never after', () => {
     assert.equal(clampBetTo(600.4, bounds(200, 840)), 600);
     assert.equal(clampBetTo(600.5, bounds(200, 840)), 601);
-    // 199.6 rounds to 200, which is legal — rounding first is what makes this reachable.
     assert.equal(clampBetTo(199.6, bounds(200, 840)), 200);
-    // 840.4 rounds to 840 rather than being pinned from 841.
     assert.equal(clampBetTo(840.4, bounds(200, 840)), 840);
   });
 
@@ -74,7 +65,6 @@ describe('clampBetTo', () => {
   });
 
   it('handles a range with no room at all', () => {
-    // A seat whose only legal bet is its whole stack.
     assert.equal(clampBetTo(1, bounds(840, 840)), 840);
     assert.equal(clampBetTo(9999, bounds(840, 840)), 840);
   });
@@ -98,25 +88,15 @@ describe('resolveDraft', () => {
   });
 
   it('accepts a decimal and rounds it to a whole chip, which the readout then prints', () => {
-    // Rounding is not silent: `clampBetTo` rounds, and the sizer's readout and commit button both
-    // show the rounded total. A reader who types 600.9 is shown 601 before they press anything.
+    // Not silent, because the readout and commit button both show the rounded total.
     assert.equal(resolveDraft('600.9', bounds(200, 840)), 601);
     assert.equal(resolveDraft('600.4', bounds(200, 840)), 600);
     assert.equal(isDraftMalformed({ text: '600.9', badInput: false }), false);
   });
 
   /**
-   * The `1e3` defect.
-   *
-   * `Number.parseInt(text, 10)` was the parser, and `parseInt` stops at the first character it
-   * cannot use: `parseInt('1e3', 10)` is **1**, which clamps to the minimum. `validity.badInput`
-   * is false at the same moment, because a number input parses `1e3` perfectly well and keeps it
-   * in `value` — so both halves of the invalid state said the field was fine.
-   *
-   * Measured in Chrome 151 on the built app at `/play?state=decision`, raise bounds 70–970:
-   * typing `1e3` left `value === "1e3"`, `badInput === false`, no `aria-invalid`, no correction on
-   * screen, and the commit button reading "Raise to 70". `2e2` — an ordinary way to write 200 —
-   * behaved the same.
+   * `parseInt('1e3', 10)` is 1, while a number input keeps `1e3` with `badInput === false`.
+   * In Chrome 151 typing `1e3` showed no correction and the button read "Raise to 70".
    */
   it('refuses shorthand rather than silently reading it as a different number', () => {
     for (const draft of ['1e3', '2e2', '600abc', '0x20', '1_000', 'Infinity', '1,000']) {
@@ -131,15 +111,8 @@ describe('resolveDraft', () => {
 });
 
 /**
- * The property the two functions above exist to hold together, stated once.
- *
- * For every string a number input can hand this control: EITHER the field is marked invalid, OR
- * the amount the sizer resolves is the amount the characters mean. "What the characters mean" is
- * `Number(text)` — the platform's own reading of a numeric literal — clamped, because clamping is
- * declared behaviour that the readout prints.
- *
- * A silent clamp is precisely the case where neither holds: the reader is shown a legal-looking
- * field, and the button offers something else.
+ * For every string a number input can hand this control, either the field is marked invalid or the
+ * resolved amount is `Number(text)` clamped. This is the old `parseInt` parser, for the control.
  */
 function silentlyReinterpreted(text: string, range: BetBounds): boolean {
   const meant = Number(text.trim());
@@ -165,14 +138,12 @@ describe('no typed amount is silently re-read as a different one', () => {
   });
 
   it('NEGATIVE CONTROL: the parser this replaced fails that property', () => {
-    // The old implementation, restated, run against the same strings. If this ever stops finding
-    // a violation the property above has stopped being about anything.
     const offenders = TYPED.filter((text) => silentlyReinterpreted(text, range));
     assert.ok(
       offenders.length > 0,
       'the old `parseInt` parser produced no disagreement on any of these, so the check above proves nothing',
     );
-    // And name the headline one explicitly, so a future edit to `TYPED` cannot quietly empty it.
+    // Named, so an edit to `TYPED` cannot quietly drop it.
     assert.ok(offenders.includes('1e3'), `expected 1e3 among the offenders, found ${String(offenders)}`);
     assert.equal(clampBetTo(Number.parseInt('1e3', 10), range), 200, 'parseInt("1e3") is 1');
     assert.equal(clampBetTo(Number('1e3'), range), 840, 'the characters mean 1000');
@@ -180,35 +151,10 @@ describe('no typed amount is silently re-read as a different one', () => {
 });
 
 /**
- * The invalid state of the bet field.
- *
- * ## The defect these exist for
- *
- * The field silently clamped and never marked itself. Type `one third` into the bet amount and
- * the browser holds the characters on screen, hands the change handler `value === ''`, and the
- * sizer quietly resolves that to the minimum — so the commit button changed its number, the field
- * still showed letters, and nothing anywhere said the two were related. The web app's quiz and
- * invite-code fields were given `aria-invalid` for exactly this; this control lives in the shared
- * package and was missed.
- *
- * ## Why the cases below are shaped the way they are
- *
- * `{ text: '', badInput: true }` is not a contrived pair — it is *literally* what an
- * `<input type="number">` reports for text it could not parse, and the reason this predicate
- * cannot be written against the text alone.
- *
- * Verified against a real browser rather than assumed. Typing `one third` into a number input in
- * Chrome 151 and then clearing it produced, in order:
- *
- *     after typing "one third"   value: ""      badInput: true    valid: false
- *     after clearing it          value: ""      badInput: false   valid: true
- *     after typing 600           value: "600"   badInput: false   valid: true
- *
- * The first two rows have the SAME value and must not have the same answer — which is the whole
- * argument in one table. On that first row `resolveDraft` still returned the minimum (200) and
- * would have sent it; `isDraftMalformed` returned true and a value-derived predicate returned
- * false, which is exactly the defect. The negative control below is that pair, and the first
- * version of the same fix elsewhere in this repo did get it wrong.
+ * The invalid state of the bet field. Measured in Chrome 151 on a number input:
+ *     after typing "one third"   value: ""      badInput: true
+ *     after clearing it          value: ""      badInput: false
+ * The same value must give different answers, so the predicate cannot read the text alone.
  */
 describe('isDraftMalformed', () => {
   it('is not malformed before anything has been typed', () => {
@@ -216,35 +162,25 @@ describe('isDraftMalformed', () => {
   });
 
   it('is not malformed when the field has simply been cleared', () => {
-    // A blank field is a legitimate state on the way to a new number, and `resolveDraft` already
-    // resolves it to the minimum. Marking it invalid would tell a screen reader that deleting the
-    // contents was a mistake.
+    // A blank field is a normal step on the way to a new number.
     assert.equal(isDraftMalformed({ text: '', badInput: false }), false);
     assert.equal(isDraftMalformed({ text: '   ', badInput: false }), false);
   });
 
   it('is not malformed for any amount the sizer can use, in range or out of it', () => {
-    // Out of range is NOT invalid: `resolveDraft` clamps it, and the readout says what will be
-    // sent. Only text that is not an amount at all is invalid.
+    // Out of range is not invalid, because `resolveDraft` clamps it and the readout says so.
     for (const text of ['0', '1', '600', '9999', '-40', '600.9', ' 300 ']) {
       assert.equal(isDraftMalformed({ text, badInput: false }), false, `text "${text}"`);
-      // The pairing that makes the claim mean something: everything called well-formed here has
-      // to be something `resolveDraft` can actually turn into a number.
       assert.ok(Number.isFinite(resolveDraft(text, bounds(200, 840))), `resolvable "${text}"`);
     }
   });
 
   it('is malformed when the browser reports text it could not parse', () => {
-    // THE case. The browser has sanitised the value to '' and the only evidence that anything was
-    // typed is the flag beside it.
     assert.equal(isDraftMalformed({ text: '', badInput: true }), true);
   });
 
   it('cannot be satisfied by looking at the value, which is the whole point', () => {
-    // The negative control. These two drafts have IDENTICAL text and must disagree; an
-    // implementation that derives the invalid state from `text` returns the same answer for both
-    // and fails here. That implementation is the defect this predicate replaces, and it is
-    // undetectable by any test that does not state this pair explicitly.
+    // The negative control. A predicate derived from `text` gives both the same answer.
     const typedLetters = { text: '', badInput: true } as const;
     const clearedField = { text: '', badInput: false } as const;
     assert.equal(typedLetters.text, clearedField.text);
@@ -252,9 +188,7 @@ describe('isDraftMalformed', () => {
   });
 
   it('also catches non-numeric text from a browser that keeps it in the value', () => {
-    // Defence in depth for the second branch: `badInput` false, unparseable text present. No
-    // current browser produces this on a number input, which is exactly why it would go unnoticed
-    // if one ever did.
+    // No current browser keeps unparseable text in a number input's value, so this would go unnoticed.
     for (const text of ['abc', 'e5', '-', '.', '+', 'one third', '1e3', '600abc']) {
       assert.equal(isDraftMalformed({ text, badInput: false }), true, `text "${text}"`);
     }
@@ -262,10 +196,8 @@ describe('isDraftMalformed', () => {
 });
 
 describe('the sizer reads the sizes the Coach prices', () => {
-  // The Coach prices exactly `offeredSizes` from `@prl/poker-math`, and the Scenario Lab grades a
-  // sized action only on an exact match, so the sizer's presets and arithmetic must BE that
-  // package's — not a copy that agrees today. A copy is what they were: the presets rounded to the
-  // nearest chip, the Coach's ladder rounded down, and a ⅔-pot button sent 207 against a priced 206.
+  // The Lab grades a sized action only on an exact match with `offeredSizes`, so the sizer must use
+  // `@prl/poker-math` itself. A copy sent 207 from a ⅔-pot button against a priced 206.
   it('re-exports the presets, the clamp and the preset arithmetic by identity', () => {
     assert.equal(SIZING_PRESETS, TABLE_SIZING_PRESETS);
     assert.equal(presetTotal, presetTo);
@@ -273,8 +205,7 @@ describe('the sizer reads the sizes the Coach prices', () => {
   });
 
   it('renders its presets from that list and defaults to the floor', () => {
-    // A source check, because the component cannot be rendered under `node:test`. `offeredSizes`
-    // is "the floor plus every preset"; these are the two places the bar could drift from it.
+    // `offeredSizes` is the floor plus every preset, and these are where the bar could drift from it.
     const bar = readFileSync(new URL('../src/components/ActionBar.tsx', import.meta.url), 'utf8');
     assert.match(bar, /SIZING_PRESETS\.map\(\(preset\) =>/u);
     assert.match(bar, /presetTotal\(preset, context\)/u);
@@ -310,8 +241,7 @@ describe('presetTotal', () => {
   });
 
   it('is call-then-bet-a-fraction when facing a bet', () => {
-    // Pot 420 already includes the opponent's 300. Calling 260 makes it 680; a pot-sized
-    // raise is then 40 (already in) + 260 (the call) + 680 = 980.
+    // Calling 260 makes the pot 680, so a pot-sized raise is 40 (in) + 260 (the call) + 680 = 980.
     const context = { bounds: bounds(600, 2000), pot: 420, toCall: 260, committedThisStreet: 40 };
     const pot = SIZING_PRESETS.find((preset) => preset.id === 'pot');
     assert.ok(pot !== undefined);
@@ -328,7 +258,6 @@ describe('presetTotal', () => {
   });
 
   it('clamps a preset that lands outside the legal range', () => {
-    // A tiny stack: every preset has to collapse into [600, 620].
     const context = { bounds: bounds(600, 620), pot: 5000, toCall: 100, committedThisStreet: 0 };
     for (const preset of SIZING_PRESETS) {
       const total = presetTotal(preset, context);
@@ -382,21 +311,8 @@ describe('resolveSizedAction', () => {
 });
 
 /**
- * The draft belongs to the spot it was typed in.
- *
- * ## The defect these exist for
- *
- * `ActionBar`'s header claimed that "blur normalises the text back to" the clamped amount. It does
- * — at the instant of blur, and not afterwards, because the bounds move at every street and the
- * text does not. So the number field went on showing an amount belonging to a spot that no longer
- * existed, while the slider, the readout and the commit button had all moved on. The clamp
- * invariant still held, so nothing illegal could be sent; what the reader was looking at was
- * simply not what the button would do.
- *
- * Measured in Chrome 151 at a live table on the built app. Preflop, raise bounds 20–1,000: type
- * `999999`, blur — field, slider, readout and button all read 1,000. Call, call. On the flop the
- * bounds are 10–980, and the field still reads `1000` while the slider reads 980, the readout
- * reads "Total commitment this street: 980 units" and the button reads "Bet to 980".
+ * The draft belongs to the spot it was typed in. The bounds move every street and the text does not,
+ * so the field read `1000` on the flop while the slider and button read 980.
  */
 describe('draftForBounds: a draft is read only in the spot it was typed in', () => {
   const typed = { text: '1000', badInput: false, bounds: bounds(20, 1_000) } as const;
@@ -416,17 +332,14 @@ describe('draftForBounds: a draft is read only in the spot it was typed in', () 
   });
 
   it('makes the field agree with everything else in the sizer once the bounds move', () => {
-    // The property, stated as the four things the reader compares. `String(to)` is what the field
-    // falls back to when there is no draft for this spot, and `to` is what the slider, the readout
-    // and the commit button all show.
+    // With no draft the field shows `String(to)`, and `to` is what the slider and button show.
     const moved = bounds(10, 980);
     const live = draftForBounds(typed, moved);
     const to = resolveDraft(live?.text ?? null, moved);
     assert.equal(live, null);
     assert.equal(String(to), '10');
 
-    // NEGATIVE CONTROL: without the stamp — which is what the component did — the field keeps the
-    // old text while `to` follows the new bounds, and the two disagree on screen.
+    // NEGATIVE CONTROL: without the stamp the field keeps the old text while `to` follows the bounds.
     const unstamped = resolveDraft(typed.text, moved);
     assert.equal(unstamped, 980, 'the clamp still holds: nothing illegal can be sent');
     assert.notEqual(

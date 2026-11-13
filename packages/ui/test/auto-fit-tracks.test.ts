@@ -1,46 +1,16 @@
 /**
- * `repeat(auto-fit, minmax(<length>, 1fr))` is a HARD FLOOR, and a hard floor overflows.
- *
- * ## The defect this exists for
- *
- * `.prl-coach__grid` was `repeat(auto-fit, minmax(calc(19rem), 1fr))`. `minmax()` with a bare
- * length cannot resolve below that length, so when the grid container is narrower than the floor
- * the track does not shrink — the container overflows instead, and in a nested grid it drags
- * every sibling out with it.
- *
- * Measured on `/review/hand-0042` at 360x640 against the production build: 19rem is 304px, the
- * Coach's own padding takes the pane to 346px, and the page gutter leaves 328px. `.prl-coach` laid
- * out 346px wide at x=16, so its right edge was 362 and `document.documentElement.scrollWidth` was
- * 362 against a `clientWidth` of 360 — the whole page scrolled sideways. Because `.prl-replay` is a
- * grid whose single implicit track is sized by its widest item, the timeline, the transport, the
- * table, the metrics and the verifier were all stretched to 346px too and hung over the right
- * gutter. One track floor, six panes off the edge, on the narrowest common phone.
- *
- * `min(100%, <length>)` is the whole fix: the floor collapses to the container's own width when
- * there is not enough room, and is the length itself whenever there is — so nothing changes at any
- * width where the design was already working, and `auto-fit` still packs the same columns.
- *
- * ## Why a test and not a comment
- *
- * The repo already knew this rule. Eleven tracks in `legends.css`, `review.css` and `lab.css`
- * carry `min(100%, …)`, and `lab.css` section 2 writes up the 390px truncation that taught it —
- * while eight tracks in `components.css`, `learn.css`, `play.css` and this one did not. A rule
- * that half the stylesheets follow is a rule, and the other half is the bug.
- *
- * ## What this asserts
- *
- * Every `repeat(auto-fit | auto-fill, minmax(…, …))` in the app's stylesheets has a floor that can
- * collapse — spelled `min(100%, …)` or `min(…, 100%)`. `auto` and `min-content` are accepted too:
- * both already collapse. Anything else is a hard floor.
+ * `repeat(auto-fit, minmax(<length>, 1fr))` is a hard floor, and a hard floor overflows.
+ * A bare length in `minmax()` cannot resolve below itself, so the container overflows instead of the
+ * track shrinking. At 360x640 a 19rem floor in `.prl-coach__grid` scrolled `/review/hand-0042` 2px
+ * sideways and stretched six sibling panes past the gutter. `min(100%, <length>)` collapses only when
+ * needed. Accepted floors are `min(100%, …)`, `min(…, 100%)`, `auto` and `min-content`.
  */
 
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 
-/** Every stylesheet an `auto-fit` track could legitimately reach — the same set the glass guard
-    in `layout-guarantees.test.ts` scans, and for the same reason: a guard that covered only
-    `packages/ui` would miss the file the last one shipped in. */
+/** The same stylesheets the glass guard in `layout-guarantees.test.ts` scans, app routes included. */
 const ROUTE_STYLE_DIR = new URL('../../../apps/web/src/styles/', import.meta.url);
 const SCANNED: readonly (readonly [string, string])[] = [
   [
@@ -60,11 +30,8 @@ const SCANNED: readonly (readonly [string, string])[] = [
 
 /**
  * `repeat(auto-fit, minmax(…` up to the comma that closes the first `minmax()` argument.
- *
- * Counting brackets rather than reaching for a regex, because the floor is routinely a nested
- * `calc(var(…) * 2 - var(…))` or a `min(100%, calc(…))` and a non-greedy match to the first comma
- * would cut it in half — reporting `min(100%` as the floor, which happens to contain the string
- * this test looks for and would pass every hard floor written with a `calc()` in it.
+ * Counts brackets because floors nest (`min(100%, calc(…))`), and a match to the first comma would
+ * report `min(100%` and pass hard floors.
  */
 function autoFitFloors(css: string): readonly string[] {
   const withoutComments = css.replace(/\/\*[\s\S]*?\*\//gu, '');
@@ -106,8 +73,7 @@ describe('an auto-fit track floor can always collapse', () => {
       }
     }
 
-    // A sweep of nothing is not a pass: if the layouts are rewritten away from `auto-fit`, or the
-    // route stylesheet directory is renamed, this would otherwise report success over zero tracks.
+    // A sweep of nothing is not a pass.
     assert.ok(seen > 0, 'no repeat(auto-fit, minmax(…)) track exists to be checked');
     assert.deepEqual(
       offenders,

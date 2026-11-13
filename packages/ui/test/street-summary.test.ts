@@ -1,13 +1,8 @@
 /**
- * The decision band's "who did what on this street" line (audit at 6b3886e, M3 and minor 2).
- *
- * M3: at the reader's decision most opponents' plates were off the screen — 1 of 5 visible at
- * 390x844, 2 of 5 at 1440x900, 0 of 2 at a private table — so "to continue 78 units" was on screen
- * with nobody visible who had bet. Minor 2: the plates start each street blank, so the call or bet
- * that CLOSED a street was on screen for about 200ms.
- *
- * Each block runs its detector over what the screen offered before as well — the plates, through
- * `lastActionsThisStreet` — and asserts it comes back without the fact this line exists to carry.
+ * The decision band's "who did what on this street" line.
+ * At the reader's decision most opponents' plates were off screen (1 of 5 visible at 390x844), and the
+ * plates start each street blank, so the action that closed a street showed for about 200ms.
+ * The negative control runs the plates (`lastActionsThisStreet`) and asserts they lack that fact.
  */
 
 import assert from 'node:assert/strict';
@@ -136,7 +131,7 @@ describe('the action that closed a street stays said until the next street has o
   it('describes the flop, by name, on a turn nobody has acted on yet', () => {
     const line = streetSummary(view('turn', [...PREFLOP, ...FLOP], turnSeats), NAMES);
     assert.equal(line?.current, false);
-    // 16, not 0: every seat's `committedThisStreet` is 0 on the turn, which is what the plate reads.
+    // 16, not 0, because every seat's `committedThisStreet` is 0 on the turn and the plate reads that.
     assert.equal(said(line), 'On the flop: You checked · Calling Station bet 16 · Nit called 16');
   });
 
@@ -152,7 +147,6 @@ describe('the action that closed a street stays said until the next street has o
   it('NEGATIVE CONTROL: the plates, which were all there was, say nothing of the closing call', () => {
     const plates = lastActionsThisStreet(view('turn', [...PREFLOP, ...FLOP], turnSeats));
     assert.deepEqual(plates, {}, 'a plate still carries the flop on the turn; the defect has changed');
-    // And worded from the seat, as the plate words a call, the closing call reads 0.
     const fromSeat = lastActionsThisStreet({ ...view('flop', FLOP, turnSeats), street: 'flop' });
     assert.equal(fromSeat[4], 'called 0', 'the seat-read amount is no longer 0 on the next street');
   });
