@@ -303,7 +303,8 @@ describe('security headers', () => {
       config: testConfig({
         NODE_ENV: 'production',
         PUBLIC_WEB_ORIGIN: 'https://app.example.test',
-        LOG_LEVEL: 'silent',
+        // `fatal`, not `silent`: production refuses `silent` (config.ts, `readLogLevel`).
+        LOG_LEVEL: 'fatal',
       }),
     });
 
@@ -329,8 +330,9 @@ describe('security headers', () => {
         NODE_ENV: 'production',
         PUBLIC_WEB_ORIGIN: 'https://app.example.test',
         // Only so this test does not print request logs. NODE_ENV=production would otherwise
-        // switch the logger on, which is exactly what it should do.
-        LOG_LEVEL: 'silent',
+        // switch the logger on, which is exactly what it should do. `fatal` because production
+        // refuses `silent`: a production process that logs nothing cannot say why it died.
+        LOG_LEVEL: 'fatal',
       }),
     });
     const prodResponse = await production.inject({ method: 'GET', url: '/api/v1/health' });

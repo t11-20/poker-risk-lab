@@ -12,6 +12,7 @@
  */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { ConfigError, type EnvRecord, loadConfig, normaliseOrigin } from '../src/config.ts';
 
@@ -158,6 +159,20 @@ describe('loadConfig — invalid values are named', () => {
     expectProblem(baseEnv({ LOG_LEVEL: 'chatty' }), 'LOG_LEVEL');
   });
 
+  it('refuses LOG_LEVEL=silent in production, and names the level that still logs a crash', () => {
+    // `silent` gives Fastify no logger at all, so a production process that failed to start exited
+    // 1 with nothing on stdout or stderr. Measured on a port another process held; see readLogLevel.
+    const problems = expectProblem(productionEnv({ LOG_LEVEL: 'silent' }), 'LOG_LEVEL=silent');
+    assert.ok(
+      problems.some((problem) => problem.includes('fatal')),
+      'the refusal should name the fix',
+    );
+    assert.equal(loadConfig(productionEnv({ LOG_LEVEL: 'fatal' })).logLevel, 'fatal');
+    // Outside production `silent` is how a test or a quiet local run asks for no output.
+    assert.equal(loadConfig(baseEnv({ LOG_LEVEL: 'silent' })).logLevel, 'silent');
+    assert.equal(loadConfig(baseEnv({ NODE_ENV: 'development', LOG_LEVEL: 'silent' })).logLevel, 'silent');
+  });
+
   it('requires DATABASE_URL', () => {
     const env = baseEnv();
     const withoutUrl: EnvRecord = { ...env, DATABASE_URL: undefined };
@@ -244,6 +259,42 @@ describe('loadConfig — the session cookie secret', () => {
     expectProblem(
       productionEnv({ SESSION_COOKIE_SECRET: 'replace-me-this-example-value-is-rejected-in-production' }),
       'SESSION_COOKIE_SECRET',
+    );
+  });
+
+  /**
+   * The value a developer has after `cp .env.example .env` and forgetting the paste. It is read out
+   * of the file rather than copied here, so a new placeholder there is the one tested.
+   */
+  function envExampleSecret(): string {
+    const text = readFileSync(new URL('../../../.env.example', import.meta.url), 'utf8');
+    const value = /^SESSION_COOKIE_SECRET=(.*)$/m.exec(text)?.[1]?.trim() ?? '';
+    // A sweep of nothing is not a pass: a renamed variable would otherwise test the empty string.
+    assert.ok(value.length >= 32, `.env.example should ship a long SESSION_COOKIE_SECRET, read "${value}"`);
+    return value;
+  }
+
+  it('boots outside production on the .env.example value, and says the secret is public', () => {
+    // It used to boot SILENTLY: the value is 55 characters, so the only check this branch made —
+    // length — passed, and nothing on the boot log said sessions were signed with a public string.
+    for (const nodeEnv of ['development', 'test']) {
+      const config = loadConfig(baseEnv({ NODE_ENV: nodeEnv, SESSION_COOKIE_SECRET: envExampleSecret() }));
+      const lines = config.warnings.filter((warning) => warning.includes('SESSION_COOKIE_SECRET'));
+      assert.equal(lines.length, 1, `${nodeEnv}: one line, not zero and not two: ${JSON.stringify(lines)}`);
+      assert.match(lines[0] ?? '', /public development secret/);
+      assert.match(lines[0] ?? '', /randomBytes\(32\)/, 'the line should say how to set a real one');
+    }
+  });
+
+  it('refuses the .env.example value in production, so the warning is never the last line of defence', () => {
+    expectProblem(productionEnv({ SESSION_COOKIE_SECRET: envExampleSecret() }), 'placeholder');
+  });
+
+  it('says nothing about a good secret outside production', () => {
+    const config = loadConfig(baseEnv({ NODE_ENV: 'development' }));
+    assert.deepEqual(
+      config.warnings.filter((warning) => warning.includes('SESSION_COOKIE_SECRET')),
+      [],
     );
   });
 

@@ -59,13 +59,19 @@ cp .env.example .env
 node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
 # paste into SESSION_COOKIE_SECRET in .env
 
-pnpm run db:setup                    # Docker must be running: postgres up, migrate, seed
+pnpm run db:setup                    # Docker must be running: postgres up, wait, migrate, seed
 pnpm run build:packages
 pnpm run dev                         # web on :3000, api on :3001
 ```
 
 No sign-in needed — the app is guest-first. Full command reference in
 [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
+
+Skip the paste and the API still starts in development, with a `configuration warning` at boot
+saying its sessions are signed with a public development secret; under `NODE_ENV=production` the
+same value refuses to boot. After a pull that adds a migration, the API refuses to start — exit 78,
+`Refusing to start: the database schema does not match this build`, naming the files — until you
+run `pnpm run db:migrate`.
 
 ---
 
@@ -215,9 +221,15 @@ section.
   pressure. Risk of ruin is a diffusion approximation assuming a constant edge, constant
   stakes and an infinite horizon. Both state their assumptions every time they produce a
   number.
-- **The accessibility audit does not run a real browser**, because a headless browser needs
-  install scripts that the supply-chain policy forbids. The script says exactly what it does
-  and does not cover — an a11y check that overstates its coverage is worse than none.
+- **No gate is a screen-reader test.** `test:a11y` is a static audit of the server-rendered
+  markup and says exactly what it does and does not cover. Four more gates drive a real headless
+  Chrome over the DevTools Protocol — `test:ax` reads the computed accessibility tree,
+  `test:keyboard` sends real key events, `test:layout` measures where glyphs land, and
+  `design:contrast` measures colours as Chrome composites them — using a Chrome already on the
+  machine (or `CHROME_PATH`), not a browser npm package, whose install scripts the supply-chain
+  policy forbids. Whether a screen reader *speaks* that tree comprehensibly is a manual procedure,
+  [`docs/production/accessibility-certification.md`](docs/production/accessibility-certification.md),
+  recorded there as BLOCKED — UNVERIFIED.
 - **Out-of-band collusion is undetectable.** No server control can see another channel.
 
 Full list with severity and what would close each:

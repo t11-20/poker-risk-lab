@@ -384,6 +384,10 @@ const FORBIDDEN_SECRET_SUBSTRINGS = [
   'dev-only',
 ] as const;
 
+/** The command every message about a missing or public secret tells the operator to run. */
+const GENERATE_SECRET =
+  "`node -e \"console.log(require('node:crypto').randomBytes(32).toString('base64url'))\"`";
+
 /** Minimum secret length. 32 base64url characters carry ~192 bits; 32 bytes is the floor. */
 const MIN_SECRET_LENGTH = 32;
 /** Below this many distinct characters, a "long" secret is really a short one repeated. */
@@ -459,6 +463,19 @@ function readLogLevel(env: EnvRecord, nodeEnv: NodeEnv, collect: Collector): Log
   const value = trimmed(env, 'LOG_LEVEL')?.toLowerCase();
   if (value === undefined) return fallback;
   const match = LOG_LEVELS.find((candidate) => candidate === value);
+  if (match === 'silent' && nodeEnv === 'production') {
+    // A refusal and not a warning, because a warning about this cannot be delivered: `silent`
+    // gives Fastify no logger at all (`buildLoggerOptions`), so the boot's `configuration warning`
+    // lines, `failed to start`, `uncaught exception; exiting` and every schema verdict after boot
+    // go nowhere. Measured with NODE_ENV=production on a port another process held: `info` wrote
+    // `failed to start` and exit 1; `silent` exited 1 with zero bytes on stdout and on stderr.
+    // `fatal` is the quietest production level, and it still says why the process died.
+    collect.problems.push(
+      'LOG_LEVEL=silent is not allowed in production: the process would log nothing, including why ' +
+        'it failed to start or crashed. Use fatal for the quietest level that still does.',
+    );
+    return fallback;
+  }
   if (match !== undefined) return match;
   collect.problems.push(`LOG_LEVEL must be one of ${LOG_LEVELS.join(', ')}, got "${value}"`);
   return fallback;
@@ -568,6 +585,17 @@ function readWebOrigins(env: EnvRecord, nodeEnv: NodeEnv, collect: Collector): r
  * Elsewhere: a missing secret is replaced with a fresh random one for this process
  * (sessions do not survive a restart, which is noisy but safe), and a short secret is
  * tolerated with a warning so tests can use a fixed literal.
+ *
+ * A placeholder outside production is tolerated too, and it is the one case that used to be
+ * tolerated in SILENCE. The README's first run is `cp .env.example .env` and then "paste a
+ * generated value"; skip the paste and `.env` holds
+ * `replace-me-this-example-value-is-rejected-in-production`, which is 55 characters, so the
+ * length warning above never fired. The API booted with no line at all, signing every session
+ * with a string anyone can read in this repository. Not a refusal, because development is
+ * where that string is supposed to work — `docker-compose.yml` and `.env.example` promise a
+ * refusal in production only, and a developer who skipped one step of a list should get the
+ * app and a line saying what it cost them, not exit 78. A process started with
+ * `NODE_ENV=production` still refuses the same value, below.
  */
 function readSessionCookieSecret(env: EnvRecord, nodeEnv: NodeEnv, collect: Collector): string {
   const value = trimmed(env, 'SESSION_COOKIE_SECRET');
@@ -576,8 +604,7 @@ function readSessionCookieSecret(env: EnvRecord, nodeEnv: NodeEnv, collect: Coll
   if (value === undefined) {
     if (isProduction) {
       collect.problems.push(
-        'SESSION_COOKIE_SECRET is required in production; generate one with ' +
-          "`node -e \"console.log(require('node:crypto').randomBytes(32).toString('base64url'))\"`",
+        `SESSION_COOKIE_SECRET is required in production; generate one with ${GENERATE_SECRET}`,
       );
       return '';
     }
@@ -593,6 +620,16 @@ function readSessionCookieSecret(env: EnvRecord, nodeEnv: NodeEnv, collect: Coll
       collect.warnings.push(
         `SESSION_COOKIE_SECRET is only ${value.length} characters; production requires ` +
           `at least ${MIN_SECRET_LENGTH}`,
+      );
+      return value;
+    }
+    const placeholder = FORBIDDEN_SECRET_SUBSTRINGS.find((needle) => value.toLowerCase().includes(needle));
+    if (placeholder !== undefined) {
+      collect.warnings.push(
+        `SESSION_COOKIE_SECRET looks like a placeholder (it contains "${placeholder}"), so this ` +
+          'process signs sessions with a public development secret, such as the one .env.example ' +
+          'ships, and anyone who has read it can forge a session. Tolerated outside production, ' +
+          `refused in it. Set a real one in .env: ${GENERATE_SECRET}`,
       );
     }
     return value;

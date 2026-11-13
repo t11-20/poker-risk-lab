@@ -453,7 +453,8 @@ describe('GET /metrics', () => {
       DATABASE_URL: 'postgresql://unused:unused@127.0.0.1:5432/unused',
       PUBLIC_WEB_ORIGIN: 'https://app.example.test',
       SESSION_COOKIE_SECRET: 'Zk7pQ2vR9tX4bN6mL1sD8gH3jF5wC0yA',
-      LOG_LEVEL: 'silent',
+      // Production refuses `silent` (config.ts, `readLogLevel`); `fatal` is its quietest level.
+      LOG_LEVEL: 'fatal',
     });
     assert.equal(config.metricsToken, null);
     const app = await appWith(config, metrics);
@@ -473,7 +474,8 @@ describe('GET /metrics', () => {
       PUBLIC_WEB_ORIGIN: 'https://app.example.test',
       SESSION_COOKIE_SECRET: 'Zk7pQ2vR9tX4bN6mL1sD8gH3jF5wC0yA',
       METRICS_TOKEN: SCRAPE_TOKEN,
-      LOG_LEVEL: 'silent',
+      // Production refuses `silent` (config.ts, `readLogLevel`); `fatal` is its quietest level.
+      LOG_LEVEL: 'fatal',
     });
     const app = await appWith(config, metrics);
     assert.equal((await app.inject({ method: 'GET', url: '/metrics' })).statusCode, 401);
