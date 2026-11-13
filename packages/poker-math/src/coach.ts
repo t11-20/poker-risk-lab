@@ -952,7 +952,8 @@ function buildTeachingNotes(
 export function buildCoachReport(input: CoachInput): CoachReport {
   validate(input);
 
-  // `exactRange` is the package's one range constructor, and `validate` has checked the two cards.
+  // `exactRange`, not a range literal. The literal that sat here left `classes` empty, hard-coded 1326
+  // and kept the caller's card order. `validate` has already checked the two cards.
   const heroRange: ParsedRange = exactRange(input.heroCards);
 
   const spec: EquitySpec = {
