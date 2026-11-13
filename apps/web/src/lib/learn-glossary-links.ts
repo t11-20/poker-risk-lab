@@ -1,33 +1,9 @@
 /**
- * Finding the glossary terms a lesson declares inside the lesson's own prose.
- *
- * ## What this does and, more importantly, what it does not
- *
- * A `Lesson` carries `glossaryTerms: ContentId[]` and a set of `prose` blocks of plain text.
- * Nothing in the contract says *where* in the prose a term appears, so this locates the first
- * mention of each declared term and splits the paragraph into text and term segments. The
- * renderer then wraps the term segments in a definition trigger.
- *
- * It never changes a word. The output segments concatenate back to the exact input string, and
- * `LessonBlockRenderer` asserts nothing else — no rewriting, no synonyms, no injected
- * explanations. The lesson's author wrote the sentence; this only marks part of it.
- *
- * ## Why plain scanning rather than a regular expression
- *
- * The needles come from content. Building a `RegExp` out of data means escaping it correctly
- * for ever, and a term like `Push/fold` or `3-bet` is exactly the shape that gets escaping
- * wrong. `indexOf` over a lower-cased copy plus an explicit boundary check is longer to read
- * and has no such failure mode, and it is linear in the paragraph length.
- *
- * ## Three rules that keep the prose readable
- *
- *  1. **Longest needle first.** Otherwise "pot" would claim the first three letters of "pot
- *     odds" and the more specific entry would never match.
- *  2. **First mention per lesson, not per paragraph.** A lesson about equity says "equity"
- *     forty times; forty dotted-underlined buttons is not a reading experience, it is a
- *     minefield. The first one teaches the term and the rest are prose.
- *  3. **Word boundaries, with an optional trailing `s`.** So "out" matches "out" and "outs" but
- *     not "outside", and "bet" does not light up inside "better".
+ * Finds the first mention of each glossary term a lesson declares in its prose, and splits the
+ * paragraph into text and term segments that concatenate back to the exact input.
+ * `indexOf` over a lower-cased copy, not a `RegExp` built from content, so `3-bet` needs no escaping.
+ * Longest needle first, so "pot" cannot claim "pot odds". First mention per lesson only. Word
+ * boundaries with an optional trailing `s`, so "bet" does not light up inside "better".
  */
 
 import type { ContentId, GlossaryEntry } from '@prl/contracts';
@@ -38,26 +14,12 @@ export interface TermMatcher {
   readonly needle: string;
 }
 
-/**
- * One run of a paragraph, with a React key derived from its own content.
- *
- * The key is produced here rather than at the call site because `key={index}` is banned — on a
- * reordered list index keys make React reuse the wrong node — and because the occurrence counter
- * that makes two identical runs distinct has to be kept somewhere. Keeping it in the splitter means
- * the renderer has nothing to get wrong, and the keys are testable as data.
- */
+/** Keys are built here, with an occurrence counter, because `key={index}` is banned. */
 export type ProseSegment =
   | { readonly kind: 'text'; readonly key: string; readonly text: string }
   | { readonly kind: 'term'; readonly key: string; readonly text: string; readonly entryId: ContentId };
 
-/**
- * The searchable form of a term.
- *
- * Glossary terms are written for a reader, so several carry a parenthetical gloss
- * ("Alpha (break-even bluff frequency)") or a leading article ("The button"). Neither appears
- * in running prose in that form, so both are stripped: what is left is what an author actually
- * types mid-sentence.
- */
+/** Strips a parenthetical gloss and a leading "the", which running prose does not carry. */
 function needleFor(term: string): string {
   const withoutGloss = term.split(' (')[0] ?? term;
   const withoutArticle = withoutGloss.replace(/^the\s+/i, '');
@@ -69,12 +31,7 @@ function isWordCharacter(character: string | undefined): boolean {
   return /[a-z0-9]/i.test(character);
 }
 
-/**
- * Matchers for a lesson's declared terms, longest needle first.
- *
- * Entries whose needle collapses to nothing are dropped rather than matched against every
- * empty position in the paragraph.
- */
+/** Longest needle first. A needle that collapses to nothing is dropped. */
 export function buildTermMatchers(entries: readonly GlossaryEntry[]): readonly TermMatcher[] {
   const matchers: TermMatcher[] = [];
   for (const entry of entries) {
@@ -84,14 +41,7 @@ export function buildTermMatchers(entries: readonly GlossaryEntry[]): readonly T
   return matchers.sort((a, b) => b.needle.length - a.needle.length);
 }
 
-/**
- * The earliest unclaimed match in `text`, or `null`.
- *
- * "Earliest" rather than "longest overall": two terms can both appear in a paragraph, and the
- * one that comes first in the sentence is the one that must be marked first, or the segments
- * would come out in the wrong order. Ties at the same position go to the longer needle, which
- * is what the sort in `buildTermMatchers` delivers.
- */
+/** The earliest match, so segments come out in order. A tie goes to the longer needle, via the sort. */
 function firstMatch(
   text: string,
   lower: string,
@@ -122,14 +72,7 @@ function firstMatch(
   return best;
 }
 
-/**
- * Splits one paragraph into text and term segments.
- *
- * `claimed` is read *and written*: it is the lesson-wide record of which terms have already been
- * marked, so a term is a trigger once and prose thereafter. Passing a mutable set through is
- * deliberate — the alternative is threading a return value through every block in the renderer,
- * which puts the same state in more places.
- */
+/** `claimed` is the lesson-wide set of terms already marked, and this writes to it. */
 export function splitProse(
   text: string,
   matchers: readonly TermMatcher[],

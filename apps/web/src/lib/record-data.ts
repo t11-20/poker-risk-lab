@@ -1,36 +1,8 @@
 /**
- * The learner's own record: what `GET /me/progress` says, and what `/record` may claim about it.
- *
- * ## Why this exists
- *
- * `GET /me/progress` has always worked. It was in no client: not in `API_PATHS`, not called from
- * anywhere in `apps/web`, so no figure it produces had ever been shown to the learner it was about.
- * Two of its figures were structurally incapable of being non-zero as well — nothing submitted a
- * quiz attempt and nothing wrote lesson completion — so the endpoint was a query nobody ran over
- * tables nobody filled.
- *
- * ## Counted, never scored — and that constrains this module, not just the page
- *
- * The API's own header on `routes/progress.ts` sets the rule: every figure answers "how much have
- * you looked at", never "how well did you do". There is no rank, no streak, no level, no percentage
- * complete, and the response type has no field capable of expressing one. This module must not
- * manufacture what the wire refuses to carry, so:
- *
- *  - nothing here divides a count by a total to produce a percentage;
- *  - nothing here compares two readings of the same figure to produce a trend;
- *  - `unitsNetLifetime` is passed through with its sign intact and is never rendered as a "score".
- *    It is as likely to be negative as positive, which is the honest shape of a variance lesson.
- *
- * `LABELS` and `EXPLANATIONS` below are the whole of what this module adds: a sentence per figure
- * saying exactly what was counted. A number a reader cannot interpret is a number they will
- * interpret wrongly, and "hands played" in particular means something specific — seats held in
- * hands that FINISHED.
- *
- * ## Signed out is not an error
- *
- * The endpoint answers `not_authenticated` to an anonymous reader, correctly: progress belongs to
- * one learner and there is no anonymous view of it. `loadRecord` reports that as its own state so
- * the page can explain it, rather than as an outage or a crash.
+ * The learner's own record from `GET /me/progress`, and what `/record` may claim about it.
+ * Counted, never scored (`routes/progress.ts`). Nothing here divides a count into a percentage or
+ * compares readings into a trend, and `unitsNetLifetime` keeps its sign. `loadRecord` reports a
+ * missing session as its own state, not an outage.
  */
 
 import { API_PATHS, type ProgressResponse } from '@prl/contracts';
@@ -38,13 +10,7 @@ import { apiGet, isApiUnavailable, isSignedOut, safeFetch } from './api.ts';
 
 export const RECORD_PATH = '/record';
 
-/**
- * The four figures, plus the two lists, in the order the page shows them.
- *
- * Ordered from "what you read" to "what happened at a table", which is the order the product's own
- * argument runs in. Not ordered by size, and not sorted at render time: a list that reorders itself
- * as the figures change is a leaderboard of one.
- */
+/** Fixed order, reading to table play. Never sorted by size, which would make a leaderboard of one. */
 export type RecordFigureName =
   | 'lessonsCompleted'
   | 'scenariosAttempted'
@@ -79,12 +45,9 @@ export const RECORD_EXPLANATIONS: Readonly<Record<RecordFigureName, string>> = {
   handsPlayed:
     'Seats you held in hands that finished. A hand still in progress has not been played yet, which is also why it contributes nothing to the figure below.',
   unitsNetLifetime:
-    // "There is no balance column anywhere in this product" was the visible wording; the fact is
-    // `apps/web/test/legal-pages.test.ts`'s to hold, and the learner only needs that it is not money.
     'The sum of your per-hand results in free practice units. This is not a balance — nothing in Poker Risk Lab holds money or a balance — and it is as likely to be negative as positive. That is what variance looks like.',
 };
 
-/** The record, as a value, with the reasons it might not be here. */
 export type RecordState =
   | { readonly state: 'ready'; readonly progress: ProgressResponse }
   /** No session. The page says so and offers the way to get one, rather than showing zeroes. */
@@ -93,15 +56,8 @@ export type RecordState =
   | { readonly state: 'unavailable'; readonly reason: string };
 
 /**
- * Reads the record for whoever this request is from.
- *
- * Deliberately has no fixture fallback, which every other read in this client has. A bundled
- * "sample record" would be somebody's invented history rendered on a page headed with the reader's
- * own name for it, and there is no notice loud enough to make that a good idea. The three states
- * above are the whole set: it is here, you are not signed in, or it could not be fetched.
- *
- * `options` carries the reader's session cookie on a server render — see `lib/server-session.ts`,
- * which is the only supported producer of it.
+ * No fixture fallback, unlike every other read here, because a sample record would be invented history
+ * under the reader's name. `options` comes from `lib/server-session.ts`.
  */
 export async function loadRecord(options: Parameters<typeof apiGet>[1] = {}): Promise<RecordState> {
   const result = await safeFetch<ProgressResponse>(() =>
@@ -110,7 +66,6 @@ export async function loadRecord(options: Parameters<typeof apiGet>[1] = {}): Pr
   if (result.ok) return { state: 'ready', progress: result.data };
   if (isSignedOut(result.error)) return { state: 'signedOut' };
   if (isApiUnavailable(result.error)) return { state: 'unavailable', reason: result.error.message };
-  // Anything else — a 404 on a path this client built, a 500 — is a defect rather than a fact about
-  // the reader, and `isApiUnavailable` deliberately does not swallow a 404 into a quiet fallback.
+  // A 404 or 500 is a defect, not a fact about the reader, so it is not folded into a state.
   throw result.error;
 }

@@ -1,21 +1,7 @@
 /**
- * Who is at the table the reader actually joined, in one line.
- *
- * ## The defect
- *
- * `/play` is headed "Six-handed table" and its lede said "A private table against five bots" — true
- * of the bot table "Deal me in" builds, and false of the other two tables the same page seats a
- * reader at: the private table "Start a private table…" builds (two bots, three seats left for
- * people) and a friend's table reached by invite code. The audit at 308fadf read that lede over a
- * room line saying "3 at the table". The heading and the lede are rendered on the server from the
- * URL, before any room exists, so they cannot know which table it will be; the lede now says
- * something true of all three, and the composition is said here, where the room is already known.
- *
- * The heading stays: every room this page creates asks for six seats (`BOT_TABLE_REQUEST`,
- * `FRIENDS_TABLE_REQUEST`), and `chooseRoom` reuses only a room of that width.
- *
- * Counted from SEATED members. A member with `seat: null` is watching, holds no chair and is dealt
- * nothing, so counting them would report a seat as taken that anybody can sit in.
+ * Who is at the table the reader joined, in one line. The server-rendered lede cannot know which of
+ * the three tables `/play` seats a reader at, so the composition is said here. Counted from SEATED
+ * members, because a watcher holds no chair.
  */
 
 import type { RoomSummary } from '@prl/contracts';

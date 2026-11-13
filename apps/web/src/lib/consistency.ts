@@ -1,36 +1,9 @@
 /**
- * Judging a learner's action against the analysis — the display shape, over the shared rule.
- *
- * ## The rule is not here any more
- *
- * It is `judgeConsistency` in `@prl/poker-math/consistency`, and `apps/api/src/routes/content.ts`
- * calls the same function. That is a correction rather than a refactor. This file used to carry its
- * own rule — "consistent when the chosen action is within five chips of the best-valued row" — while
- * the server used a different one — "consistent when the action does at least as well as folding,
- * give or take one big blind". They disagreed in both directions, and since the learner reads this
- * one and the database records that one, the product could tell somebody their decision was
- * defensible and store the opposite. This file's own header used to argue that "two copies of a rule
- * about what counts as consistent would eventually be two different rules"; it was right, and the
- * second copy was across the package boundary rather than within it.
- *
- * The server's rule is the one that survived, because the difference was not a tolerance but a
- * question. Measuring against the best-valued row marks a call wrong for being worth slightly less
- * than a raise whose value depends on an *assumed* fold frequency — which is grading a learner
- * against an invented parameter, and the guardrails forbid grading at all.
- *
- * ## What is still this file's job
- *
- * The shape the screens render. `Consistency` carries the verdict alongside the two expected values
- * and the margin, and every screen that renders it shows all three, so a reader who disagrees with
- * an assumption can see exactly which number to disagree with. That is presentation, and it is why
- * this wrapper exists rather than the components calling the maths package directly.
- *
- * ## Why this is not a score, and how the shape enforces that
- *
- * The product guardrails forbid calling anything "correct" or "optimal", and they forbid scoring.
- * That is easy to honour in copy and easy to lose in code: the moment a component computes a boolean
- * called `right`, every label above it starts drifting towards a grade. So the question answered is
- * narrower than "was that a good decision?" — see `isDefensible` in the shared module.
+ * The display shape over `judgeConsistency` in `@prl/poker-math`, the rule the API also applies, so
+ * the screen and the stored attempt cannot disagree. The rule asks whether the action does at least as
+ * well as folding, within one big blind. It never measures against the best row.
+ * Every screen shows the verdict beside the figures it follows from, so a reader can see which number
+ * to dispute. Nothing here is a score (see `isDefensible`).
  */
 
 import type { ActionCandidate, CoachReport } from '@prl/contracts';
@@ -53,106 +26,40 @@ export interface Consistency {
   readonly bestEv: number;
   /** The action that carries `bestEv`, for naming it in the copy. */
   readonly bestAction: ScenarioAction | null;
-  /** The sizing on the best action, when it has one. */
   readonly bestTo: number | null;
-  /**
-   * `bestEv - chosenEv`, or null when there is nothing to compare.
-   *
-   * Reported because it is useful to see, and deliberately NOT what decides `consistent`: the rule
-   * measures against folding, not against the best row. A large gap here with `consistent: true` is
-   * the normal case in a spot where two lines are both defensible, and saying so is the point.
-   */
+  /** `bestEv - chosenEv`. Shown, but NOT what decides `consistent`, which measures against folding. */
   readonly gapUnits: number | null;
-  /**
-   * The indifference margin the verdict used, in chips — one big blind at these stakes.
-   *
-   * Displayed rather than hidden, because a threshold a reader cannot see is a threshold they cannot
-   * argue with.
-   */
+  /** The margin the verdict used, one big blind, in chips. Shown so a reader can argue with it. */
   readonly toleranceUnits: number;
   /**
-   * How far behind the benchmark the chosen action came out, in chips. Zero when it is consistent.
-   *
-   * THIS is the figure the verdict is decided on, and it was not surfaced until 2026-08-27. The
-   * Verdict panel showed the chosen EV, the best row, and the tolerance — three numbers whose only
-   * natural reading is "consistent when best minus mine is inside the tolerance", which is not the
-   * rule. So a learner saw +20.6 against a best row of +51.4, a tolerance of 10, and the words
-   * "consistent with the analysis", and had every reason to think the panel was broken.
-   *
-   * It is no longer PRINTED, though: zero inside the allowance is right for "how far outside it"
-   * and wrong under any label a reader takes as "how far behind". The panel prints
-   * `behindBenchmarkUnits` and `withinAllowance` instead — see the first.
+   * How far outside the allowance the action came out, in chips. Zero when consistent, so it is never
+   * printed. The panel prints `behindBenchmarkUnits` and `withinAllowance` instead.
    */
   readonly shortfallUnits: number;
   /**
-   * The benchmark the verdict measured against: zero for any action but a fold, because the rule
-   * asks whether the action beats folding. For a fold it is the best row that does NOT rest on an
-   * assumed fold frequency — quoting a bet's fold equity at somebody who folded would be quoting
-   * an assumption at them. `@prl/poker-math` publishes it as `measuredBestEv` for exactly this.
+   * Zero for any action but a fold, since the rule asks whether it beats folding. For a fold, the best
+   * row that does not rest on an assumed fold frequency (`measuredBestEv`).
    */
   readonly benchmarkEv: number;
   /**
-   * Whether the analysis priced this decision at all, and if not, which half was missing.
-   *
-   * `@prl/poker-math` carries the warning this field exists for, in as many words: "A caller that
-   * renders the boolean without reading `pricing` will tell somebody their decision disagreed with
-   * an analysis that never looked at it." This layer did not carry the field at all, so
-   * `ScenarioStage` had a binary chip and an unpriced size got "not the line the analysis leans
-   * towards" — a verdict on a decision nothing had judged.
-   *
-   * It happens on ordinary use. The Coach prices discrete rungs while the ActionBar exposes a
-   * continuous range, so a panel reading "Raise — 51 to 95 units" accepts 70 and prices neither 70
-   * nor anything between the two ends.
+   * Whether the analysis priced this decision, and if not, which half was missing. A screen must read
+   * it, because the Coach prices discrete rungs while the ActionBar accepts any size in a range.
    */
   readonly pricing: ConsistencyPricing;
   /**
-   * `benchmarkEv - chosenEv`: how far the chosen action is BEHIND the benchmark, signed, so a
-   * negative figure is an action ahead of it. Null when the action was not priced.
-   *
-   * Not `shortfallUnits`, and the difference is the defect this field was added for. The shared rule
-   * zeroes the shortfall for a consistent action on purpose — it is "how far outside the allowance",
-   * which inside the allowance is nothing — and the Verdict panel printed it under "Shortfall against
-   * that". Measured at commit 308fadf: "Your action is worth −2.9 units … Judged against: folding,
-   * worth 0 … Shortfall against that: 0.0 units, against an allowance of 10 units". The action was
-   * 2.9 units behind folding and the panel said 0.0. The distance and whether it fits the allowance
-   * are two facts, and the panel now prints them as two.
+   * `benchmarkEv - chosenEv`, signed, null when unpriced. Not `shortfallUnits`, which is zero inside the
+   * allowance and once printed 0.0 for an action 2.9 units behind folding.
    */
   readonly behindBenchmarkUnits: number | null;
-  /**
-   * Whether `behindBenchmarkUnits` fits inside `toleranceUnits` — which, for a priced action, is the
-   * verdict itself (`isDefensible` in `@prl/poker-math`), restated beside the two figures it follows
-   * from. Null when the action was not priced: there is no distance for an allowance to contain.
-   */
+  /** Whether `behindBenchmarkUnits` fits `toleranceUnits`, which is the verdict. Null when unpriced. */
   readonly withinAllowance: boolean | null;
-  /**
-   * For a size the analysis did not price, the priced sizes of the same action either side of it;
-   * null in every other case.
-   *
-   * "This analysis did not price that size" was the whole message, which is true and leaves the
-   * reader nowhere to go. Every size a button produces is priced now (`offeredSizes` in
-   * `@prl/poker-math`), so this is reached only by typing or dragging to a total in between, and
-   * naming the neighbours is what turns the refusal into a next step.
-   */
+  /** For an unpriced size, the priced sizes either side of it, so the refusal names a next step. */
   readonly nearestPriced: { readonly below: number | null; readonly above: number | null } | null;
 }
 
 /**
- * Compares one action against the report's own candidate table.
- *
- * `bigBlind` should always be passed, and every caller in this app does. It stays optional only
- * because the shared rule's own parameter is: `judgeConsistency` in `@prl/poker-math` falls back to
- * one chip when nobody states the stakes.
- *
- * There was briefly a second way to supply it — a report with `bigBlind` attached (`stakedReport`),
- * so the denominator travelled inside the data and no signature had to mention it — which is how
- * `ScenarioStage` used to receive it. That is exactly why it stopped: an invisible dependency is one
- * a caller can drop without a compile error, and dropping it here means the browser judges against
- * the one-chip fallback while the server grades against a twenty-chip margin. `ScenarioStage` takes
- * `bigBlind` as a required prop now, and the attached-stakes helpers have been deleted rather than
- * left standing as a second, quieter way to do it.
- *
- * When neither is available the shared rule falls back to one chip, the strictest margin it allows —
- * an unstated big blind can widen nothing.
+ * Every caller should pass `bigBlind`. Without it the shared rule falls back to one chip, the
+ * strictest margin, while the API grades at the real big blind.
  */
 export function judgeConsistency(
   report: CoachReport,
@@ -190,13 +97,7 @@ export function judgeConsistency(
   };
 }
 
-/**
- * The sentence that names the priced sizes nearest an unpriced one, in the units the bar shows.
- *
- * Kept beside the judgement rather than in the component so it can be tested: JSX cannot run under
- * `node:test` here. The formatter is passed in — the component hands it `formatUnits` — because
- * `@prl/ui`'s entry point carries JSX this module's tests cannot load.
- */
+/** Outside the component so `node:test` can run it. `units` is passed in because `@prl/ui` carries JSX. */
 export function nearestPricedSentence(
   action: ScenarioAction,
   nearest: { readonly below: number | null; readonly above: number | null },
@@ -214,13 +115,8 @@ export function nearestPricedSentence(
 }
 
 /**
- * The actions whose rows rest on an assumed fold frequency, in table order, each named once.
- *
- * For the Lab's insight callout, which used to say "the row it moves is the raise row" under every
- * verdict. The bundled `flop-spr-commitment` prices BET rows, and a spot where every opponent is
- * already all in has no aggressive row and no fold assumption at all — the sentence pointed at a
- * row that was not on the table. A row carries `foldEquityAssumed` exactly when its figure depends
- * on one, so that field, not the action name, is the test.
+ * The actions whose rows rest on an assumed fold frequency, in table order. Tested by
+ * `foldEquityAssumed`, not the action name, because some spots have bet rows or no aggressive row.
  */
 export function foldAssumingActions(report: CoachReport): readonly ScenarioAction[] {
   const actions: ScenarioAction[] = [];

@@ -1,42 +1,11 @@
 /**
- * Every figure a lesson or a quiz shows, computed from the situation the content stored.
- *
- * ## The rule this file exists to enforce
- *
- * ADR 0006: content stores situations, never answers. A lesson block says "the pot is 120 and
- * it costs 60 to call"; it does not say "you need 33.3%". So this module is the single place
- * that turns a `LiveCalculation` into numbers, and it is deliberately the *only* way the Learn
- * screens can obtain one. There is no hard-coded percentage anywhere in `src/app/learn` or
- * `src/components`, and if a figure ever appears there it is a bug this module's existence is
- * meant to make obvious.
- *
- * The same function serves a lesson's embedded calculation and a numeric quiz question's
- * expected answer. That is not code-sharing for tidiness: a quiz whose expected answer came
- * from a different computation than the lesson's worked example is a quiz that can mark a
- * learner wrong for correctly following the lesson.
- *
- * ## The shape, and why it is not just a number
- *
- * `CalculationResult` carries four things beside the figures — the *inputs* it was given, the
- * *method* used, the *working*, and the *assumptions*. §6.2 of the design system: "a bare
- * percentage with no method is a bug, not a style choice". Making all four non-optional parts
- * of the return type means a caller cannot render the number and quietly drop the caveat.
- *
- * ## Scales, and the silent factor of 100
- *
- * `@prl/poker-math` is careful about units and this module has to be too. Probabilities come
- * back as fractions in 0..1 (`breakEvenEquity`, `probabilityOfLoss`), the rule-of-thumb figure
- * comes back in percentage POINTS (`estimatePercent`), and chip amounts are chips. A quiz
- * question declares the unit it wants an answer in. `CalculationScale` records which of those
- * a figure is actually in, and `toQuizUnit` is the one conversion — so a factor of 100 cannot
- * be applied twice, or forgotten, in eleven separate places.
- *
- * ## Nothing here throws
- *
- * Every entry point returns a discriminated outcome. A malformed card string, a negative pot or
- * an outs breakdown with no flop is a content defect, and the honest rendering is a sentence
- * saying which figure could not be computed and why — not a crashed lesson, and never a
- * plausible-looking number produced by a fallback.
+ * Every figure a lesson or quiz shows, computed from the situation the content stored (ADR 0006).
+ * Content never stores an answer, so this is the only source of a number on the Learn screens, and a
+ * quiz's expected answer comes from the same function as the lesson's worked example.
+ * A result always carries inputs, method, working and assumptions (design system §6.2).
+ * Units: probabilities are 0..1, `estimatePercent` is percentage points, chips are chips, and
+ * `toQuizUnit` is the one conversion. Nothing here throws. A content defect becomes a sentence, never
+ * a fallback number.
  */
 
 import type { LiveCalculation, QuizQuestion } from '@prl/contracts';
@@ -79,11 +48,7 @@ const SCALE_FORMAT: Readonly<Record<CalculationScale, MetricFormat>> = {
 };
 
 export interface CalculationFigure {
-  /**
-   * The name a numeric quiz question uses in its `field`. Matching the library's own field
-   * names (`breakEvenEquity`, `estimatePercent`, `cleanCount`) rather than inventing display
-   * keys is what lets `expectedAnswerFor` resolve a question without a translation table.
-   */
+  /** The quiz question's `field`. Library field names, so no translation table is needed. */
   readonly key: string;
   readonly label: string;
   readonly value: number;
@@ -105,13 +70,8 @@ export interface CalculationInput {
   readonly label: string;
   readonly text: string;
   /**
-   * When the parameter is cards: one engine-card group per holding (or one for a board), drawn as
-   * playing cards instead of `text`.
-   *
-   * `/learn/hand-flow` — the first lesson in reading order — showed its first live calculation's
-   * inputs as `AhKs` and `7c7d`, wire notation nobody has been taught yet, with no key. Everywhere
-   * else in the product a card is drawn with its suit glyph and named for a screen reader by
-   * `CardRow`, and these now are too. `text` stays as the row's identity and as the fallback.
+   * Cards to draw instead of `text`, one group per holding or board, so a reader not yet taught wire
+   * notation sees suit glyphs. `text` stays as the row's identity and the fallback.
    */
   readonly cards?: readonly (readonly number[])[];
 }
@@ -120,11 +80,9 @@ export interface CalculationMethod {
   readonly label: string;
   /** `=` for a figure that is exactly this, `≈` for one that is approximately this. §6.2. */
   readonly glyph: string;
-  /** How much work it took, in the units that matter for that method. */
   readonly note: string;
 }
 
-/** Kind-specific extras that are not a single figure. */
 export type CalculationDetail =
   | {
       readonly kind: 'outs';
@@ -170,30 +128,15 @@ export type CalculationOutcome =
   | { readonly ok: false; readonly reason: string };
 
 /**
- * Work above which a calculation is computed after mount instead of during render.
- *
- * The unit is `estimateExactWork(...).total`: matchups times board run-outs. Measured on this
- * machine, a flop match-up is 990 run-outs and takes under a millisecond, a turn is 44, a river
- * is 1 — all of which can be computed inline, which means they are in the server-rendered HTML
- * and are readable with JavaScript disabled. A preflop match-up is 1,712,304 run-outs and takes
- * roughly 260ms, which is a quarter of a second of blocked paint, so it waits.
- *
- * 20,000 sits an order of magnitude above the largest cheap case and two below the smallest
- * expensive one, so the classification does not depend on the exact figure.
+ * Work (`estimateExactWork(...).total`) above which a calculation runs after mount, not in render.
+ * Measured: a flop is 990 run-outs in under 1ms, preflop is 1,712,304 in about 260ms. 20,000 sits
+ * well clear of both, and inline figures stay in the server HTML.
  */
 export const INLINE_WORK_BUDGET = 20_000;
 
 /**
- * Whether this calculation must be computed after mount rather than during render.
- *
- * Only `equity` can be expensive, and how expensive depends entirely on how much of the board
- * is known — which is why this asks the library for a work estimate rather than treating a
- * whole calculation *kind* as slow. `outs` is bounded by construction: it needs a flop or a
- * turn, so it enumerates at most 45 cards against at most 44 run-outs each, which measured at
- * two milliseconds.
- *
- * An unparseable calculation reports `false` so that the error surfaces during render, where
- * there is somewhere honest to put it, rather than after a skeleton has already been shown.
+ * Only `equity` can be expensive, and only by how much board is known. `outs` is bounded (measured 2ms).
+ * An unparseable calculation reports `false` so its error surfaces during render.
  */
 export function isDeferred(calculation: LiveCalculation): boolean {
   if (calculation.kind !== 'equity') return false;
@@ -203,10 +146,6 @@ export function isDeferred(calculation: LiveCalculation): boolean {
     return false;
   }
 }
-
-// ---------------------------------------------------------------------------
-// Shared pieces
-// ---------------------------------------------------------------------------
 
 function equitySpec(calculation: Extract<LiveCalculation, { kind: 'equity' }>): {
   players: { label: string; range: ReturnType<typeof exactRange> }[];
@@ -223,16 +162,8 @@ function equitySpec(calculation: Extract<LiveCalculation, { kind: 'equity' }>): 
 }
 
 /**
- * A probability, for the input list.
- *
- * Every caller passes one — an equity, an assumed fold chance, an equity-when-called — so this
- * goes through the probability domain rather than through `formatPercent`. A lesson that stated
- * "Equity assumed: 160.0%" and then computed an EV from it would be teaching arithmetic that
- * cannot happen, in the one place in the product whose whole subject is that distinction.
- *
- * `formatProbability` returns null for a value outside 0..1 (with a floating-point tolerance), and
- * the input is then labelled as refused rather than dropped: an EV whose inputs are not all shown
- * is an EV a reader cannot check.
+ * Through the probability domain, so an out-of-range input reads as refused rather than "160.0%". It
+ * is still listed, because an EV with hidden inputs cannot be checked.
  */
 function percentInput(label: string, fraction: number): CalculationInput {
   return { label, text: formatProbability(fraction) ?? NOT_A_PROBABILITY };
@@ -254,28 +185,9 @@ const CLOSED_FORM: CalculationMethod = {
   note: 'Evaluated from the formula below, so the figure is exact given the inputs — which are not.',
 };
 
-// ---------------------------------------------------------------------------
-// One resolver per calculation kind
-// ---------------------------------------------------------------------------
-
 /**
- * The price of a call, as figures.
- *
- * The "Price offered" figure is published only when there is a price. `potOdds` reports
- * `oddsRatio: null` when nothing is being called — there is no "X to 1" for a free look — and a
- * `CalculationFigure` is a *number* with a scale, by design: `figureValue` hands it to `Metric`,
- * whose `value` is a number, and widening that to `number | null` would push "there might be no
- * figure here" into every metric the app draws to accommodate one case in one resolver.
- *
- * So the free case drops the figure and says so in the break-even note instead, which is
- * accurate: the whole content of "there is no price" is already carried by a break-even equity
- * of 0% and by the derivation underneath. What must never happen is a figure whose value is
- * `0`, which is a real price and the worst one there is.
- *
- * Nothing in the shipped content reaches this branch — every bundled `potOdds` calculation has a
- * positive `toCall` — and a numeric question that asked for `oddsRatio` on a free call would be
- * refused by `expectedFromResult` as a field this calculation does not produce, which is the
- * right place for that content bug to surface.
+ * A free call has no "X to 1", so the price figure is dropped and the note says so. A figure of `0`
+ * would claim the worst possible price, and `CalculationFigure.value` stays a number for `Metric`.
  */
 function resolvePotOdds(calculation: Extract<LiveCalculation, { kind: 'potOdds' }>): CalculationResult {
   const odds = potOdds(calculation.pot, calculation.toCall);
@@ -641,7 +553,6 @@ function resolveRiskOfRuin(calculation: Extract<LiveCalculation, { kind: 'riskOf
   };
 }
 
-/** One holding or one board, as an input drawn in cards. The calculation has already parsed it. */
 function cardInput(label: string, notation: string): CalculationInput {
   return { label, text: notation, cards: [parseCards(notation)] };
 }
@@ -779,17 +690,7 @@ function resolveOuts(calculation: Extract<LiveCalculation, { kind: 'outs' }>): C
   };
 }
 
-// ---------------------------------------------------------------------------
-// Entry points
-// ---------------------------------------------------------------------------
-
-/**
- * Dispatch, exhaustive over the union.
- *
- * A `switch` with a `never`-typed default rather than a lookup object, so adding a tenth
- * `LiveCalculation` kind to the contract is a compile error here instead of a lesson block that
- * silently renders nothing.
- */
+/** A `switch` with a `never` default, so a new `LiveCalculation` kind is a compile error here. */
 function resolve(calculation: LiveCalculation): CalculationResult {
   switch (calculation.kind) {
     case 'potOdds':
@@ -819,14 +720,7 @@ function resolve(calculation: LiveCalculation): CalculationResult {
   }
 }
 
-/**
- * The figures for one calculation, or a sentence explaining why there are none.
- *
- * The `catch` is the whole reason this returns an outcome rather than a result. `@prl/poker-math`
- * throws typed errors whose messages are teaching text — "computeOuts needs a flop (3 cards) or
- * a turn (4 cards), received 5" — so the honest thing to show a reader is that sentence, not a
- * blank space where a number was meant to be.
- */
+/** `@prl/poker-math` errors are teaching text, so a failure returns that sentence for the reader. */
 export function computeCalculation(calculation: LiveCalculation): CalculationOutcome {
   try {
     return { ok: true, result: resolve(calculation) };
@@ -835,19 +729,9 @@ export function computeCalculation(calculation: LiveCalculation): CalculationOut
   }
 }
 
-// ---------------------------------------------------------------------------
-// Numeric quiz answers
-// ---------------------------------------------------------------------------
-
 type QuizUnit = LeafQuizUnit;
 
-/**
- * Converts a figure from its native scale into the unit a question asks for.
- *
- * Strict on purpose: `null` for any pairing that is not a real conversion. A question asking for
- * a percentage against a figure measured in chips is a content defect, and answering it with the
- * raw number would mark every learner wrong against a meaningless target.
- */
+/** `null` for any pairing that is not a real conversion. That is a content defect, not a target. */
 function toQuizUnit(value: number, scale: CalculationScale, unit: QuizUnit): number | null {
   if (unit === 'percent') {
     if (scale === 'fraction') return value * 100;
@@ -865,9 +749,7 @@ export interface ExpectedAnswer {
   readonly value: number;
   readonly unit: QuizUnit;
   readonly tolerance: number;
-  /** The figure it came from, so the working can be shown beside it. */
   readonly figure: CalculationFigure;
-  /** Everything about the computation, for the "how this was worked out" panel. */
   readonly result: CalculationResult;
 }
 
@@ -875,14 +757,7 @@ export type ExpectedAnswerOutcome =
   | { readonly ok: true; readonly expected: ExpectedAnswer }
   | { readonly ok: false; readonly reason: string };
 
-/**
- * The expected answer, given a result that has already been computed.
- *
- * Split out from `expectedAnswerFor` because `QuizRunner` obtains the result through the same
- * deferred hook a lesson uses — a preflop equity question would otherwise block the click that
- * submitted the answer for a quarter of a second. Both paths end here, so there is one
- * definition of what the target is.
- */
+/** Split out so `QuizRunner` can pass a result from the deferred hook. Both paths end here. */
 export function expectedFromResult(
   result: CalculationResult,
   question: Extract<QuizQuestion, { kind: 'numeric' }>,
@@ -910,13 +785,7 @@ export function expectedFromResult(
   };
 }
 
-/**
- * The expected answer to a numeric question, computed from its `calculation` and `field`.
- *
- * Never read from the content, because the content does not contain it — that is the point of
- * ADR 0006 and it is what makes a quiz answer impossible to get out of step with the maths the
- * lesson taught.
- */
+/** Never read from the content, which does not contain it (ADR 0006). */
 export function expectedAnswerFor(
   question: Extract<QuizQuestion, { kind: 'numeric' }>,
 ): ExpectedAnswerOutcome {
@@ -926,17 +795,8 @@ export function expectedAnswerFor(
 }
 
 /**
- * Re-exported from `lib/quiz-tolerance.ts` rather than defined here.
- *
- * They moved to a leaf module so `formatTolerance` below could be tested: this file imports runtime
- * values from `@prl/ui`, whose entry point re-exports `.tsx`, and nothing that does can be loaded
- * by `node --test` in this repository. See that file's header for the defect that made it necessary
- * — a hint that stated a tolerance twice the size of the one the grader applies.
- *
- * `withinTolerance` went the same way and for the same reason, once it turned out to have a defect
- * of its own: the band it ACCEPTED was narrower than the band the hint STATES, for some magnitudes,
- * and no test in this app could reach it to say so. `quiz-tolerance.test.ts` now drives the real
- * function rather than a restatement of it.
+ * Defined in the leaf `lib/quiz-tolerance.ts` so `node --test` can load them. This file imports
+ * `@prl/ui`, which re-exports `.tsx`.
  */
 export { QUIZ_UNIT_DECIMALS, QUIZ_UNIT_WORDS, withinTolerance } from './quiz-tolerance.ts';
 
@@ -946,25 +806,8 @@ export function formatQuizValue(value: number, unit: QuizUnit): string {
 }
 
 /**
- * The question's tolerance, at enough precision to be TRUE.
- *
- * ## The defect this exists for
- *
- * The hint under the numeric field used to render the tolerance with `QUIZ_UNIT_DECIMALS`, which is
- * the number of decimals a FIGURE in that unit is worth showing. For `count` and `hands` that is
- * zero, and a tolerance is not a figure of the same size: `counting-outs-q4` declares
- * `tolerance: 0.5`, `(0.5).toFixed(0)` is `"1"`, and the field said
- *
- *     "Anything within 1 cards of the computed figure is accepted."
- *
- * Measured on `/learn/counting-outs` in Chrome 151, stepping to the numeric question. The rule
- * `withinTolerance` actually applies is `|answer − expected| <= 0.5`, so only the exact integer is
- * accepted: a learner who answered 8 to an answer of 9 did precisely what the hint told them was
- * allowed and was refused — by a sentence that had rounded its own rule to twice its size.
- *
- * So the tolerance is shown with one more decimal than the unit whenever the unit's own precision
- * cannot represent it. Rounding a figure is a presentation choice; rounding the RULE the figure is
- * checked against is a false statement about what will be accepted.
+ * One more decimal than the unit when the unit cannot represent the tolerance. `0.5` at zero decimals
+ * printed "within 1 cards", twice the rule `withinTolerance` applies.
  */
 export function formatTolerance(tolerance: number, unit: QuizUnit): string {
   return formatChips(tolerance, {
@@ -978,12 +821,8 @@ export function figureFormat(figure: CalculationFigure): MetricFormat {
 }
 
 /**
- * The value to hand `Metric`, which expects a fraction for `percent`.
- *
- * A `points` figure is already ×100, so it is divided back down here rather than being rendered
- * with a "points" unit. `36 %` is what the rule of 2 and 4 is taught as, and printing it as
- * "36 points" beside an exact equity of "35 %" invites the reading that they are different
- * quantities when the whole teaching point is that they are estimates of the same one.
+ * `Metric` expects a fraction for `percent`. A `points` figure is divided back so the rule of 2 and 4
+ * reads as a percentage beside the exact equity, since both estimate the same quantity.
  */
 export function figureValue(figure: CalculationFigure): number {
   return figure.scale === 'points' ? figure.value / 100 : figure.value;

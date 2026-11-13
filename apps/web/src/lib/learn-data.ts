@@ -1,37 +1,9 @@
 /**
- * Where the Learn screens get their content, and the paths they get it from.
- *
- * ## The fixture is a fallback, never a disguise
- *
- * Every loader tries the API and falls back to a typed fixture, returning **which of the two it
- * used** alongside the data. The screens render a visible notice when the source is `fixture`,
- * because a product whose subject is how much confidence a number deserves cannot itself present
- * sample data as live data. The source is part of the return type, so a screen cannot read the
- * content without having been handed its provenance next to it.
- *
- * It is also simply the normal case for now: `apps/api/src/routes/content.ts` is being written in
- * parallel with these screens, and CI renders them with no database.
- *
- * This mirrors `legends-data.ts` deliberately — same `…Data<T>` envelope, same `live`/`sampled`
- * helpers, same shared path table — so that two features written by two people behave the same way
- * when the API is down.
- *
- * ## The fallback is now narrow, and that is the point
- *
- * These loaders used to sample the fixture on *any* failure. They no longer do: only a condition
- * that means "there is no API" selects the fixture (see `isApiUnavailable`). A 404 on the lesson
- * index reaches the error boundary, because the index has no identifier that can be missing and a
- * 404 there can only mean this client asked for a path the API does not serve — which is what
- * happened for the whole build-out, invisibly, while every screen quietly rendered bundled copy.
- * A 404 on one lesson id is different and is handled as one: it is `null`, and the page turns it
- * into a not-found screen.
- *
- * ## What is NOT fetched
- *
- * Any figure. The API sends lessons, quizzes and glossary entries; it sends no computed number,
- * because the content contains none (ADR 0006). Every percentage on a Learn screen is computed
- * in the browser by `learn-calculations.ts`, which means these screens show real arithmetic even
- * when the content they are wrapped around came from a fixture.
+ * Where the Learn screens get their content. Every loader tries the API and falls back to a typed
+ * fixture, returning which source it used, so a screen showing sample data must say so.
+ * Only "there is no API" (`isApiUnavailable`) selects the fixture. Any other failure throws, and a
+ * 404 on one lesson id is `null`, a not-found page. No figure is fetched (ADR 0006), because
+ * `learn-calculations.ts` computes them all.
  */
 
 import type { ContentId, GlossaryResponse, LessonListResponse, LessonResponse } from '@prl/contracts';
@@ -89,14 +61,7 @@ export async function loadLessonList(): Promise<LearnData<LessonListResponse>> {
   return sampled(LEARN_LESSON_LIST_FIXTURE, `${LESSONS_FALLBACK} (${result.error.message})`);
 }
 
-/**
- * One lesson, or `null` when neither source has it.
- *
- * `null` is what the page turns into a 404, and it now has two causes worth telling apart in the
- * code even though the reader sees the same screen: the API answered 404 for this id, or there is
- * no API and the bundled copy does not carry this lesson body either. The fixture carries eight of
- * the seventeen, so the second case is real whenever the content service is down.
- */
+/** `null` when the API answers 404, or when there is no API and the fixture (8 of 17) lacks the body. */
 export async function loadLesson(lessonId: ContentId): Promise<LearnData<LessonResponse> | null> {
   const result = await safeFetch<LessonResponse>(() => apiGet<LessonResponse>(API_PATHS.lesson(lessonId)));
   if (result.ok) return live(result.data);
@@ -115,11 +80,5 @@ export async function loadGlossary(): Promise<LearnData<GlossaryResponse>> {
   return sampled(LEARN_GLOSSARY_FIXTURE, `${GLOSSARY_FALLBACK} (${result.error.message})`);
 }
 
-/**
- * Which lesson bodies this build can render without the API.
- *
- * The index uses it to say so on the card rather than sending a reader to a page that has to
- * apologise. Derived from the fixture instead of being listed by hand, so adding a lesson body to
- * the fixture updates the index with no second edit.
- */
+/** Derived from the fixture, so a new bundled body updates the index with no second edit. */
 export const READABLE_LESSON_IDS: readonly ContentId[] = LEARN_LESSONS.map((lesson) => lesson.id);
