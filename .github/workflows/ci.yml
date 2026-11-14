@@ -156,7 +156,8 @@ jobs:
           if [ "$EVENT" = pull_request ]; then base=HEAD^1; else base="$BEFORE"; fi
           code=true
           if git rev-parse --verify --quiet "${base}^{commit}" >/dev/null; then
-            files=$(git diff --name-only "$base" HEAD) || files=''
+            # --no-renames, or `a.ts` renamed to `a.ts.md` lists only the new name and reads as docs.
+            files=$(git diff --no-renames --name-only "$base" HEAD) || files=''
             if [ -n "$files" ] && ! printf '%s\n' "$files" | grep -qv '\.md$'; then code=false; fi
             printf 'changed:\n%s\n' "$files"
           fi
