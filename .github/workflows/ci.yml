@@ -1,16 +1,13 @@
-# ---------------------------------------------------------------------------
 # Continuous integration for Poker Risk Lab.
 #
-# ## Why this file looks paranoid
+# ## Pinning
 #
-# The repo's whole dependency policy is "mutable references are how supply-chain
-# attacks land" (see pnpm-workspace.yaml and docs/security/). A workflow that
-# writes `uses: actions/checkout@v7` throws that away: the tag is a moving
-# pointer that the action's owner — or anyone who compromises them — can
-# repoint at new code, which then runs inside this repo's CI with whatever
-# permissions the job has. So every `uses:` here is a full 40-character commit
-# SHA, with a comment naming the version it resolves to. Refreshing one is a
-# reviewed diff, not a silent upgrade.
+# A tag such as `uses: actions/checkout@v7` is a moving pointer its owner, or anyone who compromises
+# them, can repoint at new code that then runs here with the job's permissions. So every `uses:` is a
+# full 40-character commit SHA with a comment naming the version it resolves to, and refreshing one is
+# a reviewed diff. `scripts/supply-chain/ci-pinning.mjs` enforces this in the release audit: it fails
+# on an unpinned `uses:`, a floating `runs-on: *-latest`, an undigested service container, an unpinned
+# Dockerfile `FROM`, or a workflow file not declared in `EXPECTED_WORKFLOWS`.
 #
 # How the SHAs below were obtained (repeat this to refresh them):
 #
@@ -25,82 +22,48 @@
 #
 # ## Secrets
 #
-# No job in this workflow needs a secret, and none is referenced. There is
-# nothing to publish, no registry to push to, no deployment, and no bot
-# account. `permissions: contents: read` at the top level is therefore the
-# complete set of privileges CI requires; nothing below widens it. If a future
-# job genuinely needs a token, give it to that job alone and say why.
+# No job needs a secret and none is referenced, so `permissions: contents: read` at the top level is
+# the complete set of privileges and nothing below widens it. A job that one day needs a token gets it
+# alone, with the reason beside it.
 #
 # ## Why `supply-chain` gates everything
 #
-# Running lint, tests and builds against a dependency graph that has not been
-# audited means executing unaudited third-party code before deciding whether it
-# is safe. The audit runs first and every other job `needs:` it, so a
-# compromised or newly-vulnerable dependency stops the run at step one.
+# Linting, testing or building an unaudited dependency graph executes unaudited third-party code
+# before deciding whether it is safe, so every other job `needs:` the audit.
 #
 # ## Why every install passes `--ignore-scripts`
 #
-# pnpm-workspace.yaml already sets `ignoreScripts: true`, so the flag changes
-# nothing about what these jobs do today. It changes what they DEPEND ON. Both
-# Dockerfiles pass the flag explicitly and say why in a comment — "the build does
-# not depend on that file continuing to say so" — and every install in this
-# workflow depended on exactly that. One edit to pnpm-workspace.yaml, in a diff
-# about something else entirely, would have re-enabled arbitrary install-time code
-# execution in every installing job in this workflow while the release images
-# stayed safe. Install-time lifecycle hooks are the campaign's Pattern A delivery
-# mechanism (docs/security/shai-hulud-snapshot-2026-08-17.md), and the gate that
-# watches for them (`dep-shapes.mjs`) runs AFTER the install that would already
-# have executed them. Recorded as residual SUP-020; the flag is the fix.
+# pnpm-workspace.yaml already sets `ignoreScripts: true`; the flag makes these jobs stop depending on
+# that file continuing to say so, as both Dockerfiles already do. Install-time lifecycle hooks are the
+# campaign's Pattern A delivery mechanism (docs/security/shai-hulud-snapshot-2026-08-17.md), and the
+# gate that watches for them (`dep-shapes.mjs`) runs after the install that would have executed them.
+# Residual SUP-020; the flag is the fix.
 #
 # ## Why there is no dependency cache
 #
-# Deliberate. A restored `actions/cache` entry is a mutable artifact that is
-# trusted by path, and cache scoping across refs is a well-known route into a
-# build. This project's dependency tree installs in roughly fifteen seconds, so
-# the cache would buy very little and cost one more action and one more trust
-# boundary. If install time ever becomes the bottleneck, pin the cache action by
-# SHA and say here what changed.
-#
-# The paragraphs above used to be the *only* thing holding the pinning rule.
-# `scripts/supply-chain/ci-pinning.mjs` now reads this file and fails the release
-# audit on an unpinned `uses:`, a floating `runs-on: *-latest`, an undigested
-# service container, an unpinned Dockerfile `FROM`, or a workflow file that is
-# not declared in `EXPECTED_WORKFLOWS`. A comment is guidance; a gate is a rule.
+# A restored `actions/cache` entry is a mutable artifact trusted by path, and cache scoping across refs
+# is a known route into a build. The tree installs in roughly fifteen seconds, so a cache would buy
+# little for one more action and one more trust boundary. If that changes, pin the cache action by SHA.
 #
 # ## Which identity the database jobs connect as
 #
-# `db/migrations/0001_initial.sql` defines a two-role model: `prl_migrator` owns
-# the schema, `prl_app` is the runtime role and holds the narrowest per-table
-# verb set the API actually needs (no CREATE, no DROP, no TRUNCATE, no DELETE on
-# the append-only tables). Both are `NOLOGIN` privilege containers; a real login
-# identity is granted membership out of band.
+# `db/migrations/0001_initial.sql` defines two `NOLOGIN` privilege containers: `prl_migrator` owns the
+# schema, and `prl_app` holds the narrowest per-table verb set the API needs (no CREATE, no DROP, no
+# TRUNCATE, no DELETE on the append-only tables). A real login identity is granted membership out of
+# band.
 #
-# Every CI job used to connect as the `postgres` superuser, so the model was
-# enforced by nothing that runs automatically and a missing GRANT in a future
-# migration would have surfaced first in production. The `end-to-end` and `a11y`
-# jobs — the two whose database access is purely the application's own runtime
-# path — now create a login role `prl_ci_app`, grant it `prl_app`, and run the
-# server as that. Migration and seeding keep the privileged identity, because
-# creating roles and owning a schema is exactly what the runtime role must not be
-# able to do.
-#
-# The `test` job now runs as `prl_ci_app` too. It could not before: the fixture
-# helper cleaned up with `delete from prl.rooms`, on which `prl_app` holds only
-# SELECT/INSERT/UPDATE. That was the privilege model working as designed, so the
-# fix went into the helper — it issues that one delete as the schema-owning
-# identity via `DATABASE_URL_ADMIN` — rather than into the grants. Two coverage
-# files legitimately need more as well (they create throwaway databases and run
-# ALTER/GRANT/REVOKE to prove the schema gate can fail), and they ask for the
-# admin DSN explicitly. Everything else in the suite runs with the verb set the
-# API actually has.
-# ---------------------------------------------------------------------------
+# `test`, `end-to-end`, `a11y` and `ax-tree` run as a login role `prl_ci_app` that is a member of
+# `prl_app` and nothing else, so a missing GRANT fails CI rather than production. Migrating, seeding
+# and creating that role keep the privileged identity, because owning a schema and creating roles are
+# exactly what the runtime role must not be able to do. The tests that legitimately need more (the
+# fixture helper's `delete from prl.rooms`, and two coverage files that create throwaway databases and
+# run ALTER/GRANT/REVOKE to prove the schema gate can fail) ask for `DATABASE_URL_ADMIN` explicitly.
 
 name: CI
 
-# Pull requests, and pushes to main. A push to a PR branch used to start a second,
-# identical run under a different ref, which the concurrency group could not
-# cancel; every change reaches main through a PR, so the PR run is the one that
-# gates it. A branch with no PR gets no CI until one is opened.
+# Every change reaches main through a PR, so the PR run is the one that gates it; running on branch
+# pushes as well would start a duplicate under a different ref that the concurrency group cannot
+# cancel. A branch with no PR gets no CI until one is opened.
 on:
   push:
     branches: [main]
@@ -125,13 +88,10 @@ env:
   NPM_CONFIG_UPDATE_NOTIFIER: 'false'
 
 jobs:
-  # -------------------------------------------------------------------------
-  # 0. What changed. A change of Markdown files alone runs the jobs that read
-  #    docs (supply-chain, lint, test) and skips the rest: `.dockerignore`
-  #    keeps every `*.md` out of the images, and no browser, build or end-to-end
-  #    script reads one. A skipped job satisfies a required check. Anything this
-  #    step cannot classify counts as code, so the failure mode is a full run.
-  # -------------------------------------------------------------------------
+  # A change of Markdown files alone runs only the jobs that read docs (supply-chain, lint, test):
+  # `.dockerignore` keeps every `*.md` out of the images, and no browser, build or end-to-end script
+  # reads one. A skipped job satisfies a required check. Anything this step cannot classify counts as
+  # code, so the failure mode is a full run.
   changes:
     name: Classify the change
     runs-on: ubuntu-24.04
@@ -164,9 +124,6 @@ jobs:
           echo "code=$code"
           echo "code=$code" >> "$GITHUB_OUTPUT"
 
-  # -------------------------------------------------------------------------
-  # 1. The gate. Everything else needs this.
-  # -------------------------------------------------------------------------
   supply-chain:
     name: Supply-chain audit (gate)
     runs-on: ubuntu-24.04
@@ -182,10 +139,8 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          # .node-version is the single source of truth shared with local dev and
-          # the Dockerfiles. `engineStrict: true` makes a mismatch a hard failure,
-          # which is what we want — silently testing on a different Node than we
-          # ship is worse than a red build.
+          # .node-version is shared with local dev and the Dockerfiles, and `engineStrict: true` makes a
+          # mismatch a hard failure rather than a test run on a different Node than ships.
           node-version-file: .node-version
 
       - name: Enable corepack (pins pnpm via the packageManager integrity hash)
@@ -197,22 +152,17 @@ jobs:
           pnpm --version
 
       - name: Install
-        # --frozen-lockfile, never --no-frozen-lockfile: CI must fail when the
-        # lockfile and the manifests disagree, not quietly resolve a new graph.
-        # --ignore-scripts: see the header. Every install in this file carries it,
-        # and it must stay on all of them — one job without it is one job that runs
-        # a compromised dependency's postinstall.
+        # --frozen-lockfile: CI must fail when the lockfile and the manifests disagree, not quietly
+        # resolve a new graph. --ignore-scripts: see the header; every install in this file carries it,
+        # because one job without it is one job that runs a compromised dependency's postinstall.
         run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Audit
         run: pnpm run security:audit
 
       - name: Repo hygiene
-        # `security:audit` already runs this gate as one of its eight, so this step is normally a
-        # second pass over the same files — about a second. It is named separately anyway because
-        # the gate now carries the repo-wide `Math.random` ban (previously enforced over 2 of 8
-        # source trees), and a rule that release-blocks deserves to be visible by name in the run
-        # rather than buried inside an aggregate.
+        # `security:audit` already runs this gate. It is repeated by name because it carries the
+        # repo-wide `Math.random` ban, and a release-blocking rule should be visible in the run.
         run: pnpm run security:hygiene
 
       - name: Upload SBOM and supply-chain reports
@@ -231,24 +181,8 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-  # -------------------------------------------------------------------------
-  # 2. Lint. No build needed: Biome reads source, not types.
-  #
-  # `design:contrast` used to run here, under a comment claiming it "needs no
-  # build and no browser". That stopped being true at b9687b1, which gave the
-  # gate a THIRD pass — every element carrying text, composited in real Chrome,
-  # on every route in both themes — and did not update this job. So the step
-  # could not pass: `next start` in a job that never built the web app prints
-  # "Could not find a production build in the '.next' directory", and the gate
-  # correctly refuses rather than skipping. Reproduced exactly, by moving
-  # `apps/web/.next` aside and running the gate with a runner-shaped
-  # environment: "FAIL painted layer (real Chrome, every ancestor composited)
-  # 2 finding(s) — the painted layer could not be measured: web exited (1)
-  # before it was ready", exit 1.
-  #
-  # It now runs in `browser-gates` below, which builds the app and resolves a
-  # browser, alongside the other two gates that need exactly those two things.
-  # -------------------------------------------------------------------------
+  # No build needed: Biome reads source, not types. `design:contrast` is in `browser-gates`, because
+  # its third pass composites in real Chrome against a production build.
   lint:
     name: Lint
     needs: supply-chain
@@ -274,9 +208,6 @@ jobs:
       - name: Lint
         run: pnpm run lint
 
-  # -------------------------------------------------------------------------
-  # 3. Typecheck.
-  # -------------------------------------------------------------------------
   typecheck:
     name: Typecheck
     needs: [supply-chain, changes]
@@ -311,9 +242,7 @@ jobs:
       - name: Typecheck
         run: pnpm run typecheck
 
-  # -------------------------------------------------------------------------
-  # 4. Unit + integration tests. The integration suite needs a real database.
-  # -------------------------------------------------------------------------
+  # Unit and integration tests. The integration suite needs a real database.
   test:
     name: Tests
     needs: supply-chain
@@ -327,10 +256,8 @@ jobs:
         # postgres:16-bookworm
         image: postgres:16-bookworm@sha256:60f4761b9035e0b8d5218f701a8c3382f641bf12b1604822574cf5be3baeb537
         env:
-          # Throwaway credentials for an ephemeral container on a private network
-          # that is destroyed with the job. Not a secret, and deliberately not
-          # stored as one: a fake secret teaches people to look for secrets that
-          # are not there.
+          # Throwaway credentials for an ephemeral container destroyed with the job. Deliberately not
+          # stored as a secret: a fake secret teaches people to look for secrets that are not there.
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: poker_risk_lab_test
@@ -343,11 +270,9 @@ jobs:
           --health-retries 20
 
     env:
-      # The job default is the LEAST-PRIVILEGED identity, so a missing GRANT fails
-      # this build rather than a deployment. The steps that legitimately need more
-      # — waiting, migrating, creating the role, and the two coverage files that
-      # verify the schema gate and the migration runner — override it at step level
-      # with DATABASE_URL_ADMIN.
+      # The least-privileged identity by default (see the header). The steps that need more (waiting,
+      # migrating, creating the role, and the two coverage files that verify the schema gate and the
+      # migration runner) override it with DATABASE_URL_ADMIN.
       DATABASE_URL: postgres://prl_ci_app:prl-ci-not-a-secret@127.0.0.1:5432/poker_risk_lab_test
       DATABASE_URL_ADMIN: postgres://postgres:postgres@127.0.0.1:5432/poker_risk_lab_test
 
@@ -372,10 +297,9 @@ jobs:
         run: pnpm run build:packages
 
       - name: Wait for PostgreSQL
-        # The service container's own healthcheck already gates the job, but this
-        # also proves a connection string actually works, which is a far more
-        # useful failure than a timeout inside a test. Run as the admin identity,
-        # because the job's own role does not exist yet.
+        # The service healthcheck already gates the job; this also proves the connection string works,
+        # a more useful failure than a timeout inside a test. Admin, because the job's role does not
+        # exist yet.
         env:
           DATABASE_URL: ${{ env.DATABASE_URL_ADMIN }}
         run: pnpm run db:wait
@@ -387,10 +311,9 @@ jobs:
         run: pnpm run db:migrate
 
       - name: Grant a login identity membership of prl_app
-        # `prl_app` is NOLOGIN by design: a privilege container whose real login
-        # identity is granted membership out of band. This is that step, done the
-        # way a deployment would do it. The password is a throwaway for an
-        # ephemeral container destroyed with the job.
+        # `prl_app` is NOLOGIN by design (see the header): this grants a login identity membership the
+        # way a deployment would. The password is a throwaway for an ephemeral container destroyed with
+        # the job, deliberately not a repository secret, for the same reason the postgres one is not.
         env:
           PGPASSWORD: postgres
         run: |
@@ -416,21 +339,17 @@ jobs:
       - name: Verify the live schema's security properties
         env:
           DATABASE_URL: ${{ env.DATABASE_URL_ADMIN }}
-        # `db:verify` checks things no unit test can see: that `prl_app` has no privileges it should
-        # not, that the deck and salt columns do not exist, that every documented constraint is
-        # actually on the table. It passed and was run by no job.
+        # `db:verify` checks what no unit test can see: that `prl_app` has no privileges it should not,
+        # that the deck and salt columns do not exist, that every documented constraint is on the table.
         run: pnpm run db:verify
 
       - name: Test
-        # `DATABASE_URL` is set for this job, so the 57 database-backed tests RUN. They can no
-        # longer skip in silence either way: with no reachable database,
-        # `apps/api/test/database-availability.test.ts` fails the run, and the waiver that lets a
-        # developer past that is refused whenever `CI` is set.
+        # With `DATABASE_URL` set the database-backed tests run, and they cannot skip in silence: with no
+        # reachable database `apps/api/test/database-availability.test.ts` fails the run, and its
+        # developer waiver is refused whenever `CI` is set.
         run: pnpm run test
 
-  # -------------------------------------------------------------------------
-  # 5. The 133,784,560-hand enumeration.
-  # -------------------------------------------------------------------------
+  # The 133,784,560-hand enumeration.
   exhaustive:
     name: Exhaustive enumeration
     needs: [supply-chain, changes]
@@ -464,37 +383,13 @@ jobs:
         # artefact of it.
         run: pnpm run test:exhaustive
 
-  # -------------------------------------------------------------------------
-  # 5b. End-to-end against a running server: smoke test and load harness.
+  # Smoke test and load harness against a running server, in one job because both need a migrated
+  # database and a started API. `--strict` promotes the smoke test's warnings to failures; two of them
+  # are security properties (rate limiting present, an unknown hand answering 404 rather than 500).
   #
-  # Both of these existed and neither was run by anything. `test:smoke` asserts the
-  # no-currency-framing and no-endorsement guardrails on live payloads, plus the
-  # hidden-information property over a real WebSocket; `test:load` is the only
-  # place a real socket is driven under concurrency outside the test suite, and it
-  # had never completed a single hand because three of its route constants named
-  # endpoints that do not exist.
-  #
-  # They run in one job because they need the same thing: a migrated database and a
-  # started API. `--strict` on the smoke test promotes its warnings to failures —
-  # two of them are security properties (rate limiting present, an unknown hand
-  # answering 404 rather than 500) and neither could fail a run before.
-  #
-  # ## Why the WEB app is started here and not only the API
-  #
-  # It was not, and sections 10 and 11 of the smoke test — the CSP and security
-  # headers on a rendered page, and the PROD-048 guest bootstrap — both begin by
-  # fetching `PRL_WEB_ORIGIN` and, when nothing answers, `warn` and return. Under
-  # `--strict` that warning is a failure, so this job could never go green;
-  # without `--strict` it would be sixteen checks that silently did not run.
-  # Reproduced locally on the same shape (API up, nothing serving the web origin):
-  # `node scripts/smoke-test.mjs --origin … --strict` printed "web origin … is not
-  # reachable (fetch failed)  (a warning, promoted to a failure by --strict)"
-  # TWICE and exited 1 with 49 checks passed. With the web app started, the same
-  # command exits 0 with 65 — the difference is exactly those two sections.
-  #
-  # `pnpm run build` rather than `build:packages`, because `next start` serves a
-  # production build and there is otherwise nothing to serve.
-  # -------------------------------------------------------------------------
+  # The web app is started as well as the API: smoke sections 10 and 11 (CSP and security headers on a
+  # rendered page, and the PROD-048 guest bootstrap) fetch `PRL_WEB_ORIGIN` and warn when nothing
+  # answers, which `--strict` makes a failure.
   end-to-end:
     name: Smoke + load (running server)
     needs: [supply-chain, changes]
@@ -519,34 +414,27 @@ jobs:
           --health-retries 20
 
     env:
-      # The job default is the LEAST-PRIVILEGED identity: a login role that is a
-      # member of `prl_app` and nothing else. The API is started with this, so a
-      # missing GRANT fails this build instead of a deployment. The steps that
-      # legitimately need more (waiting, migrating, seeding, creating the role
-      # itself) override it with DATABASE_URL_ADMIN at step level.
+      # The least-privileged identity, as in `test`: the API is started with it, so a missing GRANT
+      # fails this build. Waiting, migrating, seeding and creating the role use DATABASE_URL_ADMIN.
       DATABASE_URL: postgres://prl_ci_app:prl-ci-not-a-secret@127.0.0.1:5432/poker_risk_lab_e2e
       DATABASE_URL_ADMIN: postgres://postgres:postgres@127.0.0.1:5432/poker_risk_lab_e2e
       NODE_ENV: development
       PORT: '3001'
       HOST: 127.0.0.1
       PUBLIC_WEB_ORIGIN: http://localhost:3000
-      # Where the smoke test looks for the rendered page. It is also the smoke
-      # test's own default, and it is written here anyway: the value has to agree
-      # with PUBLIC_WEB_ORIGIN above (the API's CORS and WebSocket Origin
-      # allowlist) and with the port the web app is started on below, and three
-      # things that must agree should be visible in one place.
+      # Also the smoke test's default, written anyway because it must agree with PUBLIC_WEB_ORIGIN (the
+      # API's CORS and WebSocket Origin allowlist) and with the port the web app is started on below.
       PRL_WEB_ORIGIN: http://localhost:3000
-      # The API test suite's shared secret (published on purpose; see secret-scan.mjs). The old literal
-      # contained "secret", so config.ts's placeholder warning fired on every boot of this job.
+      # The API test suite's shared secret (published on purpose; see secret-scan.mjs). It must not
+      # contain "secret", or config.ts's placeholder warning fires on every boot.
       SESSION_COOKIE_SECRET: Zk7pQ2vR9tX4bN6mL1sD8gH3jF5wC0yA
-      # A multi-table load run opens one guest session per seat, so the shipped limits
-      # refuse it — correctly. Raised here for the harness rather than lowered in the
-      # server, and the harness now prints the figure it needs when it sees a 429.
+      # A multi-table load run opens one guest session per seat, which the shipped limits correctly
+      # refuse. Raised here for the harness rather than lowered in the server; the harness prints the
+      # figure it needs when it sees a 429.
       RATE_LIMIT_MAX: '5000'
-      # Turns on the test-only reset control (`loadConfig` refuses it in production),
-      # which both harnesses read from this variable. Smoke's section 12 drains the
-      # guest bucket on purpose, so without it the load harness that follows got 0
-      # of 3 guests in every run. Not a credential: the API lives and dies with the job.
+      # Turns on the test-only reset control (`loadConfig` refuses it in production) that both harnesses
+      # read. Smoke's section 12 drains the guest bucket on purpose, so without it the load harness that
+      # follows gets 0 of 3 guests. Not a credential: the API lives and dies with the job.
       RATE_LIMIT_RESET_TOKEN: ci-rate-limit-reset-9fK2mQ7vT4wZ8bN1 # prl-allow-secret: test-only reset token for a throwaway CI API
       LOG_LEVEL: warn
 
@@ -568,13 +456,9 @@ jobs:
         run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Build
-        # The whole workspace, not just `build:packages`: the web app is started
-        # below and `next start` serves a production build.
-        #
-        # NODE_ENV is overridden for this step because the job-level value is the
-        # API's `development` — `next build` under a non-standard NODE_ENV is not
-        # the artefact `next start` expects to serve, and the smoke test's CSP
-        # section reads the headers of exactly that artefact.
+        # The whole workspace: `next start` below serves a production build. NODE_ENV is overridden
+        # because the job-level `development` is the API's, `next build` under it is not the artefact
+        # `next start` expects to serve, and the smoke test's CSP section reads that artefact's headers.
         env:
           NODE_ENV: production
         run: pnpm run build
@@ -594,12 +478,7 @@ jobs:
           pnpm run db:seed
 
       - name: Grant a login identity membership of prl_app
-        # `prl_app` is NOLOGIN by design (db/migrations/0001_initial.sql): it is a
-        # privilege container, and the real login identity is granted membership
-        # out of band. This is that out-of-band step, done the way a deployment
-        # would do it. The password is a throwaway for an ephemeral container on a
-        # private network destroyed with the job — deliberately not a repository
-        # secret, for the same reason the postgres password above is not.
+        # As in `test`; see the header for why `prl_app` is NOLOGIN.
         env:
           PGPASSWORD: postgres
         run: |
@@ -615,8 +494,7 @@ jobs:
           GRANT prl_app TO prl_ci_app;
           GRANT CONNECT ON DATABASE poker_risk_lab_e2e TO prl_ci_app;
           SQL
-          # Prove the identity is bounded rather than assuming it: a role that can
-          # still create tables would make this whole job theatre.
+          # Prove the identity is bounded rather than assuming it, as in `test`.
           PGPASSWORD=prl-ci-not-a-secret psql --host 127.0.0.1 --username prl_ci_app \
             --dbname poker_risk_lab_e2e --tuples-only --no-align \
             --command "select rolsuper or rolcreatedb or rolcreaterole from pg_roles where rolname = current_user" \
@@ -647,16 +525,11 @@ jobs:
           exit 1
 
       - name: Start the web app
-        # The subject of smoke-test sections 10 and 11. Same shape as the API
-        # above: backgrounded, then polled, with the log kept so a failure below
-        # can be attributed.
-        #
-        # PORT and NODE_ENV are overridden for this step alone. The job-level
-        # values are the API's (3001, development, because `loadConfig` refuses a
-        # production process without a real SESSION_COOKIE_SECRET), and inheriting
-        # them here would put Next on the API's port in a mode `next start` does
-        # not serve. PRL_API_ORIGIN is a literal address: the API binds
-        # 127.0.0.1, and `localhost` on a runner may resolve to ::1 first.
+        # The subject of smoke-test sections 10 and 11, backgrounded and polled like the API. PORT and
+        # NODE_ENV are overridden because the job values are the API's (3001, and `development` because
+        # `loadConfig` refuses a production process without a real SESSION_COOKIE_SECRET).
+        # PRL_API_ORIGIN is a literal address: the API binds 127.0.0.1, and `localhost` on a runner may
+        # resolve to ::1 first.
         env:
           PORT: '3000'
           NODE_ENV: production
@@ -679,10 +552,8 @@ jobs:
         run: pnpm run test:smoke -- --strict
 
       - name: Load harness
-        # A deliberately tiny shape. The point is that it runs at all and completes real
-        # hands over real sockets, not the numbers — see the header of scripts/load-test.mjs,
-        # which is explicit that this is a loopback regression check and NOT a capacity
-        # measurement.
+        # A deliberately tiny shape: the point is that real hands complete over real sockets.
+        # scripts/load-test.mjs is a loopback regression check, NOT a capacity measurement.
         run: pnpm run test:load -- --tables 1 --seats 3 --hands 3
 
       - name: API log
@@ -699,25 +570,16 @@ jobs:
 
       - name: Stop the web app
         if: always()
-        # `pnpm --filter … start` is a wrapper, so killing the recorded pid can
-        # leave Next holding the port (see ManagedServer in scripts/a11y-audit.mjs).
-        # The runner is destroyed either way; both are named so the intent is not
-        # left to that.
+        # `pnpm --filter … start` is a wrapper, so killing the recorded pid can leave Next holding the
+        # port (see ManagedServer in scripts/a11y-audit.mjs).
         run: |
           kill "$(cat /tmp/web.pid)" || true
           pkill -f 'next start' || true
 
-  # -------------------------------------------------------------------------
-  # 5c. The statistical evidence that the opponent profiles actually differ.
-  #
-  # 8,000 hands per profile, two-proportion z-tests at alpha = 0.001, Spearman rho
-  # of declared against observed VPIP, cross-seed agreement, and byte-identical
-  # reproduction under a fixed seed. It is the only thing in the repository that
-  # substantiates "the profiles differ measurably", it takes about two minutes, and
-  # before this job the only way to run it was to construct the pnpm --filter
-  # invocation by hand. Its own job rather than a step in `test`, so a two-minute
-  # statistical suite never becomes the reason nobody runs the fast tests.
-  # -------------------------------------------------------------------------
+  # The statistical evidence that the opponent profiles differ: 8,000 hands per profile,
+  # two-proportion z-tests at alpha = 0.001, Spearman rho of declared against observed VPIP, cross-seed
+  # agreement, and byte-identical reproduction under a fixed seed. About two minutes, so it is its own
+  # job rather than a reason nobody runs the fast tests.
   simulation:
     name: Opponent-profile simulation
     needs: [supply-chain, changes]
@@ -744,9 +606,6 @@ jobs:
       - name: Simulate
         run: pnpm run test:simulation
 
-  # -------------------------------------------------------------------------
-  # 6. Build everything the way a release would.
-  # -------------------------------------------------------------------------
   build:
     name: Build
     needs: [supply-chain, changes]
@@ -773,22 +632,12 @@ jobs:
       - name: Build
         run: pnpm run build
 
-  # -------------------------------------------------------------------------
-  # 6b. Build the release artefacts.
-  #
-  # The two Docker images are what actually ships, and until now nothing in CI
-  # built either of them: `grep "docker build" .github/workflows/*.yml` matched
-  # only comments. Both Dockerfiles carry multi-stage logic whose past failures
-  # their own headers document, and both run `pnpm install --frozen-lockfile`
-  # against the *Linux* dependency set — the 58 platform-specific optionals that
-  # a macOS developer never installs and that `dep-shapes.mjs` therefore cannot
-  # read from disk. A build here is the only automated check that the release
-  # artefact assembles at all.
-  #
-  # `docker build` directly rather than docker/build-push-action: nothing is
-  # pushed, the runner already has BuildKit, and a third-party action here would
-  # be one more trust boundary in the job that produces the thing we ship.
-  # -------------------------------------------------------------------------
+  # The two images are what ships. Both run `pnpm install --frozen-lockfile` against the Linux
+  # dependency set, whose platform-specific optionals a macOS developer never installs and
+  # `dep-shapes.mjs` therefore cannot read from disk, so this build is the only automated check that the
+  # release artefact assembles. `docker build` rather than docker/build-push-action: nothing is pushed,
+  # the runner has BuildKit, and a third-party action would be one more trust boundary in the job that
+  # produces what ships.
   containers:
     name: Container images
     needs: [supply-chain, changes]
@@ -808,9 +657,8 @@ jobs:
         run: docker build --file Dockerfile.web --tag prl-web:ci .
 
       - name: Check both images run as a non-root user
-        # A container that ships as root undoes the least-privilege story the
-        # rest of this pipeline tells. Both Dockerfiles set `USER node`; this
-        # asserts the built image agrees with the file.
+        # An image that runs as root undoes the least-privilege model. Both Dockerfiles set `USER node`;
+        # this asserts the built images agree with the files.
         run: |
           for image in prl-api:ci prl-web:ci; do
             user="$(docker image inspect --format '{{.Config.User}}' "$image")"
@@ -821,17 +669,9 @@ jobs:
             echo "$image runs as $user"
           done
 
-  # -------------------------------------------------------------------------
-  # 7. Accessibility audit of the built web app.
-  #
-  # The audit is static (it parses server-rendered HTML — see the file header of
-  # scripts/a11y-audit.mjs for exactly what that does and does not cover), but it
-  # still wants pages that rendered with a working API behind them: a route that
-  # fell back to an error state is not the markup we ship, and auditing it
-  # produces both false alarms and false confidence. So this job brings up
-  # PostgreSQL, migrates, seeds the content, and asks the audit to start the API
-  # alongside the web server.
-  # -------------------------------------------------------------------------
+  # Static accessibility audit (scripts/a11y-audit.mjs says what it does and does not cover). It parses
+  # server-rendered HTML, but a route that fell back to an error state is not the markup we ship, so
+  # this job migrates and seeds PostgreSQL and the audit starts the API alongside the web server.
   a11y:
     name: Accessibility (static)
     needs: [supply-chain, changes]
@@ -894,8 +734,7 @@ jobs:
           pnpm run db:seed
 
       - name: Grant a login identity membership of prl_app
-        # See the identical step in `end-to-end`, and the header section that
-        # explains why the runtime role is NOLOGIN.
+        # As in `test`; see the header for why `prl_app` is NOLOGIN.
         env:
           PGPASSWORD: postgres
         run: |
@@ -926,91 +765,33 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  # -------------------------------------------------------------------------
-  # 8. The COMPUTED accessibility tree and the KEYBOARD, both in real Chrome.
+  # The COMPUTED accessibility tree and the keyboard, both in real Chrome. A face-down card whose rank
+  # or suit reaches a computed accessible name leaks hidden information to a screen-reader user while
+  # looking correct on screen. Its own job rather than a step in `a11y`, which only parses HTML and is
+  # fast. `test:keyboard` is here rather than in `browser-gates`, which deliberately has no API and no
+  # database, because it folds a real hand at a socket-backed table.
   #
-  # `test:keyboard` was added here on 2026-08-26 for the same reason this job
-  # exists at all, one step further along: it was a gate of `pnpm run verify`
-  # that ran nowhere, and before that it was not even in `verify` —
-  # `grep -rl 'test:keyboard' .github/workflows/` matched NOTHING, and the
-  # RUNBOOK told a person to bring up two servers by hand first. It now has the
-  # same `--start --with-api` lifecycle `test:ax` has.
+  # Both scripts run `--start --with-api` and start their own servers; the job supplies only the
+  # environment, and a fresh checkout has no `.env`. `DATABASE_URL` is the only variable the API
+  # requires, outside production too (without it the API exits 78). `SESSION_COOKIE_SECRET` and
+  # `PUBLIC_WEB_ORIGIN` are not needed: the audit starts the API without forcing `NODE_ENV=production`
+  # and passes its own origin as `PUBLIC_WEB_ORIGIN`, so CORS and the WebSocket `Origin` check admit the
+  # browser this job drives.
   #
-  # It is HERE and not in `browser-gates` below, which is where the other Chrome
-  # gates live, because `browser-gates` deliberately has no API and no database
-  # — read its header. `test:keyboard` folds a real hand at a socket-backed
-  # table, so it needs exactly the three things this job already supplies: a
-  # production build, a migrated Postgres, and a browser. Putting it beside
-  # `test:ax` costs one extra step; putting it in `browser-gates` would cost
-  # that job a second Postgres service and the property its header claims.
+  # `test:ax` ports: the web app on 3456, the API on 3001, a second web app on 3459 with a dead API
+  # behind it (assertion 8.2), and a third on 3465 behind an in-process corrupting proxy on 3467
+  # (assertion 6.7).
   #
-  # `test:ax` is one of the sixteen gates `pnpm run verify` blocks a release on,
-  # and it ran in no workflow at all: before this job,
-  # `grep -n 'test:ax' .github/workflows/*.yml` matched nothing. A change that
-  # broke the tree therefore passed CI — including the one failure mode this
-  # audit exists for that is not an accessibility defect at all: a face-down
-  # card whose rank or suit reaches a computed accessible name has leaked
-  # hidden information to anybody running a screen reader while looking
-  # perfectly correct on screen.
-  #
-  # Its own job rather than a step in `a11y`, because the two measure different
-  # layers and only one of them is fast. `a11y-audit.mjs` parses server-rendered
-  # HTML; this drives Chrome through six journeys and sits down at a live table,
-  # playing a hand over a real socket and replaying it at `/review/<handId>`.
-  #
-  # ## What the job has to supply, and how that was established
-  #
-  # `test:ax` runs `--start --with-api`, so the script starts BOTH servers and
-  # the job supplies only the environment they boot from. That is exactly the
-  # shape that made the `a11y` job exit 78 on every run, so it was measured
-  # rather than assumed: the step below was run with EXACTLY the two variables
-  # this job sets and nothing else, and with `.env` MOVED ASIDE, which is the
-  # state of a fresh checkout —
-  #
-  #     env -i PATH=… HOME=… CI=true COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
-  #       NPM_CONFIG_UPDATE_NOTIFIER=false \
-  #       DATABASE_URL=postgres://prl_ci_app:…@127.0.0.1:5432/… \
-  #       DATABASE_URL_ADMIN=… \
-  #       pnpm run test:ax -- --json ax-tree-report.json
-  #
-  # against a migrated and seeded scratch database, connecting as a `prl_app`
-  # member. It printed ".env not found. Continuing without it.", started both
-  # servers, and finished "checks passed 111, checks failed 0" — exit 0, in
-  # Chrome 151.0.7922.174 headless.
-  #
-  # `DATABASE_URL` is the only variable the API itself requires, and it requires
-  # it outside production too: with it removed, `node apps/api/dist/server.js`
-  # prints "Refusing to start: 1 configuration problem. - DATABASE_URL is
-  # required but missing or empty" and exits 78. `SESSION_COOKIE_SECRET` and
-  # `PUBLIC_WEB_ORIGIN` are NOT needed, and that is not luck: the audit starts
-  # the API without forcing `NODE_ENV=production` (its own comment at that spawn
-  # says why) and hands it `PUBLIC_WEB_ORIGIN` itself, set to the audit's own
-  # origin so that CORS and the WebSocket `Origin` check admit the browser this
-  # job drives.
-  #
-  # Ports are the script's, not this job's: the web app on 3456
-  # (`PRL_WEB_ORIGIN`, set by the `test:ax` script), the API on 3001, a
-  # second web app on 3459 with a dead API behind it for certification assertion
-  # 8.2, and a third on 3465 behind an in-process corrupting proxy on 3467 for
-  # assertion 6.7. Nothing else in this job binds any of them.
-  #
-  # ## The one thing that cannot be measured from here
-  #
-  # The runner image. This job needs a Chrome the audit's candidate list can
-  # find — `CHROME_PATH`, then `/usr/bin/google-chrome`, `/usr/bin/chromium`,
-  # `/usr/bin/chromium-browser`. "Resolve the browser" below walks that same
-  # list and pins the answer into `CHROME_PATH`, so an image without one fails
-  # at a step that says exactly that instead of two minutes into an audit.
-  # -------------------------------------------------------------------------
+  # The runner image needs a Chrome from the audit's candidate list (`CHROME_PATH`, then
+  # `/usr/bin/google-chrome`, `/usr/bin/chromium`, `/usr/bin/chromium-browser`). "Resolve the browser"
+  # walks the same list and pins `CHROME_PATH`, so an image without one fails at a step that says so.
   ax-tree:
     name: Accessibility tree and keyboard journeys (real Chrome)
     needs: [supply-chain, changes]
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
-    # Two audits that each play a hand at a live table and wait on bots, on top
-    # of a full workspace build. `test:ax` takes about three minutes on a warm
-    # laptop and `test:keyboard` about one — measured over six consecutive runs
-    # on 2026-08-26: 56-59s each, 146 checks, 0 failures every time.
+    # Two audits that each play a hand at a live table and wait on bots, on top of a full build:
+    # `test:ax` takes about three minutes on a warm laptop and `test:keyboard` about one.
     timeout-minutes: 45
 
     services:
@@ -1030,10 +811,7 @@ jobs:
           --health-retries 20
 
     env:
-      # As in `a11y` and `end-to-end`: the job default is the least-privileged
-      # identity, because the API the audit starts inherits it and a missing
-      # GRANT should fail this build rather than a deployment. The steps that
-      # legitimately need more override it with DATABASE_URL_ADMIN.
+      # The least-privileged identity, as in `test`: the API the audit starts inherits it.
       DATABASE_URL: postgres://prl_ci_app:prl-ci-not-a-secret@127.0.0.1:5432/poker_risk_lab_ax
       DATABASE_URL_ADMIN: postgres://postgres:postgres@127.0.0.1:5432/poker_risk_lab_ax
 
@@ -1075,8 +853,7 @@ jobs:
           pnpm run db:seed
 
       - name: Grant a login identity membership of prl_app
-        # See the identical step in `end-to-end`, and the header section that
-        # explains why the runtime role is NOLOGIN.
+        # As in `test`; see the header for why `prl_app` is NOLOGIN.
         env:
           PGPASSWORD: postgres
         run: |
@@ -1116,11 +893,8 @@ jobs:
         run: pnpm run test:ax -- --json ax-tree-report.json
 
       - name: Keyboard journeys
-        # Not conditioned on the step above: they are two independent
-        # measurements of two different layers, and a broken accessibility tree
-        # must not hide a broken tab order. `!cancelled()` rather than `always()`
-        # for the reason `browser-gates` gives — a cancelled run has nothing to
-        # say.
+        # Not conditioned on the step above: a broken accessibility tree must not hide a broken tab
+        # order. `!cancelled()` rather than `always()`: a cancelled run has nothing to say.
         if: ${{ !cancelled() }}
         run: pnpm run test:keyboard -- --json keyboard-report.json
 
@@ -1135,68 +909,26 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  # -------------------------------------------------------------------------
-  # 9. The gates that need a production build and a real browser, and nothing
-  #    else.
+  # The gates that need a production build and a real browser and nothing else: `next build && next
+  # start` driven by Chrome, with no API and no database. One job, so the workspace is built once.
   #
-  # Three gates, one shape: `next build && next start`, driven by Chrome, with
-  # no API and no database anywhere near them. They are in one job for the same
-  # reason `end-to-end` puts the smoke test and the load harness together — they
-  # need the same thing, and building the workspace three times to run them
-  # apart would be the whole cost of the job, three times.
+  #   * `design:contrast` composites the background of every element carrying text in real Chrome.
+  #   * `test:csp` is the browser-level negative control. Everything else that touches the
+  #     Content-Security-Policy asserts the policy's VALUE or that the header ARRIVED, and `fetch` does
+  #     not enforce a policy; only this proves a browser refuses the injection.
+  #   * `test:age-gate`: the age gate is a LEGAL control that is OFF by default, so a gate that silently
+  #     failed would look identical to the shipped configuration.
+  #   * `test:layout` measures `Range.getClientRects()` over every text node on every route, in both
+  #     themes, at 360/768/1024/1440/1920, because boxes can sit apart while their text overlaps. Its six
+  #     injected negative controls run first, so a broken detector fails the job rather than going quiet.
   #
-  #   * `design:contrast` — see section 2. It was a step in `lint`, in a job
-  #     with no build, so its third pass could not run at all.
-  #   * `test:csp` — the browser-level negative control. Everything else in this
-  #     repository that touches the Content-Security-Policy asserts the policy's
-  #     VALUE or that the header ARRIVED; `fetch` does not enforce a policy. This
-  #     is the only thing that proves a browser refuses the injection, and it ran
-  #     in no workflow.
-  #   * `test:age-gate` — the age gate is a LEGAL control that is OFF by default,
-  #     which is exactly why it needs a gate of its own: a gate that silently
-  #     fails looks identical to the shipped configuration. It ran in no workflow
-  #     either.
-  #   * `test:layout` — the painted text. It measures `Range.getClientRects()`
-  #     over every text node on every route, in both themes, at 360/768/1024/
-  #     1440/1920, and it exists because a collapsed grid track in the Coach rail
-  #     shipped with every gate above it green: the boxes did not overlap, the
-  #     text did. It also runs six injected negative controls before the sweep,
-  #     so a broken detector fails the job rather than going quiet.
+  # None needs `.env` or a `DATABASE_URL`: `test:csp` does not pass `--with-api`, and every server the
+  # age-gate audit starts is a web app it configures itself (`PRL_AGE_GATE=on`, two scopes on two ports,
+  # because a gate that is off cannot be measured). Ports are the scripts' own and do not collide: 3457
+  # for the CSP control, 3458 and 3459 for the age gate, 3462 for contrast, 3463 for painted text.
   #
-  # ## What the job has to supply, and how that was established
-  #
-  # Nothing but the build and the browser, and that was measured rather than
-  # assumed. Each of the three steps below was run verbatim, with EXACTLY the
-  # environment this job gives it and no more — `env -i PATH=… HOME=… CI=true
-  # COREPACK_ENABLE_DOWNLOAD_PROMPT=0 NPM_CONFIG_UPDATE_NOTIFIER=false`, no
-  # `.env`, no `DATABASE_URL` of any kind, against a `pnpm run build`:
-  #
-  #   * `pnpm run design:contrast` — all three passes PASS over 38 pages and
-  #     10,884 composited text elements, 145 probes against real screenshot
-  #     pixels, exit 0.
-  #   * `pnpm run test:csp -- --out csp-negative-control.json` — 11 checks
-  #     passed, 0 failed, 7 injections refused, 4 positive controls, exit 0.
-  #   * `pnpm run test:age-gate -- --out age-gate-report.json` — 36 checks
-  #     passed, 0 failed, 17 refusals proved, 19 open routes proved, 8 of them
-  #     in a browser, exit 0.
-  #
-  # Neither wants an API: `test:csp` does not pass `--with-api`, and every
-  # server the age-gate audit starts is a web app it configures itself
-  # (`PRL_AGE_GATE=on`, and the two scopes on two ports, because a gate that is
-  # off cannot be measured).
-  #
-  # Ports are the scripts' own and do not collide: 3457 for the CSP control,
-  # 3458 and 3459 for the age gate's two scopes, 3462 for the contrast sweep,
-  # 3463 for the painted-text sweep.
-  #
-  # ## Teardown
-  #
-  # There is none, deliberately. Each script owns the servers it starts and
-  # stops them in a `finally`, including on a failing check — unlike
-  # `end-to-end`, where the job itself backgrounds them. The only case that
-  # leaks a `next start` is the job timeout killing the script outright, and
-  # that case destroys the runner a moment later.
-  # -------------------------------------------------------------------------
+  # No teardown step: each script stops the servers it starts in a `finally`, including on a failing
+  # check. Only a job timeout leaks a `next start`, and that destroys the runner a moment later.
   browser-gates:
     name: Contrast, painted text, CSP and age gate (real Chrome)
     needs: [supply-chain, changes]
@@ -1224,9 +956,8 @@ jobs:
         run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Build
-        # All three gates measure a PRODUCTION build and say so: the development
-        # Content-Security-Policy adds `'unsafe-eval'` and an HMR websocket on
-        # purpose, so a pass against `next dev` would be worth nothing.
+        # Every gate here measures a PRODUCTION build: the development Content-Security-Policy adds
+        # `'unsafe-eval'` and an HMR websocket on purpose, so a pass against `next dev` is worth nothing.
         run: pnpm run build
 
       - name: Resolve the browser
@@ -1251,12 +982,9 @@ jobs:
         run: pnpm run design:contrast
 
       - name: CSP negative control
-        # These three gates are independent measurements that happen to want the
-        # same two things, so a failure in one must not hide the verdicts of the
-        # others — `pnpm run verify` runs every gate after a failure for exactly
-        # that reason. The condition is on the BROWSER step rather than
-        # `always()`: if the build or the browser is missing, there is nothing to
-        # measure and a second confusing failure helps nobody.
+        # Independent measurements, so a failure in one must not hide the others' verdicts (as in
+        # `pnpm run verify`). Conditioned on the BROWSER step rather than `always()`: with no build or
+        # no browser there is nothing to measure.
         if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
         run: pnpm run test:csp -- --out csp-negative-control.json
 
@@ -1265,17 +993,15 @@ jobs:
         run: pnpm run test:age-gate -- --out age-gate-report.json
 
       - name: Painted text
-        # Six negative controls first — a defect of each shape put back into a
-        # real page — then 15 routes x 2 themes x 5 widths. The controls are the
-        # half that matters in CI: a sweep reporting nothing and a detector that
-        # examined nothing print the same thing, and only one of them is good
-        # news.
+        # Six negative controls first, a defect of each shape put back into a real page, then every
+        # route x 2 themes x 5 widths. The controls matter most: a sweep reporting nothing and a
+        # detector that examined nothing print the same thing.
         if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
         run: pnpm run test:layout -- --out text-layout-report.json
 
       - name: Upload the browser-gate reports
-        # `always()`, because the report of a FAILING run is the one worth
-        # reading: both files record every check, its verdict and its evidence.
+        # `always()`, because the report of a FAILING run is the one worth reading: each file records
+        # every check, its verdict and its evidence.
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
