@@ -9,7 +9,7 @@
 import { AppError } from '../errors.ts';
 import { isSensitiveKey } from '../logging.ts';
 import { newAuditEventId } from './ids.ts';
-import { type Db, jsonbText, violationError } from './sql.ts';
+import { type Db, jsonbParamOrNull, violationError } from './sql.ts';
 
 /** `audit_log_event_shape`, copied from migration 0001. */
 const EVENT_NAME = /^[a-z0-9]+([.][a-z0-9_]+)*$/;
@@ -106,7 +106,7 @@ export async function record(sql: Db, input: RecordEventInput): Promise<void> {
       insert into prl.audit_log (id, user_id, event, detail)
       values (
         ${newAuditEventId()}, ${userId}, ${event},
-        ${detail === null ? null : jsonbText(detail, 'detail')}::text::jsonb
+        ${jsonbParamOrNull(sql, detail, 'detail')}
       )
     `;
   } catch (error) {

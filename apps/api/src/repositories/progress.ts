@@ -8,7 +8,7 @@
 import type { ContentId } from '@prl/contracts';
 import { AppError } from '../errors.ts';
 import { newLessonProgressId, newQuizAttemptId, newScenarioAttemptId } from './ids.ts';
-import { type Db, jsonbText, violationError } from './sql.ts';
+import { type Db, jsonbObjectParam, jsonbParam, violationError } from './sql.ts';
 
 /**
  * `prl.content_id`, copied from migration 0001. Stricter than the contracts' `CONTENT_ID_PATTERN`
@@ -95,13 +95,13 @@ export interface QuizAttemptInput {
 export async function recordQuizAttempt(sql: Db, input: QuizAttemptInput): Promise<void> {
   const quizId = assertContentId(input.quizId, 'quizId');
   const questionId = assertContentId(input.questionId, 'questionId');
-  const answer = jsonObjectText(input.answer, 'answer');
+  const answer = jsonbObjectParam(sql, input.answer, 'answer');
   try {
     await sql`
       insert into prl.quiz_attempts (id, user_id, quiz_id, question_id, answer, was_correct)
       values (
         ${newQuizAttemptId()}, ${input.userId}, ${quizId}, ${questionId},
-        ${answer}::text::jsonb, ${input.wasCorrect}
+        ${answer}, ${input.wasCorrect}
       )
     `;
   } catch (error) {
@@ -128,7 +128,7 @@ export async function recordScenarioAttempt(sql: Db, input: ScenarioAttemptInput
       insert into prl.scenario_attempts (id, user_id, scenario_id, chosen_action, matched_expected)
       values (
         ${newScenarioAttemptId()}, ${input.userId}, ${scenarioId},
-        ${jsonbText(chosen, 'action')}::text::jsonb, ${input.matchedExpected}
+        ${jsonbParam(sql, chosen, 'action')}, ${input.matchedExpected}
       )
     `;
   } catch (error) {
@@ -229,16 +229,4 @@ export async function readProgress(sql: Db, userId: string): Promise<ProgressSna
     handsPlayed: row.hands_played,
     unitsNetLifetime: row.units_net_lifetime,
   };
-}
-
-/** `quiz_attempts_answer_is_object` would otherwise turn an array or scalar into a 500. */
-function jsonObjectText(value: unknown, field: string): string {
-  const text = jsonbText(value, field);
-  if (!text.startsWith('{')) {
-    throw new AppError('invalid_request', {
-      fields: { [field]: 'must be an object' },
-      logDetail: `${field} was not a JSON object`,
-    });
-  }
-  return text;
 }

@@ -24,7 +24,7 @@ import type {
 import { COMMITMENT_VERSION, cardToString } from '@prl/poker-engine';
 import { AppError } from '../errors.ts';
 import { newHandActionId, newHandSeatId } from './ids.ts';
-import { type Db, jsonbText, violationError } from './sql.ts';
+import { type Db, jsonbParam, jsonbParamOrNull, violationError } from './sql.ts';
 
 /** 5 board cards + 2 hole cards x 6 seats, from migration 0001. There are no burn cards. */
 export const MAX_PUBLIC_REVEALED_CARDS = 17;
@@ -137,7 +137,7 @@ export async function start(sql: Db, input: StartHandInput): Promise<HandRow> {
       )
       values (
         ${input.handId}, ${input.roomId}, ${input.handNumber}, ${input.buttonSeat},
-        ${jsonbText(input.config, 'config')}::text::jsonb,
+        ${jsonbParam(sql, input.config, 'config')},
         ${input.commitmentRoot}, ${input.commitmentContext}, ${input.randomSourceKind},
         '[]'::jsonb, 'preflop'
       )
@@ -156,7 +156,7 @@ export async function start(sql: Db, input: StartHandInput): Promise<HandRow> {
         )
         values (
           ${newHandSeatId()}, ${input.handId}, ${seat.seat}, ${seat.userId}, ${seat.isBot},
-          ${seat.startingStack}, ${notationJsonOrNull(seat.holeCards)}::text::jsonb, null, ${seat.status}, false
+          ${seat.startingStack}, ${notationParamOrNull(sql, seat.holeCards)}, null, ${seat.status}, false
         )
       `;
     }
@@ -398,7 +398,7 @@ export async function advanceStreet(
 ): Promise<boolean> {
   const rows = await sql<{ id: string }[]>`
     update prl.hands
-       set street = ${street}, board = ${notationJson(board)}::text::jsonb
+       set street = ${street}, board = ${notationParam(sql, board)}
      where id = ${handId} and completed_at is null
     returning id
   `;
@@ -432,9 +432,9 @@ export async function complete(sql: Db, input: CompleteHandInput): Promise<HandR
       update prl.hands
          set street = 'complete',
              completed_at = now(),
-             board = ${notationJson(input.board)}::text::jsonb,
-             result = ${jsonbText(input.result, 'result')}::text::jsonb,
-             reveal = ${jsonbText(input.result.reveal, 'reveal')}::text::jsonb
+             board = ${notationParam(sql, input.board)},
+             result = ${jsonbParam(sql, input.result, 'result')},
+             reveal = ${jsonbParam(sql, input.result.reveal, 'reveal')}
        where id = ${input.handId} and completed_at is null
       returning id, room_id, hand_number, button_seat, config, commitment_root, commitment_context,
                 random_source_kind, board, street, result, reveal, started_at, completed_at
@@ -693,15 +693,16 @@ export function decodeHandCursor(cursor: string): HandCursor {
 }
 
 /** `cardToString` rejects a non-card. */
-function notationJson(cards: readonly Card[]): string {
-  return jsonbText(
+function notationParam(sql: Db, cards: readonly Card[]) {
+  return jsonbParam(
+    sql,
     cards.map((card) => cardToString(card)),
     'cards',
   );
 }
 
-function notationJsonOrNull(cards: readonly Card[] | null): string | null {
-  return cards === null ? null : notationJson(cards);
+function notationParamOrNull(sql: Db, cards: readonly Card[] | null) {
+  return cards === null ? jsonbParamOrNull(sql, null, 'cards') : notationParam(sql, cards);
 }
 
 /**

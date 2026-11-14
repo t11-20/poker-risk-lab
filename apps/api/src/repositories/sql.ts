@@ -84,19 +84,47 @@ export function isForeignKeyViolation(error: unknown, constraint?: string): bool
   return constraint === undefined || violation.constraint === constraint;
 }
 
+/** `ReturnType` because the driver's fragment type is internal. */
+type SqlFragment = ReturnType<Db>;
+
 /**
- * Serialises a value for a `jsonb` parameter, refusing a NUL.
- *
- * ALWAYS WRITE `${jsonbText(x, 'field')}::text::jsonb`, NOT `::jsonb`. postgres.js uses the cast after
- * a placeholder to type the parameter, so `::jsonb` JSON-encodes the string again and silently stores
- * a jsonb string instead of an object. `::text` makes the server parse it.
- *
- * `jsonb` cannot store a NUL, and `JSON.stringify` renders one as the escape backslash-u-0-0-0-0, so it
- * is refused here with the field named. The escape is spelled in words because `security:hygiene`
- * rejects a literal control character in source. A NUL comes from caller data, so this throws
- * `invalid_request`.
+ * A complete `jsonb` parameter, serialised and cast, so no call site can write the cast wrong.
+ * `jsonb` cannot store a NUL, so a value containing one is `invalid_request` with the field named.
  */
-export function jsonbText(value: unknown, field: string): string {
+export function jsonbParam(sql: Db, value: unknown, field: string): SqlFragment {
+  return jsonbCast(sql, jsonbText(value, field));
+}
+
+/** SQL NULL for `null`, which the column CHECKs tell apart from JSON `null`. */
+export function jsonbParamOrNull(sql: Db, value: unknown, field: string): SqlFragment {
+  return jsonbCast(sql, value === null ? null : jsonbText(value, field));
+}
+
+/** For a column whose CHECK requires an object, which would otherwise turn an array or scalar into a 500. */
+export function jsonbObjectParam(sql: Db, value: unknown, field: string): SqlFragment {
+  const text = jsonbText(value, field);
+  if (!text.startsWith('{')) {
+    throw new AppError('invalid_request', {
+      fields: { [field]: 'must be an object' },
+      logDetail: `${field} was not a JSON object`,
+    });
+  }
+  return jsonbCast(sql, text);
+}
+
+/**
+ * `::text::jsonb`, not `::jsonb`: postgres.js types a parameter by the cast after it, so `::jsonb`
+ * would JSON-encode the text a second time and store a jsonb string. `::text` makes the server parse it.
+ */
+function jsonbCast(sql: Db, text: string | null): SqlFragment {
+  return sql`${text}::text::jsonb`;
+}
+
+/**
+ * `JSON.stringify` renders a NUL as the escape backslash-u-0-0-0-0, spelled in words because
+ * `security:hygiene` rejects a literal control character in source.
+ */
+function jsonbText(value: unknown, field: string): string {
   const text = JSON.stringify(value);
   if (typeof text !== 'string') {
     throw new AppError('invalid_request', {
