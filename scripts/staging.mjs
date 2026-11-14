@@ -283,8 +283,15 @@ export function hstsFromRawHeaders(rawHeaders) {
 }
 
 // nginx reads the bind-mounted certificate only at start, so a renewed leaf needs the proxy recreated.
-// Only the proxy: the API and web containers stay pinned by digest.
-export const PROXY_REFRESH_COMPOSE_ARGS = Object.freeze(['up', '-d', '--force-recreate', 'proxy']);
+// Only the proxy: `--no-deps`, because `up proxy` otherwise reconciles api and web too, and recreates
+// them (dropping live hands) whenever `init --rotate` or `--origin` changed their environment.
+export const PROXY_REFRESH_COMPOSE_ARGS = Object.freeze([
+  'up',
+  '-d',
+  '--no-deps',
+  '--force-recreate',
+  'proxy',
+]);
 
 export function refreshStagingProxy(runCompose) {
   if (typeof runCompose !== 'function') {
@@ -293,8 +300,11 @@ export function refreshStagingProxy(runCompose) {
   const args = [...PROXY_REFRESH_COMPOSE_ARGS];
   const services = args.filter((arg) => !arg.startsWith('-'));
   // Naming `api` or `web` would recreate the artefacts `staging up` just pinned by digest.
-  if (!args.includes('--force-recreate') || services[0] !== 'up' || services.slice(1).join() !== 'proxy') {
-    throw new Error(`proxy refresh must be \`up -d --force-recreate proxy\`; got ${JSON.stringify(args)}`);
+  const flagsOk = args.includes('--force-recreate') && args.includes('--no-deps');
+  if (!flagsOk || services[0] !== 'up' || services.slice(1).join() !== 'proxy') {
+    throw new Error(
+      `proxy refresh must be \`up -d --no-deps --force-recreate proxy\`; got ${JSON.stringify(args)}`,
+    );
   }
   return runCompose(args);
 }
@@ -306,12 +316,18 @@ export const CERT_WARN_DAYS = 14;
 export function servedCertificateVerdict({ served, disk, now }) {
   const days = (validTo) => Math.floor((Date.parse(validTo) - now) / 86_400_000);
   if ('problem' in served) {
-    return [{ level: 'cross', line: 'could not read the certificate the proxy serves', detail: served.problem }];
+    return [
+      { level: 'cross', line: 'could not read the certificate the proxy serves', detail: served.problem },
+    ];
   }
   const servedExpiry = `expires ${served.validTo} (${days(served.validTo)} day(s))`;
   const findings = [];
   if (disk === null) {
-    findings.push({ level: 'bang', line: 'no deploy/staging/tls/staging-cert.pem to compare with', detail: servedExpiry });
+    findings.push({
+      level: 'bang',
+      line: 'no deploy/staging/tls/staging-cert.pem to compare with',
+      detail: servedExpiry,
+    });
   } else if (served.fingerprint256 !== disk.fingerprint256) {
     findings.push({
       level: 'cross',
@@ -335,9 +351,17 @@ export function servedCertificateVerdict({ served, disk, now }) {
     ? 'the one on disk is already renewed; `pnpm run staging refresh-tls` loads it'
     : 'renew with `pnpm run staging init`, then `pnpm run staging refresh-tls`';
   if (remaining < 0) {
-    findings.push({ level: 'cross', line: `the served certificate expired ${-remaining} day(s) ago`, detail: fix });
+    findings.push({
+      level: 'cross',
+      line: `the served certificate expired ${-remaining} day(s) ago`,
+      detail: fix,
+    });
   } else if (remaining < CERT_WARN_DAYS) {
-    findings.push({ level: 'bang', line: `the served certificate expires in ${remaining} day(s)`, detail: fix });
+    findings.push({
+      level: 'bang',
+      line: `the served certificate expires in ${remaining} day(s)`,
+      detail: fix,
+    });
   }
   if (findings.length === 0) {
     findings.push({ level: 'tick', line: 'the proxy serves the certificate on disk', detail: servedExpiry });
@@ -1348,10 +1372,22 @@ async function commandStatus(options) {
   const origin = stagingOrigin();
   const proxyRunning = states.find((s) => s.name === 'proxy')?.state === 'running';
   // One loopback handshake with a timeout, so `status` still cannot hang.
-  const tlsFindings =
-    proxyRunning && !('problem' in origin)
-      ? servedCertificateVerdict({ served: await servedCertificate(origin), disk: diskCertificate(), now: Date.now() })
-      : null;
+  let tlsFindings = null;
+  if (proxyRunning && 'problem' in origin) {
+    tlsFindings = [
+      {
+        level: 'cross',
+        line: 'PRL_STAGING_PUBLIC_ORIGIN is unusable, so the served certificate was not checked',
+        detail: origin.problem,
+      },
+    ];
+  } else if (proxyRunning) {
+    tlsFindings = servedCertificateVerdict({
+      served: await servedCertificate(origin),
+      disk: diskCertificate(),
+      now: Date.now(),
+    });
+  }
 
   if (options.json) {
     console.log(
@@ -1368,6 +1404,10 @@ async function commandStatus(options) {
         2,
       ),
     );
+    // Printed as JSON above; recorded here so the exit code still says the check failed.
+    for (const finding of tlsFindings ?? []) {
+      if (finding.level === 'cross') failures.push(`${finding.line} — ${finding.detail}`);
+    }
     return;
   }
 
@@ -1418,7 +1458,10 @@ async function commandRefreshTls() {
     return;
   }
   if (serviceState('proxy').state !== 'running') {
-    cross('the proxy is not running', '`pnpm run staging up` starts it, and it reads the certificate on disk');
+    cross(
+      'the proxy is not running',
+      '`pnpm run staging up` starts it, and it reads the certificate on disk',
+    );
     return;
   }
   console.log(dim('  recreating the proxy container only; api, web and postgres keep running'));
@@ -1432,7 +1475,9 @@ async function commandRefreshTls() {
     cross('the proxy never became healthy', healthy.reason ?? 'unknown');
     return;
   }
-  reportFindings(servedCertificateVerdict({ served: await servedCertificate(origin), disk, now: Date.now() }));
+  reportFindings(
+    servedCertificateVerdict({ served: await servedCertificate(origin), disk, now: Date.now() }),
+  );
 }
 
 // Refuses a promotion unless the attestation's digests equal the manifest's, printing both when they

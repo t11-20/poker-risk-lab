@@ -41,7 +41,7 @@ test('refreshStagingProxy recreates only the TLS proxy, with --force-recreate', 
   assert.equal(calls.length, 1, 'compose must be invoked exactly once');
   assert.deepEqual(
     calls[0],
-    ['up', '-d', '--force-recreate', 'proxy'],
+    ['up', '-d', '--no-deps', '--force-recreate', 'proxy'],
     'nginx only re-reads the bind-mounted cert when the container is recreated',
   );
   assert.deepEqual(
@@ -55,6 +55,10 @@ test('refreshStagingProxy recreates only the TLS proxy, with --force-recreate', 
     'compose receives a copy; mutating it must not change the exported constant',
   );
   assert.ok(calls[0].includes('--force-recreate'), 'without --force-recreate compose would no-op');
+  assert.ok(
+    calls[0].includes('--no-deps'),
+    'without --no-deps `up proxy` also recreates api and web when their environment changed',
+  );
   assert.ok(!calls[0].includes('api'), 'recreating api would drop in-flight rooms and is not a cert refresh');
   assert.ok(!calls[0].includes('web'), 'recreating web is not required to pick up the new leaf');
   assert.equal(result.status, 0);
@@ -535,7 +539,11 @@ test('staging up asks manifestMatchesCheckout before it touches the registry or 
 const CERT_NOW = Date.parse('2026-11-14T00:00:00Z');
 const PREVIOUS_LEAF = { fingerprint256: 'AA:01', validTo: 'Nov 20 18:55:01 2026 GMT' };
 const RENEWED_LEAF = { fingerprint256: 'BB:02', validTo: 'Feb 11 02:43:48 2027 GMT' };
-const served = (cert, authorized = true, authorizationError = null) => ({ ...cert, authorized, authorizationError });
+const served = (cert, authorized = true, authorizationError = null) => ({
+  ...cert,
+  authorized,
+  authorizationError,
+});
 const levels = (findings) => findings.map((f) => `${f.level}: ${f.line}`);
 
 test('a proxy still serving the previous leaf and CA after init is two failures, not a warning', () => {
@@ -550,27 +558,47 @@ test('a proxy still serving the previous leaf and CA after init is two failures,
     'bang: the served certificate expires in 6 day(s)',
   ]);
   assert.match(findings[0].detail, /staging refresh-tls/, 'the failure names the command that fixes it');
-  assert.doesNotMatch(findings[2].detail, /staging init/, 'the leaf is already renewed; init again would mint a third CA');
+  assert.doesNotMatch(
+    findings[2].detail,
+    /staging init/,
+    'the leaf is already renewed; init again would mint a third CA',
+  );
 });
 
 test('the served certificate, not the file, decides the expiry warning', () => {
-  const findings = servedCertificateVerdict({ served: served(PREVIOUS_LEAF), disk: PREVIOUS_LEAF, now: CERT_NOW });
+  const findings = servedCertificateVerdict({
+    served: served(PREVIOUS_LEAF),
+    disk: PREVIOUS_LEAF,
+    now: CERT_NOW,
+  });
   assert.deepEqual(levels(findings), ['bang: the served certificate expires in 6 day(s)']);
   assert.ok(6 < CERT_WARN_DAYS, 'six days must sit inside the warning window for this case to mean anything');
 });
 
 test('the certificate on disk, served and verified, is one tick', () => {
-  const findings = servedCertificateVerdict({ served: served(RENEWED_LEAF), disk: RENEWED_LEAF, now: CERT_NOW });
+  const findings = servedCertificateVerdict({
+    served: served(RENEWED_LEAF),
+    disk: RENEWED_LEAF,
+    now: CERT_NOW,
+  });
   assert.deepEqual(levels(findings), ['tick: the proxy serves the certificate on disk']);
   assert.match(findings[0].detail, /89 day\(s\)/);
 });
 
 test('an expired served certificate fails even when it matches the file', () => {
-  const findings = servedCertificateVerdict({ served: served(PREVIOUS_LEAF), disk: PREVIOUS_LEAF, now: Date.parse('2026-11-22T00:00:00Z') });
+  const findings = servedCertificateVerdict({
+    served: served(PREVIOUS_LEAF),
+    disk: PREVIOUS_LEAF,
+    now: Date.parse('2026-11-22T00:00:00Z'),
+  });
   assert.deepEqual(levels(findings), ['cross: the served certificate expired 2 day(s) ago']);
 });
 
 test('no handshake is a failure, never a silent pass', () => {
-  const findings = servedCertificateVerdict({ served: { problem: 'connect ECONNREFUSED' }, disk: RENEWED_LEAF, now: CERT_NOW });
+  const findings = servedCertificateVerdict({
+    served: { problem: 'connect ECONNREFUSED' },
+    disk: RENEWED_LEAF,
+    now: CERT_NOW,
+  });
   assert.deepEqual(levels(findings), ['cross: could not read the certificate the proxy serves']);
 });
