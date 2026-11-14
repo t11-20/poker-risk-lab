@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { after, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { stripComments } from './helpers/source-scan.ts';
 
 const API_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const REPO_ROOT = join(API_DIR, '..', '..');
@@ -254,14 +255,6 @@ function filesMatchedByPackage(
     const local = file.slice(prefix.length);
     return owned.some((entry) => entry.pattern.test(local));
   });
-}
-
-/**
- * Removes comments, so this file's own prose is not read as a bypass. Copied from
- * `server-randomness.test.ts`. A `//` inside a string confuses it, which errs towards reporting a defect.
- */
-function stripComments(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
 }
 
 /**
