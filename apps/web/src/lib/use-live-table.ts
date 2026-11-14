@@ -484,6 +484,12 @@ function onAckFrame(state: TableState, frame: Extract<WsServerMessage, { type: '
   if (pending === null || pending.requestId !== frame.requestId) {
     return { ...state, notice: null, noticeCode: null };
   }
+  // The server sends the new state before the ack, so a state frame may already have moved past this
+  // decision or ended the hand; "the controls come back" would then sit beside controls already back.
+  const overtaken =
+    state.view !== null &&
+    (state.view.street === 'complete' || state.view.actionSequence !== pending.expectedSequence);
+  if (overtaken) return { ...state, pending: null, submission: null };
   // No sequence number in the sentence; it means nothing to a person.
   const detail =
     frame.deduplicated === true
