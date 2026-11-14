@@ -916,8 +916,9 @@ export function weekBucket(date) {
  * each source is never deleted, whatever the policy says, so an all-zero policy, a skewed clock or a
  * corrupt newest file cannot remove the last recovery. Only good backups can represent a bucket.
  *
- * Grouping by directory once planned the only copy of a 944,297-row database for deletion because
- * another host's newer archive shared the directory. A manifest with no source groups under `null`.
+ * It groups by source, not directory, because another host's newer archive in a shared directory
+ * would otherwise plan the only copy of a database for deletion. A manifest with no source groups
+ * under `null`.
  */
 export function selectForRetention(backups, policy) {
   const usable = backups

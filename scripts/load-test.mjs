@@ -110,8 +110,8 @@ const DEFAULTS = {
    */
   warmupSeconds: 5,
   /**
-   * Optional cap on hands per table per level; 0 lets the hold decide. A default cap of 200 once
-   * ended fast levels after two seconds and reported 7970 hands/minute beside 762.
+   * Optional cap on hands per table per level; 0 lets the hold decide. A default cap of 200 ended fast
+   * levels after two seconds and reported 7970 hands/minute beside 762.
    */
   hands: 0,
   smallBlind: 1,
@@ -1045,8 +1045,7 @@ class Client {
     this.stateWaiters = [];
     /**
      * The latest `state` frame since this socket's `welcome`. Both can be dispatched in one tick
-     * before `connect()` resumes, so a waiter registered afterwards would miss the frame. That race
-     * once caused eight seat timeouts in a fifteen-second level.
+     * before `connect()` resumes, so a waiter registered afterwards would miss the frame.
      */
     this.stateSinceWelcome = null;
   }
@@ -1728,7 +1727,7 @@ function summariseLevel({ level, tables, options, metrics, tableSummaries, readi
       consistencyFailures: [...metrics.consistencyFailures],
     },
     server: summariseServerSide(readings),
-    // Not `tables`, which is the count. Sharing the key once printed "across [object Object] tables".
+    // Not `tables`, which is the count.
     tableOutcomes: tableSummaries.map((table) => ({
       index: table.index,
       handsCompleted: table.handsCompleted,
@@ -2099,10 +2098,7 @@ const num = (value, digits = 1) =>
       ? value.toFixed(digits)
       : 'above top bucket';
 
-/**
- * A histogram bound: `<= 50.0ms`, above the top bucket, or nothing measured. The report once printed
- * `db probe p99 <= 50.0ms` on the run whose signal said 50 ms was exceeded.
- */
+/** A histogram bound: `<= 50.0ms`, above the top bucket, or nothing measured. */
 const boundMs = (value) =>
   value === null || value === undefined
     ? '   -  '
@@ -2222,10 +2218,7 @@ export function renderReport(report) {
       tone: 'warn',
       text: `  ! resource: ${report.saturation.resource} — ${report.saturation.meaning}`,
     });
-    /**
-     * When the limiter stopped the ramp, N is a policy setting. A release review once quoted such a
-     * run as "capacity saturated at 6 seated players".
-     */
+    /** When the limiter stopped the ramp, N is a policy setting, not a capacity. */
     if (report.saturation.stoppedBy.includes('refusal-rate-limited')) {
       lines.push({
         tone: 'warn',
@@ -2346,8 +2339,7 @@ function printReport(report) {
 
 /**
  * Clears the rate-limit counters before provisioning, when this process holds the token. CI runs
- * `test:smoke` first, whose section 12 drains the guest bucket, so runs since 2026-10-11 created
- * "only 0 of 3 guest sessions". The route exists only with `RATE_LIMIT_RESET_TOKEN`, which production
+ * `test:smoke` first, whose section 12 drains the guest bucket. The route exists only with `RATE_LIMIT_RESET_TOKEN`, which production
  * refuses.
  *
  * Returns the number cleared, null with no token, or throws when the server refuses the token or the

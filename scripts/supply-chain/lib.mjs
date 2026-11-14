@@ -263,8 +263,8 @@ export function installedManifests() {
 /**
  * Every physical package root in the virtual store, deduplicated by realpath. pnpm gives one
  * directory per peer-dependency variant, and a file sweep must look inside each, at
- * `<store>/<pkg>@<ver>/node_modules/<pkg>/`. `ioc-scan.mjs` once checked one level too high and
- * could not see `.claude/setup.mjs` in any dependency.
+ * `<store>/<pkg>@<ver>/node_modules/<pkg>/`. One level higher cannot see `.claude/setup.mjs` in any
+ * dependency.
  *
  * @returns {Map<string, {name: string|null, version: string|null, dir: string}>} keyed by realpath
  */

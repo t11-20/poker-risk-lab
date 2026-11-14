@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Gate: no denied package appears in the resolved graph or in the installed store, since a correct
- * lockfile does not imply a correct store. It once passed over 0 installed versions, so it now
+ * lockfile does not imply a correct store. A sweep over 0 installed versions is not a pass, so it
  * requires store coverage (`requireStoreCoverage` in lib.mjs).
  */
 

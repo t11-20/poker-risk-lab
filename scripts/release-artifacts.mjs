@@ -353,8 +353,7 @@ export function probeRoot(workingDir) {
 }
 
 // Separate from `checkArtefact` so it can be tested without Docker. Examining zero files is a failure,
-// because an empty result looks exactly like a clean image. `AGENTS.md` and `CLAUDE.md` once shipped
-// inside the web image.
+// because an empty result looks exactly like a clean image.
 export function filesystemProblems(hits, workingDir) {
   const problems = [];
   const root = hits?.root ?? '(unknown)';
@@ -404,8 +403,8 @@ export function filesystemProblems(hits, workingDir) {
 
 /**
  * Checks the built artefact, not the Dockerfile: runs as `node`, no repository markdown outside
- * node_modules, no `.env*`, and no credential material. `.dockerignore` once anchored `*.md` to the
- * root and the web image shipped `apps/web/AGENTS.md`. Dependency READMEs under node_modules are skipped.
+ * node_modules, no `.env*`, and no credential material. A `.dockerignore` `*.md` anchored to the root
+ * lets `apps/web/AGENTS.md` through. Dependency READMEs under node_modules are skipped.
  */
 function checkArtefact(reference, meta, note) {
   const problems = [];

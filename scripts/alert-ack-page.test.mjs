@@ -496,7 +496,7 @@ describe('the command, run for real', () => {
 
   it('passes an unattended rehearsal, and never prints the code while doing it', async (context) => {
     // The whole passing path of `main()`. The code from the record must appear nowhere in stdout,
-    // because a robot once scraped it from there.
+    // because a robot can scrape it from there.
     for (const port of SINK_PORTS) {
       if (await portIsFree(port)) continue;
       context.skip(

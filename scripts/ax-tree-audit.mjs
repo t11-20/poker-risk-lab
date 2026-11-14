@@ -64,7 +64,7 @@ const JOURNEYS = [
 
 /**
  * The h1 of this app's error boundaries. They return HTTP 200, so a route that rendered one is
- * refused rather than audited. A stale server once produced a confident pass over the error page.
+ * refused rather than audited.
  */
 const ERROR_BOUNDARY_HEADINGS = [
   /^this screen did not load$/iu,

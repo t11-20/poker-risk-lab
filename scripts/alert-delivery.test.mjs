@@ -747,7 +747,6 @@ describe('the counts docs/production/alerts.md states about itself', () => {
   };
 
   it('agrees with the number of rules that actually exist', () => {
-    // The document once said "all twenty-two rules" while the file held twenty-three.
     const total = alertsInRulesFile(RULES).size;
     const stated = /establishes four things about \*\*all ([a-z-]+)\*\* rules/.exec(DOC);
     assert.ok(stated !== null, 'the document no longer states how many rules it covers');

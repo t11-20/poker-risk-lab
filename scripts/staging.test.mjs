@@ -86,11 +86,11 @@ test('the shipped argv cannot name api or web even if a caller mutates their cop
   assert.ok(!PROXY_REFRESH_COMPOSE_ARGS.includes('web'));
 });
 
-// The HSTS check once probed `/api/v1/health`, where the API sets its own header, so it passed with
-// nginx's `add_header` deleted and missed that every `/api/*` response carried two headers.
+// `/api/v1/health` sets its own HSTS header, so probing it passes with nginx's `add_header` deleted
+// and misses every `/api/*` response carrying two headers.
 
 test('hstsFromRawHeaders returns every value, in wire order, and counts duplicates', () => {
-  // What `curl -D -` showed against the proxy before the fix.
+  // What `curl -D -` showed against a proxy that doubled the header.
   const raw = [
     'Content-Type',
     'application/json',
@@ -151,7 +151,7 @@ test('HSTS_EXPECTED is the policy deploy/staging/nginx.conf actually sets', () =
   );
 });
 
-// Registry leg. Each case is a shape measured against a real `registry:2` on 2026-08-25. A
+// Registry leg. Each case is a shape measured against a real `registry:2`. A
 // manifest whose registry block did not verify must still produce `pull_policy: never`.
 
 test('parsePushDigest reads the digest docker push reported, not the one beside it', () => {

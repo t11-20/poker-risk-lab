@@ -5,7 +5,7 @@
  * in an agent or editor re-runs the payload. IOC definitions live in ./denied-packages.mjs.
  *
  * Package files sit at `<store>/<pkg>@<ver>/node_modules/<pkg>/`, so the sweep walks physical
- * package roots; it once looked one level too high and found nothing. A missing or incomplete store
+ * package roots; one level higher finds nothing. A missing or incomplete store
  * fails rather than warns.
  */
 
@@ -57,7 +57,7 @@ const TEXT_EXTENSIONS = new Set([
 ]);
 
 /**
- * Files identified by name. `extensionOf` gives `Dockerfile.api` `.api`, so the sweep once skipped
+ * Files identified by name. `extensionOf` gives `Dockerfile.api` `.api`, so a sweep by extension skips
  * a `RUN curl … | sh` line or a `.dockerignore` that stopped excluding `.env`.
  */
 const TEXT_NAMES = /^(?:Dockerfile(?:\..+)?|\.dockerignore|Caddyfile)$/;

@@ -3,7 +3,7 @@
  * Tests for the deciding parts of `scripts/release-artifacts.mjs`.
  * Importing the module must not run it. If the `startedFromCommandLine()` guard goes, this file
  * builds two Docker images, so `the module is inert on import` checks the structure from source.
- * The probe tests exist because `apps/web/AGENTS.md` once shipped inside the web image. An empty
+ * The probe tests keep repository markdown such as `apps/web/AGENTS.md` out of the web image. An empty
  * walk must fail, and `probeRoot` returns the top-level ancestor of WorkingDir on purpose.
  *
  * Run with:  node --test scripts/release-artifacts.test.mjs

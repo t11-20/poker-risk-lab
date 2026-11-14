@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Tests for install hooks of versions not installed on this machine: 58 of 162 here, every Linux
- * binary on macOS, which the gate once passed over without naming. Fixture manifests, no network.
+ * binary on macOS, which the gate must name rather than pass over. Fixture manifests, no network.
  */
 
 import assert from 'node:assert/strict';

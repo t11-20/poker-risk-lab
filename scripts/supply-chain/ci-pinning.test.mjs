@@ -189,7 +189,6 @@ describe('action pinning', () => {
     assert.match(failureText(gate), /service container is not digest-pinned/);
   });
 
-  // The `container: node:22` shorthand once passed with exit 0 while the map form failed.
   it('FAILS on the job-level `container:` SHORTHAND, not just the `image:` map form', () => {
     const gate = new Gate('t');
     checkWorkflowPinning(gate, 'ci.yml', 'jobs:\n  a:\n    runs-on: ubuntu-24.04\n    container: node:22\n');
@@ -222,7 +221,7 @@ describe('action pinning', () => {
   });
 });
 
-// YAML flow styles. Each of these once passed with 0 references judged.
+// YAML flow styles. Each of these must fail rather than pass with 0 references judged.
 
 describe('keys the readers cannot see', () => {
   const unread = [
@@ -273,7 +272,7 @@ describe('keys the readers cannot see', () => {
   });
 });
 
-// A composite action with an unpinned `uses:` once passed because its file was never opened.
+// A composite action's file must be opened, or its unpinned `uses:` passes.
 
 describe('local action files', () => {
   it('discovers an action.yml anywhere but the skipped directories', () => {
@@ -297,7 +296,7 @@ describe('local action files', () => {
   });
 });
 
-// `runs-on` in every spelling GitHub accepts. A single regex once passed all but the plain scalar.
+// `runs-on` in every spelling GitHub accepts.
 
 /** A GitHub Actions expression, built through a substitution for the same reason as `interpolation`. */
 const ghExpression = (body) => `\u0024{{ ${body} }}`;
@@ -507,8 +506,8 @@ describe('container base images', () => {
     assert.match(failureText(gate), /compose image is not digest-pinned/);
   });
 
-  // `FROM node AS node` once registered the stage before testing it, and passed an unpinned image
-  // with exit 0. Both the shadowing case and the legitimate one are asserted.
+  // Registering `FROM node AS node` before testing it passes an unpinned image. Both the shadowing
+  // case and the legitimate one are asserted.
 
   it('FAILS on `FROM node AS node` — a stage named after its own image', () => {
     const gate = new Gate('t');
@@ -576,7 +575,7 @@ describe('container base images', () => {
   });
 });
 
-// Discovery. A non-recursive walk once never read `deploy/staging/compose.yml` or `compose.yml`.
+// Discovery. A non-recursive walk never reads `deploy/staging/compose.yml` or `compose.yml`.
 
 const temporary = [];
 after(() => {
@@ -693,7 +692,7 @@ describe('digest-bearing compose interpolation', () => {
   });
 
   it('reads the WHOLE value, not the first word', () => {
-    // The message contains spaces; a `\S+` capture once judged only the first word.
+    // The message contains spaces; a `\S+` capture judges only the first word.
     const gate = new Gate('t');
     checkComposePinning(gate, 'compose.yml', compose('postgres:16 with trailing words'));
     assert.match(failureText(gate), /postgres:16 with trailing words/);

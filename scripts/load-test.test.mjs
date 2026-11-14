@@ -418,7 +418,7 @@ describe('parseExposition, against a real captured scrape', () => {
   });
 
   it('separates "above the top bound" from "nothing was measured"', () => {
-    // Everything landed above the top bound. This once returned null, which also means no data.
+    // Everything landed above the top bound, which must not read as null, the no-data answer.
     const overflowing = {
       buckets: [
         { le: 1, cumulative: 0 },
@@ -645,8 +645,8 @@ describe('evaluateStopCriteria', () => {
   });
 
   it('stops when the level had no usable server-side half, rather than passing on client timings', () => {
-    // This test once asserted `stop === false`. That let a level with no usable scrapes pass on client
-    // timings and publish a capacity of 24, and it hid `refusal-rate-limited` entirely.
+    // `stop === false` here would let a level with no usable scrapes pass on client timings and
+    // publish a capacity, and would hide `refusal-rate-limited` entirely.
     const verdict = evaluateStopCriteria(
       level({
         server: {
@@ -738,7 +738,7 @@ describe('classifySaturation', () => {
   });
 
   it('does not blame the pool for a bound that MEETS the threshold (NEGATIVE CONTROL)', () => {
-    // 50 ms is a bound meaning "99% within 50 ms", so the threshold is met. `>=` once blamed db-pool
+    // 50 ms is a bound meaning "99% within 50 ms", so the threshold is met. `>=` would blame db-pool
     // for a three-player level at 0.4 requests per second.
     const verdict = classifySaturation(
       level({ server: { dbProbeP99BoundMs: THRESHOLDS.dbProbeP99Ms } }),
@@ -1111,7 +1111,7 @@ describe('parseArgs', () => {
     assert.deepEqual(options.levels, [1, 2, 4, 8]);
     assert.equal(options.seats, 3);
     assert.equal(options.holdSeconds, 15);
-    // A default cap of 200 once truncated every fast level after about two seconds.
+    // A default cap of 200 truncates every fast level after about two seconds.
     assert.equal(options.hands, 0);
     assert.equal(options.coach, true);
     assert.equal(options.reconnect, true);

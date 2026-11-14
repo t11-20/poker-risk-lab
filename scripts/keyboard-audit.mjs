@@ -835,8 +835,8 @@ async function auditNarrowViewport(page) {
       ok('Narrow viewport: focus moves into the sheet on open', `on "${opened.activeName}"`);
     else bad('Narrow viewport: menu', `focus stayed outside the sheet, on "${opened.activeName}"`);
 
-    // The sheet must fill the viewport. A header `backdrop-filter` once made the fixed sheet 76px tall
-    // while every keyboard check passed. `elementFromPoint` checks what a tap hits.
+    // The sheet must fill the viewport: a header `backdrop-filter` can make the fixed sheet 76px tall
+    // while every keyboard check passes. `elementFromPoint` checks what a tap hits.
     const geometry = await page.evaluate(
       `(() => {
         const dialog = document.querySelector('[role="dialog"]');

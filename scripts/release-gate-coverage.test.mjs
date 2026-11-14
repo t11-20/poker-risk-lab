@@ -143,8 +143,7 @@ describe('the README does not promise a gate count the audit does not run', () =
   });
 });
 
-// The README Stack line had all four versions wrong on 2026-11-11. It is joined here to the exact
-// pins in the package.json files.
+// The README Stack line is joined here to the exact pins in the package.json files.
 describe('the README Stack line names the versions that are pinned', () => {
   const README = readFileSync(join(REPO_ROOT, 'README.md'), 'utf8');
   const pinned = (workspace, name) => {

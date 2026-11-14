@@ -1616,8 +1616,8 @@ const TURN_REGION = /prl-play__decision>prl-live-region/u;
 
 const TURN_DWELL_MS = 10_000;
 
-// `setTimeout` is a minimum and `Date.now()` can be stepped, and the gate once failed on a 9999ms
-// dwell. 250ms is 2.5% of the dwell, and anything that genuinely cut it short is off by seconds.
+// `setTimeout` is a minimum and `Date.now()` can be stepped, and a 9999ms dwell has been measured.
+// 250ms is 2.5% of the dwell, and anything that genuinely cut it short is off by seconds.
 const TURN_DWELL_TOLERANCE_MS = 250;
 
 const FOLD_ECHO = /^You chose to fold\./u;
@@ -1684,9 +1684,8 @@ const TABLE_START_JS = `(() => {
 })()`;
 
 /**
- * `first visit`, `reconnected`, or null while deciding. Since PR #32 a tab that remembers a room
- * reconnects and offers the manual controls instead of "Deal me in" (CI run 43245665934 failed 6.7 on
- * this). "Reconnecting" is waited out so a pass line can say which state it measured.
+ * `first visit`, `reconnected`, or null while deciding. A tab that remembers a room reconnects and
+ * offers the manual controls instead of "Deal me in". "Reconnecting" is waited out so a pass line can say which state it measured.
  */
 export function tableStartPath(snapshot) {
   if (snapshot === null || snapshot === undefined || snapshot.reconnecting) return null;
@@ -2263,7 +2262,7 @@ const LIVE_TABLE_CHECKS = [
 const SERVER_REFUSED = /The server refused it/u;
 
 // A shape, not a string, because which refusal arrives depends on timing. A contract code in the
-// text fails, because the page stopped printing codes after the audit at 308fadf.
+// text fails, because the page does not print codes.
 const SERVER_REFUSAL_REASON = /The server refused it\s*(\S[\s\S]*?[.!?])\s*Nothing was applied\./u;
 const CONTRACT_CODE = /\([a-z]+(?:_[a-z]+)+\)/u;
 
@@ -2830,7 +2829,7 @@ const listHandSummaries = (page) =>
     )
     .then((hands) => hands ?? []);
 
-// Counted by hand id. CI run 43245665934 counted one hand read three times as three.
+// Counted by hand id, so one hand read three times counts once.
 export function tallyListedHands(reads) {
   const listed = new Set();
   const boardless = new Set();

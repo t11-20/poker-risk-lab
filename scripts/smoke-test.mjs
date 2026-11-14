@@ -310,8 +310,8 @@ export function originBucketNote(origin) {
 }
 
 /**
- * True when `value` is not a non-empty array. Section 5 once used `?.length === 0` with no `else`,
- * so a missing `uncertainty` object produced neither a pass nor a failure.
+ * True when `value` is not a non-empty array, so a missing `uncertainty` object fails rather than
+ * producing neither a pass nor a failure.
  */
 export function listIsMissingOrEmpty(value) {
   return !Array.isArray(value) || value.length === 0;
@@ -1670,10 +1670,8 @@ async function sectionProgress(alice) {
 /**
  * 10. The HTML origin carries an effective CSP.
  *
- * The page origin once served no policy while `THEME_BOOT_SCRIPT_CSP_HASH` sat unused, and only a
- * real response shows that. `apps/web/test/csp-policy.test.ts` checks the policy's shape. This checks
- * it arrived and that Next stamped the nonce on the scripts, because without that the page never
- * hydrates.
+ * `apps/web/test/csp-policy.test.ts` checks the policy's shape. Only a real response shows that it
+ * arrived and that Next stamped the nonce on the scripts, because without that the page never hydrates.
  */
 async function sectionWebHeaders() {
   section('10. Web origin security headers');

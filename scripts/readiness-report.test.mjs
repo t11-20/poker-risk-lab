@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
  * The readiness report and the release manifest are one record and must not drift.
- * The report once stated two digests that were never the candidate's while the manifest was right.
- * The check that catches that is the reverse one: every digest the manifest built must appear in the
+ * A report can state digests that were never the candidate's while the manifest is right, and
+ * the check that catches that is the reverse one: every digest the manifest built must appear in the
  * report. Superseded digests are exempted by exact value, never by heading or prose.
  *
  * Run with:  node --test scripts/readiness-report.test.mjs
@@ -150,9 +150,8 @@ describe('the readiness report cannot drift from the release manifest', { skip: 
   });
 });
 
-// The counts. A commit once updated only the three manifest-joined fields and left 2,065 tests, 29
-// rules and "gate twelve" describing an older candidate. These join the counts to the files that
-// produce them, need no built release, and so never skip. The current inventory must appear in the
+// The counts, because updating only the three manifest-joined fields leaves the rest describing an
+// older candidate. These join the counts to the files that produce them, need no built release, and so never skip. The current inventory must appear in the
 // document. Stamped capture rows are exempted by exact text.
 
 const RULES_PATH = join(REPO_ROOT, 'deploy', 'staging', 'observability', 'alert-rules.yml');

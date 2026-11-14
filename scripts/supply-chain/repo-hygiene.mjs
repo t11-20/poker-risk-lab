@@ -34,8 +34,8 @@ const CHECK_EXTENSIONS = new Set([
 ]);
 
 /**
- * Files identified by name. `extensionOf` gives `Dockerfile.api` the extension `.api`, so both
- * Dockerfiles and `.dockerignore` were once never checked.
+ * Files identified by name. `extensionOf` gives `Dockerfile.api` the extension `.api`, so an
+ * extension match never checks the Dockerfiles or `.dockerignore`.
  */
 const CHECK_NAMES = /^(?:Dockerfile(?:\..+)?|\.dockerignore|Caddyfile)$/;
 

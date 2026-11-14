@@ -69,7 +69,7 @@ describe('denied names and scopes', () => {
 
 describe("coverage of the campaign named in the repository's own sources", () => {
   it('denies every ecosystem the advisory snapshot names', () => {
-    // Snapshot §1 names TanStack, Mistral AI and OpenSearch. They were once missing from DENIED_SCOPES.
+    // Snapshot §1 names TanStack, Mistral AI and OpenSearch.
     for (const scope of ['@antv/', '@tanstack/', '@mistralai/', '@opensearch-project/', '@cacheable/']) {
       assert.ok(DENIED_SCOPES.has(scope), `${scope} is named in the cited sources but not denied`);
     }

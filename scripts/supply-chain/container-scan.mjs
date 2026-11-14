@@ -1,9 +1,7 @@
 #!/usr/bin/env node
 /**
  * Gate: the shipped container images are scanned for known vulnerabilities with trivy. The npm gates
- * cannot see OS packages, and the first run against the Debian web image found 38 HIGH or CRITICAL.
- * The unfixable count it printed (60 across two images) moved both Dockerfiles to Alpine on
- * 2026-08-25, which cleared all 60.
+ * cannot see OS packages.
  *
  * It fails when trivy is missing, its database is unreachable, it identified no OS, or there are no
  * images. A finding blocks at or above `--severity` (default HIGH) when a fix exists. Unfixable

@@ -2,8 +2,8 @@
 /**
  * Gate: the release pipeline runs every gate in `pnpm run verify`.
  * It reads the `for gate in ...` clause of `verify` and fails when a gate does not run in release.yml's
- * artefact job or a job it transitively `needs`, or nowhere in ci.yml. Gates drifted out of
- * release.yml before (eight of fourteen once ran nowhere in it), so adding a gate is a three-file change.
+ * artefact job or a job it transitively `needs`, or nowhere in ci.yml, so adding a gate is a
+ * three-file change.
  * Comment lines are stripped before the search, because prose full of gate names matches anything.
  *
  * Run with:  node scripts/release-gate-coverage.mjs

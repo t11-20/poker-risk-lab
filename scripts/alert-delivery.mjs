@@ -234,8 +234,7 @@ export function expressionsInRulesFile(text) {
       continue;
     }
     if (current === null) continue;
-    // Only an `expr:` at this rule's key indent counts. Annotation prose quotes expressions, and one
-    // once replaced the real `expr`.
+    // Only an `expr:` at this rule's key indent counts, because annotation prose quotes expressions.
     if (/^\s*-\s/.test(line) && indent < keyIndent) {
       current = null;
       keyIndent = -1;
@@ -1482,7 +1481,7 @@ async function main() {
         await new Promise((done) => setTimeout(done, 3_000));
         const webhooksBefore = sink.received.length;
         const mailsBefore = mail.received.length;
-        // Recorded first. A heartbeat routed to an unwatched path once reported a vacuous green silence.
+        // Recorded first, so a heartbeat routed to an unwatched path cannot report a vacuous silence.
         const pingsBeforeStop = arrivals().length;
         const silence = await watchForSilence(arrivals, deadlineMs, deadlineMs + 90_000);
         // The incident `alerting-blind.md` opens with. Rules fire and nothing is delivered.
