@@ -571,7 +571,7 @@ jobs:
       - name: Stop the web app
         if: always()
         # `pnpm --filter … start` is a wrapper, so killing the recorded pid can leave Next holding the
-        # port (see ManagedServer in scripts/a11y-audit.mjs).
+        # port (see ManagedServer in scripts/gate-servers.mjs).
         run: |
           kill "$(cat /tmp/web.pid)" || true
           pkill -f 'next start' || true

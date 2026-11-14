@@ -20,10 +20,8 @@
  * `/age-check` is recorded as unauditable. Audit the interstitial with `--routes /age-check`.
  */
 
-import { spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { connect } from 'node:net';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 // The gate's own constants, so the cookie this seeds is the one the proxy reads.
@@ -32,6 +30,7 @@ import {
   AGE_GATE_MINIMUM_CEILING,
   AGE_GATE_PATH,
 } from '../apps/web/src/lib/age-gate.ts';
+import { ManagedServer, refuseOccupiedPort } from './gate-servers.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
@@ -985,103 +984,13 @@ function checkAttrValue(name, value, spec, byId) {
 }
 
 /** Servers get an explicit `PORT` so they listen where the audit looks. */
+const OCCUPIED_PORT_ADVICE =
+  '--start audits a server this run started, so it will not score one it did not. Stop it, pass ' +
+  'another --base-url/--api-url, or pass --no-start to audit that server on purpose.';
+
 function portFromOrigin(origin, fallback) {
   const port = new URL(origin).port;
   return port === '' ? fallback : port;
-}
-
-/** As `refuseOccupiedPort` in `ax-tree-audit.mjs`, which says why it connects rather than binds. */
-async function refuseOccupiedPort(port) {
-  const outcome = await new Promise((done) => {
-    const socket = connect({ host: '127.0.0.1', port: Number(port) });
-    socket.setTimeout(2000);
-    socket.once('connect', () => {
-      socket.destroy();
-      done('accepted');
-    });
-    socket.once('timeout', () => {
-      socket.destroy();
-      done('was neither accepted nor refused within 2s');
-    });
-    socket.once('error', (error) =>
-      done(error.code === 'ECONNREFUSED' ? 'refused' : `failed (${error.code})`),
-    );
-  });
-  if (outcome !== 'refused') {
-    const seen = outcome === 'accepted' ? 'something is already listening' : `a probe connection ${outcome}`;
-    throw new Error(
-      `${seen} on 127.0.0.1:${port}. --start audits a server this run ` +
-        'started, so it will not score one it did not. Stop it, pass another --base-url/--api-url, ' +
-        'or pass --no-start to audit that server on purpose.',
-    );
-  }
-}
-
-/** `pnpm --filter ... start` is a wrapper, so the server is detached and signalled by process group. */
-class ManagedServer {
-  constructor(label, args, readyUrl, env) {
-    this.label = label;
-    this.args = args;
-    this.readyUrl = readyUrl;
-    this.env = env;
-    this.child = null;
-    this.output = [];
-    this.exited = null;
-  }
-
-  start() {
-    this.child = spawn('pnpm', this.args, {
-      cwd: REPO_ROOT,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      detached: true,
-      env: { ...process.env, ...this.env },
-    });
-    const keep = (chunk) => {
-      // Printed only if the server fails to become ready.
-      this.output.push(chunk.toString());
-      if (this.output.length > 200) this.output.shift();
-    };
-    this.child.stdout.on('data', keep);
-    this.child.stderr.on('data', keep);
-    this.child.on('exit', (code, signal) => {
-      this.exited = signal ?? code;
-    });
-  }
-
-  async waitUntilReady(timeoutSeconds) {
-    const deadline = Date.now() + timeoutSeconds * 1000;
-    for (;;) {
-      if (this.exited !== null) {
-        throw new Error(
-          `${this.label} exited (${this.exited}) before it was ready:\n${this.output.join('')}`,
-        );
-      }
-      try {
-        const response = await fetch(this.readyUrl, { signal: AbortSignal.timeout(2000) });
-        // Any HTTP answer means the server is listening.
-        if (response.status > 0) return;
-      } catch {
-        // Not up yet.
-      }
-      if (Date.now() >= deadline) {
-        throw new Error(
-          `${this.label} was not ready at ${this.readyUrl} within ${timeoutSeconds}s:\n${this.output.join('')}`,
-        );
-      }
-      await new Promise((r) => setTimeout(r, 300));
-    }
-  }
-
-  stop() {
-    if (this.child === null || this.child.pid === undefined) return;
-    try {
-      process.kill(-this.child.pid, 'SIGTERM');
-    } catch (err) {
-      if (!(err instanceof Error && 'code' in err && err.code === 'ESRCH')) {
-        console.log(dim(`  could not stop ${this.label}: ${err.message}`));
-      }
-    }
-  }
 }
 
 /**
@@ -1160,7 +1069,10 @@ try {
         },
       );
       servers.push(api);
-      await refuseOccupiedPort(portFromOrigin(options.apiUrl, '3001'));
+      await refuseOccupiedPort(
+        `http://127.0.0.1:${portFromOrigin(options.apiUrl, '3001')}`,
+        OCCUPIED_PORT_ADVICE,
+      );
       console.log(dim('  starting the API...'));
       api.start();
       await api.waitUntilReady(options.readyTimeoutSeconds);
@@ -1172,7 +1084,10 @@ try {
       PORT: portFromOrigin(options.baseUrl, '3000'),
     });
     servers.push(web);
-    await refuseOccupiedPort(portFromOrigin(options.baseUrl, '3000'));
+    await refuseOccupiedPort(
+      `http://127.0.0.1:${portFromOrigin(options.baseUrl, '3000')}`,
+      OCCUPIED_PORT_ADVICE,
+    );
     console.log(dim('  starting the web app...'));
     web.start();
     await web.waitUntilReady(options.readyTimeoutSeconds);

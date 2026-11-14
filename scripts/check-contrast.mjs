@@ -11,13 +11,12 @@
  * reported but not asserted (WCAG exempts inactive controls). Exits 1 if any pass fails.
  */
 
-import { spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { connect } from 'node:net';
+import { readFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inflateSync } from 'node:zlib';
-import { waitForDevtools } from './chrome-devtools.mjs';
+import { withChrome } from './chrome-devtools.mjs';
+import { ManagedServer, refuseOccupiedPort } from './gate-servers.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const TOKENS = join(REPO_ROOT, 'packages/ui/src/styles/tokens.css');
@@ -1423,8 +1422,6 @@ function uniformColour(image) {
   return first;
 }
 
-// CDP client copied, not shared, from ax-tree-audit.mjs so one gate cannot break another.
-
 class Page {
   #socket;
   #nextId = 1;
@@ -1504,52 +1501,18 @@ class Page {
   }
 }
 
-const CHROME_CANDIDATES = [
-  process.env.CHROME_PATH,
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  '/Applications/Chromium.app/Contents/MacOS/Chromium',
-  '/usr/bin/google-chrome',
-  '/usr/bin/chromium',
-  '/usr/bin/chromium-browser',
-].filter((path) => typeof path === 'string' && path !== '');
-
-function chromePath() {
-  const found = CHROME_CANDIDATES.find((path) => existsSync(path));
-  if (found === undefined) {
-    throw new Error(
-      `no Chrome found. Set CHROME_PATH, or install one of:\n${CHROME_CANDIDATES.map((p) => `  ${p}`).join('\n')}`,
-    );
-  }
-  return found;
-}
-
-async function withChrome(headful, run) {
-  const binary = chromePath();
-  // Clear of the keyboard-audit and ax-tree-audit port ranges.
-  const port = 9650 + Math.floor(process.pid % 140);
-  const child = spawn(
-    binary,
-    [
-      headful ? '--no-first-run' : '--headless=new',
-      `--remote-debugging-port=${port}`,
-      '--user-data-dir=/tmp/prl-contrast-paint-profile',
-      '--no-first-run',
-      '--no-default-browser-check',
-      '--disable-background-timer-throttling',
-      `--window-size=${PAINTED_VIEWPORT.width},${PAINTED_VIEWPORT.height}`,
-      'about:blank',
-    ],
-    { stdio: 'ignore' },
-  );
-
-  try {
-    const version = await waitForDevtools(child, port);
+async function withPage(headful, run) {
+  const chrome = {
+    headful,
+    // Clear of the keyboard-audit and ax-tree-audit port ranges.
+    port: 9650 + Math.floor(process.pid % 140),
+    profile: '/tmp/prl-contrast-paint-profile',
+    flags: [`--window-size=${PAINTED_VIEWPORT.width},${PAINTED_VIEWPORT.height}`],
+    dim,
+  };
+  await withChrome(chrome, async ({ version, openTab }) => {
     console.log(dim(`  ${version.Browser} - ${headful ? 'headful' : 'headless'}`));
-
-    const target = await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: 'PUT' }).then((r) =>
-      r.json(),
-    );
-    const page = await Page.open(target.webSocketDebuggerUrl);
+    const page = await Page.open(await openTab());
     await page.send('Page.enable');
     await page.send('Runtime.enable');
     // A device-metrics override, because a resized headless window does not reliably move media or
@@ -1565,101 +1528,7 @@ async function withChrome(headful, run) {
     } finally {
       page.close();
     }
-  } finally {
-    child.kill('SIGTERM');
-  }
-}
-
-/** As `refuseOccupiedPort` in `ax-tree-audit.mjs`, which says why it connects rather than binds. */
-async function refuseOccupiedPort(url) {
-  const { hostname, port, protocol } = new URL(url);
-  const host = hostname.replace(/^\[(.*)\]$/, '$1');
-  const target = { host, port: Number(port || (protocol === 'https:' ? 443 : 80)) };
-  const outcome = await new Promise((done) => {
-    const socket = connect(target);
-    socket.setTimeout(2000);
-    socket.once('connect', () => {
-      socket.destroy();
-      done('accepted');
-    });
-    socket.once('timeout', () => {
-      socket.destroy();
-      done('was neither accepted nor refused within 2s');
-    });
-    socket.once('error', (error) =>
-      done(error.code === 'ECONNREFUSED' ? 'refused' : `failed (${error.code})`),
-    );
   });
-  if (outcome === 'refused') return;
-  const seen = outcome === 'accepted' ? 'something is already listening' : `a probe connection ${outcome}`;
-  throw new Error(
-    `${seen} on ${host}:${String(target.port)}. This gate starts the web app it measures, so it ` +
-      'will not score one it did not. Stop it, pass another --base-url, or pass --no-start to ' +
-      'measure that server on purpose.',
-  );
-}
-
-/** `pnpm --filter ... start` is a wrapper, so the server is detached and signalled by process group. */
-class ManagedServer {
-  constructor(label, args, readyUrl, env) {
-    this.label = label;
-    this.args = args;
-    this.readyUrl = readyUrl;
-    this.env = env;
-    this.child = null;
-    this.output = [];
-    this.exited = null;
-  }
-
-  start() {
-    this.child = spawn('pnpm', this.args, {
-      cwd: REPO_ROOT,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      detached: true,
-      env: { ...process.env, ...this.env },
-    });
-    const keep = (chunk) => {
-      this.output.push(chunk.toString());
-      if (this.output.length > 200) this.output.shift();
-    };
-    this.child.stdout.on('data', keep);
-    this.child.stderr.on('data', keep);
-    this.child.on('exit', (code, signal) => {
-      this.exited = signal ?? code;
-    });
-  }
-
-  async waitUntilReady(timeoutSeconds) {
-    const deadline = Date.now() + timeoutSeconds * 1000;
-    for (;;) {
-      if (this.exited !== null) {
-        throw new Error(
-          `${this.label} exited (${this.exited}) before it was ready:\n${this.output.join('')}`,
-        );
-      }
-      const answered = await fetch(this.readyUrl, { signal: AbortSignal.timeout(2000) })
-        .then((response) => response.status > 0)
-        .catch(() => false);
-      if (answered) return;
-      if (Date.now() >= deadline) {
-        throw new Error(
-          `${this.label} was not ready at ${this.readyUrl} within ${timeoutSeconds}s:\n${this.output.join('')}`,
-        );
-      }
-      await delay(300);
-    }
-  }
-
-  stop() {
-    if (this.child === null || this.child.pid === undefined) return;
-    try {
-      process.kill(-this.child.pid, 'SIGTERM');
-    } catch (err) {
-      if (!(err instanceof Error && 'code' in err && err.code === 'ESRCH')) {
-        console.log(dim(`  could not stop ${this.label}: ${err.message}`));
-      }
-    }
-  }
 }
 
 const walkerSource = (measureAll, probeBudget) =>
@@ -1831,7 +1700,11 @@ async function runPaintedPass(options) {
 
   try {
     if (options.start) {
-      await refuseOccupiedPort(options.baseUrl);
+      await refuseOccupiedPort(
+        options.baseUrl,
+        'This gate starts the web app it measures, so it will not score one it did not. Stop it, pass ' +
+          'another --base-url, or pass --no-start to measure that server on purpose.',
+      );
       const web = new ManagedServer('web', ['--filter', '@prl/web', 'start'], options.baseUrl, {
         NODE_ENV: 'production',
         PORT: new URL(options.baseUrl).port,
@@ -1844,7 +1717,7 @@ async function runPaintedPass(options) {
       console.log(dim(`  measuring the server already running at ${options.baseUrl}`));
     }
 
-    await withChrome(options.headful, async (page) => {
+    await withPage(options.headful, async (page) => {
       for (const condition of PAINTED_CONDITIONS) {
         // Motion off for every condition. With it on, `/` reported the home guardrail 10/255 light
         // because the panel had not landed.

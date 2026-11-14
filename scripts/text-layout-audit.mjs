@@ -16,13 +16,12 @@
  * sweep reported 52 findings, and the collision showed only at 1024, 1440 and 1920.
  */
 
-import { spawn } from 'node:child_process';
-import { existsSync, writeFileSync } from 'node:fs';
-import { connect } from 'node:net';
+import { writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
-import { waitForDevtools } from './chrome-devtools.mjs';
+import { withChrome } from './chrome-devtools.mjs';
+import { ManagedServer, refuseOccupiedPort } from './gate-servers.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -894,8 +893,6 @@ export function coverageFailures(tally, exemptions = EXEMPTIONS) {
   return problems;
 }
 
-// CDP client copied, not shared, from ax-tree-audit.mjs so one gate cannot break another.
-
 class Page {
   #socket;
   #nextId = 1;
@@ -977,54 +974,22 @@ class Page {
   }
 }
 
-const CHROME_CANDIDATES = [
-  process.env.CHROME_PATH,
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  '/Applications/Chromium.app/Contents/MacOS/Chromium',
-  '/usr/bin/google-chrome',
-  '/usr/bin/chromium',
-  '/usr/bin/chromium-browser',
-].filter((path) => typeof path === 'string' && path !== '');
-
-function chromePath() {
-  const found = CHROME_CANDIDATES.find((path) => existsSync(path));
-  if (found === undefined) {
-    throw new Error(
-      `no Chrome found. Set CHROME_PATH, or install one of:\n${CHROME_CANDIDATES.map((p) => `  ${p}`).join('\n')}`,
-    );
-  }
-  return found;
-}
-
-async function withChrome(headful, run) {
-  const binary = chromePath();
-  // Clear of ax-tree-audit's debugging-port range.
-  const port = 9650 + Math.floor(process.pid % 140);
-  const child = spawn(
-    binary,
-    [
-      headful ? '--no-first-run' : '--headless=new',
-      `--remote-debugging-port=${port}`,
-      '--user-data-dir=/tmp/prl-text-layout-audit-profile',
-      '--no-first-run',
-      '--no-default-browser-check',
-      '--disable-background-timer-throttling',
+async function withPage(headful, run) {
+  const chrome = {
+    headful,
+    // Clear of ax-tree-audit's debugging-port range.
+    port: 9650 + Math.floor(process.pid % 140),
+    profile: '/tmp/prl-text-layout-audit-profile',
+    flags: [
       '--hide-scrollbars',
       '--force-device-scale-factor=1',
       `--window-size=${String(WIDTHS[WIDTHS.length - 1])},${String(VIEWPORT_HEIGHT)}`,
-      'about:blank',
     ],
-    { stdio: 'ignore' },
-  );
-
-  try {
-    const version = await waitForDevtools(child, port);
+    dim,
+  };
+  await withChrome(chrome, async ({ version, openTab }) => {
     console.log(dim(`  ${version.Browser} — ${headful ? 'headful' : 'headless'}`));
-
-    const target = await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: 'PUT' }).then((r) =>
-      r.json(),
-    );
-    const page = await Page.open(target.webSocketDebuggerUrl);
+    const page = await Page.open(await openTab());
     await page.send('Page.enable');
     await page.send('Runtime.enable');
     // Motion off, so an entrance animation cannot move geometry between walk and layout. It also
@@ -1037,103 +1002,7 @@ async function withChrome(headful, run) {
     } finally {
       page.close();
     }
-  } finally {
-    child.kill('SIGTERM');
-  }
-}
-
-/** As `refuseOccupiedPort` in `ax-tree-audit.mjs`, which says why it connects rather than binds. */
-async function refuseOccupiedPort(url) {
-  const { hostname, port, protocol } = new URL(url);
-  const host = hostname.replace(/^\[(.*)\]$/, '$1');
-  const target = { host, port: Number(port || (protocol === 'https:' ? 443 : 80)) };
-  const outcome = await new Promise((done) => {
-    const socket = connect(target);
-    socket.setTimeout(2000);
-    socket.once('connect', () => {
-      socket.destroy();
-      done('accepted');
-    });
-    socket.once('timeout', () => {
-      socket.destroy();
-      done('was neither accepted nor refused within 2s');
-    });
-    socket.once('error', (error) =>
-      done(error.code === 'ECONNREFUSED' ? 'refused' : `failed (${error.code})`),
-    );
   });
-  if (outcome === 'refused') return;
-  const seen = outcome === 'accepted' ? 'something is already listening' : `a probe connection ${outcome}`;
-  throw new Error(
-    `${seen} on ${host}:${String(target.port)}. --start measures a web app this run started, so it ` +
-      'will not score one it did not. Stop it, pass another --base-url, or leave out --start to ' +
-      'measure that server on purpose.',
-  );
-}
-
-class ManagedServer {
-  constructor(label, args, readyUrl, env) {
-    this.label = label;
-    this.args = args;
-    this.readyUrl = readyUrl;
-    this.env = env;
-    this.child = null;
-    this.output = [];
-    this.exited = null;
-  }
-
-  start() {
-    this.child = spawn('pnpm', this.args, {
-      cwd: REPO_ROOT,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      detached: true,
-      env: { ...process.env, ...this.env },
-    });
-    const keep = (chunk) => {
-      this.output.push(chunk.toString());
-      if (this.output.length > 200) this.output.shift();
-    };
-    this.child.stdout.on('data', keep);
-    this.child.stderr.on('data', keep);
-    this.child.on('exit', (code, signal) => {
-      this.exited = signal ?? code;
-    });
-  }
-
-  async waitUntilReady(timeoutSeconds) {
-    const deadline = Date.now() + timeoutSeconds * 1000;
-    for (;;) {
-      if (this.exited !== null) {
-        throw new Error(
-          `${this.label} exited (${this.exited}) before it was ready:\n${this.output.join('')}`,
-        );
-      }
-      try {
-        const response = await fetch(this.readyUrl, { signal: AbortSignal.timeout(2000) });
-        if (response.status > 0) return;
-      } catch {
-        // Not up yet.
-      }
-      if (Date.now() >= deadline) {
-        throw new Error(
-          `${this.label} was not ready at ${this.readyUrl} within ${String(timeoutSeconds)}s:\n` +
-            this.output.join(''),
-        );
-      }
-      await delay(300);
-    }
-  }
-
-  stop() {
-    if (this.child === null || this.child.pid === undefined) return;
-    try {
-      process.kill(-this.child.pid, 'SIGTERM');
-    } catch (err) {
-      if (!(err instanceof Error && 'code' in err && err.code === 'ESRCH')) {
-        console.log(dim(`  could not stop ${this.label}: ${err.message}`));
-      }
-    }
-  }
 }
 
 const walkerSource = () =>
@@ -1241,7 +1110,11 @@ async function main() {
 
   try {
     if (options.start) {
-      await refuseOccupiedPort(options.baseUrl);
+      await refuseOccupiedPort(
+        options.baseUrl,
+        '--start measures a web app this run started, so it will not score one it did not. Stop it, ' +
+          'pass another --base-url, or leave out --start to measure that server on purpose.',
+      );
       const web = new ManagedServer('web', ['--filter', '@prl/web', 'start'], options.baseUrl, {
         NODE_ENV: 'production',
         PORT: new URL(options.baseUrl).port === '' ? '3000' : new URL(options.baseUrl).port,
@@ -1259,7 +1132,7 @@ async function main() {
       }
     }
 
-    await withChrome(options.headful, async (page) => {
+    await withPage(options.headful, async (page) => {
       if (options.selfTest) {
         console.log(bold('\nNegative controls — a defect of each shape, put back into a real page'));
         for (const result of await runControls(page, options.baseUrl)) {

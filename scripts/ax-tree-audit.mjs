@@ -8,14 +8,13 @@
  * reaches the tree is a hidden-information leak, and it is checked here. A skipped journey fails.
  */
 
-import { spawn } from 'node:child_process';
-import { existsSync, writeFileSync } from 'node:fs';
-import { connect } from 'node:net';
+import { writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { ANNOUNCER_PROBE, ASSERTION_ROUTES, CARD_VALUE_WORDS, SPEECH_PROBE } from './ax-assertions.mjs';
-import { waitForDevtools } from './chrome-devtools.mjs';
+import { withChrome } from './chrome-devtools.mjs';
+import { ManagedServer, refuseOccupiedPort } from './gate-servers.mjs';
 import { startReviewProxy } from './review-proxy.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -495,8 +494,6 @@ export function checkLiveRegions(nodes, expected) {
   return { findings, regions };
 }
 
-// Copied from `scripts/keyboard-audit.mjs` on purpose, so one gate cannot be broken by editing another.
-
 class Page {
   #socket;
   #nextId = 1;
@@ -703,52 +700,18 @@ class Page {
   }
 }
 
-const CHROME_CANDIDATES = [
-  process.env.CHROME_PATH,
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  '/Applications/Chromium.app/Contents/MacOS/Chromium',
-  '/usr/bin/google-chrome',
-  '/usr/bin/chromium',
-  '/usr/bin/chromium-browser',
-].filter((path) => typeof path === 'string' && path !== '');
-
-function chromePath() {
-  const found = CHROME_CANDIDATES.find((path) => existsSync(path));
-  if (found === undefined) {
-    throw new Error(
-      `no Chrome found. Set CHROME_PATH, or install one of:\n${CHROME_CANDIDATES.map((p) => `  ${p}`).join('\n')}`,
-    );
-  }
-  return found;
-}
-
-async function withChrome(headful, run) {
-  const binary = chromePath();
-  // Offset by pid so two audits on one machine do not share a port.
-  const port = 9800 + Math.floor(process.pid % 150);
-  const child = spawn(
-    binary,
-    [
-      headful ? '--no-first-run' : '--headless=new',
-      `--remote-debugging-port=${port}`,
-      '--user-data-dir=/tmp/prl-ax-tree-audit-profile',
-      '--no-first-run',
-      '--no-default-browser-check',
-      '--disable-background-timer-throttling',
-      '--window-size=1440,900',
-      'about:blank',
-    ],
-    { stdio: 'ignore' },
-  );
-
-  try {
-    const version = await waitForDevtools(child, port);
+async function withPage(headful, run) {
+  const chrome = {
+    headful,
+    // Offset by pid so two audits on one machine do not share a port.
+    port: 9800 + Math.floor(process.pid % 150),
+    profile: '/tmp/prl-ax-tree-audit-profile',
+    flags: ['--window-size=1440,900'],
+    dim,
+  };
+  await withChrome(chrome, async ({ version, openTab }) => {
     console.log(dim(`  ${version.Browser} — ${headful ? 'headful' : 'headless'}`));
-
-    const target = await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: 'PUT' }).then((r) =>
-      r.json(),
-    );
-    const page = await Page.open(target.webSocketDebuggerUrl);
+    const page = await Page.open(await openTab());
     await page.send('Page.enable');
     await page.send('Runtime.enable');
     await page.send('DOM.enable');
@@ -765,113 +728,12 @@ async function withChrome(headful, run) {
     } finally {
       page.close();
     }
-  } finally {
-    child.kill('SIGTERM');
-  }
-}
-
-/**
- * Refuse to start when something already answers on a port this run will poll, because
- * `waitUntilReady` accepts any 200 and cannot tell its own child's answer from a stranger's.
- * It connects rather than binds, because on macOS a bind of 127.0.0.1 succeeds beside a wildcard
- * listener such as `next start` (Node 24.18). Only ECONNREFUSED counts as free.
- */
-async function refuseOccupiedPort(url) {
-  const { hostname, port, protocol } = new URL(url);
-  const host = hostname.replace(/^\[(.*)\]$/, '$1');
-  const target = { host, port: Number(port || (protocol === 'https:' ? 443 : 80)) };
-  const outcome = await new Promise((done) => {
-    const socket = connect(target);
-    socket.setTimeout(2000);
-    socket.once('connect', () => {
-      socket.destroy();
-      done('accepted');
-    });
-    socket.once('timeout', () => {
-      socket.destroy();
-      done('was neither accepted nor refused within 2s');
-    });
-    socket.once('error', (error) =>
-      done(error.code === 'ECONNREFUSED' ? 'refused' : `failed (${error.code})`),
-    );
   });
-  if (outcome === 'refused') return;
-  const seen = outcome === 'accepted' ? 'something is already listening' : `a probe connection ${outcome}`;
-  throw new Error(
-    `${seen} on ${host}:${String(target.port)}. This run starts the server it audits there, so it ` +
-      'will not score one it did not. Stop it, or pass another --base-url, --api-url, ' +
-      '--offline-url, --proxied-url or --proxy-url.',
-  );
 }
 
 function portFromOrigin(origin) {
   const port = new URL(origin).port;
   return port === '' ? '3000' : port;
-}
-
-class ManagedServer {
-  constructor(label, args, readyUrl, env) {
-    this.label = label;
-    this.args = args;
-    this.readyUrl = readyUrl;
-    this.env = env;
-    this.child = null;
-    this.output = [];
-    this.exited = null;
-  }
-
-  start() {
-    this.child = spawn('pnpm', this.args, {
-      cwd: REPO_ROOT,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      detached: true,
-      env: { ...process.env, ...this.env },
-    });
-    const keep = (chunk) => {
-      // Kept for the failure message only.
-      this.output.push(chunk.toString());
-      if (this.output.length > 200) this.output.shift();
-    };
-    this.child.stdout.on('data', keep);
-    this.child.stderr.on('data', keep);
-    this.child.on('exit', (code, signal) => {
-      this.exited = signal ?? code;
-    });
-  }
-
-  async waitUntilReady(timeoutSeconds) {
-    const deadline = Date.now() + timeoutSeconds * 1000;
-    for (;;) {
-      if (this.exited !== null) {
-        throw new Error(
-          `${this.label} exited (${this.exited}) before it was ready:\n${this.output.join('')}`,
-        );
-      }
-      try {
-        const response = await fetch(this.readyUrl, { signal: AbortSignal.timeout(2000) });
-        if (response.status > 0) return;
-      } catch {
-        // Not up yet.
-      }
-      if (Date.now() >= deadline) {
-        throw new Error(
-          `${this.label} was not ready at ${this.readyUrl} within ${timeoutSeconds}s:\n${this.output.join('')}`,
-        );
-      }
-      await delay(300);
-    }
-  }
-
-  stop() {
-    if (this.child === null || this.child.pid === undefined) return;
-    try {
-      process.kill(-this.child.pid, 'SIGTERM');
-    } catch (err) {
-      if (!(err instanceof Error && 'code' in err && err.code === 'ESRCH')) {
-        console.log(dim(`  could not stop ${this.label}: ${err.message}`));
-      }
-    }
-  }
 }
 
 let passed = 0;
@@ -1250,7 +1112,13 @@ async function main() {
       ...(needsOffline ? [options.offlineUrl] : []),
       ...(needsProxied ? [options.proxyUrl, options.proxiedUrl] : []),
     ];
-    for (const url of ours) await refuseOccupiedPort(url);
+    for (const url of ours) {
+      await refuseOccupiedPort(
+        url,
+        'This run starts the server it audits there, so it will not score one it did not. Stop it, or ' +
+          'pass another --base-url, --api-url, --offline-url, --proxied-url or --proxy-url.',
+      );
+    }
     if (options.start) {
       if (options.withApi) {
         const api = new ManagedServer(
@@ -1363,7 +1231,7 @@ async function main() {
       }
     }
 
-    await withChrome(options.headful, async (page) => {
+    await withPage(options.headful, async (page) => {
       if (!options.skipJourneys) {
         for (const journey of wanted) {
           section(`${journey.title}  ${dim(journey.key)}`);

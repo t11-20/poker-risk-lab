@@ -14,12 +14,9 @@
  * script injection are covered.
  */
 
-import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { connect } from 'node:net';
-import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 // The gate's own constants, so the seeded cookie name is the one the proxy reads.
@@ -28,7 +25,8 @@ import {
   AGE_GATE_MINIMUM_CEILING,
   AGE_GATE_PATH,
 } from '../apps/web/src/lib/age-gate.ts';
-import { waitForDevtools } from './chrome-devtools.mjs';
+import { withChrome } from './chrome-devtools.mjs';
+import { ManagedServer, refuseOccupiedPort } from './gate-servers.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -90,15 +88,6 @@ export const CASES = [
     blockedUri: null,
   },
 ];
-
-const CHROME_CANDIDATES = [
-  process.env.CHROME_PATH,
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  '/Applications/Chromium.app/Contents/MacOS/Chromium',
-  '/usr/bin/google-chrome',
-  '/usr/bin/chromium',
-  '/usr/bin/chromium-browser',
-].filter((path) => typeof path === 'string' && path !== '');
 
 /** About twenty times local hydration, so a slow machine is not reported as a CSP defect. */
 const HYDRATION_TIMEOUT_MS = 15_000;
@@ -322,8 +311,6 @@ export function buildVerdict(record) {
   };
 }
 
-// CDP client copied, not shared, from keyboard-audit.mjs so one gate cannot break another.
-
 class Page {
   #socket;
   #nextId = 1;
@@ -413,45 +400,19 @@ class Page {
   }
 }
 
-function chromePath() {
-  const found = CHROME_CANDIDATES.find((path) => existsSync(path));
-  if (found === undefined) {
-    throw new Error(
-      `no Chrome found. Set CHROME_PATH, or install one of:\n${CHROME_CANDIDATES.map((p) => `  ${p}`).join('\n')}`,
-    );
-  }
-  return found;
-}
-
-async function withChrome(headful, run) {
-  const binary = chromePath();
-  // Clear of keyboard-audit (9222+) and ax-tree-audit (9800+).
-  const port = 9400 + Math.floor(process.pid % 150);
-  // A fresh profile per run, so a seeded age cookie cannot carry into a later run.
-  const profile = mkdtempSync(join(tmpdir(), 'prl-csp-negative-control-'));
-  const child = spawn(
-    binary,
-    [
-      headful ? '--no-first-run' : '--headless=new',
-      `--remote-debugging-port=${port}`,
-      `--user-data-dir=${profile}`,
-      '--no-first-run',
-      '--no-default-browser-check',
-      '--disable-background-timer-throttling',
-      '--window-size=1440,900',
-      'about:blank',
-    ],
-    { stdio: 'ignore' },
-  );
-
-  try {
-    const version = await waitForDevtools(child, port);
+function withPage(headful, run) {
+  const chrome = {
+    headful,
+    // Clear of keyboard-audit (9222+) and ax-tree-audit (9800+).
+    port: 9400 + Math.floor(process.pid % 150),
+    // A fresh profile per run, so a seeded age cookie cannot carry into a later run.
+    freshProfile: 'prl-csp-negative-control-',
+    flags: ['--window-size=1440,900'],
+    dim,
+  };
+  return withChrome(chrome, async ({ version, openTab }) => {
     console.log(dim(`  ${version.Browser} — ${headful ? 'headful' : 'headless'}`));
-
-    const target = await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: 'PUT' }).then((r) =>
-      r.json(),
-    );
-    const page = await Page.open(target.webSocketDebuggerUrl);
+    const page = await Page.open(await openTab());
     await page.send('Page.enable');
     await page.send('Runtime.enable');
     // Console violations are recorded for the report but never asserted on.
@@ -463,17 +424,7 @@ async function withChrome(headful, run) {
     } finally {
       page.close();
     }
-  } finally {
-    child.kill('SIGTERM');
-    // Chrome writes its profile as it exits, so removal retries and tolerates failure.
-    try {
-      rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
-    } catch (error) {
-      console.log(
-        dim(`  left the browser profile at ${profile} (${error instanceof Error ? error.message : error})`),
-      );
-    }
-  }
+  });
 }
 
 /** A different port is a different origin. It records every request, so a policy failure is detected. */
@@ -496,102 +447,9 @@ async function startDisallowedOrigin() {
   };
 }
 
-/** As `refuseOccupiedPort` in `ax-tree-audit.mjs`, which says why it connects rather than binds. */
-async function refuseOccupiedPort(url) {
-  const { hostname, port, protocol } = new URL(url);
-  const host = hostname.replace(/^\[(.*)\]$/, '$1');
-  const target = { host, port: Number(port || (protocol === 'https:' ? 443 : 80)) };
-  const outcome = await new Promise((done) => {
-    const socket = connect(target);
-    socket.setTimeout(2000);
-    socket.once('connect', () => {
-      socket.destroy();
-      done('accepted');
-    });
-    socket.once('timeout', () => {
-      socket.destroy();
-      done('was neither accepted nor refused within 2s');
-    });
-    socket.once('error', (error) =>
-      done(error.code === 'ECONNREFUSED' ? 'refused' : `failed (${error.code})`),
-    );
-  });
-  if (outcome === 'refused') return;
-  const seen = outcome === 'accepted' ? 'something is already listening' : `a probe connection ${outcome}`;
-  throw new Error(
-    `${seen} on ${host}:${String(target.port)}. --start tests a server this run started, so it ` +
-      'will not score one it did not. Stop it, pass another --base-url/--api-url, or leave out ' +
-      '--start to test that server on purpose.',
-  );
-}
-
 function portFromOrigin(origin) {
   const port = new URL(origin).port;
   return port === '' ? '3000' : port;
-}
-
-class ManagedServer {
-  constructor(label, args, readyUrl, env) {
-    this.label = label;
-    this.args = args;
-    this.readyUrl = readyUrl;
-    this.env = env;
-    this.child = null;
-    this.output = [];
-    this.exited = null;
-  }
-
-  start() {
-    this.child = spawn('pnpm', this.args, {
-      cwd: REPO_ROOT,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      detached: true,
-      env: { ...process.env, ...this.env },
-    });
-    const keep = (chunk) => {
-      this.output.push(chunk.toString());
-      if (this.output.length > 200) this.output.shift();
-    };
-    this.child.stdout.on('data', keep);
-    this.child.stderr.on('data', keep);
-    this.child.on('exit', (code, signal) => {
-      this.exited = signal ?? code;
-    });
-  }
-
-  async waitUntilReady(timeoutSeconds) {
-    const deadline = Date.now() + timeoutSeconds * 1000;
-    for (;;) {
-      if (this.exited !== null) {
-        throw new Error(
-          `${this.label} exited (${this.exited}) before it was ready:\n${this.output.join('')}`,
-        );
-      }
-      try {
-        const response = await fetch(this.readyUrl, { signal: AbortSignal.timeout(2000) });
-        if (response.status > 0) return;
-      } catch {
-        // Not up yet.
-      }
-      if (Date.now() >= deadline) {
-        throw new Error(
-          `${this.label} was not ready at ${this.readyUrl} within ${timeoutSeconds}s:\n${this.output.join('')}`,
-        );
-      }
-      await delay(300);
-    }
-  }
-
-  stop() {
-    if (this.child === null || this.child.pid === undefined) return;
-    try {
-      process.kill(-this.child.pid, 'SIGTERM');
-    } catch (err) {
-      if (!(err instanceof Error && 'code' in err && err.code === 'ESRCH')) {
-        console.log(dim(`  could not stop ${this.label}: ${err.message}`));
-      }
-    }
-  }
 }
 
 const record = [];
@@ -907,7 +765,11 @@ async function main() {
   try {
     if (options.start) {
       for (const url of options.withApi ? [options.baseUrl, options.apiUrl] : [options.baseUrl]) {
-        await refuseOccupiedPort(url);
+        await refuseOccupiedPort(
+          url,
+          '--start tests a server this run started, so it will not score one it did not. Stop it, pass ' +
+            'another --base-url/--api-url, or leave out --start to test that server on purpose.',
+        );
       }
       if (options.withApi) {
         const api = new ManagedServer(
@@ -940,7 +802,7 @@ async function main() {
       }
     }
 
-    await withChrome(options.headful, async (page, browserVersion) => {
+    await withPage(options.headful, async (page, browserVersion) => {
       browser = browserVersion;
       page.on('Log.entryAdded', (params) => logEntries.push(params.entry));
       for (const cookie of ageDeclarationCookies(options.baseUrl)) {
