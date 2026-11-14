@@ -685,7 +685,7 @@ describe('users — against Postgres', dbOptions, () => {
     });
   });
 
-  /** Before migration 0004, ON DELETE RESTRICT refused this learner with an unmapped 23503. */
+  /** An ON DELETE RESTRICT foreign key would refuse this learner with an unmapped 23503. */
   it('deletes a learner who created a table and joined another, which RESTRICT used to refuse', async () => {
     await inRollback(async (tx) => {
       const leaverId = await makeGuest(tx, 'Leaver');

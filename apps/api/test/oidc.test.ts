@@ -116,7 +116,7 @@ function signJwt(parts: TokenParts, nonce: string, nowSeconds: number): string {
   return `${signingInput}.${encoded}`;
 }
 
-/** Flips every bit of the last byte. Setting it to 0x00 left one run in 256 valid (CI run 42929633672). */
+/** Flips every bit of the last byte. Setting it to 0x00 leaves one run in 256 valid. */
 function corruptLastByte(signature: Buffer): Buffer {
   const corrupted = Buffer.from(signature);
   const last = corrupted.length - 1;

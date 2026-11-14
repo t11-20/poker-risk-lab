@@ -1,8 +1,8 @@
 /**
  * Every path `scripts/load-test.mjs` and `scripts/smoke-test.mjs` can call routes on a real
- * `buildApp()`. `test:load` once never worked, because three constants named missing endpoints and
- * the CSRF hook refused the first POST before routing, so it read `csrf_failed`. Paths are extracted
- * from the script sources as text. The negative control probes those three old paths.
+ * `buildApp()`. A missing endpoint reads as `csrf_failed`, because the CSRF hook refuses a POST
+ * before routing. Paths are extracted from the script sources as text. The negative control probes
+ * three paths that do not exist.
  */
 
 import assert from 'node:assert/strict';

@@ -201,8 +201,7 @@ describe('the Legends fixture is a fixture, not a measurement', () => {
   });
 
   it('carries the same axis PROSE the served profiles do (REGRESSION)', () => {
-    // Measured 2026-08-27, 25 trait descriptions in the fixture were wording the source had already
-    // corrected. This is the offline path a reader sees whenever the API is unreachable.
+    // The fixture is the offline path a reader sees whenever the API is unreachable.
     const labels = TRAIT_LABELS as Readonly<Record<string, string>>;
     const descriptions = TRAIT_DESCRIPTIONS as Readonly<Record<string, string>>;
     let compared = 0;
@@ -221,7 +220,6 @@ describe('the Legends fixture is a fixture, not a measurement', () => {
   });
 
   it('carries the same style notes the served profiles do (REGRESSION)', () => {
-    // `profiles.ts` documents the old `volume-grinder` sentence as false.
     const byId = new Map(PROFILES.map((profile) => [profile.naming.id, profile]));
     let compared = 0;
     for (const card of PROFILE_CARDS) {
@@ -232,7 +230,6 @@ describe('the Legends fixture is a fixture, not a measurement', () => {
         profile.styleNotes,
         `${card.id}: the fixture's style notes are stale`,
       );
-      // These were not covered at first, and `calling-station`'s corrected strings went stale.
       assert.deepEqual(card.learnFrom, profile.learnFrom, `${card.id}: the fixture's learnFrom is stale`);
       assert.deepEqual(
         card.counterStrategy,
@@ -245,7 +242,7 @@ describe('the Legends fixture is a fixture, not a measurement', () => {
   });
 
   it('carries the SAME trait numbers the served profiles do (REGRESSION)', () => {
-    // The fixture copies the trait blocks from `profiles.ts`, so tuning a profile left `/legends`
+    // The fixture copies the trait blocks from `profiles.ts`, so tuning a profile leaves `/legends`
     // describing the old one. Compared over the keys the fixture declares, because `makeTraits`
     // fills every key on the profile side. The count stops a sweep of nothing passing.
     let compared = 0;
@@ -273,7 +270,7 @@ describe('the Legends fixture is a fixture, not a measurement', () => {
   });
 
   it('never claims to have observed anything', () => {
-    // A fixture has observed nothing. This once shipped 128 invented hands as "your own play".
+    // A fixture has observed nothing, so it must not offer invented hands as "your own play".
     for (const card of PROFILE_CARDS) {
       const learn = learnFromFixture(card.id);
       assert.ok(learn !== null, `${card.id} has a card but no learn-from payload`);
@@ -300,8 +297,8 @@ describe('the Legends fixture is a fixture, not a measurement', () => {
 
 describe('the web client and the API agree on the compare limit', () => {
   it('publishes the same maximum the endpoint enforces', async () => {
-    // `rooms/bots.ts` is the authority and the contract carries a copy. The copy once said 400
-    // against a cap of 40, and a CSRF failure hid the rejections.
+    // `rooms/bots.ts` is the authority and the contract carries a copy. A copy above the cap would
+    // ask for runs the endpoint rejects.
     const bots: Record<string, unknown> = await import('../src/rooms/bots.ts');
     assert.equal(bots['MAX_COMPARE_TRIALS'], MAX_COMPARE_TRIALS);
   });

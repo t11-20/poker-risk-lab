@@ -1,8 +1,8 @@
 /**
  * No profile folds a hand it has already won. `policy.ts` mixes a noise floor over plausible
- * actions, so facing a bet with the nuts the floor became the whole fold probability. Measured
- * before the fix, `educational` (the Legends default) folded a nut flush up to 0.125 on all 12
- * profiles. The second test keeps the bot from never folding.
+ * actions, so facing a bet with the nuts the floor can become the whole fold probability: unguarded,
+ * `educational` (the Legends default) folds a nut flush up to 0.125 on every profile. The second test
+ * keeps the bot from never folding.
  */
 
 import assert from 'node:assert/strict';

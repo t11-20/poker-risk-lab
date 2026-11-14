@@ -300,8 +300,8 @@ describe('the retention sweep, against a real database', { skip: skipReason }, (
 
   it('never touches a guest holding an enrolment, however long it has been (NEGATIVE CONTROL)', async () => {
     // Legal review D9. A class can be enrolled before it opens, and `enrolments_user_id_fkey` is
-    // ON DELETE CASCADE, so the sweep erased the student and the place, leaving an audit entry with
-    // `user_id` NULL. A revoked enrolment and an unstarted cohort are the shapes a predicate over
+    // ON DELETE CASCADE, so sweeping the student would also erase the place, leaving an audit entry
+    // with `user_id` NULL. A revoked enrolment and an unstarted cohort are the shapes a predicate over
     // live entitlements would miss.
     const enrolled = await makeGuest('-400 days');
     const withdrawn = await makeGuest('-400 days');
@@ -342,9 +342,9 @@ describe('the retention sweep, against a real database', { skip: skipReason }, (
 
   it('never erases a guest whose enrolment was written while the sweep waited (NEGATIVE CONTROL)', async () => {
     // Under READ COMMITTED a statement's snapshot is fixed at its start, and waiting on a row lock
-    // does not refresh it unless the locked tuple was UPDATED. Measured before the fix, the sweep
-    // blocked 1,124 ms on the enrolment INSERT's lock and still returned the account as abandoned.
-    // `enrolments grant` holds one transaction across a whole class list, so the window is real.
+    // does not refresh it unless the locked tuple was UPDATED, so a sweep that blocks on the enrolment
+    // INSERT's lock can still return the account as abandoned. `enrolments grant` holds one
+    // transaction across a whole class list, so the window is real.
     const racer = await makeGuest('-400 days');
     const cohortId = `coh_race${randomBytes(6).toString('hex')}`;
     let sawTheLock = 0;

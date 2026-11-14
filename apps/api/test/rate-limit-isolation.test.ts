@@ -2,7 +2,7 @@
  * The rate-limit reset control, which exists only when `RATE_LIMIT_RESET_TOKEN` is set and which
  * `loadConfig` refuses in production. `scripts/smoke-test.mjs` drains the address-keyed guest
  * limiter, and the fixed window would refuse its next run. This file also guards address keying
- * against the real route, which used to be guarded only by the smoke script.
+ * against the real route.
  * No database is needed. The limiter runs at `onRequest` and CSRF at `preValidation`, both before
  * the session plugin resolves a cookie.
  */
@@ -208,7 +208,7 @@ describe('the rate-limit reset control does not exist without a token', () => {
 
   it('answers 404 rather than 401, so the route is absent and not merely closed', async () => {
     const response = await postReset(app, csrf, `Bearer ${RESET_TOKEN}`, 'prl_session=absent');
-    // 403 would mean refused before routing, which hid three wrong paths in `scripts/load-test.mjs`.
+    // 403 would mean refused before routing, which hides a wrong path.
     assert.notEqual(response.statusCode, 403, `refused before routing: ${response.body}`);
     assert.equal(response.statusCode, 404, response.body);
   });
@@ -347,8 +347,8 @@ describe('POST /auth/guest is keyed on the address, not on the session it issues
   });
 
   /**
-   * `@fastify/cookie` parses but does not verify, and the old key hashed the raw cookie. Measured
-   * against that code, 60 requests with a rotating garbage cookie got zero 429s against a limit of 3.
+   * `@fastify/cookie` parses but does not verify, so a key over the raw cookie gives a rotating
+   * garbage cookie a fresh bucket per request (60 requests, zero 429s against a limit of 3).
    */
   it('a rotated UNSIGNED cookie does not start a fresh bucket, because it is not a session', async () => {
     const forged = (value: string) =>

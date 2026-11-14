@@ -170,8 +170,8 @@ describe('cohorts and entitlements, against a real database', { skip: skipReason
     assert.equal(revoked?.revokedReason, 'place transferred');
     assert.equal(revoked?.revokedBy, 'J. Okafor');
     assert.notEqual(revoked?.revokedAt, null);
-    // `entitled_now` is a second expression in `enrolmentSelect`. With its `e.revoked_at is null` term
-    // dropped, the rest of this file still passed, and `enrolments list` counted a withdrawn learner.
+    // `entitled_now` is a second expression in `enrolmentSelect`. Only this case catches its
+    // `e.revoked_at is null` term being dropped, which makes `enrolments list` count a withdrawn learner.
     const [record] = await enrolments.forUser(sql(), userId);
     assert.equal(record?.entitledNow, false, 'the operator view still calls a revoked place live');
     assert.notEqual(record?.revokedAt, null, 'the operator view lost the withdrawal itself');
@@ -276,8 +276,8 @@ describe('cohorts and entitlements, against a real database', { skip: skipReason
     assert.equal(rows[0]?.revoked_reason, enrolments.SUPERSEDED_REASON);
   });
 
-  // The partial unique index does not serialise `grant` against `revoke`. Both cases below were
-  // reproduced on PostgreSQL 16 before `lockLearner` existed, and each waits for a backend to block.
+  // The partial unique index does not serialise `grant` against `revoke`; `lockLearner` does. Each
+  // case below waits for a backend to block.
 
   /** Throws if no backend blocks, because a case with no contention has not tested the race. */
   async function untilABackendBlocks(): Promise<void> {
@@ -297,10 +297,10 @@ describe('cohorts and entitlements, against a real database', { skip: skipReason
   }
 
   it('withdraws the place a concurrent re-grant created, instead of reporting nothing to withdraw', async () => {
-    // NEGATIVE CONTROL, measured on PostgreSQL 16. With an expired unrevoked row in the slot, A's
-    // `grant` closed it out and inserted an unbounded row. B's `revoke` waited on A's row lock,
-    // re-checked a now-revoked tuple, and could not see A's new row. It returned NULL while
-    // `entitlementFor` still answered entitled. No serial order produces that.
+    // NEGATIVE CONTROL (PostgreSQL 16, without `lockLearner`). With an expired unrevoked row in the
+    // slot, A's `grant` closes it out and inserts an unbounded row. B's `revoke` waits on A's row lock,
+    // re-checks a now-revoked tuple, and cannot see A's new row, so it returns NULL while
+    // `entitlementFor` still answers entitled. No serial order produces that.
     const cohortId = await makeCohort();
     const userId = await makeUser();
     await grantTo(cohortId, userId, { startsAt: at(-120), expiresAt: at(-1) });
@@ -358,10 +358,10 @@ describe('cohorts and entitlements, against a real database', { skip: skipReason
   });
 
   it('withdraws an enrolment granted after the withdrawing transaction opened', async () => {
-    // NEGATIVE CONTROL. `now()` is `transaction_timestamp()`. A withdrawal from a transaction opened
-    // before the grant wrote `revoked_at` before `granted_at`, and `enrolments_revoked_after_grant`
-    // aborted it with an unmapped 23514. Reproduced with a 400 ms lead. Serialising on the learner's
-    // row makes that the ordinary case.
+    // NEGATIVE CONTROL. `now()` is `transaction_timestamp()`, so a withdrawal from a transaction opened
+    // before the grant writes `revoked_at` before `granted_at`, and `enrolments_revoked_after_grant`
+    // aborts it with an unmapped 23514 (a 400 ms lead is enough). Serialising on the learner's row
+    // makes that the ordinary case.
     const cohortId = await makeCohort();
     const userId = await makeUser();
 
