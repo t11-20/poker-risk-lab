@@ -27,16 +27,7 @@
   --prl-measure: 52ch;
 }
 
-/* Repairs to `@prl/ui` */
-
-/**
- * `AssumptionList` draws its own index, so the default marker is a duplicate. It stays a `<ul>`, because
- * the order does not matter. Delete once `components.css` sets `list-style: none` on the list.
- */
-.prl-assumptions__list {
-  padding-inline-start: 0;
-  list-style: none;
-}
+/* A repair to `@prl/ui` */
 
 .prl-assumptions__item {
   display: grid;

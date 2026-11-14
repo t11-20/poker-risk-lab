@@ -17,6 +17,7 @@ import {
   type CreateRoomRequest,
   type ErrorCode,
   inSecondPerson,
+  type LegendDifficulty,
   type RoomSummary,
   type WsServerMessage,
 } from '@prl/contracts';
@@ -867,7 +868,7 @@ export interface UseLiveTableOptions {
   /** When set, open a Legends match against these profiles instead of the generic bot table. */
   readonly legendMatch?: {
     readonly profileId: string;
-    readonly difficulty: 'educational' | 'realistic' | 'expert';
+    readonly difficulty: LegendDifficulty;
   };
 }
 

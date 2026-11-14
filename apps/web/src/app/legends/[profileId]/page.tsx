@@ -32,6 +32,7 @@ import {
   LEGENDS_HAND_REVIEW_PATH,
   LEGENDS_PATH,
   legendMatchHref,
+  MATCH_DIFFICULTY_PARAM,
   parseDifficulty,
   profileHref,
   type SearchParams,
@@ -250,7 +251,7 @@ export default async function ProfilePage({
 }): Promise<ReactElement> {
   const { profileId } = await params;
   const query = await searchParams;
-  const difficulty = parseDifficulty(query['difficulty']);
+  const difficulty = parseDifficulty(query[MATCH_DIFFICULTY_PARAM]);
 
   const profiles = await loadLegendProfiles();
   const profile = findProfile(profiles.data.profiles, profileId);

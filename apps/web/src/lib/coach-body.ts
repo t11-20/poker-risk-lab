@@ -1,17 +1,16 @@
 /**
  * What the Coach panel beside the table holds. A finished hand is checked before whether there is a
  * report, because a report prices a decision and a finished hand has none left.
- * A leaf module, because `TableStage.tsx` imports `@prl/ui`'s `.tsx`, which `node --test` cannot load.
+ * Its import of `TableStage.tsx` must stay type-only: that file imports `@prl/ui`'s `.tsx`, which
+ * `node --test` cannot load.
  */
 
 import type { PlayerView } from '@prl/poker-engine';
-
-/** Mirrors `TableStageStatus` in `components/TableStage.tsx`. */
-export type CoachBodyStatus = 'idle' | 'loading' | 'ready' | 'error' | 'complete';
+import type { TableStageStatus } from '@/components/TableStage.tsx';
 
 export type CoachBody = 'hand-over' | 'report' | 'skeleton' | 'unavailable';
 
-export function coachBodyFor(status: CoachBodyStatus, hasReport: boolean): CoachBody {
+export function coachBodyFor(status: TableStageStatus, hasReport: boolean): CoachBody {
   if (status === 'complete') return 'hand-over';
   if (hasReport) return 'report';
   if (status === 'loading') return 'skeleton';

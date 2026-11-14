@@ -17,6 +17,7 @@ import {
   compareHref,
   LEGENDS_HAND_REVIEW_PATH,
   LEGENDS_PATH,
+  MATCH_DIFFICULTY_PARAM,
   MATCH_PROFILE_PARAM,
   parseDifficulty,
   type SearchParams,
@@ -56,7 +57,7 @@ export default async function LegendsPage({
   readonly searchParams: Promise<SearchParams>;
 }): Promise<ReactElement> {
   const params = await searchParams;
-  const difficulty = parseDifficulty(params['difficulty']);
+  const difficulty = parseDifficulty(params[MATCH_DIFFICULTY_PARAM]);
   const profiles = await loadLegendProfiles();
   // Kept only if this page lists it, or the select would show one name and submit another.
   const asked = params[MATCH_PROFILE_PARAM];

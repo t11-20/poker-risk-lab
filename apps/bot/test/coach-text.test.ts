@@ -20,8 +20,9 @@ import {
   probabilityText,
 } from '../src/coach.ts';
 import { NEW_SESSION, type StepResult, step } from '../src/step.ts';
-import { newTable, TABLE_CONFIG } from '../src/table.ts';
+import { newTable, READER_SEAT, TABLE_CONFIG } from '../src/table.ts';
 import { splitForChat } from '../src/telegram.ts';
+import { tableText } from '../src/view.ts';
 import {
   actionButtonsOf,
   buttonsOf,
@@ -283,5 +284,23 @@ describe('the longest Why?', () => {
     assert.ok(why.length <= 4_096);
     assert.equal(why.match(/combinations from/g)?.length, 1, 'the shared range is printed once');
     assert.match(why, /^- Each opponent \(.*CO Patient Technician 2.*\) holds any of \d+ combinations/m);
+  });
+});
+
+describe('the Coach names a seat', () => {
+  test('exactly as the table’s action lines do, and leaves the reader unnamed', () => {
+    const view = redactFor(everyoneIn(4, 0), { viewerSeat: READER_SEAT });
+    const random = () => createDeterministicRandomForTests(1);
+    const table = newTable('names', { dealRandom: random, decisionRandom: random });
+    const names = coachNamer(table, view);
+    const text = tableText(table, view, null);
+    const callers = [...new Set(view.actions.map((logged) => logged.seat))].filter((s) => s !== READER_SEAT);
+    assert.ok(callers.length >= 3, `only ${callers.length} opponents acted`);
+    for (const seat of callers) {
+      const name = names(seat);
+      assert.ok(name !== undefined, `seat ${seat} is named`);
+      assert.ok(text.includes(`${name} calls`), `${name} calls\n${text}`);
+    }
+    assert.equal(names(READER_SEAT), undefined);
   });
 });

@@ -23,11 +23,14 @@ export const LEGENDS_HAND_REVIEW_PATH = '/legends/hand-review';
 
 export const DIFFICULTIES: readonly LegendDifficulty[] = ['educational', 'realistic', 'expert'];
 
+/** Null for anything else, because `/play` must deal the bot table rather than guess a match. */
+export function knownDifficulty(value: string | undefined): LegendDifficulty | null {
+  return DIFFICULTIES.find((difficulty) => difficulty === value) ?? null;
+}
+
 /** Defaults to `educational`, where the style is most legible, and never throws on a hand-edited URL. */
 export function parseDifficulty(raw: string | string[] | undefined): LegendDifficulty {
-  const value = Array.isArray(raw) ? raw[0] : raw;
-  const match = DIFFICULTIES.find((difficulty) => difficulty === value);
-  return match ?? 'educational';
+  return knownDifficulty(Array.isArray(raw) ? raw[0] : raw) ?? 'educational';
 }
 
 /** De-duplicated in order, from a repeated or comma-separated `profiles` parameter. */
@@ -127,7 +130,7 @@ export function selectionNotices(
 
 export function profileHref(profileId: string, difficulty?: LegendDifficulty): string {
   const path = `/legends/${encodeURIComponent(profileId)}`;
-  return difficulty === undefined ? path : `${path}?difficulty=${difficulty}`;
+  return difficulty === undefined ? path : `${path}?${MATCH_DIFFICULTY_PARAM}=${difficulty}`;
 }
 
 /** A query on `/play`, which owns its URL shape, rather than a nested route. */
@@ -138,5 +141,5 @@ export function legendMatchHref(profileId: string, difficulty: LegendDifficulty)
 export function compareHref(profileIds: readonly string[], difficulty: LegendDifficulty): string {
   const profiles = profileIds.map((id) => encodeURIComponent(id)).join(',');
   const query = profiles === '' ? '' : `profiles=${profiles}&`;
-  return `/legends/compare?${query}difficulty=${difficulty}`;
+  return `/legends/compare?${query}${MATCH_DIFFICULTY_PARAM}=${difficulty}`;
 }

@@ -30,6 +30,7 @@ import {
   LEGENDS_COMPARE_PATH,
   LEGENDS_HAND_REVIEW_PATH,
   LEGENDS_PATH,
+  MATCH_DIFFICULTY_PARAM,
   MAX_COMPARE_PROFILES,
   MIN_COMPARE_PROFILES,
   parseCompareSelection,
@@ -86,7 +87,7 @@ export default async function ComparePage({
   readonly searchParams: Promise<SearchParams>;
 }): Promise<ReactElement> {
   const query = await searchParams;
-  const difficulty = parseDifficulty(query['difficulty']);
+  const difficulty = parseDifficulty(query[MATCH_DIFFICULTY_PARAM]);
   // The profile list first, because it decides which requested ids are real.
   const profiles = await loadLegendProfiles();
   const selection = parseCompareSelection(

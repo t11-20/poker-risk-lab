@@ -7,6 +7,7 @@
  * because codes like `4401` and `4403` are not "try again".
  */
 
+import type { LegendDifficulty } from '@prl/contracts';
 import {
   Button,
   Callout,
@@ -765,7 +766,7 @@ export function LiveTable({
 }: {
   readonly legendMatch?: {
     readonly profileId: string;
-    readonly difficulty: 'educational' | 'realistic' | 'expert';
+    readonly difficulty: LegendDifficulty;
   };
 } = {}): ReactElement {
   const live = useLiveTable(legendMatch === undefined ? {} : { legendMatch });

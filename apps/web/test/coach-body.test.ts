@@ -4,17 +4,12 @@ import { dirname, join, resolve } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import type { PlayerView } from '@prl/poker-engine';
-import {
-  type CoachBodyStatus,
-  coachBodyFor,
-  noAnalysisReason,
-  readerHasDecisions,
-  reviewHrefFor,
-} from '../src/lib/coach-body.ts';
+import type { TableStageStatus } from '../src/components/TableStage.tsx';
+import { coachBodyFor, noAnalysisReason, readerHasDecisions, reviewHrefFor } from '../src/lib/coach-body.ts';
 
 const WEB_SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 
-const STATUSES: readonly CoachBodyStatus[] = ['idle', 'loading', 'ready', 'error', 'complete'];
+const STATUSES: readonly TableStageStatus[] = ['idle', 'loading', 'ready', 'error', 'complete'];
 
 describe('what the Coach panel holds', () => {
   it('says the hand is over beside a finished hand, even when it was handed a report (REGRESSION)', () => {
