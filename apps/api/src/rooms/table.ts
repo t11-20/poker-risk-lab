@@ -17,8 +17,7 @@
  * returns the original outcome with `deduplicated: true` instead of `not_your_turn`.
  *
  * The big blind advances by one live player per hand (dead-button rule, engine
- * `advanceBlindRotation`). The old button-first rotation made six players pay the big blind twice
- * in 40 hands (`docs/audit/poker-correctness.md`, P1-1).
+ * `advanceBlindRotation`; `docs/audit/poker-correctness.md`, P1-1).
  * An arriving player waits for the big blind. The debt is keyed by user id in `blindDebts` and
  * survives standing up. Posting a missed blind would need a dead-blind kind the engine lacks.
  * If fewer than two players could be dealt, the game restarts and all debts are cleared.
@@ -111,14 +110,14 @@ export interface TableNotice {
   readonly handCompleted: boolean;
   /**
    * Every seat's chips as the hand settled, on the one notice that settled it; null otherwise.
-   * Captured before leavers are removed. Reading `table.snapshot()` after `handComplete` missed
-   * players who stood mid-hand and destroyed or created their chips. Includes seats not dealt in.
+   * Captured before leavers are removed, since `table.snapshot()` after `handComplete` no longer has
+   * players who stood mid-hand. Includes seats not dealt in.
    */
   readonly settledStacks: readonly SettledStack[] | null;
   /**
    * The users whose seat this notice released. Every release, immediate or deferred to settlement,
-   * travels here so the durable seat is freed on one event. Freeing it at the stand request left
-   * mid-hand leavers seated in `room_members` for good.
+   * travels here so the durable seat is freed on one event. Freeing it at the stand request would
+   * leave a mid-hand leaver seated in `room_members` for good.
    */
   readonly departed: readonly string[];
   /** The hand this notice belongs to, or null between hands. */
@@ -218,8 +217,8 @@ interface LiveHand {
 }
 
 /**
- * Keyed by user id and not cleared on standing up, so leaving cannot discharge it (P1-2: four of
- * fifteen seating combinations got a free hand). Cleared only on being dealt in or a game restart.
+ * Keyed by user id and not cleared on standing up, so leaving cannot discharge it (P1-2). Cleared
+ * only on being dealt in or a game restart.
  * Entries for people who never return die with the room.
  */
 interface BlindDebt {
@@ -229,7 +228,7 @@ interface BlindDebt {
 
 /**
  * The engine only knows "automatic". The reason is this class's, and keeping it off `LoggedAction`
- * keeps it off the wire. Without it the review said "time ran out" to someone who pressed Stand up.
+ * keeps it off the wire. It stops the review saying "time ran out" to someone who pressed Stand up.
  */
 export interface ArchivedAction extends LoggedAction {
   /** Non-null exactly when `wasAutomatic`. See `AUTOMATIC_REASONS` in `@prl/contracts`. */
@@ -328,8 +327,9 @@ export class LiveTable {
 
   /**
    * The redacted view for one user. The only way state leaves this object.
-   * The user id goes to `redactFor` untranslated and `this.seats` is not consulted, which is the fix
-   * for the seat-reuse leak. Anyone not dealt in gets the spectator view. Null before the first deal.
+   * The user id goes to `redactFor` untranslated and `this.seats` is not consulted, so a newcomer in
+   * a reused chair never sees its dealt cards. Anyone not dealt in gets the spectator view. Null
+   * before the first deal.
    */
   viewFor(userId: string): PlayerView | null {
     if (this.hand === null) return null;
@@ -514,7 +514,7 @@ export class LiveTable {
 
   /**
    * The units reset reaching the table. Between hands `TableSeat.stack` is the truth, so writing only
-   * `room_members.stack` was settled back over (see `RoomRegistry.restackForUnitsReset`). A player in
+   * `room_members.stack` would be settled back over (see `RoomRegistry.restackForUnitsReset`). A player in
    * the live hand is deferred to `settleIfComplete`. Never throws for a closed table.
    */
   restack(userId: string, stack: number): Promise<'applied' | 'deferred' | 'notSeated'> {
@@ -725,7 +725,6 @@ export class LiveTable {
     if (live === null || live.state.handId !== expiry.handId) return;
     if (live.state.street === 'complete' || live.state.toAct !== expiry.seat) return;
 
-    // Check if free, else fold. NEVER a call. `timeoutAction` is the single definition.
     const action = timeoutAction(live.state, expiry.seat);
     const applied = this.apply(expiry.seat, action, {
       actionId: null,
@@ -786,7 +785,7 @@ export class LiveTable {
 
   /**
    * How long the seat to act gets, in seconds. At 60 s a learner could not read the Coach and act
-   * (a verification pass lost two hands while reading). A seat gets `max(room clock,
+   * (two hands lost while reading). A seat gets `max(room clock,
    * learnerTurnSeconds)` only when it is a person and nobody else at the table is, so the extra time
    * keeps no one waiting. A bot's timer is only a safety net. The room can still allow up to 300 s.
    * The timeout still folds an abandoned seat. Leaving the first decision untimed was rejected,

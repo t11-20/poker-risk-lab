@@ -3,9 +3,9 @@
  * heap, so two processes serving a room deal two hands and overwrite each other's `room_members.stack`.
  * Opening a room takes the lease or is refused. A heartbeat renews every held lease, and a renewal
  * that updates no row means this process was fenced and must drop the room at once.
- * `fence` restarts at 1 after a release, because `release` deletes the row (contrary to 0005's header;
- * `test/room-ownership-database.test.ts` pins it). No table has a fence column, so the database does
- * not refuse a write already in flight from a fenced process. Eviction bounds that to one heartbeat.
+ * `fence` restarts at 1 after a release, because `release` deletes the row (contrary to 0005's
+ * header). No table has a fence column, so the database does not refuse a write already in flight
+ * from a fenced process. Eviction bounds that to one heartbeat.
  */
 
 import { randomBytes } from 'node:crypto';
@@ -95,10 +95,7 @@ export interface RoomOwnership {
   readonly acquire: (roomId: string) => Promise<RoomLease | null>;
   /** Renews every named lease and answers with those renewed. A missing room was fenced. */
   readonly heartbeat: (roomIds: readonly string[]) => Promise<readonly string[]>;
-  /**
-   * Scoped to `ownerId` and `fence`, so a queued release cannot free a later generation of our own.
-   * `repositories/room-ownership.ts` has the measurement.
-   */
+  /** Scoped to `ownerId` and `fence`, so a queued release cannot free a later generation of our own. */
   readonly release: (roomId: string, fence: number) => Promise<boolean>;
   /** Who holds a room, for the refusal's log line. Null when nobody does any more. */
   readonly holderOf: (roomId: string) => Promise<LeaseHolder | null>;

@@ -1,7 +1,6 @@
 /**
  * Where `@prl/poker-ai` meets the engine. A bot receives only `table.viewFor(botUserId)`.
- * `buildPolicyInput` is the one place a `PolicyInput` is built, from a redacted view alone, and
- * `test/bots.test.ts` scans a captured input for other seats' cards and every secret field name.
+ * `buildPolicyInput` is the one place a `PolicyInput` is built, from a redacted view alone.
  * Actions go through `LiveTable.submitAction` like a human's, so the engine rejects an illegal one.
  * Decisions use a seeded stream so a match replays. Cards are never dealt from it.
  */
@@ -103,7 +102,7 @@ export function seedFor(roomId: string, seat: SeatIndex, base: number | undefine
 
 /**
  * The five legacy names `createRoomBodySchema` accepts, mapped to the nearest strategy profile.
- * One-way, for reading a request. Since migration `0003` the column stores the profile id itself.
+ * One-way, for reading a request. The column stores the profile id itself.
  */
 export const LEGACY_PROFILE_IDS: Readonly<Record<string, string>> = {
   nit: 'disciplined-specialist',
@@ -671,8 +670,8 @@ export function compareProfilesOnSpot(request: CompareRequest): CompareProfilesR
       .sort((left, right) => right.probability - left.probability);
     const modal = distribution[0];
 
-    // The explanation comes from a trial that chose the modal action. Taking the last trial put a
-    // different action under the bar in 161 of 396 columns (12 profiles x 33 spots).
+    // The explanation comes from a trial that chose the modal action. Taking the last trial would put
+    // a different action under the bar in 161 of 396 columns (12 profiles x 33 spots).
     const representative = (modal === undefined ? undefined : exemplars.get(modal.action)) ?? last;
 
     return {
@@ -731,7 +730,7 @@ function coachReportFor(request: CompareRequest): CoachReport {
     heroStack: spot.heroStack,
     opponentStacks: [spot.opponentStack],
     bigBlind: spot.bigBlind,
-    // No `HandState` to ask, so derived. An omitted set once meant everything was permitted.
+    // No `HandState` to ask, so derived.
     legalActions: deriveLegalActions({
       toCall: spot.toCall,
       heroCommittedThisStreet: 0,

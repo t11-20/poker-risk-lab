@@ -1,7 +1,7 @@
 /**
  * "May this person take a seat?" as an injected port, so rooms tests run with no Postgres.
- * `null` means this deployment does not gate seating (the `PRL_ENROLMENT_REQUIRED=off` default);
- * `test/wiring.test.ts` asserts the app binds one exactly when config says `enforced`.
+ * `null` means this deployment does not gate seating (the `PRL_ENROLMENT_REQUIRED=off` default); the
+ * app binds one exactly when config says `enforced`.
  * `prl_app` holds SELECT only on `prl.cohorts` and `prl.enrolments`, so this path can read and never
  * enrol. Writes go through `scripts/enrolments.mjs`. Do not widen that grant.
  * `entitlementFor` is one statement on `enrolments_live_user_idx`, because it sits on the seating path.
