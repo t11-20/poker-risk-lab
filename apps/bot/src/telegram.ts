@@ -165,9 +165,8 @@ async function run(
 }
 
 /**
- * Telegram refuses a message over 4,096 characters, and a preflop Why? against five opponents
- * measured over 5,000. Assumptions may not be cut, so a long send splits at line breaks with the
- * buttons last. 4,000 leaves room for Telegram counting UTF-16 units.
+ * Telegram refuses a message over 4,096 characters. Assumptions may not be cut, so a long send splits
+ * at line breaks with the buttons last. 4,000 leaves room for Telegram counting UTF-16 units.
  */
 export const MESSAGE_LIMIT = 4_000;
 

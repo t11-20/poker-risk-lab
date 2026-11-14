@@ -34,6 +34,7 @@ import {
   ruleOf24,
   stackToPotRatio,
 } from '@prl/poker-math';
+import { cardNotationText } from './cards.ts';
 
 export type NumericQuestion = Extract<QuizQuestion, { kind: 'numeric' }>;
 export type DecisionQuestion = Extract<QuizQuestion, { kind: 'decision' }>;
@@ -346,6 +347,19 @@ function compute(calculation: LiveCalculation): Calculation {
   }
 }
 
+function shown(computed: Calculation): Calculation {
+  return {
+    method: cardNotationText(computed.method),
+    working: cardNotationText(computed.working),
+    figures: Object.fromEntries(
+      Object.entries(computed.figures).map(([field, figure]) => [
+        field,
+        { ...figure, label: cardNotationText(figure.label) },
+      ]),
+    ),
+  };
+}
+
 const calculationCache = new Map<string, Calculation>();
 
 /** Cached per process. A preflop equity enumerates 1.7 million run-outs. */
@@ -353,7 +367,7 @@ export function calculate(calculation: LiveCalculation): Calculation {
   const key = JSON.stringify(calculation);
   const cached = calculationCache.get(key);
   if (cached !== undefined) return cached;
-  const computed = compute(calculation);
+  const computed = shown(compute(calculation));
   calculationCache.set(key, computed);
   return computed;
 }
@@ -479,10 +493,10 @@ export function decisionSpot(question: DecisionQuestion): DecisionSpot {
     );
   }
   const spot = {
-    facingAction: scenario.facingAction,
-    range: rangeText(scenario.opponentRange),
+    facingAction: cardNotationText(scenario.facingAction),
+    range: cardNotationText(rangeText(scenario.opponentRange)),
     analysis: analyseScenario(scenario),
-    assumptions: scenario.assumptions,
+    assumptions: scenario.assumptions.map(cardNotationText),
   };
   spotCache.set(question.scenarioId, spot);
   return spot;

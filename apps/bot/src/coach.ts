@@ -20,26 +20,41 @@ import {
   coachInputFor,
   coachSpotForView,
   LIVE_COACH_POLICY,
+  type SeatNamer,
 } from '@prl/poker-math';
+import { cardNotationText } from './cards.ts';
+import { nameOf, READER_SEAT, type Table } from './table.ts';
 
 /** One reading of one decision. `at` names the decision so a stale "Why?" is recognisable. */
 export type CoachReading =
   | { readonly kind: 'report'; readonly at: string; readonly report: CoachReport }
   | { readonly kind: 'unavailable'; readonly at: string; readonly reason: string };
 
-export type CoachFn = (view: PlayerView) => CoachReport;
+export type CoachFn = (view: PlayerView, names?: SeatNamer) => CoachReport;
 
 /** A Coach failure must never stop the hand, so every refusal becomes `unavailable`. */
-export function readCoach(view: PlayerView, at: string, coach: CoachFn): CoachReading {
+export function readCoach(view: PlayerView, at: string, coach: CoachFn, names?: SeatNamer): CoachReading {
   try {
-    return { kind: 'report', at, report: coach(view) };
+    return { kind: 'report', at, report: coach(view, names) };
   } catch (error) {
     return { kind: 'unavailable', at, reason: error instanceof Error ? error.message : String(error) };
   }
 }
 
-export function coachReportFor(view: PlayerView): CoachReport {
-  const reading = coachSpotForView(view, LIVE_COACH_POLICY);
+/**
+ * "HJ Patient Technician 2", as the table names a seat. A copy of `who` in `view.ts`, which is not
+ * exported. Without it the Coach says "Seat 3", which the table never shows.
+ */
+export function coachNamer(table: Table, view: PlayerView): SeatNamer {
+  return (seat) => {
+    if (seat === READER_SEAT) return undefined;
+    const position = view.seats.find((entry) => entry.seat === seat)?.position;
+    return position == null ? nameOf(table, seat) : `${position} ${nameOf(table, seat)}`;
+  };
+}
+
+export function coachReportFor(view: PlayerView, names?: SeatNamer): CoachReport {
+  const reading = coachSpotForView(view, LIVE_COACH_POLICY, names);
   if (reading.kind === 'refused') throw new Error(refusalWords(reading.refusal));
   return buildCoachReport(coachInputFor(reading.spot));
 }
@@ -120,6 +135,68 @@ export const COACH_DISCLAIMER =
   'This is one reading that follows from the assumptions below. It is not a verdict on the hand: ' +
   'different assumptions about the opponents give different answers, and a sound decision can still lose.';
 
+const STREET_WORDS: Readonly<Record<string, string>> = {
+  preflop: 'Preflop',
+  flop: 'Flop',
+  turn: 'Turn',
+  river: 'River',
+};
+
+/**
+ * Sentences `@prl/poker-math` writes for every client, in this client's words: play money is "units",
+ * and the bot has no Scenario Lab. `test/coach-text.test.ts` fails if the shared wording moves.
+ */
+const CHAT_WORDING: readonly (readonly [string, string])[] = [
+  [
+    ': the Scenario Lab lets you change it and watch these figures move.',
+    '. /learn has a lesson on fold equity, which works through what this does to a bet.',
+  ],
+  ['Chips already in the pot', 'Units already in the pot'],
+];
+
+function chatText(text: string): string {
+  let out = cardNotationText(text);
+  for (const [shared, ours] of CHAT_WORDING) out = out.replaceAll(shared, ours);
+  return out;
+}
+
+/** What `assumptionsFor` in `equity.ts` says about each opponent's range. */
+const RANGE_ASSUMPTION = /^(.+) holds (any of \d+ combinations from ".*", each equally likely\.)$/;
+
+/**
+ * The assumptions as Why? lists them. Opponents on one policy share one range, and five copies of it
+ * pushed a preflop Why? over Telegram's limit, so an identical range is stated once with every name.
+ */
+export function coachAssumptions(report: CoachReport): string[] {
+  const ranges = report.assumptions.flatMap((line) => {
+    const match = RANGE_ASSUMPTION.exec(line);
+    return match === null ? [] : [{ line, label: match[1] ?? '', range: match[2] ?? '' }];
+  });
+  const [first] = ranges;
+  const shared =
+    first !== undefined && ranges.length > 1 && ranges.every((entry) => entry.range === first.range);
+  const lines = shared
+    ? report.assumptions.flatMap((line) => {
+        if (line === first.line) {
+          return [`Each opponent (${ranges.map((entry) => entry.label).join(', ')}) holds ${first.range}`];
+        }
+        return ranges.some((entry) => entry.line === line) ? [] : [line];
+      })
+    : report.assumptions;
+  return lines.map(chatText);
+}
+
+/** Only a bet or raise has a size. A call costs what its button says, and the size is the call's total. */
+function actionText(report: CoachReport): string {
+  const { action, sizeRange } = report.suggestion;
+  const words = ACTION_WORDS[action];
+  if (action === 'call') return `${words} ${units(report.toCall)}`;
+  if ((action !== 'bet' && action !== 'raise') || sizeRange === undefined) return words;
+  return sizeRange.min === sizeRange.max
+    ? `${words} to ${units(sizeRange.min)}`
+    : `${words} to between ${units(sizeRange.min)} and ${units(sizeRange.max)}`;
+}
+
 /** The message "Why?" sends. Suggestion, disclaimer and assumptions are one block, never split. */
 export function coachWhy(reading: CoachReading): string {
   if (reading.kind === 'unavailable') {
@@ -127,26 +204,33 @@ export function coachWhy(reading: CoachReading): string {
   }
   const { report } = reading;
   const { suggestion } = report;
-  const size =
-    suggestion.sizeRange === undefined
-      ? ''
-      : suggestion.sizeRange.min === suggestion.sizeRange.max
-        ? ` to ${units(suggestion.sizeRange.min)}`
-        : ` to between ${units(suggestion.sizeRange.min)} and ${units(suggestion.sizeRange.max)}`;
   const lines = [
-    `Coach, ${report.street}`,
+    `Coach, ${STREET_WORDS[report.street] ?? report.street}`,
     '',
     `Equity: ${equityText(report)}, against ${RANGE_WORDS}.`,
     `Price: ${priceText(report)}.`,
     '',
-    `One reading: ${ACTION_WORDS[suggestion.action]}${size} (${CONFIDENCE_WORDS[suggestion.confidence]}).`,
-    suggestion.reason,
+    `One reading: ${actionText(report)} (${CONFIDENCE_WORDS[suggestion.confidence]}).`,
+    chatText(suggestion.reason),
   ];
   if (suggestion.whatWouldChangeIt.length > 0) {
-    lines.push('What would change it:', ...suggestion.whatWouldChangeIt.map((entry) => `- ${entry}`));
+    lines.push(
+      'What would change it:',
+      ...suggestion.whatWouldChangeIt.map((entry) => `- ${chatText(entry)}`),
+    );
   }
-  lines.push('', COACH_DISCLAIMER, '', 'Assumptions:', ...report.assumptions.map((entry) => `- ${entry}`));
-  lines.push('', 'Limits of this analysis:', ...report.uncertainty.limitations.map((entry) => `- ${entry}`));
+  lines.push(
+    '',
+    COACH_DISCLAIMER,
+    '',
+    'Assumptions:',
+    ...coachAssumptions(report).map((entry) => `- ${entry}`),
+  );
+  lines.push(
+    '',
+    'Limits of this analysis:',
+    ...report.uncertainty.limitations.map((entry) => `- ${chatText(entry)}`),
+  );
   return lines.join('\n');
 }
 
