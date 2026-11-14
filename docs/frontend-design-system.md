@@ -1106,13 +1106,12 @@ token layer, §2.4 and §7.1), `box-shadow` (a drop shadow paints over the surfa
 element casting it; every probe records whether one can reach it), and text overlapped by a
 non-ancestor sibling.
 
-**One number in `play.css` is wrong, and this pass is how we know.** The comment above
-`.prl-seat--folded` declines an `opacity` on folded seats with the table `1.0 → 5.95:1`,
-`0.9 → 4.09:1`, `0.8 → 3.10:1`. The composited measurement of that exact change is **4.74:1 and
-3.79:1** — the 0.9 step does not breach AA, the 0.8 step does. The declined table interpolates the
-two *luminances*; a browser composites `opacity` in gamma-encoded sRGB, which is what this gate
-does and what its probes confirm pixel-for-pixel. The conclusion (don't fade the plate) survives;
-the arithmetic under it does not.
+**This pass corrected a figure in `play.css`.** The comment above `.prl-seat--folded` declines an
+`opacity` on folded seats. It once quoted `0.9 → 4.09:1` and `0.8 → 3.10:1`, which interpolated the
+two *luminances*; a browser composites `opacity` in gamma-encoded sRGB, which is what this gate does
+and what its probes confirm pixel-for-pixel. The comment now carries the composited figures
+(5.95:1, 4.74:1, 3.79:1), measured under 3.0: the 0.9 step does not breach AA and the 0.8 step
+does. Re-measure them before relying on either step in 4.0.
 
 ---
 
