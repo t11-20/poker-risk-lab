@@ -264,7 +264,7 @@ export function createRoomRoutes(options: RoomRoutesOptions = {}): FastifyPlugin
       { schema: { params: { $ref: 'prl:roomIdParams#' } } },
       async (request): Promise<JoinRoomResponse> => {
         const principal = principalOf(request);
-        const room = await openRoomFor(registry, request.params.roomId, principal.userId);
+        const room = await registry.openForMember(request.params.roomId, principal.userId);
         return { room: toRoomSummary(room) };
       },
     );
@@ -274,7 +274,7 @@ export function createRoomRoutes(options: RoomRoutesOptions = {}): FastifyPlugin
       { schema: { params: { $ref: 'prl:roomIdParams#' }, body: { $ref: 'prl:sitBody#' } } },
       async (request): Promise<JoinRoomResponse> => {
         const principal = principalOf(request);
-        const room = await openRoomFor(registry, request.params.roomId, principal.userId);
+        const room = await registry.openForMember(request.params.roomId, principal.userId);
         await registry.sitAtTable(room.record.id, principal, request.body.seat);
         return { room: toRoomSummary(room) };
       },
@@ -289,7 +289,7 @@ export function createRoomRoutes(options: RoomRoutesOptions = {}): FastifyPlugin
       { schema: { params: { $ref: 'prl:roomIdParams#' } } },
       async (request): Promise<JoinRoomResponse> => {
         const principal = principalOf(request);
-        const room = await openRoomFor(registry, request.params.roomId, principal.userId);
+        const room = await registry.openForMember(request.params.roomId, principal.userId);
         await registry.leaveRoom(room.record.id, principal.userId);
         return { room: toRoomSummary(room) };
       },
@@ -459,31 +459,6 @@ function difficultyDto(difficulty: LegendDifficulty): LegendDifficultyDto {
     description: settings.description,
     coachAvailable: settings.coachAvailable,
   };
-}
-
-/**
- * One answer, `room_not_found_or_not_permitted`, for a missing room and a stranger.
- * Membership is checked against durable rows first, so a guessed room id never makes this process
- * build a live table. `ensureOpen` rebuilds the table from the roster after a restart.
- */
-async function openRoomFor(registry: RoomRegistry, roomId: string, userId: string): Promise<LiveRoom> {
-  const refuse = (): never => {
-    throw new AppError('room_not_found_or_not_permitted', {
-      logDetail: `room ${roomId} is unknown, closed, or not this caller's`,
-    });
-  };
-
-  const live = registry.get(roomId);
-  if (live === null) {
-    const row = await registry.store.byId(roomId);
-    if (row === null || row.status === 'closed') refuse();
-    const member = await registry.store.memberOf(roomId, userId);
-    if (member === null && row?.owner_user_id !== userId) refuse();
-  }
-
-  const room = await registry.ensureOpen(roomId);
-  if (room === null) refuse();
-  return registry.require(roomId, userId);
 }
 
 async function seatRequestedBots(

@@ -702,6 +702,29 @@ export class RoomRegistry {
     return room;
   }
 
+  /**
+   * One answer, `room_not_found_or_not_permitted`, for a missing room, a closed one and a stranger.
+   * Membership is checked against durable rows first, so a guessed room id never makes this process
+   * build a live table. `ensureOpen` rebuilds the table from the roster after a restart.
+   */
+  async openForMember(roomId: string, userId: string): Promise<LiveRoom> {
+    const refuse = (): never => {
+      throw new AppError('room_not_found_or_not_permitted', {
+        logDetail: `room ${roomId} is unknown, closed, or not this caller's`,
+      });
+    };
+
+    if (!this.rooms.has(roomId)) {
+      const row = await this.store.byId(roomId);
+      if (row === null || row.status === 'closed') refuse();
+      const member = await this.store.memberOf(roomId, userId);
+      if (member === null && row?.owner_user_id !== userId) refuse();
+    }
+
+    if ((await this.ensureOpen(roomId)) === null) refuse();
+    return this.require(roomId, userId);
+  }
+
   /** Opens the live table for a persisted room. Null when there is no such room. */
   async ensureOpen(roomId: string): Promise<LiveRoom | null> {
     const live = this.rooms.get(roomId);
