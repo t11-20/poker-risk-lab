@@ -23,7 +23,7 @@ import {
   type SeatNamer,
 } from '@prl/poker-math';
 import { cardNotationText } from './cards.ts';
-import { nameOf, READER_SEAT, type Table } from './table.ts';
+import { READER_SEAT, type Table, who } from './table.ts';
 
 /** One reading of one decision. `at` names the decision so a stale "Why?" is recognisable. */
 export type CoachReading =
@@ -41,16 +41,9 @@ export function readCoach(view: PlayerView, at: string, coach: CoachFn, names?: 
   }
 }
 
-/**
- * "HJ Patient Technician 2", as the table names a seat. A copy of `who` in `view.ts`, which is not
- * exported. Without it the Coach says "Seat 3", which the table never shows.
- */
+/** Without it the Coach says "Seat 3", which the table never shows. */
 export function coachNamer(table: Table, view: PlayerView): SeatNamer {
-  return (seat) => {
-    if (seat === READER_SEAT) return undefined;
-    const position = view.seats.find((entry) => entry.seat === seat)?.position;
-    return position == null ? nameOf(table, seat) : `${position} ${nameOf(table, seat)}`;
-  };
+  return (seat) => (seat === READER_SEAT ? undefined : who(table, view, seat));
 }
 
 export function coachReportFor(view: PlayerView, names?: SeatNamer): CoachReport {

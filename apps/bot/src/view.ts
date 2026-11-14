@@ -11,7 +11,7 @@ import type { Action, HandResult, LegalAction, PlayerView, SeatIndex, SeatView }
 import { rankIndexOf, suitIndexOf } from '@prl/poker-engine';
 import { type CoachReading, coachLine, units } from './coach.ts';
 import type { DecisionAction } from './learn.ts';
-import { nameOf, READER_SEAT, type Table } from './table.ts';
+import { nameOf, READER_SEAT, type Table, who } from './table.ts';
 
 export interface Button {
   readonly label: string;
@@ -300,13 +300,6 @@ function seatLine(table: Table, view: PlayerView, seat: SeatView): string {
   if (seat.status === 'allIn') parts.push('all-in');
   if (seat.isToAct) parts.push('to act');
   return parts.join(' · ');
-}
-
-/** "BB Patient Technician" or "You". The position tells apart two bots of one profile. */
-function who(table: Table, view: PlayerView, seat: SeatIndex): string {
-  if (seat === READER_SEAT) return 'You';
-  const position = view.seats.find((entry) => entry.seat === seat)?.position;
-  return position == null ? nameOf(table, seat) : `${position} ${nameOf(table, seat)}`;
 }
 
 /**

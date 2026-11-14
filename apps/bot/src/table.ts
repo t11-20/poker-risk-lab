@@ -118,6 +118,13 @@ export function nameOf(table: Table, seat: SeatIndex): string {
   return table.bots.find((bot) => bot.seat === seat)?.plate ?? `Seat ${seat + 1}`;
 }
 
+/** "BB Patient Technician" or "You". The position tells apart two bots of one profile. */
+export function who(table: Table, view: PlayerView, seat: SeatIndex): string {
+  if (seat === READER_SEAT) return 'You';
+  const position = view.seats.find((entry) => entry.seat === seat)?.position;
+  return position == null ? nameOf(table, seat) : `${position} ${nameOf(table, seat)}`;
+}
+
 export function canDeal(table: Table): boolean {
   const withUnits = table.stacks.filter((stack) => stack > 0).length;
   return (table.stacks[READER_SEAT] ?? 0) > 0 && withUnits >= 2;
