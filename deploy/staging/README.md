@@ -57,6 +57,22 @@ trust store if you want a clean padlock; the smoke test already verifies the cha
 properly, through `NODE_EXTRA_CA_CERTS`, so nothing in the automated path skips
 verification.
 
+**Renewing the certificate.** The CA and the leaf both last 90 days. `pnpm run staging status`
+handshakes with the proxy and reports the certificate it actually serves: it warns inside 14 days,
+and fails when the served leaf is not `tls/staging-cert.pem` or its chain does not verify against
+`tls/staging-ca.pem`. To renew while the stack is up:
+
+```bash
+pnpm run staging init          # new CA and leaf on disk; existing secrets are kept
+pnpm run staging refresh-tls   # recreates only the proxy, then checks the handshake
+```
+
+nginx loads the certificate when the proxy starts, so `init` alone leaves a running proxy on the old
+one. `refresh-tls` recreates the proxy container and nothing else: the API, web and Postgres keep
+running and no hand is dropped, and the origin is unreachable for the few seconds the proxy takes to
+start. `init` also makes a new CA, so re-import `tls/staging-ca.pem` wherever the old one was
+trusted. `staging up` recreates the proxy as part of every deploy.
+
 The development stack can run at the same time. Staging publishes 8443 and 55432;
 the development stack publishes 3000 and 5432, and the two compose projects have
 different names.

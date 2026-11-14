@@ -1,6 +1,6 @@
 /**
- * Tests for the staging proxy certificate refresh, the HSTS check, the registry leg and the
- * manifest-matches-checkout refusal.
+ * Tests for the staging proxy certificate refresh and served-certificate check, the HSTS check, the
+ * registry leg and the manifest-matches-checkout refusal.
  *
  * `refreshStagingProxy` recreates only the proxy, because nginx reads the renewed leaf only at start
  * and the digest-locked API and web containers must stay put.
@@ -19,6 +19,7 @@ import {
   tieManifestToLocalDigest,
 } from './registry-digest.mjs';
 import {
+  CERT_WARN_DAYS,
   deploymentPlan,
   HSTS_EXPECTED,
   HSTS_PROBE_PATH,
@@ -27,6 +28,7 @@ import {
   PROXY_REFRESH_COMPOSE_ARGS,
   RELEASE_RECORD_PATHS,
   refreshStagingProxy,
+  servedCertificateVerdict,
 } from './staging.mjs';
 
 test('refreshStagingProxy recreates only the TLS proxy, with --force-recreate', () => {
@@ -528,4 +530,47 @@ test('staging up asks manifestMatchesCheckout before it touches the registry or 
   assert.ok(read > 0 && registry > 0 && write > 0, 'the landmarks this test orders against are present');
   assert.ok(check > read, 'commandUp calls manifestMatchesCheckout after reading the manifest');
   assert.ok(check < registry && check < write, 'and refuses before the network or the env file');
+});
+
+const CERT_NOW = Date.parse('2026-11-14T00:00:00Z');
+const PREVIOUS_LEAF = { fingerprint256: 'AA:01', validTo: 'Nov 20 18:55:01 2026 GMT' };
+const RENEWED_LEAF = { fingerprint256: 'BB:02', validTo: 'Feb 11 02:43:48 2027 GMT' };
+const served = (cert, authorized = true, authorizationError = null) => ({ ...cert, authorized, authorizationError });
+const levels = (findings) => findings.map((f) => `${f.level}: ${f.line}`);
+
+test('a proxy still serving the previous leaf and CA after init is two failures, not a warning', () => {
+  const findings = servedCertificateVerdict({
+    served: served(PREVIOUS_LEAF, false, 'SELF_SIGNED_CERT_IN_CHAIN'),
+    disk: RENEWED_LEAF,
+    now: CERT_NOW,
+  });
+  assert.deepEqual(levels(findings), [
+    'cross: the proxy serves a different certificate from deploy/staging/tls/staging-cert.pem',
+    'cross: the served chain does not verify against deploy/staging/tls/staging-ca.pem',
+    'bang: the served certificate expires in 6 day(s)',
+  ]);
+  assert.match(findings[0].detail, /staging refresh-tls/, 'the failure names the command that fixes it');
+  assert.doesNotMatch(findings[2].detail, /staging init/, 'the leaf is already renewed; init again would mint a third CA');
+});
+
+test('the served certificate, not the file, decides the expiry warning', () => {
+  const findings = servedCertificateVerdict({ served: served(PREVIOUS_LEAF), disk: PREVIOUS_LEAF, now: CERT_NOW });
+  assert.deepEqual(levels(findings), ['bang: the served certificate expires in 6 day(s)']);
+  assert.ok(6 < CERT_WARN_DAYS, 'six days must sit inside the warning window for this case to mean anything');
+});
+
+test('the certificate on disk, served and verified, is one tick', () => {
+  const findings = servedCertificateVerdict({ served: served(RENEWED_LEAF), disk: RENEWED_LEAF, now: CERT_NOW });
+  assert.deepEqual(levels(findings), ['tick: the proxy serves the certificate on disk']);
+  assert.match(findings[0].detail, /89 day\(s\)/);
+});
+
+test('an expired served certificate fails even when it matches the file', () => {
+  const findings = servedCertificateVerdict({ served: served(PREVIOUS_LEAF), disk: PREVIOUS_LEAF, now: Date.parse('2026-11-22T00:00:00Z') });
+  assert.deepEqual(levels(findings), ['cross: the served certificate expired 2 day(s) ago']);
+});
+
+test('no handshake is a failure, never a silent pass', () => {
+  const findings = servedCertificateVerdict({ served: { problem: 'connect ECONNREFUSED' }, disk: RENEWED_LEAF, now: CERT_NOW });
+  assert.deepEqual(levels(findings), ['cross: could not read the certificate the proxy serves']);
 });
