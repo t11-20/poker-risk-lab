@@ -254,8 +254,8 @@ async function accountFootprint(sql: Db, userId: string): Promise<AccountFootpri
  *
  * Migrations 0004 and 0006 argue the policy. The foreign keys do the work, and referential actions
  * run with the constraint owner's privileges, so `prl_app` needs no DELETE grants that would let a
- * request path remove other learners' rows. `apps/api/scripts/verify-schema.mjs` check 9 asserts
- * the referential actions.
+ * request path remove other learners' rows. `apps/api/scripts/verify-schema.mjs` asserts the
+ * referential actions.
  *
  * Requires a transaction handle, because no partial erasure is acceptable. Returns null for an
  * unknown id, so a retried deletion is not a failure.
@@ -288,10 +288,9 @@ export async function deleteAccount(sql: Db, userId: string): Promise<AccountDel
   // a concurrent request sliding an expiry while the delete runs.
   const sessionsRevoked = await revokeAllForUser(sql, userId);
 
-  // A cascade writes nothing, so without this the audit log showed a live entitlement with no end
-  // (measured on a rolled-back transaction). A distinct event, because erasure is not an operator
-  // revocation. Written detached, since `audit_log.user_id` is about to be nulled anyway.
-  // `prl_app` already holds SELECT here and INSERT on `prl.audit_log`.
+  // A cascade writes nothing, so without this the audit log would show a live entitlement with no
+  // end. A distinct event, because erasure is not an operator revocation. Written detached, since
+  // `audit_log.user_id` is about to be nulled anyway.
   const ending = await sql<
     {
       id: string;
@@ -412,7 +411,6 @@ function abandonedGuestPredicate(sql: Db, cutoffSeconds: number) {
 }
 
 export interface AbandonedGuestQuery {
-  /** Seconds. */
   readonly cutoffSeconds: number;
   readonly limit: number;
 }
@@ -486,11 +484,9 @@ interface UnitsRow {
  * reads 0. Closed rooms are excluded, matching `resetUnits`, because their chips cannot be played.
  *
  * Only a membership the learner has sat at counts (`first_seated_at`, written by
- * `rooms.recordFirstSit`, migration 0008). Counting unsat memberships minted a stack per room
- * created, so three private tables and one Legends match read 4,000. An unsat membership holds exactly
- * `starting_stack`, so nothing is lost. The seat and dealt-hand evidence covers rows from before
- * 0008 or seated by the previous build during a roll. `>=` because inside one test transaction
- * `now()` is one instant.
+ * `rooms.recordFirstSit`), because counting unsat memberships mints a stack per room created. An
+ * unsat membership holds exactly `starting_stack`, so nothing is lost. `>=` because inside one test
+ * transaction `now()` is one instant.
  *
  * `net_lifetime` counts completed hands only, since an unfinished hand has `net_result` NULL. Sums
  * are cast to `int` because postgres.js returns `bigint` as a string.

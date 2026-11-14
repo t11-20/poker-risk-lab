@@ -66,7 +66,7 @@ export interface RoomMemberRow {
   readonly is_bot: boolean;
   /**
    * The `@prl/poker-ai` strategy profile id, `'unknown'` before migration 0003, null for a human. Not
-   * an `OpponentProfile`, which cost seven of the twelve Legends their identity across a restart.
+   * an `OpponentProfile`, which would lose seven of the twelve Legends their identity across a restart.
    */
   readonly bot_profile: string | null;
   /** Null only on a pre-0003 bot row, like `bot_seed`. */
@@ -319,8 +319,8 @@ export async function membersOfRooms(
 }
 
 /**
- * Null once the membership has left. Without `left_at is null`, a leave during `seatMember` handed
- * back the departed row as seated and let the learner back into the room (PR #25 review).
+ * Null once the membership has left. Without `left_at is null`, a leave during `seatMember` would
+ * hand back the departed row as seated and let the learner back into the room.
  */
 async function liveMemberById(sql: Db, memberId: string): Promise<RoomMemberRow | null> {
   const rows = await sql<RoomMemberRowRaw[]>`
@@ -366,7 +366,7 @@ export interface AddMemberInput {
  *
  * The `count(*)` in the WHERE clause locks nothing. The `for update` on the room row is what makes
  * the capacity check atomic. Do not drop it. Without it, two joins of a two-seat room holding one
- * member both counted 1 and both inserted (reproduced). With it, the loser blocks, and its insert
+ * member both count 1 and both insert. With it, the loser blocks, and its insert
  * takes a new READ COMMITTED snapshot that sees the winner. A REPEATABLE READ caller would defeat
  * this, and `withTransaction` uses the cluster default.
  *
@@ -478,14 +478,13 @@ export async function seatMember(
 }
 
 /**
- * Sets `room_members.first_seated_at`, which `users.readUnits` counts a membership by (migration
- * 0008). Never cleared. Returns false when the membership has left.
+ * Sets `room_members.first_seated_at`, which `users.readUnits` counts a membership by. Never
+ * cleared. Returns false when the membership has left.
  *
  * Separate from `seatMember` because the live table can still refuse a seat the database granted,
  * and the fact must only be written once the live table accepts. Found by id because a leave and
- * rejoin in the gap would otherwise mark the new, never-seated membership. Both regressions are
- * pinned by `2000 !== 1000` in `practice-table-units.test.ts` (PR #25 review). It does not require
- * a seat, because a stand before this lands still followed a genuine sit.
+ * rejoin in the gap would otherwise mark the new, never-seated membership. It does not require a
+ * seat, because a stand before this lands still followed a genuine sit.
  */
 export async function recordFirstSit(sql: Db, memberId: string): Promise<boolean> {
   const rows = await sql<{ id: string }[]>`
@@ -586,12 +585,11 @@ export async function close(sql: Db, roomId: string, options: CloseRoomOptions =
 }
 
 /**
- * Closes a practice table unless another person is a member.
+ * Closes a practice table unless another person is a member, in one transaction, so a join between
+ * reading the roster and closing cannot be closed under its maker.
  *
- * `retirePracticeTables` read the roster and then called `close`, so a join in the gap was closed
- * under its maker (PR #25 review, reproduced in `test/practice-table-units.test.ts`). A single
- * `update ... where not exists` would not fix it, because `addMember` only locks the room row and
- * EvalPlanQual never fires. So this takes the same `for update` lock, then decides in a new
+ * A single `update ... where not exists` is not enough, because `addMember` only locks the room row
+ * and EvalPlanQual never fires. So this takes the same `for update` lock, then decides in a new
  * statement whose snapshot sees every committed join. Bots and `max_seats` do not change after a
  * room is built, so only "another person" is re-checked.
  */

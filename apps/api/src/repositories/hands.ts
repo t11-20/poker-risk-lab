@@ -676,8 +676,8 @@ export function encodeHandCursor(startedAt: Date, id: string): string {
 
 /**
  * Strict, so a malformed cursor is `invalid_request` rather than a silent first page. The digits-only
- * pattern runs before `Number` because `Number('')` is 0, which turned `":hand_abc"` into the whole
- * history. It also refuses `" 12"`, `"0x10"` and `"1e3"`.
+ * pattern runs before `Number` because `Number('')` is 0, which would turn `":hand_abc"` into the
+ * whole history. It also refuses `" 12"`, `"0x10"` and `"1e3"`.
  */
 export function decodeHandCursor(cursor: string): HandCursor {
   const match = /^(\d{1,15}):([a-z0-9][a-z0-9_-]{0,63})$/.exec(cursor);

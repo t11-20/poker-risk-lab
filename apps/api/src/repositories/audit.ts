@@ -116,10 +116,7 @@ export async function record(sql: Db, input: RecordEventInput): Promise<void> {
   }
 }
 
-/**
- * Exported so the redaction is tested directly rather than through Postgres. Always returns an object,
- * because `audit_log_detail_is_object` requires one.
- */
+/** Always returns an object, because `audit_log_detail_is_object` requires one. */
 export function redactDetail(detail: Record<string, unknown>): Record<string, AuditValue> {
   return redactRecord(detail, 1);
 }
