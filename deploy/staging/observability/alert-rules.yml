@@ -1,32 +1,10 @@
-# ---------------------------------------------------------------------------
-# The alerting rules, as Prometheus evaluates them.
+# The alerting rules as Prometheus evaluates them. `docs/production/alerts.md` states each rule with
+# its threshold, the reason for that number, the first human step and its runbook, and
+# `scripts/alert-delivery.mjs` fails if either side names a rule the other does not.
 #
-# `docs/production/alerts.md` is the prose: every rule below is stated there with
-# its threshold, the reason that number and not another, what a human does first,
-# and which runbook to open. This file must not disagree with it, and
-# `scripts/alert-delivery.mjs` asserts that it does not — it reads the alert names
-# out of the markdown and fails if either side has a rule the other does not.
-#
-# Until this file existed, that document ended with a sentence saying it described
-# intent, because a rule that has never been evaluated is a hypothesis. It has now
-# been loaded into a real Prometheus, every expression has been evaluated against a
-# live scrape of the staging API, and two of them — one per tier — have been
-# provoked, routed through Alertmanager and delivered to a receiver over both an
-# HTTP webhook and a real SMTP transaction. See `docs/production/alerts.md`
-# § Verifying these rules for what that run proved and, in more detail than it used
-# to need, what it did not.
-#
-# ## Two labels, and one of them decides who wakes up
-#
-# `severity: page` and `severity: ticket` are the two tiers from that document, and
-# the route tree rendered from `alertmanager.template.yml` routes on them. There is no third value: an alert whose severity
-# is neither goes to the catch-all receiver, which is why `alert-delivery.mjs`
-# checks every rule carries one of the two.
-#
-# `runbook` is an annotation rather than a label. Labels are the alert's identity —
-# two alerts differing only in an annotation are the same alert — and a runbook
-# path is documentation about the alert, not part of what makes it distinct.
-# ---------------------------------------------------------------------------
+# `severity` routes in `alertmanager.template.yml`: `page`, `ticket`, or `heartbeat` (Watchdog only).
+# Any other value lands on the catch-all receiver, so `alert-delivery.mjs` checks every rule carries
+# one. `runbook` is an annotation, not a label, because labels are the alert's identity.
 
 groups:
   - name: availability
@@ -43,23 +21,9 @@ groups:
             deployment that /api/v1/health is unreachable before treating it as a scrape problem.
           runbook: docs/production/runbooks/api-unhealthy.md
 
-      # `min_over_time(prl_readiness_state[5m]) == 0` with `for: 5m` was this file's own dead-
-      # arithmetic warning arriving from the other side: not a `for:` that can never be satisfied,
-      # but one that is satisfied by THIRTY SECONDS of the thing it says takes five minutes.
-      # `min_over_time` stays 0 for a full five minutes AFTER the degraded samples leave, so the
-      # condition outlives the outage by the length of its own window and the `for:` was counting
-      # that afterglow. Measured with `promtool test rules`: two consecutive degraded scrapes —
-      # 30 s — and readiness back at 1 for four and a half minutes fired this PAGE at t=15m15s;
-      # one degraded scrape never fired. So the real threshold was "two scrapes", the alert
-      # arrived five minutes after the blip had healed, and the exact shape its own description
-      # calls expected and self-healing — a Postgres failover — was a 3am phone call.
-      #
-      # The rule is now the sentence itself. A bare comparison is true only while readiness is
-      # actually 0, so the `for:` measures the outage rather than the window's memory of it, and
-      # a single healthy scrape resets it. That does mean a gauge FLAPPING between 0 and 1 no
-      # longer accumulates here — deliberately: `ReadinessFlapping` is the rule for that, it is a
-      # ticket because flapping is a marginal database rather than a dead one, and having the
-      # page fire for it was the same event being reported twice at the wrong tier.
+      # A bare comparison, so the `for:` measures the outage. `min_over_time(...[5m]) == 0` stays 0
+      # for five minutes after the degraded samples leave; with `for: 5m`, promtool showed two
+      # degraded scrapes (30 s) firing this page. Flapping is `ReadinessFlapping`'s job, a ticket.
       # `rule-tests/availability.test.yml` holds the blip, the flap and the real outage.
       - alert: ApiNotReady
         expr: prl_readiness_state == 0
@@ -75,18 +39,10 @@ groups:
             clock, and readiness that flaps rather than stays down is ReadinessFlapping.
           runbook: docs/production/runbooks/db-unavailable.md
 
-      # This rule is only as good as the flatness of the series under it, and for a while that
-      # series was not flat. `prl_process_start_time_seconds` was exported with `setFrom`, so the
-      # start instant was RE-DERIVED on every scrape as `Math.floor(Date.now()/1000 -
-      # process.uptime())` — one fixed instant recomputed from a wall clock and a monotonic clock
-      # that do not agree, with `Math.floor` turning the disagreement into an integer that flips.
-      # Measured on the development machine: 1.11 ms of drift over 20 s of sampling, and on a
-      # series phased onto a second boundary — which one process in roughly a thousand is, by the
-      # accident of when it started — `changes()` counted 32 transitions over those same samples.
-      # Three is a page, so this fired within a minute on a process that had never restarted, and
-      # went on firing for as long as it ran. The fix is in `observability/metrics.ts`: computed ONCE at
-      # construction and `set()`, so a scrape reports the same integer forever and every change
-      # in it is a real restart. `rule-tests/availability.test.yml` holds both directions.
+      # Only as good as the flatness of the series: `prl_process_start_time_seconds` must be computed
+      # once and `set()` (`observability/metrics.ts`). Re-derived per scrape from wall and monotonic
+      # clocks, `Math.floor` flipped it and `changes()` counted 32 over 20 s on a process that never
+      # restarted. `rule-tests/availability.test.yml` holds both directions.
       - alert: ProcessRestartLoop
         expr: changes(prl_process_start_time_seconds[15m]) >= 3
         labels:
@@ -170,18 +126,13 @@ groups:
             blocked process produces the same reading without the pool being busy at all.
           runbook: docs/production/runbooks/db-saturation.md
 
-      # The threshold is DERIVED from the pool rather than written down, and the constant it
-      # replaced could not fire on the hosts this runs on. `WorkerPool` bounds the queue at
-      # `size * QUEUE_SLOTS_PER_WORKER` (3, `apps/api/src/workers/pool.ts`) and `size` is
-      # `max(1, min(4, availableParallelism() - 1))` (`config.ts`). On a 1- or 2-vCPU host that
-      # is one worker and a queue of three slots, so `prl_worker_pool_queued` can never exceed 3
-      # and the old `> 4` was an alert with no reachable state. `* 3 / 2` is half the queue limit
-      # on whatever host this is: 1.5 of 3 slots on one worker, 6 of 12 on four.
+      # The threshold is derived from the pool: the queue is bounded at `size * 3` slots
+      # (`workers/pool.ts`) and `size` is `max(1, min(4, availableParallelism() - 1))`, so on a 1- or
+      # 2-vCPU host the queue can never exceed 3 and a constant `> 4` could not fire. `* 3 / 2` is half
+      # the limit on whatever host this is.
       #
-      # `scalar()` rather than a bare aggregation on the right so the left side keeps its own
-      # labels: `avg_over_time(...)` carries job and instance, `max(...)` carries none, and a
-      # binary operator between the two matches nothing at all — which would be this same defect
-      # in a new spelling, an expression that is always empty.
+      # `scalar()` on the right so the comparison keeps the left side's labels: `max(...)` carries
+      # none, and a binary operator between the two would match nothing.
       - alert: WorkerPoolQueueDeep
         expr: >-
           avg_over_time(prl_worker_pool_queued[10m]) > scalar(max(prl_worker_pool_size)) * 3 / 2
@@ -212,29 +163,15 @@ groups:
             tail. One in twenty means the budget is wrong or the box is oversubscribed.
           runbook: docs/production/runbooks/worker-saturation.md
 
-  # -------------------------------------------------------------------------
-  # A `for:` may never be as long as the range window above it.
+  # A `for:` may never be as long as the range window above it. After a single step,
+  # `increase(x[10m])` is non-zero for 10m minus one scrape interval (9m45s at 15 s), so `for: 10m`
+  # can never be satisfied; promtool showed `HandsFailing` never leaving `pending` across 101
+  # evaluation points, and the same expression with `for: 9m` firing. A single step is the normal
+  # input: `rooms/registry.ts` increments `handsFailed` once, by `abandoned.length`, on reconcile.
   #
-  # This is arithmetic, not taste, and it silently killed the two zero-tolerance
-  # rules in this group. `rate(x[10m])` and `increase(x[10m])` are non-zero only
-  # while the window still holds a sample from BEFORE the step and one from after
-  # it, which for a single step is 10m minus one scrape interval — 9m45s at the
-  # 15 s scrape this deployment uses. `for: 10m` then asks the condition to stay
-  # true for longer than it can possibly be true, and the alert cannot fire at
-  # all. Measured across 101 evaluation points with `promtool test rules`:
-  # `HandsFailing` never left `pending`, and the same expression with `for: 9m`
-  # fired at t=1770s. `ArchiveFailing` had the identical shape at 15m/15m.
-  #
-  # A single step is not an exotic input here — it is the normal one.
-  # `rooms/registry.ts` increments `handsFailed` once, by `abandoned.length`,
-  # when it reconciles hands a restart interrupted.
-  #
-  # `SeatReleaseFailing` below is the model for zero tolerance: a window, no
-  # `for:` at all, so the first occurrence is the alert. `RoomOwnershipRefused`
-  # is the model for the other shape — a window SHORTER than the `for:`, which
-  # asks for something that does not stop, and says so in its own description.
-  # `rule-tests/product-correctness.test.yml` holds both directions for each.
-  # -------------------------------------------------------------------------
+  # Zero tolerance is `SeatReleaseFailing`'s shape: a window and no `for:`. Persistence is
+  # `RoomOwnershipRefused`'s: a window SHORTER than the `for:`. `rule-tests/product-correctness.test.yml`
+  # holds both directions for each.
   - name: product-correctness
     rules:
       - alert: HandsFailing
@@ -250,23 +187,12 @@ groups:
             interrupted_by_restart after a deploy is expected once and must not recur.
           runbook: docs/production/runbooks/api-unhealthy.md
 
-      # Not a windowed difference any more, and the reason is that the old one measured the wrong
-      # quantity. `increase(started[1h]) - increase(completed[1h])` is (hands in flight now) minus
-      # (hands in flight an hour ago), which is a number six healthy tables produce: measured at 20
-      # for twenty tables each dealing continuously, firing on a threshold of 5 and staying firing
-      # for an hour. And with `prl_hands_completed_total` unprimed, the catastrophic case — no hand
-      # ever completes — left the right-hand side ABSENT, so `A - empty` was empty and the rule
-      # could not fire at the one moment it was written for. Both are fixed here: the counters are
-      # primed (`observability/metrics.ts`) and the expression is the invariant itself.
-      #
-      # started = completed + failed + in flight, always. A hand leaves the in-flight set only by
-      # settling (`handsCompleted`), by its room closing under it (`LiveRoom.close` counts
-      # `room_closed`) or by being reconciled after a restart (`interrupted_by_restart`). At most
-      # one hand is in flight per live room, so `prl_rooms_live` is the exact upper bound on the
-      # legitimate difference — read from the same scrape as the counters, so there is no skew
-      # between the two sides. Anything above it is a hand that vanished for a reason nobody wrote
-      # a counter for, which is what this rule is for and what a threshold picked out of the air
-      # cannot see.
+      # The invariant itself: started = completed + failed + in flight, and at most one hand is in
+      # flight per live room, so `prl_rooms_live` (same scrape, no skew) bounds the legitimate
+      # difference. A windowed `increase(started) - increase(completed)` measured 20 on healthy
+      # tables, and with `completed` unprimed it was empty exactly when no hand ever completed; the
+      # counters are primed in `observability/metrics.ts`. A hand also leaves the in-flight set by
+      # `room_closed` or `interrupted_by_restart`.
       - alert: HandCompletionGap
         expr: >-
           sum(prl_hands_started_total)
@@ -286,17 +212,10 @@ groups:
             hour because a real difference does not heal.
           runbook: docs/production/runbooks/api-unhealthy.md
 
-      # 0.05/s sustained for ten minutes was thirty failures per ten minutes, and this alert's own
-      # description is ONE stalled seat on a thirty-second action clock — two failures a minute, or
-      # a fifteenth of what it asked for. A permanently broken bot seat was silent for an hour.
-      #
-      # Zero is the honest threshold: every value classified `actor` in `observability/telemetry.ts`
-      # is an error path (a bot that could not decide, an action the engine refused, a turn timeout
-      # that could not be applied), so there is no healthy background rate to sit above. What
-      # separates an incident from a hiccup is not the height, it is that it does not stop — and
-      # that is what the `for:` is for. The window is deliberately SHORTER than the `for:`, the
-      # `RoomOwnershipRefused` shape: at least one failure in every five-minute window for ten
-      # consecutive minutes. One stray failure, or a burst that stops, cannot stay true long enough.
+      # Zero: every `actor` value in `observability/telemetry.ts` is an error path, so there is no
+      # healthy background rate. One stalled seat on a 30 s clock is two failures a minute, so any
+      # height threshold misses it. The window is SHORTER than the `for:` (the `RoomOwnershipRefused`
+      # shape): a failure in every five-minute window for ten minutes.
       - alert: TableActorFailing
         expr: sum(increase(prl_table_actor_failures_total[5m])) > 0
         for: 10m
@@ -352,9 +271,8 @@ groups:
             that stops cannot stay true long enough to fire.
           runbook: docs/production/runbooks/room-ownership-contended.md
 
-      # `rate[15m]` with `for: 15m` was the same dead arithmetic as `HandsFailing`, one tier down:
-      # after a single archive failure the condition is true for 14m45s and the `for:` asks for
-      # 15m. `SeatReleaseFailing` above is the shape this should always have had.
+      # A window and no `for:`: `rate[15m]` with `for: 15m` can never fire (true for 14m45s after one
+      # failure).
       - alert: ArchiveFailing
         expr: sum(increase(prl_archive_failures_total[15m])) > 0
         labels:
@@ -367,33 +285,15 @@ groups:
             today rather than tonight.
           runbook: docs/production/runbooks/db-saturation.md
 
-  # -------------------------------------------------------------------------
-  # Enrolment, which only exists on a deployment running
-  # `PRL_ENROLMENT_REQUIRED=enforced`.
-  #
-  # `prl_seat_entitlement_refusals_total` is primed on both of its reasons, is
-  # documented at length in `observability/metrics.ts`, and until now was read by
-  # no rule at all — an exported, primed, argued-about counter that nothing
-  # watched. The two reasons are not two sizes of the same event and must not be
-  # summed; they are separate rules for the same reason they are separate label
-  # values.
-  #
-  # Both are TICKETS, and the argument is the same for both: on an enforced
-  # deployment a refusal is the guard doing exactly what it was configured to do.
-  # Neither rule can tell "the class list is wrong" from "somebody who is not on
-  # the list tried a seat" — no identifier reaches a label here, on purpose — and
-  # the remedy for either is `pnpm run enrolments`, an operator CLI with no
-  # HTTP surface, run by a person during working hours. A page would wake
-  # somebody to be told that an access control refused access.
-  # -------------------------------------------------------------------------
+  # Enrolment, which only moves on a deployment running `PRL_ENROLMENT_REQUIRED=enforced`.
+  # `prl_seat_entitlement_refusals_total`'s two reasons are separate events, so separate rules,
+  # never summed. Both are tickets: a refusal is the guard doing what it was configured to do, no
+  # identifier reaches a label, and the remedy is `pnpm run enrolments` during working hours.
   - name: enrolment
     rules:
-      # A volume threshold rather than zero, because one refusal is a visitor tapping a seat on an
-      # enforced instance and that is the product working. Six in ten minutes is a group of people
-      # who expected to be able to sit and could not — the shape of a cohort arriving on the
-      # morning of a class to a list that missed them. No `for:`: on that morning the useful
-      # latency is the ten-minute window itself, and the difference is a class either waiting or
-      # not.
+      # A volume threshold: one refusal is a visitor tapping a seat. Six in ten minutes is a group
+      # that expected to sit, typically a cohort a list missed. No `for:`, because on that morning the
+      # ten-minute window is already the useful latency.
       - alert: SeatEntitlementRefused
         expr: >-
           sum(increase(prl_seat_entitlement_refusals_total{reason="not_entitled"}[10m])) > 5
@@ -410,16 +310,10 @@ groups:
             enrolment tables and cannot enrol anybody.
           runbook: docs/production/runbooks/seat-entitlement-refused.md
 
-      # Zero tolerance and no `for:`, the `SeatReleaseFailing` shape, and the counter is already
-      # primed so the first occurrence is a rise from zero rather than a series appearing.
-      # `metrics.ts` calls this the one refusal that can move with nobody using the product: it is
-      # counted when a room is re-opened after a restart and a chair recorded in `room_members` is
-      # not given back, because whoever was sitting in it is no longer entitled. Nobody is being
-      # refused anything they just asked for and nothing else in this file can see it — no request
-      # fails, no learner is at a keyboard, and the chair is simply gone the next time they look.
-      # An expiry or a revocation taking effect at the next restart rather than at the moment of
-      # the write is a legitimate outcome, so this is a ticket; being invisible is what makes it
-      # worth a rule.
+      # Zero tolerance and no `for:`, on a primed counter. The one refusal that moves with nobody
+      # using the product: a re-opened room does not give back a chair whose holder is no longer
+      # entitled, and nothing else can see it. A ticket, because an expiry taking effect at the next
+      # restart is legitimate.
       - alert: SeatNotRestored
         expr: >-
           sum(increase(prl_seat_entitlement_refusals_total{reason="seat_not_restored"}[15m])) > 0
@@ -435,41 +329,16 @@ groups:
             bug rather than to a policy.
           runbook: docs/production/runbooks/seat-entitlement-refused.md
 
-  # -------------------------------------------------------------------------
-  # The three thresholds below were all set above any attack that would actually
-  # be run against this deployment, on signals whose own documentation says
-  # legitimate use produces almost none of them. Each was measured silent for a
-  # full hour of the traffic it names:
-  #
-  #   * `AuthzFailureSpike` at >2/s needed 120 refused room reads a MINUTE. An
-  #     enumeration at one request a second — a shell loop, not a botnet — was
-  #     silent for an hour.
-  #   * `AuthFailureSpike` at >5/s needed 7,200 failed sign-ins an hour. Two a
-  #     second, sustained, was silent for an hour.
-  #   * `WebSocketRefusalSpike` at >0.5/s needed about 300 bad-Origin refusals per
-  #     ten minutes. A hundred in ten minutes was silent.
-  #
-  # And the rate limiter closes the other end: it bans a caller who ignores
-  # `Retry-After`, so anyone slow enough to stay unbanned sat comfortably under
-  # all three at once. The band between "fast enough to trip these" and "slow
-  # enough not to be banned" was empty, which means these three rules could only
-  # ever have fired for traffic `RateLimitBans` had already reported.
-  #
-  # So the numbers come down to near zero and the SHAPE moves into the `for:`.
-  # The window is shorter than the `for:` on all three — the `RoomOwnershipRefused`
-  # spelling — so what fires them is traffic that does not stop, and a burst that
-  # stops cannot stay true long enough. `rule-tests/security.test.yml` holds the
+  # Thresholds near zero with the persistence in the `for:` (window shorter than the `for:`). Each
+  # previous rate threshold was measured silent for an hour of the traffic it names (>2/s missed a
+  # one-request-a-second enumeration), and the rate limiter bans anyone faster, so they could only
+  # fire for traffic `RateLimitBans` had already reported. `rule-tests/security.test.yml` holds the
   # firing and the silent case for each.
-  # -------------------------------------------------------------------------
   - name: security
     rules:
-      # >20 in every five-minute window, held for ten minutes: four failed sign-ins a minute that
-      # do not stop. Deliberately not zero, and this is the one of the three with a real background
-      # rate — `not_authenticated`, `session_expired` and `csrf_failed` all occur to honest users
-      # with a stale tab. In a cohort of thirty, four a minute for ten straight minutes is one
-      # learner in seven failing every minute, which is not a stale tab. It stays a ticket: at this
-      # threshold it will occasionally be a broken client after a deploy, and that is a
-      # working-hours question, not a 3am one.
+      # >20 per five minutes for ten minutes: four failed sign-ins a minute that do not stop. Not
+      # zero, because `not_authenticated`, `session_expired` and `csrf_failed` happen to honest users
+      # with a stale tab. A ticket: at this level it is sometimes a broken client after a deploy.
       - alert: AuthFailureSpike
         expr: sum(increase(prl_auth_failures_total[5m])) > 20
         for: 10m
@@ -483,12 +352,9 @@ groups:
             bans are also rising, it is automated.
           runbook: docs/production/runbooks/automated-abuse.md
 
-      # >5 in every five-minute window, held for ten minutes: roughly one refused room read a
-      # minute that does not stop. This one pages, so the number has to be defensible at 3am —
-      # what it now catches that it did not is a learner-speed walk of room and hand ids, which is
-      # precisely the traffic this rule names and precisely what the old >2/s excluded. What it
-      # still ignores is somebody clicking a dead link to a room they were removed from: five
-      # refusals in five minutes, or twenty in one burst and then nothing, both stay silent.
+      # >5 per five minutes for ten minutes, roughly one refused room read a minute: a learner-speed
+      # walk of room and hand ids. This one pages. A dead link clicked five times, or one burst of
+      # twenty, stays silent.
       - alert: AuthzFailureSpike
         expr: sum(increase(prl_authz_failures_total[5m])) > 5
         for: 10m
@@ -514,13 +380,9 @@ groups:
             past the limit while ignoring Retry-After, which is a script rather than a person.
           runbook: docs/production/runbooks/automated-abuse.md
 
-      # Zero, held for ten minutes: at least one bad-Origin refusal in every five-minute window,
-      # three times over. A browser at a configured origin never produces one, so there is nothing
-      # to sit above — the old >0.5/s asked for three hundred in ten minutes, which is a number
-      # neither of this rule's two causes reaches. Both of them are continuous rather than large:
-      # PUBLIC_WEB_ORIGIN wrong after a deploy refuses every learner for as long as it is wrong,
-      # and somebody probing keeps probing. A single stray refusal — one scanner, once — stays
-      # silent, which is the whole reason the persistence is in the `for:` and not in the number.
+      # Zero, held for ten minutes: a browser at a configured origin never produces one. Both causes
+      # (a wrong PUBLIC_WEB_ORIGIN after a deploy, a prober) are continuous rather than large, so the
+      # persistence is in the `for:`; one stray refusal stays silent.
       - alert: WebSocketRefusalSpike
         expr: sum(increase(prl_websocket_refused_total{reason="bad_origin"}[5m])) > 0
         for: 10m
@@ -537,26 +399,11 @@ groups:
 
   - name: connection-churn
     rules:
-      # The baseline is the live connection count, not this deployment's own recent past, and the
-      # change is not a refinement — the old rule fired on healthy traffic and could not fire on
-      # the failure it names.
-      #
-      #   * `3 * rate(closed[1h])` makes the quiet hour the baseline. Measured: a class of thirty
-      #     connecting on a morning after an overnight lull cleared it more than threefold, on
-      #     thirty sockets that each opened once and stayed open. Any deployment used during the
-      #     day and not at night trips it every morning, which is how a ticket queue is taught to
-      #     be scrolled past.
-      #   * `prl_websocket_closed_total` is created by its first increment, so before any socket
-      #     had ever closed the right-hand side was ABSENT and the whole comparison was empty. A
-      #     storm at the start of a deployment's life — a proxy misconfigured at the same deploy
-      #     that started the process — could not be seen.
-      #
-      # A reconnect storm is churn, not volume: sockets opening far faster than the number of
-      # sockets that are actually up. `prl_websocket_connections` is read at scrape time from the
-      # hub, so the right-hand side is always present. More than one open per live connection per
-      # minute, for ten minutes, is every learner's table re-establishing itself repeatedly — the
-      # `+ 5` is the floor that keeps a deployment with nobody connected from firing on a handful
-      # of opens. Thirty learners arriving at once is 0.1 opens/s against a bar of 0.58: silent.
+      # Churn against the live connection count, not against this deployment's own past:
+      # `3 * rate(closed[1h])` fired every morning after a quiet night, and `prl_websocket_closed_total`
+      # is absent until the first close, which emptied the comparison. `prl_websocket_connections` is
+      # read from the hub at scrape time, so it is always present. `+ 5` keeps an empty deployment
+      # from firing; thirty learners arriving at once is 0.1 opens/s against a bar of 0.58.
       - alert: WebSocketReconnectStorm
         expr: >-
           sum(rate(prl_websocket_opened_total[5m])) * 60 > max(prl_websocket_connections) + 5
@@ -573,10 +420,7 @@ groups:
           runbook: docs/production/runbooks/websocket-spike.md
 
       # 67 is 70% of the 96 concurrent seated players at which one instance saturated in
-      # docs/production/load-test.md, which is where alerts.md says this number must come from and
-      # what it must be re-derived from whenever that measurement is repeated. It replaced a
-      # placeholder of 400 that document flagged as a tracked task. A capacity alert copied from
-      # another service is worse than none, so if you change the measurement, change this.
+      # docs/production/load-test.md. If that measurement changes, re-derive this.
       - alert: WebSocketConnectionsHigh
         expr: prl_websocket_connections > 67
         for: 10m
@@ -589,58 +433,19 @@ groups:
             not from a generic figure. Re-derive it whenever that measurement is repeated.
           runbook: docs/production/runbooks/websocket-spike.md
 
-  # -------------------------------------------------------------------------
-  # Data retention.
+  # The front door, probed from outside the application. Every other rule reads a series Prometheus
+  # scrapes on the compose network, past the proxy, TLS and the page server, so a dead nginx, an
+  # expired certificate or a stopped Next.js server left them all green. These series come from a
+  # blackbox exporter making a real HTTPS request every 15 s, so they exist only while it runs,
+  # hence `PublicOriginProbeDown`: a ticket, because a dead probe means nobody can see, not that the
+  # site is down.
   #
-  # The one rule in this file whose subject is a promise made to a reader rather
-  # than a thing a learner would notice breaking. Nothing degrades when the
-  # retention sweep stops: every request still succeeds, every table still reads,
-  # and rows that should have gone simply stay. `docs/production/legal-register.md`
-  # §5 L5 names that shape exactly - "this is where a wrong answer is invisible:
-  # nothing fails, data simply persists."
+  # `instance` is the probed URL and `module` the upstream: `learner_page_https` failing while
+  # `api_health_https` passes is the page server; both failing is the proxy, TLS or the host.
   #
-  # Note what is NOT alerted on here, and why. `prl_retention_rows_deleted_total`
-  # staying flat is the NORMAL state of a small deployment - most six-hour windows
-  # have nothing expired and no sixty-day-old guest - so a rule on it would fire
-  # constantly or never. "Removed nothing" and "did not run" are the same flat line,
-  # which is why the sweep exports its own age and this rule reads that instead.
-  # -------------------------------------------------------------------------
-  # -------------------------------------------------------------------------
-  # The front door, probed from outside the application.
-  #
-  # Every other rule in this file reads a series the API exports about itself, and
-  # Prometheus scrapes that series on the compose network — past the proxy, past
-  # TLS, past the page server. So a dead nginx, an expired certificate, unreadable
-  # TLS material or a stopped Next.js server left `up{job="prl-api"}` at 1,
-  # `prl_readiness_state` at 1, every counter flat, and every rule in this file
-  # green, while every learner saw a dead site. That is the whole of the blind spot
-  # `prometheus.yml` names above the `prl-public-origin` job, and these four rules
-  # are the only things in this deployment that can report it.
-  #
-  # The series come from a blackbox exporter making a real HTTPS request through
-  # the front door every 15 s, so they exist only while that exporter is running —
-  # which is why `PublicOriginProbeDown` is here as well. It is a ticket rather
-  # than a page on purpose: a dead probe is not evidence that the site is down, it
-  # is evidence that nobody can see whether it is. Stating that plainly is better
-  # than a page that means "something might be wrong somewhere", and the runbook
-  # says the same.
-  #
-  # `instance` is the probed URL and `module` says which upstream was being
-  # reached, so a firing alert names the front-door path that failed rather than
-  # the exporter. Both are kept: `learner_page_https` failing while
-  # `api_health_https` passes is the page server, and both failing is the proxy,
-  # TLS or the host. Two failing targets are two alerts with one alertname, which
-  # `group_by: ['alertname']` in `alertmanager.template.yml` delivers as one
-  # notification carrying both.
-  #
-  # Nothing inhibits `PublicOriginDown` and it inhibits nothing, which is
-  # deliberate and is the one place in this deployment where two pages for one
-  # incident is the right answer. It is the only rule here that speaks for the
-  # learner rather than about a process, and neither direction of implication
-  # holds: the API can be down with `/` still served, and `/` can be dark with the
-  # API perfectly healthy. An alert added to close a blind spot must not be
-  # suppressible by a signal from inside the thing it is watching.
-  # -------------------------------------------------------------------------
+  # Nothing inhibits `PublicOriginDown` and it inhibits nothing: the API can be down with `/` served
+  # and the reverse, and an alert closing a blind spot must not be suppressible from inside the
+  # thing it watches.
   - name: public-origin
     rules:
       - alert: PublicOriginDown
@@ -659,10 +464,8 @@ groups:
             before ruling those out.
           runbook: docs/production/runbooks/public-origin-unreachable.md
 
-      # `absent()` for the same reason `ApiDown` has it: a job whose targets have gone produces no
-      # `up` series at all, and `up == 0` over nothing is empty. Without the first half, deleting
-      # the exporter from the compose file would silence this rule and `PublicOriginDown` together
-      # and leave nothing to say so.
+      # `absent()` as in `ApiDown`: a job with no targets has no `up` series, and `up == 0` over
+      # nothing is empty, so removing the exporter would silence this and `PublicOriginDown` together.
       - alert: PublicOriginProbeDown
         expr: absent(up{job="prl-public-origin"}) or up{job="prl-public-origin"} == 0
         for: 10m
@@ -677,20 +480,11 @@ groups:
             as unmonitored since it started and check the site by hand until it clears.
           runbook: docs/production/runbooks/public-origin-unreachable.md
 
-      # `> 0` inside the `min()` is load-bearing and is not cosmetic. A failed probe reports
-      # `probe_ssl_earliest_cert_expiry 0`, and `0 - time()` is a large negative number, so without
-      # the filter every outage would page a certificate expiry that had not happened and send an
-      # operator to renew a certificate that is fine. Filtered, an outage leaves the min over an
-      # empty set — no alert — and `PublicOriginDown` is what pages instead, which is the truth.
-      #
-      # `min()` rather than a per-instance comparison because both probed URLs are served by one
-      # nginx with one certificate, and a `for:` on a two-element vector is two alerts about one
-      # expiry.
-      #
-      # Twenty-one days is ahead of the <14-day warning `pnpm run staging status` prints, which
-      # only speaks when a person happens to run it. Three days pages, because the site goes dark
-      # at a known minute and a renewal that needs a third party has to start before the last
-      # working day before it.
+      # `> 0` inside the `min()` is load-bearing: a failed probe reports
+      # `probe_ssl_earliest_cert_expiry 0`, so without it every outage pages a certificate expiry.
+      # `min()` because both URLs share one nginx and one certificate. Twenty-one days is ahead of the
+      # <14-day warning `pnpm run staging status` prints only when run; three days pages, so a renewal
+      # needing a third party can start on a working day.
       - alert: TlsCertificateExpiringSoon
         expr: >-
           min(probe_ssl_earliest_cert_expiry{job="prl-public-origin"} > 0) - time() < 21 * 86400
@@ -721,6 +515,9 @@ groups:
             on a working day.
           runbook: docs/production/runbooks/public-origin-unreachable.md
 
+  # Not on `prl_retention_rows_deleted_total`: flat is the normal state of a small deployment, and
+  # "removed nothing" and "did not run" are the same flat line, so the sweep exports its own age.
+  # Nothing else degrades when it stops (legal-register §5 L5: "nothing fails, data simply persists").
   - name: data-retention
     rules:
       - alert: RetentionSweepStalled
@@ -763,25 +560,10 @@ groups:
             Usually a database that is marginal rather than down.
           runbook: docs/production/runbooks/db-unavailable.md
 
-  # -------------------------------------------------------------------------
-  # The alerting system itself.
-  #
-  # Every other rule in this file is delivered by Alertmanager, so the one failure
-  # they cannot report is Alertmanager failing to deliver. That is not a hypothetical
-  # shape of bug: an expired provider key, a rotated SMTP password, a relay that
-  # starts answering 550 for this sender, or a receiver URL that quietly began
-  # returning 404 all produce exactly it — every application alert keeps evaluating
-  # and firing correctly, Alertmanager keeps routing them correctly, and nothing
-  # arrives. Before these two rules, `alertmanager_notifications_failed_total` was
-  # exported by a container on this network and read by nothing at all.
-  #
-  # Both are `page`, and the reason is the asymmetry: a broken receiver is usually
-  # ONE receiver. A ticket queue that has stopped accepting notifications can still
-  # be reported through the paging path, and the other way round. The case these
-  # cannot report is both paths broken at once, which is what the out-of-band check
-  # in the runbook exists for — and the runbook says so rather than implying these
-  # rules cover it.
-  # -------------------------------------------------------------------------
+  # The alerting system itself: an expired key, a rotated SMTP password or a receiver answering 404
+  # leaves every rule firing correctly and nothing arriving. Both are pages because a broken receiver
+  # is usually ONE receiver, so the other path can still report it; both paths broken at once is the
+  # runbook's out-of-band check and the Watchdog's job.
   - name: alerting-itself
     rules:
       - alert: AlertmanagerNotificationsFailing
@@ -812,63 +594,21 @@ groups:
             AlertmanagerDown as a report that the deployment has been unmonitored since it started.
           runbook: docs/production/runbooks/alerting-blind.md
 
-  # -------------------------------------------------------------------------
-  # The dead man's switch.
+  # The dead man's switch. Every rule above reports by ARRIVING, so both delivery paths broken at
+  # once cannot be reported in band. This rule always fires and its signal is the GAP, watched by a
+  # machine outside this deployment that pages on absence.
   #
-  # Every rule above this one reports a thing that went wrong by ARRIVING. That
-  # shared assumption is also their shared blind spot, and the two rules above name
-  # it exactly: both delivery paths broken at once cannot be reported in band,
-  # because the channel carrying the report is the channel that failed. A silent
-  # Alertmanager and a quiet week look identical from every dashboard in this
-  # deployment.
-  #
-  # The rule below inverts that. It is always firing, so its notification must keep
-  # arriving, and the signal it carries is not the notification — it is the GAP.
-  # Something outside this deployment watches the arrivals and complains when they
-  # stop, which is the one report that cannot be swallowed by the thing it is about.
-  #
-  # ## Why `severity: heartbeat` and not `page` or `ticket`
-  #
-  # `docs/production/alerts.md` opens with a two-tier rule and it is still true: the
-  # difference between the two tiers is whether a human is woken up. This alert is
-  # neither, because it is never an incident. It fires on a healthy Tuesday morning
-  # and it will fire for as long as this deployment runs.
-  #
-  #   * `page` would wake somebody every repeat_interval, forever, about nothing.
-  #     That is the fastest way known to make a pager unreadable.
-  #   * `ticket` would do the same to the ticket queue, more slowly and with the same
-  #     ending — and a queue people scroll past is exactly what the rejected third
-  #     "warning" tier would have produced.
-  #
-  # So it gets a third destination, and the important word is DESTINATION rather than
-  # tier. The two tiers are about humans; this route ends at a machine whose only job
-  # is to notice that the pings stopped — a Dead Man's Snitch, a healthchecks.io
-  # check, a PagerDuty heartbeat integration, a Grafana OnCall heartbeat. It is that
-  # machine, not this one, that pages a person, and it does so on ABSENCE.
-  # `scripts/alert-preflight.mjs` refuses a promotion whose heartbeat destination is
-  # the same address as either human tier, because a snitch that is somebody's inbox
-  # is a subscription to a message every twenty seconds.
-  #
-  # ## What this file can and cannot prove about it
-  #
-  # `pnpm run alerts:verify` check 7 proves the half that lives here: the rule fires,
-  # routes to its own receiver and not to either human tier, and arrives repeatedly on
-  # a schedule — then it STOPS Alertmanager and shows the absence being detected while
-  # nothing else notices, and shows the pings resuming when it comes back. What it
-  # cannot prove is the watching half, because a watcher on this host dies with the
-  # host it is watching. That is one URL, it is set by PRL_ALERT_HEARTBEAT_WEBHOOK_URL,
-  # and the preflight will not let a release be promoted while it is a placeholder.
-  #
-  # See docs/production/runbooks/heartbeat-missing.md — which, unlike every other
-  # runbook here, is opened when this alert is NOT firing.
-  # -------------------------------------------------------------------------
+  # `severity: heartbeat` is a destination, not a tier: as `page` or `ticket` it would notify every
+  # `repeat_interval` for ever, about nothing. `alerts:verify` check 7 proves the half that lives
+  # here (it fires, routes only to its receiver, repeats, and its absence is detected when
+  # Alertmanager stops); the watching half cannot be proved on the host it watches. That is
+  # PRL_ALERT_HEARTBEAT_WEBHOOK_URL, and the preflight refuses a placeholder or a human tier's
+  # address. docs/production/runbooks/heartbeat-missing.md is opened when this is NOT firing.
   - name: dead-mans-switch
     rules:
       - alert: Watchdog
-        # Always true, deliberately. `vector(1)` needs no metric, no scrape and no
-        # subsystem to be healthy — which is the point: a heartbeat conditional on
-        # anything would go quiet for reasons other than the one it is watching for,
-        # and a dead man's switch that cries wolf is turned off within the week.
+        # `vector(1)` needs no metric, scrape or subsystem: a heartbeat conditional on anything goes
+        # quiet for reasons other than the one it watches for.
         expr: vector(1)
         labels:
           severity: heartbeat

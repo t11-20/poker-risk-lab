@@ -1,41 +1,15 @@
-# ---------------------------------------------------------------------------
-# Prometheus, for the staging stack only.
+# Prometheus for the staging observability overlay (`docker-compose.observability.yml`, brought up
+# by `pnpm run alerts:verify`), kept out of docker-compose.staging.yml because that file runs
+# exactly the images production runs and production gets monitoring from elsewhere.
 #
-# This exists to answer one question that `docs/production/alerts.md` could not
-# answer on its own: do the rules in that document actually fire, route and
-# arrive? Two independent release reviews recorded "alert delivery UNVERIFIED —
-# no Alertmanager in staging compose", and they were right. Prose describing an
-# alert is a hypothesis about a system nobody has run.
+# Scrapes `api:3001` on the staging network: `/metrics` is not under `/api/`, so through the proxy
+# it reaches the page server and 404s, by design. The bearer token is a file because Compose does
+# not interpolate mounted files, so `${PRL_STAGING_METRICS_TOKEN}` here would arrive literally and
+# 401; `scripts/alert-delivery.mjs` writes `metrics-token`, gitignored and asserted by
+# `scripts/supply-chain/secret-scan.mjs`.
 #
-# It is deliberately NOT part of docker-compose.staging.yml. That file is a
-# deployment manifest whose whole point is that it runs the exact image digests
-# production will run, and adding two services to it that production gets from
-# somewhere else would make it describe a stack nobody deploys. This is an
-# overlay — `docker-compose.observability.yml` — brought up beside it by
-# `pnpm run alerts:verify` and taken down after.
-#
-# ## The scrape target is the container, not the published origin
-#
-# `/metrics` is not under `/api/`, so the proxy routes it to the page server,
-# which 404s. That is the design: metrics are not public. Prometheus is on the
-# staging network and scrapes `api:3001` directly, which is also how a real
-# deployment does it.
-#
-# ## The bearer token comes from a file, and the file is generated
-#
-# Compose interpolates docker-compose.yml, not the files it mounts, so
-# `${PRL_STAGING_METRICS_TOKEN}` written here would reach Prometheus as those
-# literal characters and every scrape would 401. `scripts/alert-delivery.mjs`
-# writes the token to `metrics-token` beside this file, which
-# `deploy/staging/.gitignore` keeps out of the repository and
-# `scripts/supply-chain/secret-scan.mjs` asserts the rule for.
-#
-# ## Intervals
-#
-# 15 s, which is what `alerts.md` assumes when it says "one missed scrape at a
-# 15 s interval is a scrape problem; eight consecutive misses is the service".
-# Change one and that reasoning has to change with it.
-# ---------------------------------------------------------------------------
+# 15 s intervals are what `alerts.md` assumes ("eight consecutive misses is the service"); change
+# one and that reasoning changes with it.
 
 global:
   scrape_interval: 15s
@@ -52,8 +26,7 @@ alerting:
         - targets: ['alertmanager:9093']
 
 scrape_configs:
-  # The job name is load-bearing: `ApiDown` is keyed on `up{job="prl-api"}`, so
-  # renaming this silently disables the alert that says the service is gone.
+  # The job name is load-bearing: `ApiDown` is keyed on `up{job="prl-api"}`.
   - job_name: prl-api
     metrics_path: /metrics
     scheme: http
@@ -63,87 +36,33 @@ scrape_configs:
     static_configs:
       - targets: ['api:3001']
 
-  # Alertmanager, scraped so that the alerting system can report its OWN failure.
+  # Alertmanager, scraped so the alerting system can report its OWN failure
+  # (`AlertmanagerNotificationsFailing`, `AlertmanagerDown`). They catch one receiver or transport
+  # of two; the total case is the out-of-band check in `docs/production/runbooks/alerting-blind.md`.
   #
-  # ## The one failure no in-band alert can report
-  #
-  # Every rule above this line is about the application, and every one of them is
-  # delivered by Alertmanager. So the single failure that silences all of them —
-  # Alertmanager unable to deliver, or not running — is the one failure they cannot
-  # tell anybody about. Until this job existed, `alertmanager_notifications_failed_total`
-  # was exported by a container on this network and read by nothing: an expired
-  # PagerDuty key, a rejected SMTP password or a relay that started answering 550
-  # would have incremented a counter nobody was looking at, forever, while every
-  # dashboard stayed green.
-  #
-  # `AlertmanagerNotificationsFailing` and `AlertmanagerDown` in `alert-rules.yml`
-  # read this job. Both are honest about their own limitation in
-  # `docs/production/runbooks/alerting-blind.md`: a notification that cannot be
-  # delivered cannot deliver the news that notifications cannot be delivered. They
-  # catch the partial cases — one receiver of two, one transport of two — which is
-  # most of what actually happens, and the total case is what the runbook's
-  # out-of-band check is for.
-  #
-  # No `authorization:` block, and that is not an oversight. Alertmanager serves
-  # /metrics without authentication and has no way to require any; it is reachable
-  # only on the compose network, published to loopback alone, and what it exposes is
-  # notification counters rather than anything about a learner. The API's exposition
-  # is the one that carries a bearer token because the API's is the one with
-  # per-endpoint behaviour in it.
+  # No `authorization:`: Alertmanager serves /metrics unauthenticated and cannot require any. It is
+  # reachable only on the compose network, published to loopback, and exposes notification counters.
   - job_name: prl-alertmanager
     metrics_path: /metrics
     scheme: http
     static_configs:
       - targets: ['alertmanager:9093']
 
-  # The public origin, probed from outside the application.
+  # The public origin, probed from outside the application, because every job above bypasses the
+  # proxy, TLS and the page server, so a dead nginx or an expired certificate leaves them green. Not
+  # a rule on "requests stopped arriving": a class of thirty has whole nights with no traffic.
   #
-  # ## The blind spot, stated as the failure it was
+  # The target is `proxy:8443`, not `https://localhost:8443`: inside a container `localhost` is that
+  # container, and a port published to 127.0.0.1 is NOT reachable from a container on Linux
+  # (`host.docker.internal` is the bridge gateway there), so it would pass on Docker Desktop and stay
+  # red on Linux. `server_name: localhost` in blackbox.yml verifies the name the origin uses. Not
+  # covered, so checked from off the box: Docker's port publishing, the host firewall, public DNS.
   #
-  # Every job above reads a series the API exports about itself, and the first one
-  # scrapes it on the compose network — bypassing the proxy, TLS and the page
-  # server entirely. The API's own healthcheck targets its own container. So if
-  # nginx dies, if the certificate expires, if TLS material becomes unreadable, or
-  # if the Next.js server stops: `up{job="prl-api"}` stays 1, `prl_readiness_state`
-  # stays 1, the request counters go flat, and no rule keys on the absence of
-  # traffic. Every learner sees a dead site and every alert stays green. This job is
-  # the only thing in this configuration that would say otherwise.
+  # Relabelling: `__address__` becomes the `target` parameter, is kept as `instance` so an alert
+  # names the URL, and is replaced by the exporter's address. `module` stays on the series, so
+  # `probe_success{module=...}` tells the page server from the whole origin.
   #
-  # A rule on "requests stopped arriving" was the alternative and it is worse here:
-  # this is a teaching lab with a class of thirty, so a night with no requests is
-  # the healthy overnight state, and a rule that fires every night is a rule that
-  # gets silenced. A synthetic request every 15 seconds has no such ambiguity.
-  #
-  # ## Why the target is `proxy:8443` and not the published origin
-  #
-  # The honest target would be `https://localhost:8443` — the address a learner
-  # types, through Docker's published port. It cannot be probed from a container
-  # and stay portable, for two independent reasons:
-  #
-  #   * inside any container, `localhost` is that container;
-  #   * the port is published to 127.0.0.1 on the host, and a loopback-published
-  #     port is NOT reachable from a container on Linux (`host.docker.internal`
-  #     resolves to the bridge gateway there, not to the host's loopback). A probe
-  #     written that way passes on Docker Desktop and is permanently red on Linux,
-  #     which is worse than not having it.
-  #
-  # So the probe enters the same nginx, on the same TLS listener, with the same
-  # certificate, and `server_name: localhost` in blackbox.yml makes the handshake
-  # verify the name the origin actually uses. What is NOT covered by this and must
-  # still be checked from off the box during an incident: Docker's port publishing,
-  # the host firewall, and public DNS. The runbook says so in as many words.
-  #
-  # ## The relabel dance
-  #
-  # `__address__` starts as the URL to probe, is copied into the `target` parameter,
-  # is kept as `instance` so a firing alert names the URL rather than the exporter,
-  # and is then replaced by the exporter's own address — which is where the scrape
-  # actually goes. The per-target `module` label chooses the probe module and stays
-  # on the series, so one job covers both targets and `probe_success{module=...}`
-  # distinguishes "the page server is gone" from "the whole origin is gone".
-  #
-  # `blackbox:9115` is not published to the host: an open /probe endpoint fetches
-  # any URL it is given.
+  # `blackbox:9115` is not published to the host: an open /probe endpoint fetches any URL it is given.
   - job_name: prl-public-origin
     metrics_path: /probe
     scheme: http

@@ -1,16 +1,10 @@
-# ---------------------------------------------------------------------------
 # Container image for apps/api (the Fastify server).
 #
 # ## The base image is pinned by digest
 #
-# `node:24.18.0-alpine3.24` is a tag, and a tag is repointed every time the
-# upstream image is rebuilt for a base-OS patch. That is usually a good thing and
-# occasionally the delivery mechanism for something else, and either way it means
-# two builds of this file at different times are not the same build. The digest
-# below is the multi-arch OCI index for that tag (linux/amd64, linux/arm64/v8,
-# linux/s390x), captured 2026-08-25.
-#
-# To refresh it (no Docker daemon required, and it does not pull the image):
+# A tag is repointed every time upstream rebuilds it, so two builds of this file at different times
+# would not be the same build. The digest is the multi-arch OCI index for the tag (linux/amd64,
+# linux/arm64/v8, linux/s390x). To refresh it (no Docker daemon required, and it does not pull):
 #
 #     TOKEN=$(curl -s 'https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/node:pull' \
 #       | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>process.stdout.write(JSON.parse(d).token))")
@@ -20,95 +14,40 @@
 #       https://registry-1.docker.io/v2/library/node/manifests/24.18.0-alpine3.24 \
 #       | grep -i docker-content-digest
 #
-# With the daemon: `docker buildx imagetools inspect node:24.18.0-alpine3.24`.
-# Keep the human-readable tag in the reference as well as the digest, so a reader
-# can see which version they are looking at without resolving the hash.
+# With the daemon: `docker buildx imagetools inspect node:24.18.0-alpine3.24`. Keep the tag in the
+# reference beside the digest, so a reader can see the version without resolving the hash.
 #
-# ## Why Alpine, when this file used to say bookworm-slim
+# ## Why Alpine
 #
-# The base was `node:24.18.0-bookworm-slim@sha256:6f7b03f7…51452d` until
-# 2026-08-25. It was replaced because the runtime stage descends from `base`, so
-# the OS package set of the SHIPPED images is the base's — and that package set
-# was the entire vulnerability surface of this project's release artefacts.
+# The runtime stage descends from `base`, so the base's OS packages are the shipped images' whole OS
+# vulnerability surface. trivy 0.72.0 (HIGH/CRITICAL, base images alone, arm64): bookworm-slim 30,
+# trixie-slim 51 with 36 fixable (blocking under container-scan.mjs's block-when-fixed policy, since
+# no stage runs apt-get), alpine3.24 0. Distroless does not fit: both runtime stages need a shell for
+# `RUN rm -rf`, it puts node at /nodejs/bin/node (breaking `checkArtefact` in
+# scripts/release-artifacts.mjs), and it has no `node` user for `USER node`, the CI `Config.User`
+# assertion and the uid=1000 tmpfs in docker-compose.staging.yml.
 #
-# Measured with trivy 0.72.0, `--severity HIGH,CRITICAL --scanners vuln`, against
-# the BASE IMAGES alone on arm64, before any application layer:
+# What Alpine requires of this repository:
 #
-#   base                              OS pkgs  H/C findings  unfixed  fixable
-#   node:24.18.0-bookworm-slim (old)      88     30 (26/4)       30        0
-#   node:24.18.0-trixie-slim              79     51 (48/3)       15       36
-#   node:24.18.0-alpine3.24 (this)        18      0 (0/0)         0        0
-#
-# Across the two shipped images the old base contributed 60 HIGH/CRITICAL
-# findings — 52 HIGH, 8 CRITICAL, 14 distinct CVEs — every one of them from the
-# base and none from an application layer. All 60 are gone, and none of the 14
-# CVEs exists in the Alpine package set.
-#
-# Trixie was considered and rejected, and the reason is the opposite of the
-# obvious one: 36 of its findings HAVE upstream fixes, and this file runs no
-# `apt-get` at any stage, so under this repository's gate policy (block when a fix
-# exists — see scripts/supply-chain/container-scan.mjs) trixie would have turned a
-# passing gate into 72 blocking findings. Distroless was rejected because both
-# runtime stages need a shell for their `RUN rm -rf`, it puts node at
-# `/nodejs/bin/node` (so `docker run --entrypoint node` breaks, and so does
-# `checkArtefact` in scripts/release-artifacts.mjs), and it has no `node` user —
-# which breaks `USER node`, the CI assertion on `Config.User`, and the
-# `uid=1000,gid=1000` tmpfs line in docker-compose.staging.yml.
-#
-# ## Why the switch was cheap here — the things that had to be true
-#
-#   * Nothing compiles native code. pnpm-workspace.yaml sets `ignoreScripts: true`
-#     and `onlyBuiltDependencies: []`, and every install below also passes
-#     `--ignore-scripts`. node-gyp never runs, so there is no glibc-linked
-#     addon to rebuild.
-#   * pnpm-lock.yaml already carries every musl variant it needs
-#     (`@next/swc-linux-{x64,arm64}-musl`, `@img/sharp-linuxmusl-{x64,arm64}`,
-#     `@biomejs/cli-linux-*-musl`) and there is no `supportedArchitectures` block
-#     pinning a libc, so pnpm resolves by install platform and
-#     `--frozen-lockfile` is still satisfied.
-#   * `node:24-alpine` has `uid=1000(node) gid=1000(node)`, identical to the
-#     Debian images, so `USER node` still produces `Config.User == "node"`.
-#   * node is at `/usr/local/bin/node` on both, and neither Dockerfile referenced
-#     a Debian path, `dpkg`, or `apt-get`.
-#
-# ## What Alpine changes that a reader should know
-#
-#   * There is no bash. `/bin/sh` is busybox ash, which is what Docker's default
-#     `SHELL ["/bin/sh", "-c"]` was already using — every `RUN` in this file is
-#     POSIX and stays POSIX. If you add one, no `[[ ]]`, no arrays, no `pipefail`.
-#     busybox `find` does support `-mindepth`/`-maxdepth`/`-exec … +`, which the
-#     prod-deps prune below relies on; that was checked, not assumed.
-#   * `wget` exists here (busybox provides it) where bookworm-slim had neither
-#     wget nor curl. The healthcheck at the bottom is still `node -e` anyway —
-#     see the reason written there, which was never really about availability.
-#   * `apk` itself is left in place. It is a package manager in a production
-#     image, which this file otherwise objects to, but deleting it would also
-#     remove the apk database trivy reads to identify the OS, and
-#     container-scan.mjs correctly FAILS a scan whose OS it cannot identify —
-#     trading a real gate for a cosmetic one. The runtime root filesystem is
-#     read-only and the process is uid 1000, so apk cannot install anything here.
-#
-# ## What this migration has NOT proved
-#
-# musl is not glibc. Thread stack sizes and DNS resolver semantics differ, and
-# this project touches both: the Monte Carlo worker pool in
-# apps/api/src/workers/pool.ts creates Workers with `resourceLimits`, and the
-# Postgres client resolves and connects by hostname. What has been verified is
-# that both images build, that trivy reports zero findings against them, that
-# `new Worker(…, { resourceLimits: { maxOldGenerationSizeMb } })` runs clean, and
-# that ICU is full (`process.config.variables.icu_small === false`, `de-DE`
-# formatting and named time zones correct). A full staging run under load is what
-# settles the rest, and it has not happened yet. Do not read the zero in the
-# table above as "safe"; read it as "no known-vulnerable OS package".
+#   * No native compilation: `ignoreScripts: true` and `onlyBuiltDependencies: []` in
+#     pnpm-workspace.yaml, plus `--ignore-scripts` on every install, so node-gyp never runs.
+#   * pnpm-lock.yaml carries the musl variants (`@next/swc-linux-*-musl`, `@img/sharp-linuxmusl-*`,
+#     `@biomejs/cli-linux-*-musl`) and no `supportedArchitectures` block pins a libc.
+#   * No bash: `/bin/sh` is busybox ash, so every `RUN` stays POSIX (no `[[ ]]`, arrays or
+#     `pipefail`). busybox `find` does support `-mindepth`/`-maxdepth`/`-exec … +`.
+#   * `apk` stays in the image: deleting it removes the apk database trivy reads to identify the OS,
+#     and container-scan.mjs fails a scan whose OS it cannot identify. The read-only root and uid 1000
+#     mean it cannot install anything at runtime.
+#   * musl is not glibc: thread stack sizes (the `resourceLimits` Workers in
+#     apps/api/src/workers/pool.ts) and DNS resolution (the Postgres client connects by hostname)
+#     differ. A zero scan means "no known-vulnerable OS package", not "safe".
 #
 # ## No `# syntax=` directive
 #
-# Adding one would make every build download a Dockerfile frontend image from a
-# mutable tag before it does anything else. Nothing here needs a feature outside
-# the built-in frontend, so the trade is easy: no directive, no extra mutable
-# dependency in the build path.
+# One would make every build download a frontend image from a mutable tag first, and nothing here
+# needs a feature outside the built-in frontend.
 #
-# ## Stage layout, and why it is not "install, build, prune"
+# ## Stage layout
 #
 #   base       bare pinned image. The runtime stage descends from this, so pnpm
 #              and corepack shims never reach the shipped image.
@@ -120,110 +59,52 @@
 #              `tsc`.
 #   runtime    prod-deps' /app, with the compiled dist directories laid over it.
 #
-# Two alternatives were tried and rejected, both for reasons worth knowing:
+# Two installs, not install-build-prune: pnpm 11 answers `pnpm install --prod` over a full install by
+# purging node_modules, which without a TTY aborts with ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY and
+# with `CI=true` silently re-downloads the tree. BuildKit runs the two installs in parallel.
 #
-#   1. **One install, build, then `pnpm install --prod` to prune.** pnpm 11
-#      responds to a mode change by wanting to purge and rebuild node_modules
-#      wholesale: without a TTY it aborts with
-#      ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY, and with `CI=true` set instead
-#      it silently re-downloads the entire tree. Two independent installs from the
-#      same lockfile are cheaper — BuildKit runs them in parallel — and far easier
-#      to reason about.
-#
-#   2. **Copying each workspace package.json by name before the sources**, the
-#      usual trick for keeping the dependency layer cached across source edits.
-#      It does not survive here. pnpm-workspace.yaml sets
-#      `verifyDepsBeforeRun: error`, so pnpm compares the workspace structure
-#      against the last install before running any script — and the moment
-#      somebody adds a `packages/*`, the hand-written COPY list is one project
-#      short and every build fails with ERR_PNPM_VERIFY_DEPS_BEFORE_RUN
-#      ("the workspace structure has changed since last install"). That happened
-#      during the writing of this file, which is how it is worded so confidently.
-#      The list is a latent build break waiting on somebody else's commit, so
-#      there is no list: `COPY . .` and pay ~12 seconds of install on every source
-#      change. Correctness first; the cache was worth less than the trap.
+# `COPY . .`, not each package.json by name: `verifyDepsBeforeRun: error` (pnpm-workspace.yaml) fails
+# every build with ERR_PNPM_VERIFY_DEPS_BEFORE_RUN the day a `packages/*` is added and the list is one
+# short. The cost is ~12 seconds of install on every source change.
 #
 # ## Why the runtime stage copies prod-deps' whole /app
 #
-# `nodeLinker: isolated` (pnpm-workspace.yaml) means node_modules is a farm of
-# relative symlinks into `node_modules/.pnpm`. Those links only resolve if the
-# directory structure is reproduced at the same path, which is why every stage
-# uses /app and why the runtime copies the tree in one piece rather than
-# cherry-picking package directories. Cherry-picking also fails open: the day
-# somebody adds a runtime dependency to `packages/poker-engine`, a hand-written
-# list of COPY lines quietly ships an image that cannot resolve it. Copying
-# prod-deps' /app wholesale means new dependencies are included automatically.
+# `nodeLinker: isolated` makes node_modules a farm of relative symlinks into `node_modules/.pnpm`,
+# which resolve only if the tree is reproduced at the same path: hence /app in every stage and one
+# whole-tree copy. Cherry-picked package directories fail open: a new runtime dependency ships an image
+# that cannot resolve it.
 #
-# What that tree contains besides node_modules: the workspace package.json files
-# (Node needs them for `"type": "module"` and the `exports` maps), the lockfile,
-# pnpm-workspace.yaml and .npmrc. No secrets — .npmrc holds only registry URLs,
-# and .dockerignore excludes `.env` and `.env.*` from the build context entirely —
-# at every directory depth, not just the context root. That distinction used to
-# matter: the root-anchored spelling let `apps/*/.env` through. See that file.
+# Besides node_modules that tree holds the workspace package.json files (Node needs them for
+# `"type": "module"` and the `exports` maps), the lockfile, pnpm-workspace.yaml and .npmrc. No
+# secrets: .npmrc holds only registry URLs, and .dockerignore excludes `.env` and `.env.*` at every
+# directory depth.
 #
 # ## What is deliberately NOT in the image
 #
-# TypeScript sources, tests, EVERY tsconfig (including `tsconfig.test.json`, which
-# the prune's glob used to miss), all of apps/web except its package.json, and
-# `apps/api/scripts/` — all removed by the prune in the prod-deps stage. Because
-# that prune is mostly a deny list rather than an allow list, its worst failure is
-# an image slightly larger than necessary, never a broken one. That is the right
-# trade, and it is also why it drifted: a fat image is not a red build, so
-# `apps/api/tsconfig.test.json`, `apps/web/next.config.ts` and
-# `apps/web/next-env.d.ts` sat in the released image without anything complaining.
-# The prune's own comments record which line each of those slipped through.
+# TypeScript sources, tests, every tsconfig, all of apps/web except its package.json, and
+# `apps/api/scripts/`, removed by the prune in prod-deps. The prune is mostly a deny list, so its worst
+# failure is a fat image rather than a broken one, and a fat image is not a red build.
 #
-# Migrations are therefore run from the host (`pnpm run db:migrate`) rather than
-# from this container. If you want them run in-cluster instead, add
-# `COPY --from=build /app/apps/api/scripts /app/apps/api/scripts` to the runtime
-# stage — and expect a review conversation about giving the serving container
-# schema-change rights.
+# Migrations therefore run from the host (`pnpm run db:migrate`). Running them in-cluster would mean
+# adding `COPY --from=build /app/apps/api/scripts /app/apps/api/scripts` to the runtime stage, which
+# gives the serving container schema-change rights.
 #
-# `db/migrations` itself IS in the image, copied back by the runtime stage, as
-# read-only data: the API compares it with the migration ledger at boot and
-# refuses a schema behind this build. See the comment on that COPY line.
+# `db/migrations` itself IS in the image, as read-only data for the boot-time schema guard; see that
+# COPY line.
 #
 # ## Signals
 #
-# There is no dumb-init or tini in here, and no package was added for one.
-# `docker run --init` / `init: true` in docker-compose.yml supplies Docker's own
-# PID 1, which reaps zombies and forwards SIGTERM. See the comment in
-# docker-compose.yml.
-# ---------------------------------------------------------------------------
+# No dumb-init or tini: `docker run --init` / `init: true` in docker-compose.yml supplies Docker's own
+# PID 1, which reaps zombies and forwards SIGTERM.
 
 FROM node:24.18.0-alpine3.24@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd AS base
 WORKDIR /app
 
-# OpenSSL, ahead of the base image.
-#
-# CVE-2026-14456, HIGH, in libcrypto3/libssl3 3.5.7-r0 — which is what this
-# pinned digest ships. `security:audit` blocked the release on it: 4 findings, 0
-# unfixable, across both images. It is not a false positive and it is not
-# waivable; it is the TLS library the API terminates nothing with but links
-# against, in an image about to serve students.
-#
-# Upstream has not rebuilt the tag. Measured on 2026-08-26: the pinned digest is
-# still what `node:24.18.0-alpine3.24` resolves to, and `node:24-alpine`
-# (v24.19.0) ships the same 3.5.7-r0. So there is no newer base to move to, and
-# waiting is not a plan when the fix is sitting in the repository the image
-# already trusts — `apk policy` reports 3.5.8-r0 in alpine/v3.24/main.
-#
-# Pinned to the exact version rather than a bare `apk upgrade`. An unpinned
-# upgrade makes two builds of the same commit differ, which is the property
-# `release-artifacts.mjs` exists to protect. The cost is that this line FAILS the
-# build when Alpine drops 3.5.8-r0 for a later fix — and that is the safe
-# direction: a build that stops and names the package is a bump somebody makes on
-# purpose, where a silently-floating one is a version nobody chose.
-#
-# In `base`, so every stage derived from it — toolchain, build and runtime —
-# carries the fix. The runtime filesystem is read-only and the process is uid
-# 1000, so nothing can undo it later.
-#
-# That happened on 2026-11-10: `apk policy` in this base offered 3.5.9-r0 and no
-# 3.5.8-r0, so neither image built. The same scan then found musl 1.2.6-r2
-# (CVE-2026-107891, fixed in 1.2.6-r3) and zlib 1.3.2-r0 (CVE-2026-85091, fixed
-# in 1.3.2-r1; v3.24/main now carries 1.4-r0) in this base, so they are pinned
-# here on the same terms.
+# Pinned ahead of the base, whose digest still ships the vulnerable versions: CVE-2026-14456 (HIGH,
+# libcrypto3/libssl3 3.5.7-r0), CVE-2026-107891 (musl 1.2.6-r2) and CVE-2026-85091 (zlib 1.3.2-r0).
+# Exact versions rather than a bare `apk upgrade`, so two builds of one commit match (the property
+# release-artifacts.mjs protects) and a version Alpine drops fails the build by name instead of
+# floating. In `base`, so every stage carries it; the read-only uid-1000 runtime cannot undo it.
 RUN apk add --no-cache --upgrade libcrypto3=3.5.9-r0 libssl3=3.5.9-r0 \
       musl=1.2.6-r3 musl-utils=1.2.6-r3 zlib=1.4-r0
 
@@ -235,72 +116,29 @@ ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     NPM_CONFIG_UPDATE_NOTIFIER=false
 RUN corepack enable
 
-# ---------------------------------------------------------------------------
-# source: the whole build context.
-#
-# .dockerignore already keeps node_modules, dist, .next, coverage, .git, deploy,
-# docs, markdown and — importantly — .env and .env.* out of it, at every depth, so
-# this is source plus manifests and nothing sensitive.
-# ---------------------------------------------------------------------------
+# .dockerignore keeps node_modules, dist, .next, coverage, .git, deploy, docs, markdown and .env*
+# out of the context at every depth, so this is source plus manifests and nothing sensitive.
 FROM toolchain AS source
 COPY . .
 
-# ---------------------------------------------------------------------------
-# prod-deps: runtime dependencies for the API and its workspace dependencies.
-#
-# `--filter "@prl/api..."` is "@prl/api and everything it depends on", which
-# excludes apps/web and packages/ui — this image has no business containing Next
-# or React. `--ignore-scripts` is belt and braces: pnpm-workspace.yaml already
-# sets `ignoreScripts: true`, and passing the flag means the build does not
-# depend on that file continuing to say so.
-# ---------------------------------------------------------------------------
+# `--filter "@prl/api..."` is @prl/api and everything it depends on, which excludes apps/web and
+# packages/ui: no Next or React in this image. `--ignore-scripts` repeats pnpm-workspace.yaml's
+# `ignoreScripts: true` so the build does not depend on that file continuing to say so.
 FROM source AS prod-deps
 RUN pnpm install --frozen-lockfile --prod --ignore-scripts --filter "@prl/api..."
-# Everything the runtime does not execute. A deny list, so its worst case is a
-# slightly fat image rather than a missing module: node_modules and every
-# package.json stay, because Node needs them to resolve `"type": "module"` and the
-# `exports` maps. `packages/content/data` also stays — the compiled content
-# package reads its authored JSON from disk at runtime.
-# The markdown lines are belt and braces over .dockerignore, which is where the
-# real fix lives. `*.md` there was anchored to the context root, so it removed
-# README.md and nothing else, and apps/web/AGENTS.md and apps/web/CLAUDE.md — the
-# repository's instructions to coding agents — shipped inside the web image.
-# .dockerignore now excludes markdown at every depth; this repeats the claim
-# inside the build so that a future change to the ignore file cannot quietly put
-# prose back into a layer without also passing this line.
+# Everything the runtime does not execute. A deny list, so its worst case is a fat image rather than
+# a missing module: every package.json stays (`"type": "module"`, `exports`), and
+# packages/content/data stays because the compiled content package reads its JSON from disk.
 #
-# Two things on this list were wrong and were found in the released image
-# prl-api@sha256:3854174f…d92e36f, under a .dockerignore that says the tsconfigs
-# and the test trees "are removed inside the images by the prune stages":
-#
-#   * `apps/*/tsconfig.json` does not match `tsconfig.test.json`. Every
-#     `tsconfig.test.json` in the repository survived — apps/api's and all five
-#     packages'. `tsconfig*.json` is the spelling that means what the line meant.
-#   * The app-level entries all name a SUBDIRECTORY (src, test, scripts, public)
-#     and nothing at the app root, so apps/web/next.config.ts and
-#     apps/web/next-env.d.ts shipped in the API image — a Next config in an image
-#     whose own stage header, a few lines up, says it "has no business containing
-#     Next or React".
-#
-# The second one is fixed with an allow list for exactly one directory rather than
-# by adding two more names to the deny list, because adding names is what already
-# failed: this image executes NOTHING from apps/web, and the only reason the
-# directory exists here at all is that Node and pnpm want the manifest to resolve
-# the workspace. So keep package.json and delete the rest, and the next root-level
-# file somebody adds to the web app cannot repeat this. Everywhere else the deny
-# list stands, for the reason in the header — its worst case is a fat image.
-#
-# `docker-compose*.yml`, not the two names it used to spell out. The deny list
-# named `docker-compose.yml` and `docker-compose.staging.yml` and there is a
-# third: prl-api@sha256:acd1139c and prl-web@sha256:6a63e44f both shipped
-# `/app/docker-compose.observability.yml` — measured with `docker export`, the
-# whole Prometheus/Alertmanager/blackbox overlay including the metrics-token mount
-# path and the internal service topology. Nothing failed, because
-# `release-artifacts.mjs`'s image probe looks for `*.md` and `.env*`. A glob
-# cannot drift the way three hand-written names did. `.gitignore` and
-# `.dockerignore` go with them for the same reason they are in .dockerignore's
-# "prose" section: they are a map of where this deployment keeps its secrets, and
-# nothing in a runtime image reads either one.
+#   * The markdown lines repeat .dockerignore inside the build, so a change to that file cannot put
+#     agent instructions (apps/web/AGENTS.md, CLAUDE.md) back into a layer.
+#   * `tsconfig*.json`: `tsconfig.json` does not match `tsconfig.test.json`.
+#   * apps/web is an allow list (keep package.json, delete the rest): this image executes nothing
+#     from it and needs only the manifest to resolve the workspace, so a new root-level file there
+#     cannot ship.
+#   * `docker-compose*.yml`, `.gitignore` and `.dockerignore` map the deployment's topology and
+#     secret paths, and nothing at runtime reads them. release-artifacts.mjs's image probe looks only
+#     for `*.md` and `.env*`, so nothing else would notice them here.
 RUN rm -rf \
       apps/*/src apps/*/test apps/*/scripts apps/*/public \
       packages/*/src packages/*/test \
@@ -310,13 +148,9 @@ RUN rm -rf \
       ./*.md apps/*/*.md packages/*/*.md \
  && find apps/web -mindepth 1 -maxdepth 1 ! -name package.json -exec rm -rf {} +
 
-# ---------------------------------------------------------------------------
-# build: full install, then compile.
-#
-# NODE_ENV is deliberately NOT production in this stage. pnpm treats
-# NODE_ENV=production as an implicit `--prod`, which would omit typescript and
-# @types/node and break the build with a confusing "cannot find name 'process'".
-# ---------------------------------------------------------------------------
+# NODE_ENV is deliberately NOT production in this stage: pnpm treats NODE_ENV=production as an
+# implicit `--prod`, which omits typescript and @types/node and fails the build with
+# "cannot find name 'process'".
 FROM source AS build
 RUN pnpm install --frozen-lockfile --ignore-scripts --filter "@prl/api..."
 # One recursive, topologically-ordered build: each workspace dependency emits its
@@ -325,121 +159,54 @@ RUN pnpm install --frozen-lockfile --ignore-scripts --filter "@prl/api..."
 # packages/ui, whose typecheck needs the React types that this filtered install
 # deliberately left out.
 RUN pnpm --filter "@prl/api..." run build
-# Reduce this stage to exactly what the runtime stage should lay over prod-deps:
-# every package's `dist/` (and packages/content/data), and apps/api/dist. The
-# node_modules go first and they MUST go — this stage's tree is a FULL install, and
-# copying it over prod-deps' would silently reinstate typescript and every @types
-# package in the shipped image, undoing the entire point of having two installs.
-#
-# Deleting here rather than listing what to keep in the runtime stage is the whole
-# fix for a defect this file used to have: the runtime stage named each package's
-# dist in a hand-written COPY line, and the day apps/api gained a dependency on
-# @prl/poker-ai the list was one line short. The image built, passed every layer
-# check, and died at boot with ERR_MODULE_NOT_FOUND on
-# /app/apps/api/node_modules/@prl/poker-ai/dist/index.js — the "fails open" failure
-# this file's own header warns about, in this file. A deny list here and one
-# directory-wide COPY below means a new workspace package is included automatically.
-#
-# `tsconfig*.json`, not `tsconfig.json`, for the same reason as in the prod-deps
-# stage: /app/packages is copied from HERE into the runtime, so the narrow glob
-# left a `tsconfig.test.json` in every workspace package of the shipped image.
+# Reduce this stage to what the runtime lays over prod-deps: every package's dist/ (and
+# packages/content/data), and apps/api/dist. node_modules MUST go: this is a full install, and copying
+# it over prod-deps' would reinstate typescript and every @types package in the shipped image.
+# Deleting here and copying whole directories below means a new workspace dependency is included
+# automatically; a per-package COPY list fails open, with ERR_MODULE_NOT_FOUND at boot.
+# `tsconfig*.json` because /app/packages is copied from here into the runtime.
 RUN rm -rf \
       packages/*/node_modules packages/*/src packages/*/test packages/*/tsconfig*.json \
       apps/api/node_modules apps/api/src apps/api/test apps/api/scripts apps/api/tsconfig*.json
 
-# ---------------------------------------------------------------------------
-# runtime
-# ---------------------------------------------------------------------------
 FROM base AS runtime
 
-# NODE_ENV=production only here, where nothing installs. PORT is the contract
-# with docker-compose.yml and the healthcheck below.
+# NODE_ENV=production only here, where nothing installs. PORT is the contract with
+# docker-compose.yml and the healthcheck below.
 #
-# HOST=0.0.0.0 is not a convenience, it is the difference between a container that
-# serves traffic and one that does not. `config.ts` defaults HOST to 127.0.0.1 — the
-# right default for a dev server on a laptop, and wrong for every container, because a
-# process listening on loopback inside its own network namespace is unreachable from
-# the compose network and from a published port. Setting it here rather than only in
-# docker-compose.yml means `docker run` of this image is correct too, and it mirrors
-# HOSTNAME=0.0.0.0 in Dockerfile.web. 0.0.0.0 is safe precisely because the network
-# namespace, not the bind address, is the isolation boundary; the port is only
-# reachable where something publishes or routes it.
-#
-# An operator who genuinely wants loopback-only (a sidecar sharing a namespace) sets
-# HOST back to 127.0.0.1 and the healthcheck below will still be honest about it.
+# HOST=0.0.0.0 because config.ts defaults HOST to 127.0.0.1, and a process listening on loopback
+# inside its own network namespace is unreachable from the compose network and from a published
+# port. Set in the image so `docker run` is correct too (it mirrors HOSTNAME=0.0.0.0 in
+# Dockerfile.web). It is safe because the network namespace, not the bind address, is the isolation
+# boundary. A sidecar sharing a namespace can set HOST back to 127.0.0.1; the healthcheck stays honest.
 ENV NODE_ENV=production \
     PORT=3001 \
     HOST=0.0.0.0
 
-# ---------------------------------------------------------------------------
-# Remove npm, corepack and yarn from the RUNTIME image.
+# Remove npm, corepack and yarn from the RUNTIME image. Nothing here runs a package manager (the
+# command is `node apps/api/dist/server.js`), and one is a downloader and arbitrary-code executor
+# beside the application in an image that runs with a read-only root to rule out both.
 #
-# The official Node image ships npm at /usr/local/lib/node_modules/npm with its
-# own bundled dependency tree, and corepack beside it. This project uses neither
-# at runtime: the API's command is `node apps/api/dist/server.js`, the web app's
-# is a pnpm-generated bin shim that execs node, and the header of this file
-# explains at length why running pnpm at container start would fail anyway.
-#
-# Two reasons to delete them, one measured and one structural.
-#
-# **Measured.** `trivy image` against a bookworm-slim-era build reported eight
-# HIGH and CRITICAL vulnerabilities whose package path was
-# `usr/local/lib/node_modules/npm/node_modules/...` — brace-expansion, ip-address,
-# tar and undici, all bundled inside npm, all with fixes available upstream and
-# none of them reachable from anything this image runs. They were, at the time,
-# the ONLY findings in the image with an available fix; everything else was a
-# Debian package Debian had marked `fix_deferred` or `will_not_fix`. Deleting a
-# package manager nothing uses removed every actionable finding. That measurement
-# is history now — the base is Alpine and the whole image scans at zero — but the
-# lines stay, because "the scanner currently finds nothing" is not a reason to
-# ship a bundled dependency tree nothing executes.
-#
-# **Structural.** A package manager in a production container is a downloader and
-# an arbitrary-code executor sitting next to the application, and this image runs
-# with a read-only root filesystem precisely because we do not want either.
-#
-# **The three yarn paths are new, and they are here because the base changed.**
-# bookworm-slim had no yarn at all; `node:24.18.0-alpine3.24` ships yarn 1.22.22
-# unpacked at /opt/yarn-v1.22.22 with /usr/local/bin/yarn and
-# /usr/local/bin/yarnpkg symlinked to it. Carrying it over unnoticed would have
-# quietly reinstated exactly the thing the paragraph above deletes: a second
-# package manager, in an image whose stated posture is that it has none. Whoever
-# next changes the base should re-run `ls /usr/local/bin /opt` on it rather than
-# trusting this list — it is a deny list, and the base decides what it misses.
-#
-# `npm`, `npx`, `yarn` and `yarnpkg` under /usr/local/bin are symlinks into the
-# directories above, so they are removed by name rather than left dangling. Run
-# before `USER node` because /usr/local and /opt are root-owned; nothing after
-# this line needs any of these tools.
-# ---------------------------------------------------------------------------
+# The Alpine base ships yarn 1.22.22 at /opt/yarn-v1.22.22. This is a deny list, so re-run
+# `ls /usr/local/bin /opt` whenever the base changes. The /usr/local/bin entries are symlinks into
+# those directories, removed by name so none is left dangling. Before `USER node`, because /usr/local
+# and /opt are root-owned.
 RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
       /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
       /opt/yarn-v1.22.22 /usr/local/bin/yarn /usr/local/bin/yarnpkg
 
 COPY --from=prod-deps --chown=node:node /app /app
-# Two directory-wide copies, not a per-package list. COPY merges into an existing
-# directory, so prod-deps' node_modules symlink farm survives underneath and the
-# compiled output lands on top of it.
-#
-# packages/ carries every workspace package's dist/ — whichever packages those are
-# today — plus packages/content/data, which stays because content keeps its authored
-# JSON outside src/ (tsc will not emit a file from above rootDir) and the compiled
-# dist reads it from disk at runtime. Without it every content route 500s on a
-# missing glossary.
+# Two directory-wide copies, not a per-package list. COPY merges into an existing directory, so
+# prod-deps' node_modules symlink farm survives underneath and the compiled output lands on top.
+# packages/content/data comes along because tsc will not emit a file from above rootDir and the
+# compiled content package reads it at runtime; without it every content route 500s.
 COPY --from=build --chown=node:node /app/packages /app/packages
 COPY --from=build --chown=node:node /app/apps/api/dist /app/apps/api/dist
-# The migration FILES, not the runner. apps/api/src/schema-guard.ts compares them
-# with prl.schema_migrations at boot and refuses to serve a schema behind this
-# build: an API that booted green against a missing column once lost archive
-# writes in silence, and nothing said the schema was behind the code. The prune
-# above still removes `db`, so this puts back exactly one directory of it, at the
-# path the guard resolves from dist/ (three levels up, as from src/).
-#
-# This gives the serving container no schema-change rights — the objection the
-# "deliberately NOT in the image" note above anticipates is about the runner and
-# a migrating identity, and the image has neither: no apps/api/scripts, and a
-# DATABASE_URL that names a member of prl_app, which holds no CREATE. No --chown:
-# the process reads these and has no business being able to rewrite them.
+# The migration FILES, not the runner: apps/api/src/schema-guard.ts compares them with
+# prl.schema_migrations at boot and refuses to serve a schema behind this build. This path is the one
+# the guard resolves from dist/ (three levels up, as from src/). No schema-change rights follow: no
+# apps/api/scripts, and DATABASE_URL names a member of prl_app, which holds no CREATE. No --chown: the
+# process reads these and has no business being able to rewrite them.
 COPY --from=source /app/db/migrations /app/db/migrations
 
 # uid/gid 1000, present in the official Node images. Never root: a process that
@@ -448,27 +215,15 @@ USER node
 
 EXPOSE 3001
 
-# `node -e` rather than curl or wget. On bookworm-slim the reason was that
-# neither existed and adding one was a new package in the runtime image for no
-# reason; on Alpine busybox does provide wget, and the probe stays `node -e`
-# anyway, because the better half of that argument never depended on
-# availability. node is the one binary this image is guaranteed to have — it is
-# a Node image — so the probe cannot be broken by a base change, and the exec
-# form means there is no shell in the probe either. A wget probe would also need
-# `CMD-SHELL` to interpolate the hostname, putting a shell back into the health
-# path of a container that otherwise has no reason to start one.
+# `node -e` rather than wget: node is the one binary a Node image is guaranteed to have, and the exec
+# form keeps a shell out of the probe (a wget probe would need `CMD-SHELL` to interpolate the hostname).
 #
-# The probe targets `os.hostname()`, NOT 127.0.0.1. Docker resolves a container's own
-# hostname to its address on the container network, so this asks the question that
-# matters — "is the server reachable at the address other containers and the published
-# port use?" — instead of the weaker "is something listening on loopback?". A probe on
-# 127.0.0.1 reports healthy for a server bound to 127.0.0.1, which is exactly the
-# failure mode that shipped: healthy, and unreachable from anywhere. This probe fails
-# for that configuration, so a missing HOST cannot masquerade as a working service.
+# The probe targets `os.hostname()`, NOT 127.0.0.1. Docker resolves a container's own hostname to its
+# address on the container network, so a server bound to loopback fails the probe instead of
+# reporting healthy while unreachable from everywhere.
 #
-# start-period covers migration waits and connection-pool warm-up; the interval
-# is deliberately unhurried, because a healthcheck that polls hard is a load
-# generator pointed at your own service.
+# start-period covers migration waits and connection-pool warm-up; the interval is unhurried because a
+# healthcheck that polls hard is a load generator pointed at your own service.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD ["node", "-e", "fetch(`http://${require('node:os').hostname()}:${process.env.PORT ?? 3001}/api/v1/health`).then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
 
