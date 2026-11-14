@@ -79,7 +79,7 @@ const calcRoutes: FastifyPluginAsync = (app) => {
 
   /**
    * Looked up per request. `closeSharedPool()` drops the memo, and a captured instance would stay
-   * closed and refuse every task (seen in `test/hands.test.ts`).
+   * closed and refuse every task.
    */
   const currentPool = (): WorkerPool => getSharedPool(config, poolHooks);
 

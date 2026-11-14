@@ -1,9 +1,7 @@
 #!/usr/bin/env node
 /**
- * Migration runner. Commands are up [--allow-missing], status, down, roles, seed, and
- * reset --confirm-database <name>.
- * Roll-forward only. `down` refuses with the policy, and `up` refuses a destructive statement unless
- * the file carries a `prl:irreversible` reason (docs/RUNBOOK.md §11.3).
+ * Migration runner. Roll-forward only. `down` refuses with the policy, and `up` refuses a destructive
+ * statement unless the file carries a `prl:irreversible` reason (docs/RUNBOOK.md §11.3).
  * Applied files are immutable. A checksum mismatch or an out-of-order pending file aborts the run.
  * One transaction per file, under a session advisory lock on one connection.
  * Every line printed is redacted.
@@ -608,7 +606,6 @@ function applyFailure(file, label, error) {
   return new MigrateError(lines.join('\n'));
 }
 
-// Exported for apps/api/scripts/migrate.test.mjs, which drives it with a stub handle.
 export async function applyFile(sql, file, recordInLedger, label) {
   const startedAt = Date.now();
   try {
@@ -826,7 +823,7 @@ async function dropSchema(sql) {
 
 /**
  * NODE_ENV is not a guard for `reset`. It runs from an operator host, and the repo's `.env` sets
- * development. Without this check, a reset against a 944,297-row database emptied it with no prompt.
+ * development, so without this check a reset empties whatever it points at with no prompt.
  * The confirmation names the target, not a bare `--yes`, so a command recalled from shell history
  * refuses against any other database.
  */

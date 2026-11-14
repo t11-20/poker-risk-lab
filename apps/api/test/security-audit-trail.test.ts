@@ -1,6 +1,6 @@
 /**
- * The security events this service claims to record reach `prl.audit_log`. The writer once had zero
- * call sites, and the write is fire-and-forget, so a missing write cannot fail loudly anywhere else.
+ * The security events this service claims to record reach `prl.audit_log`. The write is
+ * fire-and-forget, so a missing write cannot fail loudly anywhere else.
  * Absence is asserted too (no display name, no user id on an erasure), because over-recording is a
  * privacy defect.
  */
@@ -20,7 +20,7 @@ import authRoutes from '../src/routes/auth.ts';
 import { DB_SKIP_REASON, testConfig } from './helpers/hands-app.ts';
 
 /**
- * A busy shared pool once took over 5 s for one INSERT. The `it` timeout must exceed this, because
+ * A busy shared pool has taken over 5 s for one INSERT. The `it` timeout must exceed this, because
  * `node --test` defaults to 5 s.
  */
 const AUDIT_DEADLINE_MS = 15_000;
@@ -53,7 +53,7 @@ interface AuditRow {
 
 /**
  * Sampled before the request, because a refused fire-and-forget write is already counted by the
- * time the wait starts. The negative control below caught that in the first version.
+ * time the wait starts.
  */
 interface AuditWatch {
   readonly since: Date;

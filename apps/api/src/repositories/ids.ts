@@ -77,7 +77,6 @@ export const ID_PREFIXES = {
 
 export type IdKind = keyof typeof ID_PREFIXES;
 
-/** Prefer the named helpers below; this exists for tests and loops. */
 export function generateId(kind: IdKind): string {
   return `${ID_PREFIXES[kind]}_${randomCharacters(ID_ALPHABET, ID_RANDOM_LENGTH)}`;
 }
@@ -125,7 +124,6 @@ export function newEnrolmentId(): string {
   return generateId('enrolment');
 }
 
-/** Exported so tests assert it against the migration's domain and the contracts' `ID_PATTERN`. */
 export const GENERATED_ID_PATTERN = /^[a-z]{3,6}_[a-z2-7]{26}$/;
 
 export function isIdOfKind(value: string, kind: IdKind): boolean {
@@ -161,7 +159,6 @@ export function normaliseInviteCode(raw: string): string | null {
   return collapsed === '' ? null : collapsed;
 }
 
-/** Exported for the tests, which assert that no ambiguous character can appear in a code. */
 export const INVITE_CODE_ALPHABET = INVITE_ALPHABET;
 
 const SECRET_BYTES = 32;

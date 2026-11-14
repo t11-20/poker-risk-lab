@@ -1,6 +1,6 @@
 /**
  * Tests for migrate.mjs policy: `down` states roll-forward-only, `up` refuses undeclared destructive
- * migrations, and a failed file is named. No database. `test:scripts` reaches this file.
+ * migrations, and a failed file is named. No database.
  * `applyFile` runs against a stub handle that rejects with the postgres.js error shape. That a live
  * PostgreSQL sends `position` as a string ('25' for line 4 column 1) was checked by hand.
  */
@@ -212,7 +212,7 @@ async function rejectionOf(fn) {
   return outcome;
 }
 
-// Also run against the old bare driver message, which must fail it. That is the negative control.
+// A bare driver message must fail this, which the negative control below shows.
 function assertNamesTheFile(text, file, expected) {
   assert.match(text, new RegExp(file.version.replace(/\./g, '\\.')), 'the message must name the file');
   assert.match(text, /file:/, 'the message must show a path to open');
@@ -258,7 +258,7 @@ test('a migration that fails names the file, the line, the statement and the SQL
   });
   assert.match(message, /rolled back|as it was before/i, 'an operator must be told what state they are in');
 
-  // NEGATIVE CONTROL. The bare driver message the old runner printed.
+  // NEGATIVE CONTROL: a bare driver message names nothing, and the check must say so.
   assert.throws(
     () =>
       assertNamesTheFile('syntax error at or near "creat"', file, {
@@ -319,7 +319,7 @@ function handleWhoseTransactionEscapes(calls) {
 }
 
 test('NEGATIVE CONTROL: a file that ends its own transaction is refused, and the message says so', async () => {
-  // Without the witness the old code resolves here, and `rejectionOf` fails.
+  // Without the transaction witness this call resolves, and `rejectionOf` fails.
   const file = await brokenMigration('0099_commits_halfway.sql', 'create table prl.a (id text);\nCOMMIT;\n');
   const calls = [];
   const handle = handleWhoseTransactionEscapes(calls);

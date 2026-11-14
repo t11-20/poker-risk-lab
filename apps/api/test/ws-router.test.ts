@@ -332,9 +332,9 @@ describe('the handshake', () => {
 });
 
 /**
- * `hello` checks membership once, so leaving must reach the socket that check let in. Measured on
- * the shipped code, an ex-member's socket kept receiving state and events after `leaveRoom`. The
- * second test asserts the member who stayed is never closed, so closing every socket cannot pass.
+ * `hello` checks membership once, so leaving must reach the socket that check let in, or an
+ * ex-member's socket keeps receiving state and events after `leaveRoom`. The second test asserts the
+ * member who stayed is never closed, so closing every socket cannot pass.
  */
 describe('a socket whose membership has ended', () => {
   it('is closed rather than sent another frame from the table it left', async () => {
@@ -669,7 +669,7 @@ describe('the Coach read off a view', () => {
 
   /**
    * Seat 2 faces 30 with 990 behind and nobody left who could answer a raise. The engine offers
-   * `fold, call`, and the Coach once recommended a raise because it checked affordability only.
+   * `fold, call`, so a Coach that checked affordability only would recommend a raise.
    */
   function everyOpponentAllIn(): ReturnType<typeof startHand>['state'] {
     let state = startHand({

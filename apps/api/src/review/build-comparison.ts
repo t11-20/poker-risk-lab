@@ -1,7 +1,5 @@
 /**
  * The Legends "compare your hand" report, built from a hand that was actually played.
- * The replay stays private in `build-review.ts`, which exports `buildComparisonDecisions` for this
- * caller only, so there is one walk of the hand.
  * A hand the replay cannot reproduce is refused with a reason. It never falls back to the sample.
  * `ModelReasoning` is always null. The policy's distribution is not persisted, so a stored hand can
  * state the model's action but nothing about why.

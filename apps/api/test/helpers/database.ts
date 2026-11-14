@@ -1,7 +1,7 @@
 /**
  * Decides whether the database suites run. A test that cannot run for lack of infrastructure must
- * fail loudly or be excluded by a named script, never pass silently (57 tests once skipped and the
- * run exited 0). With no database and no waiver, `database-availability.test.ts` fails.
+ * fail loudly or be excluded by a named script, never pass silently. With no database and no waiver,
+ * `database-availability.test.ts` fails.
  * `test:without-database` sets the waiver through `test/without-database.env`, and CI ignores it.
  */
 
@@ -17,7 +17,7 @@ export const TEST_DATABASE_URL = ((): string | undefined => {
 
 /**
  * The DSN for teardown statements the runtime role must never issue, read lazily. `prl_app` cannot
- * retract rooms or hands, and teardown through the application connection forced CI onto a
+ * retract rooms or hands, and teardown through the application connection would force CI onto a
  * superuser (OPS-008). Falls back to `DATABASE_URL`.
  */
 export function adminDatabaseUrl(): string | undefined {

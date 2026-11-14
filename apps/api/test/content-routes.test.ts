@@ -339,7 +339,7 @@ describe('POST /content/quizzes/:id/attempt', () => {
     }
   });
 
-  /** `Math.abs(3.2 - 3)` is 0.20000000000000018, which once marked `spr-q2` wrong at tolerance 0.2. */
+  /** `Math.abs(3.2 - 3)` is 0.20000000000000018, which a naive check marks wrong at `spr-q2`'s 0.2. */
   it('accepts an answer at exactly the stated tolerance, and refuses one past it', async () => {
     const app = await contentApp();
     try {

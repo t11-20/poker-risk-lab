@@ -111,8 +111,8 @@ export class AppMetrics {
     name: `${PREFIX}_rate_limit_events_total`,
     help: 'Rate-limit outcomes: limited (429 returned) or banned (over the ban threshold).',
     labelNames: ['kind'],
-    // Primed because `increase()` cannot see a rise from a series never scraped. Measured on
-    // staging, a real first ban sat at 1 and `RateLimitBans` stayed silent.
+    // Primed because `increase()` cannot see a rise from a series never scraped, so an unprimed
+    // first ban sits at 1 and `RateLimitBans` stays silent.
     primeLabels: [{ kind: 'limited' }, { kind: 'banned' }],
   });
 
@@ -255,7 +255,7 @@ export class AppMetrics {
   /**
    * Primed so a quiet deployment renders zeros rather than "no data". `abandoned_guests` counts
    * accounts, not rows. Values name what was removed, not the table, and must stay clear of
-   * `ID_PREFIXES` (`observability-metrics.test.ts` rejected `oidc_login_attempts` as an id).
+   * `ID_PREFIXES` (`oidc_login_attempts` reads as an id).
    */
   readonly retentionRowsDeleted = this.registry.counter({
     name: `${PREFIX}_retention_rows_deleted_total`,
@@ -274,8 +274,7 @@ export class AppMetrics {
    * - An age, not a timestamp, so the scraper's clock never enters the subtraction.
    * - Before the first sweep it counts from process start, so a restart does not page.
    * - That is safe only because the first sweep runs at `FIRST_SWEEP_DELAY_MS` (60 s), so a
-   *   restart pattern that hides a dead sweep trips `ProcessRestartLoop`. Pinned in
-   *   `test/retention-sweep.test.ts`.
+   *   restart pattern that hides a dead sweep trips `ProcessRestartLoop`.
    * It cannot say whether the previous process swept.
    */
   readonly retentionSweepAge = this.registry.gauge({
@@ -346,8 +345,8 @@ export class AppMetrics {
 
   /**
    * A start timestamp, because a restart counter resets on the event it records. Set once, the one
-   * exception to rule 3. Re-deriving it per scrape from `Date.now()` and `process.uptime()` wobbled
-   * across a second boundary (4.5 ms spread measured), and `ProcessRestartLoop` counted it as restarts.
+   * exception to rule 3. Re-deriving it per scrape from `Date.now()` and `process.uptime()` wobbles
+   * across a second boundary (4.5 ms spread), which `ProcessRestartLoop` counts as restarts.
    */
   readonly processStart = this.registry.gauge({
     name: `${PREFIX}_process_start_time_seconds`,

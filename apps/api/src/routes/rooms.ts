@@ -131,7 +131,6 @@ const COMPARE_BODY = {
   },
 } as const;
 
-/** Board length per street. */
 const BOARD_LENGTH: Readonly<Record<'preflop' | 'flop' | 'turn' | 'river', number>> = {
   preflop: 0,
   flop: 3,
@@ -327,7 +326,7 @@ export function createRoomRoutes(options: RoomRoutesOptions = {}): FastifyPlugin
 
     /**
      * Built by `learnFromSummary`, because two of the sixteen axes are conditional quantities an
-     * observer cannot measure and an inline copy drifted. `observed` is null, and the blockers are
+     * observer cannot measure and an inline copy would drift. `observed` is null, and the blockers are
      * listed on the field in `@prl/contracts`. Simulated figures are served by the `/stats` route.
      */
     app.get<{ Params: { profileId: string } }>(

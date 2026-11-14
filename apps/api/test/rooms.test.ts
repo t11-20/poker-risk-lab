@@ -552,7 +552,7 @@ describe('bot profiles', () => {
     );
   });
 
-  /** `persistableProfile` once wrote a Legends seat as `unknown`. It now refuses an id it cannot name. */
+  /** `persistableProfile` refuses an id it cannot name rather than writing a Legends seat as `unknown`. */
   it('persists every strategy profile under its own id, and refuses one it does not know', () => {
     for (const profile of PROFILES) {
       assert.equal(durableProfile(profile.naming.id), profile.naming.id);
@@ -1019,7 +1019,7 @@ describe('the Legends endpoints', () => {
 
 /**
  * A live hand cannot survive a restart, but the button and the interrupted hand row can be
- * recovered. Without that, somebody paid a second consecutive big blind and the history showed
+ * recovered. Without that, somebody pays a second consecutive big blind and the history shows
  * null rows.
  */
 describe('a room re-opened after a restart', () => {
@@ -1164,9 +1164,9 @@ describe('a room re-opened after a restart', () => {
 
 describe('RoomRegistry.open is deduplicated across concurrent first-touches', () => {
   /**
-   * `open()` was a check-then-act across several awaits, so two cold callers (a `GET /rooms/:id`
-   * racing the WebSocket `hello`, or two tabs) each built a `LiveTable` and the second replaced the
-   * first. The slow archive read below opens the window.
+   * `open()` spans several awaits, so two cold callers (a `GET /rooms/:id` racing the WebSocket
+   * `hello`, or two tabs) must share one `LiveTable` rather than the second replacing the first. The
+   * slow archive read below opens the window.
    */
   it('builds one LiveRoom for two simultaneous ensureOpen calls', async () => {
     const { store } = await harness();

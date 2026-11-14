@@ -111,8 +111,8 @@ export interface WsHubOptions {
   /** Defaults to the process-wide metrics. A test that wants isolation passes its own. */
   readonly metrics?: AppMetrics;
   /**
-   * Test seam for the sweep interval. Defaults to `WS_LIMITS.heartbeatIntervalMs` (15 s), at which no
-   * test reached the quiet-socket expiry check, and removing that check left the suite green.
+   * Test seam for the sweep interval, so a test can reach the quiet-socket expiry check. The default,
+   * `WS_LIMITS.heartbeatIntervalMs` (15 s), is too slow for any test to get there.
    */
   readonly heartbeatIntervalMs?: number;
 }

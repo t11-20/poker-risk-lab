@@ -1,40 +1,14 @@
--- =============================================================================
--- 0001_privilege_roles.sql - the two cluster-wide privilege containers.
+-- The two cluster-wide privilege containers, applied by `migrate.mjs roles`. Not a migration: it is not
+-- recorded in prl.schema_migrations and is safe to re-run.
 --
--- Applied by `node apps/api/scripts/migrate.mjs roles`. NOT a migration: it is
--- not recorded in prl.schema_migrations, and it is written to be re-run.
+-- 0001_initial.sql also creates these roles, but a restore runs no migration. A single-database pg_dump
+-- carries no roles yet references prl_migrator and prl_app, so a restore into a cluster without them
+-- fails, or with --no-owner --no-privileges "succeeds" with no grant prl_app can use. The roles must
+-- exist before pg_restore runs (docs/RUNBOOK.md §11.4).
 --
--- ## Why this exists when 0001_initial.sql already creates these roles
---
--- Because of the one path where no migration will ever run: restoring a backup.
---
--- `pg_dump` of a single database does not contain roles - roles are cluster-wide,
--- and only `pg_dumpall --globals-only` carries them. A dump of this database DOES
--- contain, in its table of contents, an `ALTER SCHEMA prl OWNER TO prl_migrator`,
--- a `GRANT ... TO prl_app` for every table, and a DEFAULT ACL entry for
--- prl_migrator. Restoring it into a cluster where those roles do not exist fails
--- with `role "prl_migrator" does not exist`; restoring it with --no-owner
--- --no-privileges "succeeds" and produces a database the API cannot read, because
--- prl_app ends up with no USAGE on the schema and no grant on any table. That
--- second outcome is the dangerous one: it looks like a successful restore.
---
--- So the restore procedure needs the roles to exist BEFORE pg_restore runs, and
--- 0001_initial.sql cannot provide them: applied migrations are immutable and the
--- migration runner will not be executing at that point in the procedure anyway.
--- The duplication below is two CREATE ROLE statements, deliberately, and it is
--- the smaller cost. docs/RUNBOOK.md §11.4 has the full procedure.
---
--- ## What is deliberately not here
---
--- No password, and no LOGIN. Both roles are privilege containers; the identities
--- that actually connect (prl_api, prl_deployer - RUNBOOK §5) are created per
--- environment from a secret manager and granted membership. A file in version
--- control must not be able to set a credential. db/seeds/0002_dev_login_roles.sql
--- creates the development equivalents, because a seed cannot reach production.
---
--- No GRANTs on any object either. Object privileges belong to the migration that
--- creates the object, and they arrive with the dump on the restore path.
--- =============================================================================
+-- No password and no LOGIN: the identities that connect are created per environment from a secret
+-- manager (RUNBOOK §5), and a file in version control must not be able to set a credential. No object
+-- GRANTs either: they belong to the migration that creates the object and arrive with the dump.
 
 DO $$
 BEGIN

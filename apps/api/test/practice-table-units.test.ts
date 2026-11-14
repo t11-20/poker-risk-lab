@@ -1,6 +1,6 @@
 /**
  * Units are the chips in front of a learner. Starting a practice table must not mint a stack, and a
- * reset must reach the live table the learner sits at (both found in the 2026-11 UI audit).
+ * reset must reach the live table the learner sits at.
  * The fake store in `test/rooms.test.ts` answers `readUnits` from a constant, so these run over the
  * real stores in one rolled-back transaction. Nothing is committed.
  */
@@ -200,7 +200,7 @@ describe('units across practice tables', dbOptions, () => {
       await roomsRepository.seatMember(tx, room.id, owner.id, 0);
       assert.equal(await units(tx, owner.id), 400, 'the chips in front of them');
 
-      // The old sum still reported 400 after the close.
+      // A closed table holds nothing, so the learner is back on the allowance.
       await roomsRepository.close(tx, room.id, { ownerUserId: owner.id });
       assert.equal(await units(tx, owner.id), usersRepository.DEFAULT_UNIT_ALLOWANCE);
     });
@@ -367,7 +367,7 @@ describe('only a table the reader has sat at holds units', dbOptions, () => {
   it('starting private tables and a match leaves the allowance, not a stack per table', async () => {
     await inRollback(async (tx) => {
       const test = await harness(tx);
-      // None of these is a practice table, so nothing retires them. The old sum read 4,000.
+      // None of these is a practice table, so nothing retires them.
       const friends = [];
       for (let i = 0; i < 3; i += 1) friends.push(await createTable(test, FRIENDS_TABLE));
       await startMatch(test, 'calling-station');
@@ -581,7 +581,7 @@ describe('only a table the reader has sat at holds units', dbOptions, () => {
 
   it('a leave and rejoin while the first sit is written does not record it on the new membership', async () => {
     await inRollback(async (tx) => {
-      // Found by (room, user, live), the write landed on a membership rejoined by another tab in the gap.
+      // Found by (room, user, live), the write would land on a membership rejoined by another tab in the gap.
       const gate = gateFirstSit();
       const test = await harness(tx, { wrap: gate.wrap });
       const table = await createTable(test, { ...FRIENDS_TABLE, startingStack: 2_000, bots: undefined });
@@ -708,7 +708,7 @@ describe('only a table the reader has sat at holds units', dbOptions, () => {
 
   it('a leave between taking the durable seat and reading it back refuses the sit', async () => {
     await inRollback(async (rawTx) => {
-      // `seatMember` read back by id whether left or not, so a leaver was seated and put back on the roster.
+      // Reading back by id whether left or not would seat a leaver and put them back on the roster.
       const gate = gateSeatReadback(rawTx);
       const tx = gate.tx;
       const test = await harness(tx);
@@ -780,7 +780,7 @@ describe('only a table the reader has sat at holds units', dbOptions, () => {
 
   it('a leave while the live table takes the seat refuses the sit', async () => {
     await inRollback(async (tx) => {
-      // The gap between `seatMember` and `addMember`, which used to put a leaver back on the roster.
+      // The gap between `seatMember` and `addMember`, where a leave must not be put back on the roster.
       let inTheGap: (() => Promise<void>) | null = null;
       const test = await harness(tx, {
         wrap: (store) => ({

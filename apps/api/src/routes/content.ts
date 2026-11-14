@@ -756,9 +756,8 @@ function sizedSpotFor(scenario: Scenario): SizedSpot {
 }
 
 /**
- * Refuses a size hero could not have put out, before anything is graded.
- * Before this guard, `{"action":"raise","to":26000}` with 500 behind returned
- * `consistentWithAnalysis: true`. The bounds are above zero, at most `maximumTo`, and at least
+ * Refuses a size hero could not have put out, before anything is graded, or a raise to 26,000 with
+ * 500 behind would grade as consistent. The bounds are above zero, at most `maximumTo`, and at least
  * `minimumAggressiveTo` when the rules allow aggression. The floor is quoted back to the caller.
  * Where aggression is not legal, `consistencyOf` reports the action as unavailable instead.
  */

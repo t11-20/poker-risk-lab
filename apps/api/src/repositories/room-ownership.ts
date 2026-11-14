@@ -67,9 +67,8 @@ export async function acquire(
  * fence, and a per-room parameter would force one statement per room.
  *
  * `clock_timestamp()`, NOT `now()`. `now()` is fixed at transaction start, so a beat that waited on a
- * row lock wrote a heartbeat older than the acquisition it queued behind, and
- * `room_ownership_heartbeat_after_acquire` (23514) rolled back the whole beat. Reproduced on
- * PostgreSQL 16 with one owner re-acquiring a room while its beat was blocked.
+ * row lock would write a heartbeat older than the acquisition it queued behind, and
+ * `room_ownership_heartbeat_after_acquire` (23514) would roll back the whole beat.
  */
 export async function heartbeat(
   handle: Db,
@@ -91,10 +90,9 @@ export async function heartbeat(
  * that generation, which is not an error.
  *
  * Without the owner scope, a fenced process would delete its successor's lease. Without the fence,
- * this process's own stale release would delete the lease it had since re-acquired. Releases are
- * queued by `RoomRegistry.releaseLeaseSoon` and can run long after a re-open. Reproduced against
- * `RoomRegistry` with the release chain held open across an eviction and a re-open. The row was
- * deleted, the next beat evicted the room as `fenced`, and the zero-tolerance fencing counter rose.
+ * this process's own stale release would delete the lease it had since re-acquired, and the next beat
+ * would evict the room as `fenced`. Releases are queued by `RoomRegistry.releaseLeaseSoon` and can
+ * run long after a re-open.
  */
 export async function release(
   handle: Db,

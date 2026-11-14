@@ -1,6 +1,6 @@
 /**
  * The WebSocket message handler, with no socket in it. Sockets, upgrades, origins and cookies live in
- * `hub.ts`, so `test/ws-router.test.ts` drives the real protocol through a two-method `SocketSink`.
+ * `hub.ts`, so a test can drive the real protocol through a two-method `SocketSink`.
  * Every change sends the complete redacted view (ADR 0009), never a delta, so reconnect is "send the
  * current view". `broadcast` builds a view per recipient, because a shared view is how hole cards leak.
  * Frames are validated with Fastify's own Ajv, which has `coerceTypes: 'array'`. Every schema field is
@@ -50,7 +50,6 @@ export interface WsPrincipal {
   readonly sessionId: string;
 }
 
-/** One live socket. */
 export interface WsConnection {
   readonly id: string;
   readonly sink: SocketSink;
@@ -90,17 +89,11 @@ export type WsFrameRejection =
   | 'too_large'
   /** The per-socket token bucket was empty. The socket is closed. */
   | 'rate_limited'
-  /** Not JSON at all. */
   | 'not_json'
-  /** Valid JSON, but not a message the contract's schema accepts. */
   | 'schema'
-  /** A schema-valid message whose `type` this router has no branch for. */
   | 'unknown_type'
-  /** An intent arrived before `hello` had joined a room. */
   | 'before_handshake'
-  /** A second `hello` on a socket that has already sent one. */
   | 'duplicate_hello'
-  /** `hello` named a protocol version this server does not speak. */
   | 'bad_protocol_version';
 
 export interface WsRouterOptions {
@@ -145,7 +138,6 @@ function pooledCoachAnalyser(config: AppConfig): CoachAnalyser {
   };
 }
 
-/** One minute, for the Coach limiter's window. */
 const COACH_WINDOW_MS = 60_000;
 
 /**
@@ -280,12 +272,10 @@ export class WsRouter {
     });
   }
 
-  /** Public for the leak assertions in `test/ws-coach-session-limit.test.ts`. */
   sessionsTracked(): number {
     return this.bySession.size;
   }
 
-  /** Every socket currently attached to a room. */
   socketsIn(roomId: string): readonly WsConnection[] {
     return [...(this.byRoom.get(roomId) ?? [])];
   }
@@ -451,7 +441,7 @@ export class WsRouter {
       this.sendError(connection, null, code);
       // The close code comes from the same error as the frame. A 4xx closes 4403, so a stranger and a
       // missing room stay indistinguishable. A 5xx (a database blip in `reopenFor`) closes 4503, which
-      // the client retries. A hard-coded 4403 told members their own table was not theirs.
+      // the client retries, so a member is not told their own table is not theirs.
       const closeCode = wsCloseForError(code);
       this.closeConnection(
         connection,
@@ -621,7 +611,7 @@ export class WsRouter {
 
   /**
    * Closes the sockets of anyone no longer a member. `onHello` checks membership once, so after
-   * `leaveRoom` the old socket kept receiving the private table. Checked here because every outbound
+   * `leaveRoom` the old socket would keep receiving the private table. Checked here because every outbound
    * frame passes through, so a new path that ends a membership cannot forget to announce it. Nothing
    * is sent between a departure and this check.
    */
@@ -691,7 +681,6 @@ export class WsRouter {
     this.send(connection, { type: 'error', requestId, error });
   }
 
-  /** Closes a socket and releases everything it held. */
   closeConnection(connection: WsConnection, code: number, reason: string): void {
     if (connection.closed) {
       return;
@@ -722,8 +711,8 @@ export class WsRouter {
   }
 
   /**
-   * The Coach window, keyed on the SESSION. Per socket, one session's four permitted sockets got
-   * 4 x 30 = 120 analyses a minute onto the shared pool (measured). Now it is 30 across all four.
+   * The Coach window, keyed on the SESSION. Per socket, one session's four permitted sockets would
+   * get 4 x 30 = 120 analyses a minute onto the shared pool; per session it is 30 across all four.
    * A missing entry means the socket was released. It is refused, not recreated, because a recreated
    * entry would be a fresh window and the leak coming back.
    */
@@ -756,7 +745,7 @@ export interface CoachForViewOptions {
   readonly opponentRange?: string;
   /**
    * The names the table dealt in, so the Coach names opponents the way the seat plates do. Absent,
-   * opponents are `seat N`, which `test/coach-task-pin.test.ts` holds to the byte.
+   * opponents are `seat N`.
    */
   readonly names?: ReadonlyMap<number, string>;
 }

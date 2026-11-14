@@ -1060,7 +1060,7 @@ describe('the OIDC round trip', () => {
 
   it('completes when the provider adds its own query parameters, as every real one does', async () => {
     /**
-     * `app.ts` sets `removeAdditional: false`, so a strict callback schema refused real providers.
+     * `app.ts` sets `removeAdditional: false`, so a strict callback schema would refuse real providers.
      * Google, Keycloak and Microsoft append extra parameters and RFC 9207 requires `iss`. This
      * sends the union of them in one callback.
      */

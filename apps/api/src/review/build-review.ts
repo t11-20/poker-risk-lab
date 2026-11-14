@@ -71,7 +71,6 @@ export interface HandSummaryRow {
   readonly completed_at: Date | string | null;
 }
 
-/** `prl.hands`, as the driver hands it back. */
 export interface HandRow extends HandSummaryRow {
   readonly button_seat: number;
   readonly config: unknown;
@@ -588,7 +587,6 @@ function openReplay(
   return candidates.find((state) => potTotal(state) === postedByForcedBets) ?? candidates[0] ?? null;
 }
 
-/** Sweeps a finished street's bets into the middle and resets the per-street tallies. */
 function closeStreet(state: ReplayState, nextStreet: string): void {
   for (const seat of state.seats.values()) {
     state.potInMiddle += seat.committedThisStreet;
@@ -718,7 +716,6 @@ function reviewRangeAssumption(opponentCount: number): string {
   );
 }
 
-/** One decision the review has decided to analyse, and everything that analysis needs. */
 interface AnalysisRequest {
   readonly handId: string;
   readonly sequence: number;
@@ -785,9 +782,8 @@ function withReviewAssumption(report: CoachReport, opponentCount: number): Coach
 }
 
 /**
- * The reference implementation, used by `buildHandReview`. `test/event-loop-budget.test.ts` asserts
- * the worker-pool review is deep-equal to it. NOT what `GET /hands/:handId` calls, because one flop
- * analysis measured 133 ms.
+ * The reference implementation, used by `buildHandReview`. NOT what `GET /hands/:handId` calls,
+ * because one flop analysis measured 133 ms.
  */
 function analyse(request: AnalysisRequest): CoachReport {
   const { situation } = request;
@@ -821,7 +817,6 @@ function analyse(request: AnalysisRequest): CoachReport {
 export interface BuildHandReviewInput {
   readonly hand: HandRow;
   readonly seats: readonly HandSeatRow[];
-  /** Every action for the hand, in `sequence` order. */
   readonly actions: readonly HandActionRow[];
   /** The user asking. Their own seat is the only one whose decisions are analysed. */
   readonly viewerUserId: string;
@@ -1013,8 +1008,8 @@ function planDecisions(actions: readonly HandActionRow[], context: DecisionConte
         amountPaid: action.amount_paid,
         potBefore: persistedPotBefore,
         wasAutomatic: action.was_automatic,
-        // As recorded, null included. Inferring one from `was_automatic` printed "the clock ran out"
-        // beside a fold the reader chose.
+        // As recorded, null included. Inferring one from `was_automatic` would say "the clock ran
+        // out" beside a fold the reader chose.
         automaticReason: action.automatic_reason,
         analysis: null,
       },
@@ -1343,8 +1338,8 @@ function planHandReview(input: BuildHandReviewInput, options: BuildHandReviewOpt
 
 /**
  * Computes every analysis on the calling thread. Used by `scripts/regenerate-web-fixtures.mjs` and
- * the tests, NOT by the API. `test/event-loop-budget.test.ts` asserts it deep-equal to
- * `buildHandReviewOn`, which `GET /hands/:handId` serves.
+ * the tests, NOT by the API. Must stay deep-equal to `buildHandReviewOn`, which `GET /hands/:handId`
+ * serves.
  */
 export function buildHandReview(
   input: BuildHandReviewInput,

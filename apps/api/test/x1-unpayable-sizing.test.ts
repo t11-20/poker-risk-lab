@@ -1,6 +1,6 @@
 /**
- * The Scenario Lab once graded a raise to 26,000 with 500 behind as consistent with the analysis,
- * because `candidateFor` fell back to the best row for the action name. Three outcomes, not two.
+ * A raise to 26,000 with 500 behind must not be graded as consistent with the analysis, which is
+ * what `candidateFor` falling back to the best row for the action name does. Three outcomes, not two.
  * An unpayable size (over the stack, at or below zero, under the minimum raise) is refused with a 400.
  * A legal size off the analysis ladder is answered as not established and records NULL.
  * A size on the ladder is graded as before, which stops a fix that refuses everything.
@@ -189,8 +189,8 @@ describe('a scenario sizing nobody could have paid', () => {
 });
 
 /**
- * A legal total the analysis left off its ladder, derived from the analysis itself. A hardcoded floor
- * stopped being unladdered once the Coach began grading the minimum raise (CI run 43047978449).
+ * A legal total the analysis left off its ladder, derived from the analysis itself. A hardcoded total
+ * stops being unladdered as soon as the Coach starts grading that size.
  */
 async function unpricedRaise(
   app: FastifyInstance,
@@ -314,7 +314,7 @@ describe('the sizings that were always answered correctly', () => {
   });
 
   it('still reads a fold as consistent in the scenario that asks whether to fold', async () => {
-    // Pins the earlier fix that stopped judging a fold against an assumed fold frequency.
+    // A fold must not be judged against an assumed fold frequency.
     const app = await contentApp();
     try {
       for (const id of ['rk-the-fold-that-feels-wrong', 'eq-implied-odds-deep-stacks-turn']) {

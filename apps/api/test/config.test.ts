@@ -53,7 +53,7 @@ describe('loadConfig — a valid environment', () => {
     assert.equal(config.nodeEnv, 'test');
     assert.equal(config.isTest, true);
     assert.equal(config.isProduction, false);
-    // 3001, the port every document and apps/web/src/lib/api.ts use. An 8080 fallback broke every
+    // 3001, the port every document and apps/web/src/lib/api.ts use. Any other fallback breaks every
     // request from the web app in the documented dev flow.
     assert.equal(config.port, 3001);
     assert.equal(config.host, '127.0.0.1');
@@ -151,7 +151,7 @@ describe('loadConfig — invalid values are named', () => {
   });
 
   it('refuses LOG_LEVEL=silent in production, and names the level that still logs a crash', () => {
-    // `silent` gives Fastify no logger, so a failed production start wrote nothing. See readLogLevel.
+    // `silent` gives Fastify no logger, so a failed production start would write nothing. See readLogLevel.
     const problems = expectProblem(productionEnv({ LOG_LEVEL: 'silent' }), 'LOG_LEVEL=silent');
     assert.ok(
       problems.some((problem) => problem.includes('fatal')),
@@ -264,7 +264,7 @@ describe('loadConfig — the session cookie secret', () => {
   }
 
   it('boots outside production on the .env.example value, and says the secret is public', () => {
-    // The 55-character value passes the length check, so this branch once booted with no warning.
+    // The 55-character value passes the length check, so only this warning says it is public.
     for (const nodeEnv of ['development', 'test']) {
       const config = loadConfig(baseEnv({ NODE_ENV: nodeEnv, SESSION_COOKIE_SECRET: envExampleSecret() }));
       const lines = config.warnings.filter((warning) => warning.includes('SESSION_COOKIE_SECRET'));

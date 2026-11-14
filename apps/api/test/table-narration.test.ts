@@ -78,7 +78,6 @@ describe('the narration names who did it', () => {
     );
   });
 
-  // Audit at 308fadf found "wins 1529 from the pot." under a plate reading "1,529".
   it('groups an amount of four figures or more, in every sentence that carries one (REGRESSION)', () => {
     assert.equal(awardSentence(award(3, 0, 1_529), 1, nameOf), 'Nit bot wins 1,529 from the pot.');
     assert.equal(awardSentence(award(0, 0, 1_975), 2, nameOf), 'Ada wins 1,975 from the main pot.');

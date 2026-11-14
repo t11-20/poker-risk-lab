@@ -26,7 +26,7 @@ type GuestOutcome = 'erased' | 'came-back' | 'blocked';
  * A `Sql` stand-in that dispatches on a distinctive phrase in each literal and records calls.
  * A guest erasure goes through `deleteAccount` and is eight statements, answered here so a sweep
  * that never opened a transaction would be noticed. `came-back` is decided by the separate
- * re-check, never by the lock, so this fake fails the single-statement version that erased a
+ * re-check, never by the lock, so this fake fails a single-statement sweep, which would erase a
  * student granted a place while the sweep waited.
  */
 function fakeSql(plan: {
@@ -141,7 +141,7 @@ function manualTimer(): {
   readonly clearIntervalImpl: typeof clearInterval;
   readonly tick: () => void;
   readonly cleared: () => boolean;
-  /** Counted apart, because one shared flag let a `stop()` that skipped the interval pass. */
+  /** Counted apart, because one shared flag would let a `stop()` that skipped the interval pass. */
   readonly timeoutsCleared: () => number;
   readonly intervalsCleared: () => number;
   readonly intervalArmed: () => boolean;
@@ -346,8 +346,8 @@ describe('the abandoned-guest sweep', () => {
 
 describe('the schedule', () => {
   /**
-   * A first sweep on the six-hour interval's first tick meant a deployment shipped more often than
-   * that swept nothing, and the uptime-based age gauge hid it. `>= 8`, not `> 0`, so the schedule
+   * A first sweep on the six-hour interval's first tick means a deployment shipped more often than
+   * that sweeps nothing, and the uptime-based age gauge hides it. `>= 8`, not `> 0`, so the schedule
    * cannot depend on a process living long enough.
    */
   it('sweeps on every deployment, however short (NEGATIVE CONTROL)', async () => {
@@ -516,7 +516,7 @@ describe('the schedule', () => {
 
   /**
    * `startRetentionSweep` checks `stopped` in the timeout callback because not every timer cancels.
-   * With that check deleted, the rest of the suite passed 1,001 of 1,001.
+   * Nothing else in the suite fails with that check deleted.
    */
   it('a schedule stopped before its first delay never arms an interval (NEGATIVE CONTROL)', async () => {
     const { sql, calls } = fakeSql({ sessions: [0], attempts: [0] });

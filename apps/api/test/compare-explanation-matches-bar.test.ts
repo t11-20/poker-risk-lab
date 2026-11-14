@@ -1,6 +1,6 @@
 /**
- * The compare page's explanation must describe the action its bar marks. `reasoning` came from the
- * last trial while the bar aggregates all of them, and they disagreed in 161 of 396 columns
+ * The compare page's explanation must describe the action its bar marks, and the bar aggregates every
+ * trial. `reasoning` taken from the last trial disagrees with it in 161 of 396 columns
  * (12 profiles x 33 spots).
  */
 
@@ -58,7 +58,7 @@ describe('the compare page explains the action it marks', () => {
       }
     }
 
-    // At the measured 40.7% defect rate, 72 columns expect about 29 failures on the old code.
+    // At that 40.7% disagreement rate, 72 columns expect about 29 failures from a last-trial explanation.
     assert.ok(columns >= 60, `only ${columns} column(s) compared; a sweep of nothing is not a pass`);
     assert.deepEqual(
       disagreements,

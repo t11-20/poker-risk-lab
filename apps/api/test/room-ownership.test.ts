@@ -400,8 +400,7 @@ describe('a renewal that comes back without our room', () => {
 describe('a room opened while a beat is in flight', () => {
   /**
    * `acquireLease` keeps adding rooms while a beat is out at the database. Those rooms are not in
-   * the beat's answer, so applying the verdict to the current map read them as fenced. Holding a
-   * beat open across an `open()` reproduces it.
+   * the beat's answer, so a verdict applied to the current map would read them as fenced.
    */
   it('is not evicted as fenced (NEGATIVE CONTROL)', async () => {
     const gate = heldHeartbeat();
@@ -566,8 +565,8 @@ describe('giving the lease back', () => {
 
   /**
    * The lease is taken before the room is published, so `closeAll` cannot see a build in flight.
-   * A shutdown in that gap left the lease row behind (the replacement was refused the room for
-   * `LEASE_TTL_MS`) and published a room into a registry that had already shut down.
+   * A shutdown in that gap must still release the lease row, or the replacement is refused the room
+   * for `LEASE_TTL_MS`, and must not publish into a registry that has shut down.
    */
   it('waits for a room still being opened, and gives its lease back too (NEGATIVE CONTROL)', async () => {
     const ownership = fakeOwnership();
@@ -624,8 +623,8 @@ describe('giving the lease back', () => {
   });
 
   /**
-   * `shutdown()` must never reject. A hook that threw inside `releaseLeaseSoon`'s catch rejected the
-   * release chain `shutdown()` awaits. Only a failing release and a failing logger together catch it.
+   * `shutdown()` must never reject, even when a hook throws inside `releaseLeaseSoon`'s catch. Only a
+   * failing release and a failing logger together exercise it.
    */
   it('does not let a throwing logger reject a shutdown (NEGATIVE CONTROL)', async () => {
     const ownership = fakeOwnership();
@@ -645,8 +644,8 @@ describe('giving the lease back', () => {
   });
 
   /**
-   * `evict` did not guard `onProblem`. The heartbeat is fire-and-forget, so a throw there became an
-   * unhandled rejection that kills the process, and it skipped the `lease_expired` release.
+   * `evict` must guard `onProblem`: the heartbeat is fire-and-forget, so a throw there is an
+   * unhandled rejection that kills the process, and it would skip the `lease_expired` release.
    */
   it('does not let a throwing logger escape a fencing (NEGATIVE CONTROL)', async () => {
     const ownership = fakeOwnership();
@@ -756,7 +755,7 @@ function rowBackedOwnership(ownerId = 'api_test_1_aaaaaaaa'): {
 
 /**
  * Releases run on one serial chain, so a stale release can land after the room was taken again.
- * Without `and fence = ...` it deleted the fresh lease row and the next beat evicted the room as
+ * Without `and fence = ...` it deletes the fresh lease row and the next beat evicts the room as
  * fenced, a false zero-tolerance `prl_api_room_fencings_total{reason="fenced"}`.
  */
 describe('a release queued before the room was given up and taken again', () => {

@@ -1,9 +1,9 @@
 /**
- * The guard that stops this suite quietly skipping its database tests, which once skipped 57 on
- * every documented command. It fails when a database is required and absent, asserts
- * `databaseSkip()` is false when one is present, and scans this tree for a guard that bypasses
- * `test/helpers/database.ts`. It also proves `deadlineBound` changes nothing about a healthy request,
- * including the driver's `code` and `constraint_name`, which `repositories/sql.ts` maps to 409s.
+ * The guard that stops this suite quietly skipping its database tests. It fails when a database is
+ * required and absent, asserts `databaseSkip()` is false when one is present, and scans this tree
+ * for a guard that bypasses `test/helpers/database.ts`. It also proves `deadlineBound` changes
+ * nothing about a healthy request, including the driver's `code` and `constraint_name`, which
+ * `repositories/sql.ts` maps to 409s.
  */
 
 import assert from 'node:assert/strict';

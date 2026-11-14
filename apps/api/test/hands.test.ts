@@ -429,8 +429,8 @@ describe('the reveal is verified, and an empty one is a pass', () => {
   });
 
   it('proves only the cards that legitimately became public (REGRESSION)', () => {
-    // A reveal serialises cards as deck indices, so the old substring search for notation like `"7c"`
-    // could never match. It compares the proved set of indices now.
+    // A reveal serialises cards as deck indices, so a substring search for notation like `"7c"` can
+    // never match. The proved set of indices is compared instead.
     const fixture = showdownHand();
     const review = reviewAs(fixture, ALICE, { maxAnalysedDecisions: 0 });
     assert.ok(review.reveal !== null, 'a showdown hand has a reveal to check');

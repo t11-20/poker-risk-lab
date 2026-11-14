@@ -384,8 +384,8 @@ describe('migrate.mjs — seeding and resetting', dbOptions, () => {
       assert.equal((await runMigrate(['up'], { url: throwaway.url })).code, 0);
       assert.equal((await runMigrate(['seed'], { url: throwaway.url })).code, 0);
 
-      // `NODE_ENV` describes the process, not the target. Deciding from it alone let a recalled
-      // `db:reset` empty a 944,297-row database, so reset must name the database it drops.
+      // `NODE_ENV` describes the process, not the target, so deciding from it alone lets a recalled
+      // `db:reset` empty a real database. Reset must name the database it drops.
       const unconfirmed = await runMigrate(['reset'], { url: throwaway.url });
       assert.equal(unconfirmed.code, 1, 'reset without --confirm-database must refuse');
       assert.match(unconfirmed.output, /--confirm-database/);

@@ -346,7 +346,7 @@ describe('reopening does not become a way in', () => {
   });
 
   it('joins a socket to a room once, however many hellos race the database read', async () => {
-    // `roomId` is set after the store read, so two hellos in one tick both joined and left
+    // `roomId` is set after the store read, so two hellos in one tick would both join and leave
     // `noteSocket` one over. `connection.joining` is set synchronously.
     const test = await afterRestart();
     try {
@@ -429,8 +429,7 @@ describe('a transient database fault during hello is not reported as a permanent
       const close = recorded.closes.at(0);
       assert.ok(close !== undefined, 'the socket is still closed; a half-joined socket must not linger');
 
-      // Measured before the fix it was 4403, because the catch block closed with a hard-coded
-      // `WS_CLOSE.forbidden`.
+      // The likely regression: a catch block that closes with a hard-coded `WS_CLOSE.forbidden`.
       const oldCloseCode = WS_CLOSE.forbidden;
       assert.notEqual(
         close.code,

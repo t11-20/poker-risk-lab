@@ -2,7 +2,6 @@
  * Generated prose addresses the reader as "you", never "hero", which no glossary term defines.
  * It walks every string the generators return rather than a list of known fields, because the word
  * can arrive in any field. Identifiers such as `heroCards` are not swept, because readers never see them.
- * Negative control. The touched files restored to b05ab96 fail all six cases (2,411 scenario strings).
  */
 
 import assert from 'node:assert/strict';

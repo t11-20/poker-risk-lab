@@ -481,9 +481,8 @@ describe('no metric label carries anything secret or identifying', () => {
 describe('counters whose alerts are zero-tolerance are primed at zero', () => {
   /**
    * A counter series starts at its first `inc()`, and Prometheus does not assume a series that
-   * appears mid-range began at zero, so the first event is invisible to `rate()` and `increase()`.
-   * Measured on staging, a ban made `prl_rate_limit_events_total{kind="banned"} 1` and
-   * `RateLimitBans` (`increase(...[15m]) > 0`) never fired.
+   * appears mid-range began at zero, so the first event is invisible to `rate()` and `increase()`:
+   * unprimed, a first ban never fires `RateLimitBans` (`increase(...[15m]) > 0`).
    */
   it('renders the banned and limited series before anything is limited', () => {
     const metrics = new AppMetrics();
@@ -574,9 +573,8 @@ describe('counters whose alerts are zero-tolerance are primed at zero', () => {
 
 /**
  * `ProcessRestartLoop` pages on `changes(prl_process_start_time_seconds[15m]) >= 3`, so the gauge
- * must export one integer for the life of the process. A `setFrom` that re-derived it from two
- * drifting clocks counted 32 changes in 20 s on a series near a second boundary, and paged on a
- * process that never restarted. The value is computed once and `set()`.
+ * must export one integer for the life of the process. Re-deriving it from two drifting clocks
+ * counted 32 changes in 20 s near a second boundary, so the value is computed once and `set()`.
  */
 describe('the process start time is a constant, not a reading', () => {
   /** Negative control. A `setFrom` collector runs on every render, so two scrapes can disagree. */

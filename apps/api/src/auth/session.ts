@@ -152,9 +152,9 @@ export interface SessionRevocation {
 
 /**
  * Listeners for "a session stopped being honoured". A WebSocket resolves its session once, at the
- * upgrade, so before this a logout, an erasure or a second sign-in left the socket live. Measured
- * with the row deleted, it still answered `sit` and `ping`. Polling instead would cost a query per
- * socket per interval. Module scope is safe because session ids are unique.
+ * upgrade, so without these a logout, an erasure or a second sign-in would leave the socket live.
+ * Polling instead would cost a query per socket per interval. Module scope is safe because session
+ * ids are unique.
  */
 const revocationListeners = new Set<(revocation: SessionRevocation) => void>();
 
@@ -257,7 +257,7 @@ async function resolveSession(request: FastifyRequest, store: SessionStore): Pro
 }
 
 /**
- * Both rejections log at `warn`. At `debug` they were invisible, because `LOG_LEVEL` defaults to `info`.
+ * Both rejections log at `warn`, since `LOG_LEVEL` defaults to `info` and `debug` would hide them.
  * `malformed` is an HMAC this server did not produce (tampering, another deployment, a rotated secret).
  * `unknown` is a signed cookie with no live session. The store cannot split expiry from revocation.
  * The cookie is cleared on refusal, so each dead cookie logs once, and a burst is the signal.

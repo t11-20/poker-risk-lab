@@ -155,7 +155,7 @@ describe('the fixture harness under the least-privilege role', () => {
     `;
     assert.equal(before?.hands, 1, 'the fixture hand was not written');
 
-    // Before the fix this threw `permission denied for table rooms`.
+    // Through the app connection this throws `permission denied for table rooms`.
     await deleteFixtures(sql, [roomId], [aliceId, borysId]);
 
     const [rooms] = await sql<{ count: number }[]>`

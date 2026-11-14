@@ -472,7 +472,7 @@ describe('postgresArchive — a played hand is durable and faithful', dbOptions,
     });
   });
 
-  // Migration 0009. Before it this fold was written `was_automatic = true` like a timeout.
+  // Migration 0009 records a departure fold apart from a timeout's `was_automatic = true`.
   it('writes down that a fold for a player who stood up was a departure, not a timeout', async () => {
     await inRollback(async (tx) => {
       const fixture = await seatTwo(tx, ['Alice', 'Bob']);

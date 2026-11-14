@@ -3,16 +3,6 @@
 /**
  * Operator CLI for cohorts and entitlements, and the only way an enrolment is written.
  *
- *   pnpm run enrolments cohorts
- *   pnpm run enrolments cohort-create --key spring-2026 --name "Spring 2026" --starts 2026-03-02 \
- *                                     --ends 2026-06-26
- *   pnpm run enrolments grant  --cohort spring-2026 --by "J. Okafor" --reference PO-4471 \
- *                              --expires 2026-06-26 --file class.txt
- *   pnpm run enrolments revoke --cohort spring-2026 --by "J. Okafor" --reason "place transferred" \
- *                              --user usr_...
- *   pnpm run enrolments list   --cohort spring-2026 [--all]
- *   pnpm run enrolments show   --user usr_...
- *
  * There is deliberately no HTTP admin API. The product has no admin role, a route is permanent
  * surface for a rare operation, and 0006 grants `prl_app` SELECT only on both tables, so the request
  * path cannot enrol, extend or un-revoke anybody. A future route starts by designing authorisation.

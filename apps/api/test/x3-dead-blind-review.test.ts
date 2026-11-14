@@ -1,8 +1,8 @@
 /**
  * Hand review when the dead-button rule moves the blinds off `button + 1` and `button + 2`: a dead
  * small blind (nobody posts it) and a dead button (the button chair is empty). Both rotations come
- * from the engine's `advanceBlindRotation`. A review that derived blinds from the button passed
- * hands.test.ts and published no analysis for these hands.
+ * from the engine's `advanceBlindRotation`. A review that derives blinds from the button passes
+ * hands.test.ts and publishes no analysis for these hands.
  * Fixtures are built here because `persistHand` cannot express a rotation.
  */
 

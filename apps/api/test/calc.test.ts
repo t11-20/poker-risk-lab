@@ -457,8 +457,8 @@ describe('workers/pool.ts — sharding, deadlines and the queue', () => {
 
   /**
    * `assertDealable` in `calc/parse.ts` skips `top:NN` opponents, because it does not expand them.
-   * Five `top:1` opponents against `AhKh` on `As Ks Qs` need ten cards and seven remain. Before
-   * the guard in `equity-worker.ts` this held a warm thread for 9,431 ms before the same 422.
+   * Five `top:1` opponents against `AhKh` on `As Ks Qs` need ten cards and seven remain. Without
+   * the guard in `equity-worker.ts` this holds a warm thread for 9,431 ms before the same 422.
    */
   it('refuses jointly-undealable ranges on the thread instead of sampling for the whole budget', async () => {
     const undealable: WireSpec = {
@@ -539,7 +539,7 @@ describe('POST /math/equity', () => {
       const summary = equityOf(response.body);
       assert.equal(summary['method'], 'exact-enumeration');
       // AhAs vs KdKc is the minimum of ADR 0005's 36 suit configurations, exactly 0.81255489679402726
-      // (`equity-published-figures.test.ts`). The old `> 0.8 && < 0.84` window accepted an evaluator
+      // (`equity-published-figures.test.ts`). A `> 0.8 && < 0.84` window accepts an evaluator
       // with club flushes removed. Not exact equality, so a serialisation change fails where the claim
       // lives.
       const heroEquity = numberAt(summary, 'heroEquity');
@@ -794,8 +794,8 @@ describe('POST /math/coach', () => {
   });
 
   it('sends a check spot over the wire as a null price, not as a number', async () => {
-    // `JSON.stringify(Infinity)` is `null`, so a free call sent `"oddsRatio": null` against a
-    // `number` contract and crashed `/play`. Only the serialised body shows it. Null, and not 0.
+    // `JSON.stringify(Infinity)` is `null`, so a free call would send `"oddsRatio": null` against a
+    // `number` contract and crash `/play`. Only the serialised body shows it. Null, and not 0.
     const app = await calcApp();
     try {
       const csrf = await csrfPair(app);

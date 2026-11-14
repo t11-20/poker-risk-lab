@@ -16,7 +16,7 @@ import * as audit from './audit.ts';
 import { newCohortId, newEnrolmentId } from './ids.ts';
 import { type Db, violationError } from './sql.ts';
 
-/** A test asserts a superseded row is distinguishable from a deliberate withdrawal. */
+/** Tells a superseded row apart from a deliberate withdrawal. */
 export const SUPERSEDED_REASON = 'superseded by a later grant';
 
 export interface Cohort {
@@ -448,11 +448,11 @@ export async function revoke(sql: Db, input: RevokeInput): Promise<EnrolmentReco
 /**
  * Serialises every write about one learner on the learner's row. The partial unique index decides
  * who holds the slot but does not make `grant` and `revoke` serialisable under READ COMMITTED.
- * Two interleavings were reproduced on PostgreSQL 16 without this lock:
+ * Without this lock, on PostgreSQL 16:
  *
- * - A `revoke` blocked behind a `grant`'s supersede matched nothing after it committed, because the
- *   new row was a phantom to its snapshot. It returned null while the learner stayed entitled.
- * - A `revoke` committing between `grant`'s refused insert and its read-back made `grant` throw
+ * - A `revoke` blocked behind a `grant`'s supersede matches nothing after it commits, because the
+ *   new row is a phantom to its snapshot. It returns null while the learner stays entitled.
+ * - A `revoke` committing between `grant`'s refused insert and its read-back makes `grant` throw
  *   `internal_error`, aborting the whole bulk transaction.
  *
  * `prl.users` is the same row `deleteAccount` and `deleteAbandonedGuest` lock, so erasure and grants

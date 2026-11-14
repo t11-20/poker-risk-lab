@@ -125,7 +125,6 @@ async function guestPass(
   return { examined: candidates.length, removed };
 }
 
-/** Exported so a test can run it without a timer. */
 export async function runRetentionSweep(
   options: Pick<
     RetentionSweepOptions,
@@ -175,12 +174,10 @@ export async function runRetentionSweep(
 }
 
 /**
- * The first sweep is a one-shot at `FIRST_SWEEP_DELAY_MS`. When it was the first interval tick
- * (T+6h), a deployment shipping more often than that never swept (`test/retention-sweep.test.ts`
- * reproduces eight five-hour deployments with zero sweeps). Sixty seconds is past boot work, and
- * short enough that a restart pattern hiding a dead sweep trips `ProcessRestartLoop`. The test
- * checks that against the rule's literals. No jitter, because there is one replica. Timers are
- * `unref`'d.
+ * The first sweep is a one-shot at `FIRST_SWEEP_DELAY_MS`, because on the first interval tick (T+6h)
+ * a deployment shipping more often than that would never sweep. Sixty seconds is past boot work, and
+ * short enough that a restart pattern hiding a dead sweep trips `ProcessRestartLoop`. No jitter,
+ * because there is one replica. Timers are `unref`'d.
  */
 export function startRetentionSweep(options: RetentionSweepOptions): { stop: () => void } {
   const setIntervalFn = options.setIntervalImpl ?? setInterval;

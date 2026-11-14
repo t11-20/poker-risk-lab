@@ -1,9 +1,9 @@
 /**
  * A learner alone with bots gets `learnerTurnSeconds` or the room's clock, whichever is longer,
- * because a 60 s clock folded hands while the learner read the Coach panel. Every other seat keeps
- * the room's clock (`LiveTable.turnSecondsFor`). Three tests fail if that reverts to the room clock.
- * The other four are guarantees the fix must not trade away. The acting seat is always read from
- * the table, never assumed.
+ * because a 60 s clock folds hands while the learner reads the Coach panel. Every other seat keeps
+ * the room's clock (`LiveTable.turnSecondsFor`). Some tests fail if that reverts to the room clock,
+ * and the rest are guarantees the longer clock must not trade away. The acting seat is always read
+ * from the table, never assumed.
  */
 
 import assert from 'node:assert/strict';

@@ -1,9 +1,9 @@
 /**
  * Refuses to serve a database whose migration ledger (`prl.schema_migrations`, written only by
  * `migrate.mjs`) is behind or has drifted from the migrations this build shipped. Without it the API
- * booted green against a schema one column short and failed archive writes on a missing column.
+ * boots green against a schema one column short and fails archive writes on the missing column.
  * Feature routes are gated too, not only `/ready`, because the staging nginx has no active health
- * checks and kept routing learners to a degraded API. A refusal found by a probe never exits the
+ * checks and keeps routing learners to a degraded API. A refusal found by a probe never exits the
  * process, because a readiness handler that can kill it is a kill switch on a public route.
  */
 
@@ -62,7 +62,7 @@ const DRIFT_FIX =
 
 /**
  * The checksum `migrate.mjs` records, byte for byte. Reimplemented because the runtime image does not
- * ship `apps/api/scripts/`. `test/schema-guard-database.test.ts` proves the two agree.
+ * ship `apps/api/scripts/`.
  */
 export function migrationChecksum(contents: string): string {
   const normalised = contents.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n');
@@ -376,8 +376,8 @@ export function createSchemaGate(options: SchemaGateOptions): SchemaGate {
       }
       const { verdict, identity } = outcome;
       if (verdict.kind === 'current' && identity !== database.identity) {
-        // The probe and the ledger read reached different databases mid-switch (PR #38 review). A
-        // verdict about another database closes the gate again.
+        // The probe and the ledger read can reach different databases mid-switch. A verdict about
+        // another database closes the gate again.
         if (verified === identity) {
           verified = null;
           refusal = 'schema not yet verified: the probe and the migration ledger reached different databases';

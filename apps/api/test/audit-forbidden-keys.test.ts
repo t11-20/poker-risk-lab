@@ -83,7 +83,7 @@ describe('the audit log forbids the same keys in both layers', { skip: SKIP }, (
   });
 
   it('covers the card spellings this codebase actually uses (REGRESSION)', () => {
-    // The 0001 list missed `hole_cards` and the engine's secret field names, which produced 0007.
+    // `hole_cards` and the engine's secret field names, which 0001's list did not cover.
     for (const key of [
       'hole_cards',
       'holeCards',

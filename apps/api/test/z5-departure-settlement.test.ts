@@ -3,7 +3,7 @@
  * keeps the chair until the hand is over, so a check made at the request is stale by settlement.
  * `TableNotice.departed`, `TableNotice.settledStacks` and `LiveRoom.releaseDeparted` are the single
  * mechanism. Chip conservation is asserted over what the archive was told, because the archive
- * survives the process and the table forgets the departed seat. Each case failed against the old code.
+ * survives the process and the table forgets the departed seat.
  */
 
 import assert from 'node:assert/strict';
@@ -228,7 +228,7 @@ describe('a hand settles every seat that played it, including one that stood up'
     }
   }
 
-  /** Against the old code the winner was absent, so 1,995 chips were archived where 3,000 went in. */
+  /** Leaving the winner out archives 1,995 chips where 3,000 went in. */
   it('archives the departing WINNER on their settled stack, not their pre-hand one', async () => {
     const { leaver, settled } = await departureOf('bigBlind');
 
@@ -294,7 +294,6 @@ describe('standing up mid-hand releases the durable seat when the hand settles',
       await foldItOut(room.table);
       await drainArchive();
 
-      // Against the old code this read `0`.
       assert.equal(
         seats.get(leaver),
         null,
@@ -364,8 +363,7 @@ describe('a hand that is complete when startHand returns is still archived as st
       assert.equal(table.viewFor(PLAYERS[0])?.street, 'complete', 'the hand is over before anybody acts');
       await drainArchive();
 
-      // Against the old code this printed `["complete:hand_1","stacks","status:open"]`, and the
-      // missing start made `handsRepository.complete` throw `hand_not_active`.
+      // Without the start, `handsRepository.complete` throws `hand_not_active`.
       assert.deepEqual(
         calls,
         [`start:${handId}`, `complete:${handId}`, 'stacks', 'status:open'],
@@ -510,7 +508,7 @@ describe('a seat that could not be released is reported as its own kind of failu
     }
   }
 
-  /** It used to report as `archive-write`, which pages `ArchiveFailing` with the wrong runbook. */
+  /** As `archive-write` it would page `ArchiveFailing`, which has the wrong runbook. */
   it('reports seat-release, not archive-write, and counts it on its own metric', async () => {
     const { stuck, metrics, problems } = await stuckChair();
 
@@ -530,7 +528,7 @@ describe('a seat that could not be released is reported as its own kind of failu
     );
   });
 
-  /** A single `await` over the whole list skipped every chair after the first refusal. */
+  /** A single `await` over the whole list skips every chair after the first refusal. */
   it('still frees the chairs behind the one that failed', async () => {
     const { alsoLeaving, seats, metrics } = await stuckChair();
 
@@ -565,7 +563,7 @@ describe('a refused timeout leaves the table clocked rather than frozen', () => 
 
       assert.deepEqual(problems, ['timeout-rejection'], 'the refusal is reported');
       // `TurnTimer.fire` clears `armed` first, and a null `apply` never reaches `afterMutation`,
-      // so the old code left the hand frozen with no deadline.
+      // so nothing but an explicit re-arm keeps a deadline.
       assert.ok(clocked.snapshot().deadlineMs !== null, 'the seat to act still has a deadline');
       assert.equal(clock.pending, 1, 'and a timer is actually scheduled to enforce it');
       assert.equal(clocked.handInProgress, true, 'the hand itself was untouched by the refusal');

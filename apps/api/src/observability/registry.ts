@@ -272,9 +272,8 @@ export interface MetricSpec {
   readonly labelNames?: readonly string[];
   /**
    * Label sets rendered at zero from process start. `increase()` and `rate()` cannot see the first
-   * event on a series that did not exist before it, so every zero-tolerance alert missed it.
-   * Measured on staging, `prl_rate_limit_events_total{kind="banned"} 1` and `RateLimitBans` stayed
-   * silent. Opt-in, because it only works for a closed label set.
+   * event on a series that did not exist before it, so a zero-tolerance alert would miss it.
+   * Opt-in, because it only works for a closed label set.
    */
   readonly primeLabels?: readonly Labels[];
 }

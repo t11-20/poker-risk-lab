@@ -61,7 +61,7 @@ export interface HandCursor {
  * `<handId>:<startedAtKey>`, plus `:<sort>:<value>` for a keyed ordering.
  * The id goes first because `PATTERNS.ID` has no colon. The timestamp is a fixed 27 characters.
  * The ordering's name is included so a cursor replayed into another ordering is a 400.
- * Exported for `test/hands.test.ts`. To a client the cursor is opaque.
+ * To a client the cursor is opaque.
  */
 export function encodeCursor(cursor: HandCursor): string {
   const base = `${cursor.handId}:${cursor.startedAtKey}`;
@@ -387,7 +387,7 @@ const handsRoutes: FastifyPluginAsync = (app: FastifyInstance) => {
 
   /**
    * The pool is looked up per call because `closeSharedPool()` drops the memo, and a captured instance
-   * would refuse every task after another app closes (seen in `test/hands.test.ts`).
+   * would refuse every task after another app closes.
    * Each task runs under the pool's `coachTimeoutMs`. `budgetMs` below bounds the whole request.
    * Recorded as `kind="coach"` because it is the same task type as `POST /math/coach`.
    */

@@ -1,7 +1,7 @@
 /**
  * A chair changing owner must not change who anybody's cards belong to. `LiveTable` keeps the
- * finished `HandState` between hands, and `viewFor` once mapped the viewer to a seat index through
- * the current seating, so a new occupant got the previous one's unshown cards. `isSelf` must mean
+ * finished `HandState` between hands, so `viewFor` mapping the viewer to a seat index through the
+ * current seating would give a new occupant the previous one's unshown cards. `isSelf` must mean
  * that seat's `playerId` is the recipient, and cards may appear only for the recipient or a seat
  * that showed down. `ws-socket.test.ts` drives the real socket.
  */

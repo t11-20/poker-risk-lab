@@ -2,7 +2,7 @@
  * The closed sets of strings that may reach a metric label, and helpers that count work the pool
  * and the audit log already do. `ProblemDetail.event` is required and typed so the label set of
  * `prl_table_actor_failures_total` cannot drift without `tsc` failing. `message` stays the first
- * hook argument because nine test files read the hook as `(message, detail)`.
+ * hook argument because the test files read the hook as `(message, detail)`.
  * Nothing here interpolates an id or caller string into a label. Those go to the log line.
  */
 
@@ -18,7 +18,6 @@ import { type AppMetrics, appMetrics, bindWorkerPoolMetrics } from './metrics.ts
  * dotted audit grammar, so the two vocabularies are not confused.
  */
 export type ProblemEvent =
-  // rooms/registry.ts
   | 'archive-write'
   | 'room-open-read'
   | 'hands-interrupted'
@@ -31,21 +30,17 @@ export type ProblemEvent =
   | 'room-lease-release'
   | 'seat-entitlement'
   | 'first-sit-record'
-  // rooms/table.ts
   | 'turn-timeout'
   | 'engine-rejection'
   | 'departed-seat-fold'
   | 'timeout-rejection'
   | 'subscriber-throw'
-  // rooms/bots.ts
   | 'opponent-model'
   | 'bot-policy'
   | 'bot-action-rejected'
-  // ws/router.ts
   | 'socket-intent'
   | 'socket-send'
   | 'socket-close'
-  // this file, when an audit write fails
   | 'audit-write';
 
 /** Kept in step with the type by `classifyProblem`'s exhaustive switch. */
@@ -105,7 +100,7 @@ export function classifyProblem(event: ProblemEvent): ProblemClass {
       return 'actor';
     // Each has its own metric and runbook. `seat-release` is not `archive-write`, and
     // `seat-entitlement` is not `seat-retake` (a chair left free on purpose is not a stalled actor).
-    // Folding them together once sent an operator to the wrong subsystem (runbooks/stuck-seat.md).
+    // Folded together they send an operator to the wrong subsystem (runbooks/stuck-seat.md).
     case 'archive-write':
     case 'hands-interrupted':
     case 'seat-release':
@@ -234,8 +229,8 @@ export type SecurityAuditEvent =
   | 'security.rate_limit.banned';
 
 /**
- * Lets a test await fire-and-forget audit writes instead of polling. Polling timed out at 15,036 ms
- * inside `pnpm run verify` after the deadline was already raised to 15 s. Entries remove themselves.
+ * Lets a test await fire-and-forget audit writes instead of polling, which overran a 15 s deadline
+ * under `pnpm run verify`. Entries remove themselves.
  */
 const pendingAuditWrites = new Set<Promise<unknown>>();
 

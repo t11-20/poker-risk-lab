@@ -130,7 +130,7 @@ describe('the room lease, against a real database', { skip: skipReason }, () => 
     return { registry, ownerId, metrics, evictions };
   }
 
-  /** NEGATIVE CONTROL (a). Before the lease, the second `open` succeeded and both processes dealt. */
+  /** NEGATIVE CONTROL (a). Without the lease, the second `open` succeeds and both processes deal. */
   it('refuses a second process the room a live process is already serving', async () => {
     const roomId = await makeRoom();
     const first = apiProcess('one');
@@ -187,7 +187,7 @@ describe('the room lease, against a real database', { skip: skipReason }, () => 
     }
   });
 
-  /** NEGATIVE CONTROL (b). Before the lease, a process served a room whatever other processes did. */
+  /** NEGATIVE CONTROL (b). Without the lease, a process serves a room whatever other processes do. */
   it('evicts a room it has been fenced from instead of going on serving it', async () => {
     const roomId = await makeRoom();
     const loser = apiProcess('loser');
@@ -294,8 +294,7 @@ describe('the room lease, against a real database', { skip: skipReason }, () => 
       assert.ok(row !== null, 'the lease was deleted by a process that never held it');
       assert.equal(row.owner_id, holder.ownerId);
 
-      // A queued `releaseLeaseSoon` for a generation since given up must also match nothing. See
-      // `release` in `repositories/room-ownership.ts` for the reproduction.
+      // A queued `releaseLeaseSoon` for a generation since given up must also match nothing.
       const staleGeneration = await ownershipRepository.release(sql(), {
         roomId,
         ownerId: holder.ownerId,
@@ -402,10 +401,10 @@ describe('the room lease, against a real database', { skip: skipReason }, () => 
   });
 
   /**
-   * NEGATIVE CONTROL (e). Against `set heartbeat_at = now()` this failed with `23514
-   * room_ownership_heartbeat_after_acquire` on PostgreSQL 16. `now()` is the transaction start, so a
-   * beat that waited on one row lock wrote a heartbeat older than an `acquire` that committed
-   * meanwhile, and the single-statement beat rolled back every other room's renewal with it.
+   * NEGATIVE CONTROL (e). `now()` is the transaction start, so with `set heartbeat_at = now()` a beat
+   * that waited on one row lock writes a heartbeat older than an `acquire` that committed meanwhile:
+   * `23514 room_ownership_heartbeat_after_acquire` on PostgreSQL 16, and the single-statement beat
+   * rolls back every other room's renewal with it.
    * The contention is a real row lock, and the case refuses to proceed until a backend is blocked.
    */
   it('renews every room even when the beat has to wait for one of them', async () => {

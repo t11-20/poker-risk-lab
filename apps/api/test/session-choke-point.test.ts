@@ -1,7 +1,7 @@
 /**
  * One cookie-to-identity path, asserted from source. Expiry and revocation live only in
- * `findValidByToken`'s SQL, so a second path would be a second set of rules. The socket once
- * authenticated only at upgrade and outlived sign-out. `plugins/security.ts` is the one exempt
+ * `findValidByToken`'s SQL, so a second path would be a second set of rules. A socket that
+ * authenticated only at upgrade would outlive sign-out. `plugins/security.ts` is the one exempt
  * cookie reader, because it derives a limiter bucket and checks presence but never resolves a user.
  */
 
@@ -74,7 +74,7 @@ describe('there is one cookie-to-identity path', () => {
   });
 
   it('nothing outside the auth module and the security plugin reads the session cookie', () => {
-    // `ws/hub.ts` reads `request.session`. Reading the cookie there would bring back authenticate-once.
+    // `ws/hub.ts` reads `request.session`. Reading the cookie there would authenticate only at upgrade.
     const readers = filesWith('sessionCookieName(');
     assert.deepEqual(
       readers,

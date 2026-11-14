@@ -1,5 +1,5 @@
-// Pins the calculator-thread task byte for byte to what `coachTaskForView` produced before the move
-// into `@prl/poker-math`. The task is the thread's whole input, so any drift changes a Coach figure.
+// Pins the calculator-thread task byte for byte to a recorded fixture. The task is the thread's whole
+// input, so any drift changes a Coach figure.
 // `packages/poker-math/test/coach-view.test.ts` explains how the fixture was written.
 
 import assert from 'node:assert/strict';
