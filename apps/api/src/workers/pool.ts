@@ -90,10 +90,8 @@ function defaultWorkerUrl(): URL {
 }
 
 /**
- * Refuses a report naming an action the task did not permit. A missing `legalActions` once let four
- * of five Coach surfaces publish illegal actions silently. Checked at the thread boundary so both
- * Coach routes share it. Exported for `test/coach-legality.test.ts`, since a healthy worker never
- * reaches it.
+ * Refuses a report naming an action the task did not permit, so a Coach surface cannot publish an
+ * illegal action silently. Checked at the thread boundary so both Coach routes share it.
  */
 export function assertReportStaysInsideItsLegalSet(task: CoachTask, report: CoachReport): void {
   const permitted = new Set<string>(task.legalActions);

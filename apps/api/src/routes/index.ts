@@ -50,11 +50,9 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
     archive: postgresArchive(getSql),
     // The lease that makes one API process per room real. The default `ownership: null` lets two
     // processes (a second replica, or a rolling deploy) deal separate decks for one room, silently.
-    // `test/wiring.test.ts` asserts the assembled registry enforces a lease.
     ownership: postgresRoomOwnership(getSql),
     // `enforced` gates taking a seat and nothing else. `prl_app` holds SELECT only on enrolments
-    // (`db/migrations/0006_cohort_enrolments.sql`). `test/wiring.test.ts` asserts enforced binds
-    // one and off binds none.
+    // (`db/migrations/0006_cohort_enrolments.sql`).
     ...(app.appConfig.enrolmentRequired === 'enforced'
       ? { entitlement: postgresSeatEntitlement(getSql) }
       : {}),

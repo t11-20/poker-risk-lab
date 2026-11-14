@@ -55,9 +55,9 @@ export interface CoachTask {
   readonly street: 'preflop' | 'flop' | 'turn' | 'river';
   readonly pot: number;
   /**
-   * The part of `pot` hero can win. Required, so a missing value is a compile error. Without it a
-   * short all-in was judged against the whole pot (hero 40 vs a 310 shove at 5/10 showed 8.6%
-   * needed instead of 37.5%). See `CoachInput.contestablePot`.
+   * The part of `pot` hero can win. Required, so a missing value is a compile error. Against the
+   * whole pot, hero's 40 facing a 310 shove at 5/10 shows 8.6% needed instead of 37.5%. See
+   * `CoachInput.contestablePot`.
    */
   readonly contestablePot: number;
   readonly toCall: number;
@@ -67,8 +67,8 @@ export interface CoachTask {
   readonly bigBlind: number;
   readonly minimumRaiseTo?: number;
   /**
-   * Required. When it was optional, every surface crossing this boundary ran the Coach with its
-   * legality guard off. Callers without a `HandState` pass `deriveLegalActions(...)`.
+   * Required, because without it the Coach runs with its legality guard off. Callers without a
+   * `HandState` pass `deriveLegalActions(...)`.
    */
   readonly legalActions: readonly CoachAction[];
   readonly samples: number;
@@ -111,10 +111,9 @@ function expandRange(range: WireRange, blockers: readonly Card[]): ParsedRange {
 }
 
 /**
- * `k` opponents need `2k` distinct cards. `calc/parse.ts` checks this but cannot expand `top:NN`,
- * so an all-`top:NN` request skipped it. Measured, five `top:1` opponents held a warm thread for
- * 9,431 ms before the same 422 the notation spelling gets in 0 ms. Hero and board cards are
- * already removed from each range.
+ * `k` opponents need `2k` distinct cards. `calc/parse.ts` checks this but cannot expand `top:NN`;
+ * unchecked, five `top:1` opponents held a warm thread for 9,431 ms before the same 422 the
+ * notation spelling gets in 0 ms. Hero and board cards are already removed from each range.
  */
 function assertOpponentsAreDealable(players: readonly EquityPlayer[]): void {
   const opponents = players.slice(1);
