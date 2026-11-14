@@ -10,23 +10,44 @@ import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 
+/**
+ * What a JSX text child renders as: Babel's whitespace rule, which React follows. Lines are trimmed
+ * where they meet a newline, blank lines dropped, and the rest joined with one space.
+ */
+export function jsxRenderedText(value) {
+  const lines = String(value).split(/\r\n|\n|\r/);
+  let lastNonEmpty = 0;
+  lines.forEach((line, index) => {
+    if (/[^ \t]/.test(line)) lastNonEmpty = index;
+  });
+  let out = '';
+  lines.forEach((line, index) => {
+    let text = line.replace(/\t/g, ' ');
+    if (index !== 0) text = text.replace(/^ +/, '');
+    if (index !== lines.length - 1) text = text.replace(/ +$/, '');
+    if (text !== '') out += index === lastNonEmpty ? text : `${text} `;
+  });
+  return out;
+}
+
 export function normalize(node) {
   if (Array.isArray(node)) {
     const out = [];
     for (const item of node) {
       if (item && item.type === 'JSXExpressionContainer' && item.expression?.type === 'JSXEmptyExpression')
         continue;
-      const n = normalize(item);
-      if (n && n.type === 'JSXText') {
+      if (item && item.type === 'JSXText') {
+        // Each child renders on its own and adjacent strings concatenate, so compare what is rendered.
+        const rendered = jsxRenderedText(item.value);
+        if (rendered === '') continue;
         const prev = out[out.length - 1];
-        if (prev && prev.type === 'JSXText') {
-          prev.value = `${prev.value} ${n.value}`.replace(/\s+/g, ' ').trim();
-          continue;
-        }
+        if (prev && prev.type === 'JSXText') prev.value += rendered;
+        else out.push({ type: 'JSXText', value: rendered });
+        continue;
       }
-      out.push(n);
+      out.push(normalize(item));
     }
-    return out.filter((n) => !(n && n.type === 'JSXText' && n.value === ''));
+    return out;
   }
   if (node && typeof node === 'object') {
     const out = {};
@@ -36,37 +57,44 @@ export function normalize(node) {
       // is nothing but a start and an end.
       if (v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).sort().join() === 'end,start')
         continue;
-      if (k === 'raw' && node.type === 'JSXText') continue;
       out[k] = normalize(v);
     }
-    if (out.type === 'JSXText') out.value = String(out.value).replace(/\s+/g, ' ').trim();
     return out;
   }
   return node;
 }
 
+/**
+ * CSS with comments removed and whitespace runs collapsed, strings kept byte for byte. A comment
+ * touching whitespace is whitespace; one wedged between two tokens is kept as a marker, because
+ * removing it may join them, so that edit reads as code.
+ */
 export function stripCss(src) {
   let out = '';
+  let space = false;
+  const emit = (text) => {
+    if (space && out !== '') out += ' ';
+    space = false;
+    out += text;
+  };
   for (let i = 0; i < src.length; i++) {
     const c = src[i];
     if (c === '"' || c === "'") {
-      const q = c;
-      out += c;
-      for (i++; i < src.length && src[i] !== q; i++) {
-        if (src[i] === '\\') out += src[i++];
-        out += src[i];
-      }
-      out += q;
+      let j = i + 1;
+      while (j < src.length && src[j] !== c) j += src[j] === '\\' ? 2 : 1;
+      emit(src.slice(i, j + 1));
+      i = j;
     } else if (c === '/' && src[i + 1] === '*') {
       const end = src.indexOf('*/', i + 2);
-      i = end < 0 ? src.length : end + 1;
-      out += ' ';
-    } else out += c;
+      const stop = end < 0 ? src.length : end + 2;
+      const touchesSpace = space || out === '' || stop >= src.length || /\s/.test(src[stop]);
+      if (touchesSpace) space = true;
+      else emit('\u0000');
+      i = stop - 1;
+    } else if (/\s/.test(c)) space = true;
+    else emit(c);
   }
-  return out
-    .replace(/\s+/g, ' ')
-    .replace(/\s*([{};:,>])\s*/g, '$1')
-    .trim();
+  return out;
 }
 
 // `#` starts a comment at the start of a line or after whitespace, outside quotes. Shell comments in a
@@ -87,12 +115,33 @@ function stripHashLine(line) {
   return line;
 }
 
+/**
+ * YAML with comments stripped, except inside block scalars (`run: |`, `key: >-`), which are data:
+ * a `#` line there may be a heredoc's content, so those lines are compared verbatim.
+ */
 export function stripYaml(src) {
-  return src
-    .split('\n')
-    .map((line) => stripHashLine(line).replace(/\s+$/, ''))
-    .filter((line) => line !== '')
-    .join('\n');
+  const out = [];
+  let owner = null;
+  const closeBlock = () => {
+    while (out.length > 0 && out[out.length - 1] === '') out.pop();
+    owner = null;
+  };
+  for (const line of src.split('\n')) {
+    const indent = /^ */.exec(line)[0].length;
+    if (owner !== null) {
+      if (line.trim() === '' || indent > owner) {
+        out.push(line.trim() === '' ? '' : line.replace(/\s+$/, ''));
+        continue;
+      }
+      closeBlock();
+    }
+    const code = stripHashLine(line).replace(/\s+$/, '');
+    if (code === '') continue;
+    out.push(code);
+    if (/(^|:\s|-\s)\s*[|>][1-9+-]{0,2}$/.test(code.trimStart())) owner = indent;
+  }
+  if (owner !== null) closeBlock();
+  return out.join('\n');
 }
 
 // Dockerfile comments are whole lines only; an inline `#` is part of the instruction. Parser
@@ -162,7 +211,7 @@ export async function firstCodeChange({ checkout, base, swcFrom = checkout }) {
     const before = git('show', `${base}:${path}`);
     const after = git('show', `HEAD:${path}`);
     let same;
-    if (/\.(ts|tsx|js|mjs|cjs)$/.test(path)) {
+    if (/\.(ts|tsx|js|jsx|mjs|cjs)$/.test(path)) {
       const name = path.replace(/\.[mc]js$/, '.js');
       same = (await ast(before, name)) === (await ast(after, name));
     } else if (path.endsWith('.css')) same = stripCss(before) === stripCss(after);

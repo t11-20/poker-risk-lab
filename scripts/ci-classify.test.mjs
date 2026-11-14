@@ -19,7 +19,7 @@ const CODE_GATED = ['typecheck', 'exhaustive', 'build', 'containers'];
 const HEAVY = ['end-to-end', 'simulation', 'a11y', 'ax-tree', 'browser-gates'];
 const ALWAYS = ['supply-chain', 'lint', 'test'];
 const CONDITION = "    if: needs.changes.outputs.code == 'true'";
-const HEAVY_CONDITION = "    if: needs.changes.outputs.heavy == 'true'";
+const HEAVY_CONDITION = "    if: needs.supply-chain.outputs.heavy == 'true'";
 
 function jobBodies(text) {
   const lines = text.split('\n');
@@ -36,11 +36,11 @@ function jobBodies(text) {
   return bodies;
 }
 
-function classifierScript(text, step = 'Classify') {
-  const body = jobBodies(text).get('changes');
-  assert.ok(body !== undefined, 'ci.yml has no `changes` job');
+function classifierScript(text, step = 'Classify', job = 'changes') {
+  const body = jobBodies(text).get(job);
+  assert.ok(body !== undefined, `ci.yml has no \`${job}\` job`);
   const named = body.findIndex((line) => line.trim() === `- name: ${step}`);
-  assert.ok(named !== -1, `the \`changes\` job has no "${step}" step`);
+  assert.ok(named !== -1, `the \`${job}\` job has no "${step}" step`);
   const runAt = body.findIndex((line, index) => index > named && line.trim() === 'run: |');
   assert.ok(runAt !== -1, 'the `changes` job has no `run: |` step');
   const script = [];
@@ -142,8 +142,8 @@ describe('which jobs the classifier can skip', () => {
     for (const job of HEAVY) {
       assert.ok(bodies.get(job)?.includes(HEAVY_CONDITION), `${job} should skip on a comment-only change`);
       assert.ok(
-        bodies.get(job)?.some((line) => /^ {4}needs: \[.*\bchanges\b.*\]$/u.test(line)),
-        `${job} must need \`changes\` to read its output`,
+        bodies.get(job)?.some((line) => /^ {4}needs: \[.*\bsupply-chain\b.*\]$/u.test(line)),
+        `${job} must need \`supply-chain\` to read its output`,
       );
     }
     const heavy = [...bodies].filter(([, lines]) => lines.includes(HEAVY_CONDITION)).map(([id]) => id);
@@ -165,7 +165,7 @@ describe('which jobs the classifier can skip', () => {
   });
 });
 
-const HEAVY_SCRIPT = classifierScript(WORKFLOW, 'Decide whether the runtime gates run');
+const HEAVY_SCRIPT = classifierScript(WORKFLOW, 'Decide whether the runtime gates run', 'supply-chain');
 const CHECKER = readFileSync(join(REPO, 'scripts', 'ci', 'comment-only.mjs'), 'utf8');
 
 function heavy(dir, env) {
@@ -193,9 +193,13 @@ function repoWithChecker(change) {
 
 describe('whether the runtime gates run', () => {
   it('skips them for docs-only and for a draft, whatever the change', () => {
+    const docs = repoWithChecker(() => undefined);
+    writeFileSync(join(docs.dir, 'README.md'), '# Title, retitled\n');
+    git(docs.dir, 'add', '-A');
+    git(docs.dir, 'commit', '-q', '-m', 'docs');
+    assert.equal(heavy(docs.dir, { DRAFT: 'false' }), false, 'docs-only');
     const code = repoWith((dir) => writeFileSync(join(dir, 'a.ts'), 'export const a = 3;\n'));
-    assert.equal(heavy(code.dir, { CODE: 'false', DRAFT: 'false' }), false, 'docs-only');
-    assert.equal(heavy(code.dir, { CODE: 'true', DRAFT: 'true' }), false, 'a draft cannot merge');
+    assert.equal(heavy(code.dir, { DRAFT: 'true' }), false, 'a draft cannot merge');
   });
 
   it('skips them for a comment-only change and runs them for a real one', () => {
@@ -205,17 +209,17 @@ describe('whether the runtime gates run', () => {
     writeFileSync(join(comment.dir, 's.css'), '/* the reason */\n.a { color: red; }\n');
     git(comment.dir, 'add', '-A');
     git(comment.dir, 'commit', '-q', '-m', 'comment');
-    assert.equal(heavy(comment.dir, { CODE: 'true', DRAFT: 'false' }), false, 'only a CSS comment changed');
+    assert.equal(heavy(comment.dir, { DRAFT: 'false' }), false, 'only a CSS comment changed');
     writeFileSync(join(comment.dir, 's.css'), '/* the reason */\n.a { color: blue; }\n');
     git(comment.dir, 'add', '-A');
     git(comment.dir, 'commit', '-q', '-m', 'rule');
-    assert.equal(heavy(comment.dir, { CODE: 'true', DRAFT: 'false' }), true, 'a changed CSS rule');
+    assert.equal(heavy(comment.dir, { DRAFT: 'false' }), true, 'a changed CSS rule');
     const code = repoWith((dir) => writeFileSync(join(dir, 'a.ts'), 'export const a = 4;\n'));
-    assert.equal(heavy(code.dir, { CODE: 'true', DRAFT: 'false' }), true, 'a changed value');
+    assert.equal(heavy(code.dir, { DRAFT: 'false' }), true, 'a changed value');
   });
 
   it('runs them when the checker cannot run at all (REGRESSION guard: a crash is not "comment-only")', () => {
     const missing = repoWith((dir) => writeFileSync(join(dir, 'README.md'), '# Title, again\n'));
-    assert.equal(heavy(missing.dir, { CODE: 'true', DRAFT: 'false' }), true, 'no checker in the tree');
+    assert.equal(heavy(missing.dir, { DRAFT: 'false' }), true, 'no checker in the tree');
   });
 });

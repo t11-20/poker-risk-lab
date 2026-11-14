@@ -91,6 +91,58 @@ describe('comment-only, file by file', () => {
     assert.match(await verdict(files, (w) => w('db/seeds/s.sql', '-- why\nselect 2;\n')), /s\.sql/);
   });
 
+  it('CSS: whitespace that changes a selector or a string is code (REGRESSION)', async () => {
+    const css = '.a:hover { content: "x  y"; margin: 1px/* why */solid; }\n';
+    assert.match(
+      await verdict({ 's.css': css }, (w) => w('s.css', css.replace('.a:hover', '.a :hover'))),
+      /s\.css: more than comments/,
+    );
+    assert.match(
+      await verdict({ 's.css': css }, (w) => w('s.css', css.replace('"x  y"', '"x y"'))),
+      /s\.css: more than comments/,
+    );
+    assert.match(
+      await verdict({ 's.css': css }, (w) => w('s.css', css.replace('/* why */', ''))),
+      /s\.css: more than comments/,
+    );
+    assert.equal(
+      await verdict({ 's.css': css }, (w) => w('s.css', css.replace('/* why */', '/* a reason */'))),
+      null,
+    );
+  });
+
+  it('JSX: text is compared as React renders it (REGRESSION)', async () => {
+    const spaced = 'export const A = ({ n }) => <p>Hello {n}</p>;\n';
+    assert.match(
+      await verdict({ 'a.jsx': spaced }, (w) => w('a.jsx', spaced.replace('Hello {n}', 'Hello{n}'))),
+      /a\.jsx: more than comments/,
+    );
+    const lines = 'export const B = () => (\n  <p>\n    Hello\n    {/* note */}\n    world\n  </p>\n);\n';
+    assert.match(
+      await verdict({ 'b.jsx': lines }, (w) => w('b.jsx', lines.replace('    {/* note */}\n', ''))),
+      /b\.jsx: more than comments/,
+      'Hello and world render joined with the container, and with a space without it',
+    );
+    const inline = 'export const C = () => <p>Hello {/* note */}world</p>;\n';
+    assert.equal(
+      await verdict({ 'c.jsx': inline }, (w) => w('c.jsx', inline.replace('{/* note */}', ''))),
+      null,
+    );
+  });
+
+  it('YAML: a # line inside a block scalar is data, not a comment (REGRESSION)', async () => {
+    const yml =
+      'jobs:\n  a:\n    steps:\n      - run: |\n          cat > rules <<EOF\n          # rule: allow\n          EOF\n# why\n';
+    assert.match(
+      await verdict({ 'w.yml': yml }, (w) => w('w.yml', yml.replace('allow', 'deny'))),
+      /w\.yml: more than comments/,
+    );
+    assert.equal(
+      await verdict({ 'w.yml': yml }, (w) => w('w.yml', yml.replace('# why', '# a reason'))),
+      null,
+    );
+  });
+
   it('runs everything when it cannot prove the change is only comments', async () => {
     assert.match(
       await verdict({ 'db/migrations/0001_x.sql': '-- a\nselect 1;\n' }, (w) =>
