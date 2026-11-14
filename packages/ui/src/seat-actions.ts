@@ -1,9 +1,8 @@
 /**
- * What each seat last did this street, as the few words its plate shows. Before this, the narration
- * reached only the 1x1 live region, and every opponent's plate read "in the hand" all preflop.
- * Derived from `PlayerView.actions`, so a reload draws the same words. Only the current street counts.
- * A call is worded with the seat's `committedThisStreet`, not `betLevelAfter`, because a short all-in
- * call matches less than the level (PR #27). Only the last action is labelled, so the figure is exact.
+ * What each seat last did this street, as the few words its plate shows. Derived from
+ * `PlayerView.actions`, so a reload draws the same words. A call is worded with the seat's
+ * `committedThisStreet`, not `betLevelAfter`, because a short all-in call matches less than the level;
+ * only the last action is labelled, so the figure is exact.
  */
 
 import { formatChips } from './format.ts';
@@ -43,7 +42,7 @@ export function actionWords(entry: LoggedAction, committed: number, allIn: boole
   const putChipsIn = action.type === 'call' || action.type === 'bet' || action.type === 'raise';
   if (putChipsIn && allIn) words = `${words}, all in`;
   // No cause named. `wasAutomatic` covers both a timeout and a stand-up fold, and only the
-  // `seatTimedOut` event tells them apart, which is gone after a reload (PR #27).
+  // `seatTimedOut` event tells them apart, which is gone after a reload.
   return entry.wasAutomatic && words !== '' ? `${words} by the server` : words;
 }
 
