@@ -18,6 +18,7 @@ import { closeDatabase, configureDatabase } from '../src/db.ts';
 import { registerApiRoutes } from '../src/routes/index.ts';
 import { closeSharedPool } from '../src/workers/pool.ts';
 import { TEST_DATABASE_URL } from './helpers/database.ts';
+import { stripComments } from './helpers/source-scan.ts';
 
 const API_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const REPO_ROOT = join(API_DIR, '..', '..');
@@ -32,14 +33,6 @@ function testConfig(overrides: EnvRecord = {}): AppConfig {
     RATE_LIMIT_MAX: '5000',
     ...overrides,
   });
-}
-
-/**
- * From `test/server-randomness.test.ts` unchanged, including the `[^:]` guard for `https://`.
- * Without stripping, prose naming the old constants would be reported as calls.
- */
-function stripComments(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
 }
 
 /** `@fastify/websocket` answers a GET without `Upgrade` with 404. `test/ws-socket.test.ts` covers it. */

@@ -12,6 +12,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { stripComments } from './helpers/source-scan.ts';
 
 const API_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SRC_DIR = join(API_DIR, 'src');
@@ -52,14 +53,6 @@ function sourceFiles(dir: string = SRC_DIR): string[] {
     if (entry.isFile() && entry.name.endsWith('.ts')) found.push(path);
   }
   return found;
-}
-
-/**
- * Removes comments, so a prose mention of a banned API is not read as a use of it. Not a parser, so
- * comment markers inside a string confuse it. The `[^:]` stops it eating a line after `https://`.
- */
-function stripComments(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
 }
 
 /**

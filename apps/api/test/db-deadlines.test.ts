@@ -31,6 +31,7 @@ import {
 } from '../src/db.ts';
 import { AppError } from '../src/errors.ts';
 import { AppMetrics } from '../src/observability/metrics.ts';
+import { stripComments } from './helpers/source-scan.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC_DIR = join(HERE, '..', 'src');
@@ -367,11 +368,6 @@ describe('the deadlines are ordered so that each can only catch what the one bel
     }
   });
 });
-
-/** Copied from `server-randomness.test.ts`. Not a parser. `db.ts` names these methods in prose. */
-function stripComments(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
-}
 
 /**
  * Modifiers that return a separate iterator or stream, so the deadline on `then`/`catch`/`finally`
