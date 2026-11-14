@@ -1,101 +1,37 @@
-# ---------------------------------------------------------------------------
-# The release pipeline: commit → gates → tests → ONE build → scan → staging →
-# staging verification → controlled promotion → production → post-deploy checks.
+# The release pipeline: gates → tests → ONE build → scan → staging → promotion → production.
 #
-# ## Read this first: what this workflow can and cannot do today
-#
-# **There is no container registry and no production environment in this project.**
-# Nothing here can push an image or deploy one, and this file does not pretend
-# otherwise. Every step that cannot execute is marked `NOT WIRED`, is guarded by
-# an `if:` on a repository variable that does not exist yet, and FAILS LOUDLY
-# rather than passing silently when that variable is set but the surrounding
-# configuration is absent. A pipeline whose deploy step is a green tick over an
-# `echo` is worse than no pipeline: it is a rehearsal that teaches everyone the
+# There is no container registry and no production environment yet. Every step that cannot execute
+# is marked `NOT WIRED`, guarded by an `if:` on a repository variable that does not exist, and FAILS
+# when that variable is set: a deploy step that is a green tick over an `echo` teaches everyone the
 # deploy works.
 #
-# What DOES execute here, on a real runner, today:
+# Build once: `build` runs `release:artifacts`, which builds each Dockerfile once and writes
+# `deploy/staging/release-manifest.json` for every later job. No later job may gain a `docker
+# build`, or "staging tested this" stops being a statement about bytes. Without a registry the
+# images cross runners by `docker save`/`load`, and `scripts/staging.mjs` re-verifies the loaded
+# digests against the manifest, so a corrupt tarball fails the identity check instead of deploying.
 #
-#   * every supply-chain gate, the full test suite, the typecheck and the lint;
-#   * one build of each image, by `pnpm run release:artifacts`, with the digests
-#     recorded to a manifest that every later job consumes;
-#   * `trivy` against those exact images;
-#   * the whole staging stack — postgres, api, web and a TLS-terminating proxy —
-#     brought up on those digests, migrated, smoke-tested over https including a
-#     real WebSocket, and checked for the X-Forwarded-For overwrite;
-#   * the promotion check, which refuses a digest staging did not test.
+# Rollback (printed with real digests by `rollback-plan`): the application rolls back by redeploying
+# the previous digest. The schema never rolls back: `migrate.mjs down` refuses (docs/RUNBOOK.md
+# §11.3), so migrations are additive-first and the previous release must run on the NEWER schema.
 #
-# What does not: the push, the production deploy, and the post-deploy verification
-# against a live production origin. Those are `NOT WIRED`.
+# Permissions: `contents: read` and nothing more; nothing here publishes. A future push job alone
+# gets `packages: write`, or better `id-token: write` for OIDC, which stores no long-lived secret.
 #
-# ## Build once. This is the whole architecture.
-#
-# `build` runs `pnpm run release:artifacts`, which builds each Dockerfile exactly
-# once and writes `deploy/staging/release-manifest.json`. That manifest is
-# uploaded as an artifact and every later job downloads it. No later job has a
-# `docker build` in it and none may gain one: the moment a second build exists,
-# "staging tested this" stops being a statement about bytes.
-#
-# The runner-to-runner problem is real and is handled honestly. GitHub gives each
-# job a fresh machine, so the images built in `build` do not exist in `staging`.
-# With a registry the answer is a push and a digest pull. Without one, `build`
-# saves the images with `docker save` and `staging` loads them with `docker load`,
-# and `scripts/staging.mjs` then re-verifies that the loaded images have the
-# manifest's digests — so a tarball that arrived corrupted or truncated fails the
-# identity check rather than being deployed. `docker save`/`load` preserves the
-# digest; the staging job proves it did rather than assuming it.
-#
-# ## Rollback
-#
-# Written out in the `rollback-plan` job, which runs on every release and prints
-# the plan with the actual digests in it. It is a job rather than a comment
-# because a rollback plan nobody has read is a rollback plan nobody can execute at
-# 3am, and because the previous digest has to be captured BEFORE the new one is
-# promoted or it is not available when it is needed.
-#
-# The short version, and it is unusual enough to state here as well:
-#
-#   * **Application rollback: yes.** Redeploy the previous image digest. The
-#     images are immutable and content-addressed, so this is exact.
-#   * **Schema rollback: NO. There is none.** `apps/api/scripts/migrate.mjs down`
-#     refuses, deliberately and with an explanation (docs/RUNBOOK.md §11.3). The
-#     recovery for a bad schema change is the NEXT migration; the recovery for
-#     lost data is a restore from backup. This is why `up` also refuses to apply a
-#     pending migration containing an undeclared destructive statement, and why a
-#     destructive change is always two releases.
-#   * **Therefore the application must roll back onto the NEWER schema.**
-#     Migrations are additive-first precisely so that the previous release runs
-#     against the schema the current one applied. A release that breaks that
-#     property is a release that cannot be rolled back at all, which is a decision
-#     to be made deliberately and not discovered.
-#
-# ## Permissions
-#
-# `contents: read` at the top and nothing more. No job here needs a token: nothing
-# publishes, nothing comments, nothing pushes. When a registry appears, the push
-# job — and only the push job — gets `packages: write`, or `id-token: write` for
-# OIDC-federated credentials, which is the better answer because it stores no
-# long-lived secret in this repository at all.
-#
-# ## Pinning
-#
-# Every `uses:` is a full 40-character commit SHA with the version in a trailing
-# comment, and every `runs-on` names an explicit runner version. This is enforced
-# by `scripts/supply-chain/ci-pinning.mjs`, which also refuses any workflow file
-# not declared in `EXPECTED_WORKFLOWS` — so this file's existence is itself a
-# two-file diff. See the ci.yml header for how the SHAs were obtained.
-# ---------------------------------------------------------------------------
+# Pinning: every `uses:` is a full 40-character commit SHA with the version in a trailing comment,
+# and every `runs-on` names an explicit runner version. `scripts/supply-chain/ci-pinning.mjs`
+# enforces it and refuses any workflow not in `EXPECTED_WORKFLOWS`. See the ci.yml header for how
+# the SHAs were obtained.
 
 name: Release
 
 on:
-  # Tag-driven, so a release is a deliberate act with a name, and never a
-  # side-effect of a push to a branch.
+  # Tag-driven, so a release is a deliberate act with a name, never a side-effect of a branch push.
   push:
     tags:
       - 'v*'
-  # And on demand, for a rehearsal against a branch. `dry_run` defaults to true so
-  # that the dangerous default is the safe one: somebody who clicks Run without
-  # reading gets a full build, scan and staging verification, and no promotion.
+  # A rehearsal against a branch. `dry_run` defaults to true so that clicking Run without reading
+  # gets a full build, scan and staging verification, and no promotion.
   workflow_dispatch:
     inputs:
       dry_run:
@@ -119,10 +55,8 @@ env:
   NPM_CONFIG_UPDATE_NOTIFIER: 'false'
 
 jobs:
-  # -------------------------------------------------------------------------
-  # 1. The gates. Nothing is built until the dependency graph has been audited
-  #    and the suite is green, because building means executing the graph.
-  # -------------------------------------------------------------------------
+  # Nothing is built until the dependency graph is audited and the suite is green, because building
+  # means executing the graph.
   gates:
     name: Supply-chain, lint and typecheck
     runs-on: ubuntu-24.04
@@ -148,25 +82,16 @@ jobs:
         run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Supply-chain audit
-        # The container-image gate inside this audit reports itself as "not
-        # applicable" here, because the images do not exist yet — they are built in
-        # the next job. That is not a skipped scan: the `container-scan` job below
-        # runs it against the real artefacts as a mandatory step, and the audit
-        # says out loud in its summary that its own scope excluded them.
+        # The container-image gate reports "not applicable" here because the images are built in the
+        # next job; `container-scan` runs it against the real artefacts as a mandatory step.
         run: pnpm run security:audit
 
       - name: Base-image digest freshness
-        # A REPORT, not a gate: it exits 0 whatever it finds. Its job is to make a
-        # base image that has been rebuilt upstream — usually for a security patch —
-        # visible in the release log, so that refreshing the pinned digest is a
-        # decision somebody makes rather than one nobody knows is available.
+        # A REPORT, not a gate (exits 0): it makes a base image rebuilt upstream, usually for a
+        # security patch, visible in the release log so refreshing the pinned digest is a decision.
         run: node scripts/supply-chain/ci-pinning.mjs --freshness
 
       - name: Repository hygiene
-        # The second of the sixteen gates, and one this workflow did not run. It
-        # is the check that first-party source carries no C0 control characters, no
-        # secrets and none of the shapes the campaign snapshot lists — cheap, and
-        # exactly the sort of gate whose absence from a RELEASE is worst.
         run: pnpm run security:hygiene
 
       - name: Lint
@@ -178,9 +103,7 @@ jobs:
       - name: Typecheck
         run: pnpm run typecheck
 
-  # -------------------------------------------------------------------------
-  # 2. The tests, against a real database, as the least-privileged identity.
-  # -------------------------------------------------------------------------
+  # Against a real database, as the least-privileged identity.
   tests:
     name: Tests
     needs: gates
@@ -205,8 +128,7 @@ jobs:
 
     env:
       # The job default is the runtime identity, so a missing GRANT fails the
-      # release rather than the deployment. See the ci.yml header for the full
-      # explanation of the two-role model.
+      # release rather than the deployment.
       DATABASE_URL: postgres://prl_ci_app:prl-ci-not-a-secret@127.0.0.1:5432/poker_risk_lab_release
       DATABASE_URL_ADMIN: postgres://postgres:postgres@127.0.0.1:5432/poker_risk_lab_release
 
@@ -266,14 +188,8 @@ jobs:
         run: pnpm run test
 
       - name: Enumerate every seven-card hand
-        # `test:exhaustive` and `test:simulation` are two of the sixteen gates and
-        # ran nowhere in this workflow. They are the two that decide whether the
-        # thing being released EVALUATES POKER CORRECTLY, which makes their absence
-        # from the release pipeline the least defensible of the nine.
-        #
-        # `!cancelled()` rather than the default: these are independent measurements
-        # and a failure in one must not hide the verdict of the other, for the same
-        # reason `pnpm run verify` runs every gate after a failure.
+        # `!cancelled()`: independent measurements, so a failure in one must not hide the other's
+        # verdict, as `pnpm run verify` runs every gate after a failure.
         if: ${{ !cancelled() }}
         run: pnpm run test:exhaustive
 
@@ -281,30 +197,15 @@ jobs:
         if: ${{ !cancelled() }}
         run: pnpm run test:simulation
 
-  # -------------------------------------------------------------------------
-  # 2b. The browser gates, on the same commit, BEFORE anything is built.
-  #
-  # These five ran in `ci.yml` and nowhere here, so a commit that failed the
-  # contrast budget, shipped an inaccessible control, lost the CSP negative
-  # control or broke the age gate — a LEGAL control, off by default, whose whole
-  # point is that it is provably correct when switched on — was built into an
-  # immutable artefact, scanned, staged and offered to `release-sign.yml`. The
-  # release pipeline was green throughout; the red was in another workflow, which
-  # is a thing a person has to notice.
-  #
-  # `scripts/release-gate-coverage.mjs` is the guard that keeps this job in step
-  # with `verify`, and it runs inside `pnpm run test` in the job above — so a
-  # gate added to `verify` and not wired in here fails THIS pipeline. It has
-  # already earned its keep once: `test:layout` was added to `verify` as the
-  # fifteenth gate, and this job is where that guard said it had to be wired.
-  # -------------------------------------------------------------------------
+  # The browser gates run here, BEFORE anything is built, so a commit failing one never becomes an
+  # artefact offered to `release-sign.yml`. `scripts/release-gate-coverage.mjs`, run inside
+  # `pnpm run test`, fails this pipeline when a `verify` gate is not wired in before `build`.
   browser-gates:
     name: Contrast, a11y, ax tree, keyboard, painted text, CSP and age gate (real Chrome)
     needs: gates
     runs-on: ubuntu-24.04
-    # Seven browser sweeps on top of a full build. `test:ax` and `test:keyboard`
-    # each play a hand at a live table and wait on bots; the keyboard pass takes
-    # about a minute on its own.
+    # Every browser sweep on top of a full build. `test:ax` and `test:keyboard` each play a hand at a
+    # live table and wait on bots; the keyboard pass takes about a minute on its own.
     timeout-minutes: 60
 
     services:
@@ -324,9 +225,7 @@ jobs:
           --health-retries 20
 
     env:
-      # As in `tests`: the job default is the least-privileged runtime identity, so
-      # the servers these gates drive run as a `prl_app` member and a missing GRANT
-      # fails the release rather than the deployment.
+      # As in `tests`: the servers these gates drive run as a `prl_app` member.
       DATABASE_URL: postgres://prl_ci_app:prl-ci-not-a-secret@127.0.0.1:5432/poker_risk_lab_browser
       DATABASE_URL_ADMIN: postgres://postgres:postgres@127.0.0.1:5432/poker_risk_lab_browser
 
@@ -348,10 +247,8 @@ jobs:
         run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Build
-        # The `build` gate itself, and a precondition of the seven below: every one
-        # of them measures a PRODUCTION build and says so, because the development
-        # Content-Security-Policy adds `'unsafe-eval'` and an HMR websocket on
-        # purpose and a pass against `next dev` would be worth nothing.
+        # The gates below measure a PRODUCTION build: the development CSP adds `'unsafe-eval'` and an
+        # HMR websocket on purpose, so a pass against `next dev` would be worth nothing.
         run: pnpm run build
 
       - name: Wait for PostgreSQL
@@ -385,9 +282,8 @@ jobs:
 
       - name: Resolve the browser
         id: browser
-        # Same list, same reason, as the browser jobs in ci.yml. A missing Chrome
-        # FAILS: six of the seven gates below cannot run without one, and a release
-        # pipeline that skips them quietly is the hole this job was added to close.
+        # Same list as the browser jobs in ci.yml. A missing Chrome FAILS: the gates below cannot run
+        # without one, and skipping them quietly would be a pass.
         run: |
           for candidate in /usr/bin/google-chrome /usr/bin/chromium /usr/bin/chromium-browser; do
             if [ -x "$candidate" ]; then
@@ -404,11 +300,9 @@ jobs:
         run: pnpm run design:contrast
 
       - name: Accessibility audit
-        # Every gate below carries `!cancelled() && steps.browser.outcome`: seven
-        # independent measurements, and one failing must not hide the other six's
-        # verdicts. The condition is on the BROWSER step rather than `always()`,
-        # because with no browser there is nothing to measure and a second
-        # confusing failure helps nobody.
+        # Every gate below carries `!cancelled() && steps.browser.outcome`: independent measurements,
+        # so one failing must not hide the others' verdicts. It keys on the BROWSER step rather than
+        # `always()` because with no browser there is nothing to measure.
         if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
         run: pnpm run test:a11y -- --with-api --out a11y-report.json
 
@@ -417,12 +311,6 @@ jobs:
         run: pnpm run test:ax -- --json ax-tree-report.json
 
       - name: Keyboard journeys
-        # Real `Input.dispatchKeyEvent` through Chrome's own input pipeline: tab
-        # order, focus visibility, the modal sheet's trap, the bet-size slider,
-        # and a whole hand opened, sat down at, dealt and folded from the
-        # keyboard at a live socket-backed table. It ran NOWHERE until 2026-08-26
-        # — not in `verify`, not in either workflow — because it had no `--start`
-        # and so needed a person to bring up two servers first.
         if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
         run: pnpm run test:keyboard -- --json keyboard-report.json
 
@@ -435,11 +323,8 @@ jobs:
         run: pnpm run test:age-gate -- --out age-gate-report.json
 
       - name: Painted text
-        # `Range.getClientRects()` over every text node on every route, in both
-        # themes, at five widths, with six injected negative controls run first.
-        # It is here because a collapsed grid track in the Coach rail shipped
-        # with every other gate in this job green — the element boxes did not
-        # overlap, the glyphs did — and nothing in this pipeline could see it.
+        # Measures glyphs, not element boxes: a collapsed grid track overflows its text while the
+        # boxes never overlap, which every other gate here passes.
         if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
         run: pnpm run test:layout -- --out text-layout-report.json
 
@@ -459,14 +344,8 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  # -------------------------------------------------------------------------
-  # 3. BUILD ONCE.
-  #
-  # The only `docker build` in this workflow, and it is inside
-  # `release-artifacts.mjs` rather than in a `run:` here so that the same command
-  # a developer types locally is the command that produces the release. The
-  # manifest and the image tarballs are the only things that leave this job.
-  # -------------------------------------------------------------------------
+  # The only `docker build` in this workflow, inside `release-artifacts.mjs` so the command a
+  # developer types locally is the one that produces the release.
   build:
     name: Build immutable artefacts
     # BOTH, and the pairing is the invariant: a gate that runs BESIDE this job
@@ -487,16 +366,13 @@ jobs:
           node-version-file: .node-version
 
       - name: Build both images once and record their digests
-        # No install step: this script imports nothing outside node: builtins, on
-        # purpose, so the release build does not depend on a dependency tree being
-        # present on the machine that produces it.
+        # No install step: this script imports only node: builtins, so the release build does not
+        # depend on a dependency tree on the machine that produces it.
         run: node scripts/release-artifacts.mjs --verbose
 
       - name: Save the images for the jobs that consume them
-        # `docker save` of the DIGEST reference, not the tag. With a registry this
-        # step becomes a push and the next job pulls by digest; the identity check
-        # in `staging` is written so that either transport produces the same
-        # assertion — the loaded image must have the manifest's digest.
+        # `docker save` of the DIGEST reference, not the tag, so `staging`'s identity check is the
+        # same assertion a registry pull by digest would be.
         run: |
           set -euo pipefail
           mkdir -p release-images
@@ -511,9 +387,7 @@ jobs:
         with:
           name: release-manifest
           path: deploy/staging/release-manifest.json
-          # `error`, not `warn`: every job below reads this file, and a missing
-          # manifest must stop the release here rather than three jobs later with a
-          # confusing message.
+          # `error`: every job below reads this file, so a missing one must stop the release here.
           if-no-files-found: error
           retention-days: 90
 
@@ -525,9 +399,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  # -------------------------------------------------------------------------
-  # 4. Scan the artefacts that were just built. Not "an image like them".
-  # -------------------------------------------------------------------------
+  # Scans the artefacts that were just built, not "an image like them".
   container-scan:
     name: Container image CVEs
     needs: build
@@ -539,14 +411,8 @@ jobs:
         with:
           persist-credentials: false
 
-      # This job had neither of the next two steps, and it was the only
-      # pnpm-invoking job in any of the three workflow files without them. The
-      # ubuntu-24.04 image has no pnpm on PATH, so the `Scan` step below exited
-      # 127 before trivy was ever consulted — and because `staging` needs this job
-      # and `promote` needs `staging`, the mandatory container-CVE gate did not
-      # merely fail open, it took the rest of the release down with it in a way
-      # that read as a scanner problem rather than a missing toolchain. Neither
-      # step is optional here.
+      # Required: the ubuntu-24.04 image has no pnpm on PATH, so without these two steps `Scan`
+      # exits 127 before trivy runs.
       - name: Set up Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -555,12 +421,9 @@ jobs:
       - name: Enable corepack (pins pnpm via the packageManager integrity hash)
         run: corepack enable
 
-      # Deliberately no `pnpm install`: `security:containers` is `node
-      # scripts/supply-chain/container-scan.mjs`, which imports node: builtins and
-      # its sibling lib.mjs and nothing else. corepack is here so `pnpm run` can
-      # resolve the script name, not to provide a dependency tree — and this job
-      # decides whether the artefacts are safe, so not installing the graph it is
-      # judging is the same reasoning `build` uses one job above.
+      # Deliberately no `pnpm install`: `container-scan.mjs` imports only node: builtins and its
+      # sibling lib.mjs, and the job deciding whether the artefacts are safe must not first execute
+      # the graph it is judging. corepack is here only so `pnpm run` resolves the script name.
 
       - name: Download the release manifest
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -580,10 +443,8 @@ jobs:
           docker load -i release-images/web.tar
 
       - name: Install trivy
-        # Pinned to an exact version and verified against its published checksum,
-        # for the same reason every other dependency in this repository is pinned:
-        # a scanner installed from a moving `latest` is a moving dependency in the
-        # job that decides whether the release is safe.
+        # Exact version, verified against its published checksum: a scanner from a moving `latest` is
+        # a moving dependency in the job that decides whether the release is safe.
         env:
           TRIVY_VERSION: '0.72.0'
         run: |
@@ -615,10 +476,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
-  # -------------------------------------------------------------------------
-  # 5. Deploy to staging and verify it. This is the job that decides whether a
-  #    digest may be promoted.
-  # -------------------------------------------------------------------------
+  # The job that decides whether a digest may be promoted.
   staging:
     name: Staging deploy and verification
     needs: container-scan
@@ -639,10 +497,8 @@ jobs:
         run: corepack enable
 
       - name: Install
-        # The smoke test and the migration runner are run from the checkout, not
-        # from inside the API image: Dockerfile.api deliberately omits
-        # apps/api/scripts so that the serving container cannot change the schema
-        # (docs/RUNBOOK.md §11.3). This install is what provides them.
+        # The smoke test and migration runner run from the checkout: Dockerfile.api omits
+        # apps/api/scripts so the serving container cannot change the schema (docs/RUNBOOK.md §11.3).
         run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Download the release manifest
@@ -663,24 +519,13 @@ jobs:
           docker load -i release-images/web.tar
 
       - name: Initialise staging (local CA, leaf certificate, generated secrets)
-        # Nothing here is a repository secret and nothing needs to be: staging is
-        # ephemeral, its certificate is issued by a CA created for this run, and
-        # its session key and database passwords are generated on the runner and
-        # destroyed with it. A real staging environment injects them from a secret
-        # manager, which is the same variable names and a different source.
+        # No repository secret: staging is ephemeral, its CA is created for this run, and its session
+        # key and database passwords are generated on the runner and destroyed with it.
         run: node scripts/staging.mjs init
 
       - name: Bring the stack up on the manifest's digests and verify it
-        # This step is the release's evidence. It:
-        #   * refuses a manifest whose references are not content digests;
-        #   * migrates the database from OUTSIDE the serving container;
-        #   * creates the runtime login identity and proves it is bounded;
-        #   * waits for /api/v1/health AND /api/v1/ready;
-        #   * asserts the RUNNING containers carry the manifest's digests;
-        #   * verifies the TLS chain against the generated CA;
-        #   * proves the proxy overwrites X-Forwarded-For rather than appending;
-        #   * runs the smoke test over https, including a real WebSocket upgrade
-        #     and a hand played to completion, with --strict.
+        # The release's evidence: it asserts the RUNNING containers carry the manifest's digests and
+        # runs the smoke test over https, WebSocket included, with --strict.
         run: node scripts/staging.mjs up
 
       - name: Staging logs
@@ -697,34 +542,20 @@ jobs:
 
       - name: Tear the stack down
         if: always()
-        # `--volumes`, because staging data is disposable by definition and a
-        # runner is destroyed anyway; naming it makes the intent explicit rather
-        # than relying on the machine going away.
+        # `--volumes`: staging data is disposable, and saying so beats relying on the runner dying.
         run: node scripts/staging.mjs down --volumes || true
 
-  # -------------------------------------------------------------------------
-  # 6. The promotion decision.
-  #
-  # `environment:` is what makes this "controlled": configure the `production`
-  # environment in the repository settings with required reviewers and this job
-  # waits for a human. That is the approval gate, and it is deliberately GitHub's
-  # rather than a bespoke one — an approval mechanism nobody can audit is not an
-  # approval mechanism.
-  #
-  # Until that environment exists the job still runs the digest comparison, which
-  # is the part that has to be right. It is the deploy step below that is gated.
-  # -------------------------------------------------------------------------
+  # The approval gate is GitHub's `production` environment with required reviewers, not a bespoke
+  # one nobody can audit. Until it exists the job still runs the digest comparison.
   promote:
     name: Promotion check (digest identity)
     needs: staging
     if: ${{ github.event_name == 'push' || inputs.dry_run == false }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    # Uncomment once a `production` environment with required reviewers exists.
-    # Left commented rather than present-and-unconfigured on purpose: an
-    # `environment:` naming one that does not exist is created implicitly with NO
-    # protection rules, which looks like an approval gate in the workflow file and
-    # is not one anywhere else.
+    # Uncomment once a `production` environment with required reviewers exists. An `environment:`
+    # naming one that does not exist is created implicitly with NO protection rules, which looks
+    # like an approval gate here and is not one anywhere else.
     #   environment:
     #     name: production
     steps:
@@ -746,25 +577,13 @@ jobs:
           path: deploy/staging
 
       - name: The digest going to production must be the digest staging tested
-        # `staging.mjs promote` prints BOTH digests and exits non-zero when they
-        # differ. It does not deploy — see its header — and there is nothing here
-        # that could.
+        # Prints BOTH digests and exits non-zero when they differ. It does not deploy.
         run: node scripts/staging.mjs promote
 
       - name: Record that this release was PROMOTED, not rehearsed
-        # The artefact `release-sign.yml` refuses to sign without.
-        #
-        # Signing keyed off the triggering run's conclusion alone, and a rehearsal
-        # concludes success: `workflow_dispatch` with the default `dry_run: true`
-        # against any branch runs the gates, builds the images, passes staging,
-        # skips this job — and the release run goes green. `release-sign.yml` then
-        # pushed those branch images to GHCR and signed them with a Fulcio
-        # certificate naming this repository. The safe-by-default input made the
-        # rehearsal path the LIKELY one.
-        #
-        # This job only runs on a tag push or an explicit `dry_run: false`, so its
-        # output is the only artefact in the release that means "promoted". A
-        # branch name cannot forge it and a conclusion cannot imply it.
+        # The artefact `release-sign.yml` refuses to sign without. A rehearsal also concludes
+        # success, and this job runs only on a tag push or an explicit `dry_run: false`, so its
+        # output is the one artefact that means "promoted".
         run: |
           set -euo pipefail
           node -e "
@@ -788,8 +607,7 @@ jobs:
         with:
           name: release-promotable
           path: deploy/staging/release-promotable.json
-          # `error`, not `warn`: an absent attestation would make every later
-          # signing run fail for a reason nobody could see from here.
+          # `error`: an absent attestation must fail here, not invisibly at the signer.
           if-no-files-found: error
           retention-days: 90
 
@@ -805,40 +623,17 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # -------------------------------------------------------------------------
-  # 7. Production. NOT WIRED.
-  #
-  # Guarded on `vars.PRODUCTION_DEPLOY_TARGET`, a repository variable that does
-  # not exist. With it unset the job is skipped and the release ends after the
-  # promotion check, which is the honest end of this pipeline today. With it set
-  # but the rest of the configuration missing, the job FAILS — it does not
-  # improvise, and it does not echo a success.
-  #
-  # What has to exist before this can be written for real, in the order it has to
-  # be built:
-  #
-  #   1. A registry, and a push step in `build` that records the REGISTRY digest
-  #      alongside the local one. Cross-machine promotion needs a digest a
-  #      registry vouches for; the local BuildKit digest this pipeline uses is
-  #      content-addressed but nothing signed it.
-  #   2. Credentials, ideally OIDC-federated so this repository stores no
-  #      long-lived secret. `permissions: id-token: write` on THIS job alone.
-  #   3. A migration step that runs from OUTSIDE the serving container, at this
-  #      commit, as `prl_deployer` (docs/RUNBOOK.md §5, §11.3) — BEFORE the
-  #      application rolls, because migrations are additive-first so that the old
-  #      release keeps working against the new schema during the roll.
-  #   4. A rollout that respects `deploy: replicas: 1` (ADR 0001, RUNBOOK §11.1)
-  #      or implements room affinity. Two API processes serving one room deal two
-  #      different hands and nothing detects it.
-  #
-  # And one rule that is not negotiable and is therefore stated as a rule rather
-  # than a step: **this pipeline never auto-runs a destructive database change.**
-  # `migrate.mjs up` refuses to apply a pending migration containing a DROP, a
-  # TRUNCATE, a DELETE, a column/constraint drop or a rename unless the file
-  # carries `-- prl:irreversible: <reason>`. A release that needs one is a release
-  # somebody has decided to make irreversible, and it happens in two releases:
-  # ship the additive half, roll onto it, remove in the next.
-  # -------------------------------------------------------------------------
+  # NOT WIRED. Skipped while `vars.PRODUCTION_DEPLOY_TARGET` is unset; FAILS when it is set. The four
+  # things that must exist first, in order:
+  #   1. A registry, and a push in `build` that records the REGISTRY digest: cross-machine promotion
+  #      needs a digest a registry vouches for, and the local BuildKit digest is signed by nothing.
+  #   2. Credentials, ideally OIDC (`id-token: write` on THIS job alone), so no long-lived secret.
+  #   3. A migration from OUTSIDE the serving container, at this commit, as `prl_deployer`
+  #      (docs/RUNBOOK.md §5, §11.3), BEFORE the application rolls.
+  #   4. A rollout that respects `deploy: replicas: 1` (ADR 0001, RUNBOOK §11.1) or implements room
+  #      affinity: two API processes serving one room deal two different hands.
+  # This pipeline never auto-runs a destructive database change: `migrate.mjs up` refuses one unless
+  # the file carries `-- prl:irreversible: <reason>`, and it ships as two releases.
   production:
     name: Production deploy (NOT WIRED)
     needs: promote
@@ -847,32 +642,16 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Refuse to improvise a deployment
-        # Reached only when somebody has set PRODUCTION_DEPLOY_TARGET. Failing here
-        # is the point: the variable is a statement that a target exists, and this
-        # file has no implementation to match it. A step that printed "deployed" and
-        # exited 0 would be a lie told by a green tick.
+        # The variable claims a target exists and this file has no implementation to match it.
         run: |
           echo "PRODUCTION_DEPLOY_TARGET is set to '${{ vars.PRODUCTION_DEPLOY_TARGET }}', but this"
           echo "workflow has no deployment implementation. See the header of this job for the four"
           echo "things that must exist first, in order. Failing rather than pretending."
           exit 1
 
-  # -------------------------------------------------------------------------
-  # 8. Post-deploy verification. NOT WIRED, for the same reason.
-  #
-  # When there is a production origin, this job runs the SAME smoke test the
-  # staging job ran, against it, with --strict — the point being that the check
-  # which cleared the release is the check that confirms it landed:
-  #
-  #     PRL_WEB_ORIGIN=https://<origin> node scripts/smoke-test.mjs \
-  #       --origin https://<origin> --strict
-  #
-  # It would also assert the readiness probe, that `/metrics` is NOT reachable
-  # from the public origin (it is not under /api/, so the proxy sends it to the
-  # page server), and that the deployed digest matches the promoted one.
-  #
-  # A failure here is a ROLLBACK TRIGGER, not a retry. See `rollback-plan`.
-  # -------------------------------------------------------------------------
+  # NOT WIRED. It will run the SAME smoke test that cleared staging against the production origin,
+  # with --strict, and assert the readiness probe, that `/metrics` is NOT public, and that the
+  # deployed digest is the promoted one. A failure here is a ROLLBACK TRIGGER, not a retry.
   post-deploy:
     name: Post-deploy verification (NOT WIRED)
     needs: production
@@ -886,12 +665,7 @@ jobs:
           echo "happened, so there is nothing to verify. Failing rather than reporting success."
           exit 1
 
-  # -------------------------------------------------------------------------
-  # 9. The rollback plan, printed with this release's actual digests in it.
-  #
-  # It runs on every release, whatever happened above (`if: always()`), because
-  # the moment you need it is the moment the pipeline is red.
-  # -------------------------------------------------------------------------
+  # Printed with this release's digests on every run, red ones especially, which is when it is needed.
   rollback-plan:
     name: Rollback plan
     needs: [build, staging]
