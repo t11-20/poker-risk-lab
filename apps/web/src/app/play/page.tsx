@@ -5,7 +5,7 @@
  * top of the page, never in a collapsed disclosure.
  */
 
-import type { LegendDifficultyDto } from '@prl/contracts';
+import type { LegendDifficulty, LegendDifficultyDto } from '@prl/contracts';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import type { ReactElement } from 'react';
@@ -27,6 +27,7 @@ import {
 } from '@/fixtures/table.ts';
 import { disclaimerFraming } from '@/lib/disclaimer-framing.ts';
 import {
+  knownDifficulty,
   LEGENDS_PATH,
   MATCH_DIFFICULTY_PARAM,
   MATCH_PROFILE_PARAM,
@@ -87,7 +88,7 @@ function stagePropsFor(state: TableStateName): {
  * the universal one, printed in full because "Start a match" can reach this page without passing a
  * card or profile page that showed them.
  */
-async function legendHead(profileId: string, difficulty: MatchDifficulty) {
+async function legendHead(profileId: string, difficulty: LegendDifficulty) {
   let archetypeName: string | null = null;
   let setting: LegendDifficultyDto | null = null;
   let specific: readonly string[] = [];
@@ -194,17 +195,6 @@ function FixturePage({ state }: { readonly state: TableStateName }): ReactElemen
   );
 }
 
-/** Mirrors `LiveTable`'s own prop type. */
-type MatchDifficulty = 'educational' | 'realistic' | 'expert';
-
-/**
- * A predicate, because an inline `===` chain does not narrow the property of a fresh object literal,
- * which then fails `LiveTable`'s union under `exactOptionalPropertyTypes`.
- */
-function isMatchDifficulty(value: string | undefined): value is MatchDifficulty {
-  return value === 'educational' || value === 'realistic' || value === 'expert';
-}
-
 function firstValue(raw: string | string[] | undefined): string | undefined {
   return Array.isArray(raw) ? raw[0] : raw;
 }
@@ -219,9 +209,9 @@ export default async function PlayPage({ searchParams }: PlayPageProps): Promise
   if (isTableStateName(asked)) return <FixturePage state={asked} />;
 
   const profile = firstValue(params[MATCH_PROFILE_PARAM]);
-  const difficulty = firstValue(params[MATCH_DIFFICULTY_PARAM]);
+  const difficulty = knownDifficulty(firstValue(params[MATCH_DIFFICULTY_PARAM]));
   const legendMatch =
-    profile !== undefined && isMatchDifficulty(difficulty) ? { profileId: profile, difficulty } : undefined;
+    profile !== undefined && difficulty !== null ? { profileId: profile, difficulty } : undefined;
   const legend =
     legendMatch === undefined ? null : await legendHead(legendMatch.profileId, legendMatch.difficulty);
   // `/play?profile=…` and `/play` are one route, so React would keep the table mounted with the

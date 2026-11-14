@@ -23,11 +23,14 @@ export const LEGENDS_HAND_REVIEW_PATH = '/legends/hand-review';
 
 export const DIFFICULTIES: readonly LegendDifficulty[] = ['educational', 'realistic', 'expert'];
 
+/** Null for anything else, because `/play` must deal the bot table rather than guess a match. */
+export function knownDifficulty(value: string | undefined): LegendDifficulty | null {
+  return DIFFICULTIES.find((difficulty) => difficulty === value) ?? null;
+}
+
 /** Defaults to `educational`, where the style is most legible, and never throws on a hand-edited URL. */
 export function parseDifficulty(raw: string | string[] | undefined): LegendDifficulty {
-  const value = Array.isArray(raw) ? raw[0] : raw;
-  const match = DIFFICULTIES.find((difficulty) => difficulty === value);
-  return match ?? 'educational';
+  return knownDifficulty(Array.isArray(raw) ? raw[0] : raw) ?? 'educational';
 }
 
 /** De-duplicated in order, from a repeated or comma-separated `profiles` parameter. */
