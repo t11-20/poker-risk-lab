@@ -31,12 +31,7 @@ export {
   SUIT_KEYS,
   type SuitKey,
 } from './cards.ts';
-export {
-  ActionBar,
-  type ActionBarProps,
-  // For `apps/web`'s HandReplay, whose own copy missed that Chrome can leave focus on `<html>`.
-  browserAbandonedFocus,
-} from './components/ActionBar.tsx';
+export { ActionBar, type ActionBarProps } from './components/ActionBar.tsx';
 export {
   AssumptionList,
   type AssumptionListProps,
@@ -71,6 +66,8 @@ export { type TurnClock, TurnTimer, type TurnTimerProps } from './components/Tur
 export { UncertaintyNote, type UncertaintyNoteProps } from './components/UncertaintyNote.tsx';
 export { UNITS_EXPLANATION, UnitsBadge, type UnitsBadgeProps } from './components/UnitsBadge.tsx';
 export { cx, type StyleWithVars } from './cx.ts';
+export { useChangeWatch, useFocusOnChange } from './focus-on-change.ts';
+export { browserAbandonedFocus, useFocusRescue } from './focus-rescue.ts';
 export {
   type ConfidenceIntervalOptions,
   describeSpr,

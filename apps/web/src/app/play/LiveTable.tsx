@@ -9,24 +9,16 @@
 
 import {
   Button,
-  browserAbandonedFocus,
   Callout,
   formatUnits,
   Panel,
   type TableAction,
+  useChangeWatch,
+  useFocusRescue,
   usePrefersReducedMotion,
 } from '@prl/ui';
 import Link from 'next/link';
-import {
-  type FocusEvent,
-  type FormEvent,
-  type ReactElement,
-  type RefObject,
-  useEffect,
-  useId,
-  useRef,
-  useState,
-} from 'react';
+import { type FormEvent, type ReactElement, type RefObject, useEffect, useId, useRef, useState } from 'react';
 import { TableStage, type TableStageStatus } from '@/components/TableStage.tsx';
 import { noAnalysisReason, readerHasDecisions, reviewHrefFor } from '@/lib/coach-body.ts';
 import { dealNextState } from '@/lib/deal-next.ts';
@@ -277,10 +269,9 @@ function dealNextOf(live: LiveTableModel): ReturnType<typeof dealNextState> {
 }
 
 /**
- * Every control here is conditional, so pressing one usually unmounts it and the browser drops focus
- * to `<body>`. Focus then goes to the panel's status line, but only if the caret was inside this row
- * and the browser gave up on it, the same two conditions as `ActionBar`'s idle line. The private-table
- * flows sit inside the same rescue, because "Start a private table…" unmounts too.
+ * Every control here is conditional, so pressing one usually unmounts it. Focus then goes to the panel's
+ * status line. The private-table flows sit inside the same rescue, because "Start a private table…"
+ * unmounts too.
  */
 function ConnectionControls({
   live,
@@ -294,30 +285,18 @@ function ConnectionControls({
   const deal = dealNextOf(live);
 
   const signature = controlsSignature(live);
-
-  /** Not cleared on a null `relatedTarget`, which is what `focusout` reports as the button unmounts. */
-  const hadFocus = useRef(false);
-  const onFocusCapture = (): void => {
-    hadFocus.current = true;
-  };
-  const onBlurCapture = (event: FocusEvent<HTMLDivElement>): void => {
-    const next = event.relatedTarget;
-    if (next !== null && !event.currentTarget.contains(next)) hadFocus.current = false;
-  };
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `signature` is the TRIGGER — the set of controls on screen, as a string. Nothing in the body reads it; removing it would run this effect once and leave every keyboard reader on <body> after each step of setting a table up.
+  const controlsChanged = useChangeWatch(signature);
+  const focus = useFocusRescue();
   useEffect(() => {
-    if (!hadFocus.current) return;
-    // Not a local `=== body` test. Chrome parks the caret on `<html>` after a blur (measured in `ActionBar`).
-    if (!browserAbandonedFocus()) return;
-    // The status line is at the top of the page, and a plain `.focus()` scrolled a reader looking at
-    // the showdown back to scrollY 0.
-    fallbackRef.current?.focus({ preventScroll: true });
-    hadFocus.current = false;
-  }, [signature, fallbackRef]);
+    if (controlsChanged(signature)) focus.rescue(fallbackRef.current);
+  }, [controlsChanged, signature, focus, fallbackRef]);
 
   return (
-    <div className="prl-play__controls" onBlurCapture={onBlurCapture} onFocusCapture={onFocusCapture}>
+    <div
+      className="prl-play__controls"
+      onBlurCapture={focus.onBlurCapture}
+      onFocusCapture={focus.onFocusCapture}
+    >
       {live.switchWarning === null ? null : <SwitchTablesNotice live={live} warning={live.switchWarning} />}
       <p className="prl-btn-row">
         {(phase === 'idle' || phase === 'failed') && live.switchWarning === null ? (

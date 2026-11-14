@@ -17,7 +17,17 @@
  */
 
 import type { ContentId, Quiz, QuizQuestion } from '@prl/contracts';
-import { Button, Callout, Chip, Formula, formatIndex, Metric, Panel, withKeys } from '@prl/ui';
+import {
+  Button,
+  Callout,
+  Chip,
+  Formula,
+  formatIndex,
+  Metric,
+  Panel,
+  useFocusOnChange,
+  withKeys,
+} from '@prl/ui';
 import Link from 'next/link';
 import { type ReactElement, useEffect, useRef, useState } from 'react';
 import { useCalculationOutcome } from '@/components/LiveCalculation.tsx';
@@ -467,8 +477,7 @@ export function QuizRunner(props: QuizRunnerProps): ReactElement {
   const [answers, setAnswers] = useState<ReadonlyMap<ContentId, Answer>>(new Map());
   const [verdicts, setVerdicts] = useState<ReadonlyMap<ContentId, QuizVerdict>>(new Map());
   const headingRef = useRef<HTMLHeadingElement>(null);
-  /** The first render must not steal focus; only a step *change* moves it. */
-  const mounted = useRef(false);
+  useFocusOnChange(headingRef, step);
   /**
    * The answer object each question was posted for. Identity, not value, because `record` mints a
    * fresh object per press, so "Check again" posts and paging back does not.
@@ -478,16 +487,6 @@ export function QuizRunner(props: QuizRunnerProps): ReactElement {
   const total = quiz.questions.length;
   const onReview = step >= total;
   const question = onReview ? undefined : quiz.questions[step];
-
-  /** Focus follows a step change only. `mounted` stops the first render pulling focus. */
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `step` is the trigger; without it focus stops following navigation
-  useEffect(() => {
-    if (!mounted.current) {
-      mounted.current = true;
-      return;
-    }
-    headingRef.current?.focus();
-  }, [step]);
 
   const record = (id: ContentId, answer: Answer): void => {
     setAnswers((current) => {

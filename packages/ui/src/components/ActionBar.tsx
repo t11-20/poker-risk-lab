@@ -42,6 +42,7 @@ import {
   type StampedDraft,
 } from '../bet-sizing.ts';
 import { cx } from '../cx.ts';
+import { useFocusRescue } from '../focus-rescue.ts';
 import { foldPress, spotSignature } from '../fold-guard.ts';
 import { formatChips, formatUnits } from '../format.ts';
 import type { LegalAction, TableAction } from '../view-types.ts';
@@ -266,15 +267,6 @@ function BetSizer(props: BetSizerProps): ReactElement {
   );
 }
 
-/**
- * Whether the caret has dropped onto the document. Chrome 151 can leave `activeElement` on `<html>`
- * rather than `body` after blurring a newly disabled control (measured on `/play?state=decision`).
- */
-export function browserAbandonedFocus(): boolean {
-  const active = document.activeElement;
-  return active === null || active === document.body || active === document.documentElement;
-}
-
 export function ActionBar(props: ActionBarProps): ReactElement {
   const {
     legalActions,
@@ -306,17 +298,10 @@ export function ActionBar(props: ActionBarProps): ReactElement {
    *
    * `aria-disabled` was rejected because `components.css` styles only `:disabled`, so the row would look
    * live. The line is a status because Chrome 151 does not report a focused `role="group"` as focused.
-   *
-   * Focus moves only if it was inside the bar and the browser abandoned it, so a reader in the Coach
-   * panel is never pulled back. `hadFocus` survives a disable or unmount because `focusout` then fires
-   * with a null `relatedTarget`.
-   *
-   * Every move passes `preventScroll`. A plain `.focus()` scrolls its target into view, and at 390x844
-   * every action jumped the page 566 to 2,073px.
    */
   const idleRef = useRef<HTMLParagraphElement>(null);
   const inFlightRef = useRef<HTMLParagraphElement>(null);
-  const hadFocus = useRef(false);
+  const focus = useFocusRescue();
   const lastControl = useRef<HTMLElement | null>(null);
   /** True only while the caret is on the in-flight line because this component put it there. */
   const parked = useRef(false);
@@ -325,31 +310,24 @@ export function ActionBar(props: ActionBarProps): ReactElement {
   const acting = legalActions.length > 0;
 
   const onFocusCapture = (event: ReactFocusEvent<HTMLDivElement>): void => {
-    hadFocus.current = true;
+    focus.onFocusCapture();
     // Landing on the in-flight line is not the reader choosing a control.
     if (event.target === inFlightRef.current) return;
     parked.current = false;
     lastControl.current = event.target;
   };
   const onBlurCapture = (event: ReactFocusEvent<HTMLDivElement>): void => {
-    const next = event.relatedTarget;
-    // Null means the focused node was removed or disabled, not that the reader went elsewhere.
-    if (next !== null && !event.currentTarget.contains(next)) {
-      hadFocus.current = false;
-      parked.current = false;
-    }
+    if (focus.onBlurCapture(event)) parked.current = false;
   };
 
   useEffect(() => {
     const left = wasActing.current && !acting;
     wasActing.current = acting;
     // A timed-out turn checks with the pot unchanged, so the next spot could match a stale arming.
-    if (left) setFoldArmedFor(null);
-    if (!left || !hadFocus.current) return;
-    if (!browserAbandonedFocus()) return;
-    idleRef.current?.focus({ preventScroll: true });
-    hadFocus.current = false;
-  }, [acting]);
+    if (!left) return;
+    setFoldArmedFor(null);
+    focus.rescue(idleRef.current);
+  }, [acting, focus]);
 
   useLayoutEffect(() => {
     const taken = disabled && !wasDisabled.current;
@@ -357,7 +335,7 @@ export function ActionBar(props: ActionBarProps): ReactElement {
     wasDisabled.current = disabled;
 
     if (taken) {
-      if (!hadFocus.current) return;
+      if (!focus.held()) return;
       // Layout, not a microtask, so the rescue cannot lose to Chrome parking the caret on `<html>`.
       // A parent such as TableStage overrides it, since layout effects run child-then-parent.
       inFlightRef.current?.focus({ preventScroll: true });
@@ -372,7 +350,7 @@ export function ActionBar(props: ActionBarProps): ReactElement {
     if (control === null || !control.isConnected) return;
     if (control instanceof HTMLButtonElement && control.disabled) return;
     control.focus({ preventScroll: true });
-  }, [disabled]);
+  }, [disabled, focus]);
 
   const sized = resolveSizedAction(legalActions);
   const canFold = legalActions.some((action) => action.type === 'fold');
@@ -391,12 +369,8 @@ export function ActionBar(props: ActionBarProps): ReactElement {
   const isAllIn = sized !== null && to >= bounds.max && bounds.max > bounds.min;
   const callCost = call?.costAtMin ?? toCall;
 
-  /**
-   * A press in this bar is presence in it. Chrome can deliver the activating Enter without a focus
-   * event React saw, which left the caret on `RootWebArea` after a fold.
-   */
   const actFromBar = (action: TableAction): void => {
-    hadFocus.current = true;
+    focus.claim();
     onAct(action);
   };
 

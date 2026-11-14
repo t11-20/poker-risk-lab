@@ -204,7 +204,7 @@ the arithmetic (`config.ts` collects problems and exits 78), not log and continu
 - **`biome.json` sets `lineWidth: 110`**, and `lint` fails on formatting. Run `biome check` on the
   files you touched before claiming a gate passes; a reflowed line is the usual way a "docs-only"
   edit breaks the build.
-- There are **13 `biome-ignore` suppressions** in tracked files (`git grep -n 'biome-ignore[a-z-]* *lint/' -- ':!*.md'`;
+- There are **10 `biome-ignore` suppressions** in tracked files (`git grep -n 'biome-ignore[a-z-]* *lint/' -- ':!*.md'`;
   this line said 18 while the code had 14). Adding one is a last resort — the repo
   has idioms for avoiding them (an explicit `role` instead of relying on an implicit mapping; a
   helper that builds `${` rather than writing it).

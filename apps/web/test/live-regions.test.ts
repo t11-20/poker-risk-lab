@@ -504,18 +504,18 @@ describe('a refusal interrupts, and everything else is polite', () => {
     assert.match(stage, /const acknowledgementRef = useRef<HTMLDivElement \| null>\(null\);/u);
     assert.match(
       stage,
-      /acknowledgementRef\.current\?\.focus\(\{ preventScroll: true \}\);/u,
+      /if \(submission !== null\) focus\.rescue\(acknowledgementRef\.current\);/u,
       'nothing moves the caret after a decision, so it is left on the document',
     );
-    // The first guard keeps a reader in the Coach panel. The second never steals legitimate focus.
-    assert.match(stage, /if \(submission === null \|\| !hadFocus\.current\) return;/u);
-    // `browserAbandonedFocus` is shared from `@prl/ui`, so its states are asserted where it lives.
+    // `useFocusRescue` keeps a reader in the Coach panel and never steals legitimate focus. Its
+    // decisions are tested in `packages/ui/test/focus-hooks.test.ts`, its predicate below.
+    assert.match(stage, /const focus = useFocusRescue\(\);/u);
+    const predicate = readUi('focus-rescue.ts');
     assert.match(
-      stage,
-      /if \(!browserAbandonedFocus\(\)\) return;/u,
+      predicate,
+      /if \(!held \|\| !abandoned\(\)\) return;/u,
       'the rescue must still stand down when something legitimately holds focus',
     );
-    const predicate = readUi('components', 'ActionBar.tsx');
     assert.match(
       predicate,
       /export function browserAbandonedFocus\(\): boolean \{[\s\S]*?active === null[\s\S]*?\}/u,
