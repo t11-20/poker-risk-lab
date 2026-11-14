@@ -32,6 +32,8 @@
  *
  * `PRL_ALERT_ACK_UNATTENDED=1` is allowed only when both rehearsal stages hold. Such a run is
  * stamped `attended: false` and says so in a banner.
+ *
+ * Flags (no --help): --within <duration> (default 5m), --by <name>, --out <file>, --alertmanager <url>.
  */
 
 import { createHash, randomInt } from 'node:crypto';

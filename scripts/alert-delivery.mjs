@@ -16,6 +16,8 @@
  * It stops the API rather than posting to Alertmanager's API, so the scrape, rule, `for` and routing
  * label are all exercised. `max_over_time(up[2m]) == 0` plus `for: 2m` fires a little over four
  * minutes after the stop, and a whole run takes six to seven minutes.
+ *
+ * Flags (no --help): --skip-provoke, --only-heartbeat, --keep-up, --render-config, --json, --out <file>.
  */
 
 import { spawnSync } from 'node:child_process';
