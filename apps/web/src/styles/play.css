@@ -991,7 +991,7 @@
   min-height: calc(var(--prl-space-12) + var(--prl-space-4));
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-veil-4);
-  box-shadow: var(--prl-elevation-1);
+  box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-1);
   transition:
     background-color var(--prl-dur-fast) var(--prl-ease-material),
     border-color var(--prl-dur-fast) var(--prl-ease-material),
@@ -1010,11 +1010,6 @@
   transform: translateY(1px);
 }
 
-/** The focus halo and the elevation share `box-shadow`, so both are listed, ring first. */
-.prl-play .prl-action-btn:focus-visible {
-  box-shadow: var(--prl-focus-ring), var(--prl-elevation-1);
-}
-
 /** Disabled drops a level instead of fading, which would pull the label towards the backdrop. */
 .prl-play .prl-action-btn:disabled {
   background-color: transparent;
@@ -1028,7 +1023,7 @@
  */
 .prl-play .prl-action-btn--primary {
   flex-grow: 1.6;
-  box-shadow: var(--prl-elevation-2);
+  box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-2);
 }
 
 .prl-play .prl-action-btn--primary::before {
@@ -1046,10 +1041,6 @@
 
 .prl-play .prl-action-btn--primary:active:not(:disabled) {
   box-shadow: var(--prl-elevation-1);
-}
-
-.prl-play .prl-action-btn--primary:focus-visible {
-  box-shadow: var(--prl-focus-ring), var(--prl-elevation-2);
 }
 
 /* 12.6  THE BET SIZER. A translucent `--prl-veil-4` tray, because an opaque block would cancel the glass. */

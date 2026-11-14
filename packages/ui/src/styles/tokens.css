@@ -314,8 +314,7 @@
 
   /**
    * The spread reaches one pixel past the outline and fills the offset gap (WCAG 1.4.11).
-   * `box-shadow` is one property, so a rule with an elevation restates the ring on focus, ring
-   * first: `box-shadow: var(--prl-focus-ring), var(--prl-elevation-2)`.
+   * An elevated rule reads it through base.css's `--_ring`, never directly.
    */
   --prl-focus-ring: 0 0 0 calc(var(--prl-focus-offset) + var(--prl-focus-width) + var(--prl-focus-halo-width))
     var(--prl-focus-halo);

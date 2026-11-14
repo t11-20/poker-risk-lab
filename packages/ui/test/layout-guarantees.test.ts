@@ -219,17 +219,19 @@ const GLASS_SCANNED: readonly (readonly [string, string])[] = [
 describe('the design system rules that are stated in prose and checked nowhere', () => {
   /**
    * A shadow is never a literal. Every `box-shadow` part is `--prl-elevation-*`, `--prl-focus-ring`,
-   * or `none` to cancel an inherited elevation.
+   * the ring variable with its empty shadow (base.css), or `none` to cancel an inherited elevation.
    */
   const SHADOW_VALUE = /box-shadow\s*:\s*([^;]+)/g;
-  const ALLOWED_SHADOW_PART = /^(none|var\(--prl-elevation-[0-4]\)|var\(--prl-focus-ring\))$/;
+  const ALLOWED_SHADOW_PART =
+    /^(none|var\(--prl-elevation-[0-4]\)|var\(--prl-focus-ring\)|var\(--_ring, 0 0 #0000\))$/;
 
   it('spends a shadow only through an elevation or focus-ring token, never as a literal', () => {
     for (const [name, css] of GLASS_SCANNED) {
       const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, '');
       for (const match of withoutComments.matchAll(SHADOW_VALUE)) {
         const value = (match[1] ?? '').trim();
-        for (const part of value.split(',').map((piece) => piece.trim())) {
+        // Commas inside `var(..., fallback)` do not separate shadows.
+        for (const part of value.split(/,(?![^(]*\))/).map((piece) => piece.trim())) {
           assert.match(
             part,
             ALLOWED_SHADOW_PART,

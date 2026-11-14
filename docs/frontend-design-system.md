@@ -921,10 +921,12 @@ in §4 for why, and for the metric tokens they share with the form controls in �
   choice; a filled variant would need its own per-theme ink token.
 * **States.** Hover moves fill and border; **press is a `translateY(1px)` and a darker fill, never
   an elevation change.** `box-shadow` is one property, so a hover or active rule at (0,3,0) that set
-  an elevation would out-rank the `:focus-visible` rule at (0,2,0) that restates the focus halo, and
+  an elevation would out-rank the family's rule, which is the one carrying the focus halo (§7.1), and
   hovering a keyboard-focused button would silently delete half of its focus indicator. Elevation is
-  set once per family and restated beside the ring — `box-shadow: var(--prl-focus-ring),
-  var(--prl-elevation-1)`, ring first, because shadows paint in list order.
+  set once per family, with the ring variable in front of it — `box-shadow: var(--_ring, 0 0 #0000),
+  var(--prl-elevation-1)`, ring first, because shadows paint in list order. There is no
+  `:focus-visible` rule per family: `base.css` sets `--_ring` on the focused element, and the
+  family's own rule paints it.
 * **Disabled** collapses to the opaque level below — flat, unblurred, unelevated, sheen removed,
   `--prl-surface-inset` — never `opacity`. Fading a translucent control fades its label with the
   surface AND lets more of the backdrop through, so it gets less legible in exactly the proportion
@@ -1043,10 +1045,16 @@ There is no backdrop in `[0, 1]` against which both tones disappear.
 The halo is a `box-shadow`, which means it is clipped by an ancestor's `overflow: hidden` and not
 painted under `forced-colors`. Both are accepted rather than hidden, because it is a
 **supplement**: in either case the indicator degrades to exactly the outline it was before, which
-is why the outline is still the primary tone. `box-shadow` is one property, so any rule giving an
-element an elevation must restate the ring beside it while focused —
-`box-shadow: var(--prl-focus-ring), var(--prl-elevation-2)`, ring first because shadows paint in
-list order — or the pane drops a level for as long as the keyboard is on it.
+is why the outline is still the primary tone. `box-shadow` is one property, so `base.css`'s
+`:focus-visible { box-shadow: var(--prl-focus-ring) }` at (0,1,0) loses to any rule that gives an
+element an elevation, and a focus rule that won instead would drop the elevation. Base and the
+components therefore do not compete for `box-shadow` at all: `base.css` also sets a private custom
+property, `--_ring: var(--prl-focus-ring)`, on `:focus-visible`, and every elevated rule writes
+`box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-2)` once. Unfocused, the fallback is an
+empty shadow; focused, the same rule paints the ring above its own elevation, whatever that rule's
+specificity. `--_ring` is registered with `@property { inherits: false }`, because a focused `<main>`
+would otherwise hand its ring to every elevated card inside it. A pane that is ringed when something
+*inside* it has focus sets `--_ring` itself under `:has(:focus-visible)`.
 
 ### 7.2 Reduced transparency and increased contrast
 
@@ -1289,8 +1297,9 @@ meaningful border; re-measure the light row if a stop or the falloff moves.
 the glass, so a pill in the same material would stack one tint on another and land within a
 rounding error of the sheet it sits on. They take `--prl-shell-nav-fill`, the lit hairline
 (`--prl-edge` / `--prl-edge-lit` / `--prl-edge-shade`) and `--prl-elevation-2` instead, which is
-the arrangement that reads as objects on a sheet. Every one of them that can take focus restates
-`box-shadow: var(--prl-focus-ring), var(--prl-elevation-2)` — see §2.7's composition rule.
+the arrangement that reads as objects on a sheet. Each writes
+`box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-2)`, so the one that can take focus keeps
+its elevation under the ring — see §7.1.
 
 **Also of note:** a 2px rule is written as `var(--prl-space-1)` (0.125rem), never as
 `var(--prl-focus-width)`. Both resolve to 2px and only one of them means it; borrowing the focus
