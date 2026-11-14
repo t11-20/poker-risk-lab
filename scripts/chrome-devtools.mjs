@@ -68,11 +68,7 @@ export async function waitForDevtools(child, port, timeoutMs = DEVTOOLS_STARTUP_
   }
 }
 
-/**
- * Runs `run({ version, openTab })` against a Chrome on `port`, then stops it. `openTab` resolves to a
- * new tab's WebSocket URL. Without a fixed `profile`, a fresh one prefixed `freshProfile` is made in the
- * temp directory and removed, so no cookie a run seeded carries into the next.
- */
+/** Without a fixed `profile` each run gets a fresh one, removed after, so no seeded cookie carries over. */
 export async function withChrome({ headful, port, profile, freshProfile, flags, dim }, run) {
   const binary = chromePath();
   const userDataDir = profile ?? mkdtempSync(join(tmpdir(), freshProfile));

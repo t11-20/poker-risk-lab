@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * The server and Chrome helpers the seven browser gates share, and what each gate does with them: the
- * sentence it refuses an occupied port with, and the command line it launches Chrome with.
+ * Seven gates share these helpers, so each gate's busy-port sentence and Chrome command line are pinned
+ * here: a shared change would otherwise alter every gate at once and show only when a port collides.
  */
 
 import assert from 'node:assert/strict';
@@ -98,13 +98,16 @@ describe('refuseOccupiedPort', () => {
     }
   });
 
-  it('probes the host the URL names, brackets removed', async () => {
+  it('probes the host the URL names, brackets removed', async (t) => {
     const server = createNetServer((socket) => socket.destroy());
-    const bound = await new Promise((done) => {
-      server.once('error', () => done(false));
-      server.listen(0, '::1', () => done(true));
+    const failure = await new Promise((done) => {
+      server.once('error', (err) => done(err));
+      server.listen(0, '::1', () => done(null));
     });
-    if (!bound) return;
+    if (failure !== null) {
+      t.skip(`IPv6 loopback ::1 cannot be bound on this host (${failure.code ?? failure.message})`);
+      return;
+    }
     const { port } = server.address();
     try {
       await assert.rejects(refuseOccupiedPort(`http://[::1]:${port}`, 'x'), {
