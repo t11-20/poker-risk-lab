@@ -9,7 +9,7 @@
  *   4. Animate only transform, opacity, colour and elevation steps, never `backdrop-filter`.
  */
 
-/* 1. LAYOUT. The container is a token, so a page cannot invent its own width. */
+/* Layout. The container is a token, so a page cannot invent its own width. */
 
 .prl-container {
   width: var(--prl-container);
@@ -147,8 +147,6 @@
   max-width: var(--prl-measure);
 }
 
-/* 2. TYPE UTILITIES */
-
 .prl-display-1 {
   margin: 0;
   font-size: var(--prl-type-display-1);
@@ -224,7 +222,7 @@
   font-variant-numeric: var(--prl-numeric);
 }
 
-/* 3. THE METRIC BLOCK. Label, value + unit, delta, note. A bare number is never shown. */
+/* Metric block. Label, value + unit, delta, note. A bare number is never shown. */
 
 .prl-metric {
   --prl-metric-size: var(--prl-type-metric-md);
@@ -320,7 +318,7 @@
   grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--prl-space-15)), 1fr));
 }
 
-/* 4. MATERIALS. The tokens.css ladder as classes. A glass fill always has `backdrop-filter` in the
+/* Materials. The tokens.css ladder as classes. A glass fill always has `backdrop-filter` in the
    same block, `:hover` included, or text behind it ghosts through (layout-guarantees.test.ts). */
 
 /** A border, not an inset shadow, so it survives forced colors. Never transition `backdrop-filter`. */
@@ -429,7 +427,7 @@
   cursor: not-allowed;
 }
 
-/* 4b. PANEL. Level 2 of the ladder. Not glass, because a panel is where prose and tables live. */
+/* Panel. Level 2 of the ladder. Not glass, because a panel is where prose and tables live. */
 
 .prl-panel {
   display: grid;
@@ -472,7 +470,7 @@
   box-shadow: var(--prl-elevation-3);
 }
 
-/** Matches what `Panel.tsx` emits. A single `.prl-panel__head` once left every header unstyled. */
+/** Matches what `Panel.tsx` emits, or every panel header renders unstyled. */
 .prl-panel__header {
   display: flex;
   flex-wrap: wrap;
@@ -528,9 +526,9 @@
   font-size: var(--prl-type-body-sm);
 }
 
-/* 5. BUTTONS. Pill-shaped to match the header's glass capsules. No `clip-path` chamfer, because it
+/* Buttons. Pill-shaped to match the header's glass capsules. No `clip-path` chamfer, because it
    clips the `outline` and would bite the focus ring, so the fill is a `::before` plate at
-   `z-index: -1`. `--prl-control-*` is shared with section 6 so controls line up in one row. */
+   `z-index: -1`. `--prl-control-*` is shared with the form controls so they line up in one row. */
 
 /** `--prl-control-h` is the full target. Size modifiers narrow the ink, never the target. */
 :root {
@@ -588,7 +586,7 @@
 
 /** 3.5rem. At 4rem the straight section is shorter than the end caps and stops reading as a capsule. */
 .prl-btn--lg {
-  min-height: calc(var(--prl-space-11) + var(--prl-space-4)); /* 3.5rem */
+  min-height: calc(var(--prl-space-11) + var(--prl-space-4));
   padding-inline: var(--prl-space-10);
   font-size: var(--prl-type-body-lg);
   font-weight: var(--prl-weight-semibold);
@@ -597,8 +595,6 @@
 .prl-btn--block {
   width: 100%;
 }
-
-/* ---- primary ---- */
 
 /** `--prl-edge-lit` top edge. On a filled control the fill identifies it, so rule B does not apply. */
 .prl-btn--primary {
@@ -648,8 +644,6 @@
 .prl-btn--primary:active:not(:disabled)::before {
   background-color: var(--prl-accent-600);
 }
-
-/* ---- secondary and ghost ---- */
 
 /**
  * L3 glass like `.prl-pill-group`, fill and filter in every state block. All four edges are
@@ -728,8 +722,6 @@
   box-shadow: var(--prl-focus-ring), var(--prl-elevation-1);
 }
 
-/* ---- states ---- */
-
 /** Opaque level below, no sheen, never `opacity`. `[aria-disabled]` covers anchors styled as buttons. */
 .prl-btn:disabled,
 .prl-btn[aria-disabled="true"] {
@@ -783,7 +775,7 @@
   gap: var(--prl-space-4);
 }
 
-/* 6. FORM CONTROLS. Outlines are `--prl-line-strong` or the accent, 3:1 minimum (WCAG 1.4.11). */
+/* Form controls. Outlines are `--prl-line-strong` or the accent, 3:1 minimum (WCAG 1.4.11). */
 
 .prl-field {
   display: grid;
@@ -877,8 +869,6 @@
   padding-inline-end: var(--prl-space-6);
 }
 
-/* ---- range ---- */
-
 /** Always paired with a number input, because a slider cannot express an exact amount. */
 .prl-range {
   width: 100%;
@@ -929,8 +919,6 @@
   cursor: not-allowed;
 }
 
-/* ---- checkbox and radio ---- */
-
 /**
  * Native controls with `accent-color`. A redrawn tick needs a data URI (CSP), a `clip-path` or an
  * extra element, and loses the forced-colors repaint. The 44px target is on `.prl-choice`.
@@ -963,7 +951,7 @@
   line-height: var(--prl-leading-snug);
 }
 
-/* 7. CHIPS AND BADGES. Border and ink, never a fill (forced colors discards fills). Every tone rule
+/* Chips and badges. Border and ink, never a fill (forced colors discards fills). Every tone rule
    lists both `[data-tone]` (from `Chip`) and `.prl-badge--*`, or one spelling renders untoned. */
 
 .prl-chip,
@@ -1046,7 +1034,7 @@
   font-weight: var(--prl-weight-bold);
 }
 
-/* 8. TABLE PRIMITIVES. No felt, no baize, no wood, no rail highlight. Graph paper. */
+/* Table primitives. No felt, no baize, no wood, no rail highlight. Graph paper. */
 
 /** Two gradients on one element. One paint, no asset for the CSP to refuse. */
 .prl-table-surface,
@@ -1258,8 +1246,6 @@
   letter-spacing: var(--prl-tracking-label);
 }
 
-/* ---- the turn ring ---- */
-
 /**
  * A registered `@property` drives the conic gradient, or the keyframes would jump. A paint, so it
  * is the only continuously animated thing on the table. `TurnTimer` sets the duration and a negative
@@ -1345,8 +1331,6 @@
   font-weight: var(--prl-weight-regular);
 }
 
-/* 9. REVEAL AND COUNT-UP */
-
 /**
  * Hidden only on `[data-revealed='false']`, never the bare class (design system section 5.6), so
  * content is visible by default. The observer unobserves after firing.
@@ -1406,7 +1390,7 @@
   font-feature-settings: "tnum" 1;
 }
 
-/* 10. DATA VISUALISATION. Six series, six fill patterns; swap a colour and you swap its pattern.
+/* Data visualisation. Six series, six fill patterns; swap a colour and you swap its pattern.
    The hatch uses the TRACK's colour, so each stripe is a hole punched in the fill and its contrast
    is the series-on-surface ratio the gate measures (3:1). */
 
@@ -1588,7 +1572,7 @@
   stroke-linejoin: round;
 }
 
-/* 11. PROGRESSIVE DISCLOSURE. Native `<details>`. In the Coach the equity, pot odds, suggestion
+/* Progressive disclosure. Native `<details>`. In the Coach the equity, pot odds, suggestion
    and assumptions are never collapsible. */
 
 .prl-disclose {
@@ -1637,8 +1621,6 @@
   gap: var(--prl-space-5);
   padding-block: var(--prl-space-5) var(--prl-space-6);
 }
-
-/* 12. LOADING, EMPTY AND ERROR STATES */
 
 /** Sized by the caller to the real content, so nothing reflows when data lands. */
 .prl-skeleton {
@@ -1722,7 +1704,7 @@
   letter-spacing: var(--prl-tracking-label);
 }
 
-/* 13. THE BOOT SEQUENCE. First paint of the shell only, 900ms at most, 1ms under reduced motion. */
+/* Boot sequence. First paint of the shell only, 900ms at most, 1ms under reduced motion. */
 
 /**
  * The cap is also CSS, because `data-state="done"` needs hydration, and a failed bundle left an
@@ -1807,9 +1789,7 @@
   animation: prl-boot-wipe var(--prl-dur-count) var(--prl-ease-standard) forwards;
 }
 
-/* 14. COMPONENTS. One block per component in `packages/ui/src/components`. */
-
-/* ---- 14.1 PlayingCard ---- */
+/* PlayingCard */
 
 /** A `<span>`, not an image. One `--prl-card-w` per size, and everything inside is `em`-relative. */
 .prl-card {
@@ -1922,7 +1902,7 @@
   background-color: var(--prl-card-face-dim);
 }
 
-/* ---- 14.2 CardRow ---- */
+/* CardRow */
 
 .prl-card-row {
   /* `<figure>` carries a 1em UA margin. This is a row of cards, not a plate. */
@@ -1983,7 +1963,7 @@
   }
 }
 
-/* ---- 14.3 PokerTable ---- */
+/* PokerTable */
 
 /**
  * DOM order is the read-aloud order, and the stacked layout reorders it visually. Safe only while
@@ -2254,7 +2234,7 @@
   }
 }
 
-/* ---- 14.4 ActionBar ---- */
+/* ActionBar */
 
 /**
  * The bar's height decides whether pot and price are visible together (design system section 10).
@@ -2446,7 +2426,7 @@
   color: var(--prl-text-on-accent);
 }
 
-/* ---- 14.5 the bet sizer ---- */
+/* ActionBar: the bet sizer */
 
 /**
  * Flex bases, not a container query. The interactive blocks and the readout use `max-content`,
@@ -2598,7 +2578,7 @@
   font-size: var(--prl-type-body-sm);
 }
 
-/* ---- 14.6 CoachPanel ---- */
+/* CoachPanel */
 
 /** Always visible: equity with method, pot odds, the suggestion and the assumptions. */
 .prl-coach {
@@ -2723,7 +2703,7 @@
   font-size: var(--prl-type-body);
 }
 
-/* ---- 14.7 outs ---- */
+/* CoachPanel: outs */
 
 .prl-outs {
   display: grid;
@@ -2823,7 +2803,7 @@
   gap: var(--prl-space-3);
 }
 
-/* ---- 14.8 candidate actions ---- */
+/* CoachPanel: candidate actions */
 
 /**
  * The one legitimate scroll container. `display: block` on `tr`/`td` strips the table role.
@@ -2869,7 +2849,7 @@
 
 /**
  * Element-qualified to tie the (0,1,1) cell rule above and win by order. A bare class at (0,1,0)
- * loses silently, as `.prl-legend-table__figure` did.
+ * loses silently.
  */
 td.prl-candidates__cost,
 td.prl-candidates__ev,
@@ -2932,7 +2912,7 @@ td.prl-candidates__ev,
   font-size: var(--prl-type-body);
 }
 
-/* ---- 14.9 suggestion ---- */
+/* CoachPanel: suggestion */
 
 /** An accent edge, never a wash. The markup never calls a suggestion correct or optimal. */
 .prl-suggestion {
@@ -3016,7 +2996,7 @@ td.prl-candidates__ev,
   font-size: var(--prl-type-body);
 }
 
-/* ---- 14.10 EquityBar ---- */
+/* EquityBar */
 
 .prl-equity-bar {
   display: grid;
@@ -3093,7 +3073,7 @@ td.prl-candidates__ev,
   white-space: nowrap;
 }
 
-/* ---- 14.11 StatTile ---- */
+/* StatTile */
 
 .prl-stat {
   display: grid;
@@ -3153,7 +3133,7 @@ td.prl-candidates__ev,
   color: var(--prl-adverse);
 }
 
-/* ---- 14.12 Callout ---- */
+/* Callout */
 
 /** The marker carries a word ("Insight", "Watch out"), so the callout reads without colour. */
 /** The box is capped too. On `/play` at 1440 it drew a 1360px band around a 612px paragraph. */
@@ -3214,7 +3194,7 @@ td.prl-candidates__ev,
   color: var(--prl-adverse);
 }
 
-/* ---- 14.13 Formula ---- */
+/* Formula */
 
 .prl-formula {
   display: grid;
@@ -3248,7 +3228,7 @@ td.prl-candidates__ev,
   line-height: var(--prl-leading-body);
 }
 
-/* ---- 14.14 AssumptionList and UncertaintyNote ---- */
+/* AssumptionList and UncertaintyNote */
 
 /** Never collapsible. A number whose assumptions are a click away is presented as fact. */
 .prl-assumptions {
@@ -3347,7 +3327,7 @@ td.prl-candidates__ev,
   line-height: var(--prl-leading-snug);
 }
 
-/* ---- 14.15 UnitsBadge ---- */
+/* UnitsBadge */
 
 /** Units, never currency. No symbol, no "balance", no purchase affordance. "units" stays visible. */
 .prl-units {
@@ -3434,9 +3414,7 @@ td.prl-candidates__ev,
   line-height: var(--prl-leading-snug);
 }
 
-/* ---- 14.16 legacy aliases ---- */
-
-/** Kept because components still emit them. */
+/** Legacy aliases, kept because components still emit them. */
 .prl-eyebrow,
 .prl-section-title {
   display: block;
@@ -3455,7 +3433,7 @@ td.prl-candidates__ev,
   line-height: var(--prl-leading-snug);
 }
 
-/* 15. FORCED COLORS. Fills go and every border is CanvasText. Each rule restates a lost state. */
+/* Forced colors. Fills go and every border is CanvasText. Each rule restates a lost state. */
 
 @media (forced-colors: active) {
   /* A button's shape has to come from a real border, since its fill is gone. */

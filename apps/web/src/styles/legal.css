@@ -10,8 +10,6 @@
  * reduce it to a colour.
  */
 
-/* 1. THE DOCUMENT COLUMN */
-
 /**
  * The column plus `--prl-space-9` per side, centred. `--prl-container-narrow` (60rem) left 230px dead
  * beside the 60ch column. `:has()` because the tests read these class names and the markup is fixed.
@@ -66,7 +64,7 @@
   letter-spacing: var(--prl-tracking-heading);
 }
 
-/* 2. THE DOCUMENT'S OWN METADATA, at the top so a reader knows it is a draft before reading it. */
+/* The document's own metadata, at the top so a reader knows it is a draft before reading it. */
 
 /** Material level 1 (tokens.css). `--prl-elevation-0` is stated to cancel any inherited elevation. */
 .prl-legal__meta {
@@ -106,7 +104,7 @@
   }
 }
 
-/* 3. THE "NOT REVIEWED" BANNER. A full caution border, because it qualifies the whole page. */
+/* The "not reviewed" banner. A full caution border, because it qualifies the whole page. */
 
 .prl-legal__banner {
   display: grid;
@@ -131,7 +129,7 @@ p.prl-legal__banner-mark {
   color: var(--prl-caution);
 }
 
-/* 4. THE CLAUSE MARKER. The load-bearing rule, see the header. */
+/* The clause marker. The load-bearing rule, see the header. */
 
 .prl-legal-flag {
   display: grid;
@@ -157,7 +155,7 @@ p.prl-legal-flag__mark {
   color: var(--prl-caution);
 }
 
-/* 5. THE DATA INVENTORY. A `<dl>` of terms, because a table would need a horizontal scroll on a phone. */
+/* The data inventory. A `<dl>` of terms, because a table would need a horizontal scroll on a phone. */
 
 .prl-legal__inventory {
   display: grid;
@@ -185,7 +183,7 @@ p.prl-legal-flag__mark {
   line-height: var(--prl-leading-body);
 }
 
-/* 6. THE AGE CHECK. A page, not an overlay, so it needs no scrim, trap or z-index. */
+/* The age check. A page, not an overlay, so it needs no scrim, trap or z-index. */
 
 /** Material level 2, one step of elevation, above the level-1 metadata well. */
 .prl-gate {

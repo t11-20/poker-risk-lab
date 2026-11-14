@@ -6,11 +6,10 @@
  * `components.css` lists. The `860px` nav breakpoint is mirrored by `NAV_SHEET_QUERY` in `src/lib/nav.ts`.
  */
 
-/* 0. THE APP-SHELL TOKENS
-   Shell-only, so they live here and not in `tokens.css`.
+/* App-shell tokens. Shell-only, so they live here and not in `tokens.css`.
 
    The header is glass. Its fill and filter are literal tokens in one block, with no shell alias, so
-   the ghosting guard in layout-guarantees.test.ts can see them (the nav.css header has the bug).
+   the ghosting guard in layout-guarantees.test.ts can see them (the ghosting `nav.css` describes).
    `--prl-shell-nav-fill` is opaque `--prl-surface-inset`, because glass pills on a glass strip would
    be indistinguishable. `--prl-shell-sentinel` is the 40px scroll distance before the header floats.
 
@@ -47,8 +46,6 @@
 :root[data-theme="light"] {
   --prl-shell-field-falloff: rgb(16 20 26 / 5%);
 }
-
-/* 1. THE SHELL COLUMN */
 
 /** `100dvh`, so a retracting mobile toolbar cannot strand the footer above the fold. */
 .prl-app {
@@ -117,7 +114,7 @@ body {
   outline: none;
 }
 
-/* 2. THE STICKY HEADER, AND THE SENTINEL THAT DRIVES IT. An `IntersectionObserver` on the sentinel
+/* The sticky header and the sentinel that drives it. An `IntersectionObserver` on the sentinel
    sets the state, never a scroll handler (SiteHeader.tsx). Neither element takes part in layout. */
 
 .prl-shell__sentinel-anchor {
@@ -134,7 +131,7 @@ body {
 }
 
 /**
- * The glass strip. Fill and filter stay literal tokens in one block (section 0). Neither may ever
+ * The glass strip. Fill and filter stay literal tokens in one block (see the shell tokens). Neither may ever
  * transition, because a changing `backdrop-filter` re-evaluates the whole backdrop every frame.
  */
 .prl-shell__header {
@@ -179,8 +176,6 @@ body {
   padding-block: var(--prl-space-4);
 }
 
-/* ---- 2.1 the wordmark ---- */
-
 .prl-shell__brand {
   display: inline-flex;
   align-items: center;
@@ -190,7 +185,7 @@ body {
   text-decoration: none;
 }
 
-/* ---- the suit marks (`SuitMark`) ---- */
+/* SuitMark */
 
 /** Four colours, never colour alone. The lighter partners on the card back avoid navy on navy. */
 .prl-suit-mark {
@@ -247,8 +242,6 @@ body {
 .prl-shell__brand-tail {
   display: none;
 }
-
-/* ---- 2.2 the desktop nav ---- */
 
 /** `display: none` below 860px, so only one navigation is in the accessibility tree. */
 .prl-nav {
@@ -308,8 +301,6 @@ body {
   color: var(--prl-accent-text);
 }
 
-/* ---- 2.3 the tools cluster ---- */
-
 .prl-shell__header-tools {
   display: flex;
   flex-wrap: wrap;
@@ -321,7 +312,7 @@ body {
   flex-basis: 100%;
 }
 
-/* 3. THE NARROW-VIEWPORT NAVIGATION. The focus trap, scroll lock and Escape live in `MobileNav.tsx`. */
+/* Narrow-viewport navigation. The focus trap, scroll lock and Escape live in `MobileNav.tsx`. */
 
 .prl-nav-trigger {
   display: inline-flex;
@@ -364,8 +355,6 @@ body {
 .prl-nav-trigger__word {
   color: var(--prl-text-secondary);
 }
-
-/* ---- 3.1 the sheet ---- */
 
 /** A full-screen opaque surface, not a drawer over a scrim. */
 .prl-sheet {
@@ -523,7 +512,7 @@ body {
   overflow: hidden;
 }
 
-/* 4. THE THEME CONTROL. The radios are visually hidden, not `display: none`, so they keep their
+/* Theme control. The radios are visually hidden, not `display: none`, so they keep their
    semantics and arrow keys. The focus ring is therefore drawn on the sibling word. */
 
 .prl-theme {
@@ -583,7 +572,7 @@ body {
   display: none;
 }
 
-/* 5. THE BOOT OVERLAY'S GUARDS. CSS, because it applies before first paint. Without scripting
+/* Boot overlay guards. CSS, because it applies before first paint. Without scripting
    nothing ever dismisses the overlay, so `scripting: none` must hide it. */
 
 @media (scripting: none) {
@@ -604,15 +593,13 @@ body {
   display: none;
 }
 
-/* 6. ROUTE TRANSITIONS AND SKELETONS. Skeletons match the content's size, so nothing reflows. */
+/* Route transitions and skeletons. Skeletons match the content's size, so nothing reflows. */
 
 .prl-shell__loading {
   display: grid;
   gap: var(--prl-space-8);
   padding-block: var(--prl-space-12);
 }
-
-/* 7. THE FOOTER */
 
 /**
  * No fill, so the backdrop field continues under it. Its text sits on the page ground that
@@ -684,7 +671,7 @@ body {
   margin-block-end: 0;
 }
 
-/* 7a. THE PROCESS SPINE (§9.1). Shell-level because the same component is the in-hand breadcrumb.
+/* Process spine (§9.1). Shell-level because the same component is the in-hand breadcrumb.
    The connector is one border on the list. The current step has a longer tick and an accent label,
    so colour is never the only cue. No arrow glyphs, because screen readers announce them. */
 
@@ -743,7 +730,7 @@ body {
   color: var(--prl-accent-text);
 }
 
-/* 8. RESPONSIVE. 860px is the shell's breakpoint, mirrored by `NAV_SHEET_QUERY`. */
+/* Responsive. 860px is the shell's breakpoint, mirrored by `NAV_SHEET_QUERY`. */
 
 @media (min-width: 860px) {
   .prl-nav {
@@ -783,7 +770,7 @@ body {
   }
 }
 
-/* 9. FORCED COLORS. Fills are discarded, so the stuck header and current destination rely on borders. */
+/* Forced colors. Fills are discarded, so the stuck header and current destination rely on borders. */
 
 @media (forced-colors: active) {
   .prl-nav__link[aria-current="page"],

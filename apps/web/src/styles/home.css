@@ -4,7 +4,7 @@
  * because `var()` is invalid in a media query.
  */
 
-/* 1. Section rhythm. `--prl-section-y` is spent as it is, not trimmed to fit more above the fold. */
+/* Section rhythm. `--prl-section-y` is spent as it is, not trimmed to fit more above the fold. */
 
 /**
  * `60ch` broke lines at 80 to 88 characters at 1440px, past the ~75 where the return sweep loses the
@@ -28,7 +28,7 @@
   margin-block-end: var(--prl-space-9);
 }
 
-/** From 1000px the heading and lede sit side by side, the app's one wide breakpoint (`page.css` 1a). */
+/** From 1000px the heading and lede sit side by side, the app's one wide breakpoint (`.prl-page-head` in `page.css`). */
 @media (min-width: 1000px) {
   .prl-home__section-head {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -59,7 +59,7 @@
   line-height: var(--prl-leading-body);
 }
 
-/* 2. Hero. The pitch on the left, one priced hand on the right. */
+/* Hero. The pitch on the left, one priced hand on the right. */
 
 .prl-home__hero {
   display: grid;
@@ -112,8 +112,6 @@
 .prl-home__guardrail strong {
   color: var(--prl-text);
 }
-
-/* 2a. The hand */
 
 /** The panel takes a playing card's corner, so the panel and its cards read as one object. */
 .prl-spot {
@@ -230,7 +228,7 @@
   line-height: var(--prl-leading-body);
 }
 
-/* 2b. The loop. Scoped to `.prl-home__section .prl-spine*` because the same component is a
+/* The loop. Scoped to `.prl-home__section .prl-spine*` because the same component is a
    breadcrumb inside a hand, where a rail would be noise. Overrides `globals.css` at (0,2,0). */
 
 /** The rail moves from the `<ol>` onto each step, so each segment can carry a node. */
@@ -297,7 +295,7 @@
   text-transform: none;
 }
 
-/* 3. Metrics band. Every figure carries its source note. */
+/* Metrics band. Every figure carries its source note. */
 
 .prl-metrics {
   display: grid;
@@ -308,7 +306,7 @@
   max-width: var(--prl-measure);
 }
 
-/* 4. Three ways in. Columns divided by rules, not three boxed cards. */
+/* Three ways in. Columns divided by rules, not three boxed cards. */
 
 .prl-home__ways {
   display: grid;
@@ -358,7 +356,7 @@
   font-weight: var(--prl-weight-semibold);
 }
 
-/* 6. Responsive. Two columns at 600px and more at 900px, per design system section 10. */
+/* Responsive. Two columns at 600px and more at 900px, per design system section 10. */
 
 @media (min-width: 600px) {
   .prl-metrics {

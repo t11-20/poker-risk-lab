@@ -3,7 +3,7 @@
  * marker state also has a glyph and a sentence in the markup, so it survives forced colors.
  */
 
-/* 0. Page opener, scoped to `.prl-review-page` so the shared `page.css` stays shared. The capped
+/* Page opener, scoped to `.prl-review-page` so the shared `page.css` stays shared. The capped
    standfirst moves into the empty half of the row, which also saves ~90px above the table. */
 
 .prl-review-page .prl-page-head__standfirst {
@@ -13,7 +13,7 @@
 /**
  * `grid-row: 1 / -1` means `1 / 2` in a grid with no explicit rows, so the standfirst spans 6 rows and
  * the row gap becomes a margin, because a gap is charged for empty rows. `--prl-space-5` matches
- * `.prl-page-head`'s gap in `page.css`. The full reasoning is in `legends.css` section 1.
+ * `.prl-page-head`'s gap in `page.css`. The full reasoning is at `.prl-legend-head` in `legends.css`.
  */
 @media (min-width: 900px) {
   /* `:has()` because `/review/[handId]` has no standfirst, and an empty second track would still
@@ -42,7 +42,7 @@
   }
 }
 
-/* 1. History table. Dense on purpose, with tabular numerals in every numeric column. */
+/* History table. Dense on purpose, with tabular numerals in every numeric column. */
 
 .prl-review-sorts {
   display: flex;
@@ -308,7 +308,7 @@ span.prl-review-table__cell-label {
   display: none;
 }
 
-/* 1b. Below 1024px the table is cards, because its six columns need ~930px and the net column
+/* Below 1024px the table is cards, because its six columns need ~930px and the net column
    started off screen at 360. Chrome 157 keeps the table roles with these rows re-displayed
    (`Accessibility.getFullAXTree` at 360). The header row is visually hidden, not `display: none`,
    which dropped every `columnheader`. Each card prints its own `aria-hidden` column names. The card
@@ -424,8 +424,6 @@ span.prl-review-table__cell-label {
   letter-spacing: var(--prl-tracking-label);
 }
 
-/* 2. Replay header */
-
 /**
  * Material level 1 with no elevation, because the figures are part of the header. Rules between them,
  * not gaps, make one readout with four fields.
@@ -470,7 +468,7 @@ span.prl-review-table__cell-label {
   line-height: var(--prl-leading-tight);
 }
 
-/* 3. Decision timeline. It wraps to a stack on a narrow screen, so both arrow axes are bound. */
+/* Decision timeline. It wraps to a stack on a narrow screen, so both arrow axes are bound. */
 
 /** Resets a `<fieldset>`'s `min-inline-size: min-content`, which kept it from shrinking to scroll. */
 .prl-timeline {
@@ -656,8 +654,6 @@ span.prl-review-table__cell-label {
 .prl-timeline__marker[aria-current="step"] .prl-timeline__analysis-mark {
   color: var(--prl-text-on-accent);
 }
-
-/* 4. Replay stage */
 
 .prl-replay {
   display: grid;
@@ -879,7 +875,7 @@ span.prl-review-table__cell-label {
   letter-spacing: var(--prl-tracking-label);
 }
 
-/* 5. Commitment verifier. The hash is shown in full with `overflow-wrap: anywhere`, because a root
+/* Commitment verifier. The hash is shown in full with `overflow-wrap: anywhere`, because a root
    a reader cannot copy is a root they cannot check. */
 
 .prl-verifier {
@@ -965,7 +961,7 @@ span.prl-review-table__cell-label {
   gap: var(--prl-space-2);
 }
 
-/* 6. Loading skeletons, each the height of what it stands in for, so nothing reflows. */
+/* Loading skeletons, each the height of what it stands in for, so nothing reflows. */
 
 .prl-review-skeleton {
   display: grid;
@@ -1019,7 +1015,7 @@ span.prl-review-table__cell-label {
   --prl-skeleton-h: var(--prl-space-16);
 }
 
-/* 7. Forced colors. These discard background colours, so the active marker and sort link restate
+/* Forced colors. These discard background colours, so the active marker and sort link restate
    their state as a border width and an underline. */
 
 @media (forced-colors: active) {

@@ -269,8 +269,7 @@
 /* 3. THE DECISION BAND
    In flow at every width. Never pin it. A bottom-sticky band covers the last H pixels of the viewport
    while its flow position is below the fold, so the table above it ends underneath, whatever H is.
-   The old sticky band covered the pot, board and all six seats at 1440x900. The fix is height. The
-   plate moves beside the controls from 46rem of column (section 8.1), and the band measured 342px at
+   The plate moves beside the controls from 46rem of column (section 8.1), and the band measured 342px at
    1440x900. Below 46rem only the button row sticks, inside its own bar (section 3.1). There is no
    fill or top rule, so the page wash shows through the ActionBar's glass. */
 
@@ -588,7 +587,7 @@
 @media (min-width: 900px) {
   /**
    * Section 1. The lede gets its own column. `span 6` with a margin, not a row gap, avoids the
-   * `grid-row: 1 / -1` trap described in `legends.css` section 1.
+   * `grid-row: 1 / -1` trap described at `.prl-legend-head` in `legends.css`.
    */
   .prl-play__head {
     /* Two halves, not `1fr` plus a measure track, which left the title 138px at 900px. */
