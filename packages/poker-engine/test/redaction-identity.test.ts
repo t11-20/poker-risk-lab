@@ -1,8 +1,7 @@
 /**
- * Entitlement belongs to a person, never a chair. `redactFor` once compared seat indices, so after
- * a player stood up the next occupant of the chair saw their unshown cards with `isSelf: true`.
- * Player ids here deliberately differ from seat indices (`seat 0 -> usr_c`), because with ids like
- * `p0, p1` an identity check and a position check agree, which is how the bug survived.
+ * Entitlement belongs to a person, never a chair: the next occupant of a chair must not see the
+ * previous player's unshown cards. Player ids here deliberately differ from seat indices
+ * (`seat 0 -> usr_c`), because with ids like `p0, p1` an identity check and a position check agree.
  */
 
 import assert from 'node:assert/strict';

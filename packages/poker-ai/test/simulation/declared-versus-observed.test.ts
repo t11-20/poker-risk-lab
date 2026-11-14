@@ -325,8 +325,7 @@ test('reading aggressionFrequency as an unconditional rate is arithmetically imp
 });
 
 test('the package measures the same numbers this file counted, from its own denominators', () => {
-  // `stats.ts` once published the unconditional rate on both axes, which disagrees with this count by
-  // 0.10 and 0.30.
+  // The unconditional rate on either axis disagrees with this count by 0.10 and 0.30.
   for (const { profile, own, packageStats } of sweep()) {
     const where = profile.naming.id;
     assert.equal(

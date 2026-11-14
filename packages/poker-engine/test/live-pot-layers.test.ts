@@ -76,8 +76,7 @@ test('a real side pot is still layered, so the fix did not just flatten everythi
 });
 
 test('a folded seat is shown no price to call (REGRESSION)', () => {
-  // A folded seat once reported the full bet level as "to call" (6,772 times in an engine fuzz),
-  // because `betting.ts`'s `amountToCall` has no status check.
+  // `betting.ts`'s `amountToCall` has no status check, so a folded seat would report the full bet level.
   const { state } = deal({ stacks: [1000, 1000, 1000] });
   const folder = state.toAct;
   assert.ok(folder !== null);

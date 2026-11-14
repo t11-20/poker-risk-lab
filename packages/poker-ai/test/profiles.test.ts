@@ -1,7 +1,7 @@
 /**
  * Does a profile card agree with its own vector? `assertNoImpersonation` checks voice, not whether a
- * sentence matches the number beside it. `fundamentals-coach` once said "Does not adapt to you at
- * all" at `exploitativeAdaptation` 0.30. The check runs in `validateProfiles` at module load, and
+ * sentence matches the number beside it, such as "Does not adapt to you at all" at
+ * `exploitativeAdaptation` 0.30. The check runs in `validateProfiles` at module load, and
  * these tests drive that function rather than restating its rule.
  */
 

@@ -193,7 +193,6 @@ export function assertDistinctCards(cards: readonly Card[], what = 'cards'): voi
   }
 }
 
-/** A fresh ordered deck, `[0, 1, ..., 51]`. Not shuffled. */
 export function orderedDeck(): Card[] {
   return Array.from({ length: DECK_SIZE }, (_unused, index) => index);
 }

@@ -145,9 +145,8 @@ export function analyseScenario(scenario: Scenario, options: AnalyseOptions = {}
   const hero = result.players[0];
   if (hero === undefined) throw new ScenarioAnalysisError(`equity for "${scenario.id}" produced no hero`);
 
-  // The pot hero can win, smaller than `situation.pot` when hero is all-in short of the bet. Using
-  // the whole middle once told a learner 8.6% where 37.5% was needed. It must match
-  // `buildCoachReport`, and is derived because a scenario has no per-seat record of the street.
+  // The pot hero can win, smaller than `situation.pot` when hero is all-in short of the bet. It must
+  // match `buildCoachReport`, and is derived because a scenario has no per-seat record of the street.
   const contestablePot = deriveContestablePot({
     pot: situation.pot,
     toCall: situation.toCall,
@@ -179,7 +178,7 @@ export function analyseScenario(scenario: Scenario, options: AnalyseOptions = {}
   }
 
   // `ruleOfThumbFor` is the single gate, not `ruleOf24Accuracy`, because multiplying `totalOuts`
-  // once published 47 x 4 = "188%". It answers null unless clean outs remain to come.
+  // gives 47 x 4 = "188%". It answers null unless clean outs remain to come.
   const ruleOf24ErrorPoints = ruleOfThumbFor(outs, situation.cardsToCome)?.errorPoints ?? null;
 
   return {

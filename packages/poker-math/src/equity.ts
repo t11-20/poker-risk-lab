@@ -97,7 +97,7 @@ const BOARD_TARGET = 5;
 
 /**
  * The most trials one Monte Carlo call will run. The trial loop is synchronous and nothing can
- * interrupt it, so `Infinity` once wedged the thread. The half-width falls as 1/√n, so 5 million is
+ * interrupt it, so `Infinity` would wedge the thread. The half-width falls as 1/√n, so 5 million is
  * far past the point where the interval stops moving.
  */
 export const MAX_MONTE_CARLO_SAMPLES = 5_000_000;

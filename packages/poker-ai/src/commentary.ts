@@ -736,7 +736,7 @@ export function commentOnDecision(input: {
  * 0.1 lower by construction. `threeBetTendency` is a share of openings played back at; the wire rate
  * is capped by entry frequency. Both would accuse every profile falsely.
  * `foldToPressure` on the wire counts the preflop entry decision, so it tracks `vpip` in reverse
- * (measured 2026-11-11, 8,000 hands). On priced turns observed rates span 0.165-0.301 against declared
+ * (8,000 hands). On priced turns observed rates span 0.165-0.301 against declared
  * 0.14-0.76, so the trait is a weight, not a frequency, and no watchable figure matches the card.
  */
 const OBSERVED_FROM_WIRE: Readonly<Partial<Record<TraitKey, (observed: ProfileObservedStats) => number>>> = {

@@ -266,7 +266,6 @@ export function positionLabels(
   return labels;
 }
 
-/** How many seats act after this one on the current street. */
 export function playersLeftToAct(
   seat: SeatIndex,
   maxSeats: number,

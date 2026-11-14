@@ -83,10 +83,7 @@ export interface SprResult {
   readonly implication: string;
 }
 
-/**
- * The band for a ratio. `@prl/ui` once had its own edges (1/4/8/15), and one panel showed two bands
- * thirteen lines apart. This is now the only classifier.
- */
+/** The band for a ratio, and the only classifier, so no panel can show two bands for one SPR. */
 export function sprBandFor(spr: number): SprBand {
   return bandOf(spr);
 }

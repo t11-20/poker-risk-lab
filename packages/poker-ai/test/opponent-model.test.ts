@@ -641,7 +641,7 @@ function seatThatNeverFolds(base: PlayerView, seat: number, hands: number): Oppo
 
 /**
  * Preflop alone cannot catch this, because `keep ** 0` is 1 and the per-street keep factor drops out.
- * Before the fix this 25-hand sample gave river 244 combos against a neutral 56.
+ * Unneutralised, this 25-hand sample gives 244 river combos against a neutral 56.
  */
 test('an insufficient sample cannot move the range off the baseline assumption, on any street', () => {
   const base = completedBaseView();
@@ -673,7 +673,7 @@ test('an insufficient sample cannot move the range off the baseline assumption, 
 
 /**
  * `estimateRange` must scale by adaptation like `exploitAdjustments`, because every profile has
- * adaptation 0 at `educational`. Before the fix the station and the rock gave 300 and 84 flop combos.
+ * adaptation 0 at `educational`. Unscaled, the station and the rock give 300 and 84 flop combos.
  */
 test('estimateRange returns the neutral baseline at adaptation 0, whatever it has counted', () => {
   const station: DerivedSeatStats = {
@@ -913,8 +913,8 @@ test('the OpponentModel handle swaps snapshots without mutating the one already 
 });
 
 /**
- * `derivedStats` returns null below 20 hands, but `insufficient` runs to 40. Before the fix a 25-hand
- * seat that entered every pot returned vpip 1 and fold-to-bet 0.
+ * `derivedStats` returns null below 20 hands, but `insufficient` runs to 40. Unneutralised, a 25-hand
+ * seat that entered every pot returns vpip 1 and fold-to-bet 0.
  */
 test('statsOrNeutralFor neutralises the whole insufficient band, not just the null floor', () => {
   const base = completedBaseView();

@@ -33,7 +33,6 @@ export function seatsAbleToAct(state: HandState): readonly SeatState[] {
   return state.seats.filter((seat) => seat.status === 'active');
 }
 
-/** Total chips in the middle: previous streets plus this street's commitments. */
 export function totalPot(state: HandState): number {
   let sum = state.potFromPreviousStreets;
   for (const seat of state.seats) sum += seat.committedThisStreet;

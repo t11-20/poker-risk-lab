@@ -747,8 +747,8 @@ function modelAfterWatching(kind: 'station' | 'rock', ownSeat: SeatIndex, hands 
 
 /**
  * Two `decide` calls per spot, identical except for the opponent model. With adaptation off they
- * must agree every time. Before the fix they differed in 209 of 1,050 paired decisions at
- * `educational`. The `expert` half is the negative control. A fix that stopped reading the sample
+ * must agree every time; a model read at `educational` moved 209 of 1,050 paired decisions.
+ * The `expert` half is the negative control. A fix that stopped reading the sample
  * would fail it.
  */
 test('at a difficulty with adaptation off, the opponent read cannot move a decision', () => {
