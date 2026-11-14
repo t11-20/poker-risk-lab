@@ -7,7 +7,17 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readdirSync, readFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -15,6 +25,7 @@ import { promisify } from 'node:util';
 import { loadConfig } from '../src/config.ts';
 import { createDatabaseClient, type Sql } from '../src/db.ts';
 import { generateOpaqueSecret } from '../src/repositories/ids.ts';
+import { readShippedMigrations, ShippedMigrationsError } from '../src/schema-guard.ts';
 import { adminDatabaseUrl, databaseSkip } from './helpers/database.ts';
 
 const execFileAsync = promisify(execFile);
@@ -142,7 +153,11 @@ interface RunResult {
  */
 async function runMigrate(
   args: readonly string[],
-  options: { readonly url?: string | undefined; readonly env?: Readonly<Record<string, string>> } = {},
+  options: {
+    readonly url?: string | undefined;
+    readonly env?: Readonly<Record<string, string>>;
+    readonly script?: string;
+  } = {},
 ): Promise<RunResult> {
   const env: Record<string, string> = {
     ...Object.fromEntries(
@@ -157,7 +172,7 @@ async function runMigrate(
   if (options.url !== undefined) env['DATABASE_URL'] = options.url;
 
   try {
-    const { stdout, stderr } = await execFileAsync(process.execPath, [MIGRATE, ...args], {
+    const { stdout, stderr } = await execFileAsync(process.execPath, [options.script ?? MIGRATE, ...args], {
       env,
       cwd: REPO_ROOT,
     });
@@ -167,6 +182,39 @@ async function runMigrate(
     return { code: failure.code ?? 1, output: `${failure.stdout ?? ''}${failure.stderr ?? ''}` };
   }
 }
+
+interface FixtureRunner {
+  readonly script: string;
+  readonly migrations: string;
+  readonly remove: () => void;
+}
+
+/**
+ * A copy of the real runner under a temporary root, because it reads `db/migrations` relative to itself.
+ * `src` and `node_modules` are linked so it resolves what the real one does.
+ */
+function fixtureRunner(): FixtureRunner {
+  const root = mkdtempSync(join(tmpdir(), 'prl-migrate-fixture-'));
+  const scripts = join(root, 'apps', 'api', 'scripts');
+  const migrations = join(root, 'db', 'migrations');
+  mkdirSync(scripts, { recursive: true });
+  mkdirSync(migrations, { recursive: true });
+  copyFileSync(MIGRATE, join(scripts, 'migrate.mjs'));
+  symlinkSync(join(API_DIR, 'src'), join(root, 'apps', 'api', 'src'), 'dir');
+  symlinkSync(join(API_DIR, 'node_modules'), join(root, 'apps', 'api', 'node_modules'), 'dir');
+  return {
+    script: join(scripts, 'migrate.mjs'),
+    migrations,
+    remove: () => rmSync(root, { recursive: true, force: true }),
+  };
+}
+
+function onlyMigration(runner: FixtureRunner, name: string, contents: string): void {
+  for (const entry of readdirSync(runner.migrations)) rmSync(join(runner.migrations, entry));
+  writeFileSync(join(runner.migrations, name), contents, 'utf8');
+}
+
+const sha256 = (text: string): string => `sha256:${createHash('sha256').update(text, 'utf8').digest('hex')}`;
 
 interface LedgerRow {
   readonly version: string;
@@ -494,6 +542,116 @@ describe('migrate.mjs — what it refuses to do', () => {
       assert.doesNotMatch(attempt.output, /postgresql:\/\/someone/, 'a connection string reached the output');
     }
   });
+});
+
+describe('migrate.mjs and the schema guard agree on what a migration is', () => {
+  const DEAD_URL = 'postgresql://someone:nothing@127.0.0.1:1/nothing';
+  const ACCEPTED = [
+    '0001_initial.sql',
+    '0010_schema_migrations_readable.sql',
+    '9999_a1_b2_c3.sql',
+    '0000_x.sql',
+  ];
+  const REFUSED = [
+    '001_short.sql',
+    '00001_long.sql',
+    'abcd_letters.sql',
+    '0001_Upper.sql',
+    '0001_kebab-case.sql',
+    '0001_two__underscores.sql',
+    '0001_trailing_.sql',
+    '0001_.sql',
+    '0001.sql',
+    '0001_name.SQL',
+    '0001_name.sql.bak',
+    '0001_name.psql',
+    '0001 spaced.sql',
+    '0001_ümlaut.sql',
+  ];
+
+  it('accepts and refuses the same file names', async () => {
+    const runner = fixtureRunner();
+    try {
+      for (const [name, accepted] of [
+        ...ACCEPTED.map((n) => [n, true] as const),
+        ...REFUSED.map((n) => [n, false] as const),
+      ]) {
+        onlyMigration(runner, name, 'select 1;\n');
+        // `status` reads the directory before its first query, so a dead URL separates the two outcomes.
+        const run = await runMigrate(['status'], { url: DEAD_URL, script: runner.script });
+        assert.equal(run.code, 1, run.output);
+        if (accepted) {
+          assert.match(run.output, /ECONNREFUSED/, `migrate.mjs refused ${name}: ${run.output}`);
+          assert.equal(readShippedMigrations(runner.migrations)[0]?.version, name);
+        } else {
+          assert.match(run.output, /is not named NNNN_lower_snake_case\.sql/, `migrate.mjs accepted ${name}`);
+          assert.throws(() => readShippedMigrations(runner.migrations), ShippedMigrationsError, name);
+        }
+      }
+    } finally {
+      runner.remove();
+    }
+  });
+
+  it('records, for every shipped migration, the checksum the schema guard computes', dbOptions, async () => {
+    const shipped = readShippedMigrations();
+    assert.ok(shipped.length > 0, 'no shipped migrations to compare');
+    await withThrowaway(async (throwaway) => {
+      const up = await runMigrate(['up'], { url: throwaway.url });
+      assert.equal(up.code, 0, up.output);
+      const ledger = await ledgerOf(throwaway);
+      assert.deepEqual(
+        ledger.map((row) => ({ version: row.version, checksum: row.checksum })),
+        shipped.map((file) => ({ version: file.version, checksum: file.checksum })),
+      );
+    });
+  });
+
+  // No shipped file has a BOM or a CR, so the real directory alone cannot tell normalising from not.
+  // `up` sends a BOM to PostgreSQL as a syntax error, so the BOM form is checked by `status` after it.
+  it(
+    'takes a BOM and CRLF copy of an applied file for the same file, as the guard does',
+    dbOptions,
+    async () => {
+      const runner = fixtureRunner();
+      const name = '0001_line_endings.sql';
+      const lf = 'select 1;\nselect 2;\n';
+      try {
+        await withThrowaway(async (throwaway) => {
+          onlyMigration(runner, name, lf);
+          const up = await runMigrate(['up'], { url: throwaway.url, script: runner.script });
+          assert.equal(up.code, 0, up.output);
+          const ledger = await ledgerOf(throwaway);
+          assert.deepEqual(
+            ledger.map((row) => ({ version: row.version, checksum: row.checksum })),
+            [{ version: name, checksum: sha256(lf) }],
+          );
+
+          for (const variant of [
+            lf.replace(/\n/g, '\r\n'),
+            `\uFEFF${lf}`,
+            `\uFEFF${lf.replace(/\n/g, '\r\n')}`,
+          ]) {
+            onlyMigration(runner, name, variant);
+            const status = await runMigrate(['status'], { url: throwaway.url, script: runner.script });
+            assert.equal(status.code, 0, status.output);
+            assert.match(status.output, /applied\s+0001_line_endings\.sql/, JSON.stringify(variant));
+            assert.doesNotMatch(status.output, /CHANGED/, JSON.stringify(variant));
+            assert.deepEqual(readShippedMigrations(runner.migrations), [
+              { version: name, checksum: sha256(lf) },
+            ]);
+          }
+
+          // Without this, a `status` that never compared would pass the loop above.
+          onlyMigration(runner, name, lf.replace('2', '3'));
+          const edited = await runMigrate(['status'], { url: throwaway.url, script: runner.script });
+          assert.match(edited.output, /CHANGED\s+0001_line_endings\.sql/, edited.output);
+        });
+      } finally {
+        runner.remove();
+      }
+    },
+  );
 });
 
 // Not covered. A rollback verb (none exists). A migration failing halfway, which needs a broken file in
