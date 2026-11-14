@@ -2327,6 +2327,32 @@
   gap: var(--prl-space-2) var(--prl-space-5);
 }
 
+.prl-hand-glance__hand {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--prl-space-2) var(--prl-space-5);
+}
+
+/** A row of its own, so the cards keep their line at 360px. The ring is the oval plate's 2rem, not 2.5rem. */
+.prl-hand-glance__now {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--prl-space-4);
+}
+
+.prl-hand-glance__now .prl-turn-timer {
+  --prl-turn-size: var(--prl-space-9);
+}
+
+.prl-hand-glance__latest {
+  min-width: 0;
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+  font-variant-numeric: var(--prl-numeric);
+}
+
 .prl-hand-glance__cards {
   display: flex;
   gap: var(--prl-space-2);
