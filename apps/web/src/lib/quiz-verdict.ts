@@ -18,8 +18,7 @@ export interface NumericVerdictInput {
 }
 
 /**
- * States the computed figure and the ± band separately. Takes formatted strings, because the
- * formatters live in `learn-calculations.ts`, which a test cannot load.
+ * States the computed figure and the ± band separately.
  */
 export function numericVerdictSentence(input: NumericVerdictInput): string {
   const { yours, computed, tolerance, matched } = input;

@@ -145,10 +145,7 @@ function VerdictRule(props: {
   readonly judgement: Consistency;
   readonly action: ScenarioAction;
 }): ReactElement | null {
-  const rule = verdictRuleSentence(props.judgement, props.action, {
-    units: formatUnits,
-    signedUnits: formatSignedUnits,
-  });
+  const rule = verdictRuleSentence(props.judgement, props.action);
   return rule === null ? null : <p className="prl-prose prl-stage__verdict-rule">{rule}</p>;
 }
 

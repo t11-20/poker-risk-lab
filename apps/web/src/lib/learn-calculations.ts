@@ -26,7 +26,8 @@ import {
   stackToPotRatio,
 } from '@prl/poker-math';
 import type { MetricFormat } from '@prl/ui';
-import { formatChips, formatPoints, formatProbability, formatUnits, NOT_A_PROBABILITY } from '@prl/ui';
+import { formatChips, formatPoints, formatUnits } from '@prl/ui/format';
+import { formatProbability, NOT_A_PROBABILITY } from '@prl/ui/probability';
 import type { QuizUnit as LeafQuizUnit } from './quiz-tolerance.ts';
 import {
   toleranceDecimals,
@@ -793,12 +794,6 @@ export function expectedAnswerFor(
   if (!outcome.ok) return { ok: false, reason: outcome.reason };
   return expectedFromResult(outcome.result, question);
 }
-
-/**
- * Defined in the leaf `lib/quiz-tolerance.ts` so `node --test` can load them. This file imports
- * `@prl/ui`, which re-exports `.tsx`.
- */
-export { QUIZ_UNIT_DECIMALS, QUIZ_UNIT_WORDS, withinTolerance } from './quiz-tolerance.ts';
 
 /** A figure rendered for reading, in the unit the question declared. */
 export function formatQuizValue(value: number, unit: QuizUnit): string {

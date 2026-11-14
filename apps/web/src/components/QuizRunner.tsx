@@ -39,8 +39,6 @@ import {
   figureValue,
   formatQuizValue,
   formatTolerance,
-  QUIZ_UNIT_WORDS,
-  withinTolerance,
 } from '@/lib/learn-calculations.ts';
 import {
   attemptBodyFor,
@@ -51,6 +49,7 @@ import {
   submitQuizAttempt,
   VERDICT_SOURCE_NOTE,
 } from '@/lib/quiz-attempts.ts';
+import { QUIZ_UNIT_WORDS, withinTolerance } from '@/lib/quiz-tolerance.ts';
 import { CHOICE_MARKER, numericVerdictSentence, verdictMarker } from '@/lib/quiz-verdict.ts';
 import { RECORD_PATH } from '@/lib/record-data.ts';
 

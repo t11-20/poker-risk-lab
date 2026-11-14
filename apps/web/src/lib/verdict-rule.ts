@@ -1,9 +1,9 @@
 /**
  * The plain sentence above the Lab's verdict figures, saying what the verdict judges. Without it the
  * correct figures read as contradictory, a call "consistent" beside a better raise row.
- * Pure, with formatters passed in, because `@prl/ui` carries JSX that `node:test` cannot load.
  */
 
+import { formatSignedUnits, formatUnits } from '@prl/ui/format';
 import type { Consistency, ScenarioAction } from './consistency.ts';
 
 const ACTION_NAME: Readonly<Record<ScenarioAction, string>> = {
@@ -22,22 +22,11 @@ const ROW_NAME: Readonly<Record<ScenarioAction, string>> = {
   raise: 'Raise',
 };
 
-/** `formatUnits` and `formatSignedUnits` from `@prl/ui`, which the component hands in. */
-export interface VerdictFormatters {
-  readonly units: (units: number, options?: { readonly decimals?: number }) => string;
-  readonly signedUnits: (delta: number, options?: { readonly decimals?: number }) => string;
-}
-
 /** Below this, two figures print the same at the panel's precision. */
 const LEVEL = 0.05;
 
 /** `null` for an unpriced action. States the rule and the best row, never the outcome the chip says. */
-export function verdictRuleSentence(
-  judgement: Consistency,
-  action: ScenarioAction,
-  format: VerdictFormatters,
-): string | null {
-  const { units: formatUnits, signedUnits: formatSignedUnits } = format;
+export function verdictRuleSentence(judgement: Consistency, action: ScenarioAction): string | null {
   if (judgement.behindBenchmarkUnits === null || judgement.chosenEv === null) return null;
   const allowance = formatUnits(judgement.toleranceUnits);
 

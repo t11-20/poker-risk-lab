@@ -9,14 +9,13 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { formatSignedUnits, formatUnits } from '../../../packages/ui/src/format.ts';
+import { formatUnits } from '@prl/ui/format';
 import { LAB_SCENARIO_ANALYSIS, LAB_SCENARIOS } from '../src/fixtures/scenarios.ts';
 import { judgeConsistency, type ScenarioAction } from '../src/lib/consistency.ts';
 import { verdictRuleSentence } from '../src/lib/verdict-rule.ts';
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 const ACTIONS: readonly ScenarioAction[] = ['fold', 'check', 'call', 'bet', 'raise'];
-const FORMAT = { units: formatUnits, signedUnits: formatSignedUnits };
 
 const JUDGED = LAB_SCENARIOS.flatMap((scenario) => {
   const report = LAB_SCENARIO_ANALYSIS[scenario.id];
@@ -35,11 +34,11 @@ describe('the verdict says what it judged', () => {
 
   it('is one sentence naming folding as the benchmark, and the allowance, for every priced action', () => {
     for (const { id, action, judgement } of JUDGED) {
-      const sentence = verdictRuleSentence(judgement, action, FORMAT);
+      const sentence = verdictRuleSentence(judgement, action);
       assert.ok(sentence !== null, `${id}: a priced action has no sentence`);
       assert.match(sentence, /fold/u, `${id}: the sentence does not say it is measured against folding`);
       assert.ok(
-        sentence.includes(FORMAT.units(judgement.toleranceUnits)),
+        sentence.includes(formatUnits(judgement.toleranceUnits)),
         `${id}: no allowance in "${sentence}"`,
       );
       assert.equal(sentence.match(/\. /gu), null, `${id}: more than one sentence: "${sentence}"`);
@@ -57,7 +56,7 @@ describe('the verdict says what it judged', () => {
         (judgement.behindBenchmarkUnits ?? 0) < 0,
     );
     assert.ok(found !== undefined, 'no shipped spot reproduces the audit’s case; check before deleting this');
-    const sentence = verdictRuleSentence(found.judgement, found.action, FORMAT) ?? '';
+    const sentence = verdictRuleSentence(found.judgement, found.action) ?? '';
     // The allowance is for falling short, so "ahead" beside "within the allowance" needs the rule said.
     assert.match(
       sentence,
@@ -76,7 +75,7 @@ describe('the verdict says what it judged', () => {
     const [first] = JUDGED;
     assert.ok(first !== undefined);
     const unpriced = { ...first.judgement, behindBenchmarkUnits: null, chosenEv: null };
-    assert.equal(verdictRuleSentence(unpriced, first.action, FORMAT), null);
+    assert.equal(verdictRuleSentence(unpriced, first.action), null);
   });
 
   it('is the sentence the panel prints', () => {
