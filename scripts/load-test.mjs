@@ -1,36 +1,17 @@
 #!/usr/bin/env node
 /**
- * Load and capacity harness (`pnpm run test:load`). Drives the real user journey against ONE running
- * API, ramps concurrency until a stated failure criterion is crossed, and names what saturated from
- * the server's own `GET /metrics`. Every number is stamped with its environment, and `NOT_MEASURED`
- * lists what a run cannot say (a cluster, a real network, a production database, browsers, hours).
+ * Load and capacity harness (`pnpm run test:load`); `--help` lists every flag.
  *
- * Each series in `SERIES` is resolved at run time. A metric the process does not emit reads as
- * `null`, goes into `server.missing`, and can never fire a saturation signal, because the registry
- * renders no line for a counter that was never incremented and `0` would claim an absence of load.
- * `prl_event_loop_delay_*` is a rolling window reset by every scrape, so a second scraper halves it.
- * `prl_db_probe_duration_seconds` only advances on `GET /ready`, so the harness calls it per scrape.
- *
- * Journey per virtual user: connect, join, sit, play, ask Coach mid-hand, disconnect mid-hand,
- * resume, finish the hand, open Hand Review. Every resume is checked for the same seat, hand and
- * hole cards and a non-decreasing sequence and pot, and a consistency failure fails the run. Clients
- * only send actions from `legalActions`, sized at `minTo`, with the protocol's `expectedSequence` and
- * a unique `actionId`. Coach and Hand Review are paced under their rate limits.
- *
- * Action choice uses a seeded mulberry32 stream per seat so `--seed` repeats. It cannot touch an
- * outcome, because the server deals from its own CSPRNG.
+ * A metric the process does not emit reads as `null` and can never fire a saturation signal, because
+ * the registry renders no line for a counter that was never incremented and `0` would claim an
+ * absence of load. `prl_event_loop_delay_*` is a rolling window reset by every scrape, so a second
+ * scraper halves it. `prl_db_probe_duration_seconds` only advances on `GET /ready`, so the harness
+ * calls it per scrape.
  *
  * The WebSocket cookie goes in Node's non-standard options bag as the SECOND constructor argument,
  * `new WebSocket(url, { headers })`. A third argument is silently ignored (verified on Node 24.18.0).
  * Cookies are read with `getSetCookie()`, because `get('set-cookie')` comma-joins them and Expires
  * contains commas.
- *
- * Usage:
- *     node scripts/load-test.mjs [options]        # see --help for every flag
- *     pnpm run test:load -- --ramp 1,2,4,8 --hold 20 --json
- *
- * Exit codes: 0 when every level met every threshold and the ramp completed, and for --help. 1 on a
- * breach, a lost resume, an unreachable or refused `/metrics`, a blown budget, or a bad option.
  */
 
 import { randomUUID } from 'node:crypto';

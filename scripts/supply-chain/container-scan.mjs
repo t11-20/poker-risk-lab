@@ -13,8 +13,6 @@
  *
  * It runs `--scanners vuln` only and proves nothing beyond what the database knew when it ran.
  * Nothing re-runs it on a schedule, so scan again before a release.
- *
- * Exit codes: 0 every image scanned and nothing blocking (and for --help); 1 anything else.
  */
 
 import { spawnSync } from 'node:child_process';

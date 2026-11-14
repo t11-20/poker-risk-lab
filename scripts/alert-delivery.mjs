@@ -1,24 +1,8 @@
 #!/usr/bin/env node
 /**
- * Verifies that the alerts in `docs/production/alerts.md` fire, route and arrive. This is
- * `pnpm run alerts:verify`. A rule that was never evaluated fails silently (a renamed metric, a
- * wrong `job` label, an unrouted severity), so seven checks run against a real Prometheus and
- * Alertmanager.
- *
- * 1. Loaded. Every rule is live with no evaluation error, has `severity: page` or `ticket`, and names
- *    a runbook whose Detection section names the alert back (see `runbookNamingProblems`).
- * 2. Agreed. Names and severities match between the rules file and `docs/production/alerts.md`.
- * 3. Grounded. Every `prl_*` series is in a live API scrape, every `alertmanager_*` series in an
- *    Alertmanager scrape (with `up{job="prl-alertmanager"} == 1`), and every `probe_*` series in
- *    Prometheus' query API. The API read retries, because check 6 bans this loopback address.
- * 4. Evaluable. Prometheus executes every expression.
- * 5. Delivered. `ApiDown` is provoked by stopping the API and must reach the paging tier, then resolve.
- * 6. Delivered the other way. `RateLimitBans` must reach the ticket tier and not the pager.
- * 7. Dead man's switch. `Watchdog` (`expr: vector(1)`) pings its own receiver repeatedly, never a
- *    human tier, and stopping Alertmanager produces a silence that is detected.
- *
- * Checks 5 and 6 assert over both transports, webhook and SMTP. `startSmtpSink` is a real SMTP
- * server in `node:net`, and the envelope, `Subject:` and quoted-printable body are asserted per tier.
+ * `pnpm run alerts:verify`: the alerts in `docs/production/alerts.md` fire, route and arrive, checked
+ * against a real Prometheus and Alertmanager, because a rule that was never evaluated fails silently
+ * (a renamed metric, a wrong `job` label, an unrouted severity).
  *
  * Not proved: that a provider accepts this deployment's credentials, that a phone watches the
  * address, that a person is awake (`pnpm run alerts:ack`), or that the watcher outside this host is
@@ -32,18 +16,6 @@
  * It stops the API rather than posting to Alertmanager's API, so the scrape, rule, `for` and routing
  * label are all exercised. `max_over_time(up[2m]) == 0` plus `for: 2m` fires a little over four
  * minutes after the stop, and a whole run takes six to seven minutes.
- *
- * Usage:
- *     pnpm run alerts:verify
- *     node scripts/alert-delivery.mjs --skip-provoke    # checks 1-4 only, ~30s
- *     node scripts/alert-delivery.mjs --only-heartbeat  # checks 1-4 and 7, ~4m, API untouched
- *     node scripts/alert-delivery.mjs --keep-up         # leave Prometheus running
- *     node scripts/alert-delivery.mjs --render-config  # render alertmanager.yml and stop
- *     node scripts/alert-delivery.mjs --json --out alerts.json
- *
- * Exit codes:
- *     0  every check passed
- *     1  any check failed, or the stack could not be brought up
  */
 
 import { spawnSync } from 'node:child_process';

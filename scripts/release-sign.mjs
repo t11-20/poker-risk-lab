@@ -8,14 +8,6 @@
  * a trivy CycloneDX SBOM of the image, and writes `release-signatures.json` only if every image passed.
  * It never writes release-manifest.json, because `staging.mjs` switches `pull_policy` on its
  * `registry` block. `--keyless` signs with a Fulcio certificate inside GitHub Actions and refuses elsewhere.
- *
- * Usage:
- *     node scripts/release-sign.mjs [--manifest <path>] [--out <path>] [--registry <host:port>]
- *                                   [--key <path>] [--public-key <path>] [--no-attest] [--json]
- *     node scripts/release-sign.mjs --keyless --registry ghcr.io --repository-prefix <owner>
- *     node scripts/release-sign.mjs --generate-key
- *
- * Exit codes: 0 every image pushed, signed, attested and recorded; 1 anything else. 0 for --help.
  */
 
 import { spawnSync } from 'node:child_process';

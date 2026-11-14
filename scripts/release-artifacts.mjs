@@ -1,21 +1,12 @@
 #!/usr/bin/env node
 /**
- * Builds the two release images once and records their content digests (`pnpm run release:artifacts`).
- * This is the only place an image is built. `staging.mjs`, `container-scan.mjs` and `release.yml` read
- * the manifest it writes, and a commit with a valid manifest is not rebuilt without `--force`.
+ * Builds the two release images once and records their content digests (`pnpm run release:artifacts`);
+ * `--help` lists the options. This is the only place an image is built.
  * The local digest is BuildKit's content address, the same as `--iidfile` and `{{.Id}}`. `--push`
  * also records the registry digest and proves both name the same bytes (see `registry-digest.mjs`).
  * Nothing here signs. That is `pnpm run release:sign`, which holds the private key.
  *
- * Usage:
- *     node scripts/release-artifacts.mjs [--tag <label>] [--manifest <path>]
- *                                        [--push] [--registry <host:port>]
- *                                        [--force] [--no-cache] [--verbose] [--json]
- *
- * Exit codes: 0 both images built and every artefact check passed; 1 a build that
- * failed or an artefact check that did not pass. 0 for --help.
- *
- * Refusing to rebuild a commit with a valid manifest also exits 0. The release path chains
+ * Refusing to rebuild a commit with a valid manifest exits 0. The release path chains
  * `release:artifacts && security:containers && staging up`, and exit 1 there would teach `--force`.
  */
 

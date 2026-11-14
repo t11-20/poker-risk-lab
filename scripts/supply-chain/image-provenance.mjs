@@ -19,8 +19,6 @@
  * KEY posture proves possession of a key, with no transparency log. KEYLESS posture proves which
  * workflow signed, recorded in Rekor. Neither proves what went into the image. See
  * `deploy/signing/README.md`.
- *
- * Exit codes: 0 every release image verified (and for --help); 1 anything else.
  */
 
 import { spawnSync } from 'node:child_process';

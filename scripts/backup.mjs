@@ -19,8 +19,6 @@
  * byte. Each frame's AAD binds the header hash, its index and a final flag, and an empty final frame
  * makes truncation detectable. The manifest is HMAC-signed, because whoever can corrupt an archive
  * can also rewrite a plain checksum.
- *
- * Exit codes: 0 success or --help, 1 any failure or refusal.
  */
 
 import { spawn } from 'node:child_process';
@@ -763,11 +761,10 @@ const archiveFileName = (id, payload) => (payload === 'globals' ? `${id}.globals
 const manifestFileName = (id) => `${id}.manifest.json`;
 
 /**
- * True only for a plain basename, the only shape `archiveFileName` writes.
- *
- * `prune --apply` once took a manifest name of `../VICTIM.txt` to `rm(join(directory, name))`,
- * deleted a file outside the directory and exited 0. The signature does not help, since unverified
- * archives are exactly the delete set. Contained shapes like `./file.enc` are refused too.
+ * True only for a plain basename, the only shape `archiveFileName` writes, because `prune --apply`
+ * passes the manifest's name to `rm(join(directory, name))` and `../VICTIM.txt` would delete outside
+ * the directory. The signature does not help, since unverified archives are exactly the delete set.
+ * Contained shapes like `./file.enc` are refused too.
  */
 export function isPlainArchiveFileName(name) {
   if (typeof name !== 'string' || name === '') return false;

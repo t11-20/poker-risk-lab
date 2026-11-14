@@ -8,15 +8,6 @@
  * `pnpm run test:ax`) and which need a person. The test pins `auto` rows to the checks in
  * `ax-assertions.mjs` in both directions. The artefact records the commit, and `--check` refuses it
  * once HEAD moves. It records what a person heard and certifies nothing by itself.
- *
- * Usage:
- *     pnpm run certify:screen-reader                 # start or resume a session
- *     pnpm run certify:screen-reader -- --all        # every row, machine-covered ones included
- *     pnpm run certify:screen-reader -- --check      # is the recorded result current?
- *     pnpm run certify:screen-reader -- --preflight  # environment only, answer nothing
- *     pnpm run certify:screen-reader -- --section J3 # one journey
- *
- * Exit 0 for a complete session with no FAIL or SILENT, or a current `--check`. Otherwise 1.
  */
 
 import { execFileSync } from 'node:child_process';
