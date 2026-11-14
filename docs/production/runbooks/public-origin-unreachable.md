@@ -142,11 +142,11 @@ Three distinct faults look similar in a browser and are not similar at all:
 
 | Fault | Evidence | Fix |
 | --- | --- | --- |
-| **Expired** | `notAfter` in the past | renew. In staging: `pnpm run staging init` regenerates the leaf and can do it while the stack is up. In production, whatever issues the real certificate |
+| **Expired** | `notAfter` in the past | renew. In staging: `pnpm run staging init` writes a new leaf (and CA) while the stack is up, then `pnpm run staging refresh-tls` loads it into the proxy. In production, whatever issues the real certificate |
 | **Wrong name** | the SANs do not contain the hostname a learner uses | reissue for the right name. `staging init --origin <url>` writes the SANs from the origin |
 | **Incomplete chain** | the leaf verifies locally but not from elsewhere | the proxy must serve the **chain**, not the bare leaf — `ssl_certificate` points at `staging-chain.pem` for exactly this reason |
 
-The staging leaf is deliberately **90 days**, not ten years: "a staging certificate that never expires is a staging certificate whose renewal has never been rehearsed" (`scripts/staging.mjs`). `pnpm run staging status` warns as it approaches — but only when somebody runs it, which is why the probe's expiry series is what the alerts read.
+The staging leaf is deliberately **90 days**, not ten years: "a staging certificate that never expires is a staging certificate whose renewal has never been rehearsed" (`scripts/staging.mjs`). `pnpm run staging status` handshakes with the proxy, warns inside 14 days of the **served** certificate's expiry and fails when the served certificate is not the one on disk — but only when somebody runs it, which is why the probe's expiry series is what the alerts read.
 
 ## Recovery
 
@@ -156,7 +156,7 @@ The staging leaf is deliberately **90 days**, not ten years: "a staging certific
 | Firewall / security group / port publishing | restore the path. Verify from off the host, not from it |
 | nginx down on a bad config | fix the config and start it. The container is stateless; restarting the **proxy** costs nothing and drops no hands — unlike restarting the API |
 | Unreadable TLS material | restore ownership and mode, then start the proxy. `pnpm run staging init` regenerates the whole set in staging |
-| Certificate expired or wrong | renew or reissue, then restart the proxy so it loads the new file. nginx does not re-read certificates on its own |
+| Certificate expired or wrong | renew or reissue, then recreate the proxy so it loads the new file (`pnpm run staging refresh-tls` in staging). nginx does not re-read certificates on its own |
 | The `web` service is down | restart **that** service. It holds no game state, so it is the one application container that is cheap to restart |
 | The API is down | [api-unhealthy.md](api-unhealthy.md). Do not treat it here |
 | A bad deploy of the proxy config | [rollback.md](rollback.md) |
