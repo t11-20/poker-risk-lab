@@ -21,6 +21,7 @@ import {
   type WsServerMessage,
 } from '@prl/contracts';
 import type { PlayerView, TableAction, TurnClock } from '@prl/ui';
+import { formatUnits } from '@prl/ui/format';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { TableSubmission } from '@/components/TableStage.tsx';
 import { notifySessionChanged } from './api.ts';
@@ -228,15 +229,6 @@ export function isViewersTurn(view: PlayerView | null, betweenHands: boolean): b
   return view.viewerSeat !== null && view.toAct === view.viewerSeat && view.legalActions.length > 0;
 }
 
-/**
- * Not `formatUnits` from `@prl/ui`. That package is consumed as source and re-exports `.tsx`, so a
- * runtime import makes this module unloadable under `node --test` (`ERR_UNKNOWN_FILE_EXTENSION`).
- */
-function units(value: number): string {
-  const whole = Math.round(value);
-  return `${new Intl.NumberFormat('en-GB').format(whole)} ${Math.abs(whole) === 1 ? 'unit' : 'units'}`;
-}
-
 /** No Oxford comma, because this is read aloud. */
 function listActions(names: readonly string[]): string {
   if (names.length === 0) return '';
@@ -256,17 +248,17 @@ function streetPhrase(street: PlayerView['street']): string {
  */
 export function turnAnnouncementFor(view: PlayerView): string {
   const hero = view.seats.find((seat) => seat.isSelf) ?? null;
-  const price = view.amountToCall > 0 ? `${units(view.amountToCall)} to call` : 'Nothing to call';
-  const stack = hero === null ? '' : `, your stack ${units(hero.stack)}`;
+  const price = view.amountToCall > 0 ? `${formatUnits(view.amountToCall)} to call` : 'Nothing to call';
+  const stack = hero === null ? '' : `, your stack ${formatUnits(hero.stack)}`;
   const actions = listActions(view.legalActions.map((action) => action.type));
   const offer = actions === '' ? '' : ` You can ${actions}.`;
-  return `Your turn ${streetPhrase(view.street)}. ${price}. Pot ${units(view.potTotal)}${stack}.${offer}`;
+  return `Your turn ${streetPhrase(view.street)}. ${price}. Pot ${formatUnits(view.potTotal)}${stack}.${offer}`;
 }
 
 /** Announced once as a state change, never prefixed, since `role="status"` is atomic. */
 export function spokenDecision(action: TableAction): string {
   if (action.type === 'bet' || action.type === 'raise') {
-    return `You chose to ${action.type} to ${units(action.to)}.`;
+    return `You chose to ${action.type} to ${formatUnits(action.to)}.`;
   }
   return `You chose to ${action.type}.`;
 }
