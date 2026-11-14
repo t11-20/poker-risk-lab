@@ -54,29 +54,6 @@ function sampled<T>(data: T, reason: string): LegendData<T> {
   return { data, source: 'fixture', fallbackReason: reason };
 }
 
-// Re-exported from `legend-links.ts`, so no screen's imports changed.
-
-export {
-  type CompareSelection,
-  compareHref,
-  DIFFICULTIES,
-  LEGENDS_COMPARE_PATH,
-  LEGENDS_HAND_REVIEW_PATH,
-  LEGENDS_PATH,
-  legendMatchHref,
-  MATCH_DIFFICULTY_PARAM,
-  MATCH_PROFILE_PARAM,
-  MAX_COMPARE_PROFILES,
-  MIN_COMPARE_PROFILES,
-  PLAY_PATH,
-  parseCompareSelection,
-  parseDifficulty,
-  parseProfileIds,
-  profileHref,
-  type SearchParams,
-  selectionNotices,
-} from './legend-links.ts';
-
 const PROFILES_FALLBACK =
   'The profile service is not reachable, so this page is rendering the bundled sample profiles. ' +
   'The trait values and the disclaimers are real; treat nothing here as a live figure.';

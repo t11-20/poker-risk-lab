@@ -29,16 +29,18 @@ import { TraitBars } from '@/components/TraitBars.tsx';
 import { LEGEND_PROFILE_FIXTURES } from '@/fixtures/legends.ts';
 import {
   compareHref,
-  findProfile,
   LEGENDS_HAND_REVIEW_PATH,
   LEGENDS_PATH,
   legendMatchHref,
-  loadLearnFromProfile,
-  loadLegendProfiles,
-  loadProfileStats,
   parseDifficulty,
   profileHref,
   type SearchParams,
+} from '@/lib/legend-links.ts';
+import {
+  findProfile,
+  loadLearnFromProfile,
+  loadLegendProfiles,
+  loadProfileStats,
 } from '@/lib/legends-data.ts';
 
 const TRAIT_DECIMALS = 2;

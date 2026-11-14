@@ -12,9 +12,6 @@
 import type { ContentId, Difficulty, LessonBlock, LessonSummary, Topic } from '@prl/contracts';
 import { TOPIC_LABELS, TOPICS } from '@prl/contracts';
 
-/** Re-exported from `@prl/contracts` so existing callers keep working. */
-export { TOPIC_LABELS };
-
 export const DIFFICULTY_LABELS: Readonly<Record<Difficulty, string>> = {
   intro: 'Intro',
   core: 'Core',

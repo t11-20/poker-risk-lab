@@ -12,7 +12,7 @@ import type { ReactElement } from 'react';
 import { coachWords } from '@/lib/legend-match-copy.ts';
 import { ScopedDifficultyNote, ScopedOpponentInput } from './LegendDifficultyScope.tsx';
 
-/** Shared with `parseDifficulty` in `legends-data.ts`. */
+/** Shared with `parseDifficulty` in `legend-links.ts`. */
 export const DIFFICULTY_PARAM = 'difficulty';
 
 export interface DifficultyPickerProps {

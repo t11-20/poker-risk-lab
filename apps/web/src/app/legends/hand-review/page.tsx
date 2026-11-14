@@ -11,14 +11,8 @@ import type { ReactElement } from 'react';
 import { NotFoundBody } from '@/app/not-found.tsx';
 import { PostHandComparison } from '@/components/PostHandComparison.tsx';
 import { SuitMark } from '@/components/SuitMark.tsx';
-import {
-  type HandComparisonProblem,
-  LEGENDS_COMPARE_PATH,
-  LEGENDS_PATH,
-  loadHandComparison,
-  profileHref,
-  type SearchParams,
-} from '@/lib/legends-data.ts';
+import { LEGENDS_COMPARE_PATH, LEGENDS_PATH, profileHref, type SearchParams } from '@/lib/legend-links.ts';
+import { type HandComparisonProblem, loadHandComparison } from '@/lib/legends-data.ts';
 import { readerCallOptions } from '@/lib/server-session.ts';
 
 export const metadata: Metadata = {
