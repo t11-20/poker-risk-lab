@@ -130,7 +130,7 @@ export function selectionNotices(
 
 export function profileHref(profileId: string, difficulty?: LegendDifficulty): string {
   const path = `/legends/${encodeURIComponent(profileId)}`;
-  return difficulty === undefined ? path : `${path}?difficulty=${difficulty}`;
+  return difficulty === undefined ? path : `${path}?${MATCH_DIFFICULTY_PARAM}=${difficulty}`;
 }
 
 /** A query on `/play`, which owns its URL shape, rather than a nested route. */
@@ -141,5 +141,5 @@ export function legendMatchHref(profileId: string, difficulty: LegendDifficulty)
 export function compareHref(profileIds: readonly string[], difficulty: LegendDifficulty): string {
   const profiles = profileIds.map((id) => encodeURIComponent(id)).join(',');
   const query = profiles === '' ? '' : `profiles=${profiles}&`;
-  return `/legends/compare?${query}difficulty=${difficulty}`;
+  return `/legends/compare?${query}${MATCH_DIFFICULTY_PARAM}=${difficulty}`;
 }

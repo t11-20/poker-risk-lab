@@ -9,11 +9,9 @@
 import type { LegendDifficulty, LegendDifficultyDto } from '@prl/contracts';
 import { Button, Chip, cx } from '@prl/ui';
 import type { ReactElement } from 'react';
+import { MATCH_DIFFICULTY_PARAM } from '@/lib/legend-links.ts';
 import { coachWords } from '@/lib/legend-match-copy.ts';
 import { ScopedDifficultyNote, ScopedOpponentInput } from './LegendDifficultyScope.tsx';
-
-/** Shared with `parseDifficulty` in `legend-links.ts`. */
-export const DIFFICULTY_PARAM = 'difficulty';
 
 export interface DifficultyPickerProps {
   readonly difficulties: readonly LegendDifficultyDto[];
@@ -65,7 +63,7 @@ export function DifficultyPicker(props: DifficultyPickerProps): ReactElement {
                 <input
                   className="prl-legend-difficulty__control"
                   defaultChecked={isSelected}
-                  name={DIFFICULTY_PARAM}
+                  name={MATCH_DIFFICULTY_PARAM}
                   type="radio"
                   value={difficulty.id}
                 />

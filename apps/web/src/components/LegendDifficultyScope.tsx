@@ -20,11 +20,14 @@ import {
   useRef,
   useState,
 } from 'react';
-import { knownDifficulty, legendMatchHref, MATCH_PROFILE_PARAM, profileHref } from '@/lib/legend-links.ts';
+import {
+  knownDifficulty,
+  legendMatchHref,
+  MATCH_DIFFICULTY_PARAM,
+  MATCH_PROFILE_PARAM,
+  profileHref,
+} from '@/lib/legend-links.ts';
 import { coachWords } from '@/lib/legend-match-copy.ts';
-
-/** Same string as `DIFFICULTY_PARAM` in `DifficultyPicker.tsx`. */
-const DIFFICULTY_NAME = 'difficulty';
 
 interface Scope {
   readonly chosen: LegendDifficulty | null;
@@ -42,7 +45,7 @@ export function LegendDifficultyScope({ children }: { readonly children: ReactNo
 
   useEffect(() => {
     const ticked = root.current?.querySelector<HTMLInputElement>(
-      `input[type="radio"][name="${DIFFICULTY_NAME}"]:checked`,
+      `input[type="radio"][name="${MATCH_DIFFICULTY_PARAM}"]:checked`,
     );
     if (ticked) setChosen(knownDifficulty(ticked.value));
     // After Back the browser may restore a different opponent too.
@@ -57,7 +60,7 @@ export function LegendDifficultyScope({ children }: { readonly children: ReactNo
       return;
     }
     if (!(target instanceof HTMLInputElement)) return;
-    if (target.type !== 'radio' || target.name !== DIFFICULTY_NAME || !target.checked) return;
+    if (target.type !== 'radio' || target.name !== MATCH_DIFFICULTY_PARAM || !target.checked) return;
     setChosen(knownDifficulty(target.value));
   };
 
