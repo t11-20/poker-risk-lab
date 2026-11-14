@@ -4,7 +4,6 @@
  */
 
 export interface DealNextInput {
-  /** The socket is live. */
   readonly live: boolean;
   /** "Deal me in" is seating and dealing, and a second deal must not be sent beside it. */
   readonly dealingIn: boolean;
