@@ -58,9 +58,9 @@ describe('/define', () => {
     );
   });
 
-  test('every one of the 90 terms is reachable by its own name, and by a button', () => {
+  test('every one of the 106 terms is reachable by its own name, and by a button', () => {
     const all = entries();
-    assert.equal(all.length, 90, 'the shipped glossary has 90 entries');
+    assert.equal(all.length, 106, 'the shipped glossary has 106 entries');
     for (const entry of all) {
       const found = lookup(entry.term);
       assert.ok(found.kind === 'found' && found.entry.id === entry.id, `"${entry.term}" finds ${entry.id}`);

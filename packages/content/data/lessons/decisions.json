@@ -454,7 +454,16 @@
       "Bets compound against the pot, so choose flop sizes with the river in mind rather than the other way round."
     ],
     "quizId": "quiz-bet-sizing",
-    "glossaryTerms": ["value-bet", "fold-equity", "pot-odds", "spr", "polarised-range"]
+    "glossaryTerms": [
+      "value-bet",
+      "fold-equity",
+      "pot-odds",
+      "spr",
+      "polarised-range",
+      "flop",
+      "river",
+      "stack"
+    ]
   },
   {
     "id": "stack-to-pot-ratio",
@@ -555,7 +564,16 @@
       "A hand's strength cannot be stated without stating the stack depth it is being judged at."
     ],
     "quizId": "quiz-stack-to-pot-ratio",
-    "glossaryTerms": ["spr", "effective-stack", "implied-odds", "equity-realisation", "pot-odds"]
+    "glossaryTerms": [
+      "spr",
+      "effective-stack",
+      "implied-odds",
+      "equity-realisation",
+      "pot-odds",
+      "preflop",
+      "flop",
+      "stack"
+    ]
   },
   {
     "id": "ranges-and-combos",
@@ -669,7 +687,16 @@
       "Counting gives you how many ways, not how likely, so a counted range is still an assumption and should be stated as one."
     ],
     "quizId": "quiz-ranges-and-combos",
-    "glossaryTerms": ["range", "combos", "blocker", "dominated-hand", "equity"]
+    "glossaryTerms": [
+      "range",
+      "combos",
+      "blocker",
+      "dominated-hand",
+      "equity",
+      "suited",
+      "offsuit",
+      "suited-connectors"
+    ]
   },
   {
     "id": "variance",
@@ -780,7 +807,7 @@
       "Variance is symmetric, so upswings mislead too, and reviewing after good results is the rarer and more valuable habit."
     ],
     "quizId": "quiz-variance",
-    "glossaryTerms": ["variance", "standard-deviation", "downswing", "sample-size", "tilt"]
+    "glossaryTerms": ["variance", "standard-deviation", "downswing", "sample-size", "tilt", "river"]
   },
   {
     "id": "sample-size-and-risk-of-ruin",
@@ -1046,6 +1073,6 @@
       "Chip break-even equity is a floor: when calling risks elimination you need more, and how much more depends on the schedule and the other stacks."
     ],
     "quizId": "quiz-tournament-chips-and-icm",
-    "glossaryTerms": ["icm", "push-fold", "m-ratio", "effective-stack", "ante"]
+    "glossaryTerms": ["icm", "push-fold", "m-ratio", "effective-stack", "ante", "river", "stack"]
   }
 ]
