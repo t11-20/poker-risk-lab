@@ -1,9 +1,9 @@
 'use client';
 
 /**
- * Putting the caret back when the control it was on disappears. Pressing a conditional control usually
- * unmounts or disables it, and the browser then drops focus to the document (`scripts/keyboard-audit.mjs`).
- * The decisions are React-free so `node --test` can run them without a DOM (ADR 0008).
+ * Pressing a conditional control unmounts or disables it, and the browser then drops the caret to the
+ * document (`scripts/keyboard-audit.mjs`). The decisions are React-free so `node --test` runs them without
+ * a DOM (ADR 0008).
  */
 
 import { useState } from 'react';
