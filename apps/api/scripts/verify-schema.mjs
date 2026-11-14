@@ -13,7 +13,7 @@ import postgres from 'postgres';
 
 const SCHEMA = 'prl';
 
-// Mirrors src/rooms/bot-profile.ts. Recomputed, since this `.mjs` has no TypeScript loader.
+// Mirrors src/rooms/bot-profile.ts.
 const PERSISTABLE_BOT_PROFILES = [...PROFILES.map((profile) => profile.naming.id), 'unknown'];
 
 const DELETE_ACTIONS = {
@@ -146,9 +146,8 @@ try {
   const [identity] = await sql`select current_user as role`;
   const role = identity?.role ?? 'unknown';
 
-  // 1 and 2. Do not switch this to `information_schema.columns`. It hides tables the role has no
-  // grant on. An ungranted `prl.hand_deck_cache (deck, deck_salts, total_score)` passed as prl_api
-  // and failed four times as the owner. `relkind` also covers materialized views.
+  // 1 and 2. Do not switch this to `information_schema.columns`: it hides tables the role has no
+  // grant on. `relkind` also covers materialized views.
   // The domain is unwrapped one level, so `prl.sha256_hash` reads as bytea.
   const columns = await sql`
     select cls.relname as table_name,
@@ -280,7 +279,7 @@ try {
     }
   }
 
-  // 8. A drift here once stored seven of the twelve Legends as `unknown`.
+  // 8. A drift here stores the unlisted Legends as `unknown`.
   // `pg_get_constraintdef` renders `IN (...)` as `= ANY (ARRAY['x'::text, ...])`, so match the literals.
   const botProfileChecks = checks.filter(
     (c) =>
