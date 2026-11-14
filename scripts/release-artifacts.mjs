@@ -1,21 +1,12 @@
 #!/usr/bin/env node
 /**
- * Builds the two release images once and records their content digests (`pnpm run release:artifacts`).
- * This is the only place an image is built. `staging.mjs`, `container-scan.mjs` and `release.yml` read
- * the manifest it writes, and a commit with a valid manifest is not rebuilt without `--force`.
+ * Builds the two release images once and records their content digests (`pnpm run release:artifacts`);
+ * `--help` lists the options. This is the only place an image is built.
  * The local digest is BuildKit's content address, the same as `--iidfile` and `{{.Id}}`. `--push`
  * also records the registry digest and proves both name the same bytes (see `registry-digest.mjs`).
  * Nothing here signs. That is `pnpm run release:sign`, which holds the private key.
  *
- * Usage:
- *     node scripts/release-artifacts.mjs [--tag <label>] [--manifest <path>]
- *                                        [--push] [--registry <host:port>]
- *                                        [--force] [--no-cache] [--verbose] [--json]
- *
- * Exit codes: 0 both images built and every artefact check passed; 1 a build that
- * failed or an artefact check that did not pass. 0 for --help.
- *
- * Refusing to rebuild a commit with a valid manifest also exits 0. The release path chains
+ * Refusing to rebuild a commit with a valid manifest exits 0. The release path chains
  * `release:artifacts && security:containers && staging up`, and exit 1 there would teach `--force`.
  */
 
@@ -362,8 +353,7 @@ export function probeRoot(workingDir) {
 }
 
 // Separate from `checkArtefact` so it can be tested without Docker. Examining zero files is a failure,
-// because an empty result looks exactly like a clean image. `AGENTS.md` and `CLAUDE.md` once shipped
-// inside the web image.
+// because an empty result looks exactly like a clean image.
 export function filesystemProblems(hits, workingDir) {
   const problems = [];
   const root = hits?.root ?? '(unknown)';
@@ -413,8 +403,8 @@ export function filesystemProblems(hits, workingDir) {
 
 /**
  * Checks the built artefact, not the Dockerfile: runs as `node`, no repository markdown outside
- * node_modules, no `.env*`, and no credential material. `.dockerignore` once anchored `*.md` to the
- * root and the web image shipped `apps/web/AGENTS.md`. Dependency READMEs under node_modules are skipped.
+ * node_modules, no `.env*`, and no credential material. A `.dockerignore` `*.md` anchored to the root
+ * lets `apps/web/AGENTS.md` through. Dependency READMEs under node_modules are skipped.
  */
 function checkArtefact(reference, meta, note) {
   const problems = [];

@@ -64,7 +64,7 @@ const JOURNEYS = [
 
 /**
  * The h1 of this app's error boundaries. They return HTTP 200, so a route that rendered one is
- * refused rather than audited. A stale server once produced a confident pass over the error page.
+ * refused rather than audited.
  */
 const ERROR_BOUNDARY_HEADINGS = [
   /^this screen did not load$/iu,
@@ -771,10 +771,10 @@ async function withChrome(headful, run) {
 }
 
 /**
- * Refuse to start when something already answers on a port this run will poll. `waitUntilReady`
- * accepts any 200, so on 2026-11-10 a hand-started server on the port made the audit exit 0.
- * It connects rather than binds, because on macOS a bind of 127.0.0.1 succeeds beside a wildcard listener,
- * and `next start` listens on the wildcard. Only ECONNREFUSED counts as free.
+ * Refuse to start when something already answers on a port this run will poll, because
+ * `waitUntilReady` accepts any 200 and cannot tell its own child's answer from a stranger's.
+ * It connects rather than binds, because on macOS a bind of 127.0.0.1 succeeds beside a wildcard
+ * listener such as `next start` (Node 24.18). Only ECONNREFUSED counts as free.
  */
 async function refuseOccupiedPort(url) {
   const { hostname, port, protocol } = new URL(url);

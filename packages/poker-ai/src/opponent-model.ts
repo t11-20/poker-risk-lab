@@ -620,7 +620,7 @@ function towardsObserved(neutral: number, observed: number, weight: number): num
  * The range to assume for a seat, as a slice of the computed strength ordering.
  * 0. Pull tightness and fold-to-bet from neutral towards observed by `readWeight`. At weight 0 the
  *    result is constant on every street. Neutralising only tightness hides preflop, where
- *    `keep ** 0` is 1; postflop it once widened a 25-hand river range 4.4x (56 to 244 combos).
+ *    `keep ** 0` is 1; postflop it widens a 25-hand river range 4.4x (56 to 244 combos).
  * 1. Entry percent is `(1 - tightness) * 100`, assuming a seat enters with its strongest hands.
  * 2. Multiply by `keep ** streetsOfBetting`, `keep` being `1 - foldToBet` clamped to [0.55, 0.90].
  * 3. Multiply by the facing-action factor.

@@ -216,7 +216,7 @@ export function matrixValues(text) {
 /**
  * Every `runs-on`, as concrete labels plus deferred `${{ ... }}` expressions. Handles a plain or
  * quoted scalar, a flow sequence, a block sequence, and a runner-group mapping whose `labels:` names
- * the image. A bare-scalar-only regex once passed five of six spellings.
+ * the image. A bare-scalar-only regex passes five of six spellings.
  *
  * @returns {Array<{line: number, labels: string[], expressions: string[]}>}
  */
@@ -357,7 +357,7 @@ function readsKeyOnLine(key, line) {
 
 /**
  * Fails a line that carries one of the four keys in a shape the anchored readers cannot see, such
- * as `- {uses: x@v7}` or `- uses:` with the value on the next line. Each of those once passed with
+ * as `- {uses: x@v7}` or `- uses:` with the value on the next line. Each of those would pass with
  * 0 references judged. The remedy is block style, which every workflow here uses.
  *
  * @param {Gate} gate
@@ -450,7 +450,7 @@ export function checkWorkflowPinning(gate, label, text) {
 
 /**
  * Every `FROM` refers to an earlier stage or carries a digest. A stage is registered after the
- * test, because `FROM node AS node` once matched itself and passed an unpinned image.
+ * test, because `FROM node AS node` would match itself and pass an unpinned image.
  *
  * The first `FROM` can never be a stage reference, so `FROM` lines with zero external images judged
  * is a failure.

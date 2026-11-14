@@ -4,7 +4,7 @@
  * manifest bytes. It gives content identity across a push/pull, not provenance or signatures.
  * Used by `release-artifacts.mjs` (push) and `staging.mjs` (verify and promote).
  *
- * `docker image inspect '{{.RepoDigests}}'` can be wrong. Measured 2026-08-25, a multi-platform push
+ * `docker image inspect '{{.RepoDigests}}'` can be wrong. A measured multi-platform push
  * printed `sha256:fa647fc1…` while `RepoDigests` named `a3d8aaa6…`, an index the registry never saw.
  * So the push output is the authority, and `RepoDigests` must agree with it.
  */

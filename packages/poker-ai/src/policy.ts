@@ -1264,7 +1264,6 @@ function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
 
-/** A fraction in 0..1 as a percentage with one decimal. */
 function pct(fraction: number): string {
   return `${(fraction * 100).toFixed(1)}%`;
 }

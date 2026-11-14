@@ -582,7 +582,7 @@ describe('negative control: the five measured bypasses', () => {
   });
 
   it('5d. a second proxy_intercept_errors, turned on where the first is off', () => {
-    // `.exec()` once read only the first match.
+    // `.exec()` reads only the first match.
     const verdict = gateVerdictFor(({ read, write }) =>
       write(
         'deploy/staging/nginx.conf',

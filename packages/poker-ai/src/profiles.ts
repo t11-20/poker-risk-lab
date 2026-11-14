@@ -625,12 +625,11 @@ const PROFILE_LIST: readonly StrategyProfile[] = [
       foldToPressure: 0.14,
       barrelPersistence: 0.2,
     }),
-    // Measured 2026-11-11 on five flop spots, 30 seeds. Lowest raw fold weight of the twelve and the most
+    // Measured on five flop spots, 30 seeds. Lowest raw fold weight of the twelve and the most
     // calls (32-81% against 13-39%). It still folds as often as mid-field, because `continueAppetite` in
     // `policy.ts` is the same for every profile and aggressive profiles raise instead of folding. On
     // `pricedFoldToBetFrequency` it folds second-most, 0.275 over 8,000 hands. Letting the trait move the
-    // continue threshold was tried and reverted as fitting a number to the answer. The strings claim only
-    // what the model does.
+    // continue threshold would fit a number to the answer. The strings claim only what the model does.
     learnFrom: [
       'That the adjustment against a wide, passive caller is to value-bet thinner than usual, because far more of what calls you is worse.',
       'How to recognise a passive opponent from their actions within a handful of hands.',

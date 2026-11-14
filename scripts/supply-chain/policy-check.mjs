@@ -6,7 +6,7 @@
  * Read before changing the subprocess below. `pnpm run` sets
  * `pnpm_config_verify_deps_before_run=false` on its children to suppress its own re-verification
  * (measured on pnpm 11.10.0). A nested `pnpm config list` inherits it, so reading the child verbatim
- * failed every run through `pnpm run security:policy`. Only the keys in PNPM_SELF_SUPPRESSED are
+ * would fail every run through `pnpm run security:policy`. Only the keys in PNPM_SELF_SUPPRESSED are
  * removed, and only for a pnpm-spawned child, so a real environment override is still caught. A new
  * self-suppressed key fails loudly with the variable named; add it to the list then.
  */

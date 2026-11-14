@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Tests for the quarantine environment. They keep two things true together: the script's own
- * `NPM_CONFIG_*` hardening (which matches `/^NPM_/i` and once stopped every run) is present, and a
+ * `NPM_CONFIG_*` hardening (which matches `/^NPM_/i` and would stop every run) is present, and a
  * real secret in the inherited environment is still refused.
  */
 
@@ -30,7 +30,7 @@ describe('the quarantine environment', () => {
   });
 
   it('does not refuse to run because of its own hardening', () => {
-    // The regression: each name matches /^NPM_/i and the leak check was once applied to them.
+    // Each name matches /^NPM_/i, so the leak check must not be applied to them.
     const deliberate = Object.keys(quarantineSettings(HOME));
     const flagged = deliberate.filter((name) => FORBIDDEN_PATTERNS.some((p) => p.test(name)));
     assert.deepEqual(

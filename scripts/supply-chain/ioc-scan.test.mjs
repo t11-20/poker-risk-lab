@@ -2,7 +2,7 @@
 /**
  * Tests for the `ioc-sweep` gate. The first builds pnpm's real store layout and asserts that
  * `<store>/<pkg>@<ver>/` finds nothing while the package root finds the payload. A missing store
- * once warned and exited 0.
+ * must fail, not warn and exit 0.
  */
 
 import assert from 'node:assert/strict';
@@ -86,7 +86,7 @@ describe('persistence-artefact sweep', () => {
 
   it("covers the artefacts the gate's own documentation names", () => {
     // `ioc-scan.mjs`'s header names `.vscode/tasks.json`, and snapshot §3 names
-    // `.claude/settings.json`. Both were once absent from IOC_PATHS.
+    // `.claude/settings.json`.
     for (const path of [
       '.claude/setup.mjs',
       '.claude/settings.json',

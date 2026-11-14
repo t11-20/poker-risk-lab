@@ -31,9 +31,8 @@ export function consistencyMarginUnits(bigBlind: number): number {
  *
  * Without a `to`, the most favourable row for that action name is used, since several sizings share
  * a name. With a `to`, an exact sizing match is required and there is no fallback. An unmatched size
- * returns `null`, because grading it against another row answered a different question (a
- * 26,000-chip raise with 500 behind was once scored as consistent). Callers should reject an
- * unpayable size first with `minimumAggressiveTo` and `maximumTo` in `./coach.ts`.
+ * returns `null`, because grading it against another row answers a different question. Callers should
+ * reject an unpayable size first with `minimumAggressiveTo` and `maximumTo` in `./coach.ts`.
  */
 export function candidateFor(report: CoachReport, action: string, to?: number): ActionCandidate | null {
   if (to !== undefined) {
@@ -81,7 +80,7 @@ function restsOnAssumedFoldEquity(candidate: ActionCandidate): boolean {
 /**
  * The highest-EV row that does not rest on an assumed fold frequency, or null. This is the benchmark
  * a fold is judged against. `DEFAULT_ASSUMED_FOLD_EQUITY` is an input, not a measurement, so a fold
- * is not marked wrong because a bluff-raise wins under it (two shipped scenarios did exactly that).
+ * is not marked wrong because a bluff-raise wins under it.
  * Non-fold actions are still judged against folding at zero.
  */
 export function bestMeasuredCandidate(report: CoachReport): ActionCandidate | null {

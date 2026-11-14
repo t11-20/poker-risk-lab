@@ -604,7 +604,7 @@ test('a profile that behaves exactly as declared has no divergences', () => {
 
 test('the unconditional rates a tracker reports are NOT what the two conditional axes compare', () => {
   // Hitting the declared conditional value with a far lower unconditional rate reports no
-  // divergence. Before the fix it reported two.
+  // divergence. Comparing the unconditional rates would report two.
   const traits = requireProfile('disciplined-specialist').traits;
   const stats = statsWith({
     vpip: traits.vpip,

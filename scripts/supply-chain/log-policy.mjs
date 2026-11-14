@@ -3,9 +3,8 @@
  * Gate: no shipped config may write a secret to a log, and no container log may be unbounded
  * (D2 in docs/production/legal-register.md).
  *
- * Both shipped nginx configs once used `combined`, which logs `$request` verbatim, so every OIDC
- * sign-in wrote `?code=<authorization code>` to the proxy log. The API already logs only query
- * keys; the proxy undid that with nothing going red.
+ * nginx's `combined` format logs `$request` verbatim, so every OIDC sign-in would write
+ * `?code=<authorization code>` to the proxy log, undoing the API's own query-key-only logging.
  *
  * A `log_format` may name only variables on a reviewed allowlist. A thirteen-name denylist was
  * defeated five ways in a real container: `$arg_code`, a `;` inside a quoted format, a laundering
@@ -105,7 +104,7 @@ export const ALLOWED_LOG_VARIABLES = new Map([
  * Variables a `map` computes, and the variable each is reviewed to reduce. A derived variable is
  * accepted only if exactly one map defines it, that map reads the named source, and every value it
  * returns is a named capture that cannot match any character. `map $request_uri $x { default
- * "$request_uri"; }` once leaked the full query string with this gate green.
+ * "$request_uri"; }` would otherwise leak the full query string.
  *
  * @type {Map<string, {from: string, why: string}>}
  */
@@ -205,7 +204,7 @@ export function stripYamlComments(text) {
 
 /**
  * Read nginx config as tokens, the way nginx does. `;`, `{` and `}` terminate only outside quotes;
- * a quote-blind regex once ended a `log_format` at a `;` inside a string and hid `$http_cookie`.
+ * a quote-blind regex ends a `log_format` at a `;` inside a string and hides `$http_cookie`.
  * A quoted empty string is still a token (a `map` key can be `''`). Backslash escapes are kept, so
  * a regex's `\.` stays `\.`.
  *

@@ -166,8 +166,7 @@ export interface CoachInput {
    * Nothing outside it is published. The engine also withholds a raise after a short all-in
    * (`mayRaise`) and offers nothing once betting closes, which a described spot cannot show.
    * Absent means there is no engine to ask, and `deriveLegalActions` answers. It never means everything
-   * is permitted (ADR 0003). That reading once let four of five surfaces headline an all-in raise with
-   * 35% fold equity against an opponent who could not fold.
+   * is permitted (ADR 0003).
    * Optional so a direct caller still gets the conservative derivation. An empty array is rejected.
    */
   readonly legalActions?: readonly CoachAction[];
@@ -284,7 +283,7 @@ export function ruleOfThumbRefusalFor(
 ): RuleOfThumbRefusal | null {
   if (outs === null || cardsToCome === null) return { kind: 'no-cards-to-come' };
   // "Drawing" uses the threshold `computeOuts` uses for an out, read from `outs.refusal` so a moved
-  // `aheadThreshold` cannot split them. Two thresholds once called a 100%-to-win hand 180%.
+  // `aheadThreshold` cannot split them.
   if (outs.refusal !== null) {
     return { kind: 'already-ahead', equityNow: outs.refusal.equityNow };
   }
@@ -298,8 +297,8 @@ export function ruleOfThumbRefusalFor(
 
 /**
  * The rule-of-2-and-4 figure, published as a fraction in 0..1. `ruleOf24` returns points in
- * `estimatePercent`, this converts once, and `assertProbabilityFraction` refuses anything else. The
- * producer once emitted 36 and the panel showed a flush draw as "3,600.0%".
+ * `estimatePercent`, this converts once, and `assertProbabilityFraction` refuses anything else, so 36
+ * can never render as "3,600.0%".
  * It counts clean outs only, as the shortcut's own explanation says.
  * It is compared with `probabilityOfHitting`, not equity, so `errorPoints` is the shortcut's error alone.
  * `unseen` is `outs.cardsConsidered`, the set the outs were counted from. Deriving 47 from the street
@@ -333,7 +332,7 @@ function buildRuleOfThumb(outs: OutsResult, cardsToCome: 1 | 2): NonNullable<Equ
 
 /**
  * The rule-of-2-and-4 figure, or `null` where the shortcut means nothing. The only way outside this file
- * to compute it. The Coach and `@prl/content` once each multiplied total outs and shipped 47 x 4 = 188%.
+ * to compute it, because multiplying total outs gives figures like 47 x 4 = 188%.
  */
 export function ruleOfThumbFor(
   outs: OutsResult | null,
@@ -405,8 +404,7 @@ function sidePotNote(pot: number, contestablePot: number, toCall: number): strin
 }
 
 /**
- * Chooses the whole sentence by direction. A fixed lead clause once told twelve of thirty-six Lab
- * scenarios "You clear that with 0.0% equity, a -24.3 point shortfall."
+ * Chooses the whole sentence by direction, so a shortfall never reads "You clear that with 0.0% equity".
  */
 function describePriceGap(heroEquity: number, breakEvenEquity: number): string {
   const points = (Math.abs(heroEquity - breakEvenEquity) * 100).toFixed(1);
@@ -528,7 +526,7 @@ function betSizeSentence(sizeId: OfferedSize['id']): string {
  */
 function buildCandidates(input: CoachInput, heroEquity: number, foldEquity: number): ActionCandidate[] {
   const candidates: ActionCandidate[] = [];
-  // Resolved once. An `undefined` short-circuit here once meant "nobody asked, so yes".
+  // Resolved once, so an absent `legalActions` can never short-circuit to "permitted".
   const legal = input.legalActions ?? deriveLegalActions(input);
   const permitted = (action: CoachAction): boolean => legal.includes(action);
 
@@ -584,7 +582,6 @@ function buildCandidates(input: CoachInput, heroEquity: number, foldEquity: numb
     const potAfterCall = Math.max(1, pot + input.toCall);
 
     // Exactly the sizes the bar offers, because a sized action is graded only on an exact match.
-    // A separate ladder once left the bar's default unpriced in 23 of 31 Lab scenarios.
     // `pot` equals the whole middle here, because `maxRaiseBy > 0` means hero covers the bet.
     // `apps/web/test/lab-sizes-priced.test.ts` asserts the equality.
     const offered = offeredSizes({
@@ -724,7 +721,6 @@ function buildSuggestion(
   else if (marginInBigBlinds < 1 || intervalPoints > 0.75) confidence = 'moderate';
 
   // Only sizes within the one-big-blind margin of the best, so the range holds defensible sizes.
-  // It was once the whole ladder, whose top the Coach priced hundreds of chips below its bottom.
   const sizeMargin = input.bigBlind;
   const sameActionSizes = candidates
     .filter(
@@ -880,7 +876,7 @@ function buildTeachingNotes(
 
   // `oddsRatio !== null` keeps a future caller from rendering "Infinity to 1" at a learner.
   if (input.toCall > 0 && potOddsSummary.oddsRatio !== null) {
-    // Ratio and pot come from one summary. Mixing pots once told an all-in-for-less hero 8.6%, not 37.5%.
+    // Ratio and pot come from one summary, so an all-in-for-less hero is priced on the pot they can win.
     const beyondReach = input.pot - input.contestablePot;
     // Only where the pots differ, so ordinary spots carry no qualification.
     const againstWhat = beyondReach > 0 ? ` on the ${chips(potOddsSummary.pot)} you can win` : '';

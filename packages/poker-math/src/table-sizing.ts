@@ -1,9 +1,8 @@
 /**
  * The sizes a seat is offered at the table, and the one rounding rule they are built with.
  * `ActionBar` renders `TABLE_SIZING_PRESETS` through `presetTo`, and `buildCoachReport` prices
- * exactly `offeredSizes`. The Lab grades a size by exact match, so the bar and the Coach must agree
- * (they once differed in 23 of 31 scenarios). Every function is total and never throws, because a
- * throw mid-render takes out the table.
+ * exactly `offeredSizes`. The Lab grades a size by exact match, so the bar and the Coach must agree.
+ * Every function is total and never throws, because a throw mid-render takes out the table.
  */
 
 /** The inclusive range of total street commitments the table will accept. */

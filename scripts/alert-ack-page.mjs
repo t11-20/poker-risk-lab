@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 /**
- * Sends a real `severity: page` alert through this deployment's Alertmanager and exits 0 only if
- * somebody types back, at a terminal and within MAX_ATTEMPTS tries, a code carried in that page.
- * This is `pnpm run alerts:ack`. Run it before go-live and after any change to paging destinations.
- * It closes the gap the other alert checks leave. `alerts:verify` proves the pipeline and
- * `--handshake` proves the relay accepts credentials, but neither proves a person is reached.
+ * `pnpm run alerts:ack`: sends a real `severity: page` alert through this deployment's Alertmanager
+ * and exits 0 only if somebody types back, at a terminal and within MAX_ATTEMPTS tries, a code
+ * carried in that page. `alerts:verify` proves the pipeline and `--handshake` the relay's
+ * credentials, but neither proves a person is reached.
  *
  * What a pass proves. The code travels as an alert label, and Alertmanager's unauthenticated
  * `GET /api/v2/alerts` echoes labels back (measured against `prom/alertmanager:v0.28.1`). The caller
@@ -13,8 +12,8 @@
  * It is not an attestation that survives a caller who wants a green result.
  *
  * What is closed:
- *   * The code is never printed on the passing path. Delivered subjects are redacted, because a
- *     robot once scraped the code off this command's own stdout.
+ *   * The code is never printed on the passing path, and delivered subjects are redacted, so a
+ *     robot cannot scrape it off this command's own stdout.
  *   * Attempts are capped. Uncapped, a pty drove ~106,000 guesses/s, ~383 million inside
  *     `--within 1h` against a 2^30 code space.
  *   * `rehearsal` is decided from where the page went, never from `PRL_ALERT_*`, which only say
@@ -34,14 +33,7 @@
  * `PRL_ALERT_ACK_UNATTENDED=1` is allowed only when both rehearsal stages hold. Such a run is
  * stamped `attended: false` and says so in a banner.
  *
- * Usage:
- *     pnpm run alerts:ack
- *     pnpm run alerts:ack -- --within 10m --by ada@example.org --out ack.json
- *     pnpm run alerts:ack -- --alertmanager https://alertmanager.internal:9093
- *
- * Exit codes:
- *     0  a person acknowledged inside the window
- *     1  nobody did, the attempt limit was reached, or the alert could not be sent
+ * Flags (no --help): --within <duration> (default 5m), --by <name>, --out <file>, --alertmanager <url>.
  */
 
 import { createHash, randomInt } from 'node:crypto';

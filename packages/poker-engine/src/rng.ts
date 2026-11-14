@@ -142,8 +142,7 @@ export function createDeterministicRandomForTests(seed: number): RandomSource {
 /**
  * A deterministic generator for Monte Carlo sampling. Legal in production, never deals.
  *
- * `monteCarloEquity` once used the test-only generator, which throws in production, so sampled
- * equity failed and bot hands stalled. Tests never run with `NODE_ENV=production`, which hid it.
+ * The test-only generator throws in production, and tests never run with `NODE_ENV=production`.
  * Sampling needs a seeded stream because the worker pool shards one estimate by seed and a reopened
  * analysis must show the same number. It is a separate `kind` rather than a flag, so `shuffledDeck`
  * can refuse it by type. Same SplitMix32 stream as the test-only generator.

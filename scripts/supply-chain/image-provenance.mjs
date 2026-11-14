@@ -19,8 +19,6 @@
  * KEY posture proves possession of a key, with no transparency log. KEYLESS posture proves which
  * workflow signed, recorded in Rekor. Neither proves what went into the image. See
  * `deploy/signing/README.md`.
- *
- * Exit codes: 0 every release image verified (and for --help); 1 anything else.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -1064,8 +1062,7 @@ export function runImageProvenanceGate(options) {
   }).then((code) => {
     if (options.json) console.log(JSON.stringify(report, null, 2));
     if (code !== 0) {
-      // The pass epilogue must not print on a failed run. It once did, naming an attacker-org identity
-      // under a red FAIL.
+      // The pass epilogue must not print on a failed run, where it could name an attacker-org identity.
       const anchor = report.posture === 'keyless' ? 'the committed identity policy' : 'the committed key';
       console.log(
         red(

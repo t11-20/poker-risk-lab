@@ -534,10 +534,7 @@ function serverEnv(port, scope) {
   };
 }
 
-/**
- * Connects rather than binds, because on macOS a bind to 127.0.0.1 succeeds beside a wildcard listener
- * (measured 2026-11-10, the run then scored a stranger's server). Only ECONNREFUSED counts as free.
- */
+/** As `refuseOccupiedPort` in `ax-tree-audit.mjs`, which says why it connects rather than binds. */
 async function refuseOccupiedPort(port) {
   const outcome = await new Promise((done) => {
     const socket = connect({ host: '127.0.0.1', port });

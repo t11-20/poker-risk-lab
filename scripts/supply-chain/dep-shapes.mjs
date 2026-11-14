@@ -193,7 +193,7 @@ export function checkResolutionHosts(gate, packages) {
 
 /**
  * Check 3: no installed package declares an install-time hook (Pattern A). `requireStoreCoverage`
- * runs first, because this once passed over an empty store.
+ * runs first, because a sweep of an empty store is not a pass.
  *
  * @param {Gate} gate
  * @param {Map<string, {manifest: unknown, manifestPath: string}>} installed

@@ -355,8 +355,8 @@ describe('the harness does not hand harness-paths.test.ts a route that must not 
 });
 
 /**
- * Section 5 once let a missing field produce neither a pass nor a failure. Each case states the old
- * expression and asserts it disagrees with the new one on the absent case.
+ * Each case states an expression that lets a missing field produce neither a pass nor a failure,
+ * and asserts it disagrees with the new one on the absent case.
  */
 describe('assertions about absence', () => {
   it('treats an empty list as missing, which is what it was already doing', () => {
@@ -418,9 +418,8 @@ describe('the confidence-interval check on a sampled equity', () => {
 });
 
 /**
- * Section 5 once counted any 4xx as a rejection, so six 429s from a spent expensive-rate-limit
- * budget printed "all 6 hostile calculation inputs rejected". `oldRuleCountedItRejected` writes out
- * the old rule and must disagree on the 429 case.
+ * `oldRuleCountedItRejected` counts any 4xx as a rejection, so 429s from a spent expensive-rate-limit
+ * budget read as "hostile calculation inputs rejected". It must disagree on the 429 case.
  */
 describe('classifyHostileRefusal', () => {
   const response = (status, code) => ({
@@ -467,9 +466,8 @@ describe('classifyHostileRefusal', () => {
 });
 
 /**
- * Section 7 once skipped every `street === 'complete'` frame, which exempts a hand that ended by
- * fold, the ordinary outcome here. A stub API that served the opponent's cards in that frame left
- * the whole run green. `oldScanExemptedIt` must disagree on the fold-ended case.
+ * `oldScanExemptedIt` skips every `street === 'complete'` frame, which exempts a hand that ended by
+ * fold, the ordinary outcome here. It must disagree on the fold-ended case.
  */
 describe('unentitledHoleCardSeats', () => {
   const frame = (street, { opponentCards = null, showdowns = null } = {}) => ({
@@ -539,10 +537,9 @@ describe('unentitledHoleCardSeats', () => {
 });
 
 /**
- * Section 8 once scanned `hand.seats` on `GET /hands` rows. Those are `HandSummary`, with no `seats`
- * field, so it walked zero seats and passed (measured on 2026-08-27). With both server-side redaction
- * layers removed, `auditReviewSeats` reported `leaked: [1]` while the old check stayed clean.
- * `oldSectionEightSaidClean` is that old expression.
+ * `oldSectionEightSaidClean` scans `hand.seats` on `GET /hands` rows. Those are `HandSummary`, with
+ * no `seats` field, so it walks zero seats and passes. With both server-side redaction layers
+ * removed, `auditReviewSeats` reports `leaked: [1]` while the old check stays clean.
  */
 describe('auditReviewSeats', () => {
   const oldSectionEightSaidClean = (listRows) =>

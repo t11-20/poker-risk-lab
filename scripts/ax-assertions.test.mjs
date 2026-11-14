@@ -1319,7 +1319,7 @@ describe('NEGATIVE CONTROL — 3.18, the hand that ends in silence', () => {
 describe('NEGATIVE CONTROL — 3.19, a refusal nobody is interrupted for', () => {
   const check = checkFor('J3.19');
   const DECISION = regionKey('prl-play__stage', 'prl-play__main', 'prl-play__decision');
-  // The page stopped printing contract codes after the audit at 308fadf.
+  // The page does not print contract codes.
   const REFUSAL = '▲Watch outThe server refused itIt is not your turn to act. Nothing was applied.';
 
   const REFUSED_HAND = () => {
@@ -1789,7 +1789,6 @@ describe('NEGATIVE CONTROL — 6.7, a failing deck proof nobody is interrupted f
   });
 
   it('says, when it fails, how many DISTINCT hands it saw and what each drive pressed (REGRESSION)', () => {
-    // CI run 43245665934.
     const evidence = SEEN_TWICE();
     evidence.hand = null;
     evidence.record = null;
@@ -2014,7 +2013,7 @@ describe('the quiz verdict openings match what the app writes', () => {
   });
 });
 
-// The quiz answers only on "Check answer" (UX audit at 6b3886e, Minor 2). A verdict after a mere
+// The quiz answers only on "Check answer". A verdict after a mere
 // selection must fail.
 describe('J2.5: selecting is not answering', () => {
   const check = checkFor('J2.5');

@@ -160,7 +160,7 @@ export interface SeatSimulationStats {
   /**
    * Folds facing a bet, excluding the preflop entry decision, which `decide` gives to the `vpip` plan.
    * `foldToBetFrequency` includes it and ranked the profiles in reverse `vpip` order (rho -1.000 over
-   * 8,000 hands, 2026-11-11). Printed by the simulation suite and asserted by nothing.
+   * 8,000 hands). Printed by the simulation suite and asserted by nothing.
    */
   readonly pricedFoldToBetFrequency: number;
   readonly averageBetSizeAsPotFraction: number;

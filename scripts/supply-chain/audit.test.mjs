@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * Tests for the audit aggregator. `--offline` once printed "NOT a valid release audit" and exited 0,
- * and `quarantine.mjs` read that 0 as success after running six of eight gates.
+ * Tests for the audit aggregator. `quarantine.mjs` reads exit 0 as success, so `--offline` must not
+ * exit 0.
  */
 
 import assert from 'node:assert/strict';

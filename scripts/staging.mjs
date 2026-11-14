@@ -1,24 +1,12 @@
 #!/usr/bin/env node
 /**
- * Brings up, verifies and gates promotion of the staging stack (`pnpm run staging <command>`).
+ * Brings up, verifies and gates promotion of the staging stack (`pnpm run staging <command>`);
+ * `--help` lists the commands.
  *
- * It runs the digests `pnpm run release:artifacts` built against a production-shaped stack and
- * proves the running containers match the manifest, the TLS chain verifies against the local CA,
- * the proxy overwrites `X-Forwarded-For`, and the smoke test passes over TLS. `promote` verifies and
- * deploys nothing. It also runs `alert-preflight.mjs`, because rehearsal `PRL_ALERT_*` defaults pass
- * `alerts:verify` and page nobody. Nothing here signs or checks a signature (see `release:sign`).
- * Migrations run as the cluster owner, and the API connects as `prl_api`.
- *
- * Usage:
- *     node scripts/staging.mjs init      [--rotate] [--origin https://localhost:8443]
- *     node scripts/staging.mjs up        [--manifest <path>] [--no-smoke]
- *     node scripts/staging.mjs status    [--json]
- *     node scripts/staging.mjs smoke
- *     node scripts/staging.mjs logs      [--service <name>] [--tail <n>]
- *     node scripts/staging.mjs down      [--volumes]
- *     node scripts/staging.mjs promote   [--manifest <path>] [--json]
- *
- * Exit codes: 0 success or --help, 1 anything else (including a refused promotion).
+ * `promote` verifies and deploys nothing. It runs `alert-preflight.mjs`, because rehearsal
+ * `PRL_ALERT_*` defaults pass `alerts:verify` and page nobody. Nothing here signs or checks a
+ * signature (see `release:sign`). Migrations run as the cluster owner, and the API connects as
+ * `prl_api`.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -756,8 +744,8 @@ function readManifest(path) {
 /**
  * Whether the manifest was built from the checkout `staging up` is running in.
  *
- * The manifest is gitignored, and on 2026-11-11 one 161 commits behind main would have deployed
- * three-month-old images under this checkout's migrations. Refused: a different commit, no commit,
+ * The manifest is gitignored, so a stale one would deploy old images under this checkout's
+ * migrations. Refused: a different commit, no commit,
  * a clean manifest over uncommitted or untracked changes, and a checkout git cannot report on. A
  * `dirty: true` manifest is only warned about, because `promote` is where dirty is refused.
  *

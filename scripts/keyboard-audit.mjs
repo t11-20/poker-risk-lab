@@ -835,8 +835,8 @@ async function auditNarrowViewport(page) {
       ok('Narrow viewport: focus moves into the sheet on open', `on "${opened.activeName}"`);
     else bad('Narrow viewport: menu', `focus stayed outside the sheet, on "${opened.activeName}"`);
 
-    // The sheet must fill the viewport. A header `backdrop-filter` once made the fixed sheet 76px tall
-    // while every keyboard check passed. `elementFromPoint` checks what a tap hits.
+    // The sheet must fill the viewport: a header `backdrop-filter` can make the fixed sheet 76px tall
+    // while every keyboard check passes. `elementFromPoint` checks what a tap hits.
     const geometry = await page.evaluate(
       `(() => {
         const dialog = document.querySelector('[role="dialog"]');
@@ -1344,12 +1344,7 @@ export const ROUTES = [
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-/**
- * Refuse to start when something already answers on a port this run will poll. On 2026-11-10 a
- * hand-started server on the port made the run pass 133 checks against servers it did not start.
- * It connects rather than binds, because a bind of 127.0.0.1 succeeds beside a wildcard listener.
- * Only ECONNREFUSED counts as free.
- */
+/** As `refuseOccupiedPort` in `ax-tree-audit.mjs`, which says why it connects rather than binds. */
 async function refuseOccupiedPort(url) {
   const { hostname, port, protocol } = new URL(url);
   const host = hostname.replace(/^\[(.*)\]$/, '$1');

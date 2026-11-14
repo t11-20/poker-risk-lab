@@ -14,13 +14,6 @@
  *
  * It does not prove the production limit values, or that the reset control is absent in production
  * (`apps/api/test/rate-limit-isolation.test.ts` does).
- *
- * Usage:
- *     node scripts/smoke-test.mjs [--origin http://127.0.0.1:3001] [--strict]
- *     node scripts/smoke-test.mjs --reset-token "$RATE_LIMIT_RESET_TOKEN"
- *     node scripts/smoke-test.mjs --no-reset            # exercise the wait-out fallback
- *
- * Exit codes: 0 pass, 1 any failure (or any warning under --strict), 0 for --help.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -317,8 +310,8 @@ export function originBucketNote(origin) {
 }
 
 /**
- * True when `value` is not a non-empty array. Section 5 once used `?.length === 0` with no `else`,
- * so a missing `uncertainty` object produced neither a pass nor a failure.
+ * True when `value` is not a non-empty array, so a missing `uncertainty` object fails rather than
+ * producing neither a pass nor a failure.
  */
 export function listIsMissingOrEmpty(value) {
   return !Array.isArray(value) || value.length === 0;
@@ -384,10 +377,8 @@ export function liveHandTruth(frames) {
 }
 
 /**
- * Audits one served `GET /hands/:handId` against what the live wire said about the same hand.
- *
- * Section 8 once scanned `hand.seats` on `GET /hands` rows, which are `HandSummary` and have no
- * `seats`. Measured on 2026-08-27 it examined zero seats and printed a pass.
+ * Audits one served `GET /hands/:handId` against what the live wire said about the same hand. It
+ * reads the detail, because `GET /hands` rows are `HandSummary` and have no `seats`.
  *
  * Cards may appear for `truth.viewerSeat` or for a seat with `showedDown`, as in `toReviewSeat`
  * (apps/api/src/review/build-review.ts). `overclaimed` holds `showedDown` to the wire's
@@ -416,9 +407,8 @@ export function auditReviewSeats(review, truth) {
 
 /**
  * Only a validation refusal counts, identified by contract code: `invalid_request` (400),
- * `computation_rejected` (422) or `payload_too_large` (413). Counting any 4xx once let six 429s from
- * a spent expensive-rate-limit budget print "all 6 hostile calculation inputs rejected". A 429 is
- * `untested`, never a pass.
+ * `computation_rejected` (422) or `payload_too_large` (413). Any 4xx would count a 429 from a spent
+ * expensive-rate-limit budget as a rejection, so a 429 is `untested`, never a pass.
  */
 const VALIDATION_REFUSAL_CODES = new Set(['invalid_request', 'computation_rejected', 'payload_too_large']);
 
@@ -1680,10 +1670,8 @@ async function sectionProgress(alice) {
 /**
  * 10. The HTML origin carries an effective CSP.
  *
- * The page origin once served no policy while `THEME_BOOT_SCRIPT_CSP_HASH` sat unused, and only a
- * real response shows that. `apps/web/test/csp-policy.test.ts` checks the policy's shape. This checks
- * it arrived and that Next stamped the nonce on the scripts, because without that the page never
- * hydrates.
+ * `apps/web/test/csp-policy.test.ts` checks the policy's shape. Only a real response shows that it
+ * arrived and that Next stamped the nonce on the scripts, because without that the page never hydrates.
  */
 async function sectionWebHeaders() {
   section('10. Web origin security headers');

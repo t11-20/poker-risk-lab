@@ -1,36 +1,17 @@
 #!/usr/bin/env node
 /**
- * Load and capacity harness (`pnpm run test:load`). Drives the real user journey against ONE running
- * API, ramps concurrency until a stated failure criterion is crossed, and names what saturated from
- * the server's own `GET /metrics`. Every number is stamped with its environment, and `NOT_MEASURED`
- * lists what a run cannot say (a cluster, a real network, a production database, browsers, hours).
+ * Load and capacity harness (`pnpm run test:load`); `--help` lists every flag.
  *
- * Each series in `SERIES` is resolved at run time. A metric the process does not emit reads as
- * `null`, goes into `server.missing`, and can never fire a saturation signal, because the registry
- * renders no line for a counter that was never incremented and `0` would claim an absence of load.
- * `prl_event_loop_delay_*` is a rolling window reset by every scrape, so a second scraper halves it.
- * `prl_db_probe_duration_seconds` only advances on `GET /ready`, so the harness calls it per scrape.
- *
- * Journey per virtual user: connect, join, sit, play, ask Coach mid-hand, disconnect mid-hand,
- * resume, finish the hand, open Hand Review. Every resume is checked for the same seat, hand and
- * hole cards and a non-decreasing sequence and pot, and a consistency failure fails the run. Clients
- * only send actions from `legalActions`, sized at `minTo`, with the protocol's `expectedSequence` and
- * a unique `actionId`. Coach and Hand Review are paced under their rate limits.
- *
- * Action choice uses a seeded mulberry32 stream per seat so `--seed` repeats. It cannot touch an
- * outcome, because the server deals from its own CSPRNG.
+ * A metric the process does not emit reads as `null` and can never fire a saturation signal, because
+ * the registry renders no line for a counter that was never incremented and `0` would claim an
+ * absence of load. `prl_event_loop_delay_*` is a rolling window reset by every scrape, so a second
+ * scraper halves it. `prl_db_probe_duration_seconds` only advances on `GET /ready`, so the harness
+ * calls it per scrape.
  *
  * The WebSocket cookie goes in Node's non-standard options bag as the SECOND constructor argument,
  * `new WebSocket(url, { headers })`. A third argument is silently ignored (verified on Node 24.18.0).
  * Cookies are read with `getSetCookie()`, because `get('set-cookie')` comma-joins them and Expires
  * contains commas.
- *
- * Usage:
- *     node scripts/load-test.mjs [options]        # see --help for every flag
- *     pnpm run test:load -- --ramp 1,2,4,8 --hold 20 --json
- *
- * Exit codes: 0 when every level met every threshold and the ramp completed, and for --help. 1 on a
- * breach, a lost resume, an unreachable or refused `/metrics`, a blown budget, or a bad option.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -129,8 +110,8 @@ const DEFAULTS = {
    */
   warmupSeconds: 5,
   /**
-   * Optional cap on hands per table per level; 0 lets the hold decide. A default cap of 200 once
-   * ended fast levels after two seconds and reported 7970 hands/minute beside 762.
+   * Optional cap on hands per table per level; 0 lets the hold decide. A default cap of 200 ended fast
+   * levels after two seconds and reported 7970 hands/minute beside 762.
    */
   hands: 0,
   smallBlind: 1,
@@ -1064,8 +1045,7 @@ class Client {
     this.stateWaiters = [];
     /**
      * The latest `state` frame since this socket's `welcome`. Both can be dispatched in one tick
-     * before `connect()` resumes, so a waiter registered afterwards would miss the frame. That race
-     * once caused eight seat timeouts in a fifteen-second level.
+     * before `connect()` resumes, so a waiter registered afterwards would miss the frame.
      */
     this.stateSinceWelcome = null;
   }
@@ -1747,7 +1727,7 @@ function summariseLevel({ level, tables, options, metrics, tableSummaries, readi
       consistencyFailures: [...metrics.consistencyFailures],
     },
     server: summariseServerSide(readings),
-    // Not `tables`, which is the count. Sharing the key once printed "across [object Object] tables".
+    // Not `tables`, which is the count.
     tableOutcomes: tableSummaries.map((table) => ({
       index: table.index,
       handsCompleted: table.handsCompleted,
@@ -2118,10 +2098,7 @@ const num = (value, digits = 1) =>
       ? value.toFixed(digits)
       : 'above top bucket';
 
-/**
- * A histogram bound: `<= 50.0ms`, above the top bucket, or nothing measured. The report once printed
- * `db probe p99 <= 50.0ms` on the run whose signal said 50 ms was exceeded.
- */
+/** A histogram bound: `<= 50.0ms`, above the top bucket, or nothing measured. */
 const boundMs = (value) =>
   value === null || value === undefined
     ? '   -  '
@@ -2241,10 +2218,7 @@ export function renderReport(report) {
       tone: 'warn',
       text: `  ! resource: ${report.saturation.resource} — ${report.saturation.meaning}`,
     });
-    /**
-     * When the limiter stopped the ramp, N is a policy setting. A release review once quoted such a
-     * run as "capacity saturated at 6 seated players".
-     */
+    /** When the limiter stopped the ramp, N is a policy setting, not a capacity. */
     if (report.saturation.stoppedBy.includes('refusal-rate-limited')) {
       lines.push({
         tone: 'warn',
@@ -2365,9 +2339,8 @@ function printReport(report) {
 
 /**
  * Clears the rate-limit counters before provisioning, when this process holds the token. CI runs
- * `test:smoke` first, whose section 12 drains the guest bucket, so runs since 2026-10-11 created
- * "only 0 of 3 guest sessions". The route exists only with `RATE_LIMIT_RESET_TOKEN`, which production
- * refuses.
+ * `test:smoke` first, whose section 12 drains the guest bucket. The route exists only with
+ * `RATE_LIMIT_RESET_TOKEN`, which production refuses.
  *
  * Returns the number cleared, null with no token, or throws when the server refuses the token or the
  * route.
