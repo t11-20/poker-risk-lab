@@ -22,7 +22,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, X509Certificate } from 'node:crypto';
 import {
   chmodSync,
   existsSync,
@@ -36,6 +36,7 @@ import {
 import { request as httpsRequest } from 'node:https';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { connect as tlsConnect } from 'node:tls';
 import { fileURLToPath } from 'node:url';
 import { DIGEST, REGISTRY_DIGEST_REFERENCE, verifyRegistryDigest } from './registry-digest.mjs';
 
@@ -83,7 +84,10 @@ ${bold('pnpm run staging')} — the production-shaped rehearsal stack
   Commands:
     init       generate the local CA, the leaf certificate and the secrets
     up         bring the stack up on the manifest's digests, then verify it
-    status     what is running, and whether it matches the manifest
+    status     what is running, whether it matches the manifest, and whether the
+               proxy serves the certificate on disk
+    refresh-tls  recreate ONLY the proxy so it serves the certificate on disk,
+                 then check the handshake (run it after \`init\` renews the leaf)
     smoke      run the smoke test against the running stack
     logs       tail the stack's logs
     down       stop the stack
@@ -128,7 +132,7 @@ ${bold('pnpm run staging')} — the production-shaped rehearsal stack
   Exit codes: 0 success, 1 failure or a refused promotion.
 `;
 
-const COMMANDS = ['init', 'up', 'status', 'smoke', 'logs', 'down', 'promote'];
+const COMMANDS = ['init', 'up', 'status', 'refresh-tls', 'smoke', 'logs', 'down', 'promote'];
 
 function parseArgs(argv) {
   const options = {
@@ -279,8 +283,15 @@ export function hstsFromRawHeaders(rawHeaders) {
 }
 
 // nginx reads the bind-mounted certificate only at start, so a renewed leaf needs the proxy recreated.
-// Only the proxy: the API and web containers stay pinned by digest.
-export const PROXY_REFRESH_COMPOSE_ARGS = Object.freeze(['up', '-d', '--force-recreate', 'proxy']);
+// Only the proxy: `--no-deps`, because `up proxy` otherwise reconciles api and web too, and recreates
+// them (dropping live hands) whenever `init --rotate` or `--origin` changed their environment.
+export const PROXY_REFRESH_COMPOSE_ARGS = Object.freeze([
+  'up',
+  '-d',
+  '--no-deps',
+  '--force-recreate',
+  'proxy',
+]);
 
 export function refreshStagingProxy(runCompose) {
   if (typeof runCompose !== 'function') {
@@ -289,10 +300,155 @@ export function refreshStagingProxy(runCompose) {
   const args = [...PROXY_REFRESH_COMPOSE_ARGS];
   const services = args.filter((arg) => !arg.startsWith('-'));
   // Naming `api` or `web` would recreate the artefacts `staging up` just pinned by digest.
-  if (!args.includes('--force-recreate') || services[0] !== 'up' || services.slice(1).join() !== 'proxy') {
-    throw new Error(`proxy refresh must be \`up -d --force-recreate proxy\`; got ${JSON.stringify(args)}`);
+  const flagsOk = args.includes('--force-recreate') && args.includes('--no-deps');
+  if (!flagsOk || services[0] !== 'up' || services.slice(1).join() !== 'proxy') {
+    throw new Error(
+      `proxy refresh must be \`up -d --no-deps --force-recreate proxy\`; got ${JSON.stringify(args)}`,
+    );
   }
   return runCompose(args);
+}
+
+// A renewed leaf on disk proves nothing about the handshake: `init` writes new files while a running
+// proxy keeps serving the old ones, so the check compares what the origin presents on a handshake.
+export const CERT_WARN_DAYS = 14;
+
+export function servedCertificateVerdict({ served, disk, now }) {
+  const days = (validTo) => Math.floor((Date.parse(validTo) - now) / 86_400_000);
+  if ('problem' in served) {
+    return [
+      { level: 'cross', line: 'could not read the certificate the proxy serves', detail: served.problem },
+    ];
+  }
+  const servedExpiry = `expires ${served.validTo} (${days(served.validTo)} day(s))`;
+  const findings = [];
+  if (disk !== null && 'problem' in disk) {
+    findings.push({
+      level: 'cross',
+      line: 'deploy/staging/tls/staging-cert.pem cannot be read',
+      detail: disk.problem,
+    });
+  } else if (disk === null) {
+    findings.push({
+      level: 'bang',
+      line: 'no deploy/staging/tls/staging-cert.pem to compare with',
+      detail: servedExpiry,
+    });
+  } else if (served.fingerprint256 !== disk.fingerprint256) {
+    findings.push({
+      level: 'cross',
+      line: 'the proxy serves a different certificate from deploy/staging/tls/staging-cert.pem',
+      detail:
+        `served  ${servedExpiry}\n      on disk expires ${disk.validTo} (${days(disk.validTo)} day(s))\n` +
+        '      `pnpm run staging refresh-tls` loads the one on disk; it recreates only the proxy',
+    });
+  }
+  if (!served.authorized) {
+    findings.push({
+      level: 'cross',
+      line: 'the served chain does not verify against deploy/staging/tls/staging-ca.pem',
+      detail: `${served.authorizationError ?? 'unknown error'}: the smoke test and anything trusting that CA will refuse it`,
+    });
+  }
+  const remaining = days(served.validTo);
+  const renewedOnDisk =
+    disk !== null &&
+    !('problem' in disk) &&
+    disk.fingerprint256 !== served.fingerprint256 &&
+    days(disk.validTo) >= CERT_WARN_DAYS;
+  const fix = renewedOnDisk
+    ? 'the one on disk is already renewed; `pnpm run staging refresh-tls` loads it'
+    : 'renew with `pnpm run staging init`, then `pnpm run staging refresh-tls`';
+  if (remaining < 0) {
+    findings.push({
+      level: 'cross',
+      line: `the served certificate expired ${-remaining} day(s) ago`,
+      detail: fix,
+    });
+  } else if (remaining < CERT_WARN_DAYS) {
+    findings.push({
+      level: 'bang',
+      line: `the served certificate expires in ${remaining} day(s)`,
+      detail: fix,
+    });
+  }
+  if (findings.length === 0) {
+    findings.push({ level: 'tick', line: 'the proxy serves the certificate on disk', detail: servedExpiry });
+  }
+  return findings;
+}
+
+// What `status` reports about TLS: nothing when no proxy runs, a failure when the origin cannot be
+// parsed (the check would otherwise be skipped in silence), and the served-certificate verdict otherwise.
+export async function statusTlsFindings({ proxyRunning, origin, handshake, disk, now }) {
+  if (!proxyRunning) return null;
+  if ('problem' in origin) {
+    return [
+      {
+        level: 'cross',
+        line: 'PRL_STAGING_PUBLIC_ORIGIN is unusable, so the served certificate was not checked',
+        detail: origin.problem,
+      },
+    ];
+  }
+  return servedCertificateVerdict({ served: await handshake(origin), disk, now });
+}
+
+export function failingFindings(findings) {
+  return (findings ?? []).filter((f) => f.level === 'cross').map((f) => `${f.line} — ${f.detail}`);
+}
+
+// A malformed file is a finding, not a throw: `status --json` would otherwise print nothing at all.
+function diskCertificate() {
+  if (!existsSync(LEAF_CERT)) return null;
+  try {
+    const cert = new X509Certificate(readFileSync(LEAF_CERT));
+    return { fingerprint256: cert.fingerprint256, validTo: cert.validTo };
+  } catch (err) {
+    return { problem: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+// Verification is reported rather than enforced, so a mismatch can be described instead of only refused.
+function servedCertificate(origin, timeoutMs = 5_000) {
+  return new Promise((resolveServed) => {
+    let settled = false;
+    const settle = (value) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolveServed(value);
+    };
+    const socket = tlsConnect(
+      {
+        host: '127.0.0.1',
+        port: Number(origin.port),
+        servername: origin.hostname,
+        ca: existsSync(CA_CERT) ? readFileSync(CA_CERT) : undefined,
+        rejectUnauthorized: false,
+      },
+      () => {
+        const peer = socket.getPeerCertificate();
+        settle({
+          fingerprint256: peer.fingerprint256,
+          validTo: peer.valid_to,
+          authorized: socket.authorized,
+          authorizationError: socket.authorizationError ? String(socket.authorizationError) : null,
+        });
+      },
+    );
+    socket.setTimeout(timeoutMs, () => settle({ problem: `no TLS handshake within ${timeoutMs}ms` }));
+    socket.on('error', (err) => settle({ problem: err.message }));
+  });
+}
+
+function reportFindings(findings) {
+  const print = { tick, bang, cross };
+  for (const finding of findings) print[finding.level](finding.line, finding.detail);
+}
+
+function stagingOrigin() {
+  return parseHttpsOrigin(readEnvFile().get('PRL_STAGING_PUBLIC_ORIGIN') ?? DEFAULTS.origin);
 }
 
 // Plain `KEY=value` lines with no quoting or interpolation, the form compose and this script share.
@@ -833,6 +989,13 @@ function commandInit(options) {
         '  Next: pnpm run release:artifacts, then pnpm run staging up\n',
     ),
   );
+  if (serviceState('proxy').state === 'running') {
+    bang(
+      'the running proxy still serves the previous certificate and CA',
+      '`pnpm run staging refresh-tls` loads the new ones and recreates only the proxy.\n' +
+        '      The CA is new too: re-import deploy/staging/tls/staging-ca.pem wherever the old one was trusted.',
+    );
+  }
 }
 
 // `db/seeds/0002_dev_login_roles.sql` refuses NODE_ENV=production, so the same roles get a generated
@@ -1236,10 +1399,20 @@ async function commandUp(options) {
   }
 }
 
-function commandStatus(options) {
+async function commandStatus(options) {
   const states = SERVICES.map(serviceState);
   const read = existsSync(resolve(REPO_ROOT, options.manifest)) ? readManifest(options.manifest) : null;
   const manifest = read !== null && !('problem' in read) ? read.manifest : null;
+  const origin = stagingOrigin();
+  const proxyRunning = states.find((s) => s.name === 'proxy')?.state === 'running';
+  // One loopback handshake with a timeout, so `status` still cannot hang.
+  const tlsFindings = await statusTlsFindings({
+    proxyRunning,
+    origin,
+    handshake: servedCertificate,
+    disk: proxyRunning && !('problem' in origin) ? diskCertificate() : null,
+    now: Date.now(),
+  });
 
   if (options.json) {
     console.log(
@@ -1250,11 +1423,14 @@ function commandStatus(options) {
           attestation: existsSync(ATTESTATION_FILE)
             ? JSON.parse(readFileSync(ATTESTATION_FILE, 'utf8'))
             : null,
+          tls: tlsFindings,
         },
         null,
         2,
       ),
     );
+    // Printed as JSON above; recorded here so the exit code still says the check failed.
+    failures.push(...failingFindings(tlsFindings));
     return;
   }
 
@@ -1283,10 +1459,51 @@ function commandStatus(options) {
       }
     }
   }
+  if (tlsFindings !== null) reportFindings(tlsFindings);
   console.log(
     dim(
       `\n  attestation  ${existsSync(ATTESTATION_FILE) ? 'present' : 'absent — nothing has been verified'}\n`,
     ),
+  );
+}
+
+// The renewal step `init` cannot take: it writes new files, and nginx loads them when the proxy starts.
+async function commandRefreshTls() {
+  section('staging refresh-tls');
+  const origin = stagingOrigin();
+  if ('problem' in origin) {
+    cross('PRL_STAGING_PUBLIC_ORIGIN is unusable', origin.problem);
+    return;
+  }
+  const disk = diskCertificate();
+  if (disk !== null && 'problem' in disk) {
+    cross('deploy/staging/tls/staging-cert.pem cannot be read', disk.problem);
+    return;
+  }
+  if (disk === null) {
+    cross('there is no certificate on disk to load', 'run `pnpm run staging init` first');
+    return;
+  }
+  if (serviceState('proxy').state !== 'running') {
+    cross(
+      'the proxy is not running',
+      '`pnpm run staging up` starts it, and it reads the certificate on disk',
+    );
+    return;
+  }
+  console.log(dim('  recreating the proxy container only; api, web and postgres keep running'));
+  const result = refreshStagingProxy(compose);
+  if (result.status !== 0) {
+    cross('could not recreate the TLS proxy', result.stderr.trim() || result.stdout.trim());
+    return;
+  }
+  const healthy = await waitForHealthy(['proxy'], 60);
+  if (!healthy.ok) {
+    cross('the proxy never became healthy', healthy.reason ?? 'unknown');
+    return;
+  }
+  reportFindings(
+    servedCertificateVerdict({ served: await servedCertificate(origin), disk, now: Date.now() }),
   );
 }
 
@@ -1516,7 +1733,10 @@ async function main() {
       await commandUp(options);
       break;
     case 'status':
-      commandStatus(options);
+      await commandStatus(options);
+      break;
+    case 'refresh-tls':
+      await commandRefreshTls();
       break;
     case 'smoke': {
       const entries = readEnvFile();
