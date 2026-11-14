@@ -69,7 +69,7 @@ export type TableStageStatus = 'idle' | 'loading' | 'ready' | 'error' | 'complet
 export interface TableSubmission {
   readonly action: TableAction;
   readonly status: 'pending' | 'held' | 'accepted' | 'rejected' | 'not-sent';
-  /** What the reader is told. The server's own wording where the server had any. */
+  /** The server's own wording where the server had any. */
   readonly message: string;
 }
 

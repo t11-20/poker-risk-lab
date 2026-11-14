@@ -1,7 +1,7 @@
 /**
  * The origin this deployment is reached at, as opposed to the address this process listens on.
  * The guest mint sends it as `Origin`, and the API exact-matches it against `PUBLIC_WEB_ORIGIN`.
- * Sending the container's own address was a 403 behind every real proxy (measured on staging).
+ * The container's own address is a 403 behind every real proxy (measured on staging).
  * Preference: `PUBLIC_WEB_ORIGIN`, the variable the API's allowlist is built from, then
  * `x-forwarded-proto` + `x-forwarded-host`, then the request's own origin.
  * Trusting forwarded headers is safe here, because a forged host only gets the forger's mint refused.

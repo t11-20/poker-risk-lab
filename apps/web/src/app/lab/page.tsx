@@ -65,8 +65,8 @@ const loadScenarios = cache(async (): Promise<LabData> => {
       fromFixture: false,
     };
   } catch (error) {
-    // Only an absent API selects the fixture. A 404 or auth failure is rethrown, because a wrong
-    // path once rendered six fixture scenarios in place of thirty-six.
+    // Only an absent API selects the fixture. A 404 or auth failure is rethrown, so a wrong path
+    // cannot pass the fixture's few scenarios off as the real list.
     if (!isApiUnavailable(error)) throw error;
     // The fixture hard-codes attempt marks that belong to nobody, so they are dropped.
     const bundled = scenarioListFixture();

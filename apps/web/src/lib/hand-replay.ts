@@ -382,7 +382,7 @@ function walkDecisions(input: WalkInput): WalkResult {
 
 /**
  * The terminal frame's stacks after the award. A decision list carries what was paid, never what was
- * won, so walked stacks showed the winner at the loser's figure. Uses the server's
+ * won, so walked stacks would show the winner at the loser's figure. Uses the server's
  * `startingStack + net`, and only for a completed hand.
  */
 function settleTallies(tallies: ReadonlyMap<number, Tally>, review: HandReviewResponse): Map<number, Tally> {

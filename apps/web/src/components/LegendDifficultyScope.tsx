@@ -2,8 +2,8 @@
 
 /**
  * Carries the TICKED difficulty to every Play link and to "Start a match" before the picker is
- * submitted. The picker's Apply button sits far below on a phone, and a reader who ticked Expert was
- * dealt Educational. Following the radio moves no focus and navigates nowhere, so WCAG 3.2.2 is not
+ * submitted. The picker's Apply button sits far below on a phone, and a reader who ticked Expert would
+ * be dealt Educational. Following the radio moves no focus and navigates nowhere, so WCAG 3.2.2 is not
  * engaged. Without scripts the links keep the URL's applied setting. The tick is read from the DOM
  * on mount because after Back the browser may restore a tick the URL does not carry.
  */

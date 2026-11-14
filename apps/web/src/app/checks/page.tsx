@@ -37,7 +37,7 @@ export default function ChecksPage(): ReactElement {
         ))}
       </dl>
 
-      {/* Moved from the footer verbatim. Read the "scoped on purpose" note in `SiteFooter.tsx` first. */}
+      {/* Claims only that nothing is looked up. Read `SiteFooter.tsx`'s header on that scope first. */}
       <section aria-labelledby="checks-source" className="prl-checks__source">
         <h2 id="checks-source">Where the numbers come from</h2>
         <p className="prl-checks__prose">

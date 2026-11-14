@@ -19,7 +19,6 @@ export interface HomeSpot {
   /** Outright wins and splits, 0..1. */
   readonly win: number;
   readonly tie: number;
-  /** Turn-and-river runouts counted. */
   readonly runouts: number;
 }
 

@@ -196,8 +196,7 @@ export function chooseRoom(
   preferredId: string | null,
 ): RoomSummary | null {
   // Only rooms as wide as `/play` (six seats). A legend match is two seats wide and must not reopen
-  // under the six-handed heading (Devin Review on #24). Width, because room names and profiles drift
-  // or overlap.
+  // under the six-handed heading. Width, because room names and profiles drift or overlap.
   const mine = rooms.filter(
     (room) =>
       room.ownerUserId === userId && room.status !== 'closed' && room.maxSeats === BOT_TABLE_REQUEST.maxSeats,
