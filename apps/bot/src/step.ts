@@ -12,7 +12,7 @@
 import type { GlossaryEntry } from '@prl/contracts';
 import { UNIVERSAL_DISCLAIMER } from '@prl/poker-ai';
 import { BettingRuleError, type HandState, validateAction } from '@prl/poker-engine';
-import { type CoachFn, type CoachReading, coachWhy, readCoach } from './coach.ts';
+import { type CoachFn, type CoachReading, coachNamer, coachWhy, readCoach } from './coach.ts';
 import { entryById, entryText, lookup, normalise, seeAlsoOf } from './define.ts';
 import { onLesson, onLessonPage, onLessons } from './lesson.ts';
 import { GONE, onQuizPress, onQuizText, onQuizzes, onTopic, startQuiz } from './quiz.ts';
@@ -396,7 +396,12 @@ function show(
       `hand ${state.handId} stopped on ${state.street} with seat ${String(state.toAct)} to act`,
     );
   }
-  const coach = readCoach(view, `${state.handId}:${state.actionSequence}`, deps.coach);
+  const coach = readCoach(
+    view,
+    `${state.handId}:${state.actionSequence}`,
+    deps.coach,
+    coachNamer(table, view),
+  );
   return {
     session: { ...session, table, phase: { kind: 'deciding', state, coach } },
     out: [decidingMessage(table, state, coach, how)],
