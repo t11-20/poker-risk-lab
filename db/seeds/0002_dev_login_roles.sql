@@ -1,48 +1,17 @@
--- =============================================================================
--- 0002_dev_login_roles.sql - the two DEVELOPMENT login identities.
---
--- Applied by `pnpm db:seed`, which refuses to run when NODE_ENV=production.
--- That refusal is the reason this file can exist at all: it sets passwords, and a
--- password in version control must never be able to reach a real deployment.
--- Seeds are not recorded in prl.schema_migrations, so every statement below is
+-- The two development login identities, applied by `pnpm db:seed`. That command refuses
+-- NODE_ENV=production, which is the only reason this file may set a password. Every statement is
 -- guarded and safe to re-run.
 --
--- ## Why a seed creates roles
+-- prl_migrator and prl_app are NOLOGIN privilege containers; what connects is a login role that is a
+-- member of one (docs/RUNBOOK.md §5, whose names these match). `.env.example` points DATABASE_URL at
+-- prl_api so development and the tests run with the deployment's privileges, not as a superuser that
+-- hides a missing GRANT.
 --
--- 0001_initial.sql creates `prl_migrator` and `prl_app` NOLOGIN and with no
--- password, on purpose: they are privilege containers, not identities. Nothing
--- connects AS prl_app; something connects as a login role that is a MEMBER of it
--- and inherits its privileges (docs/RUNBOOK.md §5).
+-- The password is "poker-dev-only", the value docker-compose.yml and .env.example use, so it is
+-- recognisable as not a secret. A real deployment creates these roles from a secret manager.
 --
--- Until this file existed, nothing outside the documentation ever did that.
--- Development connected as the cluster superuser, so every query ran with
--- rolsuper and rolbypassrls, and the least-privilege path - the one that bounds
--- what an injection can reach in production - was exercised for the first time in
--- production. A missing GRANT does not surface locally when the local identity
--- has every privilege there is. Now `.env.example` points DATABASE_URL at
--- prl_api, so the development API, the test suite and `pnpm db:verify` all run
--- against exactly the privileges the deployment gives them.
---
--- The names match §5 of the runbook deliberately: development should rehearse the
--- deployment's shape, not a parallel one with different role names.
---
--- ## The password
---
--- "poker-dev-only", the same value docker-compose.yml uses for POSTGRES_PASSWORD
--- and .env.example uses for the superuser. One dev credential rather than three
--- is one thing to remember and, more usefully, one thing to recognise instantly
--- as not a secret. A real deployment creates these two roles by hand, once, with
--- a password from a secret manager - the SQL for that is in RUNBOOK §5 and it is
--- not this file.
---
--- ## Why the whole thing is conditional
---
--- Creating a role needs CREATEROLE or superuser, and granting membership in
--- prl_app needs admin of it. `pnpm db:seed` may legitimately be run by an
--- identity with neither (prl_deployer owns the schema but administers no role),
--- and a seed that aborted there would take the fixture data down with it. So the
--- block below checks first and says what it skipped instead of failing.
--- =============================================================================
+-- Creating a role needs CREATEROLE or superuser and granting prl_app needs admin of it; db:seed may run
+-- as prl_deployer, which has neither, so the block skips with a notice instead of failing.
 
 DO $$
 DECLARE
@@ -110,9 +79,8 @@ BEGIN
 END
 $$;
 
--- A statement, not a comment, so the check is real: if the two identities cannot
--- reach the schema through their membership, the seed fails here rather than
--- leaving a developer to discover it as a permission-denied error at request time.
+-- Fails the seed if the identities cannot reach the schema through their membership, rather than at
+-- request time.
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'prl_api') THEN
