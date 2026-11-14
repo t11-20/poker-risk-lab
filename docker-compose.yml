@@ -1,48 +1,26 @@
-# ---------------------------------------------------------------------------
-# Local development and local end-to-end stack for Poker Risk Lab.
+# Local development and local end-to-end stack for Poker Risk Lab. Not a deployment manifest: the
+# credentials are dev defaults in plain sight and every port binds to loopback.
 #
-# This file is for a developer's machine. It is not a deployment manifest: the
-# credentials below are dev defaults in plain sight, the ports bind to localhost,
-# and nothing here is hardened against a hostile network because there is not one.
+# ## First run
 #
-# ## First run, exactly
-#
-#   1. Put a session secret in .env, FIRST. There is no default and there is not
-#      going to be one: `api` below reads `${SESSION_COOKIE_SECRET:?...}`, so a
-#      missing value stops compose with a message instead of booting a stack whose
-#      sessions are signed with a value from a public repository.
+#   1. Put a session secret in .env FIRST. `api` reads `${SESSION_COOKIE_SECRET:?...}` and compose
+#      interpolates the WHOLE file even for one service, so without it even `db:up`
+#      (`docker compose up -d postgres`) exits 1 with "required variable SESSION_COOKIE_SECRET is
+#      missing a value". .env is gitignored and dockerignored, so it never reaches an image layer.
 #
 #          cp .env.example .env      # if you have not already
 #          node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
 #          # paste that into SESSION_COOKIE_SECRET in .env
 #
-#      It has to come before step 2, not after it. Compose interpolates the WHOLE
-#      file even when it is asked for one service, and `db:up` is
-#      `docker compose up -d postgres`. Measured with no .env:
-#      `docker compose config postgres` exits 1 with "required variable
-#      SESSION_COOKIE_SECRET is missing a value". This list used to put db:setup
-#      first, so a fresh clone failed on the first command it was told to run.
-#
-#      compose reads .env from this directory for interpolation. It is gitignored
-#      and dockerignored, so the value reaches the container's environment and never
-#      an image layer.
-#
-#   2. Start the database on its own and prepare the schema. Docker must be
-#      running. `db:setup` is `db:up && db:wait && db:migrate && db:seed`, so this
-#      one command brings PostgreSQL up, blocks until it actually accepts
-#      connections, applies the migrations in db/migrations, and loads the
-#      lesson/glossary content:
+#   2. Start the database and prepare the schema (`db:setup` is
+#      `db:up && db:wait && db:migrate && db:seed`). Docker must be running.
 #
 #          pnpm install --frozen-lockfile
 #          pnpm run db:setup
 #
-#   3. Then either run the app from source, which is what you want while
-#      developing (hot reload, no image rebuild):
+#   3. Run from source (hot reload) or the way it ships:
 #
 #          pnpm run dev                     # api on :3001, web on :3000
-#
-#      or run it the way it ships, in containers:
-#
 #          docker compose up -d --build     # app on http://localhost:3000
 #
 #   4. Useful afterwards:
@@ -57,173 +35,97 @@
 #          pnpm run db:down                 # stop postgres (volume survives)
 #          docker compose down -v           # stop everything AND delete the data
 #
-# Migrations are run from the host, not from inside the api container: the image
-# deliberately does not ship apps/api/scripts (see Dockerfile.api). The database
-# port is published to 127.0.0.1 precisely so those host-side commands work.
+# Migrations run from the host, not the api container: the image does not ship apps/api/scripts
+# (see Dockerfile.api), which is why the database port is published to 127.0.0.1.
 #
 # ## The topology: ONE origin the browser can see
 #
 #   browser ──▶ 127.0.0.1:3000 ──▶ proxy ──▶ /api/*  ──▶ api:3001
 #                                        └─▶ anything else ──▶ web:3000
 #
-# `/api/*` is every REST route (API_PREFIX is /api/v1) and the WebSocket upgrade, which
-# is at /api/v1/ws because ws/hub.ts registers under the same prefix as everything else.
+# `/api/*` is every REST route (API_PREFIX is /api/v1) and the WebSocket upgrade at /api/v1/ws.
 #
-# This is the load-bearing shape of the stack, not a convenience, and it replaces a
-# design that could not work. The web client used to read the API's address from
-# `NEXT_PUBLIC_API_ORIGIN`, and `NEXT_PUBLIC_*` is inlined into the JavaScript bundle
-# by `next build` — so a built image carried whatever address the build machine saw and
-# no deployment could retarget it. Meanwhile this file set `PRL_API_ORIGIN` and claimed
-# "the web app proxies /api/* to this origin", which nothing implemented.
-#
-# So the proxy is real now. Three consequences worth knowing:
-#
-#   * The browser sends every API request to its own origin as a relative path, so
-#     there is nothing about the API's location in the bundle, and retargeting is a
-#     proxy setting (`PRL_PROXY_API_UPSTREAM`), applied when the proxy container is
-#     created — a container replacement, never an image build. Prove it:
+# The browser sends API requests to its own origin as relative paths, so the bundle carries no API
+# address (a `NEXT_PUBLIC_*` value would be inlined by `next build` and frozen into the image), and
+# retargeting is `PRL_PROXY_API_UPSTREAM`, a container replacement rather than an image build:
 #
 #         PRL_PROXY_API_UPSTREAM=api:3001 docker compose up -d proxy   # normal
 #         PRL_PROXY_API_UPSTREAM=nowhere:3001 docker compose up -d proxy
 #         curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/api/v1/health
 #
 #   * The session and CSRF cookies are `__Host-` prefixed with no `Domain`
-#     (apps/api/src/plugins/security.ts), which only means anything when the page and
-#     the API share a host. Now they do.
-#   * `web` is NOT published. Two published origins for one app is how a reader ends up
-#     on the one whose relative /api/* leads nowhere. `api` IS published, on loopback,
-#     because host-side tooling and `curl` need it — see the note on TRUST_PROXY there.
+#     (apps/api/src/plugins/security.ts), which only works when the page and the API share a host.
+#   * `web` is NOT published: a second origin is one whose relative /api/* leads nowhere. `api` IS
+#     published, on loopback, for host-side tooling — see the note on TRUST_PROXY there.
 #
-# `pnpm run dev` gets the same single-origin shape from a rewrite in
-# apps/web/next.config.ts, which is why the dev loop needs no proxy container.
+# `pnpm run dev` gets the same single-origin shape from a rewrite in apps/web/next.config.ts.
 #
 # ## Why `init: true` on every service
 #
-# The Node process is PID 1 in its container. PID 1 has no default signal
-# handlers, so a plain `node server.js` ignores SIGTERM unless the app installs a
-# handler, and `docker compose down` then waits out the stop grace period and
-# SIGKILLs it — dropping in-flight WebSocket closes and leaving Postgres
-# connections to time out. (That grace is ten seconds unless a service says
-# otherwise; `api` says otherwise, and the note on `stop_grace_period` there
-# explains why it has to.) PID 1 also has to reap orphaned children or they
-# accumulate as zombies.
-# `init: true` asks Docker to insert its own tiny init (docker-init) as PID 1,
-# which reaps children and forwards signals to the real process. That is why
-# there is no tini or dumb-init package in the images: adding a dependency to
-# solve a problem the runtime already solves is a dependency for nothing.
+# PID 1 has no default signal handlers, so a plain `node server.js` ignores SIGTERM and
+# `docker compose down` SIGKILLs it after the grace period; PID 1 also has to reap orphans.
+# `init: true` inserts Docker's own init (docker-init) as PID 1, which is why the images carry no
+# tini or dumb-init.
 #
 # ## Why read_only with explicit tmpfs mounts
 #
-# A container whose root filesystem cannot be written to cannot have its code
-# rewritten by anything that gets a foothold in it, and cannot accumulate state
-# that quietly becomes load-bearing. Everything that legitimately needs to write
-# gets a named volume (Postgres data) or an explicit tmpfs, listed below with the
-# reason. If a service starts failing with EROFS after a dependency upgrade, the
-# fix is to find out what it wants to write and add it here on purpose — not to
-# drop read_only.
+# A root filesystem that cannot be written cannot have its code rewritten by a foothold. Everything
+# that must write gets a named volume or an explicit tmpfs with its reason. An EROFS after an upgrade
+# means adding that path here on purpose, not dropping read_only.
 #
 # ## Why every service has a `logging:` block, and why the numbers differ
 #
-# THE CANONICAL EXPLANATION. `docker-compose.staging.yml` and
-# `docker-compose.observability.yml` point here rather than repeating it.
+# THE CANONICAL EXPLANATION; the staging and observability compose files point here.
 #
-# There was no `logging:` block anywhere in this repository until D2 in
-# docs/production/legal-register.md. D2 is remembered as a privacy defect — the
-# proxy was writing OAuth authorization codes to its log — but it had a second
-# half that has nothing to do with privacy and is the more likely way to lose a
-# weekend:
+# Docker's default `json-file` driver with no `max-size` is UNBOUNDED and nothing rotates it. A
+# container logging a line per request fills the Docker host's disk, Postgres can no longer write
+# WAL, and every container on the host goes down with it. `read_only: true` does not help: the
+# daemon writes the log, outside the container's filesystem.
 #
-#   Docker's default log driver is `json-file`, and `json-file` with no
-#   `max-size` is UNBOUNDED. Nothing rotates it. There is no logrotate anywhere
-#   in deploy/, and there could not usefully be — see below. A container that
-#   writes a line per request therefore grows a file on the Docker host, without
-#   limit, for as long as it runs.
+# The caps differ because the write rates do:
 #
-# The failure that follows is not "a log got big". It is: the Docker host's disk
-# fills; Postgres cannot extend a relation or write WAL; Postgres shuts down or
-# refuses writes; and the learner-visible symptom is data loss or an outage. That
-# is a DATA-AVAILABILITY incident reached entirely through a logging setting, and
-# it takes down every container on the host, not just the one that was noisy.
-# `read_only: true` on all of these services does not help at all — the log is
-# written by the daemon, outside the container's filesystem.
-#
-# So every service is capped. They are NOT capped uniformly, because they do not
-# write at remotely comparable rates, and a number chosen for the noisiest would
-# be silly on the quietest:
-#
-#   api           20m x 5 = 100 MiB  the highest-volume writer in the stack: a
-#                                    structured JSON line per HTTP request AND per
-#                                    WebSocket lifecycle event, each several times
-#                                    the width of an nginx line. It also gets the
-#                                    most headroom because it is the log an
-#                                    incident is actually reconstructed from.
+#   api           20m x 5 = 100 MiB  a JSON line per HTTP request AND per WebSocket event, and the
+#                                    log an incident is reconstructed from.
 #   proxy         10m x 5 =  50 MiB  a line per request, but a narrow one.
-#   postgres      10m x 3 =  30 MiB  near-silent by default — this stack sets
-#                                    neither log_statement nor
-#                                    log_min_duration_statement, so it logs
-#                                    startup, checkpoints and errors. The cap is
-#                                    not for today; it is for the day somebody
-#                                    debugging a slow query sets
-#                                    log_min_duration_statement=0 and forgets,
-#                                    which turns the quietest service into the
-#                                    loudest by two orders of magnitude and does
-#                                    it silently.
-#   web           10m x 3 =  30 MiB  startup and errors, not a line per request —
-#                                    but one bad render in a hot route is a stack
-#                                    trace per request, which is why it is capped
-#                                    rather than trusted.
+#   postgres      10m x 3 =  30 MiB  near-silent (neither log_statement nor
+#                                    log_min_duration_statement is set); capped for the day
+#                                    someone sets log_min_duration_statement=0 and forgets.
+#   web           10m x 3 =  30 MiB  startup and errors, but one bad render in a hot route is a
+#                                    stack trace per request.
 #
-# 210 MiB for the whole stack, worst case, and the same per-service numbers appear
-# in docker-compose.staging.yml. Keeping them identical is deliberate: the entire
-# lesson of D2 is that these two files drift and a fix in one is not a fix, so
-# `scripts/supply-chain/log-policy.mjs` asserts a service present in both has the
-# same cap in both. A production deployment on real hardware should raise these
-# deliberately, in one place, having decided how much disk it is willing to spend.
+# 210 MiB for the whole stack, worst case. docker-compose.staging.yml carries the same per-service
+# numbers and `scripts/supply-chain/log-policy.mjs` asserts a service present in both has the same
+# cap in both. A production deployment should raise these deliberately, in one place.
 #
-# ## Why there is no logrotate, and why that is not an omission
+# ## Why there is no logrotate
 #
-# logrotate would be the wrong tool and it would break `docker logs`. These files
-# are owned and held open by the Docker daemon; renaming one out from under it
-# leaves the daemon writing to an unlinked inode (the log silently stops
-# appearing and the disk is still consumed), and `copytruncate` races the daemon's
-# own writes. `max-size`/`max-file` IS Docker's rotation, applied by the component
-# that owns the file. Adding logrotate on top would be redundant at best.
+# The daemon owns and holds these files open: renaming one leaves it writing to an unlinked inode,
+# and `copytruncate` races its writes. `max-size`/`max-file` IS Docker's rotation.
 #
-# But be exact about what a size cap is and is not: it bounds HOW MUCH, never HOW
-# LONG. At ten requests a minute a 100 MiB api log holds months; under load it
-# holds an afternoon. So the disk-exhaustion risk is closed here and the
-# data-retention question is NOT — a size cap cannot implement "kept for N days"
-# and must not be recorded as though it had. That is stated in §2.10 of the legal
-# register rather than quietly left to look solved.
-# ---------------------------------------------------------------------------
+# A size cap bounds HOW MUCH, never HOW LONG (a 100 MiB api log is months when idle, an afternoon
+# under load), so it does not implement "kept for N days"; §2.10 of docs/production/legal-register.md
+# says so.
 
 name: poker-risk-lab
 
 services:
   postgres:
-    # Pinned by digest for the same reason the Dockerfiles are. postgres:16-bookworm,
-    # multi-arch index, captured 2026-08-17. Refresh with the registry command in
-    # the Dockerfile.api header, substituting library/postgres and 16-bookworm.
+    # postgres:16-bookworm, multi-arch index digest. Refresh with the registry command in the
+    # Dockerfile.api header, substituting library/postgres and 16-bookworm.
     image: postgres:16-bookworm@sha256:60f4761b9035e0b8d5218f701a8c3382f641bf12b1604822574cf5be3baeb537
-    # A container that dies at 3am should come back; one that cannot start should
-    # not spin forever. `unless-stopped` respects a deliberate `docker compose stop`.
+    # `unless-stopped` restarts a crash but respects a deliberate `docker compose stop`.
     restart: unless-stopped
     init: true
     environment:
-      # Dev defaults, overridable from the environment or a .env file that is
-      # gitignored and dockerignored. These are not secrets and are not pretending
-      # to be: a placeholder in a vault teaches people to trust placeholders.
+      # Dev defaults, overridable from the environment or .env. Not secrets, and not pretending to be.
       POSTGRES_USER: ${POSTGRES_USER:-poker}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-poker-dev-only}
       POSTGRES_DB: ${POSTGRES_DB:-poker_risk_lab}
-      # Scrypt over the default. The password never leaves this machine, but the
-      # setting is one line and there is no reason to hash it weakly.
+      # SCRAM over the default; one line, so no reason to hash weakly.
       POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256 --auth-local=scram-sha-256
       POSTGRES_HOST_AUTH_METHOD: scram-sha-256
     ports:
-      # Bound to the loopback interface, not 0.0.0.0. The unqualified form
-      # "5432:5432" publishes the database to every interface on the machine,
-      # which on a laptop on a café network means exactly what it sounds like.
+      # Loopback, not 0.0.0.0: the unqualified "5432:5432" publishes the database on every interface.
       - '127.0.0.1:${POSTGRES_PORT:-5432}:5432'
     volumes:
       - postgres-data:/var/lib/postgresql/data
@@ -233,30 +135,20 @@ services:
       - /var/run/postgresql:mode=1777
       # ...and temporary sort/hash spill files here.
       - /tmp:mode=1777
-    # 10 MiB × 3 = 30 MiB. The quietest service here by a wide margin — this stack
-    # sets neither `log_statement` nor `log_min_duration_statement`, so Postgres
-    # logs startup, checkpoints and errors and very little else. The cap is not
-    # for that; it is for the afternoon somebody adds
-    # `-c log_min_duration_statement=0` to debug a slow query, which turns the
-    # quietest service into the loudest by two orders of magnitude, silently, and
-    # the disk it fills is the one holding this database's own data directory.
-    # See this file's header, "Why every service has a `logging:` block".
+    # 10 MiB × 3 = 30 MiB; see this file's header, "Why every service has a `logging:` block".
     logging:
       driver: json-file
       options:
         max-size: '10m'
         max-file: '3'
     healthcheck:
-      # `pg_isready` against the real user and database, not just the port. During
-      # initdb the server briefly listens while rejecting connections, and a
-      # port-only check declares that healthy — after which the api starts,
-      # fails to connect, and the actual cause is three services away.
+      # Against the real user and database, not just the port: during initdb the server briefly
+      # listens while rejecting connections, and a port-only check calls that healthy.
       test:
         ['CMD-SHELL', 'pg_isready --quiet --username "$$POSTGRES_USER" --dbname "$$POSTGRES_DB"']
       interval: 5s
       timeout: 5s
-      # 30 x 2s covers a cold initdb on a slow disk without making a genuinely
-      # broken database look like a hang.
+      # Covers a cold initdb on a slow disk without making a broken database look like a hang.
       start_period: 60s
       retries: 30
 
@@ -268,139 +160,73 @@ services:
     init: true
     depends_on:
       postgres:
-        # `service_healthy`, not `service_started`. Started means the container
-        # exists; healthy means the healthcheck above passed.
+        # Healthy, not merely started: the healthcheck above passed.
         condition: service_healthy
-    # ONE replica, and this is not a formality. apps/api/src/rooms/registry.ts:
-    # "the authoritative live state is this process's memory … this design assumes
-    # one API process per room". Two processes each holding "the" HandState for one
-    # room deal two different hands and misresolve the pot. ADR 0001 chose that
-    # trade deliberately. Scaling this service therefore requires either staying at
-    # one process or a router with room affinity — see docs/RUNBOOK.md §11.
+    # ONE replica is correctness, not sizing: live table state is in process memory, so two processes
+    # serving one room deal two different hands (ADR 0001, docs/RUNBOOK.md §11).
     deploy:
       replicas: 1
     environment:
-      # Every variable here is one `loadConfig` (apps/api/src/config.ts) actually
-      # reads. The previous version set PRL_ALLOWED_ORIGINS, which nothing in the
-      # repository read, and omitted two the server requires — so the container
-      # exited 78 with "2 configuration problems" on every boot.
+      # Every variable here is one `loadConfig` (apps/api/src/config.ts) reads.
       #
-      # NODE_ENV: the image ships production (Dockerfile.api) and this overrides it to
-      # development, on purpose and not to silence anything. The production profile
-      # refuses a plaintext `http://` entry in PUBLIC_WEB_ORIGIN and refuses
-      # COOKIE_SECURE=false (config.ts), both correctly: a Secure cookie is never sent
-      # over http, so sign-in could not work. This stack is plaintext on loopback,
-      # which makes it a development stack — as the header of this file has always
-      # said. Nothing in config.ts was relaxed to make that true: set NODE_ENV
-      # explicitly and you get the refusal, verbatim, which is the point. The
-      # production profile (TLS terminated at a proxy, https origins, Secure cookies)
-      # is written out in docs/RUNBOOK.md §11.
+      # NODE_ENV: the image ships production and this stack is plaintext on loopback. The production
+      # profile refuses an `http://` PUBLIC_WEB_ORIGIN and COOKIE_SECURE=false, correctly (a Secure
+      # cookie is never sent over http), so this is a development stack. The production profile is in
+      # docs/RUNBOOK.md §11.
       NODE_ENV: ${NODE_ENV:-development}
       PORT: '3001'
-      # HOST is set to 0.0.0.0 in Dockerfile.api's runtime ENV, deliberately in the
-      # image rather than here, so `docker run` of that image is also reachable.
-      # config.ts defaults it to 127.0.0.1, which for a container means "healthy and
-      # unreachable". Do not set it here without reading that comment.
+      # HOST is 0.0.0.0 in Dockerfile.api's runtime ENV, in the image so a bare `docker run` is
+      # reachable too; config.ts defaults it to 127.0.0.1, "healthy and unreachable" in a container.
       #
-      # Host is the compose service name, resolved on the project's private
-      # network. This is the one place the connection string is assembled for
-      # containers; the host-side scripts read DATABASE_URL from .env instead.
+      # The host-side scripts read DATABASE_URL from .env; this is the containers' one copy.
       #
-      # The USER is `prl_api`, not the cluster superuser `poker`, and that is the
-      # whole point of the line. `db/migrations/0001_initial.sql` creates two
-      # privilege roles — `prl_migrator` (owns the schema) and `prl_app` (DML on
-      # exactly the tables the request path touches, no CREATE, no TRUNCATE, no
-      # ownership). Both are NOLOGIN by design: they are privilege containers, not
-      # identities, so nothing connects AS `prl_app`. Something connects as a login
-      # role that is a MEMBER of it and inherits its privileges — docs/RUNBOOK.md §5.
+      # The USER is `prl_api`, never the superuser `poker` (rolsuper, rolbypassrls), so a query needing
+      # a grant `prl_app` does not hold fails here rather than first in production. `prl_app` and
+      # `prl_migrator` (db/migrations/0001_initial.sql) are NOLOGIN privilege containers; `prl_api` is
+      # a login MEMBER of `prl_app` (docs/RUNBOOK.md §5).
       #
-      # This stack used to connect as `poker`, which has rolsuper and rolbypassrls.
-      # The roles were correct and were proven to work, and nothing exercised them:
-      # every query in development ran with every privilege there is, so a query
-      # needing a grant `prl_app` does not hold could not fail here. It failed for
-      # the first time in production, as a permission-denied at request time.
-      #
-      # `prl_api` is created with this password by `db/seeds/0002_dev_login_roles.sql`,
-      # which `pnpm run db:seed` — and therefore `pnpm run db:setup`, step 2 of First
-      # run at the top of this file — applies. If you skipped that step, this
-      # container will log `password authentication failed for user "prl_api"`; the
-      # fix is `pnpm run db:seed`, not a superuser in this line. A real deployment
-      # creates the role by hand with a password from a secret manager (RUNBOOK §5)
-      # and sets PRL_API_DB_PASSWORD accordingly.
+      # `prl_api` is created with this password by `db/seeds/0002_dev_login_roles.sql` (`pnpm run
+      # db:seed`, part of `db:setup`). `password authentication failed for user "prl_api"` means run
+      # that, not a superuser in this line. A real deployment creates the role with a password from a
+      # secret manager (RUNBOOK §5) and sets PRL_API_DB_PASSWORD.
       DATABASE_URL: postgres://${PRL_API_DB_USER:-prl_api}:${PRL_API_DB_PASSWORD:-poker-dev-only}@postgres:5432/${POSTGRES_DB:-poker_risk_lab}
-      # The origin the BROWSER uses, which is the proxy's published address — not
-      # web's and not api's, neither of which the browser ever sees. Enforced on
-      # WebSocket upgrades (WS_CLOSE.badOrigin) and on CSRF checks, so a wrong value
-      # here presents as "every socket closes 4406" rather than as a config error.
-      # Both spellings are listed because a reader who types 127.0.0.1 is not a
-      # different user from one who types localhost.
+      # The origin the BROWSER uses: the proxy's published address. Enforced on WebSocket upgrades
+      # (WS_CLOSE.badOrigin) and CSRF checks, so a wrong value shows as "every socket closes 4406".
+      # Both spellings, because a reader may type either.
       PUBLIC_WEB_ORIGIN: ${PUBLIC_WEB_ORIGIN:-http://localhost:3000,http://127.0.0.1:3000}
-      # No default, deliberately. `:?` makes compose refuse to start and name the
-      # variable; a dev-only fallback here would be a signing key in a public
-      # repository, and the server would accept it in development and boot happily.
-      # Quoted because the message contains a colon-space, which YAML would otherwise
-      # read as a nested mapping.
+      # No default: a fallback would be a signing key in a public repository that development accepts.
+      # Quoted because the message contains a colon-space, which YAML would read as a mapping.
       SESSION_COOKIE_SECRET: '${SESSION_COOKIE_SECRET:?missing. Put a generated value in .env — step 1 of First run at the top of this file}'
-      # TRUST_PROXY is deliberately NOT enabled, even though there is now a proxy in
-      # front. The port below publishes api on loopback for host-side tooling, so the
-      # proxy is not the only route to it, and TRUST_PROXY's own warning is exactly
-      # about that: a reachable process that believes X-Forwarded-For lets a client
-      # choose its own rate-limit bucket. The cost is that rate limits key on the
-      # proxy's address in this stack. A deployment that does not publish the API
-      # sets TRUST_PROXY=true — see docs/RUNBOOK.md §11.
+      # TRUST_PROXY is NOT enabled: api is also published on loopback, so the proxy is not the only
+      # route to it, and a reachable process that believes X-Forwarded-For lets a client choose its
+      # own rate-limit bucket. Rate limits therefore key on the proxy's address here. A deployment
+      # that does not publish the API sets TRUST_PROXY=true (docs/RUNBOOK.md §11).
       #
-      # ## The shutdown pair. Read this together with `stop_grace_period` below.
+      # ## The shutdown pair, with `stop_grace_period` below.
       #
-      # SHUTDOWN_GRACE_MS is how long the process gives ITSELF to drain after
-      # SIGTERM: answer in-flight requests, send every WebSocket a
-      # `serverShuttingDown` close frame, close the pool and the worker threads
-      # (apps/api/src/server.ts). When it expires the process logs `shutdown timed
-      # out; exiting hard` and exits 1.
-      #
-      # stop_grace_period is how long DOCKER waits after SIGTERM before SIGKILL.
-      #
-      # Neither was set here, and both defaults are 10 s — the same 10 s. A tie is
-      # not a margin: the two timers start together, and the one that ends the
-      # process first is whichever the scheduler reaches, so `docker compose stop`
-      # was measured at 10.62 s / exit 137 (SIGKILL) with a single socket open. The
-      # app's own log line, the one that says why the deploy was slow, was killed
-      # along with it.
-      #
-      # So they are both written down, and the container's is three times the
-      # process's. The app must ALWAYS reach its own deadline first: that is what
-      # turns a hung drain into a diagnosable exit 1 with a reason in the log,
-      # rather than an undiagnosable 137. Change one of these two numbers and you
-      # must change the other.
+      # SHUTDOWN_GRACE_MS is how long the process gives ITSELF to drain after SIGTERM (requests,
+      # `serverShuttingDown` close frames, pool, workers) before logging `shutdown timed out; exiting
+      # hard` and exiting 1. stop_grace_period is how long DOCKER waits before SIGKILL. Both default
+      # to 10 s, and a tie is a race: `docker compose stop` measured 10.62 s / exit 137 with one socket
+      # open. The app must ALWAYS reach its own deadline first, so the container's is three times the
+      # process's. Change one and you must change the other.
       SHUTDOWN_GRACE_MS: '10000'
-    # 30 s against the app's 10 s above. See "The shutdown pair" there before
-    # touching this: `stop_grace_period` must stay comfortably ABOVE
-    # SHUTDOWN_GRACE_MS, never equal to it and never below it.
+    # Must stay comfortably ABOVE SHUTDOWN_GRACE_MS; see "The shutdown pair" above.
     stop_grace_period: 30s
     ports:
-      # Loopback only, and NOT the browser's path to the API: the browser goes through
-      # the proxy on ${WEB_PORT:-3000}. This exists for `curl`, for scripts/*.mjs and
-      # for reading /api/v1/health without a proxy hop in the way.
+      # Loopback only, and NOT the browser's path (that is the proxy): for `curl` and scripts/*.mjs.
       - '127.0.0.1:${API_PORT:-3001}:3001'
     read_only: true
     tmpfs:
-      # Node writes here for diagnostic reports, heap snapshots and any use of
-      # os.tmpdir(). noexec/nosuid because nothing in here should ever be run.
+      # Diagnostic reports, heap snapshots, os.tmpdir(). noexec/nosuid: nothing here should run.
       - /tmp:mode=1777,noexec,nosuid,size=64m
-    # 20 MiB × 5 = 100 MiB, the largest allowance in the stack, and deliberately so
-    # on both axes. Per-file, because this is the highest-volume writer here — a
-    # structured JSON line per HTTP request AND per WebSocket lifecycle event, each
-    # several times the width of an nginx line. Per-count, because this is the log
-    # an incident is actually reconstructed from, and a cap that holds only the
-    # last few minutes of a busy morning is a cap that deletes the evidence just as
-    # somebody goes looking for it. See this file's header, "Why every service has
-    # a `logging:` block".
+    # 20 MiB × 5 = 100 MiB; see this file's header, "Why every service has a `logging:` block".
     logging:
       driver: json-file
       options:
         max-size: '20m'
         max-file: '5'
-    # Defence in depth on top of the non-root USER in the image: no process in
-    # this container can acquire a capability it did not start with.
+    # On top of the image's non-root USER: no process here can gain a capability it did not start with.
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -413,46 +239,26 @@ services:
     restart: unless-stopped
     init: true
     depends_on:
-      # The contract says api and web both wait for a healthy database. web does
-      # not talk to PostgreSQL itself, but it renders pages that call the api,
-      # and starting it before the database is ready just means the first
-      # requests render error states.
+      # web never talks to PostgreSQL, but before it is ready the first pages render error states.
       postgres:
         condition: service_healthy
     environment:
       NODE_ENV: production
       PORT: '3000'
       HOSTNAME: 0.0.0.0
-      # Server-side origin for the api, on the private compose network. Read by
-      # apps/web/src/lib/api.ts during a server render, at runtime — it is NOT
-      # `NEXT_PUBLIC_`, and that is the whole point: a `NEXT_PUBLIC_` variable is
-      # inlined into the client bundle by `next build`, which froze the API's address
-      # into the image and is the defect this replaces.
-      #
-      # The browser does not use this value and must not: it sends relative /api/*
-      # requests to its own origin, and the proxy below routes them. See the topology
-      # note in this file's header.
+      # Server-render origin for the api, read at runtime by apps/web/src/lib/api.ts. Never
+      # `NEXT_PUBLIC_`, which `next build` inlines into the bundle. The browser must not use it; see the
+      # topology note in this file's header.
       PRL_API_ORIGIN: ${PRL_API_ORIGIN:-http://api:3001}
-    # No `ports`. web is reached through the proxy, which is the only published origin
-    # for the app. Publishing it as well would give the browser a second origin on
-    # which relative /api/* requests go nowhere — the failure this topology exists to
-    # remove. For a direct look at the page server, `docker compose exec proxy wget
-    # -qO- http://web:3000/` or add a `ports:` entry locally and expect the API calls
-    # from that origin to fail.
+    # No `ports`: a second origin is one on which relative /api/* goes nowhere. For a direct look,
+    # `docker compose exec proxy wget -qO- http://web:3000/`.
     read_only: true
     tmpfs:
       - /tmp:mode=1777,noexec,nosuid,size=64m
-      # `next start` writes ISR revalidation output and optimised images to
-      # .next/cache. The image ships without that directory on purpose (it is
-      # build state), so it comes back as a tmpfs: cache, therefore losing it on
-      # restart is correct rather than merely tolerable.
+      # `next start` writes ISR output and optimised images to .next/cache, which the image does not
+      # ship. It is cache, so losing it on restart is correct.
       - /app/apps/web/.next/cache:mode=0700,uid=1000,gid=1000,size=256m
-    # 10 MiB × 3 = 30 MiB. `next start` logs startup and errors, not a line per
-    # request, so in steady state this is close to silent. It is capped anyway
-    # because the shape of its bad day is a single broken render in a hot route
-    # producing a full stack trace per request — quiet and unbounded are different
-    # properties, and only one of them is being relied on here. See this file's
-    # header, "Why every service has a `logging:` block".
+    # 10 MiB × 3 = 30 MiB; see this file's header, "Why every service has a `logging:` block".
     logging:
       driver: json-file
       options:
@@ -463,136 +269,75 @@ services:
     cap_drop:
       - ALL
 
-  # -------------------------------------------------------------------------
-  # proxy: the single origin the browser sees.
-  #
-  # See this file's header for why it exists. In short: the web client sends relative
-  # /api/* requests, so *something* has to route them, and the alternative — a public
-  # API origin compiled into the JavaScript bundle by `next build` — cannot be
-  # retargeted after the image exists.
+  # proxy: the single origin the browser sees (see this file's header).
   #
   # ## Why THIS image
   #
-  # `nginxinc/nginx-unprivileged` rather than the official `nginx` or `caddy`, and the
-  # reason is a real constraint rather than a preference. Both of those ship a binary
-  # with the file capability `cap_net_bind_service=ep`, and `cap_drop: ALL` makes
-  # exec'ing such a binary fail outright:
+  # The official `nginx` and `caddy` images ship a binary with the file capability
+  # `cap_net_bind_service=ep`, and under `cap_drop: ALL` exec'ing it fails outright:
   #
   #   $ docker run --cap-drop ALL --user 1000:1000 caddy:2.11.4-alpine caddy version
   #   sh: caddy: Operation not permitted
   #
-  # The two ways to run those images here are `cap_add: [NET_BIND_SERVICE]` — handing
-  # back a capability to bind privileged ports that a proxy listening on 8080 does not
-  # need — or dropping `cap_drop: ALL`. Neither is a trade worth making when an image
-  # built for exactly this constraint exists: this one runs as uid 101, listens on 8080,
-  # and carries no file capabilities at all, so it starts with the capability set
-  # genuinely empty.
+  # `nginxinc/nginx-unprivileged` runs as uid 101 on 8080 with no file capabilities, so neither
+  # `cap_add: [NET_BIND_SERVICE]` nor dropping `cap_drop: ALL` is needed.
   #
   # ## Why the config arrives in an environment variable
   #
-  # The obvious spelling is a top-level `configs:` block with inline `content:`, and it
-  # was written that way first. Compose refuses it:
+  # Compose refuses an inline `configs:` `content:` on a read-only service ("`file` is the sole
+  # supported option"), because it must be materialised inside the container. So the config travels
+  # as an environment variable written to the tmpfs at start, keeping the read-only root and the
+  # routing in the file that documents it. `exec` makes nginx, not the shell, receive SIGTERM; the
+  # image's own entrypoint is bypassed because it templates files into /etc/nginx.
   #
-  #   cannot create config "poker-risk-lab_proxy_nginx" in read-only service proxy:
-  #   `file` is the sole supported option
+  # ## What it writes to a log
   #
-  # An inline config has to be materialised inside the container, and this container's
-  # root filesystem is read-only. The ways out were to drop `read_only`, or to add an
-  # nginx.conf to the repository and mount it with `file:`. Dropping `read_only` to make
-  # a container start is not a trade this project makes, and a second file would put the
-  # routing somewhere other than the topology diagram that explains it. So the config
-  # travels as an environment variable and is written to the tmpfs at start, which keeps
-  # the read-only root, keeps the non-root user, keeps every capability dropped, and
-  # keeps the routing in the file that documents it.
+  # `combined` logs `"$request"`, the request line VERBATIM, and the OIDC provider returns to
+  # `/api/v1/auth/oidc/callback?code=<authorization code>&state=...`, so it would write a bearer
+  # credential to the log in the clear (D2 in docs/production/legal-register.md), undoing
+  # `queryKeysOf` (apps/api/src/logging.ts) and `clientKeyFor` (request-context.ts) downstream.
   #
-  # `exec` in the command matters: it replaces the shell, so nginx is the process that
-  # receives SIGTERM rather than a shell that ignores it. The image's own entrypoint is
-  # bypassed for the same read-only reason — it templates files into /etc/nginx.
+  # `prl_privacy` logs `$uri`, the path with the query string already gone, plus `$is_args` for
+  # whether there was one (nginx core cannot keep names and drop values). The client address is
+  # truncated to a /24 or /48, not dropped, because when the API is down this log is the only place
+  # that answers "one caller or a thousand"; that is reduction, not anonymisation. The user agent is
+  # classed (a UA is a fingerprint), `$http_referer` is gone (it can carry somebody else's token), and
+  # `$upstream_http_x_request_id` is the API's own request id, joining the two logs without trusting
+  # an inbound correlation id.
   #
-  # ## What it writes to a log, and the incident that decided it
+  # ## The error log, which `log_format` cannot control
   #
-  # This config used to say `access_log /dev/stdout combined;`, and `combined` logs
-  # `"$request"` — the request line VERBATIM, query string included. `/api/v1/auth/oidc/
-  # callback` is routed by `location /api/`, and an OIDC provider returns to it as
-  # `?code=<authorization code>&state=<state>`. So every sign-in wrote an OAuth
-  # authorization code — a bearer credential exchangeable for a session — to the
-  # container log in the clear. Measured against a throwaway container running this
-  # exact config, before the fix:
-  #
-  #   172.22.0.1 - - [25/Aug/2026:07:50:49 +0000] "GET /api/v1/auth/oidc/callback?
-  #   code=SENTINELCODE123&state=SENTINELSTATE456 HTTP/1.1" 502 157 "-" "curl/8.7.1"
-  #
-  # That is D2 in docs/production/legal-register.md. It matters more than an ordinary
-  # logging slip because the service one hop downstream works hard to make that exact
-  # line impossible: `queryKeysOf` (apps/api/src/logging.ts) logs query parameter names
-  # and never values *specifically* so an authorization code cannot enter a log, and
-  # `clientKeyFor` (apps/api/src/plugins/request-context.ts) stores `HMAC(secret,
-  # "client:"+ip)` rather than an address. This file undid both of them upstream.
-  #
-  # `prl_privacy` below replaces it. `$uri` rather than `$request`, because `$uri` is
-  # the path with the query string already gone — that is the line that removes the
-  # credential. `$is_args` still records *whether* there was a query string, which is
-  # as close as nginx core gets to `queryKeysOf` (it has no way to keep names and drop
-  # values). The client address is truncated to a /24 (or /48 for IPv6) rather than
-  # dropped: when the API is the thing that is down, this log is the only place that can
-  # answer "one caller or a thousand", and an access log with nothing in it is not a
-  # win. That is reduction, not anonymisation, and it is written down as such next to
-  # the map. The user agent is classed rather than logged, because a UA string is a
-  # fingerprint and "browser / tool / bot" is what it is actually read for.
-  # `$http_referer` is gone outright — a Referer is somebody else's URL and can carry
-  # somebody else's token. `$upstream_http_x_request_id` is the API's OWN request id,
-  # read back off its response, which joins a proxy line to an API line without this
-  # proxy inventing or trusting a correlation id (the API sets `requestIdHeader: false`
-  # and refuses an inbound one).
-  #
-  # ## The error log leaked the same request line, and `log_format` cannot stop it
-  #
-  # `ngx_http_log_error` stamps the request context onto error-log messages itself, at
-  # any level, in a shape no directive controls. From the same throwaway container:
+  # `ngx_http_log_error` stamps the full request line onto error-log messages at any level:
   #
   #   2026/08/25 07:50:49 [error] 7#7: *1 api could not be resolved (3: Host not found),
   #   client: 172.22.0.1, server: _, request: "GET /api/v1/auth/oidc/callback?code=
   #   SENTINELCODE123&state=SENTINELSTATE456 HTTP/1.1", host: "127.0.0.1:18080"
   #
-  # Fixing the access log alone would have been a fix that tested clean and changed
-  # nothing. nginx has no error-log format, so the level is the only lever: it is now
-  # `crit`. Everything nginx emits with a request line in normal operation — upstream
-  # unreachable, upstream timeout, oversized body, client abort, malformed request — is
-  # `[error]` or quieter and is dropped; `[emerg]`/`[alert]` still print, so a bind or
-  # config failure at start is still loud. `crit` is a reduction and not a proof, so the
-  # one path where the query string is a credential by construction gets its own
-  # `location =` block with `error_log /dev/null`. See the config.
-  #
-  # `scripts/supply-chain/log-policy.mjs` is the gate that keeps this true, and it
-  # fails against the config as it was before this comment existed.
+  # The level is the only lever, so it is `crit`: everything that carries a request line in normal
+  # operation is `[error]` or quieter, while `[emerg]`/`[alert]` still make a bind or config failure
+  # loud. `crit` is a reduction, not a proof, so the callback gets its own `location =` with
+  # `error_log /dev/null`. `scripts/supply-chain/log-policy.mjs` keeps all of this true.
   #
   # ## The `$$`
   #
-  # Compose interpolates `$VAR` in this file, and nginx configuration is made of `$vars`.
-  # `$$` is compose's escape for a literal `$`, so `$$http_upgrade` reaches nginx as
-  # `$http_upgrade`. The two upstreams are the deliberate exception: they are written as
-  # `${...}` so compose DOES substitute them, which is what makes them configurable
-  # without touching an image. Check what actually reaches the container with:
+  # `$$` is compose's escape for a literal `$`, so `$$http_upgrade` reaches nginx as `$http_upgrade`.
+  # The two upstreams are written `${...}` so compose DOES substitute them. Check what arrives with:
   #
   #     docker compose config | grep -A2 'location /api/'
-  # -------------------------------------------------------------------------
   proxy:
-    # Pinned by digest like every other image here. nginxinc/nginx-unprivileged
-    # 1.29.8-alpine, captured 2026-08-18. Refresh with the registry command in the
+    # nginxinc/nginx-unprivileged 1.29.8-alpine. Refresh with the registry command in the
     # Dockerfile.api header, substituting nginxinc/nginx-unprivileged and 1.29.8-alpine.
     image: nginxinc/nginx-unprivileged:1.29.8-alpine@sha256:0c79d56aee561a1d81c63f00eee5fb5fe29279560cdc55e91425133104c7fbe6
     restart: unless-stopped
     init: true
     depends_on:
-      # Both, and both healthy. A proxy that starts first answers 502 for the whole
-      # start-up window, and a reader cannot tell that from a broken deployment.
+      # A proxy that starts first answers 502 for the whole start-up window.
       api:
         condition: service_healthy
       web:
         condition: service_healthy
     environment:
-      # The whole routing table. Substituted by compose at `up`, so changing an upstream
-      # is `docker compose up -d proxy` — a container replacement, never an image build.
+      # The whole routing table, substituted by compose at `up`.
       PRL_PROXY_NGINX_CONF: |
         # Everything nginx writes goes to the tmpfs. With a read-only root there is no
         # other choice, and there is nothing here worth surviving a restart.
@@ -734,16 +479,12 @@ services:
       - -c
       - printf '%s' "$$PRL_PROXY_NGINX_CONF" > /tmp/nginx.conf && exec nginx -c /tmp/nginx.conf -g 'daemon off;'
     ports:
-      # THE published port for the app: the browser's one origin. Loopback only, for
-      # the reason given on the postgres service.
+      # THE published port: the browser's one origin. Loopback only, as on postgres.
       - '127.0.0.1:${WEB_PORT:-3000}:8080'
     read_only: true
     tmpfs:
       - /tmp:mode=1777,noexec,nosuid,size=16m
-    # A line per request, but a narrow one: 10 MiB × 5 = 50 MiB. Five files rather
-    # than three because this log is per-request and an incident is reconstructed
-    # from it — the same reason the api gets five. See this file's header,
-    # "Why every service has a `logging:` block".
+    # 10 MiB × 5 = 50 MiB; see this file's header, "Why every service has a `logging:` block".
     logging:
       driver: json-file
       options:
@@ -754,10 +495,8 @@ services:
     cap_drop:
       - ALL
     healthcheck:
-      # Through itself, to the web upstream, at its own address on the container
-      # network — an end-to-end statement ("a browser would get a page") rather than
-      # "a listener exists". `hostname` for the same reason the images' probes use it:
-      # a probe on 127.0.0.1 passes for a process bound to loopback only.
+      # Through itself to the web upstream ("a browser would get a page"), at `hostname` because a
+      # probe on 127.0.0.1 passes for a process bound to loopback only.
       test: ['CMD-SHELL', 'wget --quiet --tries=1 --timeout=4 -O /dev/null "http://$$(hostname):8080/" || exit 1']
       interval: 30s
       timeout: 5s
