@@ -6,6 +6,8 @@
  * Names are not unique, so the caller decides attribution (`inReadersWords` in `use-live-table.ts`).
  */
 
+import type { Pot } from '@prl/poker-engine';
+
 /** Each narrated verb phrase, as the server writes it about a seat and as it reads about the reader. */
 export const NARRATED_VERBS = {
   fold: { third: 'folds', second: 'fold' },
@@ -17,7 +19,23 @@ export const NARRATED_VERBS = {
   post: { third: 'posts', second: 'post' },
   show: { third: 'shows', second: 'show' },
   win: { third: 'wins', second: 'win' },
+  getBack: { third: 'gets back', second: 'get back' },
 } as const satisfies Readonly<Record<string, { readonly third: string; readonly second: string }>>;
+
+/** What follows `getBack` and its amount: an uncalled bet, in the glossary's words. */
+export const NOBODY_MATCHED = 'that nobody still in the hand matched';
+
+/**
+ * The part of `pot` that is its one eligible seat's own bet, which goes back to that seat rather
+ * than being won. `buildPotLayers` keeps the layer above every other live seat's commitment as a pot
+ * only its owner can win. Anything above the layer's own width came from seats that folded, and is
+ * won. A main pot with one eligible seat is a fold-win with the blinds in it, so it is never returned.
+ */
+export function unmatchedPartOf(pot: Pot, pots: readonly Pot[]): number {
+  if (pot.index === 0 || pot.eligibleSeats.length !== 1) return 0;
+  const floor = pots.find((below) => below.index === pot.index - 1)?.capPerSeat ?? 0;
+  return Math.min(pot.amount, pot.capPerSeat - floor);
+}
 
 /** The tail of a forced bet that took a seat's whole stack. */
 export const ALL_THEY_HAD = { third: 'which is all they had', second: 'which is all you had' } as const;

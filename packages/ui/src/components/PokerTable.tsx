@@ -10,12 +10,13 @@
  * so the first hand of a session is announced.
  */
 
+import { unmatchedPartOf } from '@prl/contracts';
 import type { ReactElement } from 'react';
 import { listCardNames } from '../cards.ts';
 import { cx } from '../cx.ts';
 import { formatChips, formatIndex, formatUnits } from '../format.ts';
 import { lastActionsThisStreet } from '../seat-actions.ts';
-import type { PlayerView, SeatView, Street } from '../view-types.ts';
+import type { PlayerView, PotLayer, SeatView, Street } from '../view-types.ts';
 import { CardRow } from './CardRow.tsx';
 import { PotDisplay } from './PotDisplay.tsx';
 import { Seat } from './Seat.tsx';
@@ -122,6 +123,17 @@ function PhaseSpine({ view }: PhaseSpineProps): ReactElement {
   );
 }
 
+/** Once paid, chips that went back unmatched were never contested, so they are not shown as a pot. */
+function potsShown(view: PlayerView): { readonly total: number; readonly pots: readonly PotLayer[] } {
+  const result = view.result;
+  if (result === null) return { total: view.potTotal, pots: view.pots };
+  const back = result.pots.reduce((sum, pot) => sum + unmatchedPartOf(pot, result.pots), 0);
+  const pots = view.pots
+    .map((pot) => ({ ...pot, amount: pot.amount - unmatchedPartOf(pot, view.pots) }))
+    .filter((pot) => pot.amount > 0);
+  return { total: view.potTotal - back, pots };
+}
+
 export function PokerTable(props: PokerTableProps): ReactElement {
   const { view, title, seatNames, highlightedCards, highlightLabel } = props;
   const { turn = null, className, showLastActions = false } = props;
@@ -131,6 +143,7 @@ export function PokerTable(props: PokerTableProps): ReactElement {
   const heading = title ?? `Hand ${formatChips(view.handNumber)}`;
   const headingId = `prl-table-heading-${view.handId}`;
   const board = [...view.board];
+  const shown = potsShown(view);
 
   // The viewer's plate sits outside the opponents list so the stacked layout can pin it.
   // Found rather than indexed, because `!` is banned repo-wide.
@@ -167,8 +180,8 @@ export function PokerTable(props: PokerTableProps): ReactElement {
 
         <div className="prl-table__centre">
           <PotDisplay
-            total={view.potTotal}
-            pots={view.pots}
+            total={shown.total}
+            pots={shown.pots}
             {...(seatNames === undefined ? {} : { seatNames })}
           />
           <div className="prl-table__board">

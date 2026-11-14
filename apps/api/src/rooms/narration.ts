@@ -6,8 +6,15 @@
  * matches the same table to say "You fold".
  */
 
-import { ALL_THEY_HAD, NARRATED_VERBS } from '@prl/contracts';
-import type { ForcedBet, LoggedAction, PotAward, SeatIndex, SeatShowdown } from '@prl/poker-engine';
+import { ALL_THEY_HAD, NARRATED_VERBS, NOBODY_MATCHED, unmatchedPartOf } from '@prl/contracts';
+import type {
+  ForcedBet,
+  HandResult,
+  LoggedAction,
+  PotAward,
+  SeatIndex,
+  SeatShowdown,
+} from '@prl/poker-engine';
 
 export type NameOf = (seat: SeatIndex) => string;
 
@@ -71,6 +78,27 @@ export function awardSentence(award: PotAward, potCount: number, nameOf: NameOf)
   const pot =
     potCount <= 1 ? 'the pot' : award.potIndex === 0 ? 'the main pot' : `side pot ${award.potIndex}`;
   return `${nameOf(award.seat)} ${NARRATED_VERBS.win.third} ${amount(award.amount)} from ${pot}${award.wasSplit ? ', split' : ''}.`;
+}
+
+/**
+ * One sentence per award, with a side pot's unmatched part given back rather than won. That part is
+ * not a pot either, so it does not turn "the pot" into "the main pot".
+ */
+export function awardSentences(result: Pick<HandResult, 'pots' | 'awards'>, nameOf: NameOf): string[] {
+  const unmatched = new Map(result.pots.map((pot) => [pot.index, unmatchedPartOf(pot, result.pots)]));
+  const potCount = result.pots.filter((pot) => pot.amount > (unmatched.get(pot.index) ?? 0)).length;
+  const sentences: string[] = [];
+  for (const award of result.awards) {
+    const back = Math.min(award.amount, unmatched.get(award.potIndex) ?? 0);
+    if (back > 0) {
+      sentences.push(
+        `${nameOf(award.seat)} ${NARRATED_VERBS.getBack.third} ${amount(back)} ${NOBODY_MATCHED}.`,
+      );
+    }
+    if (award.amount > back)
+      sentences.push(awardSentence({ ...award, amount: award.amount - back }, potCount, nameOf));
+  }
+  return sentences;
 }
 
 export const NO_CHIPS_CHANGED_HANDS = 'No chips changed hands.';
