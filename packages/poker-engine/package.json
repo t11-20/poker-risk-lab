@@ -17,7 +17,7 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
     "test": "node --test 'test/*.test.ts'",
-    "test:exhaustive": "node --test --test-timeout=1800000 'test/exhaustive/**/*.test.ts'"
+    "test:exhaustive": "node --test --test-timeout=300000 'test/exhaustive/**/*.test.ts'"
   },
   "devDependencies": {
     "@types/node": "24.13.3"

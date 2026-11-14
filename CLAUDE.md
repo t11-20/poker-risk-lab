@@ -32,7 +32,7 @@ since made them sixteen and fifteen. Read each count off its own list anyway; th
 again.
 
 The newest of the fifteen is `action-advisories.mjs`, and it exists because **pinning is not
-safety**. `ci-pinning.mjs` proves all 61 action references are full commit SHAs, which stops a tag
+safety**. `ci-pinning.mjs` proves all 62 action references are full commit SHAs, which stops a tag
 being repointed — and does nothing at all about a pinned SHA of a version an advisory was later
 published against, which stays pinned and stays vulnerable for ever. It resolves each pin to a
 version by asking GitHub which tags point at that commit (`git ls-remote --tags`, peeled `^{}` line

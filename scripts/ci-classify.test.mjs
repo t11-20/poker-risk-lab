@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -13,19 +13,13 @@ import { fileURLToPath } from 'node:url';
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const WORKFLOW = readFileSync(join(REPO, '.github', 'workflows', 'ci.yml'), 'utf8');
 
-const SKIPPABLE = [
-  'typecheck',
-  'exhaustive',
-  'end-to-end',
-  'simulation',
-  'build',
-  'containers',
-  'a11y',
-  'ax-tree',
-  'browser-gates',
-];
+// Comments can still change what these see (`@ts-expect-error`, a bundler magic comment).
+const CODE_GATED = ['typecheck', 'exhaustive', 'build', 'containers'];
+// The runtime gates: identical ASTs run identically, so a comment-only change or a draft skips them.
+const HEAVY = ['end-to-end', 'simulation', 'a11y', 'ax-tree', 'browser-gates'];
 const ALWAYS = ['supply-chain', 'lint', 'test'];
 const CONDITION = "    if: needs.changes.outputs.code == 'true'";
+const HEAVY_CONDITION = "    if: needs.changes.outputs.heavy == 'true'";
 
 function jobBodies(text) {
   const lines = text.split('\n');
@@ -42,10 +36,12 @@ function jobBodies(text) {
   return bodies;
 }
 
-function classifierScript(text) {
+function classifierScript(text, step = 'Classify') {
   const body = jobBodies(text).get('changes');
   assert.ok(body !== undefined, 'ci.yml has no `changes` job');
-  const runAt = body.findIndex((line) => line.trim() === 'run: |');
+  const named = body.findIndex((line) => line.trim() === `- name: ${step}`);
+  assert.ok(named !== -1, `the \`changes\` job has no "${step}" step`);
+  const runAt = body.findIndex((line, index) => index > named && line.trim() === 'run: |');
   assert.ok(runAt !== -1, 'the `changes` job has no `run: |` step');
   const script = [];
   for (const line of body.slice(runAt + 1)) {
@@ -143,7 +139,16 @@ describe('the CI change classifier', () => {
 describe('which jobs the classifier can skip', () => {
   const bodies = jobBodies(WORKFLOW);
   it('gates exactly the jobs that cannot read a doc, and never the ones that do', () => {
-    for (const job of SKIPPABLE) {
+    for (const job of HEAVY) {
+      assert.ok(bodies.get(job)?.includes(HEAVY_CONDITION), `${job} should skip on a comment-only change`);
+      assert.ok(
+        bodies.get(job)?.some((line) => /^ {4}needs: \[.*\bchanges\b.*\]$/u.test(line)),
+        `${job} must need \`changes\` to read its output`,
+      );
+    }
+    const heavy = [...bodies].filter(([, lines]) => lines.includes(HEAVY_CONDITION)).map(([id]) => id);
+    assert.deepEqual(heavy.sort(), [...HEAVY].sort(), 'a job gained or lost the runtime-gate condition');
+    for (const job of CODE_GATED) {
       assert.ok(bodies.get(job)?.includes(CONDITION), `${job} should skip on a docs-only change`);
       assert.ok(
         bodies.get(job)?.some((line) => /^ {4}needs: \[.*\bchanges\b.*\]$/u.test(line)),
@@ -153,8 +158,64 @@ describe('which jobs the classifier can skip', () => {
     for (const job of ALWAYS) {
       assert.ok(bodies.has(job), `${job} is missing from ci.yml`);
       assert.ok(!bodies.get(job)?.includes(CONDITION), `${job} reads docs and must always run`);
+      assert.ok(!bodies.get(job)?.includes(HEAVY_CONDITION), `${job} must run on a comment-only change`);
     }
     const gated = [...bodies].filter(([, lines]) => lines.includes(CONDITION)).map(([id]) => id);
-    assert.deepEqual(gated.sort(), [...SKIPPABLE].sort(), 'a job gained or lost the skip condition');
+    assert.deepEqual(gated.sort(), [...CODE_GATED].sort(), 'a job gained or lost the skip condition');
+  });
+});
+
+const HEAVY_SCRIPT = classifierScript(WORKFLOW, 'Decide whether the runtime gates run');
+const CHECKER = readFileSync(join(REPO, 'scripts', 'ci', 'comment-only.mjs'), 'utf8');
+
+function heavy(dir, env) {
+  const output = join(dir, '.github-output');
+  writeFileSync(output, '');
+  const result = spawnSync('bash', ['-e', '-c', HEAVY_SCRIPT], {
+    cwd: dir,
+    encoding: 'utf8',
+    env: { ...process.env, GITHUB_OUTPUT: output, EVENT: 'pull_request', BEFORE: '', ...env },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const line = readFileSync(output, 'utf8').trim();
+  assert.match(line, /^heavy=(true|false)$/u, `the decision wrote "${line}"`);
+  return line === 'heavy=true';
+}
+
+/** A repository carrying the real checker, a stylesheet and a code file, then `change`. */
+function repoWithChecker(change) {
+  return repoWith((dir) => {
+    mkdirSync(join(dir, 'scripts', 'ci'), { recursive: true });
+    writeFileSync(join(dir, 'scripts', 'ci', 'comment-only.mjs'), CHECKER);
+    change(dir);
+  });
+}
+
+describe('whether the runtime gates run', () => {
+  it('skips them for docs-only and for a draft, whatever the change', () => {
+    const code = repoWith((dir) => writeFileSync(join(dir, 'a.ts'), 'export const a = 3;\n'));
+    assert.equal(heavy(code.dir, { CODE: 'false', DRAFT: 'false' }), false, 'docs-only');
+    assert.equal(heavy(code.dir, { CODE: 'true', DRAFT: 'true' }), false, 'a draft cannot merge');
+  });
+
+  it('skips them for a comment-only change and runs them for a real one', () => {
+    const comment = repoWithChecker((dir) =>
+      writeFileSync(join(dir, 's.css'), '/* why */\n.a { color: red; }\n'),
+    );
+    writeFileSync(join(comment.dir, 's.css'), '/* the reason */\n.a { color: red; }\n');
+    git(comment.dir, 'add', '-A');
+    git(comment.dir, 'commit', '-q', '-m', 'comment');
+    assert.equal(heavy(comment.dir, { CODE: 'true', DRAFT: 'false' }), false, 'only a CSS comment changed');
+    writeFileSync(join(comment.dir, 's.css'), '/* the reason */\n.a { color: blue; }\n');
+    git(comment.dir, 'add', '-A');
+    git(comment.dir, 'commit', '-q', '-m', 'rule');
+    assert.equal(heavy(comment.dir, { CODE: 'true', DRAFT: 'false' }), true, 'a changed CSS rule');
+    const code = repoWith((dir) => writeFileSync(join(dir, 'a.ts'), 'export const a = 4;\n'));
+    assert.equal(heavy(code.dir, { CODE: 'true', DRAFT: 'false' }), true, 'a changed value');
+  });
+
+  it('runs them when the checker cannot run at all (REGRESSION guard: a crash is not "comment-only")', () => {
+    const missing = repoWith((dir) => writeFileSync(join(dir, 'README.md'), '# Title, again\n'));
+    assert.equal(heavy(missing.dir, { CODE: 'true', DRAFT: 'false' }), true, 'no checker in the tree');
   });
 });

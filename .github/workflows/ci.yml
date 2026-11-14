@@ -68,6 +68,8 @@ on:
   push:
     branches: [main]
   pull_request:
+    # ready_for_review starts the full run a draft skipped (see `heavy` in the changes job).
+    types: [opened, synchronize, reopened, ready_for_review]
 
 # Least privilege. Read-only on the repository contents and nothing else — no
 # packages, no id-token, no issues, no pull-requests write.
@@ -92,12 +94,16 @@ jobs:
   # `.dockerignore` keeps every `*.md` out of the images, and no browser, build or end-to-end script
   # reads one. A skipped job satisfies a required check. Anything this step cannot classify counts as
   # code, so the failure mode is a full run.
+  # `heavy` also skips the five runtime gates for a comment-only change (identical ASTs run
+  # identically) and for a draft PR, which cannot merge. Lint, typecheck, tests, build and images still
+  # run: a `@ts-expect-error` or a bundler magic comment can change what they see.
   changes:
     name: Classify the change
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       code: ${{ steps.classify.outputs.code }}
+      heavy: ${{ steps.heavy.outputs.heavy }}
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -124,10 +130,46 @@ jobs:
           echo "code=$code"
           echo "code=$code" >> "$GITHUB_OUTPUT"
 
+      - name: Set up Node
+        if: steps.classify.outputs.code == 'true' && github.event.pull_request.draft != true
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Enable corepack
+        if: steps.classify.outputs.code == 'true' && github.event.pull_request.draft != true
+        run: corepack enable
+
+      - name: Install
+        if: steps.classify.outputs.code == 'true' && github.event.pull_request.draft != true
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Decide whether the runtime gates run
+        id: heavy
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          CODE: ${{ steps.classify.outputs.code }}
+          DRAFT: ${{ github.event.pull_request.draft == true }}
+        run: |
+          set -u
+          heavy=true
+          if [ "$CODE" != true ] || [ "$DRAFT" = true ]; then
+            heavy=false
+          else
+            if [ "$EVENT" = pull_request ]; then base=HEAD^1; else base="$BEFORE"; fi
+            if git rev-parse --verify --quiet "${base}^{commit}" >/dev/null \
+              && node scripts/ci/comment-only.mjs "$PWD" "$base"; then
+              heavy=false
+            fi
+          fi
+          echo "heavy=$heavy"
+          echo "heavy=$heavy" >> "$GITHUB_OUTPUT"
+
   supply-chain:
     name: Supply-chain audit (gate)
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 10
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -187,7 +229,7 @@ jobs:
     name: Lint
     needs: supply-chain
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 5
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -213,7 +255,7 @@ jobs:
     needs: [supply-chain, changes]
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 5
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -247,7 +289,7 @@ jobs:
     name: Tests
     needs: supply-chain
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 20
 
     services:
       postgres:
@@ -355,11 +397,9 @@ jobs:
     needs: [supply-chain, changes]
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
-    # The suite sets its own `--test-timeout=1800000` (30 minutes per test). The
-    # job bound has to sit comfortably above that plus checkout and install, or
-    # the job kill would race the test's own timeout and report the wrong thing.
-    # It normally finishes in well under a minute on a warm runner.
-    timeout-minutes: 60
+    # The suite sets its own `--test-timeout=300000` (5 minutes per test), and the job bound sits above
+    # that plus checkout and install so the test's own timeout reports first. It takes about 12 s.
+    timeout-minutes: 10
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -393,9 +433,9 @@ jobs:
   end-to-end:
     name: Smoke + load (running server)
     needs: [supply-chain, changes]
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.heavy == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 10
 
     services:
       postgres:
@@ -583,9 +623,9 @@ jobs:
   simulation:
     name: Opponent-profile simulation
     needs: [supply-chain, changes]
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.heavy == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 15
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -611,7 +651,7 @@ jobs:
     needs: [supply-chain, changes]
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 10
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -643,7 +683,7 @@ jobs:
     needs: [supply-chain, changes]
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -675,9 +715,9 @@ jobs:
   a11y:
     name: Accessibility (static)
     needs: [supply-chain, changes]
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.heavy == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 10
 
     services:
       postgres:
@@ -788,11 +828,11 @@ jobs:
   ax-tree:
     name: Accessibility tree and keyboard journeys (real Chrome)
     needs: [supply-chain, changes]
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.heavy == 'true'
     runs-on: ubuntu-24.04
     # Two audits that each play a hand at a live table and wait on bots, on top of a full build:
     # `test:ax` takes about three minutes on a warm laptop and `test:keyboard` about one.
-    timeout-minutes: 45
+    timeout-minutes: 15
 
     services:
       postgres:
@@ -932,12 +972,12 @@ jobs:
   browser-gates:
     name: Contrast, painted text, CSP and age gate (real Chrome)
     needs: [supply-chain, changes]
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.heavy == 'true'
     runs-on: ubuntu-24.04
     # Four browser sweeps on top of a full build. The contrast pass alone walks
     # every route in both themes and screenshots each one, and the painted-text
     # pass walks them again at five widths.
-    timeout-minutes: 45
+    timeout-minutes: 15
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
