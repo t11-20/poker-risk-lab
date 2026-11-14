@@ -298,9 +298,7 @@
       "min-raise",
       "effective-stack",
       "split-pot",
-      "icm",
-      "preflop",
-      "stack"
+      "icm"
     ]
   },
   {
@@ -847,8 +845,7 @@
       "gutshot",
       "implied-odds",
       "flop",
-      "river",
-      "trips"
+      "river"
     ]
   }
 ]

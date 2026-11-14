@@ -186,7 +186,13 @@ describe('the counts the product prints about itself', () => {
         real.keyTakeaways,
         `${lesson.id}: the fixture's key takeaways are stale`,
       );
-      compared += 3;
+      // The fallback page links only the terms its fixture declares, so a stale list loses links.
+      assert.deepEqual(
+        lesson.glossaryTerms,
+        real.glossaryTerms,
+        `${lesson.id}: the fixture's glossary terms are stale`,
+      );
+      compared += 4;
       // `counting-outs` ends with an authored `scenarioLink` block, because no content lesson uses
       // that variant yet. Its other blocks are still joined.
       if (lesson.id === 'counting-outs') {
@@ -205,7 +211,7 @@ describe('the counts the product prints about itself', () => {
       }
       compared += 1;
     }
-    assert.ok(compared >= 30, `only ${compared} field(s) compared; a sweep of nothing is not a pass`);
+    assert.ok(compared >= 38, `only ${compared} field(s) compared; a sweep of nothing is not a pass`);
   });
 
   it('the quiz fixture still says what the content package says, answers included (REGRESSION)', () => {

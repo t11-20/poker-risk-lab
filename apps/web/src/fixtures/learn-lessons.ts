@@ -143,6 +143,10 @@ export const LEARN_LESSONS: readonly Lesson[] = [
       'pot',
       'units',
       'fold-equity',
+      'preflop',
+      'flop',
+      'turn',
+      'river',
     ],
   },
   {
@@ -295,6 +299,9 @@ export const LEARN_LESSONS: readonly Lesson[] = [
       'equity',
       'range',
       'reverse-implied-odds',
+      'flop',
+      'turn',
+      'river',
     ],
   },
   {
@@ -435,6 +442,8 @@ export const LEARN_LESSONS: readonly Lesson[] = [
       'open-ended-straight-draw',
       'gutshot',
       'implied-odds',
+      'flop',
+      'river',
     ],
   },
   {
@@ -907,7 +916,16 @@ export const LEARN_LESSONS: readonly Lesson[] = [
       "A hand's strength cannot be stated without stating the stack depth it is being judged at.",
     ],
     quizId: 'quiz-stack-to-pot-ratio',
-    glossaryTerms: ['spr', 'effective-stack', 'implied-odds', 'equity-realisation', 'pot-odds'],
+    glossaryTerms: [
+      'spr',
+      'effective-stack',
+      'implied-odds',
+      'equity-realisation',
+      'pot-odds',
+      'preflop',
+      'flop',
+      'stack',
+    ],
   },
   {
     id: 'sample-size-and-risk-of-ruin',
