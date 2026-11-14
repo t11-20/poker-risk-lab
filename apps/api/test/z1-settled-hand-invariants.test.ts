@@ -1,7 +1,7 @@
 /**
  * A settled hand need not move any stack. A chopped pot pays every seat back what it put in.
- * The socket journey test once asserted "somebody's stack moved" and failed on CSPRNG chops
- * (2 of 40 runs), so this pins the counterexample deterministically plus the checks that replaced it.
+ * Asserting "somebody's stack moved" fails on CSPRNG chops (2 of 40 runs), so this pins the
+ * counterexample deterministically plus the checks to make instead.
  * It also drives the deadlock guard in `LiveTable.nextRotation`, which restarts the game rather than
  * deal a hand to one live seat.
  */
@@ -186,8 +186,8 @@ describe('a settled hand whose stacks did not move', () => {
       'settlement wrote the same figures back to the seating',
     );
 
-    // The replacement checks that blinds are committed, every pot is paid out, and each stack equals
-    // start plus net.
+    // What a settled hand does mean: blinds are committed, every pot is paid out, and each stack
+    // equals start plus net.
     const committed = view.seats.reduce((total, seat) => total + seat.committedTotal, 0);
     assert.ok(
       committed >= CONFIG.smallBlind + CONFIG.bigBlind,

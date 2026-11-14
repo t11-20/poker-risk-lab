@@ -273,7 +273,7 @@ describe('blinds and the button across a changing roster', () => {
       'the first hand deals BTN 1 / SB 3 / BB 0',
     );
 
-    // The old rule moved the button onto seat 2 and charged seat 0 a second big blind.
+    // Moving the button onto seat 2 would charge seat 0 a second big blind.
     await simulation.sit('D', 2);
     const second = await simulation.playHand();
     assert.notEqual(second.bigBlindSeat, first.bigBlindSeat, 'seat 0 must not pay the big blind twice');
@@ -333,7 +333,7 @@ describe('the blind obligation a newcomer owes', () => {
     await simulation.sit('C', 2);
     await simulation.playHand();
 
-    // Under the old rule this newcomer was dealt in for free, in position.
+    // A newcomer here must not be dealt in for free, in position.
     await simulation.sit('N', 4);
 
     const dealtInBefore: number[] = [];

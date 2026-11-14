@@ -641,12 +641,9 @@ describe('log redaction', () => {
   });
 
   /**
-   * The scrub against a real dealt `HandState`, not a list of key names.
-   * The old denylist named `deck`, `salt` and `commitmentSalt`, and only `deck` is a real field.
-   * Measured on 2026-08-27, `deckSalts` (a `Uint8Array`) was walked as an object and logged two
-   * whole 32-byte commitment salts. This walks the state's own keys, so a new field arrives as an
-   * unclassified key. Against the old denylist it reports `deckCursor`, `deckSalts` and
-   * `holeCardPositions` surviving.
+   * The scrub against a real dealt `HandState`, not a list of key names: a denylist of names let
+   * `deckSalts` (a `Uint8Array`) be walked as an object and log two whole 32-byte commitment salts.
+   * This walks the state's own keys, so a new field arrives as an unclassified key.
    */
   it('censors every secret on a real HandState, not the spellings someone guessed', () => {
     const dealt = startHand({
@@ -700,8 +697,8 @@ describe('log redaction', () => {
         'denylist in logging.ts must cover it, or it is public and belongs in `publicKeys` above.',
     );
 
-    // Named on its own because it was the incident. The salts plus the published Merkle root are
-    // what the commitment scheme withholds.
+    // Named on its own: the salts plus the published Merkle root are what the commitment scheme
+    // withholds.
     assert.equal(scrubbed['deckSalts'], CENSOR, 'the commitment salts must never reach a log line');
     assert.equal(scrubbed['deck'], CENSOR);
     assert.equal(scrubbed['deckCursor'], CENSOR);

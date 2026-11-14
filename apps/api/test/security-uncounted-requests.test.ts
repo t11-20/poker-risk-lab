@@ -1,9 +1,8 @@
 /**
  * Fastify runs every instance hook before any route-level hook, so a refusal answered from an instance
- * hook was never counted by the limiter. Measured before the fix with 50 requests at `RATE_LIMIT_MAX=3`,
- * four classes stayed 403 (or 204) with an empty bucket. `onBanReach` also fired on every refused
- * request, so each one wrote an un-awaited audit INSERT. The database is a stub, so ban assertions read
- * the metric.
+ * hook is not counted by the limiter unless the hook counts it. `onBanReach` must fire once per ban,
+ * not per refused request, because each call writes an un-awaited audit INSERT. The database is a stub,
+ * so ban assertions read the metric.
  */
 
 import assert from 'node:assert/strict';
@@ -108,7 +107,7 @@ function assertCountedAfter(
   );
   const after = result.statuses.slice(limit);
   assert.ok(after.length > 0, 'the loop must go past the limit or it proves nothing');
-  // The pre-fix behaviour, written out as a negative control.
+  // The uncounted behaviour, written out as a negative control.
   const uncounted = new Array(after.length).fill(expectedBefore);
   assert.notDeepEqual(after, uncounted, 'these requests were refused without ever being counted');
   assert.deepEqual(
@@ -190,7 +189,7 @@ describe('a refusal from an instance hook is still counted', () => {
   });
 
   it('still limits a GET to an unknown path, which was never the broken case', async () => {
-    // Positive control. This was already counted before the fix and must stay counted.
+    // Positive control. This path reaches a counting stage on its own and must stay counted.
     const cookie = bucket(built.app, 'get-404');
     const result = await repeat(built.app, GLOBAL_MAX + 2, (index) => ({
       method: 'GET',
@@ -293,7 +292,7 @@ describe('a ban is recorded once per caller per window, not once per refused req
       `the flood must actually be refused: ${result.statuses}`,
     );
 
-    // The pre-fix count, one ban per refused request.
+    // The wrong count, one ban per refused request.
     const oncePerRefusedRequest = overLimit;
     const banned = bannedCount(built.metrics);
     assert.notEqual(
@@ -322,8 +321,8 @@ describe('a ban is recorded once per caller per window, not once per refused req
 });
 
 /**
- * The expiry arm of `bansRecordedUntil`. With the expiry set to infinity the whole suite passed, which
- * silences a persistent attacker and the `RateLimitBans` rule. One second is the floor `config.ts` allows.
+ * The expiry arm of `bansRecordedUntil`. An infinite expiry would silence a persistent attacker and the
+ * `RateLimitBans` rule. One second is the floor `config.ts` allows.
  */
 describe('a caller who is still flooding in the next window is recorded again', () => {
   const WINDOW_MS = 1_000;

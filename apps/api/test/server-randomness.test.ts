@@ -1,7 +1,7 @@
 /**
  * Source scans for four release-blocking rules. 1. No `Math.random`; cards and tokens come from a CSPRNG.
  * 2. No request path reaches `createDeterministicRandomForTests`, in `src/` or the packages it calls.
- * It throws under production, and a call one package away once stopped every sampled equity estimate.
+ * It throws under production, so a call one package away stops every sampled equity estimate.
  * 3. No `.unsafe(`; driver parameterisation is the whole SQL-injection defence. 4. No SQL names a deck
  * or salt column, so a database read cannot expose undealt or unshown cards. Each detector has a
  * negative control below, and each scan asserts it read a non-empty set.

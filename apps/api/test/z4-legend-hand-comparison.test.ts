@@ -1,6 +1,6 @@
 /**
- * `GET /legends/hands/:handId/comparison` returns the reader's own hand and nobody else's. The page
- * once served one bundled sample for every id (CHAL-P1-6). Two real hands go through the route with
+ * `GET /legends/hands/:handId/comparison` returns the reader's own hand and nobody else's, never one
+ * bundled sample for every id (CHAL-P1-6). Two real hands go through the route with
  * the real security layer, and the assertions are about correspondence to each hand. The refusals
  * never fall back to a sample.
  */

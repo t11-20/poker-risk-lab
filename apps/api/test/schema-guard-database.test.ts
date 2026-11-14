@@ -169,7 +169,7 @@ async function withLedger(change: string, use: () => Promise<void>): Promise<voi
     }
     await use();
   } finally {
-    // Restore the grant as it WAS. An unconditional re-grant let later cases pass without 0010.
+    // Restore the grant as it WAS. An unconditional re-grant would let later cases pass without 0010.
     if (acl?.readable === true) await sql`grant select on prl.schema_migrations to prl_app`;
     else await sql`revoke select on prl.schema_migrations from prl_app`;
     await sql`delete from prl.schema_migrations`;
@@ -297,7 +297,7 @@ function boot(databaseUrl: string, port: number): Booted {
 
 /**
  * Every server this file started, also killed in `after`. A case cancelled by the runner's timeout
- * skips its `finally`, and against an unguarded server that left the run hanging on a live child.
+ * skips its `finally`, and an unguarded server would leave the run hanging on a live child.
  */
 const spawned = new Set<ChildProcess>();
 

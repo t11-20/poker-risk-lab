@@ -89,7 +89,6 @@ const REVIEW_CONFIG = { smallBlind: 10, bigBlind: 20, ante: 0, maxSeats: 6, acti
 const REVIEW_BUTTON_SEAT = 0;
 const REVIEW_VIEWER = 'usr-you';
 
-/**
 /** `bet_level_after` starts at the big blind preflop. `buildHandReview` checks both against its replay. */
 function reviewActionRows(review: HandReviewResponse): readonly HandActionRow[] {
   const rows: HandActionRow[] = [];

@@ -648,8 +648,7 @@ describe('reading PRL_ENROLMENT_REQUIRED', () => {
 /**
  * The real binding must let a failed read propagate. Swallowing it would render a database outage as
  * the permanent `enrolment_required` instead of a retryable `internal_error`.
- * The registry case above uses a fake, so it cannot see this. Measured, wrapping the call in
- * `try { … } catch { return false; }` left the whole `@prl/api` suite passing 1,001 of 1,001.
+ * The registry case above uses a fake, so it cannot see this.
  */
 describe('the real seat entitlement, with no database behind it', () => {
   it('lets a failed read propagate rather than answering "not entitled"', async () => {

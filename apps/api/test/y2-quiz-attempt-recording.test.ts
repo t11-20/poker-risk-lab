@@ -129,7 +129,7 @@ describe('an answer from a caller with no session', () => {
         'nothing was stored, and the reply has to say so — this is the field whose absence let the ' +
           'quiz panel claim a row that does not exist',
       );
-      // `undefined` is what the old contract sent, so a client could not tell "not stored" from "old server".
+      // Never `undefined`, which a client cannot tell from a server that predates the field.
       assert.equal(typeof response.body['recorded'], 'boolean');
     } finally {
       await app.close();

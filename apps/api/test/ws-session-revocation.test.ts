@@ -1,8 +1,8 @@
 /**
  * A socket is authenticated once at the upgrade, so revocation and expiry must reach it separately.
- * Before this, sign-out, account erasure and a second sign-in left the socket live, and a socket that
- * answered pings had no lifetime cap. Removing `noteSessionRevoked` or the hub's `sessionExpiresAtMs`
- * checks fails the cases below. Only the two stores are faked; routes, hub, cookies and socket are real.
+ * Sign-out, account erasure and a second sign-in must each close it, and a socket that answers pings
+ * still has a lifetime cap. Removing `noteSessionRevoked` or the hub's `sessionExpiresAtMs` checks
+ * fails the cases below. Only the two stores are faked; routes, hub, cookies and socket are real.
  */
 
 import assert from 'node:assert/strict';
@@ -392,7 +392,7 @@ describe('a websocket and the session that opened it', () => {
 
   /**
    * The heartbeat sweep expires a socket that has gone quiet. The shipped sweep runs every 15,000 ms
-   * and every wait here is 5,000 ms, so with the sweep check disabled the suite passed 1,001 of 1,001.
+   * and every other wait here is 5,000 ms, so no other case waits long enough to see it.
    * Nothing is sent after `hello`, or this becomes a duplicate of the per-frame case above.
    */
   it('a socket that has gone quiet is closed by the heartbeat sweep (NEGATIVE CONTROL)', async () => {

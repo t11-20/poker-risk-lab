@@ -1,7 +1,6 @@
 /**
- * `coachRequestsPerMinute` is per session. The window used to live on each socket, and a session
- * may hold `maxSocketsPerSession` (4), so one session put 4 x 30 analyses a minute on the shared
- * worker pool. Measured against the old code, 144 were accepted and 0 refused. Now 30 and 114.
+ * `coachRequestsPerMinute` is per session. A session may hold `maxSocketsPerSession` (4), so a window
+ * on each socket would let one session put 4 x 30 analyses a minute on the shared worker pool.
  * The window also outlives its last socket by one window, so reconnecting does not reset it.
  * No hand is dealt. `onCoach` spends a token before reading a view, so `hand_not_active` means
  * accepted and `rate_limited` means refused, with no Monte Carlo.
@@ -107,8 +106,8 @@ interface Socket {
 }
 
 /**
- * Asserts `welcome`, because a too-short `clientNonce` once failed every `hello` quietly and the
- * file measured a limiter it never reached.
+ * Asserts `welcome`, because a `hello` refused quietly (a too-short `clientNonce`) would leave the
+ * file measuring a limiter it never reached.
  */
 function connect(test: Harness, sessionId: string, label: string): Socket {
   const recorded = recorder();
@@ -181,7 +180,7 @@ describe('the Coach limit is spent by the session, not by each socket', () => {
       const refused = countOf(codes, 'rate_limited');
       assert.equal(accepted + refused, PER_SOCKET_REQUESTS * sockets.length, `unexpected: ${codes}`);
 
-      // The old ceiling was the limit times the sockets a session may hold.
+      // A per-socket window's ceiling is the limit times the sockets a session may hold.
       const perSocketCeiling = WS_LIMITS.coachRequestsPerMinute * WS_LIMITS.maxSocketsPerSession;
       assert.notEqual(
         accepted,
@@ -269,7 +268,7 @@ describe('the Coach window survives a reconnect, and then goes away', () => {
       requestCoach(test, second, 100);
       await settle();
 
-      // A draft that deleted the entry on the last close gave a fresh budget here.
+      // Deleting the entry on the last close would give a fresh budget here.
       assert.deepEqual(
         errorCodes(second.recorded),
         ['rate_limited'],

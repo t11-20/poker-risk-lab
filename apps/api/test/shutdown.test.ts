@@ -1,7 +1,7 @@
 /**
  * Graceful shutdown against a real process holding a real socket, over keep-alive HTTP, WebSocket, and
- * connections that never became a request. Each shape hung `app.close()` until the grace deadline
- * fired `process.exit(1)` before its fix, and each test fails that way against the old code.
+ * connections that never became a request. Each shape can hang `app.close()` until the grace deadline
+ * fires `process.exit(1)`.
  * No test may pass on a timeout. Each asserts exit 0, an elapsed time well inside the grace,
  * `shutdown complete` in the log, and no `shutdown timed out`.
  */
@@ -330,7 +330,7 @@ describe('SIGTERM with a request in flight on a keep-alive socket', () => {
   });
 
   it('exits 0 with nothing in flight at all', async () => {
-    // The control. It passed before the fix too.
+    // The control: nothing here depends on the drain fixes.
     const server = await startServer();
     const health = await fetch(`http://127.0.0.1:${server.port}/api/v1/health`);
     assert.equal(health.status, 200);
@@ -527,7 +527,7 @@ describe('SIGTERM with a WebSocket open', () => {
         `${connectingClose.reason}`,
     );
     assertCleanExit(exit, server.output());
-    // `onClose` runs only once `app.close()` resolves, which is what used to hang.
+    // `onClose` runs only once `app.close()` resolves, which is what a missed socket hangs.
     assert.match(server.output(), /websocket hub closed/, 'the hub onClose cleanup must run');
   });
 
@@ -553,7 +553,7 @@ describe('SIGTERM with a WebSocket open', () => {
 describe('SIGTERM with an upgrade refused by the feature gate', () => {
   it('is not held open by an upgrade answered 503 before the schema was verified', async () => {
     // The gate answers before `@fastify/websocket` flags the request, which skips the plugin's socket
-    // cleanup. Until the gate destroyed the socket itself, the connection stayed open after the 503.
+    // cleanup, so the gate destroys the socket itself or the connection stays open after the 503.
     const server = await startServer(GRACE_MS, {
       DATABASE_URL: 'postgresql://unused:unused@127.0.0.1:5432/unused',
     });
