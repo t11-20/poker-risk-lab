@@ -347,7 +347,6 @@ function compute(calculation: LiveCalculation): Calculation {
   }
 }
 
-/** Every word a calculation shows, with its cards in the table's notation. */
 function shown(computed: Calculation): Calculation {
   return {
     method: cardNotationText(computed.method),

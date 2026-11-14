@@ -5,7 +5,6 @@ import type { LiveCalculation } from '@prl/contracts';
 import { cardNotationText } from '../src/cards.ts';
 import { calculate, type DecisionQuestion, decisionSpot, figureLine } from '../src/learn.ts';
 
-/** Two or more cards in the shared ASCII notation, as `@prl/poker-math` and the content write them. */
 const ASCII_CARDS = /(?<![A-Za-z0-9])[2-9TJQKA][shdc](?: ?[2-9TJQKA][shdc])+(?![A-Za-z0-9])/;
 
 describe('card notation', () => {

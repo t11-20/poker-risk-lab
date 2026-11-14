@@ -36,7 +36,6 @@ import {
 /** The words `CoachPanel.tsx` rule 3 bans, as whole words, in any case. */
 const BANNED = /\b(?:correct|optimal|best play|GTO)\b/i;
 
-/** What `equity.ts` says about one opponent's range, split into the label and the rest. */
 const RANGE_ASSUMPTION = /^(.+) holds (any of \d+ combinations from ".*", each equally likely\.)$/;
 
 /** Every Coach reading and every message of a few real hands, with the real Coach. */
