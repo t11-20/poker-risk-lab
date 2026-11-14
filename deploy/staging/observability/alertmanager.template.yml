@@ -1,51 +1,12 @@
-# ---------------------------------------------------------------------------
-# Alertmanager, for the staging stack only — as a TEMPLATE, not as the file
-# Alertmanager reads.
+# Alertmanager for the staging stack, as a TEMPLATE. `scripts/alert-delivery.mjs` renders it into
+# the gitignored `alertmanager.yml` next to it (`--render-config` renders and stops), because
+# Alertmanager does not expand environment variables in its own configuration and a destination that
+# can only be changed by editing a tracked file gets changed on a laptop, invisible to review.
 #
-# `scripts/alert-delivery.mjs` renders this into `alertmanager.yml` next to it
-# before it brings the overlay up, exactly as it already renders `metrics-token`
-# from `PRL_STAGING_METRICS_TOKEN`. That rendered file is gitignored, because it
-# is per-deployment configuration rather than source.
-#
-#     node scripts/alert-delivery.mjs --render-config   # render and stop
-#     pnpm run alerts:verify                            # render, bring up, prove
-#
-# ## Why a template and not a file with the destinations written into it
-#
-# This file used to name two URLs on `host.docker.internal:9099` — the sink the
-# verification script runs — and every document about it ended the same way:
-# "production replaces two URLs and changes nothing else". That sentence is the
-# admission. A destination that can only be changed by editing a tracked file is
-# a destination that gets changed on a laptop, at the wrong moment, by somebody
-# who is already having a bad night, and the change is invisible to review
-# because it never lands in a commit.
-#
-# Alertmanager does not expand environment variables in its own configuration —
-# it is one of the few Prometheus-ecosystem components that flatly refuses to,
-# on the grounds that a config file should be reproducible from itself. That
-# leaves exactly two honest options: render the file from a template at bring-up,
-# or ship a second file and tell people to overlay it. The first is chosen here
-# because this repository already does it for a credential, and because a
-# rendered file can be shown, diffed and archived, which an overlay cannot.
-#
-# ## The substitution language, in full
-#
-# `${NAME}` is replaced by the value of `NAME`. A `${NAME}` with no value is an
-# error rather than an empty string — the failure mode being avoided is an
-# Alertmanager that starts happily with `url: ` and silently notifies nobody.
-#
-# `# @if NAME` … `# @endif` keeps the enclosed lines only when `NAME` has a
-# non-empty value. That is what makes each destination optional: a deployment
-# that pages by email and files tickets by webhook sets three values and the
-# blocks it did not fill in are not emitted at all. `renderAlertmanagerConfig`
-# in `scripts/alert-delivery.mjs` refuses to render a receiver with no
-# destination left in it, because a receiver Alertmanager accepts and that
-# notifies nothing is the exact shape of this blocker.
-#
-# The directives are YAML comments on purpose, so this file still reads as the
-# configuration it becomes.
-#
-# ## What a deployment sets
+# `${NAME}` is replaced by the value of `NAME`; an empty value is an error, because `url: ` starts
+# happily and notifies nobody. `# @if NAME` … `# @endif` keeps the enclosed lines only when `NAME`
+# is non-empty, which makes each destination optional; a receiver left with no destination is
+# refused. The directives are YAML comments so the file still reads as the configuration it becomes.
 #
 # | Variable | Default (staging rehearsal) | What it is |
 # | --- | --- | --- |
@@ -61,104 +22,45 @@
 # | `PRL_ALERT_SMTP_REQUIRE_TLS` | `false` | **must be `true` anywhere the relay is not on the same host** |
 # | `PRL_ALERT_SMTP_USERNAME` | unset | enables SMTP AUTH; the password comes from a file, never from here |
 #
-# Any of the four HUMAN destination variables may be set to the empty string to
-# drop that destination, as long as each of the two human tiers keeps at least one.
+# Any of the four HUMAN destinations may be empty, as long as each of the two human tiers keeps at
+# least one. The heartbeat URL may not be empty (`destinationProblems` refuses): every other
+# destination announces its absence the first time something fires, and an unset heartbeat is
+# indistinguishable from a healthy month.
 #
-# `PRL_ALERT_HEARTBEAT_WEBHOOK_URL` is the exception: it may not be empty, and
-# `destinationProblems` in `alert-delivery.mjs` refuses to render without it. The
-# reason is not symmetry, it is that an unset heartbeat is invisible in exactly the
-# way the heartbeat exists to prevent — every other destination announces its own
-# absence the first time something fires, and this one announces nothing ever, to
-# nobody, which is indistinguishable from a healthy month.
+# The SMTP password is `smtp_auth_password_file`, written from `PRL_ALERT_SMTP_PASSWORD` at 0600,
+# because the rendered config (0644) is what gets pasted into a bug report.
 #
-# ## The password is a file, not a value in here
+# `continue: false` on each branch: a `page` alert must not also raise a ticket. The default
+# receiver catches a severity that is none of the three values, which `alert-delivery.mjs` treats
+# as a configuration error; every rule in `alert-rules.yml` is checked to carry one.
 #
-# `smtp_auth_password_file` rather than `smtp_auth_password`, mounted at
-# `/etc/alertmanager/smtp-password` by `docker-compose.observability.yml` and
-# written by `alert-delivery.mjs` from `PRL_ALERT_SMTP_PASSWORD` at mode 0600,
-# for the same reason `metrics-token` is a file: the rendered configuration is
-# the artefact somebody pastes into a bug report, and a submission password in
-# it is a credential in a chat log. It is also why the rendered file is 0644 and
-# the password file is not.
+# `severity: heartbeat` is not a third tier. `Watchdog` fires permanently and its route ends at a
+# receiver that is not a human; the information is in the notification's ABSENCE, watched from
+# outside. On a human receiver it would notify every `repeat_interval` for ever. `alert-delivery.mjs`
+# check 7 asserts no `Watchdog` notification reaches either human tier, and `alert-preflight.mjs`
+# refuses a heartbeat URL equal to a human destination. The `page` and `ticket` branches are
+# verified in both directions (a page raises no ticket, a ticket does not page); a change to them
+# has to re-earn that.
 #
-# ## `continue: false` on the paging route is still the important line
+# The heartbeat branch sets its own intervals: the root `repeat_interval` of an hour would need a
+# grace period longer than the outage. Its `group_interval` is 5 s, NOT equal to
+# `repeat_interval`: dedup re-sends at the first flush strictly LATER than one `repeat_interval`
+# after the last send, so equal values skip every other flush. Measured at 20 s / 5 s: gaps of
+# 25.0 s and 25.0 s, against 40 s with equal values. The interval must sit comfortably inside the
+# watcher's grace period, so one missed ping is not enough to page.
 #
-# Route matching in Alertmanager is first-match-wins per branch, and a `page`
-# alert must not also raise a ticket: two notifications for one incident is how
-# a ticket queue becomes something nobody reads. The default receiver is the
-# catch-all for an alert whose severity label is none of the three values, which
-# `alert-delivery.mjs` treats as a configuration error rather than a routing
-# outcome — every rule in `alert-rules.yml` is checked to carry one of them.
-#
-# ## The third route is not a third tier
-#
-# `severity: heartbeat` has exactly one rule behind it — `Watchdog`, which fires
-# permanently — and one route, ending at a receiver that is not a human. That is
-# the dead man's switch: the notification carries no information, and all of the
-# information is in its ABSENCE, watched by something outside this deployment.
-#
-# It is deliberately NOT the `page` receiver and not the `tickets` one. A
-# permanently firing alert on either would deliver a notification every
-# `repeat_interval` forever, and the predictable end of that is a pager nobody
-# reads — the same failure the two-tier rule at the top of
-# `docs/production/alerts.md` exists to prevent, arriving from the inside.
-# `alert-delivery.mjs` check 7 asserts that no `Watchdog` notification and no
-# `Watchdog` email ever reaches either human tier, which is `continue: false` on
-# this branch being tested rather than assumed. `alert-preflight.mjs` refuses a
-# promotion whose heartbeat URL equals either human destination.
-#
-# The `page` and `ticket` branches below are byte-for-byte what they were before
-# the receivers became configurable, and that is deliberate: they are the part
-# verified in both directions — a page that does not raise a ticket, and a ticket
-# that does not page — and a change to them would have to re-earn that.
-#
-# ## Why the heartbeat route sets its own intervals
-#
-# `repeat_interval` at the root is an hour, which is right for an incident and
-# useless for a heartbeat: a snitch cannot distinguish "healthy, next ping in 59
-# minutes" from "dead" without a grace period so long that the outage is over
-# before anybody is told. So this branch repeats on `PRL_ALERT_HEARTBEAT_INTERVAL`
-# — 20 s in the rehearsal, so that a verification run can observe several arrivals
-# and one detected silence in a couple of minutes. A deployment sets whatever its
-# snitch expects, and the rule is the same in both cases: the interval must be
-# comfortably inside the watcher's grace period, because the watcher pages on the
-# gap and a gap of one missed ping must not be enough to do it.
-#
-# `group_interval` on this branch is 5 s and is NOT the same value, which is worth
-# a sentence because the obvious spelling is wrong. A group is only re-notified
-# when it is flushed, and the dedup stage re-sends at the first flush strictly
-# LATER than one `repeat_interval` after the previous send. Setting the two equal
-# therefore loses the race by the microseconds the previous send took and skips
-# every other flush — a heartbeat at half the configured rate, which is exactly the
-# kind of quiet misconfiguration a snitch's grace period is not sized for. With a
-# small `group_interval` the ping arrives every `PRL_ALERT_HEARTBEAT_INTERVAL`
-# rounded up to the next 5 s, and `alerts:verify` reports the gaps it measured
-# rather than assuming them. Measured against the running overlay at these values:
-# three consecutive pings, gaps of 25.0 s and 25.0 s — 20 s rounded up to the next
-# 5 s flush, exactly as this paragraph predicts, and not the 40 s the equal-values
-# spelling produces.
-#
-# ## group_wait is short here and would not be in production
-#
-# 5 s, so a verification run finishes in a minute rather than in five. Production
-# wants the default 30 s so that a burst of related alerts arrives as one
-# notification. The value is called out here because it is the one setting in
-# this file that is tuned for the test rather than for the deployment.
-# ---------------------------------------------------------------------------
+# `group_wait: 5s` is tuned for the test (a verification run in a minute, not five); production
+# wants the default 30 s so a burst of related alerts arrives as one notification.
 
 global:
   resolve_timeout: 1m
 # @if PRL_ALERT_SMTP_SMARTHOST
-  # SMTP defaults for every `email_configs` below. Put here rather than repeated
-  # per receiver so that a deployment changes its relay in one place; only the
-  # recipient differs between the two tiers, and the recipient is the thing the
-  # two tiers are about.
+  # SMTP defaults for every `email_configs`, so a deployment changes its relay in one place.
   smtp_smarthost: '${PRL_ALERT_SMTP_SMARTHOST}'
   smtp_from: '${PRL_ALERT_EMAIL_FROM}'
   smtp_hello: '${PRL_ALERT_SMTP_HELLO}'
-  # Alertmanager defaults this to true, which is the right default and the wrong
-  # one for a sink on the same host with no certificate. It is a variable rather
-  # than a constant so that turning it off is a deployment's recorded decision.
+  # Alertmanager defaults this to true, which is wrong for a same-host sink with no certificate. A
+  # variable, so turning it off is a deployment's recorded decision.
   smtp_require_tls: ${PRL_ALERT_SMTP_REQUIRE_TLS}
 # @endif
 # @if PRL_ALERT_SMTP_USERNAME
@@ -187,118 +89,60 @@ route:
         - severity = "heartbeat"
       receiver: heartbeat
       continue: false
-      # No grouping wait worth the name: there is exactly one alert on this branch
-      # and it is already firing, so waiting for siblings that cannot exist only
-      # delays the first ping after a restart — which is the moment a watcher is
-      # most likely to be counting.
+      # No siblings can exist on this branch, so any wait only delays the first ping after a
+      # restart, when a watcher is most likely to be counting.
       group_wait: 0s
       group_interval: 5s
       repeat_interval: ${PRL_ALERT_HEARTBEAT_INTERVAL}
 # @endif
 
-# ---------------------------------------------------------------------------
-# One incident must not be four notifications.
+# One incident must not be four notifications. Measured: one blocked event loop also raises
+# `DbPoolSaturated`, `HttpLatencyP99High` and `HttpLatencyP95Degraded`, three pages and a ticket
+# for one cause, one of which opens the Postgres runbook. Inhibition, not grouping, says which
+# alerts are consequences of another that is already firing.
 #
-# `continue: false` above enforces "a page must not also raise a ticket" for ONE
-# alert reaching two receivers. It has nothing to say about four alerts about one
-# incident, and until these rules existed there was nothing in this file that did.
+# `group_by` stays `['alertname']`: Alertmanager's default subject renders the GROUP labels, so
+# grouping by severity turns `[FIRING:1] EventLoopBlocked` into `[FIRING:2] page`, and
+# `alerts:verify` asserts the alert name is in the subject.
 #
-# Measured: one blocked event loop raises `EventLoopBlocked`, and because the
-# process is not answering, it also raises `DbPoolSaturated`, `HttpLatencyP99High`
-# and `HttpLatencyP95Degraded`. That is three pages and a ticket for one cause —
-# and `DbPoolSaturated`'s own description admits the shape of the problem in
-# writing: "a blocked process produces the same reading without the pool being
-# busy at all". It opens the Postgres runbook. So of the three phones that ring,
-# one is actively sending somebody to the wrong subsystem while the event loop is
-# the thing that is stuck.
+# No `equal:`: a label present on one alert and absent on the other counts as unequal, and nearly
+# every rule is a `sum()` with no `instance`, so `equal: ['instance']` would silently match nothing.
+# Deployment-wide is correct because `replicas: 1` (ADR 0001) means one instance.
 #
-# An inhibition is the right mechanism and grouping is not. Grouping decides how
-# notifications are BATCHED; inhibition decides which alerts are consequences of
-# another one that is already firing, and suppresses those. Only the second can
-# say "the pool reading is downstream of the loop".
-#
-# ## Why `group_by` stays `['alertname']`
-#
-# The obvious-looking companion change — group by severity, so a tier's alerts
-# arrive as one notification — is wrong here, and the reason is the locked screen.
-# Alertmanager's default subject template renders the GROUP labels, so a group of
-# one alert keyed by `alertname` produces `[FIRING:1] EventLoopBlocked` and a group
-# keyed by severity produces `[FIRING:2] page`, with the alert names demoted into
-# the body. `alerts:verify` asserts the alert name is in the subject for exactly
-# that reason. Batching would trade the one line that says what is wrong for a
-# count. Inhibition removes the extra notifications instead of merging them.
-#
-# ## Why there is no `equal:` on any of these
-#
-# `equal` requires the named labels to match between the source and target alert,
-# and Alertmanager treats a label present on one and absent on the other as
-# unequal. Nearly every rule in `alert-rules.yml` is a `sum()` over the whole
-# deployment and carries no `instance` at all, while a few — `EventLoopBlocked`
-# reads a bare gauge — do. `equal: ['instance']` would therefore match nothing and
-# every inhibition here would silently never apply, which is the same class of
-# defect as a rule that cannot fire. Deployment-wide is also correct rather than
-# merely convenient: `replicas: 1` is a correctness constraint here (ADR 0001),
-# so there is one process and one instance to talk about.
-#
-# ## What is deliberately NOT inhibited
-#
-# `Watchdog` appears in no target list and must never appear in one. It is the
-# dead man's switch, its signal is its ARRIVAL, and an inhibition would create the
-# one thing its design forbids: a silence with a cause other than the deployment
-# being dead. `RateLimitBans` is not inhibited either — a ban is evidence about a
-# caller, and it stays true regardless of what else is broken.
-#
-# Nothing inhibits `ApiDown` or `RoomOwnershipFenced`: they are the top of their
-# causal chains, and an alert that can be suppressed by a symptom of itself is an
-# incident nobody is told about.
-# ---------------------------------------------------------------------------
+# Never inhibited: `Watchdog` (a silence must have no cause but a dead deployment),
+# `RateLimitBans` (evidence about a caller, true regardless), and `ApiDown` and
+# `RoomOwnershipFenced`, the tops of their causal chains.
 inhibit_rules:
-  # A single-threaded process that is stalled produces every downstream reading at
-  # once. The loop is the cause and the other three are the same stall, measured in
-  # three places.
+  # A stalled single-threaded process produces every downstream reading at once.
   - source_matchers:
       - alertname = "EventLoopBlocked"
     target_matchers:
       - alertname =~ "DbPoolSaturated|HttpLatencyP99High|HttpLatencyP95Degraded"
 
-  # A process that is not answering scrapes cannot be measured by anything that
-  # scrapes it, and a crash loop is how it usually got there. Every target below is
-  # a reading OF the process that is down.
+  # A process that is not answering scrapes cannot be measured by anything that scrapes it.
   - source_matchers:
       - alertname = "ApiDown"
     target_matchers:
       - alertname =~ "ApiNotReady|ProcessRestartLoop|HttpErrorRateHigh|HttpLatencyP99High|HttpLatencyP95Degraded|EventLoopBlocked|DbPoolSaturated"
 
-  # Two halves of one room-ownership incident, and the fencing is the worse half:
-  # a refusal means the guard caught a second process before it dealt anything, a
-  # fencing means two processes were both authoritative for one room's hand state.
-  # Both open the same runbook, so the second page adds a phone call and no
-  # information.
+  # A fencing (two processes authoritative for one room) is the worse half of a refusal, and both
+  # open the same runbook.
   - source_matchers:
       - alertname = "RoomOwnershipFenced"
     target_matchers:
       - alertname = "RoomOwnershipRefused"
 
-  # Two thresholds on one number. Under three days both are true, so one
-  # certificate produces a page and a ticket about the same minute in the same
-  # future — which is the shape `continue: false` was written for, arriving from
-  # the rules file instead of from the route tree. The page is the one that
-  # carries the deadline.
+  # Two thresholds on one number: under three days both are true. The page carries the deadline.
   - source_matchers:
       - alertname = "TlsCertificateExpiryImminent"
     target_matchers:
       - alertname = "TlsCertificateExpiringSoon"
 
-  # A probe that is not running produces no `probe_*` series, so `PublicOriginDown`
-  # and both certificate rules go quiet for a reason that is not the origin being
-  # healthy. `PublicOriginProbeDown` is the rule that says so, and nothing here
-  # suppresses it — it is deliberately absent from every target list above.
+  # A probe that is not running produces no `probe_*` series; `PublicOriginProbeDown` says so and
+  # is deliberately absent from every target list.
   #
-  # An Alertmanager that is not running cannot deliver, so of course its
-  # notification counter is not moving. Note what this does NOT do: it cannot stop
-  # the pages arriving, because neither of them can be delivered while it is true.
-  # It stops the pair being read as two faults in the Prometheus UI, which is where
-  # `AlertmanagerDown` says it will be seen.
+  # This cannot stop the pages arriving (neither can be delivered while Alertmanager is down); it
+  # stops the pair being read as two faults in the Prometheus UI.
   - source_matchers:
       - alertname = "AlertmanagerDown"
     target_matchers:
@@ -308,20 +152,15 @@ receivers:
   - name: paging
 # @if PRL_ALERT_PAGE_WEBHOOK_URL
     webhook_configs:
-      # In the rehearsal this is host.docker.internal, which Docker Desktop
-      # resolves and which the compose overlay's `host-gateway` entry makes work
-      # on Linux too. In a deployment it is whatever accepts a JSON POST:
-      # PagerDuty's Events API v2, Opsgenie, or a relay in front of Slack.
+      # host.docker.internal in the rehearsal (the overlay's `host-gateway` entry makes it work on
+      # Linux); in a deployment, anything that accepts a JSON POST.
       - url: '${PRL_ALERT_PAGE_WEBHOOK_URL}'
         send_resolved: true
 # @endif
 # @if PRL_ALERT_PAGE_EMAIL_TO
     email_configs:
-      # Email is not a lesser transport here. A great many teams page through it —
-      # an email-to-SMS gateway, a provider's inbound address, a shared inbox with
-      # a phone rule on it — and it is the only paging transport this repository
-      # can rehearse end to end without an account somewhere, because SMTP is a
-      # protocol rather than an API key.
+      # Email is a real paging transport (email-to-SMS, a provider's inbound address) and the only
+      # one this repository can rehearse end to end without an account, since SMTP needs no API key.
       - to: '${PRL_ALERT_PAGE_EMAIL_TO}'
         send_resolved: true
 # @endif
@@ -339,23 +178,12 @@ receivers:
 # @if PRL_ALERT_HEARTBEAT_WEBHOOK_URL
   - name: heartbeat
     webhook_configs:
-      # The dead man's switch. In the rehearsal this is `/heartbeat` on the same
-      # sink `alert-delivery.mjs` runs; in a deployment it is the ping URL of a
-      # service that is NOT this deployment — Dead Man's Snitch, healthchecks.io, a
-      # PagerDuty or Grafana OnCall heartbeat integration — whose whole job is to
-      # page a human when these stop arriving.
+      # The dead man's switch: in a deployment, the ping URL of a service that is NOT this
+      # deployment (Dead Man's Snitch, healthchecks.io, a PagerDuty or OnCall heartbeat).
       #
-      # There is no `email_configs` here on purpose. Every heartbeat destination
-      # worth having is an HTTP endpoint that counts pings, and the one destination
-      # that must never be used is an inbox: a message every twenty seconds is a
-      # subscription somebody mutes, and a muted heartbeat is a dead man's switch
-      # with the pin taped down. `alert-preflight.mjs` refuses a heartbeat URL that
-      # equals either human tier's destination for the same reason.
+      # No `email_configs` on purpose: a message every twenty seconds is an inbox somebody mutes.
       - url: '${PRL_ALERT_HEARTBEAT_WEBHOOK_URL}'
-        # `false`, and this is the only receiver in the file where that is right.
-        # This alert never resolves — if it ever did, the notification would be the
-        # last thing the watcher heard and it would look like a clean shutdown
-        # rather than the failure it is. There is nothing to send on resolution and
-        # nothing that should be believed if it arrived.
+        # `false`, uniquely: this alert never resolves, and a resolution would look like a clean
+        # shutdown to the watcher rather than the failure it is.
         send_resolved: false
 # @endif

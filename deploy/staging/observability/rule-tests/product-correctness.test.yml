@@ -1,43 +1,27 @@
-# ---------------------------------------------------------------------------
-# The rules unique to a poker table, and the four ways they were decoration.
+# The rules unique to a poker table, each asserted in both directions, with the old spellings
+# reproduced:
 #
-#   * `HandsFailing` and `ArchiveFailing` had a `for:` exactly as long as their
-#     own range window. After a single step, `rate(x[10m])` and `increase(x[10m])`
-#     are non-zero for 10m minus one scrape interval — 9m45s here — so `for: 10m`
-#     asked the condition to hold for longer than it can, and neither alert could
-#     fire for anything. Both are reproduced below: the old spelling never leaves
-#     `pending`.
+#   * `HandsFailing` and `ArchiveFailing` with a `for:` as long as their window: after one step
+#     `increase(x[10m])` is non-zero for 9m45s, so `for: 10m` never leaves `pending`.
+#   * `TableActorFailing` at 0.05/s: one stalled seat on a 30 s clock is two failures a minute,
+#     fifteen times under the bar.
+#   * `HandCompletionGap` as a difference of one-hour increases: 20 on twenty healthy tables, and
+#     empty when `prl_hands_completed_total` was unprimed and nothing ever completed.
 #
-#   * `TableActorFailing` fired above 0.05/s sustained for ten minutes, which is
-#     thirty failures per ten minutes. Its own description is ONE stalled seat on
-#     a thirty-second action clock — two failures a minute. A permanently broken
-#     bot seat was fifteen times under the bar.
-#
-#   * `HandCompletionGap` subtracted two one-hour increases, which is (hands in
-#     flight now) minus (hands in flight an hour ago). Twenty healthy tables each
-#     holding a hand produce 20 on a threshold of 5. And with
-#     `prl_hands_completed_total` unprimed, the case it exists for — no hand ever
-#     completes — left the subtraction empty and unable to fire at all.
-#
-# Every rule here is asserted in both directions. The single-step input is not a
-# contrived shape: `rooms/registry.ts` increments `handsFailed` once, by
-# `abandoned.length`, when it reconciles the hands a restart interrupted.
-# ---------------------------------------------------------------------------
+# The single step is the normal input: `rooms/registry.ts` increments `handsFailed` once, by
+# `abandoned.length`, when it reconciles hands a restart interrupted.
 rule_files:
   - ../alert-rules.yml
 
 evaluation_interval: 15s
 
 tests:
-  # -------------------------------------------------------------------------
   # HandsFailing
-  # -------------------------------------------------------------------------
   - interval: 15s
     name: three hands abandoned by a restart, in one step, page immediately
     input_series:
-      # Both reasons rendered from boot, which is what `primeLabels` buys: the
-      # step is 0 -> 3 rather than a series appearing at 3, and only the first of
-      # those is a rise `increase()` can see.
+      # Both reasons primed from boot (`primeLabels`), so the step is 0 -> 3, a rise `increase()`
+      # can see, rather than a series appearing at 3.
       - series: 'prl_hands_failed_total{reason="interrupted_by_restart"}'
         values: '0+0x40 3+0x300'
       - series: 'prl_hands_failed_total{reason="room_closed"}'
@@ -46,16 +30,13 @@ tests:
       - expr: 'ALERTS{alertname="HandsFailing"}'
         eval_time: 5m
         exp_samples: []
-      # 10m15s: the step landed at 10m15s and there is no `for:`, so the page is
-      # raised on the first evaluation that can see it.
+      # The step lands at 10m15s and there is no `for:`, so the first evaluation that sees it pages.
       - expr: 'ALERTS{alertname="HandsFailing"}'
         eval_time: 11m
         exp_samples:
           - labels: 'ALERTS{alertname="HandsFailing", alertstate="firing", severity="page"}'
             value: 1
-      # This is the arithmetic that killed the old rule, stated as a number: the
-      # condition is true for 9m45s after a single step, and the old `for: 10m`
-      # wanted 10m of it.
+      # True for 9m45s after a single step; the old `for: 10m` wanted 10m.
       - expr: 'sum(increase(prl_hands_failed_total[10m])) > 0'
         eval_time: 19m45s
         exp_samples:
@@ -80,9 +61,7 @@ tests:
         eval_time: 60m
         exp_samples: []
 
-  # -------------------------------------------------------------------------
-  # ArchiveFailing — the same defect one tier down, at 15m/15m
-  # -------------------------------------------------------------------------
+  # ArchiveFailing: the same defect one tier down, at 15m/15m.
   - interval: 15s
     name: one archive write that failed raises a ticket
     input_series:
@@ -97,8 +76,7 @@ tests:
         exp_samples:
           - labels: 'ALERTS{alertname="ArchiveFailing", alertstate="firing", severity="ticket"}'
             value: 1
-      # 14m45s of truth against a `for:` that wanted 15m, which is why the old
-      # spelling never fired.
+      # 14m45s of truth against an old `for:` of 15m.
       - expr: 'sum(increase(prl_archive_failures_total[15m])) > 0'
         eval_time: 24m45s
         exp_samples:
@@ -118,15 +96,11 @@ tests:
         eval_time: 40m
         exp_samples: []
 
-  # -------------------------------------------------------------------------
   # TableActorFailing
-  # -------------------------------------------------------------------------
   - interval: 15s
     name: one bot seat stalling on a thirty-second clock pages after ten minutes
     input_series:
-      # Two failures a minute — 0.5 per 15 s scrape — which is one seat that
-      # cannot act, timing out on every turn. Under the old `rate > 0.05/s` this
-      # is 0.033/s and silent forever.
+      # Two failures a minute (0.5 per 15 s scrape): one seat timing out on every turn, 0.033/s.
       - series: 'prl_table_actor_failures_total{reason="bot-policy"}'
         values: '0+0.5x400'
     promql_expr_test:
@@ -140,8 +114,7 @@ tests:
         exp_samples:
           - labels: 'ALERTS{alertname="TableActorFailing", alertstate="firing", severity="page"}'
             value: 1
-      # The old threshold, evaluated against the failure this alert is named
-      # after: fifteen times under the bar.
+      # The old threshold against the failure this alert is named after: silent.
       - expr: 'sum(rate(prl_table_actor_failures_total[10m])) > 0.05'
         eval_time: 30m
         exp_samples: []
@@ -162,8 +135,7 @@ tests:
   - interval: 15s
     name: a burst of five failures that stops never pages
     input_series:
-      # The window is shorter than the `for:` precisely so this cannot fire: five
-      # failures at once are true for 4m45s, and the rule wants ten minutes.
+      # Window shorter than the `for:`: five failures at once are true for 4m45s of the ten needed.
       - series: 'prl_table_actor_failures_total{reason="bot-action-rejected"}'
         values: '0+0x40 5+0x400'
     promql_expr_test:
@@ -174,15 +146,12 @@ tests:
         eval_time: 40m
         exp_samples: []
 
-  # -------------------------------------------------------------------------
   # HandCompletionGap
-  # -------------------------------------------------------------------------
   - interval: 15s
     name: twenty healthy tables each holding a hand raise nothing
     input_series:
-      # Twenty tables dealing continuously. Every scrape has twenty hands in
-      # flight, so `started` runs exactly twenty ahead of `completed` forever.
-      # That is the healthy steady state and the number the old rule fired on.
+      # Twenty tables dealing continuously: `started` runs exactly twenty ahead of `completed`,
+      # the healthy steady state the old rule fired on.
       - series: 'prl_hands_started_total'
         values: '20+20x400'
       - series: 'prl_hands_completed_total'
@@ -204,9 +173,8 @@ tests:
   - interval: 15s
     name: no hand ever completes, and the primed counter makes it visible
     input_series:
-      # The catastrophe: hands are dealt and none settles. `prl_hands_completed_total`
-      # is present at zero from boot because it is primed, which is what makes the
-      # subtraction produce a number at all.
+      # The catastrophe: hands dealt, none settles. `prl_hands_completed_total` is primed at zero,
+      # which is what makes the subtraction produce a number.
       - series: 'prl_hands_started_total'
         values: '0+20x400'
       - series: 'prl_hands_completed_total'
@@ -230,13 +198,10 @@ tests:
   - interval: 15s
     name: the same catastrophe with an unprimed completed counter is invisible to any subtraction
     input_series:
-      # `prl_hands_completed_total` is ABSENT, which is what an unprimed counter
-      # looks like before its first increment — and in this failure there is never
-      # a first increment. `A - absent` is the empty vector, so no expression that
-      # subtracts it can fire, this one included. The fix is not in the rule: it is
-      # `primeLabels` in `observability/metrics.ts`, guarded by
-      # `apps/api/test/observability-metrics.test.ts`. This case is kept so that
-      # removing the priming fails something.
+      # `prl_hands_completed_total` ABSENT, as an unprimed counter that never increments.
+      # `A - absent` is empty, so no subtraction can fire. The fix is `primeLabels` in
+      # `observability/metrics.ts` (guarded by `apps/api/test/observability-metrics.test.ts`); this
+      # case makes removing the priming fail something.
       - series: 'prl_hands_started_total'
         values: '0+20x400'
       - series: 'prl_hands_failed_total{reason="room_closed"}'
@@ -256,9 +221,8 @@ tests:
   - interval: 15s
     name: one hand vanishing among twenty healthy tables raises a ticket
     input_series:
-      # Identical to the healthy case except that one hand was dealt and never
-      # settled, failed, or stayed in play: twenty-one unaccounted for against
-      # twenty rooms that could each still be holding one.
+      # As the healthy case, plus one hand that never settled: twenty-one unaccounted for against
+      # twenty rooms.
       - series: 'prl_hands_started_total'
         values: '21+20x400'
       - series: 'prl_hands_completed_total'
@@ -282,10 +246,8 @@ tests:
   - interval: 15s
     name: a hand counted as failed is accounted for and does not also raise the gap
     input_series:
-      # Twenty tables, one of which was closed mid-hand. `LiveRoom.close()` counts
-      # that as `room_closed`, so the hand is accounted for and only the unexplained
-      # remainder is left for this rule. Without the `- failed` term every fenced
-      # room would raise a second, wrong ticket alongside `RoomOwnershipFenced`.
+      # One table closed mid-hand: `LiveRoom.close()` counts `room_closed`, so the hand is
+      # accounted for. Without the `- failed` term every fenced room would raise a second ticket.
       - series: 'prl_hands_started_total'
         values: '21+20x400'
       - series: 'prl_hands_completed_total'
@@ -301,41 +263,23 @@ tests:
         eval_time: 45m
         exp_samples: []
 
-  # -------------------------------------------------------------------------
-  # SeatReleaseFailing, RoomOwnershipFenced, RoomOwnershipRefused
-  #
-  # `alert-rules.yml` names two of these in its own header — "`SeatReleaseFailing`
-  # below is the model for zero tolerance ... `RoomOwnershipRefused` is the model
-  # for the other shape ... `rule-tests/product-correctness.test.yml` holds both
-  # directions for each" — and until these cases were written this file held
-  # NEITHER. An adversarial review compared the 35 `- alert:` names in the rule
-  # file against every `alertname=` in this directory: nineteen rules had no unit
-  # test, and the two the header points at as the models were among them. The
-  # sentence describing the coverage was itself the only evidence of it.
-  #
-  # `RoomOwnershipFenced` is the one that matters most. Its own description is two
-  # processes authoritative for one room's in-flight hand state, which is the
-  # condition `db/migrations/0005` and `rooms/ownership.ts` exist to make
-  # impossible, and its counter is the one `RoomRegistry.releaseLeaseSoon` calls a
-  # zero-tolerance series. A rule that could not fire for it would be the exact
-  # shape this whole directory was created for.
-  # -------------------------------------------------------------------------
+  # SeatReleaseFailing, RoomOwnershipFenced, RoomOwnershipRefused: the two models `alert-rules.yml`
+  # names (zero tolerance, and a window shorter than the `for:`) and the fencing page.
+  # `RoomOwnershipFenced` is two processes authoritative for one room, which `db/migrations/0005`
+  # and `rooms/ownership.ts` exist to make impossible, on a series `RoomRegistry.releaseLeaseSoon`
+  # calls zero-tolerance.
   - interval: 15s
     name: one unreleased chair raises a ticket, and a quiet table does not
     input_series:
-      # Primed from boot, so the step is 0 -> 1 and `increase()` can see the rise.
-      # A series that simply appears at 1 is not a rise, which is the trap
-      # `primeLabels` in `observability/metrics.ts` exists to close.
+      # Primed from boot, so the step is 0 -> 1, a rise `increase()` can see.
       - series: 'prl_seat_release_failures_total'
         values: '0+0x40 1+0x300'
     promql_expr_test:
-      # Before the step: silent. Without this half a rule that fired on everything
-      # would satisfy the assertion below.
+      # Before the step: silent, which a rule that fired on everything would fail.
       - expr: 'ALERTS{alertname="SeatReleaseFailing"}'
         eval_time: 5m
         exp_samples: []
-      # No `for:` on this rule, so the first occurrence is the alert: the step
-      # lands at 10m15s and the very next evaluation raises it.
+      # No `for:`: the step lands at 10m15s and the next evaluation raises it.
       - expr: 'ALERTS{alertname="SeatReleaseFailing"}'
         eval_time: 11m
         exp_samples:
@@ -384,17 +328,13 @@ tests:
   - interval: 15s
     name: a rolling deploy's burst of refusals must never page
     input_series:
-      # Six rooms refused while the old container drains, and then it stops. This
-      # is the ordinary shape of every deploy, and the rule's own description
-      # promises it does not page for it: the 5m window is SHORTER than the 10m
-      # `for:`, so a burst that stops cannot stay true long enough.
+      # Six rooms refused while the old container drains, then nothing: every deploy's shape. The 5m
+      # window is SHORTER than the 10m `for:`, so a burst that stops cannot fire.
       - series: 'prl_room_ownership_refusals_total'
         values: '0+0x40 6+0x300'
     promql_expr_test:
-      # Measured across every evaluation point in the hour: the rule reaches
-      # `pending` and never `firing`. Asserted at the two points where a rule with
-      # a shorter `for:` would already have fired, and at the point after the
-      # window has drained.
+      # Pending, never firing: asserted where a shorter `for:` would already have fired, and after
+      # the window drains.
       - expr: 'ALERTS{alertname="RoomOwnershipRefused", alertstate="firing"}'
         eval_time: 14m
         exp_samples: []
@@ -404,10 +344,8 @@ tests:
       - expr: 'ALERTS{alertname="RoomOwnershipRefused"}'
         eval_time: 40m
         exp_samples: []
-      # …and that it did get as far as `pending`, so the silence above is the
-      # `for:` holding it back rather than the expression never being true. A
-      # rule whose series had been renamed away would pass the three assertions
-      # above having evaluated over nothing.
+      # …and it did reach `pending`, so the silence is the `for:` holding it back, not a series
+      # renamed away.
       - expr: 'ALERTS{alertname="RoomOwnershipRefused", alertstate="pending"}'
         eval_time: 11m
         exp_samples:
@@ -417,9 +355,8 @@ tests:
   - interval: 15s
     name: refusals that do not stop page, which is the failure the rule names
     input_series:
-      # The other direction, and the one the rule exists for: a second replica that
-      # keeps taking traffic and keeps being refused every room it does not hold.
-      # One refusal per scrape, indefinitely.
+      # The direction the rule exists for: a second replica refused every room it does not hold,
+      # one refusal per scrape, indefinitely.
       - series: 'prl_room_ownership_refusals_total'
         values: '0+0x40 0+1x300'
     promql_expr_test:

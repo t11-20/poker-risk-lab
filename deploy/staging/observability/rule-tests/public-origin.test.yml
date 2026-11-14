@@ -1,23 +1,10 @@
-# ---------------------------------------------------------------------------
-# The front door, and the blind spot these four rules exist to close.
+# The four front-door rules, which read the `prl-public-origin` blackbox job.
 #
-# Prometheus scrapes the API on the compose network, so nginx, TLS and the page
-# server are all downstream of every `prl_*` series in this file. A dead proxy or
-# an expired certificate left every one of those rules green while learners saw
-# nothing at all. The `prl-public-origin` job makes a real HTTPS request through
-# the front door every 15 s, and these are the rules that read it.
+# `probe_ssl_earliest_cert_expiry` is 0 on a FAILED probe, so a certificate rule without the `> 0`
+# filter fires on every outage; the last two cases assert that in both directions.
 #
-# The case worth being careful about is the last one. `probe_ssl_earliest_cert_expiry`
-# is 0 on a FAILED probe, and `0 - time()` is a large negative number — so a
-# certificate rule written without the `> 0` filter fires on every outage,
-# claiming an expiry that has not happened and sending somebody to renew a
-# certificate that is fine, in the middle of an incident that is about something
-# else. That case is asserted here in both directions.
-#
-# promtool's clock starts at the Unix epoch, so `time()` at eval_time 20m is
-# 1200 and every certificate expiry below is written as seconds-since-epoch from
-# that origin.
-# ---------------------------------------------------------------------------
+# promtool's clock starts at the Unix epoch, so `time()` at eval_time 20m is 1200 and every expiry
+# below is seconds since epoch from that origin.
 rule_files:
   - ../alert-rules.yml
 
@@ -60,8 +47,7 @@ tests:
   - interval: 15s
     name: the page server dark behind a healthy proxy pages for that target alone
     input_series:
-      # `/` fails and `/api/v1/health` passes, which is the `web` service and not
-      # the proxy. The module label is the whole of that triage.
+      # `/` fails and `/api/v1/health` passes: the `web` service, not the proxy.
       - series: 'probe_success{job="prl-public-origin", instance="https://proxy:8443/", module="learner_page_https"}'
         values: '0+0x200'
       - series: 'probe_success{job="prl-public-origin", instance="https://proxy:8443/api/v1/health", module="api_health_https"}'
@@ -119,10 +105,8 @@ tests:
   - interval: 15s
     name: an exporter removed from the configuration entirely still raises the ticket
     input_series:
-      # No `up` series at all, which is what deleting the job or the container
-      # looks like from here. `up == 0` over nothing is empty, so without the
-      # `absent()` half this rule would go quiet at the same moment as the three
-      # it exists to cover for.
+      # No `up` series at all, as when the job or container is deleted. `up == 0` over nothing is
+      # empty, so without `absent()` this would go quiet together with the rules it covers for.
       - series: 'prl_readiness_state'
         values: '1+0x200'
     promql_expr_test:
@@ -171,10 +155,9 @@ tests:
         exp_samples:
           - labels: 'ALERTS{alertname="TlsCertificateExpiryImminent", alertstate="firing", severity="page"}'
             value: 1
-      # The ticket is true as well — under three days is also under twenty-one —
-      # and it is suppressed by an inhibit rule in `alertmanager.template.yml`
-      # rather than by the expression, because at delivery is where "one incident,
-      # one notification" is decided.
+      # The ticket is true as well, and is suppressed by an inhibit rule in
+      # `alertmanager.template.yml`, because delivery is where "one incident, one notification" is
+      # decided.
       - expr: 'ALERTS{alertname="TlsCertificateExpiringSoon", alertstate="firing"}'
         eval_time: 20m
         exp_samples:
@@ -184,10 +167,8 @@ tests:
   - interval: 15s
     name: an outage does not invent a certificate expiry
     input_series:
-      # The defect this guards: a failed probe reports `probe_ssl_earliest_cert_expiry 0`,
-      # and without the `> 0` filter `0 - time()` is minus twenty minutes — which
-      # is under three days, so a dead proxy would ALSO page a certificate expiry
-      # that is sixty days away, and send somebody to renew it mid-incident.
+      # Without the `> 0` filter, `0 - time()` is under three days, so a dead proxy would also page
+      # a certificate expiry sixty days away.
       - series: 'probe_success{job="prl-public-origin", instance="https://proxy:8443/", module="learner_page_https"}'
         values: '0+0x200'
       - series: 'probe_ssl_earliest_cert_expiry{job="prl-public-origin", instance="https://proxy:8443/", module="learner_page_https"}'
@@ -199,8 +180,7 @@ tests:
       - expr: 'ALERTS{alertname="TlsCertificateExpiryImminent"}'
         eval_time: 20m
         exp_samples: []
-      # And the unfiltered spelling, evaluated on the same input, to show the
-      # difference is the filter and not the threshold.
+      # The unfiltered spelling on the same input, so the difference is the filter.
       - expr: 'count(min(probe_ssl_earliest_cert_expiry{job="prl-public-origin"}) - time() < 3 * 86400)'
         eval_time: 20m
         exp_samples:
