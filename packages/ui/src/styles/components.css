@@ -2286,6 +2286,17 @@
   font-size: var(--prl-type-body-sm);
 }
 
+/* One row where the bar is wide, so the next step is in the box that says the hand is over. On its own
+   row it fell below the fold at 1440x900. */
+.prl-action-bar__idle--beside {
+  flex: 1 1 18rem;
+  align-self: center;
+}
+
+.prl-action-bar__idle-action {
+  flex: 0 0 auto;
+}
+
 /*
  * `tabindex="-1"` so focus can land here when the controls are removed (`ActionBar.tsx`).
  * The ring is inset because the line is flush with the bar's edge.
