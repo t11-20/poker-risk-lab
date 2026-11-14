@@ -75,7 +75,7 @@ interface Harness {
 
 /**
  * One room, two members, neither seated, reachable over both transports. The room is opened directly
- * so `openRoomFor` takes its live branch and `seatingOnlyStore` is asked only what seating needs.
+ * so `openForMember` takes its live branch and `seatingOnlyStore` is asked only what seating needs.
  */
 async function harness(entitlement: SeatEntitlement | null): Promise<Harness> {
   const metrics = new AppMetrics();

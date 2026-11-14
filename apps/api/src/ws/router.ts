@@ -404,7 +404,7 @@ export class WsRouter {
 
   /**
    * Identity comes from the upgrade, never from this frame. After a restart the registry is empty, so
-   * `reopenFor` rebuilds the room from the database, as `openRoomFor` in `routes/rooms.ts` does.
+   * `openForMember` rebuilds the room from the database.
    */
   private async onHello(
     connection: WsConnection,
@@ -433,14 +433,14 @@ export class WsRouter {
       const live = this.registry.get(message.roomId);
       room =
         live === null
-          ? await this.reopenFor(message.roomId, connection.principal.userId)
+          ? await this.registry.openForMember(message.roomId, connection.principal.userId)
           : this.registry.require(message.roomId, connection.principal.userId);
     } catch (error) {
       connection.joining = false;
       const code: ErrorCode = isAppError(error) ? error.code : 'internal_error';
       this.sendError(connection, null, code);
       // The close code comes from the same error as the frame. A 4xx closes 4403, so a stranger and a
-      // missing room stay indistinguishable. A 5xx (a database blip in `reopenFor`) closes 4503, which
+      // missing room stay indistinguishable. A 5xx (a database blip in `openForMember`) closes 4503, which
       // the client retries, so a member is not told their own table is not theirs.
       const closeCode = wsCloseForError(code);
       this.closeConnection(
@@ -481,31 +481,6 @@ export class WsRouter {
     // Everybody else's `connected` flag just changed.
     this.broadcastExcept(message.roomId, connection);
     await Promise.resolve();
-  }
-
-  /**
-   * Rebuilds a room this process has never seen. Membership is read from the durable rows BEFORE
-   * anything is built, so a guessed room id cannot make this process build a live table. Every
-   * refusal is the same `room_not_found_or_not_permitted`, so it cannot confirm a room exists.
-   * Mirrors `openRoomFor` in `routes/rooms.ts` step for step. Change both together.
-   */
-  private async reopenFor(roomId: string, userId: string): Promise<LiveRoom> {
-    const live = this.registry.get(roomId);
-    if (live !== null) return this.registry.require(roomId, userId);
-
-    const refuse = (): never => {
-      throw new AppError('room_not_found_or_not_permitted', {
-        logDetail: `room ${roomId} is unknown, closed, or not this caller's`,
-      });
-    };
-    const row = await this.registry.store.byId(roomId);
-    if (row === null || row.status === 'closed') refuse();
-    const member = await this.registry.store.memberOf(roomId, userId);
-    if (member === null && row?.owner_user_id !== userId) refuse();
-
-    // The row is durable, the table is not. This rebuilds the table from the roster after a restart.
-    if ((await this.registry.ensureOpen(roomId)) === null) refuse();
-    return this.registry.require(roomId, userId);
   }
 
   private async onSit(connection: WsConnection, seat: number, requestId: string): Promise<void> {
