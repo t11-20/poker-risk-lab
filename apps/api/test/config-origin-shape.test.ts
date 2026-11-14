@@ -1,7 +1,7 @@
 /**
- * Host-shape validation for `PUBLIC_WEB_ORIGIN`. A wildcard used to be accepted and, because
- * `isAllowedOrigin` matches exactly, matched nothing, so every CORS request and socket was refused
- * with no boot message. Cases run against `normaliseOrigin` and through `loadConfig`, so the boot
+ * Host-shape validation for `PUBLIC_WEB_ORIGIN`. `isAllowedOrigin` matches exactly, so an accepted
+ * wildcard matches nothing and every CORS request and socket is refused with no boot message. Cases
+ * run against `normaliseOrigin` and through `loadConfig`, so the boot
  * path is proved to stop and name the variable.
  */
 

@@ -1,9 +1,9 @@
 /**
  * Thirty learners behind one address signing in at once. These routes are keyed on the hashed client
- * address because a route that issues a session cannot be limited by that session. Before the fix, 15
- * of 30 OIDC sign-ins completed. This asserts that a cohort gets through, a script that cannot complete is
- * refused sooner, guests stay at 10 and forced token exchanges at 15 per window, and boot refuses limits
- * that cannot serve a declared cohort. No database or network, so this runs under `test:without-database`.
+ * address because a route that issues a session cannot be limited by that session. This asserts that a
+ * cohort gets through, a script that cannot complete is refused sooner, guests stay at 10 and forced
+ * token exchanges at 15 per window, and boot refuses limits that cannot serve a declared cohort. No
+ * database or network, so this runs under `test:without-database`.
  */
 
 import assert from 'node:assert/strict';
@@ -34,7 +34,6 @@ const ISSUER = 'https://idp.example.test';
 const CLIENT_ID = 'poker-risk-lab-test';
 const REDIRECT_URI = 'https://api.example.test/api/v1/auth/oidc/callback';
 
-// Thirty is the cohort the guest-limit comment in `routes/auth.ts` calls an acceptable inconvenience.
 const COHORT_SIZE = 30;
 
 const stubDatabase: DatabaseHandle = { ping: async () => ({ ok: true }), close: async () => undefined };
@@ -388,9 +387,8 @@ describe('a script that starts sign-ins it cannot complete', () => {
   });
 
   it('still forces no more outbound token exchanges than the shipped limit permitted', async () => {
-    // Before the fix a script forced 15 token-endpoint exchanges per address per window, and
-    // `RATE_LIMIT_OIDC_FAILURE_MAX` defaults to 15 to hold it there. Exact equality, because fewer breaks
-    // a learner who cancels consent twice and more is the regression.
+    // `RATE_LIMIT_OIDC_FAILURE_MAX` defaults to 15 forced token-endpoint exchanges per address per window.
+    // Exact equality, because fewer breaks a learner who cancels consent twice and more is the regression.
     const config = testConfig();
     const { app } = await harness(config, refusingRelyingParty());
     let forcedExchanges = 0;
@@ -442,9 +440,8 @@ describe('a script that starts sign-ins it cannot complete', () => {
 
 /**
  * The callback is a GET, so any site can make a visitor's browser send it as an `<img>`, with no CSRF
- * token and no session. Measured before the fix, 15 such loads got the victim's own start a 429. A
- * callback failure is now charged only after `acceptAttempt` succeeds, which needs the signed `__Host-`
- * attempt cookie no other site can produce.
+ * token and no session. A callback failure is charged only after `acceptAttempt` succeeds, which needs
+ * the signed `__Host-` attempt cookie no other site can produce.
  */
 describe('a hostile page pointing a victim’s browser at the callback', () => {
   /** What a browser attaches to a no-cors subresource load from another site. */
@@ -484,10 +481,7 @@ describe('a hostile page pointing a victim’s browser at the callback', () => {
     await app.close();
   });
 
-  /**
-   * The start route kept an unconditional charge after the callback fix. Measured then, 20 cross-site
-   * starts got 400 from `refuseNonNavigationOidc`, each was charged, and the victim got 429.
-   */
+  /** A cross-site start refused with 400 by `refuseNonNavigationOidc` must not be charged either. */
   it('cannot spend it through the START route either (REGRESSION)', async () => {
     const config = testConfig();
     const { app } = await harness(config, cohortRelyingParty());
@@ -538,7 +532,6 @@ describe('a hostile page pointing a victim’s browser at the callback', () => {
   });
 
   // Fastify validates the query before `preHandler`, so a schema refusal runs no guard of ours.
-  // Measured before the fix, 17 such starts were each charged and the victim got 429.
   it('cannot spend it with a start the SCHEMA refuses, above every guard (REGRESSION)', async () => {
     const config = testConfig();
     const { app } = await harness(config, cohortRelyingParty());
@@ -677,7 +670,7 @@ describe('a script that floods /auth/oidc/start and never calls back', () => {
 /**
  * An entry can only refuse, so evicting one can only permit, and filling the map flushes only the
  * caller's own counters. Every call passes one fixed `now`: `refusalFor` depends on the clock, and an
- * exact `60000` failed as `59999` on 1 run in 7 when the clock ticked between charge and read.
+ * exact `60000` reads `59999` when the clock ticks between charge and read.
  */
 describe('the outcome budgets bound their own memory', () => {
   const NOW = 1_700_000_000_000;
@@ -854,8 +847,7 @@ describe('a declared cohort that the configured limits cannot serve', () => {
 
   it('refuses that same failure budget with NO cohort declared (REGRESSION)', () => {
     // `checkCohortSizing` returns early when COHORT_SIZE is 0, the shipped default, so this check lives
-    // outside it. Measured before the fix, a failure budget of 10000 against a ceiling of 60 booted.
-    // Equal to and above the ceiling are both tested.
+    // outside it. Equal to and above the ceiling are both tested.
     for (const failureMax of ['60', '10000']) {
       const problems = bootProblems(
         cohortEnv({ RATE_LIMIT_OIDC_MAX: '60', RATE_LIMIT_OIDC_FAILURE_MAX: failureMax }),
@@ -865,15 +857,15 @@ describe('a declared cohort that the configured limits cannot serve', () => {
   });
 
   it('checks nothing when no cohort is declared, so a public instance is unaffected', () => {
-    // A check that stopped existing production processes booting would be worse than the incident.
+    // A public instance declares no cohort, and this check must not stop it booting.
     assert.equal(bootProblems(cohortEnv({})), null);
   });
 });
 
 /**
  * A cross-site page can send these GETs from a learner's browser, and an address-keyed budget cannot
- * tell attacker from victim. Measured, sixty `<img>` loads exhausted the address's unredeemed-start
- * budget. The routes refuse a subresource `sec-fetch-dest`. These drive the real routes through
+ * tell attacker from victim: sixty `<img>` loads exhaust the address's unredeemed-start budget. The
+ * routes refuse a subresource `sec-fetch-dest`. These drive the real routes through
  * `app.inject`, so an unwired guard fails.
  */
 describe('the OIDC GET routes and Fetch Metadata', () => {
@@ -940,9 +932,9 @@ describe('the OIDC GET routes and Fetch Metadata', () => {
 
 /**
  * The charge runs in `onResponse`, which Fastify fires on the raw response's `finish` or `error`. A
- * client that destroys the socket fires neither, while the handler still makes the token exchange.
- * Measured before the fix, hanging up forced 120 exchanges without a refusal, against 15 for a caller
- * that waits. `app.inject` always finishes, so this needs a real socket on 127.0.0.1.
+ * client that destroys the socket fires neither, while the handler still makes the token exchange, so
+ * an uncharged hang-up is an unbounded exchange. `app.inject` always finishes, so this needs a real
+ * socket on 127.0.0.1.
  */
 describe('a script that hangs up on its own callback', () => {
   /** A refusing provider that counts what it was made to do. */
@@ -1035,9 +1027,9 @@ describe('a script that hangs up on its own callback', () => {
 });
 
 /**
- * `@fastify/rate-limit` counts at `onRequest`, above the schema and `preHandler`. Measured with the
- * guard at `preHandler`, 60 cross-site `<img>` loads of either route spent the address's ceiling and
- * the victim got 429. The guard now runs at `onRequest`, and the limiter's hook is appended after it.
+ * `@fastify/rate-limit` counts at `onRequest`, above the schema and `preHandler`, so a guard at
+ * `preHandler` lets 60 cross-site `<img>` loads spend the address's ceiling. The guard runs at
+ * `onRequest`, and the limiter's hook is appended after it.
  */
 describe('a hostile page spending the victim address’s SIGN-IN CEILING', () => {
   const CROSS_SITE_SUBRESOURCE: Readonly<Record<string, string>> = {

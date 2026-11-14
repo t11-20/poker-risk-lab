@@ -88,8 +88,8 @@ async function inRollback(fn: (tx: TransactionSql) => Promise<void>): Promise<vo
 }
 
 /**
- * For fixtures `prl_app` may not build. On `DATABASE_URL` these failed in CI, where the login is
- * `prl_ci_app`. The case drops to `prl_app` with `actAsRuntimeRole` before the code under test runs.
+ * For fixtures `prl_app` may not build, so this runs as the owner rather than the `DATABASE_URL` login
+ * (`prl_ci_app` in CI). The case drops to `prl_app` with `actAsRuntimeRole` before the code under test runs.
  */
 async function inOwnerRollback(fn: (tx: TransactionSql) => Promise<void>): Promise<void> {
   const url = adminDatabaseUrl();
@@ -529,8 +529,8 @@ function errorCodeOf(payload: string): string {
 describe('an entitlement that ends because its holder erased themselves', dbOptions, () => {
   /**
    * `enrolments_user_id_fkey` is ON DELETE CASCADE, and a referential action writes no audit entry.
-   * Without this the audit log showed a grant that nothing ever ended, so reconciling places
-   * against it over-counted every erased learner.
+   * Without this the audit log shows a grant that nothing ever ended, so reconciling places
+   * against it over-counts every erased learner.
    */
   it('writes an entry per enrolment, detached, before the rows go (REGRESSION)', async () => {
     await inOwnerRollback(async (tx) => {

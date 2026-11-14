@@ -273,7 +273,7 @@ const HOSTILE_CHANGES: readonly HostileChange[] = [
     },
   },
   {
-    // The regression migration 0004 fixed. RESTRICT made every learner who ever joined a table undeletable.
+    // RESTRICT makes every learner who ever joined a table undeletable (migration 0004).
     what: 'a foreign key to prl.users that would make an account undeletable again',
     expect: /user reference: room_members: room_members_user_id_fkey is ON DELETE RESTRICT/,
     apply: async (sql) => {
@@ -431,8 +431,8 @@ describe('verify-schema.mjs — it passes a correct schema and rejects a hostile
 describe('verify-schema.mjs — a table the connecting role cannot see', dbOptions, () => {
   /**
    * Negative control for the privilege filter. A table with no grant is invisible to `prl_app` in
-   * `information_schema`, and against such a verifier this table gave four violations as owner and exit 0
-   * as `prl_api`. The visibility assertions stop this from silently becoming a duplicate case.
+   * `information_schema`, so a verifier reading only that reports this table as owner and exits 0 as
+   * `prl_api`. The visibility assertions stop this from silently becoming a duplicate case.
    */
   it('fails on a forbidden column in a table it has no grant on, run as prl_app', async () => {
     await withMigratedDatabase(async (throwaway) => {
@@ -501,8 +501,8 @@ describe('verify-schema.mjs — a table the connecting role cannot see', dbOptio
   });
 
   /**
-   * Not a past bug. `information_schema.tables` happens to count TRUNCATE as visibility, so check 6 was
-   * sound by coincidence. This pins the finding after the switch to `pg_class`.
+   * `information_schema.tables` happens to count TRUNCATE as visibility, so check 6 would be sound
+   * there by coincidence. This pins the finding on `pg_class`.
    */
   it('still reports a TRUNCATE grant to prl_app when run as prl_app', async () => {
     await withMigratedDatabase(async (throwaway) => {

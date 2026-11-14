@@ -295,8 +295,8 @@ describe('what a bot can see', () => {
 describe('a bot-driven hand', () => {
   it('completes, conserves chips, and produces a reveal that verifies', async () => {
     // Plays until a hand reaches a flop, since a preflop end never exercises a street or a showdown.
-    // The deck is random, so the cap sets the false-failure rate p^n. It failed once at 20 hands of
-    // preflop folds, with every assertion passing, and 80 makes that negligible.
+    // The deck is random, so the cap sets the false-failure rate p^n. 20 hands of preflop folds has
+    // happened, and 80 makes that negligible.
     const harness = await botTable({
       stack: 500,
       profiles: ['calling-station', 'reading-pressure-specialist'],

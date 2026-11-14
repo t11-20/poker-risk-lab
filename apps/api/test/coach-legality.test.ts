@@ -1,8 +1,8 @@
 /**
- * The Coach's legal-action guard through the production path. The library test passed while four
- * Coach surfaces published refused actions, because `CoachTask` had no `legalActions` field and an
- * absent list permitted everything. So every case goes through the real task builders and a real
- * `WorkerPool`, the boundary where the field was lost. No database.
+ * The Coach's legal-action guard through the production path. An absent `legalActions` list permits
+ * everything, so a library test passes while a task that drops the field publishes refused actions.
+ * Every case goes through the real task builders and a real `WorkerPool`, the boundary where the field
+ * can be lost. No database.
  */
 
 import assert from 'node:assert/strict';
@@ -173,7 +173,7 @@ describe('a spot where every opponent is all-in', () => {
         [],
         'the served report named an action nobody at that table could have taken',
       );
-      // Affordability was the only thing the old code checked.
+      // Affordability alone would allow a raise, so only the legal-action set withholds it.
       assert.ok(body.heroStack - body.toCall > body.bigBlind * 10, 'hero can plainly afford a raise');
     } finally {
       await app.close();
