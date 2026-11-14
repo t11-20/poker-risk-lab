@@ -13,21 +13,16 @@
  * audited as configured. Landing on `/age-check` anyway is a failure.
  */
 
-import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
-import { connect } from 'node:net';
-import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { fileURLToPath } from 'node:url';
 // Imported from the gate itself, so a renamed cookie cannot leave this harness seeding the old one.
 import {
   AGE_GATE_COOKIE_NAMES,
   AGE_GATE_MINIMUM_CEILING,
   AGE_GATE_PATH,
 } from '../apps/web/src/lib/age-gate.ts';
-import { waitForDevtools } from './chrome-devtools.mjs';
+import { withChrome } from './chrome-devtools.mjs';
+import { ManagedServer, refuseOccupiedPort } from './gate-servers.mjs';
 
 const args = process.argv.slice(2);
 const flag = (name, fallback) => {
@@ -42,21 +37,13 @@ const WITH_API = args.includes('--with-api');
 const API_ORIGIN = flag('--api', process.env['PRL_API_ORIGIN'] ?? 'http://127.0.0.1:3001');
 const READY_TIMEOUT_SECONDS = Number(flag('--ready-timeout', '120'));
 
-const CHROME_CANDIDATES = [
-  process.env['CHROME_PATH'],
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  '/Applications/Chromium.app/Contents/MacOS/Chromium',
-  '/usr/bin/google-chrome',
-  '/usr/bin/chromium',
-  '/usr/bin/chromium-browser',
-].filter((path) => typeof path === 'string' && path !== '');
-
 const RED = '\u001b[31m';
 const GREEN = '\u001b[32m';
 const YELLOW = '\u001b[33m';
 const DIM = '\u001b[2m';
 const BOLD = '\u001b[1m';
 const RESET = '\u001b[0m';
+const dim = (s) => `${DIM}${s}${RESET}`;
 
 let passed = 0;
 const failures = [];
@@ -1342,149 +1329,23 @@ export const ROUTES = [
   { title: 'Your record', path: '/record' },
 ];
 
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-
-/** As `refuseOccupiedPort` in `ax-tree-audit.mjs`, which says why it connects rather than binds. */
-async function refuseOccupiedPort(url) {
-  const { hostname, port, protocol } = new URL(url);
-  const host = hostname.replace(/^\[(.*)\]$/, '$1');
-  const target = { host, port: Number(port || (protocol === 'https:' ? 443 : 80)) };
-  const outcome = await new Promise((done) => {
-    const socket = connect(target);
-    socket.setTimeout(2000);
-    socket.once('connect', () => {
-      socket.destroy();
-      done('accepted');
-    });
-    socket.once('timeout', () => {
-      socket.destroy();
-      done('was neither accepted nor refused within 2s');
-    });
-    socket.once('error', (error) =>
-      done(error.code === 'ECONNREFUSED' ? 'refused' : `failed (${error.code})`),
-    );
-  });
-  if (outcome === 'refused') return;
-  const seen = outcome === 'accepted' ? 'something is already listening' : `a probe connection ${outcome}`;
-  throw new Error(
-    `${seen} on ${host}:${String(target.port)}. --start drives a server this run started, so it ` +
-      'will not score one it did not. Stop it, pass another --web/--api, or leave out --start to ' +
-      'drive that server on purpose.',
-  );
-}
-
 function portFromOrigin(origin) {
   const port = new URL(origin).port;
   return port === '' ? '3000' : port;
 }
 
-/**
- * Copied on purpose so release gates fail independently. `pnpm --filter ... start` is a wrapper, so
- * the child is detached and signalled by negative pid to take the real server with it. ESRCH is fine.
- */
-class ManagedServer {
-  constructor(label, args, readyUrl, env) {
-    this.label = label;
-    this.args = args;
-    this.readyUrl = readyUrl;
-    this.env = env;
-    this.child = null;
-    this.output = [];
-    this.exited = null;
-  }
-
-  start() {
-    this.child = spawn('pnpm', this.args, {
-      cwd: REPO_ROOT,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      detached: true,
-      env: { ...process.env, ...this.env },
-    });
-    const keep = (chunk) => {
-      // Kept for the failure message only.
-      this.output.push(chunk.toString());
-      if (this.output.length > 200) this.output.shift();
-    };
-    this.child.stdout.on('data', keep);
-    this.child.stderr.on('data', keep);
-    this.child.on('exit', (code, signal) => {
-      this.exited = signal ?? code;
-    });
-  }
-
-  async waitUntilReady(timeoutSeconds) {
-    const deadline = Date.now() + timeoutSeconds * 1000;
-    for (;;) {
-      if (this.exited !== null) {
-        throw new Error(
-          `${this.label} exited (${this.exited}) before it was ready:\n${this.output.join('')}`,
-        );
-      }
-      try {
-        const response = await fetch(this.readyUrl, { signal: AbortSignal.timeout(2000) });
-        if (response.status > 0) return;
-      } catch {
-        // Not up yet.
-      }
-      if (Date.now() >= deadline) {
-        throw new Error(
-          `${this.label} was not ready at ${this.readyUrl} within ${timeoutSeconds}s:\n${this.output.join('')}`,
-        );
-      }
-      await delay(300);
-    }
-  }
-
-  stop() {
-    if (this.child === null || this.child.pid === undefined) return;
-    try {
-      process.kill(-this.child.pid, 'SIGTERM');
-    } catch (error) {
-      if (!(error instanceof Error && 'code' in error && error.code === 'ESRCH')) {
-        console.log(`${DIM}  could not stop ${this.label}: ${error.message}${RESET}`);
-      }
-    }
-  }
-}
-
-function chromePath() {
-  const found = CHROME_CANDIDATES.find((path) => existsSync(path));
-  if (found === undefined) {
-    throw new Error(
-      `no Chrome found. Set CHROME_PATH, or install one of:\n${CHROME_CANDIDATES.map((p) => `  ${p}`).join('\n')}`,
-    );
-  }
-  return found;
-}
-
-async function withChrome(run) {
-  const binary = chromePath();
-  const port = 9222 + Math.floor(process.pid % 500);
-  // A profile per run, because a shared one would carry the seeded age cookie into the next run.
-  const profile = mkdtempSync(join(tmpdir(), 'prl-keyboard-audit-'));
-  const child = spawn(
-    binary,
-    [
-      HEADFUL ? '--no-first-run' : '--headless=new',
-      `--remote-debugging-port=${port}`,
-      `--user-data-dir=${profile}`,
-      '--no-first-run',
-      '--no-default-browser-check',
-      '--disable-background-timer-throttling',
-      '--window-size=1440,900',
-      'about:blank',
-    ],
-    { stdio: 'ignore' },
-  );
-
-  try {
-    const version = await waitForDevtools(child, port);
+async function withPage(run) {
+  const chrome = {
+    headful: HEADFUL,
+    port: 9222 + Math.floor(process.pid % 500),
+    // A profile per run, because a shared one would carry the seeded age cookie into the next run.
+    freshProfile: 'prl-keyboard-audit-',
+    flags: ['--window-size=1440,900'],
+    dim,
+  };
+  await withChrome(chrome, async ({ version, openTab }) => {
     console.log(`${DIM}  ${version.Browser} — ${HEADFUL ? 'headful' : 'headless'}${RESET}`);
-
-    const target = await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: 'PUT' }).then((r) =>
-      r.json(),
-    );
-    const page = await Page.open(target.webSocketDebuggerUrl);
+    const page = await Page.open(await openTab());
     await page.send('Page.enable');
     await page.send('Runtime.enable');
     await page.send('DOM.enable');
@@ -1496,17 +1357,7 @@ async function withChrome(run) {
     } finally {
       page.close();
     }
-  } finally {
-    child.kill('SIGTERM');
-    // Chrome writes its profile as it exits, so removal retries and never fails the run.
-    try {
-      rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
-    } catch (error) {
-      console.log(
-        `${DIM}  left the browser profile at ${profile} (${error instanceof Error ? error.message : String(error)})${RESET}`,
-      );
-    }
-  }
+  });
 }
 
 // `/play` is gated under both scopes, so one manual-redirect request answers for either.
@@ -1544,7 +1395,13 @@ async function main() {
 
   try {
     if (START) {
-      for (const url of WITH_API ? [WEB_ORIGIN, API_ORIGIN] : [WEB_ORIGIN]) await refuseOccupiedPort(url);
+      for (const url of WITH_API ? [WEB_ORIGIN, API_ORIGIN] : [WEB_ORIGIN]) {
+        await refuseOccupiedPort(
+          url,
+          '--start drives a server this run started, so it will not score one it did not. Stop it, pass ' +
+            'another --web/--api, or leave out --start to drive that server on purpose.',
+        );
+      }
       if (WITH_API) {
         // Inherit DATABASE_URL and do not force NODE_ENV=production, which refuses `.env`'s dev secrets.
         // PUBLIC_WEB_ORIGIN must be this audit's origin, or CORS and the WebSocket Origin check answer
@@ -1558,17 +1415,24 @@ async function main() {
             HOST: '127.0.0.1',
             PUBLIC_WEB_ORIGIN: new URL(WEB_ORIGIN).origin,
           },
+          { dim },
         );
         servers.push(api);
         console.log(`${DIM}  starting the API on ${API_ORIGIN}...${RESET}`);
         api.start();
         await api.waitUntilReady(READY_TIMEOUT_SECONDS);
       }
-      const web = new ManagedServer('web', ['--filter', '@prl/web', 'start'], WEB_ORIGIN, {
-        NODE_ENV: 'production',
-        PRL_API_ORIGIN: API_ORIGIN,
-        PORT: portFromOrigin(WEB_ORIGIN),
-      });
+      const web = new ManagedServer(
+        'web',
+        ['--filter', '@prl/web', 'start'],
+        WEB_ORIGIN,
+        {
+          NODE_ENV: 'production',
+          PRL_API_ORIGIN: API_ORIGIN,
+          PORT: portFromOrigin(WEB_ORIGIN),
+        },
+        { dim },
+      );
       servers.push(web);
       console.log(`${DIM}  starting the web app on ${WEB_ORIGIN}...${RESET}`);
       web.start();
@@ -1615,7 +1479,7 @@ async function main() {
     }
 
     let journeys = 0;
-    await withChrome(async (page) => {
+    await withPage(async (page) => {
       for (const route of ROUTES) {
         journeys += 1;
         try {
