@@ -268,7 +268,7 @@
 }
 
 /**
- * The `i` ring keeps `--prl-line-strong` (4.34:1) at every scroll position. The ring is the only cue
+ * The `i` ring keeps `--prl-line-strong` (3.96:1 dark, 4.93:1 light) at every scroll position. The ring is the only cue
  * that says button (WCAG 1.4.11).
  */
 .prl-pillbar .prl-units__toggle {
@@ -327,8 +327,8 @@
   display: none;
 }
 
-/* 6. THE CALL TO ACTION. `--prl-accent-fill` with `--prl-text-on-accent` measures 6.97:1 light and
-   9.39:1 dark, enforced by `scripts/check-contrast.mjs`. */
+/* 6. THE CALL TO ACTION. `--prl-accent-fill` with `--prl-text-on-accent` measures 7.29:1 light and
+   6.74:1 dark, enforced by `scripts/check-contrast.mjs`. */
 
 .prl-pillbar__cta {
   gap: var(--prl-space-4);
@@ -497,7 +497,7 @@
 }
 
 /* 8b. THE FLOATING STATE. Past the sentinel every pill edge separates two layers, so the whole border
-   moves from the lit hairline (~1.5:1) to `--prl-line-strong` (4.34:1), per WCAG 1.4.11. These rules
+   moves from the lit hairline (~1.5:1) to `--prl-line-strong` (3.63:1 on dark glass), per WCAG 1.4.11. These rules
    come after every rule they override. */
 
 .prl-shell__header[data-stuck="true"] .prl-pill-group,

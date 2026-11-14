@@ -2,7 +2,7 @@
 /**
  * `pnpm run design:contrast`: recomputes every contrast ratio the design system claims, in both
  * themes, with no dependencies. The WCAG 2.x formulas reproduce every ratio in the design doc
- * (14.00, 9.94, 7.07, ...).
+ * (`docs/frontend-design-system.md` §2.4 to §2.7).
  *
  * Pass 1 reads tokens.css alone (what the doc claims). Pass 2 adds base.css's derived pairings and
  * light-theme repairs (what a browser paints). Pass 3 composites every text element's real

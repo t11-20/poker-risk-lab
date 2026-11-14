@@ -17,11 +17,11 @@
    The backdrop field (`.prl-app::before`) replaces the body wash, which scrolls away (gone by 700px
    on `/terms`). Its pools use the token layer's `--prl-wash-tint` stops, so the `--prl-surface-wash`
    that check-contrast.mjs derives stays the true ceiling of the page ground. Never use a brighter pool.
-   The falloff darkens towards the edges, which in dark only raises contrast. The dark worst case is
-   both pools with no falloff (#11222a), where faint text is 5.38:1 and `--prl-line-strong` 3.65:1.
-   In light the falloff is 5% ink, which spends headroom. The light worst case, both pools at plateau
-   under the full falloff, is #d4dee2, where muted text is 4.66:1 and `--prl-line-strong` 3.27:1.
-   Re-measure muted if a stop moves. Light darkens towards ink because `--prl-surface-panel` is white. */
+   The falloff darkens towards the edges, which in dark only raises contrast: the dark worst is one
+   pool at plateau (#181e43), faint text 6.44:1 and `--prl-line-strong` 4.60:1. In light the falloff
+   is 5% ink and spends headroom: the darkest real point (#dde0ec, bottom right at 360px) gives muted
+   5.46:1, line-strong 4.35:1, and `caution` 4.41:1, so semantic text never sits on the bare field.
+   Re-measure if a stop moves. Light darkens towards ink because `--prl-surface-panel` is white. */
 
 :root {
   --prl-shell-nav-fill: var(--prl-surface-inset);
@@ -164,7 +164,7 @@ body {
   pointer-events: none;
 }
 
-/** Past the sentinel the hairline separates two layers, so it becomes `--prl-line-strong` (4.34:1). */
+/** Past the sentinel the hairline separates two layers, so it becomes `--prl-line-strong` (3.63:1 on dark glass). */
 .prl-shell__header[data-stuck="true"] {
   border-block-end-color: var(--prl-line-strong);
 }
@@ -557,7 +557,7 @@ body {
   color: var(--prl-text);
 }
 
-/** `--prl-text-on-accent` flips with the theme, which keeps the pairing at 9.39:1 dark and 6.97:1 light. */
+/** `--prl-text-on-accent` flips with the theme, which keeps the pairing at 6.74:1 dark and 7.29:1 light. */
 .prl-theme__input:checked + .prl-theme__word {
   background-color: var(--prl-accent-fill);
   color: var(--prl-text-on-accent);
