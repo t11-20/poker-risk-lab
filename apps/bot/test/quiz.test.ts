@@ -5,9 +5,11 @@ import { type Quiz, type QuizQuestion, withinTolerance } from '@prl/contracts';
 import {
   decisionSpot,
   expectedAnswer,
+  figureText,
   type NumericQuestion,
   parseNumber,
   quizTopics,
+  toleranceText,
   topicLabel,
 } from '../src/learn.ts';
 import { FINISH_HAND_FIRST, QUIZ_STALE } from '../src/quiz.ts';
@@ -93,7 +95,7 @@ const VERDICT = {
     lessons: /That matches the answer this lesson gives/,
     other: /That is not the answer this lesson gives, which is [A-J]\./,
   },
-  numeric: { lessons: /is within the tolerance of/, other: /is outside the tolerance of/ },
+  numeric: { lessons: /is close enough to the computed/, other: /is further than .+ from the computed/ },
   decision: {
     lessons: /You chose to call\.\nThis one is not marked/,
     other: /You chose to fold\.\nThis one is not marked/,
@@ -200,10 +202,10 @@ describe('numeric tolerance', () => {
       const asked = askedFor(question, deps);
       const outside = expected.tolerance * 1.001 + 1e-9;
       for (const [offset, verdict] of [
-        [expected.tolerance, /is within the tolerance/],
-        [-expected.tolerance, /is within the tolerance/],
-        [outside, /is outside the tolerance/],
-        [-outside, /is outside the tolerance/],
+        [expected.tolerance, /is close enough to the computed/],
+        [-expected.tolerance, /is close enough to the computed/],
+        [outside, /is further than .+ from the computed/],
+        [-outside, /is further than .+ from the computed/],
       ] as const) {
         const typed = String(expected.value + offset);
         assert.match(
@@ -213,6 +215,21 @@ describe('numeric tolerance', () => {
         );
       }
     }
+  });
+
+  test('a refused answer names the tolerance and the computed figure apart, so neither reads as the other', () => {
+    const deps = testDeps(2);
+    const question = numericQuestions()[0];
+    assert.ok(question !== undefined, 'at least one numeric question ships');
+    const expected = expectedAnswer(question);
+    const asked = askedFor(question, deps);
+    const reply = message(text(asked.session, String(expected.value + 3 * expected.tolerance), deps)).text;
+    const tolerance = toleranceText(expected.tolerance, expected.unit);
+    const computed = figureText(expected.value, expected.unit);
+    assert.ok(
+      reply.includes(`is further than ${tolerance} from the computed ${computed}, so it is not accepted.`),
+      reply,
+    );
   });
 
   test('the edge is the stated tolerance, not one ulp inside it: the cases quiz-tolerance.ts names', () => {

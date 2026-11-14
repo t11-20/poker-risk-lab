@@ -316,14 +316,16 @@ function numericLines(question: NumericQuestion, answer: number): string[] {
   const expected = expectedAnswer(question);
   const yours = figureText(answer, expected.unit);
   const theirs = figureText(expected.value, expected.unit);
+  const tolerance = toleranceText(expected.tolerance, expected.unit);
+  // The computed figure is named as such, so "outside the tolerance of 53.4%" cannot read as a 53.4% band.
   const verdict = withinTolerance(answer, expected)
-    ? `${yours} is within the tolerance of ${theirs}.`
-    : `${yours} is outside the tolerance of ${theirs}. Nothing is deducted for that: the working is ` +
-      'below, and the gap is usually one step of the method rather than the whole of it.';
+    ? `${yours} is close enough to the computed ${theirs}: anything within ${tolerance} of it is accepted.`
+    : `${yours} is further than ${tolerance} from the computed ${theirs}, so it is not accepted. Nothing ` +
+      'is deducted for that: the working is below, and the gap is usually one step of the method ' +
+      'rather than the whole of it.';
   return [
     `You answered ${yours}.`,
     verdict,
-    `Anything within ${toleranceText(expected.tolerance, expected.unit)} is accepted.`,
     '',
     question.explanation,
     '',
