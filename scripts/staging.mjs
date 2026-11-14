@@ -322,7 +322,13 @@ export function servedCertificateVerdict({ served, disk, now }) {
   }
   const servedExpiry = `expires ${served.validTo} (${days(served.validTo)} day(s))`;
   const findings = [];
-  if (disk === null) {
+  if (disk !== null && 'problem' in disk) {
+    findings.push({
+      level: 'cross',
+      line: 'deploy/staging/tls/staging-cert.pem cannot be read',
+      detail: disk.problem,
+    });
+  } else if (disk === null) {
     findings.push({
       level: 'bang',
       line: 'no deploy/staging/tls/staging-cert.pem to compare with',
@@ -346,7 +352,10 @@ export function servedCertificateVerdict({ served, disk, now }) {
   }
   const remaining = days(served.validTo);
   const renewedOnDisk =
-    disk !== null && disk.fingerprint256 !== served.fingerprint256 && days(disk.validTo) >= CERT_WARN_DAYS;
+    disk !== null &&
+    !('problem' in disk) &&
+    disk.fingerprint256 !== served.fingerprint256 &&
+    days(disk.validTo) >= CERT_WARN_DAYS;
   const fix = renewedOnDisk
     ? 'the one on disk is already renewed; `pnpm run staging refresh-tls` loads it'
     : 'renew with `pnpm run staging init`, then `pnpm run staging refresh-tls`';
@@ -385,15 +394,19 @@ export async function statusTlsFindings({ proxyRunning, origin, handshake, disk,
   return servedCertificateVerdict({ served: await handshake(origin), disk, now });
 }
 
-// The failures a findings list carries, for output modes that do not print through `cross`.
 export function failingFindings(findings) {
   return (findings ?? []).filter((f) => f.level === 'cross').map((f) => `${f.line} — ${f.detail}`);
 }
 
+// A malformed file is a finding, not a throw: `status --json` would otherwise print nothing at all.
 function diskCertificate() {
   if (!existsSync(LEAF_CERT)) return null;
-  const cert = new X509Certificate(readFileSync(LEAF_CERT));
-  return { fingerprint256: cert.fingerprint256, validTo: cert.validTo };
+  try {
+    const cert = new X509Certificate(readFileSync(LEAF_CERT));
+    return { fingerprint256: cert.fingerprint256, validTo: cert.validTo };
+  } catch (err) {
+    return { problem: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 // Verification is reported rather than enforced, so a mismatch can be described instead of only refused.
@@ -1397,7 +1410,7 @@ async function commandStatus(options) {
     proxyRunning,
     origin,
     handshake: servedCertificate,
-    disk: proxyRunning ? diskCertificate() : null,
+    disk: proxyRunning && !('problem' in origin) ? diskCertificate() : null,
     now: Date.now(),
   });
 
@@ -1463,6 +1476,10 @@ async function commandRefreshTls() {
     return;
   }
   const disk = diskCertificate();
+  if (disk !== null && 'problem' in disk) {
+    cross('deploy/staging/tls/staging-cert.pem cannot be read', disk.problem);
+    return;
+  }
   if (disk === null) {
     cross('there is no certificate on disk to load', 'run `pnpm run staging init` first');
     return;

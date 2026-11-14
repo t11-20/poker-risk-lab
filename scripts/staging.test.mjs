@@ -654,3 +654,12 @@ test('the JSON path fails on the same findings the printed path fails on', async
     'a warning never fails the command, in either output mode',
   );
 });
+
+test('an unreadable certificate on disk is a failure, and is not compared as if it were another leaf', () => {
+  const findings = servedCertificateVerdict({
+    served: served(RENEWED_LEAF),
+    disk: { problem: 'error:0480006C:PEM routines::no start line' },
+    now: CERT_NOW,
+  });
+  assert.deepEqual(levels(findings), ['cross: deploy/staging/tls/staging-cert.pem cannot be read']);
+});
