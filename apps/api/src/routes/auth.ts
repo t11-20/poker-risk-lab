@@ -60,7 +60,8 @@ import { type RoomRegistry, roomRegistry } from '../rooms/registry.ts';
  * a 429 is never charged. Guest creation always succeeds, so it keeps `guestMax` at 10 per 60 s.
  * The route limit replaces the global bucket rather than stacking, and the retention sweep runs
  * every six hours, so attempt-row residency is `rate x 360 minutes`. Outrunning the sweep takes 46
- * addresses with the unredeemed-start budget, and 5 with the ceiling raised alone.
+ * addresses with the unredeemed-start budget, and 5 with the ceiling raised alone. Every figure here
+ * is asserted in `test/cohort-sign-in-limits.test.ts`.
  */
 
 /**

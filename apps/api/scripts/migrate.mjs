@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * Migration runner. Roll-forward only. `down` refuses with the policy, and `up` refuses a destructive statement unless
- * the file carries a `prl:irreversible` reason (docs/RUNBOOK.md §11.3).
+ * Migration runner. Roll-forward only. `down` refuses with the policy, and `up` refuses a destructive
+ * statement unless the file carries a `prl:irreversible` reason (docs/RUNBOOK.md §11.3).
  * Applied files are immutable. A checksum mismatch or an out-of-order pending file aborts the run.
  * One transaction per file, under a session advisory lock on one connection.
  * Every line printed is redacted.
