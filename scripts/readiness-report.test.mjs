@@ -151,8 +151,9 @@ describe('the readiness report cannot drift from the release manifest', { skip: 
 });
 
 // The counts, because updating only the three manifest-joined fields leaves the rest describing an
-// older candidate. These join the counts to the files that produce them, need no built release, and so never skip. The current inventory must appear in the
-// document. Stamped capture rows are exempted by exact text.
+// older candidate. These join the counts to the files that produce them, need no built release, and
+// so never skip. The current inventory must appear in the document. Stamped capture rows are exempted
+// by exact text.
 
 const RULES_PATH = join(REPO_ROOT, 'deploy', 'staging', 'observability', 'alert-rules.yml');
 const AUDIT_PATH = join(REPO_ROOT, 'scripts', 'supply-chain', 'audit.mjs');

@@ -2339,8 +2339,8 @@ function printReport(report) {
 
 /**
  * Clears the rate-limit counters before provisioning, when this process holds the token. CI runs
- * `test:smoke` first, whose section 12 drains the guest bucket. The route exists only with `RATE_LIMIT_RESET_TOKEN`, which production
- * refuses.
+ * `test:smoke` first, whose section 12 drains the guest bucket. The route exists only with
+ * `RATE_LIMIT_RESET_TOKEN`, which production refuses.
  *
  * Returns the number cleared, null with no token, or throws when the server refuses the token or the
  * route.

@@ -215,9 +215,9 @@ describe('retention selection', () => {
   });
 
   it('NEGATIVE CONTROL: one directory, two source databases — each keeps its own newest good', () => {
-    // Measured with the 7/4/6 policy and no per-source grouping: a 149.8 MiB archive of `poker_risk_lab`
-    // was planned for deletion because a newer 77.6 KiB archive of another database shared its directory. A shared
-    // directory is what disaster-recovery.md §5.5 recommends.
+    // Measured with the 7/4/6 policy and no per-source grouping: a 149.8 MiB archive of
+    // `poker_risk_lab` was planned for deletion because a newer 77.6 KiB archive of another database
+    // shared its directory. A shared directory is what disaster-recovery.md §5.5 recommends.
     const big = backupAt('2026-08-25T18:28:44.000Z', { source: 'poker_risk_lab' });
     const small = backupAt('2026-08-25T18:38:52.000Z', { source: 'poker_risk_lab_restored' });
     const plan = selectForRetention([small, big], POLICY);

@@ -1685,7 +1685,8 @@ const TABLE_START_JS = `(() => {
 
 /**
  * `first visit`, `reconnected`, or null while deciding. A tab that remembers a room reconnects and
- * offers the manual controls instead of "Deal me in". "Reconnecting" is waited out so a pass line can say which state it measured.
+ * offers the manual controls instead of "Deal me in". "Reconnecting" is waited out so a pass line
+ * can say which state it measured.
  */
 export function tableStartPath(snapshot) {
   if (snapshot === null || snapshot === undefined || snapshot.reconnecting) return null;

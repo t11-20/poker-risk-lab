@@ -491,8 +491,9 @@ describe('the policy schema is checked before the shape is trusted', () => {
 });
 
 // What may be signed. A `workflow_dispatch` rehearsal of release.yml (`dry_run: true` by default)
-// concludes successfully, so a signer gated on success alone signs rehearsal images. The `if:` allows only a `push`
-// run (a `v*` tag), and the job checks `release-promotable.json`, which only `promote` writes.
+// concludes successfully, so a signer gated on success alone signs rehearsal images. The `if:`
+// allows only a `push` run (a `v*` tag), and the job checks `release-promotable.json`, which only
+// `promote` writes.
 describe('a rehearsal must not be signed', () => {
   const RELEASE_TEXT = readFileSync(join(REPO_ROOT, '.github/workflows/release.yml'), 'utf8');
 
