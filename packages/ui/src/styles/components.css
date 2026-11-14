@@ -354,7 +354,7 @@
   background-color: var(--prl-glass-floating);
   -webkit-backdrop-filter: var(--prl-glass-filter);
   backdrop-filter: var(--prl-glass-filter);
-  box-shadow: var(--prl-elevation-2);
+  box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-2);
 }
 
 /** L4 OVERLAY. Popovers, menus, sheets. Darker and more opaque than L3, because it carries body text. */
@@ -364,7 +364,7 @@
   background-color: var(--prl-glass-overlay);
   -webkit-backdrop-filter: var(--prl-glass-filter-strong);
   backdrop-filter: var(--prl-glass-filter-strong);
-  box-shadow: var(--prl-elevation-3);
+  box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-3);
 }
 
 /** L5 MODAL. The `--prl-scrim` behind it belongs to whatever owns the dialog, not to the pane. */
@@ -402,15 +402,10 @@
   backdrop-filter: var(--prl-glass-filter-strong);
 }
 
-/** Restated with the elevation, because `box-shadow` is one property. Ring first, so it paints on top. */
-.prl-material--floating:focus-visible,
-.prl-material--floating:has(:focus-visible) {
-  box-shadow: var(--prl-focus-ring), var(--prl-elevation-2);
-}
-
-.prl-material--overlay:focus-visible,
+/** A pane is ringed while anything inside it has focus, as well as when it has focus itself. */
+.prl-material--floating:has(:focus-visible),
 .prl-material--overlay:has(:focus-visible) {
-  box-shadow: var(--prl-focus-ring), var(--prl-elevation-3);
+  --_ring: var(--prl-focus-ring);
 }
 
 /** Drops to the opaque level below. `opacity` would fade the label and let more backdrop through. */
@@ -561,8 +556,8 @@
   text-align: center;
   text-decoration: none;
   /**
-   * No `box-shadow` here. A hover rule at (0,3,0) setting an elevation would out-rank the (0,2,0)
-   * `:focus-visible` rule and delete the halo of a hovered, focused button.
+   * No `box-shadow` here. A hover rule at (0,3,0) setting an elevation would out-rank the family's
+   * `var(--_ring, ...)` list and delete the halo of a hovered, focused button.
    */
   transition:
     background-color var(--prl-dur-fast) var(--prl-ease-material),
@@ -600,14 +595,9 @@
 .prl-btn--primary {
   border-color: var(--prl-accent-fill);
   border-block-start-color: var(--prl-edge-lit);
-  box-shadow: var(--prl-elevation-1);
+  box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-1);
   color: var(--prl-text-on-accent);
   font-weight: var(--prl-weight-semibold);
-}
-
-/** base.css draws the halo at (0,1,0), and this (0,2,0) elevation would delete it. Ring first. */
-.prl-btn--primary:focus-visible {
-  box-shadow: var(--prl-focus-ring), var(--prl-elevation-1);
 }
 
 /** The fill plate, behind the label so the outline is never painted over. */
@@ -654,7 +644,7 @@
   background-color: var(--prl-glass-floating);
   -webkit-backdrop-filter: var(--prl-glass-filter);
   backdrop-filter: var(--prl-glass-filter);
-  box-shadow: var(--prl-elevation-1);
+  box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-1);
 }
 
 .prl-btn--secondary:hover:not(:disabled) {
@@ -670,10 +660,6 @@
   -webkit-backdrop-filter: var(--prl-glass-filter);
   backdrop-filter: var(--prl-glass-filter);
   transform: translateY(1px);
-}
-
-.prl-btn--secondary:focus-visible {
-  box-shadow: var(--prl-focus-ring), var(--prl-elevation-1);
 }
 
 /** TERTIARY keeps the `--prl-line-strong` edge, or "Back" and "Skip" read as plain text. */
@@ -700,7 +686,7 @@
   background-color: var(--prl-glass-floating);
   -webkit-backdrop-filter: var(--prl-glass-filter);
   backdrop-filter: var(--prl-glass-filter);
-  box-shadow: var(--prl-elevation-1);
+  box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-1);
   color: var(--prl-adverse);
 }
 
@@ -716,10 +702,6 @@
   -webkit-backdrop-filter: var(--prl-glass-filter);
   backdrop-filter: var(--prl-glass-filter);
   transform: translateY(1px);
-}
-
-.prl-btn--danger:focus-visible {
-  box-shadow: var(--prl-focus-ring), var(--prl-elevation-1);
 }
 
 /** Opaque level below, no sheen, never `opacity`. `[aria-disabled]` covers anchors styled as buttons. */

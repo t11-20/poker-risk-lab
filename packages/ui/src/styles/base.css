@@ -257,13 +257,20 @@ a:hover {
  * (`accent-300` is 1.52:1 on white). check-contrast.mjs proves no backdrop luminance defeats both:
  * dark ring L <= 0.180 and halo L >= 0.112, light ring L >= 0.246 and halo L <= 0.300.
  * The halo is a box-shadow, so it is clipped by `overflow` and dropped under forced colors, and the
- * outline stays the primary tone. An element with an elevation restates the ring while focused
- * (`--prl-focus-ring` in tokens.css, `.prl-material` in components.css).
+ * outline stays the primary tone. An elevated rule writes `var(--_ring, 0 0 #0000)` before its
+ * elevation, because `box-shadow` is one property and this rule would otherwise lose to it.
  */
 :focus-visible {
+  --_ring: var(--prl-focus-ring);
   outline: var(--prl-focus-width) solid var(--prl-focus-color);
   outline-offset: var(--prl-focus-offset);
   box-shadow: var(--prl-focus-ring);
+}
+
+/** Not inherited, or a focused container would ring every elevated control inside it. */
+@property --_ring {
+  syntax: "*";
+  inherits: false;
 }
 
 :focus:not(:focus-visible) {

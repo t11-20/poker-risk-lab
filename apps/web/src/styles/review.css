@@ -599,6 +599,11 @@ span.prl-review-table__cell-label {
   transform: translateY(calc(-1 * var(--prl-space-1)));
 }
 
+/** Focus lifts a marker as hover does. Above `[aria-current]`, which wins the tie and keeps its level. */
+.prl-timeline__marker:focus-visible {
+  box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-1);
+}
+
 .prl-timeline__marker[data-viewer="true"] {
   color: var(--prl-text);
   font-weight: var(--prl-weight-semibold);
@@ -612,22 +617,10 @@ span.prl-review-table__cell-label {
 .prl-timeline__marker[aria-current="step"] {
   border-color: var(--prl-accent-edge);
   background-color: var(--prl-accent-fill);
-  box-shadow: var(--prl-elevation-2);
+  box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-2);
   color: var(--prl-text-on-accent);
   font-weight: var(--prl-weight-semibold);
   transform: translateY(calc(-1 * var(--prl-space-2)));
-}
-
-/**
- * The ring is restated with the elevation, because `box-shadow` is one property and the current marker
- * would drop into the groove under focus. The ring goes first, since the first shadow paints on top.
- */
-.prl-timeline__marker:focus-visible {
-  box-shadow: var(--prl-focus-ring), var(--prl-elevation-1);
-}
-
-.prl-timeline__marker[aria-current="step"]:focus-visible {
-  box-shadow: var(--prl-focus-ring), var(--prl-elevation-2);
 }
 
 .prl-timeline__glyph {
