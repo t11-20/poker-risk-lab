@@ -20,16 +20,6 @@
   font-size: var(--prl-type-body-lg);
 }
 
-/* A repair to `@prl/ui`, restated for this route group.
-   `.prl-assumptions__list` keeps its marker, so each item showed a bullet and a number ("01The
-   button bets"). `learn.css` has the same repair, and the Lab never imports it. Delete both copies
-   when `packages/ui` fixes it. The list stays a `<ul>`, because the order does not matter. */
-
-.prl-assumptions__list {
-  padding-inline-start: 0;
-  list-style: none;
-}
-
 .prl-assumptions__item {
   display: grid;
   gap: var(--prl-space-4);
