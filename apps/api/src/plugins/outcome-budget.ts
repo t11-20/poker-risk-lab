@@ -2,8 +2,7 @@
  * Budgets charged by OIDC outcomes rather than by requests.
  *
  * Both OIDC routes are keyed on the hashed address, so a cohort behind one NAT shares a bucket.
- * At the old ceiling of 15, fifteen of thirty learners signed in and the rest got a 429.
- * The ceiling is now sized for the cohort and these budgets are sized for abuse, since a script
+ * The ceiling is sized for the cohort and these budgets are sized for abuse, since a script
  * can send unlimited requests but cannot complete a sign-in.
  * `routes/auth.ts` builds two, a failed-outcome budget (charge only) and an unredeemed-start budget
  * (charged by a start, credited by a completed sign-in), windowed on the attempt TTL.

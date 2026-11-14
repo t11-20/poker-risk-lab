@@ -18,8 +18,8 @@ export const CENSOR = '[redacted]';
 /**
  * A substring pattern, because new sensitive names (`idToken`, `deckSalts`, `holeCardPositions`)
  * appear constantly. No `g` flag, since a global regex keeps `lastIndex` between `.test()` calls.
- * `deck`, `salt` and `hole_?card` are substrings because an exact list once matched only `deck` of
- * five secret `HandState` fields, and two 32-byte salts reached a log verbatim (measured 2026-08-27).
+ * `deck`, `salt` and `hole_?card` are substrings because an exact list matches only `deck` of the
+ * five secret `HandState` fields, which lets 32-byte commitment salts reach a log verbatim.
  */
 export const SENSITIVE_KEY_PATTERN =
   /token|secret|password|passwd|cookie|authorization|invite|credential|bearer|assertion|signature|apikey|api_key|privatekey|private_key|databaseurl|database_url|connectionstring|connection_string|dsn|deck|salt|hole_?card/i;
@@ -131,7 +131,6 @@ function scrubRecord(value: object, depth: number, state: ScrubState): unknown {
   return changed ? out : value;
 }
 
-/** Exported so the rules are tested directly rather than by parsing log output. */
 export function scrubLogObject(object: unknown): Record<string, unknown> {
   if (object === null || typeof object !== 'object') return {};
   const state: ScrubState = { nodes: 0, seen: new WeakSet<object>() };
@@ -189,7 +188,7 @@ type SerializedError = {
 
 /**
  * Caps the stack and follows `cause` to depth 3. Takes `unknown` because anything can be thrown,
- * and a crash inside the logger is the worst place for one. Exported for `log-error-fields.test.ts`.
+ * and a crash inside the logger is the worst place for one.
  */
 export function serializeError(value: unknown, depth = 0): SerializedError {
   if (value === null || typeof value !== 'object') {

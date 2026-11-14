@@ -53,18 +53,14 @@ import { type RoomRegistry, roomRegistry } from '../rooms/registry.ts';
  * All are keyed on the hashed client address, never the session, because these routes issue a
  * session and a fresh cookie would rotate the key (60 guest creations, zero 429s; frozen cookie,
  * 429 after six). Never introduce a key that rotates under the caller.
- * A cohort of thirty behind one address is one caller. At the old defaults 15 of 30 OIDC sign-ins
- * and 10 of 30 guest creations succeeded (`test/cohort-sign-in-limits.test.ts`).
- * OIDC therefore has three budgets. A cohort-sized ceiling (`oidcMax`, default 60 per 60 s), a
- * failed-outcome budget (`oidcFailureMax`, default 15, so forced token exchanges stay at 15 a
- * minute), and an unredeemed-start budget over the attempt TTL. A script can send requests but
- * cannot complete a sign-in. Budgets are checked in `preHandler`, and a 429 is never charged.
- * Guest creation always succeeds, so it keeps `guestMax` at 10 per 60 s. `COHORT_SIZE` and
- * `COHORT_ENTRY` in `config.ts` refuse to boot when a declared cohort cannot get in.
+ * A cohort behind one address is one caller, so OIDC has three budgets: a cohort-sized ceiling
+ * (`oidcMax`, default 60 per 60 s), a failed-outcome budget (`oidcFailureMax`, default 15, so forced
+ * token exchanges stay at 15 a minute), and an unredeemed-start budget over the attempt TTL. A
+ * script can send requests but cannot complete a sign-in. Budgets are checked in `preHandler`, and
+ * a 429 is never charged. Guest creation always succeeds, so it keeps `guestMax` at 10 per 60 s.
  * The route limit replaces the global bucket rather than stacking, and the retention sweep runs
- * every six hours, so attempt-row residency is `rate x 360 minutes`. Outrunning the sweep took 19
- * addresses before, 5 with the ceiling raised alone, and 46 with the unredeemed-start budget.
- * Every figure is asserted in `test/cohort-sign-in-limits.test.ts`.
+ * every six hours, so attempt-row residency is `rate x 360 minutes`. Outrunning the sweep takes 46
+ * addresses with the unredeemed-start budget, and 5 with the ceiling raised alone.
  */
 
 /**
@@ -266,7 +262,6 @@ async function acceptAttempt(
   };
 }
 
-/** Exported so tests can supply a store and relying party. */
 export function createAuthRoutes(options: AuthRoutesOptions = {}): FastifyPluginAsync {
   return async (app) => {
     const config = app.appConfig;
@@ -284,7 +279,6 @@ export function createAuthRoutes(options: AuthRoutesOptions = {}): FastifyPlugin
       config.rateLimit.guestMax,
       config.rateLimit.guestWindowMs,
     );
-    // The cohort-sized ceiling.
     const oidcRateLimit = clientKeyedRateLimit(
       config,
       config.rateLimit.oidcMax,
@@ -341,13 +335,12 @@ export function createAuthRoutes(options: AuthRoutesOptions = {}): FastifyPlugin
 
     /**
      * Requests whose failure the caller pays for. Both OIDC routes are GETs, so any page can make a
-     * victim's browser issue them. Charging every 4xx let 15 cross-site image loads lock a campus
-     * address out of sign-in. This applied to the start route too, where the schema refuses a bad
+     * victim's browser issue them. Charging every 4xx would let 15 cross-site image loads lock a
+     * campus address out of sign-in, the start route included, where the schema refuses a bad
      * `redirectAfter` before any `preHandler` runs.
      * The callback is marked once `acceptAttempt` succeeds, which needs a cookie only this server can
      * set. The start is marked on entering the handler, the point past which a failure costs a
-     * discovery fetch and an attempt row. `refusingRelyingParty` in
-     * `test/cohort-sign-in-limits.test.ts` still meets its fifteen.
+     * discovery fetch and an attempt row.
      * A `WeakSet` so nothing else can read or set it and no request is retained.
      */
     const chargeableOidcFailures = new WeakSet<FastifyRequest>();
@@ -366,9 +359,8 @@ export function createAuthRoutes(options: AuthRoutesOptions = {}): FastifyPlugin
     };
 
     /**
-     * `onResponse` does not run when the client aborts, and the handler keeps running. Measured with
-     * a refusing provider, reading the answer gave 15 forced token exchanges then 429, and destroying
-     * the socket gave 120 with no refusal.
+     * `onResponse` does not run when the client aborts, and the handler keeps running. With a refusing
+     * provider, destroying the socket gave 120 forced token exchanges and no refusal against a budget of 15.
      * Abandoned marked requests are charged as failures. That is the safe direction, since the mark
      * is set only after something was spent.
      */
@@ -416,11 +408,11 @@ export function createAuthRoutes(options: AuthRoutesOptions = {}): FastifyPlugin
 
     /**
      * Refuses an OIDC GET whose `Sec-Fetch-Dest` says it is a subresource load. Both routes are
-     * navigations by construction, and 60 `<img>` tags on one page exhausted a campus address's budget.
+     * navigations by construction, and 60 `<img>` tags on one page exhaust a campus address's budget.
      * Fails open when the header is absent (curl, old clients), which cannot mount a cross-site request.
      * An `onRequest` hook, not a `preHandler`: `@fastify/rate-limit` appends its hook after a route's
      * declared `onRequest`, so this runs above the cohort ceiling and above the schema. As a
-     * `preHandler`, 60 refused loads still spent the ceiling and the victim got a 429.
+     * `preHandler`, refused loads would still spend the ceiling and the victim would get a 429.
      * Requests refused here are deliberately uncounted. It is one header comparison with no I/O.
      */
     const refuseNonNavigationOidc = (

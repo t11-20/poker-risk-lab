@@ -47,8 +47,8 @@ let schemaRecheck: NodeJS.Timeout | undefined;
 
 /**
  * `forceCloseConnections: 'idle'` closes idle sockets only once, at `app.close()`. A keep-alive
- * socket that was mid-request then sat for `keepAliveTimeout` (72 s), `app.close()` never resolved
- * and every browser-driven deploy exited 1. So the drain sweeps repeatedly.
+ * socket that was mid-request then sits for `keepAliveTimeout` (72 s), `app.close()` never resolves
+ * and a browser-driven deploy exits 1. So the drain sweeps repeatedly.
  */
 const IDLE_SWEEP_INTERVAL_MS = 25;
 
@@ -71,8 +71,8 @@ type ConnectionRegistry = ReadonlyMap<Duplex, TrackedConnection>;
 
 /**
  * `closeIdleConnections()` never drops a connection that has not started a request, and
- * `server.close()` waits for it. A silent TCP connection (a health probe, a scanner) held every
- * drain for the whole grace. Node exposes no connection list, so this registry is installed before
+ * `server.close()` waits for it. A silent TCP connection (a health probe, a scanner) would hold
+ * every drain for the whole grace. Node exposes no connection list, so this registry is installed before
  * `listen()`.
  */
 function trackConnections(app: FastifyInstance): ConnectionRegistry {

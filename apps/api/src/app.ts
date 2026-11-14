@@ -91,12 +91,12 @@ const UNGATED_ROUTES: ReadonlySet<string> = new Set([
 
 /**
  * Refuses traffic while the schema guard says no. The staging proxy does not route on `/ready`, so
- * without this a degraded instance served writes to columns that did not exist (PR #38 review).
+ * without this a degraded instance would serve writes to columns that do not exist.
  * - One instance hook covers every route module and the WebSocket upgrade.
  * - Thrown as an `AppError` so body, `Retry-After`, `no-store` and the counter come from `errors.ts`.
  * - Counted by the limiter only on refusal, since counting on pass disables stricter per-route limits.
- * - A refused upgrade's socket is destroyed after the 503. Otherwise it stayed open and
- *   `app.close()` never resolved (measured with a `ws` client).
+ * - A refused upgrade's socket is destroyed after the 503. Otherwise it stays open and
+ *   `app.close()` never resolves.
  */
 function featureGateHook(app: FastifyInstance, gate: FeatureGate) {
   const countRequest = app.rateLimit();
@@ -225,7 +225,7 @@ export async function buildApp(overrides: BuildAppOptions = {}): Promise<Fastify
   /**
    * Liveness answers from memory and is exempt from the rate limit. It must never read
    * `app.appDatabase`, because a frozen database should drain the process, not restart it.
-   * `test/db-deadlines.test.ts` pins this. Keep `RATE_LIMIT_MAX` above the `/ready` probe rate.
+   * Keep `RATE_LIMIT_MAX` above the `/ready` probe rate.
    */
   app.get('/api/v1/health', { config: { rateLimit: false } }, async () => healthResponse());
 

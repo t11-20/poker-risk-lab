@@ -70,10 +70,7 @@ const MAX_REDIRECT_PATH_LENGTH = 256;
 /** Base64url with no padding, the character set of a JWS compact serialization part. */
 const BASE64URL_PART = /^[A-Za-z0-9_-]+$/;
 
-/**
- * State, nonce and PKCE failures share one code, so a prober cannot tell which check it beat.
- * Exported because `routes/auth.ts` raises the same refusal.
- */
+/** State, nonce and PKCE failures share one code, so a prober cannot tell which check it beat. */
 export function stateMismatch(logDetail: string): AppError {
   return new AppError('oidc_state_mismatch', { logDetail });
 }
@@ -591,16 +588,13 @@ export interface AuthorizationRequest {
 }
 
 export interface OidcRelyingParty {
-  /** The validated, cached discovery document. */
   readonly discovery: () => Promise<DiscoveryDocument>;
-  /** Where to send the browser. */
   readonly authorizationUrl: (request: AuthorizationRequest) => Promise<string>;
   /** Exchanges a code for an ID token. Returns the raw compact JWS, nothing else. */
   readonly exchangeCode: (params: {
     readonly code: string;
     readonly codeVerifier: string;
   }) => Promise<string>;
-  /** Verifies an ID token against the provider's keys and this attempt's expectations. */
   readonly verifyIdToken: (
     idToken: string,
     expect: { readonly nonceHash: Buffer },

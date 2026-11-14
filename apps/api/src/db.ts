@@ -4,7 +4,7 @@
  * Never concatenate SQL and never call `.unsafe()`, except the migration runner running a `.sql` file.
  * postgres.js sends text and values as separate protocol fields, which is the entire injection defence.
  * A frozen server (`docker pause`, a partition) enforces no timeout, so every query also carries a
- * client-side deadline. `reliability-drills.mjs --only postgres-outage` measures the recovery.
+ * client-side deadline.
  */
 
 import postgres from 'postgres';
@@ -26,7 +26,7 @@ export const READINESS_DEADLINE_MS = 750;
 /**
  * The probe query's own bound, strictly inside `READINESS_DEADLINE_MS` so `ping()` normally fires first
  * and can report which failure happened. The outer bound in `app.ts` is a backstop over any
- * `DatabaseHandle`. `test/db-deadlines.test.ts` asserts the ordering.
+ * `DatabaseHandle`.
  */
 export const PROBE_QUERY_DEADLINE_MS = 600;
 
@@ -39,7 +39,7 @@ const QUERY_DEADLINE_SLACK_MS = 2_000;
 /**
  * The request-path deadline, for one statement and for one whole transaction (see `boundScope`). It is
  * always above `statement_timeout`, so it fires only when the server enforces nothing. Lowering it
- * below that would cancel work Postgres was willing to run. `test/db-deadlines.test.ts` asserts it.
+ * below that would cancel work Postgres was willing to run.
  */
 export function queryDeadlineMs(config: AppConfig): number {
   return config.database.statementTimeoutMs + QUERY_DEADLINE_SLACK_MS;
@@ -203,8 +203,8 @@ const AWAIT_MEMBERS: ReadonlySet<string | symbol> = new Set(['then', 'catch', 'f
 
 /**
  * The driver's own `Query`, bounded when awaited. A Proxy, not a Promise, so it stays a `Query` and
- * postgres.js still splices it as a fragment; a Promise made `GET /hands?sort=` run its `order by`
- * fragment as a statement. Unawaited fragments get no timer.
+ * postgres.js still splices it as a fragment; a Promise would run a fragment such as the `order by`
+ * of `GET /hands?sort=` as a statement. Unawaited fragments get no timer.
  *
  * Not bounded: `.cursor()`, `.readable()` and `.writable()` return a separate object. Nothing in
  * `apps/api/src` uses them, and `test/db-deadlines.test.ts` scans for them.

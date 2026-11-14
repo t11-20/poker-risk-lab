@@ -4,7 +4,7 @@
  * Hook order is instance `onRequest` (context, helmet, cookies, CORS), route `onRequest` (rate limit),
  * body parsing (`bodyLimit`), `preValidation` (CSRF), then validation and handler.
  * Hooks that answer before the route limiter call it by hand through `countRequest`, so CORS
- * refusals, preflights and bad-CSRF 404s are counted (`test/security-uncounted-requests.test.ts`).
+ * refusals, preflights and bad-CSRF 404s are counted.
  * One deliberate exception. `refuseNonNavigationOidc` in `routes/auth.ts` refuses cross-site
  * subresource loads of the OIDC GETs uncounted, because counting them lets any page spend a campus
  * address's sign-in ceiling.
@@ -31,7 +31,7 @@ import { ResettableRateLimitStore, resetAllRateLimitCounters } from './rate-limi
 import { clientKeyFor, hashWithKey } from './request-context.ts';
 
 /**
- * Type shim. Delete when no longer needed. `@fastify/csrf@8.1.0` types an option as the DOM
+ * Type shim. `@fastify/csrf@8.1.0` types an option as the DOM
  * `CryptoKey`, which `@types/node` declares only as a value, so its `.d.ts` raises TS2749 under
  * `lib: ["ES2024"]` and `skipLibCheck: false`.
  */
@@ -144,7 +144,6 @@ const ALLOWED_REQUEST_HEADERS = 'content-type, x-csrf-token';
 /** Without this, client code cannot read `x-request-id` or `retry-after`. */
 const EXPOSED_HEADERS =
   'x-request-id, retry-after, x-ratelimit-limit, x-ratelimit-remaining, x-ratelimit-reset';
-/** 10 minutes. */
 const PREFLIGHT_MAX_AGE_SECONDS = 600;
 
 const MUTATING_METHODS: ReadonlySet<string> = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
@@ -219,10 +218,9 @@ function cookieValue(request: FastifyRequest, name: string): string | undefined 
 /**
  * Session first, hashed address second, so one NAT is not punished for one caller and discarding a
  * cookie does not reset the limit. The cookie value is hashed because it is a credential.
- * The signature is checked first. Measured with raw cookies, 60 requests rotating a garbage cookie
- * got zero 429s against a limit of 3. An unsigned cookie is keyed on its address.
+ * The signature is checked first: 60 requests rotating a garbage cookie got zero 429s against a
+ * limit of 3. An unsigned cookie is keyed on its address.
  * Genuine cookies can still be rotated, but each costs a `POST /auth/guest`, address-limited to ten a minute.
- * Exported for `rate-limit-isolation.test.ts`.
  */
 export function rateLimitKeyFor(request: FastifyRequest, config: AppConfig): string {
   const secret = config.sessionCookieSecret;
@@ -302,7 +300,7 @@ function bearerToken(request: FastifyRequest): string | null {
  * Constant-time token check. Every accepted reset logs at `warn`. Not exempt from the rate limit,
  * so the token cannot be guessed without limit.
  * ORDERING: call AFTER `registerErrorHandlers`, since Fastify binds a route's error handler when the
- * route is added. Called earlier, its refusals used Fastify's error shape instead of `ApiError`.
+ * route is added. Called earlier, its refusals use Fastify's error shape instead of `ApiError`.
  */
 export function registerRateLimitResetRoute(app: FastifyInstance, config: AppConfig): void {
   const token = config.rateLimitResetToken;
@@ -336,8 +334,7 @@ export function securityServerOptions(config: AppConfig): FastifyServerOptions {
     connectionTimeout: 0,
     keepAliveTimeout: 72_000,
     // Drops idle keep-alive sockets on `app.close()`. Not sufficient alone. It runs once, so a
-    // socket mid-request is never revisited. `server.ts` keeps sweeping (`drainIdleConnections`,
-    // `test/shutdown.test.ts`).
+    // socket mid-request is never revisited. `server.ts` keeps sweeping (`drainIdleConnections`).
     forceCloseConnections: 'idle',
     // Fastify 5 defaults, stated anyway. A body with `__proto__` or `constructor` is rejected.
     onProtoPoisoning: 'error',
@@ -398,7 +395,7 @@ export const securityPlugin: FastifyPluginAsync<SecurityPluginOptions> = async (
 
   /**
    * `onBanReach` fires on every request past the ban threshold, not once. Undeduplicated, a flood
-   * turned each refusal into a log line, a metric and an un-awaited audit INSERT. This map records
+   * turns each refusal into a log line, a metric and an un-awaited audit INSERT. This map records
    * one ban per (key, window), and is swept once it passes the threshold because keys are caller-derived.
    */
   const bansRecordedUntil = new Map<string, number>();
@@ -458,9 +455,8 @@ export const securityPlugin: FastifyPluginAsync<SecurityPluginOptions> = async (
   });
 
   /**
-   * The route limiter, called by hand from hooks that would otherwise answer before it.
-   * Measured before the fix, 50 rejected-`Origin` POSTs, 50 rejected preflights and 50 bad-CSRF POSTs to
-   * missing paths all got 403 with the bucket still empty.
+   * The route limiter, called by hand from hooks that would otherwise answer before it and leave
+   * the bucket empty.
    * Safe because `@fastify/rate-limit` counts a request once, so a route's stricter limit that already
    * ran stands. Never call it on the `continue` path, which would take the global limiter's turn
    * and disable every per-route limit.

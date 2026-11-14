@@ -76,12 +76,10 @@ export type CohortEntry = 'oidc' | 'guest' | 'both';
 /**
  * How many learners the operator declares will arrive together from one address.
  * Every limit a classroom trips is address-keyed, because guest creation and the OIDC callback
- * issue the session. Against the shipped defaults, thirty learners from one address got fifteen
- * sign-ins and fifteen 429s. `checkCohortSizing` refuses to boot when the limits cannot serve the
- * declared size, and raises nothing itself. `0` means none declared, right for a public instance.
+ * issue the session. `checkCohortSizing` refuses to boot when the limits cannot serve the declared
+ * size, and raises nothing itself. `0` means none declared, right for a public instance.
  */
 export interface CohortConfig {
-  /** `0` when nothing was declared. */
   readonly size: number;
   /** Only the declared doors are size-checked. */
   readonly entry: CohortEntry;
@@ -91,8 +89,7 @@ export interface CohortConfig {
  * Whether a live enrolment is required to take a seat (`PRL_ENROLMENT_REQUIRED`).
  * `enforced` makes `RoomRegistry.sitAtTable` refuse a learner with no entitlement, with
  * `enrolment_required`. Nothing else is gated, so lessons, the Lab and watching stay open.
- * The default is `off` so the migration did not close existing open deployments. Staging runs it
- * `enforced`, and `scripts/smoke-test.mjs` section 13 drives both directions over TLS.
+ * The default is `off` so existing open deployments stay open.
  * An enum rather than a boolean so a third value, such as warn-only, can be added.
  */
 export type EnrolmentRequirement = 'off' | 'enforced';
@@ -176,7 +173,6 @@ export interface AppConfig {
    */
   readonly rateLimitResetToken: string | null;
 
-  /** Bytes. */
   readonly bodyLimitBytes: number;
   readonly requestTimeoutMs: number;
   readonly shutdownGraceMs: number;
@@ -297,8 +293,8 @@ function readLogLevel(env: EnvRecord, nodeEnv: NodeEnv, collect: Collector): Log
   const match = LOG_LEVELS.find((candidate) => candidate === value);
   if (match === 'silent' && nodeEnv === 'production') {
     // Refused, because `silent` gives Fastify no logger, so no warning or crash reason is written.
-    // Measured with NODE_ENV=production on a taken port, `silent` exited 1 with zero bytes on
-    // stdout and stderr. `fatal` is the quietest level that still says why the process died.
+    // With NODE_ENV=production on a taken port, `silent` exits 1 with zero bytes on stdout and
+    // stderr. `fatal` is the quietest level that still says why the process died.
     collect.problems.push(
       'LOG_LEVEL=silent is not allowed in production: the process would log nothing, including why ' +
         'it failed to start or crashed. Use fatal for the quietest level that still does.',
@@ -393,7 +389,7 @@ function readWebOrigins(env: EnvRecord, nodeEnv: NodeEnv, collect: Collector): r
  * Production requires a long, non-placeholder secret.
  * Elsewhere a missing secret becomes a random per-process one, and a short or placeholder secret
  * is tolerated with a warning. The placeholder warning exists because `.env.example`'s 55-character
- * value passed the length check and the API booted silently signing with a public string.
+ * value passes the length check, and a process signing with it signs with a public string.
  */
 function readSessionCookieSecret(env: EnvRecord, nodeEnv: NodeEnv, collect: Collector): string {
   const value = trimmed(env, 'SESSION_COOKIE_SECRET');
@@ -640,10 +636,9 @@ function readEnrolmentRequirement(env: EnvRecord, collect: Collector): Enrolment
 const OIDC_REQUESTS_PER_LEARNER = 2;
 
 /**
- * Refuses to boot when a declared cohort cannot get in. A warning logged days before class would
- * not be read, and the shipped defaults let fifteen of thirty learners in from one address.
- * Nothing is raised automatically, because thirty guest accounts a minute from one address is a
- * security decision for the operator. `COHORT_ENTRY=oidc` keeps the tight guest default.
+ * Refuses to boot when a declared cohort cannot get in, because a warning logged days before class
+ * would not be read. Nothing is raised automatically, because thirty guest accounts a minute from
+ * one address is a security decision for the operator. `COHORT_ENTRY=oidc` keeps the tight guest default.
  */
 function checkCohortSizing(
   cohort: CohortConfig,
@@ -695,7 +690,6 @@ function checkCohortSizing(
 /**
  * The failure budget must stay below the OIDC ceiling, or it can never refuse anything.
  * Checked on every boot, outside `checkCohortSizing`, which returns early when `COHORT_SIZE` is 0.
- * Inside it, `RATE_LIMIT_OIDC_FAILURE_MAX=10000` with a ceiling of 60 booted cleanly.
  */
 function checkSignInBudgets(rateLimit: RateLimitConfig, collect: Collector): void {
   if (rateLimit.oidcFailureMax >= rateLimit.oidcMax) {
