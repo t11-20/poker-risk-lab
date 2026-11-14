@@ -1,7 +1,6 @@
 /**
- * What each repository does with a pool handle where it needs a transaction. The pool here points at
- * a port nothing listens on, so a guard that lets the pool through fails on connecting and can never
- * write to a real database. The transaction cases need one, and roll back.
+ * The pool points at a port nothing listens on, so a guard that lets it through fails to connect and
+ * can never write to a real database.
  */
 
 import assert from 'node:assert/strict';
