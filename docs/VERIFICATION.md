@@ -385,10 +385,10 @@ matchups, not of hold'em.
 
 ## 9. The teaching content
 
-`packages/content/test/scenarios.test.ts` — **13 tests, all passing**
+`packages/content/test/scenarios.test.ts` — **15 tests, all passing**
 
 ```
-17 lessons · 17 quizzes (81 questions) · 36 scenarios · 90 glossary terms · 11 topics
+17 lessons · 17 quizzes (81 questions) · 36 scenarios · 106 glossary terms · 11 topics
 36/36 scenarios carry claims: 74 independent verification claims, 0 regression locks
 ```
 

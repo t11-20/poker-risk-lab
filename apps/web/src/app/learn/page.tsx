@@ -210,9 +210,9 @@ export default async function LearnPage(): Promise<ReactElement> {
 
       <Panel className="prl-learn-glossary-cta" eyebrow="Reference" title="The glossary">
         <p>
-          Ninety terms, each with the plain-language version first and the jargon second. Every term a lesson
-          uses is linked from inside its own prose, so you can read a definition without leaving the
-          paragraph.
+          A hundred and six terms, each with the plain-language version first and the jargon second. Every
+          term a lesson uses is linked from inside its own prose, so you can read a definition without leaving
+          the paragraph.
         </p>
         <Link className="prl-btn prl-btn--secondary prl-btn--md" href={GLOSSARY_PATH}>
           Open the glossary

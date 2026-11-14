@@ -1,5 +1,5 @@
 /**
- * Fixture: the complete glossary, all 90 entries.
+ * Fixture: the complete glossary, all 106 entries.
  *
  * The glossary page is an index of the whole vocabulary, so a partial fixture
  * would misrepresent the screen being reviewed: the A-Z jump list, the topic filter and
@@ -173,6 +173,14 @@ export const LEARN_GLOSSARY: readonly GlossaryEntry[] = [
     seeAlso: ['bet', 'call', 'continuation-bet'],
   },
   {
+    id: 'check-raise',
+    term: 'Check-raise',
+    definition:
+      'Checking, then raising after an opponent bets in the same betting round. It is an ordinary, legal play, made both with strong hands that want more in the pot and as a bluff, and it is the reason a check is not always a sign of weakness.',
+    topics: ['rules-and-flow', 'fold-equity-and-bluffing'],
+    seeAlso: ['check', 'raise', 'position', 'semi-bluff'],
+  },
+  {
     id: 'clean-out',
     term: 'Clean out',
     definition:
@@ -314,6 +322,14 @@ export const LEARN_GLOSSARY: readonly GlossaryEntry[] = [
     seeAlso: ['variance', 'break-even-equity', 'sample-size', 'fold-equity'],
   },
   {
+    id: 'flop',
+    term: 'Flop',
+    definition:
+      'The first three community cards, dealt face up together after the preflop betting round, and the betting round that follows them. Once it is dealt you know five of the seven cards you will make your hand from.',
+    topics: ['rules-and-flow'],
+    seeAlso: ['preflop', 'turn', 'board', 'street'],
+  },
+  {
     id: 'flush-draw',
     term: 'Flush draw',
     definition:
@@ -370,6 +386,14 @@ export const LEARN_GLOSSARY: readonly GlossaryEntry[] = [
       'A hand or a game with exactly two players. The blind and position rules invert: the button posts the small blind and acts first preflop, then acts last on the flop, turn and river.',
     topics: ['positions-and-blinds', 'tournaments'],
     seeAlso: ['button', 'blinds', 'big-blind-option', 'push-fold'],
+  },
+  {
+    id: 'hole-cards',
+    term: 'Hole cards',
+    definition:
+      'The two cards dealt face down to each player and seen only by their owner. Your hand is the best five cards you can make from your two hole cards and the five on the board, using both, one or neither of them.',
+    topics: ['rules-and-flow'],
+    seeAlso: ['board', 'playing-the-board', 'hand-rankings'],
   },
   {
     id: 'icm',
@@ -452,6 +476,14 @@ export const LEARN_GLOSSARY: readonly GlossaryEntry[] = [
     seeAlso: ['hand-ranking', 'blocker', 'board-texture', 'polarised-range'],
   },
   {
+    id: 'offsuit',
+    term: 'Offsuit',
+    definition:
+      'Two hole cards of different suits, written with an o, as in AKo for ace-king in two suits. Any two different ranks can be dealt in 12 offsuit ways and only 4 suited ones, so offsuit hands are three times as common, and the two cards can never both be part of one flush.',
+    topics: ['ranges', 'hand-reading-and-outs'],
+    seeAlso: ['suited', 'combos', 'range'],
+  },
+  {
     id: 'open',
     term: 'Open (open-raise)',
     definition:
@@ -500,12 +532,28 @@ export const LEARN_GLOSSARY: readonly GlossaryEntry[] = [
     seeAlso: ['kicker', 'board-texture', 'dominated-hand', 'outs'],
   },
   {
+    id: 'overpair',
+    term: 'Overpair',
+    definition:
+      'A pocket pair higher than every card on the board, such as two queens on J-7-2. It beats any opponent who has paired a board card and loses to a higher pocket pair, two pair or better, which is why it is strong on a dry board and much less so on a connected one.',
+    topics: ['hand-reading-and-outs', 'ranges'],
+    seeAlso: ['pocket-pair', 'top-pair', 'overcard', 'board-texture'],
+  },
+  {
     id: 'playing-the-board',
     term: 'Playing the board',
     definition:
       'When your best five cards are the five community cards, so your own two add nothing. Everyone still in has at least your hand, which means the best you can do is chop and any single relevant card beats you.',
     topics: ['hand-reading-and-outs'],
     seeAlso: ['hand-ranking', 'split-pot', 'counterfeit', 'board-texture'],
+  },
+  {
+    id: 'pocket-pair',
+    term: 'Pocket pair',
+    definition:
+      'Two hole cards of the same rank, such as two sevens. It is already a made hand before the flop; what it usually needs to win a big pot is a third card of its rank on the board, which makes a set.',
+    topics: ['hand-reading-and-outs', 'ranges'],
+    seeAlso: ['set', 'overpair', 'implied-odds'],
   },
   {
     id: 'polarised-range',
@@ -539,6 +587,14 @@ export const LEARN_GLOSSARY: readonly GlossaryEntry[] = [
     formula: 'pot odds = call / (pot including the bet + call)',
     topics: ['pot-odds-and-ev'],
     seeAlso: ['break-even-equity', 'equity', 'implied-odds', 'call'],
+  },
+  {
+    id: 'preflop',
+    term: 'Preflop',
+    definition:
+      'The first betting round, after the hole cards are dealt and before any community card. It starts with the blinds already in the pot, and the player to the left of the big blind acts first.',
+    topics: ['rules-and-flow', 'positions-and-blinds'],
+    seeAlso: ['blinds', 'open', 'limp', 'street'],
   },
   {
     id: 'push-fold',
@@ -591,6 +647,14 @@ export const LEARN_GLOSSARY: readonly GlossaryEntry[] = [
     seeAlso: ['bankroll', 'standard-deviation', 'downswing', 'variance'],
   },
   {
+    id: 'river',
+    term: 'River',
+    definition:
+      'The fifth and last community card, dealt alone after the turn betting round, and the final betting round. No card is left to come, so a draw that missed can win only by betting, and calling is a judgement that your hand is already best.',
+    topics: ['rules-and-flow'],
+    seeAlso: ['turn', 'showdown', 'showdown-value', 'street'],
+  },
+  {
     id: 'rule-of-2-and-4',
     term: 'Rule of 2 and 4',
     definition:
@@ -599,6 +663,14 @@ export const LEARN_GLOSSARY: readonly GlossaryEntry[] = [
       'chance of hitting (percent) ~= 2 x outs with one card to come; ~= 4 x outs with two cards to come',
     topics: ['probability-and-equity', 'hand-reading-and-outs'],
     seeAlso: ['outs', 'clean-out', 'equity', 'pot-odds'],
+  },
+  {
+    id: 'run-out',
+    term: 'Run-out',
+    definition:
+      'The community cards still to come from a given point in a hand, or the ones that then arrived. After an all-in on the flop, the turn and river are the run-out, and your equity is the share of the possible run-outs your hand wins, with a split pot counted as your share of it.',
+    topics: ['probability-and-equity', 'rules-and-flow'],
+    seeAlso: ['equity', 'all-in', 'board'],
   },
   {
     id: 'sample-size',
@@ -615,6 +687,22 @@ export const LEARN_GLOSSARY: readonly GlossaryEntry[] = [
       'A bet with a hand that is probably behind now but can improve, so it wins in two ways: opponents fold, or the draw arrives. Combining fold equity with real outs is why a draw is usually worth more as a bet than as a call.',
     topics: ['fold-equity-and-bluffing', 'hand-reading-and-outs'],
     seeAlso: ['bluff', 'fold-equity', 'outs', 'open-ended-straight-draw'],
+  },
+  {
+    id: 'set',
+    term: 'Set',
+    definition:
+      'Three of a kind made with a pocket pair and one matching card on the board. It is better hidden than trips, because two of its three cards are face down, and it is the hand a small pocket pair is usually hoping for.',
+    topics: ['hand-reading-and-outs'],
+    seeAlso: ['pocket-pair', 'trips', 'implied-odds'],
+  },
+  {
+    id: 'shove',
+    term: 'Shove',
+    definition:
+      'Going all-in, usually as a raise; also called a push or a jam. It takes every later decision out of the hand for the player facing it, who can only call for everything or fold.',
+    topics: ['fold-equity-and-bluffing', 'tournaments'],
+    seeAlso: ['all-in', 'push-fold', 'fold-equity'],
   },
   {
     id: 'showdown',
@@ -668,6 +756,14 @@ export const LEARN_GLOSSARY: readonly GlossaryEntry[] = [
     seeAlso: ['effective-stack', 'pot', 'implied-odds', 'all-in'],
   },
   {
+    id: 'stack',
+    term: 'Stack',
+    definition:
+      'The units a player has on the table and can still bet. Only those can be wagered during a hand, so your stack caps both what you can lose in it and what you can win from each opponent.',
+    topics: ['rules-and-flow', 'bet-sizing-and-spr'],
+    seeAlso: ['effective-stack', 'table-stakes', 'all-in', 'spr'],
+  },
+  {
     id: 'standard-deviation',
     term: 'Standard deviation',
     definition:
@@ -691,6 +787,22 @@ export const LEARN_GLOSSARY: readonly GlossaryEntry[] = [
       'One stage of a hand together with its betting round: preflop, flop, turn and river. Four streets, four betting rounds, and each one starts with the current pot already built by the ones before it.',
     topics: ['rules-and-flow'],
     seeAlso: ['showdown', 'board-texture', 'position'],
+  },
+  {
+    id: 'suited',
+    term: 'Suited',
+    definition:
+      'Two hole cards of the same suit, written with an s, as in AKs for ace-king of one suit. Suited cards can make a flush with both of them, which offsuit cards never can, but that needs three more of the suit on the board, so suitedness adds a little equity rather than a lot.',
+    topics: ['ranges', 'hand-reading-and-outs'],
+    seeAlso: ['offsuit', 'suited-connectors', 'flush-draw', 'combos'],
+  },
+  {
+    id: 'suited-connectors',
+    term: 'Suited connectors',
+    definition:
+      'Two suited hole cards of consecutive rank, such as the eight and seven of hearts. They rarely make a strong pair, but they can make straights and flushes that are hard to see coming, so their value depends on implied odds and on stacks deep enough to pay them off.',
+    topics: ['ranges', 'bet-sizing-and-spr'],
+    seeAlso: ['suited', 'implied-odds', 'open-ended-straight-draw', 'effective-stack'],
   },
   {
     id: 'table-stakes',
@@ -723,6 +835,22 @@ export const LEARN_GLOSSARY: readonly GlossaryEntry[] = [
       'A pair made by combining one of your hole cards with the highest card on the board. It is often a strong hand and often a fragile one at the same time, because the hands that beat it are exactly the hands an opponent keeps betting with.',
     topics: ['hand-reading-and-outs', 'ranges'],
     seeAlso: ['kicker', 'dominated-hand', 'showdown-value'],
+  },
+  {
+    id: 'trips',
+    term: 'Trips',
+    definition:
+      'Three of a kind made with one hole card and a pair on the board. Everyone can see the board pair, so trips are easier to suspect than a set, and between two players holding the same trips the kicker usually decides.',
+    topics: ['hand-reading-and-outs'],
+    seeAlso: ['set', 'kicker', 'hand-rankings'],
+  },
+  {
+    id: 'turn',
+    term: 'Turn',
+    definition:
+      'The fourth community card, dealt alone after the flop betting round, and the betting round that follows it. With one card left to come, a draw has a single chance to complete, which is why the rule of 2 and 4 uses two here and four on the flop.',
+    topics: ['rules-and-flow', 'probability-and-equity'],
+    seeAlso: ['flop', 'river', 'rule-of-2-and-4', 'street'],
   },
   {
     id: 'uncalled-bet',

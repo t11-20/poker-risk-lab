@@ -94,7 +94,11 @@
       "all-in",
       "pot",
       "units",
-      "fold-equity"
+      "fold-equity",
+      "preflop",
+      "flop",
+      "turn",
+      "river"
     ]
   },
   {
@@ -194,7 +198,10 @@
       "open",
       "limp",
       "three-bet",
-      "spr"
+      "spr",
+      "preflop",
+      "flop",
+      "stack"
     ]
   },
   {
@@ -291,7 +298,9 @@
       "min-raise",
       "effective-stack",
       "split-pot",
-      "icm"
+      "icm",
+      "preflop",
+      "stack"
     ]
   },
   {
@@ -377,7 +386,11 @@
       "equity",
       "blinds",
       "dominated-hand",
-      "street"
+      "street",
+      "preflop",
+      "flop",
+      "turn",
+      "river"
     ]
   },
   {
@@ -489,7 +502,12 @@
       "all-in",
       "orbit",
       "minimum-defence-frequency",
-      "range"
+      "range",
+      "preflop",
+      "flop",
+      "turn",
+      "river",
+      "stack"
     ]
   },
   {
@@ -611,7 +629,9 @@
       "split-pot",
       "board-texture",
       "showdown",
-      "overcard"
+      "overcard",
+      "flop",
+      "trips"
     ]
   },
   {
@@ -721,7 +741,10 @@
       "blocker",
       "equity",
       "range",
-      "reverse-implied-odds"
+      "reverse-implied-odds",
+      "flop",
+      "turn",
+      "river"
     ]
   },
   {
@@ -822,7 +845,10 @@
       "flush-draw",
       "open-ended-straight-draw",
       "gutshot",
-      "implied-odds"
+      "implied-odds",
+      "flop",
+      "river",
+      "trips"
     ]
   }
 ]

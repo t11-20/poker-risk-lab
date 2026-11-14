@@ -86,10 +86,15 @@ const SPELLED_OUT: readonly {
   readonly computed: () => number;
 }[] = [
   { where: 'learn index — lessons', word: 'Seventeen lessons', computed: () => stats.lessons },
-  { where: 'learn index — glossary', word: 'Ninety terms', computed: () => stats.glossaryTerms },
+  { where: 'learn index — glossary', word: 'A hundred and six terms', computed: () => stats.glossaryTerms },
 ];
 
-const WORDS: Readonly<Record<number, string>> = { 17: 'Seventeen', 36: 'Thirty-six', 90: 'Ninety' };
+const WORDS: Readonly<Record<number, string>> = {
+  17: 'Seventeen',
+  36: 'Thirty-six',
+  90: 'Ninety',
+  106: 'A hundred and six',
+};
 
 describe('the counts the product prints about itself', () => {
   it('match the bundle it actually ships', () => {
