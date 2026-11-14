@@ -27,13 +27,9 @@ import { LegendSigil } from '@/components/LegendSigil.tsx';
 import { ProfileDisclaimers } from '@/components/ProfileDisclaimers.tsx';
 import { SuitMark } from '@/components/SuitMark.tsx';
 import {
-  COMPARE_SITUATION,
-  DEFAULT_COMPARE_PROFILE_IDS,
   LEGENDS_COMPARE_PATH,
   LEGENDS_HAND_REVIEW_PATH,
   LEGENDS_PATH,
-  loadLegendProfiles,
-  loadProfileComparison,
   MAX_COMPARE_PROFILES,
   MIN_COMPARE_PROFILES,
   parseCompareSelection,
@@ -41,6 +37,12 @@ import {
   profileHref,
   type SearchParams,
   selectionNotices,
+} from '@/lib/legend-links.ts';
+import {
+  COMPARE_SITUATION,
+  DEFAULT_COMPARE_PROFILE_IDS,
+  loadLegendProfiles,
+  loadProfileComparison,
 } from '@/lib/legends-data.ts';
 
 export const metadata: Metadata = {

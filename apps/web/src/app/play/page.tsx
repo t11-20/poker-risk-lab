@@ -26,15 +26,14 @@ import {
   type TableStateName,
 } from '@/fixtures/table.ts';
 import { disclaimerFraming } from '@/lib/disclaimer-framing.ts';
-import { legendMatchCopy } from '@/lib/legend-match-copy.ts';
 import {
-  findProfile,
   LEGENDS_PATH,
-  loadLegendProfiles,
   MATCH_DIFFICULTY_PARAM,
   MATCH_PROFILE_PARAM,
   profileHref,
-} from '@/lib/legends-data.ts';
+} from '@/lib/legend-links.ts';
+import { legendMatchCopy } from '@/lib/legend-match-copy.ts';
+import { findProfile, loadLegendProfiles } from '@/lib/legends-data.ts';
 import { LiveTable } from './LiveTable.tsx';
 import '@/styles/play.css';
 import { SuitMark } from '@/components/SuitMark.tsx';

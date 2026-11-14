@@ -15,14 +15,13 @@ import { LegendQuickStart } from '@/components/LegendQuickStart.tsx';
 import { SuitMark } from '@/components/SuitMark.tsx';
 import {
   compareHref,
-  DEFAULT_COMPARE_PROFILE_IDS,
   LEGENDS_HAND_REVIEW_PATH,
   LEGENDS_PATH,
-  loadLegendProfiles,
   MATCH_PROFILE_PARAM,
   parseDifficulty,
   type SearchParams,
-} from '@/lib/legends-data.ts';
+} from '@/lib/legend-links.ts';
+import { DEFAULT_COMPARE_PROFILE_IDS, loadLegendProfiles } from '@/lib/legends-data.ts';
 
 export const metadata: Metadata = {
   title: 'AI Legends',
