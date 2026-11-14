@@ -2286,6 +2286,17 @@
   font-size: var(--prl-type-body-sm);
 }
 
+/* One row where the bar is wide, so the next step is in the box that says the hand is over. On its own
+   row it fell below the fold at 1440x900. */
+.prl-action-bar__idle--beside {
+  flex: 1 1 18rem;
+  align-self: center;
+}
+
+.prl-action-bar__idle-action {
+  flex: 0 0 auto;
+}
+
 /*
  * `tabindex="-1"` so focus can land here when the controls are removed (`ActionBar.tsx`).
  * The ring is inset because the line is flush with the bar's edge.
@@ -2325,6 +2336,32 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--prl-space-2) var(--prl-space-5);
+}
+
+.prl-hand-glance__hand {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--prl-space-2) var(--prl-space-5);
+}
+
+/** A row of its own, so the cards keep their line at 360px. The ring is the oval plate's 2rem, not 2.5rem. */
+.prl-hand-glance__now {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--prl-space-4);
+}
+
+.prl-hand-glance__now .prl-turn-timer {
+  --prl-turn-size: var(--prl-space-9);
+}
+
+.prl-hand-glance__latest {
+  min-width: 0;
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+  font-variant-numeric: var(--prl-numeric);
 }
 
 .prl-hand-glance__cards {

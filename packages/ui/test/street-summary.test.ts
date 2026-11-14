@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { lastActionsThisStreet } from '../src/seat-actions.ts';
-import { STREET_SUMMARY_LIMIT, streetSummary } from '../src/street-summary.ts';
+import { latestAction, STREET_SUMMARY_LIMIT, streetSummary } from '../src/street-summary.ts';
 import type { PlayerView } from '../src/view-types.ts';
 
 type Logged = PlayerView['actions'][number];
@@ -181,5 +181,24 @@ describe('a short all-in call', () => {
   it('names a seat that has left the table by its number rather than dropping it', () => {
     const line = streetSummary(view('flop', [logged('flop', 5, { type: 'fold' }, 0)]), NAMES);
     assert.equal(said(line), 'On the flop: Seat 6 folded');
+  });
+});
+
+describe('latestAction, the glance’s one phrase', () => {
+  it('names the newest action under its street', () => {
+    assert.equal(
+      latestAction({
+        label: 'On the river',
+        current: true,
+        actions: ['You checked', 'Nit bet 215'],
+        earlier: 0,
+      }),
+      'On the river: Nit bet 215',
+    );
+  });
+
+  it('is null with no summary, or a summary with no phrase', () => {
+    assert.equal(latestAction(null), null);
+    assert.equal(latestAction({ label: 'Preflop', current: true, actions: [], earlier: 0 }), null);
   });
 });
