@@ -17,6 +17,7 @@ import * as hands from '../src/repositories/hands.ts';
 import { generateId } from '../src/repositories/ids.ts';
 import * as progress from '../src/repositories/progress.ts';
 import * as rooms from '../src/repositories/rooms.ts';
+import { jsonbObjectParam, jsonbParam, jsonbParamOrNull } from '../src/repositories/sql.ts';
 import * as users from '../src/repositories/users.ts';
 import { databaseSkip, TEST_DATABASE_URL } from './helpers/database.ts';
 
@@ -323,6 +324,32 @@ describe('jsonb parameters reach the column as parsed JSON', { skip: skipReason 
         select count(*)::int as n from prl.quiz_attempts where user_id = ${user.id}
       `;
       assert.equal(count?.n, 0, 'a refused value never reaches the database');
+    });
+  });
+});
+
+describe('the jsonb parameter helpers', { skip: skipReason }, () => {
+  it('cast so the server parses the text, and keep SQL NULL apart from JSON null', async () => {
+    await inRollback(async (tx) => {
+      const [row] = await tx<Record<string, string | null>[]>`
+        select jsonb_typeof(${jsonbParam(tx, { a: 1 }, 'f')}) as object,
+               jsonb_typeof(${jsonbParam(tx, ['Ah'], 'f')}) as array,
+               jsonb_typeof(${jsonbParam(tx, null, 'f')}) as json_null,
+               jsonb_typeof(${jsonbParamOrNull(tx, { a: 1 }, 'f')}) as nullable_object,
+               ${jsonbParamOrNull(tx, null, 'f')} is null as sql_null,
+               jsonb_typeof(${jsonbObjectParam(tx, { a: 1 }, 'f')}) as checked_object
+      `;
+      assert.deepEqual(
+        { ...row },
+        {
+          object: 'object',
+          array: 'array',
+          json_null: 'null',
+          nullable_object: 'object',
+          sql_null: true,
+          checked_object: 'object',
+        },
+      );
     });
   });
 });
