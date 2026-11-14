@@ -4,8 +4,8 @@
  * here through the real producers. Live frames come from `startHand`, `applyAction` and `redactFor`,
  * and a leak is a card that `HandState` really dealt, moved onto a seat not entitled to it. Clean
  * cases assert `seatsWithCards`, because an empty sweep also reports nothing unentitled.
- * Negative control (2026-08-27): deleting the `checkHoleCardEntitlement` line from `narrowState`
- * failed 4 of 15 tests here and 1 of 17 in `table-socket.test.ts`, and every honest case stayed green.
+ * Negative control: deleting the `checkHoleCardEntitlement` line from `narrowState` fails tests here and
+ * in `table-socket.test.ts`, and every honest case stays green.
  */
 
 import assert from 'node:assert/strict';

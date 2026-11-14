@@ -1,7 +1,7 @@
 /**
  * The claims this product makes about itself have to survive being checked.
- * `src/fixtures/*.ts` ships stored `ruleOfThumb` and `heroEquity` values as the offline fallback, and
- * a release audit found four of them wrong, so an unqualified "no odds table" claim is false. This pins
+ * `src/fixtures/*.ts` ships stored `ruleOfThumb` and `heroEquity` values as the offline fallback, so an
+ * unqualified "no odds table" claim is false. This pins
  * the phrasings checked and found false, plus the legal-page overstatements (compliance, licensing,
  * age checks, guarantees, anonymity). Every pattern is fed a violation, and must stay quiet on the
  * pages as written. The fixtures are read here and never edited.

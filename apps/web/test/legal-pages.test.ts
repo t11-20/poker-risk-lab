@@ -180,8 +180,8 @@ describe('the required disclosures are on the pages', () => {
   });
 
   /**
-   * The import alone satisfies the presence check above, and adding `hidden` to the AgeGate paragraph
-   * once left every test passing. These are Next components the `packages/ui` loader cannot compile,
+   * The import alone satisfies the presence check above, so `hidden` on the AgeGate paragraph would
+   * leave every other test passing. These are Next components the `packages/ui` loader cannot compile,
    * so this checks the enclosing element for `hidden`, `aria-hidden`, `display: none` and a falsy guard.
    */
   it('renders the warning in an element a reader can actually see', () => {
@@ -421,8 +421,8 @@ function word(value: number): string {
 }
 
 /**
- * `/privacy` §5 against the session code. The page once said fourteen days "from when it was issued",
- * which is the idle window, while the real ceiling is `SESSION_ABSOLUTE_TTL_SECONDS` (sixty days).
+ * `/privacy` §5 against the session code. Fourteen days is the idle window, not the ceiling, which is
+ * `SESSION_ABSOLUTE_TTL_SECONDS` (sixty days).
  */
 describe('the retention periods on /privacy are the ones the code implements', () => {
   const idleDays = constantProduct(API_SESSION_REPO, 'SESSION_TTL_SECONDS') / 86_400;
@@ -553,7 +553,7 @@ describe('the detectors catch a real violation', () => {
   });
 
   it('catches the retention sentence that was actually wrong', () => {
-    // The sentence that shipped. Fourteen days is the idle window, not the session's lifetime.
+    // Fourteen days is the idle window, not the session's lifetime.
     const describesLifetime = (text: string): boolean => text.includes('fourteen days from your last visit');
     assert.equal(
       describesLifetime('A session lasts fourteen days from when it was issued.'),
@@ -635,8 +635,8 @@ describe('what /terms says about money, and the absence of a payment path', () =
   /**
    * Table names that mean money moved. Forbidden in every posture, and never given an exception.
    * Matched on the split name, so `fee` and `card` need a word boundary and `prl.discards` and
-   * `prl.coffee_breaks` pass. An adversarial review found seven money table names this once accepted.
-   * The negative control below pins them and re-checks every real table against this pattern.
+   * `prl.coffee_breaks` pass. The negative control below pins money names a looser pattern accepted and
+   * re-checks every real table against this one.
    */
   const MONEY_TABLE =
     /\b(payment|purchase|order|invoice|billing|receipt|refund|price|charge|checkout|transaction|wallet|ledger|subscription)|\b(fees?|tuitions?|amounts?|currenc(y|ies)|cards?|costs?|balances?|credits?|remittances?|stripe|paypal|braintree|adyen|merchants?|iban)\b/iu;
@@ -676,8 +676,8 @@ describe('what /terms says about money, and the absence of a payment path', () =
     );
 
   /**
-   * Every workspace `src` tree, as `[repo-relative label, absolute path]`. An adversarial review got a
-   * money SDK into `packages/ui` past a scan of the app roots alone. `packages/<name>/src` rather than
+   * Every workspace `src` tree, as `[repo-relative label, absolute path]`, because a money SDK can enter
+   * through a package as well as an app. `packages/<name>/src` rather than
    * `packages`, which would descend into `node_modules` and `dist`. Enumerated, so a new package is
    * scanned the day it lands.
    */
@@ -730,7 +730,7 @@ describe('what /terms says about money, and the absence of a payment path', () =
 
   /**
    * Comments stripped first, because the `app/terms/page.tsx` header quotes the replaced clause and the
-   * posture reader once read that quotation as a live claim.
+   * posture reader would read that quotation as a live claim.
    */
   const withoutComments = (source: string): string => source.replace(/\/\*[\s\S]*?\*\//gu, ' ');
 
@@ -800,7 +800,7 @@ describe('what /terms says about money, and the absence of a payment path', () =
   });
 
   it('no dependency that moves money has been added (TRIPWIRE)', () => {
-    // Every workspace manifest. An adversarial review added a money SDK to `packages/ui` unseen.
+    // Every workspace manifest, because a money SDK can enter through a package as well as an app.
     const manifests = [
       'package.json',
       'apps/api/package.json',
@@ -911,7 +911,7 @@ describe('what /terms says about money, and the absence of a payment path', () =
         seen.add(key);
       }
     }
-    // No skip here. A `startsWith('../')` skip once hid the two entries that matched nothing.
+    // No skip here, because a skipped entry is an exemption nobody re-checks.
     for (const [relative] of ALLOWED) {
       assert.ok(seen.has(relative), `${relative} is exempted but no longer matches; drop the exemption`);
     }
@@ -951,14 +951,11 @@ describe('what /terms says about money, and the absence of a payment path', () =
         `${table} must not be read as a purchase - it is the distinction the whole rewrite rests on`,
       );
     }
-    // The snake_case miss from the first draft, reproduced and then closed by `splitTableName`.
+    // `_` is a word character, so snake_case hides a name from `splitIdentifiers`; `splitTableName` sees it.
     assert.doesNotMatch(splitIdentifiers('prl.course_invoices'), MONEY_TABLE, 'the miss, reproduced');
     assert.match(splitTableName('prl.course_invoices'), MONEY_TABLE, 'and the fix that closes it');
 
-    /*
-     * Names an adversarial review found this detector accepting (REGRESSION). `prl.enrolment_fees` also
-     * matches ENTITLEMENT_TABLE, so an honest `/terms` once unlocked it.
-     */
+    // `prl.enrolment_fees` also matches ENTITLEMENT_TABLE, so it must still fail when `/terms` is honest.
     for (const table of [
       'prl.fees',
       'prl.enrolment_fees',
@@ -1084,7 +1081,7 @@ describe('the guest retention promise on /privacy', () => {
 
   /**
    * Counted from the predicate, not from a known list, because the failure is a clause being added.
-   * 0006 made enrolments cascade on delete, the predicate gained a fifth clause, and the page listed four.
+   * A cascade added by a migration grows the predicate, and the page must list it too.
    */
   it('names every protection the predicate actually implements', () => {
     const users = readFileSync(resolve(REPO, 'apps', 'api', 'src', 'repositories', 'users.ts'), 'utf8');

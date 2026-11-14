@@ -1,8 +1,6 @@
 /**
  * What a phone reader needs at the two moments the follow scroll leaves them in the decision band: the
  * clock and the latest action while sizing a bet, and the next deal and the review once the hand is over.
- * Measured at 390x844 before this: the plate's clock at y -227..-143, the street line under the header,
- * "Deal the next hand" at y -1,174..-879, and "Review this hand" only inside the collapsed sheet.
  * Both components import `@prl/ui`, which this runner cannot load, so the wiring is read from source and
  * each predicate is run against the text it replaced, where it must fail.
  */

@@ -1,6 +1,6 @@
 /**
  * `UnitsBadge`: the explanation can be put away, and the reset it promises is somewhere to go.
- * The panel once stayed open over every page after an outside tap, Escape, a scroll or a navigation.
+ * The panel closes on an outside tap, Escape, a scroll or a navigation, or it stays open over every page.
  * The closing paths need a DOM, which `node --test` lacks (ADR 0008), so their wiring is read from the
  * source. `scripts/keyboard-audit.mjs` drives the Escape path in a real browser.
  */

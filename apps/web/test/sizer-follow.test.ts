@@ -1,7 +1,7 @@
 /**
  * On a phone, a decision with a raise legal brings the sizer into view with the action row under it,
- * not under the row (audit at 6b3886e, M1). Scrolling the buttons in by their nearest edge left the
- * stuck row painted over the sizer, so a tap on ½ pot sent a min-raise.
+ * not under the row. Scrolling the buttons in by their nearest edge leaves the stuck row painted over
+ * the sizer, so a tap on ½ pot sends a min-raise.
  * `sizerFollowDelta` is pure and is driven with rectangles Chrome measured at 390x844 and 360x640.
  * The old geometry is the negative control. `LiveTable.tsx` imports `@prl/ui`, so its wiring is read
  * from source, as `focus-rescues-scroll.test.ts` does.

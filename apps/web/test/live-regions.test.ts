@@ -367,7 +367,7 @@ describe('the table announces whose decision it is', () => {
   });
 
   it('says the NEW decision when one of the reader’s decisions follows straight on from another', () => {
-    // The audit at 308fadf heard "Your turn preflop. 74 units to call" with Check and Bet on the flop.
+    // Otherwise the reader hears "Your turn preflop. 74 units to call" with Check and Bet on the flop.
     const preflop: PlayerView = { ...DECISION_VIEW, street: 'preflop', board: [] };
     const flop: PlayerView = {
       ...DECISION_VIEW,

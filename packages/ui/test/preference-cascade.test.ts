@@ -1,8 +1,8 @@
 /**
  * A stated accessibility preference must win the cascade over the theme scope.
  * A media query adds no specificity, so a preference block on bare `:root` is (0,1,0) and loses to
- * `:root[data-theme="light"]` and `:root:not([data-theme="dark"])`, both (0,2,0). Light-theme readers
- * who asked for reduced transparency kept `--prl-glass-floating: #fffffff0` with no blur behind it.
+ * `:root[data-theme="light"]` and `:root:not([data-theme="dark"])`, both (0,2,0), and a light-theme
+ * reader who asked for reduced transparency keeps `--prl-glass-floating: #fffffff0` with no blur behind it.
  * No theme scope may beat a preference block on the same token, by specificity then source order.
  * Fix a failure by raising the preference selector, not lowering the theme one.
  */
