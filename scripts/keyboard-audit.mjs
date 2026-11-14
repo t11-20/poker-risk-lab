@@ -1344,12 +1344,7 @@ export const ROUTES = [
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-/**
- * Refuse to start when something already answers on a port this run will poll. On 2026-11-10 a
- * hand-started server on the port made the run pass 133 checks against servers it did not start.
- * It connects rather than binds, because a bind of 127.0.0.1 succeeds beside a wildcard listener.
- * Only ECONNREFUSED counts as free.
- */
+/** As `refuseOccupiedPort` in `ax-tree-audit.mjs`, which says why it connects rather than binds. */
 async function refuseOccupiedPort(url) {
   const { hostname, port, protocol } = new URL(url);
   const host = hostname.replace(/^\[(.*)\]$/, '$1');

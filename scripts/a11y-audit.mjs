@@ -990,12 +990,7 @@ function portFromOrigin(origin, fallback) {
   return port === '' ? fallback : port;
 }
 
-/**
- * `waitUntilReady` cannot tell its own child's answer from a stranger's, so an occupied port is
- * refused (a stranger on :3472 was audited and passed). It connects rather than binds, because on
- * macOS a bind to 127.0.0.1 succeeds beside a wildcard listener such as `next start` (measured
- * 2026-11-10). Only ECONNREFUSED counts as free.
- */
+/** As `refuseOccupiedPort` in `ax-tree-audit.mjs`, which says why it connects rather than binds. */
 async function refuseOccupiedPort(port) {
   const outcome = await new Promise((done) => {
     const socket = connect({ host: '127.0.0.1', port: Number(port) });

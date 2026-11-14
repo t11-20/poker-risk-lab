@@ -1570,12 +1570,7 @@ async function withChrome(headful, run) {
   }
 }
 
-/**
- * `waitUntilReady` cannot tell its own child's answer from a stranger's, so an occupied port is
- * refused (a hand-started `next start` on :3521 was measured passing this gate). It connects rather
- * than binds, because on macOS a bind to 127.0.0.1 succeeds beside a wildcard listener (Node 24.18,
- * 2026-11-10). Only ECONNREFUSED counts as free.
- */
+/** As `refuseOccupiedPort` in `ax-tree-audit.mjs`, which says why it connects rather than binds. */
 async function refuseOccupiedPort(url) {
   const { hostname, port, protocol } = new URL(url);
   const host = hostname.replace(/^\[(.*)\]$/, '$1');
