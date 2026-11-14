@@ -86,7 +86,7 @@
   color: var(--prl-accent-text);
 }
 
-/** `--prl-text-on-accent`, never white. Ink-900 on accent-500 is 9.39:1, white on it is 2.07:1. */
+/** `--prl-text-on-accent`, never white. In dark, ink-900 on the fill is 6.74:1 and white 2.67:1. */
 .prl-review-sorts__link[aria-current] {
   border-color: var(--prl-accent-edge);
   background-color: var(--prl-accent-fill);

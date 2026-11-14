@@ -1,6 +1,6 @@
 # Poker Risk Lab — Frontend Design System
 
-**Version:** 4.0 (card stock and card back) · **Last reviewed:** 2026-11-13
+**Version:** 4.0 (card stock and card back) · **Last reviewed:** 2026-11-14
 
 > **What changed in 4.0: a visual re-identity, at the owner's request.** The product is now
 > dressed as the object it is about — a deck of cards — rather than as an instrument panel.
@@ -12,10 +12,10 @@
 > carriers of meaning. The `01…05` index on every page head is replaced by **suit marks** (§2.8):
 > the four suits for the four steps of the loop, and a court letter for the Legends. Radii are
 > 0 / 3 / 6 / 10px, 6px being a playing card's corner. The home page leads with one priced hand,
-> computed when it renders, and the test evidence it used to list is on `/checks`. Everything
-> below that still names graphite or cyan describes 3.0 and is kept as the record of why the
-> structure (the ramps, the ladder, the measured contrast) is shaped the way it is; the values are
-> in `tokens.css`, and `check-contrast.mjs` measures them, as before.
+> computed when it renders, and the test evidence it used to list is on `/checks`. The hex values
+> and ratios in §2.1 to §2.7, §6.4, §7 and §9.3 were re-measured against the 4.0 tokens on
+> 2026-11-14 with `node scripts/check-contrast.mjs`; where the 3.0 figure explains a rule, it is
+> named as 3.0.
 
 > **What changed in 3.0.** §2.7 is new: a five-level material ladder with translucent levels,
 > elevation tokens and a lit hairline, replacing "one step on the surface ramp plus a hairline".
@@ -79,104 +79,122 @@ theme, each with a lighter partner on the dark one. No felt green, no gold, no c
 **Every ratio below is measured** with the WCAG 2.x relative-luminance formula, not
 estimated. Reproduce with `node scripts/check-contrast.mjs`.
 
-### 2.1 Neutrals — "graphite"
+### 2.1 Neutrals — "card back"
 
-Cool-shifted rather than neutral grey, so the dark surfaces read as instrument housing
-rather than as an absence of colour.
+Blue-shifted rather than neutral grey, so the dark theme reads as the back of a card rather than
+as an absence of colour. The dark theme builds every surface and text step from this ramp; the
+light theme declares its own surfaces and text (§2.4a) and borrows only `ink-500` for chart
+series F.
 
 | Token | Hex | Use |
 | --- | --- | --- |
-| `--prl-ink-000` | `#f4f6f8` | primary text on dark |
-| `--prl-ink-050` | `#e4e8ec` | |
-| `--prl-ink-100` | `#cbd2d9` | secondary text |
-| `--prl-ink-200` | `#a9b2bd` | muted text, data series F |
-| `--prl-ink-300` | `#8b95a1` | faint text, labels |
-| `--prl-ink-400` | `#6e7885` | **meaningful** borders, focus ring backstop |
-| `--prl-ink-500` | `#545d69` | disabled text |
-| `--prl-ink-600` | `#3d444e` | decorative hairline |
-| `--prl-ink-700` | `#2a2f37` | subtle hairline |
-| `--prl-ink-750` | `#212630` | inset surface |
-| `--prl-ink-800` | `#171b22` | panel surface |
-| `--prl-ink-850` | `#12151b` | raised surface |
-| `--prl-ink-900` | `#0b0d11` | page ground |
+| `--prl-ink-000` | `#f1f3fa` | primary text on dark |
+| `--prl-ink-050` | `#e2e6f2` | |
+| `--prl-ink-100` | `#c8cee2` | secondary text |
+| `--prl-ink-200` | `#a6aecb` | muted text, data series F |
+| `--prl-ink-300` | `#9ba3c2` | faint text, labels |
+| `--prl-ink-400` | `#7f88ab` | **meaningful** borders (`--prl-line-strong` in dark) |
+| `--prl-ink-500` | `#535c80` | disabled text, light series F |
+| `--prl-ink-600` | `#3c4469` | decorative hairline |
+| `--prl-ink-700` | `#2b3259` | subtle hairline |
+| `--prl-ink-750` | `#232a50` | inset surface |
+| `--prl-ink-800` | `#1a2146` | panel surface, table grid |
+| `--prl-ink-850` | `#141a3c` | raised surface |
+| `--prl-ink-900` | `#0e1433` | page ground, ink on an accent fill |
 
-### 2.2 Accent — "readout cyan"
+### 2.2 Accent — "back blue"
 
 One ramp. Used for interaction, focus, and live data. Not for decoration.
 
-`--prl-accent-200 #a5eef5` · `300 #6fe2ee` · `400 #3ed6e6` · `500 #17c6db` ·
-`600 #0fa6bd` · `700 #0c8298` · `800 #0a6274` · `900 #08454f`
+Dark: `--prl-accent-200 #d6dcff` · `300 #b7c2ff` · `400 #9dabff` · `500 #8597ff` ·
+`600 #6a7cf0` · `700 #5062d6` · `800 #3a49a8` · `900 #28327a`
+
+Light remaps 200 to 600 onto two values: `#2b44d4` (200, 400, 500) and `#1f33a8` (300, 600, and
+`--prl-focus-color`). 700 to 900 are used by no rule and keep their dark values (§2.4a).
 
 ### 2.3 Semantic data colours
 
-`--prl-favourable #3ddc9a` · `--prl-adverse #ff7a91` · `--prl-caution #f5b93d` ·
-`--prl-info #7db8f0`
+| Token | Dark | Light |
+| --- | --- | --- |
+| `--prl-favourable` | `#4fd3a0` | `#127152` |
+| `--prl-adverse` | `#ff8593` | `#c02637` |
+| `--prl-caution` | `#f5b93d` | `#8a5c0d` |
+| `--prl-info` | `#8ec5ff` | `#1f5a9e` |
 
-These are **desaturated on purpose**. `favourable` is a mint-teal and not a "win green";
-`adverse` is a rose and not an "alarm red". A hand that lost is information, not a failure.
+The dark values are **desaturated on purpose**. `favourable` is a mint and not a "win green";
+`adverse` is a rose and not an "alarm red". A hand that lost is information, not a failure. In
+light, `favourable` and `adverse` are the club and heart inks (§2.5).
 
 ### 2.4 Measured contrast
 
-Text on every surface, worst case (`--prl-surface-inset #212630`):
+Text on every surface the gate checks (page, raised, panel, inset, table, wash, hover, active),
+worst case per theme. The body-text steps are worst on `--prl-surface-active` (dark `#262f5c`,
+light `#dae0eb`); the semantic and accent colours are measured on the content surfaces (page
+through wash), where the dark worst is `inset` and the light worst is `wash`.
 
-| Token | Ratio | Verdict |
-| --- | --- | --- |
-| `text` `#f4f6f8` | 14.00:1 | AA body |
-| `text-secondary` `#cbd2d9` | 9.94:1 | AA body |
-| `text-muted` `#a9b2bd` | 7.07:1 | AA body |
-| `text-faint` `#8b95a1` | 4.99:1 | AA body |
-| `accent-400` `#3ed6e6` | 8.64:1 | AA body |
-| `favourable` `#3ddc9a` | 8.60:1 | AA body |
-| `caution` `#f5b93d` | 8.59:1 | AA body |
-| `adverse` `#ff7a91` | 6.10:1 | AA body |
-| `info` `#7db8f0` | 7.21:1 | AA body |
+| Token | Dark | Worst | Light | Worst |
+| --- | --- | --- | --- | --- |
+| `text` | `#f1f3fa` | 11.52:1 | `#161b33` | 12.79:1 |
+| `text-secondary` | `#c8cee2` | 8.14:1 | `#353c5a` | 8.14:1 |
+| `text-muted` | `#a6aecb` | 5.80:1 | `#4f5675` | 5.42:1 |
+| `text-faint` | `#9ba3c2` | 5.12:1 | = `text-muted` | 5.42:1 |
+| `accent-text` | `#9dabff` | 6.39:1 | `#2b44d4` | 6.13:1 |
+| `favourable` | `#4fd3a0` | 7.35:1 | `#127152` | 5.03:1 |
+| `caution` | `#f5b93d` | 7.83:1 | `#8a5c0d` | 4.88:1 |
+| `adverse` | `#ff8593` | 5.95:1 | `#c02637` | 4.94:1 |
+| `info` | `#8ec5ff` | 7.63:1 | `#1f5a9e` | 5.86:1 |
 
-On the page ground `#0b0d11` every one of those is higher again (primary text is 17.95:1).
+Every row clears AA body text (4.5:1). On the page ground every one is higher again (dark primary
+text is 16.24:1, light 15.66:1). The light semantic colours have the least headroom of any text on a
+content surface, which is why §9.3 keeps them off the bare page ground.
 
 The page ground now also carries **the wash** (§2.7) — two very low-alpha radial fields, which
 is what gives a translucent pane something worth showing through. A gradient has no single
 colour to assert, so what is asserted is its worst case: `--prl-wash-tint` is the brightest stop
 either gradient reaches, and the gate composites it over the page ground and measures the result
-as a content surface called `wash` alongside the flat ones. It costs almost nothing — primary
-text 16.38:1, `text-faint` 5.84:1 — because the tint is 7%. If a stop is ever made brighter, the
-token moves and every pairing in the table above is re-measured against it automatically.
+as a content surface called `wash` alongside the flat ones. It costs little (dark primary text
+14.51:1, `text-faint` 6.44:1) because the tint is 8% in dark and 6% in light. If a stop is ever
+made brighter, the token moves and every pairing in the table above is re-measured against it
+automatically.
 
 Where the wash is actually painted is the app shell's business rather than the package's, and it
 is **not** the `<body>` rule in `base.css`: that copy is switched off by `globals.css` and the
 field is drawn once as a viewport-fixed layer instead, so a pane four screens down a document
 still has something varying behind it. The stops are the same two tokens, deliberately, so the
-`wash` surface measured here remains the true ceiling of the page ground. §9.3 has the geometry
-and the worst-case arithmetic.
+`wash` surface measured here remains the true ceiling of the page ground in dark. In light the
+shell's edge falloff darkens the field below it; §9.3 has the geometry and the measured worst case.
 
 **Two rules fall directly out of the measurements, and both are easy to get wrong:**
 
-1. **Text on an accent fill must be `--prl-ink-900`, never white.**
-   `ink-900` on `accent-500` is **9.39:1**. White on `accent-500` is **2.07:1** — a fail.
-   The accent is a *bright* colour; treat it like a highlighter.
-2. **`--prl-ink-700` and `--prl-ink-600` are decorative hairlines only** (1.44:1 and
-   1.98:1 on the page). Any border that carries meaning — an input outline, a selected
-   state, a chart axis — must use `--prl-ink-400` (**4.34:1**) or the accent.
+1. **Text on an accent fill is `--prl-text-on-accent`, never a literal.** In dark it is
+   `--prl-ink-900`: `ink-900` on `accent-500` is **6.74:1** and white on it is **2.67:1**, a fail.
+   The dark accent is a *bright* colour; treat it like a highlighter. Light inverts this (§2.4a).
+2. **`--prl-line-subtle` and `--prl-line` are decorative hairlines only** (dark 1.46:1 and 1.91:1
+   on the page). Any border that carries meaning — an input outline, a selected state, a chart
+   axis — must use `--prl-line-strong` (dark 5.15:1 on the page, 3.66:1 on `surface-active`;
+   light 5.29:1 and 4.32:1) or the accent.
 
 ### 2.4a The light theme inverts the button pairing — do not miss this
 
-Both themes are first-class: dark is the designed default, light is fully supported, and a
+Both themes are first-class and chosen by the reader's system setting unless they pick one, and a
 component must be legible in both.
 
 The accent has to darken in light mode, and that **flips which text colour is safe on it**:
 
 | Theme | Accent fill | Safe text | Ratio | The other option |
 | --- | --- | --- | --- | --- |
-| dark | `accent-500` `#17c6db` | `--prl-ink-900` | **9.39:1** | white is 2.07:1 — fail |
-| light | `accent-800` `#0a6274` | `#ffffff` | **6.97:1** | ink-900 is 2.79:1 — fail |
+| dark | `accent-500` `#8597ff` | `--prl-ink-900` | **6.74:1** | white is 2.67:1 — fail |
+| light | `accent-500` `#2b44d4` | `#ffffff` | **7.29:1** | ink-900 is 2.47:1 — fail |
 
 `--prl-text-on-accent` is redefined per theme for exactly this reason. **Always use the
 token; never hard-code either colour.**
 
-For the same reason, **every step of the accent ramp is remapped in light mode**, not just
-the two currently in use. Left at their dark values the bright steps measure 1.21:1
-(`accent-200`) to 2.71:1 (`accent-600`) on the light page — so the first component to use one
-as text would silently fail contrast. Remapping the whole ramp makes that unrepresentable
-rather than merely unlikely.
+For the same reason, **steps 200 to 600 of the accent ramp are remapped in light mode**, not just
+the two currently in use. Left at their dark values they measure 1.25:1 (`accent-200`) to 3.37:1
+(`accent-600`) on the light page, so the first component to use one as text would silently fail
+contrast. Steps 700 to 900 are not remapped because no rule uses them, and they are not text-safe
+in light either: `accent-700` is 3.90:1 on the light `surface-active`. They are fill-eligible in
+both themes (white on `accent-700` is 5.17:1). Remap them before using one as ink.
 
 ### 2.4b The three accent roles, and how the gate reads them
 
@@ -188,12 +206,11 @@ uses them instead of reaching for `--prl-accent-400/500` directly:
 
 | Token | Job | Resolves to | Worst measured |
 | --- | --- | --- | --- |
-| `--prl-accent-fill` | a background carrying `--prl-text-on-accent` | `accent-500` | 9.39:1 dark / 6.97:1 light |
-| `--prl-accent-edge` | a border or graphic mark that carries meaning | `accent-500` | 7.04:1 dark / 5.39:1 light |
-| `--prl-accent-text` | accent-coloured text | `accent-400` | 8.31:1 dark / 5.39:1 light |
+| `--prl-accent-fill` | a background carrying `--prl-text-on-accent` | `accent-500` | 6.74:1 dark / 7.29:1 light |
+| `--prl-accent-edge` | a border or graphic mark that carries meaning | `accent-500` | 4.79:1 dark / 5.50:1 light |
+| `--prl-accent-text` | accent-coloured text | `accent-400` | 6.39:1 dark / 6.13:1 light |
 
-None of the three needs a per-theme override, because §2.4a remaps the whole ramp. That is the
-payoff of remapping all of it rather than only the steps in use.
+None of the three needs a per-theme override, because §2.4a remaps the steps they point at.
 
 **The gate reports three layers, and the differences matter.** `pnpm run design:contrast` measures
 `tokens.css` alone (what this document claims), then `tokens.css` + `base.css` (the pairings a
@@ -201,31 +218,29 @@ component may use), and then **the composited background of every piece of text 
 paints, in real Chrome** (§7.3). A failure in the first is a defect in the token set; a failure in
 the second is a defect in the pairings; a failure in the third is a defect a reader would meet on a
 screen, and the first two cannot see it, because a translucent stack has no token pair. **All three
-currently pass, and the gap between the first two is zero** — which is the state to keep them in,
-because a repair layer in `base.css` is a second place to look for the value a browser paints.
+currently pass, and `base.css` overrides no token**, so the first two layers measure the same
+values. Keep it that way: a repair layer in `base.css` is a second place to look for the value a
+browser paints.
 
-Getting there meant fixing three light-theme values at source. Each had been patched in
-`base.css` section 0; all three are now correct in the light theme of `tokens.css`, in *both* of
-its scopes, and `base.css` no longer overrides any token:
+Three light-theme values are not what a straight remap of the dark ramp would give. Each is set in
+*both* light scopes of `tokens.css`, and the gate fails if the two scopes disagree:
 
-| Token | Was, in light | Measured | Now |
-| --- | --- | --- | --- |
-| `--prl-text-faint` | `#6b7684` | 3.57:1 on `surface-active` — fails 4.5:1 | `var(--prl-text-muted)` |
-| `--prl-line-strong` | `#7e8894` | 2.78:1 on `surface-active` — fails 3:1 | `var(--prl-ink-400)` |
-| `--prl-series-f` | not remapped (`ink-200`) | 2.15:1 on a white panel | `var(--prl-ink-500)` |
-
-Two of those are worth understanding rather than just copying:
+| Token | Light value | Why |
+| --- | --- | --- |
+| `--prl-text-faint` | `var(--prl-text-muted)` | light has no fourth text step, see below |
+| `--prl-line-strong` | `#5c6587` | the dark `ink-400` (`#7f88ab`) is 2.64:1 on light `surface-active`, under 3:1 |
+| `--prl-series-f` | `var(--prl-ink-500)` | the dark `ink-200` is 2.20:1 on a white panel |
 
 * **Light has no fourth text step.** `faint` collapses onto `muted` because every value that
-  clears 4.5:1 against `--prl-surface-active` (`#dde3ea`) is within a rounding error of `muted` —
-  the light surface ramp is too tight for a fourth step to be both legible *and* visibly
-  different. One honest step of hierarchy beats a fifth token nobody can see.
-* **`line-strong` is not lightened for light.** Lifting it to `#7e8894` made the
-  *meaningful-border* token the weakest it was in either theme. The shared `ink-400` clears every
-  light surface (3.47:1 worst) and needs no override at all — the override was the bug.
+  clears 4.5:1 against `--prl-surface-active` (`#dae0eb`) is within a rounding error of `muted`
+  (5.42:1) — the light surface ramp is too tight for a fourth step to be both legible *and*
+  visibly different. One honest step of hierarchy beats a fifth token nobody can see.
+* **`line-strong` is darker in light, not shared.** In 3.0 one `ink-400` cleared every surface in
+  both themes. The 4.0 dark ramp is lighter, so the shared value would be the weakest meaningful
+  border in the system; light declares its own, which is 4.32:1 at worst.
 
 `--prl-series-f` is the failure mode to watch for: it is the one chart colour that is not part of
-the semantic set, so it is the one a theme remap forgets. A data mark at 2.15:1 is not a dim
+the semantic set, so it is the one a theme remap forgets. A data mark at 2.20:1 is not a dim
 chart, it is a wrong one.
 
 ### 2.5 Card faces
@@ -234,12 +249,18 @@ Card faces stay light in both themes, because a dark playing card is unreadable 
 sizes a six-max table needs and because inverting a card is a novelty that costs
 legibility.
 
-| Suit | Hex | On `#f2f0ea` face | On dimmed `#d8d4c9` face |
+The suit inks are the same in both themes; the face is `#f7f8fb` (dim `#e4e7ef`) in dark and
+`#ffffff` (dim `#e6e8ee`) in light. The dim face is `.prl-card--dimmed`.
+
+| Suit | Hex | Dark face / dim | Light face / dim |
 | --- | --- | --- | --- |
-| spade | `#15181d` | 15.61:1 | 12.01:1 |
-| club | `#0f5a44` | 7.18:1 | 5.53:1 |
-| heart | `#a81f2b` | 6.36:1 | 4.90:1 |
-| diamond | `#1d4fa8` | 6.74:1 | 5.18:1 |
+| spade | `#161b33` | 15.96:1 / 13.70:1 | 16.95:1 / 13.84:1 |
+| club | `#127152` | 5.63:1 / 4.84:1 | 5.98:1 / 4.88:1 |
+| heart | `#c02637` | 5.53:1 / **4.75:1** | 5.88:1 / 4.80:1 |
+| diamond | `#2b44d4` | 6.87:1 / 5.89:1 | 7.29:1 / 5.95:1 |
+
+A heart on a dim face in dark (4.75:1) is the least headroom of any text pairing the gate asserts,
+so the dim face is the token not to darken.
 
 **Four-colour by default, and never colour alone.** Each suit carries its glyph *and* its
 `aria-label` ("ace of hearts"). A red/black-only deck plus colour-coded meaning is exactly
@@ -247,9 +268,9 @@ the pattern that fails for colour-vision deficiency.
 
 ### 2.6 The table surface
 
-`--prl-surface-table #101922` — a deep slate, one step cooler than the panels, with a
-faint hairline grid at 32px drawn in `--prl-ink-800`. It reads as **graph paper**, which is
-the whole thesis: this is a worksheet you happen to be playing on.
+`--prl-surface-table` is `#111838` in dark and `#e9edf4` in light, with a faint hairline grid at
+32px drawn in `--prl-table-grid-color` (`--prl-ink-800` in dark). It reads as **graph paper**,
+which is the whole thesis: this is a worksheet you happen to be playing on.
 
 ### 2.7 Materials — the depth ladder
 
@@ -330,32 +351,31 @@ including the per-extreme figures):
 
 | On | `text` | `secondary` | `muted` | `faint` | `adverse` | `line-strong` | `focus-color` |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| L3 floating `rgb(18 21 27 / 90%)` | 12.88 | 9.14 | 6.51 | **4.59** | 5.61 | 3.12 | 9.16 |
-| L3 hovered `rgb(26 30 38 / 94%)` | 12.94 | 9.18 | 6.53 | **4.61** | 5.64 | 3.13 | 9.20 |
-| L3 pressed `rgb(33 38 48 / 97%)` | 12.76 | 9.06 | 6.45 | **4.55** | 5.56 | 3.09 | 9.08 |
-| L4 overlay `rgb(11 13 17 / 92%)` | 15.02 | 10.66 | 7.59 | 5.36 | 6.54 | 3.63 | 10.69 |
-| L4 hovered `rgb(20 24 30 / 95%)` | 14.40 | 10.22 | 7.27 | 5.14 | 6.27 | 3.48 | 10.25 |
+| L3 floating `rgb(20 26 60 / 90%)` | 11.42 | 8.07 | 5.75 | 5.07 | 5.45 | 3.63 | 7.34 |
+| L3 hovered `rgb(28 35 75 / 94%)` | 11.44 | 8.08 | 5.76 | 5.08 | 5.45 | 3.63 | 7.35 |
+| L3 pressed `rgb(36 44 87 / 97%)` | 11.05 | 7.81 | 5.57 | **4.91** | 5.27 | 3.51 | 7.10 |
+| L4 overlay `rgb(14 20 51 / 92%)` | 13.19 | 9.32 | 6.64 | 5.86 | 6.29 | 4.19 | 8.48 |
+| L4 hovered `rgb(24 31 67 / 95%)` | 12.54 | 8.86 | 6.31 | 5.57 | 5.98 | 3.98 | 8.06 |
 
-**Worst-of-both-extremes, light theme** (`faint` collapses onto `muted` in light, §2.4b):
+**Worst-of-both-extremes, light theme** (`faint` collapses onto `muted` in light, §2.4b; `caution`
+is the lowest of the four semantic colours):
 
-| On | `text` | `secondary` | `muted` | `favourable` | `line-strong` | `focus-color` |
+| On | `text` | `secondary` | `muted` | `caution` | `line-strong` | `focus-color` |
 | --- | --- | --- | --- | --- | --- | --- |
-| L3 floating `rgb(255 255 255 / 94%)` | 16.21 | 8.52 | 5.60 | **4.68** | 3.93 | 9.33 |
-| L3 hovered `rgb(248 250 252 / 96%)` | 16.17 | 8.50 | 5.59 | 4.67 | 3.92 | 9.31 |
-| L3 pressed `rgb(240 244 248 / 97%)` | 15.70 | 8.26 | 5.43 | **4.53** | 3.81 | 9.04 |
-| L4 overlay `rgb(255 255 255 / 96%)` | 16.94 | 8.91 | 5.86 | 4.89 | 4.11 | 9.76 |
-| L4 hovered `rgb(248 250 252 / 97%)` | 16.59 | 8.73 | 5.74 | 4.79 | 4.02 | 9.56 |
+| L3 floating `rgb(255 255 255 / 94%)` | 14.88 | 9.47 | 6.31 | 5.09 | 5.03 | 8.79 |
+| L3 hovered `rgb(248 250 252 / 96%)` | 14.84 | 9.45 | 6.29 | 5.08 | 5.01 | 8.76 |
+| L3 pressed `rgb(240 244 248 / 97%)` | 14.41 | 9.17 | 6.11 | **4.93** | 4.87 | 8.51 |
+| L4 overlay `rgb(255 255 255 / 96%)` | 15.55 | 9.90 | 6.60 | 5.32 | 5.25 | 9.18 |
+| L4 hovered `rgb(248 250 252 / 97%)` | 15.23 | 9.70 | 6.46 | 5.22 | 5.15 | 9.00 |
 
 Text floor 4.5:1, non-text floor 3:1. **The whole content text ramp is permitted on glass**,
-`--prl-text-faint` included — but that is a measured result and it was not the first answer. At
-the tints this started with, `faint` landed at 4.00:1 over the bright extreme and was excluded in
-prose. The tints then had to get more opaque for an unrelated reason (`--prl-line-strong` on a
-hovered pane fell to 2.71:1), and the gate's negative control reported that the exclusion had gone
-stale. It is asserted now instead of written down. **`faint` at 4.55:1 has the least headroom of
-anything in the system and is the row that fails first if a tint is ever made more transparent.**
+`--prl-text-faint` included, and the gate asserts it rather than this document. In 3.0 `faint`
+had to be excluded in prose until the tints were made more opaque. **`faint` on a pressed pane in
+dark (4.91:1) and `caution` on a pressed pane in light (4.93:1) have the least headroom on glass
+and are the rows that fail first if a tint is ever made more transparent.**
 
 The negative control that reported it now holds `--prl-line` and `--prl-line-subtle`, which are
-decorative *by definition* (§2.4 rule 2) and measure 1.03–1.99:1 on glass. Those cannot become
+decorative *by definition* (§2.4 rule 2) and measure 1.01–1.94:1 on glass. Those cannot become
 vacuous by accident: if the palette ever lifted them past 3:1 they would still not be allowed to
 carry meaning.
 
@@ -431,7 +451,8 @@ meaning. A border that carries meaning is still `--prl-line-strong` or the accen
 #### 2.7.6 The wash
 
 ```css
---prl-wash-tint: rgb(23 198 219 / 7%);   /* light theme: rgb(10 98 116 / 6%) */
+--prl-wash-tint: rgb(133 151 255 / 8%);    /* light theme: rgb(43 68 212 / 6%) */
+--prl-wash-tint-2: rgb(255 133 147 / 4%);  /* light theme: rgb(192 38 55 / 3%) */
 ```
 
 Two radial fields over the page ground. Without them the material system above is invisible: a
@@ -878,10 +899,10 @@ in §4 for why, and for the metric tokens they share with the form controls in �
   what keeps the focus ring whole.
 
   **The sheen cannot move a measured ratio, and that is why it is spent through `--prl-veil-8`.**
-  The veil flips with the theme — `rgb(244 246 248 / 8%)` on dark, `rgb(16 20 26 / 6%)` on light —
+  The veil flips with the theme — `rgb(241 243 250 / 8%)` on dark, `rgb(22 27 51 / 6%)` on light —
   so it lightens a bright fill carrying near-black ink and darkens a dark fill carrying white ink.
   Contrast rises in both themes, and the untinted rest of the plate is exactly `--prl-accent-fill`,
-  the value `scripts/check-contrast.mjs` asserts at 9.39:1 dark / 6.97:1 light. The obvious
+  the value `scripts/check-contrast.mjs` asserts at 6.74:1 dark / 7.29:1 light. The obvious
   `rgb(255 255 255 / 8%)` improves dark and erodes light; this is the trap the token avoids.
 * **Secondary** — **L3 `floating` glass**: `--prl-glass-floating` with `--prl-glass-filter`,
   `--prl-elevation-1`, and `--prl-line-strong` on all four edges. It was `background: transparent`
@@ -894,9 +915,10 @@ in §4 for why, and for the metric tokens they share with the form controls in �
   rather than by being a faint copy of the secondary. Accent on hover.
 * **Danger** — the secondary's glass with `--prl-adverse` for the border and the ink, so a
   destructive control is recognisably the same object as the control beside it and differs only in
-  its colour and its word. Outline-only in both themes: a filled `--prl-adverse` cannot carry
-  legible text, because the light theme's rose is dark and neither ink-900 nor white clears 4.5:1
-  on it.
+  its colour and its word. Outline-only in both themes. In 3.0 that was forced, because neither
+  ink cleared 4.5:1 on the light rose. In 4.0 a filled `--prl-adverse` would carry `ink-900` in dark
+  (7.74:1) and white in light (5.88:1), the same inversion as the accent, so outline-only is now a
+  choice; a filled variant would need its own per-theme ink token.
 * **States.** Hover moves fill and border; **press is a `translateY(1px)` and a darker fill, never
   an elevation change.** `box-shadow` is one property, so a hover or active rule at (0,3,0) that set
   an elevation would out-rank the `:focus-visible` rule at (0,2,0) that restates the focus halo, and
@@ -967,11 +989,11 @@ Deltas always carry an explicit `+`/`−` **and** a word, never colour alone.
 
 | Requirement | How |
 | --- | --- |
-| 1.4.3 Contrast | Every pairing measured, §2.4. Worst body text 4.99:1 |
-| 1.4.11 Non-text contrast | Meaningful borders use `--prl-ink-400` (4.34:1) or accent |
+| 1.4.3 Contrast | Every pairing measured, §2.4. Worst body text 5.12:1 dark, 5.42:1 light; worst semantic text 4.88:1 (light `caution` on the wash); worst suit 4.75:1 (§2.5) |
+| 1.4.11 Non-text contrast | Meaningful borders use `--prl-line-strong` (3.66:1 dark, 4.32:1 light, worst surface) or the accent |
 | 1.4.1 Use of colour | Every semantic colour paired with a sign, glyph, label or pattern |
 | 2.1.1 Keyboard | Everything operable. Bet sizing is a slider **plus** a number input |
-| 2.4.7 Focus visible | Two-tone: `outline: 2px solid var(--prl-focus-color)` at `outline-offset: 2px`, plus a 1px `--prl-focus-halo` of the opposite polarity. 12.77:1 on the page ground, and proved against *every* backdrop — §7.1. `:focus-visible`, never `:focus`, and **never removed** |
+| 2.4.7 Focus visible | Two-tone: `outline: 2px solid var(--prl-focus-color)` at `outline-offset: 2px`, plus a 1px `--prl-focus-halo` of the opposite polarity. 10.44:1 on the dark page ground and 9.25:1 on the light one, and proved against *every* backdrop — §7.1. `:focus-visible`, never `:focus`, and **never removed** |
 | 1.4.3 / 1.4.11 on glass | Every material tint measured over both bounding backdrops, worse of the two asserted — §2.7.2 |
 | 1.4.3 on composited stacks | Every element carrying text has its ancestors composited and measured in real Chrome, both themes, every route — §7.3 |
 | 1.4.12 / user preference | `prefers-reduced-transparency` and `prefers-contrast: more` both drop translucency for solid fills — §7.2 |
@@ -992,7 +1014,7 @@ seven of hearts, two of clubs".
 A single-colour ring is only ever as visible as its contrast with **what is behind it**, and
 `--prl-focus-offset` deliberately puts most of the ring's width on the backdrop rather than on the
 control. On a page of opaque panels that is fine. On a floating pane it is not, because the
-backdrop is not something this stylesheet owns: `accent-300` measures **1.52:1 against white**. On
+backdrop is not something this stylesheet owns: the dark ring (`accent-300`) measures **1.72:1 against white**. On
 a pill lying over a playing-card face, the ring is not dim — it is absent.
 
 So the indicator is two-tone:
@@ -1013,8 +1035,8 @@ inside one open interval. The indicator is defeated exactly where the two interv
 
 | Theme | Ring fails only for | Halo fails only for | Overlap |
 | --- | --- | --- | --- |
-| dark | `L ∈ (0.180, 2.018)` | `L ∈ (−0.032, 0.112)` | **empty** |
-| light | `L ∈ (−0.017, 0.246)` | `L ∈ (0.300, 3.100)` | **empty** |
+| dark | `L ∈ (0.153, 1.776)` | `L ∈ (−0.031, 0.125)` | **empty** |
+| light | `L ∈ (−0.015, 0.265)` | `L ∈ (0.300, 3.100)` | **empty** |
 
 There is no backdrop in `[0, 1]` against which both tones disappear.
 
@@ -1042,7 +1064,7 @@ system was in before glass existed, and every ratio it produces is already asser
 above, because a reader can ask for one preference without the other and a `var()` chain between
 two media queries resolves in cascade order rather than in the order the preferences were stated.
 Everything translucent goes solid, every decorative edge is promoted to the **meaningful** border
-token (`--prl-line-strong`, 4.34:1, from the edge tokens' ~1.5:1), `--prl-line-subtle` is promoted
+token (`--prl-line-strong`, 3.66:1 dark and 4.32:1 light at worst, from the edge tokens' ~1.5:1), `--prl-line-subtle` is promoted
 one step, and the focus ring goes from 2px to 3px.
 
 **`forced-colors: active`** additionally drops both filters and the wash: the palette is replaced
@@ -1084,13 +1106,12 @@ token layer, §2.4 and §7.1), `box-shadow` (a drop shadow paints over the surfa
 element casting it; every probe records whether one can reach it), and text overlapped by a
 non-ancestor sibling.
 
-**One number in `play.css` is wrong, and this pass is how we know.** The comment above
-`.prl-seat--folded` declines an `opacity` on folded seats with the table `1.0 → 5.95:1`,
-`0.9 → 4.09:1`, `0.8 → 3.10:1`. The composited measurement of that exact change is **4.74:1 and
-3.79:1** — the 0.9 step does not breach AA, the 0.8 step does. The declined table interpolates the
-two *luminances*; a browser composites `opacity` in gamma-encoded sRGB, which is what this gate
-does and what its probes confirm pixel-for-pixel. The conclusion (don't fade the plate) survives;
-the arithmetic under it does not.
+**This pass corrected a figure in `play.css`.** The comment above `.prl-seat--folded` declines an
+`opacity` on folded seats. It once quoted `0.9 → 4.09:1` and `0.8 → 3.10:1`, which interpolated the
+two *luminances*; a browser composites `opacity` in gamma-encoded sRGB, which is what this gate does
+and what its probes confirm pixel-for-pixel. The comment now carries the composited figures
+(5.95:1, 4.74:1, 3.79:1), measured under 3.0: the 0.9 step does not breach AA and the 0.8 step
+does. Re-measure them before relying on either step in 4.0.
 
 ---
 
@@ -1238,18 +1259,31 @@ therefore brighter than the `--prl-surface-wash` §2.7 measures.)
 Its pools are drawn with `--prl-wash-tint` and `--prl-wash-tint-2` and **not** with brighter
 colours of the shell's invention, for the same reason: `scripts/check-contrast.mjs` derives
 `--prl-surface-wash` from the brightest stop of the wash and asserts every text pairing against
-it, so reusing those stops keeps that derived surface the true ceiling of the page ground. The
-falloff moves away from the ink in each theme, which only ever raises a ratio in dark; in light it
-spends headroom, so it was measured at the arithmetic worst case — every layer at full strength at
-one point, which the geometry does not actually produce — and clears the floors there:
+it, so reusing those stops keeps that derived surface the true ceiling of the page ground in
+dark. In light the falloff takes the field below it, which the table below measures.
 
-| | ground at worst case | text | secondary | muted / faint | line-strong |
-| --- | --- | --- | --- | --- | --- |
-| dark (pools at plateau, no falloff) | `#11222a` | 15.09:1 | 10.71:1 | 7.62:1 / 5.38:1 | 3.65:1 |
-| light (pools at plateau + full falloff) | `#d4dee2` | 13.47:1 | 7.08:1 | 4.66:1 | 3.27:1 |
+The falloff moves away from the ink in each theme. In dark it is `rgb(0 0 0 / 55%)`, which only
+darkens a ground that carries light text, so it can only raise a ratio. In light it is
+`rgb(16 20 26 / 5%)`, which darkens a ground that carries dark text, so it spends headroom.
+Measured on 2026-11-14 by sampling the field's real geometry (the four gradients in
+`--prl-shell-field`, 240 × 240 points per viewport at 360, 768, 1024, 1440 and 1920px wide):
 
-Floors are 4.5:1 for text and 3:1 for a meaningful border. `muted` in light is the row with the
-least headroom and is the one to re-measure if a stop moves.
+| | worst real ground | text | secondary | muted / faint | line-strong | lowest semantic |
+| --- | --- | --- | --- | --- | --- | --- |
+| dark (a pool at plateau, outside the falloff) | `#181e43` | 14.51:1 | 10.25:1 | 7.31:1 / 6.44:1 | 4.60:1 | `adverse` 6.92:1 |
+| light (bottom-right pool at plateau, full falloff, 360px) | `#dde0ec` | 12.87:1 | 8.20:1 | 5.46:1 | 4.35:1 | `caution` 4.41:1 |
+
+The dark worst is exactly the gate's `wash` surface: no two pools reach plateau at one point, and
+darkening only raises a dark-theme ratio, so no dark figure depends on the falloff being 55%.
+
+**In light, semantic colours stay off the bare page ground.** At the darkest real point `adverse`
+is 4.46:1 and `caution` 4.41:1, under the 4.5:1 floor; `favourable` is 4.54:1. They clear the
+floor on every panel, card and glass level (§2.4, §2.7.2), so a status line goes on a surface,
+never straight on the field. The painted pass of `design:contrast` enforces it: it bounds each
+piece of text over the field by combinations of the gradients' stops, which is at least as dark as
+any real point. On `/`, 109 of 155 text elements are bounded rows with the wash on, and 4 under
+`prefers-reduced-transparency`, where the wash is `none`. Floors are 4.5:1 for text and 3:1 for a
+meaningful border; re-measure the light row if a stop or the falloff moves.
 
 **The pills stay opaque.** Level 3 is for bounded panes, and a pill is one — but the strip is now
 the glass, so a pill in the same material would stack one tint on another and land within a

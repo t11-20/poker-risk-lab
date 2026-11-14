@@ -1917,7 +1917,7 @@
   border-inline-start: calc(var(--prl-card-w) / 7) solid transparent;
 }
 
-/** The dim face keeps every suit over 4.5:1 (worst, heart at 4.90:1). */
+/** The dim face keeps every suit over 4.5:1 (worst, heart in dark at 4.75:1). */
 .prl-card--dimmed {
   background-color: var(--prl-card-face-dim);
 }
