@@ -97,12 +97,13 @@
 
 name: CI
 
-# Both events, unfiltered, exactly as the contract says. A push to a branch with
-# an open pull request therefore produces two runs; the concurrency group below
-# means only the newest of each survives, and the duplication is cheap next to
-# the risk of a filter that silently skips a branch.
+# Pull requests, and pushes to main. A push to a PR branch used to start a second,
+# identical run under a different ref, which the concurrency group could not
+# cancel; every change reaches main through a PR, so the PR run is the one that
+# gates it. A branch with no PR gets no CI until one is opened.
 on:
   push:
+    branches: [main]
   pull_request:
 
 # Least privilege. Read-only on the repository contents and nothing else — no
@@ -124,6 +125,44 @@ env:
   NPM_CONFIG_UPDATE_NOTIFIER: 'false'
 
 jobs:
+  # -------------------------------------------------------------------------
+  # 0. What changed. A change of Markdown files alone runs the jobs that read
+  #    docs (supply-chain, lint, test) and skips the rest: `.dockerignore`
+  #    keeps every `*.md` out of the images, and no browser, build or end-to-end
+  #    script reads one. A skipped job satisfies a required check. Anything this
+  #    step cannot classify counts as code, so the failure mode is a full run.
+  # -------------------------------------------------------------------------
+  changes:
+    name: Classify the change
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Classify
+        id: classify
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -u
+          # A PR runs on its merge commit, whose first parent is the base it merges into.
+          if [ "$EVENT" = pull_request ]; then base=HEAD^1; else base="$BEFORE"; fi
+          code=true
+          if git rev-parse --verify --quiet "${base}^{commit}" >/dev/null; then
+            files=$(git diff --name-only "$base" HEAD) || files=''
+            if [ -n "$files" ] && ! printf '%s\n' "$files" | grep -qv '\.md$'; then code=false; fi
+            printf 'changed:\n%s\n' "$files"
+          fi
+          echo "code=$code"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
   # -------------------------------------------------------------------------
   # 1. The gate. Everything else needs this.
   # -------------------------------------------------------------------------
@@ -239,7 +278,8 @@ jobs:
   # -------------------------------------------------------------------------
   typecheck:
     name: Typecheck
-    needs: supply-chain
+    needs: [supply-chain, changes]
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -392,7 +432,8 @@ jobs:
   # -------------------------------------------------------------------------
   exhaustive:
     name: Exhaustive enumeration
-    needs: supply-chain
+    needs: [supply-chain, changes]
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     # The suite sets its own `--test-timeout=1800000` (30 minutes per test). The
     # job bound has to sit comfortably above that plus checkout and install, or
@@ -455,7 +496,8 @@ jobs:
   # -------------------------------------------------------------------------
   end-to-end:
     name: Smoke + load (running server)
-    needs: supply-chain
+    needs: [supply-chain, changes]
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
 
@@ -677,7 +719,8 @@ jobs:
   # -------------------------------------------------------------------------
   simulation:
     name: Opponent-profile simulation
-    needs: supply-chain
+    needs: [supply-chain, changes]
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -705,7 +748,8 @@ jobs:
   # -------------------------------------------------------------------------
   build:
     name: Build
-    needs: supply-chain
+    needs: [supply-chain, changes]
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -746,7 +790,8 @@ jobs:
   # -------------------------------------------------------------------------
   containers:
     name: Container images
-    needs: supply-chain
+    needs: [supply-chain, changes]
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -788,7 +833,8 @@ jobs:
   # -------------------------------------------------------------------------
   a11y:
     name: Accessibility (static)
-    needs: supply-chain
+    needs: [supply-chain, changes]
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
 
@@ -957,7 +1003,8 @@ jobs:
   # -------------------------------------------------------------------------
   ax-tree:
     name: Accessibility tree and keyboard journeys (real Chrome)
-    needs: supply-chain
+    needs: [supply-chain, changes]
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     # Two audits that each play a hand at a live table and wait on bots, on top
     # of a full workspace build. `test:ax` takes about three minutes on a warm
@@ -1151,7 +1198,8 @@ jobs:
   # -------------------------------------------------------------------------
   browser-gates:
     name: Contrast, painted text, CSP and age gate (real Chrome)
-    needs: supply-chain
+    needs: [supply-chain, changes]
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     # Four browser sweeps on top of a full build. The contrast pass alone walks
     # every route in both themes and screenshots each one, and the painted-text
