@@ -10,7 +10,7 @@ import { loadConfig } from '../src/config.ts';
 import { createDatabaseClient, type Sql, type TransactionSql } from '../src/db.ts';
 import { AppError } from '../src/errors.ts';
 import * as enrolments from '../src/repositories/enrolments.ts';
-import { insideSavepoint } from '../src/repositories/sql.ts';
+import { insideSavepoint, isTransaction, requireTransaction } from '../src/repositories/sql.ts';
 import * as users from '../src/repositories/users.ts';
 import { databaseSkip, TEST_DATABASE_URL } from './helpers/database.ts';
 
@@ -122,6 +122,37 @@ describe('insideSavepoint in a transaction', { skip: skipReason }, () => {
       assert.notEqual(seen, tx, 'the callback gets the savepoint handle, not the transaction');
       const [row] = await tx<{ ok: number }[]>`select 1 as ok`;
       assert.equal(row?.ok, 1);
+    });
+  });
+});
+
+describe('isTransaction and requireTransaction', () => {
+  it('answer false for the pool, and refuse it naming the caller', () => {
+    assert.equal(isTransaction(unreachable), false);
+    assert.throws(
+      () => requireTransaction(unreachable, 'probe'),
+      (error: unknown) =>
+        error instanceof AppError &&
+        error.code === 'internal_error' &&
+        error.logDetail === 'probe was given a pool handle; it must run inside a transaction',
+    );
+    assert.throws(
+      () => requireTransaction(unreachable, 'probe', 'withTransaction'),
+      (error: unknown) =>
+        error instanceof AppError &&
+        error.logDetail === 'probe was given a pool handle; it must run inside withTransaction',
+    );
+  });
+
+  it('answer true for a transaction and for a savepoint inside it', { skip: skipReason }, async () => {
+    await inRollback(async (tx) => {
+      assert.equal(isTransaction(tx), true);
+      assert.doesNotThrow(() => requireTransaction(tx, 'probe'));
+      await tx.savepoint((sp) => {
+        assert.equal(isTransaction(sp), true);
+        assert.doesNotThrow(() => requireTransaction(sp, 'probe'));
+        return Promise.resolve();
+      });
     });
   });
 });

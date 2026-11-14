@@ -15,7 +15,7 @@ import { AppError } from '../errors.ts';
 import { type DurableBotSeat, durableProfile, durableSeed, isDifficulty } from '../rooms/bot-profile.ts';
 import { hashInviteCode, sha256, timingSafeEquals } from './hashing.ts';
 import { generateInviteCode, newRoomId, newRoomMemberId } from './ids.ts';
-import { type Db, insideSavepoint, isUniqueViolation, violationError } from './sql.ts';
+import { type Db, insideSavepoint, isTransaction, isUniqueViolation, violationError } from './sql.ts';
 
 /** Copied from the `rooms_*` CHECK constraints in migration 0001. */
 const NAME_MIN = 2;
@@ -620,11 +620,11 @@ export function closePracticeTable(sql: Db, roomId: string, ownerUserId: string)
 
 /**
  * Runs `fn` in the caller's transaction, or a new one when given the pool, because a row lock must
- * share a transaction with the write it guards. `TransactionSql` declares `savepoint` and `Sql` does
- * not. Boxed because postgres.js types `begin` as `UnwrapPromiseArray<T>`.
+ * share a transaction with the write it guards. Boxed because postgres.js types `begin` as
+ * `UnwrapPromiseArray<T>`.
  */
 async function inOneTransaction<T>(handle: Db, fn: (handle: Db) => Promise<T>): Promise<T> {
-  if ('savepoint' in handle) return fn(handle);
+  if (isTransaction(handle)) return fn(handle);
   const boxed = await handle.begin(async (tx) => ({ value: await fn(tx) }));
   return boxed.value;
 }

@@ -13,6 +13,24 @@ import { AppError } from '../errors.ts';
 /** The pool or a transaction. Repositories never call `getSql()`, so a route can compose them atomically. */
 export type Db = Sql | TransactionSql;
 
+/** `TransactionSql` declares `savepoint` and `Sql` does not. */
+export function isTransaction(handle: Db): handle is TransactionSql {
+  return 'savepoint' in handle;
+}
+
+/** For writes that must not commit one statement at a time, which is what the pool does. */
+export function requireTransaction(
+  handle: Db,
+  what: string,
+  inside = 'a transaction',
+): asserts handle is TransactionSql {
+  if (!isTransaction(handle)) {
+    throw new AppError('internal_error', {
+      logDetail: `${what} was given a pool handle; it must run inside ${inside}`,
+    });
+  }
+}
+
 /**
  * Runs `fn` in a savepoint so a failing statement does not abort an enclosing transaction.
  *
@@ -22,7 +40,7 @@ export type Db = Sql | TransactionSql;
  * the transaction anyway and does not need it. On the pool there is no transaction, so `fn` runs directly.
  */
 export async function insideSavepoint<T>(handle: Db, fn: (handle: Db) => Promise<T>): Promise<T> {
-  if (!('savepoint' in handle)) return fn(handle);
+  if (!isTransaction(handle)) return fn(handle);
   // Boxed because postgres.js types `savepoint` as `UnwrapPromiseArray<T>`, as in `withTransaction`.
   const boxed = await handle.savepoint(async (sp) => ({ value: await fn(sp) }));
   return boxed.value;
