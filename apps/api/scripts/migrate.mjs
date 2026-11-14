@@ -14,14 +14,13 @@ import { readdir, readFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import postgres from 'postgres';
+import { FILE_NAME_PATTERN, migrationChecksum } from '../src/migration-files.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, '..', '..', '..');
 const MIGRATIONS_DIR = join(REPO_ROOT, 'db', 'migrations');
 const SEEDS_DIR = join(REPO_ROOT, 'db', 'seeds');
 const ROLES_DIR = join(REPO_ROOT, 'db', 'roles');
-
-const FILE_NAME_PATTERN = /^(\d{4})_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$/;
 
 const LOCK_NAMESPACE = 'poker-risk-lab/db/migrations';
 const DEFAULT_LOCK_WAIT_MS = 30_000;
@@ -128,11 +127,6 @@ function connect(url) {
   });
 }
 
-function checksumOf(contents) {
-  const normalized = contents.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n');
-  return `sha256:${createHash('sha256').update(normalized, 'utf8').digest('hex')}`;
-}
-
 const shortChecksum = (checksum) =>
   String(checksum)
     .replace(/^sha256:/, '')
@@ -174,7 +168,7 @@ async function readSqlDir(dir, label) {
     numbers.set(number, entry.name);
     const path = join(dir, entry.name);
     const contents = await readFile(path, 'utf8');
-    files.push({ version: entry.name, number, path, sql: contents, checksum: checksumOf(contents) });
+    files.push({ version: entry.name, number, path, sql: contents, checksum: migrationChecksum(contents) });
   }
 
   files.sort((a, b) => (a.version < b.version ? -1 : a.version > b.version ? 1 : 0));

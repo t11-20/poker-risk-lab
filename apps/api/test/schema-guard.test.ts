@@ -17,6 +17,7 @@ import WebSocket from 'ws';
 import { buildApp, type RouteModule, registerRoutes } from '../src/app.ts';
 import { type AppConfig, loadConfig } from '../src/config.ts';
 import type { DatabaseHandle } from '../src/db.ts';
+import { migrationChecksum } from '../src/migration-files.ts';
 import { AppMetrics } from '../src/observability/metrics.ts';
 import {
   classifyLedgerFailure,
@@ -26,7 +27,6 @@ import {
   LEDGER_GRANT_MIGRATION,
   type LedgerReading,
   type MigrationRecord,
-  migrationChecksum,
   readShippedMigrations,
   type SchemaVerdict,
   SHIPPED_MIGRATIONS_DIR,

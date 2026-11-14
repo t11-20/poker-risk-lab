@@ -7,20 +7,17 @@
  * process, because a readiness handler that can kill it is a kill switch on a public route.
  */
 
-import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type DbCheck, databaseIdentity, type Sql } from './db.ts';
+import { FILE_NAME_PATTERN, migrationChecksum } from './migration-files.ts';
 
 /**
  * Three steps up from both `src/` and `dist/`, because `tsconfig.json` maps one onto the other.
  * `Dockerfile.api` copies the directory into the runtime image for this path.
  */
 export const SHIPPED_MIGRATIONS_DIR = fileURLToPath(new URL('../../../db/migrations/', import.meta.url));
-
-/** `migrate.mjs`'s FILE_NAME_PATTERN. A file it cannot order is one it will not apply. */
-const FILE_NAME_PATTERN = /^\d{4}_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$/;
 
 /** The migration that lets the runtime role read the ledger, named in the refusal it prevents. */
 export const LEDGER_GRANT_MIGRATION = '0010_schema_migrations_readable.sql';
@@ -59,15 +56,6 @@ const DRIFT_FIX =
   '`migrate.mjs up` refuses this too, so migrating will not fix it. An applied migration is ' +
   'immutable: restore the file from git (or deploy the build the database was migrated by) and write ' +
   'the change as a new migration.';
-
-/**
- * The checksum `migrate.mjs` records, byte for byte. Reimplemented because the runtime image does not
- * ship `apps/api/scripts/`.
- */
-export function migrationChecksum(contents: string): string {
-  const normalised = contents.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n');
-  return `sha256:${createHash('sha256').update(normalised, 'utf8').digest('hex')}`;
-}
 
 export class ShippedMigrationsError extends Error {
   override readonly name = 'ShippedMigrationsError';
