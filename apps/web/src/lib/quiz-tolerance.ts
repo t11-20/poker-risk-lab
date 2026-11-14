@@ -1,8 +1,6 @@
 /**
  * Renders a numeric question's unit and tolerance. A tolerance is not a figure in its unit, so
  * `tolerance: 0.5` in `cards` must not print as "within 1", which overstates what is accepted.
- * A leaf module with a type-only import, because `learn-calculations.ts` (which re-exports both maps)
- * imports `@prl/ui`'s `.tsx` and cannot load under `node --test`.
  */
 
 import type { QuizQuestion } from '@prl/contracts';
