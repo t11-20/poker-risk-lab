@@ -369,6 +369,27 @@ export function servedCertificateVerdict({ served, disk, now }) {
   return findings;
 }
 
+// What `status` reports about TLS: nothing when no proxy runs, a failure when the origin cannot be
+// parsed (the check would otherwise be skipped in silence), and the served-certificate verdict otherwise.
+export async function statusTlsFindings({ proxyRunning, origin, handshake, disk, now }) {
+  if (!proxyRunning) return null;
+  if ('problem' in origin) {
+    return [
+      {
+        level: 'cross',
+        line: 'PRL_STAGING_PUBLIC_ORIGIN is unusable, so the served certificate was not checked',
+        detail: origin.problem,
+      },
+    ];
+  }
+  return servedCertificateVerdict({ served: await handshake(origin), disk, now });
+}
+
+// The failures a findings list carries, for output modes that do not print through `cross`.
+export function failingFindings(findings) {
+  return (findings ?? []).filter((f) => f.level === 'cross').map((f) => `${f.line} — ${f.detail}`);
+}
+
 function diskCertificate() {
   if (!existsSync(LEAF_CERT)) return null;
   const cert = new X509Certificate(readFileSync(LEAF_CERT));
@@ -1372,22 +1393,13 @@ async function commandStatus(options) {
   const origin = stagingOrigin();
   const proxyRunning = states.find((s) => s.name === 'proxy')?.state === 'running';
   // One loopback handshake with a timeout, so `status` still cannot hang.
-  let tlsFindings = null;
-  if (proxyRunning && 'problem' in origin) {
-    tlsFindings = [
-      {
-        level: 'cross',
-        line: 'PRL_STAGING_PUBLIC_ORIGIN is unusable, so the served certificate was not checked',
-        detail: origin.problem,
-      },
-    ];
-  } else if (proxyRunning) {
-    tlsFindings = servedCertificateVerdict({
-      served: await servedCertificate(origin),
-      disk: diskCertificate(),
-      now: Date.now(),
-    });
-  }
+  const tlsFindings = await statusTlsFindings({
+    proxyRunning,
+    origin,
+    handshake: servedCertificate,
+    disk: proxyRunning ? diskCertificate() : null,
+    now: Date.now(),
+  });
 
   if (options.json) {
     console.log(
@@ -1405,9 +1417,7 @@ async function commandStatus(options) {
       ),
     );
     // Printed as JSON above; recorded here so the exit code still says the check failed.
-    for (const finding of tlsFindings ?? []) {
-      if (finding.level === 'cross') failures.push(`${finding.line} — ${finding.detail}`);
-    }
+    failures.push(...failingFindings(tlsFindings));
     return;
   }
 

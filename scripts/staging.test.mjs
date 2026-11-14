@@ -21,6 +21,7 @@ import {
 import {
   CERT_WARN_DAYS,
   deploymentPlan,
+  failingFindings,
   HSTS_EXPECTED,
   HSTS_PROBE_PATH,
   hstsFromRawHeaders,
@@ -29,6 +30,7 @@ import {
   RELEASE_RECORD_PATHS,
   refreshStagingProxy,
   servedCertificateVerdict,
+  statusTlsFindings,
 } from './staging.mjs';
 
 test('refreshStagingProxy recreates only the TLS proxy, with --force-recreate', () => {
@@ -601,4 +603,54 @@ test('no handshake is a failure, never a silent pass', () => {
     now: CERT_NOW,
   });
   assert.deepEqual(levels(findings), ['cross: could not read the certificate the proxy serves']);
+});
+
+const STAGING_ORIGIN = { origin: 'https://localhost:8443', hostname: 'localhost', port: '8443' };
+const neverCalled = () => {
+  throw new Error('no handshake may be attempted here');
+};
+
+test('an unusable origin with the proxy running is a failure, not a skipped check', async () => {
+  const findings = await statusTlsFindings({
+    proxyRunning: true,
+    origin: { problem: '"http://localhost:8443" must be https' },
+    handshake: neverCalled,
+    disk: RENEWED_LEAF,
+    now: CERT_NOW,
+  });
+  assert.deepEqual(failingFindings(findings), [
+    'PRL_STAGING_PUBLIC_ORIGIN is unusable, so the served certificate was not checked — "http://localhost:8443" must be https',
+  ]);
+});
+
+test('no running proxy means no TLS finding and no handshake', async () => {
+  const findings = await statusTlsFindings({
+    proxyRunning: false,
+    origin: STAGING_ORIGIN,
+    handshake: neverCalled,
+    disk: RENEWED_LEAF,
+    now: CERT_NOW,
+  });
+  assert.equal(findings, null);
+  assert.deepEqual(failingFindings(findings), []);
+});
+
+test('the JSON path fails on the same findings the printed path fails on', async () => {
+  const findings = await statusTlsFindings({
+    proxyRunning: true,
+    origin: STAGING_ORIGIN,
+    handshake: async () => served(PREVIOUS_LEAF, false, 'SELF_SIGNED_CERT_IN_CHAIN'),
+    disk: RENEWED_LEAF,
+    now: CERT_NOW,
+  });
+  const failures = failingFindings(findings);
+  assert.equal(failures.length, 2, 'the stale leaf and the unverifiable chain each fail the command');
+  assert.ok(
+    findings.some((f) => f.level === 'bang'),
+    'the expiry warning is present',
+  );
+  assert.ok(
+    failures.every((line) => !line.includes('expires in')),
+    'a warning never fails the command, in either output mode',
+  );
 });
