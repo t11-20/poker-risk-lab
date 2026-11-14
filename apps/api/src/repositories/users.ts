@@ -12,7 +12,7 @@ import { AppError } from '../errors.ts';
 import * as audit from './audit.ts';
 import { newUserId } from './ids.ts';
 import { revokeAllForUser } from './sessions.ts';
-import { type Db, isForeignKeyViolation, sqlViolation, violationError } from './sql.ts';
+import { type Db, isForeignKeyViolation, requireTransaction, sqlViolation, violationError } from './sql.ts';
 
 /** Units at no table. Matches `docs/frontend-design-system.md`, and is the same for every learner. */
 export const DEFAULT_UNIT_ALLOWANCE = 1_000;
@@ -261,11 +261,7 @@ async function accountFootprint(sql: Db, userId: string): Promise<AccountFootpri
  * unknown id, so a retried deletion is not a failure.
  */
 export async function deleteAccount(sql: Db, userId: string): Promise<AccountDeletionSummary | null> {
-  if (!('savepoint' in sql)) {
-    throw new AppError('internal_error', {
-      logDetail: 'deleteAccount was given a pool handle; it must run inside withTransaction',
-    });
-  }
+  requireTransaction(sql, 'deleteAccount', 'withTransaction');
 
   // Serialises racing deletions and settlements on the account row.
   const locked = await sql<{ id: string }[]>`
@@ -448,11 +444,7 @@ export async function deleteAbandonedGuest(
   userId: string,
   cutoffSeconds: number,
 ): Promise<AccountDeletionSummary | null> {
-  if (!('savepoint' in sql)) {
-    throw new AppError('internal_error', {
-      logDetail: 'deleteAbandonedGuest was given a pool handle; it must run inside a transaction',
-    });
-  }
+  requireTransaction(sql, 'deleteAbandonedGuest');
 
   // The lock alone. No predicate here.
   const locked = await sql<{ id: string }[]>`

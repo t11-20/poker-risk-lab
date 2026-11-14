@@ -14,7 +14,10 @@
 import { AppError } from '../errors.ts';
 import * as audit from './audit.ts';
 import { newCohortId, newEnrolmentId } from './ids.ts';
-import { type Db, violationError } from './sql.ts';
+import { type Db, requireTransaction, violationError } from './sql.ts';
+
+const WITH_ITS_AUDIT_ENTRY =
+  'a transaction so that the enrolment row and its audit entry cannot land separately';
 
 /** Tells a superseded row apart from a deliberate withdrawal. */
 export const SUPERSEDED_REASON = 'superseded by a later grant';
@@ -162,7 +165,7 @@ export interface CreateCohortInput {
  * the CLI, which names the taken key, so a wire code would serve nothing.
  */
 export async function createCohort(sql: Db, input: CreateCohortInput): Promise<Cohort> {
-  requireTransaction(sql, 'createCohort');
+  requireTransaction(sql, 'createCohort', WITH_ITS_AUDIT_ENTRY);
   const id = newCohortId();
   const endsAt = input.endsAt ?? null;
   const rows = await sql<CohortRow[]>`
@@ -319,7 +322,7 @@ export type GrantOutcome =
  * half-finished run.
  */
 export async function grant(sql: Db, input: GrantInput): Promise<GrantOutcome> {
-  requireTransaction(sql, 'grant');
+  requireTransaction(sql, 'grant', WITH_ITS_AUDIT_ENTRY);
   await lockLearner(sql, input.userId);
 
   const superseded = await sql<{ id: string }[]>`
@@ -416,7 +419,7 @@ export interface RevokeInput {
  * re-run is not a failure.
  */
 export async function revoke(sql: Db, input: RevokeInput): Promise<EnrolmentRecord | null> {
-  requireTransaction(sql, 'revoke');
+  requireTransaction(sql, 'revoke', WITH_ITS_AUDIT_ENTRY);
   await lockLearner(sql, input.userId);
 
   const rows = await sql<{ id: string }[]>`
@@ -464,15 +467,4 @@ export async function revoke(sql: Db, input: RevokeInput): Promise<EnrolmentReco
  */
 async function lockLearner(sql: Db, userId: string): Promise<void> {
   await sql`select id from prl.users where id = ${userId} for update`;
-}
-
-/** Refuses a pool handle. `TransactionSql` declares `savepoint` and `Sql` does not. */
-function requireTransaction(sql: Db, what: string): void {
-  if (!('savepoint' in sql)) {
-    throw new AppError('internal_error', {
-      logDetail:
-        `${what} was given a pool handle; it must run inside a transaction so that the ` +
-        'enrolment row and its audit entry cannot land separately',
-    });
-  }
 }
