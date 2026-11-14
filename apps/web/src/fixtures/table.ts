@@ -1,38 +1,16 @@
 /**
- * The play screen's fixtures: four table states and the Coach report that goes with them.
+ * The play screen's fixtures: four table states and the Coach report that goes with them. Typed against
+ * the real contract (`PlayerView` as `@prl/poker-engine` redacts it, `CoachReport` as `@prl/contracts`
+ * declares it), they give a deterministic render of states that are hard to reach by playing: a
+ * three-way all-in with a side pot, a completed hand with three hands shown, a decision with 15 outs.
  *
- * ## Why fixtures exist here at all
- *
- * The API and the WebSocket that will feed `/play` are being built in parallel with this screen, so
- * a screen that could only render from a live server could not be built, reviewed, or checked in CI
- * without a database. Every state below is typed against the real contract — `PlayerView` as
- * `@prl/poker-engine` redacts it, `CoachReport` as `@prl/contracts` declares it — so the day the
- * socket lands, the only change is where the object comes from. Nothing in the components knows the
- * difference, and TypeScript fails the build if the wire shape moves.
- *
- * This is not mock-driven development for its own sake. It is also the only way to get a
- * *deterministic* render of a state that is hard to reach by playing: a three-way all-in with a side
- * pot, a completed hand with three hands shown, a decision with 15 outs.
- *
- * ## The numbers are derived, not decorative
- *
- * Every figure in `FLOP_DECISION_REPORT` is arithmetic on the spot in `FLOP_DECISION_VIEW`, and the
- * derivation is written out beside it. That matters for two reasons. The obvious one: a fixture with
- * inconsistent numbers teaches a reviewer nothing about whether the panel renders a coherent report.
- * The less obvious one: ADR 0006 forbids hard-coded odds in *content*, because a number nobody can
- * reproduce is a number nobody can correct. A fixture is not content, but the same discipline
- * applies — anyone can check the working below.
- *
- * The spot is deliberately the one from the design system: `Ah Kh` on `Qh 7h 2c`, a nut flush draw
- * with two overcards, facing a small continuation bet. It exercises every branch that matters —
- * clean and dirty outs, a large equity surplus, a Monte Carlo interval, a raise suggestion with a
- * size range and only moderate confidence.
- *
- * ## Scale
+ * Every figure in `FLOP_DECISION_REPORT` is arithmetic on the spot in `FLOP_DECISION_VIEW`, worked out
+ * beside it: ADR 0006 forbids hard-coded odds in content, and a fixture keeps the same discipline. The
+ * spot is the design system's `Ah Kh` on `Qh 7h 2c`, which exercises clean and dirty outs, a large
+ * equity surplus, a Monte Carlo interval and a raise suggestion with a size range.
  *
  * Blinds 5/10 with 1,000-unit stacks, matching `STARTING_UNITS` in `fixtures/session.ts`. Units are
- * free, resettable and valueless; there is no currency symbol anywhere in this file, and there never
- * will be.
+ * valueless, and there is no currency symbol anywhere in this file.
  */
 
 import type { CoachReport } from '@prl/contracts';
@@ -47,16 +25,11 @@ export function isTableStateName(value: unknown): value is TableStateName {
   return typeof value === 'string' && (TABLE_STATES as readonly string[]).includes(value);
 }
 
-// ---------------------------------------------------------------------------
 // Cards
-// ---------------------------------------------------------------------------
 
 /**
- * `"Qh 7h 2c"` to the engine's integers, via the same parser the Coach panel uses on its out cards.
- *
- * It throws on a bad token rather than falling back, and that is the point: a typo in a fixture
- * should stop the module loading, loudly, at the moment somebody makes it. A silently-dropped card
- * would show up as a four-card flop that nobody notices for a week.
+ * `"Qh 7h 2c"` to the engine's integers, via the same parser the Coach panel uses on its out cards. It
+ * throws on a bad token, so a typo stops the module loading instead of rendering a four-card flop.
  */
 function cards(text: string): readonly number[] {
   const out: number[] = [];
@@ -84,17 +57,11 @@ const RIVERED_BOARD = cards('Qh 7h 2c Jh 3s');
 /** Hero's best five at showdown: the ace-high flush, ringed in the completed-hand view. */
 const HERO_BEST_FIVE = cards('Ah Kh Qh Jh 7h');
 
-// ---------------------------------------------------------------------------
 // Seats
-// ---------------------------------------------------------------------------
 
 /**
- * Display names by seat index.
- *
- * `SeatView.playerId` is an opaque id and is never rendered — showing one would be both meaningless
- * to a reader and a small privacy leak. The bots are named for their strategy profile rather than
- * given human names, which is the honest description of what they are: a set of numbers, not a
- * person. No celebrity names and no likenesses anywhere (see docs/AI-LEGENDS.md).
+ * Display names by seat index. `SeatView.playerId` is opaque and never rendered. The bots are named for
+ * their strategy profile, not given human names: no celebrity names or likenesses (docs/AI-LEGENDS.md).
  */
 export const SEAT_NAMES: Readonly<Record<number, string>> = {
   0: 'You',
@@ -114,18 +81,13 @@ const TABLE_CONFIG = {
 } as const;
 
 /**
- * A placeholder where the wire carries a Merkle root.
- *
- * No screen in this build renders it, and a plausible-looking 64-hex string would be a fabricated
- * cryptographic commitment sitting in the repo — exactly the kind of thing that later gets mistaken
- * for a real one. A real root only ever comes from the server, and hand review verifies it.
+ * A placeholder where the wire carries a Merkle root. A plausible 64-hex string here would be a
+ * fabricated commitment that could be mistaken for a real one; a real root only comes from the server.
  */
 const FIXTURE_COMMITMENT = 'fixture-no-commitment';
 const FIXTURE_COMMITMENT_CONTEXT = 'fixture-no-context';
 
-// ---------------------------------------------------------------------------
 // The decision: hero faces 35 into 100 on the flop
-// ---------------------------------------------------------------------------
 
 /**
  * The hand so far, which is what makes every stack below add up:
@@ -242,11 +204,9 @@ export const FLOP_DECISION_VIEW: PlayerView = {
     { kind: 'bigBlind', seat: 0, amount: 10, wasShort: false },
   ],
   /**
-   * Deliberately empty. No screen in this build renders the action log — hand review does, from the
-   * server's own record — and a hand-written log here would be a second source of truth that could
-   * drift out of step with the seats above. `actionSequence` is real: it is the number the
-   * ActionBar's `expectedSequence` echoes back, so a stale decision is rejected rather than applied
-   * to a spot the player never saw.
+   * Empty: hand review renders the action log from the server's record, and a hand-written log would be
+   * a second source of truth. `actionSequence` is real: the ActionBar echoes it as `expectedSequence`,
+   * so a stale decision is rejected rather than applied to a spot the player never saw.
    */
   actions: [],
   actionSequence: 7,
@@ -276,14 +236,9 @@ export const FLOP_DECISION_VIEW: PlayerView = {
 };
 
 /**
- * The turn clock, expressed the way the wire expresses it: an absolute deadline on the SERVER's
- * clock plus the server's own reading in the same frame.
- *
- * Both are fixed numbers rather than `Date.now()`, and that is not laziness — `TurnTimer` only ever
- * uses the *difference* between them, so a fixed pair renders identically on the server and in the
- * browser and produces a stable, screenshot-comparable 22 seconds remaining out of a 30-second
- * budget. Reading the real clock here would make the render non-deterministic and would tempt the
- * component into trusting a client timestamp, which is the thing it exists not to do.
+ * The turn clock as the wire expresses it: a deadline on the SERVER's clock plus the server's reading in
+ * the same frame. Fixed numbers rather than `Date.now()`, because `TurnTimer` uses only their difference,
+ * so server and browser render the same 22 seconds left of a 30-second budget.
  */
 export const FLOP_DECISION_TURN: TurnClock = {
   serverTimeMs: 1_771_286_400_000,
@@ -291,9 +246,7 @@ export const FLOP_DECISION_TURN: TurnClock = {
   budgetSeconds: TABLE_CONFIG.actionTimeoutSeconds,
 };
 
-// ---------------------------------------------------------------------------
 // The Coach report for that decision
-// ---------------------------------------------------------------------------
 
 /**
  * The arithmetic, in full, so every figure below can be checked.
@@ -450,43 +403,24 @@ export const FLOP_DECISION_REPORT: CoachReport = {
   ],
 };
 
-// ---------------------------------------------------------------------------
 // The completed hand: a three-way all-in, one side pot, three hands shown
-// ---------------------------------------------------------------------------
 
 /**
- * A different hand, included because a side pot is hard to reach by playing and easy to get wrong in
- * a layout: the main pot and the side pot have different eligibility lists, and a reader has to be
- * able to see which is which.
- *
- * Hero came into this hand short, on 300, which is the only way a side pot can form — with equal
- * stacks every all-in is for the same amount and there is nothing to layer. The cutoff and the button
- * each committed 600 out of 1,000, and the small blind's 5 was already dead in the middle:
+ * A side pot is hard to reach by playing and easy to get wrong in a layout: the main pot and the side
+ * pot have different eligibility lists. Hero came in short on 300, the only way a side pot forms; the
+ * cutoff and the button each committed 600 of 1,000, and the small blind's 5 was already dead:
  *
  *   main pot  300 x 3 + the dead 5 = 905, contested by all three
  *   side pot  300 x 2 = 600, contested by the two who could cover hero's 300
  *   total     1,505
  *
- * Hero's ace-high flush therefore takes the main pot only; the side pot goes to the better of the two
- * hands that could cover it. That is exactly the fact a learner most often gets wrong about all-ins,
- * and it is why this state exists.
+ * The stacks are the ones the engine's `settle` writes, what was left behind plus what was won: hero on
+ * 0 + 905, the cutoff on 400 + 600, the button on the 400 it kept. `committedTotal` and `status` stay as
+ * the hand left them, as `settle` leaves them; `play-fixture-pots.test.ts` checks every seat.
  *
- * The stacks are the ones the engine's `settle` writes: what was left behind, plus what was won.
- * They used to be the stacks from just BEFORE settlement, so `/play?state=complete` showed "You,
- * STACK 0" beside a summary saying you had won the 905 main pot (UI audit of 308fadf, item 18) —
- * and the three queens that took the 600 side pot still on 400. So hero is on 0 + 905, the cutoff
- * on 400 + 600, and the button on the 400 it kept; `committedTotal` and `status` stay as the hand
- * left them, because `settle` leaves them too. `play-fixture-pots.test.ts` settles this hand from
- * the pots and checks every seat.
- *
- * `result` is left null on purpose. It carries the revealed deck and the Merkle proofs, and the screen
- * that renders those is hand review — which gets them from the server and verifies them. Fabricating
- * a proof here would put a fake cryptographic artefact in the repo.
- *
- * The play screen pairs this view with `FLOP_DECISION_REPORT`, because the flop it was analysing is
- * this hand's flop and the same two hole cards. The pot and price in that report are from a
- * differently-stacked hand, so the pairing is a fixture convenience rather than a claim: when the API
- * lands, a completed hand's analysis comes from `HandReviewResponse.decisions`, per decision.
+ * `result` is null: it carries the revealed deck and the Merkle proofs, which only hand review renders,
+ * from the server. The play screen pairs this view with `FLOP_DECISION_REPORT` (same flop and hole
+ * cards, differently stacked) as a fixture convenience, not a claim.
  */
 export const COMPLETED_HAND_VIEW: PlayerView = {
   handId: 'fixture-hand-0013',
@@ -606,11 +540,8 @@ export const COMPLETED_HAND_VIEW: PlayerView = {
 };
 
 /**
- * What happened, in plain sentences.
- *
- * Stated as facts, with no flourish and no second person congratulation. Rewarding the *outcome* is
- * the core casino dark pattern; this product rewards the decision, and the place the positive
- * feedback lives is the analysis, not the result.
+ * What happened, as plain facts with no congratulation: rewarding the outcome is the core casino dark
+ * pattern, and this product rewards the decision.
  */
 export const COMPLETED_HAND_SUMMARY: readonly string[] = [
   'Main pot, 905 units: your ace-high flush. It includes the small blind that was folded.',

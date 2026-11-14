@@ -1,18 +1,7 @@
 /**
- * Fixture: the whole curriculum, as the lesson index receives it.
- *
- * All 17 lessons in the content package, as `LessonSummary` — the exact shape of
- * `LessonListResponse.lessons`. Two are marked `completed` so the index renders both
- * states; nothing else about progress is fabricated.
- *
- * Every string here is copied verbatim from `packages/content/data`, which is the real
- * teaching material. Nothing is paraphrased and nothing is invented, because a fixture that
- * drifts from the content it stands in for is a screen that was reviewed against fiction.
- *
- * NO COMPUTED FIGURE APPEARS ANYWHERE IN THIS FILE. Every number a learner reads is computed
- * in the browser from the `liveCalculation` and `calculation` parameters below — see
- * ADR 0006 and `src/lib/learn-calculations.ts`. Search this file for a percentage and you
- * will only find the ones that are *inputs* (a fold probability, an assumed win rate).
+ * The whole curriculum as `LessonListResponse.lessons`. Two are marked `completed` so the index renders
+ * both states; nothing else about progress is fabricated.
+ * Copied verbatim from `packages/content/data`, with no computed figure: see `learn-glossary.ts`.
  */
 
 import type { LessonSummary } from '@prl/contracts';

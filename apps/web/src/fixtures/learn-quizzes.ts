@@ -1,22 +1,7 @@
 /**
- * Fixture: the quiz attached to each of the eight fixture lessons.
- *
- * Between them these cover all three question kinds — `multipleChoice`,
- * `numeric` and `decision` — and every `field` a numeric question asks for
- * (`breakEvenEquity`, `oddsRatio`, `heroEquity`, `cleanCount`, `estimatePercent`, `ev`,
- * `spr`, `probabilityOfLoss`, `standardDeviationBb`, `probability`).
- *
- * Note what a `Quiz` has no field for: a score, a pass mark, a streak. That absence is
- * deliberate in the contract and `QuizRunner` does not reintroduce it.
- *
- * Every string here is copied verbatim from `packages/content/data`, which is the real
- * teaching material. Nothing is paraphrased and nothing is invented, because a fixture that
- * drifts from the content it stands in for is a screen that was reviewed against fiction.
- *
- * NO COMPUTED FIGURE APPEARS ANYWHERE IN THIS FILE. Every number a learner reads is computed
- * in the browser from the `liveCalculation` and `calculation` parameters below — see
- * ADR 0006 and `src/lib/learn-calculations.ts`. Search this file for a percentage and you
- * will only find the ones that are *inputs* (a fold probability, an assumed win rate).
+ * The quiz attached to each fixture lesson, covering every question kind and every numeric `field`. A
+ * `Quiz` has no field for a score, a pass mark or a streak, deliberately, and `QuizRunner` adds none.
+ * Copied verbatim from `packages/content/data`, with no computed figure: see `learn-glossary.ts`.
  */
 
 import type { Quiz } from '@prl/contracts';
