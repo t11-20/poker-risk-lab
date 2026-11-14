@@ -1,10 +1,17 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { inSecondPerson } from '@prl/contracts';
-import { createSecureRandom, type LoggedAction, type PotAward } from '@prl/poker-engine';
+import {
+  createDeterministicRandomForTests,
+  createSecureRandom,
+  type LoggedAction,
+  type Pot,
+  type PotAward,
+} from '@prl/poker-engine';
 import {
   actionSentence,
   awardSentence,
+  awardSentences,
   forcedBetsSentence,
   namesFrom,
   showdownSentence,
@@ -87,6 +94,34 @@ describe('the narration names who did it', () => {
     );
   });
 
+  it('gives back the part of a side pot nobody still in the hand matched, instead of awarding it', () => {
+    const pot = (index: number, amount: number, capPerSeat: number, eligibleSeats: number[]): Pot => ({
+      index,
+      amount,
+      capPerSeat,
+      eligibleSeats,
+    });
+    // Ada's 1,000 over Nit bot's 700 all-in, with a third seat's 800 folded: 300 is Ada's, 100 is won.
+    assert.deepEqual(
+      awardSentences(
+        {
+          pots: [pot(0, 2_100, 700, [0, 3]), pot(1, 400, 1_000, [0])],
+          awards: [award(3, 0, 2_100), award(0, 1, 400)],
+        },
+        nameOf,
+      ),
+      [
+        'Nit bot wins 2,100 from the main pot.',
+        'Ada gets back 300 that nobody still in the hand matched.',
+        'Ada wins 100 from side pot 1.',
+      ],
+    );
+    // A fold-win's one pot has one eligible seat and the blinds in it, so it is won.
+    assert.deepEqual(awardSentences({ pots: [pot(0, 40, 30, [0])], awards: [award(0, 0, 40)] }, nameOf), [
+      'Ada wins 40 from the pot.',
+    ]);
+  });
+
   it('names who showed down', () => {
     const shown = { seat: 0, playerId: 'usr_0', description: 'a flush, ace high' };
     assert.equal(
@@ -155,5 +190,54 @@ describe('a live table narrates with the names it dealt in', () => {
         assert.equal(said, sentence, `"${sentence}" is about Bo and was changed`);
       }
     }
+  });
+});
+
+describe('a shove nobody can match in full', () => {
+  it('says the difference went back, and the rest was won from the pot, not the main pot', async () => {
+    const table = new LiveTable({
+      roomId: 'room_uncalled',
+      config: { smallBlind: 5, bigBlind: 10, ante: 0, maxSeats: 6, actionTimeoutSeconds: 30 },
+      clock: systemClock,
+      // Seeded, so the showdown cannot tie and turn the one award into two split ones.
+      random: createDeterministicRandomForTests(7),
+      nextHandId: () => 'hand_uncalled',
+    });
+    const events: TableEvent[] = [];
+    table.subscribe((notice) => events.push(...notice.events));
+    await table.sit({ userId: 'usr_ada', displayName: 'Ada', seat: 0, stack: 1_000 });
+    await table.sit({ userId: 'usr_bo', displayName: 'Bo', seat: 3, stack: 950 });
+    await table.startHand();
+
+    // Ada always shoves and Bo always calls, so Ada's last 50 is never matched.
+    for (let step = 0; step < 4; step += 1) {
+      const view = table.viewFor('usr_ada');
+      if (view === null || view.toAct === null) break;
+      const actor = view.seats.find((seat) => seat.seat === view.toAct)?.playerId;
+      assert.ok(actor !== undefined);
+      const shove = view.legalActions.find((legal) => legal.type === 'raise')?.maxTo;
+      await table.submitAction(actor, {
+        action: actor === 'usr_ada' && shove !== undefined ? { type: 'raise', to: shove } : { type: 'call' },
+        actionId: `act_${String(step)}`,
+        expectedSequence: view.actionSequence,
+      });
+    }
+    table.close();
+
+    const summaries = events.flatMap((event) => (event.kind === 'handComplete' ? [...event.summaries] : []));
+    assert.ok(summaries.length > 0, 'the hand completed');
+    assert.ok(
+      summaries.includes('Ada gets back 50 that nobody still in the hand matched.'),
+      JSON.stringify(summaries),
+    );
+    assert.ok(
+      summaries.some((line) => /^(Ada|Bo) wins 1,900 from the pot\.$/.test(line)),
+      JSON.stringify(summaries),
+    );
+    assert.ok(!summaries.some((line) => /side pot/.test(line)), JSON.stringify(summaries));
+    assert.equal(
+      inSecondPerson('Ada gets back 50 that nobody still in the hand matched.', 'Ada'),
+      'You get back 50 that nobody still in the hand matched.',
+    );
   });
 });

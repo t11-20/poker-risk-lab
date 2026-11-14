@@ -234,14 +234,46 @@ describe('the plates, rendered', () => {
   });
 });
 
+describe('a finished hand’s pot', () => {
+  // The reader's 1,000 into a 950 all-in: the engine layers the last 50 as a pot only the reader can
+  // win, and pays it back.
+  const pots = [
+    { amount: 1_900, eligibleSeats: [0, 2], capPerSeat: 950, index: 0 },
+    { amount: 50, eligibleSeats: [0], capPerSeat: 1_000, index: 1 },
+  ];
+  const paid = {
+    showdowns: [{ seat: 0, bestFive: [] }],
+    awards: [],
+    pots,
+  } as unknown as PlayerView['result'];
+  const potFigure = (markup: string): string =>
+    /<div class="prl-pot">.*?aria-live="polite"[^>]*>([^<]*)</u.exec(markup)?.[1] ?? '<none>';
+
+  it('leaves out the chips that went back unmatched, as a total and as a side pot', async () => {
+    const markup = await table({ view: view('complete', { potTotal: 1_950, pots, result: paid }) });
+    assert.equal(potFigure(markup), 'Pot: 1,900 units');
+    assert.doesNotMatch(markup, /side pot 1/u);
+  });
+
+  it('while the hand is live, shows the same layers as they stand', async () => {
+    const markup = await table({ view: view('river', { potTotal: 1_950, pots }) });
+    assert.equal(potFigure(markup), 'Pot: 1,950 units');
+    assert.match(markup, /side pot 1/u);
+  });
+});
+
 const currentStep = (markup: string): string =>
   /<li class="prl-table__step"[^>]*aria-current="step"[^>]*>.*?<span class="prl-table__step-name">([^<]*)<\/span>/u.exec(
     markup,
   )?.[1] ?? '<none>';
 
 describe('the phase a finished hand ended on', () => {
-  const uncontested = { showdowns: [], awards: [] } as unknown as PlayerView['result'];
-  const contested = { showdowns: [{ seat: 0, bestFive: [] }], awards: [] } as unknown as PlayerView['result'];
+  const uncontested = { showdowns: [], awards: [], pots: [] } as unknown as PlayerView['result'];
+  const contested = {
+    showdowns: [{ seat: 0, bestFive: [] }],
+    awards: [],
+    pots: [],
+  } as unknown as PlayerView['result'];
 
   it('is the street the betting stopped on when the pot was won uncontested', async () => {
     const preflop = await table({ view: view('complete', { board: [], result: uncontested }) });

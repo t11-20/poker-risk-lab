@@ -6,8 +6,8 @@
  * Telegram caps `callback_data` at 64 bytes, and `encodePress` refuses anything longer.
  */
 
-import type { GlossaryEntry } from '@prl/contracts';
-import type { Action, LegalAction, PlayerView, SeatIndex, SeatView } from '@prl/poker-engine';
+import { type GlossaryEntry, NOBODY_MATCHED, unmatchedPartOf } from '@prl/contracts';
+import type { Action, HandResult, LegalAction, PlayerView, SeatIndex, SeatView } from '@prl/poker-engine';
 import { rankIndexOf, suitIndexOf } from '@prl/poker-engine';
 import { type CoachReading, coachLine, units } from './coach.ts';
 import type { DecisionAction } from './learn.ts';
@@ -237,7 +237,7 @@ export function actionButtons(view: PlayerView): Button[][] {
         sizes.push(at({ type: legal.type, to: size.to }, size.label));
     }
   }
-  return sizes.length === 0 ? [passive] : [passive, sizes];
+  return sizes.length === 0 ? [passive] : [passive, ...inPairs(sizes)];
 }
 
 /**
@@ -290,11 +290,13 @@ const STREET_WORDS: Readonly<Record<PlayerView['street'], string>> = {
   complete: 'Hand over',
 };
 
-function seatLine(table: Table, seat: SeatView): string {
+function seatLine(table: Table, view: PlayerView, seat: SeatView): string {
   const parts = [seat.position ?? '-', nameOf(table, seat.seat), units(seat.stack)];
   if (seat.committedThisStreet > 0)
     parts.push(`in front ${seat.committedThisStreet.toLocaleString('en-US')}`);
   if (seat.status === 'folded') parts.push('folded');
+  // A settled seat's stack is paid out, so "all-in" beside it would contradict the number.
+  if (view.street === 'complete') return parts.join(' · ');
   if (seat.status === 'allIn') parts.push('all-in');
   if (seat.isToAct) parts.push('to act');
   return parts.join(' · ');
@@ -307,9 +309,31 @@ function who(table: Table, view: PlayerView, seat: SeatIndex): string {
   return position == null ? nameOf(table, seat) : `${position} ${nameOf(table, seat)}`;
 }
 
-function actionWords(table: Table, view: PlayerView, seat: SeatIndex, action: Action): string {
+/**
+ * The sequence of each all-in. The log carries no flag, but an all-in seat never acts again, so its
+ * last action that paid anything is the one that emptied its stack.
+ */
+function allInSequences(view: PlayerView): Set<number> {
+  const sequences = new Set<number>();
+  for (const seat of view.seats) {
+    if (seat.status !== 'allIn') continue;
+    const last = view.actions.findLast((logged) => logged.seat === seat.seat && logged.amountPaid > 0);
+    if (last !== undefined) sequences.add(last.sequence);
+  }
+  return sequences;
+}
+
+function actionWords(
+  table: Table,
+  view: PlayerView,
+  seat: SeatIndex,
+  action: Action,
+  allIn: boolean,
+): string {
   const name = who(table, view, seat);
-  const verb = (third: string, second: string): string => `${name} ${seat === READER_SEAT ? second : third}`;
+  const tail = allIn ? ', all in' : '';
+  const verb = (third: string, second: string): string =>
+    `${name} ${seat === READER_SEAT ? second : third}${tail}`;
   switch (action.type) {
     case 'fold':
       return verb('folds', 'fold');
@@ -340,22 +364,35 @@ function recap(table: Table, view: PlayerView): string[] {
   if (since.length === 0) return [];
   // One line per street, so actions on different streets do not read as one.
   const lines: string[] = [];
+  const allIn = allInSequences(view);
   for (const [index, logged] of since.entries()) {
-    const words = actionWords(table, view, logged.seat, logged.action);
+    const words = actionWords(table, view, logged.seat, logged.action, allIn.has(logged.sequence));
     if (since[index - 1]?.street === logged.street) lines[lines.length - 1] += `, ${words}`;
     else lines.push(`${STREET_WORDS[logged.street]}: ${words}`);
   }
   return ['', `${from === -1 ? 'So far' : 'Since your last move'}:`, ...lines.map((line) => `${line}.`)];
 }
 
+function unmatchedOf(result: HandResult, award: HandResult['awards'][number]): number {
+  const pot = result.pots.find((entry) => entry.index === award.potIndex);
+  return pot === undefined ? 0 : Math.min(award.amount, unmatchedPartOf(pot, result.pots));
+}
+
+/** Once settled, the pot is what was contested: chips that went back unmatched were never in it. */
+function potShown(view: PlayerView): number {
+  const result = view.result;
+  if (result === null) return view.potTotal;
+  return result.pots.reduce((sum, pot) => sum + pot.amount - unmatchedPartOf(pot, result.pots), 0);
+}
+
 function header(table: Table, view: PlayerView): string[] {
   const own = view.seats.find((seat) => seat.isSelf);
   return [
-    `Hand ${view.handNumber} · ${STREET_WORDS[view.street]} · Pot ${units(view.potTotal)}`,
+    `Hand ${view.handNumber} · ${STREET_WORDS[view.street]} · Pot ${units(potShown(view))}`,
     `Board: ${view.board.length === 0 ? '(none yet)' : cardsText(view.board)}`,
     `Your cards: ${own?.holeCards == null ? '(none)' : cardsText(own.holeCards)}`,
     '',
-    ...view.seats.map((seat) => seatLine(table, seat)),
+    ...view.seats.map((seat) => seatLine(table, view, seat)),
   ];
 }
 
@@ -390,11 +427,14 @@ export function resultText(table: Table, view: PlayerView): string {
     lines.push('Nobody showed: everyone else folded.');
   }
   for (const award of result.awards) {
+    const name = who(table, view, award.seat);
+    const reader = award.seat === READER_SEAT;
+    const back = unmatchedOf(result, award);
+    if (back > 0) lines.push(`${name} ${reader ? 'get' : 'gets'} back ${units(back)} ${NOBODY_MATCHED}.`);
+    if (award.amount === back) continue;
     const pot = award.potIndex === 0 ? 'the main pot' : `side pot ${award.potIndex}`;
     const split = award.wasSplit ? ' (split)' : '';
-    lines.push(
-      `${who(table, view, award.seat)} ${award.seat === READER_SEAT ? 'win' : 'wins'} ${units(award.amount)} from ${pot}${split}.`,
-    );
+    lines.push(`${name} ${reader ? 'win' : 'wins'} ${units(award.amount - back)} from ${pot}${split}.`);
   }
   const net = result.netBySeat[READER_SEAT] ?? 0;
   const stack = view.seats.find((seat) => seat.isSelf)?.stack ?? 0;

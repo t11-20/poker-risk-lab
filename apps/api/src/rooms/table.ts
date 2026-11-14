@@ -60,7 +60,7 @@ import { AppError } from '../errors.ts';
 import type { ProblemHook } from '../observability/telemetry.ts';
 import {
   actionSentence,
-  awardSentence,
+  awardSentences,
   forcedBetsSentence,
   NO_CHIPS_CHANGED_HANDS,
   namesFrom,
@@ -999,8 +999,7 @@ export class LiveTable {
         case 'handComplete': {
           const shown = event.result.showdowns.map((showdown) => showdownSentence(showdown, nameOf));
           if (shown.length > 0) out.push({ kind: 'showdown', summaries: shown });
-          const potCount = event.result.pots.length;
-          const awards = event.result.awards.map((award) => awardSentence(award, potCount, nameOf));
+          const awards = awardSentences(event.result, nameOf);
           out.push({
             kind: 'handComplete',
             summaries: awards.length > 0 ? awards : [NO_CHIPS_CHANGED_HANDS],
