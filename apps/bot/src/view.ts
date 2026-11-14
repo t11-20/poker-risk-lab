@@ -373,7 +373,6 @@ function recap(table: Table, view: PlayerView): string[] {
   return ['', `${from === -1 ? 'So far' : 'Since your last move'}:`, ...lines.map((line) => `${line}.`)];
 }
 
-/** What went back to each award's seat unwon. See `unmatchedPartOf`. */
 function unmatchedOf(result: HandResult, award: HandResult['awards'][number]): number {
   const pot = result.pots.find((entry) => entry.index === award.potIndex);
   return pot === undefined ? 0 : Math.min(award.amount, unmatchedPartOf(pot, result.pots));
