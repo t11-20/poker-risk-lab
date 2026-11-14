@@ -7,7 +7,7 @@
  * renders nothing. A one-off shift on a first visit beats a flash on every return visit.
  */
 
-import { Button, Callout, formatIndex, UNITS_EXPLANATION } from '@prl/ui';
+import { Button, Callout, formatIndex, UNITS_EXPLANATION, useFocusOnChange } from '@prl/ui';
 import Link from 'next/link';
 import { type ReactElement, useEffect, useRef, useState } from 'react';
 
@@ -55,7 +55,7 @@ export function Onboarding(props: OnboardingProps): ReactElement | null {
   const [visible, setVisible] = useState(false);
   const [step, setStep] = useState(0);
   const headingRef = useRef<HTMLHeadingElement>(null);
-  const stepped = useRef(false);
+  useFocusOnChange(headingRef, step);
 
   useEffect(() => {
     // Disabled storage throws. Stay hidden rather than reappear on every page load.
@@ -65,13 +65,6 @@ export function Onboarding(props: OnboardingProps): ReactElement | null {
       setVisible(false);
     }
   }, []);
-
-  /** `stepped` keeps the first render from taking focus on page load. */
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `step` is the trigger; without it focus stops following navigation
-  useEffect(() => {
-    if (!stepped.current) return;
-    headingRef.current?.focus();
-  }, [step]);
 
   const dismiss = (): void => {
     setVisible(false);
@@ -100,10 +93,7 @@ export function Onboarding(props: OnboardingProps): ReactElement | null {
                 type="button"
                 className="prl-learn-onboarding__step-btn"
                 {...(index === step ? { 'aria-current': 'step' as const } : {})}
-                onClick={() => {
-                  stepped.current = true;
-                  setStep(index);
-                }}
+                onClick={() => setStep(index)}
               >
                 <span className="prl-index" aria-hidden="true">
                   {formatIndex(index + 1)}
@@ -136,14 +126,7 @@ export function Onboarding(props: OnboardingProps): ReactElement | null {
       ) : null}
 
       <div className="prl-btn-row prl-learn-onboarding__actions">
-        <Button
-          variant="ghost"
-          disabled={step === 0}
-          onClick={() => {
-            stepped.current = true;
-            setStep(step - 1);
-          }}
-        >
+        <Button variant="ghost" disabled={step === 0} onClick={() => setStep(step - 1)}>
           Back
         </Button>
         {isLast ? (
@@ -151,13 +134,7 @@ export function Onboarding(props: OnboardingProps): ReactElement | null {
             Got it — don't show this again
           </Button>
         ) : (
-          <Button
-            variant="secondary"
-            onClick={() => {
-              stepped.current = true;
-              setStep(step + 1);
-            }}
-          >
+          <Button variant="secondary" onClick={() => setStep(step + 1)}>
             Next
           </Button>
         )}

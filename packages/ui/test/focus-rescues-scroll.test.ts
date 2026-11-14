@@ -27,14 +27,21 @@ function focusCalls(path: string): readonly string[] {
   return [...source.matchAll(/\.focus\(([^)]*)\)/gu)].map((match) => match[1] ?? '');
 }
 
-const RESCUERS: readonly (readonly [string, string, number])[] = [
-  ['ActionBar.tsx', join(SRC, 'components', 'ActionBar.tsx'), 3],
-  ['TableStage.tsx', join(WEB_SRC, 'components', 'TableStage.tsx'), 1],
-  ['LiveTable.tsx', join(WEB_SRC, 'app', 'play', 'LiveTable.tsx'), 1],
+/** Every `focus.rescue(` in a file. `useFocusRescue` does the move, and its own file is swept below. */
+function rescueCalls(path: string): number {
+  return [...readFileSync(path, 'utf8').matchAll(/\bfocus\.rescue\(/gu)].length;
+}
+
+/** Label, path, then the least number of `.focus(` calls and of `focus.rescue(` calls in it. */
+const RESCUERS: readonly (readonly [string, string, number, number])[] = [
+  ['ActionBar.tsx', join(SRC, 'components', 'ActionBar.tsx'), 2, 1],
+  ['TableStage.tsx', join(WEB_SRC, 'components', 'TableStage.tsx'), 0, 2],
+  ['LiveTable.tsx', join(WEB_SRC, 'app', 'play', 'LiveTable.tsx'), 0, 1],
+  ['focus-rescue.ts', join(SRC, 'focus-rescue.ts'), 1, 0],
 ];
 
 describe('the live table’s focus rescues pass preventScroll', () => {
-  for (const [label, path, expected] of RESCUERS) {
+  for (const [label, path, expected, rescues] of RESCUERS) {
     it(`${label}: every focus move is { preventScroll: true }`, () => {
       const calls = focusCalls(path);
       // A sweep of nothing is not a pass.
@@ -42,6 +49,11 @@ describe('the live table’s focus rescues pass preventScroll', () => {
         calls.length >= expected,
         `${label}: expected at least ${expected} focus calls, found ${calls.length}`,
       );
+      assert.ok(
+        rescueCalls(path) >= rescues,
+        `${label}: expected at least ${rescues} focus.rescue calls, found ${rescueCalls(path)}`,
+      );
+      assert.ok(calls.length + rescueCalls(path) > 0, `${label}: no focus move found at all`);
       for (const argument of calls) {
         assert.match(argument, /preventScroll:\s*true/u, `${label}: .focus(${argument}) scrolls the page`);
       }

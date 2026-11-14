@@ -70,14 +70,11 @@ const SOURCE_PATH = join(
 const SOURCE = readFileSync(SOURCE_PATH, 'utf8');
 
 /** The source without the in-flight line and its effect. Every predicate must return false for it. */
-const WITHOUT_THE_FIX = SOURCE.replace(/useLayoutEffect\(\(\) => \{[\s\S]*?\}, \[disabled\]\);/u, '').replace(
-  /\{disabled \? \(\n {10}<p[\s\S]*?<\/p>\n {8}\) : null\}/u,
+const WITHOUT_THE_FIX = SOURCE.replace(
+  /useLayoutEffect\(\(\) => \{[\s\S]*?\}, \[disabled, focus\]\);/u,
   '',
-);
-const WITHOUT_ACTIVATION_MARK = SOURCE.replace(
-  /hadFocus\.current = true;\n {4}onAct\(action\);/u,
-  'onAct(action);',
-);
+).replace(/\{disabled \? \(\n {10}<p[\s\S]*?<\/p>\n {8}\) : null\}/u, '');
+const WITHOUT_ACTIVATION_MARK = SOURCE.replace(/focus\.claim\(\);\n {4}onAct\(action\);/u, 'onAct(action);');
 
 describe('while a decision is in flight', () => {
   it('offers the caret a named place to land, inside the bar', async () => {
@@ -207,18 +204,20 @@ describe('where the caret is actually moved', () => {
   });
 
   it('never moves the caret of a reader who was not in the bar', () => {
-    // A reader halfway down the Coach panel must not be pulled back when an opponent acts.
-    assert.match(SOURCE, /if \(!hadFocus\.current\) return;/u);
+    // A reader halfway down the Coach panel must not be pulled back when an opponent acts. What counts
+    // as leaving is `createFocusRescue`'s, tested in `focus-hooks.test.ts`.
+    assert.match(SOURCE, /if \(!focus\.held\(\)\) return;/u);
+    assert.match(SOURCE, /focus\.rescue\(idleRef\.current\);/u);
     assert.match(
       SOURCE,
-      /if \(next !== null && !event\.currentTarget\.contains\(next\)\) \{/u,
+      /if \(focus\.onBlurCapture\(event\)\) parked\.current = false;/u,
       'a reader who tabs away during the wait has left the bar, and must not be pulled back into it',
     );
   });
 
   it('records an activated control as in-bar before dispatching the action', () => {
     const activationMark =
-      /const actFromBar = \(action: TableAction\): void => \{[\s\S]*?hadFocus\.current = true;[\s\S]*?onAct\(action\);/u;
+      /const actFromBar = \(action: TableAction\): void => \{[\s\S]*?focus\.claim\(\);[\s\S]*?onAct\(action\);/u;
     assert.match(
       SOURCE,
       activationMark,

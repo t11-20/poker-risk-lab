@@ -63,7 +63,7 @@ const bothFromOneState = (source: string): boolean =>
 const rescuesFocus = (source: string): boolean =>
   /const dealt = wasOfferingDeal\.current && !offeringDeal;/u.test(source) &&
   /querySelector<HTMLElement>\('\.prl-action-bar__idle'\)/u.test(source) &&
-  /target\?\.focus\(\{ preventScroll: true \}\);/u.test(source);
+  /focus\.rescue\(\s*band\.current\?\.querySelector/u.test(source);
 
 describe('"Deal the next hand" is in the band once the hand is complete', () => {
   it('is drawn by the band, with the card’s action and disabled state', () => {

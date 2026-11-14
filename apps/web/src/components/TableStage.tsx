@@ -20,7 +20,6 @@ import type { CoachReport } from '@prl/contracts';
 import {
   ActionBar,
   Button,
-  browserAbandonedFocus,
   Callout,
   CardRow,
   CoachPanel,
@@ -33,6 +32,7 @@ import {
   streetSummary,
   type TableAction,
   type TurnClock,
+  useFocusRescue,
 } from '@prl/ui';
 import Link from 'next/link';
 import {
@@ -397,27 +397,14 @@ function DecisionBand(props: DecisionBandProps): ReactElement {
   /**
    * Where the caret goes when a decision is submitted. Disabling the focused button blurs it to the
    * document, and `ActionBar`'s own rescue waits for the next frame, which never comes on the fixture
-   * path. The acknowledgement says what became of the decision. Focus moves only if it was in this
-   * band and the browser has given up on it.
+   * path. The acknowledgement says what became of the decision.
    */
   const acknowledgementRef = useRef<HTMLDivElement | null>(null);
-  const hadFocus = useRef(false);
-  const onFocusCapture = (): void => {
-    hadFocus.current = true;
-  };
-  const onBlurCapture = (event: FocusEvent<HTMLDivElement>): void => {
-    const next = event.relatedTarget;
-    // Null means the focused node was removed or disabled, not that the reader went elsewhere.
-    if (next !== null && !event.currentTarget.contains(next)) hadFocus.current = false;
-  };
+  const focus = useFocusRescue();
 
   useEffect(() => {
-    if (submission === null || !hadFocus.current) return;
-    if (!browserAbandonedFocus()) return;
-    // Without `preventScroll` the page jumped to the ack below the controls (1440x900, to the footer).
-    acknowledgementRef.current?.focus({ preventScroll: true });
-    hadFocus.current = false;
-  }, [submission]);
+    if (submission !== null) focus.rescue(acknowledgementRef.current);
+  }, [submission, focus]);
 
   /**
    * The band's Deal unmounts when the next hand's first frame lands. The bar's idle line survives that
@@ -429,13 +416,12 @@ function DecisionBand(props: DecisionBandProps): ReactElement {
   useEffect(() => {
     const dealt = wasOfferingDeal.current && !offeringDeal;
     wasOfferingDeal.current = offeringDeal;
-    if (!dealt || !hadFocus.current || !browserAbandonedFocus()) return;
-    const target =
+    if (!dealt) return;
+    focus.rescue(
       band.current?.querySelector<HTMLElement>('.prl-action-bar__idle') ??
-      band.current?.querySelector<HTMLElement>('.prl-sizer button');
-    target?.focus({ preventScroll: true });
-    hadFocus.current = false;
-  }, [offeringDeal]);
+        band.current?.querySelector<HTMLElement>('.prl-sizer button'),
+    );
+  }, [offeringDeal, focus]);
 
   const setBand = (node: HTMLDivElement | null): void => {
     band.current = node;
@@ -445,8 +431,8 @@ function DecisionBand(props: DecisionBandProps): ReactElement {
   return (
     <div
       className="prl-play__decision"
-      onBlurCapture={onBlurCapture}
-      onFocusCapture={onFocusCapture}
+      onBlurCapture={focus.onBlurCapture}
+      onFocusCapture={focus.onFocusCapture}
       ref={setBand}
     >
       {/* Mounted empty on first render, because a region that arrives with its text is missed. */}
@@ -467,7 +453,7 @@ function DecisionBand(props: DecisionBandProps): ReactElement {
         <ActionBar
           legalActions={view.legalActions}
           onAct={(action) => {
-            hadFocus.current = true;
+            focus.claim();
             onAct(action);
           }}
           pot={view.potTotal}
