@@ -48,7 +48,7 @@ const bandDeals = (source: string): boolean => {
   const band = /function DecisionBand\([\s\S]*?\n\}\n/u.exec(source)?.[0] ?? '';
   return (
     /const offeringDeal = status === 'complete' && dealNext !== undefined;/u.test(band) &&
-    /\{offeringDeal \? \([\s\S]*?onClick=\{dealNext\.onDeal\} disabled=\{dealNext\.disabled\}>\s*Deal the next hand\s*<\/Button>/u.test(
+    /idleAction: \(\s*<Button variant="primary" onClick=\{dealNext\.onDeal\} disabled=\{dealNext\.disabled\}>\s*Deal the next hand\s*<\/Button>/u.test(
       band,
     )
   );

@@ -480,16 +480,17 @@ function DecisionBand(props: DecisionBandProps): ReactElement {
               ? 'This hand is complete. Nothing is owed and there is nothing to decide.'
               : 'Waiting for another player to act.'
           }
+          {...(offeringDeal
+            ? {
+                idleAction: (
+                  <Button variant="primary" onClick={dealNext.onDeal} disabled={dealNext.disabled}>
+                    Deal the next hand
+                  </Button>
+                ),
+              }
+            : {})}
         />
       )}
-
-      {offeringDeal ? (
-        <p className="prl-btn-row prl-play__deal-next">
-          <Button variant="primary" onClick={dealNext.onDeal} disabled={dealNext.disabled}>
-            Deal the next hand
-          </Button>
-        </p>
-      ) : null}
 
       {props.notice}
 

@@ -286,10 +286,6 @@
   font-size: var(--prl-type-body-sm);
 }
 
-.prl-play__deal-next {
-  margin: 0;
-}
-
 /** Wraps, never truncates. It names at most three actions, and an ellipsis would cut the latest. */
 .prl-play__street {
   margin: 0;
@@ -672,8 +668,7 @@
 
   /* Each is told its column, so an absent plate does not pull it into column one. */
   .prl-play__decision > .prl-action-bar,
-  .prl-play__decision > .prl-play__decision-idle,
-  .prl-play__decision > .prl-play__deal-next {
+  .prl-play__decision > .prl-play__decision-idle {
     grid-column: 2;
   }
 
