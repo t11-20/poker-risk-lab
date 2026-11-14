@@ -19,12 +19,14 @@
 import type { CoachReport } from '@prl/contracts';
 import {
   ActionBar,
+  Button,
   browserAbandonedFocus,
   Callout,
   CardRow,
   CoachPanel,
   formatChips,
   HandGlance,
+  latestAction,
   type PlayerView,
   PokerTable,
   type StyleWithVars,
@@ -98,6 +100,11 @@ export interface TableStageProps {
   readonly decisionRef?: RefObject<HTMLDivElement | null>;
   /** A standing notice for the band, such as out of units. Not announced. */
   readonly decisionNotice?: ReactNode;
+  /**
+   * The connection card's "Deal the next hand", repeated in the band once a hand is complete, because
+   * the card is a screen or more above by then (y -1,174 at 390x844). Omit where there is no such control.
+   */
+  readonly dealNext?: { readonly onDeal: () => void; readonly disabled: boolean } | undefined;
 }
 
 /** Skeletons at the real content's dimensions, so nothing reflows when the data lands. */
@@ -245,12 +252,13 @@ interface TableRegionProps {
   readonly summary: readonly string[] | undefined;
   readonly errorMessage: string | undefined;
   readonly idleMessage: string | undefined;
+  readonly reviewHref: string | undefined;
 }
 
 /** The table, or the empty state, the skeleton or the error that stands in for it. Exactly one. */
 function TableRegion(props: TableRegionProps): ReactElement {
   const { status, view, turn, seatNames, highlightedCards, highlightLabel } = props;
-  const { announcement, summary, errorMessage, idleMessage } = props;
+  const { announcement, summary, errorMessage, idleMessage, reviewHref } = props;
   const hasSummary = status === 'complete' && summary !== undefined && summary.length > 0;
 
   return (
@@ -302,6 +310,12 @@ function TableRegion(props: TableRegionProps): ReactElement {
             The result of one hand says almost nothing about the decision that produced it. The hand’s review,
             which prices each decision in it, is where the useful feedback is.
           </p>
+          {/* Here as well as in the Coach, which is a collapsed sheet on a phone. */}
+          {reviewHref === undefined ? null : (
+            <p className="prl-play__summary-note">
+              <Link href={reviewHref}>Review this hand</Link>
+            </p>
+          )}
         </Callout>
       ) : null}
     </div>
@@ -317,6 +331,7 @@ const NO_VIEW_LINE: Readonly<Record<'error' | 'idle' | 'waiting', string>> = {
 interface DecisionBandProps {
   readonly status: TableStageStatus;
   readonly view: PlayerView | null;
+  readonly turn: TurnClock | null;
   readonly seatNames: Readonly<Record<number, string>> | undefined;
   readonly submission: TableSubmission | null;
   readonly turnAnnouncement: string;
@@ -325,6 +340,7 @@ interface DecisionBandProps {
   readonly autoActed: string | null;
   readonly decisionRef: RefObject<HTMLDivElement | null> | undefined;
   readonly notice: ReactNode;
+  readonly dealNext: TableStageProps['dealNext'];
 }
 
 /** Each title names who decided, the server or this browser, so the reader knows to wait or act. */
@@ -349,20 +365,32 @@ const SUBMISSION_IN_FLIGHT: ReadonlySet<TableSubmission['status']> = new Set<Tab
 ]);
 
 /**
- * The cards and board for the bar, only while a bet or raise is legal. That is when `useFollowTheTable`
- * scrolls a phone to the sizer and the plate leaves the top (measured at 390x844).
+ * The cards, board, clock and latest action for the bar, only while a bet or raise is legal. That is
+ * when `useFollowTheTable` scrolls a phone to the sizer, and the plate and street line leave the top.
  */
-function handGlanceFor(view: PlayerView): ReactElement | null {
-  const hole = view.seats.find((seat) => seat.isSelf)?.holeCards ?? null;
+function handGlanceFor(
+  view: PlayerView,
+  turn: TurnClock | null,
+  seatNames: Readonly<Record<number, string>> | undefined,
+): ReactElement | null {
+  const hero = view.seats.find((seat) => seat.isSelf);
+  const hole = hero?.holeCards ?? null;
   if (hole === null) return null;
   if (!view.legalActions.some((action) => action.type === 'bet' || action.type === 'raise')) return null;
-  return <HandGlance hole={hole} board={view.board} />;
+  return (
+    <HandGlance
+      hole={hole}
+      board={view.board}
+      clock={hero?.isToAct === true ? turn : null}
+      latest={latestAction(streetSummary(view, seatNames))}
+    />
+  );
 }
 
 /** The last block in the table column. Never pinned, see the module comment. */
 function DecisionBand(props: DecisionBandProps): ReactElement {
-  const { status, view, seatNames, submission, turnAnnouncement, isLive, onAct, autoActed, decisionRef } =
-    props;
+  const { status, view, turn, seatNames, submission, turnAnnouncement, isLive, onAct, autoActed } = props;
+  const { decisionRef, dealNext } = props;
   const pending = submission !== null && SUBMISSION_IN_FLIGHT.has(submission.status);
   const rejected = submission !== null && SUBMISSION_ALERTS.has(submission.status);
 
@@ -391,12 +419,35 @@ function DecisionBand(props: DecisionBandProps): ReactElement {
     hadFocus.current = false;
   }, [submission]);
 
+  /**
+   * The band's Deal unmounts when the next hand's first frame lands. The bar's idle line survives that
+   * frame; when the reader acts first there is none, and the sizer is the first thing they choose.
+   */
+  const band = useRef<HTMLDivElement | null>(null);
+  const offeringDeal = status === 'complete' && dealNext !== undefined;
+  const wasOfferingDeal = useRef(offeringDeal);
+  useEffect(() => {
+    const dealt = wasOfferingDeal.current && !offeringDeal;
+    wasOfferingDeal.current = offeringDeal;
+    if (!dealt || !hadFocus.current || !browserAbandonedFocus()) return;
+    const target =
+      band.current?.querySelector<HTMLElement>('.prl-action-bar__idle') ??
+      band.current?.querySelector<HTMLElement>('.prl-sizer button');
+    target?.focus({ preventScroll: true });
+    hadFocus.current = false;
+  }, [offeringDeal]);
+
+  const setBand = (node: HTMLDivElement | null): void => {
+    band.current = node;
+    if (decisionRef !== undefined) decisionRef.current = node;
+  };
+
   return (
     <div
       className="prl-play__decision"
       onBlurCapture={onBlurCapture}
       onFocusCapture={onFocusCapture}
-      ref={decisionRef}
+      ref={setBand}
     >
       {/* Mounted empty on first render, because a region that arrives with its text is missed. */}
       <div aria-atomic="true" aria-live="polite" className="prl-live-region" role="status">
@@ -423,12 +474,21 @@ function DecisionBand(props: DecisionBandProps): ReactElement {
           toCall={view.amountToCall}
           committedThisStreet={view.seats.find((seat) => seat.isSelf)?.committedThisStreet ?? 0}
           disabled={pending}
-          context={handGlanceFor(view)}
+          context={handGlanceFor(view, turn, seatNames)}
           idleText={
             status === 'complete'
               ? 'This hand is complete. Nothing is owed and there is nothing to decide.'
               : 'Waiting for another player to act.'
           }
+          {...(offeringDeal
+            ? {
+                idleAction: (
+                  <Button variant="primary" onClick={dealNext.onDeal} disabled={dealNext.disabled}>
+                    Deal the next hand
+                  </Button>
+                ),
+              }
+            : {})}
         />
       )}
 
@@ -646,10 +706,12 @@ export function TableStage(props: TableStageProps): ReactElement {
           summary={summary}
           errorMessage={errorMessage}
           idleMessage={idleMessage}
+          reviewHref={props.reviewHref}
         />
         <DecisionBand
           status={status}
           view={view}
+          turn={turn}
           submission={submission}
           turnAnnouncement={turnAnnouncement}
           isLive={isLive}
@@ -658,6 +720,7 @@ export function TableStage(props: TableStageProps): ReactElement {
           decisionRef={props.decisionRef}
           seatNames={seatNames}
           notice={props.decisionNotice}
+          dealNext={props.dealNext}
         />
       </div>
 

@@ -159,7 +159,7 @@ export {
   summariseAxes,
 } from './radar.ts';
 export { lastActionsThisStreet } from './seat-actions.ts';
-export { STREET_SUMMARY_LIMIT, type StreetSummary, streetSummary } from './street-summary.ts';
+export { latestAction, STREET_SUMMARY_LIMIT, type StreetSummary, streetSummary } from './street-summary.ts';
 export type {
   ActionName,
   LegalAction,

@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { createElement } from 'react';
+import { createElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { LegalAction, TableAction } from '../src/view-types.ts';
 import { loadComponent } from './support/render-component.ts';
@@ -23,6 +23,7 @@ interface ActionBarProps {
   readonly committedThisStreet: number;
   readonly disabled?: boolean;
   readonly idleText?: string;
+  readonly idleAction?: ReactNode;
   readonly className?: string;
 }
 
@@ -223,5 +224,31 @@ describe('a fold where checking is free says what it gives up', () => {
     const markup = await render();
     assert.match(markup, /Folding costs nothing and gives up any claim on the pot\./u);
     assert.ok(!markup.includes('Checking costs nothing here'), 'no free check is on offer');
+  });
+});
+
+describe('the idle line carries the next step beside it', () => {
+  const deal = createElement('button', { type: 'button' }, 'Deal the next hand');
+
+  it('draws the action after the idle line, inside the bar, and marks the line to share its row', async () => {
+    const markup = await render({ legalActions: [], idleText: 'This hand is complete.', idleAction: deal });
+    const line = markup.indexOf('class="prl-action-bar__idle prl-action-bar__idle--beside"');
+    const action = markup.indexOf(
+      '<div class="prl-action-bar__idle-action"><button type="button">Deal the next hand',
+    );
+    assert.ok(line >= 0, `the idle line is not marked to share its row: ${markup}`);
+    assert.ok(action > line, `the action is not after the line: ${markup}`);
+  });
+
+  it('NEGATIVE CONTROL: without one, the line keeps its full row and nothing is added', async () => {
+    const markup = await render({ legalActions: [], idleText: 'Waiting for another player to act.' });
+    assert.ok(!markup.includes('prl-action-bar__idle--beside'), markup);
+    assert.ok(!markup.includes('prl-action-bar__idle-action'), markup);
+  });
+
+  it('draws no idle action while there is a decision', async () => {
+    const markup = await render({ idleAction: deal });
+    assert.ok(markup.includes('class="prl-sizer"'), 'the decision did not render; the check is over nothing');
+    assert.ok(!markup.includes('Deal the next hand'), markup);
   });
 });

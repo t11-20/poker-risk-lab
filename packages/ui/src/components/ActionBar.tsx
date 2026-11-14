@@ -62,6 +62,8 @@ export interface ActionBarProps {
    */
   readonly disabled?: boolean;
   readonly idleText?: string;
+  /** Drawn beside the idle line, such as the next deal once a hand is over. */
+  readonly idleAction?: ReactNode;
   /** Drawn between the price and the sizer, only while there is a decision (`HandGlance` on a phone). */
   readonly context?: ReactNode;
   readonly className?: string;
@@ -282,6 +284,7 @@ export function ActionBar(props: ActionBarProps): ReactElement {
     committedThisStreet,
     disabled = false,
     idleText = 'Waiting for another player to act.',
+    idleAction,
     context,
     className,
   } = props;
@@ -416,9 +419,15 @@ export function ActionBar(props: ActionBarProps): ReactElement {
     return (
       <div className={cx('prl-action-bar', className)}>
         {/* `tabIndex={-1}` lets focus land here without a tab stop. `role="status"` announces it anyway. */}
-        <p className="prl-action-bar__idle" ref={idleRef} role="status" tabIndex={-1}>
+        <p
+          className={cx('prl-action-bar__idle', idleAction !== undefined && 'prl-action-bar__idle--beside')}
+          ref={idleRef}
+          role="status"
+          tabIndex={-1}
+        >
           {idleText}
         </p>
+        {idleAction === undefined ? null : <div className="prl-action-bar__idle-action">{idleAction}</div>}
       </div>
     );
   }

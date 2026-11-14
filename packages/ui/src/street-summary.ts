@@ -85,3 +85,9 @@ export function streetSummary(
     earlier: phrases.length - shown.length,
   };
 }
+
+/** The newest phrase under its street's name, for the bar's glance: "On the river: Nit bet 16". */
+export function latestAction(summary: StreetSummary | null): string | null {
+  const last = summary?.actions.at(-1);
+  return summary === null || last === undefined ? null : `${summary.label}: ${last}`;
+}

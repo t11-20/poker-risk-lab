@@ -28,6 +28,7 @@ import {
 } from 'react';
 import { TableStage, type TableStageStatus } from '@/components/TableStage.tsx';
 import { noAnalysisReason, readerHasDecisions, reviewHrefFor } from '@/lib/coach-body.ts';
+import { dealNextState } from '@/lib/deal-next.ts';
 import { sizerFollowDelta, watchDelta } from '@/lib/follow-the-table.ts';
 import { LEGENDS_PATH } from '@/lib/legend-links.ts';
 import { describeTable } from '@/lib/table-description.ts';
@@ -250,6 +251,16 @@ function controlsSignature(live: ConnectionPanelProps['live']): string {
   ].join('/');
 }
 
+function dealNextOf(live: LiveTableModel): ReturnType<typeof dealNextState> {
+  return dealNextState({
+    live: live.status === 'live',
+    dealingIn: live.dealingIn,
+    seated: live.table.seat !== null,
+    betweenHands: live.table.betweenHands,
+    outOfUnits: live.outOfUnits,
+  });
+}
+
 /**
  * Every control here is conditional, so pressing one usually unmounts it and the browser drops focus
  * to `<body>`. Focus then goes to the panel's status line, but only if the caret was inside this row
@@ -265,6 +276,7 @@ function ConnectionControls({
   const isLive = live.status === 'live';
   const seated = table.seat !== null;
   const manual = isLive && !live.dealingIn;
+  const deal = dealNextOf(live);
 
   const signature = controlsSignature(live);
 
@@ -317,11 +329,11 @@ function ConnectionControls({
           </Button>
         ) : null}
 
-        {manual && seated ? (
-          <Button variant="primary" onClick={live.deal} disabled={!table.betweenHands || live.outOfUnits}>
+        {deal === null ? null : (
+          <Button variant="primary" onClick={live.deal} disabled={deal.disabled}>
             Deal the next hand
           </Button>
-        ) : null}
+        )}
 
         {isLive && seated ? (
           <Button variant="secondary" onClick={live.stand}>
@@ -715,6 +727,7 @@ export function LiveTable({
   const highlighted = live.highlightedCards;
 
   const act = (action: TableAction): void => live.act(action);
+  const deal = dealNextOf(live);
   const decisionRef = useRef<HTMLDivElement | null>(null);
   useFollowTheTable(live, decisionRef);
 
@@ -735,6 +748,7 @@ export function LiveTable({
         autoActed={table.autoActed}
         decisionRef={decisionRef}
         {...(live.outOfUnits ? { decisionNotice: <OutOfUnitsAtTheTable /> } : {})}
+        {...(deal === null ? {} : { dealNext: { onDeal: live.deal, disabled: deal.disabled } })}
         idleMessage={IDLE_TABLE_MESSAGE}
         {...coachUnavailableProps(live)}
         {...(status === 'complete' ? { reviewHref: reviewHrefFor(table.view) } : {})}
