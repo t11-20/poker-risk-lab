@@ -4,14 +4,14 @@
  * a rule kept in `lab.css` left Review's breadcrumb and fixture notice unstyled.
  */
 
-/* 0. The headline measure. 22ch breaks the longest `h1` into two balanced lines, where the 60ch
+/* The headline measure. 22ch breaks the longest `h1` into two balanced lines, where the 60ch
    reading measure runs a display headline across most of the container. */
 
 :root {
   --prl-measure-display: 22ch;
 }
 
-/* 1. Page opener. The grid gap is the tight eyebrow-to-title value and the standfirst adds its own
+/* Page opener. The grid gap is the tight eyebrow-to-title value and the standfirst adds its own
    margin, because proximity is what groups the eyebrow with the title. */
 
 .prl-page-head {
@@ -40,7 +40,7 @@
   line-height: var(--prl-leading-body);
 }
 
-/* 1a. From 1000px the standfirst takes a column beside the title at the same measure, which saves
+/* From 1000px the standfirst takes a column beside the title at the same measure, which saves
    ~90px of height at 1440. Use `grid-row: 1 / span 6`, not `1 / -1`. With no explicit rows `-1` is
    line 1, and the standfirst would stretch the eyebrow's row. 1000px is shared with
    `.prl-learn-page__head` and the home hero. */

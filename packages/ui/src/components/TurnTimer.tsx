@@ -23,7 +23,6 @@ export interface TurnClock {
   readonly deadlineMs: number;
   /** The server's own clock reading in the same frame. */
   readonly serverTimeMs: number;
-  /** The whole turn budget in seconds. */
   readonly budgetSeconds: number;
 }
 

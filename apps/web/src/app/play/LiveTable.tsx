@@ -380,7 +380,6 @@ function ConnectionControls({
   );
 }
 
-/** What the reader has open, by whether it is the same kind as the table being started. */
 const OPEN_TABLE: Readonly<Record<SwitchWarning['other']['kind'], readonly [string, string]>> = {
   botTable: ['the bot table', 'another bot table'],
   legendMatch: ['a Legends match', 'another Legends match'],
@@ -679,7 +678,7 @@ function OutOfUnitsAtTheTable(): ReactElement {
  * the page follows the table. It scrolls only on the edges the reader waits for, only when the target
  * is out of view, and never while they type elsewhere. A decision brings in the action row by its
  * nearest edge, never the band by its bottom. Below 900px the band (~715px) is taller than the view
- * (~620px), and aligning its bottom hid the reader's plate under the header. Other edges are watched
+ * (~620px), and aligning its bottom hides the reader's plate under the header. Other edges are watched
  * (`watchDelta`). Viewport only, because focus belongs to the rescues, which all pass `preventScroll`.
  */
 function inView(element: HTMLElement): boolean {

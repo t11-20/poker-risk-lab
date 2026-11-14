@@ -2,7 +2,7 @@
  * Copy a learner reads is written for a learner, not for whoever maintains the code. The listed files
  * are read with comments removed, and the phrases below are shapes of the defect, not the exact old
  * sentences. It is a list, not a sweep, because `/privacy` and `/terms` are a data inventory and a legal
- * document, where naming tables is the point. The twelve files at 37057ad fail all twelve cases.
+ * document, where naming tables is the point.
  */
 
 import assert from 'node:assert/strict';

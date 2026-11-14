@@ -1,47 +1,18 @@
 /**
- * Typed fixtures for the AI Legends screens.
+ * Typed fixtures for the AI Legends screens, rendered whenever the profile service is unreachable.
+ * Every value is typed against `@prl/contracts`, so a wire change stops this file compiling.
  *
- * ## Why these exist
+ * 1. `namingMode` is `archetype` and no attributed name exists in this file. The naming mode is a
+ *    deployment decision (`PRL_LEGEND_NAMING`, default `archetype`), and a fallback in attributed
+ *    mode would ship real people's names for every operator who never set it.
+ * 2. `disclaimers` is written out per profile, copied verbatim from `@prl/poker-ai/labelling`. They
+ *    are wire strings the API serialises, and that package must not become a dependency of `apps/web`.
+ * 3. No figure is invented where it can be derived, so the numbers on screen agree with each other.
  *
- * The API routes for this mode are being built in parallel with these screens. Fixtures are
- * how the screens get built, reviewed and render-checked in CI without a database — not
- * mock-driven development for its own sake. Every value below is typed against
- * `@prl/contracts`, so the day the endpoints land, the only thing that changes is where the
- * data comes from: if a wire type moves, this file stops compiling, which is the point.
- *
- * ## Three rules this file follows, because the screens cannot fix them later
- *
- * 1. **`namingMode` is `archetype` here, and no attributed name exists in this file at all.**
- *    This used to be the opposite, on the argument that attributed mode is the harder case to
- *    render and therefore the better fixture. That argument was wrong, and the way it was wrong
- *    is worth keeping written down: the naming mode is a *deployment* decision with legal
- *    consequences (`PRL_LEGEND_NAMING`, default `archetype` in `@prl/poker-ai/labelling` —
- *    "the safe mode is the one you get by not thinking about it"). A fixture that hard-codes
- *    the permissive mode overrides that decision on every screen it renders, and because these
- *    screens fall back to the fixture whenever the profile service is unreachable, an operator
- *    who never set the variable was shipping six real people's names as profile identities.
- *    The render-check was not worth defeating the one guardrail the naming design exists to
- *    enforce, so the attributed builder is gone rather than merely unused: the attributed path
- *    is exercised where it is actually decided, on the server, in `apps/api`'s own tests.
- * 2. **`disclaimers` is written out per profile, in full, never referenced by index.** The
- *    strings are copied verbatim from `@prl/poker-ai/labelling` (`UNIVERSAL_DISCLAIMER`,
- *    `COURSE_PROFILE_DISCLAIMER`). That package is not a dependency of `apps/web`, and it must
- *    not become one: these are wire strings that the API serialises, so the honest fixture is a
- *    copy of the payload, not an import of the source.
- * 3. **No figure is invented where it can be derived.** Pot odds, break-even equity and
- *    equity surplus are computed by `potOdds()` from the pot and the price, so the numbers on
- *    screen are arithmetically consistent with each other. A fixture whose break-even figure
- *    disagreed with its own pot would teach the reader something false.
- *
- * ## Provenance of the trait text
- *
- * `TRAIT_LABELS` and `TRAIT_DESCRIPTIONS` are copied from `packages/poker-ai/src/traits.ts`,
- * which is what the API folds into `LegendTraitAxis.label` / `.description`. Each description
- * is written so a HIGH value never reads as "better" — that is a property of the text, so the
- * screens must not add a ranking, a star rating or a "score" on top of it.
- *
- * The trait vectors are copied from `packages/poker-ai/src/profiles.ts`. They are **design
- * parameters chosen to produce contrasting teaching styles, not measurements of anyone.**
+ * `TRAIT_LABELS` and `TRAIT_DESCRIPTIONS` are copied from `packages/poker-ai/src/traits.ts`. Each
+ * description is written so a HIGH value never reads as "better", so the screens must not rank them.
+ * The trait vectors, from `packages/poker-ai/src/profiles.ts`, are design parameters chosen to
+ * produce contrasting teaching styles, not measurements of anyone.
  */
 
 import {
@@ -67,10 +38,6 @@ import {
 } from '@prl/contracts';
 import { evOfBet, evOfCall, evOfRaise } from '@prl/poker-math';
 
-// ---------------------------------------------------------------------------
-// The disclaimers, verbatim from @prl/poker-ai/labelling
-// ---------------------------------------------------------------------------
-
 export const UNIVERSAL_DISCLAIMER =
   'These opponents are educational strategy simulations. Each one is a configurable set of ' +
   'tendencies — how often it enters a pot, how aggressively it bets, how much it adjusts to ' +
@@ -78,22 +45,13 @@ export const UNIVERSAL_DISCLAIMER =
   'between styles. They are not real people, not digital copies of anyone, and not endorsed by ' +
   'anyone.';
 
-/**
- * `ATTRIBUTION_DISCLAIMER` is deliberately absent.
- *
- * The API sends it only in attributed naming mode, alongside an attributed display name. Nothing
- * this file can render is in attributed mode any more (rule 1 in the header), so a copy of that
- * string here would be a disclaimer with nothing to disclaim — and, worse, the raw material for
- * putting the attributed path back.
- */
+// `ATTRIBUTION_DISCLAIMER` is deliberately absent: nothing in this file is in attributed mode (rule 1).
 const COURSE_PROFILE_DISCLAIMER =
   'This profile represents general educational concepts about disciplined, fundamentals-first play. ' +
   'It does not reproduce, summarise or substitute for any particular course, book or its proprietary ' +
   'material, and is not affiliated with any course provider.';
 
-// ---------------------------------------------------------------------------
 // Trait labels and descriptions
-// ---------------------------------------------------------------------------
 
 const TRAIT_LABELS: Readonly<Record<LegendTraitKey, string>> = {
   vpip: 'Hands played',
@@ -164,11 +122,8 @@ const TRAIT_DESCRIPTIONS: Readonly<Record<LegendTraitKey, string>> = {
 };
 
 /**
- * The ready-to-render axes for a trait vector, in the contract's own key order.
- *
- * The order matters twice over: it is the order the radar draws its spokes in, and it is the
- * order the numbered markers `01…16` key into. Deriving both from `LEGEND_TRAIT_KEYS` means a
- * chart and its legend cannot disagree.
+ * In the contract's key order, which both the radar's spokes and the numbered markers `01…16` follow,
+ * so a chart and its legend cannot disagree.
  */
 export function axesFor(traits: LegendTraits): readonly LegendTraitAxis[] {
   return LEGEND_TRAIT_KEYS.map((key) => ({
@@ -179,16 +134,9 @@ export function axesFor(traits: LegendTraits): readonly LegendTraitAxis[] {
   }));
 }
 
-// ---------------------------------------------------------------------------
-// Disclosures
-// ---------------------------------------------------------------------------
-
 /**
- * `modelBasis` for a profile whose parameters were informed by publicly discussed tendencies.
- *
- * Copied from the server, where it is a property of the *profile* and not of the naming mode: the
- * API returns this same sentence in archetype mode, because how the parameters were arrived at does
- * not change when the label does. It names no one, which is what makes it safe to ship by default.
+ * `modelBasis` for a profile informed by publicly discussed tendencies. On the server it belongs to the
+ * profile, not the naming mode, so archetype mode sends it too; it names no one.
  */
 const LOOSELY_INFORMED_BASIS =
   'Design parameters chosen to produce a recognisable style, loosely informed by tendencies widely ' +
@@ -199,13 +147,7 @@ const ARCHETYPE_BASIS =
   'Design parameters chosen to produce a specific, contrasting teaching style. Not modelled on any ' +
   'individual.';
 
-/**
- * Builds a disclosure the way `profileDisclosure()` does on the server, in archetype mode.
- *
- * There is deliberately no attributed counterpart in this file. See rule 1 in the file header: a
- * disclosure builder that can emit a real person's name is a disclosure builder that will emit one
- * the next time a screen falls back, whatever `PRL_LEGEND_NAMING` says.
- */
+/** Builds a disclosure as `profileDisclosure()` does on the server, in archetype mode only (rule 1). */
 function archetypeDisclosure(input: {
   readonly archetypeName: string;
   readonly tagline: string;
@@ -224,9 +166,7 @@ function archetypeDisclosure(input: {
   };
 }
 
-// ---------------------------------------------------------------------------
 // The profiles
-// ---------------------------------------------------------------------------
 
 const VOCAL_AGGRESSOR_TRAITS: LegendTraits = {
   vpip: 0.32,
@@ -457,22 +397,9 @@ const CALLING_STATION_TRAITS: LegendTraits = {
 };
 
 /**
- * All twelve profiles the server ships, in the server's own order.
- *
- * It used to be eight, on the argument that a fixture's job is to cover the *shapes* a screen has
- * to render rather than the whole roster. That argument does not survive contact with what this
- * fixture is actually for. These screens fall back to it whenever the profile service is
- * unreachable, so "eight shapes" shipped as *the product*: the listing rendered eight cards under a
- * requirement for eleven named profiles plus the educational one, the home page and the footer both
- * said twelve, and the detail routes for the four that were missing rendered the not-found page.
- * A fallback that is missing a third of the roster is not a fallback, it is a different product.
- *
- * The order matches `PROFILE_LIST` in `packages/poker-ai/src/profiles.ts`, so the listing does not
- * reshuffle when the API comes back. `apps/api/test/legend-fixture-figures.test.ts` asserts the
- * ids here and the ids the server serves are the same set, in the same order.
- *
- * Both disclosure shapes are still covered — plain archetype, and the course-derived one that
- * carries a second disclaimer — and none of them is attributed. See rule 1 in the file header.
+ * All twelve profiles the server ships, in `PROFILE_LIST` order: the screens fall back to this whenever
+ * the profile service is unreachable, so a partial roster would be a different product.
+ * `apps/api/test/legend-fixture-figures.test.ts` asserts the same ids in the same order.
  */
 export const LEGEND_PROFILE_FIXTURES: readonly LegendProfileCardDto[] = [
   {
@@ -808,12 +735,8 @@ export const LEGEND_PROFILE_FIXTURES: readonly LegendProfileCardDto[] = [
 ];
 
 /**
- * The three difficulty settings.
- *
- * `educational` is not "worse", it is *more legible* — which is why the description says so and
- * why `coachAvailable` is part of the wire type rather than a footnote. A learner choosing a
- * setting is choosing how readable the opponent is, and whether they can see the maths while
- * they play.
+ * The three difficulty settings. `educational` is more legible, not worse, which is why
+ * `coachAvailable` is part of the wire type.
  */
 export const LEGEND_DIFFICULTY_FIXTURES: readonly LegendDifficultyDto[] = [
   {
@@ -843,9 +766,8 @@ export const LEGEND_DIFFICULTY_FIXTURES: readonly LegendDifficultyDto[] = [
 ];
 
 export const LEGEND_PROFILES_FIXTURE: LegendProfilesResponse = {
-  // `archetype`, matching the server's default, and not negotiable from inside this file: the mode
-  // is a deployer's decision (`PRL_LEGEND_NAMING`) and an offline render path must not be able to
-  // make it. `apps/api/test/legends-naming-fallback.test.ts` asserts this stays true.
+  // The server's default. The mode is a deployer's decision (`PRL_LEGEND_NAMING`) and an offline render
+  // path must not make it; `apps/api/test/legends-naming-fallback.test.ts` asserts this.
   namingMode: 'archetype',
   profiles: LEGEND_PROFILE_FIXTURES,
   difficulties: LEGEND_DIFFICULTY_FIXTURES,
@@ -856,9 +778,7 @@ export function profileFixtureById(profileId: string): LegendProfileCardDto | nu
   return LEGEND_PROFILE_FIXTURES.find((profile) => profile.id === profileId) ?? null;
 }
 
-// ---------------------------------------------------------------------------
-// Contrasts — derived, not hand-written
-// ---------------------------------------------------------------------------
+// Contrasts, derived from the trait vectors
 
 /** How many other profiles a contrast section shows, and how many axes each one lists. */
 const CONTRAST_PROFILES = 3;
@@ -872,12 +792,9 @@ function traitDistance(left: LegendTraits, right: LegendTraits): number {
 }
 
 /**
- * The axes where this profile differs most from the others, computed rather than written.
- *
- * Derived so the contrast section cannot go stale against the trait vectors above, and so it
- * says the same thing the server's `biggestTraitDifferences` would. `delta` keeps its sign:
- * which direction a style leans is the whole content of the comparison, and an absolute value
- * would turn "plays far more hands" into "differs on hands played".
+ * The axes where this profile differs most from the others, derived so it cannot go stale against the
+ * trait vectors and says what the server's `biggestTraitDifferences` would. `delta` keeps its sign:
+ * the direction a style leans is the whole content of the comparison.
  */
 export function contrastsFor(profileId: string): LearnFromProfileResponse['contrasts'] {
   const subject = profileFixtureById(profileId);
@@ -901,23 +818,6 @@ export function contrastsFor(profileId: string): LearnFromProfileResponse['contr
     }));
 }
 
-/**
- * `PATIENT_TECHNICIAN_OBSERVED` is deliberately absent, and this note is its gravestone.
- *
- * It was a `ProfileObservedStats` — 128 hands, VPIP 0.27, PFR 0.22, and six more figures — handed
- * to a table whose own caption reads "Measured over 128 hands of your own play, not declared by the
- * profile". Nobody had played those hands. Because the fixture path was taken on every request for
- * the whole build-out, every reader who opened that profile was shown invented numbers described as
- * a measurement of their own session, in a product whose subject is how much confidence a number
- * deserves. It carried a sampling interval, which made it *more* convincing rather than less.
- *
- * There is no honest fixture value for this field. A fixture is by definition not a measurement,
- * and the field means "what happened when you played". So the fixture reports null — the state the
- * page already renders correctly — and the measurement that CAN be made honestly, of a simulation
- * rather than of the reader, is served live by `GET /legends/profiles/:id/stats` and is labelled as
- * a simulation everywhere it appears.
- */
-
 /** The "what can I learn from this style" payload, assembled from the card plus the contrasts. */
 export function learnFromFixture(profileId: string): LearnFromProfileResponse | null {
   const profile = profileFixtureById(profileId);
@@ -927,27 +827,18 @@ export function learnFromFixture(profileId: string): LearnFromProfileResponse | 
     disclosure: profile.disclosure,
     learnFrom: profile.learnFrom,
     counterStrategy: profile.counterStrategy,
-    // Null, and `observedBasis` null with it: an offline fixture has observed nothing. See above.
+    // `observed` means hands the reader played, and an offline fixture has observed nothing. A
+    // simulation's stats are served live by `GET /legends/profiles/:id/stats`, labelled as such.
     observed: null,
     observedBasis: null,
     contrasts: contrastsFor(profile.id),
   };
 }
 
-// ---------------------------------------------------------------------------
-// CoachReport construction
-// ---------------------------------------------------------------------------
-
 /**
- * Pot odds, derived from the pot and the price.
- *
- * `oddsRatio` is `pot / toCall`, and `null` when there is nothing to call: a free continuation has
- * no price, which is a real situation rather than an error. `null` rather than `Infinity` because
- * `JSON.stringify(Infinity)` is `null` anyway — a fixture emitting `Infinity` would describe a wire
- * value the wire cannot carry, and would be the one shape the live path could never produce.
- *
- * Nothing is rounded here: the components format, and a fixture that pre-rounded would disagree
- * with its own arithmetic.
+ * Pot odds, derived from the pot and the price. `oddsRatio` is `null` when there is nothing to call,
+ * not `Infinity`, because `JSON.stringify(Infinity)` is `null` and the wire cannot carry it. Nothing is
+ * rounded here: the components format.
  */
 function potOdds(input: {
   readonly pot: number;
@@ -967,10 +858,8 @@ function potOdds(input: {
 }
 
 /**
- * Facing a pot-sized bet, a caller needs a third of the final pot: `P / (2P + P)`.
- *
- * Written as the division rather than as `0.333…` so the figure on screen is the arithmetic,
- * not a number somebody typed.
+ * Facing a pot-sized bet, a caller needs a third of the final pot: `P / (2P + P)`. Written as the
+ * division so the figure on screen is the arithmetic.
  */
 const POT_ODDS_OF_POT_SIZED_BET = 1 / 3;
 
@@ -981,39 +870,19 @@ const FOLD_CANDIDATE: ActionCandidate = {
   derivation: 'Folding is the zero point every other expected value here is measured against.',
 };
 
-// ---------------------------------------------------------------------------
-// Expected values: computed here, not written here
-// ---------------------------------------------------------------------------
+// Expected values
 
 /**
- * ## Why these three functions are imported instead of the numbers being typed in
- *
- * Every expected value below used to be a literal with a prose derivation beside it and no
- * generator anywhere. None of them reproduced. From their own stated premises the two preflop
- * raises are worth 28.7 and 34.7 units and the file said 12.4 and 11.6; the flop table was out by
- * roughly a factor of seven on every row; and the compare block was not internally consistent under
- * any single convention at all — its call row priced the pot at 210 while its raise row said "the
- * 390 already committed", which are the before-call and after-call pots of the same spot.
- *
- * They erred conservatively, understating raises, which is the opposite direction from the Coach
- * bug this release fixed. That makes them not urgent and it does not make them teachable: a worked
- * example that does not survive its own arithmetic teaches a learner to stop checking, which is the
- * one habit this product exists to build.
- *
- * `evOfCall`, `evOfBet` and `evOfRaise` are the same functions `buildCoachReport` uses, so these
- * candidates are now the API's own arithmetic rather than an imitation of it, and a change to the
- * model moves them. The three conventions they encode, from `@prl/poker-math/ev`:
+ * `evOfCall`, `evOfBet` and `evOfRaise` are the functions `buildCoachReport` uses, so these candidates
+ * are the API's own arithmetic. The conventions, from `@prl/poker-math/ev`:
  *
  *     EV(call)  = e x (pot + toCall) - toCall
  *     EV(bet)   = f x pot + (1 - f) x [ e x (pot + 2b) - b ]
  *     EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ]
  *
- * `pot` is what is in the middle BEFORE the action and already includes the bet being called, so
- * it is what a fold wins — never the pot the call would create. `r` is the raise ON TOP of the
- * call, and the raiser risks `c + r`, which is the term the old figures dropped.
- *
- * `apps/api/test/legend-fixture-figures.test.ts` recomputes every candidate here from the pot,
- * price, equity and fold frequency this file states, and asserts the stored figure matches.
+ * `pot` is what is in the middle BEFORE the action, including the bet being called: what a fold wins.
+ * `r` is the raise ON TOP of the call, so the raiser risks `c + r`.
+ * `apps/api/test/legend-fixture-figures.test.ts` recomputes every candidate from the figures stated here.
  */
 
 /** One decimal place, the resolution every EV in this file is quoted at. */
@@ -1037,22 +906,10 @@ function betEv(pot: number, betSize: number, foldProbability: number, equity: nu
 }
 
 /**
- * `EV(raise)`, keyed on the candidate's own `cost` rather than on its `to`.
- *
- * ## Why `cost` and not `to`, which is the trap this helper exists to close
- *
- * `ActionCandidate.to` is a raise TO: the seat's total commitment for the street once the action
- * lands. `cost` is what leaves the stack now. The two differ by whatever the seat had already put
- * in — a small blind, a previous bet — and the difference is invisible in most spots because it is
- * usually zero.
- *
- * It is not zero preflop. Hero is the small blind with 10 already in, facing a big blind of 20, so
- * `toCall` is 10 and a raise to 60 costs 50, of which 40 is the raise on top of the call. A helper
- * that computed `raiseBy = to - toCall` would call it 50, charge hero the right total by accident
- * and give the opponent 10 too much to match, and report 30.5 instead of 28.7 — a small, plausible
- * overstatement of exactly the kind this whole rewrite is correcting, produced by the same class of
- * mistake. So the increment is derived from the chips actually moved: `raiseBy = cost - toCall`,
- * and the risk `evOfRaise` charges is `toCall + raiseBy`, which is `cost`.
+ * `EV(raise)`, keyed on the candidate's `cost` rather than its `to`. `to` is the street total once the
+ * action lands and `cost` is what leaves the stack now; they differ by what was already in. From the
+ * small blind (10 in, facing 20) a raise to 60 costs 50, 40 of it on top of the call, and
+ * `raiseBy = to - toCall` would report 30.5 instead of 28.7.
  */
 function raiseEv(input: {
   readonly pot: number;
@@ -1072,10 +929,8 @@ function raiseEv(input: {
 }
 
 /**
- * How often they must fold for a raise to break even, as a percentage.
- *
- * Solved from the same line the EV is: `f x pot + (1 - f) x S = 0` where `S` is the called branch,
- * so `f* = -S / (pot - S)`. Quoted in the copy, so it is derived rather than estimated.
+ * How often they must fold for a raise to break even, as a percentage: `f x pot + (1 - f) x S = 0`
+ * for the called branch `S`, so `f* = -S / (pot - S)`.
  */
 function breakEvenFoldPercent(input: {
   readonly pot: number;
@@ -1090,13 +945,11 @@ function breakEvenFoldPercent(input: {
   return (-called / (input.pot - called)) * 100;
 }
 
-// ---------------------------------------------------------------------------
 // The hand comparison
-// ---------------------------------------------------------------------------
 
 const BIG_BLIND = 20;
 
-// --- Preflop -----------------------------------------------------------------
+// Preflop
 
 const PREFLOP_POT = 30;
 const PREFLOP_TO_CALL = 10;
@@ -1235,7 +1088,7 @@ const PREFLOP_ANALYSIS: CoachReport = {
   ],
 };
 
-// --- Flop --------------------------------------------------------------------
+// Flop
 
 const FLOP_POT = 120;
 const FLOP_EQUITY = 0.782;
@@ -1366,19 +1219,12 @@ const FLOP_ANALYSIS: CoachReport = {
   ],
 };
 
-// --- Turn --------------------------------------------------------------------
+// Turn
 
 const TURN_POT = 550;
 const TURN_TO_CALL = 250;
 const TURN_EQUITY = 0.325;
-/**
- * The one figure in this file that was already right.
- *
- * `0.325 x 800 - 250 = +10.0`, which is what the old literal said. Calls were correct throughout;
- * the arithmetic that did not reproduce was the raises and the bets. It is computed here anyway,
- * because a figure that happens to be right and a figure that is derived are different things the
- * next time somebody edits the equity above it.
- */
+/** `0.325 x 800 - 250 = +10.0`, computed rather than typed so it follows an edit to the equity. */
 const TURN_CALL_EV = callEv(TURN_POT, TURN_TO_CALL, TURN_EQUITY);
 
 /** Turn: the learner faces an all-in for their last 250 units. */
@@ -1480,18 +1326,13 @@ const TURN_ANALYSIS: CoachReport = {
   ],
 };
 
-// ---------------------------------------------------------------------------
 // The decisions, and the quality bands they land in
-// ---------------------------------------------------------------------------
 
 /**
- * `QUALITY_BANDS_IN_BIG_BLINDS` from `@prl/poker-ai/comparison`, applied here.
- *
- * The bands are half a big blind and two big blinds of shortfall. They are copied rather than
- * imported because `@prl/poker-ai` is not a dependency of `apps/web` and must not become one — it
- * reaches the policy code, and nothing that decides an opponent's action belongs in a browser
- * bundle. `apps/api/test/legend-fixture-figures.test.ts` asserts every band below is the one
- * `bandForShortfall` returns for the same shortfall, so the copy cannot drift silently.
+ * `QUALITY_BANDS_IN_BIG_BLINDS` from `@prl/poker-ai/comparison`: half a big blind and two big blinds of
+ * shortfall. Copied, not imported, because `@prl/poker-ai` reaches the policy code, which does not
+ * belong in a browser bundle. `apps/api/test/legend-fixture-figures.test.ts` asserts every band below
+ * is the one `bandForShortfall` returns.
  */
 function bandFor(shortfallUnits: number): DecisionQuality['band'] {
   const bigBlinds = Math.max(0, shortfallUnits) / BIG_BLIND;
@@ -1790,28 +1631,10 @@ const DECISIONS: readonly ComparedDecision[] = [
 ];
 
 /**
- * A finished hand: played close to the analysis at every scored decision, and lost in full.
- *
- * ## What this fixture demonstrates changed when its arithmetic was corrected, and that is the point
- *
- * It used to claim the line was the best-priced one at every decision and that the whole hand gave
- * up 0.4 units. Both figures came from EV literals that did not reproduce. Recomputed from the same
- * functions the API uses, the preflop raise gives up 5.9 units to the larger size and the flop bet
- * gives up 15.3 to the larger size — 21.2 units across the hand, 1.06 big blinds, which is
- * `slightly-off` rather than `consistent-with-analysis`.
- *
- * `outcomeVersusQualityNote` therefore has to be null, and that is not a loss of the teaching
- * moment — it is `@prl/poker-ai`'s rule working. That note fires only when the result and the
- * quality point in CLEARLY opposite directions, and it returns null for `slightly-off` precisely so
- * it does not become wallpaper. A hand that was a little off and lost is not a paradox worth a
- * paragraph; the paragraph is reserved for a hand that was right and lost, and this one no longer
- * is. Writing the old note over the new band would be teaching text contradicting the table above
- * it, which is the defect this rewrite exists to remove.
- *
- * What the hand still shows, and shows better: `chipResult` is the learner's entire 400-unit stack,
- * `decisionQuality` is computed from the analysis at each decision with no reference to the
- * run-out, and the two remain structurally unrelated. The per-decision notes now say exactly where
- * the 21.2 units went — both times, into choosing a smaller size than the table prices best.
+ * A finished hand: played close to the analysis at every scored decision, and lost in full. The preflop
+ * raise gives up 5.9 units and the flop bet 15.3, both to the larger size: 21.2 units, 1.06 big blinds,
+ * which is `slightly-off`. `chipResult` is the whole 400-unit stack and `decisionQuality` makes no
+ * reference to the run-out, so the two stay structurally unrelated.
  */
 export const HAND_COMPARISON_FIXTURE: HandComparison = {
   handId: 'hand_9f4c2ab7',
@@ -1831,9 +1654,8 @@ export const HAND_COMPARISON_FIXTURE: HandComparison = {
       'sizing: the line — raise, bet, call — is the line the analysis prices best at every one of the three. ' +
       'Every figure here comes from the analysis at each decision and none of it comes from how the hand ended.',
   },
-  // Null because the band is `slightly-off`, which is the rule in `@prl/poker-ai`'s
-  // `outcomeVersusQualityNote`: the note is reserved for a result and a quality in clear
-  // disagreement, and a hand played a big blind off the best available is not that. See the header.
+  // Null because the band is `slightly-off`: `@prl/poker-ai`'s `outcomeVersusQualityNote` is reserved
+  // for a result and a quality in clear disagreement.
   outcomeVersusQualityNote: null,
   profileId: 'patient-technician',
   disclosure: archetypeDisclosure({
@@ -1845,9 +1667,7 @@ export const HAND_COMPARISON_FIXTURE: HandComparison = {
 /** The blind level the bands above are scaled by. Exported so a screen can state it. */
 export const HAND_COMPARISON_BIG_BLIND = BIG_BLIND;
 
-// ---------------------------------------------------------------------------
 // The same spot, played by several styles
-// ---------------------------------------------------------------------------
 
 export const COMPARE_SITUATION_FIXTURE: NonNullable<CompareProfilesRequest['situation']> = {
   heroCards: 'AhJh',
@@ -1860,7 +1680,7 @@ export const COMPARE_SITUATION_FIXTURE: NonNullable<CompareProfilesRequest['situ
   street: 'flop',
 };
 
-// --- The compare spot --------------------------------------------------------
+// The compare spot
 
 const COMPARE_POT = 210;
 const COMPARE_TO_CALL = 180;
@@ -1892,22 +1712,10 @@ const COMPARE_RAISE_520_BREAK_EVEN = breakEvenFoldPercent({
 });
 
 /**
- * The maths for that spot, identical for every profile.
- *
- * ## What this spot actually shows, now that its arithmetic reproduces
- *
- * It used to say the table "does not settle the argument": calling at minus 17, folding at zero,
- * raising at plus 6.2. Two of those three were wrong. Corrected, the table is emphatic — raising is
- * priced about forty-six units above folding, at either of the two sizes — and the spot is *more*
- * useful for it, not less, because of what the styles do with it. Three of the four columns below
- * do not take the highest-priced line. That is the lesson this page is for: these are tendencies
- * sampled from a distribution, not solvers, and a style disagreeing with the arithmetic is a fact
- * about the style rather than a mistake in the table.
- *
- * The raise still rests entirely on one assumed number. Below about a 26% fold frequency it stops
- * being worth more than folding, and 42% is an assumption from a profile card rather than anything
- * measured here — which is why its confidence is `low` and why the figure is quoted rather than
- * described.
+ * The maths for that spot, identical for every profile. Raising is priced about forty-six units above
+ * folding at either size, and three of the four styles below still do not take it: these are
+ * tendencies sampled from a distribution, not solvers. The raise rests on an assumed 42% fold
+ * frequency from a profile card and stops beating a fold below about 26%, hence `low` confidence.
  */
 const COMPARE_ANALYSIS: CoachReport = {
   street: 'flop',
@@ -2064,17 +1872,9 @@ function comparisonEntry(input: {
 }
 
 /**
- * Trials per profile in this fixture — `MAX_COMPARE_TRIALS`, which is what the endpoint will run.
- *
- * It said 400, which the endpoint's own schema rejects: `trials` is capped at 40. Every weight
- * below was therefore a proportion of a sample size the server cannot produce, in a fixture whose
- * job is to look like the server's answer. They are now written as whole counts over 40 — `18 / 40`
- * rather than `0.46` — because a frequency measured over forty trials is a multiple of 1/40, and a
- * fixture that prints 0.46 is claiming a resolution the sample does not have.
- *
- * Forty is a coarse sample and the compare page prints what that costs: the widest 95% interval on
- * a proportion over forty trials is about 15 points, which is wider than most of the gaps between
- * two columns here. That is the honest reading of this table and the page says so.
+ * Trials per profile: `MAX_COMPARE_TRIALS`, the endpoint's cap of 40. Weights are whole counts over 40
+ * (`18 / 40`, not `0.46`), because a frequency over forty trials is a multiple of 1/40. The widest 95%
+ * interval over forty trials is about 15 points, wider than most gaps between columns.
  */
 const COMPARE_TRIALS = MAX_COMPARE_TRIALS;
 

@@ -3,9 +3,9 @@
  * `globals.css`, which owns the shell's skeleton. A rule restating one from there adds a class, so it
  * wins on specificity rather than on import order.
  *
- * The ghosting bug. The old header rested at 92% opacity with no `backdrop-filter`, and headings
- * scrolled under it stayed legible as a second layer of text. Opacity keeps the backdrop's legibility
- * and colour. Blur plus saturate removes the legibility and keeps the colour. So a glass fill never
+ * The ghosting bug: a translucent fill with no `backdrop-filter` leaves headings scrolled under it
+ * legible as a second layer of text. Opacity keeps the backdrop's legibility and colour. Blur plus
+ * saturate removes the legibility and keeps the colour. So a glass fill never
  * appears without `--prl-glass-filter` in the same block (layout-guarantees.test.ts), the strip is
  * blurred from first paint, and the 20px blur exceeds the largest reading size (17px). Under reduced
  * transparency, `prefers-contrast: more` and forced colours, `tokens.css` turns the fill opaque and
@@ -15,8 +15,6 @@
  * header is sticky, not fixed, so the page starts below it, and the `scroll-padding` rule below keeps
  * anchors and focused controls out from under it.
  */
-
-/* 0. THE BAR'S OWN TOKENS */
 
 :root {
   /** One tap target tall (`--prl-target-min`, 44px, WCAG 2.2). Every group shares the height. */
@@ -28,14 +26,14 @@
 
   /**
    * The tallest the bar can be at this width. Two rows by default, because the tools wrap (129px up
-   * to 381px, measured with scripting off). 129px is `2 * 44 + 8 + 2 * 16` plus the 1px edge. The
-   * old one-row 92px left 37px of a scrolled-to control behind the glass.
+   * to 381px, measured with scripting off). 129px is `2 * 44 + 8 + 2 * 16` plus the 1px edge. A
+   * one-row 92px leaves 37px of a scrolled-to control behind the glass.
    */
   --prl-pillbar-h: calc(2 * var(--prl-pill-h) + var(--prl-space-4) + 2 * var(--prl-pillbar-pad-block));
 }
 
 /**
- * One row from 360 to 411 (the trigger is a 44px circle, section 8) and from 860 up. At 360 the bar
+ * One row from 360 to 411 (the trigger is a 44px circle below 412px) and from 860 up. At 360 the bar
  * measured one row with balances up to 10,000,000 units, and two rows of padding cost every anchor
  * 67px. Nothing caps a balance, so this band is a trade. Every other width keeps the two-row default,
  * the safe side, because a bar taller than its padding hides the target. `test:keyboard` fails a
@@ -49,13 +47,11 @@
 
 /**
  * Anchors and focused controls land below the bar plus a step of air. Restated here because the value
- * derives from this bar, and base.css's 80px predates it. `test:keyboard` asserts it at 360x640.
+ * derives from this bar, not from base.css's 80px. `test:keyboard` asserts it at 360x640.
  */
 :root {
   scroll-padding-block-start: calc(var(--prl-pillbar-h) + var(--prl-space-6));
 }
-
-/* 1. THE STRIP */
 
 /**
  * Fill and filter are restated together, because a block with the fill and no filter is the ghosting
@@ -78,8 +74,8 @@
   border-block-end: 1px solid var(--prl-line-strong);
 }
 
-/* 2. THE BAR LAYOUT. `1fr auto 1fr` centres the navigation pill on the viewport, so it does not move
-   when a label changes. Below 860px the grid is two columns (section 8). */
+/* Bar layout. `1fr auto 1fr` centres the navigation pill on the viewport, so it does not move
+   when a label changes. Below 860px the grid is two columns. */
 
 .prl-shell__header-inner {
   display: grid;
@@ -103,8 +99,6 @@
   box-shadow: var(--prl-elevation-2);
   transition: border-color var(--prl-dur-quick) var(--prl-ease-standard);
 }
-
-/* ---- 2.1 the wordmark ---- */
 
 /** The wordmark is not a pill, so the reader does not look for a fourth control. It shares the height. */
 .prl-pillbar__brand {
@@ -155,8 +149,6 @@
   display: none;
 }
 
-/* ---- 2.2 the trailing controls ---- */
-
 .prl-shell__header-tools {
   display: flex;
   flex-wrap: wrap;
@@ -165,7 +157,7 @@
   gap: var(--prl-space-4) var(--prl-pill-gap);
 }
 
-/* 3. THE NAVIGATION PILL. Links only, because a reader scans this control. */
+/* Navigation pill. Links only, because a reader scans this control. */
 
 .prl-nav--pill {
   flex-wrap: nowrap;
@@ -217,8 +209,6 @@
   color: var(--prl-text-on-accent);
 }
 
-/* ---- 3.1 the count badge ---- */
-
 /** The figure comes from the API, with no hard-coded fallback. `:empty` hides it until it arrives. */
 .prl-nav__count {
   display: inline-grid;
@@ -245,7 +235,7 @@
   display: none;
 }
 
-/* 4. THE UNITS READOUT. The figure, the word `units` and the `i` are guardrails, never shrunk or hidden. */
+/* Units readout. The figure, the word `units` and the `i` are guardrails, never shrunk or hidden. */
 
 .prl-shell__units {
   position: relative;
@@ -304,8 +294,8 @@
 }
 
 /**
- * Below 860px the note hangs from the header, not the pill. Anchored to the pill it started at x=-40
- * at 360. Measured after, it spans x=16 to 344 at 360.
+ * Below 860px the note hangs from the header, not the pill. Anchored to the pill it starts at x=-40
+ * at 360. From the header it spans x=16 to 344.
  */
 @media (width < 860px) {
   .prl-shell__units {
@@ -320,14 +310,14 @@
   }
 }
 
-/* 5. THE THEME SWITCH. Its shape is in section 8a. */
+/* Theme switch. Its shape is at `.prl-footer__theme`. */
 
 /** Not in the bar. At 1280px the bar's four objects need 1067 of 1200px and the switch needs 217 more. */
 .prl-pillbar .prl-shell__theme {
   display: none;
 }
 
-/* 6. THE CALL TO ACTION. `--prl-accent-fill` with `--prl-text-on-accent` measures 7.29:1 light and
+/* Call to action. `--prl-accent-fill` with `--prl-text-on-accent` measures 7.29:1 light and
    6.74:1 dark, enforced by `scripts/check-contrast.mjs`. */
 
 .prl-pillbar__cta {
@@ -364,7 +354,7 @@
   outline: 1px solid var(--prl-accent-fill);
 }
 
-/* 7. FOCUS, INSIDE ROUNDED OVERFLOW. The ring takes the control's radius. */
+/* Focus inside rounded overflow. The ring takes the control's radius. */
 
 .prl-pillbar a:focus-visible,
 .prl-pillbar button:focus-visible {
@@ -382,15 +372,15 @@
 }
 
 /**
- * The decorative outline above is (0,2,0) and beat `base.css`'s `:where()` ring at (0,1,0), so the
- * Play pill looked the same focused and unfocused (keyboard-audit.mjs). This restates the ring to win.
+ * The decorative outline above is (0,2,0) and beats `base.css`'s `:where()` ring at (0,1,0), so the
+ * Play pill would look the same focused and unfocused (keyboard-audit.mjs). This restates the ring to win.
  */
 .prl-pillbar__cta[aria-current="page"]:focus-visible {
   outline: var(--prl-focus-width) solid var(--prl-text-on-accent);
   outline-offset: calc(-1 * var(--prl-focus-offset));
 }
 
-/* 8. THE NARROW VIEWPORT. Below 860px the destinations move into the sheet. */
+/* Narrow viewport. Below 860px the destinations move into the sheet. */
 
 /** The trigger's edge stays `--prl-line-strong`, because it is the only way into the navigation. */
 .prl-nav-trigger {
@@ -452,7 +442,7 @@
   gap: var(--prl-space-5);
 }
 
-/* 8a. THE THEME CONTROL'S PERMANENT HOME. The footer copy, spanning the footer grid. */
+/* The theme control's permanent home, the footer copy, spanning the footer grid. */
 
 /** Flex, because in a block container the `<fieldset>` stretches to the footer's full width. */
 .prl-footer__appearance {
@@ -496,7 +486,7 @@
   outline-offset: calc(-1 * var(--prl-focus-offset));
 }
 
-/* 8b. THE FLOATING STATE. Past the sentinel every pill edge separates two layers, so the whole border
+/* Floating state. Past the sentinel every pill edge separates two layers, so the whole border
    moves from the lit hairline (~1.5:1) to `--prl-line-strong` (3.63:1 on dark glass), per WCAG 1.4.11. These rules
    come after every rule they override. */
 
@@ -511,7 +501,7 @@
   border-color: var(--prl-accent-edge);
 }
 
-/* 8b. THE PENDING NAVIGATION PILL. Fixed and never a target, so it moves nothing and takes no press. */
+/* Pending navigation pill. Fixed and never a target, so it moves nothing and takes no press. */
 
 .prl-pending {
   position: fixed;
@@ -549,7 +539,7 @@
   }
 }
 
-/* 9. RESPONSIVE. 860 is mirrored by `NAV_SHEET_QUERY` in `src/lib/nav.ts`. */
+/* Responsive. 860 is mirrored by `NAV_SHEET_QUERY` in `src/lib/nav.ts`. */
 
 @media (min-width: 600px) {
   /** The full name, with the ` Lab` `globals.css` drops below 860px, fits below 860 and above 1280. */
@@ -590,7 +580,7 @@
   }
 }
 
-/* 10. FORCED COLORS. Fills are discarded, so the current page and the call to action get `Highlight`. */
+/* Forced colors. Fills are discarded, so the current page and the call to action get `Highlight`. */
 
 @media (forced-colors: active) {
   .prl-nav--pill .prl-nav__link[aria-current="page"],

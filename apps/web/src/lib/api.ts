@@ -9,7 +9,7 @@
 import type { ApiError, DeleteAccountResponse, ErrorCode, SessionResponse } from '@prl/contracts';
 import { ACCOUNT_DELETE_CONFIRMATION, API_PATHS } from '@prl/contracts';
 
-/** Re-exported, never re-declared. A second copy once sent the client to `/api/…` instead of `/api/v1/…`. */
+/** Re-exported, never re-declared, so the client cannot drift from the API's `/api/v1/…` prefix. */
 export { API_PATHS, API_PREFIX } from '@prl/contracts';
 
 /**
@@ -58,8 +58,8 @@ export class ApiRequestError extends Error {
 
 /**
  * True when nothing routed the request (`'transport'`) or the API said it cannot serve (503, 501, 5xx).
- * A 404 is deliberately excluded. Counting it hid a missing `/api/v1` segment behind fixtures for the
- * whole build-out. Single-resource callers use `isMissingResource`.
+ * A 404 is deliberately excluded, because counting it hides a wrong path behind fixtures.
+ * Single-resource callers use `isMissingResource`.
  */
 export function isApiUnavailable(error: unknown): boolean {
   if (!(error instanceof ApiRequestError)) return false;
@@ -78,8 +78,8 @@ export function isMissingResource(error: unknown): boolean {
 
 /**
  * Both 401 codes. `not_authenticated` is no usable cookie, `session_expired` is a cookie this deployment
- * signed whose session is gone. Matching only the first sent old cookies to the error boundary. This
- * picks which screen to draw and decides no trust.
+ * signed whose session is gone. Matching only the first would send old cookies to the error boundary.
+ * This picks which screen to draw and decides no trust.
  */
 export function isSignedOut(error: unknown): boolean {
   if (!(error instanceof ApiRequestError)) return false;
@@ -87,7 +87,7 @@ export function isSignedOut(error: unknown): boolean {
 }
 
 /**
- * A 400 `invalid_request` naming only the cursor. `/review?cursor=zzz` was a 500 (audit at 308fadf).
+ * A 400 `invalid_request` naming only the cursor, so `/review?cursor=zzz` is a screen, not a 500.
  * Kept this narrow so a 400 on any other field still reaches the boundary.
  */
 export function isRejectedCursor(error: unknown): boolean {
@@ -324,7 +324,7 @@ function notifyMutationAccepted(mutating: boolean): void {
 }
 
 /**
- * A settled hand moves units over the socket, which HTTP never sees (audit at 6b3886e). The caller
+ * A settled hand moves units over the socket, which HTTP never sees. The caller
  * says only that the session may have moved.
  */
 export function notifySessionChanged(): void {

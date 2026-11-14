@@ -253,8 +253,8 @@
   --prl-space-15: 8rem;
   --prl-space-16: 10rem;
 
-  /* Sections pad both block edges, so a seam spends this twice. It was 257px of nothing on an
-     801px viewport. Now the seam is near 104px on a laptop and 80px on a phone. */
+  /* Sections pad both block edges, so a seam spends this twice, about 104px on a laptop and
+     80px on a phone. */
   --prl-section-y: clamp(2.5rem, 3.2vw, 4rem);
   --prl-gutter: clamp(1rem, 4vw, 2.5rem);
   /* 78rem is a 1248px shell holding two 560px columns with a 128px gutter, the widest layout here. */
@@ -514,7 +514,7 @@
 /* REDUCED TRANSPARENCY. Materials collapse to the opaque surface below them, and the filter goes
    to `none` so no blur is paid for behind an opaque fill.
    `:root:root` is required. Both light scopes are (0,2,0) and set the glass tokens, so a bare
-   `:root` (0,1,0) lost and light readers got a 94% pane with no blur. The doubled pseudo-class
+   `:root` (0,1,0) loses and light readers get a 94% pane with no blur. The doubled pseudo-class
    ties and wins by source order. preference-cascade.test.ts pins it. */
 @media (prefers-reduced-transparency: reduce) {
   :root:root {

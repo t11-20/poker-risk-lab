@@ -1,8 +1,7 @@
 /**
  * The counts the product prints about itself, checked against `contentStats()` and the bundle. They
- * are hand-typed literals in `.tsx` (read as text, because `node --test` cannot load `.tsx`), and
- * `docs/VERIFICATION.md` §9 once said 80 quiz questions where the bundle had 81. Prose is pinned in
- * `honesty-claims.test.ts`. Every phrase must be found, so a reworded page fails rather than going quiet.
+ * are hand-typed literals in `.tsx` (read as text, because `node --test` cannot load `.tsx`). Prose is
+ * pinned in `honesty-claims.test.ts`. Every phrase must be found, so a reworded page fails rather than going quiet.
  */
 
 import assert from 'node:assert/strict';
@@ -152,9 +151,8 @@ describe('the counts the product prints about itself', () => {
 
   /**
    * The other three fixtures (glossary, lesson bodies, quizzes) copied from `packages/content/data`.
-   * On 2026-08-27 a corrected glossary definition landed in content and not in the fixture, and
-   * `fixtures:check` passed, because it covers only scenario analysis. Definitions and question text
-   * are compared, because an id-only join would have passed that drift.
+   * `fixtures:check` covers only scenario analysis, and an id-only join would pass a corrected
+   * definition that reached content and not the fixture, so definitions and question text are compared.
    */
   it('the glossary fixture still says what the content package says (REGRESSION)', () => {
     const byId = new Map(bundle.glossary.map((entry) => [entry.id, entry]));

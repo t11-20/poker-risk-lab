@@ -62,8 +62,8 @@ export default async function RootLayout({
         <div className="prl-app">
           <SiteHeader fallbackUnits={STARTING_UNITS} />
           {/*
-            `tabIndex={-1}` makes the skip link move focus, not only the navigation starting point
-            (found by `scripts/keyboard-audit.mjs`). `-1`, so it adds no tab stop.
+            `tabIndex={-1}` makes the skip link move focus, not only the navigation starting point.
+            `-1`, so it adds no tab stop.
           */}
           <main className="prl-app__main" id={MAIN_ID} tabIndex={-1}>
             {children}

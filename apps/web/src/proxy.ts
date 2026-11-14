@@ -112,7 +112,7 @@ async function bootstrapGuest(request: NextRequest, forwarded: Headers): Promise
   try {
     const minted = await mintGuestSession({
       // The PUBLIC origin. The API exact-matches it against its allowlist, so the container's own
-      // address made every mint a 403 behind a proxy (see `lib/public-origin.ts`).
+      // address makes every mint a 403 behind a proxy (see `lib/public-origin.ts`).
       origin: publicOriginFor({
         env: process.env,
         headers: request.headers,

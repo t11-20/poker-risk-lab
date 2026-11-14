@@ -48,7 +48,7 @@ export interface Consistency {
   readonly pricing: ConsistencyPricing;
   /**
    * `benchmarkEv - chosenEv`, signed, null when unpriced. Not `shortfallUnits`, which is zero inside the
-   * allowance and once printed 0.0 for an action 2.9 units behind folding.
+   * allowance and would print 0.0 for an action 2.9 units behind folding.
    */
   readonly behindBenchmarkUnits: number | null;
   /** Whether `behindBenchmarkUnits` fits `toleranceUnits`, which is the verdict. Null when unpriced. */

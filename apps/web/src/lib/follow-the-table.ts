@@ -1,10 +1,10 @@
 /**
  * How far to scroll so a reader can reach the bet sizer on a narrow column. Below 46rem the action row
- * sticks to the viewport bottom, and following it by its nearest edge painted it over the sizer, so a
- * tap on a preset hit a button (390x844).
+ * sticks to the viewport bottom, and following it by its nearest edge paints it over the sizer, so a
+ * tap on a preset hits a button (390x844).
  * The kept region runs from the street line to the row's in-flow bottom. When it does not fit, the
- * street line goes first and `HandGlance` (cards and board) stays, because sizing a bet without seeing
- * the cards was the first version's defect. Pure, so `node --test` drives it with measured rectangles.
+ * street line goes first and `HandGlance` (cards and board) stays, because a bet must not be sized
+ * without seeing the cards. Pure, so `node --test` drives it with measured rectangles.
  */
 
 /** Viewport coordinates, as `getBoundingClientRect` gives them. */
@@ -46,7 +46,7 @@ export function sizerFollowDelta(geometry: SizerGeometry): number {
   }
   const keep = handTop ?? sizerTop;
   // The cards down to the row fit. Drop the street line whole, because a 7px sliver of it under the
-  // header read as a rendering fault.
+  // header reads as a rendering fault.
   const toBottom = rowFlowBottom - viewBottom;
   if (keep - toBottom < viewTop) return keep - viewTop;
   const whole = streetBottom === null ? toBottom : Math.max(toBottom, streetBottom - coverBottom);

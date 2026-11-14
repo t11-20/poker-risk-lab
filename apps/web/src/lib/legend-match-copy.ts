@@ -50,7 +50,7 @@ export function legendMatchCopy(input: LegendMatchCopyInput): LegendMatchCopy {
 
 /**
  * One copy, so the "Start a match" form and the picker's chip cannot disagree. Not in a `'use client'`
- * module, because a server component calling a client export got a reference and failed to render.
+ * module, because a server component calling a client export gets a reference and fails to render.
  */
 export function coachWords(coachAvailable: boolean): string {
   return coachAvailable ? 'Coach available while you play' : 'Coach in review only';

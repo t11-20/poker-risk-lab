@@ -136,7 +136,7 @@ function observedRows(observed: ProfileObservedStats): readonly ObservedRow[] {
     {
       label: 'Folded to a bet',
       value: observed.foldToBetFrequency,
-      // Not the card's fold-under-pressure trait, which counts only made hands. Pairing them made
+      // Not the card's fold-under-pressure trait, which counts only made hands. Pairing them makes
       // calling-station look fifteen intervals off its own card (`stats.ts`).
       note: 'How often it folded facing a bet, on any street. Not the fold-under-pressure trait on its card, which is about giving up a made hand.',
       kind: 'frequency',

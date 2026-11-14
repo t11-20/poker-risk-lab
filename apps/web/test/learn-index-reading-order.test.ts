@@ -1,8 +1,8 @@
 /**
  * The number on a lesson card is the step "Next" takes it to, and the card is the target. Next follows
  * `lessonsInReadingOrder()`, and `learn-next-lesson.test.ts` shows the old topic order skips a
- * prerequisite, so the index is numbered by reading order. Against the old `buildCurriculum`, Lesson 2's
- * Next led to Lesson 4. Tap targets are held as stylesheet rules, because `test:layout` measures glyphs.
+ * prerequisite, so the index is numbered by reading order. Tap targets are held as stylesheet rules,
+ * because `test:layout` measures glyphs.
  */
 
 import assert from 'node:assert/strict';

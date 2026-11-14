@@ -215,7 +215,7 @@ export function HandReplay({ review, replay }: HandReplayProps): ReactElement {
     const row = transportRef.current;
     if (row === null) return;
     // Chrome blurs a newly disabled button after this effect runs, so the caret may still be on it
-    // (measured 2026-08-27, J6.5) or already on the document. Both cases rescue to the survivor.
+    // (J6.5) or already on the document. Both cases rescue to the survivor.
     // If this row grows a third control or remounts, use `ActionBar`'s focus tracking instead.
     const active = document.activeElement;
     const caretOnDisabledControl =

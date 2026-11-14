@@ -4,7 +4,7 @@
  * Profile cards are elevated objects (L2) and control groups are flat wells (L1).
  */
 
-/* 0. Component-local values. A transform angle is geometry, not a token. */
+/* Component-local values. A transform angle is geometry, not a token. */
 
 .prl-legend-card,
 .prl-legend-identity {
@@ -31,8 +31,6 @@
     --prl-legend-sigil-turn: 0deg;
   }
 }
-
-/* 1. Page frame */
 
 .prl-legend-page {
   display: grid;
@@ -202,7 +200,7 @@
   }
 }
 
-/* 2. Disclaimers. Inline, full body size, never collapsed. No `max-height`, line clamp or
+/* Disclaimers. Inline, full body size, never collapsed. No `max-height`, line clamp or
    `overflow: hidden` here, because a clamp hides a disclaimer while appearing to render it. */
 
 .prl-legend-disclaimers {
@@ -247,7 +245,7 @@
   }
 }
 
-/* 3. Sigil. A deterministic mark derived from the profile id, never a likeness. Stroke widths are
+/* Sigil. A deterministic mark derived from the profile id, never a likeness. Stroke widths are
    unitless SVG geometry, as in `.prl-radar__ring`. */
 
 .prl-legend-sigil {
@@ -295,7 +293,7 @@
   stroke: none;
 }
 
-/* 4. Identity block. The archetype name is the heading and the attributed name sits beneath it.
+/* Identity block. The archetype name is the heading and the attributed name sits beneath it.
    That order is the guardrail, so nothing here may reorder it (`order`, `column-reverse`, absolute
    positioning). */
 
@@ -327,7 +325,7 @@
   font-size: var(--prl-type-body-sm);
 }
 
-/* 5. Card grid. `auto-fit` with a floor, and `min-width: 0` on the cell so a nowrap figure cannot
+/* Card grid. `auto-fit` with a floor, and `min-width: 0` on the cell so a nowrap figure cannot
    push the page sideways. */
 
 .prl-legend-grid {
@@ -410,7 +408,7 @@
   gap: var(--prl-space-4);
 }
 
-/* 6. Trait bars. The value is printed beside every bar, the plain-language description is always
+/* Trait bars. The value is printed beside every bar, the plain-language description is always
    visible so a high value does not read as better, and the bar is `aria-hidden` so no axis is read
    twice. The width is static, never transitioned. */
 
@@ -497,7 +495,7 @@
   font-size: var(--prl-type-body-sm);
 }
 
-/* 7. Action distribution. The probability before sampling, in `.prl-bar` with the `[data-series]`
+/* Action distribution. The probability before sampling, in `.prl-bar` with the `[data-series]`
    colour and pattern pairs. Every probability is also printed in the legend beneath. */
 
 .prl-legend-dist {
@@ -560,7 +558,7 @@
   font-weight: var(--prl-weight-regular);
 }
 
-/* 8. Difficulty picker. A GET form with a visible submit that never navigates on change, because
+/* Difficulty picker. A GET form with a visible submit that never navigates on change, because
    that fails WCAG 3.2.2 and makes the third option unreachable by keyboard. */
 
 /** Level 1, a flat well, so the control group does not compete with the elevated cards. */
@@ -624,7 +622,7 @@
 
 /**
  * Selected is an accent border, a surface step, an elevation, the checked dot and the label word,
- * never the border alone (forced colors restate it in section 14). Same idiom as the quiz in `learn.css`.
+ * never the border alone (the forced-colors block restates it). Same idiom as the quiz in `learn.css`.
  */
 .prl-legend-difficulty__option:has(input:checked) {
   border-color: var(--prl-accent-edge);
@@ -731,7 +729,7 @@
   }
 }
 
-/* 9. Profile picker on the compare page */
+/* Profile picker on the compare page */
 
 .prl-legend-picker {
   display: grid;
@@ -792,7 +790,7 @@
   background-color: var(--prl-surface-inset);
 }
 
-/* 10. Post-hand comparison. The chip result and the decision quality are separate panels with a
+/* Post-hand comparison. The chip result and the decision quality are separate panels with a
    statement between them that neither explains the other. `grid-template-areas` keeps the note
    between the panels at every width. */
 
@@ -990,7 +988,7 @@
   white-space: nowrap;
 }
 
-/* 11. Compare columns. Reflowed to fit, never removed to fit. */
+/* Compare columns. Reflowed to fit, never removed to fit. */
 
 .prl-legend-columns {
   display: grid;
@@ -1015,7 +1013,7 @@
   box-shadow: var(--prl-elevation-1);
 }
 
-/* 12. Observed versus declared, and the contrast section */
+/* Observed versus declared, and the contrast section */
 
 .prl-legend-observed__note {
   margin: 0;
@@ -1076,7 +1074,7 @@
   color: var(--prl-text-muted);
 }
 
-/* 14. Forced colors. Tints are discarded, so every tinted state is restated as a border, and accent
+/* Forced colors. Tints are discarded, so every tinted state is restated as a border, and accent
    edges become `Highlight`. */
 
 @media (forced-colors: active) {

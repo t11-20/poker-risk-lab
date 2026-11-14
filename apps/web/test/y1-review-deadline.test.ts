@@ -1,7 +1,7 @@
 /**
  * A hand review must be given longer than the server may spend building it. The route's analysis
- * budget is `requestTimeoutMs / 2` (10 s at the shipped 20 s), and a 4 s client deadline once turned a
- * 6.3 to 7 s review into "there is nothing at this address". The window is
+ * budget is `requestTimeoutMs / 2` (10 s at the shipped 20 s), and a review can take 6.3 to 7 s, which a
+ * 4 s client deadline turns into "there is nothing at this address". The window is
  *
  *     analysis budget  <  the client's deadline for this endpoint  <  the API's request timeout
  *
@@ -78,7 +78,7 @@ describe('the hand-review deadline sits inside the window the API defines', () =
   const budgetMs = reviewAnalysisBudgetMs(requestTimeoutMs);
 
   it('is longer than the analysis the server is allowed to perform', () => {
-    // At the shipped configuration this is 15,000 > 10,000. Before the fix the client gave 4,000.
+    // At the shipped configuration this is 15,000 > 10,000.
     assert.ok(
       EXPENSIVE_READ_TIMEOUT_MS > budgetMs,
       `The web client gives GET /hands/:handId ${String(EXPENSIVE_READ_TIMEOUT_MS)} ms, but the route ` +

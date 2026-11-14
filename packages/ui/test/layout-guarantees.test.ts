@@ -1,8 +1,7 @@
 /**
  * Stylesheet invariants a browser would otherwise be the only witness to, asserted on the CSS text.
- * R7: a sticky `.prl-play__decision` from 900px up covered the pot, the board and all six seats.
- * P2-1: the boot overlay's 900ms cap lived only in an effect, so a failed bundle left it up for good,
- * and the reveal's hidden state had no exit for a failed bundle either.
+ * A sticky `.prl-play__decision` from 900px up covers the pot, the board and all six seats. The boot
+ * overlay's 900ms cap and the reveal's hidden state need an exit in CSS, or a failed bundle leaves them up.
  * It reads `apps/web`'s stylesheets too, because the occlusion came from both packages together.
  */
 
@@ -90,7 +89,7 @@ describe('the play screen never pins a surface over the table', () => {
 
 describe('the sticky action row is bounded by a bar that stays in flow', () => {
   // The action row is sticky below 46rem of column, which is safe only because its containing block,
-  // the ActionBar, sits below the table. Pinning or dissolving the bar brings back R7.
+  // the ActionBar, sits below the table. Pinning or dissolving the bar covers the table.
   it('never pins or dissolves the ActionBar or the band around it', () => {
     const blocks = [
       ...declarationsFor(componentsCss, '.prl-action-bar'),
@@ -282,7 +281,7 @@ describe('the design system rules that are stated in prose and checked nowhere',
 
 /**
  * A numeric column that declares `text-align: end` must win the cascade. `.prl-x__table td` is
- * (0,1,1) and silently beats a bare `.prl-x__cost` at (0,1,0). This shipped more than once.
+ * (0,1,1) and silently beats a bare `.prl-x__cost` at (0,1,0).
  * End-aligning selectors must be element-qualified (`td.`/`th.`) and placed below, since a tie
  * goes to source order.
  */
@@ -338,8 +337,8 @@ describe('numeric columns are actually end-aligned', () => {
   });
 
   /**
-   * The scans above check selectors, not values. Changing the override to `start` passed every test
-   * in both packages. So the cascade is resolved here, by (specificity, source position), over every
+   * The scans above check selectors, not values, so an override changed to `start` would pass them.
+   * So the cascade is resolved here, by (specificity, source position), over every
    * rule that can match `td.prl-candidates__cost`.
    */
   it("resolves the candidate table's numeric cells to `end`, not merely to a declaration", () => {

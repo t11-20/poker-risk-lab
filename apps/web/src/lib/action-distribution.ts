@@ -1,7 +1,7 @@
 /**
  * Which row of a sampled action distribution is the most likely one. The marker is taken out of the
  * distribution, never described a second time, because `@prl/poker-ai` and `@prl/ui` format sizes
- * differently ("raise to 1200" against "raise to 1,200") and the `===` match failed from 1,000 up.
+ * differently ("raise to 1200" against "raise to 1,200") and a `===` match fails from 1,000 up.
  * A leaf with no imports, so `node --test` can load it, which it cannot do for `ActionDistribution.tsx`.
  */
 

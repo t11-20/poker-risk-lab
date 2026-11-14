@@ -1,7 +1,7 @@
 /**
  * Each practice table keeps its own units, and starting one closes the learner's other one
- * (`RoomRegistry.retirePracticeTables`). The press used to do that silently, so 904 units at the bot
- * table became 1,000 at a Legends match. The first press now only reads the room list and asks.
+ * (`RoomRegistry.retirePracticeTables`), which resets its units. So the first press only reads the room
+ * list and asks.
  */
 
 import assert from 'node:assert/strict';

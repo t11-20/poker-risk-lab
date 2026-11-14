@@ -1,6 +1,6 @@
 /**
  * The render boundary's guard for "this number is a probability". The producer refuses impossible
- * values too, but JSON, caches and fixtures sit between, and a stale `estimate: 1.6` once rendered 160.0%.
+ * values too, but JSON, caches and fixtures sit between, so a stale `estimate: 1.6` would render 160.0%.
  * `formatPercent` still never clamps. A component that knows it holds a probability asks here instead.
  * Three ranges: probability 0..1, difference -1..1, difference in points -100..100. Bounds are inclusive.
  * Pot fractions (bet size over pot, bar widths) can exceed 1 and must not come through here.

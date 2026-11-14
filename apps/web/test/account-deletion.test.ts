@@ -274,7 +274,7 @@ describe('deleting an account clears the record from the screen and keeps the re
   });
 
   it('does not let the page gate the receipt on a session the deletion has just ended', () => {
-    // Banned by element, because gating a local `DeletePanel` wrapper is how the old page did it.
+    // Banned by element, because a local `DeletePanel` wrapper could otherwise gate it.
     const GATED = /\{[^{}]*record\.state[^{}]*\?[^{}]*<(?:AccountDeletion|DeleteAccount|DeletePanel)\b/u;
     assert.doesNotMatch(
       PAGE,

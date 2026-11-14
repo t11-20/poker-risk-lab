@@ -6,7 +6,7 @@
  * the accent (§2.4 rule B). Only transform, opacity and colour animate.
  */
 
-/* 0. THE READING MEASURE, NARROWED FOR THIS ROUTE GROUP
+/* The reading measure, narrowed for this route group.
    `60ch` broke lines at 80 to 88 characters at 1440px, past the ~75 where the eye loses the line.
    `52ch` lands at 69 to 72 at every type size. Scoped to `.prl-lab-page` because `tokens.css` is
    outside this route's ownership. */
@@ -20,7 +20,7 @@
   font-size: var(--prl-type-body-lg);
 }
 
-/* 0a. A REPAIR TO `@prl/ui`, RESTATED FOR THIS ROUTE GROUP
+/* A repair to `@prl/ui`, restated for this route group.
    `.prl-assumptions__list` keeps its marker, so each item showed a bullet and a number ("01The
    button bets"). `learn.css` has the same repair, and the Lab never imports it. Delete both copies
    when `packages/ui` fixes it. The list stays a `<ul>`, because the order does not matter. */
@@ -37,7 +37,7 @@
   align-items: baseline;
 }
 
-/* 1. FILTERS. A real `<form method="get">` with native selects. The panel border is
+/* Filters. A real `<form method="get">` with native selects. The panel border is
    `--prl-line-strong`, because it marks where the controls begin. */
 
 .prl-lab-filters {
@@ -114,7 +114,7 @@
   font-weight: var(--prl-weight-semibold);
 }
 
-/* 2. THE CARD GRID. The system's 12-column `.prl-grid` with `.prl-span-4` cards. An `auto-fill`
+/* Card grid. The system's 12-column `.prl-grid` with `.prl-span-4` cards. An `auto-fill`
    track on the largest space token packed seven 162px columns into 1280px. */
 
 .prl-lab-grid {
@@ -212,7 +212,7 @@
   outline: none;
 }
 
-/** A full `--prl-target-min` target. It measured 271x17 (UX audit Minor 1). */
+/** A full `--prl-target-min` target. Unpadded, the link is 271x17. */
 .prl-lab-start-link {
   display: inline-flex;
   align-items: center;
@@ -264,7 +264,7 @@
   color: var(--prl-accent-text);
 }
 
-/* 3. THE STAGED SCENARIO. One column, so the reader meets the assumptions before the analysis. */
+/* Staged scenario. One column, so the reader meets the assumptions before the analysis. */
 
 .prl-stage {
   display: grid;
@@ -324,8 +324,8 @@
 }
 
 /**
- * `:focus:not(:focus-visible)`, not bare `:focus`. Bare `:focus` was (0,2,0) and beat `base.css`'s
- * `:focus-visible` ring, so a keyboard reader lost the ring after the scripted focus move.
+ * `:focus:not(:focus-visible)`, not bare `:focus`. Bare `:focus` is (0,2,0) and beats `base.css`'s
+ * `:focus-visible` ring, so a keyboard reader would lose the ring after the scripted focus move.
  */
 .prl-stage__reveal:focus:not(:focus-visible) {
   outline: none;
@@ -420,7 +420,7 @@
   border-block-start: var(--prl-hairline);
 }
 
-/* 4. RESPONSIVE (§10). See `.prl-lab-filters__row` for why the fields are placed, not auto-fitted. */
+/* Responsive (§10). See `.prl-lab-filters__row` for why the fields are placed, not auto-fitted. */
 
 @media (min-width: 600px) {
   .prl-lab-filters__row {
@@ -439,7 +439,7 @@
   }
 }
 
-/* 5. FORCED COLORS. Fills are discarded and borders repainted, so hover becomes a border width change. */
+/* Forced colors. Fills are discarded and borders repainted, so hover becomes a border width change. */
 
 @media (forced-colors: active) {
   .prl-lab-card:hover,

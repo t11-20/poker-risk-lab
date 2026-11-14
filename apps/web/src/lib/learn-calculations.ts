@@ -807,7 +807,7 @@ export function formatQuizValue(value: number, unit: QuizUnit): string {
 
 /**
  * One more decimal than the unit when the unit cannot represent the tolerance. `0.5` at zero decimals
- * printed "within 1 cards", twice the rule `withinTolerance` applies.
+ * would print "within 1 cards", twice the rule `withinTolerance` applies.
  */
 export function formatTolerance(tolerance: number, unit: QuizUnit): string {
   return formatChips(tolerance, {

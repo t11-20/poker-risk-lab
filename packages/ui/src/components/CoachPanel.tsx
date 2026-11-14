@@ -14,7 +14,7 @@
  * 4. Clean and dirty outs differ by swatch, count and words, never by colour alone.
  * 5. Every figure rendered as a percentage passes a range check (`../probability.ts`) before it reaches
  *    a formatter, independently of the producer, because a report arrives as plain JSON past caches and
- *    fixtures. A stale `estimate: 1.6` once printed "160.0%". Prose fields are the producer's job.
+ *    fixtures. Prose fields are the producer's job.
  * 6. A count is called "outs" only where `countsAsOuts` (`../outs-count.ts`) says a card could be one.
  *
  * The panel emits `h2` and `h3`, never `h1`. The suggestion comes after the equity and the price, so a
@@ -251,8 +251,8 @@ interface EquitySectionProps {
 }
 
 /**
- * The delta's preposition. It was always "over", so a call not priced in read "▼ −27.0 points over".
- * Decided at `Metric`'s one-decimal precision, so a margin that rounds to 0.0 reads "at".
+ * The delta's preposition, so a call not priced in never reads "▼ −27.0 points over". Decided at
+ * `Metric`'s one-decimal precision, so a margin that rounds to 0.0 reads "at".
  */
 function surplusPreposition(surplus: number): 'over' | 'under' | 'at' {
   if (Number((Math.abs(surplus) * 100).toFixed(1)) === 0) return 'at';
@@ -555,7 +555,7 @@ function Disclose({ summary, children }: DiscloseProps): ReactElement {
 
 /**
  * The rule-of-2-and-4 line. `rule.estimate` is a fraction and `errorPoints` is already in points, so
- * swapping their formatters is the bug in either direction ("3,600.0%" once).
+ * swapping their formatters is the bug in either direction.
  * Three cases that must not share a sentence: `null` (the engine declined the shortcut), a figure that
  * is not a probability (the panel withholds it), and a real figure. `rule.note` is left out of the
  * second case, because it could restate the impossible percentage.

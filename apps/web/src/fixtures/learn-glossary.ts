@@ -1,18 +1,12 @@
 /**
- * Fixture: the complete glossary, all 106 entries.
+ * The complete glossary: the A-Z jump list, the topic filter and the "see also" cross-references only
+ * behave realistically at full size.
  *
- * The glossary page is an index of the whole vocabulary, so a partial fixture
- * would misrepresent the screen being reviewed: the A-Z jump list, the topic filter and
- * the "see also" cross-references only behave realistically at full size.
- *
- * Every string here is copied verbatim from `packages/content/data`, which is the real
- * teaching material. Nothing is paraphrased and nothing is invented, because a fixture that
- * drifts from the content it stands in for is a screen that was reviewed against fiction.
- *
- * NO COMPUTED FIGURE APPEARS ANYWHERE IN THIS FILE. Every number a learner reads is computed
- * in the browser from the `liveCalculation` and `calculation` parameters below — see
- * ADR 0006 and `src/lib/learn-calculations.ts`. Search this file for a percentage and you
- * will only find the ones that are *inputs* (a fold probability, an assumed win rate).
+ * Every string here is copied verbatim from `packages/content/data`; a fixture that drifts from the
+ * content it stands in for is a screen reviewed against fiction. No computed figure appears in this
+ * file: every number a learner reads is computed in the browser from the `liveCalculation` and
+ * `calculation` parameters (ADR 0006, `src/lib/learn-calculations.ts`). The only percentages here are
+ * inputs, such as a fold probability or an assumed win rate.
  */
 
 import type { GlossaryEntry } from '@prl/contracts';

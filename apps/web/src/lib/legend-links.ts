@@ -63,7 +63,7 @@ export interface CompareSelection {
 
 /**
  * Every id that does not reach the request is returned so the page can name it. Unknown ids are
- * removed, because the API refusal read as an outage. Past five, the reader's first five are kept.
+ * removed, because the API's refusal would read as an outage. Past five, the reader's first five are kept.
  * One style passes with `tooFew`, because its column is real.
  */
 export function parseCompareSelection(

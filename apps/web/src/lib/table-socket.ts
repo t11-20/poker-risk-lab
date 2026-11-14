@@ -660,8 +660,7 @@ export interface TableSocketOptions {
 
 /**
  * Not a boolean. A disconnected frame is held and replayed on the next `welcome`, while a rate-limited
- * one is gone and the reader must decide again. Conflating them reported a rate limit for a dropped
- * connection.
+ * one is gone and the reader must decide again.
  */
 export type SendOutcome =
   | 'sent'

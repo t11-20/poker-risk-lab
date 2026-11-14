@@ -1,26 +1,10 @@
 /**
- * Fixture: eight complete lessons, for the lesson reader.
+ * The lessons with a body, chosen so that between them they exercise every `LessonBlock` variant and
+ * every `LiveCalculation` kind in the contract. The rest appear only in the index.
  *
- * Eight of the seventeen, chosen so that between them they exercise every
- * `LessonBlock` variant and every `LiveCalculation` kind in the contract — equity, outs,
- * ruleOf24, potOdds, callEv, foldEquity, spr, variance, riskOfRuin and icm. The remaining
- * nine lessons appear in the index (see `learn-lesson-summaries.ts`) and are served by
- * the API once `apps/api/src/routes/content.ts` exists.
- *
- * ONE BLOCK IS NOT FROM THE CONTENT PACKAGE: the `scenarioLink` at the end of
- * `counting-outs`. No lesson in `packages/content` uses that variant yet, and
- * `LessonBlockRenderer` has to handle it, so the fixture supplies one pointing at a real
- * scenario id (`fl-overcards-dirty-outs`). It is the only authored content in this file
- * and it is here so the branch is reviewable rather than theoretical.
- *
- * Every string here is copied verbatim from `packages/content/data`, which is the real
- * teaching material. Nothing is paraphrased and nothing is invented, because a fixture that
- * drifts from the content it stands in for is a screen that was reviewed against fiction.
- *
- * NO COMPUTED FIGURE APPEARS ANYWHERE IN THIS FILE. Every number a learner reads is computed
- * in the browser from the `liveCalculation` and `calculation` parameters below — see
- * ADR 0006 and `src/lib/learn-calculations.ts`. Search this file for a percentage and you
- * will only find the ones that are *inputs* (a fold probability, an assumed win rate).
+ * ONE BLOCK IS NOT FROM THE CONTENT PACKAGE: the `scenarioLink` at the end of `counting-outs`, pointing
+ * at a real scenario id, so `LessonBlockRenderer`'s branch for that variant is reviewable.
+ * Copied verbatim from `packages/content/data`, with no computed figure: see `learn-glossary.ts`.
  */
 
 import type { Lesson } from '@prl/contracts';

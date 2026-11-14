@@ -64,8 +64,8 @@ export const DOCUMENT_DESTINATIONS: readonly NavDestination[] = [
 ];
 
 /**
- * Listed after the five, unnumbered, in the sheet, the footer and the 404, because it was once
- * reachable only from the footer. Exported after `DOCUMENT_DESTINATIONS`, because
+ * Listed after the five, unnumbered, in the sheet, the footer and the 404, so it is reachable from
+ * more than the footer. Exported after `DOCUMENT_DESTINATIONS`, because
  * `legal-pages.test.ts` counts the five by slicing between the two lists.
  */
 export const RECORD_DESTINATION: NavDestination = {

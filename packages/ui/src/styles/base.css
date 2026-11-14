@@ -249,8 +249,8 @@ a:hover {
 }
 
 /* 3. FOCUS. `:focus-visible`, not `:focus`. `:focus:not(:focus-visible)` is the only place this
-   package removes an outline. The rule sets `outline` and the halo only. `border-radius: inherit`
-   here once reshaped every focused control to its parent's radius. Design system section 7.1. */
+   package removes an outline. The rule sets `outline` and the halo only. No `border-radius: inherit`,
+   which reshapes every focused control to its parent's radius. Design system section 7.1. */
 
 /**
  * Two tones, because a floating control's ring sits on a backdrop this stylesheet does not own

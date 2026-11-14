@@ -150,8 +150,8 @@ export interface TableState {
   readonly coachDuringHand: boolean;
   /**
    * The server's own wording for `coach_not_available`, so the panel does not claim an Expert
-   * difficulty it never saw (a reused room on plain `/play` printed the Expert sentence). Null while
-   * Coach is on or when this page chose Expert itself.
+   * difficulty it never saw, as in a reused room on plain `/play`. Null while Coach is on or when
+   * this page chose Expert itself.
    */
   readonly coachRefusal: string | null;
   readonly pending: PendingDecision | null;
@@ -263,10 +263,7 @@ export function turnAnnouncementFor(view: PlayerView): string {
   return `Your turn ${streetPhrase(view.street)}. ${price}. Pot ${units(view.potTotal)}${stack}.${offer}`;
 }
 
-/**
- * Announced once as a state change. Prefixed onto every announcement in `TableStage`, it stuck to the
- * front of every later event, since `role="status"` is atomic.
- */
+/** Announced once as a state change, never prefixed, since `role="status"` is atomic. */
 export function spokenDecision(action: TableAction): string {
   if (action.type === 'bet' || action.type === 'raise') {
     return `You chose to ${action.type} to ${units(action.to)}.`;
@@ -326,9 +323,9 @@ function readersSeat(state: TableState): number | null {
 }
 
 /**
- * Seatless sentences (blinds, showdown, awards) carry only a name, and names are not unique (Devin on
- * PR #33). Rewrite only when the reader holds a seat, no other member's name contains theirs as a
- * whole word, and every dealt player is a member. Any doubt leaves the server's sentence.
+ * Seatless sentences (blinds, showdown, awards) carry only a name, and names are not unique. Rewrite
+ * only when the reader holds a seat, no other member's name contains theirs as a whole word, and
+ * every dealt player is a member. Any doubt leaves the server's sentence.
  */
 function onlyTheReaderIsNamed(state: TableState, name: string): boolean {
   if (readersSeat(state) === null) return false;
@@ -345,7 +342,7 @@ function escapedName(text: string): string {
 }
 
 /**
- * The reader's own sentences in the second person (audit at 308fadf). Actions are matched by seat;
+ * The reader's own sentences in the second person. Actions are matched by seat;
  * seatless events only when `onlyTheReaderIsNamed`. Unrecognised sentences are left as written.
  */
 function inReadersWords(event: WireEvent, state: TableState): WireEvent {
@@ -454,11 +451,11 @@ function onStateFrame(state: TableState, frame: Extract<WsServerMessage, { type:
   const key = decisionKey(view);
   const movedOn = key !== decisionKey(state.view);
   // Mirrors `LiveTable.handInProgress` in `rooms/table.ts`. A finished hand still carries a view, so
-  // "no view" alone left "Deal the next hand" disabled forever.
+  // "no view" alone would leave "Deal the next hand" disabled forever.
   const betweenHands = frame.view === null || frame.view.street === 'complete';
   // The edge, not the level, keyed on the decision key. Two consecutive decisions of the reader's
-  // (closing preflop, first to act on the flop) have no frame between them, and "was their turn last
-  // frame" re-spoke the dead sentence (audit at 308fadf).
+  // (closing preflop, first to act on the flop) have no frame between them, so "was their turn last
+  // frame" would re-speak the dead sentence.
   const wasTurn = isViewersTurn(state.view, state.betweenHands);
   const nowTurn = isViewersTurn(view, betweenHands);
   const sameTurn = wasTurn && !movedOn;
@@ -534,7 +531,7 @@ function onErrorFrame(state: TableState, frame: Extract<WsServerMessage, { type:
     };
   }
   const pending = state.pending;
-  // The server's sentence only, no trailing contract token (audit at 308fadf). The code goes in `noticeCode`.
+  // The server's sentence only, no trailing contract token. The code goes in `noticeCode`.
   if (pending === null || pending.requestId !== frame.requestId) {
     return { ...state, notice: frame.error.message, noticeCode: frame.error.code };
   }
@@ -587,7 +584,7 @@ function onFrame(state: TableState, frame: WsServerMessage): TableState {
 
 /**
  * Files an analysis under the spot it was REQUESTED for, or drops it. A `coach` frame carries only a
- * `requestId`, and keying on the spot on screen at arrival once printed a flop analysis beside a
+ * `requestId`, and keying on the spot on screen at arrival would print a flop analysis beside a
  * finished hand. `onStateFrame` closes the request when the spot moves, and this refuses any late
  * frame that slips past.
  */
@@ -608,8 +605,8 @@ function onCoachFrame(state: TableState, frame: Extract<WsServerMessage, { type:
 }
 
 /**
- * One sentence per send outcome, each saying what the reader can do. A single "Sent." sentence once
- * claimed delivery during a reconnect while an alert blamed the rate limit. `held` is not lost.
+ * One sentence per send outcome, each saying what the reader can do, so a reconnect is never
+ * announced as delivered. `held` is not lost.
  * `onFrame` replays it on the next `welcome` with the same `actionId`.
  */
 const SUBMISSION_FOR: Readonly<Record<SendOutcome, (action: TableAction) => TableSubmission>> = {
@@ -665,8 +662,8 @@ export function tableReducer(state: TableState, event: TableEvent): TableState {
         // is left alone, so a refused decision still has its spot's sentence and nothing is said twice.
         announcement: spokenDecision(event.pending.action),
         submission: SUBMISSION_FOR[event.delivery](event.pending.action),
-        // The refusal belongs to `submission` only. Also dispatching a `notice` once showed "Decision
-        // sent" beside an alert saying it was not.
+        // The refusal belongs to `submission` only, or "Decision sent" would sit beside an alert
+        // saying it was not.
         notice: null,
         noticeCode: null,
       };
@@ -758,16 +755,16 @@ export function dealInStep(
   const { table } = seen;
   if (step === 'off') return STAY('off');
   if (table.notice !== null) return STAY('off');
-  // Never deal for a reader the roster shows at stack 0. The server deals them out, and on a server
-  // without PR #25 the bots-only hand would settle 0 back over a units reset. Ends at `off`, which
-  // brings back the manual buttons and the out-of-units notice.
+  // Never deal for a reader the roster shows at stack 0: the server deals them out, and an older
+  // server would settle the bots-only hand's 0 back over a units reset. Ends at `off`, which brings
+  // back the manual buttons and the out-of-units notice.
   const deal: ReturnType<typeof STAY> = outOfUnits(table)
     ? STAY('off')
     : { next: 'dealSent', send: { kind: 'deal' } };
   if (step === 'wantSeat') {
     if (!seen.live) return STAY('wantSeat');
-    // `welcome` carries no view, so `betweenHands` is stale until a `state` frame (revision > 0).
-    // Reading it earlier sent a deal into a hand in progress.
+    // `welcome` carries no view, so `betweenHands` is stale until a `state` frame (revision > 0), and
+    // reading it earlier would send a deal into a hand in progress.
     if (table.revision === 0) return STAY('wantSeat');
     if (table.seat === null) {
       return seen.readerSeat === null
@@ -900,7 +897,7 @@ function winningCards(view: PlayerView | null): readonly number[] {
   return result.showdowns.filter((showdown) => winners.has(showdown.seat)).flatMap((s) => [...s.bestFive]);
 }
 
-/** The server's own wording, without its contract code (audit at 308fadf). */
+/** The server's own wording, without its contract code. */
 export function refusalSentence(cause: unknown): string {
   if (cause instanceof Error) return cause.message;
   return 'the table could not be prepared';
@@ -1040,7 +1037,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
   useEffect(() => () => setupRef.current?.abort(), []);
 
   /**
-   * Reconnects on return to `/play` (UI audit of 308fadf, item 15). It only reconnects. No guest is
+   * Reconnects on return to `/play`. It only reconnects. No guest is
    * minted and no other room is created or chosen. Never on a Legends page, where the press opens the
    * match. Runs in an effect because `sessionStorage` is absent on the server and would mismatch
    * hydration. `dealIn` stays `off`, since the reader may be mid-hand.
@@ -1205,9 +1202,8 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
           const replay = pendingRef.current;
           if (replay !== null) handle.action(replay);
           /**
-           * A Coach request dies with its socket, since the server matches `requestId` per connection.
-           * Without dropping the memo, the panel sat on "No analysis" forever after a reconnect
-           * (measured in Chrome 151 by dropping one `coach` frame and closing the socket).
+           * A Coach request dies with its socket, since the server matches `requestId` per connection,
+           * so the memo is dropped or the panel sits on "No analysis" forever after a reconnect.
            * `coachRequestRef` still holds the pre-`welcome` value here because refs are assigned in
            * render. Guarded so a reconnect does not re-ask for an analysis already on screen.
            */

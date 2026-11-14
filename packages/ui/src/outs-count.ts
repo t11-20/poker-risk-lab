@@ -1,6 +1,6 @@
 /**
  * Whether a count may be called "outs". When hero is already past the equity bar every unseen card
- * qualifies, and the Coach once headed a two-pair flop "47 cards in total".
+ * qualifies, so a two-pair flop would be headed "47 cards in total".
  * `computeOuts` refuses at source too. This guard covers stale JSON and fixtures, as in `probability.ts`.
  * The threshold is copied, not imported, because `@prl/poker-math` links `@prl/poker-engine` and its
  * secrets must not reach a browser. `test/outs-count.test.ts` pins it to `DEFAULT_AHEAD_THRESHOLD`.
