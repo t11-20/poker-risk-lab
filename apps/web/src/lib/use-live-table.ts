@@ -73,6 +73,14 @@ function rememberRoom(roomId: string | null): void {
   }
 }
 
+/**
+ * "Stay at my bot table" goes to /play, which resumes the remembered room. A private table opened
+ * since would be that room, so the one the warning names is remembered first.
+ */
+export function rememberTableToStayAt(warning: SwitchWarning): void {
+  rememberRoom(warning.other.roomId);
+}
+
 function rememberedRoom(): string | null {
   if (typeof window === 'undefined') return null;
   try {
@@ -838,6 +846,8 @@ export interface LiveTable {
   /** The press again, closing the other table. */
   readonly confirmSwitch: () => void;
   readonly keepOtherTable: () => void;
+  /** Before following the link back to the bot table the warning names. */
+  readonly stayAtOtherTable: () => void;
   /** Abandons the remembered room and builds a fresh bot table. */
   readonly startFreshTable: () => void;
   /**
@@ -1080,6 +1090,11 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
   }, [prepare]);
 
   const keepOtherTable = useCallback((): void => setSwitchWarning(null), []);
+
+  const stayAtOtherTable = useCallback((): void => {
+    if (switchWarning !== null) rememberTableToStayAt(switchWarning);
+    setSwitchWarning(null);
+  }, [switchWarning]);
 
   const buildFresh = useCallback(
     (request: CreateRoomRequest): void => {
@@ -1376,6 +1391,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
     start,
     confirmSwitch,
     keepOtherTable,
+    stayAtOtherTable,
     startFreshTable,
     startPrivateTable,
     joinByInviteCode,

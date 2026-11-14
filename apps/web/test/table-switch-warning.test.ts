@@ -17,7 +17,11 @@ import type {
 } from '@prl/contracts';
 import { BOT_TABLE_REQUEST, FRIENDS_TABLE_REQUEST } from '../src/lib/table-rooms.ts';
 import { createsPracticeTable, practiceTableToRetire } from '../src/lib/table-switch.ts';
-import { openPracticeRoom, type PracticeRoomDependencies } from '../src/lib/use-live-table.ts';
+import {
+  openPracticeRoom,
+  type PracticeRoomDependencies,
+  rememberTableToStayAt,
+} from '../src/lib/use-live-table.ts';
 
 const READER = 'user-reader';
 const FRIEND = 'user-friend';
@@ -284,5 +288,37 @@ describe('the hook and the panel', () => {
     assert.doesNotMatch(panel, /opens your practice table: the one you already have/u);
     const told = [...panel.matchAll(/'Each table keeps its own units/gu)].length;
     assert.equal(told, 2, 'the idle sentence on /play and on a Legends page both say so');
+  });
+});
+
+describe('"Stay at my bot table" (REGRESSION: /play resumed a private table remembered since)', () => {
+  it('remembers the bot table the warning names before the link resumes /play', () => {
+    const stored = new Map<string, string>([['prl.play.roomId', 'room_private']]);
+    const storage = {
+      getItem: (key: string) => stored.get(key) ?? null,
+      setItem: (key: string, value: string) => void stored.set(key, value),
+      removeItem: (key: string) => void stored.delete(key),
+    };
+    const globals = globalThis as { window?: unknown };
+    const before = globals.window;
+    globals.window = { sessionStorage: storage };
+    try {
+      rememberTableToStayAt({
+        other: { roomId: 'room_bot', kind: 'botTable', stack: 904 },
+        starting: 'legendMatch',
+        startsWith: 1000,
+      });
+    } finally {
+      globals.window = before;
+    }
+    assert.equal(stored.get('prl.play.roomId'), 'room_bot');
+  });
+
+  it('runs on the link itself', () => {
+    const panel = readFileSync(new URL('../src/app/play/LiveTable.tsx', import.meta.url), 'utf8');
+    assert.match(
+      panel,
+      /href=\{PLAY_PATH\}\s*onClick=\{live\.stayAtOtherTable\}\s*>\s*Stay at my bot table/u,
+    );
   });
 });

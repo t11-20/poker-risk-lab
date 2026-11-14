@@ -416,7 +416,11 @@ function SwitchTablesNotice({
           {`Close it and start with ${formatUnits(warning.startsWith)}`}
         </Button>
         {warning.other.kind === 'botTable' ? (
-          <Link className="prl-btn prl-btn--secondary prl-btn--md" href={PLAY_PATH}>
+          <Link
+            className="prl-btn prl-btn--secondary prl-btn--md"
+            href={PLAY_PATH}
+            onClick={live.stayAtOtherTable}
+          >
             Stay at my bot table
           </Link>
         ) : (
