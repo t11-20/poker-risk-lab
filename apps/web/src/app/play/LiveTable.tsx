@@ -11,6 +11,7 @@ import {
   Button,
   browserAbandonedFocus,
   Callout,
+  formatUnits,
   Panel,
   type TableAction,
   usePrefersReducedMotion,
@@ -30,11 +31,11 @@ import { TableStage, type TableStageStatus } from '@/components/TableStage.tsx';
 import { noAnalysisReason, readerHasDecisions, reviewHrefFor } from '@/lib/coach-body.ts';
 import { dealNextState } from '@/lib/deal-next.ts';
 import { sizerFollowDelta, watchDelta } from '@/lib/follow-the-table.ts';
-import { LEGENDS_PATH } from '@/lib/legend-links.ts';
+import { LEGENDS_PATH, PLAY_PATH } from '@/lib/legend-links.ts';
 import { describeTable } from '@/lib/table-description.ts';
 import { INVITE_CODE_EXAMPLE, MAX_INVITE_CODE_INPUT } from '@/lib/table-rooms.ts';
 import type { TableSocketStatus } from '@/lib/table-socket.ts';
-import { type LiveTable as LiveTableModel, useLiveTable } from '@/lib/use-live-table.ts';
+import { type LiveTable as LiveTableModel, type SwitchWarning, useLiveTable } from '@/lib/use-live-table.ts';
 
 /**
  * Used only when this page opened an Expert match itself. A `coach_not_available` refusal carries no
@@ -119,14 +120,27 @@ interface ConnectionPanelProps {
  * branch must come before the null-status line or a screen reader hears "Ready to connect". It stays
  * short because `TableStage`'s `role="alert"` and the callout below already carry the reason.
  */
-function statusSentence(live: LiveTableModel): string {
+function statusSentence(live: LiveTableModel, inLegendMatch: boolean): string {
+  if (live.switchWarning !== null) {
+    return 'Nothing has been opened or closed. Choose below which table to keep.';
+  }
   if (live.phase === 'idle' && live.resuming) return 'Reconnecting you to the table you were at.';
+  if (live.phase === 'idle' && inLegendMatch) {
+    return (
+      'Not connected yet. “Deal me in” starts a guest session if you need one, with no email and no ' +
+      'password, and starts a new match with 1,000 units. Then it takes your seat and deals. ' +
+      'Each table keeps its own units, and if this would close another table you have open, you are ' +
+      'asked first.'
+    );
+  }
   if (live.phase === 'idle') {
     // `chooseRoom` may reuse a held table or create one, and the page cannot know which yet.
     return (
-      'Not connected yet. “Deal me in” starts a guest session if you need one — no email, no ' +
-      'password — and opens your practice table: the one you already have, or a new one with bots ' +
-      'already seated. Then it takes your seat and deals, unless a hand is already being played.'
+      'Not connected yet. “Deal me in” starts a guest session if you need one, with no email and no ' +
+      'password, and opens your bot table: the one you already have, or a new one with bots already ' +
+      'seated. Then it takes your seat and deals, unless a hand is already being played. ' +
+      'Each table keeps its own units: a new one starts with 1,000, and if it would close a Legends ' +
+      'match you have open, you are asked first.'
     );
   }
   if (live.phase === 'preparing') {
@@ -248,6 +262,7 @@ function controlsSignature(live: ConnectionPanelProps['live']): string {
     live.dealingIn ? 'dealing-in' : 'manual',
     readerHasDecisions(live.table.view) ? 'in-the-hand' : 'out-of-the-hand',
     live.join.state,
+    live.switchWarning === null ? 'no-switch' : 'switch',
   ].join('/');
 }
 
@@ -303,8 +318,9 @@ function ConnectionControls({
 
   return (
     <div className="prl-play__controls" onBlurCapture={onBlurCapture} onFocusCapture={onFocusCapture}>
+      {live.switchWarning === null ? null : <SwitchTablesNotice live={live} warning={live.switchWarning} />}
       <p className="prl-btn-row">
-        {phase === 'idle' || phase === 'failed' ? (
+        {(phase === 'idle' || phase === 'failed') && live.switchWarning === null ? (
           <Button variant="primary" onClick={live.start}>
             {phase === 'failed' ? 'Try again' : 'Deal me in'}
           </Button>
@@ -361,6 +377,55 @@ function ConnectionControls({
 
       <OtherTables live={live} inLegendMatch={inLegendMatch} />
     </div>
+  );
+}
+
+/** What the reader has open, by whether it is the same kind as the table being started. */
+const OPEN_TABLE: Readonly<Record<SwitchWarning['other']['kind'], readonly [string, string]>> = {
+  botTable: ['the bot table', 'another bot table'],
+  legendMatch: ['a Legends match', 'another Legends match'],
+};
+
+function switchSentence(warning: SwitchWarning): string {
+  const { other, starting, startsWith } = warning;
+  const name = OPEN_TABLE[other.kind][other.kind === starting ? 1 : 0];
+  const open = other.stack === null ? 'open' : `open with ${formatUnits(other.stack)}`;
+  const action = starting === 'botTable' ? 'Starting the bot table' : 'Starting this match';
+  return (
+    `You have ${name} ${open}. ${action} closes it, and the new table starts with ` +
+    `${formatUnits(startsWith)}. Units do not carry over between tables.`
+  );
+}
+
+/**
+ * Only the text is the alert. An alert holding controls is an alertdialog, which would take focus,
+ * and the rescue in `ConnectionControls` already puts it on the status line. Only the bot table can
+ * be gone back to: a Legends page's press always starts a new match, so none is ever reopened.
+ */
+function SwitchTablesNotice({
+  live,
+  warning,
+}: ConnectionPanelProps & { readonly warning: SwitchWarning }): ReactElement {
+  return (
+    <Callout tone="warning" title="Switching tables resets your units">
+      <div role="alert">
+        <p>{switchSentence(warning)}</p>
+      </div>
+      <p className="prl-btn-row">
+        <Button variant="secondary" onClick={live.confirmSwitch}>
+          {`Close it and start with ${formatUnits(warning.startsWith)}`}
+        </Button>
+        {warning.other.kind === 'botTable' ? (
+          <Link className="prl-btn prl-btn--secondary prl-btn--md" href={PLAY_PATH}>
+            Stay at my bot table
+          </Link>
+        ) : (
+          <Button variant="secondary" onClick={live.keepOtherTable}>
+            {warning.starting === 'legendMatch' ? 'Keep my other Legends match' : 'Keep my Legends match'}
+          </Button>
+        )}
+      </p>
+    </Callout>
   );
 }
 
@@ -556,7 +621,7 @@ function ConnectionPanel({ live, inLegendMatch = false }: ConnectionPanelProps):
           ref={statusRef}
           tabIndex={-1}
         >
-          {statusSentence(live)}
+          {statusSentence(live, inLegendMatch)}
         </p>
 
         {/*

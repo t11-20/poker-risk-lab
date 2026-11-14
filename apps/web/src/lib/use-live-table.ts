@@ -49,6 +49,12 @@ import {
   type TableSocketStatus,
   tableSocketUrl,
 } from './table-socket.ts';
+import {
+  createsPracticeTable,
+  type PracticeTableInPlay,
+  type PracticeTableKind,
+  practiceTableToRetire,
+} from './table-switch.ts';
 
 /** When the header re-reads the session after a hand settles. */
 export const SETTLED_ASK_MS = 1_000;
@@ -825,8 +831,13 @@ export interface LiveTable {
   readonly dealingIn: boolean;
   /** Seated at stack 0, so the server deals every hand without the reader. */
   readonly outOfUnits: boolean;
+  /** Set when the press would close the reader's other practice table. Nothing was opened or closed. */
+  readonly switchWarning: SwitchWarning | null;
   /** Session, room, socket, then the seat and the first deal. Safe to call twice. */
   readonly start: () => void;
+  /** The press again, closing the other table. */
+  readonly confirmSwitch: () => void;
+  readonly keepOtherTable: () => void;
   /** Abandons the remembered room and builds a fresh bot table. */
   readonly startFreshTable: () => void;
   /**
@@ -840,6 +851,13 @@ export interface LiveTable {
   readonly deal: () => void;
   readonly act: (action: TableAction) => void;
   readonly askCoach: () => void;
+}
+
+export interface SwitchWarning {
+  readonly other: PracticeTableInPlay;
+  readonly starting: PracticeTableKind;
+  /** The new table's units. Nothing carries over from the other one. */
+  readonly startsWith: number;
 }
 
 export interface UseLiveTableOptions {
@@ -878,38 +896,59 @@ export function refusalSentence(cause: unknown): string {
   return 'the table could not be prepared';
 }
 
-async function openPracticeRoom(
+/** Test seams for `openPracticeRoom`. The browser uses the real requests. */
+export interface PracticeRoomDependencies {
+  readonly listRooms: typeof listRooms;
+  readonly createRoom: typeof createRoom;
+  readonly createLegendMatch: typeof createLegendMatch;
+}
+
+export type PracticeRoomOpening =
+  | { readonly kind: 'opened'; readonly room: RoomSummary; readonly inviteCode: string | null }
+  /** Nothing was created or closed. The reader is asked before their other table is closed. */
+  | { readonly kind: 'confirm'; readonly other: PracticeTableInPlay };
+
+export const LEGEND_MATCH_STARTING_STACK = 1_000;
+
+export async function openPracticeRoom(
   session: { readonly user: { readonly id: string }; readonly csrfToken: string },
   request: CreateRoomRequest,
   legendMatch: UseLiveTableOptions['legendMatch'],
-  fresh: boolean,
+  press: { readonly fresh?: boolean; readonly confirmed?: boolean },
   signal: AbortSignal,
-): Promise<{ room: RoomSummary; inviteCode: string | null }> {
-  const rooms = await listRooms(signal);
+  dependencies: PracticeRoomDependencies = { listRooms, createRoom, createLegendMatch },
+): Promise<PracticeRoomOpening> {
+  const { fresh = false, confirmed = false } = press;
+  const rooms = await dependencies.listRooms(signal);
   const reuse = !fresh && legendMatch === undefined;
   const existing = reuse ? chooseRoom(rooms, session.user.id, rememberedRoom()) : null;
-  if (existing !== null) return { room: existing, inviteCode: null };
+  // A private table closes nothing, and "Start a fresh table" is already a choice to leave this one.
+  const replaces = legendMatch !== undefined || createsPracticeTable(request);
+  const other =
+    fresh || confirmed || !replaces ? null : practiceTableToRetire(rooms, session.user.id, existing);
+  if (existing !== null) return { kind: 'opened', room: existing, inviteCode: null };
+  if (other !== null) return { kind: 'confirm', other };
   if (legendMatch !== undefined) {
-    const match = await createLegendMatch(
+    const match = await dependencies.createLegendMatch(
       session.csrfToken,
       {
         profileIds: [legendMatch.profileId],
         difficulty: legendMatch.difficulty,
-        startingStack: 1_000,
+        startingStack: LEGEND_MATCH_STARTING_STACK,
         smallBlind: 5,
         bigBlind: 10,
       },
       signal,
     );
-    const after = await listRooms(signal);
+    const after = await dependencies.listRooms(signal);
     const room = after.find((entry) => entry.id === match.roomId);
     if (room === undefined) {
       throw new Error('the Legends match was created but did not appear in the room list');
     }
-    return { room, inviteCode: null };
+    return { kind: 'opened', room, inviteCode: null };
   }
-  const created = await createRoom(session.csrfToken, request, signal);
-  return { room: created.room, inviteCode: created.inviteCode };
+  const created = await dependencies.createRoom(session.csrfToken, request, signal);
+  return { kind: 'opened', room: created.room, inviteCode: created.inviteCode };
 }
 
 /**
@@ -928,6 +967,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
   const [join, setJoin] = useState<JoinPhase>({ state: 'idle' });
   const [dealIn, setDealIn] = useState<DealIn>('off');
   const [resuming, setResuming] = useState(false);
+  const [switchWarning, setSwitchWarning] = useState<SwitchWarning | null>(null);
 
   const socketRef = useRef<TableSocketHandle | null>(null);
   const pendingRef = useRef<PendingDecision | null>(null);
@@ -947,9 +987,10 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
    * One abortable pass. Unmount aborts it, or a `POST /rooms` left in flight creates an orphan table.
    */
   const prepare = useCallback(
-    (fresh: boolean, request: CreateRoomRequest = BOT_TABLE_REQUEST) => {
+    (press: { readonly fresh?: boolean; readonly confirmed?: boolean }, request = BOT_TABLE_REQUEST) => {
       setupRef.current?.abort();
       setResuming(false);
+      setSwitchWarning(null);
       setPhase('preparing');
       setSetupError(null);
       const controller = new AbortController();
@@ -958,8 +999,18 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
         try {
           const session = await ensureSession(controller.signal);
           setDisplayName(session.user.displayName);
-          const opened = await openPracticeRoom(session, request, legendMatch, fresh, controller.signal);
+          const opened = await openPracticeRoom(session, request, legendMatch, press, controller.signal);
           if (controller.signal.aborted) return;
+          if (opened.kind === 'confirm') {
+            setSwitchWarning({
+              other: opened.other,
+              starting: legendMatch === undefined ? 'botTable' : 'legendMatch',
+              startsWith: legendMatch === undefined ? request.startingStack : LEGEND_MATCH_STARTING_STACK,
+            });
+            setDealIn('off');
+            setPhase('idle');
+            return;
+          }
           rememberRoom(opened.room.id);
           dispatch({ kind: 'reset' });
           setInviteCode(opened.inviteCode);
@@ -1020,8 +1071,15 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
   const start = useCallback((): void => {
     if (phase === 'preparing' || phase === 'ready') return;
     setDealIn('wantSeat');
-    prepare(false);
+    prepare({});
   }, [phase, prepare]);
+
+  const confirmSwitch = useCallback((): void => {
+    setDealIn('wantSeat');
+    prepare({ confirmed: true });
+  }, [prepare]);
+
+  const keepOtherTable = useCallback((): void => setSwitchWarning(null), []);
 
   const buildFresh = useCallback(
     (request: CreateRoomRequest): void => {
@@ -1034,7 +1092,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
       setInviteCode(null);
       setJoin({ state: 'idle' });
       rememberRoom(null);
-      prepare(true, request);
+      prepare({ fresh: true }, request);
     },
     [prepare],
   );
@@ -1067,6 +1125,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
     const controller = new AbortController();
     setupRef.current = controller;
     setDealIn('off');
+    setSwitchWarning(null);
     setJoin({ state: 'joining' });
     setSetupError(null);
     setPhase('preparing');
@@ -1313,7 +1372,10 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
     readerSeat,
     dealingIn: dealIn !== 'off',
     outOfUnits: outOfUnits(table),
+    switchWarning,
     start,
+    confirmSwitch,
+    keepOtherTable,
     startFreshTable,
     startPrivateTable,
     joinByInviteCode,
