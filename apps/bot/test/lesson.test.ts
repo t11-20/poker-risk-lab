@@ -161,10 +161,10 @@ describe('live calculations', () => {
   test('the figures a caption asks about are shown: every player in a three-way all-in, and the exact figure beside the shortcut', () => {
     const allIns = lessonById('all-ins-and-side-pots');
     assert.ok(allIns);
-    const page = lessonPages(allIns).find((text) => text.includes('Equity of KsKh'));
+    const page = lessonPages(allIns).find((text) => text.includes('Equity of K♠ K♥'));
     assert.ok(page, 'the all-in lesson names each player');
     assert.match(page, /Your equity: \d+\.\d%/);
-    assert.match(page, /Equity of 7c7d: \d+\.\d%/);
+    assert.match(page, /Equity of 7♣ 7♦: \d+\.\d%/);
     const shortcut = lessonById('rule-of-2-and-4');
     assert.ok(shortcut);
     const pages = lessonPages(shortcut).join('\n');
