@@ -141,3 +141,18 @@ test('control: an uncalled size within a big blind of the capped ones still wide
   assertChips(rowAt(input, 200).row.ev, 626.59090909, 'EV of the bet to 200');
   assert.deepEqual(buildCoachReport(input).suggestion.sizeRange, { min: 200, max: 300 });
 });
+
+test('a hand with no outs at all is not told that none of its 0 outs is clean', () => {
+  // AsKs against AcKc on Qc 7c 2h 9d: every river chops or loses, so there is no out to count.
+  const report = buildCoachReport(
+    setVersusDraw({
+      heroCards: parseCards('As Ks'),
+      board: parseCards('Qc 7c 2h 9d'),
+      opponents: [{ label: 'the other ace-king', range: exactRange(parseCards('Ac Kc')) }],
+      opponentStacks: [2589],
+    }),
+  );
+  const said = JSON.stringify(report);
+  assert.doesNotMatch(said, /none of your 0 cards/u);
+  assert.match(said, /No rule-of-2-and-4 figure here: no card that can come puts you in front/u);
+});

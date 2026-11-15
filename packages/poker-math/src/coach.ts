@@ -924,6 +924,9 @@ function refusalNote(refusal: RuleOfThumbRefusal | null): string | null {
         'nothing and returns a number that is not a probability of anything.'
       );
     case 'no-clean-outs':
+      if (refusal.dirty === 0) {
+        return 'No rule-of-2-and-4 figure here: no card that can come puts you in front, so there are no outs to count.';
+      }
       return (
         `No rule-of-2-and-4 figure here: none of your ${pluralCards(refusal.dirty)} of outs ${refusal.dirty === 1 ? 'is' : 'are'} clean. ` +
         'The shortcut is only ever applied to clean outs, because a card that improves you and improves ' +
