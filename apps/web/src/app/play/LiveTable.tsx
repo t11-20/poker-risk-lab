@@ -23,7 +23,7 @@ import { type FormEvent, type ReactElement, type RefObject, useEffect, useId, us
 import { TableStage, type TableStageStatus } from '@/components/TableStage.tsx';
 import { noAnalysisReason, readerHasDecisions, reviewHrefFor } from '@/lib/coach-body.ts';
 import { dealNextState } from '@/lib/deal-next.ts';
-import { sizerFollowDelta, watchDelta } from '@/lib/follow-the-table.ts';
+import { sizerFollowDelta, type WatchGeometry, watchDelta } from '@/lib/follow-the-table.ts';
 import { LEGENDS_PATH, PLAY_PATH } from '@/lib/legend-links.ts';
 import { describeTable } from '@/lib/table-description.ts';
 import { INVITE_CODE_EXAMPLE, MAX_INVITE_CODE_INPUT } from '@/lib/table-rooms.ts';
@@ -693,23 +693,29 @@ function sizerScroll(band: HTMLElement): number | null {
   const first = street ?? bar;
   const after = bar.querySelector<HTMLElement>('.prl-action-bar__note');
   const sizerBox = sizer.getBoundingClientRect();
+  const rowBox = row.getBoundingClientRect();
   // `display: none` at the widths where the HUD holds the cards: a zero box is "not drawn", not "at 0".
   const hand = bar.querySelector<HTMLElement>('.prl-hand-glance')?.getBoundingClientRect();
+  const price = bar.querySelector<HTMLElement>('.prl-action-bar__price');
   return sizerFollowDelta({
     regionTop: first.getBoundingClientRect().top,
+    priceTop: price === null ? null : price.getBoundingClientRect().top,
     handTop: hand === undefined || hand.height === 0 ? null : hand.top,
     streetBottom: street === null ? null : street.getBoundingClientRect().bottom,
     coverBottom: document.querySelector('.prl-shell__header')?.getBoundingClientRect().bottom ?? 0,
     sizerTop: sizerBox.top,
     sizerBottom: sizerBox.bottom,
+    controlsBottom: (sizer.querySelector('.prl-sizer__controls') ?? sizer).getBoundingClientRect().bottom,
     rowFlowBottom: (after ?? bar).getBoundingClientRect()[after == null ? 'bottom' : 'top'],
-    rowTop: row.getBoundingClientRect().top,
+    rowTop: rowBox.top,
+    rowStuckTop:
+      window.innerHeight - (Number.parseFloat(window.getComputedStyle(row).bottom) || 0) - rowBox.height,
     viewTop: Number.parseFloat(root.scrollPaddingBlockStart) || 0,
     viewBottom: window.innerHeight - (Number.parseFloat(root.scrollPaddingBlockEnd) || 0),
   });
 }
 
-function watchScroll(band: HTMLElement, dealt: boolean): number {
+function watchScroll(band: HTMLElement, edge: WatchGeometry['edge']): number {
   const table =
     document.querySelector<HTMLElement>('.prl-table__hero') ?? document.querySelector('.prl-table__field');
   if (table === null) return 0;
@@ -721,7 +727,7 @@ function watchScroll(band: HTMLElement, dealt: boolean): number {
     tableBottom: table.getBoundingClientRect().bottom,
     viewTop: Number.parseFloat(root.scrollPaddingBlockStart) || 0,
     viewBottom: window.innerHeight - (Number.parseFloat(root.scrollPaddingBlockEnd) || 0),
-    dealt,
+    edge,
   });
 }
 
@@ -756,7 +762,7 @@ function useFollowTheTable(live: LiveTableModel, band: RefObject<HTMLDivElement 
     watchedHand.current = hand;
     const element = band.current;
     if (element === null || typingElsewhere(element)) return;
-    const by = watchScroll(element, dealt);
+    const by = watchScroll(element, dealt ? 'dealt' : watchEdge.endsWith(':true') ? 'complete' : 'decided');
     if (by !== 0) window.scrollBy({ top: by, behavior: reduced ? 'auto' : 'smooth' });
   }, [watchEdge, band, reduced]);
 }
