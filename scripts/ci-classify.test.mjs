@@ -223,3 +223,25 @@ describe('whether the runtime gates run', () => {
     assert.equal(heavy(missing.dir, { DRAFT: 'false' }), true, 'no checker in the tree');
   });
 });
+
+describe('the pnpm store cache', () => {
+  const LOCK_KEY = "          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}";
+
+  it('sits before every install, keyed on the exact lockfile hash with no fallback key', () => {
+    const installing = [...jobBodies(WORKFLOW)].filter(([, body]) =>
+      body.some((line) => line.includes('pnpm install')),
+    );
+    assert.ok(installing.length >= 10, `found only ${installing.length} jobs that install`);
+    for (const [job, body] of installing) {
+      const install = body.findIndex((line) => line.includes('pnpm install'));
+      const cache = body.findIndex((line) => line.includes('uses: actions/cache@'));
+      assert.ok(cache !== -1 && cache < install, `${job}: no store cache before the install`);
+      const step = body.slice(cache, install);
+      assert.ok(step.includes(LOCK_KEY), `${job}: cache key is not the lockfile hash`);
+      assert.ok(
+        !step.some((line) => line.includes('restore-keys')),
+        `${job}: a fallback key restores a stale store`,
+      );
+    }
+  });
+});

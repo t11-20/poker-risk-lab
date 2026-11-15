@@ -39,11 +39,12 @@
 # gate that watches for them (`dep-shapes.mjs`) runs after the install that would have executed them.
 # Residual SUP-020; the flag is the fix.
 #
-# ## Why there is no dependency cache
+# ## Why only the pnpm store is cached
 #
-# A restored `actions/cache` entry is a mutable artifact trusted by path, and cache scoping across refs
-# is a known route into a build. The tree installs in roughly fifteen seconds, so a cache would buy
-# little for one more action and one more trust boundary. If that changes, pin the cache action by SHA.
+# The key is the exact hash of pnpm-lock.yaml with no `restore-keys`, so a cache is either the store for
+# this lockfile or nothing, and `--frozen-lockfile` still decides the graph. Only the store is cached:
+# package builds and node_modules depend on source the key does not cover. A ref can read its own caches
+# and main's, so the entry every PR restores was written by a push to main.
 #
 # ## Which identity the database jobs connect as
 #
@@ -160,6 +161,16 @@ jobs:
           node --version
           pnpm --version
 
+      - name: Locate the pnpm store
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the pnpm store
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
       - name: Install
         # --frozen-lockfile: CI must fail when the lockfile and the manifests disagree, not quietly
         # resolve a new graph. --ignore-scripts: see the header; every install in this file carries it,
@@ -233,6 +244,16 @@ jobs:
       - name: Enable corepack
         run: corepack enable
 
+      - name: Locate the pnpm store
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the pnpm store
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
       - name: Install
         run: pnpm install --frozen-lockfile --ignore-scripts
 
@@ -258,6 +279,16 @@ jobs:
 
       - name: Enable corepack
         run: corepack enable
+
+      - name: Locate the pnpm store
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the pnpm store
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
 
       - name: Install
         run: pnpm install --frozen-lockfile --ignore-scripts
@@ -320,6 +351,16 @@ jobs:
 
       - name: Enable corepack
         run: corepack enable
+
+      - name: Locate the pnpm store
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the pnpm store
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
 
       - name: Install
         run: pnpm install --frozen-lockfile --ignore-scripts
@@ -403,6 +444,16 @@ jobs:
       - name: Enable corepack
         run: corepack enable
 
+      - name: Locate the pnpm store
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the pnpm store
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
       - name: Install
         run: pnpm install --frozen-lockfile --ignore-scripts
 
@@ -480,6 +531,16 @@ jobs:
 
       - name: Enable corepack
         run: corepack enable
+
+      - name: Locate the pnpm store
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the pnpm store
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
 
       - name: Install
         run: pnpm install --frozen-lockfile --ignore-scripts
@@ -629,6 +690,16 @@ jobs:
       - name: Enable corepack
         run: corepack enable
 
+      - name: Locate the pnpm store
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the pnpm store
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
       - name: Install
         run: pnpm install --frozen-lockfile --ignore-scripts
 
@@ -654,6 +725,16 @@ jobs:
 
       - name: Enable corepack
         run: corepack enable
+
+      - name: Locate the pnpm store
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the pnpm store
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
 
       - name: Install
         run: pnpm install --frozen-lockfile --ignore-scripts
@@ -743,6 +824,16 @@ jobs:
 
       - name: Enable corepack
         run: corepack enable
+
+      - name: Locate the pnpm store
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the pnpm store
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
 
       - name: Install
         run: pnpm install --frozen-lockfile --ignore-scripts
@@ -857,6 +948,16 @@ jobs:
 
       - name: Enable corepack
         run: corepack enable
+
+      - name: Locate the pnpm store
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the pnpm store
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
 
       - name: Install
         run: pnpm install --frozen-lockfile --ignore-scripts
@@ -980,6 +1081,16 @@ jobs:
 
       - name: Enable corepack
         run: corepack enable
+
+      - name: Locate the pnpm store
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the pnpm store
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
 
       - name: Install
         run: pnpm install --frozen-lockfile --ignore-scripts
