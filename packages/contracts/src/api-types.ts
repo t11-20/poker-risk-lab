@@ -224,7 +224,10 @@ export interface ActionCandidate {
    * not the increment. Absent for fold and check.
    */
   readonly to?: number;
-  /** Chips leaving the stack. For a raise that is the call plus the raise on top. */
+  /**
+   * Chips at risk. For a raise that is the call plus the raise on top. A size above what any opponent
+   * can match counts only the matched part, because the rest comes back uncalled.
+   */
   readonly cost: number;
   /** Expected value in units, relative to folding. */
   readonly ev: number;
