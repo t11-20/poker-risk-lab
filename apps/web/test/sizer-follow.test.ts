@@ -236,6 +236,62 @@ describe('the price row stays below the header while a phone sizes a bet', () =>
   });
 });
 
+/**
+ * A call or fold has no sizer, so the stuck row must clear the price and the glance instead. On the first
+ * decision of a hand, following the row by its nearest edge left it stuck over the price: at 390x844
+ * price 683..720 under a row at 691..780, and at 360x780 price 619..657 under a row at 627..716.
+ */
+describe('a decision without a sizer keeps the price and the glance clear of the stuck row', () => {
+  const ROW = 89;
+  /** As Chrome measured it after the change: price top, glance, note top, viewport height, and the scroll. */
+  type Measured = readonly [number, readonly [number, number], number, number, number];
+  const AT_390: Measured = [537, [586, 667], 764, 844, 146];
+  const AT_360: Measured = [472, [522, 603], 700, 780, 147];
+  /** At 360x780 in a band held from a sized decision, with the street line at 21..63 under the header. */
+  const HELD_360: Measured = [92, [142, 223], 320, 780, 0];
+  const placed = ([price, glance, note, height, scrolled]: Measured, by = scrolled): SizerGeometry => ({
+    regionTop: price + by,
+    priceTop: price + by,
+    handTop: glance[0] + by,
+    streetBottom: null,
+    sizerTop: glance[0] + by,
+    sizerBottom: glance[1] + by,
+    controlsBottom: glance[1] + by,
+    rowTop: Math.min(note + by - 4, height - 64) - ROW,
+    rowStuckTop: height - 64 - ROW,
+    rowFlowBottom: note + by,
+    viewTop: 92,
+    viewBottom: height - 80,
+    coverBottom: 77,
+  });
+
+  it('NEGATIVE CONTROL: as the nearest edge left it, the row is painted over the price', () => {
+    assert.equal(rowCoversSizer({ rowTop: 691, sizerBottom: 720 }), true);
+    assert.equal(rowCoversSizer({ rowTop: 627, sizerBottom: 657 }), true);
+    assert.deepEqual([placed(AT_390).priceTop, placed(AT_360).priceTop], [683, 619], 'not as measured');
+  });
+
+  it('puts the row in flow at the bottom edge, with the price and the glance above it', () => {
+    for (const m of [AT_390, AT_360]) {
+      const delta = sizerFollowDelta(placed(m));
+      assert.equal(delta, m[4], 'not moved to where Chrome measured it');
+      const after = placed(m, 0);
+      assert.ok((after.priceTop ?? 0) >= after.viewTop, 'the price is under the header');
+      assert.equal(rowCoversSizer(after), false, `the glance ends under a row at ${after.rowTop}`);
+      assert.equal(after.rowFlowBottom, after.viewBottom, 'the row is not in flow at the bottom edge');
+      assert.equal(sizerFollowDelta(after), 0, 'a second follow moves it');
+    }
+  });
+
+  it('NEGATIVE CONTROL: keeping the street line moves a held band 71px, and the next sized decision back', () => {
+    assert.equal(sizerFollowDelta({ ...placed(HELD_360), regionTop: 21 }), -71);
+  });
+
+  it('leaves a held band where the sized decision put it', () => {
+    assert.equal(sizerFollowDelta(placed(HELD_360)), 0);
+  });
+});
+
 /** As `scrolled`, for 360x640: the row sticks 64px above a 640px bottom edge. */
 function scrolled360(geometry: SizerGeometry, delta: number): SizerGeometry {
   const moved = scrolled(geometry, delta);
@@ -356,7 +412,7 @@ describe('between the reader’s decisions the page stays where the decision lef
 describe('the live table uses it, on a narrow column only', () => {
   const wired = (source: string): boolean =>
     /window\.getComputedStyle\(row\)\.position !== 'sticky'\) return null;/u.test(source) &&
-    /const sized = sizerScroll\(element\);\s*if \(sized !== null\) \{[\s\S]*?if \(sized !== 0\) window\.scrollBy\(\{ top: sized,/u.test(
+    /const sized = stuckRowScroll\(element\);\s*if \(sized !== null\) \{[\s\S]*?if \(sized !== 0\) window\.scrollBy\(\{ top: sized,/u.test(
       source,
     );
 
@@ -366,14 +422,14 @@ describe('the live table uses it, on a narrow column only', () => {
   });
 
   const keepsTheGlance = (source: string): boolean =>
-    /bar\.querySelector<HTMLElement>\('\.prl-hand-glance'\)\?\.getBoundingClientRect\(\);/u.test(source) &&
-    /handTop: hand === undefined \|\| hand\.height === 0 \? null : hand\.top,/u.test(source) &&
+    /const drawn = hand !== undefined && hand\.height > 0;/u.test(source) &&
+    /handTop: drawn \? hand\.top : null,/u.test(source) &&
     /priceTop: price === null \? null : price\.getBoundingClientRect\(\)\.top,/u.test(source) &&
     /coverBottom: document\.querySelector\('\.prl-shell__header'\)/u.test(source);
 
   it('reads the glance, where it is drawn, and the header into the sizer scroll', () => {
     const live = readFileSync(join(SRC, 'app', 'play', 'LiveTable.tsx'), 'utf8');
-    assert.ok(keepsTheGlance(live), 'sizerScroll no longer tells the follow where the reader’s cards are');
+    assert.ok(keepsTheGlance(live), 'stuckRowScroll no longer tells the follow where the reader’s cards are');
   });
 
   const watches = (source: string): boolean =>
@@ -389,7 +445,7 @@ describe('the live table uses it, on a narrow column only', () => {
   });
 
   const holds = (source: string): boolean =>
-    /held\.current = handEdge;\s*element\.style\.minBlockSize = `\$\{element\.getBoundingClientRect\(\)\.height\}px`;/u.test(
+    /if \(element\.querySelector\('\.prl-sizer'\) !== null\) \{\s*held\.current = handEdge;\s*element\.style\.minBlockSize = `\$\{element\.getBoundingClientRect\(\)\.height\}px`;/u.test(
       source,
     ) &&
     /const holding = held\.current === watchEdge;\s*if \(!holding\) \{\s*held\.current = null;\s*element\.style\.minBlockSize = '';/u.test(
@@ -417,13 +473,32 @@ describe('the live table uses it, on a narrow column only', () => {
     assert.equal(releasesWithoutASeat('  }, [watchEdge, band, reduced]);'), false);
   });
 
-  const glancesWhileWaiting = (source: string): boolean =>
-    /const waiting = view\.legalActions\.length === 0 && view\.street !== 'complete';/u.test(source) &&
-    /if \(!waiting && !view\.legalActions\.some\(/u.test(source);
+  const glancesWhileLive = (source: string): boolean =>
+    /if \(hole === null \|\| view\.street === 'complete'\) return null;\s*return \(\s*<HandGlance/u.test(
+      source,
+    );
 
-  it('draws the glance while the reader waits for the others, not only while they size a bet', () => {
+  it('draws the glance from the deal to the end of the hand, at a decision with no sizer too', () => {
     const stage = readFileSync(join(SRC, 'components', 'TableStage.tsx'), 'utf8');
-    assert.ok(glancesWhileWaiting(stage), 'the waiting band no longer shows the board and the latest action');
+    assert.ok(glancesWhileLive(stage), 'a call or fold is decided without the reader’s cards on screen');
+  });
+
+  // At a decision with no sizer the price is what the stuck row must clear, so the follow still measures.
+  const followsWithoutASizer = (source: string): boolean =>
+    /if \(bar == null \|\| row == null\) return null;\s*if \(window\.getComputedStyle\(row\)\.position !== 'sticky'\) return null;/u.test(
+      source,
+    ) &&
+    /const first = \(sizer === null \? price : street\) \?\? bar;/u.test(source) &&
+    /const under = \(sizer \?\? \(drawn \? glance : null\) \?\? price \?\? bar\)\.getBoundingClientRect\(\);/u.test(
+      source,
+    );
+
+  it('keeps the price and the glance clear of the stuck row at a decision with no sizer', () => {
+    const live = readFileSync(join(SRC, 'app', 'play', 'LiveTable.tsx'), 'utf8');
+    assert.ok(
+      followsWithoutASizer(live),
+      'a call or fold brings the row in by its nearest edge, over the price',
+    );
   });
 
   it('NEGATIVE CONTROL: the old follow, the buttons by the nearest edge only, fails the predicate', () => {
@@ -438,6 +513,28 @@ describe('the live table uses it, on a narrow column only', () => {
     const by = watchScroll(element, dealt ? 'dealt' : watchEdge.endsWith(':true') ? 'complete' : 'decided');`;
     assert.equal(holds(unheld), false);
     const sizingOnly = `  if (!view.legalActions.some((action) => action.type === 'bet' || action.type === 'raise')) return null;`;
-    assert.equal(glancesWhileWaiting(sizingOnly), false);
+    assert.equal(glancesWhileLive(sizingOnly), false);
+    const sizedOrWaiting = `  if (hole === null) return null;
+  const waiting = view.legalActions.length === 0 && view.street !== 'complete';
+  if (!waiting && !view.legalActions.some((action) => action.type === 'bet' || action.type === 'raise')) {
+    return null;
+  }
+  return (
+    <HandGlance`;
+    assert.equal(glancesWhileLive(sizedOrWaiting), false);
+    // The source as it is, with only the guard each predicate exists for taken out.
+    const live = readFileSync(join(SRC, 'app', 'play', 'LiveTable.tsx'), 'utf8');
+    const sizerOnly = live.replace(
+      'if (bar == null || row == null)',
+      'if (bar == null || sizer == null || row == null)',
+    );
+    assert.notEqual(sizerOnly, live);
+    assert.equal(followsWithoutASizer(sizerOnly), false);
+    const keepsTheStreet = live.replace('(sizer === null ? price : street) ?? bar', 'street ?? bar');
+    assert.notEqual(keepsTheStreet, live);
+    assert.equal(followsWithoutASizer(keepsTheStreet), false);
+    const holdsAtEveryDecision = live.replace("if (element.querySelector('.prl-sizer') !== null) {", '{');
+    assert.notEqual(holdsAtEveryDecision, live);
+    assert.equal(holds(holdsAtEveryDecision), false);
   });
 });
