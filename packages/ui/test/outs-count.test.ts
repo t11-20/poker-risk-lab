@@ -6,8 +6,9 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { DEFAULT_AHEAD_THRESHOLD } from '@prl/poker-math';
-import { ALREADY_AHEAD_EQUITY, countsAsOuts } from '../src/outs-count.ts';
+import { buildCoachReport, DEFAULT_AHEAD_THRESHOLD, exactRange, type Street } from '@prl/poker-math';
+import { parseCardText } from '../src/cards.ts';
+import { ALREADY_AHEAD_EQUITY, countsAsOuts, outsWithheldBecause } from '../src/outs-count.ts';
 
 test('the re-declared threshold is the producer’s threshold', () => {
   assert.equal(
@@ -40,4 +41,50 @@ test('an equity that is not a probability suppresses nothing', () => {
       `${String(notAProbability)} says nothing about whether hero is ahead`,
     );
   }
+});
+
+function cards(text: string): number[] {
+  return text.split(' ').map((card) => {
+    const value = parseCardText(card);
+    assert.notEqual(value, null, card);
+    return value ?? -1;
+  });
+}
+
+test('the panel withholds outs for a reason exactly when the producer withholds them', () => {
+  const villains = ['Qs Qd', 'Jc Jd', 'Tc Td', '9c 9d', '8c 8d'];
+  const boards: Record<Street, string> = {
+    preflop: '',
+    flop: 'Kh 7h 2c',
+    turn: 'Kh 7h 2c 3s',
+    river: 'Kh 7h 2c 3s 4d',
+  };
+  let withheld = 0;
+  let counted = 0;
+  for (const [street, board] of Object.entries(boards) as [Street, string][]) {
+    for (let opponents = 1; opponents <= villains.length; opponents += 1) {
+      const report = buildCoachReport({
+        heroCards: cards('Ah Kd'),
+        board: board === '' ? [] : cards(board),
+        street,
+        opponents: villains
+          .slice(0, opponents)
+          .map((hand, seat) => ({ label: `villain ${seat}`, range: exactRange(cards(hand)) })),
+        pot: 100,
+        contestablePot: 100,
+        toCall: 50,
+        heroCommittedThisStreet: 0,
+        heroStack: 400,
+        opponentStacks: villains.slice(0, opponents).map(() => 400),
+        bigBlind: 10,
+        samples: 200,
+        seed: 1,
+      });
+      const reason = outsWithheldBecause(report.street, report.equity.perPlayer.length - 1);
+      assert.equal(reason !== null, report.outs === null, `${street} against ${opponents}: ${reason}`);
+      if (reason === null) counted += 1;
+      else withheld += 1;
+    }
+  }
+  assert.ok(counted > 0 && withheld > 0, 'the sweep reaches both answers');
 });

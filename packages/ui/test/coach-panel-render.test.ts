@@ -494,3 +494,50 @@ test('a negative margin over break-even is said to be under it (REGRESSION)', as
   // Rounds to 0.0 points, which the metric renders flat: neither over nor under.
   assert.equal(label(await render(priced(-0.0004))), 'at the break-even equity');
 });
+
+/** The Outs section's text, tags stripped, so a reason is read as the learner reads it. */
+function outsSectionText(markup: string): string {
+  const start = markup.indexOf('>Outs</h3>');
+  assert.notEqual(start, -1, 'the Outs section is rendered');
+  return markup
+    .slice(start, markup.indexOf('</section>', start))
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ');
+}
+
+test('a spot with no outs count names its own reason, not another street’s', async () => {
+  const withheld = (street: string, opponents: number): CoachReport => ({
+    ...CHECKED_TO,
+    street,
+    equity: {
+      ...CHECKED_TO.equity,
+      perPlayer: Array.from({ length: opponents + 1 }, (_, seat) => ({
+        label: seat === 0 ? 'you' : `opponent ${seat}`,
+        equity: 1 / (opponents + 1),
+        win: 1 / (opponents + 1),
+        tie: 0,
+      })),
+    },
+  });
+  const reasons = {
+    multiway: 'counted against a single opponent',
+    river: 'The board is complete',
+    preflop: 'no board has been dealt yet',
+  };
+  const cases = [
+    { spot: withheld('flop', 2), expected: reasons.multiway },
+    { spot: withheld('turn', 4), expected: reasons.multiway },
+    { spot: withheld('river', 1), expected: reasons.river },
+    { spot: withheld('river', 3), expected: reasons.river },
+    { spot: withheld('preflop', 1), expected: reasons.preflop },
+  ];
+  for (const { spot, expected } of cases) {
+    const text = outsSectionText(await render(spot));
+    const label = `${spot.street} against ${spot.equity.perPlayer.length - 1}`;
+    assert.ok(text.includes(expected), `${label}: says "${expected}", got "${text}"`);
+    for (const other of Object.values(reasons).filter((reason) => reason !== expected)) {
+      assert.ok(!text.includes(other), `${label}: does not also claim "${other}"`);
+    }
+  }
+  assert.match(outsSectionText(await render(withheld('flop', 2))), /2 opponents are still in this hand/);
+});
