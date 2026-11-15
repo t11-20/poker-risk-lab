@@ -1210,6 +1210,113 @@ async function auditCoachPeekOcclusion(page) {
 }
 
 /**
+ * Below 600px the open Coach sheet covered y 64 to 844, the clock, cards, price and action row with it,
+ * and its reading started 1,205px down (390x844). Opened from the two places a decision leaves the price:
+ * held at the top, and at a first call, where it was measured at 537 (390x844) and 472 (360x780).
+ */
+async function auditCoachSheetOpen(page) {
+  const VIEWPORTS = [
+    [360, 780],
+    [390, 844],
+  ];
+  try {
+    for (const [width, height] of VIEWPORTS) {
+      section(
+        `Narrow viewport — the open Coach leaves the decision in view  ${DIM}${width}x${height}${RESET}`,
+      );
+      await page.send('Emulation.setDeviceMetricsOverride', {
+        width,
+        height,
+        deviceScaleFactor: 2,
+        mobile: true,
+      });
+      for (const [where, priceAt] of [
+        ['held', null],
+        ['first call', height - 307],
+      ]) {
+        const label = `Coach sheet: ${where} at ${width}x${height}`;
+        await page.goto(`${WEB_ORIGIN}/play?state=decision`);
+        // The first-visit overlay covers the page, and every tap would land on it.
+        for (
+          let wait = 0;
+          wait < 30 && (await page.evaluate(`document.querySelector('.prl-boot') !== null`));
+          wait += 1
+        ) {
+          await delay(100);
+        }
+        await page.evaluate(
+          `(() => {
+            document.documentElement.style.scrollBehavior = 'auto';
+            // Headless Chrome stopped producing frames after a reload, and the slide stayed at its start.
+            document.querySelector('.prl-play__coach').style.transition = 'none';
+            const price = document.querySelector('.prl-action-bar__price');
+            const top = ${priceAt ?? 'parseFloat(getComputedStyle(document.documentElement).scrollPaddingBlockStart)'};
+            window.scrollBy(0, price.getBoundingClientRect().top - top);
+            document.querySelector('.prl-play__handle').focus();
+          })()`,
+        );
+        await page.press('Enter');
+        await delay(600);
+        const open = await page.evaluate(
+          `(() => {
+            const sheet = document.querySelector('.prl-play__coach');
+            const head = sheet.querySelector('.prl-suggestion__head');
+            const hit = (element) => {
+              const box = element.getBoundingClientRect();
+              const y = box.top + box.height / 2;
+              return y > 0 && y < innerHeight && element.contains(document.elementFromPoint(box.left + box.width / 2, y));
+            };
+            const needed = [
+              ...[...document.querySelectorAll('.prl-action-bar__actions button:not([disabled])')].map((b) => [b.textContent.trim().slice(0, 20), b]),
+              ['the price', document.querySelector('.prl-action-bar__price')],
+              ['the clock', document.querySelector('.prl-hand-glance .prl-turn-timer')],
+              ...[...document.querySelectorAll('.prl-hand-glance .prl-card')].map((c, i) => ['card ' + (i + 1), c]),
+            ].filter(([, element]) => element !== null);
+            return {
+              open: sheet.dataset.open === 'true',
+              headBottom: head === null ? null : Math.round(head.getBoundingClientRect().bottom - sheet.getBoundingClientRect().top),
+              sheetHeight: sheet.clientHeight,
+              needed: needed.length,
+              hidden: needed.filter(([, element]) => !hit(element)).map(([name]) => name),
+            };
+          })()`,
+        );
+        if (!open.open || open.headBottom === null || open.needed < 6) {
+          bad(
+            label,
+            `the sheet did not open over a priced decision (${JSON.stringify(open)}), so nothing was checked`,
+          );
+          continue;
+        }
+        if (open.headBottom <= open.sheetHeight) {
+          ok(`${label}: the reading ends ${open.headBottom}px into a ${open.sheetHeight}px sheet`);
+        } else {
+          bad(
+            label,
+            `the reading ends ${open.headBottom}px into a ${open.sheetHeight}px sheet, below its first screen`,
+          );
+        }
+        if (open.hidden.length === 0) ok(`${label}: ${open.needed} controls and figures still take a tap`);
+        else bad(label, `under the open sheet: ${open.hidden.join(', ')}`);
+
+        await page.evaluate(`document.querySelector('.prl-play__coach summary').focus()`);
+        await page.press('Escape');
+        await delay(400);
+        const closed = await page.evaluate(
+          `(() => ({ open: document.querySelector('.prl-play__coach').dataset.open, onHandle: document.activeElement === document.querySelector('.prl-play__handle') }))()`,
+        );
+        if (closed.open === 'false' && closed.onHandle)
+          ok(`${label}: Escape closes it, focus back on the handle`);
+        else
+          bad(label, `after Escape the sheet is open=${closed.open}, focus on the handle ${closed.onHandle}`);
+      }
+    }
+  } finally {
+    await page.send('Emulation.clearDeviceMetricsOverride');
+  }
+}
+
+/**
  * Sits down at a real table by keyboard with "Deal me in", then acts. The fixture route only proves the
  * controls answer keys, because `TableStage` sends nothing to a server. Without an API this warns.
  */
@@ -1594,7 +1701,7 @@ async function main() {
           bad(`${route.title}: audit`, error instanceof Error ? error.message : String(error));
         }
       }
-      journeys += 4;
+      journeys += 5;
       try {
         await auditNarrowViewport(page);
       } catch (error) {
@@ -1609,6 +1716,11 @@ async function main() {
         await auditCoachPeekOcclusion(page);
       } catch (error) {
         bad('Coach peek: audit', error instanceof Error ? error.message : String(error));
+      }
+      try {
+        await auditCoachSheetOpen(page);
+      } catch (error) {
+        bad('Coach sheet: audit', error instanceof Error ? error.message : String(error));
       }
       try {
         await playOneHandByKeyboard(page);
