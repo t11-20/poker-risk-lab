@@ -31,11 +31,14 @@ const STICKS_BELOW = 844 - 64;
 /** Measured before the change, with the row stuck over the sizer and no cards drawn. */
 const BEFORE: SizerGeometry = {
   regionTop: 557,
+  priceTop: null,
   handTop: null,
   streetBottom: null,
   sizerTop: 624,
   sizerBottom: 992,
+  controlsBottom: 624 + 233,
   rowTop: 611,
+  rowStuckTop: STICKS_BELOW - ROW_HEIGHT,
   rowFlowBottom: 1168,
   ...VIEW,
 };
@@ -48,10 +51,12 @@ function scrolled(geometry: SizerGeometry, delta: number): SizerGeometry {
   return {
     ...geometry,
     regionTop: geometry.regionTop - delta,
+    priceTop: geometry.priceTop === null ? null : geometry.priceTop - delta,
     handTop: geometry.handTop === null ? null : geometry.handTop - delta,
     streetBottom: geometry.streetBottom === null ? null : geometry.streetBottom - delta,
     sizerTop: geometry.sizerTop - delta,
     sizerBottom: geometry.sizerBottom - delta,
+    controlsBottom: geometry.controlsBottom - delta,
     rowFlowBottom,
     rowTop: rowBottom - ROW_HEIGHT,
   };
@@ -110,11 +115,14 @@ describe('the glance at the reader’s cards stays in view while they size a bet
   /** Where the deal left the 390x844 layout: everything 411px further down. */
   const AT_390: SizerGeometry = {
     regionTop: 56 + 411,
+    priceTop: 106 + 411,
     handTop: 156 + 411,
     streetBottom: 77 + 411,
     sizerTop: 213 + 411,
     sizerBottom: 580 + 411,
+    controlsBottom: 446 + 411,
     rowTop: STICKS_BELOW - ROW_HEIGHT,
+    rowStuckTop: STICKS_BELOW - ROW_HEIGHT,
     rowFlowBottom: 757 + 411,
     ...VIEW,
   };
@@ -122,11 +130,14 @@ describe('the glance at the reader’s cards stays in view while they size a bet
   const VIEW_360 = { viewTop: 92, viewBottom: 640 - 80, coverBottom: 77 } as const;
   const AT_360: SizerGeometry = {
     regionTop: -7 + 475,
+    priceTop: 43 + 475,
     handTop: 92 + 475,
     streetBottom: 14 + 475,
     sizerTop: 149 + 475,
     sizerBottom: 538 + 475,
+    controlsBottom: 234 + 149 + 475,
     rowTop: 640 - 64 - ROW_HEIGHT,
+    rowStuckTop: 640 - 64 - ROW_HEIGHT,
     rowFlowBottom: 715 + 475,
     ...VIEW_360,
   };
@@ -185,6 +196,46 @@ describe('the glance at the reader’s cards stays in view while they size a bet
   });
 });
 
+/**
+ * The price row is what the reader decides on, so it stays below the header too. At 360x780 the region
+ * is 97px taller than the view, and the follow put the glance at the top edge with the price at 42..80,
+ * under a header ending at 77, at every decision. Measured in Chrome as the follow left it: street
+ * -8..13, price 42..80, glance 92..183, sizer 195..562 with its slider and field ending at 428, row
+ * stuck at 547..716, the note at 739.
+ */
+describe('the price row stays below the header while a phone sizes a bet', () => {
+  const at360 = (lower: number): SizerGeometry => ({
+    regionTop: -8 + lower,
+    priceTop: 42 + lower,
+    handTop: 92 + lower,
+    streetBottom: 13 + lower,
+    sizerTop: 195 + lower,
+    sizerBottom: 562 + lower,
+    controlsBottom: 428 + lower,
+    rowTop: 547,
+    rowStuckTop: 547,
+    rowFlowBottom: 739 + lower,
+    viewTop: 92,
+    viewBottom: 780 - 80,
+    coverBottom: 77,
+  });
+
+  it('NEGATIVE CONTROL: as the follow left it, the price is under the header', () => {
+    assert.ok((at360(0).priceTop ?? 0) < at360(0).coverBottom);
+  });
+
+  it('at 360x780 puts the price at the top edge, with the controls clear of the stuck row', () => {
+    // From where the deal leaves the band, and from where the old follow left it.
+    for (const lower of [500, 0]) {
+      const at = at360(lower);
+      const delta = sizerFollowDelta(at);
+      assert.equal((at.priceTop ?? 0) - delta, 92, `the price is at ${(at.priceTop ?? 0) - delta}`);
+      assert.equal(at.handTop === null ? null : at.handTop - delta, 142, 'the glance is not under the price');
+      assert.ok(at.controlsBottom - delta <= at.rowStuckTop, 'the field is under the stuck row');
+    }
+  });
+});
+
 /** As `scrolled`, for 360x640: the row sticks 64px above a 640px bottom edge. */
 function scrolled360(geometry: SizerGeometry, delta: number): SizerGeometry {
   const moved = scrolled(geometry, delta);
@@ -201,14 +252,14 @@ describe('when the decision is not the reader’s, the table is watched', () => 
     bandTop: 92,
     bandBottom: 204,
     tableBottom: 55,
-    dealt: false,
+    edge: 'decided',
     ...VIEW,
   };
   const HAND_OVER: WatchGeometry = {
     bandTop: 108,
     bandBottom: 355,
     tableBottom: -169,
-    dealt: false,
+    edge: 'complete',
     ...VIEW,
   };
 
@@ -233,19 +284,50 @@ describe('when the decision is not the reader’s, the table is watched', () => 
   });
 
   it('does not move a reader who can see their plate', () => {
-    assert.equal(watchDelta({ bandTop: 505, bandBottom: 617, tableBottom: 468, dealt: false, ...VIEW }), 0);
+    assert.equal(
+      watchDelta({ bandTop: 505, bandBottom: 617, tableBottom: 468, edge: 'decided', ...VIEW }),
+      0,
+    );
   });
 
   it('brings the band up from below, as before, for a reader who pressed Deal at the top', () => {
     assert.equal(
-      watchDelta({ bandTop: 1700, bandBottom: 1800, tableBottom: 1690, dealt: true, ...VIEW }),
+      watchDelta({ bandTop: 1700, bandBottom: 1800, tableBottom: 1690, edge: 'dealt', ...VIEW }),
       1800 - 764,
     );
   });
 
   it('leaves a reader who scrolled up mid-hand where they are when the hand ends', () => {
     assert.equal(
-      watchDelta({ bandTop: 1700, bandBottom: 1800, tableBottom: 1690, dealt: false, ...VIEW }),
+      watchDelta({ bandTop: 1700, bandBottom: 1800, tableBottom: 1690, edge: 'complete', ...VIEW }),
+      0,
+    );
+  });
+
+  /**
+   * The result lands between the plate and the band at the end of a hand and pushes Deal off the bottom.
+   * Measured before the change, with the plate on screen: at 390x844 the band at 876..1032 with Deal at
+   * 959..1003; at 360x780 the band at 1004..1160 with Deal at 1087..1131.
+   */
+  it('brings the deal control into view at the end of a hand, for a reader who can see their plate', () => {
+    const ends: readonly [WatchGeometry, number, number][] = [
+      [{ bandTop: 876, bandBottom: 1032, tableBottom: 479, edge: 'complete', ...VIEW }, 959, 1003],
+      [
+        { bandTop: 1004, bandBottom: 1160, tableBottom: 551, edge: 'complete', viewTop: 92, viewBottom: 700 },
+        1087,
+        1131,
+      ],
+    ];
+    for (const [at, dealTop, dealBottom] of ends) {
+      const by = watchDelta(at);
+      assert.equal(by, at.bandBottom - at.viewBottom, 'the band is not at the bottom edge');
+      assert.ok(dealTop - by >= at.viewTop && dealBottom - by <= at.viewBottom, `Deal at ${dealTop - by}`);
+    }
+  });
+
+  it('leaves a band that ends below the view alone after a decision mid-hand', () => {
+    assert.equal(
+      watchDelta({ bandTop: 876, bandBottom: 1032, tableBottom: 479, edge: 'decided', ...VIEW }),
       0,
     );
   });
@@ -266,6 +348,7 @@ describe('the live table uses it, on a narrow column only', () => {
   const keepsTheGlance = (source: string): boolean =>
     /bar\.querySelector<HTMLElement>\('\.prl-hand-glance'\)\?\.getBoundingClientRect\(\);/u.test(source) &&
     /handTop: hand === undefined \|\| hand\.height === 0 \? null : hand\.top,/u.test(source) &&
+    /priceTop: price === null \? null : price\.getBoundingClientRect\(\)\.top,/u.test(source) &&
     /coverBottom: document\.querySelector\('\.prl-shell__header'\)/u.test(source);
 
   it('reads the glance, where it is drawn, and the header into the sizer scroll', () => {
@@ -275,7 +358,9 @@ describe('the live table uses it, on a narrow column only', () => {
 
   const watches = (source: string): boolean =>
     /const watchEdge = turnEdge === '' \? handEdge : null;/u.test(source) &&
-    /const by = watchScroll\(element, dealt\);\s*if \(by !== 0\) window\.scrollBy\(/u.test(source) &&
+    /watchScroll\(element, dealt \? 'dealt' : watchEdge\.endsWith\(':true'\) \? 'complete' : 'decided'\);\s*if \(by !== 0\) window\.scrollBy\(/u.test(
+      source,
+    ) &&
     /\}, \[watchEdge, band, reduced\]\);/u.test(source);
 
   it('watches the table on a deal, at the end of the reader’s decision and at the end of the hand', () => {
