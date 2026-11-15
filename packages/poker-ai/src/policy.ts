@@ -42,7 +42,7 @@ import {
   type SeatIndex,
 } from '@prl/poker-engine';
 import {
-  effectiveStack,
+  effectiveStackOf,
   evOfCall,
   type ParsedRange,
   parseRange,
@@ -276,7 +276,7 @@ interface Situation {
   readonly myStack: number;
   readonly myCommitted: number;
   readonly opponents: number;
-  readonly effectiveStackBehind: number;
+  readonly effectiveStack: number;
   readonly effectiveStackBb: number;
   /** 0 for first to act on later streets, 1 for last. See `relativePositionOf`. */
   readonly relativePosition: number;
@@ -329,13 +329,19 @@ function readSituation(input: PolicyInput): Situation {
   const liveSeatNumbers = liveSeats.map((seat) => seat.seat);
   const opponents = liveSeats.filter((seat) => seat.seat !== input.seat);
   const bigBlind = view.config.bigBlind;
+  // The Coach's definition, so the bot decides on the SPR the learner is shown.
   const effective =
     opponents.length === 0
       ? me.stack
-      : effectiveStack(
-          me.stack,
-          opponents.map((seat) => seat.stack),
-        ).effective;
+      : effectiveStackOf({
+          toCall: view.amountToCall,
+          heroCommittedThisStreet: me.committedThisStreet,
+          heroStack: me.stack,
+          opponentStacks: opponents.map((seat) => ({
+            behind: seat.stack,
+            committedThisStreet: seat.committedThisStreet,
+          })),
+        }).effective;
 
   const streetIndex = STREET_ORDER.indexOf(view.street);
   const previousStreet = streetIndex > 0 ? STREET_ORDER[streetIndex - 1] : undefined;
@@ -351,7 +357,7 @@ function readSituation(input: PolicyInput): Situation {
     myStack: me.stack,
     myCommitted: me.committedThisStreet,
     opponents: Math.max(1, opponents.length),
-    effectiveStackBehind: effective,
+    effectiveStack: effective,
     effectiveStackBb: effective / bigBlind,
     relativePosition: relativePositionOf(view, input.seat, liveSeatNumbers),
     positionLabel: me.position,
@@ -850,7 +856,7 @@ function scorePassiveContinue(context: ScoreContext, candidate: Candidate): Scor
   const traits = input.traits;
   if (situation.toCall === 0) return scoreCheck(context, candidate);
 
-  const spr = stackToPotRatio(situation.effectiveStackBehind, Math.max(1, situation.pot)).spr;
+  const spr = stackToPotRatio(situation.effectiveStack, Math.max(1, situation.pot)).spr;
   const drawRoom = clamp01(spr / 6);
   const weight =
     context.continueAppetite *

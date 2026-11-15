@@ -22,7 +22,13 @@ import {
   startHand,
   type TableConfig,
 } from '@prl/poker-engine';
-import { type ParsedRange, topPercentRange } from '@prl/poker-math';
+import {
+  coachSpotForView,
+  effectiveStackOf,
+  LIVE_COACH_POLICY,
+  type ParsedRange,
+  topPercentRange,
+} from '@prl/poker-math';
 import { findImpersonation } from '../src/labelling.ts';
 import { createOpponentModel, type OpponentModel } from '../src/opponent-model.ts';
 import {
@@ -345,6 +351,33 @@ function fixedFlopSpot(): { state: HandState; seat: SeatIndex } {
   assert.ok(seat !== null, 'somebody must be to act on the flop');
   return { state, seat };
 }
+
+test('the bot counts chips already bet this street in its effective stack, as the Coach does', () => {
+  const depthAt = (state: HandState, seat: SeatIndex): string => {
+    const input = inputFor({
+      state,
+      seat,
+      traits: traitsFor('mixed-game-generalist'),
+      difficulty: fastSettings('realistic'),
+      seed: 3,
+    });
+    const reading = coachSpotForView(input.view, LIVE_COACH_POLICY);
+    assert.ok(reading.kind === 'spot');
+    const coach = effectiveStackOf(reading.spot).effective / input.view.config.bigBlind;
+    const note = decide(input).whatChangedIt.find((entry) => entry.startsWith('Stack depth:')) ?? '';
+    assert.ok(note.startsWith(`Stack depth: at ${Number.isInteger(coach) ? coach : coach.toFixed(2)} `));
+    return note;
+  };
+
+  let state = dealHand({ stacks: [1000, 600], buttonSeat: 0, seed: 11, config: { maxSeats: 2 } });
+  // 598 behind plus 2 in, less the 1 hero has in, can come against 999: 599 effective.
+  assert.match(depthAt(state, 0), /^Stack depth: at 299\.50 big blinds effective/);
+  state = applyAction(state, 0, { type: 'call' }).state;
+  state = applyAction(state, 1, { type: 'check' }).state;
+  state = applyAction(state, 1, { type: 'bet', to: 100 }).state;
+  // 498 behind plus the 100 bet can still come against 998: 598 effective.
+  assert.match(depthAt(state, 0), /^Stack depth: at 299 big blinds effective/);
+});
 
 test('the same input with the same seed produces an identical decision', () => {
   const { state, seat } = fixedFlopSpot();

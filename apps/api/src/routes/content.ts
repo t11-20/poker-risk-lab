@@ -211,7 +211,8 @@ export function coachTaskFor(scenario: Scenario): CoachTask {
   const heroSeat = scenario.seats.find((seat) => seat.isHero === true);
   const heroCommittedThisStreet = scenario.committedThisStreet?.[heroSeat?.seat ?? -1] ?? 0;
   // A scenario has no `HandState`, so legality is derived from the same figures. A bet or raise is
-  // withheld when no opponent has chips behind. `opponentStacks` is chips behind, so all-in is `0`.
+  // withheld when no opponent has chips behind. Each opponent carries `behind` and its chips in this
+  // street, so an all-in one has `behind: 0`.
   const legalActions = deriveLegalActions({
     toCall: situation.toCall,
     heroCommittedThisStreet,

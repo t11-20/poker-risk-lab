@@ -537,7 +537,10 @@ function spotFromScenario(scenarioId: string): HypotheticalSpot {
   }
   const committed = scenario.committedThisStreet ?? {};
   const pot = scenario.potBeforeStreet + Object.values(committed).reduce((sum, value) => sum + value, 0);
-  const opponent = scenario.seats.find((seat) => seat.isHero !== true && seat.folded !== true);
+  // The heads-up model's opponent made the bet hero faces: the live seat with the most in this street.
+  const opponent = scenario.seats
+    .filter((seat) => seat.isHero !== true && seat.folded !== true)
+    .sort((left, right) => (committed[right.seat] ?? 0) - (committed[left.seat] ?? 0))[0];
   return {
     heroCards: parseCards(hero.holeCards),
     board: parseCards(scenario.board),
