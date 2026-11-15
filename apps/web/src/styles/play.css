@@ -413,6 +413,17 @@
   z-index: var(--prl-z-sticky);
 }
 
+/**
+ * With nothing to price the closed sheet can only open "No analysis", and at 360x780 it rested over
+ * "Deal me in". Scroll padding cannot clear a control already in the first viewport, so the sheet goes.
+ */
+@media (width < 600px) {
+  .prl-play__stage:is([data-state="idle"], [data-state="error"])
+    .prl-play__coach:has(> .prl-play__coach-body > .prl-empty) {
+    display: none;
+  }
+}
+
 .prl-play__handle-row {
   display: grid;
   gap: var(--prl-space-2);
