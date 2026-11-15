@@ -12,6 +12,7 @@ import {
   type SizingPreset,
   TABLE_SIZING_PRESETS,
 } from '@prl/poker-math';
+import { formatChips, formatUnits } from './format.ts';
 import type { LegalAction } from './view-types.ts';
 
 /**
@@ -120,6 +121,33 @@ export function pressedPreset(context: SizingContext, to: number): SizingPreset[
 }
 
 export const presetTotal: (preset: SizingPreset, context: SizingContext) => number = presetTo;
+
+/** `maxTo` is the seat's whole stack, so reaching it is all in even when it is also the minimum. */
+export function isAllInAt(to: number, bounds: BetBounds): boolean {
+  return to >= bounds.max;
+}
+
+/** The primary button's face and spoken name, which say "all in" together or not at all. */
+export function sizedButtonText(
+  kind: SizedAction['kind'],
+  to: number,
+  bounds: BetBounds,
+  committedThisStreet: number,
+): { readonly label: string; readonly cost: string; readonly spoken: string } {
+  const word = kind === 'bet' ? 'Bet to' : 'Raise to';
+  const cost = formatUnits(to - committedThisStreet);
+  return isAllInAt(to, bounds)
+    ? {
+        label: `${word} ${formatChips(to)}, all in`,
+        cost,
+        spoken: `${word.toLowerCase()} ${formatUnits(to)}, which is all in: ${cost} out of your stack`,
+      }
+    : {
+        label: `${word} ${formatChips(to)}`,
+        cost,
+        spoken: `${word.toLowerCase()} ${formatUnits(to)}, ${cost} out of your stack`,
+      };
+}
 
 /** An aggressive action missing a bound is dropped, because an invented maximum is an unbounded sizer. */
 export function resolveSizedAction(legalActions: readonly LegalAction[]): SizedAction | null {

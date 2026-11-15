@@ -203,7 +203,11 @@ describe('a bet or raise of the whole stack says so on the button', () => {
     const markup = await render({ legalActions: SHOVE_ONLY });
     assert.match(markup, /<span class="prl-action-btn__label">Raise to 340, all in<\/span>/u, markup);
     assert.match(markup, /aria-label="raise to 340 units, which is all in: 340 units out of your stack"/u);
-    assert.match(markup, /leaving 0 units behind — this is all in\./u, 'the readout must agree with the button');
+    assert.match(
+      markup,
+      /leaving 0 units behind — this is all in\./u,
+      'the readout must agree with the button',
+    );
   });
 
   it('NEGATIVE CONTROL: a raise with chips left behind names no all-in', async () => {
