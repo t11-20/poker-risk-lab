@@ -207,7 +207,7 @@ describe('the sizer reads the sizes the Coach prices', () => {
   it('renders its presets from that list and defaults to the floor', () => {
     // `offeredSizes` is the floor plus every preset, and these are where the bar could drift from it.
     const bar = readFileSync(new URL('../src/components/ActionBar.tsx', import.meta.url), 'utf8');
-    assert.match(bar, /SIZING_PRESETS\.map\(\(preset\) =>/u);
+    assert.match(bar, /offeredPresets\(context\)\.map\(\(preset\) =>/u);
     assert.match(bar, /presetTotal\(preset, context\)/u);
     assert.match(bar, /const context(?:: SizingContext)? = \{ bounds, pot, toCall, committedThisStreet \}/u);
     assert.equal(resolveDraft(null, bounds(50, 500)), 50, 'an untouched sizer sends the floor');

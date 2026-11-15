@@ -225,7 +225,7 @@ function resolvePotOdds(calculation: Extract<LiveCalculation, { kind: 'potOdds' 
     ],
     method: ARITHMETIC,
     formula: {
-      expression: 'break-even equity = call / (pot + call)',
+      expression: `break-even equity = call / (pot + call)${odds.oddsRatio === null ? '' : '\nprice = pot / call'}`,
       explanation:
         'The call is in the denominator as well as the numerator, because the money you put in is also money you win back when the hand holds up. The pot here excludes your own call.',
     },

@@ -1,10 +1,10 @@
 /**
  * What `/play?profile=…&difficulty=…` says above the table, so the page names the style and setting
- * the reader picked and explains the API's short seat plate (`botDisplayName`). Archetype names only,
+ * the reader picked and names the API's shortened seat plate (`legendSeatName`). Archetype names only,
  * because an attributed name must travel with "(modelled style)" and a heading loses suffixes.
  */
 
-import type { LegendDifficulty, LegendDifficultyDto } from '@prl/contracts';
+import { type LegendDifficulty, type LegendDifficultyDto, legendSeatName } from '@prl/contracts';
 
 export interface LegendMatchCopy {
   readonly eyebrow: string;
@@ -15,7 +15,6 @@ export interface LegendMatchCopy {
 }
 
 export interface LegendMatchCopyInput {
-  readonly profileId: string;
   /** Null when the id is not a listed profile. The table says why it failed. */
   readonly archetypeName: string | null;
   readonly difficulty: LegendDifficulty;
@@ -30,6 +29,7 @@ function capitalise(text: string): string {
 export function legendMatchCopy(input: LegendMatchCopyInput): LegendMatchCopy {
   const settingLabel = input.setting?.label ?? capitalise(input.difficulty);
   const named = input.archetypeName;
+  const seat = named === null ? named : legendSeatName(named);
   const coach =
     input.setting === null
       ? ''
@@ -41,7 +41,7 @@ export function legendMatchCopy(input: LegendMatchCopyInput): LegendMatchCopy {
     heading: named === null ? 'Heads-up against a modelled style' : `Heads-up against ${named}`,
     lede:
       `Just you and one modelled style, at the ${settingLabel} setting, dealt and settled by the server.` +
-      `${coach} Its seat shows a short name made from the profile id (${input.profileId}); it is the same style.`,
+      `${coach}${seat === named ? '' : ` Its seat is labelled ${seat}, a shorter form of the same name.`}`,
     framing:
       'An educational strategy simulation of a style, defined by sixteen trait values — not a real person, ' +
       'and not a copy of anyone.',

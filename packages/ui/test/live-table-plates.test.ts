@@ -11,7 +11,7 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { clampedFrom, pressedPreset, SIZING_PRESETS } from '../src/bet-sizing.ts';
+import { clampedFrom, pressedPreset } from '../src/bet-sizing.ts';
 import { lastActionsThisStreet } from '../src/seat-actions.ts';
 import type { LegalAction, PlayerView, TableAction } from '../src/view-types.ts';
 import { loadComponent } from './support/render-component.ts';
@@ -345,8 +345,35 @@ describe('one preset is pressed at a time', () => {
     );
     const pressed = markup.match(/aria-pressed="true"/gu) ?? [];
     const offered = markup.match(/class="prl-preset"/gu) ?? [];
-    assert.equal(offered.length, SIZING_PRESETS.length, 'no presets rendered; the sweep is over nothing');
+    assert.ok(offered.length > 0, 'no presets rendered; the sweep is over nothing');
     assert.equal(pressed.length, 1, `${pressed.length} presets were ticked at once`);
+  });
+
+  it('offers one preset per amount, named for the size that lands there unclamped', async () => {
+    const ActionBar = await loadComponent<ActionBarProps>('components/ActionBar', 'ActionBar');
+    // Measured at a Legends table: "⅓ pot" clamped up to the minimum that "½ pot" reaches exactly.
+    const spots = [
+      { pot: 15, toCall: 5, committedThisStreet: 5, minTo: 20, type: 'raise' },
+      { pot: 20, toCall: 0, committedThisStreet: 0, minTo: 10, type: 'bet' },
+    ];
+    for (const { minTo, type, ...spot } of spots) {
+      const markup = renderToStaticMarkup(
+        createElement(ActionBar, {
+          legalActions: [
+            { type: 'fold', note: '' },
+            { type, minTo, maxTo: 990, costAtMin: minTo, allInAtMax: true, note: '' },
+          ] as unknown as readonly LegalAction[],
+          onAct: () => undefined,
+          ...spot,
+        }),
+      );
+      const presets = [...markup.matchAll(/class="prl-preset"[^>]*>.*?<\/span>([^<]+)<span[^>]*>([^<]+)/gu)];
+      const labels = presets.map((match) => match[1]);
+      assert.deepEqual(labels, ['½ pot', '⅔ pot', 'Pot', 'All in'], `at ${minTo}: ${labels.join(', ')}`);
+      const totals = presets.map((match) => match[2]);
+      assert.equal(new Set(totals).size, totals.length, `two presets share a total: ${totals.join(', ')}`);
+      assert.equal((markup.match(/aria-pressed="true"/gu) ?? []).length, 1, 'the minimum is ticked once');
+    }
   });
 });
 

@@ -71,7 +71,7 @@ tests passed — and it was found by looking at a screenshot. The first probe wr
 too, because it compared the two elements' **bounding boxes**: when a track collapses the boxes do
 not overlap, the *text* overflows the box. If you write a layout check, measure the glyphs.
 
-Its negative controls run on every invocation: six stylesheets injected into real pages, one of
+Its negative controls run on every invocation: stylesheets injected into real pages, one of
 them the `minmax(0, 1fr) auto` rule put back verbatim, each of which must be caught. A detector
 that stops working fails the gate instead of going quiet.
 

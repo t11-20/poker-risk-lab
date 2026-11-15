@@ -50,7 +50,7 @@ import {
   submitQuizAttempt,
   VERDICT_SOURCE_NOTE,
 } from '@/lib/quiz-attempts.ts';
-import { QUIZ_UNIT_WORDS, withinTolerance } from '@/lib/quiz-tolerance.ts';
+import { quizAnswerLabel, quizBandWords, withinTolerance } from '@/lib/quiz-tolerance.ts';
 import { CHOICE_MARKER, numericVerdictSentence, verdictMarker } from '@/lib/quiz-verdict.ts';
 import { RECORD_PATH } from '@/lib/record-data.ts';
 
@@ -281,7 +281,7 @@ function numericVerdict(input: {
   return numericVerdictSentence({
     yours: formatQuizValue(submitted.value, unit),
     computed: formatQuizValue(against.value, unit),
-    tolerance: `${formatTolerance(against.tolerance, unit)} ${QUIZ_UNIT_WORDS[unit]}`,
+    tolerance: `${formatTolerance(against.tolerance, unit)}${quizBandWords(unit)}`,
     matched,
   });
 }
@@ -351,7 +351,7 @@ function NumericQuestion(props: {
     <div className="prl-stack">
       <div className="prl-field prl-learn-quiz__numeric">
         <label className="prl-field__label" htmlFor={inputId}>
-          {`Your answer, in ${QUIZ_UNIT_WORDS[question.unit]}`}
+          {quizAnswerLabel(question.unit)}
         </label>
         {/* Editable after checking. With no score there is nothing to protect by locking it. */}
         <input
@@ -380,7 +380,7 @@ function NumericQuestion(props: {
           </p>
         ) : null}
         <p className="prl-field__hint" id={hintId}>
-          {`Anything within ${formatTolerance(question.tolerance, question.unit)} ${QUIZ_UNIT_WORDS[question.unit]} of the computed figure is accepted. Work it out roughly — the point is the method, not the decimal place.`}
+          {`Anything within ${formatTolerance(question.tolerance, question.unit)}${quizBandWords(question.unit)} of the computed figure is accepted. Work it out roughly — the point is the method, not the decimal place.`}
         </p>
       </div>
 

@@ -187,6 +187,14 @@ const CONTROLS = [
     css: 'main { min-width: 900px; }',
   },
   {
+    id: 'page-sideways-2px',
+    route: '/terms',
+    width: 360,
+    expect: 'page',
+    what: 'a document 2px wider than the phone, as the scenario link on /learn/counting-outs made it',
+    css: 'main { min-width: 362px; }',
+  },
+  {
     id: 'escaping-nowrap',
     route: '/lab',
     width: 768,
@@ -673,8 +681,9 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
     }
   }
 
+  // No tolerance: `scrollWidth` counts whole pixels of layout, and 2px of sideways scroll still scrolls.
   const { page } = measurement;
-  if (page.scrollWidth > page.clientWidth + EDGE_TOLERANCE) {
+  if (page.scrollWidth > page.clientWidth) {
     add('page', {
       sel: 'html',
       text: '',

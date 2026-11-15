@@ -122,6 +122,18 @@ export function pressedPreset(context: SizingContext, to: number): SizingPreset[
 
 export const presetTotal: (preset: SizingPreset, context: SizingContext) => number = presetTo;
 
+/**
+ * One preset per amount, so a "⅓ pot" clamped up to the minimum does not sit beside a "½ pot" at the
+ * same total. The last of a group survives, the one `pressedPreset` presses: unclamped, or "All in".
+ */
+export function offeredPresets(context: SizingContext): readonly SizingPreset[] {
+  return SIZING_PRESETS.filter((preset, index) =>
+    SIZING_PRESETS.slice(index + 1).every(
+      (later) => presetTotal(later, context) !== presetTotal(preset, context),
+    ),
+  );
+}
+
 /** `maxTo` is the seat's whole stack, so reaching it is all in even when it is also the minimum. */
 export function isAllInAt(to: number, bounds: BetBounds): boolean {
   return to >= bounds.max;

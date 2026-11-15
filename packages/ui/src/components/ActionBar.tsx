@@ -34,11 +34,11 @@ import {
   draftForBounds,
   isAllInAt,
   isDraftMalformed,
+  offeredPresets,
   presetTotal,
   pressedPreset,
   resolveDraft,
   resolveSizedAction,
-  SIZING_PRESETS,
   type SizedAction,
   type StampedDraft,
   sizedButtonText,
@@ -173,7 +173,7 @@ function BetSizer(props: BetSizerProps): ReactElement {
       <legend className="prl-sizer__legend">{isBet ? 'How much to bet' : 'How much to raise to'}</legend>
 
       <div className="prl-sizer__presets">
-        {SIZING_PRESETS.map((preset) => {
+        {offeredPresets(context).map((preset) => {
           // `presetTotal` clamps into the engine's bounds, so on a short stack presets collapse onto all-in.
           const target = presetTotal(preset, context);
           return (

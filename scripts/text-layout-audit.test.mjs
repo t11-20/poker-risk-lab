@@ -421,6 +421,17 @@ describe('the page itself', () => {
     assert.equal(finding.past, 52);
     assert.match(formatFinding(finding), /scrolls sideways/u);
   });
+
+  it('reports 2px of sideways scroll, which the scenario link on /learn/counting-outs made (REGRESSION)', () => {
+    const nudged = healthyRow();
+    nudged.page = { scrollWidth: 362, clientWidth: 360, innerWidth: 360 };
+    const { findings } = findTextDefects(nudged, {
+      route: '/learn/counting-outs',
+      theme: 'dark',
+      width: 360,
+    });
+    assert.equal(findings.find((f) => f.check === 'page')?.past, 2);
+  });
 });
 
 describe('exemptions', () => {
