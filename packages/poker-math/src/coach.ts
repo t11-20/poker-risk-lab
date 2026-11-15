@@ -467,11 +467,40 @@ function buildPotOddsSummary(
   };
 }
 
-function buildStackContext(input: CoachInput): StackContext {
-  const effective = effectiveStack(
-    input.heroStack,
-    input.opponentStacks.map((opponent) => opponent.behind),
+/**
+ * `effectiveStack` for a described spot. A bet hero has not matched still changes hands, so each
+ * opponent counts its chips in front of it beyond hero's own. The chips-behind sentence is kept
+ * wherever it gives the same figure, and always once every opponent is all in.
+ */
+export function effectiveStackOf(spot: DescribedSpot): {
+  readonly effective: number;
+  readonly explanation: string;
+} {
+  const plain = effectiveStack(
+    spot.heroStack,
+    spot.opponentStacks.map((opponent) => opponent.behind),
   );
+  if (spot.opponentStacks.every((opponent) => opponent.behind === 0)) return plain;
+  const reaches = spot.opponentStacks.map((opponent) =>
+    Math.max(0, opponent.behind + opponent.committedThisStreet - spot.heroCommittedThisStreet),
+  );
+  const counted = effectiveStack(spot.heroStack, reaches);
+  if (counted.effective === plain.effective) return plain;
+  const reach = Math.max(...reaches);
+  const deepest = spot.opponentStacks[reaches.indexOf(reach)];
+  const ahead = (deepest?.committedThisStreet ?? 0) - spot.heroCommittedThisStreet;
+  const behind = chips(deepest?.behind ?? 0);
+  const why =
+    ahead > 0
+      ? `Chips already bet this street are still in play: the deepest opponent has ${behind} behind and ${chips(ahead)} more than you in front of them, so ${chips(reach)} can still come against you. `
+      : ahead < 0
+        ? `The deepest opponent has ${behind} behind but must put ${chips(-ahead)} of it in just to match you, so ${chips(reach)} can still come against you. `
+        : '';
+  return { effective: counted.effective, explanation: `${why}${counted.explanation}` };
+}
+
+function buildStackContext(input: CoachInput): StackContext {
+  const effective = effectiveStackOf(input);
   // SPR is undefined with an empty pot, which only happens preflop before blinds.
   const pot = Math.max(1, input.pot);
   const spr = stackToPotRatio(effective.effective, pot);
@@ -560,10 +589,19 @@ function sizingContextFor(input: CoachInput): SizingContext {
 }
 
 /** Empty unless the size is more than any opponent can match. */
-function uncalledSentence(kind: 'bet' | 'raise', raiseBy: number, calledBy: number): string {
+function uncalledSentence(
+  kind: 'bet' | 'raise',
+  raiseBy: number,
+  calledBy: number,
+  input: CoachInput,
+): string {
   if (calledBy === raiseBy) return '';
+  // A seat short of the bet has to spend part of its stack matching it first.
+  const limit = input.opponentStacks.some((opponent) => opponent.behind > calledBy)
+    ? `No opponent can put more than ${chips(calledBy)} on top of the ${chips(betLevelOf(input))} bet`
+    : `No opponent has more than ${chips(calledBy)} behind`;
   return (
-    `No opponent has more than ${chips(calledBy)} behind, so only ${chips(calledBy)} of the ` +
+    `${limit}, so only ${chips(calledBy)} of the ` +
     `${chips(raiseBy)} ${kind} can be called and the other ${chips(raiseBy - calledBy)} comes back to you. `
   );
 }
@@ -625,12 +663,15 @@ function buildCandidates(input: CoachInput, heroEquity: number, foldEquity: numb
 
   // The increment an all-in would be. The part that matches the bet is not a raise.
   const maxRaiseBy = input.heroStack - input.toCall;
-  if (maxRaiseBy > 0 && permitted(isOpening ? 'bet' : 'raise')) {
+  // The most a caller can add above the bet: its street total less the bet level. At 0 every chip
+  // of a raise comes back, so the call row already prices it.
+  const callable = Math.max(
+    0,
+    ...input.opponentStacks.map((opponent) => opponent.committedThisStreet + opponent.behind - betLevel),
+  );
+  if (maxRaiseBy > 0 && callable > 0 && permitted(isOpening ? 'bet' : 'raise')) {
     // Sizes are fractions of the pot after the call. For an opening bet that is the pot.
     const potAfterCall = Math.max(1, pot + input.toCall);
-    // The most a caller can add. Exact for a bet and for the bettor facing a raise. Multiway, a seat
-    // that has not yet matched the level can add less, and `CoachInput` has no per-seat commitments.
-    const callable = Math.max(0, ...input.opponentStacks.map((opponent) => opponent.behind));
 
     // Exactly the sizes the bar offers, because a sized action is graded only on an exact match.
     // `pot` equals the whole middle here, because `maxRaiseBy > 0` means hero covers the bet.
@@ -656,7 +697,7 @@ function buildCandidates(input: CoachInput, heroEquity: number, foldEquity: numb
           to: raiseBy,
           cost: calledBy,
           ev: bet.ev,
-          derivation: `${bet.derivation} ${betSizeSentence(size.id)}${uncalledSentence('bet', raiseBy, calledBy)}${option.note}`,
+          derivation: `${bet.derivation} ${betSizeSentence(size.id)}${uncalledSentence('bet', raiseBy, calledBy, input)}${option.note}`,
           foldEquityAssumed: foldEquity,
           potShareIfCalled: heroEquity,
         });
@@ -676,7 +717,7 @@ function buildCandidates(input: CoachInput, heroEquity: number, foldEquity: numb
         to: betLevel + raiseBy,
         cost: raise.risk,
         ev: raise.ev,
-        derivation: `${raise.derivation} ${uncalledSentence('raise', raiseBy, calledBy)}${raiseSizingNote(option, raiseBy, size.id, potAfterCall, pot, input.toCall, isAllIn)}`,
+        derivation: `${raise.derivation} ${uncalledSentence('raise', raiseBy, calledBy, input)}${raiseSizingNote(option, raiseBy, size.id, potAfterCall, pot, input.toCall, isAllIn)}`,
         foldEquityAssumed: foldEquity,
         potShareIfCalled: heroEquity,
       });

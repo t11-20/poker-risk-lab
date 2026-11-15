@@ -12,7 +12,7 @@ import { scenarioToPlayerView } from '../src/lib/scenario-view.ts';
 
 const AGGRESSIVE = new Set(['bet', 'raise']);
 
-/** Built as `coachTaskFor` does. `readSituation` lacks `heroCommittedThisStreet`, so `maximumTo` is NaN. */
+/** Built as `coachTaskFor` does. */
 function spotFor(scenario: Scenario) {
   const situation = readSituation(scenario);
   const heroSeat = scenario.seats.find((seat) => seat.isHero === true);

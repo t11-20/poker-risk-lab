@@ -274,8 +274,9 @@ test('a wider opponent range raises hero equity, all else equal', () => {
 
 test('stack context reports the effective stack and an SPR consistent with it', () => {
   const report = buildCoachReport(flushDrawVsSet({ heroStack: 400, opponentStacks: [150], pot: 100 }));
-  assert.equal(report.stackContext.effectiveStack, 150, 'capped by the shorter stack');
-  assert.ok(Math.abs(report.stackContext.spr - 1.5) < 1e-9);
+  // The shorter stack is the bettor's 150 behind plus the 50 it has bet: 200, and 200 / 100 = 2.
+  assert.equal(report.stackContext.effectiveStack, 200, 'capped by the shorter stack');
+  assert.ok(Math.abs(report.stackContext.spr - 2) < 1e-9);
   // A pot-sized bet lays the caller exactly 1/3.
   assert.ok(Math.abs(report.stackContext.potOddsOfferedByPotSizedBet - 1 / 3) < 1e-9);
 });

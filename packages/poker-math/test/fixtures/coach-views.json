@@ -751,10 +751,10 @@
         ]
       },
       "stackContext": {
-        "effectiveStack": 975,
-        "spr": 27.857142857142858,
+        "effectiveStack": 990,
+        "spr": 28.285714285714285,
         "potOddsOfferedByPotSizedBet": 0.3333333333333333,
-        "explanation": "The deepest opponent has only 975, so at most 975 can change hands even though you have 990. The 15 above that is not in play this hand — nobody can pay you for it and nobody can take it. SPR = effective stack / pot = 975 / 35 = 27.86. There are 27.86 pots behind, which is the \"very-high\" band. Almost all of the money is still behind. The pot in front of you is small compared with what can still go in, so the cost of a later error dwarfs what is at stake right now. SPR describes the shape of the decision, not the answer to it: your hand, their range and position all still apply."
+        "explanation": "Chips already bet this street are still in play: the deepest opponent has 975 behind and 15 more than you in front of them, so 990 can still come against you. Yours is the shorter stack: you have 990 and the deepest opponent has 990, so at most 990 can change hands. You can neither win nor lose more than you brought to the hand. SPR = effective stack / pot = 990 / 35 = 28.29. There are 28.29 pots behind, which is the \"very-high\" band. Almost all of the money is still behind. The pot in front of you is small compared with what can still go in, so the cost of a later error dwarfs what is at stake right now. SPR describes the shape of the decision, not the answer to it: your hand, their range and position all still apply."
       },
       "assumptions": [
         "The hand is played to the river with no further betting — this is raw equity, not the value of the spot.",
@@ -781,7 +781,7 @@
         "The pot is laying you 2.3 to 1, so you need 30.0% to break even on a call. That number depends only on the price — not on your cards.",
         "Notice the split: 2 clean and 37 dirty — and notice that neither figure is a number of outs. You are in front already at 57.6%, so no card here rescues anything: these are the cards that keep you in front, and the 37 dirty ones leave the river a way to take it back.",
         "No rule-of-2-and-4 figure here, deliberately: at 57.6% you are already ahead, so you are not drawing to anything. The shortcut counts the cards that rescue a hand that is behind; applied to a hand that is already winning it counts cards that change nothing and returns a number that is not a probability of anything.",
-        "At an SPR of 27.9 there is a lot of money left behind, so hands that can keep improving are worth more than their current strength suggests."
+        "At an SPR of 28.3 there is a lot of money left behind, so hands that can keep improving are worth more than their current strength suggests."
       ]
     },
     "task": {
@@ -1439,10 +1439,10 @@
         ]
       },
       "stackContext": {
-        "effectiveStack": 950,
-        "spr": 15.833333333333334,
+        "effectiveStack": 990,
+        "spr": 16.5,
         "potOddsOfferedByPotSizedBet": 0.3333333333333333,
-        "explanation": "The deepest opponent has only 950, so at most 950 can change hands even though you have 990. The 40 above that is not in play this hand — nobody can pay you for it and nobody can take it. SPR = effective stack / pot = 950 / 60 = 15.83. There are 15.83 pots behind, which is the \"very-high\" band. Almost all of the money is still behind. The pot in front of you is small compared with what can still go in, so the cost of a later error dwarfs what is at stake right now. SPR describes the shape of the decision, not the answer to it: your hand, their range and position all still apply."
+        "explanation": "Chips already bet this street are still in play: the deepest opponent has 950 behind and 40 more than you in front of them, so 990 can still come against you. Yours is the shorter stack: you have 990 and the deepest opponent has 990, so at most 990 can change hands. You can neither win nor lose more than you brought to the hand. SPR = effective stack / pot = 990 / 60 = 16.5. There are 16.5 pots behind, which is the \"very-high\" band. Almost all of the money is still behind. The pot in front of you is small compared with what can still go in, so the cost of a later error dwarfs what is at stake right now. SPR describes the shape of the decision, not the answer to it: your hand, their range and position all still apply."
       },
       "assumptions": [
         "The hand is played to the river with no further betting — this is raw equity, not the value of the spot.",
@@ -1466,7 +1466,7 @@
       },
       "teachingNotes": [
         "The pot is laying you 1.5 to 1, so you need 40.0% to break even on a call. That number depends only on the price — not on your cards.",
-        "At an SPR of 15.8 there is a lot of money left behind, so hands that can keep improving are worth more than their current strength suggests."
+        "At an SPR of 16.5 there is a lot of money left behind, so hands that can keep improving are worth more than their current strength suggests."
       ]
     },
     "task": {

@@ -16,6 +16,7 @@ export {
   type DescribedSpot,
   deriveContestablePot,
   deriveLegalActions,
+  effectiveStackOf,
   maximumTo,
   minimumAggressiveTo,
   type OpponentStack,

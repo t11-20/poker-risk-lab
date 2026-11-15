@@ -156,8 +156,8 @@ describe('the review replays a hand from its rows, with no deck anywhere', () =>
     assert.equal(analysis.street, 'preflop');
     assert.equal(analysis.potTotal, 3, 'the pot the decision faced');
     assert.equal(analysis.toCall, 1, 'the button had posted the small blind, so it owed one more');
-    // Blinds the wrong way round would show as 199.
-    assert.equal(analysis.stackContext.effectiveStack, 198);
+    // The big blind's unmatched 1 counts, so 199. Blinds the wrong way round give 198.
+    assert.equal(analysis.stackContext.effectiveStack, 199);
   });
 
   it('agrees with the engine about the pot at every decision', () => {

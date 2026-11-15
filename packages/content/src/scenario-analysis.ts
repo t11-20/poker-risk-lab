@@ -13,7 +13,7 @@ import {
   computeOuts,
   deriveContestablePot,
   type EquityResult,
-  effectiveStack,
+  effectiveStackOf,
   equity,
   evOfCall,
   exactRange,
@@ -40,6 +40,7 @@ export interface ScenarioSituation {
   /** Chips in the middle before hero acts, including this street's commitments. */
   readonly pot: number;
   readonly toCall: number;
+  readonly heroCommittedThisStreet: number;
   readonly heroStack: number;
   readonly opponentStacks: readonly OpponentStack[];
   readonly cardsToCome: 1 | 2 | null;
@@ -106,6 +107,7 @@ export function readSituation(scenario: Scenario): ScenarioSituation {
     opponentIsExact,
     pot,
     toCall: scenario.toCall,
+    heroCommittedThisStreet: committed[hero.seat] ?? 0,
     heroStack: hero.stack,
     opponentStacks,
     cardsToCome,
@@ -169,11 +171,7 @@ export function analyseScenario(scenario: Scenario, options: AnalyseOptions = {}
           equity: hero.equity,
         }).ev;
 
-  const effective = effectiveStack(
-    situation.heroStack,
-    situation.opponentStacks.map((opponent) => opponent.behind),
-  );
-  const spr = stackToPotRatio(effective.effective, Math.max(1, situation.pot)).spr;
+  const spr = stackToPotRatio(effectiveStackOf(situation).effective, Math.max(1, situation.pot)).spr;
 
   // validate.ts refuses an exact clean-out claim unless the opponent holding is exact.
   let outs: OutsResult | null = null;
