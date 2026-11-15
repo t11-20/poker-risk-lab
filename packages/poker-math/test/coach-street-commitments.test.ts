@@ -82,7 +82,10 @@ test('a raise no opponent can call any of is not priced as if one could', () => 
     [],
     'a raise priced on chips nobody can match',
   );
-  assertChips(report.candidates.find((candidate) => candidate.action === 'call')?.ev, 266.66666667, 'call');
+  const call = report.candidates.find((candidate) => candidate.action === 'call');
+  assertChips(call?.ev, 266.66666667, 'call');
+  // The table still offers a raise, so the call row says why none is priced beside it.
+  assert.match(call?.derivation ?? '', /a raise plays exactly as a call/u);
 });
 
 test('heads-up facing a bet, the bettor’s chips in front of them are still in play', () => {

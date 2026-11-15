@@ -724,6 +724,20 @@ function buildCandidates(input: CoachInput, heroEquity: number, foldEquity: numb
     }
   }
 
+  // Not priced as a raise row, because one tied with the call would outrank it (`TIEBREAK_RANK`).
+  if (maxRaiseBy > 0 && callable === 0 && !isOpening && permitted('raise')) {
+    const at = candidates.findIndex((candidate) => candidate.action === 'call');
+    const call = candidates[at];
+    if (call !== undefined) {
+      candidates[at] = {
+        ...call,
+        derivation:
+          `${call.derivation} The table offers a raise, but no opponent can put in a chip above the ` +
+          `${chips(betLevel)} bet, so a raise plays exactly as a call: every chip above it comes back.`,
+      };
+    }
+  }
+
   assertAffordable(candidates, input);
   return candidates;
 }
