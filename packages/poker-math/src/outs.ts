@@ -15,7 +15,7 @@ import {
   cardToString,
   categoryOf,
   DECK_SIZE,
-  describeScore,
+  describeAmong,
   evaluate,
   HAND_CATEGORY,
   HAND_CATEGORY_NAMES,
@@ -135,9 +135,9 @@ function categoryLabel(category: HandCategory): string {
   return takesArticle(category) ? `a ${name}` : name;
 }
 
-/** "a flush, ace high" or "two pair, sixes and fives". */
-function handPhrase(score: HandScore): string {
-  const text = describeScore(score);
+/** "a flush, ace high" or "two pair, sixes and fives"; deeper where a hand in `shown` shares that text. */
+function handPhrase(score: HandScore, shown: readonly HandScore[] = []): string {
+  const text = describeAmong(score, shown);
   return takesArticle(categoryOf(score)) ? `a ${text}` : text;
 }
 
@@ -196,7 +196,7 @@ interface Standing {
   /** The categories those beating combinations make, strongest first. */
   readonly beaters: readonly CategoryCount[];
   /** Set only when the range has collapsed to one combination. */
-  readonly soleOpponent: { readonly label: string; readonly phrase: string } | null;
+  readonly soleOpponent: { readonly label: string; readonly score: HandScore } | null;
 }
 
 function standingAt(heroCards: readonly Card[], board: readonly Card[], combos: readonly Combo[]): Standing {
@@ -210,7 +210,7 @@ function standingAt(heroCards: readonly Card[], board: readonly Card[], combos: 
   for (const combo of combos) {
     const score = evaluate([combo[0], combo[1], ...board]);
     if (combos.length === 1) {
-      soleOpponent = { label: comboToString(combo), phrase: handPhrase(score) };
+      soleOpponent = { label: comboToString(combo), score };
     }
     if (score > heroScore) {
       behind += 1;
@@ -250,15 +250,16 @@ function describeBeaters(beaters: readonly CategoryCount[]): string {
 }
 
 /** Only a category change gets "gives you", so a kicker upgrade does not make a dead card sound useful. */
-function heroHandClause(before: Standing, after: Standing): string {
-  if (after.heroCategory > before.heroCategory) return `gives you ${after.heroPhrase}`;
-  return `leaves you with ${after.heroPhrase}`;
+function heroHandClause(before: Standing, after: Standing, heroPhrase: string): string {
+  if (after.heroCategory > before.heroCategory) return `gives you ${heroPhrase}`;
+  return `leaves you with ${heroPhrase}`;
 }
 
 function soleOpponentClause(after: Standing, sole: NonNullable<Standing['soleOpponent']>): string {
-  if (after.behind > 0) return `but ${sole.label} has ${sole.phrase}, which is better`;
+  const phrase = handPhrase(sole.score, [after.heroScore]);
+  if (after.behind > 0) return `but ${sole.label} has ${phrase}, which is better`;
   if (after.tied > 0) return `and ${sole.label} has the same hand, so the pot chops`;
-  return `and beats ${sole.label}, which has ${sole.phrase}`;
+  return `and beats ${sole.label}, which has ${phrase}`;
 }
 
 function rangeClause(after: Standing): string {
@@ -307,7 +308,9 @@ function buildNote(args: {
   const { before, after, equityAfter, boardComplete } = args;
   const sole = after.soleOpponent;
   const comparison = sole === null ? rangeClause(after) : soleOpponentClause(after, sole);
-  const sentences = [capitalise(`${heroHandClause(before, after)}, ${comparison}`)];
+  // Described against the rival's hand too, so the two halves of one sentence never read the same.
+  const heroPhrase = sole === null ? after.heroPhrase : handPhrase(after.heroScore, [sole.score]);
+  const sentences = [capitalise(`${heroHandClause(before, after, heroPhrase)}, ${comparison}`)];
 
   const help = rangeHelpSentence(before, after);
   if (help !== null) sentences.push(help);

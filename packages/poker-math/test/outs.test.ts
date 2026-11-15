@@ -776,3 +776,37 @@ test('the counts agree with their verbs and their nouns (REGRESSION)', () => {
   assert.match(many.explanation, /\b9 are clean\b/u);
   assert.match(many.explanation, /\b9 outs in total\b/u);
 });
+
+test('a rival with the same kind of hand is named apart from yours, down to the rank that decides it', () => {
+  // On Ah Th 2c 5h both 7h 3h and Kh 4h make a flush that describeScore calls "ace high".
+  const noteOn5h = (hero: string, rival: string): string =>
+    outcomeFor(
+      computeOuts({
+        heroCards: parseCards(hero),
+        board: parseCards('Ah Th 2c'),
+        opponent: exactRange(parseCards(rival)),
+      }),
+      '5h',
+    ).note;
+
+  assert.match(
+    noteOn5h('7h 3h', 'Kh 4h'),
+    /^Gives you a flush, ace-ten high, but Kh4h has a flush, ace-king high, which is better\./,
+  );
+  assert.match(
+    noteOn5h('Kh 4h', '7h 3h'),
+    /^Gives you a flush, ace-king high, and beats 7h3h, which has a flush, ace-ten high\./,
+  );
+});
+
+test('an exactly equal rival adds no ranks to the description of either hand', () => {
+  const result = computeOuts({
+    heroCards: parseCards('7h 3c'),
+    board: parseCards('Ah Th 2c'),
+    opponent: exactRange(parseCards('7d 3s')),
+  });
+  assert.match(
+    outcomeFor(result, 'Kd').note,
+    /^Leaves you with high card ace, king ten kickers, and 7d3s has the same hand, so the pot chops\./,
+  );
+});
