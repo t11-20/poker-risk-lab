@@ -686,6 +686,13 @@ interface PotSplit {
   readonly live: readonly number[];
   /** Hero's share of a pot contested by these opponents, every opponent still dealt in. */
   readonly share: (group: readonly number[]) => number;
+  /**
+   * Hero's chips already in that no opponent can match, as when a big blind is all in for less than
+   * the small blind. The engine hands them back on a fold as well, so no action gains them. Read as
+   * the pot no opponent can win, it also counts a folded seat's chips above the all-in, which a fold
+   * returns to that seat: one chip too many when a seat that folded paid an ante the all-in could not.
+   */
+  readonly returnedAnyway: number;
 }
 
 interface ShowdownPot {
@@ -734,9 +741,15 @@ function potSplitOf(input: CoachInput, result: EquityResult, heroEquity: number)
       result.contestShares?.[i],
     ]),
   );
+  const allIn = allInOf(input);
+  const live = liveOf(input);
+  const top = allIn.at(-1);
   return {
-    allIn: allInOf(input),
-    live: liveOf(input),
+    allIn,
+    live,
+    // A seat with chips behind has matched hero, so only a table of all-in seats leaves any over.
+    returnedAnyway:
+      live.length === 0 && top !== undefined ? Math.max(0, input.contestablePot - top.winnable) : 0,
     share: (group) => {
       if (group.length === 0) return 1;
       if (group.length === input.opponentStacks.length) return heroEquity;
@@ -753,7 +766,8 @@ function keyOf(group: readonly number[]): string {
 
 /**
  * The pots once hero adds `heroAdds` and, when called, a caller adds `callerAdds`. A fold leaves only
- * the all-in seats, and hero's chips above their caps come back. `value` is net of hero's chips.
+ * the all-in seats, and hero's chips above their caps come back. `value` is net of hero's chips and of
+ * `returnedAnyway`, so it is measured against hero folding.
  */
 function showdownPots(
   split: PotSplit,
@@ -785,7 +799,7 @@ function showdownPots(
     );
   }
   add(total, folded ? [] : split.live);
-  return { pots, paid, value: value - paid };
+  return { pots, paid, value: value - paid - split.returnedAnyway };
 }
 
 /** "the 300 main pot at 0% and the 200 side pot at 100%". */
@@ -806,7 +820,11 @@ function allInClause(split: PotSplit): string {
 function layeredShowdown(kind: 'check' | 'call', split: PotSplit, input: CoachInput, heroAdds: number) {
   const { pots, value } = showdownPots(split, input, heroAdds, 0, 'called');
   if (pots.every((pot) => pot.contesting === input.opponentStacks.length)) return null;
-  const less = heroAdds > 0 ? `, less your ${chips(heroAdds)}` : '';
+  const deductions = [
+    ...(heroAdds > 0 ? [`your ${chips(heroAdds)}`] : []),
+    ...(split.returnedAnyway > 0 ? [`the ${chips(split.returnedAnyway)} a fold hands back too`] : []),
+  ];
+  const less = deductions.length > 0 ? `, less ${deductions.join(' and ')}` : '';
   return {
     ev: value,
     derivation:

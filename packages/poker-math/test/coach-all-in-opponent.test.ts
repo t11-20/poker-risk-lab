@@ -262,12 +262,48 @@ test('a raise that wins called and loses when B folds breaks even only below a f
   assert.doesNotMatch(half ?? '', /does not need anyone to fold/);
 });
 
-function handAt(stacks: readonly number[], seed: number): HandState {
+test('chips a fold hands back too are no gain of a call', () => {
+  // Hero has 5 in, the all-in opponent 1 and 4 of antes: a 6-chip pot it can win. A fold hands back
+  // hero's 4 unmatched chips, and a call hands back those 4 and the 5 it adds. So the call is worth the
+  // 6-chip pot at hero's share: 0 against aces, 6 against queens.
+  const spot = {
+    pot: 10,
+    toCall: 5,
+    heroCommittedThisStreet: 5,
+    opponentStacks: [{ behind: 0, committedThisStreet: 1, winnable: 6 }],
+  };
+  near(evAt(river('Kc Qh', { ...spot, opponents: [ACES] }), 'call'), 0, 'call against aces');
+  near(evAt(river('Kc Qh', { ...spot, opponents: [QUEENS] }), 'call'), 6, 'call against queens');
+});
+
+test('heads-up, a big blind all in for less than the small blind costs a fold only the matched chips', () => {
+  // Ante 2 and 3 chips: the big blind posts 2 and 1, so it can win 6. The engine hands hero's other 4
+  // back on a fold, so the call is worth that pot at hero's equity and nothing more.
+  const short = handAt([100, 3], 3, 2);
+  const hero = short.toAct ?? -1;
+  assert.equal(short.seats[hero]?.stack, 93);
+  assert.equal(act(short, hero, { type: 'fold' }).seats[hero]?.stack, 97);
+  const reading = coachSpotForView(redactFor(short, { viewerPlayerId: `v${hero}` }), LIVE_COACH_POLICY);
+  assert.ok(reading.kind === 'spot');
+  const report = buildCoachReport(coachInputFor(reading.spot));
+  near(evAt(report, 'call'), 6 * report.equity.heroEquity, 'call');
+
+  // Without an ante a 6-chip big blind is over the small blind, so nothing comes back on a fold. The
+  // call adds 5, 1 of it matched: the 12-chip pot at hero's equity, less the 1.
+  const covered = handAt([100, 6], 3);
+  const view = redactFor(covered, { viewerPlayerId: `v${covered.toAct}` });
+  const coveredReading = coachSpotForView(view, LIVE_COACH_POLICY);
+  assert.ok(coveredReading.kind === 'spot');
+  const coveredReport = buildCoachReport(coachInputFor(coveredReading.spot));
+  near(evAt(coveredReport, 'call'), 12 * coveredReport.equity.heroEquity - 1, 'call over a 6-chip blind');
+});
+
+function handAt(stacks: readonly number[], seed: number, ante = 0): HandState {
   return startHand({
     handId: `all-in-opponent-${seed}`,
     roomId: 'all-in-opponent',
     handNumber: 1,
-    config: { smallBlind: 5, bigBlind: 10, ante: 0, maxSeats: stacks.length, actionTimeoutSeconds: 30 },
+    config: { smallBlind: 5, bigBlind: 10, ante, maxSeats: stacks.length, actionTimeoutSeconds: 30 },
     buttonSeat: 0,
     seats: stacks.map((stack, seat) => ({ seat, playerId: `v${seat}`, stack })),
     random: createDeterministicRandomForTests(seed),
