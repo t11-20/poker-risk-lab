@@ -249,7 +249,8 @@ test('the price drives the decision: the same draw flips from raise to fold as t
     'the expensive spot must still offer a raise, or the flip below proves nothing',
   );
   assert.equal(expensive.suggestion.action, 'fold', 'at 4x pot this draw cannot continue');
-  assert.equal(cheap.suggestion.action, 'raise', 'at a fifth of the pot the draw can raise');
+  // Behind when called, so the draw raises only on the assumed fold rate and the reading calls.
+  assert.equal(cheap.suggestion.action, 'call', 'at a fifth of the pot the draw can continue');
 });
 
 test('a wider opponent range raises hero equity, all else equal', () => {
@@ -817,11 +818,22 @@ test('a hand that is drawing dead is priced as a pure bluff, with no equity cred
 });
 
 test('the suggested size range holds only sizes priced within a big blind of the best', () => {
-  // Facing 100 into 400 with 2,000 behind, the raises come out at roughly +71, -21 and -715 chips.
-  // A size is inside the published range if and only if it is priced within one big blind of the
-  // best candidate. Both directions are asserted.
+  // An overpair against a combo draw (e = 28/44) facing 100 into 400 with 1,000 behind. Ahead when
+  // called, so the raises climb with size, from about 300 at the floor to 441 all in. A size is
+  // inside the published range if and only if it is priced within one big blind of the best
+  // candidate. Both directions are asserted.
+  const overpair = (bigBlind: number) =>
+    countedTurn({
+      heroCards: parseCards('Tc Td'),
+      board: parseCards('9h 8h 2c 3d'),
+      opponents: [{ label: 'the draw', range: exactRange(parseCards('Qh Jh')) }],
+      toCall: 100,
+      heroStack: 1_000,
+      opponentStacks: [1_000],
+      bigBlind,
+    });
   for (const bigBlind of [10, 100]) {
-    const report = buildCoachReport(countedTurn({ toCall: 100, bigBlind }));
+    const report = buildCoachReport(overpair(bigBlind));
     const ranked = [...report.candidates].sort((a, b) => b.ev - a.ev);
     const best = ranked[0];
     const range = report.suggestion.sizeRange;
@@ -845,22 +857,17 @@ test('the suggested size range holds only sizes priced within a big blind of the
       );
     }
 
-    // The all-in is hundreds of chips worse than the best, so it is never the upper end.
-    const shove = report.candidates.find(
-      (candidate) => candidate.action === 'raise' && candidate.to === 2_000,
-    );
-    assert.notEqual(shove, undefined, 'the all-in must exist for its exclusion to mean anything');
-    assert.ok((shove?.ev ?? 0) < best.ev - bigBlind, 'the all-in is far worse than the best size here');
-    assert.ok(
-      range.max < 2_000,
-      `bigBlind ${bigBlind}: the all-in must not be published as a defensible size`,
-    );
+    // The floor is over a big blind worse than the best, so it is never the lower end.
+    const floor = report.candidates.find((candidate) => candidate.action === 'raise' && candidate.to === 200);
+    assert.notEqual(floor, undefined, 'the floor must exist for its exclusion to mean anything');
+    assert.ok((floor?.ev ?? 0) < best.ev - bigBlind, 'the floor is far worse than the best size here');
+    assert.ok(range.min > 200, `bigBlind ${bigBlind}: the floor must not be published as a defensible size`);
   }
 
   // At one big blind exactly one size qualifies, so the range is a single size. At a hundred, two
   // sizes are near-indifferent and the range is a real span.
-  const atTen = buildCoachReport(countedTurn({ toCall: 100, bigBlind: 10 })).suggestion.sizeRange;
-  const atHundred = buildCoachReport(countedTurn({ toCall: 100, bigBlind: 100 })).suggestion.sizeRange;
+  const atTen = buildCoachReport(overpair(10)).suggestion.sizeRange;
+  const atHundred = buildCoachReport(overpair(100)).suggestion.sizeRange;
   assert.equal(atTen?.min, atTen?.max);
   assert.ok((atHundred?.min ?? 0) < (atHundred?.max ?? 0));
 });
@@ -1157,31 +1164,29 @@ test('"loses more often than it wins" is keyed to hero equity, not to the price 
 });
 
 test('confidence measures the gap to the next-best ACTION, not to a neighbouring size of the same one', () => {
-  // Facing 100 into 210 at a big blind of 20, Qh Jh against exactly Ac Kd on Th 9s 2c 3d. The floor
-  // (200) and the ⅓-pot preset (203) price within a chip of each other (41.44 and 40.65). Confidence
-  // is measured against the best line that is not a raise (fold, at 0, two big blinds behind). Size
-  // near-ties are what `sizeRange` is for.
+  // Facing 100 into 210 at a big blind of 20, Ac Kd against exactly Qh Jh on Th 9s 2c 3d, e = 31/44.
+  // The opponent has 300 behind, so the pot-sized raise to 410 and the shove both raise by the 300
+  // that can be called: 0.35 x 210 + 0.65 x [ (31/44) x 910 - 400 ] = 230.24 each. Confidence is
+  // measured against the best line that is not a raise, calling at (31/44) x 310 - 100 = 118.41.
+  // Size near-ties are what `sizeRange` is for.
   const report = buildCoachReport({
-    heroCards: parseCards('Qh Jh'),
+    heroCards: parseCards('Ac Kd'),
     board: parseCards('Th 9s 2c 3d'),
     street: 'turn',
-    opponents: [{ label: 'the opponent', range: exactRange(parseCards('Ac Kd')) }],
+    opponents: [{ label: 'the opponent', range: exactRange(parseCards('Qh Jh')) }],
     pot: 210,
     contestablePot: 210,
     toCall: 100,
     heroCommittedThisStreet: 0,
     heroStack: 1000,
-    opponentStacks: [1000],
+    opponentStacks: [300],
     bigBlind: 20,
   });
-  const raises = report.candidates.filter((candidate) => candidate.action === 'raise');
-  assert.equal(raises[0]?.to, 200, 'the floor is priced');
-  assert.equal(raises[1]?.to, 203, 'and the ⅓-pot preset beside it');
-  assert.ok(Math.abs((raises[0]?.ev ?? 0) - (raises[1]?.ev ?? 0)) < 1, 'the two sizes are within a chip');
+  const raise = (to: number) => report.candidates.find((c) => c.action === 'raise' && c.to === to)?.ev;
+  assert.equal(raise(410), raise(1000), 'the two sizes tie');
 
   assert.equal(report.suggestion.action, 'raise');
   assert.equal(report.suggestion.confidence, 'reasonable');
-  assert.match(report.suggestion.reason, /by 41\.4 units over the next-best action/u);
-  // 255 (½ pot) is 26.82, within one big blind of the best, so it is in the range too.
-  assert.deepEqual(report.suggestion.sizeRange, { min: 200, max: 255 }, 'the near-tie is the size range');
+  assert.match(report.suggestion.reason, /by 111\.8 units over the next-best action/u);
+  assert.deepEqual(report.suggestion.sizeRange, { min: 410, max: 1000 }, 'the tie is the size range');
 });

@@ -53,6 +53,7 @@ export {
   isDefensible,
   judgeConsistency,
   pricedSizesFor,
+  restsOnAssumedFoldEquity,
 } from './consistency.ts';
 export {
   choose,

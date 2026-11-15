@@ -72,7 +72,7 @@ export function bestCandidate(report: CoachReport): ActionCandidate | null {
  * True for a bet or raise priced with fold equity above zero. It reads the `foldEquityAssumed`
  * marker that `buildCoachReport` sets on rows whose EV contains the `f x pot` term.
  */
-function restsOnAssumedFoldEquity(candidate: ActionCandidate): boolean {
+export function restsOnAssumedFoldEquity(candidate: ActionCandidate): boolean {
   const assumed = candidate.foldEquityAssumed;
   return assumed !== undefined && assumed > 0;
 }
