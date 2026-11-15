@@ -37,6 +37,7 @@ import {
 import Link from 'next/link';
 import {
   type FocusEvent,
+  type KeyboardEvent,
   type PointerEvent,
   type ReactElement,
   type ReactNode,
@@ -46,6 +47,7 @@ import {
   useState,
 } from 'react';
 import { coachBodyFor } from '@/lib/coach-body.ts';
+import { coachOpenDelta } from '@/lib/follow-the-table.ts';
 // A value import, not a cycle: `use-live-table.ts` imports this file's types with `import type`.
 import { spokenDecision } from '@/lib/use-live-table.ts';
 
@@ -538,6 +540,28 @@ function CoachSheet({ report, status, coachUnavailableReason, reviewHref }: Coac
   const dragStart = useRef<number | null>(null);
   const dragMoved = useRef(false);
   const handleRef = useRef<HTMLButtonElement | null>(null);
+  const sheetRef = useRef<HTMLDivElement | null>(null);
+
+  /** Only where the Coach is a fixed sheet: the open sheet and the row stuck on it hide what is below. */
+  useEffect(() => {
+    const sheet = sheetRef.current;
+    if (!open || sheet === null || window.getComputedStyle(sheet).position !== 'fixed') return;
+    const bar = sheet.closest('.prl-play__stage')?.querySelector('.prl-play__decision .prl-action-bar');
+    const price = bar?.querySelector('.prl-action-bar__price');
+    const row = bar?.querySelector<HTMLElement>('.prl-action-bar__actions');
+    if (bar == null || price == null || row == null) return;
+    const glance = bar.querySelector('.prl-hand-glance')?.getBoundingClientRect();
+    const delta = coachOpenDelta({
+      priceTop: price.getBoundingClientRect().top,
+      keepBottom:
+        glance !== undefined && glance.height > 0 ? glance.bottom : price.getBoundingClientRect().bottom,
+      viewTop:
+        Number.parseFloat(window.getComputedStyle(document.documentElement).scrollPaddingBlockStart) || 0,
+      rowTop: window.innerHeight - sheet.offsetHeight - row.offsetHeight,
+      viewHeight: window.innerHeight,
+    });
+    if (delta !== 0) window.scrollBy({ top: delta, behavior: 'instant' });
+  }, [open]);
 
   const onPointerDown = (event: PointerEvent<HTMLButtonElement>): void => {
     if (!event.isPrimary) return;
@@ -585,17 +609,26 @@ function CoachSheet({ report, status, coachUnavailableReason, reviewHref }: Coac
     setOpen(true);
   };
 
+  /** Focus left inside a closed sheet is off the screen, so it goes back to the handle. */
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+    if (event.key !== 'Escape' || !open) return;
+    setOpen(false);
+    handleRef.current?.focus({ preventScroll: true });
+  };
+
   const body = coachBodyFor(status, report !== null);
   const style: StyleWithVars | undefined =
     dragPx === null ? undefined : { '--prl-play-sheet-drag': `${dragPx}px` };
 
   return (
-    // biome-ignore lint/a11y/noStaticElementInteractions: onFocus is a reveal for keyboard users, not a control; the control is the <button> inside
+    // biome-ignore lint/a11y/noStaticElementInteractions: onFocus reveals and Escape closes for keyboard users; the control is the <button> inside
     <div
+      ref={sheetRef}
       className="prl-play__coach"
       data-open={open ? 'true' : 'false'}
       style={style}
       onFocus={onFocusWithin}
+      onKeyDown={onKeyDown}
     >
       <div className="prl-play__handle-row">
         <button

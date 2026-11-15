@@ -99,3 +99,25 @@ export function watchDelta(geometry: WatchGeometry): number {
   if (tableBottom <= viewTop) return bandBottom - viewBottom;
   return 0;
 }
+
+/** Viewport coordinates when the Coach sheet opens on a phone. */
+export interface CoachOpenGeometry {
+  readonly priceTop: number;
+  /** The bottom of `HandGlance`, else of the price. */
+  readonly keepBottom: number;
+  readonly viewTop: number;
+  /** Where the stuck row's top sits with the sheet open: the viewport less the sheet and the row. */
+  readonly rowTop: number;
+  readonly viewHeight: number;
+}
+
+/**
+ * Pixels to scroll so the price and the glance sit between the header and the row stuck on the open
+ * sheet. A reader whose decision is off the screen is not moved.
+ */
+export function coachOpenDelta(geometry: CoachOpenGeometry): number {
+  const { priceTop, keepBottom, viewTop, rowTop, viewHeight } = geometry;
+  if (priceTop >= viewHeight || keepBottom <= 0) return 0;
+  if (priceTop >= viewTop && keepBottom <= rowTop) return 0;
+  return priceTop - viewTop;
+}
