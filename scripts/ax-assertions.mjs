@@ -2496,6 +2496,12 @@ async function gatherReplay(page, baseUrl) {
     });
   }
 
+  // Home again, because three right-arrows end on the last step of a four-step hand.
+  await page.press('Home');
+  await page.settle(300);
+  evidence.endFrom = await page.evaluate(
+    `[...document.querySelectorAll('.prl-timeline__marker')].findIndex((m) => m.getAttribute('aria-current') === 'step') + 1`,
+  );
   await page.evaluate('window.__prlSpeechReset && window.__prlSpeechReset()');
   await page.press('End');
   await page.settle(500);
@@ -2658,6 +2664,12 @@ const REPLAY_CHECKS = [
     what: 'End and Home announce the last and the first step',
     decide: (e) => {
       if (e.hand === null) return fail('no replayable hand, so End and Home were never pressed');
+      // From the last step End cannot move, so its silence would prove nothing either way.
+      if (typeof e.endFrom !== 'number' || e.endFrom >= e.total) {
+        return fail(
+          `End was pressed from the last step (${e.endFrom} of ${e.total}), so this checked nothing`,
+        );
+      }
       const last = stepWrites(e.atEnd)[0];
       const first = stepWrites(e.atHome)[0];
       if (last === undefined) return fail('End announced nothing, so a reader cannot jump to the end by ear');

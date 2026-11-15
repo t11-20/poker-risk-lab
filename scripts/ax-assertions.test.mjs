@@ -1456,6 +1456,7 @@ const HEALTHY_REPLAY = () => ({
   })),
   faceUp: ['king of hearts', 'queen of spades'],
   total: 9,
+  endFrom: 1,
   scrub: [1, 2, 3].map((step) => ({
     focus: { onDocument: false, role: 'button', name: `Step ${step + 1} of 9` },
     inTimeline: true,
@@ -1536,6 +1537,27 @@ describe('NEGATIVE CONTROL — 6.2 and 6.3, the replay that scrubs in silence', 
       ),
     ];
     assert.ok(refuses(checkFor('J6.3'), evidence));
+  });
+});
+
+describe('NEGATIVE CONTROL — 6.4, End pressed where it has nowhere to go', () => {
+  const check = checkFor('J6.4');
+
+  it('passes End heard from the first step', () => {
+    assert.equal(check.decide(HEALTHY_REPLAY()).ok, true);
+  });
+
+  it('refuses End pressed from the last step as a check of nothing, not as a silent replay', () => {
+    // A four-step hand after three right-arrows: End cannot move, so silence proves nothing.
+    const evidence = { ...HEALTHY_REPLAY(), total: 4, endFrom: 4, atEnd: [] };
+    const outcome = check.decide(evidence);
+    assert.equal(outcome.ok, false);
+    assert.match(outcome.detail, /from the last step/u);
+  });
+
+  it('refuses evidence that does not say where End was pressed from', () => {
+    const { endFrom: _dropped, ...evidence } = HEALTHY_REPLAY();
+    assert.equal(check.decide(evidence).ok, false);
   });
 });
 
