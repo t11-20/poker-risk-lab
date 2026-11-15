@@ -24,7 +24,7 @@ test('a hand that is behind has outs; a hand that is in front does not', () => {
   assert.equal(countsAsOuts(0.35), true, 'a nine-out flush draw is about 35%');
   assert.equal(countsAsOuts(0.4999999), true);
 
-  // The bar is inclusive, matching `computeOuts`, where a card leaving hero exactly at the bar counts.
+  // The bar is inclusive, matching `outsCountRefusalFor`: a hero at an exact chop is not behind.
   assert.equal(countsAsOuts(0.5), false, 'the bar is inclusive on both sides of the question');
   assert.equal(countsAsOuts(0.645), false, 'the overpair spot in the audit fixture');
   assert.equal(countsAsOuts(0.88), false, 'the flopped two pair that headlined 47 outs');

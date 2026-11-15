@@ -36,7 +36,7 @@ export function outsWithheldBecause(street: string, opponents: number): OutsWith
 export type NoOuts = 'drawing-dead' | 'split-at-best' | 'no-single-card';
 
 /**
- * Why a hand that is behind has no outs; one at the bar always has a card that keeps it there. Dead only
+ * Why a hand that is behind has no outs; one at or past the bar has no outs count to explain. Dead only
  * on an exact zero, since sampling can miss a rare runout. Hero is `perPlayer[0]`, as `buildCoachReport` lists.
  */
 export function noOutsBecause(equity: EquitySummary): NoOuts {

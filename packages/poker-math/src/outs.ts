@@ -1,7 +1,7 @@
 /**
  * Classifies every card that can come next as a clean out, a dirty out or neither, against the
  * opponent's range, with hero's equity once it lands and a sentence saying why.
- * clean is equityAfter >= cleanThreshold (0.90), dirty is >= aheadThreshold (0.50), neutral is below.
+ * clean is equityAfter >= cleanThreshold (0.90), dirty is > aheadThreshold (0.50), neutral is the rest.
  * The thresholds are a modelling choice, so they are parameters and every result names them.
  * Only the next card counts as an out. Equity is exact. At most 990 combos x 44 boards = 43,560 units,
  * far under `equity()`'s 4,000,000 budget, and any sampled call is still named in `assumptions`.
@@ -41,7 +41,7 @@ export type OutsCountRefusal = {
   readonly kind: 'already-ahead';
   /** Hero's equity before any card arrives, the figure that cleared the bar. */
   readonly equityNow: number;
-  /** The equity a card has to reach to count as an out at all. */
+  /** The equity a card has to beat to count as an out at all. */
   readonly threshold: number;
 };
 
@@ -95,7 +95,7 @@ export interface OutsInput {
   readonly deadCards?: readonly Card[];
   /** Equity at or above this makes a card clean. Default 0.90. */
   readonly cleanThreshold?: number;
-  /** Equity at or above this makes a card an out at all. Default 0.50. */
+  /** Equity above this makes a card an out at all, so a heads-up split at 0.50 is not one. Default 0.50. */
   readonly aheadThreshold?: number;
 }
 
@@ -436,7 +436,8 @@ function heroEquityOn(
 
 function classify(equityAfter: number, cleanThreshold: number, aheadThreshold: number): OutClassification {
   if (equityAfter >= cleanThreshold) return 'clean';
-  if (equityAfter >= aheadThreshold) return 'dirty';
+  // Strict, because a card that only splits the pot leaves hero at exactly 0.5 and not in front.
+  if (equityAfter > aheadThreshold) return 'dirty';
   return 'neutral';
 }
 
@@ -518,7 +519,8 @@ function buildExplanation(args: {
       refusal: args.refusal,
     }),
     `Clean means your equity after that card is at least ${formatPercent(args.cleanThreshold)}; dirty ` +
-      `means at least ${formatPercent(args.aheadThreshold)} but below ${formatPercent(args.cleanThreshold)}`,
+      `means above ${formatPercent(args.aheadThreshold)} but below ${formatPercent(args.cleanThreshold)}` +
+      (args.aheadThreshold >= 0.5 ? ', so a card that only splits the pot is not an out' : ''),
   ];
   const ahead = alreadyAheadNote(args.equityNow, args.cleanThreshold, args.aheadThreshold);
   if (ahead !== null) sentences.push(ahead);
@@ -549,7 +551,7 @@ function buildAssumptions(args: {
       : `Every one of the ${args.legalNow.length} combinations in "${args.opponent.notation}" is treated as equally likely; a real opponent does not play every hand in a range the same way, so this is the range assumption rather than a prediction.`,
   );
   notes.push(
-    `"Clean" means your equity is at least ${formatPercent(args.cleanThreshold)} after the card and "dirty" at least ${formatPercent(args.aheadThreshold)} but below that. Both thresholds are a modelling choice, not a rule of poker — move them and the counts move with them.`,
+    `"Clean" means your equity is at least ${formatPercent(args.cleanThreshold)} after the card and "dirty" above ${formatPercent(args.aheadThreshold)} but below that. Both thresholds are a modelling choice, not a rule of poker — move them and the counts move with them.`,
   );
   notes.push(
     'Equity after each card is computed by enumerating every remaining board exactly, so there is no sampling error in these figures.',

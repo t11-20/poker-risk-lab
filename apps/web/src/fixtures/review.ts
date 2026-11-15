@@ -432,7 +432,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           cleanCards: ['Kh', 'Jh', 'Qh', 'Th', '6h', '7h', '3h', '4h'],
           dirtyCards: ['2h', '8d', '8s', '8c', '9d', '9s', '9c'],
           explanation:
-            'On Ah 5h 2c you hold 9h 8h — high card ace, nine eight kickers — for 43% equity against "22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, A9o+, KTo+, QJo" (227 combinations still possible). Of the 47 cards that can come next, 8 are clean and 7 are dirty, which is 15 outs in total. Clean means your equity after that card is at least 90%; dirty means at least 50% but below 90%.',
+            'On Ah 5h 2c you hold 9h 8h — high card ace, nine eight kickers — for 43% equity against "22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, A9o+, KTo+, QJo" (227 combinations still possible). Of the 47 cards that can come next, 8 are clean and 7 are dirty, which is 15 outs in total. Clean means your equity after that card is at least 90%; dirty means above 50% but below 90%, so a card that only splits the pot is not an out.',
         },
         equity: {
           heroEquity: 0.43323988786543854,
@@ -633,7 +633,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           cleanCards: ['6c', '6d', '6s', 'Th', 'Jh', 'Qh', 'Kh', '3h', '4h', '6h', '2h', '7h'],
           dirtyCards: [],
           explanation:
-            'On Ah 5h 2c 7d you hold 9h 8h — high card ace, nine eight kickers — for 32% equity against "22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, A9o+, KTo+, QJo" (223 combinations still possible). Of the 46 cards that can come next, 12 are clean and 0 are dirty, which is 12 outs in total. Clean means your equity after that card is at least 90%; dirty means at least 50% but below 90%.',
+            'On Ah 5h 2c 7d you hold 9h 8h — high card ace, nine eight kickers — for 32% equity against "22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, A9o+, KTo+, QJo" (223 combinations still possible). Of the 46 cards that can come next, 12 are clean and 0 are dirty, which is 12 outs in total. Clean means your equity after that card is at least 90%; dirty means above 50% but below 90%, so a card that only splits the pot is not an out.',
         },
         equity: {
           heroEquity: 0.32139217284957194,

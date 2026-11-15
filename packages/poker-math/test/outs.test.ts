@@ -326,7 +326,7 @@ test('the refusal moves with the threshold it is defined against', () => {
   const atTheBar = computeOuts(spot);
   assertInvariants(atTheBar);
   closeTo(atTheBar.equityNow, 0.5, 'equityNow');
-  assert.notEqual(atTheBar.refusal, null, 'the bar is inclusive at the bottom, for cards and for hero');
+  assert.notEqual(atTheBar.refusal, null, 'a hero at an exact chop is not behind, so it is not drawing');
   assert.equal(atTheBar.refusal?.threshold, 0.5);
 
   // Above a chop the same 44 cards are a countable, empty set of outs. A hard-coded 0.5 fails here.
@@ -509,31 +509,105 @@ test('raising the clean threshold moves cards between the buckets without changi
   assert.ok(strict.assumptions.some((note) => note.includes('modelling choice')));
 });
 
-test('a card that only chops sits exactly on the dirty boundary', () => {
+test('a card that only chops is not an out, because a split does not put you in front', () => {
   // Hero 9c 8d against 9h 8s on 7s 6h 2c 3d. Same ranks and a rainbow board, so every river chops.
-  // A chop is exactly 0.5, the inclusive bottom of dirty, so all 44 cards are dirty and none clean.
-  const result = computeOuts({
+  // A chop is exactly 0.5, and a dirty out has to be above it, so all 44 cards are neutral.
+  const spot = {
     heroCards: parseCards('9c 8d'),
     board: parseCards('7s 6h 2c 3d'),
     opponent: exactRange(parseCards('9h 8s')),
-  });
+  };
+  const result = computeOuts(spot);
   assertInvariants(result);
 
   closeTo(result.equityNow, 0.5, 'equityNow');
   assert.equal(result.cleanCount, 0);
-  assert.equal(result.dirtyCount, 44);
-  assert.equal(result.neutral.length, 0);
-  for (const outcome of result.dirty) closeTo(outcome.equityAfter, 0.5, `${outcome.label} after`);
+  assert.equal(result.dirtyCount, 0);
+  assert.equal(result.neutral.length, 44);
+  for (const outcome of result.neutral) closeTo(outcome.equityAfter, 0.5, `${outcome.label} after`);
   assert.match(outcomeFor(result, 'Kd').note, /chops/);
+  assert.match(result.explanation, /a card that only splits the pot is not an out/);
 
-  const stricter = computeOuts({
-    heroCards: parseCards('9c 8d'),
-    board: parseCards('7s 6h 2c 3d'),
-    opponent: exactRange(parseCards('9h 8s')),
-    aheadThreshold: 0.51,
+  // Below a chop the same cards clear the bar, so the explanation must not claim a split is excluded.
+  const lowered = computeOuts({ ...spot, aheadThreshold: 0.4 });
+  assert.equal(lowered.dirtyCount, 44);
+  assert.doesNotMatch(lowered.explanation, /only splits the pot/);
+});
+
+test('the audit spot: AsKs against AcKc chops on 35 rivers and loses on 9, so it has no outs', () => {
+  // Qc 7c 2h 9d. Both hold ace-king, so any river that is not a club plays the same five cards for both:
+  // no spade flush (hero has three), no straight (A-K-Q needs J and T). 13 clubs less Ac Kc Qc 7c = 9
+  // give the opponent a flush. 44 - 9 = 35 chops, no win, so equityNow = 35/88.
+  const result = computeOuts({
+    heroCards: parseCards('As Ks'),
+    board: parseCards('Qc 7c 2h 9d'),
+    opponent: exactRange(parseCards('Ac Kc')),
   });
-  assert.equal(stricter.totalOuts, 0);
-  assert.equal(stricter.neutral.length, 44);
+  assertInvariants(result);
+
+  closeTo(result.equityNow, 35 / 88, 'equityNow');
+  assert.equal(result.refusal, null, 'hero is behind, so this is a drawing spot');
+  assert.equal(result.cleanCount, 0);
+  assert.equal(result.dirtyCount, 0, 'a river that only splits the pot was being called a dirty out');
+  assert.equal(result.totalOuts, 0);
+  assert.equal(result.neutral.filter((outcome) => outcome.equityAfter === 0.5).length, 35);
+  assert.match(result.explanation, /which is 0 outs in total/);
+});
+
+test('a card that turns a loss into a split and nothing else is not an out', () => {
+  // Hero 2c 3d against Ts 9s on Ah Kd Qs Jc: the opponent has broadway. A ten (Th Td Tc) puts broadway
+  // on the board, which both play, so the pot chops. The other 41 rivers lose. equityNow = 3/88.
+  const result = computeOuts({
+    heroCards: parseCards('2c 3d'),
+    board: parseCards('Ah Kd Qs Jc'),
+    opponent: exactRange(parseCards('Ts 9s')),
+  });
+  assertInvariants(result);
+
+  closeTo(result.equityNow, 3 / 88, 'equityNow');
+  assert.equal(result.totalOuts, 0);
+  for (const label of ['Tc', 'Td', 'Th']) {
+    const outcome = outcomeFor(result, label);
+    assert.equal(outcome.classification, 'neutral', `${label} only splits the pot`);
+    closeTo(outcome.equityAfter, 0.5, `${label} after`);
+  }
+});
+
+test('a flush draw keeps its flush outs when its kicker cards only chop', () => {
+  // Hero Ah 9h against Ac Kd on Qh 7h 4c Qd. Both have queens with an ace; the king kicker leads.
+  //   9 hearts (13 less Ah 9h Qh 7h)    win   -> a flush, and the board cannot give them a full house
+  //   9c 9d 9s                           win   -> queens and nines
+  //   7c 7d 7s, 4d 4s                   chop  -> both play queens up with the ace
+  //   the other 27                       lose  -> the king kicker, or their bigger two pair or trips
+  // 12 clean outs. equityNow = (12 + 5/2)/44 = 29/88.
+  const result = computeOuts({
+    heroCards: parseCards('Ah 9h'),
+    board: parseCards('Qh 7h 4c Qd'),
+    opponent: exactRange(parseCards('Ac Kd')),
+  });
+  assertInvariants(result);
+
+  closeTo(result.equityNow, 29 / 88, 'equityNow');
+  assert.equal(result.cleanCount, 12);
+  assert.equal(result.dirtyCount, 0, 'the five chopping rivers are not outs');
+  assert.equal(result.totalOuts, 12);
+  assert.deepEqual(labelSet(result.clean), [
+    '2h',
+    '3h',
+    '4h',
+    '5h',
+    '6h',
+    '8h',
+    '9c',
+    '9d',
+    '9s',
+    'Jh',
+    'Kh',
+    'Th',
+  ]);
+  for (const label of ['4d', '4s', '7c', '7d', '7s']) {
+    closeTo(outcomeFor(result, label).equityAfter, 0.5, `${label} after`);
+  }
 });
 
 test('a card the range cannot exist behind is left out of the count and said so', () => {
