@@ -344,17 +344,13 @@
         }
       ],
       "suggestion": {
-        "action": "raise",
-        "sizeRange": {
-          "min": 20,
-          "max": 43
-        },
+        "action": "check",
         "confidence": "moderate",
-        "reason": "Raise has the highest expected value against the stated range, by 10.2 units over the next-best action.",
+        "reason": "Check has the highest expected value of the lines that do not rely on an assumed fold rate, by 6.7 units over the next-best action. Raising to 20 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats checking only if they fold more than 13.8% of the time.",
         "whatWouldChangeIt": [
-          "This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.",
-          "Being raised is not modelled here, so treat the figure as optimistic.",
-          "The equity figure is sampled, ±1.62 points at 95% confidence. A close decision could sit either side of that."
+          "Nothing about the opponent range can make folding better than this: checking costs nothing and keeps the hand, so it is never behind a fold. What the range changes is whether betting would beat checking.",
+          "The equity figure is sampled, ±1.62 points at 95% confidence. A close decision could sit either side of that.",
+          "The gap to the next-best action is only 6.7 units, well under a big blind — this is close to indifferent."
         ]
       },
       "stackContext": {
@@ -1428,7 +1424,7 @@
       "suggestion": {
         "action": "fold",
         "confidence": "reasonable",
-        "reason": "Fold has the highest expected value against the stated range, by 24.5 units over the next-best action.",
+        "reason": "Fold has the highest expected value against the stated range, by 34.4 units over the next-best action.",
         "whatWouldChangeIt": [
           "A wider opponent range would raise your equity and can flip a fold into a call.",
           "A narrower, stronger range does the opposite."
@@ -1808,17 +1804,12 @@
         }
       ],
       "suggestion": {
-        "action": "bet",
-        "sizeRange": {
-          "min": 10,
-          "max": 30
-        },
+        "action": "check",
         "confidence": "moderate",
-        "reason": "Bet has the highest expected value against the stated range, by 4.9 units over the next-best action.",
+        "reason": "Check has the highest expected value of the lines that do not rely on an assumed fold rate, by 3.0 units over the next-best action. Betting 10 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats checking only if they fold more than 13.3% of the time.",
         "whatWouldChangeIt": [
-          "This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.",
-          "Being raised is not modelled here, so treat the figure as optimistic.",
-          "The gap to the next-best action is only 4.9 units, well under a big blind — this is close to indifferent."
+          "Nothing about the opponent range can make folding better than this: checking costs nothing and keeps the hand, so it is never behind a fold. What the range changes is whether betting would beat checking.",
+          "The gap to the next-best action is only 3.0 units, well under a big blind — this is close to indifferent."
         ]
       },
       "stackContext": {

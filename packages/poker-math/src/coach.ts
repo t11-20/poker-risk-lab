@@ -26,6 +26,7 @@ import type {
   UncertaintyNote,
 } from '@prl/contracts';
 import type { Card } from '@prl/poker-engine';
+import { restsOnAssumedFoldEquity } from './consistency.ts';
 import { type EquityResult, type EquitySpec, equity } from './equity.ts';
 import { evOfBet, evOfCall, evOfCheck, evOfFold, evOfRaise } from './ev.ts';
 import { chips, percent } from './format.ts';
@@ -704,9 +705,37 @@ function byExpectedValue(left: ActionCandidate, right: ActionCandidate): number 
   return TIEBREAK_RANK[right.action] - TIEBREAK_RANK[left.action];
 }
 
+/** A bet or raise row's EV if it is always called, which is its EV at a fold rate of zero. */
+function evWhenCalled(row: ActionCandidate, input: CoachInput, equity: number): number {
+  return evOfRaise({
+    pot: input.contestablePot,
+    toCall: input.toCall,
+    raiseBy: row.cost - input.toCall,
+    foldProbability: 0,
+    equityWhenCalled: equity,
+  }).ev;
+}
+
 /**
- * Picks the highest-EV candidate, then weakens the claim when the margin is small against a big blind
- * or the equity interval is wide. It may never conclude fold while checking is free, and asserts so.
+ * Names the row the reading set aside and the fold rate at which it overtakes the reading. EV is
+ * linear in f, from the called branch S at f = 0 to the pot at f = 1, so that is
+ * `(reading - S) / (pot - S)`, always below the assumed rate that put the row on top.
+ */
+function foldRateNote(row: ActionCandidate, reading: ActionCandidate, input: CoachInput, equity: number) {
+  const called = evWhenCalled(row, input, equity);
+  const needed = (reading.ev - called) / (input.contestablePot - called);
+  const line = row.action === 'bet' ? `Betting ${row.to}` : `Raising to ${row.to}`;
+  return (
+    ` ${line} shows a higher figure only because it assumes they fold ` +
+    `${((row.foldEquityAssumed ?? 0) * 100).toFixed(0)}% of the time, which nothing here measures. ` +
+    `It beats ${reading.action}ing only if they fold more than ${percent(needed)} of the time.`
+  );
+}
+
+/**
+ * Picks the highest-EV candidate that is ahead without the assumed fold rate, then weakens the claim
+ * when the margin is small against a big blind or the equity interval is wide. It may never conclude
+ * fold while checking is free, and asserts so.
  */
 function buildSuggestion(
   candidates: readonly ActionCandidate[],
@@ -715,11 +744,27 @@ function buildSuggestion(
   outs: OutsResult | null,
 ): CoachSuggestion {
   const ranked = [...candidates].sort(byExpectedValue);
-  const best = ranked[0];
-  if (best === undefined) throw new CoachError('no candidate actions were produced');
-  // The next-best action, not the next row. Two sizes of one action can price within a chip, which
-  // made 12 of 36 Lab scenarios read as indifferent. `sizeRange` reports how close sizes are.
-  const second = ranked.find((candidate) => candidate.action !== best.action);
+  const top = ranked[0];
+  if (top === undefined) throw new CoachError('no candidate actions were produced');
+  // The rows the Lab's verdict measures a fold against, plus any bet or raise that beats them even
+  // when always called. The fold rate is an input, so a line ahead only because of it is not a reading.
+  const heroEquity = equitySummary.heroEquity;
+  const measuredBest = Math.max(
+    0,
+    ...candidates.filter((c) => !restsOnAssumedFoldEquity(c)).map((c) => c.ev),
+  );
+  const eligible = ranked.filter(
+    (c) => !restsOnAssumedFoldEquity(c) || evWhenCalled(c, input, heroEquity) >= measuredBest,
+  );
+  const best = eligible[0] ?? top;
+  // A row set aside still competes at its always-called value, so the margin is not measured to a line
+  // that only the fold rate put behind. The next-best action, not the next row: two sizes of one
+  // action can price within a chip, which made 12 of 36 Lab scenarios read as indifferent.
+  const runnerUp = Math.max(
+    ...ranked
+      .filter((c) => c.action !== best.action)
+      .map((c) => (eligible.includes(c) ? c.ev : evWhenCalled(c, input, heroEquity))),
+  );
 
   if (input.toCall === 0) {
     const foldRank = ranked.findIndex((candidate) => candidate.action === 'fold');
@@ -733,7 +778,7 @@ function buildSuggestion(
     }
   }
 
-  const margin = second === undefined ? Number.POSITIVE_INFINITY : best.ev - second.ev;
+  const margin = best.ev - runnerUp;
   const marginInBigBlinds = margin / input.bigBlind;
   const intervalPoints = equitySummary.confidenceHalfWidthPoints ?? 0;
 
@@ -743,7 +788,7 @@ function buildSuggestion(
 
   // Only sizes within the one-big-blind margin of the best, so the range holds defensible sizes.
   const sizeMargin = input.bigBlind;
-  const sameActionSizes = candidates
+  const sameActionSizes = eligible
     .filter(
       (candidate) =>
         candidate.action === best.action &&
@@ -793,10 +838,14 @@ function buildSuggestion(
 
   // Capitalised to open the sentence, and in units to match every figure beside it on the panel.
   const actionWord = `${best.action.charAt(0).toUpperCase()}${best.action.slice(1)}`;
+  const setAside = best.action === top.action ? '' : foldRateNote(top, best, input, heroEquity);
+  const against =
+    setAside === '' ? 'against the stated range' : 'of the lines that do not rely on an assumed fold rate';
   const reason =
-    confidence === 'low'
+    (confidence === 'low'
       ? `${actionWord} comes out marginally ahead here, but only just — treat this as close to indifferent rather than as a recommendation.`
-      : `${actionWord} has the highest expected value against the stated range, by ${margin.toFixed(1)} units over the next-best action.`;
+      : `${actionWord} has the highest expected value ${against}, by ${margin.toFixed(1)} units over the next-best action.`) +
+    setAside;
 
   return {
     action: best.action,
@@ -1053,13 +1102,7 @@ function halfPotBreakEven(input: CoachInput, candidates: readonly ActionCandidat
   );
   if (row === undefined) throw new CoachError(`internal: the ½-pot size ${to} has no priced row`);
   const pot = input.contestablePot;
-  const called = evOfRaise({
-    pot,
-    toCall: input.toCall,
-    raiseBy: row.cost - input.toCall,
-    foldProbability: 0,
-    equityWhenCalled: equity,
-  }).ev;
+  const called = evWhenCalled(row, input, equity);
   const needed = called >= 0 ? 0 : -called / (pot - called);
   const size = `The ½-pot ${row.action === 'bet' ? `bet of ${to}` : `raise to ${to}`} risks ${chips(row.cost)} to win ${chips(pot)}.`;
   // "Needs 0%" and "needs 100%" both read as mistakes, so each degenerate case says what it means.
