@@ -690,8 +690,19 @@
   font-size: var(--prl-type-body-sm);
 }
 
+/* The id wraps under the label and breaks inside itself: the longest is wider than the card at 360px. */
+.prl-learn-scenario .prl-btn {
+  flex-wrap: wrap;
+  row-gap: var(--prl-space-2);
+  max-width: 100%;
+  padding-block: var(--prl-space-3);
+}
+
 .prl-learn-scenario__id {
   margin-inline-start: var(--prl-space-4);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 /* Live calculation. Only the derivation, EV term table and card notes sit behind a `<details>`,
