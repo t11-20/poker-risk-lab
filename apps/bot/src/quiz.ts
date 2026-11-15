@@ -7,6 +7,7 @@
 
 import { quizById, quizzes } from '@prl/content';
 import { type Quiz, type QuizQuestion, type Topic, withinTolerance } from '@prl/contracts';
+import { cardNotationText } from './cards.ts';
 import {
   DECISION_ACTIONS,
   type DecisionAction,
@@ -135,10 +136,13 @@ function questionText(phase: QuizPhase): string {
   const lines = [
     `${quiz.title} · Question ${phase.position + 1} of ${quiz.questions.length}`,
     '',
-    question.prompt,
+    cardNotationText(question.prompt),
   ];
   if (question.kind === 'multipleChoice') {
-    lines.push('', ...question.options.map((option, index) => `${LETTERS[index] ?? '?'}. ${option}`));
+    lines.push(
+      '',
+      ...question.options.map((option, index) => `${LETTERS[index] ?? '?'}. ${cardNotationText(option)}`),
+    );
   }
   if (question.kind === 'numeric') {
     lines.push(
@@ -305,10 +309,10 @@ function choiceLines(question: Extract<QuizQuestion, { kind: 'multipleChoice' }>
     .filter((index, position, all) => all.indexOf(index) === position)
     .flatMap((index) => {
       const note = question.optionNotes?.[index];
-      return note === undefined ? [] : [`On ${letter(index)}: ${note}`];
+      return note === undefined ? [] : [`On ${letter(index)}: ${cardNotationText(note)}`];
     });
   if (notes.length > 0) lines.push('', ...notes);
-  lines.push('', question.explanation);
+  lines.push('', cardNotationText(question.explanation));
   return lines;
 }
 
@@ -327,7 +331,7 @@ function numericLines(question: NumericQuestion, answer: number): string[] {
     `You answered ${yours}.`,
     verdict,
     '',
-    question.explanation,
+    cardNotationText(question.explanation),
     '',
     `How it was worked out: ${expected.working}`,
   ];
@@ -339,7 +343,7 @@ function revealLines(question: NumericQuestion): string[] {
     `The computed figure is ${figureText(expected.value, expected.unit)}. Anything within ` +
       `${toleranceText(expected.tolerance, expected.unit)} is accepted.`,
     '',
-    question.explanation,
+    cardNotationText(question.explanation),
     '',
     `How it was worked out: ${expected.working}`,
   ];
@@ -371,7 +375,7 @@ function decisionLines(question: DecisionQuestion, action: DecisionAction): stri
     'Assumptions:',
     ...assumptions.map((assumption) => `- ${assumption}`),
     '',
-    question.explanation,
+    cardNotationText(question.explanation),
   ];
 }
 
@@ -389,7 +393,7 @@ function onward(session: Session, phase: QuizPhase): StepResult {
     out: [
       {
         kind: 'send',
-        text: `That was the last of ${quiz.questions.length} questions in ${quiz.title}.\n\n${quiz.reviewAdvice}`,
+        text: `That was the last of ${quiz.questions.length} questions in ${quiz.title}.\n\n${cardNotationText(quiz.reviewAdvice)}`,
         buttons: [[{ label: 'Another quiz', data: encodePress({ kind: 'quizzes' }) }, menuButton()]],
       },
     ],
