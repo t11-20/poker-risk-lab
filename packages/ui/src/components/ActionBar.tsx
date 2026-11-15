@@ -32,6 +32,7 @@ import {
   clampBetTo,
   clampedFrom,
   draftForBounds,
+  isAllInAt,
   isDraftMalformed,
   presetTotal,
   pressedPreset,
@@ -40,6 +41,7 @@ import {
   SIZING_PRESETS,
   type SizedAction,
   type StampedDraft,
+  sizedButtonText,
 } from '../bet-sizing.ts';
 import { cx } from '../cx.ts';
 import { useFocusRescue } from '../focus-rescue.ts';
@@ -149,7 +151,7 @@ function BetSizer(props: BetSizerProps): ReactElement {
   const stackBehind = bounds.max - committedThisStreet;
   const cost = to - committedThisStreet;
   const remainingAfter = bounds.max - to;
-  const isAllIn = to >= bounds.max && bounds.max > bounds.min;
+  const isAllIn = isAllInAt(to, bounds);
 
   /**
    * Invalid means text this control cannot size a bet with, never an out-of-range amount (the clamp
@@ -365,8 +367,6 @@ export function ActionBar(props: ActionBarProps): ReactElement {
   const draft = draftForBounds(stamped, bounds);
   const to = resolveDraft(draft?.text ?? null, bounds);
   const setDraft = (next: BetDraft): void => setStamped({ ...next, bounds });
-  const sizedCost = to - committedThisStreet;
-  const isAllIn = sized !== null && to >= bounds.max && bounds.max > bounds.min;
   const callCost = call?.costAtMin ?? toCall;
 
   const actFromBar = (action: TableAction): void => {
@@ -406,8 +406,6 @@ export function ActionBar(props: ActionBarProps): ReactElement {
       </div>
     );
   }
-
-  const sizedWord = sized?.kind === 'bet' ? 'Bet to' : 'Raise to';
 
   return (
     <div
@@ -458,13 +456,11 @@ export function ActionBar(props: ActionBarProps): ReactElement {
 
         {call === undefined ? null : (
           <ActionButton
-            label="Call"
+            label={call.allInAtMax ? 'Call all in' : 'Call'}
             cost={formatUnits(callCost)}
             // An all-in call says so (`allInAtMax`). In 3,000 hands, 3,569 of 15,137 call offers were all-in.
             spoken={
-              call.allInAtMax
-                ? `call ${formatUnits(callCost)}, which is all in`
-                : `call ${formatUnits(callCost)}`
+              call.allInAtMax ? `call all in, ${formatUnits(callCost)}` : `call ${formatUnits(callCost)}`
             }
             disabled={disabled}
             onClick={() => actFromBar({ type: 'call' })}
@@ -473,13 +469,7 @@ export function ActionBar(props: ActionBarProps): ReactElement {
 
         {sized === null ? null : (
           <ActionButton
-            label={`${sizedWord} ${formatChips(to)}`}
-            cost={formatUnits(sizedCost)}
-            spoken={
-              isAllIn
-                ? `${sizedWord.toLowerCase()} ${formatUnits(to)}, which is all in: ${formatUnits(sizedCost)} out of your stack`
-                : `${sizedWord.toLowerCase()} ${formatUnits(to)}, ${formatUnits(sizedCost)} out of your stack`
-            }
+            {...sizedButtonText(sized.kind, to, bounds, committedThisStreet)}
             primary
             disabled={disabled}
             onClick={commitSized}
