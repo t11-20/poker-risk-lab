@@ -222,27 +222,55 @@ export function significantRanks(score: HandScore): number[] {
 
 /** A spoken description, e.g. "flush, ace high" or "two pair, kings and threes". */
 export function describeScore(score: HandScore): string {
+  return describeToDepth(score, 0);
+}
+
+/**
+ * Describes `score` among other hands shown with it. Where one shares its description but not its
+ * score, every significant rank up to the one that splits them is named, so the text says why one beat
+ * the other; an equal score adds nothing, so a chop never reads as a win.
+ */
+export function describeAmong(score: HandScore, shown: readonly HandScore[]): string {
+  const mine = significantRanks(score);
+  let depth = 0;
+  for (const other of shown) {
+    if (other === score || categoryOf(other) !== categoryOf(score)) continue;
+    const theirs = significantRanks(other);
+    depth = Math.max(depth, mine.findIndex((rank, index) => rank !== theirs[index]) + 1);
+  }
+  return describeToDepth(score, depth);
+}
+
+/** `depth` is how many significant ranks to name, where the default names fewer. */
+function describeToDepth(score: HandScore, depth: number): string {
   const category = categoryOf(score);
-  const [r1 = 0, r2 = 0, r3 = 0] = significantRanks(score);
+  const ranks = significantRanks(score);
+  const [r1 = 0, r2 = 0] = ranks;
+  const kickers = (from: number, count: number): string => {
+    const named = ranks.slice(from, from + count).map((rank) => rankName(rank));
+    return `${named.join(' ')} kicker${named.length === 1 ? '' : 's'}`;
+  };
   switch (category) {
     case HAND_CATEGORY.straightFlush:
       return r1 === 12 ? 'royal flush' : `straight flush, ${rankName(r1)} high`;
     case HAND_CATEGORY.fourOfAKind:
-      return `four of a kind, ${rankName(r1, true)}`;
+      return `four of a kind, ${rankName(r1, true)}${depth > 1 ? `, ${kickers(1, 1)}` : ''}`;
     case HAND_CATEGORY.fullHouse:
       return `full house, ${rankName(r1, true)} full of ${rankName(r2, true)}`;
-    case HAND_CATEGORY.flush:
-      return `flush, ${rankName(r1)} high`;
+    case HAND_CATEGORY.flush: {
+      const named = ranks.slice(0, Math.max(depth, 1)).map((rank) => rankName(rank));
+      return `flush, ${named.join('-')} high`;
+    }
     case HAND_CATEGORY.straight:
       return r1 === 3 ? 'straight, five high (the wheel)' : `straight, ${rankName(r1)} high`;
     case HAND_CATEGORY.threeOfAKind:
-      return `three of a kind, ${rankName(r1, true)}`;
+      return `three of a kind, ${rankName(r1, true)}${depth > 1 ? `, ${kickers(1, depth - 1)}` : ''}`;
     case HAND_CATEGORY.twoPair:
-      return `two pair, ${rankName(r1, true)} and ${rankName(r2, true)}`;
+      return `two pair, ${rankName(r1, true)} and ${rankName(r2, true)}${depth > 2 ? `, ${kickers(2, 1)}` : ''}`;
     case HAND_CATEGORY.pair:
-      return `pair of ${rankName(r1, true)}, ${rankName(r2)} kicker`;
+      return `pair of ${rankName(r1, true)}, ${kickers(1, Math.max(depth - 1, 1))}`;
     default:
-      return `high card ${rankName(r1)}, ${rankName(r2)} ${rankName(r3)} kickers`;
+      return `high card ${rankName(r1)}, ${kickers(1, Math.max(depth - 1, 2))}`;
   }
 }
 
