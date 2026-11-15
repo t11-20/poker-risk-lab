@@ -5,18 +5,19 @@
  * The kept region runs from the street line to the row's in-flow bottom. When it does not fit, the
  * street line goes first, then the row's place in flow, so it sticks over the sizer's readout. The price
  * and `HandGlance` (cards and board) stay while the sizer's controls clear the stuck row, because a bet
- * must not be sized without seeing the price and the cards. Pure, so `node --test` drives it with
- * measured rectangles.
+ * must not be sized without seeing the price and the cards. A call or fold has no sizer, so the last of
+ * the price and the glance stands in for it. Pure, so `node --test` drives it with measured rectangles.
  */
 
 /** Viewport coordinates, as `getBoundingClientRect` gives them. */
 export interface SizerGeometry {
-  /** The top of the first thing in the band worth keeping: the street line, else the bar. */
+  /** The top of the first thing in the band worth keeping: the street line (at a call or fold the price). */
   readonly regionTop: number;
   /** The top of the price row (pot and price to continue), or null where it is not drawn. */
   readonly priceTop: number | null;
   /** The top of `HandGlance`, or null where it is not drawn. */
   readonly handTop: number | null;
+  /** The sizer's box, or with no sizer the box of the last of the price and the glance. */
   readonly sizerTop: number;
   readonly sizerBottom: number;
   /** The bottom of the sizer's slider and number field: what the stuck row must never cover. */
