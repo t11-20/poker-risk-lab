@@ -146,7 +146,7 @@ function readScenarioSpots(): readonly ScenarioSpot[] {
           heroCommitted === undefined ? 0 : asNumber(heroCommitted, `${id}: hero committed`),
         heroStack: asNumber(hero.stack, `${id}: hero stack`),
         opponentStacks: seats
-          .filter((seat) => seat.isHero !== true)
+          .filter((seat) => seat.isHero !== true && seat.folded !== true)
           .map((seat) => asNumber(seat.stack, `${id}: opponent stack`)),
         bigBlind: asNumber(scenario.bigBlind, `${id}.bigBlind`),
         smallBlind: asNumber(scenario.smallBlind, `${id}.smallBlind`),

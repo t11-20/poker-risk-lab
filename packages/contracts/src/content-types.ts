@@ -228,6 +228,8 @@ export interface ScenarioSeat {
   readonly stack: number;
   /** Only hero's cards are known to the learner. */
   readonly isHero?: boolean;
+  /** Out of the hand. Its chips stay in the pot, but it can no longer call, so it is not an opponent. */
+  readonly folded?: boolean;
   readonly holeCards?: string;
   readonly profile?: OpponentProfile;
 }

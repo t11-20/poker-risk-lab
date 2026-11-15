@@ -192,7 +192,9 @@ function heroLegalActions(
 
   // Aggression needs chips behind on both sides, the same `stack > 0` test the Coach's
   // `deriveLegalActions` makes, or the Lab offers a raise the Coach never priced.
-  const someOpponentCanAnswer = scenario.seats.some((seat) => seat.isHero !== true && seat.stack > 0);
+  const someOpponentCanAnswer = scenario.seats.some(
+    (seat) => seat.isHero !== true && seat.folded !== true && seat.stack > 0,
+  );
   // Keyed on the bet level, not on what is owed, so the big blind's option in a limped pot is a raise
   // floored at the raise floor, matching how the Coach names the action.
   if (someOpponentCanAnswer && ceiling > heroCommitted + Math.min(owed, hero.stack)) {

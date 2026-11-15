@@ -10,7 +10,7 @@
     "buttonSeat": 0,
     "seats": [
       { "seat": 0, "label": "BTN", "stack": 960, "isHero": true, "holeCards": "Ac2d" },
-      { "seat": 1, "label": "SB", "stack": 995, "profile": "unknown" },
+      { "seat": 1, "label": "SB", "stack": 995, "folded": true, "profile": "unknown" },
       { "seat": 2, "label": "BB", "stack": 940, "profile": "tight-aggressive" }
     ],
     "board": "8h 9c Td Jd Qs",
@@ -51,7 +51,7 @@
     "buttonSeat": 0,
     "seats": [
       { "seat": 0, "label": "BTN", "stack": 890, "profile": "tight-aggressive", "holeCards": "AsAd" },
-      { "seat": 1, "label": "SB", "stack": 995, "profile": "unknown" },
+      { "seat": 1, "label": "SB", "stack": 995, "folded": true, "profile": "unknown" },
       { "seat": 2, "label": "BB", "stack": 950, "isHero": true, "holeCards": "5h4h" }
     ],
     "board": "8h 7c 6d 2s Ah",
@@ -88,7 +88,7 @@
     "buttonSeat": 0,
     "seats": [
       { "seat": 0, "label": "BTN", "stack": 910, "profile": "tight-aggressive", "holeCards": "AdJs" },
-      { "seat": 1, "label": "SB", "stack": 995, "profile": "unknown" },
+      { "seat": 1, "label": "SB", "stack": 995, "folded": true, "profile": "unknown" },
       { "seat": 2, "label": "BB", "stack": 955, "isHero": true, "holeCards": "Ah9d" }
     ],
     "board": "Ac Kd 7s 3h 2c",
@@ -171,9 +171,9 @@
       { "seat": 0, "label": "BTN", "stack": 1000, "isHero": true, "holeCards": "AhJc" },
       { "seat": 1, "label": "SB", "stack": 995, "profile": "unknown" },
       { "seat": 2, "label": "BB", "stack": 990, "profile": "calling-station" },
-      { "seat": 3, "label": "UTG", "stack": 1000, "profile": "tight-aggressive" },
-      { "seat": 4, "label": "HJ", "stack": 1000, "profile": "tight-aggressive" },
-      { "seat": 5, "label": "CO", "stack": 1000, "profile": "unknown" }
+      { "seat": 3, "label": "UTG", "stack": 1000, "folded": true, "profile": "tight-aggressive" },
+      { "seat": 4, "label": "HJ", "stack": 1000, "folded": true, "profile": "tight-aggressive" },
+      { "seat": 5, "label": "CO", "stack": 1000, "folded": true, "profile": "unknown" }
     ],
     "board": "",
     "street": "preflop",
@@ -212,11 +212,11 @@
     "bigBlind": 10,
     "buttonSeat": 0,
     "seats": [
-      { "seat": 0, "label": "BTN", "stack": 1000, "profile": "unknown" },
-      { "seat": 1, "label": "SB", "stack": 995, "profile": "unknown" },
+      { "seat": 0, "label": "BTN", "stack": 1000, "folded": true, "profile": "unknown" },
+      { "seat": 1, "label": "SB", "stack": 995, "folded": true, "profile": "unknown" },
       { "seat": 2, "label": "BB", "stack": 990, "isHero": true, "holeCards": "Kh9h" },
-      { "seat": 3, "label": "UTG", "stack": 1000, "profile": "unknown" },
-      { "seat": 4, "label": "HJ", "stack": 1000, "profile": "unknown" },
+      { "seat": 3, "label": "UTG", "stack": 1000, "folded": true, "profile": "unknown" },
+      { "seat": 4, "label": "HJ", "stack": 1000, "folded": true, "profile": "unknown" },
       { "seat": 5, "label": "CO", "stack": 990, "profile": "calling-station" }
     ],
     "board": "",
@@ -293,7 +293,7 @@
     "buttonSeat": 0,
     "seats": [
       { "seat": 0, "label": "BTN", "stack": 975, "isHero": true, "holeCards": "9h8h" },
-      { "seat": 1, "label": "SB", "stack": 995, "profile": "unknown" },
+      { "seat": 1, "label": "SB", "stack": 995, "folded": true, "profile": "unknown" },
       { "seat": 2, "label": "BB", "stack": 950, "profile": "calling-station", "holeCards": "KdQs" }
     ],
     "board": "Kh 5h 2c",
@@ -330,7 +330,7 @@
     "buttonSeat": 0,
     "seats": [
       { "seat": 0, "label": "BTN", "stack": 955, "profile": "tight-aggressive", "holeCards": "KsQh" },
-      { "seat": 1, "label": "SB", "stack": 995, "profile": "unknown" },
+      { "seat": 1, "label": "SB", "stack": 995, "folded": true, "profile": "unknown" },
       { "seat": 2, "label": "BB", "stack": 975, "isHero": true, "holeCards": "9c8d" }
     ],
     "board": "Kd 7h 6s",
@@ -367,7 +367,7 @@
     "buttonSeat": 0,
     "seats": [
       { "seat": 0, "label": "BTN", "stack": 955, "isHero": true, "holeCards": "JcTd" },
-      { "seat": 1, "label": "SB", "stack": 995, "profile": "unknown" },
+      { "seat": 1, "label": "SB", "stack": 995, "folded": true, "profile": "unknown" },
       { "seat": 2, "label": "BB", "stack": 895, "profile": "tight-aggressive", "holeCards": "KdQs" }
     ],
     "board": "Kh 8s 2c 7d",
@@ -408,7 +408,7 @@
     "buttonSeat": 0,
     "seats": [
       { "seat": 0, "label": "BTN", "stack": 975, "isHero": true, "holeCards": "AhKs" },
-      { "seat": 1, "label": "SB", "stack": 995, "profile": "unknown" },
+      { "seat": 1, "label": "SB", "stack": 995, "folded": true, "profile": "unknown" },
       { "seat": 2, "label": "BB", "stack": 935, "profile": "tight-aggressive", "holeCards": "AdQc" }
     ],
     "board": "Qd 8c 3h",
@@ -449,7 +449,7 @@
     "buttonSeat": 0,
     "seats": [
       { "seat": 0, "label": "BTN", "stack": 935, "profile": "loose-aggressive", "holeCards": "AdKs" },
-      { "seat": 1, "label": "SB", "stack": 995, "profile": "unknown" },
+      { "seat": 1, "label": "SB", "stack": 995, "folded": true, "profile": "unknown" },
       { "seat": 2, "label": "BB", "stack": 975, "isHero": true, "holeCards": "Jh9h" }
     ],
     "board": "Th 9c 8h",

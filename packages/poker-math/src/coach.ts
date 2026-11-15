@@ -786,14 +786,21 @@ function buildSuggestion(
   if (marginInBigBlinds < 0.25 || intervalPoints > 2) confidence = 'low';
   else if (marginInBigBlinds < 1 || intervalPoints > 0.75) confidence = 'moderate';
 
-  // Only sizes within the one-big-blind margin of the best, so the range holds defensible sizes.
+  // Only sizes within the one-big-blind margin of the best, so the range holds defensible sizes. Sizes
+  // with one cost put the same chips at risk, the rest coming back uncalled, so only the smallest counts.
   const sizeMargin = input.bigBlind;
   const sameActionSizes = eligible
     .filter(
       (candidate) =>
         candidate.action === best.action &&
         candidate.to !== undefined &&
-        candidate.ev >= best.ev - sizeMargin,
+        candidate.ev >= best.ev - sizeMargin &&
+        !eligible.some(
+          (other) =>
+            other.action === candidate.action &&
+            other.cost === candidate.cost &&
+            (other.to ?? 0) < (candidate.to ?? 0),
+        ),
     )
     .map((candidate) => candidate.to ?? 0)
     .filter((value) => value > 0);

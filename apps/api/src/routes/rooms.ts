@@ -537,7 +537,7 @@ function spotFromScenario(scenarioId: string): HypotheticalSpot {
   }
   const committed = scenario.committedThisStreet ?? {};
   const pot = scenario.potBeforeStreet + Object.values(committed).reduce((sum, value) => sum + value, 0);
-  const opponent = scenario.seats.find((seat) => seat.isHero !== true);
+  const opponent = scenario.seats.find((seat) => seat.isHero !== true && seat.folded !== true);
   return {
     heroCards: parseCards(hero.holeCards),
     board: parseCards(scenario.board),

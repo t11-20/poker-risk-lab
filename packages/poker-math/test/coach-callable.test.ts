@@ -117,3 +117,27 @@ test('the half-pot break-even line prices the raise the ½-pot button offers', (
     'The ½-pot raise to 28 risks 28 to win 26. To break even it would need to win uncontested 39% of the time.',
   );
 });
+
+test('sizes that tie only because nobody can call more name the smallest of them', () => {
+  // Into 600 with 100 behind, every size from 200 up risks the 100 that can be called and is worth
+  // 0.35 x 600 + 0.65 x [ (37/44) x 800 - 100 ] = 210 + 0.65 x 572.7272727 = 582.2727273.
+  // Betting 10 is worth 210 + 0.65 x [ (37/44) x 620 - 10 ] = 542.39, more than a big blind behind.
+  const report = buildCoachReport(setVersusDraw({ pot: 600, opponentStacks: [100] }));
+  const tied = report.candidates.filter((candidate) => candidate.cost === 100);
+  assert.deepEqual(
+    tied.map((candidate) => candidate.to),
+    [200, 300, 400, 600, 2589],
+  );
+  for (const row of tied) assertChips(row.ev, 582.27272727, `EV of the bet to ${row.to}`);
+  assert.equal(report.suggestion.action, 'bet');
+  assert.deepEqual(report.suggestion.sizeRange, { min: 200, max: 200 });
+});
+
+test('control: an uncalled size within a big blind of the capped ones still widens the range', () => {
+  // With 210 behind, 300 and up risk 210 and are worth 210 + 0.65 x [ (37/44) x 1020 - 210 ] = 631.02.
+  // The 200 bet is called in full: 210 + 0.65 x [ (37/44) x 1000 - 200 ] = 626.59, 4.43 behind.
+  const input = setVersusDraw({ pot: 600, opponentStacks: [210] });
+  assertChips(rowAt(input, 300).row.ev, 631.02272727, 'EV of the bet to 300');
+  assertChips(rowAt(input, 200).row.ev, 626.59090909, 'EV of the bet to 200');
+  assert.deepEqual(buildCoachReport(input).suggestion.sizeRange, { min: 200, max: 300 });
+});

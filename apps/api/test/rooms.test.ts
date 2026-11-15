@@ -1015,6 +1015,31 @@ describe('the Legends endpoints', () => {
     }
     await test.app.close();
   });
+
+  it('compares against the opponent still in a scenario, not a seat that folded', async () => {
+    const test = await harness();
+    const { token, cookie } = await csrfPair(test.app);
+    // The cutoff folds with 5,000 behind and the small blind is all in, so nobody can call another chip.
+    const response = await test.app.inject({
+      method: 'POST',
+      url: '/api/v1/legends/compare',
+      payload: {
+        scenarioId: 'rk-when-survival-outweighs-chip-ev',
+        profileIds: ['calling-station'],
+        difficulty: 'educational',
+        trials: 1,
+      },
+      cookies: { prl_csrf: cookie },
+      headers: { 'x-csrf-token': token, origin: ALLOWED_ORIGIN },
+    });
+    assert.equal(response.statusCode, 200, response.payload);
+    const body = response.json() as {
+      analysis: { stackContext: { effectiveStack: number; explanation: string } };
+    };
+    assert.equal(body.analysis.stackContext.effectiveStack, 0);
+    assert.match(body.analysis.stackContext.explanation, /^Every opponent is already all in/);
+    await test.app.close();
+  });
 });
 
 /**

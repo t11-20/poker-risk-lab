@@ -360,7 +360,7 @@
     "bigBlind": 800,
     "buttonSeat": 3,
     "seats": [
-      { "seat": 3, "label": "BTN", "stack": 18000, "profile": "unknown" },
+      { "seat": 3, "label": "BTN", "stack": 18000, "folded": true, "profile": "unknown" },
       { "seat": 4, "label": "SB", "stack": 0, "profile": "loose-aggressive" },
       { "seat": 5, "label": "BB", "stack": 6400, "isHero": true, "holeCards": "KdTs" }
     ],
@@ -400,8 +400,8 @@
     "bigBlind": 2000,
     "buttonSeat": 3,
     "seats": [
-      { "seat": 2, "label": "CO", "stack": 5000, "profile": "nit" },
-      { "seat": 3, "label": "BTN", "stack": 7000, "profile": "unknown" },
+      { "seat": 2, "label": "CO", "stack": 5000, "folded": true, "profile": "nit" },
+      { "seat": 3, "label": "BTN", "stack": 7000, "folded": true, "profile": "unknown" },
       { "seat": 4, "label": "SB", "stack": 0, "profile": "loose-aggressive" },
       { "seat": 5, "label": "BB", "stack": 22000, "isHero": true, "holeCards": "KhQh" }
     ],
