@@ -47,7 +47,7 @@ import {
   verifyDeckReveal,
 } from '@prl/poker-engine';
 import type { Street as BettingStreetName, CoachAction, OpponentStack, ParsedRange } from '@prl/poker-math';
-import { buildCoachReport, deriveLegalActions, parseRange } from '@prl/poker-math';
+import { buildCoachReport, deriveLegalActions, opponentStackAt, parseRange } from '@prl/poker-math';
 import type { CoachTask } from '../workers/equity-worker.ts';
 
 /**
@@ -447,6 +447,7 @@ export function toHandSummary(input: HandSummaryInput): HandSummary {
 
 /** Mutable per-seat tally, rebuilt from the action log rather than read from anywhere. */
 interface ReplaySeat {
+  readonly startingStack: number;
   stack: number;
   committedThisStreet: number;
   folded: boolean;
@@ -512,6 +513,7 @@ function openTally(
   const tally = new Map<number, ReplaySeat>();
   for (const seat of seats) {
     tally.set(seat.seat, {
+      startingStack: seat.startingStack,
       stack: seat.startingStack,
       committedThisStreet: 0,
       folded: false,
@@ -625,11 +627,19 @@ function situationBefore(state: ReplayState, action: HandActionRow): Situation |
   // `contestablePotFor`, which may throw on such a seat.
   if (replaySeatStatus(actor) !== 'active' && replaySeatStatus(actor) !== 'allIn') return null;
 
+  // A seat has put in its starting stack less what it has left.
+  const table = [...state.seats].map(([seat, entry]) => ({
+    seat,
+    committedTotal: entry.startingStack - entry.stack,
+    committedThisStreet: entry.committedThisStreet,
+    status: replaySeatStatus(entry),
+    stack: entry.stack,
+  }));
   // All-in opponents still hold cards and can win the pot they paid for.
   const opponentStacks: OpponentStack[] = [];
   for (const [seat, entry] of state.seats) {
     if (seat === action.seat || entry.folded || !entry.dealtIn) continue;
-    opponentStacks.push({ behind: entry.stack, committedThisStreet: entry.committedThisStreet });
+    opponentStacks.push(opponentStackAt(table, seat));
   }
 
   const potBefore = potTotal(state);
