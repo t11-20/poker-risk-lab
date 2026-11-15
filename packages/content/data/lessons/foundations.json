@@ -320,7 +320,7 @@
         "items": [
           "You decide with more information. Every player before you has already checked, bet, raised or folded, and each of those is evidence about what they hold.",
           "You control the size of the pot. Acting last means you have the final say on whether a street stays cheap or gets expensive.",
-          "You can end the hand. When everybody checks to you, a bet takes the pot immediately and nobody gets to respond.",
+          "You can end the hand. When everybody checks to you, a bet takes the pot immediately unless somebody calls or raises, and a check ends the street with nothing more to pay.",
           "You fold more cheaply. Deciding after you have already put units in this street costs more than deciding before you commit them, and out of position you keep being the one who has to commit first."
         ]
       },
@@ -585,7 +585,7 @@
       { "kind": "heading", "text": "Counterfeiting, concretely" },
       {
         "kind": "prose",
-        "text": "Suppose you hold an ace and a deuce, and the flop brings an ace, a seven and a deuce. You have two pair — aces and deuces — and you are ahead of anyone holding a lone ace. Now a second seven arrives. Your best five cards are now the two aces, the two sevens and the best remaining card. So are theirs. Your deuce, which was doing all the work a moment ago, does nothing whatsoever: the board's pair of sevens replaced your pair of deuces, and every opponent with an ace shares your entire hand. Your deuces were counterfeited."
+        "text": "Suppose you hold an ace and a deuce, and the flop brings an ace, a seven and a deuce. You have two pair — aces and deuces — and you are ahead of anyone holding a lone ace. Now a second seven arrives. Your best five cards are now the two aces, the two sevens and the best remaining card. So are theirs, and their best remaining card is their kicker. Your deuce, which was doing all the work a moment ago, is now the lowest kicker there is: the board's pair of sevens replaced your pair of deuces, and every opponent with an ace and any other kicker now beats you. Your deuces were counterfeited."
       },
       {
         "kind": "liveCalculation",

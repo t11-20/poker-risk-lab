@@ -127,6 +127,23 @@ function engineMinimumRaiseAfterOpen(smallBlind: number, bigBlind: number, openT
 
 const scoreOf = (cards: string): number => evaluate(parseCards(cards));
 
+/** Hero's cards, the board and the opponent's range as the scenario stores them, so a test cannot retype them. */
+function storedSpot(id: string): { hero: Card[]; board: Card[]; range: ReturnType<typeof parseRange> } {
+  const scenario = content().scenarios.find((one) => one.id === id);
+  assert.ok(scenario !== undefined, `no scenario "${id}"`);
+  const holeCards = scenario.seats.find((seat) => seat.isHero === true)?.holeCards;
+  assert.ok(holeCards !== undefined, `${id} shows hero no cards`);
+  const hero = parseCards(holeCards);
+  const board = parseCards(scenario.board);
+  const spec = scenario.opponentRange;
+  assert.ok(spec.kind !== 'topPercent', `${id} must name the opponent's holdings`);
+  const range =
+    spec.kind === 'exact'
+      ? exactRange(parseCards(spec.cards))
+      : parseRange(spec.notation, [...hero, ...board]);
+  return { hero, board, range };
+}
+
 interface TaughtFigure {
   readonly where: string;
   readonly quote: string;
@@ -654,8 +671,9 @@ const TAUGHT_FIGURES: readonly TaughtFigure[] = [
   {
     where: 'lesson reading-the-board — a counterfeited deuce is the lowest kicker, not a split',
     quote:
-      'So are theirs. Your deuce, which was doing all the work a moment ago, does nothing whatsoever: the ' +
-      "board's pair of sevens replaced your pair of deuces, and every opponent with an ace shares your entire hand.",
+      'So are theirs, and their best remaining card is their kicker. Your deuce, which was doing all the work ' +
+      "a moment ago, is now the lowest kicker there is: the board's pair of sevens replaced your pair of " +
+      'deuces, and every opponent with an ace and any other kicker now beats you.',
     source: () => lessonText('reading-the-board'),
     expect: () => {
       const board = 'As 7c 2h 7d';
@@ -665,7 +683,7 @@ const TAUGHT_FIGURES: readonly TaughtFigure[] = [
         return them > hero ? 'beats you' : them === hero ? 'shares your entire hand' : 'loses to you';
       };
       assert.equal(against('2d'), 'shares your entire hand', 'only the other deuce splits');
-      const verdicts = new Set(['3c', '5c', '8c', 'Tc', 'Kc'].map(against));
+      const verdicts = new Set([...'3456789TJQK'].map((rank) => against(`${rank}c`)));
       assert.equal(verdicts.size, 1, 'every other kicker gets the same verdict');
       return [...verdicts];
     },
@@ -673,32 +691,36 @@ const TAUGHT_FIGURES: readonly TaughtFigure[] = [
   {
     where: 'scenario eq-dominated-flush-draw-turn — the clean outs split between the gap and the pairs',
     quote:
-      'Treating the extra straight card as a bonus on top of the flush draw, when against this opponent it is ' +
-      'doing all of the work.',
+      'Treating the extra straight card as a bonus on top of the flush draw, when against this opponent the ' +
+      'flush draw is worth nothing and the three cards that fill the gap, with the six that pair you, are all ' +
+      'that is left.',
     source: () => scenarioText('eq-dominated-flush-draw-turn'),
     expect: () => {
-      const outs = computeOuts({
-        heroCards: parseCards('6d 5d'),
-        board: parseCards('Ad 9d 4c 2s'),
-        opponent: exactRange(parseCards('Kd Qd')),
-      });
-      const pairing = outs.clean.filter((out) => '65'.includes(out.label[0] ?? '')).length;
-      assert.equal(outs.cleanCount, 9);
-      return [wordFor(outs.cleanCount - pairing), wordFor(pairing)];
+      const { hero, board, range } = storedSpot('eq-dominated-flush-draw-turn');
+      const outs = computeOuts({ heroCards: hero, board, opponent: range });
+      const heroScore = (card: Card): number => evaluate([...hero, ...board, card]);
+      const pairing = outs.clean.filter((out) => categoryOf(heroScore(out.card)) === HAND_CATEGORY.pair);
+      const straights = outs.clean.filter(
+        (out) => categoryOf(heroScore(out.card)) === HAND_CATEGORY.straight,
+      );
+      assert.equal(
+        pairing.length + straights.length,
+        outs.cleanCount,
+        'every clean out pairs or fills the gap',
+      );
+      return [wordFor(straights.length), wordFor(pairing.length)];
     },
   },
   {
     where: 'scenario rk-semi-bluff-raise-on-the-turn — how many sets the stated range holds',
-    quote: 'The button bets again on this turn only with overpairs, top pair and the two sets',
+    quote:
+      'The button bets again on this turn only with pocket aces or queens, top pair, two pair and the three sets',
     source: () => scenarioText('rk-semi-bluff-raise-on-the-turn'),
     expect: () => {
-      const board = 'Kh 8h 5s 2c';
-      const range = parseRange('AA, KK, QQ, KQs, KQo, KJs, KJo, 88, 55, K8s', parseCards(`Qh Jh ${board}`));
+      const { board, range } = storedSpot('rk-semi-bluff-raise-on-the-turn');
       const sets = new Set(
         range.combos
-          .filter(
-            (combo) => categoryOf(evaluate([...combo, ...parseCards(board)])) === HAND_CATEGORY.threeOfAKind,
-          )
+          .filter((combo) => categoryOf(evaluate([...combo, ...board])) === HAND_CATEGORY.threeOfAKind)
           .map((combo) => classOfCombo(combo).label),
       );
       return [`${wordFor(sets.size)} sets`];
@@ -707,31 +729,45 @@ const TAUGHT_FIGURES: readonly TaughtFigure[] = [
   {
     where: 'scenario eq-flush-draw-turn-small-bet — which underpairs a queen and a jack on the river beat',
     quote:
-      'a queen or a jack on the river beats the underpairs it does not itself pair, and the hands with nothing',
+      'a queen on the river beats JJ, TT and 99, a jack beats TT and 99, and either one beats the hands with nothing',
     source: () => scenarioText('eq-flush-draw-turn-small-bet'),
     expect: () => {
-      const board = 'Kh 7h 3c 2s';
-      const underpairs = ['QsQd', 'JsJd', 'TsTd', '9s9d'];
-      const beatenBy = (river: string): string => {
-        const hero = scoreOf(`Qh Jh ${board} ${river}`);
-        const beaten = underpairs.filter((pair) => scoreOf(`${pair} ${board} ${river}`) < hero);
-        const names = beaten.map((pair) => `${pair[0]}${pair[2]}`);
+      const { hero, board, range } = storedSpot('eq-flush-draw-turn-small-bet');
+      const onTheTurn = (combo: readonly Card[]): number => categoryOf(evaluate([...combo, ...board]));
+      const classes = new Map<string, Card[][]>();
+      for (const combo of range.combos) {
+        const label = classOfCombo(combo).label;
+        classes.set(label, [...(classes.get(label) ?? []), [...combo]]);
+      }
+      const isPair = (label: string): boolean => label.length === 2 && label[0] === label[1];
+      const underpairs = [...classes].filter(
+        ([label, combos]) =>
+          isPair(label) && combos.every((combo) => onTheTurn(combo) === HAND_CATEGORY.pair),
+      );
+      const nothing = range.combos.filter((combo) => onTheTurn(combo) === HAND_CATEGORY.highCard);
+      assert.ok(
+        underpairs.length > 0 && nothing.length > 0,
+        'the range holds underpairs and hands with nothing',
+      );
+      const beatenBy = (riverText: string): string => {
+        const river = parseCards(riverText);
+        const heroScore = evaluate([...hero, ...board, ...river]);
+        const loses = (combo: readonly Card[]): boolean =>
+          evaluate([...combo, ...board, ...river]) < heroScore;
+        for (const combo of nothing) assert.ok(loses(combo), `${riverText} beats a hand with nothing`);
+        const names = underpairs
+          .filter(([, combos]) => combos.filter((combo) => !combo.includes(river[0] as Card)).every(loses))
+          .map(([label]) => label);
         return names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : (names[0] ?? '');
       };
-      for (const nothing of ['As 5s', '6s 5s']) {
-        for (const river of ['Qc', 'Jc']) {
-          const hero = scoreOf(`Qh Jh ${board} ${river}`);
-          assert.ok(scoreOf(`${nothing} ${board} ${river}`) < hero, `${river} beats ${nothing}`);
-        }
-      }
       return [`a queen on the river beats ${beatenBy('Qc')}`, `a jack beats ${beatenBy('Jc')}`];
     },
   },
   {
     where: 'glossary rule-of-2-and-4 — the four-times form overstates only from seven outs up',
     quote:
-      'The four-times form OVERSTATES, because doubling the one-card chance counts the runouts that hit on ' +
-      'both cards twice',
+      'The four-times form OVERSTATES from seven outs up, because doubling the one-card chance counts the ' +
+      'runouts that hit on both cards twice',
     source: () => glossaryText('rule-of-2-and-4'),
     expect: () => {
       const error = (outs: number): number =>
@@ -745,7 +781,9 @@ const TAUGHT_FIGURES: readonly TaughtFigure[] = [
   },
   {
     where: 'lesson fold-equity — a bluff that works wins the same pot at any size',
-    quote: 'bet smaller and you need them less often but collect less each time',
+    quote:
+      'bet smaller and you need them less often, though a fold still wins the same pot and smaller bets tend ' +
+      'to get fewer of them',
     source: () => lessonText('fold-equity'),
     expect: () => {
       const wonOnAFold = (betSize: number): number =>

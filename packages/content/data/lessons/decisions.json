@@ -273,7 +273,7 @@
       {
         "kind": "formula",
         "expression": "break-even fold frequency for a pure bluff = bet / (pot + bet)",
-        "explanation": "The same shape as break-even equity, with your bet in the place of their call. This quantity is usually called alpha. Bet larger and you need folds more often; bet smaller and you need them less often but collect less each time. Its complement, the pot divided by pot plus bet, is how often the player facing the bet has to continue for your bluffs not to be free - the minimum defence frequency, which is a property of a whole strategy and not an instruction about any one hand."
+        "explanation": "The same shape as break-even equity, with your bet in the place of their call. This quantity is usually called alpha. Bet larger and you need folds more often; bet smaller and you need them less often, though a fold still wins the same pot and smaller bets tend to get fewer of them. Its complement, the pot divided by pot plus bet, is how often the player facing the bet has to continue for your bluffs not to be free - the minimum defence frequency, which is a property of a whole strategy and not an instruction about any one hand."
       },
       {
         "kind": "liveCalculation",
@@ -936,7 +936,7 @@
     "keyTakeaways": [
       "Uncertainty about a win rate shrinks with the square root of the number of hands, so cutting it in half takes four times as many hands.",
       "Samples in the tens of thousands of hands usually leave an interval wide enough to contain both a winner and a loser, so the midpoint alone is not a result.",
-      "Risk of ruin falls exponentially with bankroll and with edge, and rises with the square of the standard deviation, which makes variance the dominant term.",
+      "Risk of ruin falls exponentially with bankroll and with edge, and rises with the standard deviation, which enters the exponent squared and makes variance the dominant term.",
       "Tripling the edge and tripling the bankroll reduce risk of ruin identically, so the buffer is the lever available to everyone.",
       "The model assumes a fixed edge, normal results, unchanged stakes, no tilt and infinite play, and those assumptions do not all point the same way. Fat tails and tilt make the real risk higher than the number shown; moving down when the bankroll shrinks, and playing a finite stretch rather than for ever, both make it lower."
     ],
