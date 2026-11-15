@@ -1104,6 +1104,112 @@ async function auditStickyBarOcclusion(page) {
 }
 
 /**
+ * Below 600px the Coach's closed sheet is a fixed 4rem strip. At 360x780 "Deal me in" rested at y 705
+ * to 749 under a strip starting at 716, so a tap on it opened the Coach. Scroll padding cannot help a
+ * control that is already in the first viewport. `elementFromPoint` checks what a tap hits, at both
+ * ends of the page, and the decision fixture proves the strip is still there when it has a table.
+ */
+async function auditCoachPeekOcclusion(page) {
+  const VIEWPORTS = [
+    [360, 780],
+    [390, 844],
+  ];
+  const PAGES = [
+    { path: '/play', state: 'idle', needs: 'Deal me in' },
+    { path: '/play?state=error', state: 'error', needs: null },
+    { path: '/play?state=decision', state: 'ready', needs: null },
+  ];
+  const FOCUSABLE =
+    'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), ' +
+    'textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
+  try {
+    for (const [width, height] of VIEWPORTS) {
+      section(
+        `Narrow viewport — nothing on /play rests under the Coach peek  ${DIM}${width}x${height}${RESET}`,
+      );
+      await page.send('Emulation.setDeviceMetricsOverride', {
+        width,
+        height,
+        deviceScaleFactor: 2,
+        mobile: true,
+      });
+      for (const { path, state, needs } of PAGES) {
+        const label = `Coach peek: ${path} at ${width}x${height}`;
+        await page.goto(`${WEB_ORIGIN}${path}`);
+        const probe = (end) =>
+          page.evaluate(
+            `(() => {
+              const root = document.documentElement;
+              root.style.scrollBehavior = 'auto';
+              window.scrollTo(0, ${end ? 'root.scrollHeight' : '0'});
+              const handle = document.querySelector('.prl-play__handle');
+              const hb = handle?.getBoundingClientRect();
+              const handleHit =
+                hb !== undefined && hb.height > 0 &&
+                handle.contains(document.elementFromPoint(hb.left + hb.width / 2, hb.top + hb.height / 2));
+              const controls = [...document.querySelectorAll('main :is(${FOCUSABLE})')]
+                .filter((element) => element.closest('.prl-play__coach') === null)
+                .map((element) => ({ element, box: element.getBoundingClientRect() }))
+                // A centre past the viewport's edge is not on screen to tap.
+                .filter(({ box }) => {
+                  const y = box.top + box.height / 2;
+                  return box.width >= 4 && box.height >= 4 && y > 0 && y < innerHeight;
+                });
+              const covered = controls
+                .map(({ element, box }) => ({
+                  name: (element.textContent || element.getAttribute('aria-label') || '').trim().slice(0, 44),
+                  top: Math.round(box.top),
+                  bottom: Math.round(box.bottom),
+                  hit: document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2),
+                  element,
+                }))
+                .filter((c) => !c.element.contains(c.hit))
+                .map(({ name, top, bottom, hit }) => ({ name, top, bottom, hit: hit?.getAttribute('class') || hit?.tagName }));
+              return {
+                state: document.querySelector('.prl-play__stage')?.dataset.state ?? null,
+                names: controls.map(({ element }) => (element.textContent ?? '').trim()),
+                handleHit,
+                covered,
+              };
+            })()`,
+          );
+        const top = await probe(false);
+        const end = await probe(true);
+        if (top.state !== state) {
+          bad(label, `expected the stage in state "${state}", found "${top.state}", so this checked nothing`);
+          continue;
+        }
+        if (top.names.length === 0 || (needs !== null && !top.names.includes(needs))) {
+          bad(
+            label,
+            `no ${needs === null ? 'control' : `"${needs}"`} was on screen to tap, so nothing was checked`,
+          );
+          continue;
+        }
+        if (state === 'ready' && !top.handleHit) {
+          bad(label, 'the Coach peek is missing or covered while the table has a decision to price');
+          continue;
+        }
+        const covered = [...top.covered, ...end.covered];
+        if (covered.length === 0) {
+          ok(`${label} — ${top.names.length} control(s) on screen, each takes a tap at its centre`);
+        } else {
+          bad(
+            label,
+            covered
+              .slice(0, 3)
+              .map((c) => `"${c.name}" at y ${c.top}-${c.bottom}: a tap at its centre lands on ${c.hit}`)
+              .join('; '),
+          );
+        }
+      }
+    }
+  } finally {
+    await page.send('Emulation.clearDeviceMetricsOverride');
+  }
+}
+
+/**
  * Sits down at a real table by keyboard with "Deal me in", then acts. The fixture route only proves the
  * controls answer keys, because `TableStage` sends nothing to a server. Without an API this warns.
  */
@@ -1488,7 +1594,7 @@ async function main() {
           bad(`${route.title}: audit`, error instanceof Error ? error.message : String(error));
         }
       }
-      journeys += 3;
+      journeys += 4;
       try {
         await auditNarrowViewport(page);
       } catch (error) {
@@ -1498,6 +1604,11 @@ async function main() {
         await auditStickyBarOcclusion(page);
       } catch (error) {
         bad('Sticky bar: audit', error instanceof Error ? error.message : String(error));
+      }
+      try {
+        await auditCoachPeekOcclusion(page);
+      } catch (error) {
+        bad('Coach peek: audit', error instanceof Error ? error.message : String(error));
       }
       try {
         await playOneHandByKeyboard(page);
