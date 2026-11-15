@@ -47,6 +47,7 @@ import {
   deriveLegalActions,
   expandAssumedRange,
   LIVE_COACH_POLICY,
+  opponentsAtBetLevel,
   type ParsedRange,
 } from '@prl/poker-math';
 import { AppError } from '../errors.ts';
@@ -719,6 +720,9 @@ export function compareProfilesOnSpot(request: CompareRequest): CompareProfilesR
 function coachReportFor(request: CompareRequest): CoachReport {
   const spot = request.spot;
   const range = opponentRangeFor(request);
+  const opponentStacks = opponentsAtBetLevel({ toCall: spot.toCall, heroCommittedThisStreet: 0 }, [
+    spot.opponentStack,
+  ]);
   return buildCoachReport({
     heroCards: spot.heroCards,
     board: spot.board,
@@ -731,20 +735,20 @@ function coachReportFor(request: CompareRequest): CoachReport {
       toCall: spot.toCall,
       heroCommittedThisStreet: 0,
       heroStack: spot.heroStack,
-      opponentStacks: [spot.opponentStack],
+      opponentStacks,
     }),
     toCall: spot.toCall,
     // Earlier streets land in `pot`, so hero has nothing out on this street.
     heroCommittedThisStreet: 0,
     heroStack: spot.heroStack,
-    opponentStacks: [spot.opponentStack],
+    opponentStacks,
     bigBlind: spot.bigBlind,
     // No `HandState` to ask, so derived.
     legalActions: deriveLegalActions({
       toCall: spot.toCall,
       heroCommittedThisStreet: 0,
       heroStack: spot.heroStack,
-      opponentStacks: [spot.opponentStack],
+      opponentStacks,
     }),
   });
 }

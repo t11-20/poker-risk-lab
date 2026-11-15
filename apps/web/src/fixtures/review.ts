@@ -334,11 +334,11 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           ],
         },
         stackContext: {
-          effectiveStack: 990,
-          spr: 33,
+          effectiveStack: 1000,
+          spr: 33.333333333333336,
           potOddsOfferedByPotSizedBet: 0.3333333333333333,
           explanation:
-            'The deepest opponent has only 990, so at most 990 can change hands even though you have 1000. The 10 above that is not in play this hand — nobody can pay you for it and nobody can take it. With 2 opponents each one has its own effective stack, the smaller of yours and theirs. 990 is the largest of them, so it is the most that can move against any single player and not the most you can lose across all of them. SPR = effective stack / pot = 990 / 30 = 33. There are 33 pots behind, which is the "very-high" band. Almost all of the money is still behind. The pot in front of you is small compared with what can still go in, so the cost of a later error dwarfs what is at stake right now. SPR describes the shape of the decision, not the answer to it: your hand, their range and position all still apply.',
+            'Chips already bet this street are still in play: the deepest opponent has 990 behind and 10 more than you in front of them, so 1000 can still come against you. Yours is the shorter stack: you have 1000 and the deepest opponent has 1000, so at most 1000 can change hands. You can neither win nor lose more than you brought to the hand. With 2 opponents each one has its own effective stack, the smaller of yours and theirs. 1000 is the largest of them, so it is the most that can move against any single player and not the most you can lose across all of them. SPR = effective stack / pot = 1000 / 30 = 33.33. There are 33.33 pots behind, which is the "very-high" band. Almost all of the money is still behind. The pot in front of you is small compared with what can still go in, so the cost of a later error dwarfs what is at stake right now. SPR describes the shape of the decision, not the answer to it: your hand, their range and position all still apply.',
         },
         assumptions: [
           'The hand is played to the river with no further betting — this is raw equity, not the value of the spot.',
@@ -371,7 +371,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
         },
         teachingNotes: [
           'The pot is laying you 1.5 to 1, so you need 40.0% to break even on a call. That number depends only on the price — not on your cards.',
-          'At an SPR of 33.0 there is a lot of money left behind, so hands that can keep improving are worth more than their current strength suggests.',
+          'At an SPR of 33.3 there is a lot of money left behind, so hands that can keep improving are worth more than their current strength suggests.',
         ],
       },
     },
@@ -563,11 +563,11 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           ],
         },
         stackContext: {
-          effectiveStack: 875,
-          spr: 4.487179487179487,
+          effectiveStack: 940,
+          spr: 4.82051282051282,
           potOddsOfferedByPotSizedBet: 0.3333333333333333,
           explanation:
-            'The deepest opponent has only 875, so at most 875 can change hands even though you have 940. The 65 above that is not in play this hand — nobody can pay you for it and nobody can take it. SPR = effective stack / pot = 875 / 195 = 4.49. There are 4.49 pots behind, which is the "medium" band. A bet and a raise, or two streets of betting, gets the stacks in. There is room for about one more decision after this one and not much more. SPR describes the shape of the decision, not the answer to it: your hand, their range and position all still apply.',
+            'Chips already bet this street are still in play: the deepest opponent has 875 behind and 65 more than you in front of them, so 940 can still come against you. Yours is the shorter stack: you have 940 and the deepest opponent has 940, so at most 940 can change hands. You can neither win nor lose more than you brought to the hand. SPR = effective stack / pot = 940 / 195 = 4.82. There are 4.82 pots behind, which is the "medium" band. A bet and a raise, or two streets of betting, gets the stacks in. There is room for about one more decision after this one and not much more. SPR describes the shape of the decision, not the answer to it: your hand, their range and position all still apply.',
         },
         assumptions: [
           'The hand is played to the river with no further betting — this is raw equity, not the value of the spot.',
@@ -762,11 +762,11 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           ],
         },
         stackContext: {
-          effectiveStack: 745,
-          spr: 1.9102564102564104,
+          effectiveStack: 875,
+          spr: 2.2435897435897436,
           potOddsOfferedByPotSizedBet: 0.3333333333333333,
           explanation:
-            'The deepest opponent has only 745, so at most 745 can change hands even though you have 875. The 130 above that is not in play this hand — nobody can pay you for it and nobody can take it. SPR = effective stack / pot = 745 / 390 = 1.91. There are 1.91 pots behind, which is the "low" band. One pot-sized bet and a call puts the stacks in. The live question on this street is whether you are committing, not what happens on the next one. SPR describes the shape of the decision, not the answer to it: your hand, their range and position all still apply.',
+            'Chips already bet this street are still in play: the deepest opponent has 745 behind and 130 more than you in front of them, so 875 can still come against you. Yours is the shorter stack: you have 875 and the deepest opponent has 875, so at most 875 can change hands. You can neither win nor lose more than you brought to the hand. SPR = effective stack / pot = 875 / 390 = 2.24. There are 2.24 pots behind, which is the "low" band. One pot-sized bet and a call puts the stacks in. The live question on this street is whether you are committing, not what happens on the next one. SPR describes the shape of the decision, not the answer to it: your hand, their range and position all still apply.',
         },
         assumptions: [
           'The hand is played to the river with no further betting — this is raw equity, not the value of the spot.',
@@ -794,7 +794,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
         teachingNotes: [
           'The pot is laying you 3.0 to 1, so you need 25.0% to break even on a call. That number depends only on the price — not on your cards.',
           'The rule of 2 and 4 gives 24% on your 12 cards of clean outs, understating the exact chance of hitting one of them by 2.1 points. Your equity here is 32.1%, which is a different question again: hitting is not the same as winning.',
-          'At an SPR of 1.9 the stacks are shallow enough that one more bet commits them. Decisions like that are effectively made now rather than later.',
+          'At an SPR of 2.2 the stacks are shallow enough that one more bet commits them. Decisions like that are effectively made now rather than later.',
           'A profitable call can still lose more often than it wins: you are under 50% here and the price is lower than that. Losing this hand would not make the call wrong.',
         ],
       },
@@ -929,11 +929,11 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           ],
         },
         stackContext: {
-          effectiveStack: 545,
-          spr: 0.7569444444444444,
+          effectiveStack: 745,
+          spr: 1.0347222222222223,
           potOddsOfferedByPotSizedBet: 0.3333333333333333,
           explanation:
-            'The deepest opponent has only 545, so at most 545 can change hands even though you have 745. The 200 above that is not in play this hand — nobody can pay you for it and nobody can take it. SPR = effective stack / pot = 545 / 720 = 0.76. There are 0.76 pots behind, which is the "very-low" band. The pot is already larger than what is behind, so a single bet gets the rest of the stack in. There is no later street to hold chips back for: at this depth the decision is effectively made now. SPR describes the shape of the decision, not the answer to it: your hand, their range and position all still apply.',
+            'Chips already bet this street are still in play: the deepest opponent has 545 behind and 200 more than you in front of them, so 745 can still come against you. Yours is the shorter stack: you have 745 and the deepest opponent has 745, so at most 745 can change hands. You can neither win nor lose more than you brought to the hand. SPR = effective stack / pot = 745 / 720 = 1.03. There are 1.03 pots behind, which is the "low" band. One pot-sized bet and a call puts the stacks in. The live question on this street is whether you are committing, not what happens on the next one. SPR describes the shape of the decision, not the answer to it: your hand, their range and position all still apply.',
         },
         assumptions: [
           'The hand is played to the river with no further betting — this is raw equity, not the value of the spot.',
@@ -959,7 +959,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
         },
         teachingNotes: [
           'The pot is laying you 3.6 to 1, so you need 21.7% to break even on a call. That number depends only on the price — not on your cards.',
-          'At an SPR of 0.8 the stacks are shallow enough that one more bet commits them. Decisions like that are effectively made now rather than later.',
+          'At an SPR of 1.0 the stacks are shallow enough that one more bet commits them. Decisions like that are effectively made now rather than later.',
         ],
       },
     },
@@ -1171,11 +1171,11 @@ export const REVIEW_HAND_FOLDED: HandReviewResponse = {
           ],
         },
         stackContext: {
-          effectiveStack: 990,
-          spr: 33,
+          effectiveStack: 1000,
+          spr: 33.333333333333336,
           potOddsOfferedByPotSizedBet: 0.3333333333333333,
           explanation:
-            'The deepest opponent has only 990, so at most 990 can change hands even though you have 1000. The 10 above that is not in play this hand — nobody can pay you for it and nobody can take it. With 2 opponents each one has its own effective stack, the smaller of yours and theirs. 990 is the largest of them, so it is the most that can move against any single player and not the most you can lose across all of them. SPR = effective stack / pot = 990 / 30 = 33. There are 33 pots behind, which is the "very-high" band. Almost all of the money is still behind. The pot in front of you is small compared with what can still go in, so the cost of a later error dwarfs what is at stake right now. SPR describes the shape of the decision, not the answer to it: your hand, their range and position all still apply.',
+            'Chips already bet this street are still in play: the deepest opponent has 990 behind and 10 more than you in front of them, so 1000 can still come against you. Yours is the shorter stack: you have 1000 and the deepest opponent has 1000, so at most 1000 can change hands. You can neither win nor lose more than you brought to the hand. With 2 opponents each one has its own effective stack, the smaller of yours and theirs. 1000 is the largest of them, so it is the most that can move against any single player and not the most you can lose across all of them. SPR = effective stack / pot = 1000 / 30 = 33.33. There are 33.33 pots behind, which is the "very-high" band. Almost all of the money is still behind. The pot in front of you is small compared with what can still go in, so the cost of a later error dwarfs what is at stake right now. SPR describes the shape of the decision, not the answer to it: your hand, their range and position all still apply.',
         },
         assumptions: [
           'The hand is played to the river with no further betting — this is raw equity, not the value of the spot.',
@@ -1208,7 +1208,7 @@ export const REVIEW_HAND_FOLDED: HandReviewResponse = {
         },
         teachingNotes: [
           'The pot is laying you 1.5 to 1, so you need 40.0% to break even on a call. That number depends only on the price — not on your cards.',
-          'At an SPR of 33.0 there is a lot of money left behind, so hands that can keep improving are worth more than their current strength suggests.',
+          'At an SPR of 33.3 there is a lot of money left behind, so hands that can keep improving are worth more than their current strength suggests.',
         ],
       },
     },

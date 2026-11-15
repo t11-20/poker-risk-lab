@@ -148,7 +148,10 @@ export function coachSpotForView(
       toCall: view.amountToCall,
       heroCommittedThisStreet: own.committedThisStreet,
       heroStack: own.stack,
-      opponentStacks: opponents.map((seat) => seat.stack),
+      opponentStacks: opponents.map((seat) => ({
+        behind: seat.stack,
+        committedThisStreet: seat.committedThisStreet,
+      })),
       bigBlind: view.config.bigBlind,
       minimumRaiseTo: view.minimumRaiseTo,
       legalActions,

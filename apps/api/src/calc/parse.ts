@@ -13,6 +13,7 @@ import {
   choose,
   deriveContestablePot,
   deriveLegalActions,
+  opponentsAtBetLevel,
   type ParsedRange,
   parseRange,
   RangeParseError,
@@ -496,7 +497,10 @@ export function parseCoachRequest(body: CoachRequest, limits: WorkLimits = DEFAU
     );
   }
   // An unstated stack matches hero's, which invents no depth advantage. The report states it.
-  const opponentStacks = stacks.length > 0 ? [...stacks] : situation.opponents.map(() => body.heroStack);
+  const opponentStacks = opponentsAtBetLevel(
+    { toCall: body.toCall, heroCommittedThisStreet: 0 },
+    stacks.length > 0 ? stacks : situation.opponents.map(() => body.heroStack),
+  );
 
   const work = planWork(
     situation.spec.board.length,

@@ -32,7 +32,7 @@ function spot(toCall: number): CoachInput {
     toCall,
     heroCommittedThisStreet: 0,
     heroStack: 400,
-    opponentStacks: [400],
+    opponentStacks: [{ behind: 400, committedThisStreet: toCall }],
     bigBlind: 10,
   };
 }

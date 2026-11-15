@@ -27,7 +27,7 @@ test('top two pair facing a river bet reads fold, not a raise the opponent gets 
     pot: 900,
     toCall: 400,
     heroStack: 560,
-    opponentStacks: [160],
+    opponentStacks: [{ behind: 160, committedThisStreet: 400 }],
     bigBlind: 20,
   });
   assert.equal(report.equity.heroEquity, 1 / 6);
@@ -57,7 +57,7 @@ test('a flush draw facing a small bet reads call, and names the raise and the fo
     pot: 145,
     toCall: 25,
     heroStack: 500,
-    opponentStacks: [475],
+    opponentStacks: [{ behind: 475, committedThisStreet: 25 }],
     bigBlind: 10,
   });
   const e = report.equity.heroEquity;
@@ -88,7 +88,7 @@ test('control: top pair against a check-raising range at 70 big blinds stays a s
     toCall: 135,
     heroCommittedThisStreet: 55,
     heroStack: 1345,
-    opponentStacks: [1210],
+    opponentStacks: [{ behind: 1210, committedThisStreet: 190 }],
     bigBlind: 20,
   });
   assert.ok(report.equity.heroEquity > 0.5);
@@ -112,7 +112,7 @@ test('control: ace-jack on the button against a defending range stays a shove', 
     pot: 15,
     toCall: 10,
     heroStack: 1000,
-    opponentStacks: [990],
+    opponentStacks: [{ behind: 990, committedThisStreet: 10 }],
     bigBlind: 10,
     samples: 40_000,
     seed: 20_260_817,
@@ -133,7 +133,7 @@ test('control: a set betting into a draw stays a bet, ahead even when always cal
     pot: 56,
     toCall: 0,
     heroStack: 2589,
-    opponentStacks: [370],
+    opponentStacks: [{ behind: 370, committedThisStreet: 0 }],
     bigBlind: 10,
   });
   assert.equal(report.suggestion.action, 'bet');

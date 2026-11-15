@@ -45,7 +45,7 @@ const PROBE = {
   toCall: 80,
   heroCommittedThisStreet: 0,
   heroStack: 300,
-  opponentStacks: [300],
+  opponentStacks: [{ behind: 300, committedThisStreet: 80 }],
   bigBlind: 10,
 };
 {

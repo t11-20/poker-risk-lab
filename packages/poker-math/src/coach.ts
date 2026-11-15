@@ -57,6 +57,14 @@ export type Street = 'preflop' | 'flop' | 'turn' | 'river';
 /** The five things a seat can do. Identical to `ActionCandidate['action']` by design. */
 export type CoachAction = ActionCandidate['action'];
 
+/** One opponent still in the hand, on the same reading as hero's `heroStack` and commitment. */
+export interface OpponentStack {
+  /** Chips BEHIND, not counting `committedThisStreet`. 0 when all in. */
+  readonly behind: number;
+  /** Chips ALREADY put out on this street, which may be less than the bet level. */
+  readonly committedThisStreet: number;
+}
+
 /** The part of a spot that fixes which action kinds are legal. `CoachInput` satisfies it structurally. */
 export interface DescribedSpot {
   /** What hero must add to continue. 0 when hero can check. */
@@ -65,8 +73,8 @@ export interface DescribedSpot {
   readonly heroCommittedThisStreet: number;
   /** Chips hero has BEHIND, not counting anything already committed. */
   readonly heroStack: number;
-  /** Chips BEHIND for each opponent still in the hand, one entry per opponent. */
-  readonly opponentStacks: readonly number[];
+  /** One entry per opponent still in the hand. */
+  readonly opponentStacks: readonly OpponentStack[];
 }
 
 /** A described spot plus what fixes a legal size, kept apart so `deriveLegalActions` reads only its four. */
@@ -92,7 +100,7 @@ export function deriveLegalActions(spot: DescribedSpot): readonly CoachAction[] 
   const actions: CoachAction[] = ['fold'];
   actions.push(spot.toCall === 0 ? 'check' : 'call');
 
-  const someOpponentCanAnswer = spot.opponentStacks.some((stack) => stack > 0);
+  const someOpponentCanAnswer = spot.opponentStacks.some((opponent) => opponent.behind > 0);
   if (someOpponentCanAnswer && maximumTo(spot) > betLevelOf(spot)) {
     actions.push(betLevelOf(spot) === 0 ? 'bet' : 'raise');
   }
@@ -118,8 +126,20 @@ export function deriveContestablePot(spot: PricedSpot): number {
 }
 
 /** The street level after calling. Named once because it reads like `maximumTo` at a glance. */
-function betLevelOf(spot: DescribedSpot): number {
+function betLevelOf(spot: Pick<DescribedSpot, 'toCall' | 'heroCommittedThisStreet'>): number {
   return spot.heroCommittedThisStreet + spot.toCall;
+}
+
+/**
+ * For a described spot with no per-seat record of the street: each opponent has put in the bet hero
+ * faces. Exact heads-up, where the one opponent made or matched it. Multiway it is an assumption.
+ */
+export function opponentsAtBetLevel(
+  spot: Pick<DescribedSpot, 'toCall' | 'heroCommittedThisStreet'>,
+  behind: readonly number[],
+): readonly OpponentStack[] {
+  const committedThisStreet = betLevelOf(spot);
+  return behind.map((chips) => ({ behind: chips, committedThisStreet }));
 }
 
 /**
@@ -160,8 +180,8 @@ export interface CoachInput {
    * is `heroCommittedThisStreet + heroStack`, and no candidate may cost more than `heroStack`.
    */
   readonly heroStack: number;
-  /** Chips BEHIND for each opponent still in the hand, on the same reading. */
-  readonly opponentStacks: readonly number[];
+  /** Each opponent still in the hand, on the same reading. */
+  readonly opponentStacks: readonly OpponentStack[];
   readonly bigBlind: number;
   /**
    * The engine's `minTo` for a bet or raise here. Absent for callers with no hand state, and the Coach
@@ -206,11 +226,12 @@ function validate(input: CoachInput): void {
     input.heroStack,
     input.bigBlind,
     input.heroCommittedThisStreet,
+    ...input.opponentStacks.flatMap((opponent) => [opponent.behind, opponent.committedThisStreet]),
   ]) {
     if (!Number.isInteger(value) || value < 0) {
       throw new CoachError(
-        'pot, contestablePot, toCall, heroStack, bigBlind and heroCommittedThisStreet must be ' +
-          'non-negative integers',
+        'pot, contestablePot, toCall, heroStack, bigBlind, heroCommittedThisStreet and every ' +
+          "opponent's chips must be non-negative integers",
       );
     }
   }
@@ -446,8 +467,40 @@ function buildPotOddsSummary(
   };
 }
 
+/**
+ * `effectiveStack` for a described spot. A bet hero has not matched still changes hands, so each
+ * opponent counts its chips in front of it beyond hero's own. The chips-behind sentence is kept
+ * wherever it gives the same figure, and always once every opponent is all in.
+ */
+export function effectiveStackOf(spot: DescribedSpot): {
+  readonly effective: number;
+  readonly explanation: string;
+} {
+  const plain = effectiveStack(
+    spot.heroStack,
+    spot.opponentStacks.map((opponent) => opponent.behind),
+  );
+  if (spot.opponentStacks.every((opponent) => opponent.behind === 0)) return plain;
+  const reaches = spot.opponentStacks.map((opponent) =>
+    Math.max(0, opponent.behind + opponent.committedThisStreet - spot.heroCommittedThisStreet),
+  );
+  const counted = effectiveStack(spot.heroStack, reaches);
+  if (counted.effective === plain.effective) return plain;
+  const reach = Math.max(...reaches);
+  const deepest = spot.opponentStacks[reaches.indexOf(reach)];
+  const ahead = (deepest?.committedThisStreet ?? 0) - spot.heroCommittedThisStreet;
+  const behind = chips(deepest?.behind ?? 0);
+  const why =
+    ahead > 0
+      ? `Chips already bet this street are still in play: the deepest opponent has ${behind} behind and ${chips(ahead)} more than you in front of them, so ${chips(reach)} can still come against you. `
+      : ahead < 0
+        ? `The deepest opponent has ${behind} behind but must put ${chips(-ahead)} of it in just to match you, so ${chips(reach)} can still come against you. `
+        : '';
+  return { effective: counted.effective, explanation: `${why}${counted.explanation}` };
+}
+
 function buildStackContext(input: CoachInput): StackContext {
-  const effective = effectiveStack(input.heroStack, input.opponentStacks);
+  const effective = effectiveStackOf(input);
   // SPR is undefined with an empty pot, which only happens preflop before blinds.
   const pot = Math.max(1, input.pot);
   const spr = stackToPotRatio(effective.effective, pot);
@@ -536,10 +589,19 @@ function sizingContextFor(input: CoachInput): SizingContext {
 }
 
 /** Empty unless the size is more than any opponent can match. */
-function uncalledSentence(kind: 'bet' | 'raise', raiseBy: number, calledBy: number): string {
+function uncalledSentence(
+  kind: 'bet' | 'raise',
+  raiseBy: number,
+  calledBy: number,
+  input: CoachInput,
+): string {
   if (calledBy === raiseBy) return '';
+  // A seat short of the bet has to spend part of its stack matching it first.
+  const limit = input.opponentStacks.some((opponent) => opponent.behind > calledBy)
+    ? `No opponent can put more than ${chips(calledBy)} on top of the ${chips(betLevelOf(input))} bet`
+    : `No opponent has more than ${chips(calledBy)} behind`;
   return (
-    `No opponent has more than ${chips(calledBy)} behind, so only ${chips(calledBy)} of the ` +
+    `${limit}, so only ${chips(calledBy)} of the ` +
     `${chips(raiseBy)} ${kind} can be called and the other ${chips(raiseBy - calledBy)} comes back to you. `
   );
 }
@@ -601,12 +663,15 @@ function buildCandidates(input: CoachInput, heroEquity: number, foldEquity: numb
 
   // The increment an all-in would be. The part that matches the bet is not a raise.
   const maxRaiseBy = input.heroStack - input.toCall;
-  if (maxRaiseBy > 0 && permitted(isOpening ? 'bet' : 'raise')) {
+  // The most a caller can add above the bet: its street total less the bet level. At 0 every chip
+  // of a raise comes back, so the call row already prices it.
+  const callable = Math.max(
+    0,
+    ...input.opponentStacks.map((opponent) => opponent.committedThisStreet + opponent.behind - betLevel),
+  );
+  if (maxRaiseBy > 0 && callable > 0 && permitted(isOpening ? 'bet' : 'raise')) {
     // Sizes are fractions of the pot after the call. For an opening bet that is the pot.
     const potAfterCall = Math.max(1, pot + input.toCall);
-    // The most a caller can add. Exact for a bet and for the bettor facing a raise. Multiway, a seat
-    // that has not yet matched the level can add less, and `CoachInput` has no per-seat commitments.
-    const callable = Math.max(0, ...input.opponentStacks);
 
     // Exactly the sizes the bar offers, because a sized action is graded only on an exact match.
     // `pot` equals the whole middle here, because `maxRaiseBy > 0` means hero covers the bet.
@@ -632,7 +697,7 @@ function buildCandidates(input: CoachInput, heroEquity: number, foldEquity: numb
           to: raiseBy,
           cost: calledBy,
           ev: bet.ev,
-          derivation: `${bet.derivation} ${betSizeSentence(size.id)}${uncalledSentence('bet', raiseBy, calledBy)}${option.note}`,
+          derivation: `${bet.derivation} ${betSizeSentence(size.id)}${uncalledSentence('bet', raiseBy, calledBy, input)}${option.note}`,
           foldEquityAssumed: foldEquity,
           potShareIfCalled: heroEquity,
         });
@@ -652,10 +717,24 @@ function buildCandidates(input: CoachInput, heroEquity: number, foldEquity: numb
         to: betLevel + raiseBy,
         cost: raise.risk,
         ev: raise.ev,
-        derivation: `${raise.derivation} ${uncalledSentence('raise', raiseBy, calledBy)}${raiseSizingNote(option, raiseBy, size.id, potAfterCall, pot, input.toCall, isAllIn)}`,
+        derivation: `${raise.derivation} ${uncalledSentence('raise', raiseBy, calledBy, input)}${raiseSizingNote(option, raiseBy, size.id, potAfterCall, pot, input.toCall, isAllIn)}`,
         foldEquityAssumed: foldEquity,
         potShareIfCalled: heroEquity,
       });
+    }
+  }
+
+  // Not priced as a raise row, because one tied with the call would outrank it (`TIEBREAK_RANK`).
+  if (maxRaiseBy > 0 && callable === 0 && !isOpening && permitted('raise')) {
+    const at = candidates.findIndex((candidate) => candidate.action === 'call');
+    const call = candidates[at];
+    if (call !== undefined) {
+      candidates[at] = {
+        ...call,
+        derivation:
+          `${call.derivation} The table offers a raise, but no opponent can put in a chip above the ` +
+          `${chips(betLevel)} bet, so a raise plays exactly as a call: every chip above it comes back.`,
+      };
     }
   }
 

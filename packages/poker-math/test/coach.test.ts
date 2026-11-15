@@ -11,10 +11,11 @@ import { test } from 'node:test';
 import { parseCards } from '@prl/poker-engine';
 import { buildCoachReport, CoachError, type CoachInput, summariseCoachReport } from '../src/coach.ts';
 import { exactRange, parseRange } from '../src/ranges.ts';
+import { atBetLevel, type BehindSpot } from './at-bet-level.ts';
 
 /** A flop spot: nut flush draw facing a half-pot bet from a set. */
-function flushDrawVsSet(overrides: Partial<CoachInput> = {}): CoachInput {
-  return {
+function flushDrawVsSet(overrides: Partial<BehindSpot> = {}): CoachInput {
+  return atBetLevel({
     heroCards: parseCards('Ah Kh'),
     board: parseCards('Qh 7h 2c'),
     street: 'flop',
@@ -29,7 +30,7 @@ function flushDrawVsSet(overrides: Partial<CoachInput> = {}): CoachInput {
     // Hero covers the bet from a deep stack, so the whole pot is contestable. An all-in-for-less
     // test overrides this.
     contestablePot: overrides.contestablePot ?? overrides.pot ?? 100,
-  };
+  });
 }
 
 test('a report never presents a figure without its assumptions', () => {
@@ -51,7 +52,7 @@ test('a report never presents a figure without its assumptions', () => {
       toCall: 20,
       heroCommittedThisStreet: 0,
       heroStack: 500,
-      opponentStacks: [500],
+      opponentStacks: [{ behind: 500, committedThisStreet: 20 }],
       bigBlind: 10,
     },
     {
@@ -64,7 +65,7 @@ test('a report never presents a figure without its assumptions', () => {
       toCall: 80,
       heroCommittedThisStreet: 0,
       heroStack: 300,
-      opponentStacks: [300],
+      opponentStacks: [{ behind: 300, committedThisStreet: 80 }],
       bigBlind: 10,
     },
   ];
@@ -106,7 +107,7 @@ test('a sampled figure always carries its interval; an exact one reports null ra
     toCall: 20,
     heroCommittedThisStreet: 0,
     heroStack: 500,
-    opponentStacks: [500],
+    opponentStacks: [{ behind: 500, committedThisStreet: 20 }],
     bigBlind: 10,
     samples: 8_000,
     seed: 7,
@@ -209,7 +210,7 @@ test('outs are reported with cards to come and omitted on the river', () => {
     toCall: 50,
     heroCommittedThisStreet: 0,
     heroStack: 400,
-    opponentStacks: [400],
+    opponentStacks: [{ behind: 400, committedThisStreet: 50 }],
     bigBlind: 10,
   });
   assert.equal(river.outs, null, 'there are no outs with no cards to come');
@@ -273,8 +274,9 @@ test('a wider opponent range raises hero equity, all else equal', () => {
 
 test('stack context reports the effective stack and an SPR consistent with it', () => {
   const report = buildCoachReport(flushDrawVsSet({ heroStack: 400, opponentStacks: [150], pot: 100 }));
-  assert.equal(report.stackContext.effectiveStack, 150, 'capped by the shorter stack');
-  assert.ok(Math.abs(report.stackContext.spr - 1.5) < 1e-9);
+  // The shorter stack is the bettor's 150 behind plus the 50 it has bet: 200, and 200 / 100 = 2.
+  assert.equal(report.stackContext.effectiveStack, 200, 'capped by the shorter stack');
+  assert.ok(Math.abs(report.stackContext.spr - 2) < 1e-9);
   // A pot-sized bet lays the caller exactly 1/3.
   assert.ok(Math.abs(report.stackContext.potOddsOfferedByPotSizedBet - 1 / 3) < 1e-9);
 });
@@ -283,8 +285,8 @@ test('stack context reports the effective stack and an SPR consistent with it', 
  * A nine-out flush draw: hero Th 9h on Kh 7h 2c against exactly Ks Qd. Hero has 39.49% equity, and
  * all nine hearts are clean (top pair cannot outdraw a flush without the board pairing twice).
  */
-function nineOutFlushDraw(overrides: Partial<CoachInput> = {}): CoachInput {
-  return {
+function nineOutFlushDraw(overrides: Partial<BehindSpot> = {}): CoachInput {
+  return atBetLevel({
     heroCards: parseCards('Th 9h'),
     board: parseCards('Kh 7h 2c'),
     street: 'flop',
@@ -297,7 +299,7 @@ function nineOutFlushDraw(overrides: Partial<CoachInput> = {}): CoachInput {
     bigBlind: 10,
     ...overrides,
     contestablePot: overrides.contestablePot ?? overrides.pot ?? 100,
-  };
+  });
 }
 
 test('the rule of 2/4 is published as a fraction, from clean outs, with its real error', () => {
@@ -343,8 +345,8 @@ test('the rule of 2/4 is published as a fraction, from clean outs, with its real
  * whether the opponent is a known hand or a range. The true error changes sign across them, so both
  * assert a sign. Every literal is worked out in the comments.
  */
-function eightOutStraightDraw(overrides: Partial<CoachInput> = {}): CoachInput {
-  return {
+function eightOutStraightDraw(overrides: Partial<BehindSpot> = {}): CoachInput {
+  return atBetLevel({
     heroCards: parseCards('9s 8s'),
     board: parseCards('7s 6d 2c'),
     street: 'flop',
@@ -357,7 +359,7 @@ function eightOutStraightDraw(overrides: Partial<CoachInput> = {}): CoachInput {
     bigBlind: 10,
     ...overrides,
     contestablePot: overrides.contestablePot ?? overrides.pot ?? 100,
-  };
+  });
 }
 
 test('errorPoints is measured against the cards the outs were counted from, sign included', () => {
@@ -450,7 +452,7 @@ test('the shortcut is withheld where it cannot mean anything, and says why', () 
         toCall: 50,
         heroCommittedThisStreet: 0,
         heroStack: 400,
-        opponentStacks: [400],
+        opponentStacks: [{ behind: 400, committedThisStreet: 50 }],
         bigBlind: 10,
       },
       /already ahead/i,
@@ -474,7 +476,7 @@ test('the shortcut is withheld where it cannot mean anything, and says why', () 
         toCall: 80,
         heroCommittedThisStreet: 0,
         heroStack: 300,
-        opponentStacks: [300],
+        opponentStacks: [{ behind: 300, committedThisStreet: 80 }],
         bigBlind: 10,
       },
       // No note is owed. With no cards to come the panel shows no outs section either.
@@ -495,7 +497,7 @@ test('the shortcut is withheld where it cannot mean anything, and says why', () 
 });
 
 test('invalid input is rejected with a message that says what was expected', () => {
-  const cases: [Partial<CoachInput>, RegExp][] = [
+  const cases: [Partial<BehindSpot>, RegExp][] = [
     [{ heroCards: parseCards('Ah') }, /exactly 2 cards/],
     [{ board: parseCards('Qh 7h') }, /needs 3 board cards/],
     [{ opponents: [] }, /1 to 5 opponents/],
@@ -541,8 +543,8 @@ test('the summary line always names the method and never claims certainty', () =
  */
 const COUNTED_EQUITY = 7 / 44;
 
-function countedTurn(overrides: Partial<CoachInput> = {}): CoachInput {
-  return {
+function countedTurn(overrides: Partial<BehindSpot> = {}): CoachInput {
+  return atBetLevel({
     heroCards: parseCards('Ah Kh'),
     board: parseCards('Qh 7h 2c 3d'),
     street: 'turn',
@@ -557,7 +559,7 @@ function countedTurn(overrides: Partial<CoachInput> = {}): CoachInput {
     assumedFoldEquity: 0.35,
     ...overrides,
     contestablePot: overrides.contestablePot ?? overrides.pot ?? 400,
-  };
+  });
 }
 
 /** Chips, to a tenth of a chip. Nothing a learner reads is finer than this. */
@@ -789,7 +791,7 @@ test('a hand that is drawing dead is priced as a pure bluff, with no equity cred
     toCall: 45,
     heroCommittedThisStreet: 0,
     heroStack: 500,
-    opponentStacks: [500],
+    opponentStacks: [{ behind: 500, committedThisStreet: 45 }],
     bigBlind: 10,
     assumedFoldEquity: 0.35,
   });
@@ -890,7 +892,7 @@ test('with nothing to call, fold is never ranked above check', () => {
         toCall: 0,
         heroCommittedThisStreet: 0,
         heroStack: 0,
-        opponentStacks: [500],
+        opponentStacks: [{ behind: 500, committedThisStreet: 0 }],
         bigBlind: 10,
       },
     ],
@@ -907,7 +909,7 @@ test('with nothing to call, fold is never ranked above check', () => {
         toCall: 0,
         heroCommittedThisStreet: 0,
         heroStack: 500,
-        opponentStacks: [500],
+        opponentStacks: [{ behind: 500, committedThisStreet: 0 }],
         bigBlind: 10,
         legalActions: ['fold', 'check'],
       },
@@ -925,7 +927,7 @@ test('with nothing to call, fold is never ranked above check', () => {
         toCall: 0,
         heroCommittedThisStreet: 0,
         heroStack: 0,
-        opponentStacks: [500],
+        opponentStacks: [{ behind: 500, committedThisStreet: 0 }],
         bigBlind: 10,
       },
     ],
@@ -980,7 +982,7 @@ test('no figure a report publishes, in a number or in a sentence, is a probabili
         toCall: 50,
         heroCommittedThisStreet: 0,
         heroStack: 400,
-        opponentStacks: [400],
+        opponentStacks: [{ behind: 400, committedThisStreet: 50 }],
         bigBlind: 10,
       },
     ],
@@ -999,7 +1001,7 @@ test('no figure a report publishes, in a number or in a sentence, is a probabili
         toCall: 45,
         heroCommittedThisStreet: 0,
         heroStack: 500,
-        opponentStacks: [500],
+        opponentStacks: [{ behind: 500, committedThisStreet: 45 }],
         bigBlind: 10,
       },
     ],
@@ -1101,7 +1103,7 @@ test('the price sentence is chosen, not appended — a hero who misses the price
     toCall: 80,
     heroCommittedThisStreet: 0,
     heroStack: 300,
-    opponentStacks: [300],
+    opponentStacks: [{ behind: 300, committedThisStreet: 80 }],
     bigBlind: 10,
   };
   const missing: CoachInput = {
@@ -1149,7 +1151,7 @@ test('"loses more often than it wins" is keyed to hero equity, not to the price 
     toCall: 80,
     heroCommittedThisStreet: 0,
     heroStack: 300,
-    opponentStacks: [300],
+    opponentStacks: [{ behind: 300, committedThisStreet: 80 }],
     bigBlind: 10,
   };
   const report = buildCoachReport(winning);
@@ -1179,7 +1181,7 @@ test('confidence measures the gap to the next-best ACTION, not to a neighbouring
     toCall: 100,
     heroCommittedThisStreet: 0,
     heroStack: 1000,
-    opponentStacks: [300],
+    opponentStacks: [{ behind: 300, committedThisStreet: 100 }],
     bigBlind: 20,
   });
   const raise = (to: number) => report.candidates.find((c) => c.action === 'raise' && c.to === to)?.ev;

@@ -9,9 +9,10 @@ import { parseCards } from '@prl/poker-engine';
 import { buildCoachReport, type CoachInput } from '../src/coach.ts';
 import { exactRange } from '../src/ranges.ts';
 import { repriceAtFoldEquity } from '../src/reprice.ts';
+import { atBetLevel, type BehindSpot } from './at-bet-level.ts';
 
-function spot(overrides: Partial<CoachInput> = {}): CoachInput {
-  return {
+function spot(overrides: Partial<BehindSpot> = {}): CoachInput {
+  return atBetLevel({
     heroCards: parseCards('Qh Jh'),
     board: parseCards('Th 9s 2c 3d'),
     street: 'turn',
@@ -24,7 +25,7 @@ function spot(overrides: Partial<CoachInput> = {}): CoachInput {
     opponentStacks: [1000],
     bigBlind: 20,
     ...overrides,
-  };
+  });
 }
 
 const SHAPES: readonly [string, CoachInput][] = [
