@@ -174,11 +174,17 @@ function heroLegalActions(
       type: 'fold',
       note: 'Give up the hand and lose what you have already committed.',
     });
+    const callCost = Math.min(owed, hero.stack);
+    const callIsAllIn = callCost === hero.stack;
     actions.push({
       type: 'call',
-      minTo: heroCommitted + Math.min(owed, hero.stack),
-      costAtMin: Math.min(owed, hero.stack),
-      note: 'Match the current bet and see the next card.',
+      minTo: heroCommitted + callCost,
+      costAtMin: callCost,
+      allInAtMax: callIsAllIn,
+      // `ActionBar` prints the note of an all-in call, so it must not promise "the next card".
+      note: callIsAllIn
+        ? 'Calling puts your whole remaining stack in.'
+        : 'Match the current bet and see the next card.',
     });
   } else {
     actions.push({ type: 'check', note: 'Stay in the hand without putting chips in.' });
