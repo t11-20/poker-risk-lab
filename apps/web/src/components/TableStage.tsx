@@ -365,8 +365,9 @@ const SUBMISSION_IN_FLIGHT: ReadonlySet<TableSubmission['status']> = new Set<Tab
 ]);
 
 /**
- * The cards, board, clock and latest action for the bar, only while a bet or raise is legal. That is
- * when `useFollowTheTable` scrolls a phone to the sizer, and the plate and street line leave the top.
+ * The cards, board, clock and latest action for the bar, while a bet or raise is legal and while the
+ * reader waits for the others. Then `useFollowTheTable` keeps a phone at the sizer, with the plate and
+ * street line off the top.
  */
 function handGlanceFor(
   view: PlayerView,
@@ -376,7 +377,10 @@ function handGlanceFor(
   const hero = view.seats.find((seat) => seat.isSelf);
   const hole = hero?.holeCards ?? null;
   if (hole === null) return null;
-  if (!view.legalActions.some((action) => action.type === 'bet' || action.type === 'raise')) return null;
+  const waiting = view.legalActions.length === 0 && view.street !== 'complete';
+  if (!waiting && !view.legalActions.some((action) => action.type === 'bet' || action.type === 'raise')) {
+    return null;
+  }
   return (
     <HandGlance
       hole={hole}

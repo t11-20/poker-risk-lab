@@ -273,8 +273,11 @@
    1440x900. Below 46rem only the button row sticks, inside its own bar (section 3.1). There is no
    fill or top rule, so the page wash shows through the ActionBar's glass. */
 
+/* Start, because the follow holds the band's height between decisions on a phone. Stretched, the rows
+   pushed the bar down and scroll anchoring moved the page 334px to follow it (390x844). */
 .prl-play__decision {
   display: grid;
+  align-content: start;
   gap: var(--prl-space-5);
   padding-block: var(--prl-space-5);
 }
