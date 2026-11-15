@@ -41,6 +41,7 @@ const ROUTES = [
   '/',
   '/learn',
   '/learn/pot-odds',
+  '/learn/counting-outs',
   '/learn/glossary',
   '/play',
   '/play?state=decision',
