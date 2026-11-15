@@ -236,6 +236,14 @@ test('a raise that loses called and loses more when B folds cannot break even at
   assert.doesNotMatch(half ?? '', /already break-even/);
 });
 
+test('the fold branch of a raise names the chips hero puts in to match the all-in', () => {
+  const raise = facingAJam().candidates.find((row) => row.action === 'raise' && row.to === 400);
+  assert.match(
+    raise?.derivation ?? '',
+    /a fold still leaves the 600 main pot at 0%, less your 100: worth -100/,
+  );
+});
+
 test('a raise that wins called and loses when B folds breaks even only below a fold rate', () => {
   // Prior 900. Raise to 700, called: 1200 main pot lost, 0.6 of the 1200 side pot won, less 700: +20.
   // B folds: -100. EV = 20 - 120f, zero at f = 1/6, and 0.35 x -100 + 0.65 x 20 = -22 at the default.

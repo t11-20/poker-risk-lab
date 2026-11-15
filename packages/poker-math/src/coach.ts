@@ -761,7 +761,7 @@ function showdownPots(
   heroAdds: number,
   callerAdds: number,
   branch: 'called' | 'folded',
-): { readonly pots: readonly ShowdownPot[]; readonly value: number } {
+): { readonly pots: readonly ShowdownPot[]; readonly paid: number; readonly value: number } {
   const folded = branch === 'folded';
   const matched = Math.min(heroAdds, Math.max(0, ...split.allIn.map((seat) => seat.toMatch)));
   const paid = folded ? matched : heroAdds;
@@ -785,7 +785,7 @@ function showdownPots(
     );
   }
   add(total, folded ? [] : split.live);
-  return { pots, value: value - paid };
+  return { pots, paid, value: value - paid };
 }
 
 /** "the 300 main pot at 0% and the 200 side pot at 100%". */
@@ -827,12 +827,13 @@ function layeredAggression(
   const called = showdownPots(split, input, heroAdds, callerAdds, 'called');
   const folded = showdownPots(split, input, heroAdds, 0, 'folded');
   const ev = f * folded.value + (1 - f) * called.value;
+  const matched = folded.paid > 0 ? `, less your ${chips(folded.paid)}` : '';
   return {
     ev,
     derivation:
       `EV(${kind}) = f x [everyone who can fold does] + (1 - f) x [called] = ${frac(f)} x ${signedChips(folded.value)} + ` +
       `${frac(1 - f)} x ${signedChips(called.value)} = ${chips(ev)} chips. ${allInClause(split)}, so a fold ` +
-      `still leaves ${describePots(folded.pots)}: worth ${chips(folded.value)}. Called, you play for ` +
+      `still leaves ${describePots(folded.pots)}${matched}: worth ${chips(folded.value)}. Called, you play for ` +
       `${describePots(called.pots)}, less your ${chips(heroAdds)}: ${chips(called.value)}.`,
   };
 }
