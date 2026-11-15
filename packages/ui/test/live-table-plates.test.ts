@@ -251,8 +251,19 @@ describe('a finished hand’s pot', () => {
 
   it('leaves out the chips that went back unmatched, as a total and as a side pot', async () => {
     const markup = await table({ view: view('complete', { potTotal: 1_950, pots, result: paid }) });
-    assert.equal(potFigure(markup), 'Pot: 1,900 units');
+    assert.equal(potFigure(markup), 'Pot paid out: 1,900 units');
     assert.doesNotMatch(markup, /side pot 1/u);
+  });
+
+  // The winner's stack already holds these chips, so a bare "Pot" reads as chips still in the middle.
+  it('says the pot was paid out, with or without the result the fixture leaves out', async () => {
+    const markup = await table({ view: view('complete') });
+    assert.equal(potFigure(markup), 'Pot paid out: 100 units');
+    assert.match(markup, />Pot paid out</u);
+  });
+
+  it('at showdown, before the award, is still the pot', async () => {
+    assert.equal(potFigure(await table({ view: view('showdown') })), 'Pot: 100 units');
   });
 
   it('while the hand is live, shows the same layers as they stand', async () => {

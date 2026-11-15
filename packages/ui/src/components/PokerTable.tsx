@@ -179,9 +179,11 @@ export function PokerTable(props: PokerTableProps): ReactElement {
         <div className="prl-table__oval" aria-hidden="true" />
 
         <div className="prl-table__centre">
+          {/* Once settled these chips are in the winners' stacks, so a bare "Pot" would count them twice. */}
           <PotDisplay
             total={shown.total}
             pots={shown.pots}
+            label={view.street === 'complete' ? 'Pot paid out' : 'Pot'}
             {...(seatNames === undefined ? {} : { seatNames })}
           />
           <div className="prl-table__board">
