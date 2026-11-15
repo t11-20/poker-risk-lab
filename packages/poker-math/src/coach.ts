@@ -27,7 +27,7 @@ import type {
 } from '@prl/contracts';
 import type { Card } from '@prl/poker-engine';
 import { type EquityResult, type EquitySpec, equity } from './equity.ts';
-import { evOfBet, evOfCall, evOfCheck, evOfFold, evOfRaise, requiredFoldEquity } from './ev.ts';
+import { evOfBet, evOfCall, evOfCheck, evOfFold, evOfRaise } from './ev.ts';
 import { chips, percent } from './format.ts';
 import {
   maximumOutsForRuleOf24,
@@ -39,7 +39,13 @@ import {
 import { computeOuts, type OutsResult } from './outs.ts';
 import { exactRange, type ParsedRange } from './ranges.ts';
 import { effectiveStack, type SizingOption, sizingOptionAt, stackToPotRatio } from './stacks.ts';
-import { type OfferedSize, offeredSizes } from './table-sizing.ts';
+import {
+  type OfferedSize,
+  offeredSizes,
+  presetTo,
+  type SizingContext,
+  TABLE_SIZING_PRESETS,
+} from './table-sizing.ts';
 
 export class CoachError extends Error {
   override readonly name = 'CoachError';
@@ -475,6 +481,7 @@ export function minimumAggressiveTo(spot: SizedSpot): number {
  */
 function raiseSizingNote(
   option: SizingOption,
+  raiseBy: number,
   sizeId: OfferedSize['id'],
   potAfterCall: number,
   potBeforeCall: number,
@@ -485,13 +492,13 @@ function raiseSizingNote(
   // alpha = (c + r) / (pot + c + r).
   const risked = toCall + option.amount;
   const minimumDefence = potBeforeCall / (potBeforeCall + risked);
-  const share = `${percent(option.fractionOfPot)} of the ${chips(potAfterCall)} that would be in the middle once you call`;
+  const share = `${percent(raiseBy / potAfterCall)} of the ${chips(potAfterCall)} that would be in the middle once you call`;
   const shape =
     sizeId === 'allIn'
-      ? `Raising by ${chips(option.amount)} puts your whole remaining stack in.`
+      ? `Raising by ${chips(raiseBy)} puts your whole remaining stack in.`
       : sizeId === 'minimum'
-        ? `Raising by ${chips(option.amount)} is the smallest raise the rules allow here: ${share}.`
-        : `Raising by ${chips(option.amount)} is the ${SIZE_WORDS[sizeId]} size: ${share}.`;
+        ? `Raising by ${chips(raiseBy)} is the smallest raise the rules allow here: ${share}.`
+        : `Raising by ${chips(raiseBy)} is the ${SIZE_WORDS[sizeId]} size: ${share}.`;
   const allIn = isAllIn && sizeId !== 'allIn' ? ' That size is also your whole remaining stack.' : '';
   return (
     `${shape} A caller needs ${percent(option.priceLaidToCaller)} equity to break even on the extra ` +
@@ -515,6 +522,25 @@ function betSizeSentence(sizeId: OfferedSize['id']): string {
   if (sizeId === 'allIn') return '';
   if (sizeId === 'minimum') return 'This is the smallest bet the rules allow here. ';
   return `This is the ${SIZE_WORDS[sizeId]} size. `;
+}
+
+/** The bounds and pot every offered size is built from, shared by the candidates and the ½-pot line. */
+function sizingContextFor(input: CoachInput): SizingContext {
+  return {
+    bounds: { min: minimumAggressiveTo(input), max: maximumTo(input) },
+    pot: input.contestablePot,
+    toCall: input.toCall,
+    committedThisStreet: input.heroCommittedThisStreet,
+  };
+}
+
+/** Empty unless the size is more than any opponent can match. */
+function uncalledSentence(kind: 'bet' | 'raise', raiseBy: number, calledBy: number): string {
+  if (calledBy === raiseBy) return '';
+  return (
+    `No opponent has more than ${chips(calledBy)} behind, so only ${chips(calledBy)} of the ` +
+    `${chips(raiseBy)} ${kind} can be called and the other ${chips(raiseBy - calledBy)} comes back to you. `
+  );
 }
 
 /**
@@ -575,41 +601,37 @@ function buildCandidates(input: CoachInput, heroEquity: number, foldEquity: numb
   // The increment an all-in would be. The part that matches the bet is not a raise.
   const maxRaiseBy = input.heroStack - input.toCall;
   if (maxRaiseBy > 0 && permitted(isOpening ? 'bet' : 'raise')) {
-    // Already clamped at `maximumTo`, because a short all-in is a legal incomplete raise.
-    const floorTo = minimumAggressiveTo(input);
-
     // Sizes are fractions of the pot after the call. For an opening bet that is the pot.
     const potAfterCall = Math.max(1, pot + input.toCall);
+    // The most a caller can add. Exact for a bet and for the bettor facing a raise. Multiway, a seat
+    // that has not yet matched the level can add less, and `CoachInput` has no per-seat commitments.
+    const callable = Math.max(0, ...input.opponentStacks);
 
     // Exactly the sizes the bar offers, because a sized action is graded only on an exact match.
     // `pot` equals the whole middle here, because `maxRaiseBy > 0` means hero covers the bet.
     // `apps/web/test/lab-sizes-priced.test.ts` asserts the equality.
-    const offered = offeredSizes({
-      bounds: { min: floorTo, max: maximumTo(input) },
-      pot,
-      toCall: input.toCall,
-      committedThisStreet: input.heroCommittedThisStreet,
-    });
-    for (const size of offered) {
+    for (const size of offeredSizes(sizingContextFor(input))) {
       const raiseBy = size.to - betLevel;
       if (raiseBy <= 0) continue;
       const isAllIn = raiseBy === maxRaiseBy;
+      // Kept as a row because the bar offers it, but priced on what can be called.
+      const calledBy = Math.min(raiseBy, callable);
+      const option = sizingOptionAt(potAfterCall, calledBy, SIZE_WORDS[size.id], calledBy === maxRaiseBy);
 
       if (isOpening) {
         const bet = evOfBet({
           pot,
-          betSize: raiseBy,
+          betSize: calledBy,
           foldProbability: foldEquity,
           equityWhenCalled: heroEquity,
           callerCanRaise: true,
         });
-        const option = sizingOptionAt(potAfterCall, raiseBy, SIZE_WORDS[size.id], isAllIn);
         candidates.push({
           action: 'bet',
           to: raiseBy,
-          cost: raiseBy,
+          cost: calledBy,
           ev: bet.ev,
-          derivation: `${bet.derivation} ${betSizeSentence(size.id)}${option.note}`,
+          derivation: `${bet.derivation} ${betSizeSentence(size.id)}${uncalledSentence('bet', raiseBy, calledBy)}${option.note}`,
           foldEquityAssumed: foldEquity,
           potShareIfCalled: heroEquity,
         });
@@ -619,18 +641,17 @@ function buildCandidates(input: CoachInput, heroEquity: number, foldEquity: numb
       const raise = evOfRaise({
         pot,
         toCall: input.toCall,
-        raiseBy,
+        raiseBy: calledBy,
         foldProbability: foldEquity,
         equityWhenCalled: heroEquity,
         callerCanRaise: true,
       });
-      const option = sizingOptionAt(potAfterCall, raiseBy, SIZE_WORDS[size.id], isAllIn);
       candidates.push({
         action: 'raise',
         to: betLevel + raiseBy,
         cost: raise.risk,
         ev: raise.ev,
-        derivation: `${raise.derivation} ${raiseSizingNote(option, size.id, potAfterCall, pot, input.toCall, isAllIn)}`,
+        derivation: `${raise.derivation} ${uncalledSentence('raise', raiseBy, calledBy)}${raiseSizingNote(option, raiseBy, size.id, potAfterCall, pot, input.toCall, isAllIn)}`,
         foldEquityAssumed: foldEquity,
         potShareIfCalled: heroEquity,
       });
@@ -992,27 +1013,7 @@ export function buildCoachReport(input: CoachInput): CoachReport {
     assumptions.push(
       `Bet and raise figures assume the line wins uncontested ${(foldEquity * 100).toFixed(0)}% of the time. That is an assumption, not something measured: the Scenario Lab lets you change it and watch these figures move.`,
     );
-    // `contestablePot`, which equals `pot` wherever a bet is on offer.
-    const halfPot = Math.max(1, Math.round(input.contestablePot / 2));
-    const needed = requiredFoldEquity({
-      pot: input.contestablePot,
-      betSize: halfPot,
-      equityWhenCalled: hero.equity,
-    });
-    // "Needs 0%" and "needs 120%" both read as mistakes, so each degenerate case says what it means.
-    if (needed.foldEquityNeeded <= 0) {
-      assumptions.push(
-        `A half-pot bet of ${halfPot} is already break-even or better here purely on the equity you have when called — it does not need to win uncontested at all.`,
-      );
-    } else if (needed.foldEquityNeeded >= 1) {
-      assumptions.push(
-        `A half-pot bet of ${halfPot} cannot break even at any fold frequency with this much equity when called — folding out the whole range still would not be enough.`,
-      );
-    } else {
-      assumptions.push(
-        `For a half-pot bet of ${halfPot} to break even here it would need to win uncontested ${(needed.foldEquityNeeded * 100).toFixed(0)}% of the time.`,
-      );
-    }
+    assumptions.push(halfPotBreakEven(input, candidates, hero.equity));
   }
   assumptions.push(
     'Expected values are measured against folding, which is treated as zero. Chips already in the pot are spent either way.',
@@ -1037,6 +1038,38 @@ export function buildCoachReport(input: CoachInput): CoachReport {
     uncertainty,
     teachingNotes: buildTeachingNotes(input, potOddsSummary, equitySummary, outs, stackContext, cardsToCome),
   };
+}
+
+/**
+ * The break-even fold rate of the size the ½-pot button sends, read off its priced row so it inherits
+ * the call inside a raise and the cap at what can be called. EV is linear in f, from the called branch
+ * S at f = 0 to the pot at f = 1, so it breaks even at `-S / (pot - S)`.
+ */
+function halfPotBreakEven(input: CoachInput, candidates: readonly ActionCandidate[], equity: number): string {
+  const half = TABLE_SIZING_PRESETS.find((preset) => preset.id === 'half');
+  const to = half === undefined ? undefined : presetTo(half, sizingContextFor(input));
+  const row = candidates.find(
+    (candidate) => candidate.to === to && candidate.foldEquityAssumed !== undefined,
+  );
+  if (row === undefined) throw new CoachError(`internal: the ½-pot size ${to} has no priced row`);
+  const pot = input.contestablePot;
+  const called = evOfRaise({
+    pot,
+    toCall: input.toCall,
+    raiseBy: row.cost - input.toCall,
+    foldProbability: 0,
+    equityWhenCalled: equity,
+  }).ev;
+  const needed = called >= 0 ? 0 : -called / (pot - called);
+  const size = `The ½-pot ${row.action === 'bet' ? `bet of ${to}` : `raise to ${to}`} risks ${chips(row.cost)} to win ${chips(pot)}.`;
+  // "Needs 0%" and "needs 100%" both read as mistakes, so each degenerate case says what it means.
+  if (needed <= 0) {
+    return `${size} It is already break-even or better purely on the equity you have when called — it does not need to win uncontested at all.`;
+  }
+  if (needed >= 1) {
+    return `${size} It cannot break even at any fold frequency with this much equity when called — folding out the whole range still would not be enough.`;
+  }
+  return `${size} To break even it would need to win uncontested ${(needed * 100).toFixed(0)}% of the time.`;
 }
 
 /** A compact summary for logs and hand-review lists. Never shown as the whole story. */

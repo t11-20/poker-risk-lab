@@ -374,7 +374,7 @@
         "Estimated by sampling 2,000 random run-outs, not by exhaustive enumeration.",
         "No community cards are known yet, so five more cards are still to come.",
         "Bet and raise figures assume the line wins uncontested 35% of the time. That is an assumption, not something measured: the Scenario Lab lets you change it and watch these figures move.",
-        "For a half-pot bet of 25 to break even here it would need to win uncontested 14% of the time.",
+        "The ½-pot raise to 35 risks 25 to win 50. To break even it would need to win uncontested 14% of the time.",
         "Expected values are measured against folding, which is treated as zero. Chips already in the pot are spent either way."
       ],
       "uncertainty": {
@@ -762,7 +762,7 @@
         "Every hand in a range is weighted equally. Real opponents do not play every hand in a range the same way, so treat this as the range assumption, not a prediction.",
         "Computed by enumerating every remaining board — there is no sampling error.",
         "Bet and raise figures assume the line wins uncontested 35% of the time. That is an assumption, not something measured: the Scenario Lab lets you change it and watch these figures move.",
-        "A half-pot bet of 18 is already break-even or better here purely on the equity you have when called — it does not need to win uncontested at all.",
+        "The ½-pot raise to 40 risks 40 to win 35. It is already break-even or better purely on the equity you have when called — it does not need to win uncontested at all.",
         "Expected values are measured against folding, which is treated as zero. Chips already in the pot are spent either way."
       ],
       "uncertainty": {
@@ -1447,7 +1447,7 @@
         "Every hand in a range is weighted equally. Real opponents do not play every hand in a range the same way, so treat this as the range assumption, not a prediction.",
         "Computed by enumerating every remaining board — there is no sampling error.",
         "Bet and raise figures assume the line wins uncontested 35% of the time. That is an assumption, not something measured: the Scenario Lab lets you change it and watch these figures move.",
-        "For a half-pot bet of 30 to break even here it would need to win uncontested 28% of the time.",
+        "The ½-pot raise to 90 risks 90 to win 60. To break even it would need to win uncontested 57% of the time.",
         "Expected values are measured against folding, which is treated as zero. Chips already in the pot are spent either way."
       ],
       "uncertainty": {
@@ -1835,7 +1835,7 @@
         "Every hand in a range is weighted equally. Real opponents do not play every hand in a range the same way, so treat this as the range assumption, not a prediction.",
         "Computed by enumerating every remaining board — there is no sampling error.",
         "Bet and raise figures assume the line wins uncontested 35% of the time. That is an assumption, not something measured: the Scenario Lab lets you change it and watch these figures move.",
-        "A half-pot bet of 15 is already break-even or better here purely on the equity you have when called — it does not need to win uncontested at all.",
+        "The ½-pot bet of 15 risks 15 to win 30. It is already break-even or better purely on the equity you have when called — it does not need to win uncontested at all.",
         "Expected values are measured against folding, which is treated as zero. Chips already in the pot are spent either way."
       ],
       "uncertainty": {
