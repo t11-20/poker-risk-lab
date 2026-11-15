@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { quizzes } from '@prl/content';
 import { type Quiz, type QuizQuestion, withinTolerance } from '@prl/contracts';
+import { cardNotationText } from '../src/cards.ts';
 import {
   decisionSpot,
   expectedAnswer,
@@ -102,6 +103,10 @@ const VERDICT = {
   },
 } as const;
 
+/** Content writes cards as "Ah Kh"; the bot shows them as the table does, "A♥ K♥". */
+const shownAs = cardNotationText;
+const ASCII_CARDS = /(?<![A-Za-z0-9])[2-9TJQKA][shdc](?: ?[2-9TJQKA][shdc])+(?![A-Za-z0-9])/;
+
 describe('every question through step', () => {
   test('all 81 questions are presented, answered the lesson’s way and another way, with the explanation each time', () => {
     const deps = longTagDeps();
@@ -111,28 +116,32 @@ describe('every question through step', () => {
     const seen = { count: 0 };
     const kinds = { multipleChoice: 0, numeric: 0, decision: 0 };
     let questionsRead = 0;
+    let cardsShown = 0;
     for (const quiz of all) {
       let asked = startByMenu(quiz, deps, seen);
       for (const [position, question] of quiz.questions.entries()) {
         assertFits(asked, seen);
         const shown = message(asked);
         assert.equal(shown.kind, 'send');
-        assert.ok(shown.text.includes(question.prompt), `${question.id}: the prompt is shown`);
+        assert.ok(shown.text.includes(shownAs(question.prompt)), `${question.id}: the prompt is shown`);
+        assert.doesNotMatch(shown.text, ASCII_CARDS, `${question.id}: cards as the table writes them`);
+        if (/[♣♦♥♠]/u.test(shown.text)) cardsShown += 1;
         assert.ok(
           shown.text.includes(`Question ${position + 1} of ${quiz.questions.length}`),
           `${question.id}: wayfinding`,
         );
         if (question.kind === 'multipleChoice') {
           for (const option of question.options)
-            assert.ok(shown.text.includes(option), `${question.id}: an option is missing`);
+            assert.ok(shown.text.includes(shownAs(option)), `${question.id}: an option is missing`);
         }
 
         const other = answerAnotherWay(asked, question, deps);
         assert.match(message(other).text, VERDICT[question.kind].other, `${question.id}: another answer`);
         assert.ok(
-          message(other).text.includes(question.explanation),
+          message(other).text.includes(shownAs(question.explanation)),
           `${question.id}: explained when it misses`,
         );
+        assert.doesNotMatch(message(other).text, ASCII_CARDS, `${question.id}: another answer's cards`);
 
         const lessons = answerTheLessonsWay(asked, question, deps);
         assertFits(lessons, seen);
@@ -143,16 +152,18 @@ describe('every question through step', () => {
           `${question.id}: a typed answer has nothing to edit`,
         );
         assert.match(verdict.text, VERDICT[question.kind].lessons, `${question.id}: the lesson's answer`);
-        assert.ok(verdict.text.includes(question.explanation), `${question.id}: explained`);
+        assert.ok(verdict.text.includes(shownAs(question.explanation)), `${question.id}: explained`);
+        assert.doesNotMatch(verdict.text, ASCII_CARDS, `${question.id}: the verdict's cards`);
 
         kinds[question.kind] += 1;
         questionsRead += 1;
         asked = press(lessons.session, find(buttonsOf(lessons), /^(Next question|Finish)$/), deps);
       }
       const end = message(asked);
-      assert.ok(end.text.includes(quiz.reviewAdvice), `${quiz.id}: ends with its review advice`);
+      assert.ok(end.text.includes(shownAs(quiz.reviewAdvice)), `${quiz.id}: ends with its review advice`);
+      assert.doesNotMatch(end.text, ASCII_CARDS, `${quiz.id}: the review advice's cards`);
       // The advice is content and may say "there is no score here"; what this client adds may not count.
-      const own = end.text.replace(quiz.reviewAdvice, '');
+      const own = end.text.replace(shownAs(quiz.reviewAdvice), '');
       assert.doesNotMatch(
         own,
         /\d+\s*(?:\/|of|out of)\s*\d+\s*(?:correct|right|matched)|score|%/i,
@@ -160,6 +171,10 @@ describe('every question through step', () => {
       );
       assert.equal(asked.session.phase.kind, 'idle', `${quiz.id}: the run is over`);
     }
+    assert.ok(
+      cardsShown >= 10,
+      `only ${cardsShown} questions showed cards, so the notation check read little`,
+    );
     assert.equal(questionsRead, expectedQuestions);
     assert.equal(questionsRead, 81, 'the shipped content has 81 questions');
     assert.ok(kinds.multipleChoice > 0 && kinds.numeric > 0 && kinds.decision > 0, JSON.stringify(kinds));
