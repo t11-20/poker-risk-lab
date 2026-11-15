@@ -415,6 +415,15 @@ export function tableText(table: Table, view: PlayerView, coach: CoachReading | 
   return lines.join('\n');
 }
 
+/**
+ * As the API narrates it: "the main pot" implies a side pot, and a part that only goes back unmatched is
+ * not one, so it is left out of `potCount`.
+ */
+function potName(potIndex: number, potCount: number): string {
+  if (potCount <= 1) return 'the pot';
+  return potIndex === 0 ? 'the main pot' : `side pot ${potIndex}`;
+}
+
 /** The table once the hand is over: who won what, and the cards that were actually shown. */
 export function resultText(table: Table, view: PlayerView): string {
   const lines = header(table, view);
@@ -430,13 +439,14 @@ export function resultText(table: Table, view: PlayerView): string {
   } else {
     lines.push('Nobody showed: everyone else folded.');
   }
+  const potCount = result.pots.filter((pot) => pot.amount > unmatchedPartOf(pot, result.pots)).length;
   for (const award of result.awards) {
     const name = who(table, view, award.seat);
     const reader = award.seat === READER_SEAT;
     const back = unmatchedOf(result, award);
     if (back > 0) lines.push(`${name} ${reader ? 'get' : 'gets'} back ${units(back)} ${NOBODY_MATCHED}.`);
     if (award.amount === back) continue;
-    const pot = award.potIndex === 0 ? 'the main pot' : `side pot ${award.potIndex}`;
+    const pot = potName(award.potIndex, potCount);
     const split = award.wasSplit ? ' (split)' : '';
     lines.push(`${name} ${reader ? 'win' : 'wins'} ${units(award.amount - back)} from ${pot}${split}.`);
   }

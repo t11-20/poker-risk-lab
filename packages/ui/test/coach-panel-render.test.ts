@@ -362,6 +362,70 @@ test('a real draw keeps its outs count', async () => {
   );
 });
 
+/** A heads-up flop or turn where no single card reaches the bar, so `computeOuts` counts 0 and 0. */
+function noOuts(
+  street: 'flop' | 'turn',
+  heroEquity: number,
+  win: number,
+  tie: number,
+  method: CoachReport['equity']['method'] = 'exact-enumeration',
+): CoachReport {
+  return {
+    ...NINE_OUT_DRAW,
+    street,
+    outs: { clean: 0, dirty: 0, total: 0, cleanCards: [], dirtyCards: [], explanation: 'Zero outs.' },
+    equity: {
+      ...NINE_OUT_DRAW.equity,
+      heroEquity,
+      method,
+      ruleOfThumb: null,
+      perPlayer: [
+        { label: 'you', equity: heroEquity, win, tie },
+        { label: 'opponent', equity: 1 - heroEquity, win: 1 - win - tie, tie },
+      ],
+    },
+  };
+}
+
+test('a count of zero outs says which of three things it means', async () => {
+  const cases: readonly (readonly [string, CoachReport, string, string])[] = [
+    // 2c 2d on Ah Kh Qh Jh against Th 9h, a royal flush: nothing on the river reaches a split.
+    [
+      'drawing dead',
+      noOuts('turn', 0, 0, 0),
+      'Outs — none, you are drawing dead',
+      'No card that can still come wins or splits this pot for you',
+    ],
+    // As Ks on Qc 7c 2h against Ac Kc: a tie unless the opponent's fifth club comes, (36/45)(35/44) = 63.6%.
+    [
+      'split at best',
+      noOuts('flop', 0.3182, 0, 0.6364),
+      'Outs — none, a split is the best you can make',
+      'The most you can win is a share of a split pot.',
+    ],
+    // 7d 5d on 4d 9h 2s against QQ+ and AK, measured at 18.5%: a 7 or a 5 beats AK, but not the range.
+    [
+      'behind with equity',
+      noOuts('flop', 0.1845, 0.1845, 0),
+      'Outs — none, no single card puts you ahead',
+      'An out has to bring you to at least an even share of this pot on its own',
+    ],
+    // A sampled zero can have missed a rare runout, so it is not called dead.
+    [
+      'sampled zero',
+      noOuts('turn', 0, 0, 0, 'monte-carlo'),
+      'Outs — none, no single card puts you ahead',
+      'An out has to bring you to at least an even share of this pot on its own',
+    ],
+  ];
+  for (const [name, report, heading, lead] of cases) {
+    const markup = await render(report);
+    assert.ok(!markup.includes('Outs — 0 cards in total'), `${name}: zero is not a count of outs`);
+    assert.ok(markup.includes(heading), `${name}: the heading reads "${heading}"`);
+    assert.ok(markup.includes(lead), `${name}: the lead reads "${lead}"`);
+  }
+});
+
 test('the panel refuses the stale fixture value the audit found', async () => {
   const markup = await render(STALE_FIXTURE);
 

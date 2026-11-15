@@ -88,7 +88,7 @@ export function scenarioToPlayerView(scenario: Scenario): ScenarioTable | null {
   const seats: SeatView[] = scenario.seats.map((seat) => {
     const isHero = seat.isHero === true;
     const cards = isHero ? heroCards : null;
-    const status: SeatStatus = 'active';
+    const status: SeatStatus = seat.folded === true ? 'folded' : 'active';
     return {
       seat: seat.seat,
       // `PokerTable` never renders `playerId`. It takes names from `seatNames`.

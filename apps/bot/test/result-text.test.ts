@@ -48,8 +48,12 @@ describe('chips nobody could match go back, and are not won', () => {
     );
     const text = resultText(table, readerView(state));
     assert.match(text, /^You get back 50 units that nobody still in the hand matched\.$/m);
-    assert.match(text, /wins? 1,900 units from the main pot\./);
-    assert.doesNotMatch(text, /side pot/);
+    assert.match(text, /wins? 1,900 units from the pot\./);
+    assert.doesNotMatch(
+      text,
+      /side pot|main pot/,
+      'chips that went back are not a pot, so there is no main one',
+    );
     assert.match(text, /^Hand 1 · Hand over · Pot 1,900 units$/m);
   });
 
@@ -77,7 +81,7 @@ describe('chips nobody could match go back, and are not won', () => {
     assert.match(text, /· Pot 2,200 units$/m);
   });
 
-  test('a fold-win is still a win: the main pot holds the blinds even with one seat eligible', () => {
+  test('a fold-win is still a win: the pot holds the blinds even with one seat eligible', () => {
     const state = scripted(
       READER_SEAT,
       [
@@ -90,7 +94,7 @@ describe('chips nobody could match go back, and are not won', () => {
       ],
     );
     const text = resultText(table, readerView(state));
-    assert.match(text, /^You win 40 units from the main pot\.$/m);
+    assert.match(text, /^You win 40 units from the pot\.$/m);
     assert.doesNotMatch(text, /get back/);
     assert.match(text, /· Pot 40 units$/m);
   });
