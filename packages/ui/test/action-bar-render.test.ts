@@ -24,6 +24,7 @@ interface ActionBarProps {
   readonly disabled?: boolean;
   readonly idleText?: string;
   readonly idleAction?: ReactNode;
+  readonly context?: ReactNode;
   readonly className?: string;
 }
 
@@ -250,5 +251,19 @@ describe('the idle line carries the next step beside it', () => {
     const markup = await render({ idleAction: deal });
     assert.ok(markup.includes('class="prl-sizer"'), 'the decision did not render; the check is over nothing');
     assert.ok(!markup.includes('Deal the next hand'), markup);
+  });
+});
+
+describe('while the reader waits, the bar keeps its context', () => {
+  const glance = createElement('span', { className: 'probe-glance' }, 'cards and board');
+
+  it('draws the context above the idle line, so the board and the latest action stay on a phone', async () => {
+    const markup = await render({ legalActions: [], context: glance });
+    const drawn = markup.indexOf('probe-glance');
+    assert.ok(drawn >= 0, `the waiting bar dropped its context: ${markup}`);
+    assert.ok(
+      drawn < markup.indexOf('prl-action-bar__idle'),
+      `the context is not above the idle line: ${markup}`,
+    );
   });
 });
