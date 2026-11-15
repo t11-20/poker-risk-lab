@@ -152,6 +152,44 @@ describe('an elevated, focusable component keeps the focus halo beside its eleva
     });
   }
 
+  it('keeps the halo while a focused component is hovered or pressed', () => {
+    // A pointer resting on a keyboard-focused button must not delete its ring.
+    const pointerStates = /^(?::not\([^)]*\)|:hover|:active)+$/;
+    let checked = 0;
+    for (const component of COMPONENTS) {
+      for (const rule of rules(SHEETS[component.sheet])) {
+        for (const selector of rule.selectors) {
+          if (!selector.startsWith(component.elevated)) continue;
+          const state = selector.slice(component.elevated.length);
+          if (!pointerStates.test(state)) continue;
+          const shadow = boxShadow(rule.body);
+          if (shadow === undefined || elevation(shadow) === undefined) continue;
+          checked += 1;
+          assert.ok(
+            carriesRing(shadow),
+            `${selector} (${component.sheet}) sets \`box-shadow: ${shadow}\` without the focus ring, so a ` +
+              'focused control loses its halo under the pointer.',
+          );
+        }
+      }
+    }
+    assert.ok(checked > 0, 'no hover or active rule sets an elevation, so this checks nothing');
+  });
+
+  it('never lists --prl-elevation-0 beside another shadow, because `none` in a list voids the declaration', () => {
+    const shadows = Object.entries(SHEETS).flatMap(([name, css]) =>
+      rules(css).flatMap((rule) => {
+        const shadow = boxShadow(rule.body);
+        return shadow === undefined ? [] : [{ where: `${name}: ${rule.selectors.join(', ')}`, shadow }];
+      }),
+    );
+    assert.ok(shadows.length > 0, 'no box-shadow declarations were read');
+    for (const { where, shadow } of shadows) {
+      if (!shadow.includes('var(--prl-elevation-0)')) continue;
+      assert.equal(splitTopLevel(shadow).length, 1, `${where} lists \`${shadow}\``);
+    }
+  });
+
   it('reads the ring variable only under the name base.css sets on :focus-visible, uninherited', () => {
     const readers = Object.entries(SHEETS).flatMap(([name, css]) =>
       [...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/var\((--_[\w-]+)/g)].map((m) => `${name}: ${m[1]}`),

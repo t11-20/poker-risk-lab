@@ -1001,12 +1001,12 @@
 
 .prl-play .prl-action-btn:hover:not(:disabled) {
   background-color: var(--prl-veil-8);
-  box-shadow: var(--prl-elevation-2);
+  box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-2);
   transform: translateY(-1px);
 }
 
 .prl-play .prl-action-btn:active:not(:disabled) {
-  box-shadow: var(--prl-elevation-0);
+  box-shadow: var(--_ring, 0 0 #0000);
   transform: translateY(1px);
 }
 
@@ -1032,7 +1032,7 @@
 }
 
 .prl-play .prl-action-btn--primary:hover:not(:disabled) {
-  box-shadow: var(--prl-elevation-3);
+  box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-3);
 }
 
 .prl-play .prl-action-btn--primary:hover:not(:disabled)::before {
@@ -1040,7 +1040,7 @@
 }
 
 .prl-play .prl-action-btn--primary:active:not(:disabled) {
-  box-shadow: var(--prl-elevation-1);
+  box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-1);
 }
 
 /* 12.6  THE BET SIZER. A translucent `--prl-veil-4` tray, because an opaque block would cancel the glass. */
