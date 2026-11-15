@@ -36,3 +36,9 @@ for (const [file, expressions] of Object.entries(SITES)) {
     }
   });
 }
+
+it('LiveCalculation draws each outs label from its card value, because a lone "Ah" is never parsed', () => {
+  const source = readFileSync(join(SRC, 'LiveCalculation.tsx'), 'utf8');
+  assert.ok(source.includes('<CardRun cards={[outcome.card]} />'), 'the outs label does not draw its card');
+  assert.doesNotMatch(source, /\$\{outcome\.label\}/, 'the outs label still prints the card as notation');
+});

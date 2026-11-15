@@ -81,6 +81,22 @@ test('one card alone and range notation stay words, because "As" is English and 
   assert.equal((await cardText('7c7d')).painted, '7♣ 7♦', 'a run written without spaces is still a run');
 });
 
+test('a card known by its value is drawn and named the same way, with no notation to parse', async () => {
+  const CardRun = await loadComponent<{ readonly cards: readonly number[] }>(
+    'components/CardText',
+    'CardRun',
+  );
+  // 50 is the ace of hearts and 32 the ten of clubs, by `rankIndex * 4 + suitIndex`.
+  assert.deepEqual(read(renderToStaticMarkup(createElement(CardRun, { cards: [50] }))), {
+    painted: 'A♥',
+    heard: 'ace of hearts',
+  });
+  assert.deepEqual(read(renderToStaticMarkup(createElement(CardRun, { cards: [32, 51] }))), {
+    painted: '10♣ A♠',
+    heard: 'ten of clubs, ace of spades',
+  });
+});
+
 test('no quiz string and no Lab paragraph reaches the page or the reader as "Ah Kh"', async () => {
   const quizRuns = QUIZ_TEXT.filter((text) => RUN.test(text));
   // Eight quiz prompts carry runs today. Zero would be a sweep of nothing.
