@@ -2,7 +2,9 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { botDisplayName, botDisplayNames, LEGACY_PROFILE_IDS } from '../src/rooms/bots.ts';
+import { PATTERNS } from '@prl/contracts';
+import { PROFILES } from '@prl/poker-ai';
+import { botDisplayName, botDisplayNames, LEGACY_PROFILE_IDS, planLegendSeats } from '../src/rooms/bots.ts';
 
 const MAX_BOT_NAME = 24;
 
@@ -34,5 +36,27 @@ describe('bot display names', () => {
     for (const name of names)
       assert.ok(name.length <= MAX_BOT_NAME, `"${name}" is ${String(name.length)} long`);
     assert.deepEqual(names, ['Reading Pressure 1', 'Reading Pressure 2']);
+  });
+});
+
+describe('legend seat names', () => {
+  it('names the seat from the archetype, not the profile id', () => {
+    assert.equal(
+      planLegendSeats(['vocal-aggressor'], 'archetype', 6)[0]?.displayName,
+      'High-Variance Aggressor',
+    );
+  });
+
+  it('fits every profile, seated once or twice, into the display-name rule in its own words', () => {
+    assert.ok(PROFILES.length > 0, 'there are profiles to check');
+    for (const { naming } of PROFILES) {
+      const words = naming.archetypeName.split(' ');
+      for (const { displayName } of planLegendSeats([naming.id, naming.id], 'archetype', 6)) {
+        assert.match(displayName, new RegExp(PATTERNS.DISPLAY_NAME, 'u'), `${naming.id}: "${displayName}"`);
+        for (const word of displayName.replace(/ \d$/u, '').split(' ')) {
+          assert.ok(words.includes(word), `${naming.id}: "${word}" is not in "${naming.archetypeName}"`);
+        }
+      }
+    }
   });
 });

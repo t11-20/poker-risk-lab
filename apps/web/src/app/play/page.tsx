@@ -105,7 +105,7 @@ async function legendHead(profileId: string, difficulty: LegendDifficulty) {
   }
   return {
     known: archetypeName !== null,
-    copy: legendMatchCopy({ profileId, archetypeName, difficulty, setting }),
+    copy: legendMatchCopy({ archetypeName, difficulty, setting }),
     specific,
   };
 }

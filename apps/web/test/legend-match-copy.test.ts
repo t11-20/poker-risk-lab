@@ -24,7 +24,6 @@ const EXPERT: LegendDifficultyDto = {
 
 describe('legendMatchCopy', () => {
   const copy = legendMatchCopy({
-    profileId: 'vocal-aggressor',
     archetypeName: 'High-Variance Tournament Aggressor',
     difficulty: 'expert',
     setting: EXPERT,
@@ -41,15 +40,23 @@ describe('legendMatchCopy', () => {
     assert.match(copy.lede, /one modelled style/u);
   });
 
-  it('says what the seat plate is, so a reader is not left thinking they got another opponent', () => {
-    assert.match(copy.lede, /vocal-aggressor/u);
-    assert.match(copy.lede, /same style/u);
+  it('names the shortened seat plate, so a reader is not left thinking they got another opponent', () => {
+    assert.match(copy.lede, /Its seat is labelled High-Variance Aggressor/u);
+    assert.doesNotMatch(copy.lede, /vocal-aggressor/u);
+  });
+
+  it('says nothing about the plate when the whole name fits on it', () => {
+    const fits = legendMatchCopy({
+      archetypeName: 'Passive Calling Station',
+      difficulty: 'expert',
+      setting: EXPERT,
+    });
+    assert.doesNotMatch(fits.lede, /seat/u);
   });
 
   it('states the coach rule of the setting', () => {
     assert.match(copy.lede, /held back until the hand is over/u);
     const educational = legendMatchCopy({
-      profileId: 'calling-station',
       archetypeName: 'Passive Calling Station',
       difficulty: 'educational',
       setting: { ...EXPERT, id: 'educational', label: 'Educational', coachAvailable: true },
@@ -60,7 +67,6 @@ describe('legendMatchCopy', () => {
   it('always carries the framing, and falls back to a generic heading for an unknown id', () => {
     assert.match(copy.framing, /not a real person/u);
     const unknown = legendMatchCopy({
-      profileId: 'nope',
       archetypeName: null,
       difficulty: 'realistic',
       setting: null,

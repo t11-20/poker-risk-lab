@@ -6,12 +6,13 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import type {
-  CoachReport,
-  CompareProfilesResponse,
-  LegendDifficulty,
-  ProfileComparisonEntry,
-  ProfileDisclosureDto,
+import {
+  type CoachReport,
+  type CompareProfilesResponse,
+  type LegendDifficulty,
+  legendSeatName,
+  type ProfileComparisonEntry,
+  type ProfileDisclosureDto,
 } from '@prl/contracts';
 import {
   DIFFICULTY_SETTINGS,
@@ -133,16 +134,20 @@ export function disclosureFor(profileId: string, mode: NamingMode): ProfileDiscl
 /** `users_display_name_shape` allows 2..24 characters. */
 const MAX_BOT_NAME = 24;
 
-/** Whole words only, because "Reading Pressure Special" reads like a mistake. */
 export function botDisplayName(profileId: string): string {
+  return wholeWordName(profileId, MAX_BOT_NAME);
+}
+
+/** Whole words only, because "Reading Pressure Special" reads like a mistake. */
+function wholeWordName(profileId: string, max: number): string {
   const words = profileId.split('-').map((word) => (word[0] ?? '').toUpperCase() + word.slice(1));
   let name = '';
   for (const word of words) {
     const candidate = name === '' ? word : `${name} ${word}`;
-    if (candidate.length > MAX_BOT_NAME) break;
+    if (candidate.length > max) break;
     name = candidate;
   }
-  if (name.length < 2) name = (words[0] ?? 'Bot').slice(0, MAX_BOT_NAME);
+  if (name.length < 2) name = (words[0] ?? 'Bot').slice(0, max);
   return name.length < 2 ? 'Bot' : name;
 }
 
@@ -151,18 +156,19 @@ export function botDisplayName(profileId: string): string {
  * `BOT_TABLE` seats two `tight-aggressive` bots. The number fits inside the 24 characters, so a long
  * name loses a word before it loses its number.
  */
-export function botDisplayNames(profileIds: readonly string[]): readonly string[] {
+export function botDisplayNames(
+  profileIds: readonly string[],
+  nameOf: (profileId: string, max: number) => string = wholeWordName,
+): readonly string[] {
   const total = new Map<string, number>();
   for (const id of profileIds) total.set(id, (total.get(id) ?? 0) + 1);
   const seen = new Map<string, number>();
   return profileIds.map((id) => {
-    if ((total.get(id) ?? 0) < 2) return botDisplayName(id);
+    if ((total.get(id) ?? 0) < 2) return nameOf(id, MAX_BOT_NAME);
     const ordinal = (seen.get(id) ?? 0) + 1;
     seen.set(id, ordinal);
     const suffix = ` ${String(ordinal)}`;
-    const words = botDisplayName(id).split(' ');
-    while (words.length > 1 && `${words.join(' ')}${suffix}`.length > MAX_BOT_NAME) words.pop();
-    return `${words.join(' ').slice(0, MAX_BOT_NAME - suffix.length)}${suffix}`;
+    return `${nameOf(id, MAX_BOT_NAME - suffix.length)}${suffix}`;
   });
 }
 
@@ -441,7 +447,10 @@ export function planLegendSeats(
     });
   }
   const profiles = profileIds.map(resolveProfile);
-  const names = botDisplayNames(profiles.map((profile) => profile.naming.id));
+  const names = botDisplayNames(
+    profiles.map((profile) => profile.naming.id),
+    (id, max) => legendSeatName(requireProfile(id).naming.archetypeName, max),
+  );
   return profiles.map((profile, index) => {
     return {
       seat: index + 1,

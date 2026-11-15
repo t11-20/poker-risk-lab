@@ -8,6 +8,17 @@
 
 import type { CoachReport } from './api-types.ts';
 
+/**
+ * A Legend's seat plate, made from its archetype name. A display name holds 24 characters, so middle
+ * words go first: the noun and its first qualifier are what tell two styles apart.
+ */
+export function legendSeatName(archetypeName: string, max = 24): string {
+  const words = archetypeName.split(' ');
+  while (words.length > 2 && words.join(' ').length > max) words.splice(-2, 1);
+  const name = words.join(' ');
+  return name.length <= max ? name : (words[words.length - 1] ?? name).slice(0, max);
+}
+
 /** The 16 trait axes, mirrored from `@prl/poker-ai` for the wire. */
 export const LEGEND_TRAIT_KEYS = [
   'vpip',
