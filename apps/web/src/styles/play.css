@@ -43,6 +43,12 @@
 :root:has(.prl-play) {
   /* 4rem + 1rem, matching `--prl-play-sheet-peek` + one gap. */
   scroll-padding-block-end: calc(var(--prl-space-12) + var(--prl-space-6));
+  /* The open sheet. 25rem keeps the header, price, glance and a two-row action row above it at 360x780,
+     and the floor keeps it readable on a phone held sideways, where 25rem is more than the screen. */
+  --prl-play-sheet-open: max(
+    calc(100dvh - var(--prl-space-16) * 2 - var(--prl-space-12) - var(--prl-space-6)),
+    50dvh
+  );
 }
 
 /* 1. PAGE HEAD. Eyebrow, `h1`, lede. From 900px the lede sits beside the title (section 8), which
@@ -381,8 +387,7 @@
   inset-inline: 0;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  /* The viewport minus enough air to see what is behind the sheet when it is open. */
-  max-block-size: calc(100dvh - var(--prl-space-12));
+  max-block-size: var(--prl-play-sheet-open);
   padding-inline: var(--prl-gutter);
   padding-block-end: var(--prl-space-6);
   overflow-y: auto;
@@ -556,6 +561,19 @@
 @media (width < 600px) {
   :root:has(.prl-play) .prl-footer {
     margin-block-end: var(--prl-space-12);
+  }
+
+  /* Open, the whole sheet rests on the bottom edge: the row sticks on it and Tab stops above it. */
+  .prl-play:has(.prl-play__coach[data-open="true"]) {
+    --prl-play-sheet-peek: var(--prl-play-sheet-open);
+  }
+
+  :root:has(.prl-play__coach[data-open="true"]) {
+    scroll-padding-block-end: calc(var(--prl-play-sheet-open) + var(--prl-space-6));
+  }
+
+  :root:has(.prl-play__coach[data-open="true"]) .prl-footer {
+    margin-block-end: var(--prl-play-sheet-open);
   }
 }
 
@@ -1230,6 +1248,26 @@
 .prl-play__handle-grip {
   width: var(--prl-space-9);
   height: var(--prl-space-3);
+}
+
+@media (width < 600px) {
+  /* The sheet is the surface, and the panel's own frame pushed the reading off the sheet's first screen. */
+  .prl-play__coach .prl-coach {
+    padding: var(--prl-space-0);
+    border: 0;
+    border-radius: var(--prl-radius-0);
+    background-color: transparent;
+    box-shadow: var(--prl-elevation-0);
+  }
+
+  /* Visual order only. The DOM keeps equity and the price first, so a screen reader still meets them first. */
+  .prl-play__coach .prl-coach__header {
+    order: -2;
+  }
+
+  .prl-play__coach .prl-suggestion {
+    order: -1;
+  }
 }
 
 @media (min-width: 600px) {
