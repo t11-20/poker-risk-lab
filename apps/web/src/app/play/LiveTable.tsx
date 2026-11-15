@@ -667,8 +667,8 @@ function OutOfUnitsAtTheTable(): ReactElement {
 /**
  * The connection card pushes the first decision two screens down (Fold at docY 1746 at 1440x900), so
  * the page follows the table. It scrolls only on the edges the reader waits for, only when the target
- * is out of view, and never while they type elsewhere. A decision brings in the action row by its
- * nearest edge, never the band by its bottom. Below 900px the band (~715px) is taller than the view
+ * is out of view, and never while they type elsewhere. A decision brings in a row that does not stick by
+ * its nearest edge, never the band by its bottom. Below 900px the band (~715px) is taller than the view
  * (~620px), and aligning its bottom hides the reader's plate under the header. Other edges are watched
  * (`watchDelta`). Viewport only, because focus belongs to the rescues, which all pass `preventScroll`.
  */
@@ -689,34 +689,40 @@ function typingElsewhere(band: HTMLElement): boolean {
 }
 
 /**
- * Null unless a sticky row could cover the sizer (at 390x844 a tap on ½ pot sent a min-raise). Reads the
- * row's `position`, not the viewport width, because a container query decides it.
- * See `lib/follow-the-table.ts`.
+ * Null unless the row is sticky, so it could cover what the reader decides with: the sizer (at 390x844
+ * a tap on ½ pot sent a min-raise), or at a call or fold the price and the glance. Reads the row's
+ * `position`, not the viewport width, because a container query decides it. See `lib/follow-the-table.ts`.
  */
-function sizerScroll(band: HTMLElement): number | null {
+function stuckRowScroll(band: HTMLElement): number | null {
   const bar = band.querySelector<HTMLElement>('.prl-action-bar');
-  const sizer = bar?.querySelector<HTMLElement>('.prl-sizer');
   const row = bar?.querySelector<HTMLElement>('.prl-action-bar__actions');
-  if (bar == null || sizer == null || row == null) return null;
+  if (bar == null || row == null) return null;
   if (window.getComputedStyle(row).position !== 'sticky') return null;
   const root = window.getComputedStyle(document.documentElement);
   const street = band.querySelector<HTMLElement>('.prl-play__street');
-  const first = street ?? bar;
   const after = bar.querySelector<HTMLElement>('.prl-action-bar__note');
-  const sizerBox = sizer.getBoundingClientRect();
+  const sizer = bar.querySelector<HTMLElement>('.prl-sizer');
+  const price = bar.querySelector<HTMLElement>('.prl-action-bar__price');
+  // The glance repeats the street line's latest action, and keeping the line at a call or fold in a held
+  // band moved the page 71px down and the next sized decision moved it back (360x780).
+  const first = (sizer === null ? price : street) ?? bar;
   const rowBox = row.getBoundingClientRect();
   // `display: none` at the widths where the HUD holds the cards: a zero box is "not drawn", not "at 0".
-  const hand = bar.querySelector<HTMLElement>('.prl-hand-glance')?.getBoundingClientRect();
-  const price = bar.querySelector<HTMLElement>('.prl-action-bar__price');
+  const glance = bar.querySelector<HTMLElement>('.prl-hand-glance');
+  const hand = glance?.getBoundingClientRect();
+  const drawn = hand !== undefined && hand.height > 0;
+  // Without a sizer, the last of the price and the glance is what the stuck row must clear.
+  const under = (sizer ?? (drawn ? glance : null) ?? price ?? bar).getBoundingClientRect();
   return sizerFollowDelta({
     regionTop: first.getBoundingClientRect().top,
     priceTop: price === null ? null : price.getBoundingClientRect().top,
-    handTop: hand === undefined || hand.height === 0 ? null : hand.top,
+    handTop: drawn ? hand.top : null,
     streetBottom: street === null ? null : street.getBoundingClientRect().bottom,
     coverBottom: document.querySelector('.prl-shell__header')?.getBoundingClientRect().bottom ?? 0,
-    sizerTop: sizerBox.top,
-    sizerBottom: sizerBox.bottom,
-    controlsBottom: (sizer.querySelector('.prl-sizer__controls') ?? sizer).getBoundingClientRect().bottom,
+    sizerTop: under.top,
+    sizerBottom: under.bottom,
+    controlsBottom:
+      sizer?.querySelector('.prl-sizer__controls')?.getBoundingClientRect().bottom ?? under.bottom,
     rowFlowBottom: (after ?? bar).getBoundingClientRect()[after == null ? 'bottom' : 'top'],
     rowTop: rowBox.top,
     rowStuckTop:
@@ -764,11 +770,13 @@ function useFollowTheTable(live: LiveTableModel, band: RefObject<HTMLDivElement 
     if (turnEdge === '') return;
     const element = band.current;
     if (element === null || typingElsewhere(element)) return;
-    const sized = sizerScroll(element);
+    const sized = stuckRowScroll(element);
     if (sized !== null) {
       // The sizer and the row leave when the decision ends, and the page shrank 718px at 390x844.
-      held.current = handEdge;
-      element.style.minBlockSize = `${element.getBoundingClientRect().height}px`;
+      if (element.querySelector('.prl-sizer') !== null) {
+        held.current = handEdge;
+        element.style.minBlockSize = `${element.getBoundingClientRect().height}px`;
+      }
       if (sized !== 0) window.scrollBy({ top: sized, behavior: reduced ? 'auto' : 'smooth' });
       return;
     }
