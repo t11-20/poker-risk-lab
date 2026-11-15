@@ -17,6 +17,7 @@ import {
   AssumptionList,
   Callout,
   CardRow,
+  CardText,
   Chip,
   EquityBar,
   Formula,
@@ -211,7 +212,9 @@ function OutsDetail(props: { readonly detail: Extract<CalculationDetail, { kind:
               {notes.map((outcome) => (
                 <div className="prl-learn-calc__card" key={outcome.label}>
                   <dt className="prl-mono">{`${outcome.label} — ${outcome.classification}`}</dt>
-                  <dd>{outcome.note}</dd>
+                  <dd>
+                    <CardText text={outcome.note} />
+                  </dd>
                 </div>
               ))}
             </dl>
@@ -360,7 +363,9 @@ export function LiveCalculation(props: LiveCalculationProps): ReactElement {
           <details className="prl-disclose">
             <summary className="prl-disclose__summary">The arithmetic, written out</summary>
             <div className="prl-disclose__body">
-              <p className="prl-learn-calc__derivation">{result.derivation}</p>
+              <p className="prl-learn-calc__derivation">
+                <CardText text={result.derivation} />
+              </p>
             </div>
           </details>
         )}

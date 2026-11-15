@@ -23,6 +23,7 @@ export {
 export {
   type CardDescription,
   type CardValue,
+  cardTextSegments,
   describeCard,
   handAndBoardName,
   isCardValue,
@@ -40,6 +41,7 @@ export {
 export { Button, type ButtonProps, type ButtonSize, type ButtonVariant } from './components/Button.tsx';
 export { Callout, type CalloutProps, type CalloutTone } from './components/Callout.tsx';
 export { type CardEntry, CardRow, type CardRowProps } from './components/CardRow.tsx';
+export { CardText } from './components/CardText.tsx';
 export { Chip, type ChipProps, type ChipTone } from './components/Chip.tsx';
 export { CoachPanel, type CoachPanelProps } from './components/CoachPanel.tsx';
 export { EquityBar, type EquityBarPlayer, type EquityBarProps } from './components/EquityBar.tsx';
