@@ -1016,6 +1016,28 @@ describe('the Legends endpoints', () => {
     await test.app.close();
   });
 
+  it('compares against the seat that made the bet, not the first seat still in', async () => {
+    const test = await harness();
+    const { token, cookie } = await csrfPair(test.app);
+    // The small blind has 995 behind and 5 in, the big blind 990 and the 10 the button faces.
+    const response = await test.app.inject({
+      method: 'POST',
+      url: '/api/v1/legends/compare',
+      payload: {
+        scenarioId: 'fl-same-cards-on-the-button',
+        profileIds: ['calling-station'],
+        difficulty: 'educational',
+        trials: 1,
+      },
+      cookies: { prl_csrf: cookie },
+      headers: { 'x-csrf-token': token, origin: ALLOWED_ORIGIN },
+    });
+    assert.equal(response.statusCode, 200, response.payload);
+    const body = response.json() as { analysis: { stackContext: { explanation: string } } };
+    assert.match(body.analysis.stackContext.explanation, /has 990 behind and 10 more than you/);
+    await test.app.close();
+  });
+
   it('compares against the opponent still in a scenario, not a seat that folded', async () => {
     const test = await harness();
     const { token, cookie } = await csrfPair(test.app);
