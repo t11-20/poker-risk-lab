@@ -241,7 +241,6 @@ export function describeAmong(score: HandScore, shown: readonly HandScore[]): st
   return describeToDepth(score, depth);
 }
 
-/** `depth` is how many significant ranks to name, where the default names fewer. */
 function describeToDepth(score: HandScore, depth: number): string {
   const category = categoryOf(score);
   const ranks = significantRanks(score);
