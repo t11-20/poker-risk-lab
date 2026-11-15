@@ -9,6 +9,7 @@ import {
   bestFiveCards,
   buildPotLayers,
   buildPots,
+  computeShowdowns,
   seatOrderFromButton,
 } from '../src/pots.ts';
 import type { SeatState } from '../src/types.ts';
@@ -320,4 +321,33 @@ test('a chopped pot in a real hand splits the chips', () => {
   assert.equal(result.netBySeat[0], 0);
   assert.equal(result.netBySeat[1], 0);
   assert.equal(chipsInSystem(finished), 200);
+});
+
+function shownAt(board: string, ...holes: string[]): string[] {
+  const seats = holes.map((hole, index) => {
+    const [first, second] = parseCards(hole);
+    if (first === undefined || second === undefined) throw new Error(`two hole cards needed: ${hole}`);
+    return seat({ seat: index, holeCards: [first, second] });
+  });
+  const showdowns = computeShowdowns({ seats, board: parseCards(board), buttonSeat: 0, maxSeats: 6 });
+  return showdowns.map((showdown) => showdown.description);
+}
+
+test('two flushes to the same ace are described down to the card that decides them', () => {
+  assert.deepEqual(shownAt('3d 7c Ac Jc 2c', 'Qc 9c', '5h 5c', 'Ad Kh'), [
+    'flush, ace-queen high',
+    'flush, ace-jack high',
+    'pair of aces, king kicker',
+  ]);
+});
+
+test('hands that chop share one description, so the wording invents no winner', () => {
+  assert.deepEqual(shownAt('Ac Kc Qc Jc 9c', '2d 3h', '4s 5d'), ['flush, ace high', 'flush, ace high']);
+});
+
+test('a pair beaten on its second kicker names that kicker', () => {
+  assert.deepEqual(shownAt('Ks Kd Ac 8h 3c', 'Qd 2s', 'Jd 4h'), [
+    'pair of kings, ace queen kickers',
+    'pair of kings, ace jack kickers',
+  ]);
 });

@@ -13,7 +13,7 @@
  */
 
 import type { Card } from './cards.ts';
-import { describeScore, evaluate, type HandScore } from './evaluate.ts';
+import { describeAmong, evaluate, type HandScore } from './evaluate.ts';
 import type { Pot, PotAward, SeatIndex, SeatShowdown, SeatState, SeatStatus } from './types.ts';
 
 export class PotError extends Error {
@@ -274,7 +274,7 @@ export interface ShowdownInput {
 
 /** Evaluates every seat still holding cards. */
 export function computeShowdowns(input: ShowdownInput): SeatShowdown[] {
-  const out: SeatShowdown[] = [];
+  const out: Omit<SeatShowdown, 'description'>[] = [];
   for (const seat of input.seats) {
     if (seat.status !== 'active' && seat.status !== 'allIn') continue;
     if (seat.holeCards === null) {
@@ -290,11 +290,11 @@ export function computeShowdowns(input: ShowdownInput): SeatShowdown[] {
       playerId: seat.playerId,
       holeCards: seat.holeCards,
       score,
-      description: describeScore(score),
       bestFive: bestFiveCards(all),
     });
   }
-  return out;
+  const scores = out.map((showdown) => showdown.score);
+  return out.map((showdown) => ({ ...showdown, description: describeAmong(showdown.score, scores) }));
 }
 
 export interface AwardInput {
