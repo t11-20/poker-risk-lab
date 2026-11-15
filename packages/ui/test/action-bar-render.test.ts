@@ -167,17 +167,49 @@ describe('a call that takes the whole stack says so', () => {
   it('speaks the all-in and prints the engine sentence (REGRESSION)', async () => {
     // Over 3,000 hands, 3,569 of 15,137 call offers were all-in calls.
     const markup = await render({ legalActions: ALL_IN_CALL, toCall: 62 });
-    assert.match(markup, /call 62 units, which is all in/u, 'the spoken label must say it is all in');
+    assert.match(
+      markup,
+      /aria-label="call all in, 62 units"/u,
+      'the spoken name must begin with the visible label',
+    );
     assert.match(markup, /Calling puts your whole remaining stack in\./u, "the engine's note must be shown");
+  });
+
+  it('prints the all-in on the button as well as speaking it', async () => {
+    const markup = await render({ legalActions: ALL_IN_CALL, toCall: 62 });
+    assert.match(markup, /<span class="prl-action-btn__label">Call all in<\/span>/u, markup);
   });
 
   it('says nothing of the sort on an ordinary call, so the wording is conditional', async () => {
     const markup = await render();
+    assert.match(markup, /<span class="prl-action-btn__label">Call<\/span>/u, markup);
     assert.ok(!markup.includes('which is all in'), 'an ordinary call must not be announced as all in');
     assert.ok(
       !markup.includes('Calling puts your whole remaining stack in.'),
       'an ordinary call must not carry the all-in note',
     );
+  });
+});
+
+describe('a bet or raise of the whole stack says so on the button', () => {
+  /** Facing 100 with 340 behind: a full raise is out of reach, so the only raise is all in. */
+  const SHOVE_ONLY: readonly LegalAction[] = [
+    { type: 'fold' },
+    { type: 'call', minTo: 100, costAtMin: 100 },
+    { type: 'raise', minTo: 340, maxTo: 340, allInAtMax: true },
+  ];
+
+  it('prints and speaks the all-in when the only raise is the whole stack (REGRESSION)', async () => {
+    const markup = await render({ legalActions: SHOVE_ONLY });
+    assert.match(markup, /<span class="prl-action-btn__label">Raise to 340, all in<\/span>/u, markup);
+    assert.match(markup, /aria-label="raise to 340 units, which is all in: 340 units out of your stack"/u);
+    assert.match(markup, /leaving 0 units behind — this is all in\./u, 'the readout must agree with the button');
+  });
+
+  it('NEGATIVE CONTROL: a raise with chips left behind names no all-in', async () => {
+    const markup = await render();
+    assert.match(markup, /<span class="prl-action-btn__label">Raise to 200<\/span>/u, markup);
+    assert.ok(!markup.includes('all in'), markup);
   });
 });
 
