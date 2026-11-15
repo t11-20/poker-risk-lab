@@ -74,6 +74,7 @@ export {
   categoryName,
   categoryOf,
   compareHands,
+  describeAmong,
   describeScore,
   evaluate,
   HAND_CATEGORY,
