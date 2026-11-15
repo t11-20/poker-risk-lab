@@ -28,6 +28,7 @@ import type {
   ProfileObservedStats,
 } from '@prl/contracts';
 import { type Action, type Card, cardToString, type PlayerView, type SeatView } from '@prl/poker-engine';
+import { effectiveStackOf } from '@prl/poker-math';
 import { assertNoImpersonation, type ProfileDisclosure } from './labelling.ts';
 import {
   DIFFICULTY_SETTINGS,
@@ -476,9 +477,19 @@ function stackDepthLine(traits: Traits, view: PlayerView, self: SeatView): strin
   const contenders = view.seats.filter(
     (seat) => !seat.isSelf && (seat.status === 'active' || seat.status === 'allIn'),
   );
-  let biggestOther = 0;
-  for (const seat of contenders) biggestOther = Math.max(biggestOther, seat.stack);
-  const effective = contenders.length === 0 ? self.stack : Math.min(self.stack, biggestOther);
+  // The policy's and the Coach's definition, so the line names the depth the decision used.
+  const effective =
+    contenders.length === 0
+      ? self.stack
+      : effectiveStackOf({
+          toCall: view.amountToCall,
+          heroCommittedThisStreet: self.committedThisStreet,
+          heroStack: self.stack,
+          opponentStacks: contenders.map((seat) => ({
+            behind: seat.stack,
+            committedThisStreet: seat.committedThisStreet,
+          })),
+        }).effective;
   if (effective <= 0) {
     return `Stack depth: with no chips behind on the other side of this pot, ${trait('stackDepthAdjustment', traits)} has nothing left to act on here.`;
   }

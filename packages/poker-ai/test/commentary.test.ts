@@ -470,6 +470,25 @@ test('explainModelDecision never impersonates, over every profile and every offe
   assert.ok(generated > 300, `the fuzz should cover hundreds of inputs, covered ${generated}`);
 });
 
+test('explainModelDecision counts chips already bet this street in the effective stack, as the policy does', () => {
+  // 498 behind plus the 100 bet can still come against 998: 598 effective, 299 big blinds.
+  const view = situation({
+    stacks: [1000, 600],
+    maxSeats: 2,
+    script: [{ type: 'call' }, { type: 'check' }, { type: 'bet', to: 100 }],
+    seed: 37,
+  });
+  const profile = requireProfile('mixed-game-generalist');
+  const reasoning = explainModelDecision({
+    decision: decisionFor(view, { type: 'call' }, profile.naming.id, 0),
+    profile,
+    disclosure: profileDisclosure(profile.naming, 'archetype'),
+    view,
+  });
+  const depth = reasoning.whatChangedIt.find((line) => line.startsWith('Stack depth:'));
+  assert.match(depth ?? '', /^Stack depth: at 299\.0 big blinds effective/);
+});
+
 test('explainModelDecision shows more than one plausible action wherever more than one is legal', () => {
   for (const { view } of situations()) {
     const actions = offeredActions(view);
