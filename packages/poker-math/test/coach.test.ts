@@ -1168,7 +1168,7 @@ test('confidence measures the gap to the next-best ACTION, not to a neighbouring
   // The opponent has 300 behind, so the pot-sized raise to 410 and the shove both raise by the 300
   // that can be called: 0.35 x 210 + 0.65 x [ (31/44) x 910 - 400 ] = 230.24 each. Confidence is
   // measured against the best line that is not a raise, calling at (31/44) x 310 - 100 = 118.41.
-  // Size near-ties are what `sizeRange` is for.
+  // The shove ties only because nobody can call more, so the range names the smaller size alone.
   const report = buildCoachReport({
     heroCards: parseCards('Ac Kd'),
     board: parseCards('Th 9s 2c 3d'),
@@ -1188,5 +1188,5 @@ test('confidence measures the gap to the next-best ACTION, not to a neighbouring
   assert.equal(report.suggestion.action, 'raise');
   assert.equal(report.suggestion.confidence, 'reasonable');
   assert.match(report.suggestion.reason, /by 111\.8 units over the next-best action/u);
-  assert.deepEqual(report.suggestion.sizeRange, { min: 410, max: 1000 }, 'the tie is the size range');
+  assert.deepEqual(report.suggestion.sizeRange, { min: 410, max: 410 }, 'the capped tie is one size');
 });
