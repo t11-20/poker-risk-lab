@@ -16,6 +16,16 @@ export const QUIZ_UNIT_WORDS: Readonly<Record<QuizUnit, string>> = {
   hands: 'hands',
 };
 
+/** "in to 1" is not English, so a ratio asks for the X, as the bot does. */
+export function quizAnswerLabel(unit: QuizUnit): string {
+  return unit === 'ratio' ? 'Your answer, the X in “X to 1”' : `Your answer, in ${QUIZ_UNIT_WORDS[unit]}`;
+}
+
+/** The words after a tolerance. A ratio's band is a plain number, since "within 0.2 to 1" reads as a range. */
+export function quizBandWords(unit: QuizUnit): string {
+  return unit === 'ratio' ? '' : ` ${QUIZ_UNIT_WORDS[unit]}`;
+}
+
 /** A count is never fractional. */
 export const QUIZ_UNIT_DECIMALS: Readonly<Record<QuizUnit, number>> = {
   percent: 1,
