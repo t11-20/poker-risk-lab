@@ -609,6 +609,11 @@ function CoachSheet({ report, status, coachUnavailableReason, reviewHref }: Coac
     setOpen(true);
   };
 
+  // The handle scrolls with the report, so a sheet closed from deep in it would peek at report text.
+  useEffect(() => {
+    if (!open) sheetRef.current?.scrollTo({ top: 0 });
+  }, [open]);
+
   /** Focus left inside a closed sheet is off the screen, so it goes back to the handle. */
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     if (event.key !== 'Escape' || !open) return;

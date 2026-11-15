@@ -43,8 +43,12 @@
 :root:has(.prl-play) {
   /* 4rem + 1rem, matching `--prl-play-sheet-peek` + one gap. */
   scroll-padding-block-end: calc(var(--prl-space-12) + var(--prl-space-6));
-  /* The open sheet. 25rem keeps the header, price, glance and a two-row action row above it at 360x780. */
-  --prl-play-sheet-open: calc(100dvh - var(--prl-space-16) * 2 - var(--prl-space-12) - var(--prl-space-6));
+  /* The open sheet. 25rem keeps the header, price, glance and a two-row action row above it at 360x780,
+     and the floor keeps it readable on a phone held sideways, where 25rem is more than the screen. */
+  --prl-play-sheet-open: max(
+    calc(100dvh - var(--prl-space-16) * 2 - var(--prl-space-12) - var(--prl-space-6)),
+    50dvh
+  );
 }
 
 /* 1. PAGE HEAD. Eyebrow, `h1`, lede. From 900px the lede sits beside the title (section 8), which

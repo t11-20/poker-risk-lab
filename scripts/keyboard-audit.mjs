@@ -1299,18 +1299,76 @@ async function auditCoachSheetOpen(page) {
         if (open.hidden.length === 0) ok(`${label}: ${open.needed} controls and figures still take a tap`);
         else bad(label, `under the open sheet: ${open.hidden.join(', ')}`);
 
-        await page.evaluate(`document.querySelector('.prl-play__coach summary').focus()`);
+        // From the last disclosure, scrolled to the bottom: the handle scrolls with the sheet's content.
+        await page.evaluate(
+          `(() => {
+            const sheet = document.querySelector('.prl-play__coach');
+            [...sheet.querySelectorAll('summary')].at(-1).focus({ preventScroll: true });
+            sheet.scrollTop = sheet.scrollHeight;
+          })()`,
+        );
         await page.press('Escape');
         await delay(400);
         const closed = await page.evaluate(
-          `(() => ({ open: document.querySelector('.prl-play__coach').dataset.open, onHandle: document.activeElement === document.querySelector('.prl-play__handle') }))()`,
+          `(() => {
+            const handle = document.querySelector('.prl-play__handle');
+            const box = handle.getBoundingClientRect();
+            const y = box.top + box.height / 2;
+            return {
+              open: document.querySelector('.prl-play__coach').dataset.open,
+              onHandle: document.activeElement === handle,
+              shown: y > 0 && y < innerHeight && handle.contains(document.elementFromPoint(box.left + box.width / 2, y)),
+            };
+          })()`,
         );
-        if (closed.open === 'false' && closed.onHandle)
-          ok(`${label}: Escape closes it, focus back on the handle`);
+        if (closed.open === 'false' && closed.onHandle && closed.shown)
+          ok(`${label}: Escape closes it, focus back on the handle, and the handle is what the peek shows`);
         else
-          bad(label, `after Escape the sheet is open=${closed.open}, focus on the handle ${closed.onHandle}`);
+          bad(
+            label,
+            `after Escape the sheet is open=${closed.open}, focus on the handle ${closed.onHandle}, ` +
+              `handle on screen ${closed.shown}`,
+          );
       }
     }
+    // A phone held sideways is under 600px wide too, and a sheet sized for a tall screen came out negative.
+    section(`Narrow viewport — the open Coach in landscape  ${DIM}568x320${RESET}`);
+    await page.send('Emulation.setDeviceMetricsOverride', {
+      width: 568,
+      height: 320,
+      deviceScaleFactor: 2,
+      mobile: true,
+    });
+    await page.goto(`${WEB_ORIGIN}/play?state=decision`);
+    for (
+      let wait = 0;
+      wait < 30 && (await page.evaluate(`document.querySelector('.prl-boot') !== null`));
+      wait += 1
+    ) {
+      await delay(100);
+    }
+    await page.evaluate(
+      `(() => {
+        document.querySelector('.prl-play__coach').style.transition = 'none';
+        document.querySelector('.prl-play__handle').focus();
+      })()`,
+    );
+    await page.press('Enter');
+    await delay(600);
+    const sideways = await page.evaluate(
+      `(() => {
+        const sheet = document.querySelector('.prl-play__coach');
+        return { open: sheet.dataset.open === 'true', height: sheet.clientHeight };
+      })()`,
+    );
+    if (!sideways.open) bad('Coach sheet: 568x320', 'the sheet did not open, so nothing was checked');
+    else if (sideways.height >= 320 * 0.4)
+      ok(`Coach sheet: 568x320: the open sheet is ${sideways.height}px of a 320px screen`);
+    else
+      bad(
+        'Coach sheet: 568x320',
+        `the open sheet is ${sideways.height}px of a 320px screen, too small to read`,
+      );
   } finally {
     await page.send('Emulation.clearDeviceMetricsOverride');
   }
