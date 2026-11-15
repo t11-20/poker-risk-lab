@@ -24,7 +24,7 @@ import { TableStage, type TableStageStatus } from '@/components/TableStage.tsx';
 import { noAnalysisReason, readerHasDecisions, reviewHrefFor } from '@/lib/coach-body.ts';
 import { dealNextState } from '@/lib/deal-next.ts';
 import { sizerFollowDelta, type WatchGeometry, watchDelta } from '@/lib/follow-the-table.ts';
-import { LEGENDS_PATH, PLAY_PATH } from '@/lib/legend-links.ts';
+import { LEGENDS_PATH, legendMatchHref, PLAY_PATH } from '@/lib/legend-links.ts';
 import { describeTable } from '@/lib/table-description.ts';
 import { INVITE_CODE_EXAMPLE, MAX_INVITE_CODE_INPUT } from '@/lib/table-rooms.ts';
 import type { TableSocketStatus } from '@/lib/table-socket.ts';
@@ -121,7 +121,8 @@ function statusSentence(live: LiveTableModel, inLegendMatch: boolean): string {
   if (live.phase === 'idle' && inLegendMatch) {
     return (
       'Not connected yet. “Deal me in” starts a guest session if you need one, with no email and no ' +
-      'password, and starts a new match with 1,000 units. Then it takes your seat and deals. ' +
+      'password, and opens your match against this style: the one still running, or a new one with ' +
+      '1,000 units. Then it takes your seat and deals, unless a hand is already being played. ' +
       'Each table keeps its own units, and if this would close another table you have open, you are ' +
       'asked first.'
     );
@@ -378,13 +379,15 @@ function switchSentence(warning: SwitchWarning): string {
 
 /**
  * Only the text is the alert. An alert holding controls is an alertdialog, which would take focus,
- * and the rescue in `ConnectionControls` already puts it on the status line. Only the bot table can
- * be gone back to: a Legends page's press always starts a new match, so none is ever reopened.
+ * and the rescue in `ConnectionControls` already puts it on the status line. A match still running is
+ * gone back to on its own page, which reconnects to it. A finished one has nothing to go back to.
  */
 function SwitchTablesNotice({
   live,
   warning,
 }: ConnectionPanelProps & { readonly warning: SwitchWarning }): ReactElement {
+  const keep = warning.starting === 'legendMatch' ? 'Keep my other Legends match' : 'Keep my Legends match';
+  const match = warning.other.kind === 'legendMatch' ? warning.other.match : null;
   return (
     <Callout tone="warning" title="Switching tables resets your units">
       <div role="alert">
@@ -402,10 +405,18 @@ function SwitchTablesNotice({
           >
             Stay at my bot table
           </Link>
-        ) : (
+        ) : match === null ? (
           <Button variant="secondary" onClick={live.keepOtherTable}>
-            {warning.starting === 'legendMatch' ? 'Keep my other Legends match' : 'Keep my Legends match'}
+            {keep}
           </Button>
+        ) : (
+          <Link
+            className="prl-btn prl-btn--secondary prl-btn--md"
+            href={legendMatchHref(match.profileId, match.difficulty)}
+            onClick={live.stayAtOtherTable}
+          >
+            {keep}
+          </Link>
         )}
       </p>
     </Callout>

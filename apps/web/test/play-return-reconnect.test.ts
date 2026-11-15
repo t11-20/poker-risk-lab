@@ -27,6 +27,7 @@ function member(userId: string, seat: number | null, isBot: boolean): RoomMember
     stack: 1_000,
     isBot,
     botProfile: isBot ? 'calling-station' : null,
+    botDifficulty: isBot ? 'realistic' : null,
     connected: true,
     awaitingBigBlind: false,
   };
@@ -173,8 +174,13 @@ describe('the page that does the reconnecting', () => {
     assert.ok(!/setDealIn\(/u.test(effect), 'being reconnected is not being dealt in');
     assert.match(
       effect,
-      /if \(legendMatch !== undefined\) return;/u,
-      'a Legends page opens a match by its press',
+      /resumeRememberedTable\(remembered, controller\.signal, undefined, legendMatch\)/u,
+      'a Legends page resumes only its own match',
+    );
+    assert.match(
+      effect,
+      /if \(legendMatch === undefined\) rememberRoom\(null\);/u,
+      'a Legends page keeps the bot table /play resumes',
     );
   });
 

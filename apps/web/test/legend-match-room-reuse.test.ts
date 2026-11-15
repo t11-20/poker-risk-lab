@@ -24,6 +24,7 @@ function member(userId: string, seat: number | null, isBot: boolean, botProfile:
     stack: 1_000,
     isBot,
     botProfile,
+    botDifficulty: isBot ? 'realistic' : null,
     connected: true,
     awaitingBigBlind: false,
   };

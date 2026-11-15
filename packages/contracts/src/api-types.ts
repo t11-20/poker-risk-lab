@@ -5,6 +5,7 @@
  */
 
 import type { ContentBundle, ContentId, GlossaryEntry, Lesson, Quiz, Scenario } from './content-types.ts';
+import type { LegendDifficulty } from './legends.ts';
 
 /** Bumped when a breaking change lands. Clients send it; the server rejects mismatches. */
 export const PROTOCOL_VERSION = 1;
@@ -345,6 +346,8 @@ export interface RoomMember {
   readonly stack: number;
   readonly isBot: boolean;
   readonly botProfile: string | null;
+  /** Null for a person. With `botProfile`, it tells one Legends match from another. */
+  readonly botDifficulty: LegendDifficulty | null;
   readonly connected: boolean;
   /**
    * True while this seat owes a blind and is not dealt in yet. Derived from `LiveTable.owesBlind`.
