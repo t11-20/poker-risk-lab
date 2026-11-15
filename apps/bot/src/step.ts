@@ -417,16 +417,20 @@ function sizeProblem(to: number | null, size: Sizable): string | null {
   return null;
 }
 
+/** `parseNumber` also reads `%`, `bb` and `to 1`, and none of them is a number of units. */
+const UNITS_TEXT = /^\s*[\d,.]+\s*(?:units?)?\s*$/i;
+
 function onSizeText(session: Session, text: string, deps: Deps): StepResult | null {
   const { sizing, phase, table } = session;
   if (sizing === null) return null;
   const live = phase.kind === 'deciding' && drawnFor(phase.state, sizing.handId, sizing.sequence);
   const size = live ? sizable(phase.state) : null;
   if (size === null || phase.kind !== 'deciding' || table === null) {
-    return { session: { ...session, sizing: null }, out: [say(SIZE_STALE)] };
+    // Only a number reads as a late answer. Other chat ends the prompt and gets the usual reply.
+    const cleared = { ...session, sizing: null };
+    return { session: cleared, out: [say(UNITS_TEXT.test(text) ? SIZE_STALE : UNKNOWN)] };
   }
-  // `parseNumber` also reads `%`, `bb` and `to 1`, and none of them is a number of units.
-  const to = /^\s*[\d,.]+\s*(?:units?)?\s*$/i.test(text) ? parseNumber(text) : null;
+  const to = UNITS_TEXT.test(text) ? parseNumber(text) : null;
   const problem = sizeProblem(to, size);
   if (problem !== null || to === null) {
     return { session, out: [say(`${problem}, so nothing was sent. ${rangeText(size)}`)] };

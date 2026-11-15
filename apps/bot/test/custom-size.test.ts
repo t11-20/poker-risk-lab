@@ -104,4 +104,13 @@ describe('a size typed after Other size…', () => {
       buttons: [],
     });
   });
+
+  test('words typed after the hand moved on get the usual reply, and end the stale prompt', () => {
+    const { deps, table, ask } = asked();
+    const moved = press(ask.session, find(actionButtonsOf(table), /^Call/), deps);
+    const hello = typed(moved.session, 'hi', deps);
+    assert.match(message(hello).text, /^Use the buttons/, 'chat that is not a size is not answered as one');
+    assert.equal(hello.session.sizing, null);
+    assert.match(message(typed(hello.session, '50', deps)).text, /^Use the buttons/);
+  });
 });
