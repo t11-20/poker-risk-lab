@@ -6,8 +6,10 @@
 
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
+import { scenarioById } from '@prl/content';
 import { parseCards } from '@prl/poker-engine';
 import { buildHandReview } from '../src/review/build-review.ts';
+import { coachTaskFor } from '../src/routes/content.ts';
 import type { CoachTask } from '../src/workers/equity-worker.ts';
 import { WorkerPool } from '../src/workers/pool.ts';
 import { persistHand } from './helpers/hand-rows.ts';
@@ -49,6 +51,20 @@ test('the thread prices a side pot from the winnable the task carries', async ()
   const report = await pool.runCoach(task);
   const check = report.candidates.find((row) => row.action === 'check');
   assert.equal(check?.ev, 200);
+});
+
+test('a Lab scenario with an opponent all in deals each opponent the scenario range', async () => {
+  // The small blind still has chips, the big blind is all in for its 10. Two stacks, so two ranges.
+  const base = scenarioById('fl-same-cards-on-the-button');
+  assert.ok(base !== null);
+  const allIn = {
+    ...base,
+    seats: base.seats.map((seat) => (seat.seat === 2 ? { ...seat, stack: 0 } : seat)),
+  };
+  const report = await pool.runCoach(coachTaskFor(allIn));
+  assert.match(report.assumptions.join(' '), /all in and cannot fold/);
+  // Nobody all in: the scenario's stated model, one opponent continuing with its range.
+  assert.equal(coachTaskFor(base).spec.opponents.length, 1);
 });
 
 test('a review replays the pot an all-in seat can win, folded chips included', () => {
