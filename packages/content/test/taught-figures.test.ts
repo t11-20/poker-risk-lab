@@ -13,8 +13,10 @@ import {
   applyAction,
   buildPotLayers,
   type Card,
+  categoryOf,
   createDeterministicRandomForTests,
   evaluate,
+  HAND_CATEGORY,
   minimumRaiseTo,
   parseCards,
   type SeatSetup,
@@ -22,13 +24,19 @@ import {
 } from '@prl/poker-engine';
 import {
   allHandClasses,
+  classOfCombo,
   combosOfClass,
+  computeOuts,
   defenceFrequency,
+  evOfBet,
+  exactRange,
   icmEquity,
   parseRange,
   potOdds,
+  probabilityOfHitting,
   projectResults,
   riskOfRuin,
+  ruleOf24Accuracy,
 } from '@prl/poker-math';
 import { content } from '../src/index.ts';
 
@@ -118,6 +126,23 @@ function engineMinimumRaiseAfterOpen(smallBlind: number, bigBlind: number, openT
 }
 
 const scoreOf = (cards: string): number => evaluate(parseCards(cards));
+
+/** Hero's cards, the board and the opponent's range as the scenario stores them, so a test cannot retype them. */
+function storedSpot(id: string): { hero: Card[]; board: Card[]; range: ReturnType<typeof parseRange> } {
+  const scenario = content().scenarios.find((one) => one.id === id);
+  assert.ok(scenario !== undefined, `no scenario "${id}"`);
+  const holeCards = scenario.seats.find((seat) => seat.isHero === true)?.holeCards;
+  assert.ok(holeCards !== undefined, `${id} shows hero no cards`);
+  const hero = parseCards(holeCards);
+  const board = parseCards(scenario.board);
+  const spec = scenario.opponentRange;
+  assert.ok(spec.kind !== 'topPercent', `${id} must name the opponent's holdings`);
+  const range =
+    spec.kind === 'exact'
+      ? exactRange(parseCards(spec.cards))
+      : parseRange(spec.notation, [...hero, ...board]);
+  return { hero, board, range };
+}
 
 interface TaughtFigure {
   readonly where: string;
@@ -641,6 +666,129 @@ const TAUGHT_FIGURES: readonly TaughtFigure[] = [
       assert.equal(heroScore, straight, 'hero holds exactly the eight-high straight the reasoning names');
       assert.ok(heroScore > tripAces, 'a straight is above three of a kind, whatever the trips are');
       return [];
+    },
+  },
+  {
+    where: 'lesson reading-the-board — a counterfeited deuce is the lowest kicker, not a split',
+    quote:
+      'So are theirs, and their best remaining card is their kicker. Your deuce, which was doing all the work ' +
+      "a moment ago, is now the lowest kicker there is: the board's pair of sevens replaced your pair of " +
+      'deuces, and every opponent with an ace and any other kicker now beats you.',
+    source: () => lessonText('reading-the-board'),
+    expect: () => {
+      const board = 'As 7c 2h 7d';
+      const hero = scoreOf(`Ah 2s ${board}`);
+      const against = (kicker: string): string => {
+        const them = scoreOf(`Ad ${kicker} ${board}`);
+        return them > hero ? 'beats you' : them === hero ? 'shares your entire hand' : 'loses to you';
+      };
+      assert.equal(against('2d'), 'shares your entire hand', 'only the other deuce splits');
+      const verdicts = new Set([...'3456789TJQK'].map((rank) => against(`${rank}c`)));
+      assert.equal(verdicts.size, 1, 'every other kicker gets the same verdict');
+      return [...verdicts];
+    },
+  },
+  {
+    where: 'scenario eq-dominated-flush-draw-turn — the clean outs split between the gap and the pairs',
+    quote:
+      'Treating the extra straight card as a bonus on top of the flush draw, when against this opponent the ' +
+      'flush draw is worth nothing and the three cards that fill the gap, with the six that pair you, are all ' +
+      'that is left.',
+    source: () => scenarioText('eq-dominated-flush-draw-turn'),
+    expect: () => {
+      const { hero, board, range } = storedSpot('eq-dominated-flush-draw-turn');
+      const outs = computeOuts({ heroCards: hero, board, opponent: range });
+      const heroScore = (card: Card): number => evaluate([...hero, ...board, card]);
+      const pairing = outs.clean.filter((out) => categoryOf(heroScore(out.card)) === HAND_CATEGORY.pair);
+      const straights = outs.clean.filter(
+        (out) => categoryOf(heroScore(out.card)) === HAND_CATEGORY.straight,
+      );
+      assert.equal(
+        pairing.length + straights.length,
+        outs.cleanCount,
+        'every clean out pairs or fills the gap',
+      );
+      return [wordFor(straights.length), wordFor(pairing.length)];
+    },
+  },
+  {
+    where: 'scenario rk-semi-bluff-raise-on-the-turn — how many sets the stated range holds',
+    quote:
+      'The button bets again on this turn only with pocket aces or queens, top pair, two pair and the three sets',
+    source: () => scenarioText('rk-semi-bluff-raise-on-the-turn'),
+    expect: () => {
+      const { board, range } = storedSpot('rk-semi-bluff-raise-on-the-turn');
+      const sets = new Set(
+        range.combos
+          .filter((combo) => categoryOf(evaluate([...combo, ...board])) === HAND_CATEGORY.threeOfAKind)
+          .map((combo) => classOfCombo(combo).label),
+      );
+      return [`${wordFor(sets.size)} sets`];
+    },
+  },
+  {
+    where: 'scenario eq-flush-draw-turn-small-bet — which underpairs a queen and a jack on the river beat',
+    quote:
+      'a queen on the river beats JJ, TT and 99, a jack beats TT and 99, and either one beats the hands with nothing',
+    source: () => scenarioText('eq-flush-draw-turn-small-bet'),
+    expect: () => {
+      const { hero, board, range } = storedSpot('eq-flush-draw-turn-small-bet');
+      const onTheTurn = (combo: readonly Card[]): number => categoryOf(evaluate([...combo, ...board]));
+      const classes = new Map<string, Card[][]>();
+      for (const combo of range.combos) {
+        const label = classOfCombo(combo).label;
+        classes.set(label, [...(classes.get(label) ?? []), [...combo]]);
+      }
+      const isPair = (label: string): boolean => label.length === 2 && label[0] === label[1];
+      const underpairs = [...classes].filter(
+        ([label, combos]) =>
+          isPair(label) && combos.every((combo) => onTheTurn(combo) === HAND_CATEGORY.pair),
+      );
+      const nothing = range.combos.filter((combo) => onTheTurn(combo) === HAND_CATEGORY.highCard);
+      assert.ok(
+        underpairs.length > 0 && nothing.length > 0,
+        'the range holds underpairs and hands with nothing',
+      );
+      const beatenBy = (riverText: string): string => {
+        const river = parseCards(riverText);
+        const heroScore = evaluate([...hero, ...board, ...river]);
+        const loses = (combo: readonly Card[]): boolean =>
+          evaluate([...combo, ...board, ...river]) < heroScore;
+        for (const combo of nothing) assert.ok(loses(combo), `${riverText} beats a hand with nothing`);
+        const names = underpairs
+          .filter(([, combos]) => combos.filter((combo) => !combo.includes(river[0] as Card)).every(loses))
+          .map(([label]) => label);
+        return names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : (names[0] ?? '');
+      };
+      return [`a queen on the river beats ${beatenBy('Qc')}`, `a jack beats ${beatenBy('Jc')}`];
+    },
+  },
+  {
+    where: 'glossary rule-of-2-and-4 — the four-times form overstates only from seven outs up',
+    quote:
+      'The four-times form OVERSTATES from seven outs up, because doubling the one-card chance counts the ' +
+      'runouts that hit on both cards twice',
+    source: () => glossaryText('rule-of-2-and-4'),
+    expect: () => {
+      const error = (outs: number): number =>
+        ruleOf24Accuracy(outs, 2, probabilityOfHitting(outs, 47, 2).probability).errorPoints;
+      const first = [...Array(20).keys()].map((i) => i + 1).find((outs) => error(outs) > 0) ?? 0;
+      for (let outs = 1; outs < first; outs += 1) {
+        assert.ok(error(outs) < 0 && error(outs) > -0.5, `${outs} outs: under half a point low`);
+      }
+      return [`from ${wordFor(first)} outs up`];
+    },
+  },
+  {
+    where: 'lesson fold-equity — a bluff that works wins the same pot at any size',
+    quote:
+      'bet smaller and you need them less often, though a fold still wins the same pot and smaller bets tend ' +
+      'to get fewer of them',
+    source: () => lessonText('fold-equity'),
+    expect: () => {
+      const wonOnAFold = (betSize: number): number =>
+        evOfBet({ pot: 100, betSize, foldProbability: 1, equityWhenCalled: 0 }).ev;
+      return [wonOnAFold(25) === wonOnAFold(100) ? 'a fold still wins the same pot' : 'collect less'];
     },
   },
 ];

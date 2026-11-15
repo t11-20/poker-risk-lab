@@ -652,7 +652,7 @@ export const LEARN_GLOSSARY: readonly GlossaryEntry[] = [
     id: 'rule-of-2-and-4',
     term: 'Rule of 2 and 4',
     definition:
-      'A table-friendly approximation: multiply your outs by two for the chance of hitting with one card to come, or by four with two cards to come. It is deliberately rough, and the two halves miss in opposite directions. The two-times form understates a little, charging 2% per out where one card off a 46-card stub is worth about 2.17%. The four-times form OVERSTATES, because doubling the one-card chance counts the runouts that hit on both cards twice, and the error grows with the out count: at 9 outs it says 36% against a true 35.0%, at 15 outs 60% against 54.1%. It also assumes you see both cards without paying again, which a bet on the turn takes away.',
+      'A table-friendly approximation: multiply your outs by two for the chance of hitting with one card to come, or by four with two cards to come. It is deliberately rough, and once you have seven or more outs the two halves miss in opposite directions. The two-times form understates a little, charging 2% per out where one card off a 46-card stub is worth about 2.17%. The four-times form OVERSTATES from seven outs up, because doubling the one-card chance counts the runouts that hit on both cards twice, and the error grows with the out count: at 9 outs it says 36% against a true 35.0%, at 15 outs 60% against 54.1%. Below seven outs it reads under half a point low instead. It also assumes you see both cards without paying again, which a bet on the turn takes away.',
     formula:
       'chance of hitting (percent) ~= 2 x outs with one card to come; ~= 4 x outs with two cards to come',
     topics: ['probability-and-equity', 'hand-reading-and-outs'],

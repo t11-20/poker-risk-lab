@@ -138,10 +138,10 @@
     "opponentRange": {
       "kind": "notation",
       "notation": "AA, KK, QQ, KQs, KQo, KJs, KJo, 88, 55, K8s",
-      "label": "a value-heavy turn betting range of overpairs and top pair"
+      "label": "a value-heavy turn betting range of sets, two pair, top pair and big pocket pairs"
     },
     "assumptions": [
-      "The button bets again on this turn only with overpairs, top pair and the two sets, and never with a hand that has given up.",
+      "The button bets again on this turn only with pocket aces or queens, top pair, two pair and the three sets, and never with a hand that has given up.",
       "Stacks shown are the units each player has left behind right now, after the 150 the button has already bet.",
       "Read the board back: Kh 8h 5s 2c has two hearts, so a flush draw is live. It makes no pair and no straight, and you have no pair.",
       "The equity figure is your share of the pot if the hand simply runs out, so it measures the flat call and not the raise."

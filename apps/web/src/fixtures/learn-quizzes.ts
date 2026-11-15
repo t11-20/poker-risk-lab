@@ -149,7 +149,7 @@ export const LEARN_QUIZZES: readonly Quiz[] = [
         ],
         correctIndex: 1,
         explanation:
-          "An out is only useful if it wins. A card that improves you into second place costs you money rather than saving you, because you will happily pay off the rest of the hand with it. Discounting is unavoidably a judgement call, which is exactly why you should say the judgement out loud: 'I am counting these as half, because I think a third of their range has me beaten even when this card comes'.",
+          "An out is only useful if it wins. A card that improves you into second place costs you money rather than saving you, because you will happily pay off the rest of the hand with it. Discounting is unavoidably a judgement call, which is exactly why you should say the judgement out loud: 'I am counting these as two-thirds, because I think a third of their range has me beaten even when this card comes'.",
         optionNotes: [
           'Counting every improvement is how a drawing hand ends up looking far better than it is.',
           'Correct: discount them, and state the assumption you are discounting on.',
@@ -775,16 +775,16 @@ export const LEARN_QUIZZES: readonly Quiz[] = [
         prompt: 'Which statement about the risk-of-ruin model is honest?',
         options: [
           'It gives the probability that you will go broke',
-          'It gives a probability under strong assumptions - fixed edge, normally distributed results, no change of stakes, no tilt, and playing for ever - each of which makes the real risk higher',
+          'It gives a probability under strong assumptions - fixed edge, normally distributed results, no change of stakes, no tilt, and playing for ever - which do not all push the real risk the same way',
           'It proves that bankroll management is unnecessary with a big enough edge',
           'It applies only to tournaments',
         ],
         correctIndex: 1,
         explanation:
-          "The model's value is in its shape rather than its decimals: risk falls exponentially with bankroll and edge, and rises with the square of the variance. Its assumptions are all optimistic ones, so treat the output as a lower bound on risk and a way of comparing scenarios, not as a forecast about you.",
+          "The model's value is in its shape rather than its decimals: risk falls exponentially with bankroll and edge, and rises with the standard deviation, which enters the exponent squared. Its assumptions pull both ways: fat tails and tilt make the real risk higher, while moving down when the bankroll shrinks and playing a finite stretch make it lower. So treat the output as a way of comparing scenarios, not as a forecast about you.",
         optionNotes: [
           'It gives a probability inside a model, which is a narrower and more useful claim.',
-          'Correct: strong assumptions, all of them flattering.',
+          'Correct: strong assumptions, and they do not all err in the same direction.',
           'The formula says the opposite - the buffer is one of only two levers, and the more available one.',
           'The same arithmetic applies to any repeated wager with an edge and a spread, cards or otherwise.',
         ],
