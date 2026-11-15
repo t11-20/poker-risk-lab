@@ -77,13 +77,18 @@ export interface WatchGeometry {
   readonly tableBottom: number;
   readonly viewTop: number;
   readonly viewBottom: number;
-  /** A deal, or a hand's end for a reader at or below their plate, brings up a band below the view. */
-  readonly edge: 'dealt' | 'decided' | 'complete';
+  /**
+   * A deal, or a hand's end for a reader at or below their plate, brings up a band below the view. `held`
+   * is the rest of a hand the reader has decided in on a phone: the band keeps its height and its glance
+   * shows the board and the latest action, so bringing the table back would cost ~600px each way.
+   */
+  readonly edge: 'dealt' | 'decided' | 'complete' | 'held';
 }
 
 /** Pixels to scroll by (negative is up the page), or 0 to leave the page where it is. */
 export function watchDelta(geometry: WatchGeometry): number {
   const { bandTop, bandBottom, tableBottom, viewTop, viewBottom, edge } = geometry;
+  if (edge === 'held') return 0;
   if (bandBottom - bandTop > viewBottom - viewTop) {
     return edge === 'dealt' && bandTop > viewBottom ? bandTop - viewTop : 0;
   }

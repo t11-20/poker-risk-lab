@@ -739,6 +739,15 @@ function useFollowTheTable(live: LiveTableModel, band: RefObject<HTMLDivElement 
   const handEdge =
     view !== null && view.viewerSeat !== null ? `${view.handId}:${String(view.street === 'complete')}` : null;
   const watchEdge = turnEdge === '' ? handEdge : null;
+  /** The hand edge at the reader's last sized decision, while the band keeps that decision's height. */
+  const held = useRef<string | null>(null);
+
+  // Standing up clears the hand edge, and the watch below runs only on one, so the hold ends here.
+  useEffect(() => {
+    if (handEdge !== null || held.current === null) return;
+    held.current = null;
+    if (band.current !== null) band.current.style.minBlockSize = '';
+  }, [handEdge, band]);
 
   useEffect(() => {
     if (turnEdge === '') return;
@@ -746,13 +755,16 @@ function useFollowTheTable(live: LiveTableModel, band: RefObject<HTMLDivElement 
     if (element === null || typingElsewhere(element)) return;
     const sized = sizerScroll(element);
     if (sized !== null) {
+      // The sizer and the row leave when the decision ends, and the page shrank 718px at 390x844.
+      held.current = handEdge;
+      element.style.minBlockSize = `${element.getBoundingClientRect().height}px`;
       if (sized !== 0) window.scrollBy({ top: sized, behavior: reduced ? 'auto' : 'smooth' });
       return;
     }
     const target = element.querySelector<HTMLElement>('.prl-action-bar__actions') ?? element;
     if (inView(target)) return;
     target.scrollIntoView({ block: 'nearest', behavior: reduced ? 'auto' : 'smooth' });
-  }, [turnEdge, band, reduced]);
+  }, [turnEdge, handEdge, band, reduced]);
 
   const watchedHand = useRef<string | null>(null);
   useEffect(() => {
@@ -761,8 +773,18 @@ function useFollowTheTable(live: LiveTableModel, band: RefObject<HTMLDivElement 
     const dealt = hand !== watchedHand.current;
     watchedHand.current = hand;
     const element = band.current;
-    if (element === null || typingElsewhere(element)) return;
-    const by = watchScroll(element, dealt ? 'dealt' : watchEdge.endsWith(':true') ? 'complete' : 'decided');
+    if (element === null) return;
+    // Released before measuring, so the end of the hand brings Deal in from an unheld band.
+    const holding = held.current === watchEdge;
+    if (!holding) {
+      held.current = null;
+      element.style.minBlockSize = '';
+    }
+    if (typingElsewhere(element)) return;
+    const by = watchScroll(
+      element,
+      holding ? 'held' : dealt ? 'dealt' : watchEdge.endsWith(':true') ? 'complete' : 'decided',
+    );
     if (by !== 0) window.scrollBy({ top: by, behavior: reduced ? 'auto' : 'smooth' });
   }, [watchEdge, band, reduced]);
 }

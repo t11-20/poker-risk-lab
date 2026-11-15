@@ -65,7 +65,7 @@ export interface ActionBarProps {
   readonly idleText?: string;
   /** Drawn beside the idle line, such as the next deal once a hand is over. */
   readonly idleAction?: ReactNode;
-  /** Drawn between the price and the sizer, only while there is a decision (`HandGlance` on a phone). */
+  /** Drawn between the price and the sizer, and above the idle line (`HandGlance` on a phone). */
   readonly context?: ReactNode;
   readonly className?: string;
 }
@@ -392,6 +392,7 @@ export function ActionBar(props: ActionBarProps): ReactElement {
   if (legalActions.length === 0) {
     return (
       <div className={cx('prl-action-bar', className)}>
+        {context}
         {/* `tabIndex={-1}` lets focus land here without a tab stop. `role="status"` announces it anyway. */}
         <p
           className={cx('prl-action-bar__idle', idleAction !== undefined && 'prl-action-bar__idle--beside')}

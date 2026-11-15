@@ -333,10 +333,30 @@ describe('when the decision is not the reader’s, the table is watched', () => 
   });
 });
 
+/**
+ * Between the reader's decisions the band keeps the height it had at the decision, and the glance in it
+ * shows the board and the latest action, so the page stays put. Measured at 390x844 before the change:
+ * a call took the sizer and the row out, the band shrank to 40..152 with the plate ending at 3, the
+ * watch scrolled 612px up, and the next decision's follow scrolled about 600px back down.
+ */
+describe('between the reader’s decisions the page stays where the decision left it', () => {
+  const WAITING: WatchGeometry = { bandTop: 40, bandBottom: 152, tableBottom: 3, edge: 'decided', ...VIEW };
+
+  it('NEGATIVE CONTROL: with the band released, the watch moves the page 612px up, as measured', () => {
+    assert.equal(watchDelta(WAITING), -612);
+  });
+
+  it('does not move the page while the band is held', () => {
+    // As measured (the shrunk band) and as held (its 841px at the decision).
+    assert.equal(watchDelta({ ...WAITING, edge: 'held' }), 0);
+    assert.equal(watchDelta({ ...WAITING, bandBottom: 40 + 841, edge: 'held' }), 0);
+  });
+});
+
 describe('the live table uses it, on a narrow column only', () => {
   const wired = (source: string): boolean =>
     /window\.getComputedStyle\(row\)\.position !== 'sticky'\) return null;/u.test(source) &&
-    /const sized = sizerScroll\(element\);\s*if \(sized !== null\) \{\s*if \(sized !== 0\) window\.scrollBy\(\{ top: sized,/u.test(
+    /const sized = sizerScroll\(element\);\s*if \(sized !== null\) \{[\s\S]*?if \(sized !== 0\) window\.scrollBy\(\{ top: sized,/u.test(
       source,
     );
 
@@ -358,7 +378,7 @@ describe('the live table uses it, on a narrow column only', () => {
 
   const watches = (source: string): boolean =>
     /const watchEdge = turnEdge === '' \? handEdge : null;/u.test(source) &&
-    /watchScroll\(element, dealt \? 'dealt' : watchEdge\.endsWith\(':true'\) \? 'complete' : 'decided'\);\s*if \(by !== 0\) window\.scrollBy\(/u.test(
+    /dealt \? 'dealt' : watchEdge\.endsWith\(':true'\) \? 'complete' : 'decided',\s*\);\s*if \(by !== 0\) window\.scrollBy\(/u.test(
       source,
     ) &&
     /\}, \[watchEdge, band, reduced\]\);/u.test(source);
@@ -368,6 +388,44 @@ describe('the live table uses it, on a narrow column only', () => {
     assert.ok(watches(live), 'useFollowTheTable no longer brings the table back when the decision is over');
   });
 
+  const holds = (source: string): boolean =>
+    /held\.current = handEdge;\s*element\.style\.minBlockSize = `\$\{element\.getBoundingClientRect\(\)\.height\}px`;/u.test(
+      source,
+    ) &&
+    /const holding = held\.current === watchEdge;\s*if \(!holding\) \{\s*held\.current = null;\s*element\.style\.minBlockSize = '';/u.test(
+      source,
+    ) &&
+    /watchScroll\(\s*element,\s*holding \? 'held'/u.test(source);
+
+  it('holds the band from a sized decision until the hand’s edge changes, and the watch then holds still', () => {
+    const live = readFileSync(join(SRC, 'app', 'play', 'LiveTable.tsx'), 'utf8');
+    assert.ok(holds(live), 'useFollowTheTable no longer holds the band between the reader’s decisions');
+  });
+
+  // Standing up clears the hand edge, so the watch, which needs one, never runs to release the hold.
+  const releasesWithoutASeat = (source: string): boolean =>
+    /if \(handEdge !== null \|\| held\.current === null\) return;\s*held\.current = null;\s*if \(band\.current !== null\) band\.current\.style\.minBlockSize = '';\s*\}, \[handEdge, band\]\);/u.test(
+      source,
+    );
+
+  it('releases the held band when the reader stands up or loses the table', () => {
+    const live = readFileSync(join(SRC, 'app', 'play', 'LiveTable.tsx'), 'utf8');
+    assert.ok(
+      releasesWithoutASeat(live),
+      'a reader who stands up after a sized decision keeps a tall empty band',
+    );
+    assert.equal(releasesWithoutASeat('  }, [watchEdge, band, reduced]);'), false);
+  });
+
+  const glancesWhileWaiting = (source: string): boolean =>
+    /const waiting = view\.legalActions\.length === 0 && view\.street !== 'complete';/u.test(source) &&
+    /if \(!waiting && !view\.legalActions\.some\(/u.test(source);
+
+  it('draws the glance while the reader waits for the others, not only while they size a bet', () => {
+    const stage = readFileSync(join(SRC, 'components', 'TableStage.tsx'), 'utf8');
+    assert.ok(glancesWhileWaiting(stage), 'the waiting band no longer shows the board and the latest action');
+  });
+
   it('NEGATIVE CONTROL: the old follow, the buttons by the nearest edge only, fails the predicate', () => {
     const old = `    const target = element.querySelector<HTMLElement>('.prl-action-bar__actions') ?? element;
     if (inView(target)) return;
@@ -375,5 +433,11 @@ describe('the live table uses it, on a narrow column only', () => {
     assert.equal(wired(old), false);
     assert.equal(watches(old), false);
     assert.equal(keepsTheGlance(old), false);
+    const unheld = `    const element = band.current;
+    if (element === null || typingElsewhere(element)) return;
+    const by = watchScroll(element, dealt ? 'dealt' : watchEdge.endsWith(':true') ? 'complete' : 'decided');`;
+    assert.equal(holds(unheld), false);
+    const sizingOnly = `  if (!view.legalActions.some((action) => action.type === 'bet' || action.type === 'raise')) return null;`;
+    assert.equal(glancesWhileWaiting(sizingOnly), false);
   });
 });
