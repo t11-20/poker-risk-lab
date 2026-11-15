@@ -17,6 +17,7 @@ import {
   AssumptionList,
   Callout,
   CardRow,
+  CardRun,
   CardText,
   Chip,
   EquityBar,
@@ -211,7 +212,10 @@ function OutsDetail(props: { readonly detail: Extract<CalculationDetail, { kind:
             <dl className="prl-learn-calc__cards">
               {notes.map((outcome) => (
                 <div className="prl-learn-calc__card" key={outcome.label}>
-                  <dt className="prl-mono">{`${outcome.label} — ${outcome.classification}`}</dt>
+                  <dt className="prl-mono">
+                    <CardRun cards={[outcome.card]} />
+                    {` — ${outcome.classification}`}
+                  </dt>
                   <dd>
                     <CardText text={outcome.note} />
                   </dd>

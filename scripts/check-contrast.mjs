@@ -680,6 +680,8 @@ const PAINTED_ROUTES = [
   '/',
   '/learn',
   '/learn/pot-odds',
+  // Its assumptions draw cards in prose (`CardText`) in all four suit colours.
+  '/learn/counting-outs',
   '/play?state=decision',
   '/play?state=complete',
   '/lab',
