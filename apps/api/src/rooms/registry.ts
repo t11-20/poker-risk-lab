@@ -21,7 +21,13 @@ import { newHandId } from '../repositories/ids.ts';
 import * as roomsRepository from '../repositories/rooms.ts';
 import type { Db } from '../repositories/sql.ts';
 import * as usersRepository from '../repositories/users.ts';
-import { type DurableBotSeat, describeRefusal, durableProfile, rehydrateBotSeat } from './bot-profile.ts';
+import {
+  type DurableBotSeat,
+  describeRefusal,
+  durableProfile,
+  isDifficulty,
+  rehydrateBotSeat,
+} from './bot-profile.ts';
 import { BotRunner, type BotSeatSpec } from './bots.ts';
 import type { SeatEntitlement } from './entitlement.ts';
 import { LEASE_HEARTBEAT_INTERVAL_MS, LEASE_SELF_EVICT_AFTER_MS, type RoomOwnership } from './ownership.ts';
@@ -1442,6 +1448,7 @@ export function toRoomSummary(room: LiveRoom): RoomSummary {
       stack: seat?.stack ?? 0,
       isBot: member.isBot,
       botProfile: member.botProfile,
+      botDifficulty: room.bots.specOf(member.userId)?.difficulty ?? null,
       connected: member.isBot || member.sockets > 0,
       // Named field by field so the wire shape is deliberate (ADR 0003).
       awaitingBigBlind: seat !== undefined && awaitingBigBlind.has(seat.seat),
@@ -1489,6 +1496,8 @@ export function summaryFromRows(
       stack: member.stack,
       isBot: member.is_bot,
       botProfile: member.bot_profile,
+      botDifficulty:
+        member.bot_difficulty !== null && isDifficulty(member.bot_difficulty) ? member.bot_difficulty : null,
       connected: member.is_bot,
       // Debts are not persisted, so a room with no live table has none.
       awaitingBigBlind: false,

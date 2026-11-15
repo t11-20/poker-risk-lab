@@ -17,7 +17,6 @@ import {
   type CreateRoomRequest,
   type ErrorCode,
   inSecondPerson,
-  type LegendDifficulty,
   type RoomSummary,
   type WsServerMessage,
 } from '@prl/contracts';
@@ -34,7 +33,9 @@ import {
   ensureSession,
   FRIENDS_TABLE_REQUEST,
   firstFreeSeat,
+  isRunningMatch,
   joinRoomByInviteCode,
+  type LegendMatch,
   listRooms,
   normaliseInviteCode,
   READER_SEAT,
@@ -76,8 +77,9 @@ function rememberRoom(roomId: string | null): void {
 }
 
 /**
- * "Stay at my bot table" goes to /play, which resumes the remembered room. A private table opened
- * since would be that room, so the one the warning names is remembered first.
+ * "Stay at my bot table" and "Keep my other Legends match" go to that table's page, which resumes the
+ * remembered room. A table opened since would be that room, so the one the warning names is remembered
+ * first.
  */
 export function rememberTableToStayAt(warning: SwitchWarning): void {
   rememberRoom(warning.other.roomId);
@@ -836,7 +838,7 @@ export interface LiveTable {
   /** The press again, closing the other table. */
   readonly confirmSwitch: () => void;
   readonly keepOtherTable: () => void;
-  /** Before following the link back to the bot table the warning names. */
+  /** Before following the link back to the table the warning names. */
   readonly stayAtOtherTable: () => void;
   /** Abandons the remembered room and builds a fresh bot table. */
   readonly startFreshTable: () => void;
@@ -866,10 +868,7 @@ export interface UseLiveTableOptions {
   readonly scheduler?: Scheduler;
   readonly url?: string;
   /** When set, open a Legends match against these profiles instead of the generic bot table. */
-  readonly legendMatch?: {
-    readonly profileId: string;
-    readonly difficulty: LegendDifficulty;
-  };
+  readonly legendMatch?: LegendMatch;
 }
 
 /** Bots are named by the server, never here. */
@@ -920,8 +919,12 @@ export async function openPracticeRoom(
 ): Promise<PracticeRoomOpening> {
   const { fresh = false, confirmed = false } = press;
   const rooms = await dependencies.listRooms(signal);
-  const reuse = !fresh && legendMatch === undefined;
-  const existing = reuse ? chooseRoom(rooms, session.user.id, rememberedRoom()) : null;
+  // A Legends page reuses only its own match, and only while it can still deal.
+  const existing = fresh
+    ? null
+    : legendMatch === undefined
+      ? chooseRoom(rooms, session.user.id, rememberedRoom())
+      : (rooms.find((room) => isRunningMatch(room, session.user.id, legendMatch)) ?? null);
   // A private table closes nothing, and "Start a fresh table" is already a choice to leave this one.
   const replaces = legendMatch !== undefined || createsPracticeTable(request);
   const other =
@@ -1030,13 +1033,12 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
   useEffect(() => () => setupRef.current?.abort(), []);
 
   /**
-   * Reconnects on return to `/play`. It only reconnects. No guest is
-   * minted and no other room is created or chosen. Never on a Legends page, where the press opens the
-   * match. Runs in an effect because `sessionStorage` is absent on the server and would mismatch
-   * hydration. `dealIn` stays `off`, since the reader may be mid-hand.
+   * Reconnects on return to `/play`, or to a Legends page whose match is still running. It only
+   * reconnects. No guest is minted and no other room is created or chosen. Runs in an effect because
+   * `sessionStorage` is absent on the server and would mismatch hydration. `dealIn` stays `off`, since
+   * the reader may be mid-hand.
    */
   useEffect(() => {
-    if (legendMatch !== undefined) return;
     const remembered = rememberedRoom();
     if (remembered === null) return;
     const controller = new AbortController();
@@ -1044,11 +1046,12 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
     setResuming(true);
     void (async (): Promise<void> => {
       try {
-        const resumed = await resumeRememberedTable(remembered, controller.signal);
+        const resumed = await resumeRememberedTable(remembered, controller.signal, undefined, legendMatch);
         if (controller.signal.aborted) return;
         if (resumed === null) {
-          // The remembered table is unreachable now. Forget it so the next press does not aim at it.
-          rememberRoom(null);
+          // The remembered table is unreachable now. Forget it so the next press does not aim at it. Not
+          // on a Legends page, where it may be the bot table that `/play` should still resume.
+          if (legendMatch === undefined) rememberRoom(null);
           return;
         }
         setDisplayName(resumed.session.user.displayName);

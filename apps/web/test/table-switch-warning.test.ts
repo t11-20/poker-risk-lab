@@ -34,6 +34,7 @@ function member(userId: string, seat: number | null, isBot: boolean, stack = 1_0
     stack,
     isBot,
     botProfile: isBot ? 'calling-station' : null,
+    botDifficulty: isBot ? 'realistic' : null,
     connected: true,
     awaitingBigBlind: false,
   };
@@ -85,6 +86,7 @@ describe('the table a press would close', () => {
       roomId: 'room-legend',
       kind: 'legendMatch',
       stack: 1_240,
+      match: { profileId: 'calling-station', difficulty: 'realistic' },
     });
   });
 
@@ -124,6 +126,7 @@ describe('the table a press would close', () => {
       roomId: 'room-standing',
       kind: 'legendMatch',
       stack: null,
+      match: { profileId: 'calling-station', difficulty: 'realistic' },
     });
   });
 });
@@ -181,6 +184,7 @@ describe('pressing "Deal me in" with the other table open', () => {
       roomId: 'room-legend',
       kind: 'legendMatch',
       stack: 1_240,
+      match: { profileId: 'calling-station', difficulty: 'realistic' },
     });
     assert.deepEqual(calls, ['listRooms']);
   });

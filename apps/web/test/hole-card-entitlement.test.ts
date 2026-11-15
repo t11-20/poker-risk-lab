@@ -93,6 +93,7 @@ function stateFrame(view: PlayerView | null): string {
           stack: 1000,
           isBot: false,
           botProfile: null,
+          botDifficulty: null,
           connected: true,
           awaitingBigBlind: false,
         },

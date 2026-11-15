@@ -4,16 +4,19 @@
  */
 
 import type { CreateRoomRequest, RoomSummary } from '@prl/contracts';
-import { BOT_TABLE_REQUEST } from './table-rooms.ts';
+import { BOT_TABLE_REQUEST, type LegendMatch, runningLegendMatchOf } from './table-rooms.ts';
 
 export type PracticeTableKind = 'botTable' | 'legendMatch';
 
-export interface PracticeTableInPlay {
+export type PracticeTableInPlay = {
   readonly roomId: string;
-  readonly kind: PracticeTableKind;
   /** Null while the reader stands, because a live table reports 0 for a member with no seat. */
   readonly stack: number | null;
-}
+} & (
+  | { readonly kind: 'botTable' }
+  /** Null once the match is finished, so there is nothing to go back to. */
+  | { readonly kind: 'legendMatch'; readonly match: LegendMatch | null }
+);
 
 /** `POST /rooms` replaces a practice table only when its bots fill every chair but the owner's. */
 export function createsPracticeTable(request: CreateRoomRequest): boolean {
@@ -37,11 +40,10 @@ export function practiceTableToRetire(
     const anotherPerson = room.members.some((member) => !member.isBot && member.userId !== userId);
     if (anotherPerson || bots === 0 || room.maxSeats !== bots + 1) continue;
     const reader = room.members.find((member) => member.userId === userId);
-    return {
-      roomId: room.id,
-      kind: room.maxSeats === BOT_TABLE_REQUEST.maxSeats ? 'botTable' : 'legendMatch',
-      stack: reader === undefined || reader.seat === null ? null : reader.stack,
-    };
+    const stack = reader === undefined || reader.seat === null ? null : reader.stack;
+    return room.maxSeats === BOT_TABLE_REQUEST.maxSeats
+      ? { roomId: room.id, kind: 'botTable', stack }
+      : { roomId: room.id, kind: 'legendMatch', stack, match: runningLegendMatchOf(room, userId) };
   }
   return null;
 }

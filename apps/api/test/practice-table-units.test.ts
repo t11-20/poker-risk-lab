@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
 import { after, describe, it } from 'node:test';
-import { API_PATHS, WS_CLOSE } from '@prl/contracts';
+import { API_PATHS, type RoomSummary, WS_CLOSE } from '@prl/contracts';
 import { createSecureRandom } from '@prl/poker-engine';
 import type { FastifyInstance } from 'fastify';
 import WebSocket from 'ws';
@@ -283,6 +283,42 @@ describe('units across practice tables', dbOptions, () => {
       assert.equal((await roomsRepository.byId(tx, friendsId))?.status, 'open');
       assert.ok(test.registry.get(friendsId) !== null);
       assert.equal(await units(tx, test.userId), 1_000, 'no table the reader has sat at holds units');
+
+      await test.registry.shutdown();
+      await test.app.close();
+    });
+  });
+
+  it('the room list names the Legend and difficulty a match was started with, live and from rows', async () => {
+    await inRollback(async (tx) => {
+      const test = await harness(tx);
+      const created = await test.send('POST', '/api/v1/legends/matches', {
+        ...matchAgainst('calling-station'),
+        difficulty: 'expert',
+      });
+      assert.equal(created.status, 201, JSON.stringify(created.body));
+      const roomId = String(Reflect.get(created.body as object, 'roomId'));
+
+      const opponents = async () => {
+        const listed = await test.send('GET', '/api/v1/rooms');
+        const rooms = Reflect.get(listed.body as object, 'rooms') as RoomSummary[];
+        const room = rooms.find((entry) => entry.id === roomId);
+        assert.ok(room !== undefined, 'the match is listed');
+        return {
+          status: room.status,
+          bots: room.members.filter((m) => m.isBot).map((m) => [m.botProfile, m.botDifficulty, m.seat]),
+        };
+      };
+      assert.deepEqual(await opponents(), { status: 'open', bots: [['calling-station', 'expert', 1]] });
+
+      // Out of memory with its row still open, as after a restart. `openForMember` rebuilds it, so it
+      // is still a running match.
+      test.registry.close(roomId);
+      assert.equal(test.registry.get(roomId), null);
+      assert.deepEqual(await opponents(), { status: 'open', bots: [['calling-station', 'expert', 1]] });
+      await test.registry.openForMember(roomId, test.userId);
+      assert.ok(test.registry.get(roomId) !== null, 'the membership path rebuilt it');
+      assert.deepEqual(await opponents(), { status: 'open', bots: [['calling-station', 'expert', 1]] });
 
       await test.registry.shutdown();
       await test.app.close();

@@ -12,6 +12,7 @@ import type {
   CreateRoomResponse,
   JoinRoomRequest,
   JoinRoomResponse,
+  LegendDifficulty,
   RoomListResponse,
   RoomSummary,
   SessionResponse,
@@ -209,6 +210,36 @@ export function chooseRoom(
   return mine.find((room) => room.members.some((member) => member.isBot)) ?? null;
 }
 
+/** What identifies a Legends match, and the page it is played on. */
+export interface LegendMatch {
+  readonly profileId: string;
+  readonly difficulty: LegendDifficulty;
+}
+
+/**
+ * The match a room is while it can still deal: the reader's own, open, and one bot in the other chair
+ * with chips, as `LiveTable.startHand` needs. A standing reader counts, because sitting restores their
+ * stack and a live table reports 0 for them. Null for any other room, and for a finished one.
+ */
+export function runningLegendMatchOf(room: RoomSummary, userId: string): LegendMatch | null {
+  if (room.ownerUserId !== userId || room.status === 'closed' || room.maxSeats !== 2) return null;
+  const bot = room.members.find((member) => member.isBot);
+  const reader = room.members.find((member) => member.userId === userId);
+  if (bot === undefined || bot.botProfile === null || bot.botDifficulty === null) return null;
+  // Mid-hand an all-in seat shows no chips behind, and the hand still has to be played out.
+  const bust =
+    bot.seat === null ||
+    bot.stack <= 0 ||
+    (reader !== undefined && reader.seat !== null && reader.stack <= 0);
+  if (bust && room.status !== 'playing') return null;
+  return { profileId: bot.botProfile, difficulty: bot.botDifficulty };
+}
+
+export function isRunningMatch(room: RoomSummary, userId: string, match: LegendMatch): boolean {
+  const running = runningLegendMatchOf(room, userId);
+  return running?.profileId === match.profileId && running.difficulty === match.difficulty;
+}
+
 /**
  * Runs on page load without a press, so it may only reconnect. It mints no session, creates no room,
  * and returns only the remembered room while the server lists it open and six seats wide. It never
@@ -234,10 +265,18 @@ export async function resumeRememberedTable(
   rememberedId: string | null,
   signal: AbortSignal,
   dependencies: ResumeDependencies = { readSession, listRooms },
+  legendMatch?: LegendMatch,
 ): Promise<{ readonly session: TableSession; readonly room: RoomSummary } | null> {
   if (rememberedId === null) return null;
   const session = await dependencies.readSession(signal);
   if (session === null) return null;
-  const room = resumableRoom(await dependencies.listRooms(signal), rememberedId);
+  const rooms = await dependencies.listRooms(signal);
+  // On a Legends page, only that page's match, and only while it is still running.
+  const room =
+    legendMatch === undefined
+      ? resumableRoom(rooms, rememberedId)
+      : (rooms.find(
+          (entry) => entry.id === rememberedId && isRunningMatch(entry, session.user.id, legendMatch),
+        ) ?? null);
   return room === null ? null : { session, room };
 }

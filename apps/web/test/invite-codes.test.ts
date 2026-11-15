@@ -71,6 +71,7 @@ function roomWith(seats: readonly (number | null)[], maxSeats = 6): RoomSummary 
       stack: 1000,
       isBot: index > 0,
       botProfile: null,
+      botDifficulty: null,
       connected: true,
       // `firstFreeSeat` is about occupied chairs; a member owing a blind occupies theirs all the same.
       awaitingBigBlind: false,
