@@ -408,14 +408,14 @@ test('a count of zero outs says which of three things it means', async () => {
       'behind with equity',
       noOuts('flop', 0.1845, 0.1845, 0),
       'Outs — none, no single card puts you ahead',
-      'An out has to bring you to at least an even share of this pot on its own',
+      'An out has to bring you to more than an even share of this pot on its own',
     ],
     // A sampled zero can have missed a rare runout, so it is not called dead.
     [
       'sampled zero',
       noOuts('turn', 0, 0, 0, 'monte-carlo'),
       'Outs — none, no single card puts you ahead',
-      'An out has to bring you to at least an even share of this pot on its own',
+      'An out has to bring you to more than an even share of this pot on its own',
     ],
   ];
   for (const [name, report, heading, lead] of cases) {

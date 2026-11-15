@@ -512,11 +512,12 @@ test('raising the clean threshold moves cards between the buckets without changi
 test('a card that only chops is not an out, because a split does not put you in front', () => {
   // Hero 9c 8d against 9h 8s on 7s 6h 2c 3d. Same ranks and a rainbow board, so every river chops.
   // A chop is exactly 0.5, and a dirty out has to be above it, so all 44 cards are neutral.
-  const result = computeOuts({
+  const spot = {
     heroCards: parseCards('9c 8d'),
     board: parseCards('7s 6h 2c 3d'),
     opponent: exactRange(parseCards('9h 8s')),
-  });
+  };
+  const result = computeOuts(spot);
   assertInvariants(result);
 
   closeTo(result.equityNow, 0.5, 'equityNow');
@@ -525,6 +526,12 @@ test('a card that only chops is not an out, because a split does not put you in 
   assert.equal(result.neutral.length, 44);
   for (const outcome of result.neutral) closeTo(outcome.equityAfter, 0.5, `${outcome.label} after`);
   assert.match(outcomeFor(result, 'Kd').note, /chops/);
+  assert.match(result.explanation, /a card that only splits the pot is not an out/);
+
+  // Below a chop the same cards clear the bar, so the explanation must not claim a split is excluded.
+  const lowered = computeOuts({ ...spot, aheadThreshold: 0.4 });
+  assert.equal(lowered.dirtyCount, 44);
+  assert.doesNotMatch(lowered.explanation, /only splits the pot/);
 });
 
 test('the audit spot: AsKs against AcKc chops on 35 rivers and loses on 9, so it has no outs', () => {

@@ -234,7 +234,7 @@ const NO_OUTS_TEXT: Readonly<Record<NoOuts, { readonly heading: string; readonly
   'no-single-card': {
     heading: 'Outs — none, no single card puts you ahead',
     lead:
-      'An out has to bring you to at least an even share of this pot on its own, and no card that can ' +
+      'An out has to bring you to more than an even share of this pot on its own, and no card that can ' +
       'come next does that against the range assumed below.',
   },
 };

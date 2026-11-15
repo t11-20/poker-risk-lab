@@ -440,7 +440,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       cleanCards: ['3h', '4h', '6h', '7h', 'Th', 'Jh', 'Qh', '2h', 'Kh'],
       dirtyCards: [],
       explanation:
-        'On Ah 5h 2c you hold 9h 8h — high card ace, nine eight kickers — for 38% equity against exactly AsKd. Of the 45 cards that can come next, 9 are clean and 0 are dirty, which is 9 outs in total. Clean means your equity after that card is at least 90%; dirty means at least 50% but below 90%.',
+        'On Ah 5h 2c you hold 9h 8h — high card ace, nine eight kickers — for 38% equity against exactly AsKd. Of the 45 cards that can come next, 9 are clean and 0 are dirty, which is 9 outs in total. Clean means your equity after that card is at least 90%; dirty means above 50% but below 90%, so a card that only splits the pot is not an out.',
     },
     equity: {
       heroEquity: 0.3843434343434343,
@@ -613,7 +613,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       cleanCards: ['9c', '9d', '9h', '9s'],
       dirtyCards: [],
       explanation:
-        'On Jc Ts 3d 2c you hold 8h 7h — high card jack, ten eight kickers — for 9.1% equity against exactly AcJd. Of the 44 cards that can come next, 4 are clean and 0 are dirty, which is 4 outs in total. Clean means your equity after that card is at least 90%; dirty means at least 50% but below 90%.',
+        'On Jc Ts 3d 2c you hold 8h 7h — high card jack, ten eight kickers — for 9.1% equity against exactly AcJd. Of the 44 cards that can come next, 4 are clean and 0 are dirty, which is 4 outs in total. Clean means your equity after that card is at least 90%; dirty means above 50% but below 90%, so a card that only splits the pot is not an out.',
     },
     equity: {
       heroEquity: 0.09090909090909091,
@@ -973,7 +973,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
         'Kc',
       ],
       explanation:
-        'On Jh 7c 4d you hold Qs Qd — a pair of queens, jack kicker — for 65% equity against "JJ, 77, 44, AJ, KJs, QJs, JTs, 98s, 65s, A5s, KQo" (46 combinations still possible). Of the 47 cards that can come next, 2 are clean and 38 are dirty — but none of them is an out and there is no outs count here, deliberately: an out is a card that rescues a hand that is behind, and yours is not behind. Clean means your equity after that card is at least 90%; dirty means at least 50% but below 90%. You are already in front before any card arrives — your equity now is above the same threshold a card has to clear to count as an out — so read the counts as cards that keep you ahead rather than as the size of a draw.',
+        'On Jh 7c 4d you hold Qs Qd — a pair of queens, jack kicker — for 65% equity against "JJ, 77, 44, AJ, KJs, QJs, JTs, 98s, 65s, A5s, KQo" (46 combinations still possible). Of the 47 cards that can come next, 2 are clean and 38 are dirty — but none of them is an out and there is no outs count here, deliberately: an out is a card that rescues a hand that is behind, and yours is not behind. Clean means your equity after that card is at least 90%; dirty means above 50% but below 90%, so a card that only splits the pot is not an out. You are already in front before any card arrives — your equity now is above the same threshold a card has to clear to count as an out — so read the counts as cards that keep you ahead rather than as the size of a draw.',
     },
     equity: {
       heroEquity: 0.6450812472551603,
