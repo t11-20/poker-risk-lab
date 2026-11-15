@@ -14,6 +14,7 @@ import type { ReactElement } from 'react';
 import { ScrollRegion } from '../../components/ScrollRegion.tsx';
 import { emptyHandListFixture, HAND_PAGE_SIZE, REVIEW_HAND_SUMMARIES } from '../../fixtures/review.ts';
 import { API_PATHS, apiGet, isApiUnavailable, isRejectedCursor, isSignedOut } from '../../lib/api.ts';
+import { historyCaption } from '../../lib/hand-history-caption.ts';
 import { formatTimestamp } from '../../lib/lab-labels.ts';
 import { netWord } from '../../lib/net-words.ts';
 import { readerCallOptions } from '../../lib/server-session.ts';
@@ -309,7 +310,12 @@ export default async function ReviewIndexPage({
           <ScrollRegion className="prl-review-scroll" label={TABLE_LABEL}>
             <table className="prl-review-table">
               <caption>
-                {`${hands.length === 1 ? '1 hand' : `${hands.length} hands`}, ordered by ${SORT_LABEL[sort].toLowerCase()}. Net is the change across the whole hand, blinds included.`}
+                {`${historyCaption({
+                  count: hands.length,
+                  firstPage: cursor === null,
+                  more: response.nextCursor !== null,
+                  order: SORT_LABEL[sort].toLowerCase(),
+                })} Net is the change across the whole hand, blinds included.`}
               </caption>
               <thead>
                 <tr>
@@ -372,7 +378,7 @@ export default async function ReviewIndexPage({
                 className="prl-btn prl-btn--secondary"
                 href={`${ROUTE}?sort=${sort}&cursor=${encodeURIComponent(response.nextCursor)}`}
               >
-                Older hands
+                Next page
               </a>
             )}
           </nav>
