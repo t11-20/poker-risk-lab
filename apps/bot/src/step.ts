@@ -11,9 +11,16 @@
 
 import type { GlossaryEntry } from '@prl/contracts';
 import { UNIVERSAL_DISCLAIMER } from '@prl/poker-ai';
-import { BettingRuleError, type HandState, validateAction } from '@prl/poker-engine';
+import {
+  type Action,
+  BettingRuleError,
+  type HandState,
+  legalActions,
+  validateAction,
+} from '@prl/poker-engine';
 import { type CoachFn, type CoachReading, coachNamer, coachWhy, readCoach } from './coach.ts';
 import { entryById, entryText, lookup, normalise, seeAlsoOf } from './define.ts';
+import { parseNumber } from './learn.ts';
 import { onLesson, onLessonPage, onLessons } from './lesson.ts';
 import { GONE, onQuizPress, onQuizText, onQuizzes, onTopic, startQuiz } from './quiz.ts';
 import {
@@ -31,6 +38,7 @@ import {
 } from './table.ts';
 import {
   actionButtons,
+  actionWords,
   type Button,
   decodePress,
   encodePress,
@@ -72,6 +80,8 @@ export interface Session {
   readonly phase: Phase;
   /** Increments only on a change. A refused press leaves it alone. */
   readonly revision: number;
+  /** The decision Other size… was pressed at. Text has no hand id, so this is what makes it stale. */
+  readonly sizing: { readonly handId: string; readonly sequence: number } | null;
 }
 
 export interface Deps extends Dealer {
@@ -84,9 +94,11 @@ export interface StepResult {
   readonly out: readonly Outgoing[];
 }
 
-export const NEW_SESSION: Session = { table: null, phase: { kind: 'idle' }, revision: 0 };
+export const NEW_SESSION: Session = { table: null, phase: { kind: 'idle' }, revision: 0, sizing: null };
 
 export const STALE = 'That button is from an earlier moment in the hand.';
+
+const SIZE_STALE = 'That size is from an earlier moment in the hand, so nothing was sent.';
 
 const MENU_TEXT =
   'Poker Risk Lab: a play-money No-Limit Hold’em table for learning probability, risk and expected ' +
@@ -159,7 +171,8 @@ export function step(session: Session, event: Event, deps: Deps): StepResult {
       return toastsAsMessages(onCommand(session, event.name, event.args));
     case 'text':
       return (
-        onQuizText(session, event.text) ?? { session, out: [{ kind: 'send', text: UNKNOWN, buttons: [] }] }
+        onQuizText(session, event.text) ??
+        onSizeText(session, event.text, deps) ?? { session, out: [say(UNKNOWN)] }
       );
     case 'button': {
       const press = decodePress(event.data);
@@ -275,6 +288,8 @@ function onPress(session: Session, press: Press, deps: Deps): StepResult {
       return { session, out: [{ kind: 'send', text: coachWhy(phase.coach), buttons: [] }] };
     case 'act':
       return onAct(session, press, deps);
+    case 'size':
+      return onSize(session, press);
     case 'quizzes':
       return onQuizzes(session);
     case 'topic':
@@ -324,22 +339,110 @@ function onAct(session: Session, press: Extract<Press, { kind: 'act' }>, deps: D
   const { phase, table } = session;
   if (phase.kind !== 'deciding' || table === null) return refuse(session);
   if (!drawnFor(phase.state, press.handId, press.sequence)) return refuse(session);
+  return act(session, table, phase.state, press.action, deps, 'edit');
+}
+
+function act(
+  session: Session,
+  table: Table,
+  state: HandState,
+  action: Action,
+  deps: Deps,
+  how: 'send' | 'edit',
+): StepResult {
   try {
     // Validated before anything moves (ADR 0002). A refusal here means a forged or corrupted press,
     // and checking first keeps a later bot failure from looking like one.
-    validateAction(phase.state, READER_SEAT, press.action);
+    validateAction(state, READER_SEAT, action);
   } catch (error) {
     if (error instanceof BettingRuleError) {
       return { session, out: [{ kind: 'toast', text: 'That action is not available here.' }] };
     }
     throw error;
   }
-  const next = readerActs(table, phase.state, press.action, `reader-${press.sequence}`);
-  return show({ ...session, revision: session.revision + 1 }, table, next, deps, 'edit');
+  const next = readerActs(table, state, action, `reader-${state.actionSequence}`);
+  return show({ ...session, revision: session.revision + 1 }, table, next, deps, how);
+}
+
+interface Sizable {
+  readonly type: 'bet' | 'raise';
+  readonly minTo: number;
+  readonly maxTo: number;
+}
+
+/** Null when there is no range to choose a size from. */
+function sizable(state: HandState): Sizable | null {
+  for (const legal of legalActions(state, READER_SEAT)) {
+    if (legal.type !== 'bet' && legal.type !== 'raise') continue;
+    if (legal.minTo === undefined || legal.maxTo === undefined || legal.minTo >= legal.maxTo) return null;
+    return { type: legal.type, minTo: legal.minTo, maxTo: legal.maxTo };
+  }
+  return null;
+}
+
+function rangeText(size: Sizable): string {
+  const most = size.maxTo.toLocaleString('en-US');
+  return `Allowed range ${size.minTo.toLocaleString('en-US')} to ${most} units. ${most} is all in.`;
+}
+
+function onSize(session: Session, press: Extract<Press, { kind: 'size' }>): StepResult {
+  const { phase } = session;
+  if (phase.kind !== 'deciding' || !drawnFor(phase.state, press.handId, press.sequence)) {
+    return refuse(session);
+  }
+  const size = sizable(phase.state);
+  if (size === null) return { session, out: [{ kind: 'toast', text: 'That action is not available here.' }] };
+  const ask = size.type === 'bet' ? 'Bet how much?' : 'Raise to how much?';
+  return {
+    session: {
+      ...session,
+      sizing: { handId: press.handId, sequence: press.sequence },
+      revision: session.revision + 1,
+    },
+    out: [
+      say(
+        `${ask} Type your total for this street as a whole number, for example ` +
+          `${size.minTo.toLocaleString('en-US')}. ${rangeText(size)}`,
+      ),
+    ],
+  };
+}
+
+/** Refused rather than clamped, so what is sent is always what was typed. */
+function sizeProblem(to: number | null, size: Sizable): string | null {
+  if (to === null) return 'That is not a whole number of units I can read';
+  if (!Number.isInteger(to)) return 'Units are whole';
+  if (to < size.minTo) return `${to.toLocaleString('en-US')} is below the minimum`;
+  if (to > size.maxTo) return `${to.toLocaleString('en-US')} is above the most you can put in`;
+  return null;
+}
+
+function onSizeText(session: Session, text: string, deps: Deps): StepResult | null {
+  const { sizing, phase, table } = session;
+  if (sizing === null) return null;
+  const live = phase.kind === 'deciding' && drawnFor(phase.state, sizing.handId, sizing.sequence);
+  const size = live ? sizable(phase.state) : null;
+  if (size === null || phase.kind !== 'deciding' || table === null) {
+    return { session: { ...session, sizing: null }, out: [say(SIZE_STALE)] };
+  }
+  // `parseNumber` also reads `%`, `bb` and `to 1`, and none of them is a number of units.
+  const to = /^\s*[\d,.]+\s*(?:units?)?\s*$/i.test(text) ? parseNumber(text) : null;
+  const problem = sizeProblem(to, size);
+  if (problem !== null || to === null) {
+    return { session, out: [say(`${problem}, so nothing was sent. ${rangeText(size)}`)] };
+  }
+  const action: Action = { type: size.type, to };
+  const sent = say(`${actionWords(table, readerView(phase.state), READER_SEAT, action, to === size.maxTo)}.`);
+  const played = act({ ...session, sizing: null }, table, phase.state, action, deps, 'send');
+  return { session: played.session, out: [sent, ...played.out] };
 }
 
 function drawnFor(state: HandState, handId: string, sequence: number): boolean {
   return state.handId === handId && state.actionSequence === sequence;
+}
+
+function say(text: string): Outgoing {
+  return { kind: 'send', text, buttons: [] };
 }
 
 function refuse(session: Session): StepResult {

@@ -26,6 +26,8 @@ export type Press =
   | { readonly kind: 'reset' }
   | { readonly kind: 'act'; readonly handId: string; readonly sequence: number; readonly action: Action }
   | { readonly kind: 'why'; readonly handId: string; readonly sequence: number }
+  /** Asks for a typed bet or raise total. */
+  | { readonly kind: 'size'; readonly handId: string; readonly sequence: number }
   | { readonly kind: 'next'; readonly handId: string }
   | { readonly kind: 'quizzes' }
   | { readonly kind: 'topic'; readonly topic: string }
@@ -85,6 +87,8 @@ function wireOf(press: Press): string {
       return `a:${press.handId}:${press.sequence}:${actionCode(press.action)}`;
     case 'why':
       return `w:${press.handId}:${press.sequence}`;
+    case 'size':
+      return `s:${press.handId}:${press.sequence}`;
     case 'next':
       return `n:${press.handId}`;
     case 'quizzes':
@@ -140,7 +144,7 @@ const HAND_ID = '[A-Za-z0-9_-]{1,24}-\\d{1,6}';
 const MOMENT = '([A-Za-z0-9_-]{1,24}):(\\d{1,3})';
 const PATTERNS = {
   act: new RegExp(`^a:(${HAND_ID}):(\\d{1,6}):(f|k|c|b\\d{1,9}|r\\d{1,9})$`),
-  why: new RegExp(`^w:(${HAND_ID}):(\\d{1,6})$`),
+  whyOrSize: new RegExp(`^([ws]):(${HAND_ID}):(\\d{1,6})$`),
   next: new RegExp(`^n:(${HAND_ID})$`),
   topic: /^qt:([a-z0-9-]{1,60})$/,
   quiz: /^qs:([a-z0-9-]{1,60})$/,
@@ -170,8 +174,11 @@ export function decodePress(data: string): Press | null {
     const [, handId = '', sequence = '', code = ''] = act;
     return { kind: 'act', handId, sequence: Number(sequence), action: actionOfCode(code) };
   }
-  const why = PATTERNS.why.exec(data);
-  if (why !== null) return { kind: 'why', handId: why[1] ?? '', sequence: Number(why[2]) };
+  const decision = PATTERNS.whyOrSize.exec(data);
+  if (decision !== null) {
+    const [, code, handId = '', sequence = ''] = decision;
+    return { kind: code === 'w' ? 'why' : 'size', handId, sequence: Number(sequence) };
+  }
   const next = PATTERNS.next.exec(data);
   if (next !== null) return { kind: 'next', handId: next[1] ?? '' };
   if (data === 'q') return { kind: 'quizzes' };
@@ -235,6 +242,10 @@ export function actionButtons(view: PlayerView): Button[][] {
     if (legal.type === 'bet' || legal.type === 'raise') {
       for (const size of sizesFor(legal, view, own))
         sizes.push(at({ type: legal.type, to: size.to }, size.label));
+      if ((legal.minTo ?? 0) < (legal.maxTo ?? 0)) {
+        const press = { kind: 'size', handId: view.handId, sequence: view.actionSequence } as const;
+        sizes.push({ label: 'Other size…', data: encodePress(press) });
+      }
     }
   }
   return sizes.length === 0 ? [passive] : [passive, ...inPairs(sizes)];
@@ -316,7 +327,7 @@ function allInSequences(view: PlayerView): Set<number> {
   return sequences;
 }
 
-function actionWords(
+export function actionWords(
   table: Table,
   view: PlayerView,
   seat: SeatIndex,
