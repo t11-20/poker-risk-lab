@@ -33,7 +33,7 @@ export async function runTerminal(io: TerminalIo, deps: Deps): Promise<Session> 
     .join(', ');
   io.write(
     `Type a number to press a button, or a command: ${commands}, or /quit. ` +
-      "To send a number as a message instead, as a quiz answer, start it with a quote: '2\n",
+      "To send a number as a message instead, as a quiz answer or a bet size, start it with a quote: '2\n",
   );
   apply({ kind: 'command', name: 'start', args: '' });
   for await (const raw of io.lines) {
