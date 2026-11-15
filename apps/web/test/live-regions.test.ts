@@ -679,3 +679,26 @@ describe('the Coach panel says the reason that applies, not the one that reads b
     );
   });
 });
+
+describe('two of the reader’s decisions in a row', () => {
+  // Closing preflop and first to act on the flop arrive with no frame between them, so a turn edge keyed
+  // on "was it their turn" alone would keep speaking the preflop sentence over the flop's buttons.
+  const preflop: PlayerView = { ...DECISION_VIEW, street: 'preflop', board: [], actionSequence: 6 };
+  const flop: PlayerView = {
+    ...DECISION_VIEW,
+    actionSequence: 7,
+    amountToCall: 0,
+    legalActions: [
+      { type: 'check' },
+      { type: 'bet', minTo: 10, maxTo: 970, costAtMin: 10, allInAtMax: true },
+    ],
+  };
+
+  it('speaks the flop’s sentence, not the preflop one it followed', () => {
+    const first = tableReducer(EMPTY_TABLE_STATE, { kind: 'frame', frame: stateFrame(preflop, 1) });
+    const second = tableReducer(first, { kind: 'frame', frame: stateFrame(flop, 2) });
+    assert.match(first.turnAnnouncement, /preflop/u);
+    assert.equal(second.turnAnnouncement, turnAnnouncementFor(flop));
+    assert.match(second.turnAnnouncement, /on the flop\. Nothing to call\./u);
+  });
+});
