@@ -28,7 +28,15 @@ import type {
 import { buildPotLayers, type Card, type PotContributor, type SeatIndex } from '@prl/poker-engine';
 import { restsOnAssumedFoldEquity } from './consistency.ts';
 import { type EquityResult, type EquitySpec, equity } from './equity.ts';
-import { evOfBet, evOfCall, evOfCheck, evOfFold, evOfRaise, foldRateReaching } from './ev.ts';
+import {
+  breakEvenFoldRate,
+  evOfBet,
+  evOfCall,
+  evOfCheck,
+  evOfFold,
+  evOfRaise,
+  foldRateReaching,
+} from './ev.ts';
 import { chips, frac, percent, signedChips } from './format.ts';
 import {
   maximumOutsForRuleOf24,
@@ -1459,23 +1467,29 @@ function halfPotBreakEven(
   );
   if (row === undefined) throw new CoachError(`internal: the ½-pot size ${to} has no priced row`);
   const { whenCalled, whenFolded } = branchesOf(row, input, split);
-  const needed = whenCalled >= 0 ? 0 : foldRateReaching(0, whenFolded, whenCalled);
+  const breakEven = breakEvenFoldRate(whenFolded, whenCalled);
   const line = `The ½-pot ${row.action === 'bet' ? `bet of ${to}` : `raise to ${to}`} risks ${chips(row.cost)}`;
   const layered = split.allIn.length > 0;
   const size = layered
     ? `${line}. ${allInClause(split)}, so everyone else folding is worth ${chips(whenFolded)} to you, not the ${chips(input.contestablePot)} in the middle.`
     : `${line} to win ${chips(input.contestablePot)}.`;
   // "Needs 0%" and "needs 100%" both read as mistakes, so each degenerate case says what it means.
-  if (needed <= 0) {
-    return `${size} It is already break-even or better purely on the equity you have when called — it does not need ${layered ? 'anyone to fold' : 'to win uncontested'} at all.`;
+  switch (breakEven.kind) {
+    case 'always':
+      return `${size} It is already break-even or better purely on the equity you have when called — it does not need ${layered ? 'anyone to fold' : 'to win uncontested'} at all.`;
+    case 'never':
+      return `${size} It cannot break even at any fold frequency with this much equity when called — folding out the whole range still would not be enough.`;
+    case 'at-most':
+      return `${size} It breaks even when called, but a fold is worth less to you than a call, so it stops breaking even once everyone who can fold does fold more than ${percentOfTime(breakEven.rate)}.`;
+    case 'at-least':
+      return layered
+        ? `${size} To break even everyone who can fold would need to fold ${percentOfTime(breakEven.rate)}.`
+        : `${size} To break even it would need to win uncontested ${percentOfTime(breakEven.rate)}.`;
   }
-  if (needed >= 1) {
-    return `${size} It cannot break even at any fold frequency with this much equity when called — folding out the whole range still would not be enough.`;
-  }
-  const rate = `${(needed * 100).toFixed(0)}% of the time`;
-  return layered
-    ? `${size} To break even everyone who can fold would need to fold ${rate}.`
-    : `${size} To break even it would need to win uncontested ${rate}.`;
+}
+
+function percentOfTime(rate: number): string {
+  return `${(rate * 100).toFixed(0)}% of the time`;
 }
 
 /** A compact summary for logs and hand-review lists. Never shown as the whole story. */

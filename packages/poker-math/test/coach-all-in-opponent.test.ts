@@ -16,11 +16,13 @@ import {
 } from '@prl/poker-engine';
 import { buildCoachReport, type CoachInput, type OpponentStack } from '../src/coach.ts';
 import { coachInputFor, coachSpotForView, LIVE_COACH_POLICY } from '../src/coach-view.ts';
-import { exactRange } from '../src/ranges.ts';
+import { exactRange, parseRange } from '../src/ranges.ts';
 import { repriceAtFoldEquity } from '../src/reprice.ts';
 
 const ACES = { label: 'A', range: exactRange(parseCards('As Ah')) };
 const QUEENS = { label: 'B', range: exactRange(parseCards('Qc Qd')) };
+// Against KcQh on this board: JJ (6 combos) and QQ (3) lose, 99 (3) and 55 (3) make a full house. 9/15.
+const SIXTY = { label: 'B', range: parseRange('JJ,QQ,99,55', parseCards('Kc Qh Ks 9d 5c 2h 2s')) };
 
 function river(hero: string, spot: Partial<CoachInput> & { opponentStacks: readonly OpponentStack[] }) {
   const pot = spot.pot ?? 300;
@@ -209,6 +211,47 @@ test('refused: a seat with chips behind that cannot win the whole pot, and stack
     () => river('Kc Qh', { opponents: [ACES], opponentStacks: ALL_IN_PREFLOP }),
     /one range per opponent/,
   );
+});
+
+/** Prior 300 three ways, then A jams 100 with aces and B calls. */
+function facingAJam() {
+  return river('Kc Qh', {
+    opponents: [ACES, SIXTY],
+    pot: 500,
+    toCall: 100,
+    opponentStacks: [
+      { behind: 0, committedThisStreet: 100, winnable: 500 },
+      { behind: 800, committedThisStreet: 100 },
+    ],
+  });
+}
+
+test('a raise that loses called and loses more when B folds cannot break even at any fold rate', () => {
+  // Raise to 400, called: the 600 main pot goes to A and hero wins 0.6 of the 600 side pot, less 400:
+  // -40. B folds: the main pot goes to A, less the 100 hero matched: -100. 0.35 x -100 + 0.65 x -40.
+  const report = facingAJam();
+  near(evAt(report, 'raise', 400), -61, 'raise to 400');
+  const half = report.assumptions.find((line) => line.startsWith('The ½-pot raise to 400'));
+  assert.match(half ?? '', /cannot break even at any fold frequency/);
+  assert.doesNotMatch(half ?? '', /already break-even/);
+});
+
+test('a raise that wins called and loses when B folds breaks even only below a fold rate', () => {
+  // Prior 900. Raise to 700, called: 1200 main pot lost, 0.6 of the 1200 side pot won, less 700: +20.
+  // B folds: -100. EV = 20 - 120f, zero at f = 1/6, and 0.35 x -100 + 0.65 x 20 = -22 at the default.
+  const report = river('Kc Qh', {
+    opponents: [ACES, SIXTY],
+    pot: 1_100,
+    toCall: 100,
+    opponentStacks: [
+      { behind: 0, committedThisStreet: 100, winnable: 1_100 },
+      { behind: 800, committedThisStreet: 100 },
+    ],
+  });
+  near(evAt(report, 'raise', 700), -22, 'raise to 700');
+  const half = report.assumptions.find((line) => line.startsWith('The ½-pot raise to 700'));
+  assert.match(half ?? '', /fold more than 17% of the time/);
+  assert.doesNotMatch(half ?? '', /does not need anyone to fold/);
 });
 
 function handAt(stacks: readonly number[], seed: number): HandState {

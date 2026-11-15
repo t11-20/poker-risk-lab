@@ -396,6 +396,23 @@ export function foldRateReaching(target: number, whenFolded: number, whenCalled:
 }
 
 /**
+ * Where a bet's EV, linear in f, is at or above zero. The signs of its two ends decide it: with an
+ * opponent all in, a fold can be worth less than a call, so more folds can make a line worse.
+ */
+export type FoldRateBreakEven =
+  | { readonly kind: 'always' }
+  | { readonly kind: 'never' }
+  | { readonly kind: 'at-least'; readonly rate: number }
+  | { readonly kind: 'at-most'; readonly rate: number };
+
+export function breakEvenFoldRate(whenFolded: number, whenCalled: number): FoldRateBreakEven {
+  if (whenCalled >= 0 && whenFolded >= 0) return { kind: 'always' };
+  if (whenCalled < 0 && whenFolded <= 0) return { kind: 'never' };
+  const rate = foldRateReaching(0, whenFolded, whenCalled);
+  return whenCalled < 0 ? { kind: 'at-least', rate } : { kind: 'at-most', rate };
+}
+
+/**
  * How often they must fold for a bet to break even. With S the called-branch EV,
  * `EV(f) = S + f x (pot - S)`, so `f* = -S / (pot - S)`. At e = 0 this is alpha, `b / (pot + b)`,
  * and the tests check it against `breakEvenBluffFrequency`.
