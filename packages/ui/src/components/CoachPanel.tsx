@@ -46,7 +46,7 @@ import {
   pluralise,
 } from '../format.ts';
 import { withKeys } from '../keys.ts';
-import { countsAsOuts } from '../outs-count.ts';
+import { countsAsOuts, type OutsWithheld, outsWithheldBecause } from '../outs-count.ts';
 import {
   formatProbability,
   isProbabilityDifference,
@@ -193,6 +193,24 @@ interface OutsSectionProps {
   readonly outs: OutsBreakdown | null;
   /** Decides whether this section has an outs count at all (`../outs-count.ts`). */
   readonly heroEquity: number;
+  readonly street: string;
+  readonly opponents: number;
+}
+
+function outsWithheldProse(reason: OutsWithheld | null, opponents: number): string {
+  switch (reason) {
+    case 'no-board-yet':
+      return 'Outs are counted against the board, and no board has been dealt yet.';
+    case 'board-complete':
+      return 'The board is complete, so no card is still to come that could be an out.';
+    case 'several-opponents':
+      return (
+        `Outs are counted against a single opponent, and ${opponents} opponents are still in this hand. ` +
+        'A card that puts you ahead of one of them can still leave you behind another.'
+      );
+    case null:
+      return '';
+  }
 }
 
 /**
@@ -200,16 +218,13 @@ interface OutsSectionProps {
  * claims. The counts and card lists survive a refusal because they are true. Only the word and the sum
  * are withheld.
  */
-function OutsSection({ outs, heroEquity }: OutsSectionProps): ReactElement {
+function OutsSection({ outs, heroEquity, street, opponents }: OutsSectionProps): ReactElement {
   if (outs === null) {
+    const why = outsWithheldProse(outsWithheldBecause(street, opponents), opponents);
     return (
       <section className="prl-coach__section">
         <h3 className="prl-coach__section-heading">Outs</h3>
-        <p className="prl-coach__prose">
-          No outs breakdown for this spot. Outs are counted when there are cards still to come and the hand
-          needs one of them to improve; with the board complete, or before any board is dealt, the count has
-          nothing to enumerate.
-        </p>
+        <p className="prl-coach__prose">{`No outs breakdown for this spot. ${why}`.trim()}</p>
       </section>
     );
   }
@@ -651,7 +666,12 @@ export function CoachPanel(props: CoachPanelProps): ReactElement {
       <SuggestionBlock suggestion={report.suggestion} candidate={suggested} />
 
       <div className="prl-coach__grid">
-        <OutsSection outs={outs} heroEquity={equity.heroEquity} />
+        <OutsSection
+          outs={outs}
+          heroEquity={equity.heroEquity}
+          street={report.street}
+          opponents={equity.perPlayer.length - 1}
+        />
         <StackSection stack={report.stackContext} />
       </div>
 
