@@ -608,14 +608,20 @@ function validateScenarioSeat(problems: Problems, path: string, raw: unknown): S
     return { seat: 0, label: '', stack: 0 };
   }
   const isHero = raw['isHero'];
+  const folded = raw['folded'];
   const holeCards = raw['holeCards'];
   const profile = raw['profile'];
+  // Refused rather than dropped, because a seat silently kept in the hand is priced as a caller.
+  if (folded !== undefined && typeof folded !== 'boolean') {
+    problems.add(`${path}.folded`, `expected true or false, got ${describe(folded)}`);
+  }
   return {
     seat: requireInteger(problems, `${path}.seat`, raw['seat'], { min: 0, max: 5 }),
     label: requireString(problems, `${path}.label`, raw['label'], { max: 16 }),
     // min 0, because `stack` is chips behind and an all-in seat has exactly 0.
     stack: requireInteger(problems, `${path}.stack`, raw['stack'], { min: 0, max: 10_000_000 }),
     ...(typeof isHero === 'boolean' ? { isHero } : {}),
+    ...(typeof folded === 'boolean' ? { folded } : {}),
     ...(typeof holeCards === 'string' ? { holeCards } : {}),
     ...(typeof profile === 'string'
       ? { profile: requireOneOf(problems, `${path}.profile`, profile, OPPONENT_PROFILES) }
@@ -1072,6 +1078,10 @@ function checkSeatSet(
   const hero = heroes[0];
   if (hero !== undefined && (hero.holeCards === undefined || hero.holeCards === '')) {
     problems.add(`${path}.seats`, 'the hero seat must have holeCards');
+  }
+  if (hero?.folded === true) problems.add(`${path}.seats`, 'the hero seat cannot be folded');
+  if (seats.every((seat) => seat.isHero === true || seat.folded === true)) {
+    problems.add(`${path}.seats`, 'no opponent is still in the hand: every other seat is folded');
   }
   if (seatNumbers.length > 0 && !seatNumbers.includes(buttonSeat)) {
     problems.add(`${path}.buttonSeat`, `seat ${buttonSeat} is not one of the seats in this scenario`);

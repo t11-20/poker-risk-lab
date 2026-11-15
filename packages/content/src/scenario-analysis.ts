@@ -87,7 +87,11 @@ export function readSituation(scenario: Scenario): ScenarioSituation {
   const committedTotal = Object.values(committed).reduce((sum, value) => sum + value, 0);
   const pot = scenario.potBeforeStreet + committedTotal;
 
-  const opponentStacks = scenario.seats.filter((seat) => seat.isHero !== true).map((seat) => seat.stack);
+  // A folded seat cannot call, so its stack would lift the cap on what a bet can win. An all-in seat
+  // stays, at 0 behind, because it can still win the pot.
+  const opponentStacks = scenario.seats
+    .filter((seat) => seat.isHero !== true && seat.folded !== true)
+    .map((seat) => seat.stack);
   if (opponentStacks.length === 0) {
     throw new ScenarioAnalysisError(`scenario "${scenario.id}" has no opponents`);
   }

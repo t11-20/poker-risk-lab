@@ -89,6 +89,23 @@ describe('the Lab and the Coach agree on what hero may do', () => {
       `only ${withAggression} scenario(s) offer aggression; expected most of them`,
     );
   });
+
+  it('offers no raise when the only chips behind belong to a seat that folded', () => {
+    // The big blind is all in for 170 and hero has 260, so a raise needs a caller nobody can be.
+    const base = content().scenarios.find((candidate) => candidate.id === 'eq-rule-of-four-big-draw-flop');
+    assert.ok(base !== undefined, 'eq-rule-of-four-big-draw-flop is no longer in the bundle');
+    const scenario: Scenario = {
+      ...base,
+      seats: [...base.seats, { seat: 0, label: 'SB', stack: 995, folded: true }],
+    };
+    assert.deepEqual(deriveLegalActions(spotFor(scenario)), ['fold', 'call']);
+    const table = scenarioToPlayerView(scenario);
+    assert.ok(table !== null, 'the scenario did not project into a table');
+    assert.deepEqual(
+      table.legalActions.map((action) => action.type),
+      ['fold', 'call'],
+    );
+  });
 });
 
 describe("the big blind's option in a limped pot", () => {
