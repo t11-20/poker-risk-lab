@@ -27,6 +27,7 @@ import {
   AssumptionList,
   Button,
   Callout,
+  CardText,
   Chip,
   CoachPanel,
   formatSignedUnits,
@@ -453,7 +454,7 @@ export function ScenarioStage(props: ScenarioStageProps): ReactElement {
           <Panel title="The reasoning" eyebrow="Why" index={6} headingLevel={2}>
             {scenario.reasoning.split('\n\n').map((paragraph) => (
               <p className="prl-prose" key={paragraph.slice(0, 48)}>
-                {paragraph}
+                <CardText text={paragraph} />
               </p>
             ))}
           </Panel>

@@ -121,3 +121,22 @@ export function handAndBoardName(hole: readonly number[], board: readonly number
   const dealt = board.length === 0 ? 'none dealt yet' : listCardNames(board);
   return `Your cards: ${listCardNames(hole)}. Board: ${dealt}.`;
 }
+
+/**
+ * Two or more cards, joined or one space apart. A lone token stays text because "As" and "Ah" are
+ * English words, and the alphanumeric guards keep range notation ("AKs", "T9s") whole.
+ */
+const CARD_RUN = /(?<![A-Za-z0-9])[2-9TJQKA][shdc](?: ?[2-9TJQKA][shdc])+(?![A-Za-z0-9])/g;
+
+/** Prose split into its text and its runs of cards, in order. */
+export function cardTextSegments(text: string): readonly (string | readonly CardValue[])[] {
+  const segments: (string | readonly CardValue[])[] = [];
+  let at = 0;
+  for (const match of text.matchAll(CARD_RUN)) {
+    if (match.index > at) segments.push(text.slice(at, match.index));
+    segments.push((match[0].replaceAll(' ', '').match(/../g) ?? []).map(parseCardText).filter(isCardValue));
+    at = match.index + match[0].length;
+  }
+  if (at < text.length) segments.push(text.slice(at));
+  return segments;
+}

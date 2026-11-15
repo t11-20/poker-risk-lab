@@ -1884,6 +1884,30 @@
   background-color: var(--prl-card-face-dim);
 }
 
+/* CardText */
+
+/** Page-surface suit colours, because the card-face ones put navy spades on a dark page. */
+.prl-card-text {
+  white-space: nowrap;
+}
+
+.prl-card-text__card {
+  color: var(--prl-mark-spade);
+  font-weight: var(--prl-weight-bold);
+}
+
+.prl-card-text__card[data-suit="heart"] {
+  color: var(--prl-mark-heart);
+}
+
+.prl-card-text__card[data-suit="diamond"] {
+  color: var(--prl-mark-diamond);
+}
+
+.prl-card-text__card[data-suit="club"] {
+  color: var(--prl-mark-club);
+}
+
 /* CardRow */
 
 .prl-card-row {

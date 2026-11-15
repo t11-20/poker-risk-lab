@@ -20,6 +20,7 @@ import type { ContentId, Quiz, QuizQuestion } from '@prl/contracts';
 import {
   Button,
   Callout,
+  CardText,
   Chip,
   Formula,
   formatIndex,
@@ -147,7 +148,9 @@ function MultipleChoice(props: {
                   checked={selected === index}
                   onChange={() => setSelected(index)}
                 />
-                <span className="prl-choice__label">{entry.value}</span>
+                <span className="prl-choice__label">
+                  <CardText text={entry.value} />
+                </span>
               </label>
               {answered ? (
                 <div className="prl-learn-quiz__option-feedback">
@@ -159,7 +162,11 @@ function MultipleChoice(props: {
                       <Chip glyph={CHOICE_MARKER.yours}>what you picked</Chip>
                     ) : null}
                   </span>
-                  {note === undefined ? null : <p className="prl-note">{note}</p>}
+                  {note === undefined ? null : (
+                    <p className="prl-note">
+                      <CardText text={note} />
+                    </p>
+                  )}
                 </div>
               ) : null}
             </div>
@@ -225,11 +232,17 @@ function Working(props: {
           explanation={result.formula.explanation}
         />
       )}
-      {result.derivation === null ? null : <p className="prl-note">{result.derivation}</p>}
+      {result.derivation === null ? null : (
+        <p className="prl-note">
+          <CardText text={result.derivation} />
+        </p>
+      )}
       {result.assumptions.length === 0 ? null : (
         <ul className="prl-learn-quiz__assumptions">
           {result.assumptions.map((assumption) => (
-            <li key={assumption}>{assumption}</li>
+            <li key={assumption}>
+              <CardText text={assumption} />
+            </li>
           ))}
         </ul>
       )}
@@ -246,7 +259,9 @@ function Unmarkable(props: { readonly reason: string; readonly explanation: stri
         This question cannot be marked
       </p>
       <p>{props.reason}</p>
-      <p>{props.explanation}</p>
+      <p>
+        <CardText text={props.explanation} />
+      </p>
     </div>
   );
 }
@@ -539,7 +554,9 @@ export function QuizRunner(props: QuizRunnerProps): ReactElement {
         <h3 className="prl-learn-quiz__heading" ref={headingRef} tabIndex={-1}>
           What to do with all that
         </h3>
-        <p className="prl-learn-quiz__advice">{quiz.reviewAdvice}</p>
+        <p className="prl-learn-quiz__advice">
+          <CardText text={quiz.reviewAdvice} />
+        </p>
         {/* Says what is kept and what is not. The condition is a guest session, not a sign-in. */}
         <p className="prl-note">
           Nothing here was scored. Once this browser has a guest session — opening a table starts one — each
@@ -597,7 +614,7 @@ export function QuizRunner(props: QuizRunnerProps): ReactElement {
       <h3 className="prl-learn-quiz__heading" ref={headingRef} tabIndex={-1}>
         {/* Focus lands here each step, so it says the position. Hidden, since `01 / 05` is drawn. */}
         <span className="prl-visually-hidden">{`Question ${String(step + 1)} of ${String(total)}. `}</span>
-        {question.prompt}
+        <CardText text={question.prompt} />
       </h3>
 
       {questionBody(question, answer, server, (given) => record(question.id, given))}
@@ -605,7 +622,9 @@ export function QuizRunner(props: QuizRunnerProps): ReactElement {
       {answered ? (
         <div className="prl-learn-quiz__explanation">
           <span className="prl-label">Why</span>
-          <p>{question.explanation}</p>
+          <p>
+            <CardText text={question.explanation} />
+          </p>
           {lessonTitleId === null ? null : (
             <ReReadLink
               targetId={lessonTitleId}

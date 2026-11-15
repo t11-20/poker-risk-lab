@@ -9,6 +9,7 @@ import type { ReactElement } from 'react';
 import { cx } from '../cx.ts';
 import { formatIndex } from '../format.ts';
 import { withKeys } from '../keys.ts';
+import { CardText } from './CardText.tsx';
 
 export type HeadingLevel = 2 | 3 | 4 | 5 | 6;
 
@@ -49,7 +50,9 @@ export function AssumptionList(props: AssumptionListProps): ReactElement {
                 <span className="prl-assumptions__index prl-index" aria-hidden="true">
                   {formatIndex(position + 1)}
                 </span>
-                <span className="prl-assumptions__text">{entry.value}</span>
+                <span className="prl-assumptions__text">
+                  <CardText text={entry.value} />
+                </span>
               </li>
             ))}
           </ul>
