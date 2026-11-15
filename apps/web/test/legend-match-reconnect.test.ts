@@ -16,6 +16,7 @@ import type {
   RoomSummary,
 } from '@prl/contracts';
 import { BOT_TABLE_REQUEST, resumeRememberedTable, type TableSession } from '../src/lib/table-rooms.ts';
+import { readServerMessage } from '../src/lib/table-socket.ts';
 import { openPracticeRoom, type PracticeRoomDependencies } from '../src/lib/use-live-table.ts';
 
 const READER = 'usr_reader';
@@ -217,5 +218,55 @@ describe('"Keep my other Legends match"', () => {
       /href=\{legendMatchHref\(match\.profileId, match\.difficulty\)\}\s*onClick=\{live\.stayAtOtherTable\}/u,
     );
     assert.doesNotMatch(panel, /none is ever reopened/u);
+  });
+});
+
+describe('a state frame from an API that predates botDifficulty', () => {
+  // The web and API images can roll out apart, so the reader tolerates an absent field. An absent
+  // difficulty matches no Legends match, so the page starts fresh as before rather than refusing the table.
+  const frame = (member: Record<string, unknown>): string =>
+    JSON.stringify({
+      type: 'state',
+      view: null,
+      room: {
+        id: 'room-old-api',
+        name: 'Bot table',
+        ownerUserId: 'p0',
+        maxSeats: 6,
+        smallBlind: 5,
+        bigBlind: 10,
+        ante: 0,
+        startingStack: 1000,
+        actionTimeoutSeconds: 30,
+        status: 'open',
+        visibility: 'invite_only',
+        members: [
+          {
+            userId: 'p0',
+            displayName: 'You',
+            seat: 0,
+            stack: 1000,
+            isBot: false,
+            botProfile: null,
+            connected: true,
+            awaitingBigBlind: false,
+            ...member,
+          },
+        ],
+        createdAt: '2026-08-27T00:00:00.000Z',
+      },
+      deadlineMs: null,
+      serverTimeMs: 1_756_000_000_000,
+      revision: 1,
+    });
+
+  it('is still read, without the field', () => {
+    assert.equal(readServerMessage(frame({})).ok, true);
+  });
+
+  it('is read with the field, and refused when the field is not a string or null', () => {
+    assert.equal(readServerMessage(frame({ botDifficulty: null })).ok, true);
+    assert.equal(readServerMessage(frame({ botDifficulty: 'expert' })).ok, true);
+    assert.equal(readServerMessage(frame({ botDifficulty: 3 })).ok, false);
   });
 });

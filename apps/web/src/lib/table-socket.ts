@@ -333,7 +333,10 @@ function isRoomMember(value: unknown): boolean {
     isNumber(value['stack']) &&
     isBoolean(value['isBot']) &&
     (value['botProfile'] === null || isString(value['botProfile'])) &&
-    (value['botDifficulty'] === null || isString(value['botDifficulty'])) &&
+    // Optional on the way in, because an API that predates it may still be serving during a rollout.
+    (value['botDifficulty'] === undefined ||
+      value['botDifficulty'] === null ||
+      isString(value['botDifficulty'])) &&
     isBoolean(value['connected']) &&
     // Required. A frame without it would render a seat awaiting the big blind as an ordinary player
     // dealt no cards.
