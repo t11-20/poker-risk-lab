@@ -15,7 +15,12 @@ import type {
   RoomMember,
   RoomSummary,
 } from '@prl/contracts';
-import { BOT_TABLE_REQUEST, resumeRememberedTable, type TableSession } from '../src/lib/table-rooms.ts';
+import {
+  BOT_TABLE_REQUEST,
+  resumeRememberedTable,
+  runningLegendMatchOf,
+  type TableSession,
+} from '../src/lib/table-rooms.ts';
 import { readServerMessage } from '../src/lib/table-socket.ts';
 import { openPracticeRoom, type PracticeRoomDependencies } from '../src/lib/use-live-table.ts';
 
@@ -268,5 +273,24 @@ describe('a state frame from an API that predates botDifficulty', () => {
     assert.equal(readServerMessage(frame({ botDifficulty: null })).ok, true);
     assert.equal(readServerMessage(frame({ botDifficulty: 'expert' })).ok, true);
     assert.equal(readServerMessage(frame({ botDifficulty: 3 })).ok, false);
+  });
+});
+
+describe('a room listed by an API that predates botDifficulty', () => {
+  // Without a difficulty there is no match to name, so no link may be built to `difficulty=undefined`.
+  const old = (room: RoomSummary): RoomSummary => ({
+    ...room,
+    members: room.members.map((entry) => {
+      const { botDifficulty: _dropped, ...rest } = entry;
+      return rest as RoomMember;
+    }),
+  });
+
+  it("is no running match, so the page falls back to today's warning", () => {
+    assert.equal(runningLegendMatchOf(old(match('room-old')), READER), null);
+  });
+
+  it('NEGATIVE CONTROL: the same room from a current API is the running match', () => {
+    assert.deepEqual(runningLegendMatchOf(match('room-new'), READER), PAGE);
   });
 });

@@ -225,7 +225,8 @@ export function runningLegendMatchOf(room: RoomSummary, userId: string): LegendM
   if (room.ownerUserId !== userId || room.status === 'closed' || room.maxSeats !== 2) return null;
   const bot = room.members.find((member) => member.isBot);
   const reader = room.members.find((member) => member.userId === userId);
-  if (bot === undefined || bot.botProfile === null || bot.botDifficulty === null) return null;
+  // `typeof`, because an API that predates the field omits it, and an absent difficulty names no match.
+  if (bot === undefined || bot.botProfile === null || typeof bot.botDifficulty !== 'string') return null;
   // Mid-hand an all-in seat shows no chips behind, and the hand still has to be played out.
   const bust =
     bot.seat === null ||
