@@ -6,6 +6,7 @@
  * secrets must not reach a browser. `test/outs-count.test.ts` pins it to `DEFAULT_AHEAD_THRESHOLD`.
  */
 
+import type { EquitySummary } from '@prl/contracts';
 import { isProbabilityFraction } from './probability.ts';
 
 /** A hand past this needs no card, so nothing that arrives is an out. */
@@ -30,4 +31,17 @@ export function outsWithheldBecause(street: string, opponents: number): OutsWith
   if (street === 'preflop') return 'no-board-yet';
   if (street === 'river') return 'board-complete';
   return opponents > 1 ? 'several-opponents' : null;
+}
+
+export type NoOuts = 'drawing-dead' | 'split-at-best' | 'no-single-card';
+
+/**
+ * Why a hand that is behind has no outs; one at the bar always has a card that keeps it there. Dead only
+ * on an exact zero, since sampling can miss a rare runout. Hero is `perPlayer[0]`, as `buildCoachReport` lists.
+ */
+export function noOutsBecause(equity: EquitySummary): NoOuts {
+  if (equity.heroEquity === 0 && equity.method === 'exact-enumeration') return 'drawing-dead';
+  const hero = equity.perPlayer[0];
+  if (hero !== undefined && hero.win === 0 && hero.tie > 0) return 'split-at-best';
+  return 'no-single-card';
 }

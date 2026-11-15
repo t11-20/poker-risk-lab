@@ -46,7 +46,13 @@ import {
   pluralise,
 } from '../format.ts';
 import { withKeys } from '../keys.ts';
-import { countsAsOuts, type OutsWithheld, outsWithheldBecause } from '../outs-count.ts';
+import {
+  countsAsOuts,
+  type NoOuts,
+  noOutsBecause,
+  type OutsWithheld,
+  outsWithheldBecause,
+} from '../outs-count.ts';
 import {
   formatProbability,
   isProbabilityDifference,
@@ -191,8 +197,8 @@ function OutsBucket({ kind, count, areOuts }: OutsBucketProps): ReactElement {
 
 interface OutsSectionProps {
   readonly outs: OutsBreakdown | null;
-  /** Decides whether this section has an outs count at all (`../outs-count.ts`). */
-  readonly heroEquity: number;
+  /** Decides whether this section has an outs count at all (`../outs-count.ts`), and what a zero means. */
+  readonly equity: EquitySummary;
   readonly street: string;
   readonly opponents: number;
 }
@@ -213,12 +219,32 @@ function outsWithheldProse(reason: OutsWithheld | null, opponents: number): stri
   }
 }
 
+/** A zero read as a count is "Outs — 0 cards in total", which says nothing about why. */
+const NO_OUTS_TEXT: Readonly<Record<NoOuts, { readonly heading: string; readonly lead: string }>> = {
+  'drawing-dead': {
+    heading: 'Outs — none, you are drawing dead',
+    lead: 'No card that can still come wins or splits this pot for you against the range assumed below.',
+  },
+  'split-at-best': {
+    heading: 'Outs — none, a split is the best you can make',
+    lead:
+      'No card that can still come puts you ahead of the range assumed below. ' +
+      'The most you can win is a share of a split pot.',
+  },
+  'no-single-card': {
+    heading: 'Outs — none, no single card puts you ahead',
+    lead:
+      'An out has to bring you to at least an even share of this pot on its own, and no card that can ' +
+      'come next does that against the range assumed below.',
+  },
+};
+
 /**
  * Rule 6. `countsAsOuts` picks the heading at the render boundary, whatever the report's own prose
  * claims. The counts and card lists survive a refusal because they are true. Only the word and the sum
  * are withheld.
  */
-function OutsSection({ outs, heroEquity, street, opponents }: OutsSectionProps): ReactElement {
+function OutsSection({ outs, equity, street, opponents }: OutsSectionProps): ReactElement {
   if (outs === null) {
     const why = outsWithheldProse(outsWithheldBecause(street, opponents), opponents);
     return (
@@ -228,12 +254,15 @@ function OutsSection({ outs, heroEquity, street, opponents }: OutsSectionProps):
       </section>
     );
   }
-  const areOuts = countsAsOuts(heroEquity);
+  const areOuts = countsAsOuts(equity.heroEquity);
+  const none = areOuts && outs.total === 0 ? NO_OUTS_TEXT[noOutsBecause(equity)] : null;
+  let heading = 'Outs — no outs count for this spot';
+  if (none !== null) heading = none.heading;
+  else if (areOuts) heading = `Outs — ${pluralise(outs.total, 'card')} in total`;
   return (
     <section className="prl-coach__section">
-      <h3 className="prl-coach__section-heading">
-        {areOuts ? `Outs — ${pluralise(outs.total, 'card')} in total` : 'Outs — no outs count for this spot'}
-      </h3>
+      <h3 className="prl-coach__section-heading">{heading}</h3>
+      {none === null ? null : <p className="prl-coach__prose">{none.lead}</p>}
       <div className="prl-outs__buckets">
         <OutsBucket kind="clean" count={outs.clean} areOuts={areOuts} />
         <OutsBucket kind="dirty" count={outs.dirty} areOuts={areOuts} />
@@ -668,7 +697,7 @@ export function CoachPanel(props: CoachPanelProps): ReactElement {
       <div className="prl-coach__grid">
         <OutsSection
           outs={outs}
-          heroEquity={equity.heroEquity}
+          equity={equity}
           street={report.street}
           opponents={equity.perPlayer.length - 1}
         />
