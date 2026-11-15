@@ -9,13 +9,14 @@ import { parseCards } from '@prl/poker-engine';
 import { buildCoachReport, type CoachInput } from '../src/coach.ts';
 import { exactRange } from '../src/ranges.ts';
 import { repriceAtFoldEquity } from '../src/reprice.ts';
+import { atBetLevel, type BehindSpot } from './at-bet-level.ts';
 
 /**
  * Hero's set of queens against the nut flush draw on the turn. Of the 44 unseen rivers, the seven
  * hearts that do not pair the board beat hero, so hero's equity is exactly 37/44.
  */
-function setVersusDraw(overrides: Partial<CoachInput> = {}): CoachInput {
-  return {
+function setVersusDraw(overrides: Partial<BehindSpot> = {}): CoachInput {
+  return atBetLevel({
     heroCards: parseCards('Qs Qd'),
     board: parseCards('Qh 7h 2c 3d'),
     street: 'turn',
@@ -29,7 +30,7 @@ function setVersusDraw(overrides: Partial<CoachInput> = {}): CoachInput {
     assumedFoldEquity: 0.35,
     ...overrides,
     contestablePot: overrides.contestablePot ?? overrides.pot ?? 56,
-  };
+  });
 }
 
 function assertChips(actual: number | undefined, expected: number, what: string): void {

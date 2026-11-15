@@ -18,6 +18,8 @@ export {
   deriveLegalActions,
   maximumTo,
   minimumAggressiveTo,
+  type OpponentStack,
+  opponentsAtBetLevel,
   type PricedSpot,
   type RuleOfThumbRefusal,
   ruleOfThumbFor,

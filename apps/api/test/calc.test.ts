@@ -287,7 +287,10 @@ describe('calc/parse.ts — costing a request before running it', () => {
       bigBlind: 10,
       street: 'flop',
     });
-    assert.deepEqual(plan.task.opponentStacks, [500, 500]);
+    assert.deepEqual(plan.task.opponentStacks, [
+      { behind: 500, committedThisStreet: 50 },
+      { behind: 500, committedThisStreet: 50 },
+    ]);
 
     assert.throws(
       () =>

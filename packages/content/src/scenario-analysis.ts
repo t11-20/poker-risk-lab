@@ -17,6 +17,7 @@ import {
   equity,
   evOfCall,
   exactRange,
+  type OpponentStack,
   type OutsResult,
   type ParsedRange,
   parseRange,
@@ -40,7 +41,7 @@ export interface ScenarioSituation {
   readonly pot: number;
   readonly toCall: number;
   readonly heroStack: number;
-  readonly opponentStacks: readonly number[];
+  readonly opponentStacks: readonly OpponentStack[];
   readonly cardsToCome: 1 | 2 | null;
 }
 
@@ -91,7 +92,7 @@ export function readSituation(scenario: Scenario): ScenarioSituation {
   // stays, at 0 behind, because it can still win the pot.
   const opponentStacks = scenario.seats
     .filter((seat) => seat.isHero !== true && seat.folded !== true)
-    .map((seat) => seat.stack);
+    .map((seat) => ({ behind: seat.stack, committedThisStreet: committed[seat.seat] ?? 0 }));
   if (opponentStacks.length === 0) {
     throw new ScenarioAnalysisError(`scenario "${scenario.id}" has no opponents`);
   }
@@ -168,7 +169,10 @@ export function analyseScenario(scenario: Scenario, options: AnalyseOptions = {}
           equity: hero.equity,
         }).ev;
 
-  const effective = effectiveStack(situation.heroStack, situation.opponentStacks);
+  const effective = effectiveStack(
+    situation.heroStack,
+    situation.opponentStacks.map((opponent) => opponent.behind),
+  );
   const spr = stackToPotRatio(effective.effective, Math.max(1, situation.pot)).spr;
 
   // validate.ts refuses an exact clean-out claim unless the opponent holding is exact.

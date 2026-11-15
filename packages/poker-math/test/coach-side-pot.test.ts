@@ -106,7 +106,10 @@ function inputFor(spot: Spot, contestablePot: number): CoachInput {
     toCall: spot.view.amountToCall,
     heroCommittedThisStreet: spot.own.committedThisStreet,
     heroStack: spot.own.stack,
-    opponentStacks: spot.opponents.map((seat) => seat.stack),
+    opponentStacks: spot.opponents.map((seat) => ({
+      behind: seat.stack,
+      committedThisStreet: seat.committedThisStreet,
+    })),
     bigBlind: spot.view.config.bigBlind,
     minimumRaiseTo: spot.view.minimumRaiseTo,
     legalActions: spot.view.legalActions.map((entry) => entry.type),

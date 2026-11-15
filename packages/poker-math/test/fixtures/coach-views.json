@@ -427,7 +427,12 @@
       "toCall": 0,
       "heroCommittedThisStreet": 10,
       "heroStack": 990,
-      "opponentStacks": [990, 990, 990, 990],
+      "opponentStacks": [
+        { "behind": 990, "committedThisStreet": 10 },
+        { "behind": 990, "committedThisStreet": 10 },
+        { "behind": 990, "committedThisStreet": 10 },
+        { "behind": 990, "committedThisStreet": 10 }
+      ],
       "bigBlind": 10,
       "minimumRaiseTo": 20,
       "legalActions": ["fold", "check", "raise"],
@@ -799,7 +804,7 @@
       "toCall": 15,
       "heroCommittedThisStreet": 0,
       "heroStack": 990,
-      "opponentStacks": [975],
+      "opponentStacks": [{ "behind": 975, "committedThisStreet": 15 }],
       "bigBlind": 10,
       "minimumRaiseTo": 30,
       "legalActions": ["fold", "call", "raise"],
@@ -1101,7 +1106,10 @@
       "toCall": 50,
       "heroCommittedThisStreet": 10,
       "heroStack": 50,
-      "opponentStacks": [700, 700],
+      "opponentStacks": [
+        { "behind": 700, "committedThisStreet": 300 },
+        { "behind": 700, "committedThisStreet": 300 }
+      ],
       "bigBlind": 10,
       "minimumRaiseTo": 590,
       "legalActions": ["fold", "call"],
@@ -1481,7 +1489,7 @@
       "toCall": 40,
       "heroCommittedThisStreet": 0,
       "heroStack": 990,
-      "opponentStacks": [950],
+      "opponentStacks": [{ "behind": 950, "committedThisStreet": 40 }],
       "bigBlind": 10,
       "minimumRaiseTo": 80,
       "legalActions": ["fold", "call", "raise"],
@@ -1869,7 +1877,10 @@
       "toCall": 0,
       "heroCommittedThisStreet": 0,
       "heroStack": 990,
-      "opponentStacks": [990, 990],
+      "opponentStacks": [
+        { "behind": 990, "committedThisStreet": 0 },
+        { "behind": 990, "committedThisStreet": 0 }
+      ],
       "bigBlind": 10,
       "minimumRaiseTo": 10,
       "legalActions": ["fold", "check", "bet"],

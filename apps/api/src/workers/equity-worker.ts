@@ -19,6 +19,7 @@ import {
   exactEquity,
   exactRange,
   monteCarloEquity,
+  type OpponentStack,
   type ParsedRange,
   parseRange,
   topPercentRange,
@@ -63,7 +64,7 @@ export interface CoachTask {
   readonly toCall: number;
   readonly heroCommittedThisStreet: number;
   readonly heroStack: number;
-  readonly opponentStacks: readonly number[];
+  readonly opponentStacks: readonly OpponentStack[];
   readonly bigBlind: number;
   readonly minimumRaiseTo?: number;
   /**

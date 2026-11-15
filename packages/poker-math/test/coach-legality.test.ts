@@ -34,6 +34,7 @@ import {
   deriveLegalActions,
   maximumTo,
   minimumAggressiveTo,
+  type OpponentStack,
   type Street,
 } from '../src/coach.ts';
 import { topPercentRange } from '../src/hand-ranking.ts';
@@ -83,7 +84,7 @@ interface ScenarioSpot {
   readonly toCall: number;
   readonly heroCommittedThisStreet: number;
   readonly heroStack: number;
-  readonly opponentStacks: readonly number[];
+  readonly opponentStacks: readonly OpponentStack[];
   readonly bigBlind: number;
   readonly smallBlind: number;
 }
@@ -147,7 +148,13 @@ function readScenarioSpots(): readonly ScenarioSpot[] {
         heroStack: asNumber(hero.stack, `${id}: hero stack`),
         opponentStacks: seats
           .filter((seat) => seat.isHero !== true && seat.folded !== true)
-          .map((seat) => asNumber(seat.stack, `${id}: opponent stack`)),
+          .map((seat) => ({
+            behind: asNumber(seat.stack, `${id}: opponent stack`),
+            committedThisStreet:
+              committed[String(seat.seat)] === undefined
+                ? 0
+                : asNumber(committed[String(seat.seat)], `${id}: opponent committed`),
+          })),
         bigBlind: asNumber(scenario.bigBlind, `${id}.bigBlind`),
         smallBlind: asNumber(scenario.smallBlind, `${id}.smallBlind`),
       });
@@ -168,7 +175,7 @@ function tuple(cards: readonly Card[], id: string): readonly [Card, Card] {
  * be. Anything smaller would make this test easier to pass.
  */
 function stateForSpot(spot: ScenarioSpot): HandState {
-  const opponentStack = spot.opponentStacks[0] ?? 1_000;
+  const opponentStack = spot.opponentStacks[0]?.behind ?? 1_000;
   const started = startHand({
     handId: `legality-${spot.id}`,
     roomId: 'legality',
@@ -452,7 +459,10 @@ function inputForPlayedHand(hand: PlayedHand, tellTheMinimum: boolean, tellTheAc
     toCall: view.amountToCall,
     heroCommittedThisStreet: own.committedThisStreet,
     heroStack: own.stack,
-    opponentStacks: live.map((seat) => seat.stack),
+    opponentStacks: live.map((seat) => ({
+      behind: seat.stack,
+      committedThisStreet: seat.committedThisStreet,
+    })),
     bigBlind: view.config.bigBlind,
     ...(tellTheMinimum ? { minimumRaiseTo: view.minimumRaiseTo } : {}),
     // `redactFor` fills `legalActions` only for the seat to act. `tellTheActions: false` is what a
@@ -664,7 +674,7 @@ test('the derived legal set reproduces the engine on every state this file build
         toCall: spot.toCall,
         heroCommittedThisStreet: spot.heroCommittedThisStreet,
         heroStack: spot.heroStack,
-        opponentStacks: [spot.opponentStacks[0] ?? 0],
+        opponentStacks: spot.opponentStacks.slice(0, 1),
       }),
     ].sort();
     const offered = engineOffers(state, 0);
@@ -692,7 +702,7 @@ test('the derivation matches the engine when nobody is left to call, and is know
   // (iv) Only `opponentStacks` shows a raise is unavailable, and the derivation reads it.
   const allInInput = inputForPlayedHand(everyoneAllIn, true, false);
   assert.ok(
-    allInInput.opponentStacks.some((stack) => stack === 0),
+    allInInput.opponentStacks.some((opponent) => opponent.behind === 0),
     'the live opponent is all-in',
   );
   assert.deepEqual(
@@ -706,7 +716,7 @@ test('the derivation matches the engine when nobody is left to call, and is know
   assert.deepEqual(engineOffers(shortAllIn.state, shortAllIn.seat), ['call', 'fold']);
   assert.deepEqual([...deriveLegalActions(shortInput)].sort(), ['call', 'fold', 'raise']);
   assert.ok(
-    shortInput.opponentStacks.some((stack) => stack > 0),
+    shortInput.opponentStacks.some((opponent) => opponent.behind > 0),
     'this gap exists precisely because somebody here does still have chips behind',
   );
 });
@@ -815,7 +825,7 @@ test("the bounds a grader holds a learner to are the engine's own maxTo, and nev
     toCall: 40,
     heroCommittedThisStreet: 10,
     heroStack: 25,
-    opponentStacks: [500],
+    opponentStacks: [{ behind: 500, committedThisStreet: 50 }],
     bigBlind: 20,
   };
   assert.equal(maximumTo(short), 35);

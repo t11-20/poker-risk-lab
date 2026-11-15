@@ -87,7 +87,7 @@ function affordableRaiseTask(overrides: Partial<CoachTask> = {}): CoachTask {
     toCall: 40,
     heroCommittedThisStreet: 0,
     heroStack: 800,
-    opponentStacks: [800],
+    opponentStacks: [{ behind: 800, committedThisStreet: 40 }],
     bigBlind: 10,
     legalActions: ['fold', 'call', 'raise'],
     samples: 4_000,

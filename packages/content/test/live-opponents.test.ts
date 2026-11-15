@@ -17,11 +17,18 @@ function shipped(id: string): Scenario {
 
 test('only the seats still in the hand are opponents, an all-in one at 0 behind', () => {
   // Under the gun, the hijack and the cutoff fold, so the blinds are the only opponents.
-  assert.deepEqual(readSituation(shipped('fl-same-cards-on-the-button')).opponentStacks, [995, 990]);
+  assert.deepEqual(readSituation(shipped('fl-same-cards-on-the-button')).opponentStacks, [
+    { behind: 995, committedThisStreet: 5 },
+    { behind: 990, committedThisStreet: 10 },
+  ]);
   // The cutoff and the button fold and the small blind is all in, so nobody can call another chip.
-  assert.deepEqual(readSituation(shipped('rk-when-survival-outweighs-chip-ev')).opponentStacks, [0]);
+  assert.deepEqual(readSituation(shipped('rk-when-survival-outweighs-chip-ev')).opponentStacks, [
+    { behind: 0, committedThisStreet: 24000 },
+  ]);
   // The small blind folded before the flop. The big blind's 940 is all that can still be matched.
-  assert.deepEqual(readSituation(shipped('fl-board-plays-itself-river')).opponentStacks, [940]);
+  assert.deepEqual(readSituation(shipped('fl-board-plays-itself-river')).opponentStacks, [
+    { behind: 940, committedThisStreet: 20 },
+  ]);
 });
 
 test('a deep folded seat does not lift what a shove can win', () => {

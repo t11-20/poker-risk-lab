@@ -65,7 +65,7 @@ function topPercentCoach(): CoachTask {
     toCall: 20,
     heroCommittedThisStreet: 10,
     heroStack: 1_000,
-    opponentStacks: [1_000],
+    opponentStacks: [{ behind: 1_000, committedThisStreet: 30 }],
     bigBlind: 10,
     legalActions: ['fold', 'call', 'raise'],
     samples: 2_000,

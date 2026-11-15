@@ -46,7 +46,7 @@ import {
   parseCard,
   verifyDeckReveal,
 } from '@prl/poker-engine';
-import type { Street as BettingStreetName, CoachAction, ParsedRange } from '@prl/poker-math';
+import type { Street as BettingStreetName, CoachAction, OpponentStack, ParsedRange } from '@prl/poker-math';
 import { buildCoachReport, deriveLegalActions, parseRange } from '@prl/poker-math';
 import type { CoachTask } from '../workers/equity-worker.ts';
 
@@ -609,7 +609,7 @@ interface Situation {
   /** What this seat had already put out on the street, for a legal raise total. */
   readonly committedThisStreet: number;
   readonly heroStack: number;
-  readonly opponentStacks: readonly number[];
+  readonly opponentStacks: readonly OpponentStack[];
   readonly opponentCount: number;
 }
 
@@ -626,10 +626,10 @@ function situationBefore(state: ReplayState, action: HandActionRow): Situation |
   if (replaySeatStatus(actor) !== 'active' && replaySeatStatus(actor) !== 'allIn') return null;
 
   // All-in opponents still hold cards and can win the pot they paid for.
-  const opponentStacks: number[] = [];
+  const opponentStacks: OpponentStack[] = [];
   for (const [seat, entry] of state.seats) {
     if (seat === action.seat || entry.folded || !entry.dealtIn) continue;
-    opponentStacks.push(entry.stack);
+    opponentStacks.push({ behind: entry.stack, committedThisStreet: entry.committedThisStreet });
   }
 
   const potBefore = potTotal(state);

@@ -75,7 +75,7 @@ test('the panel withholds outs for a reason exactly when the producer withholds 
         toCall: 50,
         heroCommittedThisStreet: 0,
         heroStack: 400,
-        opponentStacks: villains.slice(0, opponents).map(() => 400),
+        opponentStacks: villains.slice(0, opponents).map(() => ({ behind: 400, committedThisStreet: 50 })),
         bigBlind: 10,
         samples: 200,
         seed: 1,
