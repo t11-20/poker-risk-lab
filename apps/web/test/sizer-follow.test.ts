@@ -402,6 +402,21 @@ describe('the live table uses it, on a narrow column only', () => {
     assert.ok(holds(live), 'useFollowTheTable no longer holds the band between the reader’s decisions');
   });
 
+  // Standing up clears the hand edge, so the watch, which needs one, never runs to release the hold.
+  const releasesWithoutASeat = (source: string): boolean =>
+    /if \(handEdge !== null \|\| held\.current === null\) return;\s*held\.current = null;\s*if \(band\.current !== null\) band\.current\.style\.minBlockSize = '';\s*\}, \[handEdge, band\]\);/u.test(
+      source,
+    );
+
+  it('releases the held band when the reader stands up or loses the table', () => {
+    const live = readFileSync(join(SRC, 'app', 'play', 'LiveTable.tsx'), 'utf8');
+    assert.ok(
+      releasesWithoutASeat(live),
+      'a reader who stands up after a sized decision keeps a tall empty band',
+    );
+    assert.equal(releasesWithoutASeat('  }, [watchEdge, band, reduced]);'), false);
+  });
+
   const glancesWhileWaiting = (source: string): boolean =>
     /const waiting = view\.legalActions\.length === 0 && view\.street !== 'complete';/u.test(source) &&
     /if \(!waiting && !view\.legalActions\.some\(/u.test(source);

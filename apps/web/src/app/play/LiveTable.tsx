@@ -742,6 +742,13 @@ function useFollowTheTable(live: LiveTableModel, band: RefObject<HTMLDivElement 
   /** The hand edge at the reader's last sized decision, while the band keeps that decision's height. */
   const held = useRef<string | null>(null);
 
+  // Standing up clears the hand edge, and the watch below runs only on one, so the hold ends here.
+  useEffect(() => {
+    if (handEdge !== null || held.current === null) return;
+    held.current = null;
+    if (band.current !== null) band.current.style.minBlockSize = '';
+  }, [handEdge, band]);
+
   useEffect(() => {
     if (turnEdge === '') return;
     const element = band.current;
