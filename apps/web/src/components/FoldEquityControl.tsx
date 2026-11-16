@@ -11,13 +11,8 @@ import type { CoachReport } from '@prl/contracts';
 import { repriceAtFoldEquity } from '@prl/poker-math';
 import { Button, formatSignedUnits, formatUnits, Panel } from '@prl/ui';
 import { type ReactElement, useId, useRef, useState } from 'react';
-import {
-  type Formatters,
-  percentText,
-  repricingSummary,
-  rowChangeText,
-  rowName,
-} from '../lib/fold-equity-lab.ts';
+import { rowName } from '../lib/consistency.ts';
+import { type Formatters, percentText, repricingSummary, rowChangeText } from '../lib/fold-equity-lab.ts';
 
 const FORMAT: Formatters = {
   units: (value) => formatUnits(value),
@@ -96,7 +91,7 @@ export function FoldEquityControl({ report }: { readonly report: CoachReport }):
       <ul className="prl-fold-input__rows">
         {repriced.rows.map((row) => (
           <li key={`${row.action}-${row.to ?? 'na'}`} className="prl-fold-input__row">
-            <span className="prl-fold-input__row-name">{rowName(row, FORMAT)}</span>
+            <span className="prl-fold-input__row-name">{rowName(row, FORMAT.units)}</span>
             <span className="prl-fold-input__row-value">{rowChangeText(row, FORMAT)}</span>
           </li>
         ))}

@@ -14,6 +14,7 @@ import { evOfBet, evOfRaise } from './ev.ts';
 export interface RepricedRow {
   readonly action: ActionCandidate['action'];
   readonly to: number | null;
+  readonly cost: number;
   /** The figure the analysis published, at its own assumed fold frequency. */
   readonly analysedEv: number;
   /** The figure at the frequency asked for. Equal to `analysedEv` for a row that reads none. */
@@ -123,6 +124,7 @@ export function repriceAtFoldEquity(report: CoachReport, foldEquity: number): Fo
     return {
       action: candidate.action,
       to: candidate.to ?? null,
+      cost: candidate.cost,
       analysedEv: candidate.ev,
       ev: readsFoldEquity ? (rowEvAt(candidate, report, f) as number) : candidate.ev,
       readsFoldEquity,
