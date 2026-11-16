@@ -543,7 +543,7 @@ test('a size range reads as totals the Coach priced, and equal ends print one si
   assert.equal(spread.action, 'Raise to 120–380 units');
   assert.ok(
     spread.markup.includes(
-      'Each raise size the Coach priced from 120 to 380 units is within one big blind of the highest expected value among them.',
+      'Of the raise sizes the Coach priced from 120 to 380 units, raising to 200 has the highest expected value, and each of the others is within one big blind of it.',
     ),
     'a span says what its ends mean',
   );
@@ -553,6 +553,32 @@ test('a size range reads as totals the Coach priced, and equal ends print one si
   assert.equal(call.action, 'Call — 50 units');
   for (const { markup } of [single, call])
     assert.doesNotMatch(markup, /priced from/u, 'one size has no span');
+});
+
+test('under a size range, the EV is the size the reading names, not the smallest (REGRESSION)', async () => {
+  // eq-second-pair-vs-wide-range: every size is within a big blind of the best, 380 at 92.29.
+  const raise = (to: number, ev: number) => ({ action: 'raise' as const, to, cost: to, ev, derivation: '.' });
+  const markup = await render({
+    ...NINE_OUT_DRAW,
+    toCall: 60,
+    candidates: [
+      { action: 'fold', cost: 0, ev: 0, derivation: '.' },
+      { action: 'call', to: 60, cost: 60, ev: 51.49, derivation: '.' },
+      ...[raise(120, 90), raise(133, 90.11), raise(170, 90.44), raise(207, 90.76)],
+      ...[raise(280, 91.41), raise(380, 92.29)],
+    ],
+    suggestion: { ...NINE_OUT_DRAW.suggestion, action: 'raise', sizeRange: { min: 120, max: 380 } },
+  });
+  assert.ok(
+    markup.includes('+92.3 units compared with folding, and 380 units to take it.'),
+    'the published EV is the highest in the span',
+  );
+  assert.ok(
+    markup.includes(
+      'Of the raise sizes the Coach priced from 120 to 380 units, raising to 380 has the highest expected value, and each of the others is within one big blind of it.',
+    ),
+    'the sentence names the size the EV belongs to',
+  );
 });
 
 test('a call reads what its Call button costs, not the street total it reaches (REGRESSION)', async () => {

@@ -58,6 +58,7 @@ export {
   judgeConsistency,
   pricedSizesFor,
   restsOnAssumedFoldEquity,
+  suggestedCandidate,
 } from './consistency.ts';
 export {
   choose,

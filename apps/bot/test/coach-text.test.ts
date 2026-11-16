@@ -157,11 +157,25 @@ describe('the Coach in chat', () => {
     assert.doesNotMatch(call, /1,000/);
     assert.match(suggesting({ action: 'check', sizeRange: { min: 10, max: 10 } }), /^One reading: Check \(/m);
     assert.match(suggesting({ action: 'fold' }), /^One reading: Fold \(/m);
-    const spread = suggesting({ action: 'raise', sizeRange: { min: 20, max: 35 } });
+    const spread = coachWhy({
+      kind: 'report',
+      at: 'x',
+      report: {
+        ...report,
+        candidates: [20, 28, 35].map((to, at) => ({
+          action: 'raise',
+          to,
+          cost: to,
+          ev: [9, 9.6, 9.3][at] ?? 0,
+          derivation: '.',
+        })),
+        suggestion: { ...report.suggestion, action: 'raise', sizeRange: { min: 20, max: 35 } },
+      },
+    });
     assert.match(spread, /^One reading: Raise to 20–35 units \(/m);
     assert.match(
       spread,
-      /^Each raise size the Coach priced from 20 to 35 units is within one big blind of the highest expected value among them\.$/m,
+      /^Of the raise sizes the Coach priced from 20 to 35 units, raising to 28 has the highest expected value, and each of the others is within one big blind of it\.$/m,
     );
     const single = suggesting({ action: 'bet', sizeRange: { min: 40, max: 40 } });
     assert.match(single, /^One reading: Bet to 40 units \(/m);
