@@ -982,6 +982,7 @@
     "report": {
       "street": "preflop",
       "potTotal": 615,
+      "outOfReach": "side-pot",
       "toCall": 50,
       "outs": null,
       "equity": {

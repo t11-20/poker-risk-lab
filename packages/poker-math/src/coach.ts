@@ -193,7 +193,7 @@ export interface CoachInput {
   readonly pot: number;
   /**
    * The part of `pot` hero could win. It differs from `pot` when hero is all-in for less than the bet,
-   * because the uncovered part is a side pot hero cannot win. Heads-up at 5/10, hero calling 40 into a
+   * because hero cannot win the uncovered part. Heads-up at 5/10, hero calling 40 into a
    * 310 shove was priced at +82.8 chips. The truth is 30 into 80, 37.5%, -4.2. `invariants.test.ts` in
    * the engine finds 5,650 such spots in 4,000 random hands.
    * Required, because a default of `pot` is the defect. Seat-state callers use `contestablePotFor`, and
@@ -482,15 +482,35 @@ function buildOutsBreakdown(outs: OutsResult | null): OutsBreakdown | null {
   };
 }
 
-/** Names the side pot hero cannot win, or `''` when the whole pot is contestable. Never silent. */
-function sidePotNote(pot: number, contestablePot: number, toCall: number): string {
+/**
+ * As the side-pots quiz teaches it: chips past hero's cap are a side pot only when a second opponent
+ * can still contest them. Otherwise they are the bettor's own, returned uncalled.
+ */
+function outOfReachOf(input: CoachInput): CoachReport['outOfReach'] {
+  if (input.pot <= input.contestablePot) return undefined;
+  const cap = input.heroCommittedThisStreet + Math.min(input.toCall, input.heroStack);
+  const reaching = input.opponentStacks.filter((seat) => seat.committedThisStreet + seat.behind > cap);
+  return reaching.length >= 2 ? 'side-pot' : 'uncalled';
+}
+
+/** Names the chips hero cannot win, or `''` when the whole pot is contestable. Never silent. */
+function outOfReachNote(
+  pot: number,
+  contestablePot: number,
+  toCall: number,
+  outOfReach: CoachReport['outOfReach'],
+): string {
   const beyondReach = pot - contestablePot;
   if (beyondReach <= 0) return '';
+  const what =
+    outOfReach === 'uncalled'
+      ? 'the part of the bet you cannot match, which goes back to the bettor uncalled'
+      : 'a side pot you are not in';
   return (
     ` There are ${chips(pot)} in the middle, but you are all-in for less than the bet in front of ` +
-    `you: ${chips(beyondReach)} of it is a side pot you are not in, because your ${chips(toCall)} ` +
-    `does not reach that far. The price above is against the ${chips(contestablePot)} you can ` +
-    'actually win. Calling cannot win the rest of the middle no matter which hand is best.'
+    `you: ${chips(beyondReach)} of it is ${what}, because your ` +
+    `${chips(toCall)} does not reach that far. The price above is against the ${chips(contestablePot)} ` +
+    'you can actually win. Calling cannot win the rest of the middle no matter which hand is best.'
   );
 }
 
@@ -559,6 +579,7 @@ function buildPotOddsSummary(
   heroEquity: number,
   pricedPotByPot: boolean,
   behind: CallIfTheyCall | null,
+  outOfReach: CoachReport['outOfReach'],
 ): PotOddsSummary {
   const odds = potOdds(contestablePot, toCall);
   // Equity against the whole table is not the share of a pot an all-in seat is not in.
@@ -576,7 +597,7 @@ function buildPotOddsSummary(
     explanation:
       toCall === 0
         ? 'Nothing to call, so there is no price to beat — checking keeps you in for free.'
-        : `${odds.explanation} ${gap}${behind === null ? '' : theyCallSentence(behind)}${sidePotNote(pot, contestablePot, toCall)}`,
+        : `${odds.explanation} ${gap}${behind === null ? '' : theyCallSentence(behind)}${outOfReachNote(pot, contestablePot, toCall, outOfReach)}`,
   };
 }
 
@@ -1605,11 +1626,14 @@ function buildTeachingNotes(
       `The pot is laying you ${potOddsSummary.oddsRatio.toFixed(1)} to 1${againstWhat}, so you need ${(potOddsSummary.breakEvenEquity * 100).toFixed(1)}% to break even on a call. That number depends only on the price — not on your cards.`,
     );
     if (beyondReach > 0) {
+      const goesTo =
+        outOfReachOf(input) === 'uncalled'
+          ? 'the part of the bet you cannot match. It goes back to the bettor uncalled'
+          : 'a side pot you are not in — it goes to whoever wins it among the players who covered that bet';
       notes.push(
         `Do not price this against the ${chips(input.pot)} you can see. You are all-in for less than ` +
-          `the bet, so ${chips(beyondReach)} of the middle is a side pot you are not in — it goes to ` +
-          'whoever wins it among the players who covered that bet, whatever you are holding. Being ' +
-          'short changes the price you are getting, not just the chips you can lose.',
+          `the bet, so ${chips(beyondReach)} of the middle is ${goesTo}, whatever you are holding. ` +
+          'Being short changes the price you are getting, not just the chips you can lose.',
       );
     }
   }
@@ -1705,6 +1729,7 @@ export function buildCoachReport(input: CoachInput): CoachReport {
   const split = potSplitOf(input, equityResult, hero.equity);
   const behind = callIfTheyCall(input, hero.equity, split);
   const cappedCall = Math.min(input.toCall, input.heroStack);
+  const outOfReach = outOfReachOf(input);
   const potOddsSummary = buildPotOddsSummary(
     input.pot,
     input.contestablePot,
@@ -1712,6 +1737,7 @@ export function buildCoachReport(input: CoachInput): CoachReport {
     hero.equity,
     input.toCall > 0 && layeredShowdown('call', split, input, cappedCall) !== null,
     behind,
+    outOfReach,
   );
   const stackContext = buildStackContext(input);
   const foldEquity = input.assumedFoldEquity ?? DEFAULT_ASSUMED_FOLD_EQUITY;
@@ -1742,6 +1768,7 @@ export function buildCoachReport(input: CoachInput): CoachReport {
   return {
     street: input.street,
     potTotal: input.pot,
+    ...(outOfReach === undefined ? {} : { outOfReach }),
     toCall: input.toCall,
     outs: buildOutsBreakdown(outs),
     equity: equitySummary,

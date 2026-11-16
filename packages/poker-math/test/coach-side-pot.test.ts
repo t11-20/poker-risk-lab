@@ -157,7 +157,7 @@ test('a hero all-in for less is priced against the pot they can win, not the who
 
   const share = shareOf(spot);
   assert.equal(share.contestable, 50, 'hero can win an 80-chip main pot, 30 of which is the call itself');
-  assert.equal(share.uncontestable, 270, 'the side pot only villain is in');
+  assert.equal(share.uncontestable, 270, 'the part of the shove only villain reaches');
 
   const report = buildCoachReport(inputFor(spot, share.contestable));
 

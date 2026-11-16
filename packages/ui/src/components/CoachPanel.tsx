@@ -342,9 +342,11 @@ function EquitySection({ equity, interval, surplus }: EquitySectionProps): React
 function PriceSection({
   potOdds,
   potTotal,
+  outOfReach,
 }: {
   readonly potOdds: PotOddsSummary;
   readonly potTotal: number;
+  readonly outOfReach: CoachReport['outOfReach'];
 }): ReactElement {
   const beyondReach = potTotal - potOdds.pot;
   return (
@@ -390,7 +392,7 @@ function PriceSection({
         }
         {...(beyondReach > 0
           ? {
-              note: `You are all-in for less than the bet, so ${formatUnits(beyondReach)} is a side pot you are not in. Every figure on this panel is against the ${formatUnits(potOdds.pot)} you can win.`,
+              note: `You are all-in for less than the bet, so ${formatUnits(beyondReach)} is ${outOfReach === 'uncalled' ? 'the part of the bet you cannot match, which goes back to the bettor uncalled' : 'a side pot you are not in'}. Every figure on this panel is against the ${formatUnits(potOdds.pot)} you can win.`,
             }
           : {})}
       />
@@ -708,7 +710,7 @@ export function CoachPanel(props: CoachPanelProps): ReactElement {
       */}
       <div className="prl-coach__grid">
         <EquitySection equity={equity} interval={intervalText} surplus={report.potOdds.equitySurplus} />
-        <PriceSection potOdds={report.potOdds} potTotal={report.potTotal} />
+        <PriceSection potOdds={report.potOdds} potTotal={report.potTotal} outOfReach={report.outOfReach} />
       </div>
 
       <SuggestionBlock suggestion={report.suggestion} candidate={suggested} />

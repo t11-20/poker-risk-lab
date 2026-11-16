@@ -151,6 +151,12 @@ export interface CoachReport {
    * win, and differs only when hero is all-in for less than the bet.
    */
   readonly potTotal: number;
+  /**
+   * What the chips in `potTotal` beyond hero's reach are, present only when there are some: a side pot
+   * when two or more opponents can still contest them, or the part of one opponent's bet hero cannot
+   * match, which goes back to them uncalled.
+   */
+  readonly outOfReach?: 'side-pot' | 'uncalled';
   readonly toCall: number;
 
   readonly outs: OutsBreakdown | null;
@@ -200,8 +206,8 @@ export interface EquitySummary {
 export interface PotOddsSummary {
   /**
    * Chips in the middle that hero can win. Smaller than `CoachReport.potTotal` only when hero is
-   * all-in for less than the bet, because the excess is a side pot hero cannot win. Every figure in
-   * this summary is against this pot, so the price and the pot it buys into agree.
+   * all-in for less than the bet, because hero cannot win the excess (`CoachReport.outOfReach`). Every
+   * figure in this summary is against this pot, so the price and the pot it buys into agree.
    */
   readonly pot: number;
   readonly toCall: number;
