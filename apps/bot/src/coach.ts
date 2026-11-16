@@ -187,7 +187,22 @@ function actionText(report: CoachReport): string {
   if ((action !== 'bet' && action !== 'raise') || sizeRange === undefined) return words;
   return sizeRange.min === sizeRange.max
     ? `${words} to ${units(sizeRange.min)}`
-    : `${words} to between ${units(sizeRange.min)} and ${units(sizeRange.max)}`;
+    : `${words} to ${sizeRange.min.toLocaleString('en-US')}–${units(sizeRange.max)}`;
+}
+
+/** What a span of sizes means, as the web panel says it. One size needs no sentence. */
+function sizeSpanText(report: CoachReport): string[] {
+  const { action, sizeRange } = report.suggestion;
+  if (
+    (action !== 'bet' && action !== 'raise') ||
+    sizeRange === undefined ||
+    sizeRange.min === sizeRange.max
+  ) {
+    return [];
+  }
+  return [
+    `Each ${action} size the Coach priced from ${sizeRange.min.toLocaleString('en-US')} to ${units(sizeRange.max)} is within one big blind of the highest expected value among them.`,
+  ];
 }
 
 /** The message "Why?" sends. Suggestion, disclaimer and assumptions are one block, never split. */
@@ -204,6 +219,7 @@ export function coachWhy(reading: CoachReading): string {
     `Price: ${priceText(report)}.`,
     '',
     `One reading: ${actionText(report)} (${CONFIDENCE_WORDS[suggestion.confidence]}).`,
+    ...sizeSpanText(report),
     chatText(suggestion.reason),
   ];
   if (suggestion.whatWouldChangeIt.length > 0) {
