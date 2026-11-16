@@ -1126,6 +1126,22 @@ function foldRateNote(row: ActionCandidate, reading: ActionCandidate, input: Coa
   );
 }
 
+/** The fold rate a bet or raise reading assumes, and which way a different rate moves it. */
+function foldRateCaveat(best: ActionCandidate, input: CoachInput, split: PotSplit): string {
+  const rate = `${(best.foldEquityAssumed ?? 0) * 100}% of the time`;
+  const { whenCalled, whenFolded } = branchesOf(best, input, split);
+  const assumed =
+    split.allIn.length === 0
+      ? `This assumes the line wins uncontested ${rate}.`
+      : `This assumes everyone who can still fold does so ${rate}.`;
+  // EV is linear in the fold rate, so the sign of folded minus called is the whole direction.
+  if (whenFolded > whenCalled) return `${assumed} An opponent who folds less often makes it worse.`;
+  if (whenFolded < whenCalled) {
+    return `${assumed} Here a fold is worth less to you than a call, so an opponent who folds more often makes it worse.`;
+  }
+  return `${assumed} Here a fold and a call are worth the same to you, so how often they fold makes no difference.`;
+}
+
 /** What a call or fold reading leaves out about the seats still to act. */
 function seatsBehindNotes(
   action: CoachAction,
@@ -1234,17 +1250,7 @@ function buildSuggestion(
     );
   }
   if (best.action === 'bet' || best.action === 'raise') {
-    const rate = `${(best.foldEquityAssumed ?? 0) * 100}% of the time`;
-    const { whenCalled, whenFolded } = branchesOf(best, input, split);
-    whatWouldChangeIt.push(
-      split.allIn.length === 0
-        ? `This assumes the line wins uncontested ${rate}. An opponent who folds less often makes it worse.`
-        : `This assumes everyone who can still fold does so ${rate}. ${
-            whenFolded >= whenCalled
-              ? 'An opponent who folds less often makes it worse.'
-              : 'Here a fold is worth less to you than a call, so an opponent who folds more often makes it worse.'
-          }`,
-    );
+    whatWouldChangeIt.push(foldRateCaveat(best, input, split));
     whatWouldChangeIt.push('Being raised is not modelled here, so treat the figure as optimistic.');
   }
   if (outs !== null && outs.dirtyCount > 0) {

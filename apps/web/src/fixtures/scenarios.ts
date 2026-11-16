@@ -1094,7 +1094,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       reason:
         'Bet has the highest expected value against the stated range, by 132.9 units over the next-best action.',
       whatWouldChangeIt: [
-        'This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.',
+        'This assumes the line wins uncontested 35% of the time. Here a fold is worth less to you than a call, so an opponent who folds more often makes it worse.',
         'Being raised is not modelled here, so treat the figure as optimistic.',
         '38 of the 40 cards that keep you in front leave a way to lose — they are not outs, because you are not drawing, but they are the cards a river can still take the pot back with.',
       ],

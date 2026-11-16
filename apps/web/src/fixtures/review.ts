@@ -928,7 +928,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           reason:
             'Raise has the highest expected value against the stated range, by 348.6 units over the next-best action.',
           whatWouldChangeIt: [
-            'This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.',
+            'This assumes the line wins uncontested 35% of the time. Here a fold is worth less to you than a call, so an opponent who folds more often makes it worse.',
             'Being raised is not modelled here, so treat the figure as optimistic.',
           ],
         },
