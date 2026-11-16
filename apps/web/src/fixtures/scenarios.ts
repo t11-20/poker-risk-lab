@@ -1091,7 +1091,8 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
         max: 520,
       },
       confidence: 'reasonable',
-      reason: 'Bet has the highest expected value against the stated range, by 132.9 units over checking.',
+      reason:
+        'Bet has the highest expected value against the stated range, by 132.9 units over checking. Betting 520 is more than the pot. It is kept because a pot-sized bet would leave under a third of the pot behind, but its figure assumes the whole range calls any size, and a real opponent folds more of the hands you beat as the size grows.',
       whatWouldChangeIt: [
         'This assumes the line wins uncontested 35% of the time. Here a fold is worth less to you than a call, so an opponent who folds more often makes it worse.',
         'Being raised is not modelled here, so treat the figure as optimistic.',

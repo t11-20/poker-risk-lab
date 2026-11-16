@@ -80,13 +80,14 @@ test('worst hand: a fold by B still leaves the main pot to A, so a bet has no fo
 
 test('hero beats only B: a call is worth the side pot, and a fold by B gives it up', () => {
   // B folds: hero loses the 300 main pot to A, worth 0. Called: main lost, side 2b won, less b, so +b.
-  // EV = 0.65b, highest at the all-in, 585. Always called it is +900, so it is not a fold-rate line.
+  // EV = 0.65b, highest at the all-in, 585. Always called it is +900, so it is not a fold-rate line,
+  // but the reading stops at the pot-sized 300.
   const report = river('Kc Qh', { opponentStacks: ALL_IN_PREFLOP });
   near(evAt(report, 'bet', 900), 585, 'all in');
   near(evAt(report, 'bet', 150), 97.5, 'bet 150');
   near(evAt(report, 'check'), 0, 'check: the 300 main pot goes to A');
   assert.equal(report.suggestion.action, 'bet');
-  assert.deepEqual(report.suggestion.sizeRange, { min: 900, max: 900 });
+  assert.deepEqual(report.suggestion.sizeRange, { min: 300, max: 300 });
   assert.match(report.suggestion.whatWouldChangeIt.join(' '), /folds more often makes it worse/);
   assert.doesNotMatch(report.suggestion.whatWouldChangeIt.join(' '), /folds less often makes it worse/);
   // The Lab's fold slider rebuilds a row from one share, which two pots do not have.

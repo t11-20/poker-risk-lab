@@ -14,32 +14,31 @@ import { parseRange } from '../src/ranges.ts';
 
 const top40 = (hand: string) => expandAssumedRange({ kind: 'topPercent', percent: 40 }, parseCards(hand));
 
-test('a Legends shove 18 big blinds ahead is not called marginal because its equity is sampled', () => {
-  // A♥Q♥ in the small blind, 5/10, 1,000 deep. Calling plays for 20, so it moves 20 units per unit
-  // of equity; the shove is called for 2,000 at 65% of the time, 1,300 per unit. A ±2.07-point
-  // interval moves the gap by 0.02066 x 1,280 = 26.4 units, far under the 182.4 it is ahead by.
+test('a call of a shove 28 big blinds ahead is not called marginal because its equity is sampled', () => {
+  // A♥Q♥ in the small blind, 5/10, calling the big blind's shove to 1,000 with the last 995. Calling is
+  // 2,000e - 995 = 2,000 x 0.63975 - 995 = 284.5, so a ±2.07-point interval moves the gap to folding
+  // by 0.02066 x 2,000 = 41.3 units, far under the 284.5 it is ahead by.
   const report = buildCoachReport({
     heroCards: parseCards('Ah Qh'),
     board: [],
     street: 'preflop',
     opponents: [{ label: 'the big blind', range: top40('Ah Qh') }],
-    pot: 15,
-    contestablePot: 15,
-    toCall: 5,
+    pot: 1005,
+    contestablePot: 1005,
+    toCall: 995,
     heroCommittedThisStreet: 5,
     heroStack: 995,
-    opponentStacks: [{ behind: 990, committedThisStreet: 10 }],
+    opponentStacks: [{ behind: 0, committedThisStreet: 1000 }],
     bigBlind: 10,
-    minimumRaiseTo: 20,
     samples: 2000,
     seed: 1,
   });
   assert.ok((report.equity.confidenceHalfWidthPoints ?? 0) > 2, 'the interval is over 2 points');
-  assert.equal(report.suggestion.action, 'raise');
+  assert.equal(report.suggestion.action, 'call');
   assert.equal(report.suggestion.confidence, 'reasonable');
   assert.match(
     report.suggestion.reason,
-    /^Raise has the highest expected value against the stated range, by 182\.4 units over calling\./u,
+    /^Call has the highest expected value against the stated range, by 284\.5 units over folding\./u,
   );
   assert.doesNotMatch(report.suggestion.reason, /marginally|only just/u);
 });
