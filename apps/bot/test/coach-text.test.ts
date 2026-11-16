@@ -182,6 +182,24 @@ describe('the Coach in chat', () => {
     for (const text of [single, call]) assert.doesNotMatch(text, /priced from/, 'one size has no span');
   });
 
+  test('a reading that is all in says so, as its button does', () => {
+    const report = reports.find((entry) => entry.toCall > 0);
+    assert.ok(report, 'a report with a price');
+    const reading = (action: 'call' | 'raise', to: number): string =>
+      coachWhy({
+        kind: 'report',
+        at: 'x',
+        report: {
+          ...report,
+          toCall: 358,
+          candidates: [{ action, to, cost: 358, ev: 9, derivation: '.', allIn: true }],
+          suggestion: { ...report.suggestion, action, sizeRange: { min: to, max: to } },
+        },
+      });
+    assert.match(reading('call', 358), /^One reading: Call all in, 358 units \(/m);
+    assert.match(reading('raise', 400), /^One reading: Raise to 400 units, all in \(/m);
+  });
+
   test('Why? names opponents as the table does, never by a seat number the table does not show', () => {
     assert.ok(whys.length >= 3, `scanned ${whys.length} Why? messages`);
     for (const why of whys) assert.doesNotMatch(why, /\bseat \d\b/i, why);
