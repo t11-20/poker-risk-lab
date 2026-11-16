@@ -35,6 +35,7 @@ import {
 } from '@prl/ui';
 import type { ReactElement } from 'react';
 import { decisionPotNote } from '../lib/decision-pot-note.ts';
+import { pricedRowName } from '../lib/post-hand-labels.ts';
 import { ActionDistribution, mostLikelyAction } from './ActionDistribution.tsx';
 import { LegendSigil } from './LegendSigil.tsx';
 import { ProfileDisclaimers } from './ProfileDisclaimers.tsx';
@@ -63,14 +64,6 @@ const ACTION_PAST: Readonly<Record<string, string>> = {
   raise: 'raised to',
 };
 
-const ACTION_PRESENT: Readonly<Record<string, string>> = {
-  fold: 'Fold',
-  check: 'Check',
-  call: 'Call',
-  bet: 'Bet',
-  raise: 'Raise to',
-};
-
 function capitalise(text: string): string {
   return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
 }
@@ -78,11 +71,6 @@ function capitalise(text: string): string {
 function describeTaken(action: { readonly action: string; readonly to: number | null }): string {
   const verb = ACTION_PAST[action.action] ?? action.action;
   return action.to === null ? verb : `${verb} ${formatUnits(action.to)}`;
-}
-
-function describePriced(action: string, to: number | null): string {
-  const verb = ACTION_PRESENT[action] ?? capitalise(action);
-  return to === null ? verb : `${verb} ${formatChips(to)}`;
 }
 
 function boardCards(board: readonly string[]): readonly number[] {
@@ -192,7 +180,7 @@ function DecisionMaths({ report }: { readonly report: CoachReport }): ReactEleme
               <tbody>
                 {report.candidates.map((candidate) => (
                   <tr key={`${candidate.action}:${candidate.to ?? 'none'}`}>
-                    <th scope="row">{describePriced(candidate.action, candidate.to ?? null)}</th>
+                    <th scope="row">{pricedRowName(candidate)}</th>
                     <td className="prl-legend-table__figure">{formatUnits(candidate.cost)}</td>
                     <td className="prl-legend-table__figure">{formatSignedUnits(candidate.ev)}</td>
                     <td>{candidate.derivation}</td>
