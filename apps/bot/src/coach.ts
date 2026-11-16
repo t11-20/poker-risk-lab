@@ -184,10 +184,11 @@ export function coachAssumptions(report: CoachReport): string[] {
 function actionText(report: CoachReport): string {
   const { action, sizeRange } = report.suggestion;
   const words = ACTION_WORDS[action];
-  if (action === 'call') return `${words} ${units(report.toCall)}`;
+  const allIn = suggestedCandidate(report)?.allIn === true;
+  if (action === 'call') return `${words}${allIn ? ' all in,' : ''} ${units(report.toCall)}`;
   if ((action !== 'bet' && action !== 'raise') || sizeRange === undefined) return words;
   return sizeRange.min === sizeRange.max
-    ? `${words} to ${units(sizeRange.min)}`
+    ? `${words} to ${units(sizeRange.min)}${allIn ? ', all in' : ''}`
     : `${words} to ${sizeRange.min.toLocaleString('en-US')}–${units(sizeRange.max)}`;
 }
 

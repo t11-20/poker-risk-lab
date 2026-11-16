@@ -601,6 +601,32 @@ test('a call reads what its Call button costs, not the street total it reaches (
   assert.doesNotMatch(markup, /7,200/u, 'the street total is not a figure the table shows');
 });
 
+test('a reading that is all in says so, as its button does (REGRESSION)', async () => {
+  // rk-nine-big-blinds-call-or-fold: 6,400 is the whole stack behind, and the button reads "Call all in".
+  const reading = async (suggestion: Partial<CoachReport['suggestion']>) => {
+    const markup = await render({
+      ...NINE_OUT_DRAW,
+      toCall: 6_400,
+      candidates: [
+        { action: 'fold', cost: 0, ev: 0, derivation: '.' },
+        { action: 'call', to: 7_200, cost: 6_400, ev: 1_235.24, derivation: '.', allIn: true },
+        { action: 'raise', to: 1_000, cost: 1_000, ev: 9, derivation: '.', allIn: true },
+      ],
+      suggestion: { ...NINE_OUT_DRAW.suggestion, ...suggestion },
+    });
+    const rows = [...markup.matchAll(/class="prl-candidates__action" scope="row">([^<]*)</gu)];
+    return {
+      action: /class="prl-suggestion__action">([^<]*)</u.exec(markup)?.[1],
+      rows: rows.map((row) => row[1]),
+    };
+  };
+  const call = await reading({ action: 'call', sizeRange: { min: 7_200, max: 7_200 } });
+  assert.equal(call.action, 'Call all in — 6,400 units');
+  assert.deepEqual(call.rows, ['Fold', 'Call all in', 'Raise to 1,000 units, all in']);
+  const raise = await reading({ action: 'raise', sizeRange: { min: 1_000, max: 1_000 } });
+  assert.equal(raise.action, 'Raise to 1,000 units, all in');
+});
+
 test('a negative margin over break-even is said to be under it (REGRESSION)', async () => {
   // The Lab once printed "▼ −27.0 points over the break-even equity".
   const label = (markup: string): string | undefined =>

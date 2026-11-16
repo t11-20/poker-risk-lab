@@ -319,6 +319,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
               'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 30 + 0.65 x [ 0.2769 x (30 + 20 + 2 x 980) - 1000 ] = 10.5 + (-288.25) = -277.75 chips. Risks 1000 to win 30. Raising by 980 puts your whole remaining stack in. A caller needs 48.8% equity to break even on the extra 980, and has to continue with 2.9% of their range for a raise of this size not to print automatically.',
             foldEquityAssumed: 0.35,
             potShareIfCalled: 0.2768833333333335,
+            allIn: true,
           },
         ],
         suggestion: {
@@ -544,6 +545,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
               'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 195 + 0.65 x [ 0.4332 x (195 + 65 + 2 x 875) - 940 ] = 68.25 + (-44.97) = 23.28 chips. Risks 940 to win 195. Raising by 875 puts your whole remaining stack in. A caller needs 43.5% equity to break even on the extra 875, and has to continue with 17.2% of their range for a raise of this size not to print automatically.',
             foldEquityAssumed: 0.35,
             potShareIfCalled: 0.43323988786543854,
+            allIn: true,
           },
         ],
         suggestion: {
@@ -745,6 +747,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
               'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 390 + 0.65 x [ 0.3214 x (390 + 130 + 2 x 745) - 875 ] = 136.5 + (-148.85) = -12.35 chips. Risks 875 to win 390. Raising by 745 puts your whole remaining stack in. A caller needs 37.1% equity to break even on the extra 745, and has to continue with 30.8% of their range for a raise of this size not to print automatically.',
             foldEquityAssumed: 0.35,
             potShareIfCalled: 0.32139217284957194,
+            allIn: true,
           },
         ],
         suggestion: {
@@ -912,6 +915,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
               'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 720 + 0.65 x [ 0.9854 x (720 + 200 + 2 x 545) - 745 ] = 252 + 803.13 = 1055.13 chips. Risks 745 to win 720. Raising by 545 puts your whole remaining stack in. A caller needs 27.1% equity to break even on the extra 545, and has to continue with 49.1% of their range for a raise of this size not to print automatically.',
             foldEquityAssumed: 0.35,
             potShareIfCalled: 0.9853658536585366,
+            allIn: true,
           },
         ],
         suggestion: {
@@ -1156,6 +1160,7 @@ export const REVIEW_HAND_FOLDED: HandReviewResponse = {
               'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 30 + 0.65 x [ 0.2778 x (30 + 20 + 2 x 980) - 1000 ] = 10.5 + (-287.01) = -276.51 chips. Risks 1000 to win 30. Raising by 980 puts your whole remaining stack in. A caller needs 48.8% equity to break even on the extra 980, and has to continue with 2.9% of their range for a raise of this size not to print automatically.',
             foldEquityAssumed: 0.35,
             potShareIfCalled: 0.2778333333333334,
+            allIn: true,
           },
         ],
         suggestion: {

@@ -484,9 +484,11 @@ function CandidateTable({ candidates }: { readonly candidates: readonly ActionCa
                 <th className="prl-candidates__action" scope="row">
                   {ACTION_WORD[candidate.action]}
                   {/* A call's `to` is the street total; Costs says what it takes, as its button does. */}
-                  {candidate.to === undefined || candidate.action === 'call'
-                    ? ''
-                    : ` to ${formatUnits(candidate.to)}`}
+                  {candidate.action === 'call'
+                    ? allInWords(candidate, ' all in')
+                    : candidate.to === undefined
+                      ? ''
+                      : ` to ${formatUnits(candidate.to)}${allInWords(candidate, ', all in')}`}
                 </th>
                 <td className="prl-candidates__cost">{formatUnits(candidate.cost)}</td>
                 <td className="prl-candidates__ev" data-sign={evSign(candidate.ev)}>
@@ -503,6 +505,11 @@ function CandidateTable({ candidates }: { readonly candidates: readonly ActionCa
       </table>
     </section>
   );
+}
+
+/** Worded as the table's button words the same action, "Call all in" or "Raise to 1,000, all in". */
+function allInWords(candidate: ActionCandidate | null, words: string): string {
+  return candidate?.allIn === true ? words : '';
 }
 
 interface SuggestionBlockProps {
@@ -528,11 +535,11 @@ function SuggestionBlock({ suggestion, candidate }: SuggestionBlockProps): React
           {suggestion.action === 'call'
             ? candidate === null
               ? ''
-              : ` — ${formatUnits(candidate.cost)}`
+              : `${allInWords(candidate, ' all in')} — ${formatUnits(candidate.cost)}`
             : !sized
               ? ''
               : range.min === range.max
-                ? ` to ${formatUnits(range.min)}`
+                ? ` to ${formatUnits(range.min)}${allInWords(candidate, ', all in')}`
                 : ` to ${formatChips(range.min)}–${formatUnits(range.max)}`}
         </p>
         <span className="prl-suggestion__confidence" data-confidence={suggestion.confidence}>
