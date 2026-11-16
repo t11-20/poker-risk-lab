@@ -68,8 +68,8 @@ describe('the Verdict panel names the reading, not a row the reading set aside',
     const { report, judgement, sentence } = judged('rk-low-spr-commit-top-pair', 'call');
     const top = Math.max(...report.candidates.map((candidate) => candidate.ev));
     assert.equal(judgement.reading?.ev, top);
-    assert.equal(judgement.reading?.name, 'Raise to 440 units');
-    assert.match(sentence, /Raise to 440 units, is there for comparison/u);
+    assert.equal(judgement.reading?.name, 'Raise to 440 units, all in');
+    assert.match(sentence, /Raise to 440 units, all in, is there for comparison/u);
   });
 
   it('is the row the panel prints, under the Coach’s own label', () => {

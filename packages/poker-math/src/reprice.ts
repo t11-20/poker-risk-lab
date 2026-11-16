@@ -15,6 +15,7 @@ export interface RepricedRow {
   readonly action: ActionCandidate['action'];
   readonly to: number | null;
   readonly cost: number;
+  readonly allIn?: true;
   /** The figure the analysis published, at its own assumed fold frequency. */
   readonly analysedEv: number;
   /** The figure at the frequency asked for. Equal to `analysedEv` for a row that reads none. */
@@ -125,6 +126,7 @@ export function repriceAtFoldEquity(report: CoachReport, foldEquity: number): Fo
       action: candidate.action,
       to: candidate.to ?? null,
       cost: candidate.cost,
+      ...(candidate.allIn === true ? { allIn: true as const } : {}),
       analysedEv: candidate.ev,
       ev: readsFoldEquity ? (rowEvAt(candidate, report, f) as number) : candidate.ev,
       readsFoldEquity,
