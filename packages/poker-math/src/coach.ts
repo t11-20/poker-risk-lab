@@ -508,8 +508,8 @@ function describePriceGap(heroEquity: number, breakEvenEquity: number): string {
 /**
  * The call if every opponent who still owes chips calls too, the world the equity already describes.
  * The call row is the other half: every opponent dealt in, none of their chips. Null when nobody owes
- * chips, when an all-in already prices the call pot by pot, and when one range stands for several
- * seats, as in the Lab, because then no seat can be matched to its range.
+ * chips, when an all-in already prices the call pot by pot or a seat behind could only call all in for
+ * less, and when one range stands for several seats, as in the Lab.
  */
 interface CallIfTheyCall {
   readonly seats: number;
@@ -523,9 +523,10 @@ function callIfTheyCall(input: CoachInput, heroEquity: number, split: PotSplit):
   if (call === 0 || call < input.toCall || split.allIn.length > 0) return null;
   if (input.opponents.length !== input.opponentStacks.length) return null;
   const level = betLevelOf(input);
-  const owed = input.opponentStacks
-    .map((opponent) => Math.min(opponent.behind, Math.max(0, level - opponent.committedThisStreet)))
-    .filter((owes) => owes > 0);
+  const owes = input.opponentStacks.map((opponent) => Math.max(0, level - opponent.committedThisStreet));
+  // A seat that can only call all in for less opens a side pot it cannot win, which one equity misprices.
+  if (input.opponentStacks.some((opponent, index) => opponent.behind < (owes[index] ?? 0))) return null;
+  const owed = owes.filter((amount) => amount > 0);
   if (owed.length === 0) return null;
   const pot = input.contestablePot + call + owed.reduce((sum, owes) => sum + owes, 0);
   return { seats: owed.length, pot, breakEvenEquity: call / pot, ev: heroEquity * pot - call };

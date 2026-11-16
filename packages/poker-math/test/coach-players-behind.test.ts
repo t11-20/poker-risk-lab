@@ -148,3 +148,16 @@ test('live table: first to act five-handed, the price names the three seats stil
   assert.match(report.potOdds.explanation, /There are 3 players still to act after you/);
   assert.match(report.potOdds.explanation, /the pot you play for is 50 and a call needs 20%/);
 });
+
+test('a player behind who can only call all in for less gets no "if they call too" price', () => {
+  // B has 20 left against a 90 bet, so B's call makes a 120 main pot all three contest and a 140 side
+  // pot B cannot win. One whole-table equity cannot price both, so no "if they call" price is quoted.
+  const report = facingOverbet({
+    opponents: [A, { label: 'B', range: exactRange(parseCards('9c 9h')) }],
+    opponentStacks: [
+      { behind: 810, committedThisStreet: 90 },
+      { behind: 20, committedThisStreet: 0 },
+    ],
+  });
+  assert.doesNotMatch(JSON.stringify(report), /If they call too/u);
+});
