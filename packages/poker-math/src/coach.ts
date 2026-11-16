@@ -532,14 +532,17 @@ function callIfTheyCall(input: CoachInput, heroEquity: number, split: PotSplit):
   return { seats: owed.length, pot, breakEvenEquity: call / pot, ev: heroEquity * pot - call };
 }
 
-function stillToAct(behind: CallIfTheyCall): string {
-  return behind.seats === 1 ? 'the player still to act' : `the ${behind.seats} players still to act`;
+/** Not "still to act": a big blind with the option is still to act and owes nothing. */
+function yetToMatch(behind: CallIfTheyCall): string {
+  return behind.seats === 1
+    ? 'the player yet to match the bet'
+    : `the ${behind.seats} players yet to match the bet`;
 }
 
 function theyCallSentence(behind: CallIfTheyCall): string {
   const who = behind.seats === 1 ? 'is 1 player' : `are ${behind.seats} players`;
   return (
-    ` There ${who} still to act after you: the equity above assumes they all reach showdown, but this price ` +
+    ` There ${who} after you yet to match the bet: the equity above assumes they all reach showdown, but this price ` +
     `leaves out what they would put in. If they call too, the pot you play for is ${chips(behind.pot)} and a call needs ` +
     `${percent(behind.breakEvenEquity)}. A raise behind you is not modelled, and it can cost the whole call.`
   );
@@ -1152,12 +1155,12 @@ function seatsBehindNotes(
   if (behind === null) return [];
   if (action === 'call') {
     return [
-      `A raise from ${stillToAct(behind)} is not modelled. A call that is raised and then folded loses the ${chips(toCall)} it put in.`,
+      `A raise from anyone still to act is not modelled. A call that is raised and then folded loses the ${chips(toCall)} it put in.`,
     ];
   }
   if (action !== 'fold' || behind.ev <= 0) return [];
   return [
-    `If ${stillToAct(behind)} call too, a call needs only ${percent(behind.breakEvenEquity)}, which your ` +
+    `If ${yetToMatch(behind)} call too, a call needs only ${percent(behind.breakEvenEquity)}, which your ` +
       `${percent(heroEquity)} clears. A raise behind you would cut the other way.`,
   ];
 }
@@ -1283,7 +1286,7 @@ function buildSuggestion(
     setAside === '' ? 'against the stated range' : 'of the lines that do not rely on an assumed fold rate';
   const reason =
     (openBehind !== null
-      ? `${actionWord} has the highest expected value ${against}, by ${margin.toFixed(1)} units, but the price leaves out what ${stillToAct(openBehind)} would put in — treat this as close rather than as a recommendation.`
+      ? `${actionWord} has the highest expected value ${against}, by ${margin.toFixed(1)} units, but the price leaves out what ${yetToMatch(openBehind)} would put in — treat this as close rather than as a recommendation.`
       : confidence === 'low'
         ? `${actionWord} comes out marginally ahead here, but only just — treat this as close to indifferent rather than as a recommendation.`
         : `${actionWord} has the highest expected value ${against}, by ${margin.toFixed(1)} units over the next-best action.`) +
@@ -1319,7 +1322,7 @@ function buildUncertainty(
     limitations.push(
       behind === null
         ? 'Against several opponents the analysis assumes all of them see the river, which overstates your risk when some would fold.'
-        : `Against several opponents the equity assumes all of them see the river, but the price leaves out what ${stillToAct(behind)} would put in. Together that is the least a call is worth if nobody raises; a raise behind you, which is not modelled, can cost the whole call.`,
+        : `Against several opponents the equity assumes all of them see the river, but the price leaves out what ${yetToMatch(behind)} would put in. Together that is the least a call is worth if nobody raises; a raise behind you, which is not modelled, can cost the whole call.`,
     );
   }
   if (outs !== null) {

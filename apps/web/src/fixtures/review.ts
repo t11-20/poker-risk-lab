@@ -251,7 +251,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           oddsRatio: 1.5,
           equitySurplus: -0.12311666666666654,
           explanation:
-            'You risk 20 to win the 30 already in the middle, a price of 1.50 to 1. Calling breaks even at 20 / (30 + 20) = 40.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 30 is what is in the middle before your own 20 goes in — counting the call inside the pot understates the equity a call needs. You do not clear that: 27.7% equity is 12.3 points short of it. There is 1 player still to act after you: the equity above assumes they all reach showdown, but this price leaves out what they would put in. If they call too, the pot you play for is 60 and a call needs 33.3%. A raise behind you is not modelled, and it can cost the whole call.',
+            'You risk 20 to win the 30 already in the middle, a price of 1.50 to 1. Calling breaks even at 20 / (30 + 20) = 40.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 30 is what is in the middle before your own 20 goes in — counting the call inside the pot understates the equity a call needs. You do not clear that: 27.7% equity is 12.3 points short of it. There is 1 player after you yet to match the bet: the equity above assumes they all reach showdown, but this price leaves out what they would put in. If they call too, the pot you play for is 60 and a call needs 33.3%. A raise behind you is not modelled, and it can cost the whole call.',
         },
         candidates: [
           {
@@ -366,7 +366,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
             'This is raw equity: the hand is treated as running to the river with no further betting. Real hands have more streets and more decisions.',
             'Every hand in the opponent range is weighted equally. Real opponents do not play every hand in a range the same way.',
             'Equity was estimated from 10,000 sampled run-outs, not enumerated exhaustively.',
-            'Against several opponents the equity assumes all of them see the river, but the price leaves out what the player still to act would put in. Together that is the least a call is worth if nobody raises; a raise behind you, which is not modelled, can cost the whole call.',
+            'Against several opponents the equity assumes all of them see the river, but the price leaves out what the player yet to match the bet would put in. Together that is the least a call is worth if nobody raises; a raise behind you, which is not modelled, can cost the whole call.',
             'No implied odds, reverse implied odds or future-street play are modelled.',
           ],
         },
@@ -1092,7 +1092,7 @@ export const REVIEW_HAND_FOLDED: HandReviewResponse = {
           oddsRatio: 1.5,
           equitySurplus: -0.12216666666666665,
           explanation:
-            'You risk 20 to win the 30 already in the middle, a price of 1.50 to 1. Calling breaks even at 20 / (30 + 20) = 40.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 30 is what is in the middle before your own 20 goes in — counting the call inside the pot understates the equity a call needs. You do not clear that: 27.8% equity is 12.2 points short of it. There is 1 player still to act after you: the equity above assumes they all reach showdown, but this price leaves out what they would put in. If they call too, the pot you play for is 60 and a call needs 33.3%. A raise behind you is not modelled, and it can cost the whole call.',
+            'You risk 20 to win the 30 already in the middle, a price of 1.50 to 1. Calling breaks even at 20 / (30 + 20) = 40.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 30 is what is in the middle before your own 20 goes in — counting the call inside the pot understates the equity a call needs. You do not clear that: 27.8% equity is 12.2 points short of it. There is 1 player after you yet to match the bet: the equity above assumes they all reach showdown, but this price leaves out what they would put in. If they call too, the pot you play for is 60 and a call needs 33.3%. A raise behind you is not modelled, and it can cost the whole call.',
         },
         candidates: [
           {
@@ -1207,7 +1207,7 @@ export const REVIEW_HAND_FOLDED: HandReviewResponse = {
             'This is raw equity: the hand is treated as running to the river with no further betting. Real hands have more streets and more decisions.',
             'Every hand in the opponent range is weighted equally. Real opponents do not play every hand in a range the same way.',
             'Equity was estimated from 10,000 sampled run-outs, not enumerated exhaustively.',
-            'Against several opponents the equity assumes all of them see the river, but the price leaves out what the player still to act would put in. Together that is the least a call is worth if nobody raises; a raise behind you, which is not modelled, can cost the whole call.',
+            'Against several opponents the equity assumes all of them see the river, but the price leaves out what the player yet to match the bet would put in. Together that is the least a call is worth if nobody raises; a raise behind you, which is not modelled, can cost the whole call.',
             'No implied odds, reverse implied odds or future-street play are modelled.',
           ],
         },
