@@ -25,11 +25,19 @@ import type {
   StackContext,
   UncertaintyNote,
 } from '@prl/contracts';
-import type { Card } from '@prl/poker-engine';
+import { buildPotLayers, type Card, type PotContributor, type SeatIndex } from '@prl/poker-engine';
 import { restsOnAssumedFoldEquity } from './consistency.ts';
 import { type EquityResult, type EquitySpec, equity } from './equity.ts';
-import { evOfBet, evOfCall, evOfCheck, evOfFold, evOfRaise } from './ev.ts';
-import { chips, percent } from './format.ts';
+import {
+  breakEvenFoldRate,
+  evOfBet,
+  evOfCall,
+  evOfCheck,
+  evOfFold,
+  evOfRaise,
+  foldRateReaching,
+} from './ev.ts';
+import { chips, frac, percent, signedChips } from './format.ts';
 import {
   maximumOutsForRuleOf24,
   potOdds,
@@ -63,6 +71,13 @@ export interface OpponentStack {
   readonly behind: number;
   /** Chips ALREADY put out on this street, which may be less than the bet level. */
   readonly committedThisStreet: number;
+  /**
+   * Chips of the pot, before hero acts, this seat can win at showdown. The whole pot for a seat with
+   * chips behind. Less for a seat all in for less than others put in. Seat-state callers use
+   * `opponentStackAt`. Absent, it is the pot less every other seat's chips this street above this one's,
+   * which is exact for an all-in made this street with no folded seat above it.
+   */
+  readonly winnable?: number;
 }
 
 /** The part of a spot that fixes which action kinds are legal. `CoachInput` satisfies it structurally. */
@@ -140,6 +155,24 @@ export function opponentsAtBetLevel(
 ): readonly OpponentStack[] {
   const committedThisStreet = betLevelOf(spot);
   return behind.map((chips) => ({ behind: chips, committedThisStreet }));
+}
+
+/**
+ * One seat of a real table as an `OpponentStack`. An all-in seat's `winnable` is the engine's own
+ * layering, folded seats included. A seat with chips behind is left to the default, because mid-street
+ * the layers cut it out of chips it can still call for.
+ */
+export function opponentStackAt(
+  seats: readonly (PotContributor & { readonly stack: number; readonly committedThisStreet: number })[],
+  seat: SeatIndex,
+): OpponentStack {
+  const entry = seats.find((candidate) => candidate.seat === seat);
+  if (entry === undefined) throw new CoachError(`seat ${seat} is not at the table`);
+  const stack = { behind: entry.stack, committedThisStreet: entry.committedThisStreet };
+  if (entry.stack > 0) return stack;
+  let winnable = 0;
+  for (const pot of buildPotLayers(seats).pots) if (pot.eligibleSeats.includes(seat)) winnable += pot.amount;
+  return { ...stack, winnable };
 }
 
 /**
@@ -290,11 +323,41 @@ function validate(input: CoachInput): void {
       );
     }
   }
+  validateWinnable(input);
   const all = [...input.heroCards, ...input.board];
   if (new Set(all).size !== all.length) throw new CoachError('hero cards and board contain a duplicate');
   const foldEquity = input.assumedFoldEquity;
   if (foldEquity !== undefined && (foldEquity < 0 || foldEquity > 1)) {
     throw new CoachError(`assumedFoldEquity must be between 0 and 1, received ${foldEquity}`);
+  }
+}
+
+function validateWinnable(input: CoachInput): void {
+  for (const opponent of input.opponentStacks) {
+    const winnable = opponent.winnable;
+    if (winnable === undefined) continue;
+    if (!Number.isInteger(winnable) || winnable < 0 || winnable > input.pot) {
+      throw new CoachError(
+        `an opponent's winnable must be whole chips no more than the pot, received ${winnable} with ` +
+          `${input.pot} in the middle — a figure above the ${input.pot} counts chips that are not there`,
+      );
+    }
+    if (opponent.behind > 0 && winnable !== input.pot) {
+      throw new CoachError(
+        `an opponent with ${opponent.behind} behind can match any bet, so it can win all ${input.pot} in ` +
+          `the middle, not ${winnable}`,
+      );
+    }
+  }
+  // An all-in seat wins only some pots, so each stack must name the range that plays for them.
+  if (
+    input.opponentStacks.some((opponent) => opponent.behind === 0) &&
+    input.opponentStacks.length !== input.opponents.length
+  ) {
+    throw new CoachError(
+      `${input.opponentStacks.length} opponent stacks but ${input.opponents.length} ranges: with an ` +
+        'opponent all in, the Coach needs one range per opponent to price the pots each can win',
+    );
   }
 }
 
@@ -451,8 +514,15 @@ function buildPotOddsSummary(
   contestablePot: number,
   toCall: number,
   heroEquity: number,
+  pricedPotByPot: boolean,
 ): PotOddsSummary {
   const odds = potOdds(contestablePot, toCall);
+  // Equity against the whole table is not the share of a pot an all-in seat is not in.
+  const gap = pricedPotByPot
+    ? `Your ${percent(heroEquity)} is against the whole table, but an opponent all in for less splits ` +
+      'the middle into pots with different players in them, so it does not price this call. The call ' +
+      'row prices each pot against the players in it.'
+    : describePriceGap(heroEquity, odds.breakEvenEquity);
   return {
     pot: contestablePot,
     toCall,
@@ -462,8 +532,7 @@ function buildPotOddsSummary(
     explanation:
       toCall === 0
         ? 'Nothing to call, so there is no price to beat — checking keeps you in for free.'
-        : `${odds.explanation} ${describePriceGap(heroEquity, odds.breakEvenEquity)}` +
-          sidePotNote(pot, contestablePot, toCall),
+        : `${odds.explanation} ${gap}${sidePotNote(pot, contestablePot, toCall)}`,
   };
 }
 
@@ -607,13 +676,199 @@ function uncalledSentence(
 }
 
 /**
+ * The pots a showdown is played for once an opponent is all in. Each all-in seat caps a layer at what
+ * it reached, so the layers nest: the lowest is contested by everyone, the top only by seats with chips
+ * behind. With nobody all in there is one pot and every share is hero's equity.
+ */
+interface PotSplit {
+  /** Lowest reach first. `toMatch` is what hero must add before passing the seat's cap. */
+  readonly allIn: readonly { readonly index: number; readonly winnable: number; readonly toMatch: number }[];
+  readonly live: readonly number[];
+  /** Hero's share of a pot contested by these opponents, every opponent still dealt in. */
+  readonly share: (group: readonly number[]) => number;
+  /**
+   * Hero's chips already in that no opponent can match, as when a big blind is all in for less than
+   * the small blind. The engine hands them back on a fold as well, so no action gains them. Read as
+   * the pot no opponent can win, it also counts a folded seat's chips above the all-in, which a fold
+   * returns to that seat: one chip too many when a seat that folded paid an ante the all-in could not.
+   */
+  readonly returnedAnyway: number;
+}
+
+interface ShowdownPot {
+  readonly amount: number;
+  readonly share: number;
+  /** How many opponents can win it. */
+  readonly contesting: number;
+}
+
+function allInOf(input: CoachInput): PotSplit['allIn'] {
+  const allIn: PotSplit['allIn'][number][] = [];
+  for (const [index, opponent] of input.opponentStacks.entries()) {
+    if (opponent.behind > 0) continue;
+    const street = opponent.committedThisStreet;
+    const above = [input.heroCommittedThisStreet, ...input.opponentStacks.map((o) => o.committedThisStreet)];
+    const derived = input.pot - above.reduce((sum, chips) => sum + Math.max(0, chips - street), 0);
+    allIn.push({
+      index,
+      winnable: opponent.winnable ?? Math.max(0, derived),
+      toMatch: Math.max(0, street - input.heroCommittedThisStreet),
+    });
+  }
+  return allIn.sort((a, b) => a.winnable - b.winnable);
+}
+
+function liveOf(input: CoachInput): number[] {
+  return input.opponentStacks.flatMap((opponent, index) => (opponent.behind > 0 ? [index] : []));
+}
+
+/** The groups `potSplitOf` reads a share for, as `EquitySpec.contests` (hero is player 0). */
+function contestsFor(input: CoachInput): number[][] {
+  const allIn = allInOf(input).map((seat) => seat.index);
+  const live = liveOf(input);
+  const groups = allIn.flatMap((_seat, j) => [allIn.slice(j), [...live, ...allIn.slice(j)]]);
+  const partial = [live, ...groups].filter(
+    (group) => allIn.length > 0 && group.length > 0 && group.length < input.opponentStacks.length,
+  );
+  const unique = new Map(partial.map((group) => [keyOf(group), group]));
+  return [...unique.values()].map((group) => group.map((index) => index + 1));
+}
+
+function potSplitOf(input: CoachInput, result: EquityResult, heroEquity: number): PotSplit {
+  const measured = new Map(
+    contestsFor(input).map((group, i) => [
+      keyOf(group.map((player) => player - 1)),
+      result.contestShares?.[i],
+    ]),
+  );
+  const allIn = allInOf(input);
+  const live = liveOf(input);
+  const top = allIn.at(-1);
+  return {
+    allIn,
+    live,
+    // A seat with chips behind has matched hero, so only a table of all-in seats leaves any over.
+    returnedAnyway:
+      live.length === 0 && top !== undefined ? Math.max(0, input.contestablePot - top.winnable) : 0,
+    share: (group) => {
+      if (group.length === 0) return 1;
+      if (group.length === input.opponentStacks.length) return heroEquity;
+      const share = measured.get(keyOf(group));
+      if (share === undefined) throw new CoachError(`internal: no share was measured for ${keyOf(group)}`);
+      return share;
+    },
+  };
+}
+
+function keyOf(group: readonly number[]): string {
+  return [...group].sort((a, b) => a - b).join(',');
+}
+
+/**
+ * The pots once hero adds `heroAdds` and, when called, a caller adds `callerAdds`. A fold leaves only
+ * the all-in seats, and hero's chips above their caps come back. `value` is net of hero's chips and of
+ * `returnedAnyway`, so it is measured against hero folding.
+ */
+function showdownPots(
+  split: PotSplit,
+  input: CoachInput,
+  heroAdds: number,
+  callerAdds: number,
+  branch: 'called' | 'folded',
+): { readonly pots: readonly ShowdownPot[]; readonly paid: number; readonly value: number } {
+  const folded = branch === 'folded';
+  const matched = Math.min(heroAdds, Math.max(0, ...split.allIn.map((seat) => seat.toMatch)));
+  const paid = folded ? matched : heroAdds;
+  const total = input.contestablePot + paid + (folded ? 0 : callerAdds);
+  const pots: ShowdownPot[] = [];
+  let below = 0;
+  let value = 0;
+  const add = (top: number, group: readonly number[]): void => {
+    const amount = Math.min(top, total) - below;
+    if (amount <= 0) return;
+    const share = split.share(group);
+    pots.push({ amount, share, contesting: group.length });
+    value += share * amount;
+    below += amount;
+  };
+  for (const [j, seat] of split.allIn.entries()) {
+    const contesting = split.allIn.slice(j).map((entry) => entry.index);
+    add(
+      seat.winnable + Math.min(heroAdds, seat.toMatch),
+      folded ? contesting : [...split.live, ...contesting],
+    );
+  }
+  add(total, folded ? [] : split.live);
+  return { pots, paid, value: value - paid - split.returnedAnyway };
+}
+
+/** "the 300 main pot at 0% and the 200 side pot at 100%". */
+function describePots(pots: readonly ShowdownPot[]): string {
+  const named = pots.map((pot, i) => {
+    const name = `the ${chips(pot.amount)} ${i === 0 ? 'main' : 'side'} pot`;
+    return pot.contesting === 0 ? `${name}, uncontested` : `${name} at ${percent(pot.share)}`;
+  });
+  return named.length < 2 ? (named[0] ?? 'nothing') : `${named.slice(0, -1).join(', ')} and ${named.at(-1)}`;
+}
+
+function allInClause(split: PotSplit): string {
+  const count = split.allIn.length;
+  return `${count === 1 ? 'One opponent is' : `${count} opponents are`} all in and cannot fold`;
+}
+
+/** A check or call priced pot by pot, or null when one pot holds everything and every opponent is in it. */
+function layeredShowdown(kind: 'check' | 'call', split: PotSplit, input: CoachInput, heroAdds: number) {
+  const { pots, value } = showdownPots(split, input, heroAdds, 0, 'called');
+  if (pots.every((pot) => pot.contesting === input.opponentStacks.length)) return null;
+  const deductions = [
+    ...(heroAdds > 0 ? [`your ${chips(heroAdds)}`] : []),
+    ...(split.returnedAnyway > 0 ? [`the ${chips(split.returnedAnyway)} a fold hands back too`] : []),
+  ];
+  const less = deductions.length > 0 ? `, less ${deductions.join(' and ')}` : '';
+  return {
+    ev: value,
+    derivation:
+      `EV(${kind}): you play for ${describePots(pots)}${less}, ${chips(value)} chips. An all-in opponent wins only ` +
+      'the chips its stack reached, so each pot is priced against the players in it.',
+  };
+}
+
+/** A bet or raise against an all-in seat: a fold still leaves the pots it is in to showdown. */
+function layeredAggression(
+  kind: 'bet' | 'raise',
+  split: PotSplit,
+  input: CoachInput,
+  heroAdds: number,
+  callerAdds: number,
+  f: number,
+) {
+  const called = showdownPots(split, input, heroAdds, callerAdds, 'called');
+  const folded = showdownPots(split, input, heroAdds, 0, 'folded');
+  const ev = f * folded.value + (1 - f) * called.value;
+  const matched = folded.paid > 0 ? `, less your ${chips(folded.paid)}` : '';
+  return {
+    ev,
+    derivation:
+      `EV(${kind}) = f x [everyone who can fold does] + (1 - f) x [called] = ${frac(f)} x ${signedChips(folded.value)} + ` +
+      `${frac(1 - f)} x ${signedChips(called.value)} = ${chips(ev)} chips. ${allInClause(split)}, so a fold ` +
+      `still leaves ${describePots(folded.pots)}${matched}: worth ${chips(folded.value)}. Called, you play for ` +
+      `${describePots(called.pots)}, less your ${chips(heroAdds)}: ${chips(called.value)}.`,
+  };
+}
+
+/**
  * Candidate actions with EV relative to folding, which is zero. Sunk chips do not appear.
  * Raising by `r` facing `c` risks `c + r` (`evOfRaise`), and its total is
  * `heroCommittedThisStreet + toCall + r`. The floor itself is offered, because an untouched sizer
  * sends it. Bet versus raise follows the engine's `betLevel === 0`, not `toCall`.
  * Every candidate passes `input.legalActions`, or `deriveLegalActions` when it is absent.
  */
-function buildCandidates(input: CoachInput, heroEquity: number, foldEquity: number): ActionCandidate[] {
+function buildCandidates(
+  input: CoachInput,
+  heroEquity: number,
+  foldEquity: number,
+  split: PotSplit,
+): ActionCandidate[] {
   const candidates: ActionCandidate[] = [];
   // Resolved once, so an absent `legalActions` can never short-circuit to "permitted".
   const legal = input.legalActions ?? deriveLegalActions(input);
@@ -627,7 +882,7 @@ function buildCandidates(input: CoachInput, heroEquity: number, foldEquity: numb
 
   // Check before fold. The sort is stable, so on a tie the line that keeps the hand wins.
   if (input.toCall === 0 && permitted('check')) {
-    const check = evOfCheck({ pot, equity: heroEquity });
+    const check = layeredShowdown('check', split, input, 0) ?? evOfCheck({ pot, equity: heroEquity });
     candidates.push({
       action: 'check',
       cost: 0,
@@ -649,7 +904,8 @@ function buildCandidates(input: CoachInput, heroEquity: number, foldEquity: numb
 
   if (input.toCall > 0 && permitted('call')) {
     const cappedCall = Math.min(input.toCall, input.heroStack);
-    const call = evOfCall({ pot, toCall: cappedCall, equity: heroEquity });
+    const layered = layeredShowdown('call', split, input, cappedCall);
+    const call = layered ?? evOfCall({ pot, toCall: cappedCall, equity: heroEquity });
     candidates.push({
       action: 'call',
       // The street total, matching the engine.
@@ -657,7 +913,8 @@ function buildCandidates(input: CoachInput, heroEquity: number, foldEquity: numb
       cost: cappedCall,
       ev: call.ev,
       derivation: call.derivation,
-      potShareIfCalled: heroEquity,
+      // Several pots have several shares, so none is published.
+      ...(layered === null ? { potShareIfCalled: heroEquity } : {}),
     });
   }
 
@@ -683,6 +940,24 @@ function buildCandidates(input: CoachInput, heroEquity: number, foldEquity: numb
       // Kept as a row because the bar offers it, but priced on what can be called.
       const calledBy = Math.min(raiseBy, callable);
       const option = sizingOptionAt(potAfterCall, calledBy, SIZE_WORDS[size.id], calledBy === maxRaiseBy);
+
+      // The sizing notes assume a fold wins the pot, which is false while a seat is all in.
+      if (split.allIn.length > 0) {
+        const kind = isOpening ? 'bet' : 'raise';
+        const cost = input.toCall + calledBy;
+        const layered = layeredAggression(kind, split, input, cost, calledBy, foldEquity);
+        const extra = isOpening ? betSizeSentence(size.id) : '';
+        candidates.push({
+          action: kind,
+          to: betLevel + raiseBy,
+          cost,
+          ev: layered.ev,
+          derivation:
+            `${layered.derivation} ${extra}${uncalledSentence(kind, raiseBy, calledBy, input)}`.trimEnd(),
+          foldEquityAssumed: foldEquity,
+        });
+        continue;
+      }
 
       if (isOpening) {
         const bet = evOfBet({
@@ -784,25 +1059,21 @@ function byExpectedValue(left: ActionCandidate, right: ActionCandidate): number 
   return TIEBREAK_RANK[right.action] - TIEBREAK_RANK[left.action];
 }
 
-/** A bet or raise row's EV if it is always called, which is its EV at a fold rate of zero. */
-function evWhenCalled(row: ActionCandidate, input: CoachInput, equity: number): number {
-  return evOfRaise({
-    pot: input.contestablePot,
-    toCall: input.toCall,
-    raiseBy: row.cost - input.toCall,
-    foldProbability: 0,
-    equityWhenCalled: equity,
-  }).ev;
+/** A bet or raise row's EV at a fold rate of 0 and of 1. EV is linear in f between them. */
+function branchesOf(row: ActionCandidate, input: CoachInput, split: PotSplit) {
+  return {
+    whenCalled: showdownPots(split, input, row.cost, row.cost - input.toCall, 'called').value,
+    whenFolded: showdownPots(split, input, row.cost, 0, 'folded').value,
+  };
 }
 
 /**
- * Names the row the reading set aside and the fold rate at which it overtakes the reading. EV is
- * linear in f, from the called branch S at f = 0 to the pot at f = 1, so that is
- * `(reading - S) / (pot - S)`, always below the assumed rate that put the row on top.
+ * Names the row the reading set aside and the fold rate at which it overtakes the reading, always below
+ * the assumed rate that put the row on top.
  */
-function foldRateNote(row: ActionCandidate, reading: ActionCandidate, input: CoachInput, equity: number) {
-  const called = evWhenCalled(row, input, equity);
-  const needed = (reading.ev - called) / (input.contestablePot - called);
+function foldRateNote(row: ActionCandidate, reading: ActionCandidate, input: CoachInput, split: PotSplit) {
+  const { whenCalled, whenFolded } = branchesOf(row, input, split);
+  const needed = foldRateReaching(reading.ev, whenFolded, whenCalled);
   const line = row.action === 'bet' ? `Betting ${row.to}` : `Raising to ${row.to}`;
   return (
     ` ${line} shows a higher figure only because it assumes they fold ` +
@@ -821,19 +1092,19 @@ function buildSuggestion(
   input: CoachInput,
   equitySummary: EquitySummary,
   outs: OutsResult | null,
+  split: PotSplit,
 ): CoachSuggestion {
   const ranked = [...candidates].sort(byExpectedValue);
   const top = ranked[0];
   if (top === undefined) throw new CoachError('no candidate actions were produced');
   // The rows the Lab's verdict measures a fold against, plus any bet or raise that beats them even
   // when always called. The fold rate is an input, so a line ahead only because of it is not a reading.
-  const heroEquity = equitySummary.heroEquity;
   const measuredBest = Math.max(
     0,
     ...candidates.filter((c) => !restsOnAssumedFoldEquity(c)).map((c) => c.ev),
   );
   const eligible = ranked.filter(
-    (c) => !restsOnAssumedFoldEquity(c) || evWhenCalled(c, input, heroEquity) >= measuredBest,
+    (c) => !restsOnAssumedFoldEquity(c) || branchesOf(c, input, split).whenCalled >= measuredBest,
   );
   const best = eligible[0] ?? top;
   // A row set aside still competes at its always-called value, so the margin is not measured to a line
@@ -842,7 +1113,7 @@ function buildSuggestion(
   const runnerUp = Math.max(
     ...ranked
       .filter((c) => c.action !== best.action)
-      .map((c) => (eligible.includes(c) ? c.ev : evWhenCalled(c, input, heroEquity))),
+      .map((c) => (eligible.includes(c) ? c.ev : branchesOf(c, input, split).whenCalled)),
   );
 
   if (input.toCall === 0) {
@@ -895,8 +1166,16 @@ function buildSuggestion(
     );
   }
   if (best.action === 'bet' || best.action === 'raise') {
+    const rate = `${(best.foldEquityAssumed ?? 0) * 100}% of the time`;
+    const { whenCalled, whenFolded } = branchesOf(best, input, split);
     whatWouldChangeIt.push(
-      `This assumes the line wins uncontested ${(best.foldEquityAssumed ?? 0) * 100}% of the time. An opponent who folds less often makes it worse.`,
+      split.allIn.length === 0
+        ? `This assumes the line wins uncontested ${rate}. An opponent who folds less often makes it worse.`
+        : `This assumes everyone who can still fold does so ${rate}. ${
+            whenFolded >= whenCalled
+              ? 'An opponent who folds less often makes it worse.'
+              : 'Here a fold is worth less to you than a call, so an opponent who folds more often makes it worse.'
+          }`,
     );
     whatWouldChangeIt.push('Being raised is not modelled here, so treat the figure as optimistic.');
   }
@@ -924,7 +1203,7 @@ function buildSuggestion(
 
   // Capitalised to open the sentence, and in units to match every figure beside it on the panel.
   const actionWord = `${best.action.charAt(0).toUpperCase()}${best.action.slice(1)}`;
-  const setAside = best.action === top.action ? '' : foldRateNote(top, best, input, heroEquity);
+  const setAside = best.action === top.action ? '' : foldRateNote(top, best, input, split);
   const against =
     setAside === '' ? 'against the stated range' : 'of the lines that do not rely on an assumed fold rate';
   const reason =
@@ -1117,6 +1396,7 @@ export function buildCoachReport(input: CoachInput): CoachReport {
       ...input.opponents.map((opponent) => ({ label: opponent.label, range: opponent.range })),
     ],
     board: input.board,
+    contests: contestsFor(input),
   };
 
   const equityResult = equity(spec, {
@@ -1139,19 +1419,31 @@ export function buildCoachReport(input: CoachInput): CoachReport {
   }
 
   const equitySummary = buildEquitySummary(equityResult, outs, cardsToCome);
-  const potOddsSummary = buildPotOddsSummary(input.pot, input.contestablePot, input.toCall, hero.equity);
+  const split = potSplitOf(input, equityResult, hero.equity);
+  const cappedCall = Math.min(input.toCall, input.heroStack);
+  const potOddsSummary = buildPotOddsSummary(
+    input.pot,
+    input.contestablePot,
+    input.toCall,
+    hero.equity,
+    input.toCall > 0 && layeredShowdown('call', split, input, cappedCall) !== null,
+  );
   const stackContext = buildStackContext(input);
   const foldEquity = input.assumedFoldEquity ?? DEFAULT_ASSUMED_FOLD_EQUITY;
-  const candidates = buildCandidates(input, hero.equity, foldEquity);
-  const suggestion = buildSuggestion(candidates, input, equitySummary, outs);
+  const candidates = buildCandidates(input, hero.equity, foldEquity, split);
+  const suggestion = buildSuggestion(candidates, input, equitySummary, outs, split);
   const uncertainty = buildUncertainty(equityResult, input, outs);
 
   const assumptions = [...equityResult.assumptions];
   if (candidates.some((candidate) => candidate.action === 'bet' || candidate.action === 'raise')) {
+    const rate = `${(foldEquity * 100).toFixed(0)}% of the time`;
     assumptions.push(
-      `Bet and raise figures assume the line wins uncontested ${(foldEquity * 100).toFixed(0)}% of the time. That is an assumption, not something measured: the Scenario Lab lets you change it and watch these figures move.`,
+      (split.allIn.length > 0
+        ? `Bet and raise figures assume everyone who can still fold does so ${rate}. ${allInClause(split)}, so even then the pot they are in goes to showdown.`
+        : `Bet and raise figures assume the line wins uncontested ${rate}.`) +
+        ' That is an assumption, not something measured: the Scenario Lab lets you change it and watch these figures move.',
     );
-    assumptions.push(halfPotBreakEven(input, candidates, hero.equity));
+    assumptions.push(halfPotBreakEven(input, candidates, split));
   }
   assumptions.push(
     'Expected values are measured against folding, which is treated as zero. Chips already in the pot are spent either way.',
@@ -1180,28 +1472,43 @@ export function buildCoachReport(input: CoachInput): CoachReport {
 
 /**
  * The break-even fold rate of the size the ½-pot button sends, read off its priced row so it inherits
- * the call inside a raise and the cap at what can be called. EV is linear in f, from the called branch
- * S at f = 0 to the pot at f = 1, so it breaks even at `-S / (pot - S)`.
+ * the call inside a raise and the cap at what can be called.
  */
-function halfPotBreakEven(input: CoachInput, candidates: readonly ActionCandidate[], equity: number): string {
+function halfPotBreakEven(
+  input: CoachInput,
+  candidates: readonly ActionCandidate[],
+  split: PotSplit,
+): string {
   const half = TABLE_SIZING_PRESETS.find((preset) => preset.id === 'half');
   const to = half === undefined ? undefined : presetTo(half, sizingContextFor(input));
   const row = candidates.find(
     (candidate) => candidate.to === to && candidate.foldEquityAssumed !== undefined,
   );
   if (row === undefined) throw new CoachError(`internal: the ½-pot size ${to} has no priced row`);
-  const pot = input.contestablePot;
-  const called = evWhenCalled(row, input, equity);
-  const needed = called >= 0 ? 0 : -called / (pot - called);
-  const size = `The ½-pot ${row.action === 'bet' ? `bet of ${to}` : `raise to ${to}`} risks ${chips(row.cost)} to win ${chips(pot)}.`;
+  const { whenCalled, whenFolded } = branchesOf(row, input, split);
+  const breakEven = breakEvenFoldRate(whenFolded, whenCalled);
+  const line = `The ½-pot ${row.action === 'bet' ? `bet of ${to}` : `raise to ${to}`} risks ${chips(row.cost)}`;
+  const layered = split.allIn.length > 0;
+  const size = layered
+    ? `${line}. ${allInClause(split)}, so everyone else folding is worth ${chips(whenFolded)} to you, not the ${chips(input.contestablePot)} in the middle.`
+    : `${line} to win ${chips(input.contestablePot)}.`;
   // "Needs 0%" and "needs 100%" both read as mistakes, so each degenerate case says what it means.
-  if (needed <= 0) {
-    return `${size} It is already break-even or better purely on the equity you have when called — it does not need to win uncontested at all.`;
+  switch (breakEven.kind) {
+    case 'always':
+      return `${size} It is already break-even or better purely on the equity you have when called — it does not need ${layered ? 'anyone to fold' : 'to win uncontested'} at all.`;
+    case 'never':
+      return `${size} It cannot break even at any fold frequency with this much equity when called — folding out the whole range still would not be enough.`;
+    case 'at-most':
+      return `${size} It breaks even when called, but a fold is worth less to you than a call, so it stops breaking even once everyone who can fold does fold more than ${percentOfTime(breakEven.rate)}.`;
+    case 'at-least':
+      return layered
+        ? `${size} To break even everyone who can fold would need to fold ${percentOfTime(breakEven.rate)}.`
+        : `${size} To break even it would need to win uncontested ${percentOfTime(breakEven.rate)}.`;
   }
-  if (needed >= 1) {
-    return `${size} It cannot break even at any fold frequency with this much equity when called — folding out the whole range still would not be enough.`;
-  }
-  return `${size} To break even it would need to win uncontested ${(needed * 100).toFixed(0)}% of the time.`;
+}
+
+function percentOfTime(rate: number): string {
+  return `${(rate * 100).toFixed(0)}% of the time`;
 }
 
 /** A compact summary for logs and hand-review lists. Never shown as the whole story. */

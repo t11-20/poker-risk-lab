@@ -229,13 +229,17 @@ export function coachTaskFor(scenario: Scenario): CoachTask {
     heroStack: situation.heroStack,
     opponentStacks: situation.opponentStacks,
   });
+  // A scenario's one range is the one opponent who continues. An all-in seat cannot fold and wins only
+  // the pots it reached, so then every seat still in is dealt that range.
+  const range = wireRangeFor(scenario);
+  const anyAllIn = situation.opponentStacks.some((opponent) => opponent.behind === 0);
   return {
     kind: 'coach',
     spec: {
       heroLabel: 'you',
       heroCards: [...situation.heroCards],
       board: [...situation.board],
-      opponents: [wireRangeFor(scenario)],
+      opponents: anyAllIn ? situation.opponentStacks.map(() => range) : [range],
     },
     street: scenario.street,
     pot: situation.pot,

@@ -135,3 +135,21 @@ test('EquityResult.matchups means what its doc comment now says on both paths', 
   assert.equal(enumerated.matchups, 6, 'exact enumeration counts what it dealt out');
   assert.notEqual(enumerated.matchups, sampled.matchups, 'the asymmetry the doc comment now names');
 });
+
+test('a contest reports the first player its share of a pot only that group plays for', () => {
+  // KQ on Ks 9d 5c 2h 2s beats queens and loses to aces. Each group's share is 0 or 1, ties split.
+  const board = parseCards('Ks 9d 5c 2h 2s');
+  const contests = [[1, 2], [2], [1], [3], [2, 3]];
+  const players = [
+    { label: 'hero', range: exactRange(parseCards('Kc Qh')) },
+    { label: 'aces', range: exactRange(parseCards('As Ah')) },
+    { label: 'queens', range: exactRange(parseCards('Qc Qd')) },
+    { label: 'the same hand', range: exactRange(parseCards('Kd Qs')) },
+  ];
+  const exact = exactEquity({ players, board, contests });
+  assert.deepEqual(exact.contestShares, [0, 1, 0, 0.5, 0.5]);
+  const sampled = monteCarloEquity({ players, board, contests }, { samples: 50, seed: 3 });
+  assert.deepEqual(sampled.contestShares, [0, 1, 0, 0.5, 0.5]);
+  assert.equal(exactEquity({ players, board }).contestShares, undefined, 'absent unless asked for');
+  assert.throws(() => exactEquity({ players, board, contests: [[0]] }), /index 1 to 3/);
+});

@@ -8,7 +8,7 @@
  */
 
 import { type Card, contestablePotFor, type PlayerView, type SeatIndex } from '@prl/poker-engine';
-import type { CoachAction, CoachInput } from './coach.ts';
+import { type CoachAction, type CoachInput, opponentStackAt } from './coach.ts';
 import { topPercentRange } from './hand-ranking.ts';
 import { type ParsedRange, parseRange } from './ranges.ts';
 
@@ -148,10 +148,7 @@ export function coachSpotForView(
       toCall: view.amountToCall,
       heroCommittedThisStreet: own.committedThisStreet,
       heroStack: own.stack,
-      opponentStacks: opponents.map((seat) => ({
-        behind: seat.stack,
-        committedThisStreet: seat.committedThisStreet,
-      })),
+      opponentStacks: opponents.map((seat) => opponentStackAt(view.seats, seat.seat)),
       bigBlind: view.config.bigBlind,
       minimumRaiseTo: view.minimumRaiseTo,
       legalActions,

@@ -35,6 +35,11 @@ export interface EquitySpec {
   readonly board: readonly Card[];
   /** Cards known to be out of play but not on the board (e.g. exposed cards). */
   readonly deadCards?: readonly Card[];
+  /**
+   * Groups of opponents, as indices into `players` (never 0). For each, `contestShares` reports the
+   * first player's share of a pot only that group contests, with every player still dealt in.
+   */
+  readonly contests?: readonly (readonly number[])[];
 }
 
 export interface EquityOptions {
@@ -89,6 +94,8 @@ export interface EquityResult {
   readonly elapsedMs: number;
   /** Everything the number depends on, in plain language, shown next to the figure in the UI. */
   readonly assumptions: readonly string[];
+  /** One per `EquitySpec.contests` entry, from the same trials. Absent when none were asked for. */
+  readonly contestShares?: readonly number[];
 }
 
 const DEFAULT_MAX_EXACT_WORK = 4_000_000;
@@ -166,6 +173,11 @@ function validateSpec(spec: EquitySpec): void {
       throw new EquityError(`player "${player.label}" has no possible hands after removing blockers`);
     }
   }
+  for (const group of spec.contests ?? []) {
+    if (group.some((index) => !Number.isInteger(index) || index < 1 || index >= spec.players.length)) {
+      throw new EquityError(`a contest names players by index 1 to ${spec.players.length - 1}`);
+    }
+  }
 }
 
 function availableCards(spec: EquitySpec): Card[] {
@@ -177,17 +189,21 @@ class Tally {
   readonly wins: Float64Array;
   readonly ties: Float64Array;
   readonly share: Float64Array;
+  readonly contests: readonly (readonly number[])[];
+  readonly contestShare: Float64Array;
   /** Sum of squared per-trial share, for the first player's variance. */
   private firstShareSquaredSum = 0;
   private trials = 0;
 
   // Explicit fields, not parameter properties, because `erasableSyntaxOnly` forbids them. That flag
   // lets Node run this TypeScript directly.
-  constructor(playerCount: number) {
+  constructor(playerCount: number, contests: readonly (readonly number[])[] = []) {
     this.playerCount = playerCount;
     this.wins = new Float64Array(playerCount);
     this.ties = new Float64Array(playerCount);
     this.share = new Float64Array(playerCount);
+    this.contests = contests;
+    this.contestShare = new Float64Array(contests.length);
   }
 
   record(scores: Float64Array): void {
@@ -210,7 +226,23 @@ class Tally {
       this.share[i] = (this.share[i] ?? 0) + perWinner;
       if (i === 0) this.firstShareSquaredSum += perWinner * perWinner;
     }
+    const first = scores[0] ?? -1;
+    for (const [index, group] of this.contests.entries()) {
+      let tied = 1;
+      let beaten = false;
+      for (const player of group) {
+        const score = scores[player] ?? -1;
+        if (score > first) beaten = true;
+        else if (score === first) tied += 1;
+      }
+      if (!beaten) this.contestShare[index] = (this.contestShare[index] ?? 0) + 1 / tied;
+    }
     this.trials += 1;
+  }
+
+  contestShares(): readonly number[] | undefined {
+    if (this.contests.length === 0) return undefined;
+    return Array.from(this.contestShare, (sum) => sum / this.trials);
   }
 
   get count(): number {
@@ -339,7 +371,7 @@ export function exactEquity(spec: EquitySpec): EquityResult {
   validateSpec(spec);
   const started = performance.now();
   const playerCount = spec.players.length;
-  const tally = new Tally(playerCount);
+  const tally = new Tally(playerCount, spec.contests);
   const scores = new Float64Array(playerCount);
   const needed = BOARD_TARGET - spec.board.length;
   const blocked = new Set<Card>([...spec.board, ...(spec.deadCards ?? [])]);
@@ -409,7 +441,13 @@ export function exactEquity(spec: EquitySpec): EquityResult {
     confidence: null,
     elapsedMs: performance.now() - started,
     assumptions: assumptionsFor(spec, 'exact-enumeration', 0),
+    ...withContestShares(tally),
   };
+}
+
+function withContestShares(tally: Tally): { readonly contestShares?: readonly number[] } {
+  const shares = tally.contestShares();
+  return shares === undefined ? {} : { contestShares: shares };
 }
 
 /**
@@ -502,7 +540,7 @@ export function monteCarloEquity(spec: EquitySpec, options: EquityOptions = {}):
   const random = createSamplingRandom(seed);
 
   const playerCount = spec.players.length;
-  const tally = new Tally(playerCount);
+  const tally = new Tally(playerCount, spec.contests);
   const scores = new Float64Array(playerCount);
   const needed = BOARD_TARGET - spec.board.length;
   const pool = availableCards(spec);
@@ -535,6 +573,7 @@ export function monteCarloEquity(spec: EquitySpec, options: EquityOptions = {}):
     confidence: { level: 0.95, halfWidthPoints: halfWidth * 100, samples: tally.count },
     elapsedMs: performance.now() - started,
     assumptions: assumptionsFor(spec, 'monte-carlo', tally.count),
+    ...withContestShares(tally),
   };
 }
 
@@ -574,7 +613,21 @@ export function combineMonteCarlo(shards: readonly EquityResult[]): EquityResult
     throw new EquityError('shards disagree on the number of players');
   }
 
+  const contestCount = first.contestShares?.length;
+  if (shards.some((shard) => shard.contestShares?.length !== contestCount)) {
+    throw new EquityError('shards disagree on the contests they report');
+  }
+
   const totalTrials = shards.reduce((sum, shard) => sum + shard.trials, 0);
+  const contestShares =
+    contestCount === undefined
+      ? undefined
+      : Array.from(
+          { length: contestCount },
+          (_unused, index) =>
+            shards.reduce((sum, shard) => sum + (shard.contestShares?.[index] ?? 0) * shard.trials, 0) /
+            totalTrials,
+        );
   const players: PlayerEquity[] = first.players.map((_unused, index) => {
     let win = 0;
     let tie = 0;
@@ -612,6 +665,7 @@ export function combineMonteCarlo(shards: readonly EquityResult[]): EquityResult
     matchups: first.matchups,
     confidence: { level: 0.95, halfWidthPoints: combinedHalfWidth * 100, samples: totalTrials },
     elapsedMs: shards.reduce((max, shard) => Math.max(max, shard.elapsedMs), 0),
+    ...(contestShares === undefined ? {} : { contestShares }),
     assumptions: [
       ...first.assumptions.filter((note) => !note.startsWith('Estimated by sampling')),
       `Estimated by sampling ${totalTrials.toLocaleString('en-US')} random run-outs across ${shards.length} independent shards.`,

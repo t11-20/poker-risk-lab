@@ -387,6 +387,33 @@ export function evOfRaise(input: {
 }
 
 /**
+ * The fold rate at which `f x whenFolded + (1 - f) x whenCalled` reaches `target`. A bet's EV is linear
+ * in f, so this is the one closed form behind every break-even fold rate. Heads-up `whenFolded` is the
+ * pot. With an opponent all in it is what the pots they are in are worth to you.
+ */
+export function foldRateReaching(target: number, whenFolded: number, whenCalled: number): number {
+  return (target - whenCalled) / (whenFolded - whenCalled);
+}
+
+/**
+ * Where a bet's EV, linear in f, is at or above zero. The signs of its two ends decide it: with an
+ * opponent all in, a fold can be worth less than a call, so more folds can make a line worse.
+ */
+export type FoldRateBreakEven =
+  | { readonly kind: 'always' }
+  | { readonly kind: 'never' }
+  | { readonly kind: 'at-least'; readonly rate: number }
+  | { readonly kind: 'at-most'; readonly rate: number };
+
+export function breakEvenFoldRate(whenFolded: number, whenCalled: number): FoldRateBreakEven {
+  if (whenCalled >= 0 && whenFolded >= 0) return { kind: 'always' };
+  // A fold worth exactly 0 breaks even at a fold rate of 1, so only a fold that still loses is never enough.
+  if (whenCalled < 0 && whenFolded < 0) return { kind: 'never' };
+  const rate = foldRateReaching(0, whenFolded, whenCalled);
+  return whenCalled < 0 ? { kind: 'at-least', rate } : { kind: 'at-most', rate };
+}
+
+/**
  * How often they must fold for a bet to break even. With S the called-branch EV,
  * `EV(f) = S + f x (pot - S)`, so `f* = -S / (pot - S)`. At e = 0 this is alpha, `b / (pot + b)`,
  * and the tests check it against `breakEvenBluffFrequency`.
@@ -429,7 +456,7 @@ export function requiredFoldEquity(input: { pot: number; betSize: number; equity
   }
 
   // S < 0, so the slope (pot - S) is positive.
-  const needed = -showdownEv / (pot - showdownEv);
+  const needed = foldRateReaching(0, pot, showdownEv);
 
   if (needed > 1) {
     return {

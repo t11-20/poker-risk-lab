@@ -20,6 +20,7 @@ export {
   maximumTo,
   minimumAggressiveTo,
   type OpponentStack,
+  opponentStackAt,
   opponentsAtBetLevel,
   type PricedSpot,
   type RuleOfThumbRefusal,
@@ -80,6 +81,7 @@ export {
 } from './equity.ts';
 export {
   breakEvenBluffFrequency,
+  breakEvenFoldRate,
   type EvBreakdown,
   EvError,
   type EvTerm,
@@ -89,6 +91,8 @@ export {
   evOfFold,
   evOfRaise,
   evOfSemiBluff,
+  type FoldRateBreakEven,
+  foldRateReaching,
   requiredFoldEquity,
 } from './ev.ts';
 export {
