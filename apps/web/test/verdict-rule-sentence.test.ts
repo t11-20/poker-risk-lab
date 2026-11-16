@@ -46,13 +46,13 @@ describe('the verdict says what it judged', () => {
     }
   });
 
-  it('explains the audit’s case: a consistent call beside a better best row', () => {
+  it('explains the audit’s case: a consistent call beside a better reading', () => {
     const found = JUDGED.find(
       ({ action, judgement }) =>
         action !== 'fold' &&
         judgement.consistent &&
         judgement.chosenEv !== null &&
-        judgement.bestEv - judgement.chosenEv > judgement.toleranceUnits &&
+        (judgement.reading?.ev ?? 0) - judgement.chosenEv > judgement.toleranceUnits &&
         (judgement.behindBenchmarkUnits ?? 0) < 0,
     );
     assert.ok(found !== undefined, 'no shipped spot reproduces the audit’s case; check before deleting this');
@@ -63,10 +63,10 @@ describe('the verdict says what it judged', () => {
       /does at least as well as folding, which is worth 0, allowing it to fall up to/u,
       sentence,
     );
-    // The best row is not the bar.
+    // The reading is not the bar.
     assert.match(
       sentence,
-      /the best row, .+, is there for comparison and does not have to be matched\.$/u,
+      /the Coach's reading, .+, is there for comparison and does not have to be matched\.$/u,
       sentence,
     );
   });

@@ -12,6 +12,7 @@ import {
   judgeConsistency as judgeShared,
   nearestPricedSizes,
   pricedSizesFor,
+  suggestedCandidate,
 } from '@prl/poker-math';
 import { formatUnits } from '@prl/ui/format';
 
@@ -23,12 +24,12 @@ export interface Consistency {
   readonly consistent: boolean;
   /** The chosen action's EV, or null when the report has no candidate for it. */
   readonly chosenEv: number | null;
-  /** The best EV in the candidate table. Folding is always available at 0, so this is never below 0. */
-  readonly bestEv: number;
-  /** The row that carries `bestEv`, named as `rowName` names it. */
-  readonly bestName: string | null;
-  /** `bestEv - chosenEv`. Shown, but NOT what decides `consistent`, which measures against folding. */
-  readonly gapUnits: number | null;
+  /**
+   * The row the Coach's reading stands on (`suggestedCandidate`), named as `rowName` names it, not the
+   * table's highest: a row the reading set aside, above pot or ahead only on the assumed fold rate,
+   * would be a second answer on the page. Shown for comparison, and NOT what decides `consistent`.
+   */
+  readonly reading: { readonly ev: number; readonly name: string } | null;
   /** The margin the verdict used, one big blind, in chips. Shown so a reader can argue with it. */
   readonly toleranceUnits: number;
   /**
@@ -74,15 +75,16 @@ export function judgeConsistency(
     ...(bigBlind === undefined ? {} : { bigBlind }),
   });
   const chosenEv = verdict.chosen === null ? null : verdict.chosen.ev;
-  const best = verdict.best;
+  const reading = suggestedCandidate(report);
   const benchmarkEv = action === 'fold' ? verdict.measuredBestEv : 0;
 
   return {
     consistent: verdict.consistent,
     chosenEv,
-    bestEv: verdict.bestEv,
-    bestName: best === null ? null : rowName({ ...best, to: best.to ?? null }, formatUnits),
-    gapUnits: chosenEv === null ? null : verdict.bestEv - chosenEv,
+    reading:
+      reading === null
+        ? null
+        : { ev: reading.ev, name: rowName({ ...reading, to: reading.to ?? null }, formatUnits) },
     toleranceUnits: verdict.marginUnits,
     shortfallUnits: verdict.shortfallUnits,
     benchmarkEv,
