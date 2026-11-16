@@ -588,7 +588,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
     uncertainty: {
       method: 'exact-enumeration',
       summary:
-        'Computed exactly by enumerating every remaining board (990 run-outs). There is no sampling error.',
+        'Computed exactly over every hand the opponent range allows and every board still to come (990 showdowns). There is no sampling error.',
       confidenceInterval: null,
       limitations: [
         'This is raw equity: the hand is treated as running to the river with no further betting. Real hands have more streets and more decisions.',
@@ -758,7 +758,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
     uncertainty: {
       method: 'exact-enumeration',
       summary:
-        'Computed exactly by enumerating every remaining board (44 run-outs). There is no sampling error.',
+        'Computed exactly over every hand the opponent range allows and every board still to come (44 showdowns). There is no sampling error.',
       confidenceInterval: null,
       limitations: [
         'This is raw equity: the hand is treated as running to the river with no further betting. Real hands have more streets and more decisions.',
@@ -1119,7 +1119,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
     uncertainty: {
       method: 'exact-enumeration',
       summary:
-        'Computed exactly by enumerating every remaining board (45,540 run-outs). There is no sampling error.',
+        'Computed exactly over every hand the opponent range allows and every board still to come (45,540 showdowns). There is no sampling error.',
       confidenceInterval: null,
       limitations: [
         'This is raw equity: the hand is treated as running to the river with no further betting. Real hands have more streets and more decisions.',
@@ -1228,7 +1228,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
     uncertainty: {
       method: 'exact-enumeration',
       summary:
-        'Computed exactly by enumerating every remaining board (37 run-outs). There is no sampling error.',
+        'Computed exactly over every hand the opponent range allows (37 showdowns). There is no sampling error.',
       confidenceInterval: null,
       limitations: [
         'This is raw equity: the hand is treated as running to the river with no further betting. Real hands have more streets and more decisions.',

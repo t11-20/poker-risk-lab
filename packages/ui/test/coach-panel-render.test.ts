@@ -687,3 +687,17 @@ test('a spot with no outs count names its own reason, not another street’s', a
   }
   assert.match(outsSectionText(await render(withheld('flop', 2))), /2 opponents are still in this hand/);
 });
+
+test('an exact count names showdowns, which a complete river has without any board to come', async () => {
+  const note = (markup: string) => /(\d[\d,]*) (\w+) enumerated\./u.exec(markup)?.slice(1);
+  assert.deepEqual(note(await render(NINE_OUT_DRAW)), ['990', 'showdowns']);
+  const river: CoachReport = {
+    ...NINE_OUT_DRAW,
+    street: 'river',
+    outs: null,
+    equity: { ...NINE_OUT_DRAW.equity, trials: 417, ruleOfThumb: null },
+  };
+  const markup = await render(river);
+  assert.deepEqual(note(markup), ['417', 'showdowns']);
+  assert.doesNotMatch(markup, /boards? enumerated/u);
+});

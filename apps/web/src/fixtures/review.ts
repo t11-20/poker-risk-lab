@@ -585,7 +585,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
         uncertainty: {
           method: 'exact-enumeration',
           summary:
-            'Computed exactly by enumerating every remaining board (224,730 run-outs). There is no sampling error.',
+            'Computed exactly over every hand the opponent range allows and every board still to come (224,730 showdowns). There is no sampling error.',
           confidenceInterval: null,
           limitations: [
             'This is raw equity: the hand is treated as running to the river with no further betting. Real hands have more streets and more decisions.',
@@ -785,7 +785,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
         uncertainty: {
           method: 'exact-enumeration',
           summary:
-            'Computed exactly by enumerating every remaining board (9,812 run-outs). There is no sampling error.',
+            'Computed exactly over every hand the opponent range allows and every board still to come (9,812 showdowns). There is no sampling error.',
           confidenceInterval: null,
           limitations: [
             'This is raw equity: the hand is treated as running to the river with no further betting. Real hands have more streets and more decisions.',
@@ -953,7 +953,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
         uncertainty: {
           method: 'exact-enumeration',
           summary:
-            'Computed exactly by enumerating every remaining board (205 run-outs). There is no sampling error.',
+            'Computed exactly over every hand the opponent range allows (205 showdowns). There is no sampling error.',
           confidenceInterval: null,
           limitations: [
             'This is raw equity: the hand is treated as running to the river with no further betting. Real hands have more streets and more decisions.',

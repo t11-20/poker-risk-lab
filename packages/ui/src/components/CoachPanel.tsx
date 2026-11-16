@@ -100,10 +100,13 @@ const METHOD_CHIP: Readonly<
   'monte-carlo': { label: 'monte carlo', glyph: '≈' },
 };
 
-/** Spelled out, because `pluralise` would produce "80,000 trial sampleds". */
+/**
+ * Spelled out, because `pluralise` would produce "80,000 trial sampleds". An exact count is opponent
+ * hands times boards to come, so a complete river has a count and no boards.
+ */
 const TRIAL_NOUN: Readonly<Record<EquitySummary['method'], { readonly one: string; readonly many: string }>> =
   {
-    'exact-enumeration': { one: 'board enumerated', many: 'boards enumerated' },
+    'exact-enumeration': { one: 'showdown enumerated', many: 'showdowns enumerated' },
     'monte-carlo': { one: 'trial sampled', many: 'trials sampled' },
   };
 

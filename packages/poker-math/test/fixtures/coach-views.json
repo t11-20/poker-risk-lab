@@ -770,7 +770,7 @@
       ],
       "uncertainty": {
         "method": "exact-enumeration",
-        "summary": "Computed exactly by enumerating every remaining board (439,560 run-outs). There is no sampling error.",
+        "summary": "Computed exactly over every hand the opponent range allows and every board still to come (439,560 showdowns). There is no sampling error.",
         "confidenceInterval": null,
         "limitations": [
           "This is raw equity: the hand is treated as running to the river with no further betting. Real hands have more streets and more decisions.",
@@ -1460,7 +1460,7 @@
       ],
       "uncertainty": {
         "method": "exact-enumeration",
-        "summary": "Computed exactly by enumerating every remaining board (377 run-outs). There is no sampling error.",
+        "summary": "Computed exactly over every hand the opponent range allows (377 showdowns). There is no sampling error.",
         "confidenceInterval": null,
         "limitations": [
           "This is raw equity: the hand is treated as running to the river with no further betting. Real hands have more streets and more decisions.",
@@ -1844,7 +1844,7 @@
       ],
       "uncertainty": {
         "method": "exact-enumeration",
-        "summary": "Computed exactly by enumerating every remaining board (1,935,948 run-outs). There is no sampling error.",
+        "summary": "Computed exactly over every combination of hands the opponent ranges allow and every board still to come (1,935,948 showdowns). There is no sampling error.",
         "confidenceInterval": null,
         "limitations": [
           "This is raw equity: the hand is treated as running to the river with no further betting. Real hands have more streets and more decisions.",

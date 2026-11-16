@@ -1336,7 +1336,7 @@ function buildUncertainty(
 
   const summary =
     result.method === 'exact-enumeration'
-      ? `Computed exactly by enumerating every remaining board (${result.trials.toLocaleString('en-US')} run-outs). There is no sampling error.`
+      ? `Computed exactly over ${enumeratedOver(input)} (${result.trials.toLocaleString('en-US')} ${result.trials === 1 ? 'showdown' : 'showdowns'}). There is no sampling error.`
       : `Estimated by sampling ${result.trials.toLocaleString('en-US')} run-outs. The 95% confidence interval is ±${(result.confidence?.halfWidthPoints ?? 0).toFixed(2)} percentage points.`;
 
   return {
@@ -1348,6 +1348,15 @@ function buildUncertainty(
         : { level: result.confidence.level, halfWidthPoints: result.confidence.halfWidthPoints },
     limitations,
   };
+}
+
+/** What an exact count runs over: every opponent hand, times every board still to come before the river. */
+function enumeratedOver(input: CoachInput): string {
+  const hands =
+    input.opponents.length === 1
+      ? 'every hand the opponent range allows'
+      : 'every combination of hands the opponent ranges allow';
+  return input.street === 'river' ? hands : `${hands} and every board still to come`;
 }
 
 /** "9 cards" / "1 card". Counts read as cards here, not as a bare number. */
