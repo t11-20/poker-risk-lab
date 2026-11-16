@@ -43,7 +43,6 @@ export {
   type SeatNamer,
 } from './coach-view.ts';
 export {
-  bestCandidate,
   bestMeasuredCandidate,
   CONSISTENCY_MARGIN_BIG_BLINDS,
   type ConsistencyAction,
