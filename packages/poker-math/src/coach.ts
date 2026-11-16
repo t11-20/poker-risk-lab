@@ -493,7 +493,7 @@ function outOfReachOf(input: CoachInput): CoachReport['outOfReach'] {
   return reaching.length >= 2 ? 'side-pot' : 'uncalled';
 }
 
-/** Names the chips hero cannot win, or `''` when the whole pot is contestable. Never silent. */
+/** A price read off the whole middle would overstate what hero can win, so the chips past hero's cap are named. */
 function outOfReachNote(
   pot: number,
   contestablePot: number,
