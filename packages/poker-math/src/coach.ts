@@ -1182,43 +1182,75 @@ function readsCloserNote(
   );
 }
 
-/** A row's EV under `split`, at its fold rate unless counted as always called. */
+/**
+ * A row's EV under `split`, at its fold rate unless counted as always called. A check or call adds no
+ * opponent chips, so it never goes through `branchesOf`, which reads a short call as a negative raise.
+ */
 function valueUnder(row: ActionCandidate, alwaysCalled: boolean, input: CoachInput, split: PotSplit): number {
   if (row.action === 'fold') return 0;
+  if (row.action === 'check' || row.action === 'call') {
+    return showdownPots(split, input, row.cost, 0, 'called').value;
+  }
   const { whenCalled, whenFolded } = branchesOf(row, input, split);
   const f = alwaysCalled ? 0 : (row.foldEquityAssumed ?? 0);
   return f * whenFolded + (1 - f) * whenCalled;
 }
 
-function gapAt(best: ActionCandidate, rival: Rival, input: CoachInput, split: PotSplit): number {
-  return valueUnder(best, false, input, split) - valueUnder(rival.row, rival.alwaysCalled, input, split);
+/** The interval is read by repricing rows, so a row it would reprice differently is refused. */
+function assertRepriced(candidates: readonly ActionCandidate[], input: CoachInput, split: PotSplit): void {
+  for (const row of candidates) {
+    const repriced = valueUnder(row, false, input, split);
+    if (Math.abs(repriced - row.ev) > 1e-9 * Math.max(1, Math.abs(row.ev))) {
+      throw new CoachError(
+        `internal: the ${row.action} row is worth ${row.ev} but reprices to ${repriced} at the same equity.`,
+      );
+    }
+  }
 }
 
-/** `intervalPoints` is 0 when the interval cannot close the gap, so only one that can lowers it. */
+/** `intervalPoints` is 0 when no other line overtakes the reading inside the interval. */
 function confidenceFor(marginInBigBlinds: number, intervalPoints: number): CoachSuggestion['confidence'] {
   if (marginInBigBlinds < 0.25 || intervalPoints > 2) return 'low';
   if (marginInBigBlinds < 1 || intervalPoints > 0.75) return 'moderate';
   return 'reasonable';
 }
 
+interface Overtaker extends Rival {
+  readonly end: 'low' | 'high';
+  readonly ahead: number;
+}
+
 /**
- * The most the sampling error can move the gap between two lines. Every EV is linear in the shares,
- * so repricing both with each contested share moved by the half-width gives it. A wide interval that
- * cannot close the gap does not make the reading any less sure.
+ * The other line furthest ahead of the reading at either end of the sampled interval, with every
+ * share moved by the half-width and held inside 0..1. Every EV is linear in the shares, and lines
+ * move at different rates, so any of them can overtake, not only the runner-up.
  */
-function sampledSwing(
+function overtakerOf(
+  ranked: readonly ActionCandidate[],
+  eligible: readonly ActionCandidate[],
   best: ActionCandidate,
-  rival: Rival,
   input: CoachInput,
   split: PotSplit,
   halfWidthPoints: number,
-): number {
-  const by = halfWidthPoints / 100;
-  const shifted: PotSplit = {
-    ...split,
-    share: (group) => (group.length === 0 ? 1 : split.share(group) + by),
-  };
-  return Math.abs(gapAt(best, rival, input, shifted) - gapAt(best, rival, input, split));
+): Overtaker | undefined {
+  let found: Overtaker | undefined;
+  for (const end of ['low', 'high'] as const) {
+    const by = (end === 'low' ? -halfWidthPoints : halfWidthPoints) / 100;
+    const shifted: PotSplit = {
+      ...split,
+      share: (group) => (group.length === 0 ? 1 : Math.min(1, Math.max(0, split.share(group) + by))),
+    };
+    const reading = valueUnder(best, false, input, shifted);
+    for (const row of ranked) {
+      if (row.action === best.action) continue;
+      const alwaysCalled = !eligible.includes(row);
+      const value = valueUnder(row, alwaysCalled, input, shifted);
+      if (value > reading && (found === undefined || value - reading > found.ahead)) {
+        found = { row, alwaysCalled, value, end, ahead: value - reading };
+      }
+    }
+  }
+  return found;
 }
 
 /** A row as the reading names it: "calling", "raising to 88". */
@@ -1314,9 +1346,10 @@ function buildSuggestion(
   const marginInBigBlinds = margin / input.bigBlind;
   const intervalPoints = equitySummary.confidenceHalfWidthPoints ?? 0;
 
-  const swing = rival === undefined ? 0 : sampledSwing(best, rival, input, split, intervalPoints);
+  assertRepriced(candidates, input, split);
+  const overtaker = overtakerOf(ranked, eligible, best, input, split, intervalPoints);
   const smallMargin = marginInBigBlinds < 0.25;
-  let confidence = confidenceFor(marginInBigBlinds, swing >= margin ? intervalPoints : 0);
+  let confidence = confidenceFor(marginInBigBlinds, overtaker === undefined ? 0 : intervalPoints);
   // The call row is the least a call is worth if nobody raises, so a fold it loses only there is open.
   const openBehind = best.action === 'fold' && behind !== null && behind.ev > 0 ? behind : null;
   if (openBehind !== null) confidence = 'low';
@@ -1387,8 +1420,8 @@ function buildSuggestion(
       ? `${actionWord} has the highest expected value ${against}, by ${margin.toFixed(1)} units over ${rivalName}, but the price leaves out what ${yetToMatch(openBehind)} would put in — treat this as close rather than as a recommendation.`
       : confidence === 'low' && smallMargin
         ? `${actionWord} comes out ahead of ${rivalName} by only ${margin.toFixed(1)} units, under a quarter of a big blind — treat this as close to indifferent rather than as a recommendation.`
-        : confidence === 'low'
-          ? `${actionWord} has the highest expected value ${against}, by ${margin.toFixed(1)} units over ${rivalName}, but the equity is sampled to ±${intervalPoints.toFixed(2)} points, which could move that gap by up to ${swing.toFixed(1)} units — treat this as close rather than as a recommendation.`
+        : confidence === 'low' && overtaker !== undefined
+          ? `${actionWord} has the highest expected value ${against}, by ${margin.toFixed(1)} units over ${rivalName}, but the equity is sampled to ±${intervalPoints.toFixed(2)} points, and at the ${overtaker.end} end ${nameOfRival(overtaker)} comes out ahead by ${overtaker.ahead.toFixed(1)} units — treat this as close rather than as a recommendation.`
           : `${actionWord} has the highest expected value ${against}, by ${margin.toFixed(1)} units over ${rivalName}.`) +
     (setAside === '' ? readsCloserNote(ranked, best, rival) : setAside);
 
