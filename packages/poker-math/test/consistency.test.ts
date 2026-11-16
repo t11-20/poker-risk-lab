@@ -106,8 +106,7 @@ describe('what counts as consistent', () => {
     ]);
     const verdict = judgeConsistency({ report, action: 'call', bigBlind: 2 });
     assert.equal(verdict.consistent, true);
-    // 26 chips behind the best row and still consistent. The gap is reported, not judged.
-    assert.equal(verdict.bestEv, 30);
+    // 26 chips behind the raise row and still consistent.
     assert.equal(verdict.chosen?.ev, 4);
     // A raise worth 30 beats folding at a 2-chip margin.
     assert.deepEqual([...verdict.supportedActions], ['call', 'raise']);
@@ -151,8 +150,6 @@ describe('what counts as consistent', () => {
     const verdict = judgeConsistency({ report, action: 'fold', bigBlind: 20 });
     assert.equal(verdict.consistent, true);
     assert.equal(verdict.shortfallUnits, 0);
-    // `bestEv` is the best row in the table, `measuredBestEv` the one the verdict used.
-    assert.equal(verdict.bestEv, 126);
     assert.equal(verdict.measuredBestEv, 0);
     assert.deepEqual([...verdict.supportedActions], ['fold', 'raise']);
     // The call is still wrong, at -60 against a 20-chip margin.
@@ -275,14 +272,12 @@ describe('what counts as consistent', () => {
     assert.equal(judgeConsistency({ report, action: 'fold', bigBlind: 10 }).pricing, 'priced');
   });
 
-  it('floors the best EV at zero, because folding is always available at zero', () => {
+  it('floors the measured best EV at zero, because folding is always available at zero', () => {
     const report = reportWith([
       candidate({ action: 'call', ev: -3 }),
       candidate({ action: 'raise', ev: -9 }),
     ]);
-    const verdict = judgeConsistency({ report, action: 'call', bigBlind: 10 });
-    assert.equal(verdict.bestEv, 0);
-    assert.equal(verdict.best?.ev, -3, 'the row itself is still reported unchanged');
+    assert.equal(judgeConsistency({ report, action: 'call', bigBlind: 10 }).measuredBestEv, 0);
   });
 
   it('reports a single defensible action as such, which is what the nullable column records', () => {

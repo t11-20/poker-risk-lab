@@ -35,6 +35,7 @@ import {
 } from '@prl/ui';
 import type { ReactElement } from 'react';
 import { decisionPotNote } from '../lib/decision-pot-note.ts';
+import { equityMethodNote, pricedRowName } from '../lib/post-hand-labels.ts';
 import { ActionDistribution, mostLikelyAction } from './ActionDistribution.tsx';
 import { LegendSigil } from './LegendSigil.tsx';
 import { ProfileDisclaimers } from './ProfileDisclaimers.tsx';
@@ -63,14 +64,6 @@ const ACTION_PAST: Readonly<Record<string, string>> = {
   raise: 'raised to',
 };
 
-const ACTION_PRESENT: Readonly<Record<string, string>> = {
-  fold: 'Fold',
-  check: 'Check',
-  call: 'Call',
-  bet: 'Bet',
-  raise: 'Raise to',
-};
-
 function capitalise(text: string): string {
   return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
 }
@@ -78,11 +71,6 @@ function capitalise(text: string): string {
 function describeTaken(action: { readonly action: string; readonly to: number | null }): string {
   const verb = ACTION_PAST[action.action] ?? action.action;
   return action.to === null ? verb : `${verb} ${formatUnits(action.to)}`;
-}
-
-function describePriced(action: string, to: number | null): string {
-  const verb = ACTION_PRESENT[action] ?? capitalise(action);
-  return to === null ? verb : `${verb} ${formatChips(to)}`;
 }
 
 function boardCards(board: readonly string[]): readonly number[] {
@@ -94,22 +82,11 @@ function boardCards(board: readonly string[]): readonly number[] {
   return cards;
 }
 
-/** `null` for an exact enumeration. A sampled figure with no half-width gets a sentence in `methodNote`. */
+/** `null` for an exact enumeration. A sampled figure with no half-width gets a sentence in `equityMethodNote`. */
 function intervalFor(report: CoachReport): string | null {
   const half = report.equity.confidenceHalfWidthPoints;
   if (half === null) return null;
   return `± ${formatPoints(Math.abs(half))}`;
-}
-
-function methodNote(report: CoachReport): string {
-  const { method, trials } = report.equity;
-  if (method === 'exact-enumeration') {
-    return `Exact enumeration over ${formatChips(trials)} run-outs. No sampling error.`;
-  }
-  if (report.equity.confidenceHalfWidthPoints === null) {
-    return `Sampled over ${formatChips(trials)} run-outs, and the interval was not reported — treat this figure as approximate.`;
-  }
-  return `Monte Carlo over ${formatChips(trials)} sampled run-outs, so the figure carries the interval beside it.`;
 }
 
 function DecisionMaths({ report }: { readonly report: CoachReport }): ReactElement {
@@ -137,7 +114,7 @@ function DecisionMaths({ report }: { readonly report: CoachReport }): ReactEleme
           }
           format="percent"
           label="Equity"
-          note={methodNote(report)}
+          note={equityMethodNote(report)}
           {...(interval === null ? {} : { interval })}
           value={report.equity.heroEquity}
         />
@@ -192,7 +169,7 @@ function DecisionMaths({ report }: { readonly report: CoachReport }): ReactEleme
               <tbody>
                 {report.candidates.map((candidate) => (
                   <tr key={`${candidate.action}:${candidate.to ?? 'none'}`}>
-                    <th scope="row">{describePriced(candidate.action, candidate.to ?? null)}</th>
+                    <th scope="row">{pricedRowName(candidate)}</th>
                     <td className="prl-legend-table__figure">{formatUnits(candidate.cost)}</td>
                     <td className="prl-legend-table__figure">{formatSignedUnits(candidate.ev)}</td>
                     <td>{candidate.derivation}</td>

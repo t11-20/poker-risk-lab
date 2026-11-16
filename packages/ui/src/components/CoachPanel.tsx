@@ -101,13 +101,13 @@ const METHOD_CHIP: Readonly<
 };
 
 /**
- * Spelled out, because `pluralise` would produce "80,000 trial sampleds". An exact count is opponent
+ * Spelled out, because `pluralise` would produce "80,000 run sampleds". An exact count is opponent
  * hands times boards to come, so a complete river has a count and no boards.
  */
 const TRIAL_NOUN: Readonly<Record<EquitySummary['method'], { readonly one: string; readonly many: string }>> =
   {
     'exact-enumeration': { one: 'showdown enumerated', many: 'showdowns enumerated' },
-    'monte-carlo': { one: 'trial sampled', many: 'trials sampled' },
+    'monte-carlo': { one: 'run sampled', many: 'runs sampled' },
   };
 
 interface RefusedFigureProps {
@@ -402,20 +402,30 @@ function PriceSection({
   );
 }
 
-function StackSection({ stack }: { readonly stack: StackContext }): ReactElement {
+/** A depth band is untrue once no bet can follow: every opponent is all in, or hero's own call is. */
+const NO_MORE_BETTING: Readonly<Record<'opponents' | 'hero', string>> = {
+  opponents:
+    'Every opponent is all in, so no bet can follow this one: there is no depth to measure and no pot-sized bet to price.',
+  hero: 'Calling puts in the rest of your stack, so you can bet no more after it: there is no depth to measure and no pot-sized bet to price.',
+};
+
+function StackSection({
+  stack,
+  callIsAllIn,
+}: {
+  readonly stack: StackContext;
+  readonly callIsAllIn: boolean;
+}): ReactElement {
   const spr = describeSpr(stack.spr);
+  const noMoreBetting = stack.effectiveStack === 0 ? 'opponents' : callIsAllIn ? 'hero' : null;
   // Rule 5. `formatProbability` returns `null`, so the refusal branch cannot be forgotten.
   const potSizedBetPrice = formatProbability(stack.potOddsOfferedByPotSizedBet);
   return (
     <section className="prl-coach__section">
       <h3 className="prl-coach__section-heading">Stack context</h3>
       <Metric label="Effective stack" value={stack.effectiveStack} format="units" size="md" />
-      {stack.effectiveStack === 0 ? (
-        <StatTile
-          label="Stack-to-pot ratio"
-          value="No more betting"
-          note="Every opponent is all in, so no bet can follow this one: there is no depth to measure and no pot-sized bet to price."
-        />
+      {noMoreBetting !== null ? (
+        <StatTile label="Stack-to-pot ratio" value="No more betting" note={NO_MORE_BETTING[noMoreBetting]} />
       ) : (
         <>
           <StatTile label="Stack-to-pot ratio" value={spr.label} note={spr.meaning} />
@@ -722,7 +732,10 @@ export function CoachPanel(props: CoachPanelProps): ReactElement {
           street={report.street}
           opponents={equity.perPlayer.length - 1}
         />
-        <StackSection stack={report.stackContext} />
+        <StackSection
+          stack={report.stackContext}
+          callIsAllIn={report.candidates.some((row) => row.action === 'call' && row.allIn === true)}
+        />
       </div>
 
       <div className="prl-coach__disclosures">
@@ -776,8 +789,10 @@ export function CoachPanel(props: CoachPanelProps): ReactElement {
           <RuleOfThumbLine rule={rule} />
           <p className="prl-coach__prose">
             {`Equity came from ${
-              isSampled ? 'Monte Carlo sampling' : 'exact enumeration'
-            } over ${pluralise(equity.trials, 'run')}. ${
+              isSampled
+                ? `Monte Carlo sampling of ${pluralise(equity.trials, 'run')}`
+                : `exact enumeration of ${pluralise(equity.trials, 'showdown')}`
+            }. ${
               intervalText === null
                 ? 'No interval was reported with it.'
                 : `The interval beside the figure, ${intervalText}, is the sampling error at the level stated below.`

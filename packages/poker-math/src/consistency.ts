@@ -59,15 +59,6 @@ export function pricedSizesFor(report: CoachReport, action: string): readonly nu
   return sizes;
 }
 
-/** The highest-EV row in the table, or null when the report published no candidates. */
-export function bestCandidate(report: CoachReport): ActionCandidate | null {
-  let best: ActionCandidate | null = null;
-  for (const candidate of report.candidates) {
-    if (best === null || candidate.ev > best.ev) best = candidate;
-  }
-  return best;
-}
-
 /**
  * True for a bet or raise priced with fold equity above zero. It reads the `foldEquityAssumed`
  * marker that `buildCoachReport` sets on rows whose EV contains the `f x pot` term.
@@ -159,10 +150,6 @@ export interface ConsistencyVerdict {
   readonly chosen: ActionCandidate | null;
   /** Sizes priced for the submitted action name. Empty when none were priced or it moves no chips. */
   readonly pricedSizes: readonly number[];
-  /** The highest-EV row in the table, or null when the report published none. */
-  readonly best: ActionCandidate | null;
-  /** The best EV available, floored at zero because folding is always available at 0. */
-  readonly bestEv: number;
   /**
    * The best EV among rows that do not rest on an assumed fold frequency, floored at zero. This is
    * the figure a fold was judged against. See `bestMeasuredCandidate`.
@@ -205,8 +192,6 @@ export function judgeConsistency(input: ConsistencyInput): ConsistencyVerdict {
   const marginUnits = consistencyMarginUnits(bigBlind);
 
   const chosen = candidateFor(report, action, to);
-  const best = bestCandidate(report);
-  const bestEv = Math.max(0, best === null ? 0 : best.ev);
   const measured = bestMeasuredCandidate(report);
   const measuredBestEv = Math.max(0, measured === null ? 0 : measured.ev);
   const supportedActions = defensibleActions(report, marginUnits);
@@ -224,8 +209,6 @@ export function judgeConsistency(input: ConsistencyInput): ConsistencyVerdict {
       pricing,
       chosen: null,
       pricedSizes,
-      best,
-      bestEv,
       measuredBestEv,
       marginUnits,
       supportedActions,
@@ -237,15 +220,12 @@ export function judgeConsistency(input: ConsistencyInput): ConsistencyVerdict {
 
   const consistent = isDefensible(report, chosen, marginUnits);
   // A fold is behind by the best measured row. Anything else is behind by how far below zero it sits.
-  // `measuredBestEv`, not `bestEv`, so the shortfall shown is the one the verdict used.
   const shortfall = chosen.action === 'fold' ? measuredBestEv : -chosen.ev;
   return {
     consistent,
     pricing: 'priced',
     chosen,
     pricedSizes,
-    best,
-    bestEv,
     measuredBestEv,
     marginUnits,
     supportedActions,

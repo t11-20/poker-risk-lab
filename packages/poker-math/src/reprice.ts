@@ -15,6 +15,7 @@ export interface RepricedRow {
   readonly action: ActionCandidate['action'];
   readonly to: number | null;
   readonly cost: number;
+  readonly allIn?: true;
   /** The figure the analysis published, at its own assumed fold frequency. */
   readonly analysedEv: number;
   /** The figure at the frequency asked for. Equal to `analysedEv` for a row that reads none. */
@@ -30,9 +31,8 @@ export type FoldEquityRepricing =
       /** The frequency these figures are priced at, as a fraction in 0..1. */
       readonly foldEquity: number;
       readonly rows: readonly RepricedRow[];
-      /** The highest-EV row at `foldEquity`, and at the analysed frequency. */
+      /** The highest-EV row at `foldEquity`. */
       readonly best: RepricedRow;
-      readonly analysedBest: RepricedRow;
     }
   | { readonly kind: 'unavailable'; readonly reason: string };
 
@@ -125,6 +125,7 @@ export function repriceAtFoldEquity(report: CoachReport, foldEquity: number): Fo
       action: candidate.action,
       to: candidate.to ?? null,
       cost: candidate.cost,
+      ...(candidate.allIn === true ? { allIn: true as const } : {}),
       analysedEv: candidate.ev,
       ev: readsFoldEquity ? (rowEvAt(candidate, report, f) as number) : candidate.ev,
       readsFoldEquity,
@@ -136,6 +137,5 @@ export function repriceAtFoldEquity(report: CoachReport, foldEquity: number): Fo
     foldEquity: f,
     rows,
     best: bestOf(rows, (row) => row.ev),
-    analysedBest: bestOf(rows, (row) => row.analysedEv),
   };
 }

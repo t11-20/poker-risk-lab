@@ -315,7 +315,7 @@ function compute(calculation: LiveCalculation): Calculation {
       // A sampled figure always carries its interval (the rule in `equity.ts`).
       const method =
         result.method === 'exact-enumeration'
-          ? `Exact: every one of ${result.trials.toLocaleString('en-US')} run-outs was played out.`
+          ? `Exact: every showdown was played out (${result.trials.toLocaleString('en-US')} ${result.trials === 1 ? 'showdown' : 'showdowns'}).`
           : `Sampled: ${result.trials.toLocaleString('en-US')} random run-outs from a fixed seed` +
             (result.confidence === null
               ? '.'

@@ -106,7 +106,10 @@ const ROW_WORD: Readonly<Record<ScenarioAction, string>> = {
   raise: 'Raise',
 };
 
-/** A call's `to` is the street total, so a call is named by its cost, as its Call button is. */
+/**
+ * A call's `to` is the street total, so a call is named by its cost, as its Call button is. All in is
+ * worded as the button words it.
+ */
 export function rowName(
   row: {
     readonly action: ScenarioAction;
@@ -117,7 +120,8 @@ export function rowName(
   units: (value: number) => string,
 ): string {
   if (row.action === 'call') return `Call ${row.allIn === true ? 'all in, ' : ''}${units(row.cost)}`;
-  return row.to === null ? ROW_WORD[row.action] : `${ROW_WORD[row.action]} to ${units(row.to)}`;
+  if (row.to === null) return ROW_WORD[row.action];
+  return `${ROW_WORD[row.action]} to ${units(row.to)}${row.allIn === true ? ', all in' : ''}`;
 }
 
 /** Outside the component so `node:test` can run it. `units` is passed in because `@prl/ui` carries JSX. */

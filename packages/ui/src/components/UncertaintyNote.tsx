@@ -50,7 +50,7 @@ function intervalSentence(note: UncertaintyNoteData): string {
     );
   }
   if (note.method === 'exact-enumeration') {
-    return 'Every remaining board was enumerated, so there is no sampling error in this figure.';
+    return 'Every showdown was enumerated, so there is no sampling error in this figure.';
   }
   return 'This figure was sampled but no interval was reported with it, so treat it as approximate rather than precise.';
 }

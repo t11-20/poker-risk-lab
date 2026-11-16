@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { content } from '@prl/content';
 import type { CoachReport } from '@prl/contracts';
-import { buildCoachReport, repriceAtFoldEquity } from '@prl/poker-math';
+import { buildCoachReport, repriceAtFoldEquity, suggestedCandidate } from '@prl/poker-math';
 import { LAB_SCENARIO_ANALYSIS } from '../src/fixtures/scenarios.ts';
 import { type Formatters, repricingSummary, rowChangeText } from '../src/lib/fold-equity-lab.ts';
 import { coachInputFor } from './lab-coach-input.ts';
@@ -99,10 +99,16 @@ describe('the fold-frequency control', () => {
     assert.ok(call !== undefined && raise !== undefined);
     assert.match(rowChangeText(call, FORMAT), /does not depend on the fold frequency, so it does not move/u);
     assert.match(rowChangeText(raise, FORMAT), /as analysed, .* now \(-/u);
-    assert.match(repricingSummary(repriced, FORMAT), /^At 0%, the highest row is /u);
+    assert.match(
+      repricingSummary(repriced, suggestedCandidate(report), FORMAT),
+      /^At 0%, the highest row is /u,
+    );
     const analysed = repriceAtFoldEquity(report, 0.35);
     assert.ok(analysed.kind === 'available');
-    assert.match(repricingSummary(analysed, FORMAT), /^At the analysed 35%, the highest row is /u);
+    assert.match(
+      repricingSummary(analysed, suggestedCandidate(report), FORMAT),
+      /^At the analysed 35%, the Coach’s reading stands on Call /u,
+    );
   });
 
   it('is in the reveal, as a labelled native range whose value is announced', () => {

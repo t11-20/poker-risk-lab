@@ -702,6 +702,32 @@ test('an exact count names showdowns, which a complete river has without any boa
   assert.doesNotMatch(markup, /boards? enumerated/u);
 });
 
+test('the derivation and the uncertainty note count what the equity tile counts (REGRESSION)', async () => {
+  const text = (markup: string) => markup.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+  const sentenceOf = (markup: string, opening: string) => {
+    const start = text(markup).indexOf(opening);
+    assert.notEqual(start, -1, `"${opening}" is rendered`);
+    return text(markup).slice(start, text(markup).indexOf('.', start) + 1);
+  };
+  const river = text(
+    await render({
+      ...NINE_OUT_DRAW,
+      street: 'river',
+      outs: null,
+      equity: { ...NINE_OUT_DRAW.equity, trials: 417, ruleOfThumb: null },
+    }),
+  );
+  assert.equal(sentenceOf(river, 'Equity came from'), 'Equity came from exact enumeration of 417 showdowns.');
+  assert.match(river, /Every showdown was enumerated, so there is no sampling error in this figure\./u);
+  assert.doesNotMatch(river, /Every remaining board/u, 'a complete river has no board to come');
+  const sampled = await render(CHECKED_TO);
+  assert.equal(
+    sentenceOf(sampled, 'Equity came from'),
+    'Equity came from Monte Carlo sampling of 40,000 runs.',
+  );
+  assert.match(text(sampled), /40,000 runs sampled\./u, 'the tile names the same count');
+});
+
 test('with no more betting, the stack section shows no SPR band and no pot-sized-bet price', async () => {
   const stackText = (markup: string): string => {
     const start = markup.indexOf('>Stack context</h3>');
@@ -719,6 +745,27 @@ test('with no more betting, the stack section shows no SPR band and no pot-sized
   const open = stackText(await render(NINE_OUT_DRAW));
   assert.match(open, /Price a pot-sized bet would offer/u, 'control: a stack behind keeps both tiles');
   assert.doesNotMatch(open, /No more betting/u);
+});
+
+test('when the call puts in the rest of the stack, the stack section says no more betting (REGRESSION)', async () => {
+  const stackText = (markup: string): string => {
+    const start = markup.indexOf('>Stack context</h3>');
+    assert.notEqual(start, -1, 'the Stack context section is rendered');
+    return markup.slice(start, markup.indexOf('</section>', start)).replace(/<[^>]+>/g, ' ');
+  };
+  // Hero has 50 behind facing a bet of 50 from an opponent who covers it: SPR 0.5, opponent not all in.
+  const allInCall = stackText(
+    await render({
+      ...NINE_OUT_DRAW,
+      candidates: NINE_OUT_DRAW.candidates
+        .filter((row) => row.action !== 'raise')
+        .map((row) => (row.action === 'call' ? { ...row, allIn: true as const } : row)),
+      stackContext: { ...NINE_OUT_DRAW.stackContext, effectiveStack: 50, spr: 0.5 },
+    }),
+  );
+  assert.match(allInCall, /No more betting/u);
+  assert.match(allInCall, /Calling puts in the rest of your stack/u);
+  assert.doesNotMatch(allInCall, /committed|Price a pot-sized bet would offer|Every opponent is all in/u);
 });
 
 test('the chips past a short hero are a side pot only when a second opponent can contest them', async () => {
