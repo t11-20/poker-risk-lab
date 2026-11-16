@@ -71,8 +71,9 @@ test('worst hand: a fold by B still leaves the main pot to A, so a bet has no fo
   const prose = [report.suggestion.reason, ...report.assumptions].join(' ');
   assert.doesNotMatch(prose, /wins uncontested/, 'the main pot can never be won uncontested here');
   assert.doesNotMatch(prose, /fold more than/, 'no bet is set aside on the fold rate');
-  // Folding everyone who can gains nothing, so the ½-pot bet cannot break even at any rate.
-  assert.match(prose, /cannot break even at any fold frequency/);
+  // Everyone who can fold folding is worth exactly 0, so the ½-pot bet only gets back to even if they
+  // always do.
+  assert.match(prose, /would need to fold 100% of the time/);
   assert.match(prose, /all in and cannot fold/);
 });
 

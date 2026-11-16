@@ -613,7 +613,21 @@ export function combineMonteCarlo(shards: readonly EquityResult[]): EquityResult
     throw new EquityError('shards disagree on the number of players');
   }
 
+  const contestCount = first.contestShares?.length;
+  if (shards.some((shard) => shard.contestShares?.length !== contestCount)) {
+    throw new EquityError('shards disagree on the contests they report');
+  }
+
   const totalTrials = shards.reduce((sum, shard) => sum + shard.trials, 0);
+  const contestShares =
+    contestCount === undefined
+      ? undefined
+      : Array.from(
+          { length: contestCount },
+          (_unused, index) =>
+            shards.reduce((sum, shard) => sum + (shard.contestShares?.[index] ?? 0) * shard.trials, 0) /
+            totalTrials,
+        );
   const players: PlayerEquity[] = first.players.map((_unused, index) => {
     let win = 0;
     let tie = 0;
@@ -651,6 +665,7 @@ export function combineMonteCarlo(shards: readonly EquityResult[]): EquityResult
     matchups: first.matchups,
     confidence: { level: 0.95, halfWidthPoints: combinedHalfWidth * 100, samples: totalTrials },
     elapsedMs: shards.reduce((max, shard) => Math.max(max, shard.elapsedMs), 0),
+    ...(contestShares === undefined ? {} : { contestShares }),
     assumptions: [
       ...first.assumptions.filter((note) => !note.startsWith('Estimated by sampling')),
       `Estimated by sampling ${totalTrials.toLocaleString('en-US')} random run-outs across ${shards.length} independent shards.`,

@@ -407,7 +407,8 @@ export type FoldRateBreakEven =
 
 export function breakEvenFoldRate(whenFolded: number, whenCalled: number): FoldRateBreakEven {
   if (whenCalled >= 0 && whenFolded >= 0) return { kind: 'always' };
-  if (whenCalled < 0 && whenFolded <= 0) return { kind: 'never' };
+  // A fold worth exactly 0 breaks even at a fold rate of 1, so only a fold that still loses is never enough.
+  if (whenCalled < 0 && whenFolded < 0) return { kind: 'never' };
   const rate = foldRateReaching(0, whenFolded, whenCalled);
   return whenCalled < 0 ? { kind: 'at-least', rate } : { kind: 'at-most', rate };
 }
