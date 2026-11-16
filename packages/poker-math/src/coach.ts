@@ -506,6 +506,46 @@ function describePriceGap(heroEquity: number, breakEvenEquity: number): string {
 }
 
 /**
+ * The call if every opponent who still owes chips calls too, the world the equity already describes.
+ * The call row is the other half: every opponent dealt in, none of their chips. Null when nobody owes
+ * chips, when an all-in already prices the call pot by pot or a seat behind could only call all in for
+ * less, and when one range stands for several seats, as in the Lab.
+ */
+interface CallIfTheyCall {
+  readonly seats: number;
+  readonly pot: number;
+  readonly breakEvenEquity: number;
+  readonly ev: number;
+}
+
+function callIfTheyCall(input: CoachInput, heroEquity: number, split: PotSplit): CallIfTheyCall | null {
+  const call = Math.min(input.toCall, input.heroStack);
+  if (call === 0 || call < input.toCall || split.allIn.length > 0) return null;
+  if (input.opponents.length !== input.opponentStacks.length) return null;
+  const level = betLevelOf(input);
+  const owes = input.opponentStacks.map((opponent) => Math.max(0, level - opponent.committedThisStreet));
+  // A seat that can only call all in for less opens a side pot it cannot win, which one equity misprices.
+  if (input.opponentStacks.some((opponent, index) => opponent.behind < (owes[index] ?? 0))) return null;
+  const owed = owes.filter((amount) => amount > 0);
+  if (owed.length === 0) return null;
+  const pot = input.contestablePot + call + owed.reduce((sum, owes) => sum + owes, 0);
+  return { seats: owed.length, pot, breakEvenEquity: call / pot, ev: heroEquity * pot - call };
+}
+
+function stillToAct(behind: CallIfTheyCall): string {
+  return behind.seats === 1 ? 'the player still to act' : `the ${behind.seats} players still to act`;
+}
+
+function theyCallSentence(behind: CallIfTheyCall): string {
+  const who = behind.seats === 1 ? 'is 1 player' : `are ${behind.seats} players`;
+  return (
+    ` There ${who} still to act after you: the equity above assumes they all reach showdown, but this price ` +
+    `leaves out what they would put in. If they call too, the pot you play for is ${chips(behind.pot)} and a call needs ` +
+    `${percent(behind.breakEvenEquity)}. A raise behind you is not modelled, and it can cost the whole call.`
+  );
+}
+
+/**
  * `PotOddsSummary.pot` is the contestable pot, so the price and the pot it is into are the same pot.
  * `CoachReport.potTotal` carries the whole middle beside it.
  */
@@ -515,6 +555,7 @@ function buildPotOddsSummary(
   toCall: number,
   heroEquity: number,
   pricedPotByPot: boolean,
+  behind: CallIfTheyCall | null,
 ): PotOddsSummary {
   const odds = potOdds(contestablePot, toCall);
   // Equity against the whole table is not the share of a pot an all-in seat is not in.
@@ -532,7 +573,7 @@ function buildPotOddsSummary(
     explanation:
       toCall === 0
         ? 'Nothing to call, so there is no price to beat — checking keeps you in for free.'
-        : `${odds.explanation} ${gap}${sidePotNote(pot, contestablePot, toCall)}`,
+        : `${odds.explanation} ${gap}${behind === null ? '' : theyCallSentence(behind)}${sidePotNote(pot, contestablePot, toCall)}`,
   };
 }
 
@@ -1082,6 +1123,26 @@ function foldRateNote(row: ActionCandidate, reading: ActionCandidate, input: Coa
   );
 }
 
+/** What a call or fold reading leaves out about the seats still to act. */
+function seatsBehindNotes(
+  action: CoachAction,
+  toCall: number,
+  behind: CallIfTheyCall | null,
+  heroEquity: number,
+): string[] {
+  if (behind === null) return [];
+  if (action === 'call') {
+    return [
+      `A raise from ${stillToAct(behind)} is not modelled. A call that is raised and then folded loses the ${chips(toCall)} it put in.`,
+    ];
+  }
+  if (action !== 'fold' || behind.ev <= 0) return [];
+  return [
+    `If ${stillToAct(behind)} call too, a call needs only ${percent(behind.breakEvenEquity)}, which your ` +
+      `${percent(heroEquity)} clears. A raise behind you would cut the other way.`,
+  ];
+}
+
 /**
  * Picks the highest-EV candidate that is ahead without the assumed fold rate, then weakens the claim
  * when the margin is small against a big blind or the equity interval is wide. It may never conclude
@@ -1093,6 +1154,7 @@ function buildSuggestion(
   equitySummary: EquitySummary,
   outs: OutsResult | null,
   split: PotSplit,
+  behind: CallIfTheyCall | null,
 ): CoachSuggestion {
   const ranked = [...candidates].sort(byExpectedValue);
   const top = ranked[0];
@@ -1135,6 +1197,9 @@ function buildSuggestion(
   let confidence: CoachSuggestion['confidence'] = 'reasonable';
   if (marginInBigBlinds < 0.25 || intervalPoints > 2) confidence = 'low';
   else if (marginInBigBlinds < 1 || intervalPoints > 0.75) confidence = 'moderate';
+  // The call row is the least a call is worth if nobody raises, so a fold it loses only there is open.
+  const openBehind = best.action === 'fold' && behind !== null && behind.ev > 0 ? behind : null;
+  if (openBehind !== null) confidence = 'low';
 
   // Only sizes within the one-big-blind margin of the best, so the range holds defensible sizes. Sizes
   // with one cost put the same chips at risk, the rest coming back uncalled, so only the smallest counts.
@@ -1192,6 +1257,7 @@ function buildSuggestion(
       `The equity figure is sampled, ±${intervalPoints.toFixed(2)} points at 95% confidence. A close decision could sit either side of that.`,
     );
   }
+  whatWouldChangeIt.push(...seatsBehindNotes(best.action, input.toCall, behind, equitySummary.heroEquity));
   if (marginInBigBlinds < 1) {
     whatWouldChangeIt.push(
       `The gap to the next-best action is only ${margin.toFixed(1)} units, well under a big blind — this is close to indifferent.`,
@@ -1207,9 +1273,11 @@ function buildSuggestion(
   const against =
     setAside === '' ? 'against the stated range' : 'of the lines that do not rely on an assumed fold rate';
   const reason =
-    (confidence === 'low'
-      ? `${actionWord} comes out marginally ahead here, but only just — treat this as close to indifferent rather than as a recommendation.`
-      : `${actionWord} has the highest expected value ${against}, by ${margin.toFixed(1)} units over the next-best action.`) +
+    (openBehind !== null
+      ? `${actionWord} has the highest expected value ${against}, by ${margin.toFixed(1)} units, but the price leaves out what ${stillToAct(openBehind)} would put in — treat this as close rather than as a recommendation.`
+      : confidence === 'low'
+        ? `${actionWord} comes out marginally ahead here, but only just — treat this as close to indifferent rather than as a recommendation.`
+        : `${actionWord} has the highest expected value ${against}, by ${margin.toFixed(1)} units over the next-best action.`) +
     setAside;
 
   return {
@@ -1223,7 +1291,12 @@ function buildSuggestion(
   };
 }
 
-function buildUncertainty(result: EquityResult, input: CoachInput, outs: OutsResult | null): UncertaintyNote {
+function buildUncertainty(
+  result: EquityResult,
+  input: CoachInput,
+  outs: OutsResult | null,
+  behind: CallIfTheyCall | null,
+): UncertaintyNote {
   const limitations: string[] = [
     'This is raw equity: the hand is treated as running to the river with no further betting. Real hands have more streets and more decisions.',
     'Every hand in the opponent range is weighted equally. Real opponents do not play every hand in a range the same way.',
@@ -1235,7 +1308,9 @@ function buildUncertainty(result: EquityResult, input: CoachInput, outs: OutsRes
   }
   if (input.opponents.length > 1) {
     limitations.push(
-      'Against several opponents the analysis assumes all of them see the river, which overstates your risk when some would fold.',
+      behind === null
+        ? 'Against several opponents the analysis assumes all of them see the river, which overstates your risk when some would fold.'
+        : `Against several opponents the equity assumes all of them see the river, but the price leaves out what ${stillToAct(behind)} would put in. Together that is the least a call is worth if nobody raises; a raise behind you, which is not modelled, can cost the whole call.`,
     );
   }
   if (outs !== null) {
@@ -1420,6 +1495,7 @@ export function buildCoachReport(input: CoachInput): CoachReport {
 
   const equitySummary = buildEquitySummary(equityResult, outs, cardsToCome);
   const split = potSplitOf(input, equityResult, hero.equity);
+  const behind = callIfTheyCall(input, hero.equity, split);
   const cappedCall = Math.min(input.toCall, input.heroStack);
   const potOddsSummary = buildPotOddsSummary(
     input.pot,
@@ -1427,12 +1503,13 @@ export function buildCoachReport(input: CoachInput): CoachReport {
     input.toCall,
     hero.equity,
     input.toCall > 0 && layeredShowdown('call', split, input, cappedCall) !== null,
+    behind,
   );
   const stackContext = buildStackContext(input);
   const foldEquity = input.assumedFoldEquity ?? DEFAULT_ASSUMED_FOLD_EQUITY;
   const candidates = buildCandidates(input, hero.equity, foldEquity, split);
-  const suggestion = buildSuggestion(candidates, input, equitySummary, outs, split);
-  const uncertainty = buildUncertainty(equityResult, input, outs);
+  const suggestion = buildSuggestion(candidates, input, equitySummary, outs, split, behind);
+  const uncertainty = buildUncertainty(equityResult, input, outs, behind);
 
   const assumptions = [...equityResult.assumptions];
   if (candidates.some((candidate) => candidate.action === 'bet' || candidate.action === 'raise')) {
