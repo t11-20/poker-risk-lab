@@ -1054,8 +1054,11 @@ function buildCandidates(
     }
   }
 
-  assertAffordable(candidates, input);
-  return candidates;
+  // The engine's `allInAtMax` holds at `maxTo`, so a row says all in exactly where its button does.
+  const maxTo = maximumTo(input);
+  const flagged = candidates.map((row) => (row.to === maxTo ? { ...row, allIn: true as const } : row));
+  assertAffordable(flagged, input);
+  return flagged;
 }
 
 /**

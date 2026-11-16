@@ -25,8 +25,10 @@ function rows(overrides: Partial<BehindSpot>) {
     bigBlind: 10,
     ...overrides,
   };
-  const input = atBetLevel({ ...spot, contestablePot: deriveContestablePot(spot) });
-  return buildCoachReport(input).candidates.map((row) => `${row.action}@${row.to}${row.allIn ? ' all in' : ''}`);
+  const input = atBetLevel(spot);
+  return buildCoachReport({ ...input, contestablePot: deriveContestablePot(input) }).candidates.map(
+    (row) => `${row.action}@${row.to}${row.allIn ? ' all in' : ''}`,
+  );
 }
 
 test('a call of exactly the stack behind is all in', () => {

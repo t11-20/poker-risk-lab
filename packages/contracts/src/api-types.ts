@@ -233,6 +233,8 @@ export interface ActionCandidate {
   readonly ev: number;
   /** How the EV was arrived at, in words. */
   readonly derivation: string;
+  /** Present when `to` is hero's whole stack, where the table's button says "all in". */
+  readonly allIn?: true;
   /** Present for aggressive actions. */
   readonly foldEquityAssumed?: number;
   readonly potShareIfCalled?: number;

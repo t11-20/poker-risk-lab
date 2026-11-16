@@ -551,6 +551,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
           'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 195 + 0.65 x [ 0.3843 x (195 + 65 + 2 x 870) - 935 ] = 68.25 + (-108.1) = -39.85 chips. Risks 935 to win 195. Raising by 870 puts your whole remaining stack in. A caller needs 43.5% equity to break even on the extra 870, and has to continue with 17.3% of their range for a raise of this size not to print automatically.',
         foldEquityAssumed: 0.35,
         potShareIfCalled: 0.3843434343434343,
+        allIn: true,
       },
     ],
     suggestion: {
@@ -725,6 +726,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
           'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 300 + 0.65 x [ 0.0909 x (300 + 100 + 2 x 700) - 800 ] = 105 + (-413.64) = -308.64 chips. Risks 800 to win 300. Raising by 700 puts your whole remaining stack in. A caller needs 38.9% equity to break even on the extra 700, and has to continue with 27.3% of their range for a raise of this size not to print automatically.',
         foldEquityAssumed: 0.35,
         potShareIfCalled: 0.09090909090909091,
+        allIn: true,
       },
     ],
     suggestion: {
@@ -871,6 +873,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
           'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 90 + 0.65 x [ 0.3851 x (90 + 60 + 2 x 940) - 1000 ] = 31.5 + (-141.88) = -110.38 chips. Risks 1000 to win 90. Raising by 940 puts your whole remaining stack in. A caller needs 46.3% equity to break even on the extra 940, and has to continue with 8.3% of their range for a raise of this size not to print automatically.',
         foldEquityAssumed: 0.35,
         potShareIfCalled: 0.3850875,
+        allIn: true,
       },
     ],
     suggestion: {
@@ -1078,6 +1081,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
           'EV(bet) = f x pot + (1 - f) x [ e x (pot + 2b) - b ] = 0.35 x 280 + 0.65 x [ 0.6451 x (280 + 2 x 520) - 520 ] = 98 + 215.48 = 313.48 chips. Risks 520 to win 280. A caller needs 39.4% equity to break even, and as a pure bluff it would have to work 65% of the time. For bluffs of this size not to print automatically, the player facing it has to continue with 35% of their range. Betting this is your whole stack, so it is also an all-in.',
         foldEquityAssumed: 0.35,
         potShareIfCalled: 0.6450812472551603,
+        allIn: true,
       },
     ],
     suggestion: {
@@ -1191,6 +1195,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
           'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 900 + 0.65 x [ 0.2432 x (900 + 540 + 2 x 360) - 900 ] = 315 + (-243.49) = 71.51 chips. Risks 900 to win 900. Raising by 360 is the smallest raise the rules allow here: 25% of the 1440 that would be in the middle once you call. A caller needs 16.7% equity to break even on the extra 360, and has to continue with 50% of their range for a raise of this size not to print automatically. That size is also your whole remaining stack.',
         foldEquityAssumed: 0.35,
         potShareIfCalled: 0.24324324324324326,
+        allIn: true,
       },
     ],
     suggestion: {
@@ -1346,6 +1351,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
           'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 150 + 0.65 x [ 0.4458 x (150 + 40 + 2 x 960) - 1000 ] = 52.5 + (-38.59) = 13.91 chips. Risks 1000 to win 150. Raising by 960 puts your whole remaining stack in. A caller needs 45.5% equity to break even on the extra 960, and has to continue with 13% of their range for a raise of this size not to print automatically.',
         foldEquityAssumed: 0.35,
         potShareIfCalled: 0.4458,
+        allIn: true,
       },
     ],
     suggestion: {

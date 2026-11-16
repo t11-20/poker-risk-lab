@@ -340,7 +340,8 @@
           "ev": -405.95138333333335,
           "derivation": "EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 50 + 0.65 x [ 0.1668 x (50 + 0 + 2 x 990) - 990 ] = 17.5 + (-423.45) = -405.95 chips. Risks 990 to win 50. Raising by 990 puts your whole remaining stack in. A caller needs 48.8% equity to break even on the extra 990, and has to continue with 4.8% of their range for a raise of this size not to print automatically.",
           "foldEquityAssumed": 0.35,
-          "potShareIfCalled": 0.16676666666666667
+          "potShareIfCalled": 0.16676666666666667,
+          "allIn": true
         }
       ],
       "suggestion": {
@@ -733,7 +734,8 @@
           "ev": 118.00379925379936,
           "derivation": "EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 35 + 0.65 x [ 0.5763 x (35 + 15 + 2 x 975) - 990 ] = 12.25 + 105.75 = 118 chips. Risks 990 to win 35. Raising by 975 puts your whole remaining stack in. A caller needs 48.8% equity to break even on the extra 975, and has to continue with 3.4% of their range for a raise of this size not to print automatically.",
           "foldEquityAssumed": 0.35,
-          "potShareIfCalled": 0.5763490763490764
+          "potShareIfCalled": 0.5763490763490764,
+          "allIn": true
         }
       ],
       "suggestion": {
@@ -1030,7 +1032,8 @@
           "cost": 50,
           "ev": -6.817916666666676,
           "derivation": "EV(call) = equity x (pot + toCall) - toCall = 0.2334 x (135 + 50) - 50 = -6.82 chips.",
-          "potShareIfCalled": 0.23341666666666663
+          "potShareIfCalled": 0.23341666666666663,
+          "allIn": true
         }
       ],
       "suggestion": {
@@ -1426,7 +1429,8 @@
           "ev": -550.0862068965517,
           "derivation": "EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 60 + 0.65 x [ 0.0557 x (60 + 40 + 2 x 950) - 990 ] = 21 + (-571.09) = -550.09 chips. Risks 990 to win 60. Raising by 950 puts your whole remaining stack in. A caller needs 47.5% equity to break even on the extra 950, and has to continue with 5.7% of their range for a raise of this size not to print automatically.",
           "foldEquityAssumed": 0.35,
-          "potShareIfCalled": 0.05570291777188329
+          "potShareIfCalled": 0.05570291777188329,
+          "allIn": true
         }
       ],
       "suggestion": {
@@ -1808,7 +1812,8 @@
           "ev": -174.4984136970621,
           "derivation": "EV(bet) = f x pot + (1 - f) x [ e x (pot + 2b) - b ] = 0.35 x 30 + 0.65 x [ 0.3509 x (30 + 2 x 990) - 990 ] = 10.5 + (-185) = -174.5 chips. Risks 990 to win 30. A caller needs 49.3% equity to break even, and as a pure bluff it would have to work 97.1% of the time. For bluffs of this size not to print automatically, the player facing it has to continue with 2.9% of their range. Betting this is your whole stack, so it is also an all-in.",
           "foldEquityAssumed": 0.35,
-          "potShareIfCalled": 0.3509388337565541
+          "potShareIfCalled": 0.3509388337565541,
+          "allIn": true
         }
       ],
       "suggestion": {
