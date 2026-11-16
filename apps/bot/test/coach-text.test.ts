@@ -337,3 +337,45 @@ describe('the Coach names a seat', () => {
     assert.equal(names(READER_SEAT), undefined);
   });
 });
+
+/** Seat 0 deals and shoves its whole stack, every seat before the reader calls, and the reader is last. */
+function shovedInto(stacks: readonly number[]): string {
+  let { state } = startHand({
+    handId: `short-${stacks.join('-')}`,
+    roomId: 'short',
+    handNumber: 1,
+    config: { ...TABLE_CONFIG, maxSeats: stacks.length },
+    buttonSeat: 0,
+    seats: stacks.map((stack, seat) => ({ seat, playerId: `p${seat}`, stack })),
+    random: createDeterministicRandomForTests(9),
+  });
+  const reader = stacks.length - 1;
+  state = applyAction(state, 0, { type: 'raise', to: stacks[0] ?? 0 }).state;
+  while (state.toAct !== reader) state = applyAction(state, state.toAct ?? -1, { type: 'call' }).state;
+  return coachLine({
+    kind: 'report',
+    at: 'x',
+    report: coachReportFor(redactFor(state, { viewerSeat: reader })),
+  });
+}
+
+describe('the part of the pot the reader cannot reach', () => {
+  test('heads-up is the part of the bet they cannot match, which goes back uncalled', () => {
+    const line = shovedInto([310, 40]);
+    assert.match(
+      line,
+      /into 50 units \(the other 270 units are the part of the bet you cannot match, which goes back to the bettor uncalled\)/,
+    );
+    assert.doesNotMatch(line, /side pot/);
+  });
+
+  test('is a side pot when a second opponent can still contest it', () => {
+    assert.match(shovedInto([300, 1_000, 40]), /the other 520 units are a side pot you cannot win/);
+  });
+
+  test('is uncalled when the second opponent is all in below the reader', () => {
+    const line = shovedInto([300, 20, 40]);
+    assert.match(line, /the other 260 units are the part of the bet you cannot match/);
+    assert.doesNotMatch(line, /side pot/);
+  });
+});

@@ -720,3 +720,21 @@ test('with no more betting, the stack section shows no SPR band and no pot-sized
   assert.match(open, /Price a pot-sized bet would offer/u, 'control: a stack behind keeps both tiles');
   assert.doesNotMatch(open, /No more betting/u);
 });
+
+test('the chips past a short hero are a side pot only when a second opponent can contest them', async () => {
+  // Hero calls 30 all in into a 310 shove: 50 to win, 270 out of reach.
+  const short = (outOfReach: CoachReport['outOfReach']): CoachReport => ({
+    ...NINE_OUT_DRAW,
+    potTotal: 320,
+    toCall: 30,
+    potOdds: { ...NINE_OUT_DRAW.potOdds, pot: 50, toCall: 30, breakEvenEquity: 0.375, oddsRatio: 5 / 3 },
+    ...(outOfReach === undefined ? {} : { outOfReach }),
+  });
+  const headsUp = await render(short('uncalled'));
+  assert.match(
+    headsUp,
+    /270 units is the part of the bet you cannot match, which goes back to the bettor uncalled\./u,
+  );
+  assert.doesNotMatch(headsUp, /side pot/u);
+  assert.match(await render(short('side-pot')), /270 units is a side pot you are not in\./u);
+});

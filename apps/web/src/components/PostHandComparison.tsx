@@ -34,6 +34,7 @@ import {
   withKeys,
 } from '@prl/ui';
 import type { ReactElement } from 'react';
+import { decisionPotNote } from '../lib/decision-pot-note.ts';
 import { ActionDistribution, mostLikelyAction } from './ActionDistribution.tsx';
 import { LegendSigil } from './LegendSigil.tsx';
 import { ProfileDisclaimers } from './ProfileDisclaimers.tsx';
@@ -150,17 +151,10 @@ function DecisionMaths({ report }: { readonly report: CoachReport }): ReactEleme
           }
           value={report.potOdds.breakEvenEquity}
         />
-        {/* `potOdds.pot` is what hero could win, which is less than `potTotal` when hero is all-in short. */}
         <Metric
           format="units"
           label="Pot the decision was for"
-          note={
-            report.potTotal > report.potOdds.pot
-              ? `${formatUnits(report.toCall)} to call, with ${formatUnits(report.potTotal - report.potOdds.pot)} of the ${formatUnits(report.potTotal)} in the middle a side pot this seat was not in.`
-              : priced
-                ? `${formatUnits(report.toCall)} to call.`
-                : 'Nothing to call.'
-          }
+          note={decisionPotNote(report)}
           value={report.potOdds.pot}
         />
       </div>

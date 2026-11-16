@@ -157,7 +157,7 @@ test('a hero all-in for less is priced against the pot they can win, not the who
 
   const share = shareOf(spot);
   assert.equal(share.contestable, 50, 'hero can win an 80-chip main pot, 30 of which is the call itself');
-  assert.equal(share.uncontestable, 270, 'the side pot only villain is in');
+  assert.equal(share.uncontestable, 270, 'the part of the shove only villain reaches');
 
   const report = buildCoachReport(inputFor(spot, share.contestable));
 
@@ -171,13 +171,17 @@ test('a hero all-in for less is priced against the pot they can win, not the who
   const equity = report.equity.heroEquity;
   assert.ok(Math.abs(evOf(report, 'call') - (equity * 50 - (1 - equity) * 30)) < 1e-9);
 
-  // The prose names the side pot, so a reader can reconcile 50 with the 320 in front of them.
+  // Heads-up the 270 is the part of the shove hero cannot match, which the quiz calls an uncalled bet.
   const prose = [report.potOdds.explanation, ...report.teachingNotes].join(' ');
   assert.match(prose, /1\.67 to 1/);
   assert.match(prose, /37\.5%/);
-  assert.match(prose, /side pot/);
-  assert.match(prose, /270/);
+  assert.match(
+    prose,
+    /270 of it is the part of the bet you cannot match, which goes back to the bettor uncalled/,
+  );
+  assert.doesNotMatch(prose, /side pot/, 'one opponent cannot contest a pot against nobody');
   assert.match(prose, /320/);
+  assert.equal(report.outOfReach, 'uncalled');
 
   // The same report built against the whole middle, for comparison.
   const asItWas = buildCoachReport(inputFor(spot, spot.view.potTotal));
@@ -245,7 +249,8 @@ test('multiway, every opponent beyond reach is subtracted, not just the largest'
   assert.equal(report.potOdds.pot, 90);
   assert.equal(report.potOdds.oddsRatio, 3);
   assert.equal(report.potOdds.breakEvenEquity, 0.25);
-  assert.match([report.potOdds.explanation, ...report.teachingNotes].join(' '), /320/);
+  assert.match([report.potOdds.explanation, ...report.teachingNotes].join(' '), /320 of it is a side pot/);
+  assert.equal(report.outOfReach, 'side-pot');
 
   const asItWas = buildCoachReport(inputFor(spot, spot.view.potTotal));
   assert.equal(asItWas.potOdds.breakEvenEquity, 30 / 440, 'the defect: 6.8%, understating 25% by 3.7x');
@@ -253,6 +258,37 @@ test('multiway, every opponent beyond reach is subtracted, not just the largest'
   // The single-subtraction reading, `pot - (toCall - heroStack)`, leaves 110, not 90.
   const singleSubtraction = spot.view.potTotal - (300 - spot.own.committedThisStreet - spot.own.stack);
   assert.notEqual(singleSubtraction, share.contestable);
+});
+
+test('three-way, the excess is a side pot only while two opponents can still contest it', () => {
+  // 5/10. Seat 0 shoves 300 into hero's 40 in the big blind. Seat 1 either calls with 700 behind, so
+  // 520 is a side pot between them, or is all in for 20, below hero, so 260 goes back to seat 0.
+  const prose = (stacks: readonly number[]): string => {
+    const spot = spotFrom(
+      stacks,
+      [
+        { seat: 0, action: 'raise', to: 300 },
+        { seat: 1, action: 'call' },
+      ],
+      'hero',
+      9,
+    );
+    const report = buildCoachReport(inputFor(spot, shareOf(spot).contestable));
+    return [report.outOfReach, report.potOdds.explanation, ...report.teachingNotes].join(' ');
+  };
+  const covered = prose([300, 1_000, 40]);
+  assert.match(covered, /^side-pot /);
+  assert.match(covered, /520 of it is a side pot you are not in/);
+  assert.doesNotMatch(covered, /uncalled/);
+
+  // Three seats in the hand, one of them able to reach past hero, so a count of opponents is wrong.
+  const short = prose([300, 20, 40]);
+  assert.match(short, /^uncalled /);
+  assert.match(
+    short,
+    /260 of it is the part of the bet you cannot match, which goes back to the bettor uncalled/,
+  );
+  assert.doesNotMatch(short, /side pot/);
 });
 
 test('a hero who covers the bet sees no change at all, and none can be introduced', () => {
@@ -268,6 +304,7 @@ test('a hero who covers the bet sees no change at all, and none can be introduce
 
   const report = buildCoachReport(inputFor(spot, share.contestable));
   assert.equal(report.potOdds.pot, report.potTotal, 'the two pots are the same pot here');
+  assert.equal('outOfReach' in report, false, 'nothing is out of reach, so nothing says what it is');
   // 90 / (110 + 90) = 0.45, and 110 / 90 = 1.222...
   assert.equal(report.potOdds.breakEvenEquity, 0.45);
   assert.equal(report.potOdds.oddsRatio, 110 / 90);

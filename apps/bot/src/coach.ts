@@ -93,9 +93,14 @@ function priceText(report: CoachReport): string {
   if (report.toCall === 0) return 'checking is free, so there is no price to beat';
   const { potOdds } = report;
   const price = `${probabilityText(potOdds.breakEvenEquity)} needed to call ${units(potOdds.toCall)} into ${units(potOdds.pot)}`;
-  // The price is against the pot the reader can win. Name the side pot so the two totals reconcile.
-  const sidePot = report.potTotal - potOdds.pot;
-  return sidePot > 0 ? `${price} (the other ${units(sidePot)} are a side pot you cannot win)` : price;
+  // The price is against the pot the reader can win. Name the rest so the two totals reconcile.
+  const outOfReach = report.potTotal - potOdds.pot;
+  if (outOfReach <= 0) return price;
+  const what =
+    report.outOfReach === 'uncalled'
+      ? 'the part of the bet you cannot match, which goes back to the bettor uncalled'
+      : 'a side pot you cannot win';
+  return `${price} (the other ${units(outOfReach)} are ${what})`;
 }
 
 const RANGE_WORDS = `an assumed top-${LIVE_COACH_POLICY.range.percent}% range for each opponent`;
