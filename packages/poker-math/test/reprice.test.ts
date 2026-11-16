@@ -73,14 +73,15 @@ describe('repriceAtFoldEquity', () => {
     );
   });
 
-  it('names the best row at the new frequency and at the analysed one', () => {
+  it('names the best row at the frequency asked for', () => {
     const report = buildCoachReport(spot());
+    const analysed = repriceAtFoldEquity(report, Number.NaN);
     const repriced = repriceAtFoldEquity(report, 0);
-    assert.ok(repriced.kind === 'available');
+    assert.ok(analysed.kind === 'available' && repriced.kind === 'available');
     // At 35% the floor raise is best (+41.44); with no folds at all every raise loses more than
     // folding's 0 and the call's -8.41, so the best row is the fold.
-    assert.equal(repriced.analysedBest.action, 'raise');
-    assert.equal(repriced.analysedBest.to, 200);
+    assert.equal(analysed.best.action, 'raise');
+    assert.equal(analysed.best.to, 200);
     assert.equal(repriced.best.action, 'fold');
   });
 

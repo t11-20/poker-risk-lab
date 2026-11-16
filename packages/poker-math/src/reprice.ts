@@ -31,9 +31,8 @@ export type FoldEquityRepricing =
       /** The frequency these figures are priced at, as a fraction in 0..1. */
       readonly foldEquity: number;
       readonly rows: readonly RepricedRow[];
-      /** The highest-EV row at `foldEquity`, and at the analysed frequency. */
+      /** The highest-EV row at `foldEquity`. */
       readonly best: RepricedRow;
-      readonly analysedBest: RepricedRow;
     }
   | { readonly kind: 'unavailable'; readonly reason: string };
 
@@ -138,6 +137,5 @@ export function repriceAtFoldEquity(report: CoachReport, foldEquity: number): Fo
     foldEquity: f,
     rows,
     best: bestOf(rows, (row) => row.ev),
-    analysedBest: bestOf(rows, (row) => row.analysedEv),
   };
 }

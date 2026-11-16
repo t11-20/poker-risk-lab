@@ -8,7 +8,7 @@
  */
 
 import type { CoachReport } from '@prl/contracts';
-import { repriceAtFoldEquity } from '@prl/poker-math';
+import { repriceAtFoldEquity, suggestedCandidate } from '@prl/poker-math';
 import { Button, formatSignedUnits, formatUnits, Panel } from '@prl/ui';
 import { type ReactElement, useId, useRef, useState } from 'react';
 import { rowName } from '../lib/consistency.ts';
@@ -85,7 +85,7 @@ export function FoldEquityControl({ report }: { readonly report: CoachReport }):
       </div>
 
       <p className="prl-fold-input__summary" role="status" aria-live="polite">
-        {repricingSummary(repriced, FORMAT)}
+        {repricingSummary(repriced, suggestedCandidate(report), FORMAT)}
       </p>
 
       <ul className="prl-fold-input__rows">
