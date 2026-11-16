@@ -1,7 +1,6 @@
 /**
- * A live view shows a side pot only when one exists. `redactFor` used `buildPots`, which is correct
- * only at settlement and turned uncalled bets and unequal blinds into phantom side pots. 947 of 1,446
- * decision points (65%) in a live-table fuzz showed a multi-layer pot with nobody all in.
+ * A live view shows a side pot only when one exists. Layering every committed chip mid-street turned
+ * uncalled bets, unequal blinds and unmatched all-ins into phantom side pots.
  */
 
 import assert from 'node:assert/strict';
@@ -9,8 +8,8 @@ import { test } from 'node:test';
 import { legalActions } from '../src/betting.ts';
 import { applyAction } from '../src/machine.ts';
 import { redactFor } from '../src/redact.ts';
-import type { HandState } from '../src/types.ts';
-import { deal } from './helpers.ts';
+import type { HandState, Pot } from '../src/types.ts';
+import { bet, call, check, deal, fold, play, raise } from './helpers.ts';
 
 /** Calls when there is a price and checks when there is not, from the engine's own legal set. */
 function continueOnce(state: HandState): HandState {
@@ -105,4 +104,56 @@ test('a folded seat is shown no price to call (REGRESSION)', () => {
     const active = redactFor(live, { viewerSeat: live.toAct });
     assert.ok(active.amountToCall > 0, 'the seat to act must still be told what it costs');
   }
+});
+
+const layers = (pots: readonly Pot[]) => pots.map((pot) => [pot.amount, [...pot.eligibleSeats]]);
+const blinds = { smallBlind: 5, bigBlind: 10 };
+
+test('an all-in bet nobody has called yet is not a side pot (REGRESSION)', () => {
+  // The audit spot: 536 in the middle, a river shove of 764 into hero's 764.
+  const { state } = deal({ stacks: [1000, 1000, 1000], config: blinds });
+  const river = play(state, [
+    ...[raise(0, 64), call(1), call(2)],
+    ...[bet(1, 172), call(2), fold(0)],
+    ...[check(1), check(2)],
+    ...[check(1), bet(2, 764)],
+  ]);
+  assert.equal(river.toAct, 1);
+  const view = redactFor(river, { viewerSeat: 1 });
+  assert.equal(view.potTotal, 1300);
+  assert.deepEqual(layers(view.pots), [[1300, [1, 2]]]);
+});
+
+test('two equal all-ins facing an equal stack make no side pot (REGRESSION)', () => {
+  // 1,713 before the flop, two shoves of 479 and hero to act with 479.
+  const { state } = deal({ stacks: [1000, 1000, 1000, 1000], config: blinds });
+  const flop = play(state, [
+    ...[raise(3, 150), call(0), raise(1, 521), call(2), call(3), fold(0)],
+    ...[bet(1, 479), call(2)],
+  ]);
+  assert.equal(flop.toAct, 3);
+  const view = redactFor(flop, { viewerSeat: 3 });
+  assert.deepEqual(layers(view.pots), [[2671, [1, 2, 3]]]);
+});
+
+test('a short all-in becomes a side pot once the street it was matched on closes', () => {
+  const { state } = deal({ stacks: [1000, 1000, 300], config: blinds });
+  const preflop = play(state, [raise(0, 100), call(1), call(2)]);
+  const shortCalled = play(preflop, [bet(1, 400), call(2)]);
+  assert.equal(shortCalled.toAct, 0, 'the street is still open');
+  assert.deepEqual(layers(redactFor(shortCalled, { viewerSeat: 0 }).pots), [[900, [0, 1, 2]]]);
+
+  const turn = play(shortCalled, [call(0)]);
+  assert.equal(turn.street, 'turn');
+  assert.deepEqual(layers(redactFor(turn, { viewerSeat: 0 }).pots), [
+    [900, [0, 1, 2]],
+    [400, [0, 1]],
+  ]);
+
+  // A bet on a later street sits with the side pot its bettors contest, not in a layer of its own.
+  const turnBet = play(turn, [bet(1, 100)]);
+  assert.deepEqual(layers(redactFor(turnBet, { viewerSeat: 0 }).pots), [
+    [900, [0, 1, 2]],
+    [500, [0, 1]],
+  ]);
 });
