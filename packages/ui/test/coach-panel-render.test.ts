@@ -747,6 +747,27 @@ test('with no more betting, the stack section shows no SPR band and no pot-sized
   assert.doesNotMatch(open, /No more betting/u);
 });
 
+test('when the call puts in the rest of the stack, the stack section says no more betting (REGRESSION)', async () => {
+  const stackText = (markup: string): string => {
+    const start = markup.indexOf('>Stack context</h3>');
+    assert.notEqual(start, -1, 'the Stack context section is rendered');
+    return markup.slice(start, markup.indexOf('</section>', start)).replace(/<[^>]+>/g, ' ');
+  };
+  // Hero has 50 behind facing a bet of 50 from an opponent who covers it: SPR 0.5, opponent not all in.
+  const allInCall = stackText(
+    await render({
+      ...NINE_OUT_DRAW,
+      candidates: NINE_OUT_DRAW.candidates
+        .filter((row) => row.action !== 'raise')
+        .map((row) => (row.action === 'call' ? { ...row, allIn: true as const } : row)),
+      stackContext: { ...NINE_OUT_DRAW.stackContext, effectiveStack: 50, spr: 0.5 },
+    }),
+  );
+  assert.match(allInCall, /No more betting/u);
+  assert.match(allInCall, /Calling puts in the rest of your stack/u);
+  assert.doesNotMatch(allInCall, /committed|Price a pot-sized bet would offer|Every opponent is all in/u);
+});
+
 test('the chips past a short hero are a side pot only when a second opponent can contest them', async () => {
   // Hero calls 30 all in into a 310 shove: 50 to win, 270 out of reach.
   const short = (outOfReach: CoachReport['outOfReach']): CoachReport => ({
