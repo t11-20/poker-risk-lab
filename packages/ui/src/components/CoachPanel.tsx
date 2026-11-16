@@ -100,10 +100,13 @@ const METHOD_CHIP: Readonly<
   'monte-carlo': { label: 'monte carlo', glyph: '≈' },
 };
 
-/** Spelled out, because `pluralise` would produce "80,000 trial sampleds". */
+/**
+ * Spelled out, because `pluralise` would produce "80,000 trial sampleds". An exact count is opponent
+ * hands times boards to come, so a complete river has a count and no boards.
+ */
 const TRIAL_NOUN: Readonly<Record<EquitySummary['method'], { readonly one: string; readonly many: string }>> =
   {
-    'exact-enumeration': { one: 'board enumerated', many: 'boards enumerated' },
+    'exact-enumeration': { one: 'showdown enumerated', many: 'showdowns enumerated' },
     'monte-carlo': { one: 'trial sampled', many: 'trials sampled' },
   };
 
@@ -405,18 +408,28 @@ function StackSection({ stack }: { readonly stack: StackContext }): ReactElement
     <section className="prl-coach__section">
       <h3 className="prl-coach__section-heading">Stack context</h3>
       <Metric label="Effective stack" value={stack.effectiveStack} format="units" size="md" />
-      <StatTile label="Stack-to-pot ratio" value={spr.label} note={spr.meaning} />
-      {potSizedBetPrice === null ? (
-        <RefusedFigure
-          label="Price a pot-sized bet would offer"
-          what="the equity a pot-sized bet would demand"
+      {stack.effectiveStack === 0 ? (
+        <StatTile
+          label="Stack-to-pot ratio"
+          value="No more betting"
+          note="Every opponent is all in, so no bet can follow this one: there is no depth to measure and no pot-sized bet to price."
         />
       ) : (
-        <StatTile
-          label="Price a pot-sized bet would offer"
-          value={potSizedBetPrice}
-          note="The equity a caller would need if the next bet were the size of the pot."
-        />
+        <>
+          <StatTile label="Stack-to-pot ratio" value={spr.label} note={spr.meaning} />
+          {potSizedBetPrice === null ? (
+            <RefusedFigure
+              label="Price a pot-sized bet would offer"
+              what="the equity a pot-sized bet would demand"
+            />
+          ) : (
+            <StatTile
+              label="Price a pot-sized bet would offer"
+              value={potSizedBetPrice}
+              note="The equity a caller would need if the next bet were the size of the pot."
+            />
+          )}
+        </>
       )}
       <Disclose summary="What this depth means for the decision">
         <p className="prl-coach__prose">{stack.explanation}</p>

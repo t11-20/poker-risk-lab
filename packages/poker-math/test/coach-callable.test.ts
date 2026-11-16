@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parseCards } from '@prl/poker-engine';
 import { buildCoachReport, type CoachInput } from '../src/coach.ts';
-import { exactRange } from '../src/ranges.ts';
+import { exactRange, parseRange } from '../src/ranges.ts';
 import { repriceAtFoldEquity } from '../src/reprice.ts';
 import { atBetLevel, type BehindSpot } from './at-bet-level.ts';
 
@@ -101,6 +101,7 @@ test('the half-pot break-even line prices the raise the ½-pot button offers', (
   // Hero holds the draw, equity 7/44. Facing 10 into 26 the button is 10 + round(0.5 x 36) = raise to
   // 28, which risks 28 to win 26. Called it is worth S = (7/44) x (26 + 10 + 36) - 28 = -728/44, so
   // the break-even fold rate is -S / (26 - S) = 728 / 1872 = 38.9%. Half of 26 priced as a bet said 15%.
+  // The lesson's bet / (pot + bet), 28 / 54 = 52%, is the same line with no equity when called.
   const report = buildCoachReport(
     setVersusDraw({
       heroCards: parseCards('Ah Kh'),
@@ -115,7 +116,9 @@ test('the half-pot break-even line prices the raise the ½-pot button offers', (
   const line = report.assumptions.find((assumption) => assumption.includes('½-pot'));
   assert.equal(
     line,
-    'The ½-pot raise to 28 risks 28 to win 26. To break even it would need to win uncontested 39% of the time.',
+    'The ½-pot raise to 28 risks 28 to win 26. To break even it would need to win uncontested 39% of the ' +
+      'time, counting the 15.9% equity you have when called. With no equity when called it would need ' +
+      '28 / (26 + 28) = 52%.',
   );
 });
 
@@ -156,4 +159,28 @@ test('a hand with no outs at all is not told that none of its 0 outs is clean', 
   const said = JSON.stringify(report);
   assert.doesNotMatch(said, /none of your 0 cards/u);
   assert.match(said, /No rule-of-2-and-4 figure here: no card that can come puts you in front/u);
+});
+
+test('with no equity when called, the half-pot line is the bet / (pot + bet) figure and says so once', () => {
+  // K♣Q♥ loses to every AA, 99 and 55, so e = 0. The ½-pot bet of 42 into 84 breaks even at
+  // 42 / (84 + 42) = 33%, the lesson's figure, with no second figure beside it.
+  const report = buildCoachReport({
+    heroCards: parseCards('Kc Qh'),
+    board: parseCards('Ks 9d 5c 2h 2s'),
+    street: 'river',
+    opponents: [{ label: 'the checker', range: parseRange('AA,99,55', parseCards('Kc Qh Ks 9d 5c 2h 2s')) }],
+    pot: 84,
+    contestablePot: 84,
+    toCall: 0,
+    heroCommittedThisStreet: 0,
+    heroStack: 990,
+    opponentStacks: [{ behind: 990, committedThisStreet: 0 }],
+    bigBlind: 10,
+  });
+  assert.equal(report.equity.heroEquity, 0);
+  assert.equal(
+    report.assumptions.find((assumption) => assumption.includes('½-pot')),
+    'The ½-pot bet of 42 risks 42 to win 84. To break even it would need to win uncontested 33% of the ' +
+      'time: with no equity when called, that is 42 / (84 + 42).',
+  );
 });

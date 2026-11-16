@@ -347,11 +347,11 @@
       "suggestion": {
         "action": "check",
         "confidence": "moderate",
-        "reason": "Check has the highest expected value of the lines that do not rely on an assumed fold rate, by 6.7 units over the next-best action. Raising to 20 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats checking only if they fold more than 13.8% of the time.",
+        "reason": "Check has the highest expected value of the lines that do not rely on an assumed fold rate, by 6.7 units over raising to 20 (counted as always called). Raising to 20 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats checking only if they fold more than 13.8% of the time.",
         "whatWouldChangeIt": [
           "Nothing about the opponent range can make folding better than this: checking costs nothing and keeps the hand, so it is never behind a fold. What the range changes is whether betting would beat checking.",
           "The equity figure is sampled, ±1.62 points at 95% confidence. A close decision could sit either side of that.",
-          "The gap to the next-best action is only 6.7 units, well under a big blind — this is close to indifferent."
+          "The gap to raising to 20 (counted as always called) is only 6.7 units, well under a big blind — this is close to indifferent."
         ]
       },
       "stackContext": {
@@ -371,7 +371,7 @@
         "Estimated by sampling 2,000 random run-outs, not by exhaustive enumeration.",
         "No community cards are known yet, so five more cards are still to come.",
         "Bet and raise figures assume the line wins uncontested 35% of the time. That is an assumption, not something measured: the Scenario Lab lets you change it and watch these figures move.",
-        "The ½-pot raise to 35 risks 25 to win 50. To break even it would need to win uncontested 14% of the time.",
+        "The ½-pot raise to 35 risks 25 to win 50. To break even it would need to win uncontested 14% of the time, counting the 16.7% equity you have when called. With no equity when called it would need 25 / (50 + 25) = 33%.",
         "Expected values are measured against folding, which is treated as zero. Chips already in the pot are spent either way."
       ],
       "uncertainty": {
@@ -745,9 +745,9 @@
           "max": 990
         },
         "confidence": "reasonable",
-        "reason": "Raise has the highest expected value against the stated range, by 104.2 units over the next-best action.",
+        "reason": "Raise has the highest expected value against the stated range, by 104.2 units over calling.",
         "whatWouldChangeIt": [
-          "This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.",
+          "This assumes the line wins uncontested 35% of the time. Here a fold is worth less to you than a call, so an opponent who folds more often makes it worse.",
           "Being raised is not modelled here, so treat the figure as optimistic.",
           "37 of the 39 cards that keep you in front leave a way to lose — they are not outs, because you are not drawing, but they are the cards a river can still take the pot back with."
         ]
@@ -770,7 +770,7 @@
       ],
       "uncertainty": {
         "method": "exact-enumeration",
-        "summary": "Computed exactly by enumerating every remaining board (439,560 run-outs). There is no sampling error.",
+        "summary": "Computed exactly over every hand the opponent range allows and every board still to come (439,560 showdowns). There is no sampling error.",
         "confidenceInterval": null,
         "limitations": [
           "This is raw equity: the hand is treated as running to the river with no further betting. Real hands have more streets and more decisions.",
@@ -1039,12 +1039,12 @@
       "suggestion": {
         "action": "fold",
         "confidence": "moderate",
-        "reason": "Fold has the highest expected value against the stated range, by 6.8 units over the next-best action.",
+        "reason": "Fold has the highest expected value against the stated range, by 6.8 units over calling.",
         "whatWouldChangeIt": [
           "A wider opponent range would raise your equity and can flip a fold into a call.",
           "A narrower, stronger range does the opposite.",
           "The equity figure is sampled, ±1.83 points at 95% confidence. A close decision could sit either side of that.",
-          "The gap to the next-best action is only 6.8 units, well under a big blind — this is close to indifferent."
+          "The gap to calling is only 6.8 units, well under a big blind — this is close to indifferent."
         ]
       },
       "stackContext": {
@@ -1436,7 +1436,7 @@
       "suggestion": {
         "action": "fold",
         "confidence": "reasonable",
-        "reason": "Fold has the highest expected value against the stated range, by 34.4 units over the next-best action.",
+        "reason": "Fold has the highest expected value against the stated range, by 34.4 units over calling. Raising to 80 reads closer on the table only because it assumes they fold 35% of the time.",
         "whatWouldChangeIt": [
           "A wider opponent range would raise your equity and can flip a fold into a call.",
           "A narrower, stronger range does the opposite."
@@ -1455,12 +1455,12 @@
         "Every hand in a range is weighted equally. Real opponents do not play every hand in a range the same way, so treat this as the range assumption, not a prediction.",
         "Computed by enumerating every remaining board — there is no sampling error.",
         "Bet and raise figures assume the line wins uncontested 35% of the time. That is an assumption, not something measured: the Scenario Lab lets you change it and watch these figures move.",
-        "The ½-pot raise to 90 risks 90 to win 60. To break even it would need to win uncontested 57% of the time.",
+        "The ½-pot raise to 90 risks 90 to win 60. To break even it would need to win uncontested 57% of the time, counting the 5.6% equity you have when called. With no equity when called it would need 90 / (60 + 90) = 60%.",
         "Expected values are measured against folding, which is treated as zero. Chips already in the pot are spent either way."
       ],
       "uncertainty": {
         "method": "exact-enumeration",
-        "summary": "Computed exactly by enumerating every remaining board (377 run-outs). There is no sampling error.",
+        "summary": "Computed exactly over every hand the opponent range allows (377 showdowns). There is no sampling error.",
         "confidenceInterval": null,
         "limitations": [
           "This is raw equity: the hand is treated as running to the river with no further betting. Real hands have more streets and more decisions.",
@@ -1819,10 +1819,10 @@
       "suggestion": {
         "action": "check",
         "confidence": "moderate",
-        "reason": "Check has the highest expected value of the lines that do not rely on an assumed fold rate, by 3.0 units over the next-best action. Betting 10 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats checking only if they fold more than 13.3% of the time.",
+        "reason": "Check has the highest expected value of the lines that do not rely on an assumed fold rate, by 3.0 units over betting 10 (counted as always called). Betting 10 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats checking only if they fold more than 13.3% of the time.",
         "whatWouldChangeIt": [
           "Nothing about the opponent range can make folding better than this: checking costs nothing and keeps the hand, so it is never behind a fold. What the range changes is whether betting would beat checking.",
-          "The gap to the next-best action is only 3.0 units, well under a big blind — this is close to indifferent."
+          "The gap to betting 10 (counted as always called) is only 3.0 units, well under a big blind — this is close to indifferent."
         ]
       },
       "stackContext": {
@@ -1844,7 +1844,7 @@
       ],
       "uncertainty": {
         "method": "exact-enumeration",
-        "summary": "Computed exactly by enumerating every remaining board (1,935,948 run-outs). There is no sampling error.",
+        "summary": "Computed exactly over every combination of hands the opponent ranges allow and every board still to come (1,935,948 showdowns). There is no sampling error.",
         "confidenceInterval": null,
         "limitations": [
           "This is raw equity: the hand is treated as running to the river with no further betting. Real hands have more streets and more decisions.",

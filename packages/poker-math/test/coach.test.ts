@@ -1189,6 +1189,6 @@ test('confidence measures the gap to the next-best ACTION, not to a neighbouring
 
   assert.equal(report.suggestion.action, 'raise');
   assert.equal(report.suggestion.confidence, 'reasonable');
-  assert.match(report.suggestion.reason, /by 111\.8 units over the next-best action/u);
+  assert.match(report.suggestion.reason, /by 111\.8 units over calling\./u);
   assert.deepEqual(report.suggestion.sizeRange, { min: 410, max: 410 }, 'the capped tie is one size');
 });

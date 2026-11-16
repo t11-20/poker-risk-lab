@@ -54,19 +54,19 @@ test('a fold that only the missing chips of the seat behind decide is low confid
   assert.equal(report.potOdds.breakEvenEquity, 90 / 240);
   assert.equal(report.suggestion.action, 'fold');
   assert.equal(report.suggestion.confidence, 'low');
-  assert.match(report.potOdds.explanation, /There is 1 player still to act after you/);
+  assert.match(report.potOdds.explanation, /There is 1 player after you yet to match the bet/);
   assert.match(
     report.potOdds.explanation,
     /If they call too, the pot you play for is 330 and a call needs 27\.3%/,
   );
-  assert.match(report.suggestion.reason, /leaves out what the player still to act would put in/);
+  assert.match(report.suggestion.reason, /leaves out what the player yet to match the bet would put in/);
   assert.ok(
     report.suggestion.whatWouldChangeIt.some((line) => /27\.3%, which your 33\.3% clears/.test(line)),
     report.suggestion.whatWouldChangeIt.join('\n'),
   );
   assert.ok(
     report.uncertainty.limitations.some((line) =>
-      /the price leaves out what the player still to act would put in/.test(line),
+      /the price leaves out what the player yet to match the bet would put in/.test(line),
     ),
     report.uncertainty.limitations.join('\n'),
   );
@@ -83,7 +83,7 @@ test('a call with a seat still to act names the raise it does not model, and kee
   assert.equal(report.suggestion.confidence, 'reasonable');
   assert.ok(
     report.suggestion.whatWouldChangeIt.some((line) =>
-      /A raise from the player still to act is not modelled\. A call that is raised and then folded loses the 90/.test(
+      /A raise from anyone still to act is not modelled\. A call that is raised and then folded loses the 90/.test(
         line,
       ),
     ),
@@ -103,7 +103,7 @@ test('control: the same figures with B already in for the bet keep the reading a
   });
   assert.ok(Math.abs(callEv(report) - 20) < 1e-9);
   assert.equal(report.suggestion.action, 'call');
-  assert.doesNotMatch(report.potOdds.explanation, /still to act/);
+  assert.doesNotMatch(report.potOdds.explanation, /yet to match the bet/);
   assert.ok(report.uncertainty.limitations.some((line) => /all of them see the river/.test(line)));
 });
 
@@ -115,7 +115,7 @@ test('control: a fold that stays a fold when the seat behind calls keeps its con
   assert.equal(report.suggestion.confidence, 'reasonable');
   assert.match(
     report.potOdds.explanation,
-    /There is 1 player still to act after you/,
+    /There is 1 player after you yet to match the bet/,
     'the price still names the gap',
   );
   assert.ok(!report.suggestion.whatWouldChangeIt.some((line) => /clears/.test(line)));
@@ -124,11 +124,11 @@ test('control: a fold that stays a fold when the seat behind calls keeps its con
 test('control: a Lab spot with one range for several seats names no seat behind', () => {
   // The Lab sends one continuing range and every seat's stack, so seats cannot be matched to ranges.
   const report = facingOverbet({ opponents: [B] });
-  assert.doesNotMatch(report.potOdds.explanation, /still to act/);
+  assert.doesNotMatch(report.potOdds.explanation, /yet to match the bet/);
   assert.notEqual(report.suggestion.confidence, 'low');
 });
 
-test('live table: first to act five-handed, the price names the three seats still to act', () => {
+test('live table: first to act five-handed, the price names the three seats yet to match the bet', () => {
   const { state } = startHand({
     handId: 'h',
     roomId: 'r',
@@ -144,8 +144,10 @@ test('live table: first to act five-handed, the price names the three seats stil
   if (reading.kind !== 'spot') return;
   const report = buildCoachReport(coachInputFor(reading.spot));
   // 15 in, 10 to call. Two seats owe 10 and the small blind 5: 15 + 10 + 25 = 50, so 10 / 50 = 20%.
+  // Four seats act after this one, but the big blind with the option owes nothing.
   assert.equal(report.potOdds.breakEvenEquity, 0.4);
-  assert.match(report.potOdds.explanation, /There are 3 players still to act after you/);
+  assert.match(report.potOdds.explanation, /There are 3 players after you yet to match the bet/);
+  assert.doesNotMatch(report.potOdds.explanation, /3 players still to act/);
   assert.match(report.potOdds.explanation, /the pot you play for is 50 and a call needs 20%/);
 });
 

@@ -562,11 +562,11 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       },
       confidence: 'moderate',
       reason:
-        'Call has the highest expected value of the lines that do not rely on an assumed fold rate, by 15.0 units over the next-best action. Raising to 130 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats calling only if they fold more than 8.6% of the time.',
+        'Call has the highest expected value of the lines that do not rely on an assumed fold rate, by 15.0 units over raising to 130 (counted as always called). Raising to 130 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats calling only if they fold more than 8.6% of the time.',
       whatWouldChangeIt: [
         'A wider opponent range would raise your equity and can flip a fold into a call.',
         'A narrower, stronger range does the opposite.',
-        'The gap to the next-best action is only 15.0 units, well under a big blind — this is close to indifferent.',
+        'The gap to raising to 130 (counted as always called) is only 15.0 units, well under a big blind — this is close to indifferent.',
       ],
     },
     stackContext: {
@@ -588,7 +588,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
     uncertainty: {
       method: 'exact-enumeration',
       summary:
-        'Computed exactly by enumerating every remaining board (990 run-outs). There is no sampling error.',
+        'Computed exactly over every hand the opponent range allows and every board still to come (990 showdowns). There is no sampling error.',
       confidenceInterval: null,
       limitations: [
         'This is raw equity: the hand is treated as running to the river with no further betting. Real hands have more streets and more decisions.',
@@ -733,7 +733,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       action: 'fold',
       confidence: 'reasonable',
       reason:
-        'Fold has the highest expected value of the lines that do not rely on an assumed fold rate, by 63.6 units over the next-best action. Raising to 200 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats folding only if they fold more than 32.7% of the time.',
+        'Fold has the highest expected value of the lines that do not rely on an assumed fold rate, by 63.6 units over calling. Raising to 200 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats folding only if they fold more than 32.7% of the time.',
       whatWouldChangeIt: [
         'A wider opponent range would raise your equity and can flip a fold into a call.',
         'A narrower, stronger range does the opposite.',
@@ -752,13 +752,13 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       'The opponent holds exactly AcJd.',
       'Computed by enumerating every remaining board — there is no sampling error.',
       'Bet and raise figures assume the line wins uncontested 35% of the time. That is an assumption, not something measured: the Scenario Lab lets you change it and watch these figures move.',
-      'The ½-pot raise to 300 risks 300 to win 300. To break even it would need to win uncontested 43% of the time.',
+      'The ½-pot raise to 300 risks 300 to win 300. To break even it would need to win uncontested 43% of the time, counting the 9.1% equity you have when called. With no equity when called it would need 300 / (300 + 300) = 50%.',
       'Expected values are measured against folding, which is treated as zero. Chips already in the pot are spent either way.',
     ],
     uncertainty: {
       method: 'exact-enumeration',
       summary:
-        'Computed exactly by enumerating every remaining board (44 run-outs). There is no sampling error.',
+        'Computed exactly over every hand the opponent range allows and every board still to come (44 showdowns). There is no sampling error.',
       confidenceInterval: null,
       limitations: [
         'This is raw equity: the hand is treated as running to the river with no further betting. Real hands have more streets and more decisions.',
@@ -880,12 +880,12 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       action: 'fold',
       confidence: 'low',
       reason:
-        'Fold comes out marginally ahead here, but only just — treat this as close to indifferent rather than as a recommendation. Raising to 120 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats folding only if they fold more than 15.1% of the time.',
+        'Fold comes out ahead of calling by only 2.2 units, under a quarter of a big blind — treat this as close to indifferent rather than as a recommendation. Raising to 120 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats folding only if they fold more than 15.1% of the time.',
       whatWouldChangeIt: [
         'A wider opponent range would raise your equity and can flip a fold into a call.',
         'A narrower, stronger range does the opposite.',
         'The equity figure is sampled, ±0.48 points at 95% confidence. A close decision could sit either side of that.',
-        'The gap to the next-best action is only 2.2 units, well under a big blind — this is close to indifferent.',
+        'The gap to calling is only 2.2 units, well under a big blind — this is close to indifferent.',
       ],
     },
     stackContext: {
@@ -903,7 +903,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       'Estimated by sampling 40,000 random run-outs, not by exhaustive enumeration.',
       'No community cards are known yet, so five more cards are still to come.',
       'Bet and raise figures assume the line wins uncontested 35% of the time. That is an assumption, not something measured: the Scenario Lab lets you change it and watch these figures move.',
-      'The ½-pot raise to 135 risks 135 to win 90. To break even it would need to win uncontested 18% of the time.',
+      'The ½-pot raise to 135 risks 135 to win 90. To break even it would need to win uncontested 18% of the time, counting the 38.5% equity you have when called. With no equity when called it would need 135 / (90 + 135) = 60%.',
       'Expected values are measured against folding, which is treated as zero. Chips already in the pot are spent either way.',
     ],
     uncertainty: {
@@ -1091,10 +1091,9 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
         max: 520,
       },
       confidence: 'reasonable',
-      reason:
-        'Bet has the highest expected value against the stated range, by 132.9 units over the next-best action.',
+      reason: 'Bet has the highest expected value against the stated range, by 132.9 units over checking.',
       whatWouldChangeIt: [
-        'This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.',
+        'This assumes the line wins uncontested 35% of the time. Here a fold is worth less to you than a call, so an opponent who folds more often makes it worse.',
         'Being raised is not modelled here, so treat the figure as optimistic.',
         '38 of the 40 cards that keep you in front leave a way to lose — they are not outs, because you are not drawing, but they are the cards a river can still take the pot back with.',
       ],
@@ -1119,7 +1118,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
     uncertainty: {
       method: 'exact-enumeration',
       summary:
-        'Computed exactly by enumerating every remaining board (45,540 run-outs). There is no sampling error.',
+        'Computed exactly over every hand the opponent range allows and every board still to come (45,540 showdowns). There is no sampling error.',
       confidenceInterval: null,
       limitations: [
         'This is raw equity: the hand is treated as running to the river with no further betting. Real hands have more streets and more decisions.',
@@ -1202,7 +1201,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       action: 'fold',
       confidence: 'reasonable',
       reason:
-        'Fold has the highest expected value of the lines that do not rely on an assumed fold rate, by 189.7 units over the next-best action. Raising to 900 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats folding only if they fold more than 29.4% of the time.',
+        'Fold has the highest expected value of the lines that do not rely on an assumed fold rate, by 189.7 units over calling. Raising to 900 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats folding only if they fold more than 29.4% of the time.',
       whatWouldChangeIt: [
         'A wider opponent range would raise your equity and can flip a fold into a call.',
         'A narrower, stronger range does the opposite.',
@@ -1222,13 +1221,13 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       'Every hand in a range is weighted equally. Real opponents do not play every hand in a range the same way, so treat this as the range assumption, not a prediction.',
       'Computed by enumerating every remaining board — there is no sampling error.',
       'Bet and raise figures assume the line wins uncontested 35% of the time. That is an assumption, not something measured: the Scenario Lab lets you change it and watch these figures move.',
-      'The ½-pot raise to 900 risks 900 to win 900. To break even it would need to win uncontested 29% of the time.',
+      'The ½-pot raise to 900 risks 900 to win 900. To break even it would need to win uncontested 29% of the time, counting the 24.3% equity you have when called. With no equity when called it would need 900 / (900 + 900) = 50%.',
       'Expected values are measured against folding, which is treated as zero. Chips already in the pot are spent either way.',
     ],
     uncertainty: {
       method: 'exact-enumeration',
       summary:
-        'Computed exactly by enumerating every remaining board (37 run-outs). There is no sampling error.',
+        'Computed exactly over every hand the opponent range allows (37 showdowns). There is no sampling error.',
       confidenceInterval: null,
       limitations: [
         'This is raw equity: the hand is treated as running to the river with no further betting. Real hands have more streets and more decisions.',
@@ -1362,12 +1361,12 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       },
       confidence: 'low',
       reason:
-        'Call comes out marginally ahead here, but only just — treat this as close to indifferent rather than as a recommendation. Raising to 80 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats calling only if they fold more than 4% of the time.',
+        'Call comes out ahead of raising to 80 (counted as always called) by only 4.3 units, under a quarter of a big blind — treat this as close to indifferent rather than as a recommendation. Raising to 80 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats calling only if they fold more than 4% of the time.',
       whatWouldChangeIt: [
         'A wider opponent range would raise your equity and can flip a fold into a call.',
         'A narrower, stronger range does the opposite.',
         'The equity figure is sampled, ±0.47 points at 95% confidence. A close decision could sit either side of that.',
-        'The gap to the next-best action is only 4.3 units, well under a big blind — this is close to indifferent.',
+        'The gap to raising to 80 (counted as always called) is only 4.3 units, well under a big blind — this is close to indifferent.',
       ],
     },
     stackContext: {

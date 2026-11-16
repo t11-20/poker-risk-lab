@@ -687,3 +687,36 @@ test('a spot with no outs count names its own reason, not another street’s', a
   }
   assert.match(outsSectionText(await render(withheld('flop', 2))), /2 opponents are still in this hand/);
 });
+
+test('an exact count names showdowns, which a complete river has without any board to come', async () => {
+  const note = (markup: string) => /(\d[\d,]*) (\w+) enumerated\./u.exec(markup)?.slice(1);
+  assert.deepEqual(note(await render(NINE_OUT_DRAW)), ['990', 'showdowns']);
+  const river: CoachReport = {
+    ...NINE_OUT_DRAW,
+    street: 'river',
+    outs: null,
+    equity: { ...NINE_OUT_DRAW.equity, trials: 417, ruleOfThumb: null },
+  };
+  const markup = await render(river);
+  assert.deepEqual(note(markup), ['417', 'showdowns']);
+  assert.doesNotMatch(markup, /boards? enumerated/u);
+});
+
+test('with no more betting, the stack section shows no SPR band and no pot-sized-bet price', async () => {
+  const stackText = (markup: string): string => {
+    const start = markup.indexOf('>Stack context</h3>');
+    assert.notEqual(start, -1, 'the Stack context section is rendered');
+    return markup.slice(start, markup.indexOf('</section>', start)).replace(/<[^>]+>/g, ' ');
+  };
+  const closed = stackText(
+    await render({
+      ...NINE_OUT_DRAW,
+      stackContext: { ...NINE_OUT_DRAW.stackContext, effectiveStack: 0, spr: 0 },
+    }),
+  );
+  assert.doesNotMatch(closed, /committed|Price a pot-sized bet would offer|33\.3%/u);
+  assert.match(closed, /No more betting/u);
+  const open = stackText(await render(NINE_OUT_DRAW));
+  assert.match(open, /Price a pot-sized bet would offer/u, 'control: a stack behind keeps both tiles');
+  assert.doesNotMatch(open, /No more betting/u);
+});

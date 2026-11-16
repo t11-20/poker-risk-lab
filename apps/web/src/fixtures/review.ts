@@ -251,7 +251,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           oddsRatio: 1.5,
           equitySurplus: -0.12311666666666654,
           explanation:
-            'You risk 20 to win the 30 already in the middle, a price of 1.50 to 1. Calling breaks even at 20 / (30 + 20) = 40.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 30 is what is in the middle before your own 20 goes in — counting the call inside the pot understates the equity a call needs. You do not clear that: 27.7% equity is 12.3 points short of it. There is 1 player still to act after you: the equity above assumes they all reach showdown, but this price leaves out what they would put in. If they call too, the pot you play for is 60 and a call needs 33.3%. A raise behind you is not modelled, and it can cost the whole call.',
+            'You risk 20 to win the 30 already in the middle, a price of 1.50 to 1. Calling breaks even at 20 / (30 + 20) = 40.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 30 is what is in the middle before your own 20 goes in — counting the call inside the pot understates the equity a call needs. You do not clear that: 27.7% equity is 12.3 points short of it. There is 1 player after you yet to match the bet: the equity above assumes they all reach showdown, but this price leaves out what they would put in. If they call too, the pot you play for is 60 and a call needs 33.3%. A raise behind you is not modelled, and it can cost the whole call.',
         },
         candidates: [
           {
@@ -326,12 +326,12 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           action: 'fold',
           confidence: 'moderate',
           reason:
-            'Fold has the highest expected value of the lines that do not rely on an assumed fold rate, by 6.2 units over the next-best action. Raising to 40 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats folding only if they fold more than 33.5% of the time.',
+            'Fold has the highest expected value of the lines that do not rely on an assumed fold rate, by 6.2 units over calling. Raising to 40 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats folding only if they fold more than 33.5% of the time.',
           whatWouldChangeIt: [
             'A wider opponent range would raise your equity and can flip a fold into a call.',
             'A narrower, stronger range does the opposite.',
             'The equity figure is sampled, ±0.87 points at 95% confidence. A close decision could sit either side of that.',
-            'The gap to the next-best action is only 6.2 units, well under a big blind — this is close to indifferent.',
+            'The gap to calling is only 6.2 units, well under a big blind — this is close to indifferent.',
           ],
         },
         stackContext: {
@@ -350,7 +350,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           'Estimated by sampling 10,000 random run-outs, not by exhaustive enumeration.',
           'No community cards are known yet, so five more cards are still to come.',
           'Bet and raise figures assume the line wins uncontested 35% of the time. That is an assumption, not something measured: the Scenario Lab lets you change it and watch these figures move.',
-          'The ½-pot raise to 45 risks 45 to win 30. To break even it would need to win uncontested 37% of the time.',
+          'The ½-pot raise to 45 risks 45 to win 30. To break even it would need to win uncontested 37% of the time, counting the 27.7% equity you have when called. With no equity when called it would need 45 / (30 + 45) = 60%.',
           'Expected values are measured against folding, which is treated as zero. Chips already in the pot are spent either way.',
           'Each of the 2 opponents still in the hand is modelled with the same fixed range, "22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, A9o+, KTo+, QJo". That is a stated assumption for the review, not a read of what they actually held: their cards are never disclosed unless they showed down, and this range does not narrow as the hand goes on.',
         ],
@@ -366,7 +366,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
             'This is raw equity: the hand is treated as running to the river with no further betting. Real hands have more streets and more decisions.',
             'Every hand in the opponent range is weighted equally. Real opponents do not play every hand in a range the same way.',
             'Equity was estimated from 10,000 sampled run-outs, not enumerated exhaustively.',
-            'Against several opponents the equity assumes all of them see the river, but the price leaves out what the player still to act would put in. Together that is the least a call is worth if nobody raises; a raise behind you, which is not modelled, can cost the whole call.',
+            'Against several opponents the equity assumes all of them see the river, but the price leaves out what the player yet to match the bet would put in. Together that is the least a call is worth if nobody raises; a raise behind you, which is not modelled, can cost the whole call.',
             'No implied odds, reverse implied odds or future-street play are modelled.',
           ],
         },
@@ -556,12 +556,12 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           },
           confidence: 'moderate',
           reason:
-            'Call has the highest expected value of the lines that do not rely on an assumed fold rate, by 8.7 units over the next-best action. Raising to 130 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats calling only if they fold more than 5.6% of the time.',
+            'Call has the highest expected value of the lines that do not rely on an assumed fold rate, by 8.7 units over raising to 130 (counted as always called). Raising to 130 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats calling only if they fold more than 5.6% of the time.',
           whatWouldChangeIt: [
             'A wider opponent range would raise your equity and can flip a fold into a call.',
             'A narrower, stronger range does the opposite.',
             '7 of your 15 outs are dirty — they improve you without making you safe, so counting all of them would overstate your chances.',
-            'The gap to the next-best action is only 8.7 units, well under a big blind — this is close to indifferent.',
+            'The gap to raising to 130 (counted as always called) is only 8.7 units, well under a big blind — this is close to indifferent.',
           ],
         },
         stackContext: {
@@ -585,7 +585,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
         uncertainty: {
           method: 'exact-enumeration',
           summary:
-            'Computed exactly by enumerating every remaining board (224,730 run-outs). There is no sampling error.',
+            'Computed exactly over every hand the opponent range allows and every board still to come (224,730 showdowns). There is no sampling error.',
           confidenceInterval: null,
           limitations: [
             'This is raw equity: the hand is treated as running to the river with no further betting. Real hands have more streets and more decisions.',
@@ -758,7 +758,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           },
           confidence: 'reasonable',
           reason:
-            'Call has the highest expected value of the lines that do not rely on an assumed fold rate, by 37.1 units over the next-best action. Raising to 260 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats calling only if they fold more than 11.6% of the time.',
+            'Call has the highest expected value of the lines that do not rely on an assumed fold rate, by 37.1 units over folding. Raising to 260 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats calling only if they fold more than 11.6% of the time.',
           whatWouldChangeIt: [
             'A wider opponent range would raise your equity and can flip a fold into a call.',
             'A narrower, stronger range does the opposite.',
@@ -778,14 +778,14 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           'Every hand in a range is weighted equally. Real opponents do not play every hand in a range the same way, so treat this as the range assumption, not a prediction.',
           'Computed by enumerating every remaining board — there is no sampling error.',
           'Bet and raise figures assume the line wins uncontested 35% of the time. That is an assumption, not something measured: the Scenario Lab lets you change it and watch these figures move.',
-          'The ½-pot raise to 390 risks 390 to win 390. To break even it would need to win uncontested 13% of the time.',
+          'The ½-pot raise to 390 risks 390 to win 390. To break even it would need to win uncontested 13% of the time, counting the 32.1% equity you have when called. With no equity when called it would need 390 / (390 + 390) = 50%.',
           'Expected values are measured against folding, which is treated as zero. Chips already in the pot are spent either way.',
           'The one opponent still in the hand is modelled with the same fixed range, "22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, A9o+, KTo+, QJo". That is a stated assumption for the review, not a read of what they actually held: their cards are never disclosed unless they showed down, and this range does not narrow as the hand goes on.',
         ],
         uncertainty: {
           method: 'exact-enumeration',
           summary:
-            'Computed exactly by enumerating every remaining board (9,812 run-outs). There is no sampling error.',
+            'Computed exactly over every hand the opponent range allows and every board still to come (9,812 showdowns). There is no sampling error.',
           confidenceInterval: null,
           limitations: [
             'This is raw equity: the hand is treated as running to the river with no further betting. Real hands have more streets and more decisions.',
@@ -926,9 +926,9 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           },
           confidence: 'reasonable',
           reason:
-            'Raise has the highest expected value against the stated range, by 348.6 units over the next-best action.',
+            'Raise has the highest expected value against the stated range, by 348.6 units over calling.',
           whatWouldChangeIt: [
-            'This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.',
+            'This assumes the line wins uncontested 35% of the time. Here a fold is worth less to you than a call, so an opponent who folds more often makes it worse.',
             'Being raised is not modelled here, so treat the figure as optimistic.',
           ],
         },
@@ -953,7 +953,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
         uncertainty: {
           method: 'exact-enumeration',
           summary:
-            'Computed exactly by enumerating every remaining board (205 run-outs). There is no sampling error.',
+            'Computed exactly over every hand the opponent range allows (205 showdowns). There is no sampling error.',
           confidenceInterval: null,
           limitations: [
             'This is raw equity: the hand is treated as running to the river with no further betting. Real hands have more streets and more decisions.',
@@ -1092,7 +1092,7 @@ export const REVIEW_HAND_FOLDED: HandReviewResponse = {
           oddsRatio: 1.5,
           equitySurplus: -0.12216666666666665,
           explanation:
-            'You risk 20 to win the 30 already in the middle, a price of 1.50 to 1. Calling breaks even at 20 / (30 + 20) = 40.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 30 is what is in the middle before your own 20 goes in — counting the call inside the pot understates the equity a call needs. You do not clear that: 27.8% equity is 12.2 points short of it. There is 1 player still to act after you: the equity above assumes they all reach showdown, but this price leaves out what they would put in. If they call too, the pot you play for is 60 and a call needs 33.3%. A raise behind you is not modelled, and it can cost the whole call.',
+            'You risk 20 to win the 30 already in the middle, a price of 1.50 to 1. Calling breaks even at 20 / (30 + 20) = 40.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 30 is what is in the middle before your own 20 goes in — counting the call inside the pot understates the equity a call needs. You do not clear that: 27.8% equity is 12.2 points short of it. There is 1 player after you yet to match the bet: the equity above assumes they all reach showdown, but this price leaves out what they would put in. If they call too, the pot you play for is 60 and a call needs 33.3%. A raise behind you is not modelled, and it can cost the whole call.',
         },
         candidates: [
           {
@@ -1167,12 +1167,12 @@ export const REVIEW_HAND_FOLDED: HandReviewResponse = {
           action: 'fold',
           confidence: 'moderate',
           reason:
-            'Fold has the highest expected value of the lines that do not rely on an assumed fold rate, by 6.1 units over the next-best action. Raising to 40 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats folding only if they fold more than 33.3% of the time.',
+            'Fold has the highest expected value of the lines that do not rely on an assumed fold rate, by 6.1 units over calling. Raising to 40 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats folding only if they fold more than 33.3% of the time.',
           whatWouldChangeIt: [
             'A wider opponent range would raise your equity and can flip a fold into a call.',
             'A narrower, stronger range does the opposite.',
             'The equity figure is sampled, ±0.87 points at 95% confidence. A close decision could sit either side of that.',
-            'The gap to the next-best action is only 6.1 units, well under a big blind — this is close to indifferent.',
+            'The gap to calling is only 6.1 units, well under a big blind — this is close to indifferent.',
           ],
         },
         stackContext: {
@@ -1191,7 +1191,7 @@ export const REVIEW_HAND_FOLDED: HandReviewResponse = {
           'Estimated by sampling 10,000 random run-outs, not by exhaustive enumeration.',
           'No community cards are known yet, so five more cards are still to come.',
           'Bet and raise figures assume the line wins uncontested 35% of the time. That is an assumption, not something measured: the Scenario Lab lets you change it and watch these figures move.',
-          'The ½-pot raise to 45 risks 45 to win 30. To break even it would need to win uncontested 36% of the time.',
+          'The ½-pot raise to 45 risks 45 to win 30. To break even it would need to win uncontested 36% of the time, counting the 27.8% equity you have when called. With no equity when called it would need 45 / (30 + 45) = 60%.',
           'Expected values are measured against folding, which is treated as zero. Chips already in the pot are spent either way.',
           'Each of the 2 opponents still in the hand is modelled with the same fixed range, "22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, A9o+, KTo+, QJo". That is a stated assumption for the review, not a read of what they actually held: their cards are never disclosed unless they showed down, and this range does not narrow as the hand goes on.',
         ],
@@ -1207,7 +1207,7 @@ export const REVIEW_HAND_FOLDED: HandReviewResponse = {
             'This is raw equity: the hand is treated as running to the river with no further betting. Real hands have more streets and more decisions.',
             'Every hand in the opponent range is weighted equally. Real opponents do not play every hand in a range the same way.',
             'Equity was estimated from 10,000 sampled run-outs, not enumerated exhaustively.',
-            'Against several opponents the equity assumes all of them see the river, but the price leaves out what the player still to act would put in. Together that is the least a call is worth if nobody raises; a raise behind you, which is not modelled, can cost the whole call.',
+            'Against several opponents the equity assumes all of them see the river, but the price leaves out what the player yet to match the bet would put in. Together that is the least a call is worth if nobody raises; a raise behind you, which is not modelled, can cost the whole call.',
             'No implied odds, reverse implied odds or future-street play are modelled.',
           ],
         },
