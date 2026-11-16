@@ -501,7 +501,10 @@ function CandidateTable({ candidates }: { readonly candidates: readonly ActionCa
               <tr key={key}>
                 <th className="prl-candidates__action" scope="row">
                   {ACTION_WORD[candidate.action]}
-                  {candidate.to === undefined ? '' : ` to ${formatUnits(candidate.to)}`}
+                  {/* A call's `to` is the street total; Costs says what it takes, as its button does. */}
+                  {candidate.to === undefined || candidate.action === 'call'
+                    ? ''
+                    : ` to ${formatUnits(candidate.to)}`}
                 </th>
                 <td className="prl-candidates__cost">{formatUnits(candidate.cost)}</td>
                 <td className="prl-candidates__ev" data-sign={evSign(candidate.ev)}>
@@ -539,10 +542,13 @@ function SuggestionBlock({ suggestion, candidate }: SuggestionBlockProps): React
         <p className="prl-suggestion__action">
           {ACTION_WORD[suggestion.action]}
           {/* A range, because one figure claims false precision. Equal ends (often all-in) print once. */}
-          {range === undefined
-            ? ''
+          {/* A call reads its cost, as its button does: its range is the street total it reaches. */}
+          {suggestion.action === 'call'
+            ? candidate === null
+              ? ''
+              : ` — ${formatUnits(candidate.cost)}`
             : !sized
-              ? ` — ${formatUnits(range.min)}`
+              ? ''
               : range.min === range.max
                 ? ` to ${formatUnits(range.min)}`
                 : ` to ${formatChips(range.min)}–${formatUnits(range.max)}`}

@@ -555,6 +555,26 @@ test('a size range reads as totals the Coach priced, and equal ends print one si
     assert.doesNotMatch(markup, /priced from/u, 'one size has no span');
 });
 
+test('a call reads what its Call button costs, not the street total it reaches (REGRESSION)', async () => {
+  // rk-nine-big-blinds-call-or-fold: the 800 blind is in, so calling 6,400 makes the street 7,200.
+  const markup = await render({
+    ...NINE_OUT_DRAW,
+    toCall: 6_400,
+    candidates: [
+      { action: 'fold', cost: 0, ev: 0, derivation: 'EV(fold) = 0 chips.' },
+      { action: 'call', to: 7_200, cost: 6_400, ev: 1_235.24, derivation: 'EV(call) charges the call.' },
+    ],
+    suggestion: { ...NINE_OUT_DRAW.suggestion, action: 'call', sizeRange: { min: 7_200, max: 7_200 } },
+  });
+  assert.equal(/class="prl-suggestion__action">([^<]*)</u.exec(markup)?.[1], 'Call — 6,400 units');
+  const rows = [...markup.matchAll(/class="prl-candidates__action" scope="row">([^<]*)</gu)];
+  assert.deepEqual(
+    rows.map((row) => row[1]),
+    ['Fold', 'Call'],
+  );
+  assert.doesNotMatch(markup, /7,200/u, 'the street total is not a figure the table shows');
+});
+
 test('a negative margin over break-even is said to be under it (REGRESSION)', async () => {
   // The Lab once printed "▼ −27.0 points over the break-even equity".
   const label = (markup: string): string | undefined =>
