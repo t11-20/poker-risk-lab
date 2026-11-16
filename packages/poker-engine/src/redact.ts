@@ -115,28 +115,34 @@ function viewerFor(state: HandState, options: RedactOptions): SeatState | null {
 }
 
 /**
- * Pot layers during a hand. `buildPots` is correct only at settlement. Mid-street it turns an
- * uncalled bet, or the unequal blinds, into a phantom side pot. A live-table fuzz showed 947 of 1,446
- * decision points (65%) with a multi-layer pot and nobody all-in. A side pot exists only once a seat
- * is all in for less than others can still wager.
+ * Pot layers during a hand. Only chips matched on earlier streets are layered, or an all-in nobody has
+ * called yet shows as a side pot; this street's bets join the top layer, which every bettor has matched.
  */
 function livePots(state: HandState): readonly Pot[] {
   const contesting = state.seats.filter((seat) => seat.status !== 'folded');
-  const someoneIsAllIn = contesting.some((seat) => seat.stack === 0);
-  if (someoneIsAllIn) return buildPots(state.seats);
+  const isSettled = state.street === 'complete';
+  if (isSettled && contesting.some((seat) => seat.stack === 0)) return buildPots(state.seats);
 
   const total = totalPot(state);
   if (total === 0) return [];
   let cap = 0;
   for (const seat of contesting) cap = Math.max(cap, seat.committedTotal);
-  return [
-    {
-      amount: total,
-      eligibleSeats: contesting.map((seat) => seat.seat),
-      capPerSeat: cap,
-      index: 0,
-    },
-  ];
+  const whole: Pot = {
+    amount: total,
+    eligibleSeats: contesting.map((seat) => seat.seat),
+    capPerSeat: cap,
+    index: 0,
+  };
+  if (isSettled) return [whole];
+
+  const matched = buildPots(
+    state.seats.map((seat) => ({ ...seat, committedTotal: seat.committedTotal - seat.committedThisStreet })),
+  );
+  const top = matched[matched.length - 1];
+  if (matched.length < 2 || top === undefined) return [whole];
+  const below = matched.slice(0, -1);
+  const belowTotal = below.reduce((sum, pot) => sum + pot.amount, 0);
+  return [...below, { ...top, amount: total - belowTotal, capPerSeat: cap }];
 }
 
 /**
