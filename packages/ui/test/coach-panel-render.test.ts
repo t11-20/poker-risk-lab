@@ -543,7 +543,7 @@ test('a size range reads as totals the Coach priced, and equal ends print one si
   assert.equal(spread.action, 'Raise to 120–380 units');
   assert.ok(
     spread.markup.includes(
-      'Each raise size the Coach priced from 120 to 380 units is within one big blind of the highest expected value among them.',
+      'Of the raise sizes the Coach priced from 120 to 380 units, raising to 200 has the highest expected value, and each of the others is within one big blind of it.',
     ),
     'a span says what its ends mean',
   );
@@ -553,6 +553,52 @@ test('a size range reads as totals the Coach priced, and equal ends print one si
   assert.equal(call.action, 'Call — 50 units');
   for (const { markup } of [single, call])
     assert.doesNotMatch(markup, /priced from/u, 'one size has no span');
+});
+
+test('under a size range, the EV is the size the reading names, not the smallest (REGRESSION)', async () => {
+  // eq-second-pair-vs-wide-range: every size is within a big blind of the best, 380 at 92.29.
+  const raise = (to: number, ev: number) => ({ action: 'raise' as const, to, cost: to, ev, derivation: '.' });
+  const markup = await render({
+    ...NINE_OUT_DRAW,
+    toCall: 60,
+    candidates: [
+      { action: 'fold', cost: 0, ev: 0, derivation: '.' },
+      { action: 'call', to: 60, cost: 60, ev: 51.49, derivation: '.' },
+      ...[raise(120, 90), raise(133, 90.11), raise(170, 90.44), raise(207, 90.76)],
+      ...[raise(280, 91.41), raise(380, 92.29)],
+    ],
+    suggestion: { ...NINE_OUT_DRAW.suggestion, action: 'raise', sizeRange: { min: 120, max: 380 } },
+  });
+  assert.ok(
+    markup.includes('+92.3 units compared with folding, and 380 units to take it.'),
+    'the published EV is the highest in the span',
+  );
+  assert.ok(
+    markup.includes(
+      'Of the raise sizes the Coach priced from 120 to 380 units, raising to 380 has the highest expected value, and each of the others is within one big blind of it.',
+    ),
+    'the sentence names the size the EV belongs to',
+  );
+});
+
+test('a call reads what its Call button costs, not the street total it reaches (REGRESSION)', async () => {
+  // rk-nine-big-blinds-call-or-fold: the 800 blind is in, so calling 6,400 makes the street 7,200.
+  const markup = await render({
+    ...NINE_OUT_DRAW,
+    toCall: 6_400,
+    candidates: [
+      { action: 'fold', cost: 0, ev: 0, derivation: 'EV(fold) = 0 chips.' },
+      { action: 'call', to: 7_200, cost: 6_400, ev: 1_235.24, derivation: 'EV(call) charges the call.' },
+    ],
+    suggestion: { ...NINE_OUT_DRAW.suggestion, action: 'call', sizeRange: { min: 7_200, max: 7_200 } },
+  });
+  assert.equal(/class="prl-suggestion__action">([^<]*)</u.exec(markup)?.[1], 'Call — 6,400 units');
+  const rows = [...markup.matchAll(/class="prl-candidates__action" scope="row">([^<]*)</gu)];
+  assert.deepEqual(
+    rows.map((row) => row[1]),
+    ['Fold', 'Call'],
+  );
+  assert.doesNotMatch(markup, /7,200/u, 'the street total is not a figure the table shows');
 });
 
 test('a negative margin over break-even is said to be under it (REGRESSION)', async () => {

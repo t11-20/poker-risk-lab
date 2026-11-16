@@ -30,6 +30,7 @@ import type {
   PotOddsSummary,
   StackContext,
 } from '@prl/contracts';
+import { suggestedCandidate } from '@prl/poker-math';
 import type { ReactElement } from 'react';
 import { parseCardText } from '../cards.ts';
 import { cx } from '../cx.ts';
@@ -138,25 +139,6 @@ function evTone(ev: number): 'favourable' | 'adverse' | 'neutral' {
   if (sign === 'positive') return 'favourable';
   if (sign === 'negative') return 'adverse';
   return 'neutral';
-}
-
-/**
- * Matched on the action, then narrowed by the size range. `null` rather than a guess, because an EV
- * attributed to the wrong line is worse than none.
- */
-function candidateForSuggestion(
-  candidates: readonly ActionCandidate[],
-  suggestion: CoachSuggestion,
-): ActionCandidate | null {
-  const matches = candidates.filter((candidate) => candidate.action === suggestion.action);
-  const range = suggestion.sizeRange;
-  if (range !== undefined) {
-    const inRange = matches.find(
-      (candidate) => candidate.to !== undefined && candidate.to >= range.min && candidate.to <= range.max,
-    );
-    if (inRange !== undefined) return inRange;
-  }
-  return matches[0] ?? null;
 }
 
 function OutCard({ text }: { readonly text: string }): ReactElement {
@@ -501,7 +483,10 @@ function CandidateTable({ candidates }: { readonly candidates: readonly ActionCa
               <tr key={key}>
                 <th className="prl-candidates__action" scope="row">
                   {ACTION_WORD[candidate.action]}
-                  {candidate.to === undefined ? '' : ` to ${formatUnits(candidate.to)}`}
+                  {/* A call's `to` is the street total; Costs says what it takes, as its button does. */}
+                  {candidate.to === undefined || candidate.action === 'call'
+                    ? ''
+                    : ` to ${formatUnits(candidate.to)}`}
                 </th>
                 <td className="prl-candidates__cost">{formatUnits(candidate.cost)}</td>
                 <td className="prl-candidates__ev" data-sign={evSign(candidate.ev)}>
@@ -539,10 +524,13 @@ function SuggestionBlock({ suggestion, candidate }: SuggestionBlockProps): React
         <p className="prl-suggestion__action">
           {ACTION_WORD[suggestion.action]}
           {/* A range, because one figure claims false precision. Equal ends (often all-in) print once. */}
-          {range === undefined
-            ? ''
+          {/* A call reads its cost, as its button does: its range is the street total it reaches. */}
+          {suggestion.action === 'call'
+            ? candidate === null
+              ? ''
+              : ` — ${formatUnits(candidate.cost)}`
             : !sized
-              ? ` — ${formatUnits(range.min)}`
+              ? ''
               : range.min === range.max
                 ? ` to ${formatUnits(range.min)}`
                 : ` to ${formatChips(range.min)}–${formatUnits(range.max)}`}
@@ -552,9 +540,9 @@ function SuggestionBlock({ suggestion, candidate }: SuggestionBlockProps): React
         </span>
       </div>
 
-      {sized && range.min !== range.max ? (
+      {sized && range.min !== range.max && candidate?.to !== undefined ? (
         <p className="prl-suggestion__reason">
-          {`Each ${suggestion.action} size the Coach priced from ${formatChips(range.min)} to ${formatUnits(range.max)} is within one big blind of the highest expected value among them.`}
+          {`Of the ${suggestion.action} sizes the Coach priced from ${formatChips(range.min)} to ${formatUnits(range.max)}, ${suggestion.action === 'bet' ? 'betting' : 'raising to'} ${formatChips(candidate.to)} has the highest expected value, and each of the others is within one big blind of it.`}
         </p>
       ) : null}
 
@@ -668,7 +656,7 @@ export function CoachPanel(props: CoachPanelProps): ReactElement {
   const outs = report.outs;
   const notes = withKeys(report.teachingNotes, 'teaching-note');
   const rule = equity.ruleOfThumb;
-  const suggested = candidateForSuggestion(report.candidates, report.suggestion);
+  const suggested = suggestedCandidate(report);
 
   return (
     <div className={cx('prl-coach', className)}>

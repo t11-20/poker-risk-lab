@@ -93,6 +93,25 @@ export function bestMeasuredCandidate(report: CoachReport): ActionCandidate | nu
 }
 
 /**
+ * The row the suggestion's EV is shown from: within a size range the highest-EV size, a tie going to the
+ * smaller as the Coach's does. An EV attributed to a different size misrepresents the reading.
+ */
+export function suggestedCandidate(report: Pick<CoachReport, 'candidates' | 'suggestion'>) {
+  const { action, sizeRange } = report.suggestion;
+  const matches = report.candidates.filter((candidate) => candidate.action === action);
+  let pick: ActionCandidate | null = null;
+  for (const candidate of matches) {
+    const to = candidate.to;
+    if (sizeRange === undefined || to === undefined || to < sizeRange.min || to > sizeRange.max) continue;
+    const better = pick === null || candidate.ev > pick.ev;
+    const smallerTie =
+      pick !== null && candidate.ev === pick.ev && to < (pick.to ?? Number.POSITIVE_INFINITY);
+    if (better || smallerTie) pick = candidate;
+  }
+  return pick ?? matches[0] ?? null;
+}
+
+/**
  * Is this action defensible against the stated range? The test is against folding, which is
  * exactly zero, not against the highest-EV row.
  *

@@ -21,6 +21,7 @@ import {
   coachSpotForView,
   LIVE_COACH_POLICY,
   type SeatNamer,
+  suggestedCandidate,
 } from '@prl/poker-math';
 import { cardNotationText } from './cards.ts';
 import { READER_SEAT, type Table, who } from './table.ts';
@@ -193,15 +194,17 @@ function actionText(report: CoachReport): string {
 /** What a span of sizes means, as the web panel says it. One size needs no sentence. */
 function sizeSpanText(report: CoachReport): string[] {
   const { action, sizeRange } = report.suggestion;
+  const named = suggestedCandidate(report)?.to;
   if (
     (action !== 'bet' && action !== 'raise') ||
     sizeRange === undefined ||
-    sizeRange.min === sizeRange.max
+    sizeRange.min === sizeRange.max ||
+    named === undefined
   ) {
     return [];
   }
   return [
-    `Each ${action} size the Coach priced from ${sizeRange.min.toLocaleString('en-US')} to ${units(sizeRange.max)} is within one big blind of the highest expected value among them.`,
+    `Of the ${action} sizes the Coach priced from ${sizeRange.min.toLocaleString('en-US')} to ${units(sizeRange.max)}, ${action === 'bet' ? 'betting' : 'raising to'} ${named.toLocaleString('en-US')} has the highest expected value, and each of the others is within one big blind of it.`,
   ];
 }
 
