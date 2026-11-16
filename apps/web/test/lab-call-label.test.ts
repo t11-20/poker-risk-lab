@@ -31,9 +31,9 @@ describe('a call in the Lab is named by what it costs', () => {
     assert.equal(call?.allIn, true);
   });
 
-  it('the verdict names the best row as its Call button does (REGRESSION)', () => {
+  it('the verdict names the reading as its Call button does (REGRESSION)', () => {
     const judgement = judgeConsistency(NINE_BIG_BLINDS, 'call', undefined, 800);
-    assert.equal(judgement.bestName, 'Call all in, 6,400 units');
+    assert.equal(judgement.reading?.name, 'Call all in, 6,400 units');
   });
 
   it('the verdict rule names a better call by its cost (REGRESSION)', () => {
@@ -45,7 +45,7 @@ describe('a call in the Lab is named by what it costs', () => {
       ],
     };
     const sentence = verdictRuleSentence(judgeConsistency(withRaise, 'raise', 9_000, 800), 'raise') ?? '';
-    assert.match(sentence, /the best row, Call all in, 6,400 units, is there for comparison/u);
+    assert.match(sentence, /the Coach's reading, Call all in, 6,400 units, is there for comparison/u);
     assert.doesNotMatch(sentence, /7,200/u, 'the street total is not what the call costs');
   });
 

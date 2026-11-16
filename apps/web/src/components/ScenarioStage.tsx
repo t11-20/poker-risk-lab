@@ -160,7 +160,6 @@ function Verdict({
   readonly action: ScenarioAction;
   readonly server: ServerVerdict;
 }): ReactElement {
-  const best = judgement.bestName === null ? '' : ` — ${judgement.bestName}`;
   // The server's answer wins when there is one, because it is the verdict that was recorded.
   const consistent = server.state === 'live' ? server.consistent : judgement.consistent;
   return (
@@ -210,12 +209,14 @@ function Verdict({
               : formatSignedUnits(judgement.chosenEv, { decimals: 1 })}
           </dd>
         </div>
-        <div className="prl-stage__ev-row">
-          <dt className="prl-label">Best row on the table</dt>
-          <dd className="prl-stage__ev-value">
-            {`${formatSignedUnits(judgement.bestEv, { decimals: 1 })}${best}`}
-          </dd>
-        </div>
+        {judgement.reading === null ? null : (
+          <div className="prl-stage__ev-row">
+            <dt className="prl-label">One reading of this spot</dt>
+            <dd className="prl-stage__ev-value">
+              {`${formatSignedUnits(judgement.reading.ev, { decimals: 1 })} — ${judgement.reading.name}`}
+            </dd>
+          </div>
+        )}
         {/*
           The rule asks whether the action beats folding, so the benchmark rows show it. The distance
           is `behindBenchmarkUnits`, not `shortfallUnits`, which is zero for a consistent action. None
