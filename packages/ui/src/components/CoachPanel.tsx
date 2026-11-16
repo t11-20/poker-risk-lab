@@ -408,18 +408,28 @@ function StackSection({ stack }: { readonly stack: StackContext }): ReactElement
     <section className="prl-coach__section">
       <h3 className="prl-coach__section-heading">Stack context</h3>
       <Metric label="Effective stack" value={stack.effectiveStack} format="units" size="md" />
-      <StatTile label="Stack-to-pot ratio" value={spr.label} note={spr.meaning} />
-      {potSizedBetPrice === null ? (
-        <RefusedFigure
-          label="Price a pot-sized bet would offer"
-          what="the equity a pot-sized bet would demand"
+      {stack.effectiveStack === 0 ? (
+        <StatTile
+          label="Stack-to-pot ratio"
+          value="No more betting"
+          note="Every opponent is all in, so no bet can follow this one: there is no depth to measure and no pot-sized bet to price."
         />
       ) : (
-        <StatTile
-          label="Price a pot-sized bet would offer"
-          value={potSizedBetPrice}
-          note="The equity a caller would need if the next bet were the size of the pot."
-        />
+        <>
+          <StatTile label="Stack-to-pot ratio" value={spr.label} note={spr.meaning} />
+          {potSizedBetPrice === null ? (
+            <RefusedFigure
+              label="Price a pot-sized bet would offer"
+              what="the equity a pot-sized bet would demand"
+            />
+          ) : (
+            <StatTile
+              label="Price a pot-sized bet would offer"
+              value={potSizedBetPrice}
+              note="The equity a caller would need if the next bet were the size of the pot."
+            />
+          )}
+        </>
       )}
       <Disclose summary="What this depth means for the decision">
         <p className="prl-coach__prose">{stack.explanation}</p>

@@ -701,3 +701,22 @@ test('an exact count names showdowns, which a complete river has without any boa
   assert.deepEqual(note(markup), ['417', 'showdowns']);
   assert.doesNotMatch(markup, /boards? enumerated/u);
 });
+
+test('with no more betting, the stack section shows no SPR band and no pot-sized-bet price', async () => {
+  const stackText = (markup: string): string => {
+    const start = markup.indexOf('>Stack context</h3>');
+    assert.notEqual(start, -1, 'the Stack context section is rendered');
+    return markup.slice(start, markup.indexOf('</section>', start)).replace(/<[^>]+>/g, ' ');
+  };
+  const closed = stackText(
+    await render({
+      ...NINE_OUT_DRAW,
+      stackContext: { ...NINE_OUT_DRAW.stackContext, effectiveStack: 0, spr: 0 },
+    }),
+  );
+  assert.doesNotMatch(closed, /committed|Price a pot-sized bet would offer|33\.3%/u);
+  assert.match(closed, /No more betting/u);
+  const open = stackText(await render(NINE_OUT_DRAW));
+  assert.match(open, /Price a pot-sized bet would offer/u, 'control: a stack behind keeps both tiles');
+  assert.doesNotMatch(open, /No more betting/u);
+});

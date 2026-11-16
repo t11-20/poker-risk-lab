@@ -618,11 +618,15 @@ function buildStackContext(input: CoachInput): StackContext {
   const pot = Math.max(1, input.pot);
   const spr = stackToPotRatio(effective.effective, pot);
   const potSizedPrice = priceLaidByBet(pot, pot);
+  // At 0 no bet can follow, so a depth band that describes betting to come would not be true.
   return {
     effectiveStack: effective.effective,
     spr: spr.spr,
     potOddsOfferedByPotSizedBet: potSizedPrice.breakEvenEquity,
-    explanation: `${effective.explanation} ${spr.explanation} ${spr.implication}`,
+    explanation:
+      effective.effective === 0
+        ? effective.explanation
+        : `${effective.explanation} ${spr.explanation} ${spr.implication}`,
   };
 }
 
@@ -1459,7 +1463,7 @@ function buildTeachingNotes(
     const withheld = refusalNote(refusal);
     if (withheld !== null) notes.push(withheld);
   }
-  if (stacks.spr < 3) {
+  if (stacks.effectiveStack > 0 && stacks.spr < 3) {
     notes.push(
       `At an SPR of ${stacks.spr.toFixed(1)} the stacks are shallow enough that one more bet commits them. Decisions like that are effectively made now rather than later.`,
     );
