@@ -74,6 +74,7 @@ test('worst hand: a fold by B still leaves the main pot to A, so a bet has no fo
   // Everyone who can fold folding is worth exactly 0, so the ½-pot bet only gets back to even if they
   // always do.
   assert.match(prose, /would need to fold 100% of the time/);
+  assert.doesNotMatch(prose, /With no equity when called/, 'a fold here is not worth the pot');
   assert.match(prose, /all in and cannot fold/);
 });
 

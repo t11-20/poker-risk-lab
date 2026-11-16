@@ -1598,10 +1598,21 @@ function halfPotBreakEven(
       return `${size} It cannot break even at any fold frequency with this much equity when called — folding out the whole range still would not be enough.`;
     case 'at-most':
       return `${size} It breaks even when called, but a fold is worth less to you than a call, so it stops breaking even once everyone who can fold does fold more than ${percentOfTime(breakEven.rate)}.`;
-    case 'at-least':
-      return layered
-        ? `${size} To break even everyone who can fold would need to fold ${percentOfTime(breakEven.rate)}.`
-        : `${size} To break even it would need to win uncontested ${percentOfTime(breakEven.rate)}.`;
+    case 'at-least': {
+      if (layered) {
+        return `${size} To break even everyone who can fold would need to fold ${percentOfTime(breakEven.rate)}.`;
+      }
+      // The lesson's bet / (pot + bet) is this line at zero equity, so a learner can reconcile the two.
+      const lesson = `${chips(row.cost)} / (${chips(input.contestablePot)} + ${chips(row.cost)})`;
+      const share = split.share(split.live);
+      const needs = `${size} To break even it would need to win uncontested ${percentOfTime(breakEven.rate)}`;
+      if (share === 0) return `${needs}: with no equity when called, that is ${lesson}.`;
+      const bluff = row.cost / (input.contestablePot + row.cost);
+      return (
+        `${needs}, counting the ${percent(share)} equity you have when called. With no equity when called ` +
+        `it would need ${lesson} = ${(bluff * 100).toFixed(0)}%.`
+      );
+    }
   }
 }
 

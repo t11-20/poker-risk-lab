@@ -752,7 +752,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       'The opponent holds exactly AcJd.',
       'Computed by enumerating every remaining board — there is no sampling error.',
       'Bet and raise figures assume the line wins uncontested 35% of the time. That is an assumption, not something measured: the Scenario Lab lets you change it and watch these figures move.',
-      'The ½-pot raise to 300 risks 300 to win 300. To break even it would need to win uncontested 43% of the time.',
+      'The ½-pot raise to 300 risks 300 to win 300. To break even it would need to win uncontested 43% of the time, counting the 9.1% equity you have when called. With no equity when called it would need 300 / (300 + 300) = 50%.',
       'Expected values are measured against folding, which is treated as zero. Chips already in the pot are spent either way.',
     ],
     uncertainty: {
@@ -903,7 +903,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       'Estimated by sampling 40,000 random run-outs, not by exhaustive enumeration.',
       'No community cards are known yet, so five more cards are still to come.',
       'Bet and raise figures assume the line wins uncontested 35% of the time. That is an assumption, not something measured: the Scenario Lab lets you change it and watch these figures move.',
-      'The ½-pot raise to 135 risks 135 to win 90. To break even it would need to win uncontested 18% of the time.',
+      'The ½-pot raise to 135 risks 135 to win 90. To break even it would need to win uncontested 18% of the time, counting the 38.5% equity you have when called. With no equity when called it would need 135 / (90 + 135) = 60%.',
       'Expected values are measured against folding, which is treated as zero. Chips already in the pot are spent either way.',
     ],
     uncertainty: {
@@ -1222,7 +1222,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       'Every hand in a range is weighted equally. Real opponents do not play every hand in a range the same way, so treat this as the range assumption, not a prediction.',
       'Computed by enumerating every remaining board — there is no sampling error.',
       'Bet and raise figures assume the line wins uncontested 35% of the time. That is an assumption, not something measured: the Scenario Lab lets you change it and watch these figures move.',
-      'The ½-pot raise to 900 risks 900 to win 900. To break even it would need to win uncontested 29% of the time.',
+      'The ½-pot raise to 900 risks 900 to win 900. To break even it would need to win uncontested 29% of the time, counting the 24.3% equity you have when called. With no equity when called it would need 900 / (900 + 900) = 50%.',
       'Expected values are measured against folding, which is treated as zero. Chips already in the pot are spent either way.',
     ],
     uncertainty: {
