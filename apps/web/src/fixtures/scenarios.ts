@@ -562,11 +562,11 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       },
       confidence: 'moderate',
       reason:
-        'Call has the highest expected value of the lines that do not rely on an assumed fold rate, by 15.0 units over the next-best action. Raising to 130 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats calling only if they fold more than 8.6% of the time.',
+        'Call has the highest expected value of the lines that do not rely on an assumed fold rate, by 15.0 units over raising to 130 (counted as always called). Raising to 130 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats calling only if they fold more than 8.6% of the time.',
       whatWouldChangeIt: [
         'A wider opponent range would raise your equity and can flip a fold into a call.',
         'A narrower, stronger range does the opposite.',
-        'The gap to the next-best action is only 15.0 units, well under a big blind — this is close to indifferent.',
+        'The gap to raising to 130 (counted as always called) is only 15.0 units, well under a big blind — this is close to indifferent.',
       ],
     },
     stackContext: {
@@ -733,7 +733,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       action: 'fold',
       confidence: 'reasonable',
       reason:
-        'Fold has the highest expected value of the lines that do not rely on an assumed fold rate, by 63.6 units over the next-best action. Raising to 200 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats folding only if they fold more than 32.7% of the time.',
+        'Fold has the highest expected value of the lines that do not rely on an assumed fold rate, by 63.6 units over calling. Raising to 200 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats folding only if they fold more than 32.7% of the time.',
       whatWouldChangeIt: [
         'A wider opponent range would raise your equity and can flip a fold into a call.',
         'A narrower, stronger range does the opposite.',
@@ -885,7 +885,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
         'A wider opponent range would raise your equity and can flip a fold into a call.',
         'A narrower, stronger range does the opposite.',
         'The equity figure is sampled, ±0.48 points at 95% confidence. A close decision could sit either side of that.',
-        'The gap to the next-best action is only 2.2 units, well under a big blind — this is close to indifferent.',
+        'The gap to calling is only 2.2 units, well under a big blind — this is close to indifferent.',
       ],
     },
     stackContext: {
@@ -1091,8 +1091,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
         max: 520,
       },
       confidence: 'reasonable',
-      reason:
-        'Bet has the highest expected value against the stated range, by 132.9 units over the next-best action.',
+      reason: 'Bet has the highest expected value against the stated range, by 132.9 units over checking.',
       whatWouldChangeIt: [
         'This assumes the line wins uncontested 35% of the time. Here a fold is worth less to you than a call, so an opponent who folds more often makes it worse.',
         'Being raised is not modelled here, so treat the figure as optimistic.',
@@ -1202,7 +1201,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       action: 'fold',
       confidence: 'reasonable',
       reason:
-        'Fold has the highest expected value of the lines that do not rely on an assumed fold rate, by 189.7 units over the next-best action. Raising to 900 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats folding only if they fold more than 29.4% of the time.',
+        'Fold has the highest expected value of the lines that do not rely on an assumed fold rate, by 189.7 units over calling. Raising to 900 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats folding only if they fold more than 29.4% of the time.',
       whatWouldChangeIt: [
         'A wider opponent range would raise your equity and can flip a fold into a call.',
         'A narrower, stronger range does the opposite.',
@@ -1367,7 +1366,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
         'A wider opponent range would raise your equity and can flip a fold into a call.',
         'A narrower, stronger range does the opposite.',
         'The equity figure is sampled, ±0.47 points at 95% confidence. A close decision could sit either side of that.',
-        'The gap to the next-best action is only 4.3 units, well under a big blind — this is close to indifferent.',
+        'The gap to raising to 80 (counted as always called) is only 4.3 units, well under a big blind — this is close to indifferent.',
       ],
     },
     stackContext: {

@@ -1133,6 +1133,66 @@ function foldRateNote(row: ActionCandidate, reading: ActionCandidate, input: Coa
   );
 }
 
+interface Rival {
+  readonly row: ActionCandidate;
+  /** True for a row set aside on the fold rate, which is measured at its always-called value. */
+  readonly alwaysCalled: boolean;
+  readonly value: number;
+}
+
+/**
+ * The best other action. A row set aside still competes at its always-called value, so the margin is
+ * not measured to a line that only the fold rate put behind. The next-best action, not the next row:
+ * two sizes of one action can price within a chip, which made 12 of 36 Lab scenarios read as indifferent.
+ */
+function rivalOf(
+  ranked: readonly ActionCandidate[],
+  eligible: readonly ActionCandidate[],
+  best: ActionCandidate,
+  input: CoachInput,
+  split: PotSplit,
+): Rival | undefined {
+  let found: Rival | undefined;
+  for (const row of ranked) {
+    if (row.action === best.action) continue;
+    const alwaysCalled = !eligible.includes(row);
+    const value = alwaysCalled ? branchesOf(row, input, split).whenCalled : row.ev;
+    if (found === undefined || value > found.value) found = { row, alwaysCalled, value };
+  }
+  return found;
+}
+
+/** Named, because the table shows a set-aside row at its fold-rate figure, not the one measured to. */
+function nameOfRival(rival: Rival | undefined): string {
+  if (rival === undefined) return 'the next-best action';
+  return `${lineName(rival.row)}${rival.alwaysCalled ? ' (counted as always called)' : ''}`;
+}
+
+/** Empty unless the highest row of another action sits above the rival on the table only by the fold rate. */
+function readsCloserNote(
+  ranked: readonly ActionCandidate[],
+  best: ActionCandidate,
+  rival: Rival | undefined,
+) {
+  const shown = ranked.find((c) => c.action !== best.action);
+  if (shown === undefined || rival === undefined || shown === rival.row || shown.ev <= rival.value) return '';
+  return (
+    ` ${capitalised(lineName(shown))} reads closer on the table only because it assumes they fold ` +
+    `${((shown.foldEquityAssumed ?? 0) * 100).toFixed(0)}% of the time.`
+  );
+}
+
+/** A row as the reading names it: "calling", "raising to 88". */
+function lineName(row: ActionCandidate): string {
+  if (row.action === 'bet') return `betting ${chips(row.to ?? row.cost)}`;
+  if (row.action === 'raise') return `raising to ${chips(row.to ?? row.cost)}`;
+  return { fold: 'folding', check: 'checking', call: 'calling' }[row.action];
+}
+
+function capitalised(text: string): string {
+  return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
+}
+
 /** The fold rate a bet or raise reading assumes, and which way a different rate moves it. */
 function foldRateCaveat(best: ActionCandidate, input: CoachInput, split: PotSplit): string {
   const rate = `${(best.foldEquityAssumed ?? 0) * 100}% of the time`;
@@ -1195,14 +1255,9 @@ function buildSuggestion(
     (c) => !restsOnAssumedFoldEquity(c) || branchesOf(c, input, split).whenCalled >= measuredBest,
   );
   const best = eligible[0] ?? top;
-  // A row set aside still competes at its always-called value, so the margin is not measured to a line
-  // that only the fold rate put behind. The next-best action, not the next row: two sizes of one
-  // action can price within a chip, which made 12 of 36 Lab scenarios read as indifferent.
-  const runnerUp = Math.max(
-    ...ranked
-      .filter((c) => c.action !== best.action)
-      .map((c) => (eligible.includes(c) ? c.ev : branchesOf(c, input, split).whenCalled)),
-  );
+  const rival = rivalOf(ranked, eligible, best, input, split);
+  const runnerUp = rival?.value ?? Number.NEGATIVE_INFINITY;
+  const rivalName = nameOfRival(rival);
 
   if (input.toCall === 0) {
     const foldRank = ranked.findIndex((candidate) => candidate.action === 'fold');
@@ -1276,7 +1331,7 @@ function buildSuggestion(
   whatWouldChangeIt.push(...seatsBehindNotes(best.action, input.toCall, behind, equitySummary.heroEquity));
   if (marginInBigBlinds < 1) {
     whatWouldChangeIt.push(
-      `The gap to the next-best action is only ${margin.toFixed(1)} units, well under a big blind — this is close to indifferent.`,
+      `The gap to ${rivalName} is only ${margin.toFixed(1)} units, well under a big blind — this is close to indifferent.`,
     );
   }
   if (whatWouldChangeIt.length === 0) {
@@ -1290,11 +1345,11 @@ function buildSuggestion(
     setAside === '' ? 'against the stated range' : 'of the lines that do not rely on an assumed fold rate';
   const reason =
     (openBehind !== null
-      ? `${actionWord} has the highest expected value ${against}, by ${margin.toFixed(1)} units, but the price leaves out what ${yetToMatch(openBehind)} would put in — treat this as close rather than as a recommendation.`
+      ? `${actionWord} has the highest expected value ${against}, by ${margin.toFixed(1)} units over ${rivalName}, but the price leaves out what ${yetToMatch(openBehind)} would put in — treat this as close rather than as a recommendation.`
       : confidence === 'low'
         ? `${actionWord} comes out marginally ahead here, but only just — treat this as close to indifferent rather than as a recommendation.`
-        : `${actionWord} has the highest expected value ${against}, by ${margin.toFixed(1)} units over the next-best action.`) +
-    setAside;
+        : `${actionWord} has the highest expected value ${against}, by ${margin.toFixed(1)} units over ${rivalName}.`) +
+    (setAside === '' ? readsCloserNote(ranked, best, rival) : setAside);
 
   return {
     action: best.action,

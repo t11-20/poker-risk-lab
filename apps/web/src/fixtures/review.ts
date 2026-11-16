@@ -326,12 +326,12 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           action: 'fold',
           confidence: 'moderate',
           reason:
-            'Fold has the highest expected value of the lines that do not rely on an assumed fold rate, by 6.2 units over the next-best action. Raising to 40 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats folding only if they fold more than 33.5% of the time.',
+            'Fold has the highest expected value of the lines that do not rely on an assumed fold rate, by 6.2 units over calling. Raising to 40 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats folding only if they fold more than 33.5% of the time.',
           whatWouldChangeIt: [
             'A wider opponent range would raise your equity and can flip a fold into a call.',
             'A narrower, stronger range does the opposite.',
             'The equity figure is sampled, ±0.87 points at 95% confidence. A close decision could sit either side of that.',
-            'The gap to the next-best action is only 6.2 units, well under a big blind — this is close to indifferent.',
+            'The gap to calling is only 6.2 units, well under a big blind — this is close to indifferent.',
           ],
         },
         stackContext: {
@@ -556,12 +556,12 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           },
           confidence: 'moderate',
           reason:
-            'Call has the highest expected value of the lines that do not rely on an assumed fold rate, by 8.7 units over the next-best action. Raising to 130 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats calling only if they fold more than 5.6% of the time.',
+            'Call has the highest expected value of the lines that do not rely on an assumed fold rate, by 8.7 units over raising to 130 (counted as always called). Raising to 130 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats calling only if they fold more than 5.6% of the time.',
           whatWouldChangeIt: [
             'A wider opponent range would raise your equity and can flip a fold into a call.',
             'A narrower, stronger range does the opposite.',
             '7 of your 15 outs are dirty — they improve you without making you safe, so counting all of them would overstate your chances.',
-            'The gap to the next-best action is only 8.7 units, well under a big blind — this is close to indifferent.',
+            'The gap to raising to 130 (counted as always called) is only 8.7 units, well under a big blind — this is close to indifferent.',
           ],
         },
         stackContext: {
@@ -758,7 +758,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           },
           confidence: 'reasonable',
           reason:
-            'Call has the highest expected value of the lines that do not rely on an assumed fold rate, by 37.1 units over the next-best action. Raising to 260 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats calling only if they fold more than 11.6% of the time.',
+            'Call has the highest expected value of the lines that do not rely on an assumed fold rate, by 37.1 units over folding. Raising to 260 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats calling only if they fold more than 11.6% of the time.',
           whatWouldChangeIt: [
             'A wider opponent range would raise your equity and can flip a fold into a call.',
             'A narrower, stronger range does the opposite.',
@@ -926,7 +926,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           },
           confidence: 'reasonable',
           reason:
-            'Raise has the highest expected value against the stated range, by 348.6 units over the next-best action.',
+            'Raise has the highest expected value against the stated range, by 348.6 units over calling.',
           whatWouldChangeIt: [
             'This assumes the line wins uncontested 35% of the time. Here a fold is worth less to you than a call, so an opponent who folds more often makes it worse.',
             'Being raised is not modelled here, so treat the figure as optimistic.',
@@ -1167,12 +1167,12 @@ export const REVIEW_HAND_FOLDED: HandReviewResponse = {
           action: 'fold',
           confidence: 'moderate',
           reason:
-            'Fold has the highest expected value of the lines that do not rely on an assumed fold rate, by 6.1 units over the next-best action. Raising to 40 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats folding only if they fold more than 33.3% of the time.',
+            'Fold has the highest expected value of the lines that do not rely on an assumed fold rate, by 6.1 units over calling. Raising to 40 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats folding only if they fold more than 33.3% of the time.',
           whatWouldChangeIt: [
             'A wider opponent range would raise your equity and can flip a fold into a call.',
             'A narrower, stronger range does the opposite.',
             'The equity figure is sampled, ±0.87 points at 95% confidence. A close decision could sit either side of that.',
-            'The gap to the next-best action is only 6.1 units, well under a big blind — this is close to indifferent.',
+            'The gap to calling is only 6.1 units, well under a big blind — this is close to indifferent.',
           ],
         },
         stackContext: {
