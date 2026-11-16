@@ -359,7 +359,7 @@ function assumptionsFor(spec: EquitySpec, method: EquityResult['method'], sample
       `Estimated by sampling ${samples.toLocaleString('en-US')} random run-outs, not by exhaustive enumeration.`,
     );
   } else {
-    notes.push('Computed by enumerating every remaining board — there is no sampling error.');
+    notes.push('Computed by enumerating every showdown the ranges allow — there is no sampling error.');
   }
   if (spec.board.length === 0) {
     notes.push('No community cards are known yet, so five more cards are still to come.');

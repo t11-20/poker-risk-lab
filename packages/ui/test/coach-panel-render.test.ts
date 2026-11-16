@@ -702,6 +702,32 @@ test('an exact count names showdowns, which a complete river has without any boa
   assert.doesNotMatch(markup, /boards? enumerated/u);
 });
 
+test('the derivation and the uncertainty note count what the equity tile counts (REGRESSION)', async () => {
+  const text = (markup: string) => markup.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+  const sentenceOf = (markup: string, opening: string) => {
+    const start = text(markup).indexOf(opening);
+    assert.notEqual(start, -1, `"${opening}" is rendered`);
+    return text(markup).slice(start, text(markup).indexOf('.', start) + 1);
+  };
+  const river = text(
+    await render({
+      ...NINE_OUT_DRAW,
+      street: 'river',
+      outs: null,
+      equity: { ...NINE_OUT_DRAW.equity, trials: 417, ruleOfThumb: null },
+    }),
+  );
+  assert.equal(sentenceOf(river, 'Equity came from'), 'Equity came from exact enumeration of 417 showdowns.');
+  assert.match(river, /Every showdown was enumerated, so there is no sampling error in this figure\./u);
+  assert.doesNotMatch(river, /Every remaining board/u, 'a complete river has no board to come');
+  const sampled = await render(CHECKED_TO);
+  assert.equal(
+    sentenceOf(sampled, 'Equity came from'),
+    'Equity came from Monte Carlo sampling of 40,000 runs.',
+  );
+  assert.match(text(sampled), /40,000 runs sampled\./u, 'the tile names the same count');
+});
+
 test('with no more betting, the stack section shows no SPR band and no pot-sized-bet price', async () => {
   const stackText = (markup: string): string => {
     const start = markup.indexOf('>Stack context</h3>');

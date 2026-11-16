@@ -101,13 +101,13 @@ const METHOD_CHIP: Readonly<
 };
 
 /**
- * Spelled out, because `pluralise` would produce "80,000 trial sampleds". An exact count is opponent
+ * Spelled out, because `pluralise` would produce "80,000 run sampleds". An exact count is opponent
  * hands times boards to come, so a complete river has a count and no boards.
  */
 const TRIAL_NOUN: Readonly<Record<EquitySummary['method'], { readonly one: string; readonly many: string }>> =
   {
     'exact-enumeration': { one: 'showdown enumerated', many: 'showdowns enumerated' },
-    'monte-carlo': { one: 'trial sampled', many: 'trials sampled' },
+    'monte-carlo': { one: 'run sampled', many: 'runs sampled' },
   };
 
 interface RefusedFigureProps {
@@ -776,8 +776,10 @@ export function CoachPanel(props: CoachPanelProps): ReactElement {
           <RuleOfThumbLine rule={rule} />
           <p className="prl-coach__prose">
             {`Equity came from ${
-              isSampled ? 'Monte Carlo sampling' : 'exact enumeration'
-            } over ${pluralise(equity.trials, 'run')}. ${
+              isSampled
+                ? `Monte Carlo sampling of ${pluralise(equity.trials, 'run')}`
+                : `exact enumeration of ${pluralise(equity.trials, 'showdown')}`
+            }. ${
               intervalText === null
                 ? 'No interval was reported with it.'
                 : `The interval beside the figure, ${intervalText}, is the sampling error at the level stated below.`

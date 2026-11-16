@@ -601,7 +601,7 @@ function resolveEquity(calculation: Extract<LiveCalculation, { kind: 'equity' }>
         ? {
             label: 'exact enumeration',
             glyph: '=',
-            note: `Every one of ${formatChips(result.trials)} remaining run-outs was played out, so there is no sampling error.`,
+            note: `Every showdown was played out (${formatChips(result.trials)} ${result.trials === 1 ? 'showdown' : 'showdowns'}), so there is no sampling error.`,
           }
         : {
             label: 'Monte Carlo sampling',

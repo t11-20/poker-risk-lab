@@ -153,3 +153,22 @@ test('a contest reports the first player its share of a pot only that group play
   assert.equal(exactEquity({ players, board }).contestShares, undefined, 'absent unless asked for');
   assert.throws(() => exactEquity({ players, board, contests: [[0]] }), /index 1 to 3/);
 });
+
+test('an exact count is stated as showdowns, which a complete board has with no board to come (REGRESSION)', () => {
+  const hero = parseCards('Ac Kd');
+  const river = exactEquity({
+    players: [
+      { label: 'hero', range: exactRange(hero) },
+      { label: 'villain', range: parseRange('QQ, JJ', hero) },
+    ],
+    board: parseCards('Th 9d 8c 7s 2h'),
+  });
+  assert.equal(river.trials, 12, 'six queens and six jacks, one showdown each');
+  assert.ok(
+    river.assumptions.includes(
+      'Computed by enumerating every showdown the ranges allow — there is no sampling error.',
+    ),
+    river.assumptions.join('\n'),
+  );
+  assert.ok(!river.assumptions.some((note) => /remaining board/u.test(note)));
+});
