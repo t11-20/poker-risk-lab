@@ -93,9 +93,8 @@ export function bestMeasuredCandidate(report: CoachReport): ActionCandidate | nu
 }
 
 /**
- * The row the suggestion's EV is shown from: its action and, within a size range, the highest-EV size,
- * because the reading takes the best row and spans the sizes within a big blind of it. Ties go to the
- * smaller size. `null` rather than a guess, because an EV attributed to the wrong line is worse.
+ * The row the suggestion's EV is shown from: within a size range the highest-EV size, a tie going to the
+ * smaller as the Coach's does. An EV attributed to a different size misrepresents the reading.
  */
 export function suggestedCandidate(report: Pick<CoachReport, 'candidates' | 'suggestion'>) {
   const { action, sizeRange } = report.suggestion;
@@ -104,7 +103,10 @@ export function suggestedCandidate(report: Pick<CoachReport, 'candidates' | 'sug
   for (const candidate of matches) {
     const to = candidate.to;
     if (sizeRange === undefined || to === undefined || to < sizeRange.min || to > sizeRange.max) continue;
-    if (pick === null || candidate.ev > pick.ev) pick = candidate;
+    const better = pick === null || candidate.ev > pick.ev;
+    const smallerTie =
+      pick !== null && candidate.ev === pick.ev && to < (pick.to ?? Number.POSITIVE_INFINITY);
+    if (better || smallerTie) pick = candidate;
   }
   return pick ?? matches[0] ?? null;
 }
