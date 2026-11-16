@@ -458,7 +458,7 @@ export const LEARN_QUIZZES: readonly Quiz[] = [
         ],
         correctIndex: 1,
         explanation:
-          'One result carries almost no information about a decision. A call needing a quarter and delivering a third loses two times in three and still gains chips every time it is made. What can be reviewed is the input: was the price computed correctly, and was the range you assumed defensible? Those you can check. The outcome you cannot.',
+          'One result carries almost no information about a decision. A call needing a quarter and delivering a third loses two times in three and still gains chips on average each time it is made. What can be reviewed is the input: was the price computed correctly, and was the range you assumed defensible? Those you can check. The outcome you cannot.',
         optionNotes: [
           'This is the single most expensive habit of thought in poker: grading decisions by their results.',
           'Correct: the result is nearly uninformative, and the inputs are what can be reviewed.',

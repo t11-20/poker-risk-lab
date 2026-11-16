@@ -5,23 +5,12 @@
  */
 
 import type { FoldEquityRepricing, RepricedRow } from '@prl/poker-math';
+import { rowName } from './consistency.ts';
 
 export interface Formatters {
   readonly units: (value: number) => string;
   /** `formatSignedUnits` at one decimal: "+41.4 units", "-8.4 units". */
   readonly signed: (value: number) => string;
-}
-
-const WORD: Readonly<Record<RepricedRow['action'], string>> = {
-  fold: 'Fold',
-  check: 'Check',
-  call: 'Call',
-  bet: 'Bet',
-  raise: 'Raise',
-};
-
-export function rowName(row: RepricedRow, format: Formatters): string {
-  return row.to === null ? WORD[row.action] : `${WORD[row.action]} to ${format.units(row.to)}`;
 }
 
 /** A fraction as a whole percentage, the precision the control moves in. */
@@ -46,7 +35,7 @@ export function repricingSummary(
 ): string {
   const at = percentText(repriced.foldEquity);
   const analysedAt = percentText(repriced.analysedFoldEquity);
-  const best = `${rowName(repriced.best, format)}, worth ${format.signed(repriced.best.ev)}`;
+  const best = `${rowName(repriced.best, format.units)}, worth ${format.signed(repriced.best.ev)}`;
   if (repriced.foldEquity === repriced.analysedFoldEquity) {
     return `At the analysed ${analysedAt}, the highest row is ${best}.`;
   }
@@ -54,5 +43,5 @@ export function repricingSummary(
     repriced.best.action === repriced.analysedBest.action && repriced.best.to === repriced.analysedBest.to;
   return sameRow
     ? `At ${at}, the highest row is still ${best}.`
-    : `At ${at}, the highest row is ${best}. At the analysed ${analysedAt} it was ${rowName(repriced.analysedBest, format)}.`;
+    : `At ${at}, the highest row is ${best}. At the analysed ${analysedAt} it was ${rowName(repriced.analysedBest, format.units)}.`;
 }

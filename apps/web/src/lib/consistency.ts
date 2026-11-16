@@ -13,6 +13,7 @@ import {
   nearestPricedSizes,
   pricedSizesFor,
 } from '@prl/poker-math';
+import { formatUnits } from '@prl/ui/format';
 
 /** The action names a learner can commit to. Matches `ScenarioAttemptRequest.action`. */
 export type ScenarioAction = ActionCandidate['action'];
@@ -24,9 +25,8 @@ export interface Consistency {
   readonly chosenEv: number | null;
   /** The best EV in the candidate table. Folding is always available at 0, so this is never below 0. */
   readonly bestEv: number;
-  /** The action that carries `bestEv`, for naming it in the copy. */
-  readonly bestAction: ScenarioAction | null;
-  readonly bestTo: number | null;
+  /** The row that carries `bestEv`, named as `rowName` names it. */
+  readonly bestName: string | null;
   /** `bestEv - chosenEv`. Shown, but NOT what decides `consistent`, which measures against folding. */
   readonly gapUnits: number | null;
   /** The margin the verdict used, one big blind, in chips. Shown so a reader can argue with it. */
@@ -81,8 +81,7 @@ export function judgeConsistency(
     consistent: verdict.consistent,
     chosenEv,
     bestEv: verdict.bestEv,
-    bestAction: best === null ? null : best.action,
-    bestTo: best === null || best.to === undefined ? null : best.to,
+    bestName: best === null ? null : rowName({ ...best, to: best.to ?? null }, formatUnits),
     gapUnits: chosenEv === null ? null : verdict.bestEv - chosenEv,
     toleranceUnits: verdict.marginUnits,
     shortfallUnits: verdict.shortfallUnits,
@@ -95,6 +94,28 @@ export function judgeConsistency(
         ? nearestPricedSizes(to, pricedSizesFor(report, action))
         : null,
   };
+}
+
+const ROW_WORD: Readonly<Record<ScenarioAction, string>> = {
+  fold: 'Fold',
+  check: 'Check',
+  call: 'Call',
+  bet: 'Bet',
+  raise: 'Raise',
+};
+
+/** A call's `to` is the street total, so a call is named by its cost, as its Call button is. */
+export function rowName(
+  row: {
+    readonly action: ScenarioAction;
+    readonly to: number | null;
+    readonly cost: number;
+    readonly allIn?: true;
+  },
+  units: (value: number) => string,
+): string {
+  if (row.action === 'call') return `Call ${row.allIn === true ? 'all in, ' : ''}${units(row.cost)}`;
+  return row.to === null ? ROW_WORD[row.action] : `${ROW_WORD[row.action]} to ${units(row.to)}`;
 }
 
 /** Outside the component so `node:test` can run it. `units` is passed in because `@prl/ui` carries JSX. */

@@ -160,10 +160,7 @@ function Verdict({
   readonly action: ScenarioAction;
   readonly server: ServerVerdict;
 }): ReactElement {
-  const best =
-    judgement.bestAction === null
-      ? ''
-      : ` — ${ACTION_WORD[judgement.bestAction]}${judgement.bestTo === null ? '' : ` to ${formatUnits(judgement.bestTo)}`}`;
+  const best = judgement.bestName === null ? '' : ` — ${judgement.bestName}`;
   // The server's answer wins when there is one, because it is the verdict that was recorded.
   const consistent = server.state === 'live' ? server.consistent : judgement.consistent;
   return (
