@@ -880,7 +880,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       action: 'fold',
       confidence: 'low',
       reason:
-        'Fold comes out marginally ahead here, but only just — treat this as close to indifferent rather than as a recommendation. Raising to 120 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats folding only if they fold more than 15.1% of the time.',
+        'Fold comes out ahead of calling by only 2.2 units, under a quarter of a big blind — treat this as close to indifferent rather than as a recommendation. Raising to 120 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats folding only if they fold more than 15.1% of the time.',
       whatWouldChangeIt: [
         'A wider opponent range would raise your equity and can flip a fold into a call.',
         'A narrower, stronger range does the opposite.',
@@ -1361,7 +1361,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       },
       confidence: 'low',
       reason:
-        'Call comes out marginally ahead here, but only just — treat this as close to indifferent rather than as a recommendation. Raising to 80 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats calling only if they fold more than 4% of the time.',
+        'Call comes out ahead of raising to 80 (counted as always called) by only 4.3 units, under a quarter of a big blind — treat this as close to indifferent rather than as a recommendation. Raising to 80 shows a higher figure only because it assumes they fold 35% of the time, which nothing here measures. It beats calling only if they fold more than 4% of the time.',
       whatWouldChangeIt: [
         'A wider opponent range would raise your equity and can flip a fold into a call.',
         'A narrower, stronger range does the opposite.',

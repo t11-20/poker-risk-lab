@@ -1182,6 +1182,45 @@ function readsCloserNote(
   );
 }
 
+/** A row's EV under `split`, at its fold rate unless counted as always called. */
+function valueUnder(row: ActionCandidate, alwaysCalled: boolean, input: CoachInput, split: PotSplit): number {
+  if (row.action === 'fold') return 0;
+  const { whenCalled, whenFolded } = branchesOf(row, input, split);
+  const f = alwaysCalled ? 0 : (row.foldEquityAssumed ?? 0);
+  return f * whenFolded + (1 - f) * whenCalled;
+}
+
+function gapAt(best: ActionCandidate, rival: Rival, input: CoachInput, split: PotSplit): number {
+  return valueUnder(best, false, input, split) - valueUnder(rival.row, rival.alwaysCalled, input, split);
+}
+
+/** `intervalPoints` is 0 when the interval cannot close the gap, so only one that can lowers it. */
+function confidenceFor(marginInBigBlinds: number, intervalPoints: number): CoachSuggestion['confidence'] {
+  if (marginInBigBlinds < 0.25 || intervalPoints > 2) return 'low';
+  if (marginInBigBlinds < 1 || intervalPoints > 0.75) return 'moderate';
+  return 'reasonable';
+}
+
+/**
+ * The most the sampling error can move the gap between two lines. Every EV is linear in the shares,
+ * so repricing both with each contested share moved by the half-width gives it. A wide interval that
+ * cannot close the gap does not make the reading any less sure.
+ */
+function sampledSwing(
+  best: ActionCandidate,
+  rival: Rival,
+  input: CoachInput,
+  split: PotSplit,
+  halfWidthPoints: number,
+): number {
+  const by = halfWidthPoints / 100;
+  const shifted: PotSplit = {
+    ...split,
+    share: (group) => (group.length === 0 ? 1 : split.share(group) + by),
+  };
+  return Math.abs(gapAt(best, rival, input, shifted) - gapAt(best, rival, input, split));
+}
+
 /** A row as the reading names it: "calling", "raising to 88". */
 function lineName(row: ActionCandidate): string {
   if (row.action === 'bet') return `betting ${chips(row.to ?? row.cost)}`;
@@ -1231,8 +1270,8 @@ function seatsBehindNotes(
 
 /**
  * Picks the highest-EV candidate that is ahead without the assumed fold rate, then weakens the claim
- * when the margin is small against a big blind or the equity interval is wide. It may never conclude
- * fold while checking is free, and asserts so.
+ * when the margin is small against a big blind or a wide equity interval could close it. It may never
+ * conclude fold while checking is free, and asserts so.
  */
 function buildSuggestion(
   candidates: readonly ActionCandidate[],
@@ -1275,9 +1314,9 @@ function buildSuggestion(
   const marginInBigBlinds = margin / input.bigBlind;
   const intervalPoints = equitySummary.confidenceHalfWidthPoints ?? 0;
 
-  let confidence: CoachSuggestion['confidence'] = 'reasonable';
-  if (marginInBigBlinds < 0.25 || intervalPoints > 2) confidence = 'low';
-  else if (marginInBigBlinds < 1 || intervalPoints > 0.75) confidence = 'moderate';
+  const swing = rival === undefined ? 0 : sampledSwing(best, rival, input, split, intervalPoints);
+  const smallMargin = marginInBigBlinds < 0.25;
+  let confidence = confidenceFor(marginInBigBlinds, swing >= margin ? intervalPoints : 0);
   // The call row is the least a call is worth if nobody raises, so a fold it loses only there is open.
   const openBehind = best.action === 'fold' && behind !== null && behind.ev > 0 ? behind : null;
   if (openBehind !== null) confidence = 'low';
@@ -1346,9 +1385,11 @@ function buildSuggestion(
   const reason =
     (openBehind !== null
       ? `${actionWord} has the highest expected value ${against}, by ${margin.toFixed(1)} units over ${rivalName}, but the price leaves out what ${yetToMatch(openBehind)} would put in — treat this as close rather than as a recommendation.`
-      : confidence === 'low'
-        ? `${actionWord} comes out marginally ahead here, but only just — treat this as close to indifferent rather than as a recommendation.`
-        : `${actionWord} has the highest expected value ${against}, by ${margin.toFixed(1)} units over ${rivalName}.`) +
+      : confidence === 'low' && smallMargin
+        ? `${actionWord} comes out ahead of ${rivalName} by only ${margin.toFixed(1)} units, under a quarter of a big blind — treat this as close to indifferent rather than as a recommendation.`
+        : confidence === 'low'
+          ? `${actionWord} has the highest expected value ${against}, by ${margin.toFixed(1)} units over ${rivalName}, but the equity is sampled to ±${intervalPoints.toFixed(2)} points, which could move that gap by up to ${swing.toFixed(1)} units — treat this as close rather than as a recommendation.`
+          : `${actionWord} has the highest expected value ${against}, by ${margin.toFixed(1)} units over ${rivalName}.`) +
     (setAside === '' ? readsCloserNote(ranked, best, rival) : setAside);
 
   return {
