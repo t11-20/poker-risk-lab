@@ -75,9 +75,8 @@ test('a flush draw facing a small bet reads call, and names the raise and the fo
 });
 
 test('control: top pair against a check-raising range at 70 big blinds stays a raise', () => {
-  // At f = 0 a raise by r is worth EV(call) + r(2e - 1), so with e above one half every size is ahead
-  // of calling without a single fold. It rests on the range, not on the fold rate. The reading stops at
-  // the pot-sized raise to 680, 190 + 490.
+  // At f = 0 a raise by r is worth EV(call) + r(2e - 1), so with e above one half every size beats calling
+  // on the range alone. The reading stops at the pot-sized raise to 680, 190 + 490.
   const report = spot({
     heroCards: parseCards('Ah Kd'),
     board: parseCards('Kc 8d 3s'),

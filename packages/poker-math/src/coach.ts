@@ -1137,10 +1137,8 @@ function foldRateNote(row: ActionCandidate, reading: ActionCandidate, input: Coa
 type SetAside = 'fold-rate' | 'above-pot';
 
 /**
- * Above pot, measured on what can be called. Every row assumes the whole range calls any size, so with
- * more than half of a called pot each chip added reads as profit and the largest size always ranks first.
- * An all-in up to twice the pot is kept: a pot-sized bet would leave under a third of the pot behind, so
- * it commits the stack just the same.
+ * Every row assumes the whole range calls any size, so past the pot each added chip reads as profit. An
+ * all-in up to twice the pot is kept, because a pot-sized bet would commit the stack just the same.
  */
 function abovePot(row: ActionCandidate, input: CoachInput, times = row.allIn === true ? 2 : 1): boolean {
   if (row.action !== 'bet' && row.action !== 'raise') return false;

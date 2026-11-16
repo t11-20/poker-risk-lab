@@ -1,8 +1,7 @@
 /**
- * Every bet and raise is priced as if the whole range calls any size, so with more than half of a
- * called pot the largest size always ranks first. The reading stops at a pot-sized bet or raise, or an
- * all-in of at most twice the pot, and says why the larger row reads higher. Hero holds the nut straight here, so e = 1 and every figure
- * is worked by hand: a bet of B into P shows 0.35P + 0.65(P + 2B - B).
+ * With the whole range assumed to call any size, the largest size would always rank first, so the reading
+ * stops at pot or a twice-pot all-in. Hero holds the nut straight, so e = 1 and a bet of B into P shows
+ * 0.35P + 0.65(P + 2B - B).
  */
 
 import assert from 'node:assert/strict';
