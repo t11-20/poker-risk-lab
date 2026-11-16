@@ -16,9 +16,9 @@ function foldRateLine(report: ReturnType<typeof buildCoachReport>): string {
   return line;
 }
 
-test('a flop shove worth +441 called and +20 folded to gets better as they fold less', () => {
-  // The Legends spot: A♥Q♥ on 4♥ J♠ J♥, 20 in the pot, both 990 deep. Called, the 990 shove is worth
-  // 0.7156 x 2,000 - 990 = +441; folded to, it wins the 20.
+test('a flop bet worth +22.9 called and +20 folded to gets better as they fold less', () => {
+  // The Legends spot: A♥Q♥ on 4♥ J♠ J♥, 20 in the pot, both 990 deep. The reading stops at the
+  // pot-sized 20, which called is worth 0.7156 x 60 - 20 = +22.9; folded to, it wins the 20.
   const hero = parseCards('Ah Qh');
   const report = buildCoachReport({
     heroCards: hero,
@@ -36,7 +36,7 @@ test('a flop shove worth +441 called and +20 folded to gets better as they fold 
     bigBlind: 10,
   });
   assert.equal(report.suggestion.action, 'bet');
-  assert.deepEqual(report.suggestion.sizeRange, { min: 990, max: 990 });
+  assert.equal(report.suggestion.sizeRange?.max, 20);
   const line = foldRateLine(report);
   assert.match(line, /folds more often makes it worse/);
   assert.doesNotMatch(line, /folds less often makes it worse/);

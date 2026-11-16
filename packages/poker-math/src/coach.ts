@@ -1133,9 +1133,59 @@ function foldRateNote(row: ActionCandidate, reading: ActionCandidate, input: Coa
   );
 }
 
+/** Why a row cannot be the reading. Either way the margin counts it as always called. */
+type SetAside = 'fold-rate' | 'above-pot';
+
+/**
+ * Every row assumes the whole range calls any size, so past the pot each added chip reads as profit. An
+ * all-in up to twice the pot is kept, because a pot-sized bet would commit the stack just the same.
+ */
+function abovePot(row: ActionCandidate, input: CoachInput, times = row.allIn === true ? 2 : 1): boolean {
+  if (row.action !== 'bet' && row.action !== 'raise') return false;
+  return row.cost - input.toCall > times * (input.contestablePot + input.toCall);
+}
+
+function setAsideFor(
+  row: ActionCandidate,
+  input: CoachInput,
+  split: PotSplit,
+  measuredBest: number,
+): SetAside | null {
+  if (restsOnAssumedFoldEquity(row) && branchesOf(row, input, split).whenCalled < measuredBest) {
+    return 'fold-rate';
+  }
+  return abovePot(row, input) ? 'above-pot' : null;
+}
+
+/** Empty unless a row above pot reads higher on the table than the reading does, or is the reading. */
+function abovePotNote(
+  ranked: readonly ActionCandidate[],
+  best: ActionCandidate,
+  setAside: ReadonlyMap<ActionCandidate, SetAside>,
+  input: CoachInput,
+): string {
+  if (abovePot(best, input, 1)) {
+    const kind = best.action === 'bet' ? 'bet' : 'raise';
+    return (
+      ` ${capitalised(lineName(best))} is more than the pot. It is kept because a pot-sized ${kind} would ` +
+      'leave under a third of the pot behind, but its figure assumes the whole range calls any size, and ' +
+      'a real opponent folds more of the hands you beat as the size grows.'
+    );
+  }
+  const shown = ranked.find((row) => setAside.get(row) === 'above-pot');
+  if (shown === undefined || shown.ev <= best.ev) return '';
+  const kind = shown.action === 'bet' ? 'bet' : 'raise';
+  return (
+    ` ${capitalised(lineName(shown))} shows a higher figure only because every figure here assumes the ` +
+    `whole range calls any size, so past a pot-sized ${kind} each extra unit reads as profit. A real ` +
+    'opponent folds more of the hands you beat as the size grows, so the reading goes no higher than a ' +
+    `pot-sized ${kind}, or all in when that is at most twice the pot.`
+  );
+}
+
 interface Rival {
   readonly row: ActionCandidate;
-  /** True for a row set aside on the fold rate, which is measured at its always-called value. */
+  /** True for a row set aside, which is measured at its always-called value. */
   readonly alwaysCalled: boolean;
   readonly value: number;
 }
@@ -1322,9 +1372,12 @@ function buildSuggestion(
     0,
     ...candidates.filter((c) => !restsOnAssumedFoldEquity(c)).map((c) => c.ev),
   );
-  const eligible = ranked.filter(
-    (c) => !restsOnAssumedFoldEquity(c) || branchesOf(c, input, split).whenCalled >= measuredBest,
-  );
+  const setAsideBy = new Map<ActionCandidate, SetAside>();
+  for (const c of ranked) {
+    const why = setAsideFor(c, input, split, measuredBest);
+    if (why !== null) setAsideBy.set(c, why);
+  }
+  const eligible = ranked.filter((c) => !setAsideBy.has(c));
   const best = eligible[0] ?? top;
   const rival = rivalOf(ranked, eligible, best, input, split);
   const runnerUp = rival?.value ?? Number.NEGATIVE_INFINITY;
@@ -1423,7 +1476,8 @@ function buildSuggestion(
         : confidence === 'low' && overtaker !== undefined
           ? `${actionWord} has the highest expected value ${against}, by ${margin.toFixed(1)} units over ${rivalName}, but the equity is sampled to ±${intervalPoints.toFixed(2)} points, and at the ${overtaker.end} end ${nameOfRival(overtaker)} comes out ahead by ${overtaker.ahead.toFixed(1)} units — treat this as close rather than as a recommendation.`
           : `${actionWord} has the highest expected value ${against}, by ${margin.toFixed(1)} units over ${rivalName}.`) +
-    (setAside === '' ? readsCloserNote(ranked, best, rival) : setAside);
+    (setAside === '' ? readsCloserNote(ranked, best, rival) : setAside) +
+    abovePotNote(ranked, best, setAsideBy, input);
 
   return {
     action: best.action,
