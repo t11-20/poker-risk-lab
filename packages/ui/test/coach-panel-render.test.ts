@@ -531,18 +531,28 @@ test('explanatory prose under outs and stack is behind a disclosure, and the fig
   assert.ok(!inDisclosure('One reading of this spot'), 'and so does the suggestion');
 });
 
-test('a size range whose two ends are one figure prints it once', async () => {
-  const single = await render({
-    ...NINE_OUT_DRAW,
-    suggestion: { ...NINE_OUT_DRAW.suggestion, sizeRange: { min: 50, max: 50 } },
-  });
-  assert.match(single, /Call — 50 units</u);
-  assert.doesNotMatch(single, /50 units to 50 units/u);
-  const spread = await render({
-    ...NINE_OUT_DRAW,
-    suggestion: { ...NINE_OUT_DRAW.suggestion, sizeRange: { min: 50, max: 80 } },
-  });
-  assert.match(spread, /Call — 50 units to 80 units</u);
+test('a size range reads as totals the Coach priced, and equal ends print one size', async () => {
+  const suggesting = async (suggestion: Partial<CoachReport['suggestion']>) => {
+    const markup = await render({
+      ...NINE_OUT_DRAW,
+      suggestion: { ...NINE_OUT_DRAW.suggestion, ...suggestion },
+    });
+    return { markup, action: /class="prl-suggestion__action">([^<]*)</u.exec(markup)?.[1] };
+  };
+  const spread = await suggesting({ action: 'raise', sizeRange: { min: 120, max: 380 } });
+  assert.equal(spread.action, 'Raise to 120–380 units');
+  assert.ok(
+    spread.markup.includes(
+      'Each raise size the Coach priced from 120 to 380 units is within one big blind of the highest expected value among them.',
+    ),
+    'a span says what its ends mean',
+  );
+  const single = await suggesting({ action: 'bet', sizeRange: { min: 400, max: 400 } });
+  assert.equal(single.action, 'Bet to 400 units');
+  const call = await suggesting({ action: 'call', sizeRange: { min: 50, max: 50 } });
+  assert.equal(call.action, 'Call — 50 units');
+  for (const { markup } of [single, call])
+    assert.doesNotMatch(markup, /priced from/u, 'one size has no span');
 });
 
 test('a negative margin over break-even is said to be under it (REGRESSION)', async () => {
