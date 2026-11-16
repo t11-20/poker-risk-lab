@@ -39,6 +39,7 @@ import { cx } from '../cx.ts';
  */
 import {
   describeSpr,
+  formatChips,
   formatOdds,
   formatPoints,
   formatSignedUnits,
@@ -527,6 +528,8 @@ interface SuggestionBlockProps {
 function SuggestionBlock({ suggestion, candidate }: SuggestionBlockProps): ReactElement {
   const changes = withKeys(suggestion.whatWouldChangeIt, 'change');
   const range = suggestion.sizeRange;
+  // A bet or raise range is street totals, so "to"; a bare span reads as a raise from one figure to the other.
+  const sized = range !== undefined && (suggestion.action === 'bet' || suggestion.action === 'raise');
 
   return (
     <div className="prl-suggestion">
@@ -538,14 +541,22 @@ function SuggestionBlock({ suggestion, candidate }: SuggestionBlockProps): React
           {/* A range, because one figure claims false precision. Equal ends (often all-in) print once. */}
           {range === undefined
             ? ''
-            : range.min === range.max
+            : !sized
               ? ` — ${formatUnits(range.min)}`
-              : ` — ${formatUnits(range.min)} to ${formatUnits(range.max)}`}
+              : range.min === range.max
+                ? ` to ${formatUnits(range.min)}`
+                : ` to ${formatChips(range.min)}–${formatUnits(range.max)}`}
         </p>
         <span className="prl-suggestion__confidence" data-confidence={suggestion.confidence}>
           {CONFIDENCE_WORD[suggestion.confidence]}
         </span>
       </div>
+
+      {sized && range.min !== range.max ? (
+        <p className="prl-suggestion__reason">
+          {`Each ${suggestion.action} size the Coach priced from ${formatChips(range.min)} to ${formatUnits(range.max)} is within one big blind of the highest expected value among them.`}
+        </p>
+      ) : null}
 
       {candidate === null ? null : (
         <Metric

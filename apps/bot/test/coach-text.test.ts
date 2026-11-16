@@ -157,14 +157,15 @@ describe('the Coach in chat', () => {
     assert.doesNotMatch(call, /1,000/);
     assert.match(suggesting({ action: 'check', sizeRange: { min: 10, max: 10 } }), /^One reading: Check \(/m);
     assert.match(suggesting({ action: 'fold' }), /^One reading: Fold \(/m);
+    const spread = suggesting({ action: 'raise', sizeRange: { min: 20, max: 35 } });
+    assert.match(spread, /^One reading: Raise to 20–35 units \(/m);
     assert.match(
-      suggesting({ action: 'raise', sizeRange: { min: 20, max: 35 } }),
-      /^One reading: Raise to between 20 units and 35 units \(/m,
+      spread,
+      /^Each raise size the Coach priced from 20 to 35 units is within one big blind of the highest expected value among them\.$/m,
     );
-    assert.match(
-      suggesting({ action: 'bet', sizeRange: { min: 40, max: 40 } }),
-      /^One reading: Bet to 40 units \(/m,
-    );
+    const single = suggesting({ action: 'bet', sizeRange: { min: 40, max: 40 } });
+    assert.match(single, /^One reading: Bet to 40 units \(/m);
+    for (const text of [single, call]) assert.doesNotMatch(text, /priced from/, 'one size has no span');
   });
 
   test('Why? names opponents as the table does, never by a seat number the table does not show', () => {
