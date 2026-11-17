@@ -28,6 +28,7 @@ import { LEGENDS_PATH, legendMatchHref, PLAY_PATH } from '@/lib/legend-links.ts'
 import { describeTable } from '@/lib/table-description.ts';
 import { INVITE_CODE_EXAMPLE, MAX_INVITE_CODE_INPUT } from '@/lib/table-rooms.ts';
 import type { TableSocketStatus } from '@/lib/table-socket.ts';
+import { keepLabel } from '@/lib/table-switch.ts';
 import { type LiveTable as LiveTableModel, type SwitchWarning, useLiveTable } from '@/lib/use-live-table.ts';
 
 /**
@@ -386,7 +387,7 @@ function SwitchTablesNotice({
   live,
   warning,
 }: ConnectionPanelProps & { readonly warning: SwitchWarning }): ReactElement {
-  const keep = warning.starting === 'legendMatch' ? 'Keep my other Legends match' : 'Keep my Legends match';
+  const keep = keepLabel(warning.other, warning.starting);
   const match = warning.other.kind === 'legendMatch' ? warning.other.match : null;
   return (
     <Callout tone="warning" title="Switching tables resets your units">
@@ -403,7 +404,7 @@ function SwitchTablesNotice({
             href={PLAY_PATH}
             onClick={live.stayAtOtherTable}
           >
-            Stay at my bot table
+            {keep}
           </Link>
         ) : match === null ? (
           <Button variant="secondary" onClick={live.keepOtherTable}>

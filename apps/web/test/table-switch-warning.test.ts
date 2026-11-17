@@ -16,7 +16,7 @@ import type {
   RoomSummary,
 } from '@prl/contracts';
 import { BOT_TABLE_REQUEST, FRIENDS_TABLE_REQUEST } from '../src/lib/table-rooms.ts';
-import { createsPracticeTable, practiceTableToRetire } from '../src/lib/table-switch.ts';
+import { createsPracticeTable, keepLabel, practiceTableToRetire } from '../src/lib/table-switch.ts';
 import {
   openPracticeRoom,
   type PracticeRoomDependencies,
@@ -320,9 +320,33 @@ describe('"Stay at my bot table" (REGRESSION: /play resumed a private table reme
 
   it('runs on the link itself', () => {
     const panel = readFileSync(new URL('../src/app/play/LiveTable.tsx', import.meta.url), 'utf8');
-    assert.match(
-      panel,
-      /href=\{PLAY_PATH\}\s*onClick=\{live\.stayAtOtherTable\}\s*>\s*Stay at my bot table/u,
+    assert.match(panel, /href=\{PLAY_PATH\}\s*onClick=\{live\.stayAtOtherTable\}\s*>\s*\{keep\}/u);
+  });
+});
+
+describe('the button that leaves the other table alone', () => {
+  const match = { profileId: 'calling-station', difficulty: 'realistic' } as const;
+  it('offers to keep a table there is one to go back to', () => {
+    assert.equal(
+      keepLabel({ roomId: 'r', stack: 900, kind: 'botTable' }, 'legendMatch'),
+      'Stay at my bot table',
     );
+    assert.equal(
+      keepLabel({ roomId: 'r', stack: 900, kind: 'legendMatch', match }, 'botTable'),
+      'Keep my Legends match',
+    );
+    assert.equal(
+      keepLabel({ roomId: 'r', stack: 900, kind: 'legendMatch', match }, 'legendMatch'),
+      'Keep my other Legends match',
+    );
+  });
+
+  it('promises nothing for a finished match, which it can only leave as it is', () => {
+    for (const starting of ['botTable', 'legendMatch'] as const) {
+      assert.equal(
+        keepLabel({ roomId: 'r', stack: 0, kind: 'legendMatch', match: null }, starting),
+        'Not now',
+      );
+    }
   });
 });
