@@ -1390,10 +1390,12 @@ function readsCloserNote(
 ) {
   const shown = ranked.find((c) => c.action !== best.action);
   if (shown === undefined || rival === undefined || shown === rival.row || shown.ev <= rival.value) return '';
-  return (
-    ` ${capitalised(lineName(shown))} reads closer on the table only because it assumes they fold ` +
-    `${((shown.foldEquityAssumed ?? 0) * 100).toFixed(0)}% of the time.`
-  );
+  const closer = ` ${capitalised(lineName(shown))} reads closer on the table only because it assumes`;
+  // Priced against the hands that continue, the fold rate is who does not call, not a separate guess.
+  if (shown.continuingShare !== undefined && shown.continuingShare < 1) {
+    return `${closer} the weakest ${shareOf(1 - shown.continuingShare)} of the range folds to it.`;
+  }
+  return `${closer} they fold ${((shown.foldEquityAssumed ?? 0) * 100).toFixed(0)}% of the time.`;
 }
 
 /**

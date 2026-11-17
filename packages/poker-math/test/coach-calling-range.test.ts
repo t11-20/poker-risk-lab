@@ -406,3 +406,13 @@ test('a size range stops at a size the reading sets aside, so it never spans one
   assert.equal(report.suggestion.action, 'raise');
   assert.deepEqual(report.suggestion.sizeRange, { min: 100, max: 117 });
 });
+
+test('a raise that reads closer on its folds names them as the weakest part of the range', () => {
+  // Facing 80 into 100, raising to 160 asks 180 / 260 of 39 for 27, so the weakest 12 fold: 31%.
+  const report = buildCoachReport(river(80));
+  close(rowAt(report, 160).foldEquityAssumed, 12 / 39, 'fold rate');
+  assert.match(
+    report.suggestion.reason,
+    / Raising to 160 reads closer on the table only because it assumes the weakest 31% of the range folds to it\.$/,
+  );
+});

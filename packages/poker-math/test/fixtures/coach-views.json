@@ -1472,7 +1472,7 @@
       "suggestion": {
         "action": "fold",
         "confidence": "reasonable",
-        "reason": "Fold has the highest expected value against the stated range, by 34.4 units over calling. Raising to 80 reads closer on the table only because it assumes they fold 39% of the time.",
+        "reason": "Fold has the highest expected value against the stated range, by 34.4 units over calling. Raising to 80 reads closer on the table only because it assumes the weakest 39% of the range folds to it.",
         "whatWouldChangeIt": [
           "A wider opponent range would raise your equity and can flip a fold into a call.",
           "A narrower, stronger range does the opposite."
