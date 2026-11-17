@@ -6,6 +6,7 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import * as callingRange from '../src/calling-range.ts';
 import * as coach from '../src/coach.ts';
 import * as coachView from '../src/coach-view.ts';
 import * as consistency from '../src/consistency.ts';
@@ -24,6 +25,7 @@ import * as tableSizing from '../src/table-sizing.ts';
 import * as variance from '../src/variance.ts';
 
 const PUBLIC_MODULES: readonly (readonly [string, Record<string, unknown>])[] = [
+  ['calling-range.ts', callingRange],
   ['coach.ts', coach],
   ['coach-view.ts', coachView],
   ['consistency.ts', consistency],
