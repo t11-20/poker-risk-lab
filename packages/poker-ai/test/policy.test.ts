@@ -518,6 +518,37 @@ test('an aggressive profile bets or raises more often than a passive one in the 
   );
 });
 
+function assumedFoldFrequency(state: HandState, seat: SeatIndex): string {
+  const decision = decide(
+    inputFor({
+      state,
+      seat,
+      traits: traitsFor('vocal-aggressor'),
+      difficulty: fastSettings('realistic'),
+      seed: 9,
+    }),
+  );
+  const bet = decision.distribution.find((entry) => entry.action.type === 'bet');
+  assert.ok(bet !== undefined, 'a bet must be on offer');
+  return /assumed fold frequency of [^.]*\d\.\d%[^.]*/.exec(bet.rationale)?.[0] ?? bet.rationale;
+}
+
+test('an all-in opponent cannot fold, so a bet is credited only the minimum fold equity', () => {
+  let state = dealHand({ stacks: [10, 300, 300], buttonSeat: 0, seed: 21, config: { maxSeats: 3 } });
+  state = applyAction(state, 0, { type: 'raise', to: 10 }).state;
+  state = applyAction(state, 1, { type: 'call' }).state;
+  state = applyAction(state, 2, { type: 'call' }).state;
+  assert.equal(state.street, 'flop');
+  assert.equal(state.seats[0]?.status, 'allIn');
+  assert.equal(
+    assumedFoldFrequency(state, 1),
+    'assumed fold frequency of 5.0%, since the all-in player cannot fold',
+  );
+
+  const { state: nobodyAllIn, seat } = threeHandedFlopSpot(21);
+  assert.equal(assumedFoldFrequency(nobodyAllIn, seat), 'assumed fold frequency of 30.3% across 2 opponents');
+});
+
 function entropyOf(decision: PolicyDecision): number {
   let total = 0;
   for (const entry of decision.distribution) {
