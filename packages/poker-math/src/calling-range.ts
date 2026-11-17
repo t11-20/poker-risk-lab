@@ -4,7 +4,7 @@
  * board, never against hero's cards, because an opponent decides from their own hand.
  */
 
-import { type Card, evaluate } from '@prl/poker-engine';
+import { allDistinct, type Card, evaluate } from '@prl/poker-engine';
 import { strengthTable } from './hand-ranking.ts';
 import { type Combo, classOfCombo, type ParsedRange } from './ranges.ts';
 
@@ -49,6 +49,9 @@ export function rankAgainstBoard(
   board: readonly Card[],
   dead: readonly Card[],
 ): BoardStrengthOrder {
+  if (!allDistinct([...board, ...dead])) {
+    throw new CallingRangeError('the board and the dead cards must be distinct cards');
+  }
   const seen = new Set<Card>([...board, ...dead]);
   const live = range.combos.filter((combo) => !seen.has(combo[0]) && !seen.has(combo[1]));
   if (live.length === 0) {
@@ -78,8 +81,9 @@ export function rankAgainstBoard(
  */
 export function continuingRange(order: BoardStrengthOrder, pot: number, risk: number): ContinuingRange {
   const share = continuingShare(pot, risk);
-  // The share is above zero, so this is at least 1.
-  const wanted = Math.ceil(share * order.combos.length);
+  // 0.56 x 25 is 14.000000000000002, which would admit the next strength group. The share is above
+  // zero, so the floor of 1 binds only when the share is under 1e-9 of a combo.
+  const wanted = Math.max(1, Math.ceil(share * order.combos.length - 1e-9));
   const floor = order.strengths[wanted - 1];
   let count = wanted;
   while (count < order.combos.length && order.strengths[count] === floor) count += 1;

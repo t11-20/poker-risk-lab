@@ -48,6 +48,15 @@ test('every hand tied with the weakest one that must continue continues too', ()
   assert.equal(half.range.fractionOfAllHands, 18 / 1326);
 });
 
+test('a share that is a whole count in exact arithmetic is not rounded up into the next group', () => {
+  // 70 / (70 + 55) x 25 is exactly 14, the sets, K7s and AA, but 0.56 x 25 is 14.000000000000002.
+  const order = ranked('KK, 77, K7s, AA, QJs, JTs, 98s, 97s');
+  assert.equal(order.combos.length, 25);
+  const cut = continuingRange(order, 70, 110);
+  assert.equal(cut.range.combos.length, 14);
+  assert.deepEqual(classes(cut.range.combos), ['77', 'AA', 'K7s', 'KK']);
+});
+
 test('the continuing set does not depend on the order the range was written in', () => {
   const a = continuingRange(ranked('QJ, AK, 77, KK'), 100, 200);
   const b = continuingRange(ranked('KK, 77, AK, QJ'), 100, 200);
@@ -55,7 +64,7 @@ test('the continuing set does not depend on the order the range was written in',
 });
 
 test('at least the strongest hand continues against any size', () => {
-  const shove = continuingRange(ranked('QJ, AK, 77, KK'), 1, 1_000_000);
+  const shove = continuingRange(ranked('QJ, AK, 77, KK'), 1, 1e12);
   assert.equal(shove.range.combos.length, 3);
   assert.deepEqual(classes(shove.range.combos), ['KK']);
 });
@@ -77,6 +86,11 @@ test('before the flop the range is ranked by starting-hand strength', () => {
 test('a range with no live combo is refused, not read as nobody continuing', () => {
   const blocked = exactRange(parseCards('Kh Kc'));
   assert.throws(() => rankAgainstBoard(blocked, BOARD, parseCards('Kh 2c')), CallingRangeError);
+});
+
+test('a board that repeats a card, or a dead card on the board, is refused rather than scored', () => {
+  assert.throws(() => rankAgainstBoard(parseRange('AK'), parseCards('Kd Kd 7h'), HERO), CallingRangeError);
+  assert.throws(() => rankAgainstBoard(parseRange('AK'), BOARD, parseCards('Kd 9s')), CallingRangeError);
 });
 
 test('a pot of nothing or a negative risk is refused', () => {
