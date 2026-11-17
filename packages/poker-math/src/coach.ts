@@ -1252,10 +1252,14 @@ function foldRateNote(row: ActionCandidate, reading: ActionCandidate, input: Coa
       `range it is behind ${reading.action}ing.`
     );
   }
+  const narrowed = row.continuingShare !== undefined && row.continuingShare < 1;
   const shown =
-    ` ${line} shows a higher figure only because it assumes they fold ` +
-    `${((row.foldEquityAssumed ?? 0) * 100).toFixed(0)}% of the time, which nothing here measures.`;
-  if (row.continuingShare !== undefined && row.continuingShare < 1) {
+    ` ${line} shows a higher figure only because it assumes ` +
+    (narrowed
+      ? `the weakest ${shareOf(1 - (row.continuingShare ?? 1))} of the range folds to it, `
+      : `they fold ${shareOf(row.foldEquityAssumed ?? 0)} of the time, `) +
+    'which nothing here measures.';
+  if (narrowed) {
     const [worth, bar] = [whenCalled.toFixed(1), reading.ev.toFixed(1)];
     const value =
       whenCalled < 0 ? `it loses ${(-whenCalled).toFixed(1)} units` : `it is worth ${worth} units`;
@@ -1447,7 +1451,7 @@ function cappedAheadOf(
 function closeGapNotes(margin: number, bigBlind: number, rivalName: string, cappedAhead: string | null) {
   if (margin >= bigBlind || cappedAhead !== null) return [];
   return [
-    `The gap to ${rivalName} is only ${margin.toFixed(1)} units, well under a big blind — this is close to indifferent.`,
+    `The gap to ${rivalName} is ${onlyUnits(margin)}, well under a big blind — this is close to indifferent.`,
   ];
 }
 
@@ -1696,7 +1700,7 @@ function buildSuggestion(
     openBehind !== null
       ? `${actionWord} has the highest expected value ${against}, by ${margin.toFixed(1)} units over ${rivalName}, but the price leaves out what ${yetToMatch(openBehind)} would put in — treat this as close rather than as a recommendation.`
       : confidence === 'low' && smallMargin
-        ? `${actionWord} comes out ahead of ${rivalName} by only ${margin.toFixed(1)} units, under a quarter of a big blind — treat this as close to indifferent rather than as a recommendation.`
+        ? `${actionWord} comes out ahead of ${rivalName} by ${onlyUnits(margin)}, under a quarter of a big blind — treat this as close to indifferent rather than as a recommendation.`
         : confidence === 'low' && overtaker !== undefined
           ? `${actionWord} has the highest expected value ${against}, by ${margin.toFixed(1)} units over ${rivalName}, but the equity is sampled to ±${intervalPoints.toFixed(2)} points, and at the ${overtaker.end} end ${nameOfRival(overtaker)} comes out ahead by ${overtaker.ahead.toFixed(1)} units — treat this as close rather than as a recommendation.`
           : `${actionWord} has the highest expected value ${against}, by ${margin.toFixed(1)} units over ${rivalName}.`;
@@ -1820,6 +1824,7 @@ function buildTeachingNotes(
   outs: OutsResult | null,
   stacks: StackContext,
   cardsToCome: 1 | 2 | null,
+  heroCallIsAllIn: boolean,
 ): string[] {
   const notes: string[] = [];
 
@@ -1877,11 +1882,13 @@ function buildTeachingNotes(
     const withheld = refusalNote(refusal);
     if (withheld !== null) notes.push(withheld);
   }
-  if (stacks.effectiveStack > 0 && stacks.spr < 3) {
+  // Both notes describe betting still to come, which an all-in call leaves none of.
+  const bettingToCome = stacks.effectiveStack > 0 && !heroCallIsAllIn;
+  if (bettingToCome && stacks.spr < 3) {
     notes.push(
       `At an SPR of ${stacks.spr.toFixed(1)} the stacks are shallow enough that one more bet commits them. Decisions like that are effectively made now rather than later.`,
     );
-  } else if (stacks.spr > 10) {
+  } else if (bettingToCome && stacks.spr > 10) {
     notes.push(
       `At an SPR of ${stacks.spr.toFixed(1)} there is a lot of money left behind, so hands that can keep improving are worth more than their current strength suggests.`,
     );
@@ -1948,7 +1955,8 @@ export function buildCoachReport(input: CoachInput): CoachReport {
   );
   const foldEquity = input.assumedFoldEquity ?? DEFAULT_ASSUMED_FOLD_EQUITY;
   const candidates = buildCandidates(input, hero.equity, foldEquity, split);
-  const stackContext = buildStackContext(input, callIsAllIn(candidates));
+  const heroCallIsAllIn = callIsAllIn(candidates);
+  const stackContext = buildStackContext(input, heroCallIsAllIn);
   const suggestion = buildSuggestion(candidates, input, equitySummary, outs, split, behind);
   const uncertainty = buildUncertainty(equityResult, input, outs, behind);
 
@@ -1987,7 +1995,15 @@ export function buildCoachReport(input: CoachInput): CoachReport {
     stackContext,
     assumptions,
     uncertainty,
-    teachingNotes: buildTeachingNotes(input, potOddsSummary, equitySummary, outs, stackContext, cardsToCome),
+    teachingNotes: buildTeachingNotes(
+      input,
+      potOddsSummary,
+      equitySummary,
+      outs,
+      stackContext,
+      cardsToCome,
+      heroCallIsAllIn,
+    ),
   };
 }
 
@@ -2048,6 +2064,11 @@ function halfPotBreakEven(
 
 function percentOfTime(rate: number): string {
   return `${(rate * 100).toFixed(0)}% of the time`;
+}
+
+/** A small gap in units, said as under 0.05 where one decimal would print it as nothing at all. */
+function onlyUnits(margin: number): string {
+  return Math.abs(margin) < 0.05 ? 'under 0.05 units' : `only ${margin.toFixed(1)} units`;
 }
 
 /** Whole percents, except where that would round part of the range to all of it or none. */

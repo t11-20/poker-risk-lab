@@ -131,7 +131,7 @@ test('a raise ahead only on its folds stays set aside, though it tops the table'
   // The break-even fold rate belongs to a table where folds and callers are unrelated, so it is not said.
   assert.match(
     report.suggestion.reason,
-    /by 5\.1 units over raising to 120 \(counted against the hands that call it\)\. Raising to 120 shows a higher figure only because it assumes they fold 18% of the time, which nothing here measures\. Called only by the strongest 82% of the range, it is worth 74\.3 units, behind calling's 79\.4\.$/,
+    /by 5\.1 units over raising to 120 \(counted against the hands that call it\)\. Raising to 120 shows a higher figure only because it assumes the weakest 18% of the range folds to it, which nothing here measures\. Called only by the strongest 82% of the range, it is worth 74\.3 units, behind calling's 79\.4\.$/,
   );
 });
 
@@ -472,5 +472,22 @@ test('a fold rate whole percents would round to none is given to a tenth', () =>
   assert.match(
     report.suggestion.reason,
     / Betting 1 reads closer on the table only because it assumes the weakest 0\.3% of the range folds to it\.$/,
+  );
+});
+
+test('a gap under 0.05 and a fold rate under half a percent are said, not printed as 0.0 and 0%', () => {
+  // Betting 1 is 0.029 behind checking, and it assumes only J♣4♦ folds: 1 of 318.
+  const report = buildCoachReport(overJackHigh('9h Ts', 60, 1));
+  const text = [report.suggestion.reason, ...report.suggestion.whatWouldChangeIt].join('\n');
+  assert.doesNotMatch(text, /0\.0 units|fold 0% /u);
+  assert.match(report.suggestion.reason, /^Check comes out ahead of betting 1 .* by under 0\.05 units/u);
+  assert.match(
+    report.suggestion.reason,
+    / Betting 1 shows a higher figure only because it assumes the weakest 0\.3% of the range folds to it, /u,
+  );
+  assert.ok(
+    report.suggestion.whatWouldChangeIt.some((note) =>
+      /gap to betting 1 .* is under 0\.05 units/u.test(note),
+    ),
   );
 });
