@@ -94,6 +94,7 @@ test('a margin under a quarter of a big blind says it is small, not that it is s
     heroStack: 1000,
     opponentStacks: [{ behind: 1000, committedThisStreet: 0 }],
     bigBlind: 100,
+    wholeRangeContinues: true,
   });
   assert.equal(report.suggestion.action, 'bet');
   assert.equal(report.suggestion.confidence, 'low');

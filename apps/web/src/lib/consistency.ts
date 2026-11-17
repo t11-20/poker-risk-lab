@@ -153,3 +153,22 @@ export function foldAssumingActions(report: CoachReport): readonly ScenarioActio
   }
   return actions;
 }
+
+/**
+ * The fold-assumption sentence, naming the rows it moves. The next panel changes one fold frequency,
+ * so it is pointed at only where the table has one: a row priced against the hands that continue has
+ * a rate of its own.
+ */
+export function foldAssumptionSentence(report: CoachReport): string {
+  const opening =
+    'Both figures come from the candidate table further down, and both rest on the assumptions you read at the top';
+  const actions = foldAssumingActions(report);
+  if (actions.length === 0) {
+    return `${opening}. No row in this table assumes the opponent folds, so its figures move with the range and the price: if you think either is wrong, disagreeing with them on those grounds is exactly the reasoning this scenario is for.`;
+  }
+  const rows = actions.map((action) => ROW_WORD[action].toLowerCase()).join(' and ');
+  if (report.candidates.some((candidate) => candidate.continuingShare !== undefined)) {
+    return `${opening} — including how often the opponent folds to each size, which is assumed and not measured. If you think those fold rates are too generous, the rows they move are the ${rows} rows. Disagreeing with them on those grounds is exactly the reasoning this scenario is for.`;
+  }
+  return `${opening} — including the assumed fold frequency, which somebody chose. If you think that fold assumption is too generous, the rows it moves are the ${rows} rows: change it in the next panel and watch them move. Disagreeing with it on those grounds is exactly the reasoning this scenario is for.`;
+}

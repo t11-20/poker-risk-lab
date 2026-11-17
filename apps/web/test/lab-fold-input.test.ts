@@ -1,8 +1,8 @@
 /**
  * The Lab's one promised input is the fold frequency, changed after deciding. `FoldEquityControl` is
- * offered wherever a row reads a fold frequency and explained elsewhere, reproduces the analysis at
- * the analysed frequency and moves only fold-reading rows, and is a labelled native range. The
- * arithmetic is pinned against the Coach in `packages/poker-math/test/reprice.test.ts`.
+ * offered wherever one fold frequency prices every bet and raise row and explained elsewhere, reproduces
+ * the analysis at the analysed frequency and moves only fold-reading rows, and is a labelled native
+ * range. The arithmetic is pinned against the Coach in `packages/poker-math/test/reprice.test.ts`.
  */
 
 import assert from 'node:assert/strict';
@@ -32,14 +32,25 @@ const reports: [string, CoachReport][] = [
 ];
 
 describe('the fold-frequency control', () => {
-  it('is offered wherever a row reads a fold frequency, and explained everywhere else', () => {
+  it('is offered wherever one fold frequency prices the rows, and explained everywhere else', () => {
     assert.ok(reports.length >= 42, `only ${reports.length} report(s); a sweep of nothing is not a pass`);
     let offered = 0;
     let explained = 0;
+    let ownRates = 0;
     const wrong: string[] = [];
     for (const [id, report] of reports) {
       const readsFolds = report.candidates.some((candidate) => candidate.foldEquityAssumed !== undefined);
       const repriced = repriceAtFoldEquity(report, 0.1);
+      if (report.candidates.some((candidate) => candidate.continuingShare !== undefined)) {
+        if (
+          repriced.kind !== 'unavailable' ||
+          !/priced against the hands assumed to call/u.test(repriced.reason)
+        ) {
+          wrong.push(`${id}: its rows are priced against what calls and the control did not say so`);
+        }
+        ownRates += 1;
+        continue;
+      }
       if (readsFolds && repriced.kind !== 'available') wrong.push(`${id}: ${repriced.reason}`);
       if (!readsFolds) {
         if (repriced.kind !== 'unavailable' || !/No row in this table assumes/u.test(repriced.reason)) {
@@ -51,9 +62,9 @@ describe('the fold-frequency control', () => {
       }
     }
     assert.deepEqual(wrong, [], wrong.join('\n'));
-    // The other five of the 36 bundled scenarios face an all-in.
-    assert.ok(offered >= 30, `offered on only ${offered}`);
-    assert.ok(explained >= 1, 'no scenario exercised the explanation');
+    // Of the 36 bundled scenarios, nine keep one stated fold rate, 22 price each size against the hands
+    // that call it and five face an all-in. The six fixtures add three to each of the first two.
+    assert.deepEqual({ offered, ownRates, explained }, { offered: 12, ownRates: 25, explained: 5 });
   });
 
   it('reproduces the analysis at its own frequency and moves only fold-reading rows elsewhere', () => {
@@ -90,8 +101,8 @@ describe('the fold-frequency control', () => {
   });
 
   it('says what moved, and what did not', () => {
-    const report = reports.find(([id]) => id === 'eq-flush-draw-turn-small-bet')?.[1];
-    assert.ok(report !== undefined, 'eq-flush-draw-turn-small-bet is no longer in the bundle');
+    const report = reports.find(([id]) => id === 'fl-flush-draw-counting-outs')?.[1];
+    assert.ok(report !== undefined, 'fl-flush-draw-counting-outs is no longer in the bundle');
     const repriced = repriceAtFoldEquity(report, 0);
     assert.ok(repriced.kind === 'available');
     const call = repriced.rows.find((row) => row.action === 'call');

@@ -262,6 +262,11 @@ export interface Scenario {
   readonly toCall: number;
   /** The range assumption the analysis rests on. Always stated, never implied. */
   readonly opponentRange: RangeSpec;
+  /**
+   * Set when an assumption says the opponent does not fold, so the stated range is what continues
+   * against a bet of any size. `validate.ts` holds the two together.
+   */
+  readonly wholeRangeContinues?: boolean;
   /** Assumptions the analysis depends on, shown next to every number. */
   readonly assumptions: readonly string[];
   /** The reasoning the learner should arrive at, in prose. */

@@ -56,6 +56,7 @@ function reportForScenario(scenario: Scenario): CoachReport {
     heroStack: situation.heroStack,
     opponentStacks: [...situation.opponentStacks],
     bigBlind: scenario.bigBlind,
+    ...(scenario.wholeRangeContinues === true ? { wholeRangeContinues: true } : {}),
     samples: SCENARIO_SAMPLES,
     seed: SCENARIO_SEED,
   });

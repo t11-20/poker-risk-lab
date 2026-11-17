@@ -10,8 +10,14 @@ import { parseCards } from '@prl/poker-engine';
 import { buildCoachReport, type CoachInput } from '../src/coach.ts';
 import { exactRange, parseRange } from '../src/ranges.ts';
 
+/** One fold rate for every size, the pricing these figures are worked at. */
 function spot(input: Omit<CoachInput, 'contestablePot' | 'heroCommittedThisStreet'> & Partial<CoachInput>) {
-  return buildCoachReport({ heroCommittedThisStreet: 0, contestablePot: input.pot, ...input });
+  return buildCoachReport({
+    heroCommittedThisStreet: 0,
+    contestablePot: input.pot,
+    wholeRangeContinues: true,
+    ...input,
+  });
 }
 
 test('top two pair facing a river bet reads fold, not a raise the opponent gets 7:1 to call', () => {

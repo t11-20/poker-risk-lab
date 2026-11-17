@@ -29,6 +29,7 @@ export function coachInputFor(scenario: Scenario, sampling = { samples: 2_000, s
     contestablePot: deriveContestablePot(spot),
     bigBlind: scenario.bigBlind,
     legalActions: deriveLegalActions(spot),
+    ...(scenario.wholeRangeContinues === true ? { wholeRangeContinues: true } : {}),
     ...sampling,
   };
 }
