@@ -45,6 +45,7 @@ import {
   foldAssumptionSentence,
   judgeConsistency,
   nearestPricedSentence,
+  readingSpanWords,
   type ScenarioAction,
 } from '../lib/consistency.ts';
 import { verdictRuleSentence } from '../lib/verdict-rule.ts';
@@ -215,6 +216,9 @@ function Verdict({
             <dd className="prl-stage__ev-value">
               {`${formatSignedUnits(judgement.reading.ev, { decimals: 1 })} — ${judgement.reading.name}`}
             </dd>
+            {judgement.reading.span === null ? null : (
+              <dd className="prl-note">{readingSpanWords(judgement.reading.span, formatUnits)}</dd>
+            )}
           </div>
         )}
         {/*
