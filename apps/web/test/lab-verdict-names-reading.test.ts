@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { content, SCENARIO_ANALYSIS_SAMPLES, SCENARIO_ANALYSIS_SEED } from '@prl/content';
 import type { CoachReport } from '@prl/contracts';
 import { buildCoachReport, suggestedCandidate } from '@prl/poker-math';
-import { judgeConsistency, type ScenarioAction } from '../src/lib/consistency.ts';
+import { judgeConsistency, readingSpanWords, type ScenarioAction } from '../src/lib/consistency.ts';
 import { verdictRuleSentence } from '../src/lib/verdict-rule.ts';
 import { coachInputFor } from './lab-coach-input.ts';
 
@@ -80,5 +80,26 @@ describe('the Verdict panel names the reading, not a row the reading set aside',
     assert.match(stage, /<dt className="prl-label">One reading of this spot<\/dt>/u);
     assert.doesNotMatch(stage, /Best row on the table/u);
     assert.match(stage, /judgement\.reading\.ev/u);
+  });
+});
+
+describe('the Verdict panel names the sizes the reading spans, as the Coach does', () => {
+  it('rk-raise-size-sets-up-the-turn reads raise 105–185, so the panel names the range (REGRESSION)', () => {
+    const { report, judgement } = judged('rk-raise-size-sets-up-the-turn', 'call');
+    assert.deepEqual(report.suggestion.sizeRange, { min: 105, max: 185 });
+    assert.equal(judgement.reading?.name, 'Raise to 185 units');
+    assert.equal(
+      readingSpanWords(judgement.reading?.span ?? null, (value) => `${value} units`),
+      'The highest of the raise sizes from 105 to 185 units.',
+    );
+  });
+
+  it('a reading of one size names no range', () => {
+    const { judgement } = judged('fl-small-straight-beats-trips', 'call');
+    assert.equal(judgement.reading?.span, null);
+    assert.equal(
+      readingSpanWords(null, (value) => `${value} units`),
+      '',
+    );
   });
 });
