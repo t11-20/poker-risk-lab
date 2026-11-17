@@ -243,6 +243,7 @@ export function isNeutralAssessment(relativeStrength: number): boolean {
  * move `bluffMore`, not this number.
  */
 const BASE_FOLD_PER_OPPONENT = 0.55;
+/** Also the whole credit while anyone is all in, since a bet can then never take the pot uncontested. */
 const MIN_FOLD_EQUITY = 0.05;
 const MAX_FOLD_EQUITY = 0.9;
 
@@ -275,7 +276,9 @@ interface Situation {
   readonly bigBlind: number;
   readonly myStack: number;
   readonly myCommitted: number;
+  /** Every live opponent, the all-in ones included, because their cards still count against equity. */
   readonly opponents: number;
+  readonly allInOpponents: number;
   readonly effectiveStack: number;
   readonly effectiveStackBb: number;
   /** 0 for first to act on later streets, 1 for last. See `relativePositionOf`. */
@@ -357,6 +360,7 @@ function readSituation(input: PolicyInput): Situation {
     myStack: me.stack,
     myCommitted: me.committedThisStreet,
     opponents: Math.max(1, opponents.length),
+    allInOpponents: opponents.filter((seat) => seat.status === 'allIn').length,
     effectiveStack: effective,
     effectiveStackBb: effective / bigBlind,
     relativePosition: relativePositionOf(view, input.seat, liveSeatNumbers),
@@ -651,10 +655,10 @@ function buildContext(
     adjustments,
     breakEvenEquity: price.breakEvenEquity,
     continueAppetite: logistic((strength.equity - price.breakEvenEquity) * PRICE_SENSITIVITY),
-    foldEquity: Math.min(
-      MAX_FOLD_EQUITY,
-      Math.max(MIN_FOLD_EQUITY, BASE_FOLD_PER_OPPONENT ** situation.opponents),
-    ),
+    foldEquity:
+      situation.allInOpponents > 0
+        ? MIN_FOLD_EQUITY
+        : Math.min(MAX_FOLD_EQUITY, Math.max(MIN_FOLD_EQUITY, BASE_FOLD_PER_OPPONENT ** situation.opponents)),
     positionFactor: positionalVpipMultiplier(input.traits, situation.relativePosition),
     depthFactor: stackDepthCommitmentMultiplier(input.traits, situation.effectiveStackBb),
     passiveReference: MIN_PASSIVE_REFERENCE,
@@ -968,8 +972,12 @@ function scoreAggression(context: ScoreContext, candidate: Candidate): Scored {
     rationale:
       `A ${candidate.legal.type} to ${num(to)} risks ${num(betSize)} into ${num(situation.pot)}, laying a ` +
       `caller ${pct(price.breakEvenEquity)} and needing folds ${pct(needed)} of the time to break even ` +
-      `against an assumed fold frequency of ${pct(context.foldEquity)} across ` +
-      `${num(situation.opponents)} opponent${situation.opponents === 1 ? '' : 's'}. ` +
+      `against an assumed fold frequency of ${pct(context.foldEquity)}` +
+      (situation.allInOpponents === 0
+        ? ` across ${num(situation.opponents)} opponent${situation.opponents === 1 ? '' : 's'}. `
+        : situation.allInOpponents === 1
+          ? ', since the all-in player cannot fold. '
+          : `, since the ${num(situation.allInOpponents)} all-in players cannot fold. `) +
       (valueness > airness
         ? `It beats ${pct(strength.relativeStrength)} of the range it assumes it is against, so the weight ` +
           'here is value. '
