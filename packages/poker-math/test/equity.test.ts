@@ -13,6 +13,7 @@ import {
   countMatchups,
   EquityError,
   type EquitySpec,
+  equity,
   exactEquity,
   MAX_MONTE_CARLO_SAMPLES,
   MIN_MONTE_CARLO_SAMPLES,
@@ -171,4 +172,38 @@ test('an exact count is stated as showdowns, which a complete board has with no 
     river.assumptions.join('\n'),
   );
   assert.ok(!river.assumptions.some((note) => /remaining board/u.test(note)));
+});
+
+test('the method is chosen at the budget exactly, counting matchups only as far as the budget needs', () => {
+  // AA against AA on a flop: 6 legal matchups, each meeting C(45, 2) = 990 run-outs, so 5,940 boards.
+  const aces: EquitySpec = {
+    players: [
+      { label: 'hero', range: parseRange('AA') },
+      { label: 'villain', range: parseRange('AA') },
+    ],
+    board: parseCards('7h 5c 2d'),
+  };
+  assert.equal(equity(aces, { maxExactWork: 5_940 }).method, 'exact-enumeration');
+  assert.equal(equity(aces, { maxExactWork: 5_939, samples: 2_000, seed: 3 }).method, 'monte-carlo');
+
+  // Five wide preflop ranges hold millions of matchups. Deciding against them stops one past the cap.
+  const wide = parseRange('22+, A2s+, K2s+, Q2s+, J2s+, A2o+, K2o+, Q2o+, J2o+');
+  const crowd: EquitySpec = {
+    players: ['hero', 'a', 'b', 'c', 'd'].map((label) => ({ label, range: wide })),
+    board: [],
+  };
+  assert.equal(countMatchups(crowd, 1_000), 1_001);
+  assert.equal(equity(crowd, { samples: 2_000, seed: 3 }).method, 'monte-carlo');
+});
+
+test('a budget that cannot bound the count is refused before any counting', () => {
+  // The budget sets where counting stops, so NaN or Infinity would enumerate every matchup there is.
+  const random = parseRange('random');
+  const three: EquitySpec = {
+    players: ['hero', 'a', 'b'].map((label) => ({ label, range: random })),
+    board: [],
+  };
+  for (const maxExactWork of [Number.NaN, Number.POSITIVE_INFINITY, -1]) {
+    assert.throws(() => equity(three, { maxExactWork, samples: 2_000 }), EquityError, String(maxExactWork));
+  }
 });

@@ -303,29 +303,45 @@ function* enumerateMatchups(
   yield* recurse(0);
 }
 
-export function countMatchups(spec: EquitySpec): number {
+/** Stops one past `limit`, since a caller asking only whether the count fits needs no more. */
+export function countMatchups(spec: EquitySpec, limit = 5_000_000): number {
   const blocked = new Set<Card>([...spec.board, ...(spec.deadCards ?? [])]);
   let count = 0;
   for (const _matchup of enumerateMatchups(spec.players, blocked)) {
     count += 1;
-    // Past this the exact path is out of the question anyway.
-    if (count > 5_000_000) return count;
+    if (count > limit) return count;
   }
   return count;
 }
 
-/** Legal matchups × boards per matchup. It decides the method and is reported for inspection. */
+function boardsPerMatchupOf(spec: EquitySpec): number {
+  const cardsUsedByHands = spec.players.length * 2;
+  const remaining = DECK_SIZE - spec.board.length - (spec.deadCards?.length ?? 0) - cardsUsedByHands;
+  return choose(remaining, BOARD_TARGET - spec.board.length);
+}
+
+/** Legal matchups × boards per matchup, reported for inspection. */
 export function estimateExactWork(spec: EquitySpec): {
   matchups: number;
   boardsPerMatchup: number;
   total: number;
 } {
   const matchups = countMatchups(spec);
-  const cardsUsedByHands = spec.players.length * 2;
-  const remaining = DECK_SIZE - spec.board.length - (spec.deadCards?.length ?? 0) - cardsUsedByHands;
-  const needed = BOARD_TARGET - spec.board.length;
-  const boardsPerMatchup = choose(remaining, needed);
+  const boardsPerMatchup = boardsPerMatchupOf(spec);
   return { matchups, boardsPerMatchup, total: matchups * boardsPerMatchup };
+}
+
+/**
+ * Whether exact enumeration is at most `budget` boards. For whole numbers m × b <= budget exactly when
+ * m <= floor(budget / b), so the count stops one past that: five wide preflop ranges took 1.3 s to count
+ * millions of matchups only to choose sampling.
+ */
+function exactFits(spec: EquitySpec, budget: number): boolean {
+  const boards = boardsPerMatchupOf(spec);
+  if (boards <= 0) return false;
+  const cap = Math.floor(budget / boards);
+  const matchups = countMatchups(spec, cap);
+  return matchups > 0 && matchups <= cap;
 }
 
 /** A player's label as the subject of an assumption: "You hold" or a capitalised "<label> holds". */
@@ -585,8 +601,11 @@ export function equity(spec: EquitySpec, options: EquityOptions = {}): EquityRes
   if (method === 'monte-carlo') return monteCarloEquity(spec, options);
 
   const budget = options.maxExactWork ?? DEFAULT_MAX_EXACT_WORK;
-  const estimate = estimateExactWork(spec);
-  if (estimate.total > 0 && estimate.total <= budget) return exactEquity(spec);
+  // The budget is where counting stops, so one that cannot bound it would enumerate every matchup.
+  if (!Number.isFinite(budget) || budget < 0) {
+    throw new EquityError(`maxExactWork must be a finite number of at least 0, received ${String(budget)}`);
+  }
+  if (exactFits(spec, budget)) return exactEquity(spec);
   return monteCarloEquity(spec, options);
 }
 
