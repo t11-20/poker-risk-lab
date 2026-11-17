@@ -19,7 +19,7 @@
     "@prl/poker-math": "workspace:*",
     "@prl/ui": "workspace:*",
     "@swc/helpers": "0.5.23",
-    "next": "16.4.4",
+    "next": "16.4.5",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },
