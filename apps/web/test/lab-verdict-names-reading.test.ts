@@ -27,15 +27,15 @@ function judged(id: string, action: ScenarioAction, to?: number) {
 }
 
 describe('the Verdict panel names the reading, not a row the reading set aside', () => {
-  it('above pot: rk-high-spr-same-top-pair reads raise 325-680, so the panel names 680 (REGRESSION)', () => {
-    const { report, judgement, sentence } = judged('rk-high-spr-same-top-pair', 'call');
-    assert.deepEqual(report.suggestion.sizeRange, { min: 325, max: 680 });
+  it('above pot: fl-small-straight-beats-trips reads raise 285, so the panel names 285 (REGRESSION)', () => {
+    const { report, judgement, sentence } = judged('fl-small-straight-beats-trips', 'call');
+    assert.deepEqual(report.suggestion.sizeRange, { min: 285, max: 285 });
     const top = Math.max(...report.candidates.map((candidate) => candidate.ev));
     assert.ok(top > (suggestedCandidate(report)?.ev ?? top), 'the premise: a set-aside row reads higher');
-    assert.equal(judgement.reading?.name, 'Raise to 680 units');
-    assert.equal(judgement.reading?.ev.toFixed(1), '230.4');
-    assert.match(sentence, /the Coach's reading, Raise to 680 units, is there for comparison/u);
-    assert.doesNotMatch(sentence, /1,400/u);
+    assert.equal(judgement.reading?.name, 'Raise to 285 units');
+    assert.equal(judgement.reading?.ev.toFixed(1), '285.7');
+    assert.match(sentence, /the Coach's reading, Raise to 285 units, is there for comparison/u);
+    assert.doesNotMatch(sentence, /950/u);
     assert.equal(judgement.consistent, true, 'the verdict still judges a call against folding');
     assert.equal(judgement.benchmarkEv, 0);
   });
@@ -51,7 +51,7 @@ describe('the Verdict panel names the reading, not a row the reading set aside',
 
   it('choosing the row the reading set aside says why its figure is higher (REGRESSION)', () => {
     for (const [id, to, reading] of [
-      ['rk-high-spr-same-top-pair', 1_400, 'Raise to 680 units'],
+      ['fl-small-straight-beats-trips', 950, 'Raise to 285 units'],
       ['eq-flush-draw-turn-small-bet', 50, 'Call 25 units'],
     ] as const) {
       const { judgement, sentence } = judged(id, 'raise', to);
@@ -64,12 +64,12 @@ describe('the Verdict panel names the reading, not a row the reading set aside',
     }
   });
 
-  it('nothing set aside: rk-low-spr-commit-top-pair still names the highest row, raise to 440', () => {
+  it('no higher row: rk-low-spr-commit-top-pair still names the highest row, raise to 350', () => {
     const { report, judgement, sentence } = judged('rk-low-spr-commit-top-pair', 'call');
     const top = Math.max(...report.candidates.map((candidate) => candidate.ev));
     assert.equal(judgement.reading?.ev, top);
-    assert.equal(judgement.reading?.name, 'Raise to 440 units, all in');
-    assert.match(sentence, /Raise to 440 units, all in, is there for comparison/u);
+    assert.equal(judgement.reading?.name, 'Raise to 350 units');
+    assert.match(sentence, /Raise to 350 units, is there for comparison/u);
   });
 
   it('is the row the panel prints, under the Coach’s own label', () => {

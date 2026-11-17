@@ -1,7 +1,7 @@
 /**
  * The fold-frequency summary sits under the Verdict panel, which names the Coach's reading. Naming only
- * the table's highest row put a second answer beside it on `rk-high-spr-same-top-pair`: Raise to 1,400
- * at +264.4 next to the reading's 680 at +230.4. Driven with the reports the API builds.
+ * the table's highest row puts a second answer beside it, as on `fl-combo-draw-already-ahead`: Raise to
+ * 975 at +566.5 next to the reading's 175 at +155.2. Driven with the reports the API builds.
  */
 
 import assert from 'node:assert/strict';
@@ -33,22 +33,24 @@ function summaryAt(report: CoachReport, foldEquity: number): string {
 }
 
 describe('the fold-frequency summary names the Coach’s reading', () => {
-  it('rk-high-spr-same-top-pair: the 1,400 raise is named as set aside, beside the reading (REGRESSION)', () => {
-    const report = reports.find(([id]) => id === 'rk-high-spr-same-top-pair')?.[1];
-    assert.ok(report !== undefined, 'rk-high-spr-same-top-pair is no longer in the bundle');
+  it('fl-combo-draw-already-ahead: the 975 raise is named as set aside, beside the reading (REGRESSION)', () => {
+    const report = reports.find(([id]) => id === 'fl-combo-draw-already-ahead')?.[1];
+    assert.ok(report !== undefined, 'fl-combo-draw-already-ahead is no longer in the bundle');
     assert.equal(
       summaryAt(report, Number.NaN),
-      'At the analysed 35%, the Coach’s reading stands on Raise to 680 units, worth +230.4 units. The ' +
-        'highest row, Raise to 1,400 units, all in, worth +264.4 units, is one the reading sets aside, ' +
+      'At the analysed 35%, the Coach’s reading stands on Raise to 175 units, worth +155.2 units. The ' +
+        'highest row, Raise to 975 units, all in, worth +566.5 units, is one the reading sets aside, ' +
         'and the Coach says why.',
     );
   });
 
   it('names the reading first wherever a higher row would read as the answer, at any frequency', () => {
     let differs = 0;
+    let swept = 0;
     for (const [id, report] of reports) {
       const reading = suggestedCandidate(report);
       if (reading === null || repriceAtFoldEquity(report, 0).kind !== 'available') continue;
+      swept += 1;
       const name = rowName({ ...reading, to: reading.to ?? null }, formatUnits);
       for (const f of [Number.NaN, 0, 0.6, 1]) {
         const repriced = repriceAtFoldEquity(report, f);
@@ -67,14 +69,20 @@ describe('the fold-frequency summary names the Coach’s reading', () => {
         }
       }
     }
-    assert.ok(differs >= 20, `only ${differs} scenario(s) set a higher row aside; a sweep of nothing`);
+    // The control is offered where one fold rate prices every size: four preflop scenarios and the five
+    // that say the opponent does not fold. All but the gutshot's fold set a higher row aside.
+    assert.equal(swept, 9, `swept ${swept} scenario(s)`);
+    assert.equal(differs, 8, `${differs} scenario(s) set a higher row aside`);
   });
 
   it('control: where the reading is the highest row, the summary says so once', () => {
-    const report = reports.find(([id]) => id === 'rk-low-spr-commit-top-pair')?.[1];
+    const report = reports.find(([id]) => id === 'fl-gutshot-facing-turn-bet')?.[1];
     assert.ok(report !== undefined);
     const sentence = summaryAt(report, Number.NaN);
-    assert.match(sentence, /^At the analysed 35%, the highest row is Raise to 440 units, all in, worth /u);
+    assert.match(
+      sentence,
+      /^At the analysed 35%, the highest row is Fold, worth .* reading stands on it\.$/u,
+    );
     assert.doesNotMatch(sentence, /sets aside/u);
   });
 });

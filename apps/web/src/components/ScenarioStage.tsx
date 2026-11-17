@@ -42,7 +42,7 @@ import { type ReactElement, useEffect, useId, useRef, useState } from 'react';
 import { API_PATHS, apiSend, fetchSession, safeFetch } from '../lib/api.ts';
 import {
   type Consistency,
-  foldAssumingActions,
+  foldAssumptionSentence,
   judgeConsistency,
   nearestPricedSentence,
   type ScenarioAction,
@@ -226,17 +226,6 @@ function Verdict({
       </dl>
     </>
   );
-}
-
-/** The fold-assumption sentence, naming the rows it moves (`foldAssumingActions`). */
-function foldAssumptionSentence(actions: readonly ScenarioAction[]): string {
-  const opening =
-    'Both figures come from the candidate table further down, and both rest on the assumptions you read at the top';
-  if (actions.length === 0) {
-    return `${opening}. No row in this table assumes the opponent folds, so its figures move with the range and the price: if you think either is wrong, disagreeing with them on those grounds is exactly the reasoning this scenario is for.`;
-  }
-  const rows = actions.map((action) => ACTION_WORD[action].toLowerCase()).join(' and ');
-  return `${opening} — including the assumed fold frequency, which somebody chose. If you think that fold assumption is too generous, the rows it moves are the ${rows} rows: change it in the next panel and watch them move. Disagreeing with it on those grounds is exactly the reasoning this scenario is for.`;
 }
 
 function GlossaryRow({ entry }: { readonly entry: GlossaryEntry }): ReactElement {
@@ -432,7 +421,7 @@ export function ScenarioStage(props: ScenarioStageProps): ReactElement {
             <Verdict judgement={judgement} action={committed.action} server={server} />
 
             <Callout tone="insight" title="This is a comparison, not a mark">
-              {foldAssumptionSentence(foldAssumingActions(analysis))}
+              {foldAssumptionSentence(analysis)}
               {/* Only when a row was written, which `recorded` says. */}
               {server.state === 'live' && server.recorded ? (
                 <>
