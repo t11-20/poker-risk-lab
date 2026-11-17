@@ -234,7 +234,8 @@ export function colorAlpha(color) {
 
 /**
  * Which vertical edges of a box a reader sees: a side with a border, or both sides of a fill that
- * differs from the colour behind it. Runs in the page beside `colorAlpha`, so it references nothing else.
+ * differs from the colour behind it. A translucent fill always does: it composites over that colour.
+ * Runs in the page beside `colorAlpha`, so it references nothing else.
  */
 export function frameSides(style, backdrop) {
   const border = (side) =>
@@ -242,7 +243,8 @@ export function frameSides(style, backdrop) {
     style[`border${side}Style`] !== 'none' &&
     style[`border${side}Style`] !== 'hidden' &&
     colorAlpha(style[`border${side}Color`]) > 0;
-  const fill = colorAlpha(style.backgroundColor) > 0 && style.backgroundColor !== backdrop;
+  const alpha = colorAlpha(style.backgroundColor);
+  const fill = alpha > 0 && (alpha < 1 || style.backgroundColor !== backdrop);
   return { left: fill || border('Left'), right: fill || border('Right') };
 }
 
@@ -399,7 +401,7 @@ const WALKER = String.raw`(() => {
     return answer;
   };
 
-  /** The colour painted behind an element: the nearest ancestor's background that is not transparent. */
+  /** The colour painted behind an element: the nearest ancestor's fill. display: contents paints none. */
   const backdrop = new Map();
   const backdropOf = (el) => {
     const parent = el.parentElement;
@@ -407,7 +409,8 @@ const WALKER = String.raw`(() => {
     const cached = backdrop.get(parent);
     if (cached !== undefined) return cached;
     const own = styleOf(parent).backgroundColor;
-    const answer = colorAlpha(own) > 0 ? own : backdropOf(parent);
+    const paints = styleOf(parent).display !== 'contents' && colorAlpha(own) > 0;
+    const answer = paints ? own : backdropOf(parent);
     backdrop.set(parent, answer);
     return answer;
   };
@@ -663,6 +666,19 @@ export function drawnEdges(frame) {
   return { x: left, y: frame.border.y, w: rightEdge - left, h: frame.border.h };
 }
 
+/** What of `rects` each clipper lets through horizontally. A clipper wider than the frame hides nothing. */
+export function clippedRects(rects, clips) {
+  let shown = rects;
+  for (const clip of clips) {
+    shown = shown.flatMap((r) => {
+      const x = Math.max(r.x, clip.pad.x);
+      const w = Math.min(right(r), right(clip.pad)) - x;
+      return w > 0 ? [{ ...r, x, w }] : [];
+    });
+  }
+  return shown;
+}
+
 /** `measurement` is what `WALKER` returns. `context` names route, theme and width. */
 export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIONS) {
   const findings = [];
@@ -749,12 +765,12 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
     if (box.ellipsis) continue;
     const frame = nearestFrame(box, frames);
     if (frame === null) continue;
-    // Out of flow, scrolled or clipped inside the frame, the glyphs are not crossing its edge.
+    // Out of flow or scrolled inside the frame, the glyphs are not crossing its edge.
     if (box.layer > frame.i) continue;
     if (box.scrollHost !== null && box.scrollHost >= frame.i) continue;
-    if (clippers.some((c) => c.i >= frame.i && c.i <= box.i && box.i < c.end)) continue;
     counts.frameTests += 1;
-    const spilled = escapeAmount(box.rects, drawnEdges(frame));
+    const clips = clippers.filter((c) => c.i >= frame.i && c.i <= box.i && box.i < c.end);
+    const spilled = escapeAmount(clippedRects(box.rects, clips), drawnEdges(frame));
     if (spilled.amount <= EDGE_TOLERANCE) continue;
     if (exemptFor(box, 'spills', frame.sel) !== null) continue;
     add('spills', {

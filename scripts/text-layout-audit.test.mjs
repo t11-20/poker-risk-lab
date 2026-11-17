@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   CONTROLS,
+  clippedRects,
   colorAlpha,
   coverageFailures,
   drawnEdges,
@@ -512,6 +513,23 @@ describe('text painted across the frame drawn around it', () => {
     );
   });
 
+  it('a clipper wider than the frame does not hide the spill (REGRESSION)', () => {
+    const wide = spilledBanner();
+    wide.clippers.push({ i: 31, end: 32, sel: 'p', pad: wide.boxes[0].pad });
+    const result = findTextDefects(wide, {});
+    assert.equal(result.findings.find((f) => f.check === 'spills')?.past, 300.95);
+    const cut = clippedRects(wide.boxes[0].rects, [{ pad: { x: 500, y: 0, w: 100, h: 1 } }]);
+    assert.deepEqual(
+      cut.map((r) => [r.x, r.w]),
+      [
+        [500, 100],
+        [500, 100],
+        [500, 100],
+      ],
+    );
+    assert.deepEqual(clippedRects(wide.boxes[0].rects, [{ pad: { x: 0, y: 0, w: 400, h: 1 } }]), []);
+  });
+
   it('nearestFrame and drawnEdges are the parts the rule is built from', () => {
     const [text] = spilledBanner().boxes;
     assert.equal(nearestFrame(text, []), null);
@@ -567,6 +585,12 @@ describe('which edges of a box a reader sees', () => {
     const panel = edges({ backgroundColor: 'rgb(20, 24, 31)' });
     assert.deepEqual(frameSides(panel, 'rgb(12, 14, 18)'), { left: true, right: true });
     assert.deepEqual(frameSides(panel, 'rgb(20, 24, 31)'), { left: false, right: false });
+    const veil = edges({ backgroundColor: 'rgba(255, 255, 255, 0.5)' });
+    assert.deepEqual(
+      frameSides(veil, 'rgba(255, 255, 255, 0.5)'),
+      { left: true, right: true },
+      'it composites',
+    );
     assert.deepEqual(frameSides(edges({}), 'rgb(12, 14, 18)'), { left: false, right: false });
   });
 });
