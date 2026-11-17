@@ -34,6 +34,7 @@ test('a flop bet worth +22.9 called and +20 folded to gets better as they fold l
     heroStack: 990,
     opponentStacks: [{ behind: 990, committedThisStreet: 0 }],
     bigBlind: 10,
+    wholeRangeContinues: true,
   });
   assert.equal(report.suggestion.action, 'bet');
   assert.equal(report.suggestion.sizeRange?.max, 20);

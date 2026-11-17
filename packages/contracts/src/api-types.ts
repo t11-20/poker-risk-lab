@@ -244,6 +244,12 @@ export interface ActionCandidate {
   /** Present for aggressive actions. */
   readonly foldEquityAssumed?: number;
   readonly potShareIfCalled?: number;
+  /**
+   * The share of the opponent's range assumed to continue against this size, strongest hands first.
+   * Present when the row is priced against those hands: `foldEquityAssumed` is then one minus it, and
+   * `potShareIfCalled` is the share against them, not against the whole range.
+   */
+  readonly continuingShare?: number;
 }
 
 export interface CoachSuggestion {

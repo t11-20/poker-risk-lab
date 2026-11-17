@@ -26,8 +26,9 @@ import type {
   UncertaintyNote,
 } from '@prl/contracts';
 import { buildPotLayers, type Card, type PotContributor, type SeatIndex } from '@prl/poker-engine';
+import { continuingRange, rankAgainstBoard } from './calling-range.ts';
 import { restsOnAssumedFoldEquity } from './consistency.ts';
-import { type EquityResult, type EquitySpec, equity } from './equity.ts';
+import { type EquityResult, type EquitySpec, equity, exactEquity } from './equity.ts';
 import {
   breakEvenFoldRate,
   evOfBet,
@@ -230,8 +231,17 @@ export interface CoachInput {
    * Optional so a direct caller still gets the conservative derivation. An empty array is rejected.
    */
   readonly legalActions?: readonly CoachAction[];
-  /** How often a bet or raise is assumed to win uncontested. An input, so it is reported as an assumption. */
+  /**
+   * How often a bet or raise is assumed to win uncontested. An input, so it is reported as an assumption.
+   * Stated, it is the one rate for every size. Absent, a bet or raise after the flop against one opponent
+   * with chips behind is priced against the hands that continue against its size (`continuingFor`).
+   */
   readonly assumedFoldEquity?: number;
+  /**
+   * The stated range is already what continues against a bet of any size, as when a scenario says the
+   * opponent does not fold. No row is then priced against part of it.
+   */
+  readonly wholeRangeContinues?: boolean;
   /** Caps Monte Carlo work when the exact path does not fit. */
   readonly samples?: number;
   readonly seed?: number;
@@ -762,6 +772,16 @@ interface PotSplit {
    * returns to that seat: one chip too many when a seat that folded paid an ante the all-in could not.
    */
   readonly returnedAnyway: number;
+  /**
+   * For a line that costs this much: how much of the range continues against it, and hero's share
+   * against those hands. Null where every size is priced against the whole range.
+   */
+  readonly continuing: (cost: number) => Continuing | null;
+}
+
+interface Continuing {
+  readonly share: number;
+  readonly equity: number;
 }
 
 interface ShowdownPot {
@@ -803,6 +823,59 @@ function contestsFor(input: CoachInput): number[][] {
   return [...unique.values()].map((group) => group.map((index) => index + 1));
 }
 
+/**
+ * Narrows only where the bots' continue rate was measured to fit: after the flop, against one opponent.
+ * A caller that states the fold rate, or that the whole range continues, has said what calls. Heads-up
+ * after the flop is at most 1,326 hands by 990 boards, inside the exact budget, so these shares are
+ * enumerated like the equity beside them and carry no sampling interval.
+ */
+function continuingFor(input: CoachInput, heroEquity: number): PotSplit['continuing'] {
+  const [opponent, ...others] = input.opponents;
+  const narrows =
+    input.street !== 'preflop' &&
+    others.length === 0 &&
+    input.opponentStacks.length === 1 &&
+    input.contestablePot > 0 &&
+    input.wholeRangeContinues !== true &&
+    input.assumedFoldEquity === undefined;
+  if (!narrows || opponent === undefined) return () => null;
+  const order = rankAgainstBoard(opponent.range, input.board, input.heroCards);
+  const all = order.combos.length;
+  // Hero's share summed over the strongest n hands. Every hand meets the same number of boards, so a
+  // range's equity is the mean over its hands, and each size costs only the band of hands between it
+  // and the nearest count already known. One enumeration per size took the flop against any two
+  // cards from 0.7 s to 2.4 s.
+  const summed = new Map<number, number>([
+    [0, 0],
+    [all, all * heroEquity],
+  ]);
+  const band = (from: number, to: number): number => {
+    const players = [
+      { label: 'you', range: exactRange(input.heroCards) },
+      { label: opponent.label, range: { ...opponent.range, combos: order.combos.slice(from, to) } },
+    ];
+    return (to - from) * (exactEquity({ players, board: input.board }).players[0]?.equity ?? 0);
+  };
+  const sumOver = (count: number): number => {
+    const known = summed.get(count);
+    if (known !== undefined) return known;
+    const below = Math.max(...[...summed.keys()].filter((n) => n < count));
+    const above = Math.min(...[...summed.keys()].filter((n) => n > count));
+    const sum =
+      count - below <= above - count
+        ? (summed.get(below) ?? 0) + band(below, count)
+        : (summed.get(above) ?? 0) - band(count, above);
+    summed.set(count, sum);
+    return sum;
+  };
+  return (cost) => {
+    const { share, range } = continuingRange(order, input.contestablePot, cost);
+    const count = range.combos.length;
+    // A difference of sums lands a hair outside 0..1 where the true share is exactly 0 or 1.
+    return { share, equity: Math.min(1, Math.max(0, sumOver(count) / count)) };
+  };
+}
+
 function potSplitOf(input: CoachInput, result: EquityResult, heroEquity: number): PotSplit {
   const measured = new Map(
     contestsFor(input).map((group, i) => [
@@ -816,6 +889,7 @@ function potSplitOf(input: CoachInput, result: EquityResult, heroEquity: number)
   return {
     allIn,
     live,
+    continuing: continuingFor(input, heroEquity),
     // A seat with chips behind has matched hero, so only a table of all-in seats leaves any over.
     returnedAnyway:
       live.length === 0 && top !== undefined ? Math.max(0, input.contestablePot - top.winnable) : 0,
@@ -925,6 +999,17 @@ function layeredAggression(
   };
 }
 
+/** What a bet or raise row assumes of a caller: the hands that continue against its cost, or the whole range. */
+function assumedFor(split: PotSplit, cost: number, foldEquity: number, heroEquity: number) {
+  const continuing = split.continuing(cost);
+  if (continuing === null) return { foldEquityAssumed: foldEquity, potShareIfCalled: heroEquity };
+  return {
+    foldEquityAssumed: 1 - continuing.share,
+    potShareIfCalled: continuing.equity,
+    continuingShare: continuing.share,
+  };
+}
+
 /**
  * Candidate actions with EV relative to folding, which is zero. Sunk chips do not appear.
  * Raising by `r` facing `c` risks `c + r` (`evOfRaise`), and its total is
@@ -1028,42 +1113,34 @@ function buildCandidates(
         continue;
       }
 
+      const assumed = assumedFor(split, input.toCall + calledBy, foldEquity, heroEquity);
+      const priced = {
+        foldProbability: assumed.foldEquityAssumed,
+        equityWhenCalled: assumed.potShareIfCalled,
+        callerCanRaise: true,
+      };
+
       if (isOpening) {
-        const bet = evOfBet({
-          pot,
-          betSize: calledBy,
-          foldProbability: foldEquity,
-          equityWhenCalled: heroEquity,
-          callerCanRaise: true,
-        });
+        const bet = evOfBet({ pot, betSize: calledBy, ...priced });
         candidates.push({
           action: 'bet',
           to: raiseBy,
           cost: calledBy,
           ev: bet.ev,
           derivation: `${bet.derivation} ${betSizeSentence(size.id)}${uncalledSentence('bet', raiseBy, calledBy, input)}${option.note}`,
-          foldEquityAssumed: foldEquity,
-          potShareIfCalled: heroEquity,
+          ...assumed,
         });
         continue;
       }
 
-      const raise = evOfRaise({
-        pot,
-        toCall: input.toCall,
-        raiseBy: calledBy,
-        foldProbability: foldEquity,
-        equityWhenCalled: heroEquity,
-        callerCanRaise: true,
-      });
+      const raise = evOfRaise({ pot, toCall: input.toCall, raiseBy: calledBy, ...priced });
       candidates.push({
         action: 'raise',
         to: betLevel + raiseBy,
         cost: raise.risk,
         ev: raise.ev,
         derivation: `${raise.derivation} ${uncalledSentence('raise', raiseBy, calledBy, input)}${raiseSizingNote(option, raiseBy, size.id, potAfterCall, pot, input.toCall, isAllIn)}`,
-        foldEquityAssumed: foldEquity,
-        potShareIfCalled: heroEquity,
+        ...assumed,
       });
     }
   }
@@ -1131,10 +1208,21 @@ function byExpectedValue(left: ActionCandidate, right: ActionCandidate): number 
   return TIEBREAK_RANK[right.action] - TIEBREAK_RANK[left.action];
 }
 
-/** A bet or raise row's EV at a fold rate of 0 and of 1. EV is linear in f between them. */
+/**
+ * A bet or raise row's EV at a fold rate of 0 and of 1. EV is linear in f between them. `whenCalled` is
+ * the row as priced. `calledAtWorst` is the lower of that and the whole range calling, which a row has
+ * to beat checking or calling on, so pricing against part of the range never adds a reading.
+ */
 function branchesOf(row: ActionCandidate, input: CoachInput, split: PotSplit) {
+  const called = (shares: PotSplit) =>
+    showdownPots(shares, input, row.cost, row.cost - input.toCall, 'called').value;
+  const continuing = split.continuing(row.cost);
+  const byAll = called(split);
+  const whenCalled = continuing === null ? byAll : called({ ...split, share: () => continuing.equity });
   return {
-    whenCalled: showdownPots(split, input, row.cost, row.cost - input.toCall, 'called').value,
+    whenCalled,
+    calledAtWorst: Math.min(whenCalled, byAll),
+    byCallers: continuing !== null && whenCalled <= byAll,
     whenFolded: showdownPots(split, input, row.cost, 0, 'folded').value,
   };
 }
@@ -1144,9 +1232,17 @@ function branchesOf(row: ActionCandidate, input: CoachInput, split: PotSplit) {
  * the assumed rate that put the row on top.
  */
 function foldRateNote(row: ActionCandidate, reading: ActionCandidate, input: CoachInput, split: PotSplit) {
-  const { whenCalled, whenFolded } = branchesOf(row, input, split);
-  const needed = foldRateReaching(reading.ev, whenFolded, whenCalled);
+  const { whenCalled, calledAtWorst, whenFolded } = branchesOf(row, input, split);
+  // Not behind when called, so it was set aside for its size, and that note says so.
+  if (calledAtWorst >= reading.ev) return '';
   const line = row.action === 'bet' ? `Betting ${row.to}` : `Raising to ${row.to}`;
+  if (whenCalled >= reading.ev) {
+    return (
+      ` ${line} shows a higher figure only if the weaker hands fold as assumed. Called by the whole ` +
+      `range it is behind ${reading.action}ing.`
+    );
+  }
+  const needed = foldRateReaching(reading.ev, whenFolded, whenCalled);
   return (
     ` ${line} shows a higher figure only because it assumes they fold ` +
     `${((row.foldEquityAssumed ?? 0) * 100).toFixed(0)}% of the time, which nothing here measures. ` +
@@ -1172,7 +1268,7 @@ function setAsideFor(
   split: PotSplit,
   measuredBest: number,
 ): SetAside | null {
-  if (restsOnAssumedFoldEquity(row) && branchesOf(row, input, split).whenCalled < measuredBest) {
+  if (restsOnAssumedFoldEquity(row) && branchesOf(row, input, split).calledAtWorst < measuredBest) {
     return 'fold-rate';
   }
   return abovePot(row, input) ? 'above-pot' : null;
@@ -1187,27 +1283,31 @@ function abovePotNote(
 ): string {
   if (abovePot(best, input, 1)) {
     const kind = best.action === 'bet' ? 'bet' : 'raise';
-    return (
-      ` ${capitalised(lineName(best))} is more than the pot. It is kept because a pot-sized ${kind} would ` +
-      'leave under a third of the pot behind, but its figure assumes the whole range calls any size, and ' +
-      'a real opponent folds more of the hands you beat as the size grows.'
-    );
+    const kept = ` ${capitalised(lineName(best))} is more than the pot. It is kept because a pot-sized ${kind} would leave under a third of the pot behind, but its figure `;
+    return best.continuingShare === undefined
+      ? `${kept}assumes the whole range calls any size, and a real opponent folds more of the hands you beat as the size grows.`
+      : `${kept}rests on how often a ${kind} that large is assumed to be called.`;
   }
   const shown = ranked.find((row) => setAside.get(row) === 'above-pot');
   if (shown === undefined || shown.ev <= best.ev) return '';
   const kind = shown.action === 'bet' ? 'bet' : 'raise';
+  const limit = `the reading goes no higher than a pot-sized ${kind}, or all in when that is at most twice the pot.`;
+  if (shown.continuingShare !== undefined) {
+    return ` ${capitalised(lineName(shown))} shows a higher figure, but it rests on how often a ${kind} that large is assumed to be called, so ${limit}`;
+  }
   return (
     ` ${capitalised(lineName(shown))} shows a higher figure only because every figure here assumes the ` +
     `whole range calls any size, so past a pot-sized ${kind} each extra unit reads as profit. A real ` +
-    'opponent folds more of the hands you beat as the size grows, so the reading goes no higher than a ' +
-    `pot-sized ${kind}, or all in when that is at most twice the pot.`
+    `opponent folds more of the hands you beat as the size grows, so ${limit}`
   );
 }
 
 interface Rival {
   readonly row: ActionCandidate;
-  /** True for a row set aside, which is measured at its always-called value. */
+  /** True for a row set aside, which is measured at what it is worth called (`calledAtWorst`). */
   readonly alwaysCalled: boolean;
+  /** True when that is against the hands that continue, not the whole range. */
+  readonly byCallers: boolean;
   readonly value: number;
 }
 
@@ -1226,9 +1326,11 @@ function rivalOf(
   let found: Rival | undefined;
   for (const row of ranked) {
     if (row.action === best.action) continue;
-    const alwaysCalled = !eligible.includes(row);
-    const value = alwaysCalled ? branchesOf(row, input, split).whenCalled : row.ev;
-    if (found === undefined || value > found.value) found = { row, alwaysCalled, value };
+    const called = eligible.includes(row) ? null : branchesOf(row, input, split);
+    const value = called?.calledAtWorst ?? row.ev;
+    if (found === undefined || value > found.value) {
+      found = { row, alwaysCalled: called !== null, byCallers: called?.byCallers === true, value };
+    }
   }
   return found;
 }
@@ -1236,7 +1338,8 @@ function rivalOf(
 /** Named, because the table shows a set-aside row at its fold-rate figure, not the one measured to. */
 function nameOfRival(rival: Rival | undefined): string {
   if (rival === undefined) return 'the next-best action';
-  return `${lineName(rival.row)}${rival.alwaysCalled ? ' (counted as always called)' : ''}`;
+  const counted = rival.byCallers ? 'against the hands that call it' : 'as always called';
+  return `${lineName(rival.row)}${rival.alwaysCalled ? ` (counted ${counted})` : ''}`;
 }
 
 /** Empty unless the highest row of another action sits above the rival on the table only by the fold rate. */
@@ -1262,8 +1365,9 @@ function valueUnder(row: ActionCandidate, alwaysCalled: boolean, input: CoachInp
   if (row.action === 'check' || row.action === 'call') {
     return showdownPots(split, input, row.cost, 0, 'called').value;
   }
-  const { whenCalled, whenFolded } = branchesOf(row, input, split);
-  const f = alwaysCalled ? 0 : (row.foldEquityAssumed ?? 0);
+  const { whenCalled, calledAtWorst, whenFolded } = branchesOf(row, input, split);
+  if (alwaysCalled) return calledAtWorst;
+  const f = row.foldEquityAssumed ?? 0;
   return f * whenFolded + (1 - f) * whenCalled;
 }
 
@@ -1277,6 +1381,32 @@ function assertRepriced(candidates: readonly ActionCandidate[], input: CoachInpu
       );
     }
   }
+}
+
+/**
+ * Only a size past the pot is set aside while still ahead of the reading when called. The reading is then
+ * the cap's, so it says that in place of a margin below zero. Null everywhere else.
+ */
+function cappedAheadOf(
+  best: ActionCandidate,
+  rival: Rival | undefined,
+  margin: number,
+  setAside: ReadonlyMap<ActionCandidate, SetAside>,
+): string | null {
+  if (margin >= 0 || rival === undefined || setAside.get(rival.row) !== 'above-pot') return null;
+  return (
+    `${capitalised(best.action)} is the reading only because ${lineName(rival.row)} is more than the pot. ` +
+    `${capitalised(nameOfRival(rival))} comes out ahead by ${(-margin).toFixed(1)} units — treat this as ` +
+    'close rather than as a recommendation.'
+  );
+}
+
+/** Empty at a big blind or more, and where the reading already says the other line is ahead. */
+function closeGapNotes(margin: number, bigBlind: number, rivalName: string, cappedAhead: string | null) {
+  if (margin >= bigBlind || cappedAhead !== null) return [];
+  return [
+    `The gap to ${rivalName} is only ${margin.toFixed(1)} units, well under a big blind — this is close to indifferent.`,
+  ];
 }
 
 /** `intervalPoints` is 0 when no other line overtakes the reading inside the interval. */
@@ -1317,7 +1447,8 @@ function overtakerOf(
       const alwaysCalled = !eligible.includes(row);
       const value = valueUnder(row, alwaysCalled, input, shifted);
       if (value > reading && (found === undefined || value - reading > found.ahead)) {
-        found = { row, alwaysCalled, value, end, ahead: value - reading };
+        const byCallers = alwaysCalled && branchesOf(row, input, shifted).byCallers;
+        found = { row, alwaysCalled, byCallers, value, end, ahead: value - reading };
       }
     }
   }
@@ -1337,7 +1468,7 @@ function capitalised(text: string): string {
 
 /** The fold rate a bet or raise reading assumes, and which way a different rate moves it. */
 function foldRateCaveat(best: ActionCandidate, input: CoachInput, split: PotSplit): string {
-  const rate = `${(best.foldEquityAssumed ?? 0) * 100}% of the time`;
+  const rate = `${percent(best.foldEquityAssumed ?? 0)} of the time`;
   const { whenCalled, whenFolded } = branchesOf(best, input, split);
   const assumed =
     split.allIn.length === 0
@@ -1418,6 +1549,7 @@ function buildSuggestion(
 
   const margin = best.ev - runnerUp;
   const marginInBigBlinds = margin / input.bigBlind;
+  const cappedAhead = cappedAheadOf(best, rival, margin, setAsideBy);
   const intervalPoints = equitySummary.confidenceHalfWidthPoints ?? 0;
 
   assertRepriced(candidates, input, split);
@@ -1475,11 +1607,7 @@ function buildSuggestion(
     );
   }
   whatWouldChangeIt.push(...seatsBehindNotes(best.action, input.toCall, behind, equitySummary.heroEquity));
-  if (marginInBigBlinds < 1) {
-    whatWouldChangeIt.push(
-      `The gap to ${rivalName} is only ${margin.toFixed(1)} units, well under a big blind — this is close to indifferent.`,
-    );
-  }
+  whatWouldChangeIt.push(...closeGapNotes(margin, input.bigBlind, rivalName, cappedAhead));
   if (whatWouldChangeIt.length === 0) {
     whatWouldChangeIt.push('A different assumption about the opponent range would change the numbers.');
   }
@@ -1489,14 +1617,16 @@ function buildSuggestion(
   const setAside = best.action === top.action ? '' : foldRateNote(top, best, input, split);
   const against =
     setAside === '' ? 'against the stated range' : 'of the lines that do not rely on an assumed fold rate';
-  const reason =
-    (openBehind !== null
+  const byMargin =
+    openBehind !== null
       ? `${actionWord} has the highest expected value ${against}, by ${margin.toFixed(1)} units over ${rivalName}, but the price leaves out what ${yetToMatch(openBehind)} would put in — treat this as close rather than as a recommendation.`
       : confidence === 'low' && smallMargin
         ? `${actionWord} comes out ahead of ${rivalName} by only ${margin.toFixed(1)} units, under a quarter of a big blind — treat this as close to indifferent rather than as a recommendation.`
         : confidence === 'low' && overtaker !== undefined
           ? `${actionWord} has the highest expected value ${against}, by ${margin.toFixed(1)} units over ${rivalName}, but the equity is sampled to ±${intervalPoints.toFixed(2)} points, and at the ${overtaker.end} end ${nameOfRival(overtaker)} comes out ahead by ${overtaker.ahead.toFixed(1)} units — treat this as close rather than as a recommendation.`
-          : `${actionWord} has the highest expected value ${against}, by ${margin.toFixed(1)} units over ${rivalName}.`) +
+          : `${actionWord} has the highest expected value ${against}, by ${margin.toFixed(1)} units over ${rivalName}.`;
+  const reason =
+    (cappedAhead ?? byMargin) +
     (setAside === '' ? readsCloserNote(ranked, best, rival) : setAside) +
     abovePotNote(ranked, best, setAsideBy, input);
 
@@ -1749,10 +1879,12 @@ export function buildCoachReport(input: CoachInput): CoachReport {
   if (candidates.some((candidate) => candidate.action === 'bet' || candidate.action === 'raise')) {
     const rate = `${(foldEquity * 100).toFixed(0)}% of the time`;
     assumptions.push(
-      (split.allIn.length > 0
-        ? `Bet and raise figures assume everyone who can still fold does so ${rate}. ${allInClause(split)}, so even then the pot they are in goes to showdown.`
-        : `Bet and raise figures assume the line wins uncontested ${rate}.`) +
-        ' That is an assumption, not something measured: the Scenario Lab lets you change it and watch these figures move.',
+      candidates.some((candidate) => candidate.continuingShare !== undefined)
+        ? 'Bet and raise figures assume a chance that the opponent folds which grows with the size, and that a call comes from the strongest hands in the stated range as the board stands. Those are assumptions, not something measured.'
+        : (split.allIn.length > 0
+            ? `Bet and raise figures assume everyone who can still fold does so ${rate}. ${allInClause(split)}, so even then the pot they are in goes to showdown.`
+            : `Bet and raise figures assume the line wins uncontested ${rate}.`) +
+            ' That is an assumption, not something measured: the Scenario Lab lets you change it and watch these figures move.',
     );
     assumptions.push(halfPotBreakEven(input, candidates, split));
   }
@@ -1818,7 +1950,7 @@ function halfPotBreakEven(
       }
       // The lesson's bet / (pot + bet) is this line at zero equity, so a learner can reconcile the two.
       const lesson = `${chips(row.cost)} / (${chips(input.contestablePot)} + ${chips(row.cost)})`;
-      const share = split.share(split.live);
+      const share = row.potShareIfCalled ?? split.share(split.live);
       const needs = `${size} To break even it would need to win uncontested ${percentOfTime(breakEven.rate)}`;
       if (share === 0) return `${needs}: with no equity when called, that is ${lesson}.`;
       const bluff = row.cost / (input.contestablePot + row.cost);
