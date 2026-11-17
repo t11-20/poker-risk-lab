@@ -47,3 +47,13 @@ export function practiceTableToRetire(
   }
   return null;
 }
+
+/**
+ * A finished match, or one an older API cannot name, has no page to go back to, so its button only
+ * closes the warning and must not promise to keep anything.
+ */
+export function keepLabel(other: PracticeTableInPlay, starting: PracticeTableKind): string {
+  if (other.kind === 'botTable') return 'Stay at my bot table';
+  if (other.match === null) return 'Not now';
+  return starting === 'legendMatch' ? 'Keep my other Legends match' : 'Keep my Legends match';
+}
