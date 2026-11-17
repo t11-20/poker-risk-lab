@@ -30,7 +30,7 @@ import type {
   PotOddsSummary,
   StackContext,
 } from '@prl/contracts';
-import { suggestedCandidate } from '@prl/poker-math';
+import { callIsAllIn, suggestedCandidate } from '@prl/poker-math';
 import type { ReactElement } from 'react';
 import { parseCardText } from '../cards.ts';
 import { cx } from '../cx.ts';
@@ -732,10 +732,7 @@ export function CoachPanel(props: CoachPanelProps): ReactElement {
           street={report.street}
           opponents={equity.perPlayer.length - 1}
         />
-        <StackSection
-          stack={report.stackContext}
-          callIsAllIn={report.candidates.some((row) => row.action === 'call' && row.allIn === true)}
-        />
+        <StackSection stack={report.stackContext} callIsAllIn={callIsAllIn(report.candidates)} />
       </div>
 
       <div className="prl-coach__disclosures">
