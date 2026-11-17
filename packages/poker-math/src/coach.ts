@@ -643,19 +643,25 @@ export function effectiveStackOf(spot: DescribedSpot): {
   return { effective: counted.effective, explanation: `${why}${counted.explanation}` };
 }
 
-function buildStackContext(input: CoachInput): StackContext {
+/** True when calling puts in the rest of hero's stack, so no bet can follow it. The panel reads the same. */
+export function callIsAllIn(candidates: readonly ActionCandidate[]): boolean {
+  return candidates.some((row) => row.action === 'call' && row.allIn === true);
+}
+
+function buildStackContext(input: CoachInput, heroCallIsAllIn: boolean): StackContext {
   const effective = effectiveStackOf(input);
   // SPR is undefined with an empty pot, which only happens preflop before blinds.
   const pot = Math.max(1, input.pot);
   const spr = stackToPotRatio(effective.effective, pot);
   const potSizedPrice = priceLaidByBet(pot, pot);
-  // At 0 no bet can follow, so a depth band that describes betting to come would not be true.
+  // At 0, or once hero's call is all in, no bet can follow, so a depth band describing betting to come
+  // would not be true.
   return {
     effectiveStack: effective.effective,
     spr: spr.spr,
     potOddsOfferedByPotSizedBet: potSizedPrice.breakEvenEquity,
     explanation:
-      effective.effective === 0
+      effective.effective === 0 || heroCallIsAllIn
         ? effective.explanation
         : `${effective.explanation} ${spr.explanation} ${spr.implication}`,
   };
@@ -1384,10 +1390,12 @@ function readsCloserNote(
 ) {
   const shown = ranked.find((c) => c.action !== best.action);
   if (shown === undefined || rival === undefined || shown === rival.row || shown.ev <= rival.value) return '';
-  return (
-    ` ${capitalised(lineName(shown))} reads closer on the table only because it assumes they fold ` +
-    `${((shown.foldEquityAssumed ?? 0) * 100).toFixed(0)}% of the time.`
-  );
+  const closer = ` ${capitalised(lineName(shown))} reads closer on the table only because it assumes`;
+  // Priced against the hands that continue, the fold rate is who does not call, not a separate guess.
+  if (shown.continuingShare !== undefined && shown.continuingShare < 1) {
+    return `${closer} the weakest ${shareOf(1 - shown.continuingShare)} of the range folds to it.`;
+  }
+  return `${closer} they fold ${((shown.foldEquityAssumed ?? 0) * 100).toFixed(0)}% of the time.`;
 }
 
 /**
@@ -1938,9 +1946,9 @@ export function buildCoachReport(input: CoachInput): CoachReport {
     behind,
     outOfReach,
   );
-  const stackContext = buildStackContext(input);
   const foldEquity = input.assumedFoldEquity ?? DEFAULT_ASSUMED_FOLD_EQUITY;
   const candidates = buildCandidates(input, hero.equity, foldEquity, split);
+  const stackContext = buildStackContext(input, callIsAllIn(candidates));
   const suggestion = buildSuggestion(candidates, input, equitySummary, outs, split, behind);
   const uncertainty = buildUncertainty(equityResult, input, outs, behind);
 

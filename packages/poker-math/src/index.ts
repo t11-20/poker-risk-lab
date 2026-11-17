@@ -21,6 +21,7 @@ export {
   type CoachAction,
   CoachError,
   type CoachInput,
+  callIsAllIn,
   type DescribedSpot,
   deriveContestablePot,
   deriveLegalActions,

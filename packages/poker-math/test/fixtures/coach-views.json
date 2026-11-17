@@ -1076,7 +1076,7 @@
         "effectiveStack": 50,
         "spr": 0.08130081300813008,
         "potOddsOfferedByPotSizedBet": 0.3333333333333333,
-        "explanation": "Yours is the shorter stack: you have 50 and the deepest opponent has 700, so at most 50 can change hands. You can neither win nor lose more than you brought to the hand. With 2 opponents each one has its own effective stack, the smaller of yours and theirs. 50 is the largest of them, so it is the most that can move against any single player and not the most you can lose across all of them. SPR = effective stack / pot = 50 / 615 = 0.08. There are 0.08 pots behind, which is the \"very-low\" band. The pot is already larger than what is behind, so a single bet gets the rest of the stack in. There is no later street to hold chips back for: at this depth the decision is effectively made now. SPR describes the shape of the decision, not the answer to it: your hand, their range and position all still apply."
+        "explanation": "Yours is the shorter stack: you have 50 and the deepest opponent has 700, so at most 50 can change hands. You can neither win nor lose more than you brought to the hand. With 2 opponents each one has its own effective stack, the smaller of yours and theirs. 50 is the largest of them, so it is the most that can move against any single player and not the most you can lose across all of them."
       },
       "assumptions": [
         "The hand is played to the river with no further betting — this is raw equity, not the value of the spot.",
@@ -1472,7 +1472,7 @@
       "suggestion": {
         "action": "fold",
         "confidence": "reasonable",
-        "reason": "Fold has the highest expected value against the stated range, by 34.4 units over calling. Raising to 80 reads closer on the table only because it assumes they fold 39% of the time.",
+        "reason": "Fold has the highest expected value against the stated range, by 34.4 units over calling. Raising to 80 reads closer on the table only because it assumes the weakest 39% of the range folds to it.",
         "whatWouldChangeIt": [
           "A wider opponent range would raise your equity and can flip a fold into a call.",
           "A narrower, stronger range does the opposite."
