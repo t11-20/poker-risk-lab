@@ -3,8 +3,9 @@
 /**
  * The Lab's one promised input, the assumed fold frequency after deciding. It re-prices only the
  * rows that read a fold frequency with the Coach's own formulas (`repriceAtFoldEquity`). It never
- * re-grades the recorded verdict. Where no row reads one, or the rows do not reproduce to a millionth
- * of a unit, the reason replaces the control. A native range with `aria-valuetext` and a polite status.
+ * re-grades the recorded verdict. Where no row reads one, each row has a rate of its own, or the rows
+ * do not reproduce to a millionth of a unit, the reason replaces the control. A native range with
+ * `aria-valuetext` and a polite status.
  */
 
 import type { CoachReport } from '@prl/contracts';

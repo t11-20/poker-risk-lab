@@ -24,6 +24,7 @@ function spot(overrides: Partial<BehindSpot> = {}): CoachInput {
     heroStack: 1000,
     opponentStacks: [1000],
     bigBlind: 20,
+    wholeRangeContinues: true,
     ...overrides,
   });
 }
@@ -56,6 +57,17 @@ describe('repriceAtFoldEquity', () => {
       }
     });
   }
+
+  it('refuses a table priced against the hands that continue, even where every row has one fold rate', () => {
+    // The one known hand calls every size, so every raise row reads the same fold rate: none.
+    const report = buildCoachReport(spot({ wholeRangeContinues: false, opponentStacks: [50] }));
+    const rates = report.candidates.flatMap((row) => row.foldEquityAssumed ?? []);
+    assert.ok(rates.length > 1 && new Set(rates).size === 1, 'the premise: one rate on several rows');
+    assert.notEqual(rates[0], 0.35);
+    const repriced = repriceAtFoldEquity(report, 0.1);
+    assert.ok(repriced.kind === 'unavailable');
+    assert.match(repriced.reason, /priced against the hands assumed to call a bet of its size/u);
+  });
 
   it('moves only the rows that read a fold frequency, and leaves equity alone', () => {
     const report = buildCoachReport(spot());

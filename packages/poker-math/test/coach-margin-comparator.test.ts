@@ -26,6 +26,7 @@ test('a fold names calling as its runner-up when a fold-rate raise reads closer 
     heroStack: 990,
     opponentStacks: [{ behind: 946, committedThisStreet: 44 }],
     bigBlind: 10,
+    wholeRangeContinues: true,
   });
   assert.equal(report.equity.heroEquity, 0);
   const shown = (action: string, to: number) =>
@@ -57,6 +58,7 @@ test('a call measured against a raise set aside on the fold rate says the raise 
     heroStack: 500,
     opponentStacks: [{ behind: 475, committedThisStreet: 25 }],
     bigBlind: 10,
+    wholeRangeContinues: true,
   });
   assert.equal(report.suggestion.action, 'call');
   assert.match(

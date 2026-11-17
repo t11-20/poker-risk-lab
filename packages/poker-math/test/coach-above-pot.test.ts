@@ -23,6 +23,7 @@ const spot = (heroStack: number, toCall: number): CoachInput => ({
   heroStack,
   opponentStacks: [{ behind: 1000 - toCall, committedThisStreet: toCall }],
   bigBlind: 10,
+  wholeRangeContinues: true,
 });
 const ev = (report: ReturnType<typeof buildCoachReport>, to: number) =>
   report.candidates.find((c) => c.to === to && (c.action === 'bet' || c.action === 'raise'))?.ev.toFixed(1);

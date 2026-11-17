@@ -934,6 +934,28 @@ function checkStatedDepth(
   }
 }
 
+/** An assumption that the stated range is what continues against a bet, in the words the scenarios use. */
+const NEVER_FOLDS = /\b(?:does|will) not fold\b/iu;
+
+/** The prose and the field price the same opponent, or bets are priced against hands the prose keeps in. */
+function checkDeclaredContinuing(problems: Problems, path: string, scenario: Scenario): void {
+  const said = scenario.assumptions.some((assumption) => NEVER_FOLDS.test(assumption));
+  if (said && scenario.wholeRangeContinues !== true) {
+    problems.add(
+      `${path}.wholeRangeContinues`,
+      'must be true: an assumption says the opponent does not fold, and without it a bet is priced as ' +
+        'if the weaker part of the range folded',
+    );
+  }
+  if (!said && scenario.wholeRangeContinues === true) {
+    problems.add(
+      `${path}.wholeRangeContinues`,
+      'is set, but no assumption says the opponent does not fold, so the learner is never told why ' +
+        'every size is priced against the whole range',
+    );
+  }
+}
+
 /** Skipped when the shape checks failed, since coherence errors on top of those are noise. */
 function checkSituationCoherence(problems: Problems, path: string, scenario: Scenario): void {
   const heroes = scenario.seats.filter((seat) => seat.isHero === true);
@@ -970,6 +992,7 @@ function checkSituationCoherence(problems: Problems, path: string, scenario: Sce
   checkNarratedWagers(problems, path, money, scenario);
   checkPreflopPosting(problems, path, money, scenario);
   checkStatedDepth(problems, path, money, scenario);
+  checkDeclaredContinuing(problems, path, scenario);
 }
 
 function validateScenario(problems: Problems, path: string, raw: unknown): Scenario {
@@ -1050,6 +1073,7 @@ function validateScenario(problems: Problems, path: string, raw: unknown): Scena
       ? { ante: requireInteger(problems, `${path}.ante`, ante, { min: 0, max: 100_000 }) }
       : {}),
     ...(Object.keys(committed).length > 0 ? { committedThisStreet: committed } : {}),
+    ...(raw['wholeRangeContinues'] === true ? { wholeRangeContinues: true } : {}),
   };
 
   // Last, on the assembled record, so coherence checks can trust the types.

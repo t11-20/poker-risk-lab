@@ -97,6 +97,14 @@ export function repriceAtFoldEquity(report: CoachReport, foldEquity: number): Fo
         'figure here rests on the range and the price, and a fold frequency has nothing to move.',
     };
   }
+  if (reading.some((candidate) => candidate.continuingShare !== undefined)) {
+    return {
+      kind: 'unavailable',
+      reason:
+        'Each bet and raise row here is priced against the hands assumed to call a bet of its size, so ' +
+        'its fold frequency is not an input that can be changed here.',
+    };
+  }
   const analysed = reading[0]?.foldEquityAssumed as number;
   if (reading.some((candidate) => candidate.foldEquityAssumed !== analysed)) {
     return {

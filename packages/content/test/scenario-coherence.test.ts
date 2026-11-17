@@ -204,3 +204,14 @@ test('a bounded depth in the prose is not read as a claim about one seat', () =>
     'this control is only meaningful while the scenario still contains the bounded phrase',
   );
 });
+
+test('a scenario that says the opponent does not fold must declare that the whole range continues', () => {
+  const draw = scenarioNamed('fl-flush-draw-counting-outs');
+  assert.equal(draw['wholeRangeContinues'], true);
+  draw['wholeRangeContinues'] = false;
+  assert.equal(mentioning(problemsFor(draw), /wholeRangeContinues.*does not fold/).length, 1);
+
+  const range = scenarioNamed('rk-high-spr-same-top-pair');
+  range['wholeRangeContinues'] = true;
+  assert.equal(mentioning(problemsFor(range), /wholeRangeContinues.*no assumption says/).length, 1);
+});

@@ -230,6 +230,7 @@
       "notation": "22-99, A2s-A9s, KTs, QTs, JTs, T9s, 98s, 87s, KTo, QTo, JTo, T9o, A8o, A9o",
       "label": "a loose-passive limping range"
     },
+    "wholeRangeContinues": true,
     "assumptions": [
       "The cutoff limps with the loose-passive range listed and will not fold before the flop if you raise.",
       "If you check, the hand is taken to showdown against that range with no further betting; this simplification is why the number attached to checking should be read as a floor, not a forecast.",
@@ -303,6 +304,7 @@
     "facingAction": "The big blind bets 25 into a pot of 55 on the flop.",
     "toCall": 25,
     "opponentRange": { "kind": "exact", "cards": "KdQs" },
+    "wholeRangeContinues": true,
     "assumptions": [
       "This is a known-hand teaching case: the opponent's exact cards are shown so the out count can be verified, which you would not see at the table.",
       "Both the turn and the river are dealt with no further betting after your call; this is the standard simplification behind flop equity and it flatters a draw, because in a real hand the opponent can bet again.",
@@ -340,6 +342,7 @@
     "facingAction": "The button bets 20 into a pot of 55 on the flop.",
     "toCall": 20,
     "opponentRange": { "kind": "exact", "cards": "KsQh" },
+    "wholeRangeContinues": true,
     "assumptions": [
       "This is a known-hand teaching case: the opponent's exact cards are shown so the out count can be verified, which you would not see at the table.",
       "Both the turn and the river are dealt with no further betting after your call, which is the usual flop simplification and is generous to the draw.",
@@ -377,6 +380,7 @@
     "facingAction": "The big blind bets 60 into a pot of 95 on the turn.",
     "toCall": 60,
     "opponentRange": { "kind": "exact", "cards": "KdQs" },
+    "wholeRangeContinues": true,
     "assumptions": [
       "This is a known-hand teaching case: the opponent's exact cards are shown so the out count can be verified.",
       "Only the river is still to come, and there is no further betting after your call, so you either fill the straight on one card or lose.",
@@ -418,6 +422,7 @@
     "facingAction": "The big blind bets 40 into a pot of 55 on the flop.",
     "toCall": 40,
     "opponentRange": { "kind": "exact", "cards": "AdQc" },
+    "wholeRangeContinues": true,
     "assumptions": [
       "This is a known-hand teaching case: the opponent's exact cards are shown, which is the only way the clean and dirty outs can be separated with certainty.",
       "Both the turn and the river are dealt with no further betting after your call, which is generous to you.",
@@ -459,6 +464,7 @@
     "facingAction": "The button bets 40 into a pot of 55 on the flop.",
     "toCall": 40,
     "opponentRange": { "kind": "exact", "cards": "AdKs" },
+    "wholeRangeContinues": true,
     "assumptions": [
       "This is a known-hand teaching case: the opponent's exact cards are shown so the comparison of current hands can be verified.",
       "Both the turn and the river are dealt with no further betting after your call; in a real hand more money would usually go in, and that would favour you here rather than the opponent.",

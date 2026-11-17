@@ -1183,6 +1183,7 @@ test('confidence measures the gap to the next-best ACTION, not to a neighbouring
     heroStack: 1000,
     opponentStacks: [{ behind: 300, committedThisStreet: 100 }],
     bigBlind: 20,
+    wholeRangeContinues: true,
   });
   const raise = (to: number) => report.candidates.find((c) => c.action === 'raise' && c.to === to)?.ev;
   assert.equal(raise(410), raise(1000), 'the two sizes tie');
