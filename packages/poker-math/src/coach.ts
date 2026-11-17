@@ -1469,6 +1469,33 @@ function capitalised(text: string): string {
   return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
 }
 
+/**
+ * The unbroken run of the reading's sizes, by size, that are eligible and within a big blind of it. The
+ * calling set narrows in steps, so a middle size can be set aside while a larger one is not, and a run
+ * that skipped it would publish a range that includes it. Sizes with one cost put the same chips at
+ * risk, the rest coming back uncalled, so only the smallest of them counts.
+ */
+function defensibleSizes(
+  ranked: readonly ActionCandidate[],
+  eligible: readonly ActionCandidate[],
+  best: ActionCandidate,
+  margin: number,
+): number[] {
+  const sized = ranked
+    .filter((row) => row.action === best.action && row.to !== undefined && row.to > 0)
+    .sort((left, right) => (left.to ?? 0) - (right.to ?? 0))
+    .filter((row, index, rows) => rows.findIndex((other) => other.cost === row.cost) === index);
+  const fits = (row: ActionCandidate | undefined) =>
+    row !== undefined && eligible.includes(row) && row.ev >= best.ev - margin;
+  const start = sized.findIndex((row) => row.cost === best.cost);
+  if (start === -1 || !fits(sized[start])) return [];
+  let low = start;
+  let high = start;
+  while (fits(sized[low - 1])) low -= 1;
+  while (fits(sized[high + 1])) high += 1;
+  return sized.slice(low, high + 1).map((row) => row.to ?? 0);
+}
+
 /** The fold rate a bet or raise reading assumes, and which way a different rate moves it. */
 function foldRateCaveat(best: ActionCandidate, input: CoachInput, split: PotSplit): string {
   const folds = best.foldEquityAssumed ?? 0;
@@ -1577,24 +1604,7 @@ function buildSuggestion(
   const openBehind = best.action === 'fold' && behind !== null && behind.ev > 0 ? behind : null;
   if (openBehind !== null) confidence = 'low';
 
-  // Only sizes within the one-big-blind margin of the best, so the range holds defensible sizes. Sizes
-  // with one cost put the same chips at risk, the rest coming back uncalled, so only the smallest counts.
-  const sizeMargin = input.bigBlind;
-  const sameActionSizes = eligible
-    .filter(
-      (candidate) =>
-        candidate.action === best.action &&
-        candidate.to !== undefined &&
-        candidate.ev >= best.ev - sizeMargin &&
-        !eligible.some(
-          (other) =>
-            other.action === candidate.action &&
-            other.cost === candidate.cost &&
-            (other.to ?? 0) < (candidate.to ?? 0),
-        ),
-    )
-    .map((candidate) => candidate.to ?? 0)
-    .filter((value) => value > 0);
+  const sameActionSizes = defensibleSizes(ranked, eligible, best, input.bigBlind);
 
   const whatWouldChangeIt: string[] = [];
   if (best.action === 'call' || best.action === 'fold') {

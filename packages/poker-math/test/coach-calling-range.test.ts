@@ -364,3 +364,20 @@ test('before the flop, multiway, against an all-in seat and into an empty pot no
     for (const row of sized) assert.equal(row.foldEquityAssumed, 0.35, `${name}: ${row.action} to ${row.to}`);
   }
 });
+
+test('a size range stops at a size the reading sets aside, so it never spans one', () => {
+  const dead = parseCards(`${HERO} ${BOARD}`);
+  const report = buildCoachReport({
+    ...river(50),
+    opponents: [{ label: 'the bettor', range: parseRange('AK, K9, 99, 98, 87, 65', dead) }],
+    pot: 150,
+    contestablePot: 150,
+    heroStack: 300,
+    opponentStacks: [{ behind: 250, committedThisStreet: 50 }],
+    bigBlind: 20,
+  });
+  // The raises to 150 and 183 lose to calling when only the hands that continue call, and 250 is ahead
+  // again, so 100 to 250 would include two sizes the reading rejects.
+  assert.equal(report.suggestion.action, 'raise');
+  assert.deepEqual(report.suggestion.sizeRange, { min: 100, max: 117 });
+});
