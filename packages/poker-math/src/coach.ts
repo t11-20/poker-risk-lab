@@ -1287,9 +1287,9 @@ function aheadOfCallersNote(
 type SetAside = 'fold-rate' | 'above-pot';
 
 /**
- * Wherever every hand calls, past the pot each added chip reads as profit: at a flat fold rate, and
- * against a single known hand, which always continues. An all-in up to twice the pot is kept, because a
- * pot-sized bet would commit the stack just the same.
+ * Past the pot, a size every hand calls reads each added chip as profit, and one priced against the hands
+ * that continue rests on how often a size that large is assumed to be called. An all-in up to twice the
+ * pot is kept, because a pot-sized bet would commit the stack just the same.
  */
 function abovePot(row: ActionCandidate, input: CoachInput, times = row.allIn === true ? 2 : 1): boolean {
   if (row.action !== 'bet' && row.action !== 'raise') return false;
