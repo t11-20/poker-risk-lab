@@ -763,7 +763,7 @@
           "max": 15
         },
         "confidence": "moderate",
-        "reason": "Call has the highest expected value of the lines that do not rely on an assumed fold rate, by 4.4 units over raising to 30 (counted against the hands that call it). Raising to 30 shows a higher figure only because it assumes they fold 30% of the time, which nothing here measures. It beats calling only if they fold more than 17.1% of the time.",
+        "reason": "Call has the highest expected value of the lines that do not rely on an assumed fold rate, by 4.4 units over raising to 30 (counted against the hands that call it). Raising to 30 shows a higher figure only because it assumes they fold 30% of the time, which nothing here measures. Called only by the strongest 70% of the range, it is worth 9.5 units, behind calling's 13.8.",
         "whatWouldChangeIt": [
           "A wider opponent range would raise your equity and can flip a fold into a call.",
           "A narrower, stronger range does the opposite.",

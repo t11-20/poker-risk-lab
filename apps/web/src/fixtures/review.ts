@@ -562,7 +562,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           },
           confidence: 'moderate',
           reason:
-            'Call has the highest expected value of the lines that do not rely on an assumed fold rate, by 17.2 units over raising to 130 (counted against the hands that call it). Raising to 195 shows a higher figure only because it assumes they fold 31% of the time, which nothing here measures. It beats calling only if they fold more than 18.6% of the time.',
+            "Call has the highest expected value of the lines that do not rely on an assumed fold rate, by 17.2 units over raising to 130 (counted against the hands that call it). Raising to 195 shows a higher figure only because it assumes they fold 31% of the time, which nothing here measures. Called only by the strongest 69% of the range, it is worth 13.9 units, behind calling's 47.6.",
           whatWouldChangeIt: [
             'A wider opponent range would raise your equity and can flip a fold into a call.',
             'A narrower, stronger range does the opposite.',
@@ -770,7 +770,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           },
           confidence: 'reasonable',
           reason:
-            'Call has the highest expected value of the lines that do not rely on an assumed fold rate, by 37.1 units over folding. Raising to 260 shows a higher figure only because it assumes they fold 25% of the time, which nothing here measures. It beats calling only if they fold more than 15.1% of the time.',
+            "Call has the highest expected value of the lines that do not rely on an assumed fold rate, by 37.1 units over folding. Raising to 260 shows a higher figure only because it assumes they fold 25% of the time, which nothing here measures. Called only by the strongest 75% of the range, it loses 25.5 units, behind calling's 37.1.",
           whatWouldChangeIt: [
             'A wider opponent range would raise your equity and can flip a fold into a call.',
             'A narrower, stronger range does the opposite.',
@@ -942,9 +942,9 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           },
           confidence: 'reasonable',
           reason:
-            'Raise has the highest expected value against the stated range, by 345.6 units over calling.',
+            'Raise has the highest expected value against the stated range, by 345.6 units over calling. Called only by the strongest 66% of the range, raising to 745 is still worth 514.1 units more than calling.',
           whatWouldChangeIt: [
-            'This assumes the line wins uncontested 33.7% of the time. Here a fold is worth less to you than a call, so an opponent who folds more often makes it worse.',
+            'This assumes a raise to 745 is called by the strongest 66% of the stated range as the board stands and the rest fold. If the whole range called, it would be worth 1235.6 units instead of 1052.1.',
             'Being raised is not modelled here, so treat the figure as optimistic.',
           ],
         },

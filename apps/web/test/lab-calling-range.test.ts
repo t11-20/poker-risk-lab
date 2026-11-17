@@ -45,6 +45,52 @@ describe('the Lab reads a bet or raise against what continues', () => {
     });
   });
 
+  it('says what a size assumes of the hands that call it, in the report’s own figures', () => {
+    const whole = (share: number | undefined) => `${((share ?? Number.NaN) * 100).toFixed(0)}%`;
+    const raise = buildCoachReport(inputOf('rk-raise-size-sets-up-the-turn'));
+    // The reading names the highest of the sizes it keeps, 105 to 185.
+    const read = raise.candidates.find((row) => row.action === 'raise' && row.to === 185);
+    assert.ok(read !== undefined && (read.continuingShare ?? 1) < 1, 'the premise: 185 is priced narrowed');
+    assert.match(
+      raise.suggestion.reason,
+      new RegExp(
+        `Called only by the strongest ${whole(read.continuingShare)} of the range, raising to 185 is still worth \\d+\\.\\d units more than calling\\.`,
+      ),
+    );
+    assert.match(
+      raise.suggestion.whatWouldChangeIt[0] ?? '',
+      new RegExp(
+        `^This assumes a raise to 185 is called by the strongest ${whole(read.continuingShare)} of the stated range as the board stands and the rest fold\\. If the whole range called, it would be worth -?\\d+\\.\\d units instead of ${read.ev.toFixed(1)}\\.$`,
+      ),
+    );
+    // A reading every hand calls keeps the sentence it had.
+    assert.ok(
+      buildCoachReport(inputOf('rk-low-spr-commit-top-pair')).suggestion.whatWouldChangeIt.includes(
+        'This assumes the line is called every time. An opponent who sometimes folds makes it better.',
+      ),
+    );
+    for (const [id, set, reading] of [
+      ['rk-counting-the-combos-that-beat-you', 560, 'calling'],
+      ['rk-a-right-call-that-usually-loses', 125, 'calling'],
+      ['eq-implied-odds-deep-stacks-turn', 240, 'folding'],
+    ] as const) {
+      const report = buildCoachReport(inputOf(id));
+      const row = report.candidates.find((c) => c.action === 'raise' && c.to === set);
+      assert.ok(row?.continuingShare !== undefined, `${id}: the premise: ${set} is priced narrowed`);
+      const worth =
+        reading === 'folding'
+          ? 'it loses \\d+\\.\\d units, where folding loses nothing'
+          : `it is worth -?\\d+\\.\\d units, behind calling's \\d+\\.\\d`;
+      assert.match(
+        report.suggestion.reason,
+        new RegExp(
+          `Raising to ${set} shows a higher figure only because it assumes they fold \\d+% of the time, which nothing here measures\\. Called only by the strongest ${whole(row.continuingShare)} of the range, ${worth}\\.$`,
+        ),
+        id,
+      );
+    }
+  });
+
   it('never turns a check, call or fold reading into a bet or raise', () => {
     assert.equal(inputs.length, 36, 'the bundle is 36 scenarios');
     const changed: string[] = [];
