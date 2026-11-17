@@ -9,13 +9,17 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   CONTROLS,
+  colorAlpha,
   coverageFailures,
+  drawnEdges,
   EXEMPTIONS,
   escapeAmount,
   findTextDefects,
   formatFinding,
+  frameSides,
   intersection,
   isRealOverlap,
+  nearestFrame,
   parseArgs,
   ROUTES,
   sweepMatrix,
@@ -40,6 +44,7 @@ function box(overrides = {}) {
     content: overrides.content ?? pad,
     word: overrides.word ?? { text: 'text', width: 30 },
     flow: overrides.flow ?? -1,
+    layer: overrides.layer ?? -1,
     scrollHost: overrides.scrollHost ?? null,
     blockScrolls: overrides.blockScrolls ?? false,
     ellipsis: overrides.ellipsis ?? false,
@@ -52,6 +57,7 @@ function measurement(boxes, extra = {}) {
     heading: extra.heading ?? 'six-handed table',
     boxes,
     clippers: extra.clippers ?? [],
+    frames: extra.frames ?? [],
     page: extra.page ?? { scrollWidth: 1440, clientWidth: 1440, innerWidth: 1440 },
     counts: {
       scanned: 900,
@@ -411,6 +417,160 @@ describe('text cut off by an ancestor that hides overflow', () => {
   });
 });
 
+/**
+ * The `bordered-spill` control as Chrome measured it at 1440px: a 480px paragraph inside a 200px
+ * banner. Its glyphs stay inside the paragraph's own box, so only the banner's border is crossed.
+ */
+function spilledBanner() {
+  return measurement(
+    [
+      box({
+        i: 31,
+        end: 32,
+        sel: 'main > div.prl-legal__banner > p',
+        text: 'Passages carrying this marker are placeholders written by the people who built t',
+        rects: [
+          { x: 438.11, y: 509.95, w: 430.22, h: 17 },
+          { x: 438.11, y: 533.95, w: 475.95, h: 17 },
+          { x: 438.11, y: 629.95, w: 174.5, h: 17 },
+        ],
+        pad: { x: 438.11, y: 506.95, w: 480, h: 144 },
+        content: { x: 438.11, y: 506.95, w: 480, h: 144 },
+      }),
+    ],
+    {
+      frames: [
+        { i: 30, end: 33, sel: 'main > div.prl-legal__banner', border: BANNER, left: true, right: true },
+      ],
+    },
+  );
+}
+const BANNER = { x: 413.11, y: 450.45, w: 200, h: 225.5 };
+
+describe('text painted across the frame drawn around it', () => {
+  it('reports the glyphs past the border, and names the box that drew it', () => {
+    const { findings, counts } = findTextDefects(spilledBanner(), {
+      route: '/terms',
+      theme: 'dark',
+      width: 1440,
+    });
+    assert.deepEqual(
+      findings.map((f) => f.check),
+      ['spills'],
+      'the paragraph fits its own box, so nothing but the frame can see this',
+    );
+    assert.equal(findings[0].side, 'right');
+    assert.equal(findings[0].past, 300.95);
+    assert.match(findings[0].frame, /prl-legal__banner$/u);
+    assert.match(formatFinding(findings[0]), /SPILLS .*\n.*300\.95px past the right edge drawn by/u);
+    assert.equal(counts.frameTests, 1);
+  });
+
+  it('says nothing when the glyphs stay inside, or cross an edge the frame does not draw', () => {
+    const fits = spilledBanner();
+    fits.frames[0].border = { ...BANNER, w: 560 };
+    assert.deepEqual(findTextDefects(fits, {}).findings, []);
+    assert.equal(findTextDefects(fits, {}).counts.frameTests, 1, 'measured and clear, not skipped');
+    const leftOnly = spilledBanner();
+    leftOnly.frames[0].right = false;
+    assert.deepEqual(findTextDefects(leftOnly, {}).findings, []);
+  });
+
+  it('judges against the innermost frame only', () => {
+    const nested = spilledBanner();
+    nested.frames.push({
+      i: 1,
+      end: 90,
+      sel: 'main',
+      border: { x: 0, y: 0, w: 1440, h: 900 },
+      left: true,
+      right: true,
+    });
+    assert.equal(findTextDefects(nested, {}).findings[0]?.frame, 'main > div.prl-legal__banner');
+    const inner = spilledBanner();
+    inner.frames.push({ i: 31, end: 32, sel: 'p', border: inner.boxes[0].pad, left: true, right: true });
+    assert.deepEqual(findTextDefects(inner, {}).findings, []);
+  });
+
+  it('excuses text in its own absolute layer, scrolled, clipped or truncated inside the frame', () => {
+    for (const excuse of [
+      (m) => Object.assign(m.boxes[0], { layer: 31 }),
+      (m) => Object.assign(m.boxes[0], { scrollHost: 30 }),
+      (m) => Object.assign(m.boxes[0], { ellipsis: true }),
+      (m) => m.clippers.push({ i: 30, end: 33, sel: 'div', pad: BANNER }),
+    ]) {
+      const excused = spilledBanner();
+      excuse(excused);
+      const result = findTextDefects(excused, {});
+      assert.ok(!result.findings.some((f) => f.check === 'spills'), JSON.stringify(result.findings));
+    }
+    const layered = spilledBanner();
+    layered.boxes[0].layer = 30;
+    assert.ok(
+      findTextDefects(layered, {}).findings.some((f) => f.check === 'spills'),
+      'the frame IS the layer',
+    );
+  });
+
+  it('nearestFrame and drawnEdges are the parts the rule is built from', () => {
+    const [text] = spilledBanner().boxes;
+    assert.equal(nearestFrame(text, []), null);
+    assert.equal(nearestFrame(text, [{ i: 40, end: 50 }]), null);
+    const open = drawnEdges({ border: BANNER, left: false, right: true });
+    assert.ok(Math.abs(open.x + open.w - 613.11) < 1e-6, 'the drawn right edge stays where it was');
+    assert.ok(open.x < -1000);
+  });
+});
+
+describe('which edges of a box a reader sees', () => {
+  const edges = (overrides) => ({
+    borderLeftWidth: '0px',
+    borderLeftStyle: 'none',
+    borderLeftColor: 'rgb(0, 0, 0)',
+    borderRightWidth: '0px',
+    borderRightStyle: 'none',
+    borderRightColor: 'rgb(0, 0, 0)',
+    backgroundColor: 'rgba(0, 0, 0, 0)',
+    ...overrides,
+  });
+  const solid = {
+    borderLeftWidth: '1px',
+    borderLeftStyle: 'solid',
+    borderRightWidth: '1px',
+    borderRightStyle: 'solid',
+  };
+
+  it('colorAlpha reads every form Chrome computes', () => {
+    assert.equal(colorAlpha('rgb(20, 24, 31)'), 1);
+    assert.equal(colorAlpha('rgba(0, 0, 0, 0)'), 0);
+    assert.equal(colorAlpha('rgba(255, 255, 255, 0.06)'), 0.06);
+    assert.equal(colorAlpha('rgb(20 24 31 / 0.5)'), 0.5);
+    assert.equal(colorAlpha('color(srgb 1 1 1 / 40%)'), 0.4);
+    assert.equal(colorAlpha('transparent'), 0);
+  });
+
+  it('a drawn border marks its side, and a hidden, zero or transparent one does not', () => {
+    assert.deepEqual(frameSides(edges(solid), 'rgb(1, 1, 1)'), { left: true, right: true });
+    assert.deepEqual(frameSides(edges({ ...solid, borderRightWidth: '0px' }), ''), {
+      left: true,
+      right: false,
+    });
+    assert.deepEqual(frameSides(edges({ ...solid, borderLeftStyle: 'hidden' }), ''), {
+      left: false,
+      right: true,
+    });
+    const clear = { borderLeftColor: 'rgba(0, 0, 0, 0)', borderRightColor: 'rgba(0, 0, 0, 0)' };
+    assert.deepEqual(frameSides(edges({ ...solid, ...clear }), ''), { left: false, right: false });
+  });
+
+  it('a fill marks both sides only when it differs from the colour behind it', () => {
+    const panel = edges({ backgroundColor: 'rgb(20, 24, 31)' });
+    assert.deepEqual(frameSides(panel, 'rgb(12, 14, 18)'), { left: true, right: true });
+    assert.deepEqual(frameSides(panel, 'rgb(20, 24, 31)'), { left: false, right: false });
+    assert.deepEqual(frameSides(edges({}), 'rgb(12, 14, 18)'), { left: false, right: false });
+  });
+});
+
 describe('the page itself', () => {
   it('reports a document that scrolls sideways', () => {
     const wide = healthyRow();
@@ -454,7 +614,7 @@ describe('exemptions', () => {
       {
         measurements: 150,
         textBoxes: 34098,
-        detector: { ownBox: 34028, clipTests: 4168, pairs: 25744 },
+        detector: { ownBox: 34028, clipTests: 4168, frameTests: 25211, pairs: 25744 },
         routesLoaded: 30,
         routesWanted: 30,
         usedExemptions: new Set(),
@@ -469,7 +629,7 @@ describe('exemptions', () => {
     for (const rule of EXEMPTIONS) {
       assert.ok(typeof rule.selector === 'string' && rule.selector.length > 0);
       assert.ok(typeof rule.why === 'string' && rule.why.length > 30, 'an exemption needs a reason');
-      assert.ok(['collision', 'escapes', 'clipped', 'squeezed', 'page'].includes(rule.check));
+      assert.ok(['collision', 'escapes', 'clipped', 'spills', 'squeezed', 'page'].includes(rule.check));
     }
   });
 });
@@ -478,7 +638,7 @@ describe('a sweep of nothing is not a pass', () => {
   const healthy = {
     measurements: 150,
     textBoxes: 34098,
-    detector: { ownBox: 34028, clipTests: 4168, pairs: 25744 },
+    detector: { ownBox: 34028, clipTests: 4168, frameTests: 25211, pairs: 25744 },
     routesLoaded: 30,
     routesWanted: 30,
     usedExemptions: new Set(),
@@ -496,11 +656,18 @@ describe('a sweep of nothing is not a pass', () => {
 
   it('refuses a run where a detector examined nothing, even with pages measured', () => {
     // A busy sweep with one detector out of the loop must still fail.
-    for (const key of ['ownBox', 'clipTests', 'pairs']) {
+    for (const key of ['ownBox', 'clipTests', 'frameTests', 'pairs']) {
       const problems = coverageFailures({ ...healthy, detector: { ...healthy.detector, [key]: 0 } }, []);
       assert.equal(problems.length, 1, `${key} at zero must be reported`);
       assert.match(problems[0], /a detector that examined nothing/u);
     }
+  });
+
+  it('counts a detector missing from the tally as one that examined nothing', () => {
+    const { frameTests: _, ...withoutFrames } = healthy.detector;
+    const problems = coverageFailures({ ...healthy, detector: withoutFrames }, []);
+    assert.equal(problems.length, 1);
+    assert.match(problems[0], /frame drawn around them/u);
   });
 
   it('refuses a run where a route never loaded', () => {
@@ -559,7 +726,7 @@ describe('the scope of the sweep', () => {
 
   it('every check has a negative control that runs on every invocation', () => {
     const covered = new Set(CONTROLS.map((control) => control.expect));
-    for (const check of ['collision', 'escapes', 'clipped', 'squeezed', 'page']) {
+    for (const check of ['collision', 'escapes', 'clipped', 'spills', 'squeezed', 'page']) {
       assert.ok(covered.has(check), `${check} has no negative control, so nobody has seen it fire`);
     }
     for (const control of CONTROLS) {
