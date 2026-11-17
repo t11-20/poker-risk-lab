@@ -956,6 +956,35 @@ function checkDeclaredContinuing(problems: Problems, path: string, scenario: Sce
   }
 }
 
+/** A fold rate stated in an assumption, in the words the scenarios use: "an assumed 30% chance ... fold". */
+const STATED_FOLD_RATE = /\bassumed (\d+(?:\.\d+)?)% chance\b[^.]*\bfold/iu;
+
+/** The prose and the field state one rate, or the table prices a figure the learner is never shown. */
+function checkStatedFoldRate(problems: Problems, path: string, scenario: Scenario): void {
+  const field = scenario.assumedFoldEquity;
+  const stated = scenario.assumptions.flatMap((assumption) => {
+    const percent = STATED_FOLD_RATE.exec(assumption)?.[1];
+    return percent === undefined ? [] : [Number(percent)];
+  });
+  for (const percent of stated) {
+    if (field !== undefined && Math.abs(field * 100 - percent) < 1e-9) continue;
+    problems.add(
+      `${path}.assumedFoldEquity`,
+      field === undefined
+        ? `must be ${percent / 100}: an assumption states a ${percent}% fold rate, and without it every ` +
+            'bet and raise is priced at the default rate instead'
+        : `is ${field}, but an assumption states a ${percent}% fold rate`,
+    );
+  }
+  if (stated.length === 0 && field !== undefined) {
+    problems.add(
+      `${path}.assumedFoldEquity`,
+      `is ${field}, but no assumption states the rate, so the learner is never told what every bet and ` +
+        'raise is priced at',
+    );
+  }
+}
+
 /** Skipped when the shape checks failed, since coherence errors on top of those are noise. */
 function checkSituationCoherence(problems: Problems, path: string, scenario: Scenario): void {
   const heroes = scenario.seats.filter((seat) => seat.isHero === true);
@@ -993,6 +1022,7 @@ function checkSituationCoherence(problems: Problems, path: string, scenario: Sce
   checkPreflopPosting(problems, path, money, scenario);
   checkStatedDepth(problems, path, money, scenario);
   checkDeclaredContinuing(problems, path, scenario);
+  checkStatedFoldRate(problems, path, scenario);
 }
 
 function validateScenario(problems: Problems, path: string, raw: unknown): Scenario {
@@ -1074,6 +1104,14 @@ function validateScenario(problems: Problems, path: string, raw: unknown): Scena
       : {}),
     ...(Object.keys(committed).length > 0 ? { committedThisStreet: committed } : {}),
     ...(raw['wholeRangeContinues'] === true ? { wholeRangeContinues: true } : {}),
+    ...(raw['assumedFoldEquity'] === undefined
+      ? {}
+      : {
+          assumedFoldEquity: requireNumber(problems, `${path}.assumedFoldEquity`, raw['assumedFoldEquity'], {
+            min: 0,
+            max: 1,
+          }),
+        }),
   };
 
   // Last, on the assembled record, so coherence checks can trust the types.

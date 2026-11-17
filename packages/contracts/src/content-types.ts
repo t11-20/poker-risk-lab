@@ -267,6 +267,11 @@ export interface Scenario {
    * against a bet of any size. `validate.ts` holds the two together.
    */
   readonly wholeRangeContinues?: boolean;
+  /**
+   * How often a bet or raise is assumed to win uncontested, in [0, 1], when an assumption states the
+   * rate. `validate.ts` holds the two together, so the table prices the figure the learner reads.
+   */
+  readonly assumedFoldEquity?: number;
   /** Assumptions the analysis depends on, shown next to every number. */
   readonly assumptions: readonly string[];
   /** The reasoning the learner should arrive at, in prose. */
