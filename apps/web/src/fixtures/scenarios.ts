@@ -166,43 +166,46 @@ export const LAB_SCENARIOS: readonly Scenario[] = [
     topic: 'probability-and-equity',
     difficulty: 'intro',
     question:
-      'A small pair flops a set about one time in eight. You are being asked for 60 to see it. What has to be true for that to be worth doing?',
+      'A small pair flops a set about one time in eight. You are being asked for 80 to see it. What has to be true for that to be worth doing?',
     smallBlind: 10,
     bigBlind: 20,
-    buttonSeat: 2,
+    buttonSeat: 0,
     seats: [
       {
         seat: 0,
+        label: 'Ledger',
+        stack: 910,
+        profile: 'tight-aggressive',
+      },
+      {
+        seat: 1,
         label: 'You',
-        stack: 1000,
+        stack: 990,
         isHero: true,
         holeCards: '5c 5d',
       },
       {
-        seat: 1,
-        label: 'Ledger',
-        stack: 1000,
-        profile: 'tight-aggressive',
-      },
-      {
         seat: 2,
         label: 'Quartile',
-        stack: 1000,
+        stack: 980,
         profile: 'nit',
       },
     ],
     board: '',
-    potBeforeStreet: 30,
+    potBeforeStreet: 0,
     committedThisStreet: {
-      '1': 60,
+      '0': 90,
+      '1': 10,
+      '2': 20,
     },
     street: 'preflop',
-    facingAction: 'Ledger raises to 60 from early position. You are next to act with fives.',
-    toCall: 60,
+    facingAction:
+      'Ledger raises to 90 on the button. You are next to act in the small blind with fives, and Quartile is in the big blind behind you.',
+    toCall: 80,
     opponentRange: {
       kind: 'notation',
       notation: 'TT+, AJs+, KQs, AQo+',
-      label: 'a tight early-position opening range',
+      label: 'a tight opening range',
     },
     assumedFoldEquity: 0.3,
     assumptions: [
@@ -212,7 +215,7 @@ export const LAB_SCENARIOS: readonly Scenario[] = [
       'Every bet and raise below is priced against an assumed 30% chance that the remaining opponents fold to it. That figure is an input chosen from the stated opponent profile, not a measurement of anybody: move it and the aggressive rows move with it, while the fold and call rows do not move at all.',
     ],
     reasoning:
-      'Raw equity is the wrong tool for this decision, and seeing why is the lesson. A pair of fives against a strong range has real equity — the number below is not small — but almost all of it is "I stay ahead of two overcards that miss", and you will not get to realise that: you are calling out of position and you will fold the flop most of the time.\n\nThe honest question is whether the times you flop a set pay for all the times you do not. You flop a set roughly 11.8% of the time, so about one call in eight. The 60 you put in buys a lottery ticket, and the ticket has to pay about eight times its price plus something for the hands where you flop a set and still lose.\n\nThat is what makes this a stack-depth question rather than a pot-odds question. With 1,000 behind and a 60 call the implied price is plausible. At 300 behind it is not, and the same cards become a fold with nothing about the cards having changed.',
+      'Raw equity is the wrong tool for this decision, and seeing why is the lesson. A pair of fives against a strong range has real equity — the number below is not small — but almost all of it is "I stay ahead of two overcards that miss", and you will not get to realise that: you are calling out of position and you will fold the flop most of the time.\n\nThe honest question is whether the times you flop a set pay for all the times you do not. You flop a set roughly 11.8% of the time, so about one call in eight. The 80 you put in buys a lottery ticket, and the ticket has to pay about eight times its price plus something for the hands where you flop a set and still lose.\n\nThat is what makes this a stack-depth question rather than a pot-odds question. With about 1,000 behind and an 80 call the implied price is plausible. At 300 behind it is not, and the same cards become a fold with nothing about the cards having changed.',
     expectedInsight: [
       {
         kind: 'breakEvenEquityBetween',
@@ -263,7 +266,6 @@ export const LAB_SCENARIOS: readonly Scenario[] = [
       notation: 'JJ, 77, 44, AJ, KJs, QJs, JTs, 98s, 65s, A5s, KQo',
       label: 'a loose continuing range on this board',
     },
-    wholeRangeContinues: true,
     assumedFoldEquity: 0.15,
     assumptions: [
       'Maniac continues with the stated range and folds everything else. A maniac will in practice do things no range describes, which is exactly why the range is written down rather than assumed.',
@@ -357,43 +359,46 @@ export const LAB_SCENARIOS: readonly Scenario[] = [
       'An open and a call in front of you. How much of a squeeze is paid for by the folds, and how much by the hand?',
     smallBlind: 10,
     bigBlind: 20,
-    buttonSeat: 3,
+    buttonSeat: 2,
     seats: [
       {
         seat: 0,
         label: 'You',
-        stack: 1000,
+        stack: 980,
         isHero: true,
         holeCards: 'As 5s',
       },
       {
         seat: 1,
         label: 'Ledger',
-        stack: 1000,
+        stack: 940,
         profile: 'tight-aggressive',
       },
       {
         seat: 2,
         label: 'Station',
-        stack: 1000,
+        stack: 940,
         profile: 'calling-station',
       },
       {
         seat: 3,
         label: 'Quartile',
-        stack: 1000,
+        stack: 990,
+        folded: true,
         profile: 'nit',
       },
     ],
     board: '',
-    potBeforeStreet: 30,
+    potBeforeStreet: 0,
     committedThisStreet: {
+      '0': 20,
       '1': 60,
       '2': 60,
+      '3': 10,
     },
     street: 'preflop',
     facingAction:
-      'Ledger opens to 60, Station calls. You are in the big blind with the ace of spades and the five of spades.',
+      'Ledger opens to 60, Station calls on the button and Quartile folds the small blind. You are in the big blind with the ace of spades and the five of spades.',
     toCall: 40,
     opponentRange: {
       kind: 'topPercent',
@@ -790,8 +795,8 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
   },
   'preflop-set-mining-odds': {
     street: 'preflop',
-    potTotal: 90,
-    toCall: 60,
+    potTotal: 120,
+    toCall: 80,
     outs: null,
     equity: {
       heroEquity: 0.3850875,
@@ -807,7 +812,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
           tie: 0.004425,
         },
         {
-          label: 'a tight early-position opening range',
+          label: 'a tight opening range',
           equity: 0.6149125,
           win: 0.6127,
           tie: 0.004425,
@@ -815,13 +820,13 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       ],
     },
     potOdds: {
-      pot: 90,
-      toCall: 60,
+      pot: 120,
+      toCall: 80,
       breakEvenEquity: 0.4,
       oddsRatio: 1.5,
       equitySurplus: -0.014912499999999995,
       explanation:
-        'You risk 60 to win the 90 already in the middle, a price of 1.50 to 1. Calling breaks even at 60 / (90 + 60) = 40.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 90 is what is in the middle before your own 60 goes in — counting the call inside the pot understates the equity a call needs. You do not clear that: 38.5% equity is 1.5 points short of it.',
+        'You risk 80 to win the 120 already in the middle, a price of 1.50 to 1. Calling breaks even at 80 / (120 + 80) = 40.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 120 is what is in the middle before your own 80 goes in — counting the call inside the pot understates the equity a call needs. You do not clear that: 38.5% equity is 1.5 points short of it.',
     },
     candidates: [
       {
@@ -833,59 +838,59 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       },
       {
         action: 'call',
-        to: 60,
-        cost: 60,
-        ev: -2.2368749999999977,
-        derivation: 'EV(call) = equity x (pot + toCall) - toCall = 0.3851 x (90 + 60) - 60 = -2.24 chips.',
+        to: 90,
+        cost: 80,
+        ev: -2.9824999999999875,
+        derivation: 'EV(call) = equity x (pot + toCall) - toCall = 0.3851 x (120 + 80) - 80 = -2.98 chips.',
         potShareIfCalled: 0.3850875,
       },
       {
         action: 'raise',
-        to: 120,
-        cost: 120,
-        ev: 15.78153750000001,
-        derivation:
-          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.3 x 90 + 0.7 x [ 0.3851 x (90 + 60 + 2 x 60) - 120 ] = 27 + (-11.22) = 15.78 chips. Risks 120 to win 90. Raising by 60 is the smallest raise the rules allow here: 40% of the 150 that would be in the middle once you call. A caller needs 22.2% equity to break even on the extra 60, and has to continue with 42.9% of their range for a raise of this size not to print automatically.',
-        foldEquityAssumed: 0.3,
-        potShareIfCalled: 0.3850875,
-      },
-      {
-        action: 'raise',
-        to: 135,
-        cost: 135,
-        ev: 13.368375000000004,
-        derivation:
-          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.3 x 90 + 0.7 x [ 0.3851 x (90 + 60 + 2 x 75) - 135 ] = 27 + (-13.63) = 13.37 chips. Risks 135 to win 90. Raising by 75 is the ½-pot size: 50% of the 150 that would be in the middle once you call. A caller needs 25% equity to break even on the extra 75, and has to continue with 40% of their range for a raise of this size not to print automatically.',
-        foldEquityAssumed: 0.3,
-        potShareIfCalled: 0.3850875,
-      },
-      {
-        action: 'raise',
-        to: 160,
+        to: 170,
         cost: 160,
-        ev: 9.346437500000011,
+        ev: 21.04205000000001,
         derivation:
-          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.3 x 90 + 0.7 x [ 0.3851 x (90 + 60 + 2 x 100) - 160 ] = 27 + (-17.65) = 9.35 chips. Risks 160 to win 90. Raising by 100 is the ⅔-pot size: 66.7% of the 150 that would be in the middle once you call. A caller needs 28.6% equity to break even on the extra 100, and has to continue with 36% of their range for a raise of this size not to print automatically.',
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.3 x 120 + 0.7 x [ 0.3851 x (120 + 80 + 2 x 80) - 160 ] = 36 + (-14.96) = 21.04 chips. Risks 160 to win 120. Raising by 80 is the smallest raise the rules allow here: 40% of the 200 that would be in the middle once you call. A caller needs 22.2% equity to break even on the extra 80, and has to continue with 42.9% of their range for a raise of this size not to print automatically.',
         foldEquityAssumed: 0.3,
         potShareIfCalled: 0.3850875,
       },
       {
         action: 'raise',
-        to: 210,
-        cost: 210,
-        ev: 1.3025625000000076,
+        to: 190,
+        cost: 180,
+        ev: 17.824500000000018,
         derivation:
-          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.3 x 90 + 0.7 x [ 0.3851 x (90 + 60 + 2 x 150) - 210 ] = 27 + (-25.7) = 1.3 chips. Risks 210 to win 90. Raising by 150 is the pot-sized size: 100% of the 150 that would be in the middle once you call. A caller needs 33.3% equity to break even on the extra 150, and has to continue with 30% of their range for a raise of this size not to print automatically.',
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.3 x 120 + 0.7 x [ 0.3851 x (120 + 80 + 2 x 100) - 180 ] = 36 + (-18.18) = 17.82 chips. Risks 180 to win 120. Raising by 100 is the ½-pot size: 50% of the 200 that would be in the middle once you call. A caller needs 25% equity to break even on the extra 100, and has to continue with 40% of their range for a raise of this size not to print automatically.',
+        foldEquityAssumed: 0.3,
+        potShareIfCalled: 0.3850875,
+      },
+      {
+        action: 'raise',
+        to: 223,
+        cost: 213,
+        ev: 12.515542500000016,
+        derivation:
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.3 x 120 + 0.7 x [ 0.3851 x (120 + 80 + 2 x 133) - 213 ] = 36 + (-23.48) = 12.52 chips. Risks 213 to win 120. Raising by 133 is the ⅔-pot size: 66.5% of the 200 that would be in the middle once you call. A caller needs 28.5% equity to break even on the extra 133, and has to continue with 36% of their range for a raise of this size not to print automatically.',
+        foldEquityAssumed: 0.3,
+        potShareIfCalled: 0.3850875,
+      },
+      {
+        action: 'raise',
+        to: 290,
+        cost: 280,
+        ev: 1.7367500000000078,
+        derivation:
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.3 x 120 + 0.7 x [ 0.3851 x (120 + 80 + 2 x 200) - 280 ] = 36 + (-34.26) = 1.74 chips. Risks 280 to win 120. Raising by 200 is the pot-sized size: 100% of the 200 that would be in the middle once you call. A caller needs 33.3% equity to break even on the extra 200, and has to continue with 30% of their range for a raise of this size not to print automatically.',
         foldEquityAssumed: 0.3,
         potShareIfCalled: 0.3850875,
       },
       {
         action: 'raise',
         to: 1000,
-        cost: 1000,
-        ev: -125.79066249999991,
+        cost: 990,
+        ev: -112.48627499999998,
         derivation:
-          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.3 x 90 + 0.7 x [ 0.3851 x (90 + 60 + 2 x 940) - 1000 ] = 27 + (-152.79) = -125.79 chips. Risks 1000 to win 90. Raising by 940 puts your whole remaining stack in. A caller needs 46.3% equity to break even on the extra 940, and has to continue with 8.3% of their range for a raise of this size not to print automatically.',
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.3 x 120 + 0.7 x [ 0.3851 x (120 + 80 + 2 x 910) - 990 ] = 36 + (-148.49) = -112.49 chips. Risks 990 to win 120. Raising by 910 puts your whole remaining stack in. A caller needs 45% equity to break even on the extra 910, and has to continue with 10.8% of their range for a raise of this size not to print automatically.',
         foldEquityAssumed: 0.3,
         potShareIfCalled: 0.3850875,
         allIn: true,
@@ -895,30 +900,30 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       action: 'fold',
       confidence: 'low',
       reason:
-        'Fold comes out ahead of calling by only 2.2 units, under a quarter of a big blind — treat this as close to indifferent rather than as a recommendation. Raising to 120 shows a higher figure only because it assumes they fold 30% of the time, which nothing here measures. It beats folding only if they fold more than 15.1% of the time.',
+        'Fold comes out ahead of calling by only 3.0 units, under a quarter of a big blind — treat this as close to indifferent rather than as a recommendation. Raising to 170 shows a higher figure only because it assumes they fold 30% of the time, which nothing here measures. It beats folding only if they fold more than 15.1% of the time.',
       whatWouldChangeIt: [
         'A wider opponent range would raise your equity and can flip a fold into a call.',
         'A narrower, stronger range does the opposite.',
         'The equity figure is sampled, ±0.48 points at 95% confidence. A close decision could sit either side of that.',
-        'The gap to calling is only 2.2 units, well under a big blind — this is close to indifferent.',
+        'The gap to calling is only 3.0 units, well under a big blind — this is close to indifferent.',
       ],
     },
     stackContext: {
-      effectiveStack: 1000,
-      spr: 11.11111111111111,
+      effectiveStack: 990,
+      spr: 8.25,
       potOddsOfferedByPotSizedBet: 0.3333333333333333,
       explanation:
-        'Yours is the shorter stack: you have 1000 and the deepest opponent has 1000, so at most 1000 can change hands. You can neither win nor lose more than you brought to the hand. With 2 opponents each one has its own effective stack, the smaller of yours and theirs. 1000 is the largest of them, so it is the most that can move against any single player and not the most you can lose across all of them. SPR = effective stack / pot = 1000 / 90 = 11.11. There are 11.11 pots behind, which is the "high" band. Several streets of betting fit before the stacks are in, so this decision mostly sets up the next one rather than settling the hand. SPR describes the shape of the decision, not the answer to it: your hand, their range and position all still apply.',
+        'Chips already bet this street are still in play: the deepest opponent has 910 behind and 80 more than you in front of them, so 990 can still come against you. Yours is the shorter stack: you have 990 and the deepest opponent has 990, so at most 990 can change hands. You can neither win nor lose more than you brought to the hand. With 2 opponents each one has its own effective stack, the smaller of yours and theirs. 990 is the largest of them, so it is the most that can move against any single player and not the most you can lose across all of them. SPR = effective stack / pot = 990 / 120 = 8.25. There are 8.25 pots behind, which is the "high" band. Several streets of betting fit before the stacks are in, so this decision mostly sets up the next one rather than settling the hand. SPR describes the shape of the decision, not the answer to it: your hand, their range and position all still apply.',
     },
     assumptions: [
       'The hand is played to the river with no further betting — this is raw equity, not the value of the spot.',
       'You hold exactly 5c5d.',
-      'A tight early-position opening range holds any of 70 combinations from "TT+, AJs+, KQs, AQo+", each equally likely.',
+      'A tight opening range holds any of 70 combinations from "TT+, AJs+, KQs, AQo+", each equally likely.',
       'Every hand in a range is weighted equally. Real opponents do not play every hand in a range the same way, so treat this as the range assumption, not a prediction.',
       'Estimated by sampling 40,000 random run-outs, not by exhaustive enumeration.',
       'No community cards are known yet, so five more cards are still to come.',
       'Bet and raise figures assume the line wins uncontested 30% of the time. That is an assumption, not something measured: the Scenario Lab lets you change it and watch these figures move.',
-      'The ½-pot raise to 135 risks 135 to win 90. To break even it would need to win uncontested 18% of the time, counting the 38.5% equity you have when called. With no equity when called it would need 135 / (90 + 135) = 60%.',
+      'The ½-pot raise to 190 risks 180 to win 120. To break even it would need to win uncontested 18% of the time, counting the 38.5% equity you have when called. With no equity when called it would need 180 / (120 + 180) = 60%.',
       'Expected values are measured against folding, which is treated as zero. Chips already in the pot are spent either way.',
     ],
     uncertainty: {
@@ -938,7 +943,6 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
     },
     teachingNotes: [
       'The pot is laying you 1.5 to 1, so you need 40.0% to break even on a call. That number depends only on the price — not on your cards.',
-      'At an SPR of 11.1 there is a lot of money left behind, so hands that can keep improving are worth more than their current strength suggests.',
     ],
   },
   'flop-spr-commitment': {
@@ -1301,7 +1305,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       },
       {
         action: 'call',
-        to: 40,
+        to: 60,
         cost: 40,
         ev: 44.702,
         derivation: 'EV(call) = equity x (pot + toCall) - toCall = 0.4458 x (150 + 40) - 40 = 44.7 chips.',
@@ -1309,7 +1313,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       },
       {
         action: 'raise',
-        to: 80,
+        to: 100,
         cost: 80,
         ev: 84.2196,
         derivation:
@@ -1319,7 +1323,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       },
       {
         action: 'raise',
-        to: 103,
+        to: 123,
         cost: 103,
         ev: 82.72367999999999,
         derivation:
@@ -1329,7 +1333,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       },
       {
         action: 'raise',
-        to: 135,
+        to: 155,
         cost: 135,
         ev: 80.6424,
         derivation:
@@ -1339,7 +1343,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       },
       {
         action: 'raise',
-        to: 167,
+        to: 187,
         cost: 167,
         ev: 78.56111999999999,
         derivation:
@@ -1349,7 +1353,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       },
       {
         action: 'raise',
-        to: 230,
+        to: 250,
         cost: 230,
         ev: 74.4636,
         derivation:
@@ -1360,10 +1364,10 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       {
         action: 'raise',
         to: 1000,
-        cost: 1000,
-        ev: 24.382799999999953,
+        cost: 980,
+        ev: 25.683599999999956,
         derivation:
-          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.4 x 150 + 0.6 x [ 0.4458 x (150 + 40 + 2 x 960) - 1000 ] = 60 + (-35.62) = 24.38 chips. Risks 1000 to win 150. Raising by 960 puts your whole remaining stack in. A caller needs 45.5% equity to break even on the extra 960, and has to continue with 13% of their range for a raise of this size not to print automatically.',
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.4 x 150 + 0.6 x [ 0.4458 x (150 + 40 + 2 x 940) - 980 ] = 60 + (-34.32) = 25.68 chips. Risks 980 to win 150. Raising by 940 puts your whole remaining stack in. A caller needs 45.4% equity to break even on the extra 940, and has to continue with 13.3% of their range for a raise of this size not to print automatically.',
         foldEquityAssumed: 0.4,
         potShareIfCalled: 0.4458,
         allIn: true,
@@ -1372,25 +1376,25 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
     suggestion: {
       action: 'call',
       sizeRange: {
-        min: 40,
-        max: 40,
+        min: 60,
+        max: 60,
       },
       confidence: 'low',
       reason:
-        'Call comes out ahead of raising to 80 (counted as always called) by only 4.3 units, under a quarter of a big blind — treat this as close to indifferent rather than as a recommendation. Raising to 80 shows a higher figure only because it assumes they fold 40% of the time, which nothing here measures. It beats calling only if they fold more than 4% of the time.',
+        'Call comes out ahead of raising to 100 (counted as always called) by only 4.3 units, under a quarter of a big blind — treat this as close to indifferent rather than as a recommendation. Raising to 100 shows a higher figure only because it assumes they fold 40% of the time, which nothing here measures. It beats calling only if they fold more than 4% of the time.',
       whatWouldChangeIt: [
         'A wider opponent range would raise your equity and can flip a fold into a call.',
         'A narrower, stronger range does the opposite.',
         'The equity figure is sampled, ±0.47 points at 95% confidence. A close decision could sit either side of that.',
-        'The gap to raising to 80 (counted as always called) is only 4.3 units, well under a big blind — this is close to indifferent.',
+        'The gap to raising to 100 (counted as always called) is only 4.3 units, well under a big blind — this is close to indifferent.',
       ],
     },
     stackContext: {
-      effectiveStack: 1000,
-      spr: 6.666666666666667,
+      effectiveStack: 980,
+      spr: 6.533333333333333,
       potOddsOfferedByPotSizedBet: 0.3333333333333333,
       explanation:
-        'Yours is the shorter stack: you have 1000 and the deepest opponent has 1000, so at most 1000 can change hands. You can neither win nor lose more than you brought to the hand. With 3 opponents each one has its own effective stack, the smaller of yours and theirs. 1000 is the largest of them, so it is the most that can move against any single player and not the most you can lose across all of them. SPR = effective stack / pot = 1000 / 150 = 6.67. There are 6.67 pots behind, which is the "high" band. Several streets of betting fit before the stacks are in, so this decision mostly sets up the next one rather than settling the hand. SPR describes the shape of the decision, not the answer to it: your hand, their range and position all still apply.',
+        'Chips already bet this street are still in play: the deepest opponent has 940 behind and 40 more than you in front of them, so 980 can still come against you. Yours is the shorter stack: you have 980 and the deepest opponent has 980, so at most 980 can change hands. You can neither win nor lose more than you brought to the hand. With 2 opponents each one has its own effective stack, the smaller of yours and theirs. 980 is the largest of them, so it is the most that can move against any single player and not the most you can lose across all of them. SPR = effective stack / pot = 980 / 150 = 6.53. There are 6.53 pots behind, which is the "high" band. Several streets of betting fit before the stacks are in, so this decision mostly sets up the next one rather than settling the hand. SPR describes the shape of the decision, not the answer to it: your hand, their range and position all still apply.',
     },
     assumptions: [
       'The hand is played to the river with no further betting — this is raw equity, not the value of the spot.',
@@ -1400,7 +1404,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       'Estimated by sampling 40,000 random run-outs, not by exhaustive enumeration.',
       'No community cards are known yet, so five more cards are still to come.',
       'Bet and raise figures assume the line wins uncontested 40% of the time. That is an assumption, not something measured: the Scenario Lab lets you change it and watch these figures move.',
-      'The ½-pot raise to 135 risks 135 to win 150. It is already break-even or better purely on the equity you have when called — it does not need to win uncontested at all.',
+      'The ½-pot raise to 155 risks 135 to win 150. It is already break-even or better purely on the equity you have when called — it does not need to win uncontested at all.',
       'Expected values are measured against folding, which is treated as zero. Chips already in the pot are spent either way.',
     ],
     uncertainty: {
