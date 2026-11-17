@@ -215,3 +215,26 @@ test('a scenario that says the opponent does not fold must declare that the whol
   range['wholeRangeContinues'] = true;
   assert.equal(mentioning(problemsFor(range), /wholeRangeContinues.*no assumption says/).length, 1);
 });
+
+test('a fold rate stated in an assumption is the one the scenario declares', () => {
+  const stated =
+    'Every bet and raise below is priced against an assumed 30% chance that the opponent folds to it.';
+  const foldRateProblems = (scenario: RawScenario) => mentioning(problemsFor(scenario), /assumedFoldEquity/);
+  const scenario = scenarioNamed('rk-high-spr-same-top-pair');
+  assert.deepEqual(foldRateProblems(scenario), []);
+  scenario['assumptions'] = [...(scenario['assumptions'] as string[]), stated];
+  assert.match(foldRateProblems(scenario).join('\n'), /must be 0\.3: an assumption states a 30% fold rate/);
+
+  scenario['assumedFoldEquity'] = 0.3;
+  assert.deepEqual(foldRateProblems(scenario), []);
+  scenario['assumedFoldEquity'] = 0.35;
+  assert.match(foldRateProblems(scenario).join('\n'), /is 0\.35, but an assumption states a 30% fold rate/);
+  scenario['assumedFoldEquity'] = '0.3';
+  assert.match(foldRateProblems(scenario).join('\n'), /expected a finite number/);
+  scenario['assumedFoldEquity'] = 1.5;
+  assert.match(foldRateProblems(scenario).join('\n'), /must be at most 1/);
+
+  const silent = scenarioNamed('rk-high-spr-same-top-pair');
+  silent['assumedFoldEquity'] = 0.3;
+  assert.match(foldRateProblems(silent).join('\n'), /is 0\.3, but no assumption states the rate/);
+});

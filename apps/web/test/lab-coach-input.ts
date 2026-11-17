@@ -30,6 +30,7 @@ export function coachInputFor(scenario: Scenario, sampling = { samples: 2_000, s
     bigBlind: scenario.bigBlind,
     legalActions: deriveLegalActions(spot),
     ...(scenario.wholeRangeContinues === true ? { wholeRangeContinues: true } : {}),
+    ...(scenario.assumedFoldEquity === undefined ? {} : { assumedFoldEquity: scenario.assumedFoldEquity }),
     ...sampling,
   };
 }

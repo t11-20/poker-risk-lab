@@ -251,6 +251,7 @@ export function coachTaskFor(scenario: Scenario): CoachTask {
     bigBlind: scenario.bigBlind,
     legalActions,
     ...(scenario.wholeRangeContinues === true ? { wholeRangeContinues: true } : {}),
+    ...(scenario.assumedFoldEquity === undefined ? {} : { assumedFoldEquity: scenario.assumedFoldEquity }),
     samples: CONTENT_SAMPLES,
     seed: CONTENT_SEED,
   };

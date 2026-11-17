@@ -74,6 +74,8 @@ export interface CoachTask {
   readonly legalActions: readonly CoachAction[];
   /** See `CoachInput.wholeRangeContinues`. Set from a scenario that says the opponent does not fold. */
   readonly wholeRangeContinues?: boolean;
+  /** See `CoachInput.assumedFoldEquity`. Set from a scenario whose assumptions state the rate. */
+  readonly assumedFoldEquity?: number;
   readonly samples: number;
   readonly seed: number;
 }
@@ -176,6 +178,7 @@ function runCoach(task: CoachTask): CoachReport {
     // Never defaulted here, for the same reason.
     legalActions: task.legalActions,
     ...(task.wholeRangeContinues === true ? { wholeRangeContinues: true } : {}),
+    ...(task.assumedFoldEquity === undefined ? {} : { assumedFoldEquity: task.assumedFoldEquity }),
     samples: task.samples,
     seed: task.seed,
   });

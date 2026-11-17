@@ -44,3 +44,13 @@ test('the two scenarios whose reasoning says call read call on the thread', asyn
     );
   }
 });
+
+test('a scenario that states its fold rate reaches the thread with it, for every size', async () => {
+  const scenario = scenarioById('rk-high-spr-same-top-pair');
+  assert.ok(scenario !== null);
+  assert.equal(coachTaskFor(scenario).assumedFoldEquity, undefined);
+  const task = coachTaskFor({ ...scenario, assumedFoldEquity: 0.3 });
+  const rates = (await pool.runCoach(task)).candidates.flatMap((row) => row.foldEquityAssumed ?? []);
+  assert.ok(rates.length > 1, 'no raise rows; a sweep of nothing');
+  assert.deepEqual([...new Set(rates)], [0.3]);
+});
