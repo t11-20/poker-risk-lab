@@ -58,9 +58,10 @@ construction**: `package.json`, `.github/workflows/ci.yml`, `.github/workflows/r
 
 `pnpm run test:layout` is the newest and the one whose absence cost the most. It measures
 **`Range.getClientRects()` over each element's own text nodes** — where the glyphs landed — on
-every route, in both themes, at 360/768/1024/1440/1920, and reports four shapes of one failure:
+every route, in both themes, at 360/768/1024/1440/1920, and reports five shapes of one failure:
 glyphs of two independent in-flow elements overlapping, glyphs painted outside their own box,
-glyphs cut off by a non-scrolling ancestor, and a block narrower than its own longest word.
+glyphs cut off by a non-scrolling ancestor, glyphs painted across the border or fill of the nearest
+box that draws one, and a block narrower than its own longest word.
 
 It exists because `.prl-play .prl-coach__section .prl-stat__pair` shipped as
 `grid-template-columns: minmax(0, 1fr) auto`. A bare `auto` track is floored at max-content, so a

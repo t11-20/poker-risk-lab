@@ -7,8 +7,9 @@
  *
  * Findings: `collision` (glyphs of two independent in-flow elements intersect), `escapes` (glyphs
  * leave their own non-scrolling block), `clipped` (cut off by a non-scrolling ancestor without an
- * ellipsis), `squeezed` (a block narrower than its longest word), and `page` (the document scrolls
- * sideways). The page only measures. `findTextDefects()` judges in Node, so tests can feed it the
+ * ellipsis), `squeezed` (a block narrower than its longest word), `spills` (glyphs cross the left or
+ * right edge of the nearest box that draws one, with nothing clipping them), and `page` (the document
+ * scrolls sideways). The page only measures. `findTextDefects()` judges in Node, so tests can feed it the
  * collapsed row's real numbers.
  *
  * Negative controls run on every invocation (`--controls-only` runs only them). Each injects CSS that
@@ -108,6 +109,7 @@ const MIN_TEXT_BOXES_TOTAL = 5000;
 const MIN_OWN_BOX_CHECKS = 8000;
 const MIN_CLIP_TESTS = 2000;
 const MIN_PAIRS_COMPARED = 8000;
+const MIN_FRAME_TESTS = 8000;
 
 /**
  * @typedef {object} Exemption
@@ -210,12 +212,48 @@ const CONTROLS = [
     what: 'a Legends card title escaping its box, inside the `display: contents` difficulty scope',
     css: '.prl-legend-scope .prl-legend-identity__archetype { white-space: nowrap; max-width: 60px; }',
   },
+  {
+    id: 'bordered-spill',
+    route: '/terms',
+    width: 1440,
+    expect: 'spills',
+    what: 'a paragraph wider than the bordered banner around it, painted across its border',
+    // The paragraph keeps its glyphs inside its own box, so only the banner's edge is crossed.
+    css: '.prl-legal__banner { max-width: 200px; } .prl-legal__banner p { width: 480px; }',
+  },
 ];
+
+/** The alpha of a computed colour, which Chrome reports as `rgb()`, `rgba()` or with a `/ a` part. */
+export function colorAlpha(color) {
+  if (color === '' || color === 'transparent') return 0;
+  const slash = /\/\s*([\d.]+)(%?)\s*\)$/u.exec(color);
+  if (slash !== null) return Number(slash[1]) / (slash[2] === '%' ? 100 : 1);
+  const rgba = /^rgba\([^,]+,[^,]+,[^,]+,\s*([\d.]+)\s*\)$/u.exec(color);
+  return rgba === null ? 1 : Number(rgba[1]);
+}
+
+/**
+ * Which vertical edges of a box a reader sees: a side with a border, or both sides of a fill that
+ * differs from the colour behind it. A translucent fill always does: it composites over that colour.
+ * Runs in the page beside `colorAlpha`, so it references nothing else.
+ */
+export function frameSides(style, backdrop) {
+  const border = (side) =>
+    Number.parseFloat(style[`border${side}Width`]) > 0 &&
+    style[`border${side}Style`] !== 'none' &&
+    style[`border${side}Style`] !== 'hidden' &&
+    colorAlpha(style[`border${side}Color`]) > 0;
+  const alpha = colorAlpha(style.backgroundColor);
+  const fill = alpha > 0 && (alpha < 1 || style.backgroundColor !== backdrop);
+  return { left: fill || border('Left'), right: fill || border('Right') };
+}
 
 // The walker measures and decides nothing. Comments inside it are part of the page script.
 
 const WALKER = String.raw`(() => {
   const EXEMPT_SELECTORS = EXEMPT_SELECTORS_ARGUMENT;
+  const colorAlpha = COLOR_ALPHA_ARGUMENT;
+  const frameSides = FRAME_SIDES_ARGUMENT;
 
   const skipped = { ariaHidden: 0, visuallyHidden: 0, invisible: 0, offscreen: 0, inert: 0 };
 
@@ -349,6 +387,34 @@ const WALKER = String.raw`(() => {
     return answer;
   };
 
+  /** The nearest absolute or fixed ancestor-or-self, or -1. Text in such a layer may overhang on purpose. */
+  const layer = new Map();
+  const layerOf = (el) => {
+    const cached = layer.get(el);
+    if (cached !== undefined) return cached;
+    const position = styleOf(el).position;
+    let answer;
+    if (position === 'absolute' || position === 'fixed') answer = order.get(el);
+    else if (el.parentElement === null) answer = -1;
+    else answer = layerOf(el.parentElement);
+    layer.set(el, answer);
+    return answer;
+  };
+
+  /** The colour painted behind an element: the nearest ancestor's fill. display: contents paints none. */
+  const backdrop = new Map();
+  const backdropOf = (el) => {
+    const parent = el.parentElement;
+    if (parent === null) return '';
+    const cached = backdrop.get(parent);
+    if (cached !== undefined) return cached;
+    const own = styleOf(parent).backgroundColor;
+    const paints = styleOf(parent).display !== 'contents' && colorAlpha(own) > 0;
+    const answer = paints ? own : backdropOf(parent);
+    backdrop.set(parent, answer);
+    return answer;
+  };
+
   /** The nearest ancestor-or-self that scrolls horizontally, or null. */
   const scrollHostOf = (el) => {
     for (let cur = el; cur !== null; cur = cur.parentElement) {
@@ -368,6 +434,8 @@ const WALKER = String.raw`(() => {
 
   const boxes = [];
   const clippers = [];
+  const frames = [];
+  const docRoot = document.documentElement;
   let textNodes = 0;
   let words = 0;
   let scanned = 0;
@@ -387,6 +455,18 @@ const WALKER = String.raw`(() => {
           sel: describe(el),
           pad: round(pad),
         });
+      }
+    }
+
+    // A frame needs a box of its own that lets text overflow. The root's fill paints the canvas.
+    const boxed = style.display !== 'none' && style.display !== 'contents' && style.display !== 'inline' &&
+      style.display !== 'ruby';
+    const shown = style.visibility === 'visible' && style.overflowX === 'visible';
+    if (boxed && shown && el !== document.body && el !== docRoot) {
+      const sides = frameSides(style, backdropOf(el));
+      const r = el.getBoundingClientRect();
+      if ((sides.left || sides.right) && r.width > 0 && r.height > 0) {
+        frames.push({ i: order.get(el), end: ends.get(el), sel: describe(el), border: asRect(r), ...sides });
       }
     }
 
@@ -497,6 +577,7 @@ const WALKER = String.raw`(() => {
       content: round(content),
       word: widest,
       flow: flowRootOf(el),
+      layer: layerOf(el),
       scrollHost: scrollHostOf(el),
       blockScrolls: scrollsHorizontally(blockStyle),
       ellipsis: style.textOverflow === 'ellipsis' || blockStyle.textOverflow === 'ellipsis',
@@ -511,12 +592,20 @@ const WALKER = String.raw`(() => {
     heading: h1 === null ? '' : (h1.textContent || '').trim().slice(0, 120).toLowerCase(),
     boxes,
     clippers,
+    frames,
     page: {
       scrollWidth: docEl.scrollWidth,
       clientWidth: docEl.clientWidth,
       innerWidth: window.innerWidth,
     },
-    counts: { scanned, textBoxes: boxes.length, textNodes, words, clippers: clippers.length },
+    counts: {
+      scanned,
+      textBoxes: boxes.length,
+      textNodes,
+      words,
+      clippers: clippers.length,
+      frames: frames.length,
+    },
     skipped,
   };
 })()`;
@@ -559,13 +648,45 @@ export function escapeAmount(rects, box) {
   return { amount: Math.round(worst * 100) / 100, side };
 }
 
+/** The innermost frame containing `box`, the box's own element included, or null. */
+export function nearestFrame(box, frames) {
+  let nearest = null;
+  for (const frame of frames) {
+    if (frame.i > box.i || box.i >= frame.end) continue;
+    if (nearest === null || frame.i > nearest.i) nearest = frame;
+  }
+  return nearest;
+}
+
+/** The frame's border box, opened out on a side it does not draw, so only a drawn edge can be crossed. */
+export function drawnEdges(frame) {
+  const far = 1e6;
+  const left = frame.left ? frame.border.x : -far;
+  const rightEdge = frame.right ? right(frame.border) : far;
+  return { x: left, y: frame.border.y, w: rightEdge - left, h: frame.border.h };
+}
+
+/** What of `rects` each clipper lets through horizontally. A clipper wider than the frame hides nothing. */
+export function clippedRects(rects, clips) {
+  let shown = rects;
+  for (const clip of clips) {
+    shown = shown.flatMap((r) => {
+      const x = Math.max(r.x, clip.pad.x);
+      const w = Math.min(right(r), right(clip.pad)) - x;
+      return w > 0 ? [{ ...r, x, w }] : [];
+    });
+  }
+  return shown;
+}
+
 /** `measurement` is what `WALKER` returns. `context` names route, theme and width. */
 export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIONS) {
   const findings = [];
   const usedExemptions = new Set();
   const { boxes, clippers } = measurement;
+  const frames = measurement.frames ?? [];
   // What each detector looked at, floored in `coverageFailures`.
-  const counts = { ownBox: 0, scrollExcused: 0, ellipsisExcused: 0, clipTests: 0, pairs: 0 };
+  const counts = { ownBox: 0, scrollExcused: 0, ellipsisExcused: 0, clipTests: 0, frameTests: 0, pairs: 0 };
 
   const exemptFor = (box, check, otherSel) => {
     for (const index of box.exempt) {
@@ -638,6 +759,28 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
         past: escaped.amount,
       });
     }
+  }
+
+  for (const box of boxes) {
+    if (box.ellipsis) continue;
+    const frame = nearestFrame(box, frames);
+    if (frame === null) continue;
+    // Out of flow or scrolled inside the frame, the glyphs are not crossing its edge.
+    if (box.layer > frame.i) continue;
+    if (box.scrollHost !== null && box.scrollHost >= frame.i) continue;
+    counts.frameTests += 1;
+    const clips = clippers.filter((c) => c.i >= frame.i && c.i <= box.i && box.i < c.end);
+    const spilled = escapeAmount(clippedRects(box.rects, clips), drawnEdges(frame));
+    if (spilled.amount <= EDGE_TOLERANCE) continue;
+    if (exemptFor(box, 'spills', frame.sel) !== null) continue;
+    add('spills', {
+      sel: box.sel,
+      text: box.text,
+      frame: frame.sel,
+      side: spilled.side,
+      past: spilled.amount,
+      box: frame.border,
+    });
   }
 
   // Sorted by top edge so the scan can exit early. The key must be the TOPMOST rect, not `rects[0]`,
@@ -716,6 +859,11 @@ export function formatFinding(finding) {
         `${where}\n      CLIPPED    ${finding.sel}${quote}\n` +
         `      cut off ${String(finding.past)}px past the ${finding.side} edge of ${finding.clipper}`
       );
+    case 'spills':
+      return (
+        `${where}\n      SPILLS     ${finding.sel}${quote}\n` +
+        `      glyphs reach ${String(finding.past)}px past the ${finding.side} edge drawn by ${finding.frame}`
+      );
     case 'collision':
       return (
         `${where}\n      COLLISION  ${finding.sel}${quote}\n` +
@@ -771,8 +919,8 @@ ${bold('pnpm run test:layout')} — the PAINTED TEXT of this app, in real Chrome
     --out <file>          also write the findings as JSON
     -h, --help            this text
 
-  Exits 0 when nothing collided, nothing escaped, nothing was clipped, nothing was
-  squeezed, every negative control was caught and every exemption was used.
+  Exits 0 when nothing collided, escaped, was clipped, spilled past a drawn frame or
+  was squeezed, every negative control was caught and every exemption was used.
 `;
 
 export function parseArgs(argv) {
@@ -878,11 +1026,12 @@ export function coverageFailures(tally, exemptions = EXEMPTIONS) {
   for (const [what, seen, floor] of [
     ['text blocks measured against their own box', tally.detector.ownBox, MIN_OWN_BOX_CHECKS],
     ['text blocks measured against a clipping ancestor', tally.detector.clipTests, MIN_CLIP_TESTS],
+    ['text blocks measured against the frame drawn around them', tally.detector.frameTests, MIN_FRAME_TESTS],
     ['pairs of text blocks compared for a collision', tally.detector.pairs, MIN_PAIRS_COMPARED],
   ]) {
-    if (seen < floor) {
+    if ((seen ?? 0) < floor) {
       problems.push(
-        `only ${String(seen)} ${what} (floor ${String(floor)}) — a detector that examined nothing ` +
+        `only ${String(seen ?? 0)} ${what} (floor ${String(floor)}) — a detector that examined nothing ` +
           'reports what a detector that found nothing reports',
       );
     }
@@ -1016,7 +1165,9 @@ async function withPage(headful, run) {
 }
 
 const walkerSource = () =>
-  WALKER.replace('EXEMPT_SELECTORS_ARGUMENT', JSON.stringify(EXEMPTIONS.map((rule) => rule.selector)));
+  WALKER.replace('EXEMPT_SELECTORS_ARGUMENT', JSON.stringify(EXEMPTIONS.map((rule) => rule.selector)))
+    .replace('COLOR_ALPHA_ARGUMENT', () => String(colorAlpha))
+    .replace('FRAME_SIDES_ARGUMENT', () => String(frameSides));
 
 let dumpCount = 0;
 
@@ -1111,7 +1262,7 @@ async function main() {
     clippers: 0,
     skipped: { ariaHidden: 0, visuallyHidden: 0, invisible: 0, offscreen: 0, inert: 0 },
     usedExemptions: new Set(),
-    detector: { ownBox: 0, scrollExcused: 0, ellipsisExcused: 0, clipTests: 0, pairs: 0 },
+    detector: { ownBox: 0, scrollExcused: 0, ellipsisExcused: 0, clipTests: 0, frameTests: 0, pairs: 0 },
     routesLoaded: 0,
     routesWanted: 0,
   };
@@ -1261,6 +1412,7 @@ async function main() {
   console.log(
     `  detectors examined  ${String(tally.detector.ownBox)} block(s) against their own box, ` +
       `${String(tally.detector.clipTests)} against a clipping ancestor, ` +
+      `${String(tally.detector.frameTests)} against a drawn frame, ` +
       `${String(tally.detector.pairs)} pair(s) for a collision`,
   );
   console.log(
@@ -1349,7 +1501,7 @@ async function main() {
       green(
         bold(
           `\nPASS — ${String(tally.textBoxes)} painted text elements over ${String(tally.measurements)} ` +
-            'measurements, nothing collided, escaped, was clipped or was squeezed,\n' +
+            'measurements, nothing collided, escaped, was clipped, spilled or was squeezed,\n' +
             `and all ${String(controlResults.length)} negative controls were caught.`,
         ),
       ),
