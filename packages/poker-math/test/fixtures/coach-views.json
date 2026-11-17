@@ -763,7 +763,7 @@
           "max": 15
         },
         "confidence": "moderate",
-        "reason": "Call has the highest expected value of the lines that do not rely on an assumed fold rate, by 4.4 units over raising to 30 (counted against the hands that call it). Raising to 30 shows a higher figure only because it assumes they fold 30% of the time, which nothing here measures. Called only by the strongest 70% of the range, it is worth 9.5 units, behind calling's 13.8.",
+        "reason": "Call has the highest expected value of the lines that do not rely on an assumed fold rate, by 4.4 units over raising to 30 (counted against the hands that call it). Raising to 30 shows a higher figure only because it assumes the weakest 30% of the range folds to it, which nothing here measures. Called only by the strongest 70% of the range, it is worth 9.5 units, behind calling's 13.8.",
         "whatWouldChangeIt": [
           "A wider opponent range would raise your equity and can flip a fold into a call.",
           "A narrower, stronger range does the opposite.",
@@ -1105,8 +1105,7 @@
       },
       "teachingNotes": [
         "The pot is laying you 2.7 to 1 on the 135 you can win, so you need 27.0% to break even on a call. That number depends only on the price — not on your cards.",
-        "Do not price this against the 615 you can see. You are all-in for less than the bet, so 480 of the middle is a side pot you are not in — it goes to whoever wins it among the players who covered that bet, whatever you are holding. Being short changes the price you are getting, not just the chips you can lose.",
-        "At an SPR of 0.1 the stacks are shallow enough that one more bet commits them. Decisions like that are effectively made now rather than later."
+        "Do not price this against the 615 you can see. You are all-in for less than the bet, so 480 of the middle is a side pot you are not in — it goes to whoever wins it among the players who covered that bet, whatever you are holding. Being short changes the price you are getting, not just the chips you can lose."
       ]
     },
     "task": {

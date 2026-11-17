@@ -562,7 +562,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           },
           confidence: 'moderate',
           reason:
-            "Call has the highest expected value of the lines that do not rely on an assumed fold rate, by 17.2 units over raising to 130 (counted against the hands that call it). Raising to 195 shows a higher figure only because it assumes they fold 31% of the time, which nothing here measures. Called only by the strongest 69% of the range, it is worth 13.9 units, behind calling's 47.6.",
+            "Call has the highest expected value of the lines that do not rely on an assumed fold rate, by 17.2 units over raising to 130 (counted against the hands that call it). Raising to 195 shows a higher figure only because it assumes the weakest 31% of the range folds to it, which nothing here measures. Called only by the strongest 69% of the range, it is worth 13.9 units, behind calling's 47.6.",
           whatWouldChangeIt: [
             'A wider opponent range would raise your equity and can flip a fold into a call.',
             'A narrower, stronger range does the opposite.',
@@ -770,7 +770,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           },
           confidence: 'reasonable',
           reason:
-            "Call has the highest expected value of the lines that do not rely on an assumed fold rate, by 37.1 units over folding. Raising to 260 shows a higher figure only because it assumes they fold 25% of the time, which nothing here measures. Called only by the strongest 75% of the range, it loses 25.5 units, behind calling's 37.1.",
+            "Call has the highest expected value of the lines that do not rely on an assumed fold rate, by 37.1 units over folding. Raising to 260 shows a higher figure only because it assumes the weakest 25% of the range folds to it, which nothing here measures. Called only by the strongest 75% of the range, it loses 25.5 units, behind calling's 37.1.",
           whatWouldChangeIt: [
             'A wider opponent range would raise your equity and can flip a fold into a call.',
             'A narrower, stronger range does the opposite.',

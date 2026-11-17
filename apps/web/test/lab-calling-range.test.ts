@@ -84,7 +84,7 @@ describe('the Lab reads a bet or raise against what continues', () => {
       assert.match(
         report.suggestion.reason,
         new RegExp(
-          `Raising to ${set} shows a higher figure only because it assumes they fold \\d+% of the time, which nothing here measures\\. Called only by the strongest ${whole(row.continuingShare)} of the range, ${worth}\\.$`,
+          `Raising to ${set} shows a higher figure only because it assumes the weakest ${whole(1 - row.continuingShare)} of the range folds to it, which nothing here measures\\. Called only by the strongest ${whole(row.continuingShare)} of the range, ${worth}\\.$`,
         ),
         id,
       );

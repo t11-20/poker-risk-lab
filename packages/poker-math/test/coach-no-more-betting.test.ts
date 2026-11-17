@@ -45,7 +45,7 @@ test('control: a shallow stack with an opponent behind keeps its SPR and its com
   assert.ok(report.teachingNotes.some((note) => /At an SPR of 0\.3 .* one more bet commits them/.test(note)));
 });
 
-test('a call that puts hero all in drops the SPR band, though the opponent has chips behind', () => {
+test('a call that puts hero all in drops the SPR band and its note, though the opponent has chips behind', () => {
   // The panel shows "No more betting" for this spot, so the depth band beneath it would be untrue.
   for (const toCall of [764, 900]) {
     const report = facing([{ behind: 400, committedThisStreet: toCall }], toCall);
@@ -53,5 +53,9 @@ test('a call that puts hero all in drops the SPR band, though the opponent has c
     assert.equal(call?.allIn, true, `calling ${toCall} is all in`);
     assert.equal(report.stackContext.effectiveStack, 764);
     assert.doesNotMatch(report.stackContext.explanation, /SPR|band/, report.stackContext.explanation);
+    assert.ok(
+      !report.teachingNotes.some((note) => /SPR|commits them/.test(note)),
+      report.teachingNotes.join('\n'),
+    );
   }
 });
