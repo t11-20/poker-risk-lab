@@ -128,9 +128,10 @@ test('a raise ahead only on its folds stays set aside, though it tops the table'
   assert.equal(top?.to, 120, 'the premise: ranked on the table alone, a raise would be the reading');
   close(top?.ev, (6 / 34) * 150 + (28 / 34) * ((16 / 28) * 340 - 120), 'EV');
   assert.equal(report.suggestion.action, 'call');
+  // The break-even fold rate belongs to a table where folds and callers are unrelated, so it is not said.
   assert.match(
     report.suggestion.reason,
-    /by 5\.1 units over raising to 120 \(counted against the hands that call it\)\. Raising to 120 shows a higher figure only because it assumes they fold 18% of the time, .* only if they fold more than 6\.8% of the time\.$/,
+    /by 5\.1 units over raising to 120 \(counted against the hands that call it\)\. Raising to 120 shows a higher figure only because it assumes they fold 18% of the time, which nothing here measures\. Called only by the strongest 82% of the range, it is worth 74\.3 units, behind calling's 79\.4\.$/,
   );
 });
 
@@ -141,15 +142,39 @@ test('a bet ahead of what calls it is the reading, and states the fold rate it w
   close(rowAt(report, 100).ev, (6 / 34) * 100 + (28 / 34) * ((16 / 28) * 300 - 100), 'EV');
   assert.equal(report.suggestion.action, 'bet');
   assert.equal(report.suggestion.sizeRange?.max, 100);
-  assert.match(
-    report.suggestion.reason,
-    /^Bet has the highest expected value .* by 11\.8 units over checking\./,
-  );
+  // Called by the 28 alone it is 71.43 against checking's 64.71. Called by all 34 it would be
+  // (22/34) x 300 - 100 = 94.12, so a whole range calling would help here, not hurt.
   assert.ok(
     report.suggestion.whatWouldChangeIt.includes(
-      'This assumes the line wins uncontested 17.6% of the time. An opponent who folds less often makes it worse.',
+      'This assumes a bet of 100 is called by the strongest 82% of the stated range as the board stands ' +
+        'and the rest fold. If the whole range called, it would be worth 94.1 units instead of 76.5.',
     ),
+    report.suggestion.whatWouldChangeIt.join('\n'),
   );
+  assert.equal(
+    report.suggestion.reason,
+    'Bet has the highest expected value against the stated range, by 11.8 units over checking. Called ' +
+      'only by the strongest 82% of the range, betting 100 is still worth 6.7 units more than checking.',
+  );
+});
+
+test('a table priced at one fold rate for every size keeps its reason and caveat', () => {
+  const report = buildCoachReport(river(0, { wholeRangeContinues: true }));
+  assert.equal(
+    report.suggestion.reason,
+    'Bet has the highest expected value against the stated range, by 18.7 units over checking. Betting ' +
+      '300 shows a higher figure only because every figure here assumes the whole range calls any size, ' +
+      'so past a pot-sized bet each extra unit reads as profit. A real opponent folds more of the hands ' +
+      'you beat as the size grows, so the reading goes no higher than a pot-sized bet, or all in when ' +
+      'that is at most twice the pot.',
+  );
+  assert.equal(
+    report.suggestion.whatWouldChangeIt[0],
+    'This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.',
+  );
+  // A size every hand calls is narrowed too, but nothing is left out of it, so there is nothing to add.
+  const all = buildCoachReport(river(0));
+  assert.equal(all.suggestion.reason.includes('Called only by'), false, all.suggestion.reason);
 });
 
 test('a size past the pot is still set aside, and the report says what its figures assume', () => {
