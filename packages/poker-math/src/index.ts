@@ -9,6 +9,14 @@
  */
 
 export {
+  type BoardStrengthOrder,
+  CallingRangeError,
+  type ContinuingRange,
+  continuingRange,
+  continuingShare,
+  rankAgainstBoard,
+} from './calling-range.ts';
+export {
   buildCoachReport,
   type CoachAction,
   CoachError,
