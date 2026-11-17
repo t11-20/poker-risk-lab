@@ -250,6 +250,7 @@ export function coachTaskFor(scenario: Scenario): CoachTask {
     opponentStacks: [...situation.opponentStacks],
     bigBlind: scenario.bigBlind,
     legalActions,
+    ...(scenario.wholeRangeContinues === true ? { wholeRangeContinues: true } : {}),
     samples: CONTENT_SAMPLES,
     seed: CONTENT_SEED,
   };
