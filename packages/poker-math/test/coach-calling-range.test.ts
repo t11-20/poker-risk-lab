@@ -416,3 +416,61 @@ test('a raise that reads closer on its folds names them as the weakest part of t
     / Raising to 160 reads closer on the table only because it assumes the weakest 31% of the range folds to it\.$/,
   );
 });
+
+// On BOARD every combo of PAIRED makes a pair or better, and J♣4♦ is jack high, weaker than all of them.
+// A one- or two-unit bet into a deep pot leaves out J♣4♦ alone.
+const PAIRED =
+  '22+, AK, KQ, KJ, KT, K9, K8, K7, K6, K4, A9, Q9, J9, T9, 98, 97, 96, A5, 65, 75, 85, T5, J5, Q5, A3, Q3, J3, T3';
+const overJackHigh = (hero: string, pot: number, bigBlind: number): CoachInput => {
+  const paired = parseRange(PAIRED, parseCards(`${hero} ${BOARD} Jc 4d`));
+  const range = { ...paired, combos: [...paired.combos, ...exactRange(parseCards('Jc 4d')).combos] };
+  return river(0, {
+    heroCards: parseCards(hero),
+    opponents: [{ label: 'the bettor', range: { ...range, notation: `${PAIRED} and Jc4d` } }],
+    pot,
+    contestablePot: pot,
+    heroStack: 1000,
+    opponentStacks: [{ behind: 1000, committedThisStreet: 0 }],
+    bigBlind,
+  });
+};
+
+test('within 0.05 of the bar or of the whole range, and at 99.7% of it, the notes say so', () => {
+  // 9♥T♠ beats 169 of 318. Betting 2 into 60 is called by 317, of which it beats 168: called by them it is
+  // 168/317 x 64 - 2 = 31.918 against checking's 31.887, and by the whole range 32.013 against 32.006.
+  const report = buildCoachReport(overJackHigh('9h Ts', 60, 2));
+  close(rowAt(report, 2).continuingShare, 317 / 318, 'share that continues');
+  close(rowAt(report, 2).ev, (60 + 168 * 64 - 2 * 317) / 318, 'EV');
+  assert.equal(report.suggestion.action, 'bet');
+  assert.match(
+    report.suggestion.reason,
+    / Called only by the strongest 99\.7% of the range, betting 2 is still worth no less than checking\.$/,
+  );
+  assert.ok(
+    report.suggestion.whatWouldChangeIt.includes(
+      'This assumes a bet of 2 is called by the strongest 99.7% of the stated range as the board stands ' +
+        'and the rest fold. If the whole range called, it would be worth the same.',
+    ),
+    report.suggestion.whatWouldChangeIt.join('\n'),
+  );
+});
+
+test('a bet set aside under 0.05 behind the reading is a fraction of a unit behind it', () => {
+  // Betting 1 called by the 317 is 168/317 x 62 - 1 = 31.858, short of checking's 31.887 by 0.029.
+  const report = buildCoachReport(overJackHigh('9h Ts', 60, 1));
+  assert.equal(report.suggestion.action, 'check');
+  assert.match(
+    report.suggestion.reason,
+    / Called only by the strongest 99\.7% of the range, it is worth 31\.9 units, a fraction of a unit behind checking's 31\.9\.$/,
+  );
+});
+
+test('a fold rate whole percents would round to none is given to a tenth', () => {
+  // 3♠T♠ beats 4 of 333, so betting 1 into 100 reads above folding only on J♣4♦ folding: 1/333.
+  const report = buildCoachReport(overJackHigh('3s Ts', 100, 1));
+  close(rowAt(report, 1).foldEquityAssumed, 1 / 333, 'fold rate');
+  assert.match(
+    report.suggestion.reason,
+    / Betting 1 reads closer on the table only because it assumes the weakest 0\.3% of the range folds to it\.$/,
+  );
+});
