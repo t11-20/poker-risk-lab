@@ -58,15 +58,15 @@ describe('repriceAtFoldEquity', () => {
     });
   }
 
-  it('refuses a table priced against the hands that continue, even where every size has one rate', () => {
-    // The opponent has 50 behind, so every raise risks the same 150 and reads the same fold rate.
+  it('refuses a table priced against the hands that continue, even where every row has one fold rate', () => {
+    // The one known hand calls every size, so every raise row reads the same fold rate: none.
     const report = buildCoachReport(spot({ wholeRangeContinues: false, opponentStacks: [50] }));
     const rates = report.candidates.flatMap((row) => row.foldEquityAssumed ?? []);
     assert.ok(rates.length > 1 && new Set(rates).size === 1, 'the premise: one rate on several rows');
     assert.notEqual(rates[0], 0.35);
     const repriced = repriceAtFoldEquity(report, 0.1);
     assert.ok(repriced.kind === 'unavailable');
-    assert.match(repriced.reason, /has its own fold frequency/u);
+    assert.match(repriced.reason, /priced against the hands assumed to call a bet of its size/u);
   });
 
   it('moves only the rows that read a fold frequency, and leaves equity alone', () => {

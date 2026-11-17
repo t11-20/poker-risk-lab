@@ -61,7 +61,6 @@ describe('the Lab reads a bet or raise against what continues', () => {
     }
     assert.deepEqual(changed, [
       'eq-second-pair-vs-wide-range',
-      'eq-equity-against-one-known-hand',
       'rk-low-spr-commit-top-pair',
       'rk-high-spr-same-top-pair',
       'rk-raise-size-sets-up-the-turn',

@@ -773,8 +773,9 @@ interface PotSplit {
    */
   readonly returnedAnyway: number;
   /**
-   * For a line that costs this much: how much of the range continues against it, and hero's share
-   * against those hands. Null where every size is priced against the whole range.
+   * For a line that costs this much: the share of the range's hands that continue against it, ties at
+   * the boundary included, and hero's share against those hands. Null where every size is priced
+   * against the whole range at one fold rate.
    */
   readonly continuing: (cost: number) => Continuing | null;
 }
@@ -869,10 +870,12 @@ function continuingFor(input: CoachInput, heroEquity: number): PotSplit['continu
     return sum;
   };
   return (cost) => {
-    const { share, range } = continuingRange(order, input.contestablePot, cost);
-    const count = range.combos.length;
+    // The share is the hands priced as calling, not the share asked for: the rest are the fold rate,
+    // so a known hand, or a size every hand ties into, carries no fold credit.
+    const count = continuingRange(order, input.contestablePot, cost).range.combos.length;
+    if (count === all) return { share: 1, equity: heroEquity };
     // A difference of sums lands a hair outside 0..1 where the true share is exactly 0 or 1.
-    return { share, equity: Math.min(1, Math.max(0, sumOver(count) / count)) };
+    return { share: count / all, equity: Math.min(1, Math.max(0, sumOver(count) / count)) };
   };
 }
 
@@ -1468,13 +1471,23 @@ function capitalised(text: string): string {
 
 /** The fold rate a bet or raise reading assumes, and which way a different rate moves it. */
 function foldRateCaveat(best: ActionCandidate, input: CoachInput, split: PotSplit): string {
-  const rate = `${percent(best.foldEquityAssumed ?? 0)} of the time`;
+  const folds = best.foldEquityAssumed ?? 0;
   const { whenCalled, whenFolded } = branchesOf(best, input, split);
+  // EV is linear in the fold rate, so the sign of folded minus called is the whole direction.
+  if (folds === 0) {
+    // Nobody can fold less often than never, so the direction is said from the other side.
+    const assumed = 'This assumes the line is called every time.';
+    if (whenFolded > whenCalled) return `${assumed} An opponent who sometimes folds makes it better.`;
+    if (whenFolded < whenCalled) {
+      return `${assumed} Here a fold is worth less to you than a call, so an opponent who sometimes folds makes it worse.`;
+    }
+    return `${assumed} Here a fold and a call are worth the same to you, so how often they fold makes no difference.`;
+  }
+  const rate = `${percent(folds)} of the time`;
   const assumed =
     split.allIn.length === 0
       ? `This assumes the line wins uncontested ${rate}.`
       : `This assumes everyone who can still fold does so ${rate}.`;
-  // EV is linear in the fold rate, so the sign of folded minus called is the whole direction.
   if (whenFolded > whenCalled) return `${assumed} An opponent who folds less often makes it worse.`;
   if (whenFolded < whenCalled) {
     return `${assumed} Here a fold is worth less to you than a call, so an opponent who folds more often makes it worse.`;
@@ -1520,9 +1533,13 @@ function buildSuggestion(
   if (top === undefined) throw new CoachError('no candidate actions were produced');
   // The rows the Lab's verdict measures a fold against, plus any bet or raise that beats them even
   // when always called. The fold rate is an input, so a line ahead only because of it is not a reading.
+  // A size the whole range calls carries no fold rate and is still a bet, so it is not the bar: a bet
+  // priced against part of the range has to beat the best check or call when called, as before.
   const measuredBest = Math.max(
     0,
-    ...candidates.filter((c) => !restsOnAssumedFoldEquity(c)).map((c) => c.ev),
+    ...candidates
+      .filter((c) => !restsOnAssumedFoldEquity(c) && c.continuingShare === undefined)
+      .map((c) => c.ev),
   );
   const setAsideBy = new Map<ActionCandidate, SetAside>();
   for (const c of ranked) {
@@ -1880,7 +1897,7 @@ export function buildCoachReport(input: CoachInput): CoachReport {
     const rate = `${(foldEquity * 100).toFixed(0)}% of the time`;
     assumptions.push(
       candidates.some((candidate) => candidate.continuingShare !== undefined)
-        ? 'Bet and raise figures assume a chance that the opponent folds which grows with the size, and that a call comes from the strongest hands in the stated range as the board stands. Those are assumptions, not something measured.'
+        ? continuingAssumption(candidates)
         : (split.allIn.length > 0
             ? `Bet and raise figures assume everyone who can still fold does so ${rate}. ${allInClause(split)}, so even then the pot they are in goes to showdown.`
             : `Bet and raise figures assume the line wins uncontested ${rate}.`) +
@@ -1912,6 +1929,13 @@ export function buildCoachReport(input: CoachInput): CoachReport {
     uncertainty,
     teachingNotes: buildTeachingNotes(input, potOddsSummary, equitySummary, outs, stackContext, cardsToCome),
   };
+}
+
+/** What the rows priced against the hands that continue assume, said so that it holds when none of them folds. */
+function continuingAssumption(candidates: readonly ActionCandidate[]): string {
+  return candidates.some((candidate) => restsOnAssumedFoldEquity(candidate))
+    ? 'Bet and raise figures assume a call comes from the strongest hands in the stated range as the board stands and that the rest fold, more of them the larger the size. Those are assumptions, not something measured.'
+    : 'Bet and raise figures assume the whole stated range calls every size here, so none of them rests on a fold. That is an assumption, not something measured.';
 }
 
 /**

@@ -101,8 +101,8 @@ export function repriceAtFoldEquity(report: CoachReport, foldEquity: number): Fo
     return {
       kind: 'unavailable',
       reason:
-        'Each bet and raise row here has its own fold frequency, which grows with its size, so there is ' +
-        'no single input here to change.',
+        'Each bet and raise row here is priced against the hands assumed to call a bet of its size, so ' +
+        'its fold frequency is not an input that can be changed here.',
     };
   }
   const analysed = reading[0]?.foldEquityAssumed as number;

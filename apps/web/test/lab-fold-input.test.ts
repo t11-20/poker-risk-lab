@@ -42,8 +42,11 @@ describe('the fold-frequency control', () => {
       const readsFolds = report.candidates.some((candidate) => candidate.foldEquityAssumed !== undefined);
       const repriced = repriceAtFoldEquity(report, 0.1);
       if (report.candidates.some((candidate) => candidate.continuingShare !== undefined)) {
-        if (repriced.kind !== 'unavailable' || !/has its own fold frequency/u.test(repriced.reason)) {
-          wrong.push(`${id}: each size has its own fold rate and the control did not say so`);
+        if (
+          repriced.kind !== 'unavailable' ||
+          !/priced against the hands assumed to call/u.test(repriced.reason)
+        ) {
+          wrong.push(`${id}: its rows are priced against what calls and the control did not say so`);
         }
         ownRates += 1;
         continue;
@@ -59,8 +62,8 @@ describe('the fold-frequency control', () => {
       }
     }
     assert.deepEqual(wrong, [], wrong.join('\n'));
-    // Of the 36 bundled scenarios, nine keep one fold rate, 22 have a rate for each size and five face
-    // an all-in. The six fixtures add three to each of the first two.
+    // Of the 36 bundled scenarios, nine keep one stated fold rate, 22 price each size against the hands
+    // that call it and five face an all-in. The six fixtures add three to each of the first two.
     assert.deepEqual({ offered, ownRates, explained }, { offered: 12, ownRates: 25, explained: 5 });
   });
 

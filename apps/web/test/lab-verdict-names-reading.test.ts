@@ -33,7 +33,7 @@ describe('the Verdict panel names the reading, not a row the reading set aside',
     const top = Math.max(...report.candidates.map((candidate) => candidate.ev));
     assert.ok(top > (suggestedCandidate(report)?.ev ?? top), 'the premise: a set-aside row reads higher');
     assert.equal(judgement.reading?.name, 'Raise to 285 units');
-    assert.equal(judgement.reading?.ev.toFixed(1), '285.7');
+    assert.equal(judgement.reading?.ev.toFixed(1), '390.0');
     assert.match(sentence, /the Coach's reading, Raise to 285 units, is there for comparison/u);
     assert.doesNotMatch(sentence, /950/u);
     assert.equal(judgement.consistent, true, 'the verdict still judges a call against folding');
@@ -52,7 +52,7 @@ describe('the Verdict panel names the reading, not a row the reading set aside',
   it('choosing the row the reading set aside says why its figure is higher (REGRESSION)', () => {
     for (const [id, to, reading] of [
       ['fl-small-straight-beats-trips', 950, 'Raise to 285 units'],
-      ['eq-flush-draw-turn-small-bet', 50, 'Call 25 units'],
+      ['fl-flush-draw-counting-outs', 50, 'Call 25 units'],
     ] as const) {
       const { judgement, sentence } = judged(id, 'raise', to);
       assert.ok((judgement.chosenEv ?? 0) > (judgement.reading?.ev ?? 0), `${id}: the premise`);

@@ -1,10 +1,13 @@
 /**
  * After the flop, heads-up and with nobody all in, a bet or raise is priced against the hands that
  * continue against that size, and it is the reading only when it beats checking or calling both ways:
- * called by the whole range and called by those hands alone. Expected figures are worked by hand.
+ * called by the whole range and called by those hands alone. A row's fold rate is the share of hands
+ * left out of its calling set, so a size every hand calls has none. Expected figures are worked by hand.
  *
  * The river spot: hero holds Kc Jc on Kd 9s 5h 3c 2d against 39 combos, strongest first: 99 (3),
  * AK (8), KQ (8), KT (8), QQ (6), 88 (6). Hero beats KT, QQ and 88, so e = 20/39.
+ * The second: hero holds Ac Kc on the same board against 34: 99, 55, 33, 22 (3 each), KQ (8), KJ (8),
+ * QQ (6). Hero beats KQ, KJ and QQ, so e = 22/34.
  */
 
 import assert from 'node:assert/strict';
@@ -32,6 +35,15 @@ const river = (toCall: number, more: Partial<CoachInput> = {}): CoachInput => ({
   bigBlind: 10,
   ...more,
 });
+const topPair = (toCall: number, heroStack: number): CoachInput => {
+  const dead = parseCards(`Ac Kc ${BOARD}`);
+  const range = parseRange('99, 55, 33, 22, KQ, KJ, QQ', dead);
+  return river(toCall, {
+    heroCards: parseCards('Ac Kc'),
+    opponents: [{ label: 'the bettor', range }],
+    heroStack,
+  });
+};
 const rowAt = (report: ReturnType<typeof buildCoachReport>, to: number) => {
   const row = report.candidates.find((c) => c.to === to && (c.action === 'bet' || c.action === 'raise'));
   assert.ok(row !== undefined, `no bet or raise to ${to}`);
@@ -40,19 +52,20 @@ const rowAt = (report: ReturnType<typeof buildCoachReport>, to: number) => {
 const close = (actual: number | undefined, expected: number, what: string) =>
   assert.ok(Math.abs((actual ?? Number.NaN) - expected) < 1e-9, `${what}: ${actual}, expected ${expected}`);
 
-test('a raise is priced against the hands that continue, and its fold rate follows its size', () => {
+test('a raise is priced against the hands that continue, and the hands left out are its fold rate', () => {
   // Facing 50 into 100, P = 150. Raising to 100 risks 100: s = 150 / 200 = 0.75 of 39 is 29.25, so 30
-  // continue, and the QQ tied with the 30th make it 33. Hero beats 14 of them. The final pot is 300.
+  // are asked for, and the QQ tied with the 30th make it 33. Six fold, and hero beats 14 of the 33.
   const report = buildCoachReport(river(50));
   const small = rowAt(report, 100);
-  close(small.foldEquityAssumed, 0.25, 'fold rate');
+  close(small.continuingShare, 33 / 39, 'share that continues');
+  close(small.foldEquityAssumed, 6 / 39, 'fold rate');
   close(small.potShareIfCalled, 14 / 33, 'share when called');
-  close(small.ev, 0.25 * 150 + 0.75 * ((14 / 33) * 300 - 100), 'EV');
+  close(small.ev, (6 / 39) * 150 + (33 / 39) * ((14 / 33) * 300 - 100), 'EV');
   // Raising to 150 risks 150: s = 2/3 of 39 is 26, and the KT tied with the 26th make it 27.
   const pot = rowAt(report, 150);
-  close(pot.foldEquityAssumed, 1 / 3, 'fold rate');
+  close(pot.foldEquityAssumed, 12 / 39, 'fold rate');
   close(pot.potShareIfCalled, 8 / 27, 'share when called');
-  close(pot.ev, 150 / 3 + (2 / 3) * ((8 / 27) * 400 - 150), 'EV');
+  close(pot.ev, (12 / 39) * 150 + (27 / 39) * ((8 / 27) * 400 - 150), 'EV');
   // That raise is the ½-pot one. Called it is worth -31.48, so it breaks even at 31.48 / 181.48 = 17%.
   assert.ok(
     report.assumptions.some((line) =>
@@ -61,45 +74,88 @@ test('a raise is priced against the hands that continue, and its fold rate follo
       ),
     ),
   );
+  assert.equal(report.suggestion.action, 'call');
+});
+
+test('a size every hand calls carries no fold rate, and is priced as the whole range calling', () => {
+  // Checked to, P = 100. Betting 33 asks for 0.858 x 39 = 33.5, so 34, and the 88 tied with the 34th
+  // make it all 39: worth (20/39) x 166 - 33 = 52.13, against 51.28 for checking. From 50 up six fold.
+  const report = buildCoachReport(river(0));
+  const all = rowAt(report, 33);
+  assert.equal(all.foldEquityAssumed, 0);
+  assert.equal(all.continuingShare, 1);
+  assert.equal(all.potShareIfCalled, report.equity.heroEquity);
+  close(all.ev, (20 / 39) * 166 - 33, 'EV');
+  close(rowAt(report, 50).foldEquityAssumed, 6 / 39, 'fold rate at 50');
+  assert.equal(report.suggestion.action, 'bet');
+  assert.deepEqual(report.suggestion.sizeRange, { min: 10, max: 33 });
+  // 0.85 units over checking is under a quarter of the big blind of 10.
+  assert.equal(report.suggestion.confidence, 'low');
+  assert.ok(
+    report.suggestion.whatWouldChangeIt.includes(
+      'This assumes the line is called every time. An opponent who sometimes folds makes it better.',
+    ),
+  );
+});
+
+test('a size every hand calls reads the report’s own equity, to the last bit', () => {
+  // On the turn the sixteen JT tie at the bottom, so every size up to the pot is called by all 47.
+  // Summed and divided back, 47 x e / 47 is not e in floating point, so the whole range is not summed.
+  const hero = parseCards('Ac Kc');
+  const board = parseCards('Kd 9s 5h 3c');
+  const range = parseRange('99, 55, 33, KQ, KJ, QQ, JT', [...hero, ...board]);
+  const report = buildCoachReport({
+    ...river(0),
+    heroCards: hero,
+    board,
+    street: 'turn',
+    opponents: [{ label: 'the caller', range }],
+  });
+  const e = report.equity.heroEquity;
+  assert.notEqual((47 * e) / 47, e, 'the premise: the round trip moves the last bit');
+  const pot = rowAt(report, 100);
+  assert.equal(pot.continuingShare, 1);
+  assert.equal(pot.potShareIfCalled, e);
+  assert.equal(pot.ev, e * 300 - 100);
 });
 
 test('a raise ahead only on its folds stays set aside, though it tops the table', () => {
-  // Calling is (20/39) x 200 - 50 = 52.56. The raise to 117 shows 59.85, but called by the 33 hands
-  // that continue it is worth 24.70, and the raise to 100 is worth 27.27.
-  const report = buildCoachReport(river(50));
+  // Facing 50 into 100 with 120 behind. Calling is (22/34) x 200 - 50 = 79.41. All in for 120 asks for
+  // 0.714 x 34 = 24.3, so 25, and the KJ tied with the 25th make it 28: the six QQ fold. Hero beats 16
+  // of the 28, so called it is (16/28) x 340 - 120 = 74.29, and on the table 87.65.
+  const report = buildCoachReport(topPair(50, 120));
   const top = [...report.candidates].sort((a, b) => b.ev - a.ev)[0];
-  assert.equal(top?.to, 117, 'the premise: ranked on the table alone, a raise would be the reading');
-  assert.equal(top?.ev.toFixed(2), '59.85');
+  assert.equal(top?.to, 120, 'the premise: ranked on the table alone, a raise would be the reading');
+  close(top?.ev, (6 / 34) * 150 + (28 / 34) * ((16 / 28) * 340 - 120), 'EV');
   assert.equal(report.suggestion.action, 'call');
-  assert.equal(report.suggestion.confidence, 'reasonable');
   assert.match(
     report.suggestion.reason,
-    /by 25\.3 units over raising to 100 \(counted against the hands that/,
-  );
-  assert.match(
-    report.suggestion.reason,
-    /Raising to 117 shows a higher figure only because it assumes they fold 28%/,
+    /by 5\.1 units over raising to 120 \(counted against the hands that call it\)\. Raising to 120 shows a higher figure only because it assumes they fold 18% of the time, .* only if they fold more than 6\.8% of the time\.$/,
   );
 });
 
-test('among the sizes that qualify, the reading follows the per-size figures', () => {
-  // Checking is 51.28. Betting 10 or 33 is called by all 39 (the 88 tie with the last hand asked for),
-  // worth 51.54 and 52.13 called and 53.85 and 58.91 on the table. From 50 up only stronger hands call.
-  const report = buildCoachReport(river(0));
-  close(rowAt(report, 33).ev, (1 - 100 / 116.5) * 100 + (100 / 116.5) * ((20 / 39) * 166 - 33), 'EV');
+test('a bet ahead of what calls it is the reading, and states the fold rate it was priced at', () => {
+  // Checked to with 100 behind. Checking is 64.71. All in for the pot is called by the same 28:
+  // (16/28) x 300 - 100 = 71.43 called, and (6/34) x 100 + (28/34) x 71.43 = 76.47 on the table.
+  const report = buildCoachReport(topPair(0, 100));
+  close(rowAt(report, 100).ev, (6 / 34) * 100 + (28 / 34) * ((16 / 28) * 300 - 100), 'EV');
   assert.equal(report.suggestion.action, 'bet');
-  assert.deepEqual(report.suggestion.sizeRange, { min: 10, max: 33 });
-  assert.doesNotMatch(report.suggestion.reason, /whole range calls any size/);
+  assert.equal(report.suggestion.sizeRange?.max, 100);
+  assert.match(
+    report.suggestion.reason,
+    /^Bet has the highest expected value .* by 11\.8 units over checking\./,
+  );
   assert.ok(
     report.suggestion.whatWouldChangeIt.includes(
-      'This assumes the line wins uncontested 14.2% of the time. An opponent who folds less often makes it worse.',
+      'This assumes the line wins uncontested 17.6% of the time. An opponent who folds less often makes it worse.',
     ),
   );
 });
 
 test('a size past the pot is still set aside, and the report says what its figures assume', () => {
-  // The nut straight wins whenever it is called, so a bet of B shows 100 + s x B: 166.67 at the pot,
-  // and all in for 1,000, where s is 1/6, 266.67.
+  // The nut straight wins whenever it is called. The three KK and the three 99 all call up to the pot,
+  // worth 100 + 100 = 200. All in for 1,000 asks for one hand in six, so the KK call and the 99 fold:
+  // 0.5 x 100 + 0.5 x 1,100 = 600.
   const board = '9c 8d 7h 2s Kd';
   const nuts = (heroStack: number) =>
     buildCoachReport(
@@ -112,8 +168,8 @@ test('a size past the pot is still set aside, and the report says what its figur
       }),
     );
   const report = nuts(1000);
-  close(rowAt(report, 100).ev, 100 + 100 / 1.5, 'EV at the pot');
-  close(rowAt(report, 1000).ev, 100 + 1000 / 6, 'EV all in');
+  close(rowAt(report, 100).ev, 200, 'EV at the pot');
+  close(rowAt(report, 1000).ev, 600, 'EV all in');
   assert.deepEqual(report.suggestion.sizeRange, { min: 100, max: 100 });
   assert.match(
     report.suggestion.reason,
@@ -123,13 +179,20 @@ test('a size past the pot is still set aside, and the report says what its figur
   assert.equal(stated.length, 1);
   assert.match(
     stated[0] ?? '',
-    /a chance that the opponent folds which grows with the size, and that a call comes from the strongest hands/,
+    /a call comes from the strongest hands in the stated range as the board stands and that the rest fold/,
   );
   assert.doesNotMatch(report.assumptions.join(' '), /35% of the time|Scenario Lab|whole range calls/);
-  // All in for twice the pot is kept, as before, and says the same of its own figure.
+  // All in for one and a half pots is kept, as before, and says the same of its own figure. All six
+  // hands call it, so no row there folds anybody and the assumption line says that instead.
+  const kept = nuts(150);
   assert.match(
-    nuts(200).suggestion.reason,
-    /Betting 200 is more than the pot\. It is kept .*, but its figure rests on how often a bet that large is assumed to be called\.$/,
+    kept.suggestion.reason,
+    /Betting 150 is more than the pot\. It is kept .*, but its figure rests on how often a bet that large is assumed to be called\.$/,
+  );
+  assert.ok(
+    kept.assumptions.includes(
+      'Bet and raise figures assume the whole stated range calls every size here, so none of them rests on a fold. That is an assumption, not something measured.',
+    ),
   );
 });
 
