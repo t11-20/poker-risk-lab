@@ -195,3 +195,15 @@ test('the method is chosen at the budget exactly, counting matchups only as far 
   assert.equal(countMatchups(crowd, 1_000), 1_001);
   assert.equal(equity(crowd, { samples: 2_000, seed: 3 }).method, 'monte-carlo');
 });
+
+test('a budget that cannot bound the count is refused before any counting', () => {
+  // The budget sets where counting stops, so NaN or Infinity would enumerate every matchup there is.
+  const random = parseRange('random');
+  const three: EquitySpec = {
+    players: ['hero', 'a', 'b'].map((label) => ({ label, range: random })),
+    board: [],
+  };
+  for (const maxExactWork of [Number.NaN, Number.POSITIVE_INFINITY, -1]) {
+    assert.throws(() => equity(three, { maxExactWork, samples: 2_000 }), EquityError, String(maxExactWork));
+  }
+});

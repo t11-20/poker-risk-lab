@@ -600,7 +600,12 @@ export function equity(spec: EquitySpec, options: EquityOptions = {}): EquityRes
   if (method === 'exact') return exactEquity(spec);
   if (method === 'monte-carlo') return monteCarloEquity(spec, options);
 
-  if (exactFits(spec, options.maxExactWork ?? DEFAULT_MAX_EXACT_WORK)) return exactEquity(spec);
+  const budget = options.maxExactWork ?? DEFAULT_MAX_EXACT_WORK;
+  // The budget is where counting stops, so one that cannot bound it would enumerate every matchup.
+  if (!Number.isFinite(budget) || budget < 0) {
+    throw new EquityError(`maxExactWork must be a finite number of at least 0, received ${String(budget)}`);
+  }
+  if (exactFits(spec, budget)) return exactEquity(spec);
   return monteCarloEquity(spec, options);
 }
 
