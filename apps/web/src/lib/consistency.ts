@@ -29,7 +29,12 @@ export interface Consistency {
    * table's highest: a row the reading set aside, above pot or ahead only on the assumed fold rate,
    * would be a second answer on the page. Shown for comparison, and NOT what decides `consistent`.
    */
-  readonly reading: { readonly ev: number; readonly name: string } | null;
+  readonly reading: {
+    readonly ev: number;
+    readonly name: string;
+    /** The bet or raise sizes the reading spans, as the Coach names them. Null for one size. */
+    readonly span: { readonly action: 'bet' | 'raise'; readonly min: number; readonly max: number } | null;
+  } | null;
   /** The margin the verdict used, one big blind, in chips. Shown so a reader can argue with it. */
   readonly toleranceUnits: number;
   /**
@@ -84,7 +89,11 @@ export function judgeConsistency(
     reading:
       reading === null
         ? null
-        : { ev: reading.ev, name: rowName({ ...reading, to: reading.to ?? null }, formatUnits) },
+        : {
+            ev: reading.ev,
+            name: rowName({ ...reading, to: reading.to ?? null }, formatUnits),
+            span: spanOf(report.suggestion),
+          },
     toleranceUnits: verdict.marginUnits,
     shortfallUnits: verdict.shortfallUnits,
     benchmarkEv,
@@ -122,6 +131,21 @@ export function rowName(
   if (row.action === 'call') return `Call ${row.allIn === true ? 'all in, ' : ''}${units(row.cost)}`;
   if (row.to === null) return ROW_WORD[row.action];
   return `${ROW_WORD[row.action]} to ${units(row.to)}${row.allIn === true ? ', all in' : ''}`;
+}
+
+function spanOf(suggestion: CoachReport['suggestion']): NonNullable<Consistency['reading']>['span'] {
+  const { action, sizeRange } = suggestion;
+  if ((action !== 'bet' && action !== 'raise') || sizeRange === undefined) return null;
+  return sizeRange.min === sizeRange.max ? null : { action, ...sizeRange };
+}
+
+/** Said under the reading's row, so the Lab names the range the Coach panel names beside it. */
+export function readingSpanWords(
+  span: NonNullable<Consistency['reading']>['span'],
+  units: (value: number) => string,
+): string {
+  if (span === null) return '';
+  return `The highest of the ${span.action} sizes from ${span.min} to ${units(span.max)}.`;
 }
 
 /** Outside the component so `node:test` can run it. `units` is passed in because `@prl/ui` carries JSX. */
