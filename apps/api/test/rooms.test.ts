@@ -1154,11 +1154,6 @@ describe('the Legends endpoints', () => {
   });
 });
 
-/**
- * A live hand cannot survive a restart, but the button and the interrupted hand row can be
- * recovered. Without that, somebody pays a second consecutive big blind and the history shows
- * null rows.
- */
 /** The cross-column checks of `prl.rooms` in 0001_initial.sql, which `sql.ts` maps to invalid_request. */
 function enforceRoomChecks(test: Harness): void {
   const create = test.store.create;
@@ -1213,6 +1208,33 @@ describe('a practice table request the database would refuse', () => {
   }
 });
 
+describe('a room name the database would refuse', () => {
+  it('is refused by the schema, before the open practice table is retired', async () => {
+    const test = await harness();
+    const owner = caller(test, { id: 'usr_owner' });
+    const table = {
+      maxSeats: 3,
+      bots: [{ profile: 'nit', count: 2 }],
+      smallBlind: 5,
+      bigBlind: 10,
+      startingStack: 1_000,
+    };
+    const first = await postAs(test, owner, '/api/v1/rooms', { ...table, name: 'Bots' });
+    assert.equal(first.status, 201, JSON.stringify(first.body));
+    const firstId = [...test.store.rows.keys()].at(-1) ?? '';
+    // `rooms_name_shape` needs 2 to 48 characters.
+    const refused = await postAs(test, owner, '/api/v1/rooms', { ...table, name: 'B' });
+    assert.deepEqual([refused.status, refused.code], [400, 'invalid_request']);
+    assert.equal(test.store.rows.get(firstId)?.status, 'open');
+    await test.app.close();
+  });
+});
+
+/**
+ * A live hand cannot survive a restart, but the button and the interrupted hand row can be
+ * recovered. Without that, somebody pays a second consecutive big blind and the history shows
+ * null rows.
+ */
 describe('a room re-opened after a restart', () => {
   const RESTART_CONFIG = { smallBlind: 5, bigBlind: 10, ante: 0, maxSeats: 6, actionTimeoutSeconds: 30 };
 

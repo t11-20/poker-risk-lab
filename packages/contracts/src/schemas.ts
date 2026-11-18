@@ -205,11 +205,12 @@ export const createRoomBodySchema = {
   additionalProperties: false,
   required: ['name', 'maxSeats', 'smallBlind', 'bigBlind', 'startingStack'],
   properties: {
+    /** At least 2, because `rooms_name_shape` refuses one, after a practice table has been retired. */
     name: {
       type: 'string',
-      minLength: 1,
+      minLength: 2,
       maxLength: 40,
-      pattern: "^[A-Za-z0-9][A-Za-z0-9 '._-]{0,38}[A-Za-z0-9]$|^[A-Za-z0-9]$",
+      pattern: "^[A-Za-z0-9][A-Za-z0-9 '._-]{0,38}[A-Za-z0-9]$",
     },
     maxSeats: { type: 'integer', minimum: 2, maximum: 6 },
     smallBlind: { type: 'integer', minimum: 1, maximum: 10_000 },
