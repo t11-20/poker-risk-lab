@@ -232,6 +232,75 @@ describe('numeric tolerance', () => {
     }
   });
 
+  test('the answer is echoed as typed, so the echo always gets the verdict the answer got', () => {
+    const deps = testDeps(2);
+    const echoOf = (reply: string): string => /^You answered (.+)\.$/m.exec(reply)?.[1] ?? '';
+    const pot = askedFor(numericQuestions().find((q) => q.id === 'pot-odds-q2') ?? assert.fail(), deps);
+    const outs = askedFor(numericQuestions().find((q) => q.id === 'counting-outs-q4') ?? assert.fail(), deps);
+    assert.equal(echoOf(message(text(pot.session, '34.84', deps)).text), '34.84%');
+    assert.equal(echoOf(message(text(outs.session, '9.5', deps)).text), '9.5 cards');
+    assert.equal(echoOf(message(text(outs.session, '9', deps)).text), '9 cards');
+
+    let swept = 0;
+    for (const question of numericQuestions()) {
+      const expected = expectedAnswer(question);
+      const asked = askedFor(question, deps);
+      for (let step = -30; step <= 30; step += 1) {
+        for (const decimals of [1, 2, 3]) {
+          const typed = (expected.value + expected.tolerance + step * 10 ** -decimals).toFixed(decimals);
+          const reply = message(text(asked.session, typed, deps)).text;
+          const accepted = /is close enough to the computed/.test(reply);
+          const echoed = parseNumber(echoOf(reply));
+          assert.ok(echoed !== null, `${question.id}: ${typed} echoed as ${echoOf(reply)}`);
+          assert.equal(withinTolerance(echoed, expected), accepted, `${question.id}: ${typed}`);
+          swept += 1;
+        }
+      }
+    }
+    assert.ok(swept > 1_000, `${swept} answers swept`);
+  });
+
+  test('the computed figure is quoted to the same decimals as the answer, so the gap reads true', () => {
+    const deps = testDeps(2);
+    const pot = askedFor(numericQuestions().find((q) => q.id === 'pot-odds-q2') ?? assert.fail(), deps);
+    // 34.82 is 1.49 from 33.333…, and "the computed 33.3%" read as a 1.52 gap beside "within 1.5%".
+    assert.match(message(text(pot.session, '34.82', deps)).text, /close enough to the computed 33\.33%/u);
+    assert.match(message(text(pot.session, '34', deps)).text, /the computed 33\.3%/u);
+  });
+
+  test('the gap between the two quoted figures agrees with the verdict, right up to the boundary', () => {
+    const deps = testDeps(2);
+    const figures = (reply: string): [number, number] => {
+      const match = /^(.+) is (?:close enough to|further than .+ from) the computed (.+?)(?::|, so)/mu.exec(
+        reply,
+      );
+      return [parseNumber(match?.[1] ?? '') ?? Number.NaN, parseNumber(match?.[2] ?? '') ?? Number.NaN];
+    };
+    let swept = 0;
+    for (const question of numericQuestions()) {
+      const expected = expectedAnswer(question);
+      const shownTolerance = parseNumber(toleranceText(expected.tolerance, expected.unit)) ?? Number.NaN;
+      const asked = askedFor(question, deps);
+      for (const decimals of [0, 1, 2, 3]) {
+        for (let step = -40; step <= 40; step += 1) {
+          const edge = expected.value + Math.sign(step || 1) * expected.tolerance;
+          const typed = (edge + (step * 10 ** -decimals) / 10).toFixed(decimals);
+          const reply = message(text(asked.session, typed, deps)).text;
+          const [yours, theirs] = figures(reply);
+          const accepted = /is close enough to the computed/u.test(reply);
+          const gap = Math.abs(yours - theirs);
+          assert.equal(
+            gap <= shownTolerance + 1e-9,
+            accepted,
+            `${question.id}: ${typed} read ${reply.split('\n')[1]}`,
+          );
+          swept += 1;
+        }
+      }
+    }
+    assert.ok(swept > 1_000, `${swept} answers swept`);
+  });
+
   test('a refused answer names the tolerance and the computed figure apart, so neither reads as the other', () => {
     const deps = testDeps(2);
     const question = numericQuestions()[0];
@@ -306,6 +375,15 @@ describe('numeric tolerance', () => {
     for (const typed of ['', 'about 30', '30 or 35', '1,2', 'thirty', '3.', '1e3', '12abc']) {
       assert.equal(parseNumber(typed), null, typed);
     }
+  });
+
+  test('the minus sign the bot prints, and an en dash, are read as a minus', () => {
+    assert.equal(parseNumber('−16'), -16);
+    assert.equal(parseNumber('– 16.5 units'), null, 'a sign is joined to its number');
+    assert.equal(parseNumber('–16.5 units'), -16.5);
+    const deps = testDeps(2);
+    const asked = askedFor(numericQuestions().find((q) => q.id === 'ev-q2') ?? assert.fail(), deps);
+    assert.match(message(text(asked.session, '−16', deps)).text, /is close enough to the computed/);
   });
 
   test('every decision spot computes, from the content, without sampling', () => {

@@ -123,6 +123,10 @@ describe('/define', () => {
     assert.equal(buttonsOf(viaMenu).length, 5, 'every starting term exists');
   });
 
+  test('a term with nothing a glossary name could contain is answered as /define on its own', () => {
+    for (const typed of ['☃☃☃', '?!', '—']) assert.deepEqual(define(typed), define(''), typed);
+  });
+
   test('a term button for an entry that no longer exists is a toast', () => {
     const refused = step(NEW_SESSION, { kind: 'button', data: 'g:no-such-entry' }, deps);
     assert.deepEqual(refused.out, [{ kind: 'toast', text: GONE }]);

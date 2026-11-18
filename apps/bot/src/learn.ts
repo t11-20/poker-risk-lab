@@ -446,13 +446,35 @@ export function toleranceText(tolerance: number, unit: QuizUnit): string {
 }
 
 /**
+ * Decimals for quoting an answer beside the computed figure: every decimal typed, then more until the
+ * gap between the two quoted figures agrees with the verdict. Rounded, 32.8 read 2.0 from "the computed
+ * 30.8%" while its true gap of 2.03 was refused.
+ */
+export function verdictDecimals(answer: number, expected: Expected, accepted: boolean): number {
+  const shown = (value: number, decimals: number): number =>
+    parseNumber(figureText(value, expected.unit, decimals)) ?? value;
+  const tolerance = shown(
+    expected.tolerance,
+    toleranceDecimals(expected.tolerance, UNIT_DECIMALS[expected.unit]),
+  );
+  let decimals = UNIT_DECIMALS[expected.unit];
+  while (decimals < 20 && Number(answer.toFixed(decimals)) !== answer) decimals += 1;
+  for (; decimals < 12; decimals += 1) {
+    const gap = Math.abs(shown(answer, decimals) - shown(expected.value, decimals));
+    if (gap <= tolerance + 1e-9 === accepted) break;
+  }
+  return decimals;
+}
+
+/**
  * Null unless the text is plainly one number, with an optional trailing unit (`33.3%`, `2.5 to 1`).
  * "about 30, maybe 35" is not an answer of 30.
  */
 export function parseNumber(text: string): number | null {
   const match =
     /^\s*([+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|[+-]?\.\d+)\s*(?:%|units?|to 1|:1|cards?|hands?|bb)?\s*$/i.exec(
-      text,
+      // The bot prints a negative figure with U+2212, so a reader copying it back types one.
+      text.replace(/[\u2212\u2013]/gu, '-'),
     );
   if (match === null) return null;
   const value = Number((match[1] ?? '').replace(/,/g, ''));

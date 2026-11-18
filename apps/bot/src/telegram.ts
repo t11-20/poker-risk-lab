@@ -114,20 +114,19 @@ export async function handleUpdate(
   chats: Chats,
   api: TelegramApi,
   deps: Deps,
+  log: (line: string) => void = () => undefined,
 ): Promise<void> {
   const message = update.message;
   if (message !== undefined) {
     if (message.chat.type !== 'private' || message.text === undefined) return;
-    await run(chats, message.chat.id, eventOfText(message.text), api, deps, null);
+    await run(chats, message.chat.id, eventOfText(message.text), api, deps, null, log);
     return;
   }
   const query = update.callback_query;
   const anchor = query?.message;
   if (query === undefined || anchor === undefined || anchor.chat.type !== 'private') return;
-  await run(chats, anchor.chat.id, { kind: 'button', data: query.data ?? '' }, api, deps, {
-    queryId: query.id,
-    messageId: anchor.message_id,
-  });
+  const press = { queryId: query.id, messageId: anchor.message_id };
+  await run(chats, anchor.chat.id, { kind: 'button', data: query.data ?? '' }, api, deps, press, log);
 }
 
 async function run(
@@ -137,6 +136,7 @@ async function run(
   api: TelegramApi,
   deps: Deps,
   press: { readonly queryId: string; readonly messageId: number } | null,
+  log: (line: string) => void,
 ): Promise<void> {
   let result: ReturnType<typeof step>;
   try {
@@ -149,19 +149,30 @@ async function run(
       session: NEW_SESSION,
       out: [{ kind: 'send', text: TABLE_CLOSED, buttons: [] }],
     };
-    if (press !== null) await api.call('answerCallbackQuery', { callback_query_id: press.queryId });
+    if (press !== null) await answer(api, { callback_query_id: press.queryId }, log);
     for (const out of result.out) await deliver(api, chatId, out, null);
     throw error;
   }
   chats.sessions.set(chatId, result.session);
   if (press !== null) {
     const toast = result.out.find((out) => out.kind === 'toast');
-    await api.call('answerCallbackQuery', {
-      callback_query_id: press.queryId,
-      ...(toast === undefined ? {} : { text: toast.text }),
-    });
+    const body = { callback_query_id: press.queryId, ...(toast === undefined ? {} : { text: toast.text }) };
+    await answer(api, body, log);
   }
   for (const out of result.out) await deliver(api, chatId, out, press?.messageId ?? null);
+}
+
+/** The session already moved, so an expired or refused answer must not cost the reader the result. */
+async function answer(
+  api: TelegramApi,
+  body: Record<string, unknown>,
+  log: (line: string) => void,
+): Promise<void> {
+  try {
+    await api.call('answerCallbackQuery', body);
+  } catch (error) {
+    log(`answerCallbackQuery failed (${errorText(error)}); delivering anyway`);
+  }
 }
 
 /**
@@ -271,7 +282,7 @@ export async function poll(options: PollOptions): Promise<PollExit> {
       // Advanced before handling, so an update that throws is not fetched and retried for ever.
       offset = update.update_id + 1;
       try {
-        await handleUpdate(update, chats, options.api, options.deps);
+        await handleUpdate(update, chats, options.api, options.deps, options.log);
       } catch (error) {
         options.log(`update ${update.update_id} failed: ${errorText(error)}`);
       }

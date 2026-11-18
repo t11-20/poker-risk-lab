@@ -154,6 +154,9 @@ const ROLE_WORDS: ReadonlySet<string> = new Set([
   'hero',
 ]);
 
+/** Case-sensitive and letter-bounded, so "As" is a card and "as" a word, and "AsKd" is two cards. */
+const CARD_RUN = /(?<!\p{L})(?:[2-9TJQKA][shdc])+(?!\p{L})/gu;
+
 /** Exported so tests can prove the guard fires and `comparison.ts` can reuse it. */
 export function assertModelVoice(text: string, where: string, context: VoiceContext = {}): void {
   for (const { pattern, why } of VOICE_PATTERNS) {
@@ -170,6 +173,7 @@ export function assertModelVoice(text: string, where: string, context: VoiceCont
     if (trimmed === '') continue;
     // "you" names a role, and the templates are built from it.
     if (ROLE_WORDS.has(trimmed.toLowerCase())) continue;
+    // Case-sensitive, because a label such as a guest's display name can be an ordinary word.
     if (text.includes(trimmed)) {
       throw new CommentaryError(
         `${where}: text ${JSON.stringify(text.slice(0, 120))} repeats the identity label ` +
@@ -178,10 +182,10 @@ export function assertModelVoice(text: string, where: string, context: VoiceCont
       );
     }
   }
+  const written = new Set(text.match(CARD_RUN)?.flatMap((run) => run.match(/../gu) ?? []));
   for (const card of context.privateCards ?? []) {
     const token = cardToString(card);
-    // Case-sensitive and boundary-checked: "As" is a card, "as" is a word.
-    if (new RegExp(`(?:^|[^\\p{L}])${token}(?:[^\\p{L}]|$)`, 'u').test(text)) {
+    if (written.has(token)) {
       throw new CommentaryError(
         `${where}: text ${JSON.stringify(text.slice(0, 120))} contains ${token}, a card only the acting ` +
           'seat can see. Commentary is generated from public state and declared parameters.',
