@@ -39,6 +39,7 @@ import { equityMethodNote, pricedRowName } from '../lib/post-hand-labels.ts';
 import { ActionDistribution, mostLikelyAction } from './ActionDistribution.tsx';
 import { LegendSigil } from './LegendSigil.tsx';
 import { ProfileDisclaimers } from './ProfileDisclaimers.tsx';
+import { ScrollRegion } from './ScrollRegion.tsx';
 
 /** The bands are fractions of a big blind, so at zero decimals a 0.4-unit shortfall reads `0`. */
 const EV_DECIMALS = 1;
@@ -89,7 +90,13 @@ function intervalFor(report: CoachReport): string | null {
   return `± ${formatPoints(Math.abs(half))}`;
 }
 
-function DecisionMaths({ report }: { readonly report: CoachReport }): ReactElement {
+function DecisionMaths({
+  report,
+  sequence,
+}: {
+  readonly report: CoachReport;
+  readonly sequence: number;
+}): ReactElement {
   const interval = intervalFor(report);
   const priced = report.toCall > 0;
   const surplus = report.potOdds.equitySurplus;
@@ -151,7 +158,10 @@ function DecisionMaths({ report }: { readonly report: CoachReport }): ReactEleme
       <details className="prl-disclose">
         <summary className="prl-disclose__summary">Every action the analysis priced</summary>
         <div className="prl-disclose__body">
-          <div className="prl-legend-table-wrap">
+          <ScrollRegion
+            className="prl-legend-table-wrap"
+            label={`Every action the analysis priced at decision ${sequence}`}
+          >
             <table className="prl-legend-table">
               <caption>Expected value per action, in units, measured against folding at zero</caption>
               <thead>
@@ -177,7 +187,7 @@ function DecisionMaths({ report }: { readonly report: CoachReport }): ReactEleme
                 ))}
               </tbody>
             </table>
-          </div>
+          </ScrollRegion>
         </div>
       </details>
       {/* `h4`, not `h5`. A skipped level breaks heading navigation under the decision's `h3`. */}
@@ -283,7 +293,7 @@ function DecisionBlock({ decision }: { readonly decision: ComparedDecision }): R
           a review that printed them would hand over the information the hand was played over.
         </p>
       ) : (
-        <DecisionMaths report={decision.analysis} />
+        <DecisionMaths report={decision.analysis} sequence={decision.sequence} />
       )}
 
       {quality === null ? null : (

@@ -222,12 +222,13 @@ section.
   stakes and an infinite horizon. Both state their assumptions every time they produce a
   number.
 - **No gate is a screen-reader test.** `test:a11y` is a static audit of the server-rendered
-  markup and says exactly what it does and does not cover. Four more gates drive a real headless
+  markup and says exactly what it does and does not cover. Six more gates drive a real headless
   Chrome over the DevTools Protocol — `test:ax` reads the computed accessibility tree,
-  `test:keyboard` sends real key events, `test:layout` measures where glyphs land, and
-  `design:contrast` measures colours as Chrome composites them — using a Chrome already on the
-  machine (or `CHROME_PATH`), not a browser npm package, whose install scripts the supply-chain
-  policy forbids. Whether a screen reader *speaks* that tree comprehensibly is a manual procedure,
+  `test:keyboard` sends real key events, `test:layout` measures where glyphs land,
+  `design:contrast` measures colours as Chrome composites them, `test:csp` injects scripts the
+  policy must block, and `test:age-gate` checks the age gate's refusals in a production build —
+  using a Chrome already on the machine (or `CHROME_PATH`), not a browser npm package, whose
+  install scripts the supply-chain policy forbids. Whether a screen reader *speaks* that tree comprehensibly is a manual procedure,
   [`docs/production/accessibility-certification.md`](docs/production/accessibility-certification.md),
   recorded there as BLOCKED — UNVERIFIED.
 - **Out-of-band collusion is undetectable.** No server control can see another channel.

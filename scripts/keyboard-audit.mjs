@@ -1165,10 +1165,16 @@ async function auditCoachPeekOcclusion(page) {
                 }))
                 .filter((c) => !c.element.contains(c.hit))
                 .map(({ name, top, bottom, hit }) => ({ name, top, bottom, hit: hit?.getAttribute('class') || hit?.tagName }));
+              const note = document.querySelector('.prl-play__coach[data-open="false"] .prl-play__handle-note');
+              const nb = note?.getBoundingClientRect();
+              const noteCut =
+                nb !== undefined && getComputedStyle(note).visibility !== 'hidden' &&
+                nb.top < innerHeight && nb.bottom > innerHeight;
               return {
                 state: document.querySelector('.prl-play__stage')?.dataset.state ?? null,
                 names: controls.map(({ element }) => (element.textContent ?? '').trim()),
                 handleHit,
+                noteCut,
                 covered,
               };
             })()`,
@@ -1188,6 +1194,10 @@ async function auditCoachPeekOcclusion(page) {
         }
         if (state === 'ready' && !top.handleHit) {
           bad(label, 'the Coach peek is missing or covered while the table has a decision to price');
+          continue;
+        }
+        if (top.noteCut) {
+          bad(label, 'the closed sheet shows a cut-off sliver of its caveat line at the viewport edge');
           continue;
         }
         const covered = [...top.covered, ...end.covered];
@@ -1372,6 +1382,51 @@ async function auditCoachSheetOpen(page) {
   } finally {
     await page.send('Emulation.clearDeviceMetricsOverride');
   }
+}
+
+/**
+ * After the table, the session can delete its account. Each step unmounts the control that was pressed,
+ * so focus must be placed. The journey opens the warning and backs out; it never types the phrase.
+ */
+async function auditAccountDeletionFocus(page) {
+  section(`Account deletion keeps focus  ${DIM}/record${RESET}`);
+  await page.goto(`${WEB_ORIGIN}/record`);
+  await resetFocus(page);
+  let reached = false;
+  for (let step = 0; step < 80 && !reached; step += 1) {
+    await page.press('Tab');
+    reached = (await page.evaluate(DESCRIBE_ACTIVE)).name === 'Delete my account';
+  }
+  if (!reached) {
+    unproven(
+      'Account deletion',
+      'no "Delete my account" control to reach; the session from the table is missing',
+    );
+    return;
+  }
+  await page.press('Enter');
+  await delay(250);
+  const field = await page.evaluate(
+    `document.activeElement?.labels?.[0]?.textContent ?? document.activeElement?.tagName ?? 'body'`,
+  );
+  if (/^To confirm, type /u.test(field))
+    ok('Account deletion: opening the warning focuses the confirm field');
+  else bad('Account deletion', `opening the warning left focus on ${field}, so the warning is not announced`);
+
+  let back = false;
+  for (let step = 0; step < 6 && !back; step += 1) {
+    await page.press('Tab');
+    back = (await page.evaluate(DESCRIBE_ACTIVE)).name === 'Keep my account';
+  }
+  if (!back) {
+    bad('Account deletion', 'could not reach "Keep my account" by keyboard from the confirm field');
+    return;
+  }
+  await page.press('Enter');
+  await delay(250);
+  const opener = (await page.evaluate(DESCRIBE_ACTIVE)).name;
+  if (opener === 'Delete my account') ok('Account deletion: keeping the account returns focus to the opener');
+  else bad('Account deletion', `keeping the account left focus on "${opener || 'body'}"`);
 }
 
 /**
@@ -1759,7 +1814,7 @@ async function main() {
           bad(`${route.title}: audit`, error instanceof Error ? error.message : String(error));
         }
       }
-      journeys += 5;
+      journeys += 6;
       try {
         await auditNarrowViewport(page);
       } catch (error) {
@@ -1784,6 +1839,11 @@ async function main() {
         await playOneHandByKeyboard(page);
       } catch (error) {
         bad('Private table: audit', error instanceof Error ? error.message : String(error));
+      }
+      try {
+        await auditAccountDeletionFocus(page);
+      } catch (error) {
+        bad('Account deletion: audit', error instanceof Error ? error.message : String(error));
       }
     });
     if (journeys === 0) bad('scope', 'no journey ran, so nothing was audited');

@@ -7,7 +7,7 @@
  * icon-only mode (§12). `type` defaults to `button`, because an unspecified type inside a form submits it.
  */
 
-import type { ButtonHTMLAttributes, ReactElement, ReactNode } from 'react';
+import type { ButtonHTMLAttributes, ReactElement, ReactNode, Ref } from 'react';
 import { cx } from '../cx.ts';
 
 export type ButtonVariant = 'primary' | 'secondary' | 'ghost';
@@ -21,6 +21,8 @@ export interface ButtonProps extends NativeButtonProps {
   readonly size?: ButtonSize;
   readonly type?: 'button' | 'submit' | 'reset';
   readonly className?: string;
+  /** React 19 passes `ref` as a prop, so the spread below hands it to the `<button>`. */
+  readonly ref?: Ref<HTMLButtonElement>;
 }
 
 const VARIANT_CLASS: Readonly<Record<ButtonVariant, string>> = {

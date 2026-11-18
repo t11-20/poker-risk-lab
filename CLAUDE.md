@@ -58,10 +58,10 @@ construction**: `package.json`, `.github/workflows/ci.yml`, `.github/workflows/r
 
 `pnpm run test:layout` is the newest and the one whose absence cost the most. It measures
 **`Range.getClientRects()` over each element's own text nodes** — where the glyphs landed — on
-every route, in both themes, at 360/768/1024/1440/1920, and reports five shapes of one failure:
+every route, in both themes, at 360/768/1024/1440/1920, and reports six shapes of one failure:
 glyphs of two independent in-flow elements overlapping, glyphs painted outside their own box,
 glyphs cut off by a non-scrolling ancestor, glyphs painted across the border or fill of the nearest
-box that draws one, and a block narrower than its own longest word.
+box that draws one, a block narrower than its own longest word, and a page that scrolls sideways.
 
 It exists because `.prl-play .prl-coach__section .prl-stat__pair` shipped as
 `grid-template-columns: minmax(0, 1fr) auto`. A bare `auto` track is floored at max-content, so a
@@ -87,7 +87,7 @@ nothing and `verify` did not list it, for one mechanical reason — it had no `-
 `docs/RUNBOOK.md` told a person to bring up a production build and an API by hand first. A gate that
 needs somebody to remember is not a gate. It now starts its own servers (web on **3464**, API on
 **3001** — the API port is not a free choice, see the script's header on the frozen `/api/*` rewrite)
-and reports 147 checks.
+and reports its check count at the end of the run (169 on 2026-11-19; read it off the run).
 
 `pnpm run test:ax` runs **three web apps** off one build, and the second and third are fixtures
 rather than duplication. 8.2 needs the WEB SERVER's own fetch to fail, so one runs on :3459 with

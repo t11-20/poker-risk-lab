@@ -28,7 +28,7 @@ pnpm run security:sbom          # regenerate and compare the component graph
 pnpm run security:containers    # image CVE scan
 ```
 
-The gates run in CI on every commit and on a daily schedule, so the realistic detection paths are a scheduled run turning red, or an external report arriving before the scanners know about it.
+The gates run in CI on every push to main and every pull request, and nothing runs them on a schedule (`supply-chain.yml` was removed on 2026-10-11). So the realistic detection paths are the next push turning red, a Dependabot security update if those are enabled in the repository settings, or an external report arriving before the scanners know about it.
 
 ## Immediate containment
 

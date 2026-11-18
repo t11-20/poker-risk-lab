@@ -12,7 +12,7 @@
 import { ACCOUNT_DELETE_CONFIRMATION } from '@prl/contracts';
 import { Button, Callout, Panel, pluralise } from '@prl/ui';
 import { useRouter } from 'next/navigation';
-import { type FormEvent, type ReactElement, useId, useState } from 'react';
+import { type FormEvent, type ReactElement, useEffect, useId, useRef, useState } from 'react';
 import { deleteAccount, fetchSession } from '@/lib/api.ts';
 
 /**
@@ -54,6 +54,21 @@ export function AccountDeletion({ deletable }: AccountDeletionProps): ReactEleme
   const fieldId = useId();
   const hintId = useId();
   const router = useRouter();
+  const openerRef = useRef<HTMLButtonElement>(null);
+  const fieldRef = useRef<HTMLInputElement>(null);
+  const receiptRef = useRef<HTMLDivElement>(null);
+  const shown = useRef(deletion.state);
+
+  // Each step unmounts the control that was pressed, so focus is placed or it falls to the body and the
+  // warning, the way back and the receipt are never announced.
+  useEffect(() => {
+    const was = shown.current;
+    shown.current = deletion.state;
+    if (was === deletion.state) return;
+    if (deletion.state === 'confirming' || deletion.state === 'failed') fieldRef.current?.focus();
+    else if (deletion.state === 'closed') openerRef.current?.focus();
+    else if (deletion.state === 'done') receiptRef.current?.focus();
+  }, [deletion.state]);
 
   const confirmed = matchesConfirmation(typed);
 
@@ -105,25 +120,27 @@ export function AccountDeletion({ deletable }: AccountDeletionProps): ReactEleme
     <Panel title="Delete your account" eyebrow="Irreversible" index={3} headingLevel={2}>
       {deletion.state === 'done' ? (
         /* The only place these counts can be read, since the account they describe is gone. */
-        <Callout tone="insight" title="Your account has been deleted">
-          <p className="prl-prose">
-            {`Gone for good: ${pluralise(deletion.outcome.sessions, 'sign-in')}, ` +
-              `${pluralise(deletion.outcome.lessonsCompleted, 'lesson')} marked as read, ` +
-              `${pluralise(deletion.outcome.quizAttempts, 'quiz answer')}, ` +
-              `${pluralise(deletion.outcome.scenarioAttempts, 'scenario decision')} and ` +
-              `${pluralise(deletion.outcome.roomMemberships, 'seat')} at a table.`}
-          </p>
-          <p className="prl-prose">
-            {`Kept, with your name taken off them: ${pluralise(deletion.outcome.handSeats, 'seat')} in ` +
-              `hands that were played, and ${pluralise(deletion.outcome.roomsCreated, 'table')} you ` +
-              'created — now closed. Those hands belong to the other people who were in them as much as ' +
-              'to you, so they stay, with nothing in them pointing back at you.'}
-          </p>
-          <p className="prl-prose">
-            You are signed out. Nothing on this page refers to you any more, and opening a table again starts
-            a brand-new account with no connection to the old one.
-          </p>
-        </Callout>
+        <div ref={receiptRef} tabIndex={-1}>
+          <Callout tone="insight" title="Your account has been deleted">
+            <p className="prl-prose">
+              {`Gone for good: ${pluralise(deletion.outcome.sessions, 'sign-in')}, ` +
+                `${pluralise(deletion.outcome.lessonsCompleted, 'lesson')} marked as read, ` +
+                `${pluralise(deletion.outcome.quizAttempts, 'quiz answer')}, ` +
+                `${pluralise(deletion.outcome.scenarioAttempts, 'scenario decision')} and ` +
+                `${pluralise(deletion.outcome.roomMemberships, 'seat')} at a table.`}
+            </p>
+            <p className="prl-prose">
+              {`Kept, with your name taken off them: ${pluralise(deletion.outcome.handSeats, 'seat')} in ` +
+                `hands that were played, and ${pluralise(deletion.outcome.roomsCreated, 'table')} you ` +
+                'created — now closed. Those hands belong to the other people who were in them as much as ' +
+                'to you, so they stay, with nothing in them pointing back at you.'}
+            </p>
+            <p className="prl-prose">
+              You are signed out. Nothing on this page refers to you any more, and opening a table again
+              starts a brand-new account with no connection to the old one.
+            </p>
+          </Callout>
+        </div>
       ) : (
         <>
           {/*
@@ -145,6 +162,7 @@ export function AccountDeletion({ deletable }: AccountDeletionProps): ReactEleme
           {deletion.state === 'closed' ? (
             <p className="prl-btn-row">
               <Button
+                ref={openerRef}
                 variant="secondary"
                 onClick={() => {
                   setTyped('');
@@ -180,6 +198,7 @@ export function AccountDeletion({ deletable }: AccountDeletionProps): ReactEleme
                   {`To confirm, type ${ACCOUNT_DELETE_CONFIRMATION}`}
                 </label>
                 <input
+                  ref={fieldRef}
                   className="prl-input"
                   id={fieldId}
                   name="confirm"

@@ -195,12 +195,14 @@ committed. The names are kept apart deliberately rather than one being renamed o
 because dated audit evidence under `docs/audit/` quotes `security:provenance` runs and
 retro-fitting that name onto a different check would falsify the record.
 
-**Signing is not wired into CI, and that is not an oversight.** Signing needs a private key and
-this repository has no CI signing identity; `.github/workflows/*` therefore run
-`security:audit` at a point where no release image exists, so the signature gate reports
-*not applicable* there and says so loudly. It is a release-machine step. See
-[`deploy/signing/README.md`](../deploy/signing/README.md) for custody, rotation, and what a
-verification failure means.
+**Key-based signing is a release-machine step; keyless signing is wired but has not run.**
+`pnpm run release:sign` needs a private key, and only the release machine holds one.
+`.github/workflows/release-sign.yml` signs keyless instead, after a successful tag-triggered
+`Release`: its `sign` job alone holds `id-token: write`, and its header marks it implemented and
+unexercised. `ci.yml` runs `security:audit` before any release image exists, so the signature
+gate reports *not applicable* there and says so loudly. See
+[`deploy/signing/README.md`](../deploy/signing/README.md) for custody, rotation, the keyless
+identity, and what a verification failure means.
 
 **`--offline` exits 2 and that is the point.** It prints `4 network gate(s) skipped — NOT a
 valid release audit` and exits non-zero, so a pipeline reading only the exit code cannot

@@ -16,7 +16,7 @@
 .prl-play {
   /* 22rem: the Coach rail's width, from design system section 10. */
   --prl-play-rail: calc(var(--prl-space-16) * 2 + var(--prl-space-9));
-  /* The closed sheet's visible part, the handle row plus its caveat line. */
+  /* The closed sheet's visible part, the handle row. */
   --prl-play-sheet-peek: var(--prl-space-12);
   /* How far a drag may pull the sheet before CSS stops following the finger. The component
      publishes the raw pointer delta as `--prl-play-sheet-drag`; the clamp below owns the bounds. */
@@ -473,11 +473,17 @@
   text-align: start;
 }
 
-/** Visible in both sheet states, so no number here is ever seen without its caveats. */
+/** Shown whenever the panel's figures are, so no number here is ever seen without its caveats. */
 .prl-play__handle-note {
   margin: 0;
   color: var(--prl-text-muted);
   font-size: var(--prl-type-body-sm);
+}
+
+/* The peek ends about 8px into the caveat, so a closed sheet showed a cut-off sliver of it at 360px.
+   Closed, the sheet shows no figure for it to qualify. */
+.prl-play__coach[data-open="false"] .prl-play__handle-note {
+  visibility: hidden;
 }
 
 .prl-play__coach-body {
@@ -1300,6 +1306,10 @@
 
   .prl-play__handle {
     display: none;
+  }
+
+  .prl-play__coach[data-open="false"] .prl-play__handle-note {
+    visibility: visible;
   }
 }
 
