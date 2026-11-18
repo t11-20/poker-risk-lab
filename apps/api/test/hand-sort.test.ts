@@ -59,9 +59,23 @@ const EXPECTED: Readonly<Record<(typeof HAND_SORTS)[number], readonly number[]>>
   'pot-high': [4, 5, 1, 7, 2, 8, 3, 6],
 };
 
+/**
+ * Three hands inside one millisecond and one in the next, as `DEFAULT now()` writes them. Net and pot
+ * are equal, so in every ordering the microseconds alone decide the seam.
+ */
+const SAME_MILLISECOND: readonly string[] = [
+  '2026-08-20T10:00:00.000100Z',
+  '2026-08-20T10:00:00.000200Z',
+  '2026-08-20T10:00:00.000300Z',
+  '2026-08-20T10:00:00.001400Z',
+];
+
 interface Fixtures {
   readonly app: FastifyInstance;
   readonly cookie: string;
+  readonly tickCookie: string;
+  /** In `started_at` order. */
+  readonly tickHandIds: readonly string[];
 }
 
 let fixtures: Fixtures | null = null;
@@ -110,10 +124,51 @@ before(async () => {
     });
   }
 
+  const tickReaderId = newUserId();
+  const tickRoomId = newRoomId();
+  created.userIds.push(tickReaderId);
+  created.roomIds.push(tickRoomId);
+  await insertGuest(sql, tickReaderId, 'Ticker');
+  await insertRoom(sql, tickRoomId, tickReaderId);
+  const tickHandIds: string[] = [];
+  for (const [index, startedAt] of SAME_MILLISECOND.entries()) {
+    const handId = newHandId();
+    tickHandIds.push(handId);
+    const played = persistHand({
+      handId,
+      roomId: tickRoomId,
+      handNumber: index + 1,
+      seats: [
+        { seat: 0, userId: tickReaderId, displayName: 'Ticker', stack: 200 },
+        { seat: 1, userId: botId, displayName: 'Rock', stack: 200, isBot: true },
+      ],
+      holeCards: { 0: 'AhKs', 1: '7c2d' },
+      steps: [{ seat: 0, action: { type: 'fold' } }],
+      startedAt: new Date(startedAt),
+    });
+    await insertHand(sql, played);
+    // A Date parameter would truncate to milliseconds, which is the case this fixture exists for.
+    await sql`update prl.hands set started_at = ${startedAt}::text::timestamptz where id = ${handId}`;
+  }
+  const subMillisecond = await sql<{ n: number }[]>`
+    select count(*)::int as n from prl.hands
+     where id = any(${tickHandIds}::text[]) and extract(microseconds from started_at)::bigint % 1000 <> 0
+  `;
+  assert.equal(subMillisecond[0]?.n, SAME_MILLISECOND.length, 'the fixture lost its microseconds');
+
   const token = 'sorter-token-for-the-hand-ordering-tests';
-  const accounts = new Map<string, SessionAccount>([[token, accountFor(readerId, 'Sorter')]]);
+  const tickToken = 'ticker-token-for-the-hand-ordering-tests';
+  const accounts = new Map<string, SessionAccount>([
+    [token, accountFor(readerId, 'Sorter')],
+    [tickToken, accountFor(tickReaderId, 'Ticker')],
+  ]);
   const harness = await buildHandsApp({ config, accounts });
-  fixtures = { app: harness.app, cookie: harness.cookieFor(token) };
+  fixtures = {
+    app: harness.app,
+    cookie: harness.cookieFor(token),
+    tickCookie: harness.cookieFor(tickToken),
+    tickHandIds,
+  };
 });
 
 after(async () => {
@@ -128,12 +183,12 @@ function live(): Fixtures {
   return fixtures;
 }
 
-async function list(query: string): Promise<HandListResponse> {
+async function list(query: string, cookie = live().cookie): Promise<HandListResponse> {
   const context = live();
   const response = await context.app.inject({
     method: 'GET',
     url: `/api/v1/hands?${query}`,
-    headers: { cookie: context.cookie },
+    headers: { cookie },
   });
   assert.equal(response.statusCode, 200, response.payload.slice(0, 200));
   return response.json<HandListResponse>();
@@ -219,4 +274,25 @@ describe('GET /hands?sort=', { skip: DB_SKIP_REASON }, () => {
     assert.equal(last?.heroNet, null, 'a hand with no net is not the smallest net');
     assert.notEqual(byNet.hands[0]?.handNumber, 7, 'and it is not the biggest loss either');
   });
+});
+
+describe('GET /hands pages hands that share a millisecond', { skip: DB_SKIP_REASON }, () => {
+  for (const sort of HAND_SORTS) {
+    it(`pages ${sort} one hand at a time, each hand exactly once`, async () => {
+      const context = live();
+      const ascending = sort === 'oldest' || sort === 'net-low';
+      const expected = ascending ? context.tickHandIds : [...context.tickHandIds].reverse();
+      const seen: string[] = [];
+      let cursor: string | null = null;
+      for (let page = 0; page < expected.length + 2; page += 1) {
+        const query = `sort=${sort}&limit=1${cursor === null ? '' : `&cursor=${encodeURIComponent(cursor)}`}`;
+        const body: HandListResponse = await list(query, context.tickCookie);
+        seen.push(...body.hands.map((hand) => hand.id));
+        cursor = body.nextCursor;
+        if (cursor === null) break;
+      }
+      assert.equal(cursor, null, 'paging did not terminate');
+      assert.deepEqual(seen, expected);
+    });
+  }
 });
