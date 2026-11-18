@@ -860,6 +860,42 @@ describe('GET /hands', { skip: DB_SKIP_REASON }, () => {
       assert.equal(errorCodeOf(response.payload), 'invalid_request', url);
     }
   });
+
+  it('refuses a cursor whose timestamp or value the database could not read, rather than failing', async () => {
+    const context = live();
+    const cookie = context.cookieFor(context.aliceToken);
+    const id = 'hand_cursoraaaaaaaaaaaaaaa';
+    const at = '2026-08-17T14:26:23.974456Z';
+    const refused: readonly (readonly [string, string])[] = [
+      ['recent', `${id}:2026-13-45T99:99:99.000000Z`],
+      ['recent', `${id}:0000-01-01T00:00:00.000000Z`],
+      ['recent', `${id}:2026-02-30T14:26:23.974456Z`],
+      ['recent', `${id}:2026-08-17T24:00:00.000000Z`],
+      ['recent', `${id}:2026-08-17T23:59:60.000000Z`],
+      ['net-high', `${id}:${at}:net-high:999999999999999`],
+      ['net-high', `${id}:${at}:net-high:2147483648`],
+      ['net-low', `${id}:${at}:net-low:-2147483649`],
+    ];
+    const answers: Record<string, string> = {};
+    for (const [sort, cursor] of refused) {
+      const url = `/api/v1/hands?sort=${sort}&cursor=${encodeURIComponent(cursor)}`;
+      const response = await context.app.inject({ method: 'GET', url, headers: { cookie } });
+      answers[cursor] =
+        response.statusCode === 200 ? '200' : `${response.statusCode} ${errorCodeOf(response.payload)}`;
+    }
+    assert.deepEqual(
+      answers,
+      Object.fromEntries(refused.map(([, cursor]) => [cursor, '400 invalid_request'])),
+    );
+    for (const [sort, value] of [
+      ['net-high', 2147483647],
+      ['net-low', -2147483648],
+    ] as const) {
+      const url = `/api/v1/hands?sort=${sort}&cursor=${encodeURIComponent(`${id}:${at}:${sort}:${value}`)}`;
+      const response = await context.app.inject({ method: 'GET', url, headers: { cookie } });
+      assert.equal(response.statusCode, 200, `${sort} at the int32 bound ${value}`);
+    }
+  });
 });
 
 describe('GET /hands/:handId', { skip: DB_SKIP_REASON }, () => {

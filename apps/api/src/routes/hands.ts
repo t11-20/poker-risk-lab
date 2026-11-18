@@ -48,6 +48,20 @@ const STARTED_AT_KEY_LENGTH = 27;
 /** `null` is a real value. */
 const SORT_VALUE_PATTERN = /^(?:null|-?\d{1,15})$/;
 
+/** The keyset binds the value `::int`, and Postgres answers 22003 outside this range. */
+const INT32_MIN = -(2 ** 31);
+const INT32_MAX = 2 ** 31 - 1;
+
+/**
+ * A key that does not survive a Date round trip, or Postgres's year 1 floor, is one no row produced, and
+ * the database would refuse it with a 500.
+ */
+function isRealInstant(key: string): boolean {
+  const instant = new Date(key);
+  if (Number.isNaN(instant.getTime()) || instant.getUTCFullYear() < 1) return false;
+  return instant.toISOString() === `${key.slice(0, 23)}Z`;
+}
+
 export interface HandCursor {
   readonly handId: string;
   readonly startedAtKey: string;
@@ -86,6 +100,7 @@ export function decodeCursor(raw: string): HandCursor {
   if (!ID_PATTERN.test(handId) || !STARTED_AT_KEY_PATTERN.test(startedAtKey)) {
     rejectCursor('id or timestamp did not parse');
   }
+  if (!isRealInstant(startedAtKey)) rejectCursor('timestamp is not a real instant');
 
   const suffix = rest.slice(STARTED_AT_KEY_LENGTH);
   if (suffix === '') return { handId, startedAtKey };
@@ -98,7 +113,9 @@ export function decodeCursor(raw: string): HandCursor {
   const sort = HAND_SORTS.find((candidate) => candidate === sortName);
   if (sort === undefined) rejectCursor(`unknown ordering "${sortName}"`);
   if (!SORT_VALUE_PATTERN.test(sortValue)) rejectCursor('sort value is not a number or null');
-  return { handId, startedAtKey, sort, sortValue: sortValue === 'null' ? null : Number(sortValue) };
+  const value = sortValue === 'null' ? null : Number(sortValue);
+  if (value !== null && (value < INT32_MIN || value > INT32_MAX)) rejectCursor('sort value is outside int');
+  return { handId, startedAtKey, sort, sortValue: value };
 }
 
 /** Columns listed, never `select *`. `hole_cards` is never projected, so a list cannot leak one. */
