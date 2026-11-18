@@ -18,6 +18,7 @@ import {
   type ErrorCode,
   inSecondPerson,
   type RoomSummary,
+  WS_CLOSE,
   type WsServerMessage,
 } from '@prl/contracts';
 import type { PlayerView, TableAction, TurnClock } from '@prl/ui';
@@ -955,6 +956,23 @@ export async function openPracticeRoom(
 }
 
 /**
+ * `4403` never retries, and the room is gone or not this session's, so the tab lets go of it and
+ * "Deal me in" is offered again. The other closes that never retry are about the session, the build or
+ * the deployment, which another room would not fix.
+ */
+export function closeForgetsRoom(meaning: CloseMeaning | null): boolean {
+  return meaning?.code === WS_CLOSE.forbidden;
+}
+
+/**
+ * False for the room already open here. Its socket follows the room id, so disposing it for an id that
+ * does not change would leave no socket at all.
+ */
+export function joinMovesTables(current: string | null, joined: string): boolean {
+  return current !== joined;
+}
+
+/**
  * Unmount closes the socket, cancels every timer and aborts setup. A socket leaked per navigation hits
  * `maxSocketsPerSession` (four) and locks the reader out with a `4429`.
  */
@@ -980,6 +998,9 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
   const coachRequestRef = useRef<TableState['coachRequest']>(null);
   const setupRef = useRef<AbortController | null>(null);
 
+  /** Readable after the join's `await`, where the closure's `roomId` is the one from the press. */
+  const roomIdRef = useRef<string | null>(null);
+  roomIdRef.current = roomId;
   pendingRef.current = table.pending;
   viewRef.current = table.view;
   coachRequestRef.current = table.coachRequest;
@@ -1143,16 +1164,18 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
         setDisplayName(session.user.displayName);
         const room = await joinRoomByInviteCode(session.csrfToken, normalised, controller.signal);
         if (controller.signal.aborted) return;
-        socketRef.current?.dispose();
-        socketRef.current = null;
-        setStatus(null);
-        setClosed(null);
-        // Not this session's code; it was issued to the room's creator.
-        setInviteCode(null);
-        rememberRoom(room.id);
-        dispatch({ kind: 'reset' });
+        if (joinMovesTables(roomIdRef.current, room.id)) {
+          socketRef.current?.dispose();
+          socketRef.current = null;
+          setStatus(null);
+          setClosed(null);
+          // Not this session's code; it was issued to the room's creator.
+          setInviteCode(null);
+          rememberRoom(room.id);
+          dispatch({ kind: 'reset' });
+          setRoomId(room.id);
+        }
         setJoin({ state: 'joined', roomName: room.name });
-        setRoomId(room.id);
         setPhase('ready');
       } catch (cause) {
         if (controller.signal.aborted) return;
@@ -1174,7 +1197,16 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
       roomId,
       url: target,
       onStatus: setStatus,
-      onClose: setClosed,
+      onClose: (meaning) => {
+        setClosed(meaning);
+        if (!closeForgetsRoom(meaning)) return;
+        if (rememberedRoom() === roomId) rememberRoom(null);
+        // The gone room's last `notice` would otherwise stop the next "Deal me in" before it sits.
+        dispatch({ kind: 'reset' });
+        setRoomId(null);
+        // A join or a new table still being prepared finishes on its own; "Deal me in" would abort it.
+        setPhase((current) => (current === 'preparing' ? current : 'idle'));
+      },
       onProblem: (message) => console.warn(`[table-socket] ${message}`),
       /**
        * Most dropped frames are repaired by the next whole `state`. A dropped `coach` frame is not.
