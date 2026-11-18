@@ -33,6 +33,13 @@ describe('a refused room is let go of', () => {
     assert.match(handler, /setRoomId\(null\)/u);
     // A stale `notice` turns "Deal me in" off before it sits (`dealInStep`).
     assert.match(handler, /dispatch\(\{ kind: 'reset' \}\)/u);
-    assert.match(handler, /setPhase\('idle'\)/u);
+    assert.match(handler, /setPhase\(\(current\) => \(current === 'preparing' \? current : 'idle'\)\)/u);
+  });
+
+  it('leaves a join or a new table that is still being prepared to finish (REGRESSION)', () => {
+    // A bare `setPhase('idle')` offered "Deal me in" mid-join, and pressing it aborted the join.
+    const source = readFileSync(new URL('../src/lib/use-live-table.ts', import.meta.url), 'utf8');
+    const handler = source.slice(source.indexOf('onClose: (meaning)'), source.indexOf('onProblem:'));
+    assert.doesNotMatch(handler, /setPhase\('idle'\)/u);
   });
 });

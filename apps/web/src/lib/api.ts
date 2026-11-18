@@ -33,7 +33,10 @@ export const EXPENSIVE_READ_TIMEOUT_MS = 15_000;
 
 const MUTATING_METHODS: readonly string[] = ['POST', 'PUT', 'PATCH', 'DELETE'];
 
-/** `'transport'` is not an `ErrorCode`. It means no handler was reached, so callers can fall back. */
+/**
+ * `'transport'` is not an `ErrorCode`. It means no usable answer arrived (no handler was reached, or the
+ * body failed mid-read), so callers can fall back.
+ */
 export class ApiRequestError extends Error {
   override readonly name = 'ApiRequestError';
   readonly status: number;

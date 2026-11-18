@@ -1204,7 +1204,8 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
         // The gone room's last `notice` would otherwise stop the next "Deal me in" before it sits.
         dispatch({ kind: 'reset' });
         setRoomId(null);
-        setPhase('idle');
+        // A join or a new table still being prepared finishes on its own; "Deal me in" would abort it.
+        setPhase((current) => (current === 'preparing' ? current : 'idle'));
       },
       onProblem: (message) => console.warn(`[table-socket] ${message}`),
       /**
