@@ -12,7 +12,6 @@ import {
   createSamplingRandom,
   DECK_SIZE,
   evaluate,
-  type HandScore,
   type RandomSource,
   remainingDeck,
 } from '@prl/poker-engine';
@@ -690,10 +689,4 @@ export function combineMonteCarlo(shards: readonly EquityResult[]): EquityResult
       `Estimated by sampling ${totalTrials.toLocaleString('en-US')} random run-outs across ${shards.length} independent shards.`,
     ],
   };
-}
-
-/** Scores every player's current made hand. Only valid with 5 board cards. */
-export function showdownScores(hands: readonly Combo[], board: readonly Card[]): HandScore[] {
-  if (board.length !== 5) throw new EquityError(`showdownScores needs a full board, got ${board.length}`);
-  return hands.map((combo) => evaluate([combo[0], combo[1], ...board]));
 }

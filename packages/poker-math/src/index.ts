@@ -86,7 +86,6 @@ export {
   MIN_MONTE_CARLO_SAMPLES,
   monteCarloEquity,
   type PlayerEquity,
-  showdownScores,
 } from './equity.ts';
 export {
   breakEvenBluffFrequency,
