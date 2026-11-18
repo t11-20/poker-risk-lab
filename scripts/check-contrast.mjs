@@ -1542,6 +1542,9 @@ const walkerSource = (measureAll, probeBudget) =>
 /** Returns failures. Never throws for content. */
 async function measurePage(page, url, label, theme, failures, tally) {
   await page.goto(url);
+  // Opened, because a closed disclosure paints nothing and starts no transition: text whose style
+  // was computed before the theme switch (a ResizeObserver inside one) kept the old theme's colour.
+  await page.evaluate(`for (const details of document.querySelectorAll('details')) details.open = true`);
   // Set on the root after load, which exercises the explicit `[data-theme]` scope the toggle uses.
   // The media-query scope is checked against it for drift in passes 1 and 2.
   await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`);
