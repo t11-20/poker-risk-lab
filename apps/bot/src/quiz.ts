@@ -9,7 +9,6 @@ import { quizById, quizzes } from '@prl/content';
 import { type Quiz, type QuizQuestion, type Topic, withinTolerance } from '@prl/contracts';
 import { cardNotationText } from './cards.ts';
 import {
-  answerDecimals,
   DECISION_ACTIONS,
   type DecisionAction,
   type DecisionQuestion,
@@ -23,6 +22,7 @@ import {
   quizzesIn,
   toleranceText,
   topicLabel,
+  verdictDecimals,
 } from './learn.ts';
 import type { Deps, Outgoing, Phase, Session, StepResult } from './step.ts';
 import { type Button, cardsText, encodePress, type Press, type QuizMoment } from './view.ts';
@@ -319,12 +319,13 @@ function choiceLines(question: Extract<QuizQuestion, { kind: 'multipleChoice' }>
 
 function numericLines(question: NumericQuestion, answer: number): string[] {
   const expected = expectedAnswer(question);
-  const decimals = answerDecimals(answer, expected.unit);
+  const accepted = withinTolerance(answer, expected);
+  const decimals = verdictDecimals(answer, expected, accepted);
   const yours = figureText(answer, expected.unit, decimals);
   const theirs = figureText(expected.value, expected.unit, decimals);
   const tolerance = toleranceText(expected.tolerance, expected.unit);
   // The computed figure is named as such, so "outside the tolerance of 53.4%" cannot read as a 53.4% band.
-  const verdict = withinTolerance(answer, expected)
+  const verdict = accepted
     ? `${yours} is close enough to the computed ${theirs}: anything within ${tolerance} of it is accepted.`
     : `${yours} is further than ${tolerance} from the computed ${theirs}, so it is not accepted. Nothing ` +
       'is deducted for that: the working is below, and the gap is usually one step of the method ' +

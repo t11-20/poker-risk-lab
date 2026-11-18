@@ -446,12 +446,23 @@ export function toleranceText(tolerance: number, unit: QuizUnit): string {
 }
 
 /**
- * At least the unit's decimals, and every decimal typed: a rounded echo can read as the other verdict.
- * The computed figure is quoted to the same decimals, or the gap between the two reads wrong.
+ * Decimals for quoting an answer beside the computed figure: every decimal typed, then more until the
+ * gap between the two quoted figures agrees with the verdict. Rounded, 32.8 read 2.0 from "the computed
+ * 30.8%" while its true gap of 2.03 was refused.
  */
-export function answerDecimals(answer: number, unit: QuizUnit): number {
-  let decimals = UNIT_DECIMALS[unit];
+export function verdictDecimals(answer: number, expected: Expected, accepted: boolean): number {
+  const shown = (value: number, decimals: number): number =>
+    parseNumber(figureText(value, expected.unit, decimals)) ?? value;
+  const tolerance = shown(
+    expected.tolerance,
+    toleranceDecimals(expected.tolerance, UNIT_DECIMALS[expected.unit]),
+  );
+  let decimals = UNIT_DECIMALS[expected.unit];
   while (decimals < 20 && Number(answer.toFixed(decimals)) !== answer) decimals += 1;
+  for (; decimals < 12; decimals += 1) {
+    const gap = Math.abs(shown(answer, decimals) - shown(expected.value, decimals));
+    if (gap <= tolerance + 1e-9 === accepted) break;
+  }
   return decimals;
 }
 

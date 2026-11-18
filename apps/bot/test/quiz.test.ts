@@ -268,6 +268,39 @@ describe('numeric tolerance', () => {
     assert.match(message(text(pot.session, '34', deps)).text, /the computed 33\.3%/u);
   });
 
+  test('the gap between the two quoted figures agrees with the verdict, right up to the boundary', () => {
+    const deps = testDeps(2);
+    const figures = (reply: string): [number, number] => {
+      const match = /^(.+) is (?:close enough to|further than .+ from) the computed (.+?)(?::|, so)/mu.exec(
+        reply,
+      );
+      return [parseNumber(match?.[1] ?? '') ?? Number.NaN, parseNumber(match?.[2] ?? '') ?? Number.NaN];
+    };
+    let swept = 0;
+    for (const question of numericQuestions()) {
+      const expected = expectedAnswer(question);
+      const shownTolerance = parseNumber(toleranceText(expected.tolerance, expected.unit)) ?? Number.NaN;
+      const asked = askedFor(question, deps);
+      for (const decimals of [0, 1, 2, 3]) {
+        for (let step = -40; step <= 40; step += 1) {
+          const edge = expected.value + Math.sign(step || 1) * expected.tolerance;
+          const typed = (edge + (step * 10 ** -decimals) / 10).toFixed(decimals);
+          const reply = message(text(asked.session, typed, deps)).text;
+          const [yours, theirs] = figures(reply);
+          const accepted = /is close enough to the computed/u.test(reply);
+          const gap = Math.abs(yours - theirs);
+          assert.equal(
+            gap <= shownTolerance + 1e-9,
+            accepted,
+            `${question.id}: ${typed} read ${reply.split('\n')[1]}`,
+          );
+          swept += 1;
+        }
+      }
+    }
+    assert.ok(swept > 1_000, `${swept} answers swept`);
+  });
+
   test('a refused answer names the tolerance and the computed figure apart, so neither reads as the other', () => {
     const deps = testDeps(2);
     const question = numericQuestions()[0];
