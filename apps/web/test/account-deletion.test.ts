@@ -241,6 +241,21 @@ describe('the control asks twice, and says what survives before it asks at all',
     assert.match(CONTROL, /<p className="prl-note" role="status">/u);
     assert.doesNotMatch(CONTROL, /<(?:div|span|p)[^>]*onClick=/u);
   });
+
+  it('places focus at every step, because each one unmounts the control that was pressed (REGRESSION)', () => {
+    // Without it focus fell to the body: the warning, the way back and the receipt went unannounced.
+    assert.match(
+      CONTROL,
+      /deletion\.state === 'confirming' \|\| deletion\.state === 'failed'\) fieldRef\.current\?\.focus\(\)/u,
+    );
+    assert.match(CONTROL, /deletion\.state === 'closed'\) openerRef\.current\?\.focus\(\)/u);
+    assert.match(CONTROL, /deletion\.state === 'done'\) receiptRef\.current\?\.focus\(\)/u);
+    assert.match(CONTROL, /<Button\s+ref=\{openerRef\}/u);
+    assert.match(CONTROL, /<input\s+ref=\{fieldRef\}/u);
+    assert.match(CONTROL, /<div ref=\{receiptRef\} tabIndex=\{-1\}>/u);
+    // The first render is `closed` too, and must not pull focus to the opener on page load.
+    assert.match(CONTROL, /if \(was === deletion\.state\) return;/u);
+  });
 });
 
 /**
