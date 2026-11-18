@@ -1385,6 +1385,51 @@ async function auditCoachSheetOpen(page) {
 }
 
 /**
+ * After the table, the session can delete its account. Each step unmounts the control that was pressed,
+ * so focus must be placed. The journey opens the warning and backs out; it never types the phrase.
+ */
+async function auditAccountDeletionFocus(page) {
+  section(`Account deletion keeps focus  ${DIM}/record${RESET}`);
+  await page.goto(`${WEB_ORIGIN}/record`);
+  await resetFocus(page);
+  let reached = false;
+  for (let step = 0; step < 80 && !reached; step += 1) {
+    await page.press('Tab');
+    reached = (await page.evaluate(DESCRIBE_ACTIVE)).name === 'Delete my account';
+  }
+  if (!reached) {
+    unproven(
+      'Account deletion',
+      'no "Delete my account" control to reach; the session from the table is missing',
+    );
+    return;
+  }
+  await page.press('Enter');
+  await delay(250);
+  const field = await page.evaluate(
+    `document.activeElement?.labels?.[0]?.textContent ?? document.activeElement?.tagName ?? 'body'`,
+  );
+  if (/^To confirm, type /u.test(field))
+    ok('Account deletion: opening the warning focuses the confirm field');
+  else bad('Account deletion', `opening the warning left focus on ${field}, so the warning is not announced`);
+
+  let back = false;
+  for (let step = 0; step < 6 && !back; step += 1) {
+    await page.press('Tab');
+    back = (await page.evaluate(DESCRIBE_ACTIVE)).name === 'Keep my account';
+  }
+  if (!back) {
+    bad('Account deletion', 'could not reach "Keep my account" by keyboard from the confirm field');
+    return;
+  }
+  await page.press('Enter');
+  await delay(250);
+  const opener = (await page.evaluate(DESCRIBE_ACTIVE)).name;
+  if (opener === 'Delete my account') ok('Account deletion: keeping the account returns focus to the opener');
+  else bad('Account deletion', `keeping the account left focus on "${opener || 'body'}"`);
+}
+
+/**
  * Sits down at a real table by keyboard with "Deal me in", then acts. The fixture route only proves the
  * controls answer keys, because `TableStage` sends nothing to a server. Without an API this warns.
  */
@@ -1769,7 +1814,7 @@ async function main() {
           bad(`${route.title}: audit`, error instanceof Error ? error.message : String(error));
         }
       }
-      journeys += 5;
+      journeys += 6;
       try {
         await auditNarrowViewport(page);
       } catch (error) {
@@ -1794,6 +1839,11 @@ async function main() {
         await playOneHandByKeyboard(page);
       } catch (error) {
         bad('Private table: audit', error instanceof Error ? error.message : String(error));
+      }
+      try {
+        await auditAccountDeletionFocus(page);
+      } catch (error) {
+        bad('Account deletion: audit', error instanceof Error ? error.message : String(error));
       }
     });
     if (journeys === 0) bad('scope', 'no journey ran, so nothing was audited');
