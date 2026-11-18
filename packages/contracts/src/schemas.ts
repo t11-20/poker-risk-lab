@@ -101,16 +101,34 @@ export const quizAttemptBodySchema = {
   required: ['questionId', 'answer'],
   properties: {
     questionId: { type: 'string', pattern: CONTENT_ID_PATTERN },
+    /** One branch per kind, as `QuizAttemptRequest` has it, so an answer missing its field is a 400. */
     answer: {
       type: 'object',
-      additionalProperties: false,
       required: ['kind'],
-      properties: {
-        kind: { type: 'string', enum: ['choice', 'number', 'action'] },
-        index: { type: 'integer', minimum: 0, maximum: 9 },
-        value: { type: 'number', minimum: -1e9, maximum: 1e9 },
-        action: { type: 'string', enum: ['fold', 'check', 'call', 'bet', 'raise'] },
-      },
+      discriminator: { propertyName: 'kind' },
+      oneOf: [
+        {
+          type: 'object',
+          additionalProperties: false,
+          required: ['kind', 'index'],
+          properties: { kind: { const: 'choice' }, index: { type: 'integer', minimum: 0, maximum: 9 } },
+        },
+        {
+          type: 'object',
+          additionalProperties: false,
+          required: ['kind', 'value'],
+          properties: { kind: { const: 'number' }, value: { type: 'number', minimum: -1e9, maximum: 1e9 } },
+        },
+        {
+          type: 'object',
+          additionalProperties: false,
+          required: ['kind', 'action'],
+          properties: {
+            kind: { const: 'action' },
+            action: { type: 'string', enum: ['fold', 'check', 'call', 'bet', 'raise'] },
+          },
+        },
+      ],
     },
   },
 } as const;
@@ -187,11 +205,12 @@ export const createRoomBodySchema = {
   additionalProperties: false,
   required: ['name', 'maxSeats', 'smallBlind', 'bigBlind', 'startingStack'],
   properties: {
+    /** At least 2, because `rooms_name_shape` refuses one, after a practice table has been retired. */
     name: {
       type: 'string',
-      minLength: 1,
+      minLength: 2,
       maxLength: 40,
-      pattern: "^[A-Za-z0-9][A-Za-z0-9 '._-]{0,38}[A-Za-z0-9]$|^[A-Za-z0-9]$",
+      pattern: "^[A-Za-z0-9][A-Za-z0-9 '._-]{0,38}[A-Za-z0-9]$",
     },
     maxSeats: { type: 'integer', minimum: 2, maximum: 6 },
     smallBlind: { type: 'integer', minimum: 1, maximum: 10_000 },

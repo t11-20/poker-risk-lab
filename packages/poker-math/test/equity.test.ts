@@ -207,3 +207,41 @@ test('a budget that cannot bound the count is refused before any counting', () =
     assert.throws(() => equity(three, { maxExactWork, samples: 2_000 }), EquityError, String(maxExactWork));
   }
 });
+
+test('equity refuses a spec it cannot price, and says which part', () => {
+  const board = parseCards('Ah Kd 7c');
+  const hero = { label: 'you', range: exactRange(parseCards('Qs Qh')) };
+  const villain = { label: 'the opponent', range: parseRange('JJ+', [...board, ...parseCards('Qs Qh')]) };
+  const refusals: readonly [string, EquitySpec, RegExp][] = [
+    ['one player', { players: [hero], board }, /at least 2 players, received 1/u],
+    [
+      'seven players',
+      { players: Array.from({ length: 7 }, () => hero), board },
+      /at most 6 players, received 7/u,
+    ],
+    [
+      'a two-card board',
+      { players: [hero, villain], board: parseCards('Ah Kd') },
+      /0, 3, 4 or 5 cards, received 2/u,
+    ],
+    [
+      'a dead card on the board',
+      { players: [hero, villain], board, deadCards: parseCards('7c') },
+      /board and dead cards contain a duplicate/u,
+    ],
+    [
+      'a range the board empties',
+      { players: [hero, { label: 'the opponent', range: { ...villain.range, combos: [] } }], board },
+      /"the opponent" has no possible hands/u,
+    ],
+    ['a contest naming hero', { players: [hero, villain], board, contests: [[0]] }, /index 1 to 1/u],
+    ['a contest past the last player', { players: [hero, villain], board, contests: [[2]] }, /index 1 to 1/u],
+  ];
+  for (const [what, spec, message] of refusals) {
+    assert.throws(
+      () => equity(spec),
+      (error: unknown) => error instanceof EquityError && message.test(error.message),
+      what,
+    );
+  }
+});

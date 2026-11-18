@@ -48,6 +48,20 @@ const STARTED_AT_KEY_LENGTH = 27;
 /** `null` is a real value. */
 const SORT_VALUE_PATTERN = /^(?:null|-?\d{1,15})$/;
 
+/** The keyset binds the value `::int`, and Postgres answers 22003 outside this range. */
+const INT32_MIN = -(2 ** 31);
+const INT32_MAX = 2 ** 31 - 1;
+
+/**
+ * A key that does not survive a Date round trip, or Postgres's year 1 floor, is one no row produced, and
+ * the database would refuse it with a 500.
+ */
+function isRealInstant(key: string): boolean {
+  const instant = new Date(key);
+  if (Number.isNaN(instant.getTime()) || instant.getUTCFullYear() < 1) return false;
+  return instant.toISOString() === `${key.slice(0, 23)}Z`;
+}
+
 export interface HandCursor {
   readonly handId: string;
   readonly startedAtKey: string;
@@ -86,6 +100,7 @@ export function decodeCursor(raw: string): HandCursor {
   if (!ID_PATTERN.test(handId) || !STARTED_AT_KEY_PATTERN.test(startedAtKey)) {
     rejectCursor('id or timestamp did not parse');
   }
+  if (!isRealInstant(startedAtKey)) rejectCursor('timestamp is not a real instant');
 
   const suffix = rest.slice(STARTED_AT_KEY_LENGTH);
   if (suffix === '') return { handId, startedAtKey };
@@ -98,7 +113,9 @@ export function decodeCursor(raw: string): HandCursor {
   const sort = HAND_SORTS.find((candidate) => candidate === sortName);
   if (sort === undefined) rejectCursor(`unknown ordering "${sortName}"`);
   if (!SORT_VALUE_PATTERN.test(sortValue)) rejectCursor('sort value is not a number or null');
-  return { handId, startedAtKey, sort, sortValue: sortValue === 'null' ? null : Number(sortValue) };
+  const value = sortValue === 'null' ? null : Number(sortValue);
+  if (value !== null && (value < INT32_MIN || value > INT32_MAX)) rejectCursor('sort value is outside int');
+  return { handId, startedAtKey, sort, sortValue: value };
 }
 
 /** Columns listed, never `select *`. `hole_cards` is never projected, so a list cannot leak one. */
@@ -131,6 +148,8 @@ interface HandListQuery {
  * The tiebreak `started_at, id` follows the leading direction because a keyset row comparison applies
  * one direction to the whole tuple. `nulls last` keeps unsettled hands from sorting as zero.
  * `SqlFragment` goes through `ReturnType` because the driver's fragment type is internal.
+ * The key is bound `::text::timestamptz`: as a timestamptz parameter the driver passes it through a
+ * JS Date, which drops the microseconds the cursor exists to carry.
  */
 type SqlFragment = ReturnType<Db>;
 
@@ -147,13 +166,15 @@ const HAND_ORDERINGS: Readonly<Record<HandSort, HandOrdering>> = {
     keyed: false,
     keyOf: () => null,
     orderBy: (sql) => sql`order by h.started_at desc, h.id desc`,
-    after: (sql, c) => sql`and (h.started_at, h.id) < (${c.startedAtKey}::timestamptz, ${c.handId}::text)`,
+    after: (sql, c) =>
+      sql`and (h.started_at, h.id) < (${c.startedAtKey}::text::timestamptz, ${c.handId}::text)`,
   },
   oldest: {
     keyed: false,
     keyOf: () => null,
     orderBy: (sql) => sql`order by h.started_at asc, h.id asc`,
-    after: (sql, c) => sql`and (h.started_at, h.id) > (${c.startedAtKey}::timestamptz, ${c.handId}::text)`,
+    after: (sql, c) =>
+      sql`and (h.started_at, h.id) > (${c.startedAtKey}::text::timestamptz, ${c.handId}::text)`,
   },
   'net-high': {
     keyed: true,
@@ -162,10 +183,10 @@ const HAND_ORDERINGS: Readonly<Record<HandSort, HandOrdering>> = {
     after: (sql, c) =>
       c.sortValue === null || c.sortValue === undefined
         ? sql`and s.net_result is null
-              and (h.started_at, h.id) < (${c.startedAtKey}::timestamptz, ${c.handId}::text)`
+              and (h.started_at, h.id) < (${c.startedAtKey}::text::timestamptz, ${c.handId}::text)`
         : sql`and (s.net_result is null
                    or (s.net_result, h.started_at, h.id)
-                      < (${c.sortValue}::int, ${c.startedAtKey}::timestamptz, ${c.handId}::text))`,
+                      < (${c.sortValue}::int, ${c.startedAtKey}::text::timestamptz, ${c.handId}::text))`,
   },
   'net-low': {
     keyed: true,
@@ -174,10 +195,10 @@ const HAND_ORDERINGS: Readonly<Record<HandSort, HandOrdering>> = {
     after: (sql, c) =>
       c.sortValue === null || c.sortValue === undefined
         ? sql`and s.net_result is null
-              and (h.started_at, h.id) > (${c.startedAtKey}::timestamptz, ${c.handId}::text)`
+              and (h.started_at, h.id) > (${c.startedAtKey}::text::timestamptz, ${c.handId}::text)`
         : sql`and (s.net_result is null
                    or (s.net_result, h.started_at, h.id)
-                      > (${c.sortValue}::int, ${c.startedAtKey}::timestamptz, ${c.handId}::text))`,
+                      > (${c.sortValue}::int, ${c.startedAtKey}::text::timestamptz, ${c.handId}::text))`,
   },
   'pot-high': {
     keyed: true,
@@ -186,10 +207,10 @@ const HAND_ORDERINGS: Readonly<Record<HandSort, HandOrdering>> = {
     after: (sql, c) =>
       c.sortValue === null || c.sortValue === undefined
         ? sql`and p.max_pot_after is null
-              and (h.started_at, h.id) < (${c.startedAtKey}::timestamptz, ${c.handId}::text)`
+              and (h.started_at, h.id) < (${c.startedAtKey}::text::timestamptz, ${c.handId}::text)`
         : sql`and (p.max_pot_after is null
                    or (p.max_pot_after, h.started_at, h.id)
-                      < (${c.sortValue}::int, ${c.startedAtKey}::timestamptz, ${c.handId}::text))`,
+                      < (${c.sortValue}::int, ${c.startedAtKey}::text::timestamptz, ${c.handId}::text))`,
   },
 };
 

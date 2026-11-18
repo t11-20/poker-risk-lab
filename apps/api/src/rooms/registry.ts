@@ -894,7 +894,7 @@ export class RoomRegistry {
   /**
    * Takes a seat: units checked, database first, then the live table.
    * `room_members_live_seat_key` arbitrates a race for one seat. If the live table refuses, the
-   * database seat is given back.
+   * database seat is set back to whatever the live table holds for this user, which may be none.
    * Both transports (`POST /rooms/:roomId/sit` and the socket `sit` frame) take a new seat here, so the
    * entitlement check lives here; `ensureOpen` re-seats under its own gate.
    * `require` stays first so a stranger cannot learn a room exists from `enrolment_required`. The
@@ -916,6 +916,10 @@ export class RoomRegistry {
       });
     }
 
+    // Before the write, which would otherwise move the row off the seat the live table holds.
+    if (room.table.seatOf(principal.userId) !== null) {
+      throw new AppError('already_seated', { logDetail: `already holds a seat at ${roomId}` });
+    }
     // Read before the awaits below, so a leave from another tab during them shows after the live sit.
     const liveMember = room.member(principal.userId);
     const memberId = await this.store.seatMember(roomId, principal.userId, seat);
@@ -927,7 +931,13 @@ export class RoomRegistry {
         stack: buyIn,
       });
     } catch (error) {
-      await this.store.unseatMember(roomId, principal.userId).catch(() => undefined);
+      // A racing sit may have won the live seat, and a restart re-seats whatever the row names.
+      const liveSeat = room.table.seatOf(principal.userId);
+      const restore =
+        liveSeat === null
+          ? this.store.unseatMember(roomId, principal.userId)
+          : this.store.seatMember(roomId, principal.userId, liveSeat);
+      await restore.catch(() => undefined);
       throw error;
     }
     // A leave from another tab during the live sit already wrote `left_at`, and `addMember` would

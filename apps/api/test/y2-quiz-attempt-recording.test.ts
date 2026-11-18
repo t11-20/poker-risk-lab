@@ -237,4 +237,48 @@ describe('the same answer from a caller with a session', () => {
       }
     },
   );
+
+  it('refuses an answer without the field its kind needs, and records nothing', databaseTest, async () => {
+    database();
+    const sql = getSql();
+    const userId = newUserId();
+    await sql`insert into prl.users (id, kind, display_name) values (${userId}, 'guest', 'Test Learner')`;
+    const app = await contentApp({ userId });
+    try {
+      const answers: Record<string, string> = {};
+      for (const [kind, questionKind] of [
+        ['choice', 'multipleChoice'],
+        ['number', 'numeric'],
+        ['action', 'decision'],
+      ] as const) {
+        const { quizId, question } = firstQuestion(questionKind);
+        const response = await attempt(
+          app,
+          quizId,
+          { questionId: question.id, answer: { kind } },
+          await csrfPair(app),
+        );
+        const error = response.body['error'] as { readonly code?: string } | undefined;
+        answers[kind] = `${response.status} ${error?.code ?? 'graded'}`;
+      }
+      const rows = await sql<{ n: number }[]>`
+        select count(*)::int as n from prl.quiz_attempts where user_id = ${userId}
+      `;
+      assert.deepEqual(
+        { answers, recorded: rows[0]?.n },
+        {
+          answers: {
+            choice: '400 invalid_request',
+            number: '400 invalid_request',
+            action: '400 invalid_request',
+          },
+          recorded: 0,
+        },
+      );
+    } finally {
+      await app.close();
+      await sql`delete from prl.quiz_attempts where user_id = ${userId}`.catch(() => undefined);
+      await sql`delete from prl.users where id = ${userId}`.catch(() => undefined);
+    }
+  });
 });

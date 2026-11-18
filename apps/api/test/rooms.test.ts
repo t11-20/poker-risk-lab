@@ -271,6 +271,24 @@ async function csrfPair(app: FastifyInstance): Promise<{ token: string; cookie: 
   return { token: String(payload.token), cookie: cookie.value };
 }
 
+async function postAs(
+  test: Harness,
+  who: { readonly cookies: Record<string, string> },
+  url: string,
+  payload: Record<string, unknown>,
+): Promise<{ readonly status: number; readonly code: string | undefined; readonly body: unknown }> {
+  const { token, cookie } = await csrfPair(test.app);
+  const response = await test.app.inject({
+    method: 'POST',
+    url,
+    payload,
+    cookies: { ...who.cookies, prl_csrf: cookie },
+    headers: { 'x-csrf-token': token, origin: ALLOWED_ORIGIN },
+  });
+  const body: unknown = response.json();
+  return { status: response.statusCode, code: (body as { error?: { code?: string } }).error?.code, body };
+}
+
 describe('turn timers', () => {
   it('fires at an absolute deadline and not before', () => {
     const clock = createManualClock();
@@ -694,6 +712,22 @@ describe('POST /rooms', () => {
     }
     await test.app.close();
   });
+
+  it('refuses more bots than chairs before it makes the room or any bot', async () => {
+    const test = await harness();
+    const owner = caller(test, { id: 'usr_owner' });
+    const crowded = { name: 'Bots', maxSeats: 3, smallBlind: 5, bigBlind: 10, startingStack: 1_000 };
+    const refused = await postAs(test, owner, '/api/v1/rooms', {
+      ...crowded,
+      bots: [{ profile: 'nit', count: 5 }],
+    });
+    assert.deepEqual([refused.status, refused.code], [409, 'room_full']);
+    const listed = await test.app.inject({ method: 'GET', url: '/api/v1/rooms', cookies: owner.cookies });
+    assert.deepEqual((listed.json() as { rooms: unknown[] }).rooms, [], 'the refused room is not listed');
+    assert.equal(test.store.rows.size, 0, 'no room row');
+    assert.equal(test.store.members.size, 0, 'no member, bot or owner');
+    await test.app.close();
+  });
 });
 
 describe('joining and sitting', () => {
@@ -814,6 +848,62 @@ describe('joining and sitting', () => {
 
     await test.app.close();
   });
+
+  /** A durable seat the live table does not match is dropped, or invented, by the next restart. */
+  async function emptyRoom(test: Harness): Promise<string> {
+    const owner = caller(test, { id: 'usr_owner' });
+    const room = { name: 'Twice', maxSeats: 3, smallBlind: 5, bigBlind: 10, startingStack: 1_000 };
+    const created = await postAs(test, owner, '/api/v1/rooms', room);
+    return (created.body as { room: { id: string } }).room.id;
+  }
+
+  function seatsOf(test: Harness, roomId: string): { live: number | null; durable: number | null } {
+    const live = test.registry.get(roomId)?.table.seatOf('usr_owner') ?? null;
+    return { live, durable: test.store.members.get(`${roomId}:usr_owner`)?.seat ?? null };
+  }
+
+  it('refuses a sit from somebody already seated, and leaves their seat where it was', async () => {
+    const test = await harness();
+    const roomId = await emptyRoom(test);
+    const owner = caller(test, { id: 'usr_owner' });
+    assert.equal((await postAs(test, owner, `/api/v1/rooms/${roomId}/sit`, { seat: 0 })).status, 200);
+    const writes: number[] = [];
+    const seatMember = test.store.seatMember;
+    (test.store as { seatMember: typeof seatMember }).seatMember = (room, userId, seat) => {
+      writes.push(seat);
+      return seatMember(room, userId, seat);
+    };
+    for (const seat of [0, 1]) {
+      const again = await postAs(test, owner, `/api/v1/rooms/${roomId}/sit`, { seat });
+      assert.deepEqual([again.status, again.code], [409, 'already_seated'], `sit again at ${seat}`);
+      assert.deepEqual(seatsOf(test, roomId), { live: 0, durable: 0 }, `after sitting again at ${seat}`);
+    }
+    assert.deepEqual(writes, [], 'refused before the row was touched');
+    await test.app.close();
+  });
+
+  for (const seats of [
+    [0, 0],
+    [1, 2],
+  ] as const) {
+    it(`keeps the durable seat on the live one when two sits race, at seats ${seats.join(' and ')}`, async () => {
+      const test = await harness();
+      const roomId = await emptyRoom(test);
+      // Called directly, so both pass the already-seated check before either reaches the live table.
+      const principal = { userId: 'usr_owner', displayName: 'Player usr_owner' };
+      const answers = await Promise.allSettled(
+        seats.map((seat) => test.registry.sitAtTable(roomId, principal, seat)),
+      );
+      const outcomes = answers.map((answer) =>
+        answer.status === 'fulfilled' ? 'sat' : isAppError(answer.reason) ? answer.reason.code : 'threw',
+      );
+      assert.deepEqual(outcomes.sort(), ['already_seated', 'sat']);
+      const { live, durable } = seatsOf(test, roomId);
+      assert.ok(live !== null, 'one of the two sits took a seat');
+      assert.equal(durable, live, 'the row names the seat the live table holds');
+      await test.app.close();
+    });
+  }
 });
 
 describe('the Legends endpoints', () => {
@@ -1060,6 +1150,82 @@ describe('the Legends endpoints', () => {
     };
     assert.equal(body.analysis.stackContext.effectiveStack, 0);
     assert.match(body.analysis.stackContext.explanation, /^Every opponent is already all in/);
+    await test.app.close();
+  });
+});
+
+/** The cross-column checks of `prl.rooms` in 0001_initial.sql, which `sql.ts` maps to invalid_request. */
+function enforceRoomChecks(test: Harness): void {
+  const create = test.store.create;
+  (test.store as { create: typeof create }).create = (spec) => {
+    const playable =
+      spec.bigBlind > spec.smallBlind &&
+      (spec.ante ?? 0) <= spec.bigBlind &&
+      spec.startingStack >= spec.bigBlind * 2;
+    return playable ? create(spec) : Promise.reject(new AppError('invalid_request', {}));
+  };
+}
+
+const UNPLAYABLE_STAKES: readonly Record<string, number>[] = [
+  { smallBlind: 10, bigBlind: 10, startingStack: 1_000 },
+  { smallBlind: 5, bigBlind: 10, ante: 11, startingStack: 1_000 },
+  { smallBlind: 5, bigBlind: 10, startingStack: 19 },
+];
+
+describe('a practice table request the database would refuse', () => {
+  const stakes = { smallBlind: 5, bigBlind: 10, startingStack: 1_000 };
+  const legends = { profileIds: [PROFILES[0]?.naming.id], difficulty: 'realistic' };
+  const botTable = { name: 'Bots', maxSeats: 3, bots: [{ profile: 'nit', count: 2 }] };
+
+  for (const [route, body] of [
+    ['/api/v1/legends/matches', legends],
+    ['/api/v1/rooms', botTable],
+  ] as const) {
+    it(`leaves the open practice table alone when ${route} is refused`, async () => {
+      const test = await harness();
+      enforceRoomChecks(test);
+      const owner = caller(test, { id: 'usr_owner' });
+      const first = await postAs(test, owner, route, { ...body, ...stakes });
+      assert.equal(first.status, 201, JSON.stringify(first.body));
+      const firstId = [...test.store.rows.keys()].at(-1) ?? '';
+      for (const unplayable of UNPLAYABLE_STAKES) {
+        const refused = await postAs(test, owner, route, { ...body, ...unplayable });
+        assert.deepEqual(
+          [refused.status, refused.code],
+          [400, 'invalid_request'],
+          JSON.stringify(unplayable),
+        );
+        assert.equal(
+          test.store.rows.get(firstId)?.status,
+          'open',
+          `durable, after ${JSON.stringify(unplayable)}`,
+        );
+        assert.equal(test.registry.get(firstId)?.record.closed, false, 'and live');
+      }
+      assert.equal(test.store.rows.size, 1, 'no second room was made');
+      await test.app.close();
+    });
+  }
+});
+
+describe('a room name the database would refuse', () => {
+  it('is refused by the schema, before the open practice table is retired', async () => {
+    const test = await harness();
+    const owner = caller(test, { id: 'usr_owner' });
+    const table = {
+      maxSeats: 3,
+      bots: [{ profile: 'nit', count: 2 }],
+      smallBlind: 5,
+      bigBlind: 10,
+      startingStack: 1_000,
+    };
+    const first = await postAs(test, owner, '/api/v1/rooms', { ...table, name: 'Bots' });
+    assert.equal(first.status, 201, JSON.stringify(first.body));
+    const firstId = [...test.store.rows.keys()].at(-1) ?? '';
+    // `rooms_name_shape` needs 2 to 48 characters.
+    const refused = await postAs(test, owner, '/api/v1/rooms', { ...table, name: 'B' });
+    assert.deepEqual([refused.status, refused.code], [400, 'invalid_request']);
+    assert.equal(test.store.rows.get(firstId)?.status, 'open');
     await test.app.close();
   });
 });
