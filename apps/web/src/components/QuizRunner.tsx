@@ -44,6 +44,7 @@ import {
 import {
   attemptBodyFor,
   gradedAnswer,
+  isLatestPosted,
   type QuizAnswer,
   type QuizVerdict,
   resolvedVerdict,
@@ -534,10 +535,11 @@ export function QuizRunner(props: QuizRunnerProps): ReactElement {
     submissions.current ??= new AbortController();
     const signal = submissions.current.signal;
     const questionId = question.id;
+    const answerSent = currentAnswer;
     setVerdicts((current) => new Map(current).set(questionId, { state: 'pending' }));
     void (async () => {
       const verdict = await submitQuizAttempt(quiz.id, body, signal);
-      if (signal.aborted) return;
+      if (signal.aborted || !isLatestPosted(posted.current, questionId, answerSent)) return;
       setVerdicts((current) => new Map(current).set(questionId, verdict));
     })();
   }, [quiz.id, question, currentAnswer]);

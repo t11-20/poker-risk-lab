@@ -97,6 +97,14 @@ export async function submitQuizAttempt(
   return verdictFor(attempt.data);
 }
 
+/**
+ * Responses can arrive out of order, so a verdict is kept only while the answer it graded is still the
+ * latest posted for its question. Identity, as `QuizRunner` posts by identity.
+ */
+export function isLatestPosted<K, A>(posted: ReadonlyMap<K, A>, questionId: K, sent: A): boolean {
+  return posted.get(questionId) === sent;
+}
+
 /** One function, so the precedence (server first, then the local comparison) cannot be inverted. */
 export function resolvedVerdict(
   verdict: QuizVerdict,
