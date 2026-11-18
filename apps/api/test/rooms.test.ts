@@ -1143,6 +1143,60 @@ describe('the Legends endpoints', () => {
  * recovered. Without that, somebody pays a second consecutive big blind and the history shows
  * null rows.
  */
+/** The cross-column checks of `prl.rooms` in 0001_initial.sql, which `sql.ts` maps to invalid_request. */
+function enforceRoomChecks(test: Harness): void {
+  const create = test.store.create;
+  (test.store as { create: typeof create }).create = (spec) => {
+    const playable =
+      spec.bigBlind > spec.smallBlind &&
+      (spec.ante ?? 0) <= spec.bigBlind &&
+      spec.startingStack >= spec.bigBlind * 2;
+    return playable ? create(spec) : Promise.reject(new AppError('invalid_request', {}));
+  };
+}
+
+const UNPLAYABLE_STAKES: readonly Record<string, number>[] = [
+  { smallBlind: 10, bigBlind: 10, startingStack: 1_000 },
+  { smallBlind: 5, bigBlind: 10, ante: 11, startingStack: 1_000 },
+  { smallBlind: 5, bigBlind: 10, startingStack: 19 },
+];
+
+describe('a practice table request the database would refuse', () => {
+  const stakes = { smallBlind: 5, bigBlind: 10, startingStack: 1_000 };
+  const legends = { profileIds: [PROFILES[0]?.naming.id], difficulty: 'realistic' };
+  const botTable = { name: 'Bots', maxSeats: 3, bots: [{ profile: 'nit', count: 2 }] };
+
+  for (const [route, body] of [
+    ['/api/v1/legends/matches', legends],
+    ['/api/v1/rooms', botTable],
+  ] as const) {
+    it(`leaves the open practice table alone when ${route} is refused`, async () => {
+      const test = await harness();
+      enforceRoomChecks(test);
+      const owner = caller(test, { id: 'usr_owner' });
+      const first = await postAs(test, owner, route, { ...body, ...stakes });
+      assert.equal(first.status, 201, JSON.stringify(first.body));
+      const firstId = [...test.store.rows.keys()].at(-1) ?? '';
+      for (const unplayable of UNPLAYABLE_STAKES) {
+        const refused = await postAs(test, owner, route, { ...body, ...unplayable });
+        assert.deepEqual(
+          [refused.status, refused.code],
+          [400, 'invalid_request'],
+          JSON.stringify(unplayable),
+        );
+        assert.equal(
+          test.store.rows.get(firstId)?.status,
+          'open',
+          `durable, after ${JSON.stringify(unplayable)}`,
+        );
+        assert.equal(test.registry.get(firstId)?.record.closed, false, 'and live');
+      }
+      assert.equal(test.store.rows.size, 1, 'no second room was made');
+      await test.app.close();
+    });
+  }
+});
+
 describe('a room re-opened after a restart', () => {
   const RESTART_CONFIG = { smallBlind: 5, bigBlind: 10, ante: 0, maxSeats: 6, actionTimeoutSeconds: 30 };
 
