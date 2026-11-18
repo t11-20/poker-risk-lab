@@ -18,6 +18,7 @@ import {
   createDeterministicRandomForTests,
   type HandState,
   type PlayerView,
+  parseCards,
   redactFor,
   type SeatIndex,
   startHand,
@@ -392,6 +393,38 @@ test('a caller-supplied label and a private card are both banned from prose', ()
     assertModelVoice('This model prefers a bet, as the price is short.', 'test', {
       privateCards: [card],
     }),
+  );
+});
+
+test('a private card is caught when it is joined to another card, and a label in any case', () => {
+  const privateCards = parseCards('As Kd Th');
+  for (const text of [
+    'This model prefers a raise holding AsKd.',
+    'This model prefers a raise holding QcAs.',
+    'This model prefers a raise holding As Kd.',
+    'This model prefers a raise with As-Kd.',
+    'This model prefers a raise on 9As.',
+    'This model prefers a raise on 2c3cTh.',
+  ]) {
+    assert.throws(
+      () => assertModelVoice(text, 'test', { privateCards }),
+      /a card only the acting seat can see/,
+      text,
+    );
+  }
+  for (const text of [
+    'This model prefers a bet, as the price is short.',
+    'The board is QcJc, and this model prefers a bet. Thus it bets.',
+    'This model prefers a bet on AsKdx.',
+  ]) {
+    assert.doesNotThrow(() => assertModelVoice(text, 'test', { privateCards }), text);
+  }
+  assert.throws(
+    () =>
+      assertModelVoice('The seat plate reads passive calling station.', 'test', {
+        labels: ['Passive Calling Station'],
+      }),
+    /repeats the identity label/,
   );
 });
 
