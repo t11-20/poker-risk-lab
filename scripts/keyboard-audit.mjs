@@ -1165,10 +1165,16 @@ async function auditCoachPeekOcclusion(page) {
                 }))
                 .filter((c) => !c.element.contains(c.hit))
                 .map(({ name, top, bottom, hit }) => ({ name, top, bottom, hit: hit?.getAttribute('class') || hit?.tagName }));
+              const note = document.querySelector('.prl-play__coach[data-open="false"] .prl-play__handle-note');
+              const nb = note?.getBoundingClientRect();
+              const noteCut =
+                nb !== undefined && getComputedStyle(note).visibility !== 'hidden' &&
+                nb.top < innerHeight && nb.bottom > innerHeight;
               return {
                 state: document.querySelector('.prl-play__stage')?.dataset.state ?? null,
                 names: controls.map(({ element }) => (element.textContent ?? '').trim()),
                 handleHit,
+                noteCut,
                 covered,
               };
             })()`,
@@ -1188,6 +1194,10 @@ async function auditCoachPeekOcclusion(page) {
         }
         if (state === 'ready' && !top.handleHit) {
           bad(label, 'the Coach peek is missing or covered while the table has a decision to price');
+          continue;
+        }
+        if (top.noteCut) {
+          bad(label, 'the closed sheet shows a cut-off sliver of its caveat line at the viewport edge');
           continue;
         }
         const covered = [...top.covered, ...end.covered];
