@@ -206,6 +206,11 @@ export function createRoomRoutes(options: RoomRoutesOptions = {}): FastifyPlugin
         const principal = principalOf(request);
         const body = request.body;
         refuseUnplayableStakes(body);
+        const bots = (body.bots ?? []).reduce((total, entry) => total + entry.count, 0);
+        // Before the room exists: refused after it, the room and the bots seated so far stay listed.
+        if (bots > body.maxSeats - 1) {
+          throw new AppError('room_full', { logDetail: `${bots} bots asked for ${body.maxSeats} seats` });
+        }
         const build = async (): Promise<{ readonly room: LiveRoom; readonly inviteCode: string }> => {
           const made = await registry.createRoom(principal, {
             name: body.name,
@@ -223,7 +228,6 @@ export function createRoomRoutes(options: RoomRoutesOptions = {}): FastifyPlugin
         };
         // Bots in every chair but the owner's make a practice table, and a learner holds one at a
         // time (`RoomRegistry.retirePracticeTables`). A table with a free chair is never retired here.
-        const bots = (body.bots ?? []).reduce((total, entry) => total + entry.count, 0);
         const created =
           bots > 0 && bots + 1 === body.maxSeats
             ? await registry.replacePracticeTable(principal.userId, build)

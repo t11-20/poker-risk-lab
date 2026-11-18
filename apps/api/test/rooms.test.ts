@@ -712,6 +712,22 @@ describe('POST /rooms', () => {
     }
     await test.app.close();
   });
+
+  it('refuses more bots than chairs before it makes the room or any bot', async () => {
+    const test = await harness();
+    const owner = caller(test, { id: 'usr_owner' });
+    const crowded = { name: 'Bots', maxSeats: 3, smallBlind: 5, bigBlind: 10, startingStack: 1_000 };
+    const refused = await postAs(test, owner, '/api/v1/rooms', {
+      ...crowded,
+      bots: [{ profile: 'nit', count: 5 }],
+    });
+    assert.deepEqual([refused.status, refused.code], [409, 'room_full']);
+    const listed = await test.app.inject({ method: 'GET', url: '/api/v1/rooms', cookies: owner.cookies });
+    assert.deepEqual((listed.json() as { rooms: unknown[] }).rooms, [], 'the refused room is not listed');
+    assert.equal(test.store.rows.size, 0, 'no room row');
+    assert.equal(test.store.members.size, 0, 'no member, bot or owner');
+    await test.app.close();
+  });
 });
 
 describe('joining and sitting', () => {
