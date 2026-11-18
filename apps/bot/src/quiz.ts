@@ -9,6 +9,7 @@ import { quizById, quizzes } from '@prl/content';
 import { type Quiz, type QuizQuestion, type Topic, withinTolerance } from '@prl/contracts';
 import { cardNotationText } from './cards.ts';
 import {
+  answerText,
   DECISION_ACTIONS,
   type DecisionAction,
   type DecisionQuestion,
@@ -318,7 +319,7 @@ function choiceLines(question: Extract<QuizQuestion, { kind: 'multipleChoice' }>
 
 function numericLines(question: NumericQuestion, answer: number): string[] {
   const expected = expectedAnswer(question);
-  const yours = figureText(answer, expected.unit);
+  const yours = answerText(answer, expected.unit);
   const theirs = figureText(expected.value, expected.unit);
   const tolerance = toleranceText(expected.tolerance, expected.unit);
   // The computed figure is named as such, so "outside the tolerance of 53.4%" cannot read as a 53.4% band.

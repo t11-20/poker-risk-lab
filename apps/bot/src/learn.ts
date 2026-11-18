@@ -445,6 +445,13 @@ export function toleranceText(tolerance: number, unit: QuizUnit): string {
   return figureText(tolerance, unit, toleranceDecimals(tolerance, UNIT_DECIMALS[unit]));
 }
 
+/** At least the unit's decimals, and every decimal typed: a rounded echo can read as the other verdict. */
+export function answerText(answer: number, unit: QuizUnit): string {
+  let decimals = UNIT_DECIMALS[unit];
+  while (decimals < 20 && Number(answer.toFixed(decimals)) !== answer) decimals += 1;
+  return figureText(answer, unit, decimals);
+}
+
 /**
  * Null unless the text is plainly one number, with an optional trailing unit (`33.3%`, `2.5 to 1`).
  * "about 30, maybe 35" is not an answer of 30.

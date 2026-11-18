@@ -232,6 +232,34 @@ describe('numeric tolerance', () => {
     }
   });
 
+  test('the answer is echoed as typed, so the echo always gets the verdict the answer got', () => {
+    const deps = testDeps(2);
+    const echoOf = (reply: string): string => /^You answered (.+)\.$/m.exec(reply)?.[1] ?? '';
+    const pot = askedFor(numericQuestions().find((q) => q.id === 'pot-odds-q2') ?? assert.fail(), deps);
+    const outs = askedFor(numericQuestions().find((q) => q.id === 'counting-outs-q4') ?? assert.fail(), deps);
+    assert.equal(echoOf(message(text(pot.session, '34.84', deps)).text), '34.84%');
+    assert.equal(echoOf(message(text(outs.session, '9.5', deps)).text), '9.5 cards');
+    assert.equal(echoOf(message(text(outs.session, '9', deps)).text), '9 cards');
+
+    let swept = 0;
+    for (const question of numericQuestions()) {
+      const expected = expectedAnswer(question);
+      const asked = askedFor(question, deps);
+      for (let step = -30; step <= 30; step += 1) {
+        for (const decimals of [1, 2, 3]) {
+          const typed = (expected.value + expected.tolerance + step * 10 ** -decimals).toFixed(decimals);
+          const reply = message(text(asked.session, typed, deps)).text;
+          const accepted = /is close enough to the computed/.test(reply);
+          const echoed = parseNumber(echoOf(reply));
+          assert.ok(echoed !== null, `${question.id}: ${typed} echoed as ${echoOf(reply)}`);
+          assert.equal(withinTolerance(echoed, expected), accepted, `${question.id}: ${typed}`);
+          swept += 1;
+        }
+      }
+    }
+    assert.ok(swept > 1_000, `${swept} answers swept`);
+  });
+
   test('a refused answer names the tolerance and the computed figure apart, so neither reads as the other', () => {
     const deps = testDeps(2);
     const question = numericQuestions()[0];
