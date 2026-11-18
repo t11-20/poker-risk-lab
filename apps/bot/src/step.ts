@@ -217,7 +217,11 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
   quiz: { description: 'Practise a quiz (never scored)', run: onQuizzes },
   define: {
     description: 'Look a term up, e.g. /define pot odds',
-    run: (session, args) => ({ session, out: [args === '' ? glossaryHelp() : defineMessage(args)] }),
+    // Text with no letter or digit could only be quoted back as "".
+    run: (session, args) => ({
+      session,
+      out: [normalise(args) === '' ? glossaryHelp() : defineMessage(args)],
+    }),
   },
   about: { description: 'What this bot is, and what units are', run: about },
 };
