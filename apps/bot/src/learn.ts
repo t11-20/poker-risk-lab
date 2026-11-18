@@ -459,7 +459,8 @@ export function answerText(answer: number, unit: QuizUnit): string {
 export function parseNumber(text: string): number | null {
   const match =
     /^\s*([+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|[+-]?\.\d+)\s*(?:%|units?|to 1|:1|cards?|hands?|bb)?\s*$/i.exec(
-      text,
+      // The bot prints a negative figure with U+2212, so a reader copying it back types one.
+      text.replace(/[\u2212\u2013]/gu, '-'),
     );
   if (match === null) return null;
   const value = Number((match[1] ?? '').replace(/,/g, ''));

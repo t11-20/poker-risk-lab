@@ -336,6 +336,15 @@ describe('numeric tolerance', () => {
     }
   });
 
+  test('the minus sign the bot prints, and an en dash, are read as a minus', () => {
+    assert.equal(parseNumber('−16'), -16);
+    assert.equal(parseNumber('– 16.5 units'), null, 'a sign is joined to its number');
+    assert.equal(parseNumber('–16.5 units'), -16.5);
+    const deps = testDeps(2);
+    const asked = askedFor(numericQuestions().find((q) => q.id === 'ev-q2') ?? assert.fail(), deps);
+    assert.match(message(text(asked.session, '−16', deps)).text, /is close enough to the computed/);
+  });
+
   test('every decision spot computes, from the content, without sampling', () => {
     const decisions = quizzes().flatMap((quiz) =>
       quiz.questions.filter((question) => question.kind === 'decision'),
