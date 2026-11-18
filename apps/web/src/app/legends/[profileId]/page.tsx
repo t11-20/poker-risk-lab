@@ -25,6 +25,7 @@ import { Fragment, type ReactElement } from 'react';
 import { NotFoundBody } from '@/app/not-found.tsx';
 import { LegendSigil } from '@/components/LegendSigil.tsx';
 import { ProfileDisclaimers } from '@/components/ProfileDisclaimers.tsx';
+import { ScrollRegion } from '@/components/ScrollRegion.tsx';
 import { TraitBars } from '@/components/TraitBars.tsx';
 import { LEGEND_PROFILE_FIXTURES } from '@/fixtures/legends.ts';
 import {
@@ -175,7 +176,7 @@ function ObservedTable({
       <p className="prl-legend-observed__note">
         {`${note} Every FREQUENCY below carries the same sampling interval of ${halfWidth}, and several of the differences between profiles are narrower than that — which is the whole reason the interval is printed rather than implied. The average bet size is a mean of pot fractions rather than a frequency, so that interval does not describe it and is not printed against it.`}
       </p>
-      <div className="prl-legend-table-wrap">
+      <ScrollRegion className="prl-legend-table-wrap" label={caption}>
         <table className="prl-legend-table">
           <caption>{caption}</caption>
           <thead>
@@ -203,7 +204,7 @@ function ObservedTable({
             ))}
           </tbody>
         </table>
-      </div>
+      </ScrollRegion>
     </div>
   );
 }
