@@ -270,6 +270,49 @@ describe('requests', () => {
     assert.equal(calls[2]?.body['text'], TABLE_CLOSED);
     assert.equal(chats.sessions.has(42), false);
   });
+
+  test('a press whose answer is refused still delivers, in play and when the table closes', async () => {
+    const { api: recording, calls } = fakeApi();
+    const expired: TelegramApi = {
+      call: (method, body) => {
+        if (method !== 'answerCallbackQuery') return recording.call(method, body);
+        calls.push({ method, body });
+        return Promise.reject(new TelegramError(method, 400, 'Bad Request: query is too old', null));
+      },
+    };
+    const chats = newChats();
+    const deps = testDeps(4);
+    const logged: string[] = [];
+    await handleUpdate(text(1, '/start'), chats, recording, deps);
+    await handleUpdate(tap(2, dataFor(calls[0], /^Play a hand$/), 101), chats, recording, deps);
+    await handleUpdate(tap(3, dataFor(calls[2], /^Fold$|^Check$/), 102), chats, expired, deps, (line) =>
+      logged.push(line),
+    );
+    assert.deepEqual(
+      calls.slice(3).map((call) => call.method),
+      ['answerCallbackQuery', 'editMessageText'],
+    );
+    assert.match(logged.join('\n'), /answerCallbackQuery failed with 400/);
+
+    const broken = {
+      ...deps,
+      dealRandom: () => {
+        throw new Error('dealer exploded');
+      },
+    };
+    await handleUpdate(text(4, '/start'), chats, recording, deps);
+    const before = calls.length;
+    await assert.rejects(
+      handleUpdate(tap(5, dataFor(calls.at(-1), /^Play a hand$/), 106), chats, expired, broken),
+      /exploded/,
+    );
+    assert.deepEqual(
+      calls.slice(before).map((call) => call.method),
+      ['answerCallbackQuery', 'sendMessage'],
+    );
+    assert.equal(calls.at(-1)?.body['text'], TABLE_CLOSED);
+    assert.equal(chats.sessions.has(42), false);
+  });
 });
 
 describe('who the bot answers', () => {
@@ -339,5 +382,27 @@ describe('the poll loop', () => {
     assert.equal(exit.kind, 'stopped');
     assert.deepEqual(waits, [3_000, 5_000], 'retry_after honoured, then the default pause');
     assert.equal(calls.filter((call) => call.method === 'sendMessage').length, 1);
+  });
+
+  test('a refused callback answer reaches the log and the update is not failed', async () => {
+    const { api, calls } = fakeApi();
+    const logged: string[] = [];
+    let polls = 0;
+    await poll({
+      api: {
+        call: (method, body) => {
+          if (method === 'answerCallbackQuery') return Promise.reject(new Error('fetch failed'));
+          if (method !== 'getUpdates') return api.call(method, body);
+          polls += 1;
+          return Promise.resolve(polls === 1 ? [tap(9, 'p', 101)] : []);
+        },
+      },
+      deps: testDeps(1),
+      log: (line) => logged.push(line),
+      sleep: async () => undefined,
+      shouldStop: () => polls >= 2,
+    });
+    assert.equal(calls.filter((call) => call.method === 'sendMessage').length, 1, 'the table was sent');
+    assert.deepEqual(logged, ['answerCallbackQuery failed (fetch failed); delivering anyway']);
   });
 });
