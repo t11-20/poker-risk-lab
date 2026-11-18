@@ -271,6 +271,24 @@ async function csrfPair(app: FastifyInstance): Promise<{ token: string; cookie: 
   return { token: String(payload.token), cookie: cookie.value };
 }
 
+async function postAs(
+  test: Harness,
+  who: { readonly cookies: Record<string, string> },
+  url: string,
+  payload: Record<string, unknown>,
+): Promise<{ readonly status: number; readonly code: string | undefined; readonly body: unknown }> {
+  const { token, cookie } = await csrfPair(test.app);
+  const response = await test.app.inject({
+    method: 'POST',
+    url,
+    payload,
+    cookies: { ...who.cookies, prl_csrf: cookie },
+    headers: { 'x-csrf-token': token, origin: ALLOWED_ORIGIN },
+  });
+  const body: unknown = response.json();
+  return { status: response.statusCode, code: (body as { error?: { code?: string } }).error?.code, body };
+}
+
 describe('turn timers', () => {
   it('fires at an absolute deadline and not before', () => {
     const clock = createManualClock();
@@ -814,6 +832,62 @@ describe('joining and sitting', () => {
 
     await test.app.close();
   });
+
+  /** A durable seat the live table does not match is dropped, or invented, by the next restart. */
+  async function emptyRoom(test: Harness): Promise<string> {
+    const owner = caller(test, { id: 'usr_owner' });
+    const room = { name: 'Twice', maxSeats: 3, smallBlind: 5, bigBlind: 10, startingStack: 1_000 };
+    const created = await postAs(test, owner, '/api/v1/rooms', room);
+    return (created.body as { room: { id: string } }).room.id;
+  }
+
+  function seatsOf(test: Harness, roomId: string): { live: number | null; durable: number | null } {
+    const live = test.registry.get(roomId)?.table.seatOf('usr_owner') ?? null;
+    return { live, durable: test.store.members.get(`${roomId}:usr_owner`)?.seat ?? null };
+  }
+
+  it('refuses a sit from somebody already seated, and leaves their seat where it was', async () => {
+    const test = await harness();
+    const roomId = await emptyRoom(test);
+    const owner = caller(test, { id: 'usr_owner' });
+    assert.equal((await postAs(test, owner, `/api/v1/rooms/${roomId}/sit`, { seat: 0 })).status, 200);
+    const writes: number[] = [];
+    const seatMember = test.store.seatMember;
+    (test.store as { seatMember: typeof seatMember }).seatMember = (room, userId, seat) => {
+      writes.push(seat);
+      return seatMember(room, userId, seat);
+    };
+    for (const seat of [0, 1]) {
+      const again = await postAs(test, owner, `/api/v1/rooms/${roomId}/sit`, { seat });
+      assert.deepEqual([again.status, again.code], [409, 'already_seated'], `sit again at ${seat}`);
+      assert.deepEqual(seatsOf(test, roomId), { live: 0, durable: 0 }, `after sitting again at ${seat}`);
+    }
+    assert.deepEqual(writes, [], 'refused before the row was touched');
+    await test.app.close();
+  });
+
+  for (const seats of [
+    [0, 0],
+    [1, 2],
+  ] as const) {
+    it(`keeps the durable seat on the live one when two sits race, at seats ${seats.join(' and ')}`, async () => {
+      const test = await harness();
+      const roomId = await emptyRoom(test);
+      // Called directly, so both pass the already-seated check before either reaches the live table.
+      const principal = { userId: 'usr_owner', displayName: 'Player usr_owner' };
+      const answers = await Promise.allSettled(
+        seats.map((seat) => test.registry.sitAtTable(roomId, principal, seat)),
+      );
+      const outcomes = answers.map((answer) =>
+        answer.status === 'fulfilled' ? 'sat' : isAppError(answer.reason) ? answer.reason.code : 'threw',
+      );
+      assert.deepEqual(outcomes.sort(), ['already_seated', 'sat']);
+      const { live, durable } = seatsOf(test, roomId);
+      assert.ok(live !== null, 'one of the two sits took a seat');
+      assert.equal(durable, live, 'the row names the seat the live table holds');
+      await test.app.close();
+    });
+  }
 });
 
 describe('the Legends endpoints', () => {
