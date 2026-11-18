@@ -396,7 +396,7 @@ test('a caller-supplied label and a private card are both banned from prose', ()
   );
 });
 
-test('a private card is caught when it is joined to another card, and a label in any case', () => {
+test('a private card is caught when it is joined to another card', () => {
   const privateCards = parseCards('As Kd Th');
   for (const text of [
     'This model prefers a raise holding AsKd.',
@@ -419,12 +419,9 @@ test('a private card is caught when it is joined to another card, and a label in
   ]) {
     assert.doesNotThrow(() => assertModelVoice(text, 'test', { privateCards }), text);
   }
-  assert.throws(
-    () =>
-      assertModelVoice('The seat plate reads passive calling station.', 'test', {
-        labels: ['Passive Calling Station'],
-      }),
-    /repeats the identity label/,
+  // Labels stay case-sensitive: a guest called "Pot" must not make "the pot" a refusal.
+  assert.doesNotThrow(() =>
+    assertModelVoice('This model prefers a bet into the pot.', 'test', { labels: ['Pot'] }),
   );
 });
 

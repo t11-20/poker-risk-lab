@@ -173,7 +173,8 @@ export function assertModelVoice(text: string, where: string, context: VoiceCont
     if (trimmed === '') continue;
     // "you" names a role, and the templates are built from it.
     if (ROLE_WORDS.has(trimmed.toLowerCase())) continue;
-    if (text.toLowerCase().includes(trimmed.toLowerCase())) {
+    // Case-sensitive, because a label such as a guest's display name can be an ordinary word.
+    if (text.includes(trimmed)) {
       throw new CommentaryError(
         `${where}: text ${JSON.stringify(text.slice(0, 120))} repeats the identity label ` +
           `${JSON.stringify(trimmed)}. Refer to the actor by role — "you" or "this model" — and let the ` +
