@@ -445,11 +445,14 @@ export function toleranceText(tolerance: number, unit: QuizUnit): string {
   return figureText(tolerance, unit, toleranceDecimals(tolerance, UNIT_DECIMALS[unit]));
 }
 
-/** At least the unit's decimals, and every decimal typed: a rounded echo can read as the other verdict. */
-export function answerText(answer: number, unit: QuizUnit): string {
+/**
+ * At least the unit's decimals, and every decimal typed: a rounded echo can read as the other verdict.
+ * The computed figure is quoted to the same decimals, or the gap between the two reads wrong.
+ */
+export function answerDecimals(answer: number, unit: QuizUnit): number {
   let decimals = UNIT_DECIMALS[unit];
   while (decimals < 20 && Number(answer.toFixed(decimals)) !== answer) decimals += 1;
-  return figureText(answer, unit, decimals);
+  return decimals;
 }
 
 /**

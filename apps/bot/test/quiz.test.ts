@@ -260,6 +260,14 @@ describe('numeric tolerance', () => {
     assert.ok(swept > 1_000, `${swept} answers swept`);
   });
 
+  test('the computed figure is quoted to the same decimals as the answer, so the gap reads true', () => {
+    const deps = testDeps(2);
+    const pot = askedFor(numericQuestions().find((q) => q.id === 'pot-odds-q2') ?? assert.fail(), deps);
+    // 34.82 is 1.49 from 33.333…, and "the computed 33.3%" read as a 1.52 gap beside "within 1.5%".
+    assert.match(message(text(pot.session, '34.82', deps)).text, /close enough to the computed 33\.33%/u);
+    assert.match(message(text(pot.session, '34', deps)).text, /the computed 33\.3%/u);
+  });
+
   test('a refused answer names the tolerance and the computed figure apart, so neither reads as the other', () => {
     const deps = testDeps(2);
     const question = numericQuestions()[0];
