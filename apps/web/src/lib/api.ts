@@ -192,15 +192,18 @@ async function callWithHeaders<T>(
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   };
 
+  // In a browser the target is the page's own origin and whatever routes the API prefix there.
+  const target = API_ORIGIN === '' ? 'this origin' : API_ORIGIN;
+  const failure = (cause: unknown): string =>
+    cause instanceof Error ? cause.message : 'unknown transport failure';
+
   let response: Response;
   try {
     response = await fetch(url, init);
   } catch (cause) {
-    // No handler was reached, so there is no code or request id. In a browser the target is the page's
-    // own origin and whatever routes the API prefix there.
-    const target = API_ORIGIN === '' ? 'this origin' : API_ORIGIN;
+    // No handler was reached, so there is no code or request id.
     throw new ApiRequestError({
-      message: `could not reach the API at ${target}: ${cause instanceof Error ? cause.message : 'unknown transport failure'}`,
+      message: `could not reach the API at ${target}: ${failure(cause)}`,
       status: 0,
       code: 'transport',
     });
@@ -211,7 +214,18 @@ async function callWithHeaders<T>(
     return { data: undefined as T, headers: response.headers };
   }
 
-  const text = await response.text();
+  // The deadline and the reader's signal still run while the body streams, and a raw DOMException
+  // escapes `safeFetch`, whose callers render its value and do not catch.
+  let text: string;
+  try {
+    text = await response.text();
+  } catch (cause) {
+    throw new ApiRequestError({
+      message: `the API at ${target} stopped sending its response: ${failure(cause)}`,
+      status: 0,
+      code: 'transport',
+    });
+  }
   let parsed: unknown = null;
   if (text !== '') {
     try {
