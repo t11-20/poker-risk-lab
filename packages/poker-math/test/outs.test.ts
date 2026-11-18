@@ -7,6 +7,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { cardToString, parseCards, remainingDeck } from '@prl/poker-engine';
+import { equity } from '../src/equity.ts';
 import type { CardOutcome, OutsResult } from '../src/outs.ts';
 import { computeOuts, OutsError, outsSummaryFor } from '../src/outs.ts';
 import { exactRange, parseRange } from '../src/ranges.ts';
@@ -636,7 +637,7 @@ test('a card the range cannot exist behind is left out of the count and said so'
 });
 
 test('a wide range still comes back exact, and says so', () => {
-  // The widest input. C(45,2) = 990 combinations x 44 rivers = 43,560 units, inside the exact budget.
+  // The widest input: 1,081 combinations, each against C(45,2) - 89 = 901 run-outs.
   const heroCards = parseCards('Ah Kh');
   const board = parseCards('Qh 7h 2c');
   const result = computeOuts({
@@ -883,4 +884,42 @@ test('an exactly equal rival adds no ranks to the description of either hand', (
     outcomeFor(result, 'Kd').note,
     /^Leaves you with high card ace, king ten kickers, and 7d3s has the same hand, so the pot chops\./,
   );
+});
+
+test('equity now and after every card is exactly what equity() gives for that board', () => {
+  const spots = [
+    { hero: 'Ah Kh', board: 'Qh 7h 2c', range: 'random', dead: '', known: false },
+    { hero: '9s 8s', board: 'Ts 7d 2s', range: 'TT+, AQs+, KTs, JTs, 77, 22', dead: '3c', known: false },
+    { hero: 'Jd Jc', board: 'Ad 8c 4h 4d', range: 'AJs+, AJo+, 88, 44, KQs', dead: '', known: false },
+    { hero: 'Qc Jc', board: 'Kc 7c 3d', range: 'As Kd', dead: '', known: true },
+  ];
+  for (const spot of spots) {
+    const heroCards = parseCards(spot.hero);
+    const board = parseCards(spot.board);
+    const deadCards = spot.dead === '' ? [] : parseCards(spot.dead);
+    // A known hand as well as ranges, because a known hand's two cards cannot come off the deck.
+    const opponent = spot.known
+      ? exactRange(parseCards(spot.range))
+      : parseRange(spot.range, [...heroCards, ...board, ...deadCards]);
+    const result = computeOuts({ heroCards, board, deadCards, opponent });
+    const on = (cards: readonly number[]) =>
+      equity({
+        players: [
+          { label: 'you', range: exactRange(heroCards) },
+          { label: 'the opponent', range: opponent },
+        ],
+        board: cards,
+        deadCards,
+      }).players[0]?.equity;
+    assert.equal(result.equityNow, on(board), `${spot.hero} on ${spot.board}: equity now`);
+    const outcomes = [...result.clean, ...result.dirty, ...result.neutral];
+    assert.ok(outcomes.length > 40, `${spot.hero} on ${spot.board}: a sweep of nothing is not a pass`);
+    for (const outcome of outcomes) {
+      assert.equal(
+        outcome.equityAfter,
+        on([...board, outcome.card]),
+        `${spot.hero} on ${spot.board} + ${outcome.label}`,
+      );
+    }
+  }
 });

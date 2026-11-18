@@ -3,8 +3,7 @@
  * opponent's range, with hero's equity once it lands and a sentence saying why.
  * clean is equityAfter >= cleanThreshold (0.90), dirty is > aheadThreshold (0.50), neutral is the rest.
  * The thresholds are a modelling choice, so they are parameters and every result names them.
- * Only the next card counts as an out. Equity is exact. At most 990 combos x 44 boards = 43,560 units,
- * far under `equity()`'s 4,000,000 budget, and any sampled call is still named in `assumptions`.
+ * Only the next card counts as an out. Equity is exact, from one enumeration of every run-out.
  * A hand already in front has no outs count, so the result carries `refusal` and its sentences stop
  * saying "outs". `totalOuts` stays clean + dirty, because zero would read as drawing dead.
  */
@@ -24,8 +23,7 @@ import {
   isCard,
   remainingDeck,
 } from '@prl/poker-engine';
-import { type EquitySpec, equity } from './equity.ts';
-import { type Combo, comboCountOf, comboToString, exactRange, type ParsedRange } from './ranges.ts';
+import { type Combo, comboCountOf, comboToString, type ParsedRange } from './ranges.ts';
 
 export class OutsError extends Error {
   override readonly name = 'OutsError';
@@ -409,29 +407,83 @@ function validateInput(input: OutsInput): ValidatedInput {
   };
 }
 
-interface HeroEquity {
-  readonly value: number;
-  readonly exact: boolean;
+interface EquityByNextCard {
+  readonly now: number;
+  /** Indexed by card id; NaN for a card no legal combination leaves room for. */
+  readonly after: Float64Array;
 }
 
-function heroEquityOn(
-  heroRange: ParsedRange,
-  opponent: ParsedRange,
+/**
+ * Hero's equity now and after each next card, from one pass over every run-out. A two-card run-out is
+ * the same board whichever card comes first, so on the flop it counts towards both. Heads-up a showdown
+ * is worth 0, 1/2 or 1, so every sum is exact and divides to the figure `equity()` gives for that board.
+ */
+function equityByNextCard(
+  heroCards: readonly Card[],
   board: readonly Card[],
   deadCards: readonly Card[],
-): HeroEquity {
-  const spec: EquitySpec = {
-    players: [
-      { label: 'you', range: heroRange },
-      { label: 'the opponent', range: opponent },
-    ],
-    board,
-    deadCards,
-  };
-  const result = equity(spec);
-  const hero = result.players[0];
-  if (hero === undefined) throw new OutsError('the equity calculation returned no players');
-  return { value: hero.equity, exact: result.method === 'exact-enumeration' };
+  legal: readonly Combo[],
+): EquityByNextCard {
+  const deck = remainingDeck([...heroCards, ...board, ...deadCards]);
+  const n = deck.length;
+  const twoToCome = board.length === 3;
+  const toCome: Card[] = twoToCome ? [0, 0] : [0];
+  const mine: Card[] = [...heroCards, ...board, ...toCome];
+  const theirs: Card[] = [0, 0, ...board, ...toCome];
+  const first = mine.length - toCome.length;
+  // Hero's score depends only on the run-out, so it is evaluated once per run-out, not once per combo.
+  const heroScore = new Float64Array(twoToCome ? n * n : n);
+  for (let i = 0; i < n; i++) {
+    mine[first] = deck[i] ?? 0;
+    if (!twoToCome) {
+      heroScore[i] = evaluate(mine);
+      continue;
+    }
+    for (let j = i + 1; j < n; j++) {
+      mine[first + 1] = deck[j] ?? 0;
+      heroScore[i * n + j] = evaluate(mine);
+    }
+  }
+
+  const share = new Float64Array(DECK_SIZE);
+  const trials = new Float64Array(DECK_SIZE);
+  let shareNow = 0;
+  let trialsNow = 0;
+  for (const [a, b] of legal) {
+    theirs[0] = a;
+    theirs[1] = b;
+    for (let i = 0; i < n; i++) {
+      const turn = deck[i] ?? 0;
+      if (turn === a || turn === b) continue;
+      theirs[first] = turn;
+      if (!twoToCome) {
+        const score = evaluate(theirs);
+        const won = (heroScore[i] ?? 0) > score ? 1 : heroScore[i] === score ? 0.5 : 0;
+        share[turn] = (share[turn] ?? 0) + won;
+        trials[turn] = (trials[turn] ?? 0) + 1;
+        shareNow += won;
+        trialsNow += 1;
+        continue;
+      }
+      for (let j = i + 1; j < n; j++) {
+        const river = deck[j] ?? 0;
+        if (river === a || river === b) continue;
+        theirs[first + 1] = river;
+        const score = evaluate(theirs);
+        const hero = heroScore[i * n + j] ?? 0;
+        const won = hero > score ? 1 : hero === score ? 0.5 : 0;
+        share[turn] = (share[turn] ?? 0) + won;
+        share[river] = (share[river] ?? 0) + won;
+        trials[turn] = (trials[turn] ?? 0) + 1;
+        trials[river] = (trials[river] ?? 0) + 1;
+        shareNow += won;
+        trialsNow += 1;
+      }
+    }
+  }
+  const after = new Float64Array(DECK_SIZE);
+  for (let card = 0; card < DECK_SIZE; card++) after[card] = (share[card] ?? 0) / (trials[card] ?? 0);
+  return { now: shareNow / trialsNow, after };
 }
 
 function classify(equityAfter: number, cleanThreshold: number, aheadThreshold: number): OutClassification {
@@ -542,7 +594,6 @@ function buildAssumptions(args: {
   readonly aheadThreshold: number;
   readonly equityNow: number;
   readonly skipped: readonly string[];
-  readonly sampled: readonly string[];
 }): string[] {
   const notes: string[] = [];
   notes.push(
@@ -581,12 +632,6 @@ function buildAssumptions(args: {
       `${args.skipped.length} ${cards} (${args.skipped.join(', ')}) ${args.skipped.length === 1 ? 'is' : 'are'} left out of the count because the opponent's range cannot exist behind ${args.skipped.length === 1 ? 'it' : 'them'}: every combination the range has left uses that card.`,
     );
   }
-  if (args.sampled.length > 0) {
-    const cards = args.sampled.length === 1 ? 'case' : 'cases';
-    notes.push(
-      `${args.sampled.length} ${cards} (${args.sampled.join(', ')}) came back sampled rather than enumerated, so ${args.sampled.length === 1 ? 'that equity carries' : 'those equities carry'} sampling error — treat those classifications as provisional.`,
-    );
-  }
   const ahead = alreadyAheadNote(args.equityNow, args.cleanThreshold, args.aheadThreshold);
   if (ahead !== null) notes.push(`${ahead}.`);
   return notes;
@@ -610,15 +655,12 @@ export function computeOuts(input: OutsInput): OutsResult {
   const sole = legalNow.length === 1 ? legalNow[0] : undefined;
   const opponentHeld: Card[] = sole === undefined ? [] : [sole[0], sole[1]];
 
-  const heroRange = exactRange(heroCards);
-  const nowEquity = heroEquityOn(heroRange, opponent, board, deadCards);
+  const equities = equityByNextCard(heroCards, board, deadCards, legalNow);
   const standingNow = standingAt(heroCards, board, legalNow);
   const boardCompleteAfter = board.length === 4;
 
   const outcomes: CardOutcome[] = [];
   const skipped: string[] = [];
-  const sampled: string[] = [];
-  if (!nowEquity.exact) sampled.push('the current board');
 
   for (const card of remainingDeck([...known, ...opponentHeld])) {
     const legalAfter = legalCombos(opponent.combos, [...known, card]);
@@ -628,19 +670,18 @@ export function computeOuts(input: OutsInput): OutsResult {
       continue;
     }
     const boardAfter = [...board, card];
-    const after = heroEquityOn(heroRange, opponent, boardAfter, deadCards);
-    if (!after.exact) sampled.push(cardToString(card));
+    const equityAfter = equities.after[card] ?? Number.NaN;
     const standingAfter = standingAt(heroCards, boardAfter, legalAfter);
     outcomes.push({
       card,
       label: cardToString(card),
-      classification: classify(after.value, cleanThreshold, aheadThreshold),
-      equityAfter: after.value,
-      equityBefore: nowEquity.value,
+      classification: classify(equityAfter, cleanThreshold, aheadThreshold),
+      equityAfter,
+      equityBefore: equities.now,
       note: buildNote({
         before: standingNow,
         after: standingAfter,
-        equityAfter: after.value,
+        equityAfter,
         boardComplete: boardCompleteAfter,
       }),
     });
@@ -652,14 +693,14 @@ export function computeOuts(input: OutsInput): OutsResult {
   const neutral = sorted.filter((outcome) => outcome.classification === 'neutral');
 
   // Decided once and carried on the result, so no consumer re-tests the equity against another bar.
-  const refusal = outsCountRefusalFor(nowEquity.value, aheadThreshold);
+  const refusal = outsCountRefusalFor(equities.now, aheadThreshold);
 
   const explanation = buildExplanation({
     heroCards,
     board,
     opponentText: describeOpponent(opponent, legalNow),
     standingNow,
-    equityNow: nowEquity.value,
+    equityNow: equities.now,
     cleanCount: clean.length,
     dirtyCount: dirty.length,
     cardsConsidered: outcomes.length,
@@ -676,7 +717,7 @@ export function computeOuts(input: OutsInput): OutsResult {
     dirtyCount: dirty.length,
     totalOuts: clean.length + dirty.length,
     refusal,
-    equityNow: nowEquity.value,
+    equityNow: equities.now,
     cardsConsidered: outcomes.length,
     explanation,
     assumptions: buildAssumptions({
@@ -686,9 +727,8 @@ export function computeOuts(input: OutsInput): OutsResult {
       cardsConsidered: outcomes.length,
       cleanThreshold,
       aheadThreshold,
-      equityNow: nowEquity.value,
+      equityNow: equities.now,
       skipped,
-      sampled,
     }),
     method: 'exact-per-card',
   };
