@@ -8,8 +8,8 @@
 import assert from 'node:assert/strict';
 import { after, describe, it } from 'node:test';
 import { content, scenarioById, scenarios } from '@prl/content';
-import type { QuizQuestion } from '@prl/contracts';
-import { potOdds, ruleOf24 } from '@prl/poker-math';
+import type { CoachReport, QuizQuestion } from '@prl/contracts';
+import { bestMeasuredCandidate, judgeConsistency, potOdds, ruleOf24 } from '@prl/poker-math';
 import type { FastifyInstance } from 'fastify';
 import { buildApp, registerRoutes } from '../src/app.ts';
 import { DEFAULT_WORK_LIMITS } from '../src/calc/parse.ts';
@@ -736,6 +736,90 @@ describe('POST /content/scenarios/:id/attempt', () => {
     } finally {
       await app.close();
     }
+  });
+
+  describe('names what the analysis supports, in the words that fit the verdict', () => {
+    interface Attempt {
+      readonly reasoning: string;
+      readonly analysis: CoachReport;
+      readonly supported: readonly string[];
+    }
+
+    async function attempt(id: string, body: Record<string, unknown>): Promise<Attempt> {
+      const app = await contentApp();
+      try {
+        const response = await post(
+          app,
+          `/api/v1/content/scenarios/${id}/attempt`,
+          body,
+          await csrfPair(app),
+        );
+        assert.equal(response.status, 200);
+        const analysis: CoachReport = JSON.parse(response.raw).analysis;
+        const stored = scenarioById(id);
+        assert.ok(stored !== null, `no scenario ${id}`);
+        const verdict = judgeConsistency({
+          report: analysis,
+          action: String(body['action']),
+          bigBlind: stored.bigBlind,
+          ...(typeof body['to'] === 'number' ? { to: body['to'] } : {}),
+        });
+        return {
+          reasoning: String(response.body['reasoning']),
+          analysis,
+          supported: verdict.supportedActions,
+        };
+      } finally {
+        await app.close();
+      }
+    }
+
+    it('says the one supported action is the only one, when the learner chose another', async () => {
+      const { reasoning, supported } = await attempt('eq-dominated-flush-draw-turn', { action: 'call' });
+      assert.deepEqual(supported, ['fold'], 'premise: fold is the one supported action');
+      assert.match(reasoning, /^call is not consistent/);
+      assert.match(reasoning, /Against this range the analysis supports only fold here\./);
+      assert.doesNotMatch(reasoning, /does not come down to one answer/);
+    });
+
+    it('names the row a fold is behind, not folding itself', async () => {
+      const { reasoning, analysis } = await attempt('rk-counting-the-combos-that-beat-you', {
+        action: 'fold',
+      });
+      const best = bestMeasuredCandidate(analysis);
+      assert.ok(best !== null && best.action !== 'fold', 'premise: a measured row beats folding');
+      const named = best.to === undefined ? best.action : `${best.action} to ${best.to}`;
+      assert.match(reasoning, /^fold is not consistent/);
+      assert.ok(
+        reasoning.includes(`Folding gives up about ${best.ev.toFixed(1)} chips against ${named},`),
+        reasoning,
+      );
+      assert.doesNotMatch(reasoning, /Measured against folding/);
+    });
+
+    it('lists the supported actions as the alternatives to a fold that a free check beats', async () => {
+      const { reasoning, supported } = await attempt('fl-big-blind-option-limped-pot', { action: 'fold' });
+      assert.deepEqual(supported, ['check', 'raise'], 'premise: check and raise are both supported');
+      assert.match(reasoning, /Against this range the analysis supports check and raise instead\./);
+      assert.doesNotMatch(reasoning, /does not come down to one answer/);
+    });
+
+    it('says the same action is supported at another size, when only that size is not', async () => {
+      const { reasoning, supported } = await attempt('eq-flush-draw-turn-small-bet', {
+        action: 'raise',
+        to: 500,
+      });
+      assert.deepEqual(supported, ['call', 'raise'], 'premise: raise is supported at some size');
+      assert.match(reasoning, /^raise is not consistent/);
+      assert.match(reasoning, /supports call and raise at another size instead\./);
+    });
+
+    it('keeps "does not come down to one answer" for a consistent action with company', async () => {
+      const { reasoning, supported } = await attempt('fl-big-blind-option-limped-pot', { action: 'check' });
+      assert.deepEqual(supported, ['check', 'raise']);
+      assert.match(reasoning, /^check is consistent/);
+      assert.match(reasoning, /also supports raise, so this spot does not come down to one answer\./);
+    });
   });
 });
 
