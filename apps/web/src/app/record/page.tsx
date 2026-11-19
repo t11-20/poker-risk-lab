@@ -86,9 +86,9 @@ export default async function RecordPage(): Promise<ReactElement> {
         <h1 className="prl-page-head__title prl-display-2">What you have actually done</h1>
         {/* A fact, not a design choice. `prl` has no column a score could be stored in. */}
         <p className="prl-page-head__standfirst">
-          Six counts and two lists, and nothing else. There is no score on this page, no percentage complete,
-          no streak and no rank, and there is nowhere in Poker Risk Lab for one to be kept: what you have done
-          is counted, never graded.
+          Six counts and three lists, and nothing else. There is no score on this page, no percentage
+          complete, no streak and no rank, and there is nowhere in Poker Risk Lab for one to be kept: what you
+          have done is counted, never graded.
         </p>
       </header>
 

@@ -192,20 +192,22 @@ function compute(calculation: LiveCalculation): Calculation {
         pool === 0 ? 0 : asPercent((result.equities[index] ?? 0) / pool);
       const label = (index: number): string =>
         `Prize share of the stack of ${(calculation.stacks[index] ?? 0).toLocaleString('en-US')}`;
+      // The API grades the largest stack's share, wherever content lists it. Of equal ones, the first.
+      const leader = calculation.stacks.indexOf(Math.max(...calculation.stacks));
       const others = Object.fromEntries(
-        result.equities
-          .slice(1)
-          .map((_, offset) => [
+        calculation.stacks
+          .map((_, index) => index)
+          .filter((index) => index !== leader)
+          .map((index, offset) => [
             `prizeShare${offset + 1}`,
-            { label: label(offset + 1), value: shareOf(offset + 1), unit: 'percent' as const },
+            { label: label(index), value: shareOf(index), unit: 'percent' as const },
           ]),
       );
       return {
         method: `${CLOSED_FORM} Malmuth–Harville.`,
         working: result.explanation,
         figures: {
-          // The API's name for the first stack's share. That stack is the largest in shipped content.
-          chipLeaderShare: { label: label(0), value: shareOf(0), unit: 'percent' },
+          chipLeaderShare: { label: label(leader), value: shareOf(leader), unit: 'percent' },
           ...others,
         },
       };

@@ -12,8 +12,9 @@
  * "recorded" only when a row exists.
  *
  * A step change moves focus to the question heading, which carries "Question N of M" as hidden text.
- * Answering moves nothing. The verdict regions are `role="status"`, so the verdict and its source
- * note are read as one atomic message.
+ * A checked answer moves nothing, because its button stays. "Show the reasoning" unmounts itself, so it
+ * moves focus to the reasoning it revealed. The verdict regions are `role="status"`, so the verdict and
+ * its source note are read as one atomic message.
  */
 
 import type { ContentId, Quiz, QuizQuestion } from '@prl/contracts';
@@ -493,6 +494,9 @@ export function QuizRunner(props: QuizRunnerProps): ReactElement {
   const [verdicts, setVerdicts] = useState<ReadonlyMap<ContentId, QuizVerdict>>(new Map());
   const headingRef = useRef<HTMLHeadingElement>(null);
   useFocusOnChange(headingRef, step);
+  const explanationRef = useRef<HTMLDivElement>(null);
+  /** Set by "Show the reasoning" and nothing else, so paging back to a revealed question moves nothing. */
+  const revealing = useRef(false);
   /**
    * The answer object each question was posted for. Identity, not value, because `record` mints a
    * fresh object per press, so "Check again" posts and paging back does not.
@@ -512,6 +516,12 @@ export function QuizRunner(props: QuizRunnerProps): ReactElement {
   };
 
   const currentAnswer = question === undefined ? undefined : answers.get(question.id);
+
+  useEffect(() => {
+    if (!revealing.current || currentAnswer?.kind !== 'revealed') return;
+    revealing.current = false;
+    explanationRef.current?.focus();
+  }, [currentAnswer]);
 
   /**
    * One controller for the runner, aborted on unmount. One per question would abort the POST for the
@@ -619,10 +629,13 @@ export function QuizRunner(props: QuizRunnerProps): ReactElement {
         <CardText text={question.prompt} />
       </h3>
 
-      {questionBody(question, answer, server, (given) => record(question.id, given))}
+      {questionBody(question, answer, server, (given) => {
+        if (given.kind === 'revealed') revealing.current = true;
+        record(question.id, given);
+      })}
 
       {answered ? (
-        <div className="prl-learn-quiz__explanation">
+        <div className="prl-learn-quiz__explanation" ref={explanationRef} tabIndex={-1}>
           <span className="prl-label">Why</span>
           <p>
             <CardText text={question.explanation} />

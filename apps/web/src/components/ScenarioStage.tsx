@@ -289,6 +289,8 @@ export function ScenarioStage(props: ScenarioStageProps): ReactElement {
     setServer({ state: 'pending' });
     void (async () => {
       const session = await fetchSession({ signal: controller.signal });
+      // An abort resolves as a failure, and a late "unavailable" would outlive "Choose again".
+      if (controller.signal.aborted) return;
       const token = session.ok ? session.data.csrfToken : null;
       if (token === null) {
         setServer({ state: 'unavailable' });
@@ -391,6 +393,8 @@ export function ScenarioStage(props: ScenarioStageProps): ReactElement {
               onClick={() => {
                 choseAgain.current = true;
                 setCommitted(null);
+                // The next commit renders once before its effect resets this, showing the last verdict.
+                setServer({ state: 'pending' });
               }}
             >
               Choose again and compare the other line

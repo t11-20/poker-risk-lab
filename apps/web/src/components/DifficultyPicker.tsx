@@ -69,7 +69,8 @@ export function DifficultyPicker(props: DifficultyPickerProps): ReactElement {
                 />
                 <span className="prl-legend-difficulty__label">
                   {difficulty.label}
-                  {isSelected ? <span className="prl-visually-hidden">, selected</span> : null}
+                  {/* Not "selected": the radio is uncontrolled, so the name would outlive the tick. */}
+                  {isSelected ? <span className="prl-visually-hidden">, the applied setting</span> : null}
                 </span>
                 <p className="prl-legend-difficulty__description">{difficulty.description}</p>
                 <span className="prl-legend-difficulty__coach">

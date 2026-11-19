@@ -88,11 +88,15 @@ export function LessonRead(props: LessonReadProps): ReactElement {
       </p>
       <div className="prl-stack">
         <p className="prl-btn-row">
+          {/* `aria-disabled` with a guard, not `disabled`, which blurs the focused button to <body>. */}
           <Button
             variant="primary"
             className="prl-learn-titled-btn"
-            onClick={() => setPress({ lessonId })}
-            disabled={working || done}
+            onClick={() => {
+              if (!working && !done) setPress({ lessonId });
+            }}
+            aria-disabled={working || done ? true : undefined}
+            aria-busy={working ? true : undefined}
           >
             {working ? 'Recording…' : done ? 'Recorded' : `I have finished “${lessonTitle}”`}
           </Button>

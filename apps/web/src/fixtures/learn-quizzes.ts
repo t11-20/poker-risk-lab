@@ -227,7 +227,7 @@ export const LEARN_QUIZZES: readonly Quiz[] = [
         unit: 'percent',
         tolerance: 1,
         explanation:
-          'Apply the rule as stated: with two cards to come, multiply the outs by four. This is deliberately an estimate you can do at a table in a second, and the next question is about where it goes wrong. Enter the estimate the rule gives, not a more exact figure you may know from elsewhere.',
+          'Apply the rule as stated: with two cards to come, multiply the outs by four. This is deliberately an estimate you can do at a table in a second, and a later question is about where it goes wrong. Enter the estimate the rule gives, not a more exact figure you may know from elsewhere.',
       },
       {
         kind: 'numeric',

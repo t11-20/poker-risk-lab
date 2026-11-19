@@ -21,6 +21,7 @@ export function UnitsReset(): ReactElement {
   const [reset, setReset] = useState<ResetState>({ state: 'idle' });
 
   const run = (): void => {
+    if (reset.state === 'working') return;
     setReset({ state: 'working' });
     void (async () => {
       const session = await fetchSession();
@@ -49,7 +50,13 @@ export function UnitsReset(): ReactElement {
   return (
     <div className="prl-stack">
       <p className="prl-btn-row">
-        <Button variant="secondary" onClick={run} disabled={reset.state === 'working'}>
+        {/* `aria-disabled` with the guard in `run`, not `disabled`, which blurs the focused button to <body>. */}
+        <Button
+          variant="secondary"
+          onClick={run}
+          aria-disabled={reset.state === 'working' ? true : undefined}
+          aria-busy={reset.state === 'working' ? true : undefined}
+        >
           {reset.state === 'working' ? 'Resetting…' : 'Reset my units to the starting amount'}
         </Button>
       </p>

@@ -36,6 +36,16 @@ describe('a refused room is let go of', () => {
     assert.match(handler, /setPhase\(\(current\) => \(current === 'preparing' \? current : 'idle'\)\)/u);
   });
 
+  it('drops the gone table\'s invite code and "Joined" line, but not a join in flight', () => {
+    const source = readFileSync(new URL('../src/lib/use-live-table.ts', import.meta.url), 'utf8');
+    const handler = source.slice(source.indexOf('onClose: (meaning)'), source.indexOf('onProblem:'));
+    assert.match(handler, /setInviteCode\(null\)/u, "the closed table's code stays on screen");
+    assert.match(
+      handler,
+      /setJoin\(\(current\) => \(current\.state === 'joined' \? \{ state: 'idle' \} : current\)\)/u,
+    );
+  });
+
   it('leaves a join or a new table that is still being prepared to finish (REGRESSION)', () => {
     // A bare `setPhase('idle')` offered "Deal me in" mid-join, and pressing it aborted the join.
     const source = readFileSync(new URL('../src/lib/use-live-table.ts', import.meta.url), 'utf8');

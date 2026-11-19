@@ -379,4 +379,62 @@ describe('the blind obligation a newcomer owes', () => {
     assert.equal(paid.posted.get('D'), CONFIG.bigBlind, 'having posted a full big blind for it');
     assert.ok(!simulation.table.owesBlind('D'), 'the obligation is discharged by posting');
   });
+
+  it('owed by a seat that sat a hand out with no chips and is restacked, so the button never posts the big blind (REGRESSION)', async () => {
+    // Busted seats stay seated. Restacked between two heads-up blinds without a debt, seat 1 made the
+    // heads-up button the next big blind, with no button at all and seat 1 first to act on every street.
+    const simulation = new Simulation();
+    await simulation.table.sit({ userId: 'C', displayName: 'C', seat: 1, stack: 0 });
+    await simulation.sit('A', 0);
+    await simulation.sit('B', 2);
+    let reached = false;
+    for (let index = 0; index < 4 && !reached; index += 1) {
+      const hand = await simulation.playHand();
+      assert.deepEqual(hand.dealtIn, [0, 2]);
+      reached = hand.bigBlindSeat === 2;
+    }
+    assert.ok(reached, 'the heads-up big blind never reached seat 2');
+
+    assert.equal(await simulation.table.restack('C', BUY_IN), 'applied');
+    assert.ok(simulation.table.owesBlind('C'), 'the restacked seat waits for the big blind like a newcomer');
+    for (let index = 0; index < 4; index += 1) {
+      const hand = await simulation.playHand();
+      assert.notEqual(
+        hand.buttonSeat,
+        hand.bigBlindSeat,
+        `hand ${hand.handNumber} put the button on the big blind`,
+      );
+      if (hand.dealtIn.includes(1)) {
+        assert.equal(hand.bigBlindSeat, 1, 'seat 1 is dealt in on the hand it posts the big blind');
+        return;
+      }
+    }
+    assert.fail('the big blind never reached the restacked seat');
+  });
+
+  it('not owed after a restart, where nobody is known to have sat out, so a resuming hero is dealt in', async () => {
+    const table = new LiveTable({
+      roomId: 'room_restart',
+      config: CONFIG,
+      clock: systemClock,
+      random: createSecureRandom(),
+      nextHandId: incrementingHandIds(),
+      initialBlinds: { buttonSeat: 4, smallBlindSeat: 5, bigBlindSeat: 0 },
+    });
+    await table.sit({ userId: 'hero', displayName: 'hero', seat: 0, stack: 0, resumingSeat: true });
+    for (const seat of [1, 2, 3, 4, 5]) {
+      await table.sit({
+        userId: `bot${seat}`,
+        displayName: `bot${seat}`,
+        seat,
+        stack: BUY_IN,
+        resumingSeat: true,
+      });
+    }
+    assert.equal(await table.restack('hero', BUY_IN), 'applied');
+    assert.ok(
+      !table.owesBlind('hero'),
+      'a restacked hero after a restart sits out an orbit of bots-only hands',
+    );
+  });
 });

@@ -14,6 +14,7 @@ import { LEARN_GLOSSARY } from '../src/fixtures/learn-glossary.ts';
 import { LEARN_LESSON_SUMMARIES } from '../src/fixtures/learn-lesson-summaries.ts';
 import { LEARN_LESSONS } from '../src/fixtures/learn-lessons.ts';
 import { LEARN_QUIZZES } from '../src/fixtures/learn-quizzes.ts';
+import { RECORD_FIGURES } from '../src/lib/record-data.ts';
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 const read = (...parts: readonly string[]): string => readFileSync(join(SRC, ...parts), 'utf8');
@@ -232,5 +233,24 @@ describe('the counts the product prints about itself', () => {
     const counted = bundle.quizzes.reduce((sum, quiz) => sum + quiz.questions.length, 0);
     assert.equal(counted, stats.quizQuestions, 'contentStats must agree with the bundle it counted');
     assert.ok(counted > 0, 'a sweep of nothing is not a pass');
+  });
+});
+
+describe('/record says how many counts and lists it shows', () => {
+  const record = read('app', 'record', 'page.tsx');
+  const WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];
+
+  it('matches the figures and the lists the page renders (REGRESSION)', () => {
+    // The metric row, plus the topic count in the note under the lists.
+    assert.match(record, /pluralise\(record\.progress\.topicsTouched\.length, 'topic'\)/u);
+    const counts = RECORD_FIGURES.length + 1;
+    const lists = record.match(/<dt className="prl-label">/gu)?.length ?? 0;
+    assert.ok(lists > 0, 'no lists found; a sweep of nothing is not a pass');
+    const stated = `${WORDS[counts] ?? String(counts)} counts and ${WORDS[lists] ?? String(lists)} lists`;
+    assert.match(
+      record.replace(/\s+/gu, ' '),
+      new RegExp(stated, 'iu'),
+      `the standfirst should say "${stated}"`,
+    );
   });
 });

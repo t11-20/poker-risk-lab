@@ -1204,6 +1204,9 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
         // The gone room's last `notice` would otherwise stop the next "Deal me in" before it sits.
         dispatch({ kind: 'reset' });
         setRoomId(null);
+        // The code and the "Joined" line name the gone table. A join still in flight keeps its own state.
+        setInviteCode(null);
+        setJoin((current) => (current.state === 'joined' ? { state: 'idle' } : current));
         // A join or a new table still being prepared finishes on its own; "Deal me in" would abort it.
         setPhase((current) => (current === 'preparing' ? current : 'idle'));
       },

@@ -49,6 +49,7 @@ import type {
 import { withinTolerance } from '@prl/contracts';
 import { type Card, parseCards } from '@prl/poker-engine';
 import {
+  bestMeasuredCandidate,
   computeOuts,
   deriveContestablePot,
   deriveLegalActions,
@@ -367,7 +368,8 @@ function foldEquityFields(calculation: Extract<LiveCalculation, { kind: 'foldEqu
 function icmFields(calculation: Extract<LiveCalculation, { kind: 'icm' }>): FieldTable {
   const result = icmEquity(calculation.stacks, calculation.payouts);
   const pool = result.totalPrizePool;
-  const leader = result.equities[0] ?? 0;
+  // Content may list the stacks in any order. Of equal largest stacks, the first is taken.
+  const leader = result.equities[calculation.stacks.indexOf(Math.max(...calculation.stacks))] ?? 0;
   const share = pool === 0 ? 0 : leader / pool;
   return {
     working: result.explanation,
@@ -605,6 +607,13 @@ export function consistencyOf(
       ? ''
       : ` Against this range the analysis also supports ${alternatives.join(' and ')}, so this spot ` +
         'does not come down to one answer.';
+  // "Only" is said when exactly one action is defensible, which is when `matched_expected` is stored.
+  const supportedInstead =
+    alternatives.length === 0
+      ? ''
+      : claimsOneAction
+        ? ` Against this range the analysis supports only ${alternatives[0]} here.`
+        : ` Against this range the analysis supports ${alternatives.join(' and ')} instead.`;
   // The evaluated size stated next to the learner's own, so their agreement is visible.
   const sizing =
     to === undefined ? '' : ` You sized it to ${to}; the analysis priced ${chosen.to ?? chosen.cost}.`;
@@ -625,7 +634,30 @@ export function consistencyOf(
         'fold is not consistent with this analysis, and this is the one case that does not come ' +
         'down to a margin: you can check here for free. Checking keeps every card still to come ' +
         'and costs nothing, so it is never behind folding however thin the hand is. What the ' +
-        `range assumption changes is whether betting would beat checking, not this.${alsoSupported}`,
+        `range assumption changes is whether betting would beat checking, not this.${supportedInstead}`,
+      claimsOneAction,
+      priced: true,
+    };
+  }
+  const margin = `${verdict.marginUnits.toFixed(1)} chips (one big blind)`;
+  const caveat =
+    ' That is a statement about the stated range assumption, and a different assumption could change it.';
+  // A fold's shortfall is `measuredBestEv`, so the row it is behind is named, not folding itself.
+  if (chosen.action === 'fold') {
+    const best = bestMeasuredCandidate(report);
+    const benchmark =
+      best === null
+        ? 'the best measured alternative'
+        : best.action === 'bet' || best.action === 'raise'
+          ? `${best.action} to ${best.to}`
+          : best.action;
+    return {
+      consistent: false,
+      reasoning:
+        `fold is not consistent with this analysis. ${chosen.derivation} Folding gives up about ` +
+        `${verdict.shortfallUnits.toFixed(1)} chips against ${benchmark}, the best alternative that does ` +
+        `not rest on an assumed fold rate, more than the ${margin} this spot treats as indifferent.` +
+        `${supportedInstead}${caveat}${sizing}`,
       claimsOneAction,
       priced: true,
     };
@@ -635,9 +667,8 @@ export function consistencyOf(
     reasoning:
       `${action} is not consistent with this analysis. ${chosen.derivation} Measured against ` +
       `folding — which is worth exactly zero — it comes out about ${verdict.shortfallUnits.toFixed(1)} ` +
-      `chips behind, more than the ${verdict.marginUnits.toFixed(1)} chips (one big blind) this spot ` +
-      `treats as indifferent.${alsoSupported} That is a statement about the stated range assumption, ` +
-      `and a different assumption could change it.${sizing}`,
+      `chips behind, more than the ${margin} this spot treats as indifferent.${supportedInstead}` +
+      `${caveat}${sizing}`,
     claimsOneAction,
     priced: true,
   };

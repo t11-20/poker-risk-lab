@@ -150,7 +150,12 @@ async function run(
       out: [{ kind: 'send', text: TABLE_CLOSED, buttons: [] }],
     };
     if (press !== null) await answer(api, { callback_query_id: press.queryId }, log);
-    for (const out of result.out) await deliver(api, chatId, out, null);
+    try {
+      for (const out of result.out) await deliver(api, chatId, out, null);
+    } catch (failed) {
+      // The step's error is the one worth reporting; a failed notice must not replace it.
+      log(`could not tell the reader the table closed (${errorText(failed)})`);
+    }
     throw error;
   }
   chats.sessions.set(chatId, result.session);

@@ -616,22 +616,22 @@
   transition: background-color var(--prl-dur-fast) var(--prl-ease-material);
 }
 
-.prl-btn--primary:hover:not(:disabled) {
+.prl-btn--primary:hover:not(:disabled, [aria-disabled="true"]) {
   border-color: var(--prl-accent-400);
 }
 
 /** The veil does the work in light, where accent 400 and 500 are the same value. */
-.prl-btn--primary:hover:not(:disabled)::before {
+.prl-btn--primary:hover:not(:disabled, [aria-disabled="true"])::before {
   background-color: var(--prl-accent-400);
   background-image: linear-gradient(to bottom, var(--prl-veil-8), var(--prl-veil-4));
 }
 
 /** A transform and a darker plate, never an elevation change. 1px, so it reads as a key. */
-.prl-btn--primary:active:not(:disabled) {
+.prl-btn--primary:active:not(:disabled, [aria-disabled="true"]) {
   transform: translateY(1px);
 }
 
-.prl-btn--primary:active:not(:disabled)::before {
+.prl-btn--primary:active:not(:disabled, [aria-disabled="true"])::before {
   background-color: var(--prl-accent-600);
 }
 
@@ -647,7 +647,7 @@
   box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-1);
 }
 
-.prl-btn--secondary:hover:not(:disabled) {
+.prl-btn--secondary:hover:not(:disabled, [aria-disabled="true"]) {
   border-color: var(--prl-accent-edge);
   background-color: var(--prl-glass-floating-hover);
   -webkit-backdrop-filter: var(--prl-glass-filter);
@@ -655,7 +655,7 @@
   color: var(--prl-accent-text);
 }
 
-.prl-btn--secondary:active:not(:disabled) {
+.prl-btn--secondary:active:not(:disabled, [aria-disabled="true"]) {
   background-color: var(--prl-glass-floating-active);
   -webkit-backdrop-filter: var(--prl-glass-filter);
   backdrop-filter: var(--prl-glass-filter);
@@ -670,12 +670,12 @@
   color: var(--prl-text-secondary);
 }
 
-.prl-btn--ghost:hover:not(:disabled) {
+.prl-btn--ghost:hover:not(:disabled, [aria-disabled="true"]) {
   background-color: var(--prl-surface-hover);
   color: var(--prl-accent-text);
 }
 
-.prl-btn--ghost:active:not(:disabled) {
+.prl-btn--ghost:active:not(:disabled, [aria-disabled="true"]) {
   background-color: var(--prl-surface-active);
   transform: translateY(1px);
 }
@@ -690,21 +690,24 @@
   color: var(--prl-adverse);
 }
 
-.prl-btn--danger:hover:not(:disabled) {
+.prl-btn--danger:hover:not(:disabled, [aria-disabled="true"]) {
   border-color: var(--prl-adverse);
   background-color: var(--prl-glass-floating-hover);
   -webkit-backdrop-filter: var(--prl-glass-filter);
   backdrop-filter: var(--prl-glass-filter);
 }
 
-.prl-btn--danger:active:not(:disabled) {
+.prl-btn--danger:active:not(:disabled, [aria-disabled="true"]) {
   background-color: var(--prl-glass-floating-active);
   -webkit-backdrop-filter: var(--prl-glass-filter);
   backdrop-filter: var(--prl-glass-filter);
   transform: translateY(1px);
 }
 
-/** Opaque level below, no sheen, never `opacity`. `[aria-disabled]` covers anchors styled as buttons. */
+/**
+ * Opaque level below, no sheen, never `opacity`. `[aria-disabled]` covers anchors styled as buttons, and
+ * buttons that must keep focus while unavailable, which is why the hover and active rules exclude it too.
+ */
 .prl-btn:disabled,
 .prl-btn[aria-disabled="true"] {
   border-color: var(--prl-line-subtle);
