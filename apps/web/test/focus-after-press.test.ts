@@ -95,13 +95,20 @@ describe('"Remind me again" leaves the caret on the reminder control (REGRESSION
 
   it('focuses the select before the press unmounts the button', () => {
     assert.match(session, /id="prl-session-reminder"\s+ref=\{reminderRef\}/u);
-    assert.match(session, /reminderRef\.current\?\.focus\(\);\s*setAcknowledgedAt\(Date\.now\(\)\);/u);
+    assert.match(session, /reminderRef\.current\?\.focus\(\);\s*acknowledge\(\);/u);
   });
 
-  it('keeps no new storage key, because `/privacy` names every one', () => {
+  it('keeps only the storage keys `/privacy` names', () => {
+    const sitting = read('apps', 'web', 'src', 'lib', 'session-sitting.ts');
+    assert.doesNotMatch(session, /_KEY = '/u, 'the keys live in one file');
     assert.deepEqual(
-      [...session.matchAll(/const \w+_KEY = '([^']+)'/gu)].map((match) => match[1]),
-      ['prl.session.startedAt', 'prl.session.reminderMinutes', 'prl.session.hidden'],
+      [...sitting.matchAll(/const \w+_KEY = '([^']+)'/gu)].map((match) => match[1]),
+      [
+        'prl.session.startedAt',
+        'prl.session.reminderMinutes',
+        'prl.session.hidden',
+        'prl.session.acknowledgedAt',
+      ],
     );
   });
 });

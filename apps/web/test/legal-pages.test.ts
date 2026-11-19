@@ -248,13 +248,14 @@ describe('the required disclosures are on the pages', () => {
   it('the privacy page describes the browser storage this product actually uses', () => {
     // A key renamed in the source but not on the page leaves the page describing storage that is gone.
     const privacy = read(...PAGES.privacy);
-    const timer = read('components', 'SessionDuration.tsx');
+    const timer = read('lib', 'session-sitting.ts');
     const theme = read('lib', 'theme.ts');
     const onboarding = read('components', 'Onboarding.tsx');
     const keys = [
       'prl.session.startedAt',
       'prl.session.reminderMinutes',
       'prl.session.hidden',
+      'prl.session.acknowledgedAt',
       'prl-theme',
       'prl-booted',
       'prl.learn.onboarding.dismissed',
