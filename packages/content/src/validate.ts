@@ -1265,6 +1265,13 @@ export function validateContent(raw: RawContent): ContentBundle {
   assertUniqueIds(problems, 'lessons', lessons);
   assertUniqueIds(problems, 'quizzes', quizzes);
   assertUniqueIds(problems, 'scenarios', scenarios);
+  // The API grades against the first question with the id, and progress counts distinct question ids
+  // across every quiz, so a repeat anywhere misgrades or undercounts.
+  assertUniqueIds(
+    problems,
+    'quiz questions',
+    quizzes.flatMap((quiz) => quiz.questions),
+  );
 
   const known: KnownIds = {
     glossary: new Set(glossary.map((entry) => entry.id)),
