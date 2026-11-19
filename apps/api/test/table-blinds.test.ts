@@ -411,4 +411,30 @@ describe('the blind obligation a newcomer owes', () => {
     }
     assert.fail('the big blind never reached the restacked seat');
   });
+
+  it('not owed after a restart, where nobody is known to have sat out, so a resuming hero is dealt in', async () => {
+    const table = new LiveTable({
+      roomId: 'room_restart',
+      config: CONFIG,
+      clock: systemClock,
+      random: createSecureRandom(),
+      nextHandId: incrementingHandIds(),
+      initialBlinds: { buttonSeat: 4, smallBlindSeat: 5, bigBlindSeat: 0 },
+    });
+    await table.sit({ userId: 'hero', displayName: 'hero', seat: 0, stack: 0, resumingSeat: true });
+    for (const seat of [1, 2, 3, 4, 5]) {
+      await table.sit({
+        userId: `bot${seat}`,
+        displayName: `bot${seat}`,
+        seat,
+        stack: BUY_IN,
+        resumingSeat: true,
+      });
+    }
+    assert.equal(await table.restack('hero', BUY_IN), 'applied');
+    assert.ok(
+      !table.owesBlind('hero'),
+      'a restacked hero after a restart sits out an orbit of bots-only hands',
+    );
+  });
 });

@@ -529,8 +529,9 @@ export class LiveTable {
       if (seat.stack === stack) return 'applied';
       // A seat with no chips that sat the last hand out is outside the rotation, so it re-enters as a
       // newcomer does. Dealt straight in between heads-up blinds, the button became the big blind. With
-      // no hand retained (after a restart) it is unknown, and waiting one orbit is the safe direction.
-      const satOut = this.hand === null || !this.hand.state.seats.some((entry) => entry.playerId === userId);
+      // no hand retained (after a restart) it is not known to have sat out, and a debt there would sit a
+      // resuming hero out for an orbit of bots-only hands.
+      const satOut = this.hand !== null && !this.hand.state.seats.some((entry) => entry.playerId === userId);
       if (seat.stack === 0 && satOut && this.blinds !== null && !this.blindDebts.has(userId)) {
         this.blindDebts.set(userId, { since: this.handNumber + 1 });
       }
