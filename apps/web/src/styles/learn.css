@@ -844,8 +844,14 @@
   white-space: nowrap;
 }
 
-/* Glossary popover. It spans its paragraph (`.prl-learn-prose` is `position: relative`), so it
+/* Glossary popover. It spans its paragraph or callout text (both are `position: relative`), so it
    cannot clip at a line's right edge. */
+
+/* Position only, so a callout keeps its own type and measure from `.prl-callout__body`. */
+.prl-learn-callout-text {
+  position: relative;
+  display: block;
+}
 
 /** Dotted underline at rest, a solid accent underline when open, with `aria-expanded` too. */
 .prl-term__trigger {

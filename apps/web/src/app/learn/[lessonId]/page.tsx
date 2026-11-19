@@ -175,8 +175,8 @@ export default async function LessonPage({ params }: LessonPageProps): Promise<R
               headingLevel={2}
             >
               <p className="prl-note">
-                Each of these is a button the first time it appears in the text above. The full definitions,
-                with cross-references, are in the glossary.
+                Each of these is a button the first time it appears in the lesson's paragraphs, lists and
+                callouts. The full definitions, with cross-references, are in the glossary.
               </p>
               <ul className="prl-learn-terms__list">
                 {glossary.map((entry) => (
