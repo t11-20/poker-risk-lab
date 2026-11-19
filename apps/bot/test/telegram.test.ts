@@ -271,6 +271,36 @@ describe('requests', () => {
     assert.equal(chats.sessions.has(42), false);
   });
 
+  test('a step that throws is reported as itself when the closing notice cannot be sent either', async () => {
+    const { api: recording, calls } = fakeApi();
+    const unreachable: TelegramApi = {
+      call: (method, body) => {
+        if (method !== 'sendMessage') return recording.call(method, body);
+        calls.push({ method, body });
+        return Promise.reject(new TelegramError(method, 403, 'Forbidden: bot was blocked by the user', null));
+      },
+    };
+    const chats = newChats();
+    const deps = testDeps(4);
+    const logged: string[] = [];
+    await handleUpdate(text(1, '/start'), chats, recording, deps);
+    const broken = {
+      ...deps,
+      dealRandom: () => {
+        throw new Error('dealer exploded');
+      },
+    };
+    await assert.rejects(
+      handleUpdate(tap(2, dataFor(calls[0], /^Play a hand$/), 101), chats, unreachable, broken, (line) =>
+        logged.push(line),
+      ),
+      /exploded/,
+    );
+    assert.equal(calls.at(-1)?.body['text'], TABLE_CLOSED);
+    assert.match(logged.join('\n'), /could not tell the reader the table closed/);
+    assert.equal(chats.sessions.has(42), false);
+  });
+
   test('a press whose answer is refused still delivers, in play and when the table closes', async () => {
     const { api: recording, calls } = fakeApi();
     const expired: TelegramApi = {
