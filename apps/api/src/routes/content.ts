@@ -367,7 +367,8 @@ function foldEquityFields(calculation: Extract<LiveCalculation, { kind: 'foldEqu
 function icmFields(calculation: Extract<LiveCalculation, { kind: 'icm' }>): FieldTable {
   const result = icmEquity(calculation.stacks, calculation.payouts);
   const pool = result.totalPrizePool;
-  const leader = result.equities[0] ?? 0;
+  // Content may list the stacks in any order. Of equal largest stacks, the first is taken.
+  const leader = result.equities[calculation.stacks.indexOf(Math.max(...calculation.stacks))] ?? 0;
   const share = pool === 0 ? 0 : leader / pool;
   return {
     working: result.explanation,

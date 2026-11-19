@@ -580,6 +580,26 @@ describe('POST /content/quizzes/:id/attempt', () => {
       await pool.close();
     }
   });
+
+  it("grades the chip leader's prize share on the largest stack, wherever it is listed", async () => {
+    const pool = new WorkerPool({ size: 1, timeoutMs: 1_000 });
+    try {
+      const shipped = numericQuestion('quiz-tournament-chips-and-icm', 'icm-q6');
+      assert.equal(shipped.calculation.kind, 'icm');
+      assert.equal((await expectedValueFor(shipped, pool, DEFAULT_WORK_LIMITS)).value, 60);
+      // 300 against 100 for 70/30 is 60 to the leader, however the two stacks are written.
+      for (const stacks of [
+        [300, 100],
+        [100, 300],
+      ]) {
+        const question = { ...shipped, calculation: { kind: 'icm' as const, stacks, payouts: [70, 30] } };
+        const expected = await expectedValueFor(question, pool, DEFAULT_WORK_LIMITS);
+        assert.equal(expected.value, 60, `stacks ${stacks.join(' / ')}`);
+      }
+    } finally {
+      await pool.close();
+    }
+  });
 });
 
 describe('POST /content/scenarios/:id/attempt', () => {
