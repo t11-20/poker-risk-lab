@@ -4,7 +4,7 @@
  * How long you have been here, and a reminder you can set for yourself (guardrails §8 and §2).
  *
  * Not tracking. The start time is in `sessionStorage` (per tab) and the reminder interval in
- * `localStorage`, and neither leaves the browser. `/privacy` names both keys. A server-side version
+ * `localStorage`, and neither leaves the browser. `/privacy` names every key. A server-side version
  * from `sessions.created_at` was rejected, because it would profile when somebody plays.
  *
  * Not a dark pattern. It never blocks, has no default interval, cannot be configured by the operator,
@@ -15,62 +15,20 @@
 
 import { Button, pluralise } from '@prl/ui';
 import { type ReactElement, useEffect, useRef, useState } from 'react';
-
-/** Per-tab, so closing the tab genuinely ends the sitting. Namespaced against the origin's keys. */
-const STARTED_KEY = 'prl.session.startedAt';
-
-/** Per device, so a reader does not re-choose an interval in every tab. */
-const REMINDER_KEY = 'prl.session.reminderMinutes';
-
-/** Per tab, because hiding is a decision about this sitting, not a permanent opt-out of knowing the time. */
-const HIDDEN_KEY = 'prl.session.hidden';
+import {
+  HIDDEN_KEY,
+  REMINDER_CHOICES,
+  REMINDER_KEY,
+  readAcknowledgedAt,
+  readReminder,
+  readStartedAt,
+  readStorage,
+  writeAcknowledgedAt,
+  writeStorage,
+} from '@/lib/session-sitting.ts';
 
 /** The figure has minute resolution, so a 30-second tick is at most half a minute stale. */
 const TICK_MS = 30_000;
-
-/** In minutes. `0` is no reminder and the default. Ninety is the longest that is still a reminder. */
-const REMINDER_CHOICES: readonly number[] = [0, 15, 30, 45, 60, 90];
-
-/**
- * Storage throws rather than returning null in Safari private mode and where site data is blocked,
- * and this renders on every page. `src/lib/theme.ts` carries its own private copy of this guard.
- */
-function readStorage(storage: 'localStorage' | 'sessionStorage', key: string): string | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    return window[storage].getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function writeStorage(storage: 'localStorage' | 'sessionStorage', key: string, value: string): void {
-  if (typeof window === 'undefined') return;
-  try {
-    window[storage].setItem(key, value);
-  } catch {
-    // Storage refused. The clock still runs for this page view from state.
-  }
-}
-
-/** The stored interval, or 0. Anything unrecognised is 0 rather than a guess at what was meant. */
-function readReminder(): number {
-  const stored = readStorage('localStorage', REMINDER_KEY);
-  if (stored === null) return 0;
-  const parsed = Number(stored);
-  return REMINDER_CHOICES.includes(parsed) ? parsed : 0;
-}
-
-/** The tab's stored start, or now. An implausible timestamp is replaced rather than trusted. */
-function readStartedAt(now: number): number {
-  const stored = readStorage('sessionStorage', STARTED_KEY);
-  if (stored !== null) {
-    const parsed = Number(stored);
-    if (Number.isFinite(parsed) && parsed > 0 && parsed <= now) return parsed;
-  }
-  writeStorage('sessionStorage', STARTED_KEY, String(now));
-  return now;
-}
 
 /** "less than a minute", "1 minute", "42 minutes", "2 hours 5 minutes". */
 export function describeElapsed(milliseconds: number): string {
@@ -97,17 +55,26 @@ export function SessionDuration(): ReactElement | null {
       setHidden(true);
       return undefined;
     }
-    setStartedAt(readStartedAt(Date.now()));
-    setNow(Date.now());
+    const loadedAt = Date.now();
+    const started = readStartedAt(loadedAt);
+    setStartedAt(started);
+    setAcknowledgedAt(readAcknowledgedAt(started, loadedAt));
+    setNow(loadedAt);
     setReminderMinutes(readReminder());
     const tick = window.setInterval(() => setNow(Date.now()), TICK_MS);
     return () => window.clearInterval(tick);
   }, []);
 
+  const acknowledge = (): void => {
+    const at = Date.now();
+    setAcknowledgedAt(at);
+    writeAcknowledgedAt(at);
+  };
+
   const chooseReminder = (minutes: number): void => {
     setReminderMinutes(minutes);
     // Choosing restarts the count, so a new interval never fires instantly.
-    setAcknowledgedAt(Date.now());
+    acknowledge();
     writeStorage('localStorage', REMINDER_KEY, String(minutes));
   };
 
@@ -160,7 +127,7 @@ export function SessionDuration(): ReactElement | null {
             onClick={() => {
               // The button unmounts on this press. The interval it restarted is the nearest thing left.
               reminderRef.current?.focus();
-              setAcknowledgedAt(Date.now());
+              acknowledge();
             }}
             size="sm"
             variant="ghost"

@@ -261,9 +261,10 @@ export default function PrivacyPage(): ReactElement {
             <li>
               <strong>The sitting timer in the footer</strong>: when this tab was opened (
               <code>prl.session.startedAt</code> in session storage), the reminder interval you chose if you
-              chose one (<code>prl.session.reminderMinutes</code> in local storage), and whether you hid it (
-              <code>prl.session.hidden</code> in session storage). None of these is sent anywhere, attached to
-              your account, or recorded.
+              chose one (<code>prl.session.reminderMinutes</code> in local storage), when you last
+              acknowledged a reminder in this tab (<code>prl.session.acknowledgedAt</code> in session
+              storage), and whether you hid it (<code>prl.session.hidden</code> in session storage). None of
+              these is sent anywhere, attached to your account, or recorded.
             </li>
             <li>
               <strong>An age declaration</strong>, if this deployment asks for one. It records the threshold
