@@ -7,7 +7,13 @@ import { describe, it } from 'node:test';
 import type { RawContent } from '../src/index.ts';
 import { collectContentProblems, readRawContent } from '../src/index.ts';
 
+interface RawLesson {
+  id: string;
+  prerequisites: string[];
+}
+
 interface RawQuiz {
+  lessonId?: string;
   readonly id: string;
   readonly questions: Record<string, unknown>[];
 }
@@ -16,6 +22,23 @@ function withQuizzes(edit: (quizzes: RawQuiz[]) => void): RawContent {
   const raw = structuredClone(readRawContent());
   edit(raw.quizzes as unknown as RawQuiz[]);
   return raw;
+}
+
+/** Renames the first lesson and repoints everything that refers to it, so only the id can be at fault. */
+function lessonRenamed(id: string): readonly string[] {
+  const raw = structuredClone(readRawContent());
+  const lessons = raw.lessons as unknown as RawLesson[];
+  const lesson = lessons[0];
+  assert.ok(lesson !== undefined, 'the bundle has a lesson');
+  const old = lesson.id;
+  lesson.id = id;
+  for (const entry of lessons) {
+    entry.prerequisites = entry.prerequisites.map((prerequisite) =>
+      prerequisite === old ? id : prerequisite,
+    );
+  }
+  for (const quiz of raw.quizzes as unknown as RawQuiz[]) if (quiz.lessonId === old) quiz.lessonId = id;
+  return collectContentProblems(raw);
 }
 
 function questionsOf(quizzes: readonly RawQuiz[], index: number): Record<string, unknown>[] {
@@ -54,5 +77,21 @@ describe('a quiz question id', () => {
       problems.some((problem) => /^quiz questions: duplicate id "/.test(problem)),
       problems.join('\n'),
     );
+  });
+});
+
+describe('a content id', () => {
+  it('is accepted up to the 63 characters the database stores', () => {
+    for (const id of ['a'.repeat(63), 'pot-odds-2', 'x']) assert.deepEqual(lessonRenamed(id), [], id);
+  });
+
+  it('is refused past 63 characters, or with a hyphen at either end', () => {
+    for (const id of ['a'.repeat(64), 'pot-odds-', '-pot-odds']) {
+      const problems = lessonRenamed(id);
+      assert.ok(
+        problems.some((problem) => problem.startsWith('lessons[0].id: ')),
+        `${id} was not refused: ${problems.join('; ')}`,
+      );
+    }
   });
 });

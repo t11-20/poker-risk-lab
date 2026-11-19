@@ -142,12 +142,17 @@ function requireOneOf<T extends string>(
   return value as T;
 }
 
-const CONTENT_ID = /^[a-z0-9][a-z0-9-]{0,79}$/;
+// The `prl.content_id` domain (db/migrations/0001), so every id the bundle serves can be recorded.
+const CONTENT_ID = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 
 function requireContentId(problems: Problems, path: string, value: unknown): ContentId {
-  const text = requireString(problems, path, value, { max: 80 });
+  const text = requireString(problems, path, value, { max: 63 });
   if (text !== '' && !CONTENT_ID.test(text)) {
-    problems.add(path, `"${text}" is not a valid id (lower-case letters, digits and hyphens only)`);
+    problems.add(
+      path,
+      `"${text}" is not a valid id (lower-case letters, digits and hyphens, at most 63 characters, ` +
+        'not starting or ending with a hyphen)',
+    );
   }
   return text;
 }
