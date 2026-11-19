@@ -231,7 +231,15 @@ describe('the navigation sheet is a real modal', () => {
 
   it('lets Escape out, and hands focus back to the trigger', () => {
     assert.match(nav, /event\.key === 'Escape'/u);
-    assert.match(nav, /triggerRef\.current\?\.focus\(\)/u);
+    assert.match(nav, /triggerRef\.current\?\.focus\(/u);
+  });
+
+  it('hands focus back without scrolling the page (REGRESSION)', () => {
+    // The trigger is in the sticky header, under the root's `scroll-padding`: a plain focus moved a
+    // phone reader 430px up the page on every close.
+    const returns = [...nav.matchAll(/triggerRef\.current\?\.focus\(([^)]*)\)/gu)];
+    assert.ok(returns.length > 0, 'a sweep of nothing is not a pass');
+    for (const [, argument] of returns) assert.match(argument ?? '', /preventScroll:\s*true/u);
   });
 
   it('counts a radio group as one tab stop, which is what the browser does', () => {

@@ -4,8 +4,8 @@
  * A term in running prose that opens its definition. A button, because `title` is unreachable by
  * keyboard and touch. A disclosure, not a dialog: the panel follows the trigger in the DOM, so Tab
  * walks through it with no trap. Escape returns focus to the trigger because the focused node is
- * removed. `aria-controls` is set only while the panel exists. The panel spans its paragraph
- * (`position: relative` in `learn.css`), so it needs no measurement and cannot overflow sideways.
+ * removed. `aria-controls` is set only while the panel exists. The panel spans its paragraph or callout
+ * text (`position: relative` in `learn.css`), so it needs no measurement and cannot overflow sideways.
  * Every element is phrasing content, because a `<div>` inside a `<p>` breaks hydration.
  */
 

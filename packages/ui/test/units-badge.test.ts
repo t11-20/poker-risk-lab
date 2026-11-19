@@ -90,6 +90,29 @@ describe('the figure leads to the reader’s record', () => {
   });
 });
 
+/** The figure and the word as a reader sees them, e.g. "1,000 units". */
+async function readout(units: number): Promise<string> {
+  const markup = await render({ units });
+  const found = /"prl-units__figure">([^<]*)<\/span><span class="prl-units__word prl-label">([^<]*)</u.exec(
+    markup,
+  );
+  assert.ok(found !== null, `no figure and word in the rendered badge:\n${markup}`);
+  return `${found[1]} ${found[2]}`;
+}
+
+describe('the word agrees in number with the figure', () => {
+  it('reads "1 unit" for one, as formatUnits does (REGRESSION)', async () => {
+    assert.equal(await readout(1), '1 unit');
+    assert.equal(await readout(-1), '-1 unit');
+  });
+
+  it('reads "units" for every other figure', async () => {
+    assert.equal(await readout(1000), '1,000 units');
+    assert.equal(await readout(0), '0 units');
+    assert.equal(await readout(2), '2 units');
+  });
+});
+
 describe('the panel closes the ways a reader expects (wiring)', () => {
   it('closes on a pointerdown outside the whole badge, so the `i` is still a toggle', () => {
     assert.match(CODE, /document\.addEventListener\('pointerdown', onPointerDown\)/u);
@@ -99,8 +122,15 @@ describe('the panel closes the ways a reader expects (wiring)', () => {
   it('closes on Escape, and gives focus back to the `i` when focus was inside it', () => {
     assert.match(CODE, /document\.addEventListener\('keydown', onKeyDown\)/u);
     assert.match(CODE, /event\.key !== 'Escape'\) return;/u);
-    assert.match(CODE, /if \(inside\) toggleRef\.current\?\.focus\(\);/u);
+    assert.match(CODE, /if \(inside\) toggleRef\.current\?\.focus\(/u);
     assert.match(CODE, /ref=\{toggleRef\}/u);
+  });
+
+  it('gives focus back without scrolling, because the `i` is in the sticky header (REGRESSION)', () => {
+    // Under the root's `scroll-padding`, a plain focus moved a phone reader 430px up the page.
+    const returns = [...CODE.matchAll(/toggleRef\.current\?\.focus\(([^)]*)\)/gu)];
+    assert.ok(returns.length > 0, 'a sweep of nothing is not a pass');
+    for (const [, argument] of returns) assert.match(argument ?? '', /preventScroll:\s*true/u);
   });
 
   it('listens only while open, and stops listening when it closes', () => {

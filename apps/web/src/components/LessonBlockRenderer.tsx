@@ -206,9 +206,18 @@ export function LessonBlockRenderer(props: LessonBlockRendererProps): ReactEleme
         }
 
         if (block.kind === 'callout') {
+          // A term's first mention can be in a callout, and the page's term list promises it is a button.
           return (
             <Callout key={key} tone={block.tone} title={block.title}>
-              {block.text}
+              <span className="prl-learn-callout-text">
+                <Prose
+                  text={block.text}
+                  matchers={matchers}
+                  claimed={claimed}
+                  entries={entries}
+                  related={related}
+                />
+              </span>
             </Callout>
           );
         }

@@ -168,7 +168,9 @@ export function MobileNav(props: MobileNavProps): ReactElement {
     }
     if (returnFocus.current) {
       returnFocus.current = false;
-      triggerRef.current?.focus();
+      // The trigger sits in the sticky header, under the root's `scroll-padding`, so a plain focus
+      // scrolled the page up 430px at 390x844 to "reveal" a button that was already on screen.
+      triggerRef.current?.focus({ preventScroll: true });
     }
     return undefined;
   }, [open]);
