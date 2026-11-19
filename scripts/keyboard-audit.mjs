@@ -1429,6 +1429,39 @@ async function auditAccountDeletionFocus(page) {
   else bad('Account deletion', `keeping the account left focus on "${opener || 'body'}"`);
 }
 
+/** "Show the reasoning" unmounts itself when pressed, so it must hand focus to the reasoning it revealed. */
+async function auditQuizRevealFocus(page) {
+  const path = '/learn/counting-outs';
+  section(`Quiz reveal keeps focus  ${DIM}${path}${RESET}`);
+  await page.goto(`${WEB_ORIGIN}${path}`);
+  const focusButton = (pattern) =>
+    page.evaluate(
+      `(() => { const b = [...document.querySelectorAll('.prl-learn-quiz button')].find((x) => ${pattern}.test(x.textContent.trim())); if (b === undefined) return false; b.focus(); return document.activeElement === b; })()`,
+    );
+  let found = false;
+  for (let step = 0; step < 12 && !found; step += 1) {
+    found = await focusButton('/^Show the reasoning$/');
+    if (found) break;
+    if (!(await focusButton('/^Next question$/'))) break;
+    await page.press('Enter');
+    await delay(200);
+  }
+  if (!found) {
+    bad('Quiz reveal', `no decision question with "Show the reasoning" in the quiz on ${path}`);
+    return;
+  }
+  await page.press('Enter');
+  await delay(300);
+  const landed = await page.evaluate(
+    `(() => { const a = document.activeElement; return { why: a?.classList.contains('prl-learn-quiz__explanation') ?? false, visible: a?.matches(':focus-visible') ?? false, tag: a === null || a === document.body ? 'body' : a.tagName }; })()`,
+  );
+  if (landed.why && landed.visible)
+    ok('Quiz reveal: "Show the reasoning" moves visible focus to the reasoning');
+  else if (landed.why)
+    bad('Quiz reveal', 'focus reached the reasoning, but it does not match :focus-visible');
+  else bad('Quiz reveal', `pressing "Show the reasoning" left focus on ${landed.tag}`);
+}
+
 /**
  * Sits down at a real table by keyboard with "Deal me in", then acts. The fixture route only proves the
  * controls answer keys, because `TableStage` sends nothing to a server. Without an API this warns.
@@ -1814,7 +1847,7 @@ async function main() {
           bad(`${route.title}: audit`, error instanceof Error ? error.message : String(error));
         }
       }
-      journeys += 6;
+      journeys += 7;
       try {
         await auditNarrowViewport(page);
       } catch (error) {
@@ -1844,6 +1877,11 @@ async function main() {
         await auditAccountDeletionFocus(page);
       } catch (error) {
         bad('Account deletion: audit', error instanceof Error ? error.message : String(error));
+      }
+      try {
+        await auditQuizRevealFocus(page);
+      } catch (error) {
+        bad('Quiz reveal: audit', error instanceof Error ? error.message : String(error));
       }
     });
     if (journeys === 0) bad('scope', 'no journey ran, so nothing was audited');
