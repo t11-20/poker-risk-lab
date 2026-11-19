@@ -121,7 +121,8 @@ function viewerFor(state: HandState, options: RedactOptions): SeatState | null {
 function livePots(state: HandState): readonly Pot[] {
   const contesting = state.seats.filter((seat) => seat.status !== 'folded');
   const isSettled = state.street === 'complete';
-  if (isSettled && contesting.some((seat) => seat.stack === 0)) return buildPots(state.seats);
+  // Not `stack === 0`: by now the winnings are paid, and an all-in seat that won has chips again.
+  if (isSettled && contesting.some((seat) => seat.isAllInThisHand)) return buildPots(state.seats);
 
   const total = totalPot(state);
   if (total === 0) return [];

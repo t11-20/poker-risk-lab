@@ -6,8 +6,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { legalActions } from '../src/betting.ts';
-import { applyAction } from '../src/machine.ts';
+import { orderedDeck, parseCards } from '../src/cards.ts';
+import { applyAction, startHand } from '../src/machine.ts';
 import { redactFor } from '../src/redact.ts';
+import { createDeterministicRandomForTests } from '../src/rng.ts';
 import type { HandState, Pot } from '../src/types.ts';
 import { bet, call, check, deal, fold, play, raise } from './helpers.ts';
 
@@ -156,4 +158,43 @@ test('a short all-in becomes a side pot once the street it was matched on closes
     [900, [0, 1, 2]],
     [500, [0, 1]],
   ]);
+});
+
+/** Three-handed, button 0: seat 0 is all in for 100 and seats 1 and 2 check down a side pot of 400. */
+function settledSidePot(shortStackHolds: 'aces' | 'deuces'): HandState {
+  const holes = shortStackHolds === 'aces' ? 'Kh Qh Ah Kd Qd Ad' : 'Kh Qh 2h Kd Qd 2d';
+  const dealt = parseCards(`${holes} 3c 7s 9h Js 4c`);
+  let { state } = startHand({
+    handId: 'h1',
+    roomId: 'r1',
+    handNumber: 1,
+    config: { smallBlind: 5, bigBlind: 10, ante: 0, maxSeats: 3, actionTimeoutSeconds: 30 },
+    buttonSeat: 0,
+    seats: [
+      { seat: 0, playerId: 'p0', stack: 100 },
+      { seat: 1, playerId: 'p1', stack: 1000 },
+      { seat: 2, playerId: 'p2', stack: 1000 },
+    ],
+    random: createDeterministicRandomForTests(1),
+    fixedDeck: [...dealt, ...orderedDeck().filter((card) => !dealt.includes(card))],
+  });
+  state = applyAction(state, 0, { type: 'raise', to: 100 }).state;
+  state = applyAction(state, 1, { type: 'raise', to: 300 }).state;
+  state = applyAction(state, 2, { type: 'call' }).state;
+  while (state.toAct !== null) state = applyAction(state, state.toAct, { type: 'check' }).state;
+  return state;
+}
+
+test('a finished hand keeps its side pot whoever won it, the all-in seat included (REGRESSION)', () => {
+  // Read off `stack === 0`, a short stack that won had chips again and the side pot vanished.
+  for (const holding of ['aces', 'deuces'] as const) {
+    const state = settledSidePot(holding);
+    assert.equal(state.street, 'complete');
+    const layers = (pots: readonly Pot[]) => pots.map((pot) => [pot.amount, [...pot.eligibleSeats]]);
+    assert.deepEqual(layers(redactFor(state, { viewerSeat: 1 }).pots), [
+      [300, [0, 1, 2]],
+      [400, [1, 2]],
+    ]);
+    assert.deepEqual(layers(redactFor(state, { viewerSeat: 1 }).pots), layers(state.result?.pots ?? []));
+  }
 });
