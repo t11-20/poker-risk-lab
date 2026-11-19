@@ -2,14 +2,15 @@
 
 /**
  * The lesson's sticky in-page contents. Tracked with `IntersectionObserver` and no scroll handler
- * (§5.4). The header band is read from the root's `scroll-padding-block-start` (`base.css`, WCAG
- * 2.4.11) rather than hard-coded. The active heading is the last one whose top has passed that band,
- * because "topmost visible" reads ahead and "nearest the middle" flickers. Emits no heading.
+ * (§5.4); `lib/lesson-contents.ts` has the rule and the root that makes it exact. The header band is
+ * read from the root's `scroll-padding-block-start` (`base.css`, WCAG 2.4.11) rather than hard-coded.
+ * Emits no heading.
  */
 
 import { formatIndex } from '@prl/ui';
-import { type ReactElement, useEffect, useId, useRef, useState } from 'react';
+import { type ReactElement, useEffect, useId, useState } from 'react';
 import type { OutlineHeading } from '@/lib/learn-curriculum.ts';
+import { aboveLineRootMargin, activeHeading } from '@/lib/lesson-contents.ts';
 
 export interface LessonContentsProps {
   readonly headings: readonly OutlineHeading[];
@@ -28,31 +29,36 @@ export function LessonContents(props: LessonContentsProps): ReactElement | null 
   const first = headings[0];
   const [activeId, setActiveId] = useState<string | null>(first === undefined ? null : first.id);
   const labelId = useId();
-  const positions = useRef(new Map<string, number>());
-
   useEffect(() => {
     if (headings.length === 0 || typeof IntersectionObserver === 'undefined') return undefined;
-    const offset = headerOffset();
     const ids = headings.map((heading) => heading.id);
-    const seen = positions.current;
+    let observer: IntersectionObserver | null = null;
 
-    const observer = new IntersectionObserver((entries) => {
-      for (const entry of entries) {
-        seen.set(entry.target.id, entry.boundingClientRect.top);
-      }
-      let active: string | null = null;
+    // The margin is in px of this viewport, so a resize needs a new observer.
+    const observe = (): void => {
+      observer?.disconnect();
+      const line = headerOffset() + 1;
+      const root = document.documentElement;
+      // The observer is only the trigger. Every heading is re-read, so none is judged on a stale top.
+      observer = new IntersectionObserver(
+        () => {
+          const tops = ids.map((id) => document.getElementById(id)?.getBoundingClientRect().top ?? null);
+          setActiveId(activeHeading(ids, tops, line));
+        },
+        { rootMargin: aboveLineRootMargin(root.clientHeight, root.scrollHeight, line) },
+      );
       for (const id of ids) {
-        const top = seen.get(id);
-        if (top !== undefined && top <= offset + 1) active = id;
+        const element = document.getElementById(id);
+        if (element !== null) observer.observe(element);
       }
-      setActiveId(active ?? ids[0] ?? null);
-    });
+    };
 
-    for (const id of ids) {
-      const element = document.getElementById(id);
-      if (element !== null) observer.observe(element);
-    }
-    return () => observer.disconnect();
+    observe();
+    window.addEventListener('resize', observe);
+    return () => {
+      window.removeEventListener('resize', observe);
+      observer?.disconnect();
+    };
   }, [headings]);
 
   if (headings.length === 0) return null;
