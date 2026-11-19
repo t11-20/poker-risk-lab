@@ -99,8 +99,15 @@ describe('the panel closes the ways a reader expects (wiring)', () => {
   it('closes on Escape, and gives focus back to the `i` when focus was inside it', () => {
     assert.match(CODE, /document\.addEventListener\('keydown', onKeyDown\)/u);
     assert.match(CODE, /event\.key !== 'Escape'\) return;/u);
-    assert.match(CODE, /if \(inside\) toggleRef\.current\?\.focus\(\);/u);
+    assert.match(CODE, /if \(inside\) toggleRef\.current\?\.focus\(/u);
     assert.match(CODE, /ref=\{toggleRef\}/u);
+  });
+
+  it('gives focus back without scrolling, because the `i` is in the sticky header (REGRESSION)', () => {
+    // Under the root's `scroll-padding`, a plain focus moved a phone reader 430px up the page.
+    const returns = [...CODE.matchAll(/toggleRef\.current\?\.focus\(([^)]*)\)/gu)];
+    assert.ok(returns.length > 0, 'a sweep of nothing is not a pass');
+    for (const [, argument] of returns) assert.match(argument ?? '', /preventScroll:\s*true/u);
   });
 
   it('listens only while open, and stops listening when it closes', () => {

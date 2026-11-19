@@ -91,7 +91,8 @@ export function UnitsBadge(props: UnitsBadgeProps): ReactElement {
       const inside =
         root !== null && document.activeElement !== null && root.contains(document.activeElement);
       setExpanded(false);
-      if (inside) toggleRef.current?.focus();
+      // The `i` is in the sticky header, so a plain focus scrolled the page up 430px at 390x844.
+      if (inside) toggleRef.current?.focus({ preventScroll: true });
     };
     document.addEventListener('pointerdown', onPointerDown);
     document.addEventListener('keydown', onKeyDown);
