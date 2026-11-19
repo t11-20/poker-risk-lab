@@ -26,6 +26,18 @@ function withScenarioRange(id: string, notation: string): readonly string[] {
   return collectContentProblems(raw);
 }
 
+/** The top 0.1% is "AA". The board of eq-second-pair-vs-wide-range shows Ah. */
+function topTenthWithHero(holeCards: string): readonly string[] {
+  const raw = structuredClone(readRawContent());
+  const scenario = recordWithId(raw.scenarios, 'eq-second-pair-vs-wide-range');
+  scenario['opponentRange'] = { kind: 'topPercent', percent: 0.1, label: 'aces' };
+  const seats = scenario['seats'] as Editable[];
+  const hero = seats.find((seat) => seat['isHero'] === true);
+  assert.ok(hero !== undefined, 'the scenario has a hero');
+  hero['holeCards'] = holeCards;
+  return collectContentProblems(raw).filter((problem) => problem.includes('.opponentRange'));
+}
+
 function withCalculation(questionId: string, edit: (calculation: Editable) => void): readonly string[] {
   const raw = structuredClone(readRawContent());
   const questions = raw.quizzes.flatMap((quiz) => (quiz as { questions: unknown[] }).questions);
@@ -58,6 +70,12 @@ describe('a scenario opponent range', () => {
 
   it('is accepted when some of it is left to deal', () => {
     assert.deepEqual(withScenarioRange('eq-set-on-connected-flop-jam', '88, 99'), []);
+  });
+
+  it('is refused as a top percentage when the blockers leave none of it', () => {
+    // Hero's AsAd and the board's Ah leave no two aces for "AA".
+    refused(topTenthWithHero('AsAd'), /\.opponentRange\.percent: every hand in "AA" uses a card/);
+    assert.deepEqual(topTenthWithHero('9h8h'), [], 'control: with the shipped hand, aces are left');
   });
 });
 
@@ -94,5 +112,37 @@ describe("a quiz calculation's cards", () => {
       calculation['opponentCards'] = 'AhKs';
     });
     refused(problems, /\.calculation: card appears twice — in board and in opponentCards/);
+  });
+  it('are refused when hero is not two cards', () => {
+    const hero = withCalculation('reading-board-q4', (calculation) => {
+      calculation['heroCards'] = 'AhKhQd';
+    });
+    refused(hero, /\.calculation\.heroCards: a holding is exactly 2 cards, got 3/);
+  });
+
+  it('are refused when an equity opponent names three cards', () => {
+    const opponent = withCalculation('reading-board-q4', (calculation) => {
+      calculation['opponents'] = ['QsJcTd'];
+    });
+    refused(
+      opponent,
+      /\.calculation\.opponents\[0\]: an opponent is exactly 2 cards or a range, got 3 cards/,
+    );
+  });
+
+  it('are refused when an outs opponent is present and empty', () => {
+    const empty = withCalculation('counting-outs-q4', (calculation) => {
+      calculation['opponentCards'] = '';
+    });
+    refused(empty, /\.calculation\.opponentCards: string is shorter than 1 characters/);
+  });
+
+  it('are refused when a top percentage is not a whole number from 1 to 100', () => {
+    for (const bad of ['top:abc', 'top:0', 'top:12.5', 'top:101']) {
+      const problems = withCalculation('reading-board-q4', (calculation) => {
+        calculation['opponents'] = [bad];
+      });
+      refused(problems, /\.calculation\.opponents\[0\]: a top-percentage is written "top:15"/);
+    }
   });
 });

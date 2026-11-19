@@ -229,7 +229,16 @@ function checkEquityOpponent(
   blockers: readonly Card[],
 ): Card[] {
   const trimmed = text.trim();
-  if (trimmed.toLowerCase().startsWith('top:')) return [];
+  if (trimmed.toLowerCase().startsWith('top:')) {
+    const percent = Number(trimmed.slice('top:'.length));
+    if (!Number.isInteger(percent) || percent < 1 || percent > 100) {
+      problems.add(
+        path,
+        `a top-percentage is written "top:15", a whole number from 1 to 100, got "${trimmed}"`,
+      );
+    }
+    return [];
+  }
   let cards: Card[];
   try {
     cards = parseCards(trimmed);
@@ -341,7 +350,11 @@ function validateLiveCalculation(problems: Problems, path: string, raw: unknown)
       const board = requireString(problems, `${path}.board`, raw['board'], { max: 24 });
       const hero = parseHoleCards(problems, `${path}.heroCards`, heroCards);
       const boardCards = parseCardsSafely(problems, `${path}.board`, board);
-      const opponentCards = typeof raw['opponentCards'] === 'string' ? raw['opponentCards'] : undefined;
+      // Present means an exact holding: the API hands it to `exactRange`, which throws on anything else.
+      const opponentCards =
+        raw['opponentCards'] === undefined
+          ? undefined
+          : requireString(problems, `${path}.opponentCards`, raw['opponentCards'], { max: 24 });
       const opponent =
         opponentCards === undefined ? [] : parseHoleCards(problems, `${path}.opponentCards`, opponentCards);
       checkCardsDistinct(problems, path, [
