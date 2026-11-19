@@ -788,7 +788,8 @@ describe('POST /content/scenarios/:id/attempt', () => {
       });
       const best = bestMeasuredCandidate(analysis);
       assert.ok(best !== null && best.action !== 'fold', 'premise: a measured row beats folding');
-      const named = best.to === undefined ? best.action : `${best.action} to ${best.to}`;
+      const named =
+        best.action === 'bet' || best.action === 'raise' ? `${best.action} to ${best.to}` : best.action;
       assert.match(reasoning, /^fold is not consistent/);
       assert.ok(
         reasoning.includes(`Folding gives up about ${best.ev.toFixed(1)} chips against ${named},`),
@@ -804,14 +805,15 @@ describe('POST /content/scenarios/:id/attempt', () => {
       assert.doesNotMatch(reasoning, /does not come down to one answer/);
     });
 
-    it('says the same action is supported at another size, when only that size is not', async () => {
+    it('says "instead", not "only", when the learner\'s own action is supported at another size', async () => {
       const { reasoning, supported } = await attempt('eq-flush-draw-turn-small-bet', {
         action: 'raise',
         to: 500,
       });
       assert.deepEqual(supported, ['call', 'raise'], 'premise: raise is supported at some size');
       assert.match(reasoning, /^raise is not consistent/);
-      assert.match(reasoning, /supports call and raise at another size instead\./);
+      assert.match(reasoning, /Against this range the analysis supports call instead\./);
+      assert.doesNotMatch(reasoning, /supports only/);
     });
 
     it('keeps "does not come down to one answer" for a consistent action with company', async () => {

@@ -607,16 +607,13 @@ export function consistencyOf(
       ? ''
       : ` Against this range the analysis also supports ${alternatives.join(' and ')}, so this spot ` +
         'does not come down to one answer.';
-  // A sized action is judged on its own row, so the same action can still be supported at another size.
-  const instead = verdict.supportedActions.map((candidate) =>
-    candidate === action ? `${candidate} at another size` : candidate,
-  );
+  // "Only" is said when exactly one action is defensible, which is when `matched_expected` is stored.
   const supportedInstead =
-    instead.length === 0
+    alternatives.length === 0
       ? ''
-      : instead.length === 1
-        ? ` Against this range the analysis supports only ${instead[0]} here.`
-        : ` Against this range the analysis supports ${instead.join(' and ')} instead.`;
+      : claimsOneAction
+        ? ` Against this range the analysis supports only ${alternatives[0]} here.`
+        : ` Against this range the analysis supports ${alternatives.join(' and ')} instead.`;
   // The evaluated size stated next to the learner's own, so their agreement is visible.
   const sizing =
     to === undefined ? '' : ` You sized it to ${to}; the analysis priced ${chosen.to ?? chosen.cost}.`;
@@ -651,9 +648,9 @@ export function consistencyOf(
     const benchmark =
       best === null
         ? 'the best measured alternative'
-        : best.to === undefined
-          ? best.action
-          : `${best.action} to ${best.to}`;
+        : best.action === 'bet' || best.action === 'raise'
+          ? `${best.action} to ${best.to}`
+          : best.action;
     return {
       consistent: false,
       reasoning:
