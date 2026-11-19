@@ -90,6 +90,29 @@ describe('the figure leads to the reader’s record', () => {
   });
 });
 
+/** The figure and the word as a reader sees them, e.g. "1,000 units". */
+async function readout(units: number): Promise<string> {
+  const markup = await render({ units });
+  const found = /"prl-units__figure">([^<]*)<\/span><span class="prl-units__word prl-label">([^<]*)</u.exec(
+    markup,
+  );
+  assert.ok(found !== null, `no figure and word in the rendered badge:\n${markup}`);
+  return `${found[1]} ${found[2]}`;
+}
+
+describe('the word agrees in number with the figure', () => {
+  it('reads "1 unit" for one, as formatUnits does (REGRESSION)', async () => {
+    assert.equal(await readout(1), '1 unit');
+    assert.equal(await readout(-1), '-1 unit');
+  });
+
+  it('reads "units" for every other figure', async () => {
+    assert.equal(await readout(1000), '1,000 units');
+    assert.equal(await readout(0), '0 units');
+    assert.equal(await readout(2), '2 units');
+  });
+});
+
 describe('the panel closes the ways a reader expects (wiring)', () => {
   it('closes on a pointerdown outside the whole badge, so the `i` is still a toggle', () => {
     assert.match(CODE, /document\.addEventListener\('pointerdown', onPointerDown\)/u);

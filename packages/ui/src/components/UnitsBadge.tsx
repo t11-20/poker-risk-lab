@@ -1,9 +1,10 @@
 'use client';
 
 /**
- * A play-units balance with the explanation of what units are. The word "units" is always beside the
- * number, never a bare figure or a currency symbol. The explanation is a disclosure, not a `title`,
- * which keyboard and touch cannot reach, and `aria-describedby` reads it on arrival even when collapsed.
+ * A play-units balance with the explanation of what units are. The word "units" ("unit" for one) is
+ * always beside the number, never a bare figure or a currency symbol. The explanation is a disclosure,
+ * not a `title`, which keyboard and touch cannot reach, and `aria-describedby` reads it on arrival even
+ * when collapsed.
  * It closes on Escape (focus returns to the `i` if it was inside), on a pointerdown outside the badge,
  * and when `route` changes, because an open panel covers the top of every page at 390x844.
  * Links go through `linkAs`, because this package does not depend on Next.
@@ -102,13 +103,16 @@ export function UnitsBadge(props: UnitsBadgeProps): ReactElement {
     };
   }, [expanded]);
 
+  const figure = formatChips(units);
+  // Read off the figure as shown, as `formatUnits` does, so the word agrees with the number beside it.
+  const word = Math.abs(Number(figure.replace(/,/gu, ''))) === 1 ? 'unit' : 'units';
   const readout = (
     <>
       <span className="prl-visually-hidden">{`${label}: `}</span>
       {/* Its own element for tabular figures, so the header does not twitch (§3.3). */}
-      <span className="prl-units__figure">{formatChips(units)}</span>
+      <span className="prl-units__figure">{figure}</span>
       {/* Never abbreviated or dropped. The word is the guardrail. */}
-      <span className="prl-units__word prl-label">units</span>
+      <span className="prl-units__word prl-label">{word}</span>
     </>
   );
 
