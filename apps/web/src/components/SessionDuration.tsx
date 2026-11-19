@@ -14,7 +14,7 @@
  */
 
 import { Button, pluralise } from '@prl/ui';
-import { type ReactElement, useEffect, useState } from 'react';
+import { type ReactElement, useEffect, useRef, useState } from 'react';
 
 /** Per-tab, so closing the tab genuinely ends the sitting. Namespaced against the origin's keys. */
 const STARTED_KEY = 'prl.session.startedAt';
@@ -90,6 +90,7 @@ export function SessionDuration(): ReactElement | null {
   /** When the reader last acknowledged a reminder. The next one counts from here. */
   const [acknowledgedAt, setAcknowledgedAt] = useState<number | null>(null);
   const [hidden, setHidden] = useState(false);
+  const reminderRef = useRef<HTMLSelectElement>(null);
 
   useEffect(() => {
     if (readStorage('sessionStorage', HIDDEN_KEY) !== null) {
@@ -134,6 +135,7 @@ export function SessionDuration(): ReactElement | null {
         <select
           className="prl-select"
           id="prl-session-reminder"
+          ref={reminderRef}
           onChange={(event) => chooseReminder(Number(event.target.value))}
           value={String(reminderMinutes)}
         >
@@ -154,7 +156,15 @@ export function SessionDuration(): ReactElement | null {
 
       <p className="prl-btn-row">
         {reminderDue ? (
-          <Button onClick={() => setAcknowledgedAt(Date.now())} size="sm" variant="ghost">
+          <Button
+            onClick={() => {
+              // The button unmounts on this press. The interval it restarted is the nearest thing left.
+              reminderRef.current?.focus();
+              setAcknowledgedAt(Date.now());
+            }}
+            size="sm"
+            variant="ghost"
+          >
             {`Remind me again in ${pluralise(reminderMinutes, 'minute')}`}
           </Button>
         ) : null}

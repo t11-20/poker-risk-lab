@@ -115,7 +115,10 @@ describe('the completion is claimed by the learner, not inferred from a page loa
     const component = read('components', 'LessonRead.tsx');
     // The press mints the value the send effect is guarded on. Otherwise the effect is an on-mount
     // recording, which a prefetch, a crawler and a back-button all trigger.
-    assert.match(component, /onClick=\{\(\) => setPress\(\{ lessonId \}\)\}/u);
+    assert.match(
+      component,
+      /onClick=\{\(\) => \{\s*if \(!working && !done\) setPress\(\{ lessonId \}\);\s*\}\}/u,
+    );
     assert.match(component, /if \(press === null\) return;/u);
   });
 
