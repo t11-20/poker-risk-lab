@@ -581,6 +581,35 @@ describe('POST /content/quizzes/:id/attempt', () => {
     }
   });
 
+  it('computes an expected answer for every shipped numeric question', async () => {
+    // The grading path, through the worker pool. A preflop enumeration needs more than a second.
+    const pool = new WorkerPool({ size: 1, timeoutMs: 30_000 });
+    try {
+      const questions = content().quizzes.flatMap((quiz) =>
+        quiz.questions.flatMap((question) =>
+          question.kind === 'numeric' ? [{ where: `${quiz.id} ${question.id}`, question }] : [],
+        ),
+      );
+      const kinds = new Set(questions.map((entry) => entry.question.calculation.kind));
+      assert.ok(
+        kinds.has('equity') && kinds.has('outs'),
+        `premise: equity and outs are graded, got ${[...kinds]}`,
+      );
+      const failed: string[] = [];
+      for (const { where, question } of questions) {
+        try {
+          const expected = await expectedValueFor(question, pool, DEFAULT_WORK_LIMITS);
+          if (!Number.isFinite(expected.value)) failed.push(`${where}: ${expected.value}`);
+        } catch (error) {
+          failed.push(`${where}: ${isAppError(error) ? error.code : String(error)}`);
+        }
+      }
+      assert.deepEqual(failed, []);
+    } finally {
+      await pool.close();
+    }
+  });
+
   it("grades the chip leader's prize share on the largest stack, wherever it is listed", async () => {
     const pool = new WorkerPool({ size: 1, timeoutMs: 1_000 });
     try {
@@ -825,6 +854,17 @@ describe('POST /content/scenarios/:id/attempt', () => {
 
     describe('leaves out an action the scenario sets aside', () => {
       const id = 'fl-board-plays-itself-river';
+
+      it('is sent with the scenario, which the Lab screen judges by', async () => {
+        const app = await contentApp();
+        try {
+          const response = await get(app, `/api/v1/content/scenarios/${id}`);
+          assert.equal(response.status, 200);
+          assert.deepEqual(objectAt(response.body, 'scenario')['actionsSetAside'], ['raise']);
+        } finally {
+          await app.close();
+        }
+      });
 
       it('does not name it beside a consistent call', async () => {
         const { reasoning, supported } = await attempt(id, { action: 'call' });
