@@ -97,6 +97,17 @@ describe("a quiz calculation's cards", () => {
       const reported = problems.filter((problem) => problem.includes('.calculation.opponents[0]:'));
       assert.equal(reported.length, 1, `${JSON.stringify(opponent)}: ${problems.join('; ')}`);
     }
+    for (const range of ['QQ+, AKs', 'top:15']) {
+      const problems = withCalculation('reading-board-q4', (calculation) => {
+        calculation['opponents'] = [range];
+      });
+      refused(problems, /\.calculation\.opponents\[0\]: an equity opponent is an exact two-card hand/);
+    }
+    // Ah and Kh are hero's and Qh is on the board, so each card would also be a duplicate.
+    const tooMany = withCalculation('reading-board-q4', (calculation) => {
+      calculation['opponents'] = ['AhKhQh'];
+    });
+    assert.equal(tooMany.length, 1, `a refused hand is not also a duplicate card: ${tooMany.join('; ')}`);
     const exact = withCalculation('reading-board-q4', (calculation) => {
       calculation['opponents'] = ['QsJc', 'Td9d'];
     });

@@ -189,7 +189,29 @@ function requireHolding(problems: Problems, path: string, raw: unknown): { text:
   if (problems.count === before && cards.length !== 2) {
     problems.add(path, `a holding is exactly 2 cards, got ${cards.length}`);
   }
-  return { text, cards };
+  // A refused holding passes no cards on, so the distinct-card check does not report it again.
+  return { text, cards: problems.count === before ? cards : [] };
+}
+
+/** An equity opponent, refused in words a content author can act on when it is written as a range. */
+function requireExactOpponent(
+  problems: Problems,
+  path: string,
+  raw: unknown,
+): { text: string; cards: Card[] } {
+  if (typeof raw === 'string' && raw.trim() !== '') {
+    try {
+      parseCards(raw);
+    } catch {
+      problems.add(
+        path,
+        `an equity opponent is an exact two-card hand such as "QsJc", because the browser cannot compute ` +
+          `a range or a top percentage, got "${raw}"`,
+      );
+      return { text: raw, cards: [] };
+    }
+  }
+  return requireHolding(problems, path, raw);
 }
 
 function checkCardsDistinct(
@@ -264,7 +286,7 @@ function validateEquityCalculation(
     problems.add(`${path}.opponents`, `an equity calculation has 1 to 5 opponents, got ${listed.length}`);
   }
   const held = listed.map((opponent, index) =>
-    requireHolding(problems, `${path}.opponents[${index}]`, opponent),
+    requireExactOpponent(problems, `${path}.opponents[${index}]`, opponent),
   );
   const opponents = held.map((holding) => holding.text);
   // Preflop is a board left out. A present board that is not a string, or names no cards, is refused,
