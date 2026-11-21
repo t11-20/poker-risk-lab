@@ -146,3 +146,53 @@ describe("a quiz calculation's cards", () => {
     }
   });
 });
+
+describe("a quiz calculation's board, as the calculators will take it", () => {
+  it('refuses an equity board that is not preflop, a flop, a turn or a river', () => {
+    // reading-board-q4: hero AhKh on Qh7h2c.
+    const two = withCalculation('reading-board-q4', (calculation) => {
+      calculation['board'] = 'Qh7h';
+    });
+    refused(two, /\.calculation\.board: an equity board has 0, 3, 4 or 5 cards, got 2/);
+    const turn = withCalculation('reading-board-q4', (calculation) => {
+      calculation['board'] = 'Qh7h2c3d';
+    });
+    assert.deepEqual(turn, [], 'control: a turn is a board');
+  });
+
+  it('refuses outs counted on anything but a flop or a turn', () => {
+    // counting-outs-q4: hero Th9h on Ah7h2c4d.
+    const river = withCalculation('counting-outs-q4', (calculation) => {
+      calculation['board'] = 'Ah7h2c4dKs';
+    });
+    refused(river, /\.calculation\.board: outs are counted on a flop or a turn, 3 or 4 cards, got 5/);
+    for (const empty of ['   ', ',', ' , ,']) {
+      const blank = withCalculation('counting-outs-q4', (calculation) => {
+        calculation['board'] = empty;
+      });
+      refused(blank, /\.calculation\.board: outs are counted on a flop or a turn, 3 or 4 cards, got 0/);
+    }
+    const flop = withCalculation('counting-outs-q4', (calculation) => {
+      calculation['board'] = 'Ah7h2c';
+    });
+    assert.deepEqual(flop, [], 'control: a flop is counted');
+  });
+
+  it('reports a missing or empty outs board once, not also as zero cards', () => {
+    for (const board of [undefined, '']) {
+      const problems = withCalculation('counting-outs-q4', (calculation) => {
+        calculation['board'] = board;
+      });
+      const reported = problems.filter((problem) => problem.includes('.calculation.board'));
+      assert.equal(reported.length, 1, `${JSON.stringify(board)}: ${problems.join('; ')}`);
+    }
+  });
+
+  it('reports an unparseable outs board once, not also as zero cards', () => {
+    const problems = withCalculation('counting-outs-q4', (calculation) => {
+      calculation['board'] = 'Ah7hXx';
+    });
+    refused(problems, /\.calculation\.board: could not parse cards from "Ah7hXx"/);
+    assert.ok(!problems.some((problem) => problem.includes('got 0')), problems.join('; '));
+  });
+});
