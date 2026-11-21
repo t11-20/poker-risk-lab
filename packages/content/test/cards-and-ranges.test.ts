@@ -153,7 +153,10 @@ describe("a quiz calculation's board, as the calculators will take it", () => {
     const two = withCalculation('reading-board-q4', (calculation) => {
       calculation['board'] = 'Qh7h';
     });
-    refused(two, /\.calculation\.board: an equity board has 0, 3, 4 or 5 cards, got 2/);
+    refused(
+      two,
+      /\.calculation\.board: an equity board is left out before the flop, or has 3, 4 or 5 cards, got 2/,
+    );
     const turn = withCalculation('reading-board-q4', (calculation) => {
       calculation['board'] = 'Qh7h2c3d';
     });
@@ -194,5 +197,55 @@ describe("a quiz calculation's board, as the calculators will take it", () => {
     });
     refused(problems, /\.calculation\.board: could not parse cards from "Ah7hXx"/);
     assert.ok(!problems.some((problem) => problem.includes('got 0')), problems.join('; '));
+  });
+});
+
+describe("a calculation's holdings and equity board, each refused once", () => {
+  const at = (problems: readonly string[], path: string) =>
+    problems.filter((problem) => problem.includes(`.calculation.${path}:`));
+
+  // reading-board-q4 is equity, hero AhKh on Qh7h2c. counting-outs-q4 is outs, hero Th9h on Ah7h2c4d.
+  const holdings = [
+    { question: 'reading-board-q4', field: 'heroCards', good: 'AhKh' },
+    { question: 'counting-outs-q4', field: 'heroCards', good: 'Th9h' },
+    { question: 'counting-outs-q4', field: 'opponentCards', good: 'AsKs' },
+  ];
+
+  it('refuses a holding that is missing, blank, unparseable or not two cards', () => {
+    for (const { question, field } of holdings) {
+      for (const value of [undefined, null, 7, '', '   ', ',', ' , ', 'Xx', '9c', '9c8c6c']) {
+        if (field === 'opponentCards' && value === undefined) continue;
+        const problems = withCalculation(question, (calculation) => {
+          calculation[field] = value;
+        });
+        assert.equal(
+          at(problems, field).length,
+          1,
+          `${question} ${field} ${JSON.stringify(value)}: ${problems.join('; ')}`,
+        );
+      }
+    }
+  });
+
+  it('accepts the shipped holdings', () => {
+    for (const { question, field, good } of holdings) {
+      const problems = withCalculation(question, (calculation) => {
+        calculation[field] = good;
+      });
+      assert.deepEqual(problems, [], `control: ${question} ${field}`);
+    }
+  });
+
+  it('refuses an equity board that is present but is not a string or names no cards', () => {
+    for (const board of [null, 7, ['Qh', '7h', '2c'], '', '   ', ',', 'Xx', 'Qh']) {
+      const problems = withCalculation('reading-board-q4', (calculation) => {
+        calculation['board'] = board;
+      });
+      assert.equal(at(problems, 'board').length, 1, `${JSON.stringify(board)}: ${problems.join('; ')}`);
+    }
+    const preflop = withCalculation('reading-board-q4', (calculation) => {
+      calculation['board'] = undefined;
+    });
+    assert.deepEqual(preflop, [], 'control: a board left out is preflop');
   });
 });

@@ -177,13 +177,19 @@ function parseCardsSafely(problems: Problems, path: string, text: string): Card[
   }
 }
 
-/** Exactly two cards, as `exactRange` and the equity planner require of a holding. */
-function parseHoleCards(problems: Problems, path: string, text: string): Card[] {
+/**
+ * A string of exactly two cards, as `exactRange` and the equity planner require of a holding. Blank or
+ * separator-only text parses as no cards without a problem, so the length is checked only when nothing
+ * was reported, and each bad holding is reported once.
+ */
+function requireHolding(problems: Problems, path: string, raw: unknown): { text: string; cards: Card[] } {
+  const before = problems.count;
+  const text = requireString(problems, path, raw, { max: 24 });
   const cards = parseCardsSafely(problems, path, text);
-  if (cards.length !== 0 && cards.length !== 2) {
+  if (problems.count === before && cards.length !== 2) {
     problems.add(path, `a holding is exactly 2 cards, got ${cards.length}`);
   }
-  return cards;
+  return { text, cards };
 }
 
 function checkCardsDistinct(
@@ -282,17 +288,24 @@ function validateEquityCalculation(
   path: string,
   raw: Record<string, unknown>,
 ): Extract<LiveCalculation, { kind: 'equity' }> {
-  const heroCards = requireString(problems, `${path}.heroCards`, raw['heroCards'], { max: 24 });
-  const hero = parseHoleCards(problems, `${path}.heroCards`, heroCards);
+  const { text: heroCards, cards: hero } = requireHolding(problems, `${path}.heroCards`, raw['heroCards']);
   const opponents = requireStringArray(problems, `${path}.opponents`, raw['opponents'], {
     min: 1,
     max: 5,
   });
-  const board = typeof raw['board'] === 'string' ? raw['board'] : undefined;
+  // Preflop is a board left out. A present board that is not a string, or names no cards, is refused,
+  // because the calculators would otherwise run it as preflop. Each bad board is reported once.
+  const before = problems.count;
+  const board =
+    raw['board'] === undefined
+      ? undefined
+      : requireString(problems, `${path}.board`, raw['board'], { max: 24 });
   const boardCards = board === undefined ? [] : parseCardsSafely(problems, `${path}.board`, board);
-  // An unparseable board parses as no cards, which is a legal length, so it is reported once.
-  if (![0, 3, 4, 5].includes(boardCards.length)) {
-    problems.add(`${path}.board`, `an equity board has 0, 3, 4 or 5 cards, got ${boardCards.length}`);
+  if (board !== undefined && problems.count === before && ![3, 4, 5].includes(boardCards.length)) {
+    problems.add(
+      `${path}.board`,
+      `an equity board is left out before the flop, or has 3, 4 or 5 cards, got ${boardCards.length}`,
+    );
   }
   const seen: [string, readonly Card[]][] = [
     ['heroCards', hero],
@@ -314,13 +327,12 @@ function validateOutsCalculation(
   path: string,
   raw: Record<string, unknown>,
 ): Extract<LiveCalculation, { kind: 'outs' }> {
-  const heroCards = requireString(problems, `${path}.heroCards`, raw['heroCards'], { max: 24 });
+  const { text: heroCards, cards: hero } = requireHolding(problems, `${path}.heroCards`, raw['heroCards']);
   // Blank or separator-only text parses as no cards without a problem, so a report is counted, not guessed.
   const before = problems.count;
   const board = requireString(problems, `${path}.board`, raw['board'], { max: 24 });
   const boardCards = parseCardsSafely(problems, `${path}.board`, board);
   const boardReported = problems.count > before;
-  const hero = parseHoleCards(problems, `${path}.heroCards`, heroCards);
   if (!boardReported && boardCards.length !== 3 && boardCards.length !== 4) {
     problems.add(
       `${path}.board`,
@@ -328,12 +340,12 @@ function validateOutsCalculation(
     );
   }
   // Present means an exact holding: the API hands it to `exactRange`, which throws on anything else.
-  const opponentCards =
+  const named =
     raw['opponentCards'] === undefined
       ? undefined
-      : requireString(problems, `${path}.opponentCards`, raw['opponentCards'], { max: 24 });
-  const opponent =
-    opponentCards === undefined ? [] : parseHoleCards(problems, `${path}.opponentCards`, opponentCards);
+      : requireHolding(problems, `${path}.opponentCards`, raw['opponentCards']);
+  const opponentCards = named?.text;
+  const opponent = named?.cards ?? [];
   checkCardsDistinct(problems, path, [
     ['heroCards', hero],
     ['board', boardCards],
