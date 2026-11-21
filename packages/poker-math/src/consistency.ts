@@ -133,7 +133,7 @@ export function defensibleActions(report: CoachReport, marginUnits: number): rea
  * Whether the analysis priced the submitted action.
  *
  * - `'priced'` means a row exists for this exact decision.
- * - `'action-not-priced'` means no row exists for this action name.
+ * - `'action-not-priced'` means no row exists for this action name, or the scenario set it aside.
  * - `'sizing-not-priced'` means the action was priced, but at other sizes.
  *
  * In the last two `consistent` is `false` as "not established", never as "wrong". A caller writing a
@@ -146,19 +146,21 @@ export interface ConsistencyVerdict {
   readonly consistent: boolean;
   /** Whether the analysis priced this exact decision, and if not, in which of the two ways. */
   readonly pricing: ConsistencyPricing;
-  /** The row the chosen action was judged on, or null when the analysis did not price it. */
+  /** The row the chosen action was judged on. Null when it was not priced, or was set aside. */
   readonly chosen: ActionCandidate | null;
-  /** Sizes priced for the submitted action name. Empty when none were priced or it moves no chips. */
+  /** Sizes priced for the submitted action. Empty when none were, it moves no chips, or it was set aside. */
   readonly pricedSizes: readonly number[];
   /**
    * The best EV among rows that do not rest on an assumed fold frequency, floored at zero. This is
    * the figure a fold was judged against. See `bestMeasuredCandidate`.
    */
   readonly measuredBestEv: number;
+  /** The row `measuredBestEv` was read from, so a caller names it without recomputing. */
+  readonly measuredBest: ActionCandidate | null;
   /** The margin in chips this verdict used, for showing the reader the threshold they were held to. */
   readonly marginUnits: number;
   readonly supportedActions: readonly string[];
-  /** Every action the analysis priced at all, supported or not. */
+  /** Every action the analysis priced at all, supported or not, less any the scenario set aside. */
   readonly availableActions: readonly string[];
   /**
    * True when exactly one action is defensible. Stored as `scenario_attempts.matched_expected` only
@@ -179,6 +181,11 @@ export interface ConsistencyInput {
    * cannot widen the threshold. Every caller passes it.
    */
   readonly bigBlind?: number;
+  /**
+   * Actions the scenario says are not being evaluated (`Scenario.actionsSetAside`). Their rows are
+   * left out of the verdict, so they are neither supported nor the benchmark a fold is judged against.
+   */
+  readonly setAside?: readonly string[];
 }
 
 /**
@@ -187,7 +194,15 @@ export interface ConsistencyInput {
  * "not established", so a caller must read `pricing` before rendering it.
  */
 export function judgeConsistency(input: ConsistencyInput): ConsistencyVerdict {
-  const { report, action, to } = input;
+  const { action, to } = input;
+  const setAside = input.setAside ?? [];
+  const report =
+    setAside.length === 0
+      ? input.report
+      : {
+          ...input.report,
+          candidates: input.report.candidates.filter((row) => !setAside.includes(row.action)),
+        };
   const bigBlind = input.bigBlind ?? 1;
   const marginUnits = consistencyMarginUnits(bigBlind);
 
@@ -210,6 +225,7 @@ export function judgeConsistency(input: ConsistencyInput): ConsistencyVerdict {
       chosen: null,
       pricedSizes,
       measuredBestEv,
+      measuredBest: measured,
       marginUnits,
       supportedActions,
       availableActions,
@@ -227,6 +243,7 @@ export function judgeConsistency(input: ConsistencyInput): ConsistencyVerdict {
     chosen,
     pricedSizes,
     measuredBestEv,
+    measuredBest: measured,
     marginUnits,
     supportedActions,
     availableActions,

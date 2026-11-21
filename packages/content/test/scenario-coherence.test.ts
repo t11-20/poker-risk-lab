@@ -216,6 +216,92 @@ test('a scenario that says the opponent does not fold must declare that the whol
   assert.equal(mentioning(problemsFor(range), /wholeRangeContinues.*no assumption says/).length, 1);
 });
 
+test('a scenario that sets actions aside says so in an assumption, in one fixed form', () => {
+  const setAsideProblems = (scenario: RawScenario) => mentioning(problemsFor(scenario), /actionsSetAside/);
+  const river = scenarioNamed('fl-board-plays-itself-river');
+  assert.deepEqual(river['actionsSetAside'], ['raise']);
+  assert.deepEqual(setAsideProblems(river), [], 'control: the shipped scenario is consistent');
+
+  const undeclared = structuredClone(river);
+  undeclared['actionsSetAside'] = undefined;
+  assert.equal(mentioning(setAsideProblems(undeclared), /is missing, but an assumption mentions/).length, 1);
+
+  const unsaid = scenarioNamed('rk-high-spr-same-top-pair');
+  assert.deepEqual(setAsideProblems(unsaid), [], 'control: no field and no sentence');
+  unsaid['actionsSetAside'] = ['bet'];
+  assert.deepEqual(setAsideProblems(unsaid), [
+    'scenarios[0].actionsSetAside: is ["bet"], so one assumption must be ' +
+      '"Betting is not being evaluated here." or end "; betting is not being evaluated here.", ' +
+      'and no other may mention what is evaluated, or the learner is not told exactly what the verdict ' +
+      'leaves out',
+  ]);
+
+  const malformed = structuredClone(river);
+  malformed['assumptions'] = 'x';
+  assert.deepEqual(setAsideProblems(malformed), [], 'a malformed assumptions list is reported only there');
+});
+
+test('a set-aside sentence in other words is refused, not guessed at', () => {
+  const withSentences = (sentences: readonly string[], field: unknown) => {
+    const scenario = scenarioNamed('fl-board-plays-itself-river');
+    const kept = (scenario['assumptions'] as string[]).filter((text) => !/evaluat/.test(text));
+    scenario['assumptions'] = [...kept, ...sentences];
+    scenario['actionsSetAside'] = field;
+    return mentioning(problemsFor(scenario), /actionsSetAside/);
+  };
+  for (const [sentences, field] of [
+    [['Raising is not being evaluated here.'], ['raise']],
+    [['You may call or fold; raising is not being evaluated here.'], ['raise']],
+    [['Betting and raising are not being evaluated here.'], ['bet', 'raise']],
+    [['Betting, calling and raising are not being evaluated here.'], ['bet', 'call', 'raise']],
+  ] as const) {
+    assert.deepEqual(withSentences(sentences, field), [], `accepted: ${sentences.join(' / ')}`);
+  }
+  const shipped = 'You may call or fold; raising is not being evaluated here.';
+  for (const [sentences, field] of [
+    [['Betting or raising is not being evaluated here.'], ['raise']],
+    [['Betting, calling and raising are not being evaluated here.'], ['call', 'raise']],
+    [['Compared with calling, raising is not being evaluated here.'], ['raise']],
+    [['Calling vs. raising is not being evaluated here.'], ['raise']],
+    [['One limit: raising is not being evaluated here.'], ['raise']],
+    [['Raising is not being evaluated, and neither is betting.'], ['raise']],
+    [["Raising isn't evaluated here."], ['raise']],
+    [[shipped, 'Betting will not be evaluated either.'], ['raise']],
+    [['Raising will not be evaluated here.'], undefined],
+    [['Raising is never evaluated here.', 'Rake is not evaluated here.'], undefined],
+  ] as const) {
+    const problems = withSentences(sentences, field);
+    assert.equal(
+      problems.length,
+      1,
+      `${sentences.join(' / ')} with ${JSON.stringify(field)}: ${problems.join('; ')}`,
+    );
+  }
+});
+
+test('actionsSetAside is a list of action names, each reported once', () => {
+  const field = (value: unknown) => {
+    const scenario = scenarioNamed('fl-board-plays-itself-river');
+    scenario['actionsSetAside'] = value;
+    return mentioning(problemsFor(scenario), /actionsSetAside/);
+  };
+  assert.deepEqual(field([]), [
+    'scenarios[0].actionsSetAside: must be a non-empty list of action names, or left out',
+  ]);
+  assert.deepEqual(field('raise'), [
+    'scenarios[0].actionsSetAside: must be a non-empty list of action names, or left out',
+  ]);
+  assert.deepEqual(field(['raise', 'shove']), [
+    'scenarios[0].actionsSetAside[1]: expected one of call | bet | raise, got string "shove"',
+  ]);
+  assert.deepEqual(field(['raise', 'raise']), [
+    'scenarios[0].actionsSetAside: names an action more than once',
+  ]);
+  assert.deepEqual(field(['check']), [
+    'scenarios[0].actionsSetAside[0]: expected one of call | bet | raise, got string "check"',
+  ]);
+});
+
 test('a fold rate stated in an assumption is the one the scenario declares', () => {
   const stated =
     'Every bet and raise below is priced against an assumed 30% chance that the opponent folds to it.';

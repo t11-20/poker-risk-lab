@@ -22,7 +22,7 @@ export type ScenarioAction = ActionCandidate['action'];
 export interface Consistency {
   /** True when the chosen action is defensible against the stated range. From the shared rule. */
   readonly consistent: boolean;
-  /** The chosen action's EV, or null when the report has no candidate for it. */
+  /** The chosen action's EV, or null when the report has no candidate for it or the scenario set it aside. */
   readonly chosenEv: number | null;
   /**
    * The row the Coach's reading stands on (`suggestedCandidate`), named as `rowName` names it, not the
@@ -53,6 +53,11 @@ export interface Consistency {
    */
   readonly pricing: ConsistencyPricing;
   /**
+   * The scenario's assumptions set this action aside, so its rows, still shown in the Coach's table,
+   * were left out of the verdict. `pricing` is then `'action-not-priced'`.
+   */
+  readonly setAside: boolean;
+  /**
    * `benchmarkEv - chosenEv`, signed, null when unpriced. Not `shortfallUnits`, which is zero inside the
    * allowance and would print 0.0 for an action 2.9 units behind folding.
    */
@@ -65,22 +70,27 @@ export interface Consistency {
 
 /**
  * Every caller should pass `bigBlind`. Without it the shared rule falls back to one chip, the
- * strictest margin, while the API grades at the real big blind.
+ * strictest margin, while the API grades at the real big blind. A scenario caller passes its
+ * `actionsSetAside` too, or the screen grades an action the API leaves out.
  */
 export function judgeConsistency(
   report: CoachReport,
   action: ScenarioAction,
   to?: number,
   bigBlind?: number,
+  setAside?: readonly ScenarioAction[],
 ): Consistency {
   const verdict = judgeShared({
     report,
     action,
     ...(to === undefined ? {} : { to }),
     ...(bigBlind === undefined ? {} : { bigBlind }),
+    ...(setAside === undefined ? {} : { setAside }),
   });
   const chosenEv = verdict.chosen === null ? null : verdict.chosen.ev;
-  const reading = suggestedCandidate(report);
+  const suggested = suggestedCandidate(report);
+  // A reading the scenario sets aside is not offered beside the verdict, which leaves it out.
+  const reading = suggested !== null && setAside?.includes(suggested.action) === true ? null : suggested;
   const benchmarkEv = action === 'fold' ? verdict.measuredBestEv : 0;
 
   return {
@@ -98,6 +108,7 @@ export function judgeConsistency(
     shortfallUnits: verdict.shortfallUnits,
     benchmarkEv,
     pricing: verdict.pricing,
+    setAside: setAside?.includes(action) ?? false,
     behindBenchmarkUnits: chosenEv === null ? null : benchmarkEv - chosenEv,
     withinAllowance: chosenEv === null ? null : verdict.consistent,
     nearestPriced:

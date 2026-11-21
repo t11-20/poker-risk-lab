@@ -14,7 +14,8 @@ Do these steps in order. Steps 1 to 3 are on your own computer and use no CI min
 3. Fix each problem that the review finds. If you fix something, do steps 1 to 3 again.
 4. Push once for each pass through these steps.
 
-If `main` moves before you merge, rebase the branch on `main`. Then do steps 1 to 4 again.
+If `main` moves before you merge, merge `main` into the branch with a merge commit. Do not rebase a
+branch you have pushed, and do not force-push. Then do steps 1 to 4 again.
 
 ## In the pull request
 
@@ -26,7 +27,7 @@ If `main` moves before you merge, rebase the branch on `main`. Then do steps 1 t
 
 Merge only when all of these are true:
 
-- The branch is rebased on the latest `main`.
+- The branch contains the latest `main`.
 - All required CI checks pass.
 - All review threads are resolved.
 - The local review is clean.

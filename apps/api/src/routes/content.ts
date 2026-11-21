@@ -49,7 +49,6 @@ import type {
 import { withinTolerance } from '@prl/contracts';
 import { type Card, parseCards } from '@prl/poker-engine';
 import {
-  bestMeasuredCandidate,
   computeOuts,
   deriveContestablePot,
   deriveLegalActions,
@@ -559,15 +558,34 @@ interface Consistency {
 /**
  * The rule is `judgeConsistency` in `@prl/poker-math`, shared with `apps/web`. Only the wording is here.
  * `bigBlind` comes from the scenario because the margin is in big blinds, not a pot fraction.
+ * `setAside` is required so that no caller can leave out what a scenario says is not being evaluated.
  */
 export function consistencyOf(
   report: CoachReport,
   action: string,
   to: number | undefined,
   bigBlind: number,
+  setAside: readonly string[],
 ): Consistency {
-  const verdict = judgeConsistency({ report, action, bigBlind, ...(to === undefined ? {} : { to }) });
+  const verdict = judgeConsistency({
+    report,
+    action,
+    bigBlind,
+    setAside,
+    ...(to === undefined ? {} : { to }),
+  });
   const { claimsOneAction } = verdict;
+
+  if (setAside.includes(action)) {
+    return {
+      consistent: false,
+      reasoning:
+        `This scenario does not evaluate ${action}: its assumptions set it aside, so there is nothing ` +
+        `here to judge it against. It evaluated: ${verdict.availableActions.join(', ')}.`,
+      claimsOneAction,
+      priced: false,
+    };
+  }
 
   // A size the analysis never evaluated. `to` is always present here, and the check is written out.
   // Sizes hero could not reach are refused earlier, in `requirePayableSizing`.
@@ -644,7 +662,7 @@ export function consistencyOf(
     ' That is a statement about the stated range assumption, and a different assumption could change it.';
   // A fold's shortfall is `measuredBestEv`, so the row it is behind is named, not folding itself.
   if (chosen.action === 'fold') {
-    const best = bestMeasuredCandidate(report);
+    const best = verdict.measuredBest;
     const benchmark =
       best === null
         ? 'the best measured alternative'
@@ -754,7 +772,13 @@ async function gradeQuestion(
     });
   }
   const report = await reportFor(deps.pool, scenario);
-  const consistency = consistencyOf(report, answer.action, undefined, scenario.bigBlind);
+  const consistency = consistencyOf(
+    report,
+    answer.action,
+    undefined,
+    scenario.bigBlind,
+    scenario.actionsSetAside ?? [],
+  );
   return { correct: consistency.consistent, explanation: `${question.explanation} ${consistency.reasoning}` };
 }
 
@@ -995,7 +1019,13 @@ const contentRoutes: FastifyPluginAsync = (app) => {
       requireSizing(request.body);
       requirePayableSizing(scenario, request.body);
       const analysis = await reportFor(currentPool(), scenario);
-      const consistency = consistencyOf(analysis, request.body.action, request.body.to, scenario.bigBlind);
+      const consistency = consistencyOf(
+        analysis,
+        request.body.action,
+        request.body.to,
+        scenario.bigBlind,
+        scenario.actionsSetAside ?? [],
+      );
 
       const userId = callerUserId(request);
       let recorded = false;

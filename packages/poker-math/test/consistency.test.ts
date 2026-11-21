@@ -305,3 +305,52 @@ describe('the stakes the margin is denominated in', () => {
     assert.equal(judgeConsistency({ report: smuggled, action: 'call' }).consistent, false);
   });
 });
+
+describe('actions a scenario sets aside', () => {
+  // Shaped like `fl-board-plays-itself-river`, whose assumptions say raising is not being evaluated.
+  const report = reportWith([
+    candidate({ action: 'fold', ev: 0 }),
+    candidate({ action: 'call', ev: 21 }),
+    candidate({ action: 'raise', ev: 40, to: 40, foldEquityAssumed: 0 }),
+  ]);
+  const setAside = ['raise'];
+
+  it('are never named as supported', () => {
+    const verdict = judgeConsistency({ report, action: 'call', bigBlind: 10, setAside });
+    assert.deepEqual([...verdict.supportedActions], ['call']);
+    assert.deepEqual([...verdict.availableActions], ['fold', 'call']);
+    assert.equal(verdict.claimsOneAction, true);
+    assert.deepEqual(
+      [...judgeConsistency({ report, action: 'call', bigBlind: 10 }).supportedActions],
+      ['call', 'raise'],
+      'control: without the set-aside the raise is supported',
+    );
+  });
+
+  it('are not the benchmark a fold is judged against', () => {
+    const verdict = judgeConsistency({ report, action: 'fold', bigBlind: 10, setAside });
+    assert.equal(verdict.measuredBestEv, 21);
+    assert.equal(verdict.measuredBest?.action, 'call');
+    assert.equal(verdict.shortfallUnits, 21);
+    const control = judgeConsistency({ report, action: 'fold', bigBlind: 10 });
+    assert.equal(
+      control.measuredBest?.action,
+      'raise',
+      'control: without the set-aside the raise is the benchmark',
+    );
+  });
+
+  it('are not graded when chosen, at any size', () => {
+    for (const to of [40, 60]) {
+      const verdict = judgeConsistency({ report, action: 'raise', to, bigBlind: 10, setAside });
+      assert.equal(verdict.pricing, 'action-not-priced');
+      assert.equal(verdict.chosen, null);
+      assert.equal(verdict.consistent, false);
+    }
+    assert.equal(
+      judgeConsistency({ report, action: 'raise', to: 40, bigBlind: 10 }).consistent,
+      true,
+      'control: without the set-aside the raise to 40 is graded',
+    );
+  });
+});

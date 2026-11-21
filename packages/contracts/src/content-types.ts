@@ -88,6 +88,7 @@ export type LiveCalculation =
       readonly kind: 'equity';
       readonly heroCards: string;
       readonly board?: string;
+      /** Exact two-card holdings, as the browser computes them. `validate.ts` refuses a range. */
       readonly opponents: readonly string[];
     }
   | {
@@ -272,6 +273,11 @@ export interface Scenario {
    * rate. `validate.ts` holds the two together, so the table prices the figure the learner reads.
    */
   readonly assumedFoldEquity?: number;
+  /**
+   * Actions an assumption says are not being evaluated. The verdict leaves them out, so it never
+   * supports an action the learner was told is out of scope. `validate.ts` holds the two together.
+   */
+  readonly actionsSetAside?: readonly ('call' | 'bet' | 'raise')[];
   /** Assumptions the analysis depends on, shown next to every number. */
   readonly assumptions: readonly string[];
   /** The reasoning the learner should arrive at, in prose. */

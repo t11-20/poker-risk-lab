@@ -177,13 +177,43 @@ function parseCardsSafely(problems: Problems, path: string, text: string): Card[
   }
 }
 
-/** Exactly two cards, as `exactRange` and the equity planner require of a holding. */
-function parseHoleCards(problems: Problems, path: string, text: string): Card[] {
-  const cards = parseCardsSafely(problems, path, text);
-  if (cards.length !== 0 && cards.length !== 2) {
+/**
+ * A string of exactly two cards, as `exactRange` and the equity planner require of a holding. Blank or
+ * separator-only text parses as no cards without a problem, so the length is checked only when nothing
+ * was reported, and each bad holding is reported once.
+ */
+function requireHolding(problems: Problems, path: string, raw: unknown): { text: string; cards: Card[] } {
+  const before = problems.count;
+  const text = requireString(problems, path, raw, { max: 24 });
+  const cards = problems.count === before ? parseCardsSafely(problems, path, text) : [];
+  if (problems.count === before && cards.length !== 2) {
     problems.add(path, `a holding is exactly 2 cards, got ${cards.length}`);
   }
-  return cards;
+  // A refused holding passes no cards on, so the distinct-card check does not report it again.
+  return { text, cards: problems.count === before ? cards : [] };
+}
+
+/** An equity opponent, refused in words a content author can act on when it is written as a range. */
+function requireExactOpponent(
+  problems: Problems,
+  path: string,
+  raw: unknown,
+): { text: string; cards: Card[] } {
+  if (typeof raw === 'string' && raw.trim() !== '') {
+    try {
+      parseCards(raw);
+    } catch (error) {
+      // The parser's reason is kept, so a mistyped card reads as a typo and not only as a range.
+      const reason = error instanceof CardParseError ? error.message : String(error);
+      problems.add(
+        path,
+        `an equity opponent is an exact two-card hand such as "QsJc", because the browser cannot compute ` +
+          `a range or a top percentage, got "${raw}" (${reason})`,
+      );
+      return { text: raw, cards: [] };
+    }
+  }
+  return requireHolding(problems, path, raw);
 }
 
 function checkCardsDistinct(
@@ -218,40 +248,6 @@ function checkRangeDealable(
   }
 }
 
-/**
- * The equity planner's order in `apps/api/src/calc/parse.ts`: `top:NN`, then exact cards, then range
- * notation. Returns the cards an exact holding names, for the distinct-card check.
- */
-function checkEquityOpponent(
-  problems: Problems,
-  path: string,
-  text: string,
-  blockers: readonly Card[],
-): Card[] {
-  const trimmed = text.trim();
-  if (trimmed.toLowerCase().startsWith('top:')) {
-    const percent = Number(trimmed.slice('top:'.length));
-    if (!Number.isInteger(percent) || percent < 1 || percent > 100) {
-      problems.add(
-        path,
-        `a top-percentage is written "top:15", a whole number from 1 to 100, got "${trimmed}"`,
-      );
-    }
-    return [];
-  }
-  let cards: Card[];
-  try {
-    cards = parseCards(trimmed);
-  } catch {
-    checkRangeDealable(problems, path, trimmed, blockers);
-    return [];
-  }
-  if (cards.length === 2) return cards;
-  if (cards.length === 0) checkRangeDealable(problems, path, trimmed, blockers);
-  else problems.add(path, `an opponent is exactly 2 cards or a range, got ${cards.length} cards`);
-  return [];
-}
-
 function validateGlossaryEntry(problems: Problems, path: string, raw: unknown): GlossaryEntry {
   if (!isRecord(raw)) {
     problems.add(path, `expected an object, got ${describe(raw)}`);
@@ -282,29 +278,39 @@ function validateEquityCalculation(
   path: string,
   raw: Record<string, unknown>,
 ): Extract<LiveCalculation, { kind: 'equity' }> {
-  const heroCards = requireString(problems, `${path}.heroCards`, raw['heroCards'], { max: 24 });
-  const hero = parseHoleCards(problems, `${path}.heroCards`, heroCards);
-  const opponents = requireStringArray(problems, `${path}.opponents`, raw['opponents'], {
-    min: 1,
-    max: 5,
-  });
-  const board = typeof raw['board'] === 'string' ? raw['board'] : undefined;
-  const boardCards = board === undefined ? [] : parseCardsSafely(problems, `${path}.board`, board);
-  // An unparseable board parses as no cards, which is a legal length, so it is reported once.
-  if (![0, 3, 4, 5].includes(boardCards.length)) {
-    problems.add(`${path}.board`, `an equity board has 0, 3, 4 or 5 cards, got ${boardCards.length}`);
+  const { text: heroCards, cards: hero } = requireHolding(problems, `${path}.heroCards`, raw['heroCards']);
+  // Exact holdings only: the browser computes a lesson's equity with `exactRange`, which takes no range
+  // or `top:NN`, although the API's planner would.
+  const listed = Array.isArray(raw['opponents']) ? raw['opponents'] : [];
+  if (!Array.isArray(raw['opponents'])) {
+    problems.add(`${path}.opponents`, `expected an array, got ${describe(raw['opponents'])}`);
+  } else if (listed.length < 1 || listed.length > 5) {
+    problems.add(`${path}.opponents`, `an equity calculation has 1 to 5 opponents, got ${listed.length}`);
+  }
+  const held = listed.map((opponent, index) =>
+    requireExactOpponent(problems, `${path}.opponents[${index}]`, opponent),
+  );
+  const opponents = held.map((holding) => holding.text);
+  // Preflop is a board left out. A present board that is not a string, or names no cards, is refused,
+  // because the calculators would otherwise run it as preflop. Each bad board is reported once.
+  const before = problems.count;
+  const board =
+    raw['board'] === undefined
+      ? undefined
+      : requireString(problems, `${path}.board`, raw['board'], { max: 24 });
+  const boardCards =
+    board === undefined || problems.count > before ? [] : parseCardsSafely(problems, `${path}.board`, board);
+  if (board !== undefined && problems.count === before && ![3, 4, 5].includes(boardCards.length)) {
+    problems.add(
+      `${path}.board`,
+      `an equity board is left out before the flop, or has 3, 4 or 5 cards, got ${boardCards.length}`,
+    );
   }
   const seen: [string, readonly Card[]][] = [
     ['heroCards', hero],
     ['board', boardCards],
   ];
-  for (const [index, opponent] of opponents.entries()) {
-    const held = checkEquityOpponent(problems, `${path}.opponents[${index}]`, opponent, [
-      ...hero,
-      ...boardCards,
-    ]);
-    seen.push([`opponents[${index}]`, held]);
-  }
+  for (const [index, holding] of held.entries()) seen.push([`opponents[${index}]`, holding.cards]);
   checkCardsDistinct(problems, path, seen);
   return { kind: 'equity', heroCards, opponents, ...(board === undefined ? {} : { board }) };
 }
@@ -314,13 +320,12 @@ function validateOutsCalculation(
   path: string,
   raw: Record<string, unknown>,
 ): Extract<LiveCalculation, { kind: 'outs' }> {
-  const heroCards = requireString(problems, `${path}.heroCards`, raw['heroCards'], { max: 24 });
+  const { text: heroCards, cards: hero } = requireHolding(problems, `${path}.heroCards`, raw['heroCards']);
   // Blank or separator-only text parses as no cards without a problem, so a report is counted, not guessed.
   const before = problems.count;
   const board = requireString(problems, `${path}.board`, raw['board'], { max: 24 });
-  const boardCards = parseCardsSafely(problems, `${path}.board`, board);
+  const boardCards = problems.count === before ? parseCardsSafely(problems, `${path}.board`, board) : [];
   const boardReported = problems.count > before;
-  const hero = parseHoleCards(problems, `${path}.heroCards`, heroCards);
   if (!boardReported && boardCards.length !== 3 && boardCards.length !== 4) {
     problems.add(
       `${path}.board`,
@@ -328,12 +333,12 @@ function validateOutsCalculation(
     );
   }
   // Present means an exact holding: the API hands it to `exactRange`, which throws on anything else.
-  const opponentCards =
+  const named =
     raw['opponentCards'] === undefined
       ? undefined
-      : requireString(problems, `${path}.opponentCards`, raw['opponentCards'], { max: 24 });
-  const opponent =
-    opponentCards === undefined ? [] : parseHoleCards(problems, `${path}.opponentCards`, opponentCards);
+      : requireHolding(problems, `${path}.opponentCards`, raw['opponentCards']);
+  const opponentCards = named?.text;
+  const opponent = named?.cards ?? [];
   checkCardsDistinct(problems, path, [
     ['heroCards', hero],
     ['board', boardCards],
@@ -1116,6 +1121,61 @@ function checkStatedFoldRate(problems: Problems, path: string, scenario: Scenari
   }
 }
 
+type SetAsideAction = NonNullable<Scenario['actionsSetAside']>[number];
+
+const GERUND_OF: Readonly<Record<SetAsideAction, string>> = {
+  call: 'calling',
+  bet: 'betting',
+  raise: 'raising',
+};
+
+/** "raising is not being evaluated", "betting and raising are not being evaluated", "a, b and c are ...". */
+function setAsideSentence(actions: readonly SetAsideAction[]): string {
+  const gerunds = actions.map((action) => GERUND_OF[action]);
+  const listed =
+    gerunds.length === 1 ? gerunds.join('') : `${gerunds.slice(0, -1).join(', ')} and ${gerunds.at(-1)}`;
+  return `${listed} ${gerunds.length === 1 ? 'is' : 'are'} not being evaluated`;
+}
+
+/** Any mention of evaluating, in any tense. Counted, so no second statement about it goes unread. */
+const EVALUAT = /evaluat/giu;
+
+/**
+ * The field is the source of truth, and free wording cannot be read reliably: every partial match let
+ * some sentence add or drop an action. So the one assumption that says it is anchored at both ends,
+ * exactly "Raising is not being evaluated here." or ending "; raising is not being evaluated here.",
+ * and no other assumption may mention evaluating at all.
+ */
+function checkDeclaredSetAside(problems: Problems, path: string, scenario: Scenario): void {
+  const at = `${path}.actionsSetAside`;
+  const field = scenario.actionsSetAside;
+  const mentions = scenario.assumptions.reduce(
+    (total, text) => total + [...text.matchAll(EVALUAT)].length,
+    0,
+  );
+  if (field === undefined) {
+    if (mentions > 0) {
+      problems.add(
+        at,
+        'is missing, but an assumption mentions what is evaluated; if it sets actions aside, name them ' +
+          'here, or the verdict can still support them',
+      );
+    }
+    return;
+  }
+  const clause = `${setAsideSentence(field)} here.`;
+  const whole = `${clause.charAt(0).toUpperCase()}${clause.slice(1)}`;
+  const declares = scenario.assumptions.some((text) => text === whole || text.endsWith(`; ${clause}`));
+  if (!declares || mentions !== 1) {
+    problems.add(
+      at,
+      `is ${JSON.stringify(field)}, so one assumption must be "${whole}" or end "; ${clause}", ` +
+        'and no other may mention what is evaluated, or the learner is not told exactly what the verdict ' +
+        'leaves out',
+    );
+  }
+}
+
 /** Skipped when the shape checks failed, since coherence errors on top of those are noise. */
 function checkSituationCoherence(problems: Problems, path: string, scenario: Scenario): void {
   const heroes = scenario.seats.filter((seat) => seat.isHero === true);
@@ -1201,6 +1261,19 @@ function validateScenario(problems: Problems, path: string, raw: unknown): Scena
 
   const committed = readCommittedThisStreet(problems, path, raw['committedThisStreet']);
   const ante = raw['ante'];
+  // A malformed field is reported once, so the prose check below runs only when both parsed.
+  const beforeSetAside = problems.count;
+  const actionsSetAside =
+    raw['actionsSetAside'] === undefined
+      ? undefined
+      : readActionsSetAside(problems, `${path}.actionsSetAside`, raw['actionsSetAside']);
+  const setAsideReported = problems.count > beforeSetAside;
+  const beforeAssumptions = problems.count;
+  const assumptions = requireStringArray(problems, `${path}.assumptions`, raw['assumptions'], {
+    min: 1,
+    max: 8,
+  });
+  const assumptionsReported = problems.count > beforeAssumptions;
 
   const scenario: Scenario = {
     id: requireContentId(problems, `${path}.id`, raw['id']),
@@ -1221,7 +1294,7 @@ function validateScenario(problems: Problems, path: string, raw: unknown): Scena
     facingAction: requireString(problems, `${path}.facingAction`, raw['facingAction'], { min: 5, max: 400 }),
     toCall: requireInteger(problems, `${path}.toCall`, raw['toCall'], { min: 0, max: 10_000_000 }),
     opponentRange,
-    assumptions: requireStringArray(problems, `${path}.assumptions`, raw['assumptions'], { min: 1, max: 8 }),
+    assumptions,
     reasoning: requireString(problems, `${path}.reasoning`, raw['reasoning'], { min: 40, max: 4000 }),
     expectedInsight: claims,
     commonMistakes: requireStringArray(problems, `${path}.commonMistakes`, raw['commonMistakes'], {
@@ -1244,11 +1317,40 @@ function validateScenario(problems: Problems, path: string, raw: unknown): Scena
             max: 1,
           }),
         }),
+    ...(actionsSetAside === undefined ? {} : { actionsSetAside }),
   };
 
   // Last, on the assembled record, so coherence checks can trust the types.
   checkSituationCoherence(problems, path, scenario);
+  if (!setAsideReported && !assumptionsReported) checkDeclaredSetAside(problems, path, scenario);
   return scenario;
+}
+
+// Fold and check are what the verdict judges against, so setting either aside would change the rule.
+const SET_ASIDE_ACTIONS = ['call', 'bet', 'raise'] as const;
+
+function readActionsSetAside(
+  problems: Problems,
+  path: string,
+  raw: unknown,
+): NonNullable<Scenario['actionsSetAside']> {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    problems.add(path, 'must be a non-empty list of action names, or left out');
+    return [];
+  }
+  const actions = raw.flatMap((action, index) => {
+    const known = SET_ASIDE_ACTIONS.find((name) => name === action);
+    if (known === undefined) {
+      problems.add(
+        `${path}[${index}]`,
+        `expected one of ${SET_ASIDE_ACTIONS.join(' | ')}, got ${describe(action)}`,
+      );
+      return [];
+    }
+    return [known];
+  });
+  if (new Set(actions).size !== actions.length) problems.add(path, 'names an action more than once');
+  return actions;
 }
 
 /** Seat count, seat numbers, exactly one hero with cards, and a button that is at the table. */
