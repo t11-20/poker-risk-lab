@@ -108,6 +108,10 @@ describe("a quiz calculation's cards", () => {
       calculation['opponents'] = ['AhKhQh'];
     });
     assert.equal(tooMany.length, 1, `a refused hand is not also a duplicate card: ${tooMany.join('; ')}`);
+    const typo = withCalculation('reading-board-q4', (calculation) => {
+      calculation['opponents'] = ['QsJx'];
+    });
+    refused(typo, /\.calculation\.opponents\[0\]: an equity opponent .* got "QsJx" \(.*suit.*\)/);
     const exact = withCalculation('reading-board-q4', (calculation) => {
       calculation['opponents'] = ['QsJc', 'Td9d'];
     });

@@ -202,11 +202,13 @@ function requireExactOpponent(
   if (typeof raw === 'string' && raw.trim() !== '') {
     try {
       parseCards(raw);
-    } catch {
+    } catch (error) {
+      // The parser's reason is kept, so a mistyped card reads as a typo and not only as a range.
+      const reason = error instanceof CardParseError ? error.message : String(error);
       problems.add(
         path,
         `an equity opponent is an exact two-card hand such as "QsJc", because the browser cannot compute ` +
-          `a range or a top percentage, got "${raw}"`,
+          `a range or a top percentage, got "${raw}" (${reason})`,
       );
       return { text: raw, cards: [] };
     }
