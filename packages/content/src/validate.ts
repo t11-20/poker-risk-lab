@@ -1127,6 +1127,7 @@ function checkStatedFoldRate(problems: Problems, path: string, scenario: Scenari
     );
   }
 }
+
 type SetAsideAction = NonNullable<Scenario['actionsSetAside']>[number];
 
 const GERUND_OF: Readonly<Record<SetAsideAction, string>> = {
@@ -1143,45 +1144,41 @@ function setAsideSentence(actions: readonly SetAsideAction[]): string {
   return `${listed} ${gerunds.length === 1 ? 'is' : 'are'} not being evaluated`;
 }
 
-/** Saying something is not evaluated, in whatever words. */
-const NOT_EVALUATED = /(?:\bnot|n['’]t)\s+(?:being\s+)?evaluated\b/giu;
+/** Any mention of evaluating, in any tense. Counted, so no second statement about it goes unread. */
+const EVALUAT = /evaluat/giu;
 
 /**
- * The field is the source of truth, and free wording cannot be read reliably ("compared with calling,
- * raising is not evaluated"). So the assumptions must say "not evaluated" exactly once, as the field's
- * own sentence at the start of a clause, where nothing before it can add an action to its list.
+ * The field is the source of truth, and free wording cannot be read reliably: every partial match let
+ * some sentence add or drop an action. So the one assumption that says it is anchored at both ends,
+ * exactly "Raising is not being evaluated here." or ending "; raising is not being evaluated here.",
+ * and no other assumption may mention evaluating at all.
  */
 function checkDeclaredSetAside(problems: Problems, path: string, scenario: Scenario): void {
   const at = `${path}.actionsSetAside`;
   const field = scenario.actionsSetAside;
-  const said = scenario.assumptions.flatMap((assumption) =>
-    [...assumption.matchAll(NOT_EVALUATED)].map(() => assumption),
+  const mentions = scenario.assumptions.reduce(
+    (total, text) => total + [...text.matchAll(EVALUAT)].length,
+    0,
   );
   if (field === undefined) {
-    for (const assumption of new Set(said)) {
+    if (mentions > 0) {
       problems.add(
         at,
-        `is missing, but an assumption says something is not evaluated ("${assumption}"); ` +
-          'name those actions here, or the verdict can still support them',
+        'is missing, but an assumption mentions what is evaluated; if it sets actions aside, name them ' +
+          'here, or the verdict can still support them',
       );
     }
     return;
   }
-  const sentence = setAsideSentence(field);
-  const clause = new RegExp(`(?:^|[.;:]\\s+)${sentence}\\b`, 'iu');
-  if (!scenario.assumptions.some((assumption) => clause.test(assumption))) {
+  const clause = `${setAsideSentence(field)} here.`;
+  const whole = `${clause.charAt(0).toUpperCase()}${clause.slice(1)}`;
+  const declares = scenario.assumptions.some((text) => text === whole || text.endsWith(`; ${clause}`));
+  if (!declares || mentions !== 1) {
     problems.add(
       at,
-      `is ${JSON.stringify(field)}, so an assumption must say "${sentence}" at the start of a sentence or ` +
-        'after a semicolon, or the learner is never told why the verdict leaves them out',
-    );
-    return;
-  }
-  if (said.length > 1) {
-    problems.add(
-      at,
-      `the assumptions say something is not evaluated ${said.length} times; say it once, as ` +
-        `"${sentence}", and add any other action meant to the field`,
+      `is ${JSON.stringify(field)}, so one assumption must be "${whole}" or end "; ${clause}", ` +
+        'and no other may mention what is evaluated, or the learner is not told exactly what the verdict ' +
+        'leaves out',
     );
   }
 }

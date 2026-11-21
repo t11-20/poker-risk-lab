@@ -224,21 +224,17 @@ test('a scenario that sets actions aside says so in an assumption, in one fixed 
 
   const undeclared = structuredClone(river);
   undeclared['actionsSetAside'] = undefined;
-  assert.equal(mentioning(setAsideProblems(undeclared), /is missing, but an assumption says/).length, 1);
+  assert.equal(mentioning(setAsideProblems(undeclared), /is missing, but an assumption mentions/).length, 1);
 
   const unsaid = scenarioNamed('rk-high-spr-same-top-pair');
   assert.deepEqual(setAsideProblems(unsaid), [], 'control: no field and no sentence');
   unsaid['actionsSetAside'] = ['bet'];
   assert.deepEqual(setAsideProblems(unsaid), [
-    'scenarios[0].actionsSetAside: is ["bet"], so an assumption must say "betting is not being evaluated" ' +
-      'at the start of a sentence or after a semicolon, ' +
-      'or the learner is never told why the verdict leaves them out',
+    'scenarios[0].actionsSetAside: is ["bet"], so one assumption must be ' +
+      '"Betting is not being evaluated here." or end "; betting is not being evaluated here.", ' +
+      'and no other may mention what is evaluated, or the learner is not told exactly what the verdict ' +
+      'leaves out',
   ]);
-
-  const extra = structuredClone(river);
-  extra['assumptions'] = [...(river['assumptions'] as string[]), 'Betting is not being evaluated.'];
-  assert.equal(mentioning(setAsideProblems(extra), /say something is not evaluated 2 times/).length, 1);
-  assert.equal(setAsideProblems(extra).length, 1);
 
   const malformed = structuredClone(river);
   malformed['assumptions'] = 'x';
@@ -246,34 +242,40 @@ test('a scenario that sets actions aside says so in an assumption, in one fixed 
 });
 
 test('a set-aside sentence in other words is refused, not guessed at', () => {
-  const withSentence = (sentence: string, field: unknown) => {
+  const withSentences = (sentences: readonly string[], field: unknown) => {
     const scenario = scenarioNamed('fl-board-plays-itself-river');
-    const assumptions = scenario['assumptions'] as string[];
-    scenario['assumptions'] = assumptions.map((text) =>
-      /raising is not being evaluated/.test(text) ? sentence : text,
-    );
+    const kept = (scenario['assumptions'] as string[]).filter((text) => !/evaluat/.test(text));
+    scenario['assumptions'] = [...kept, ...sentences];
     scenario['actionsSetAside'] = field;
     return mentioning(problemsFor(scenario), /actionsSetAside/);
   };
-  for (const [sentence, field] of [
-    ['Betting and raising are not being evaluated here.', ['bet', 'raise']],
-    ['Betting, calling and raising are not being evaluated here.', ['bet', 'call', 'raise']],
-    ['You may call or fold; raising is not being evaluated here.', ['raise']],
+  for (const [sentences, field] of [
+    [['Raising is not being evaluated here.'], ['raise']],
+    [['You may call or fold; raising is not being evaluated here.'], ['raise']],
+    [['Betting and raising are not being evaluated here.'], ['bet', 'raise']],
+    [['Betting, calling and raising are not being evaluated here.'], ['bet', 'call', 'raise']],
   ] as const) {
-    assert.deepEqual(withSentence(sentence, field), [], `accepted: ${sentence}`);
+    assert.deepEqual(withSentences(sentences, field), [], `accepted: ${sentences.join(' / ')}`);
   }
-  for (const [sentence, field, why] of [
-    ['Betting or raising is not being evaluated here.', ['raise'], /must say/],
-    ['Betting, calling and raising are not being evaluated here.', ['call', 'raise'], /must say/],
-    ['Compared with calling, raising is not being evaluated here.', ['raise'], /must say/],
-    ['Betting, calling, and raising are not evaluated here.', ['raise'], /must say/],
-    ["Raising isn't evaluated here.", ['raise'], /must say/],
-    ["Raising isn't evaluated here.", undefined, /is missing/],
-    ['Raising is not being evaluated, and betting is not being evaluated either.', ['raise'], /2 times/],
+  const shipped = 'You may call or fold; raising is not being evaluated here.';
+  for (const [sentences, field] of [
+    [['Betting or raising is not being evaluated here.'], ['raise']],
+    [['Betting, calling and raising are not being evaluated here.'], ['call', 'raise']],
+    [['Compared with calling, raising is not being evaluated here.'], ['raise']],
+    [['Calling vs. raising is not being evaluated here.'], ['raise']],
+    [['One limit: raising is not being evaluated here.'], ['raise']],
+    [['Raising is not being evaluated, and neither is betting.'], ['raise']],
+    [["Raising isn't evaluated here."], ['raise']],
+    [[shipped, 'Betting will not be evaluated either.'], ['raise']],
+    [['Raising will not be evaluated here.'], undefined],
+    [['Raising is never evaluated here.', 'Rake is not evaluated here.'], undefined],
   ] as const) {
-    const problems = withSentence(sentence, field);
-    assert.equal(problems.length, 1, `${sentence} with ${JSON.stringify(field)}: ${problems.join('; ')}`);
-    assert.match(problems[0] ?? '', why, sentence);
+    const problems = withSentences(sentences, field);
+    assert.equal(
+      problems.length,
+      1,
+      `${sentences.join(' / ')} with ${JSON.stringify(field)}: ${problems.join('; ')}`,
+    );
   }
 });
 
