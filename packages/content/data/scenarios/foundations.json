@@ -24,6 +24,7 @@
       "notation": "AA-TT",
       "label": "a big-pair value-betting range"
     },
+    "actionsSetAside": ["raise"],
     "assumptions": [
       "The big blind only bets this river with one of the big pairs listed; a wider betting range changes the answer completely.",
       "The stacks and the pot are exactly as shown, and neither player can put in more money after your decision.",

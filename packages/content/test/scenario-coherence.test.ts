@@ -216,6 +216,45 @@ test('a scenario that says the opponent does not fold must declare that the whol
   assert.equal(mentioning(problemsFor(range), /wholeRangeContinues.*no assumption says/).length, 1);
 });
 
+test('an action an assumption says is not being evaluated is the one the scenario sets aside', () => {
+  const setAsideProblems = (scenario: RawScenario) => mentioning(problemsFor(scenario), /actionsSetAside/);
+  const river = scenarioNamed('fl-board-plays-itself-river');
+  assert.deepEqual(river['actionsSetAside'], ['raise']);
+  assert.deepEqual(setAsideProblems(river), [], 'control: the shipped scenario is consistent');
+
+  const undeclared = structuredClone(river);
+  undeclared['actionsSetAside'] = undefined;
+  assert.deepEqual(setAsideProblems(undeclared), [
+    'scenarios[0].actionsSetAside: must include "raise": an assumption says it is not being evaluated, ' +
+      'and without it the verdict can still name it as supported',
+  ]);
+
+  const unsaid = scenarioNamed('rk-high-spr-same-top-pair');
+  assert.deepEqual(setAsideProblems(unsaid), [], 'control: no field and no sentence');
+  unsaid['actionsSetAside'] = ['bet'];
+  assert.equal(mentioning(setAsideProblems(unsaid), /lists "bet", but no assumption says/).length, 1);
+});
+
+test('actionsSetAside is a list of action names, each reported once', () => {
+  const field = (value: unknown) => {
+    const scenario = scenarioNamed('fl-board-plays-itself-river');
+    scenario['actionsSetAside'] = value;
+    return mentioning(problemsFor(scenario), /actionsSetAside/);
+  };
+  assert.deepEqual(field([]), [
+    'scenarios[0].actionsSetAside: must be a non-empty list of action names, or left out',
+  ]);
+  assert.deepEqual(field('raise'), [
+    'scenarios[0].actionsSetAside: must be a non-empty list of action names, or left out',
+  ]);
+  assert.deepEqual(field(['raise', 'shove']), [
+    'scenarios[0].actionsSetAside[1]: expected one of fold | check | call | bet | raise, got string "shove"',
+  ]);
+  assert.deepEqual(field(['raise', 'raise']), [
+    'scenarios[0].actionsSetAside: names an action more than once',
+  ]);
+});
+
 test('a fold rate stated in an assumption is the one the scenario declares', () => {
   const stated =
     'Every bet and raise below is priced against an assumed 30% chance that the opponent folds to it.';

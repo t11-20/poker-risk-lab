@@ -53,6 +53,11 @@ export interface Consistency {
    */
   readonly pricing: ConsistencyPricing;
   /**
+   * The scenario's assumptions set this action aside, so its rows, still shown in the Coach's table,
+   * were left out of the verdict. `pricing` is then `'action-not-priced'`.
+   */
+  readonly setAside: boolean;
+  /**
    * `benchmarkEv - chosenEv`, signed, null when unpriced. Not `shortfallUnits`, which is zero inside the
    * allowance and would print 0.0 for an action 2.9 units behind folding.
    */
@@ -65,19 +70,22 @@ export interface Consistency {
 
 /**
  * Every caller should pass `bigBlind`. Without it the shared rule falls back to one chip, the
- * strictest margin, while the API grades at the real big blind.
+ * strictest margin, while the API grades at the real big blind. A scenario caller passes its
+ * `actionsSetAside` too, or the screen grades an action the API leaves out.
  */
 export function judgeConsistency(
   report: CoachReport,
   action: ScenarioAction,
   to?: number,
   bigBlind?: number,
+  setAside?: readonly ScenarioAction[],
 ): Consistency {
   const verdict = judgeShared({
     report,
     action,
     ...(to === undefined ? {} : { to }),
     ...(bigBlind === undefined ? {} : { bigBlind }),
+    ...(setAside === undefined ? {} : { setAside }),
   });
   const chosenEv = verdict.chosen === null ? null : verdict.chosen.ev;
   const reading = suggestedCandidate(report);
@@ -98,6 +106,7 @@ export function judgeConsistency(
     shortfallUnits: verdict.shortfallUnits,
     benchmarkEv,
     pricing: verdict.pricing,
+    setAside: setAside?.includes(action) ?? false,
     behindBenchmarkUnits: chosenEv === null ? null : benchmarkEv - chosenEv,
     withinAllowance: chosenEv === null ? null : verdict.consistent,
     nearestPriced:

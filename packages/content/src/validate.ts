@@ -1116,6 +1116,46 @@ function checkStatedFoldRate(problems: Problems, path: string, scenario: Scenari
   }
 }
 
+/** An assumption that sets an action aside, in the words the scenarios use: "raising is not being evaluated". */
+const SET_ASIDE = /\b(folding|checking|calling|betting|raising) is not (?:being )?evaluated\b/giu;
+
+const SET_ASIDE_ACTION: Readonly<Record<string, NonNullable<Scenario['actionsSetAside']>[number]>> = {
+  folding: 'fold',
+  checking: 'check',
+  calling: 'call',
+  betting: 'bet',
+  raising: 'raise',
+};
+
+/** The prose and the field set aside the same actions, or the verdict supports one the learner was told is out. */
+function checkDeclaredSetAside(problems: Problems, path: string, scenario: Scenario): void {
+  const said = new Set(
+    scenario.assumptions.flatMap((assumption) =>
+      [...assumption.matchAll(SET_ASIDE)].flatMap((match) => {
+        const action = SET_ASIDE_ACTION[(match[1] ?? '').toLowerCase()];
+        return action === undefined ? [] : [action];
+      }),
+    ),
+  );
+  const field = new Set(scenario.actionsSetAside ?? []);
+  for (const action of said) {
+    if (field.has(action)) continue;
+    problems.add(
+      `${path}.actionsSetAside`,
+      `must include "${action}": an assumption says it is not being evaluated, and without it the verdict ` +
+        'can still name it as supported',
+    );
+  }
+  for (const action of field) {
+    if (said.has(action)) continue;
+    problems.add(
+      `${path}.actionsSetAside`,
+      `lists "${action}", but no assumption says it is not being evaluated, so the learner is never told ` +
+        'why the verdict leaves it out',
+    );
+  }
+}
+
 /** Skipped when the shape checks failed, since coherence errors on top of those are noise. */
 function checkSituationCoherence(problems: Problems, path: string, scenario: Scenario): void {
   const heroes = scenario.seats.filter((seat) => seat.isHero === true);
@@ -1201,6 +1241,13 @@ function validateScenario(problems: Problems, path: string, raw: unknown): Scena
 
   const committed = readCommittedThisStreet(problems, path, raw['committedThisStreet']);
   const ante = raw['ante'];
+  // A malformed field is reported once, so the prose check below runs only on one that parsed.
+  const beforeSetAside = problems.count;
+  const actionsSetAside =
+    raw['actionsSetAside'] === undefined
+      ? undefined
+      : readActionsSetAside(problems, `${path}.actionsSetAside`, raw['actionsSetAside']);
+  const setAsideReported = problems.count > beforeSetAside;
 
   const scenario: Scenario = {
     id: requireContentId(problems, `${path}.id`, raw['id']),
@@ -1244,11 +1291,39 @@ function validateScenario(problems: Problems, path: string, raw: unknown): Scena
             max: 1,
           }),
         }),
+    ...(actionsSetAside === undefined ? {} : { actionsSetAside }),
   };
 
   // Last, on the assembled record, so coherence checks can trust the types.
   checkSituationCoherence(problems, path, scenario);
+  if (!setAsideReported) checkDeclaredSetAside(problems, path, scenario);
   return scenario;
+}
+
+const SCENARIO_ACTIONS = ['fold', 'check', 'call', 'bet', 'raise'] as const;
+
+function readActionsSetAside(
+  problems: Problems,
+  path: string,
+  raw: unknown,
+): NonNullable<Scenario['actionsSetAside']> {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    problems.add(path, 'must be a non-empty list of action names, or left out');
+    return [];
+  }
+  const actions = raw.flatMap((action, index) => {
+    const known = SCENARIO_ACTIONS.find((name) => name === action);
+    if (known === undefined) {
+      problems.add(
+        `${path}[${index}]`,
+        `expected one of ${SCENARIO_ACTIONS.join(' | ')}, got ${describe(action)}`,
+      );
+      return [];
+    }
+    return [known];
+  });
+  if (new Set(actions).size !== actions.length) problems.add(path, 'names an action more than once');
+  return actions;
 }
 
 /** Seat count, seat numbers, exactly one hero with cards, and a button that is at the table. */

@@ -729,7 +729,13 @@ describe('POST /content/scenarios/:id/attempt', () => {
       assert.ok(typeof report === 'object' && report !== null);
       const stored = scenarioById(scenario.id);
       assert.ok(stored !== null);
-      const outcome = consistencyOf(JSON.parse(JSON.stringify(report)), 'fold', undefined, stored.bigBlind);
+      const outcome = consistencyOf(
+        JSON.parse(JSON.stringify(report)),
+        'fold',
+        undefined,
+        stored.bigBlind,
+        stored.actionsSetAside ?? [],
+      );
       assert.equal(typeof outcome.consistent, 'boolean');
       assert.equal(typeof outcome.claimsOneAction, 'boolean');
       assert.ok(outcome.reasoning.length > 0);
@@ -762,6 +768,7 @@ describe('POST /content/scenarios/:id/attempt', () => {
           report: analysis,
           action: String(body['action']),
           bigBlind: stored.bigBlind,
+          setAside: stored.actionsSetAside ?? [],
           ...(typeof body['to'] === 'number' ? { to: body['to'] } : {}),
         });
         return {
@@ -814,6 +821,34 @@ describe('POST /content/scenarios/:id/attempt', () => {
       assert.match(reasoning, /^raise is not consistent/);
       assert.match(reasoning, /Against this range the analysis supports call instead\./);
       assert.doesNotMatch(reasoning, /supports only/);
+    });
+
+    describe('leaves out an action the scenario sets aside', () => {
+      const id = 'fl-board-plays-itself-river';
+
+      it('does not name it beside a consistent call', async () => {
+        const { reasoning, supported } = await attempt(id, { action: 'call' });
+        assert.match(reasoning, /^call is consistent/);
+        assert.doesNotMatch(reasoning, /also supports/);
+        assert.deepEqual(supported, ['call']);
+      });
+
+      it('does not offer it in place of a fold', async () => {
+        const { reasoning } = await attempt(id, { action: 'fold' });
+        assert.match(reasoning, /Against this range the analysis supports only call here\./);
+      });
+
+      it('does not grade it when chosen, at a priced size or another', async () => {
+        for (const to of [40, 60]) {
+          const { reasoning, analysis } = await attempt(id, { action: 'raise', to });
+          assert.ok(
+            analysis.candidates.some((row) => row.action === 'raise'),
+            'premise: the analysis still prices raising',
+          );
+          assert.match(reasoning, /^This scenario does not evaluate raise: its assumptions set it aside/);
+          assert.match(reasoning, /It evaluated: fold, call\./);
+        }
+      });
     });
 
     it('keeps "does not come down to one answer" for a consistent action with company', async () => {

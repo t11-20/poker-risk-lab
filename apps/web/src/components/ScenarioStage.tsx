@@ -142,6 +142,19 @@ function BenchmarkRows({
   );
 }
 
+function unpricedChip(judgement: Consistency): string {
+  if (judgement.setAside) return 'this scenario does not evaluate that action';
+  return judgement.pricing === 'sizing-not-priced'
+    ? 'this analysis did not price that size'
+    : 'this analysis did not price that action';
+}
+
+function unpricedNote(judgement: Consistency): string {
+  return judgement.setAside
+    ? 'The assumptions above set that action aside, so the verdict leaves it out. That is not a judgement on your decision — there is nothing here to compare it with.'
+    : 'The analysis covers particular sizes rather than every one, and yours is not among them. That is not a judgement on your decision — there is nothing here to compare it with.';
+}
+
 /** The rule in words with this action's numbers, so the figures do not read as contradictions. */
 function VerdictRule(props: {
   readonly judgement: Consistency;
@@ -172,9 +185,7 @@ function Verdict({
         */}
         {judgement.pricing !== 'priced' ? (
           <Chip tone="info" glyph="?">
-            {judgement.pricing === 'sizing-not-priced'
-              ? 'this analysis did not price that size'
-              : 'this analysis did not price that action'}
+            {unpricedChip(judgement)}
           </Chip>
         ) : (
           <Chip tone={consistent ? 'favourable' : 'caution'} glyph={consistent ? '=' : '≠'}>
@@ -185,7 +196,7 @@ function Verdict({
           {server.state === 'live'
             ? server.recorded
               ? judgement.pricing !== 'priced'
-                ? 'The analysis covers particular sizes rather than every one, and yours is not among them. That is not a judgement on your decision — there is nothing here to compare it with.'
+                ? unpricedNote(judgement)
                 : 'This verdict is the one kept on your record.'
               : 'Nothing was recorded, because this browser has no guest session to keep it on.'
             : server.state === 'pending'
@@ -331,6 +342,7 @@ export function ScenarioStage(props: ScenarioStageProps): ReactElement {
           committed.action,
           committed.to === null ? undefined : committed.to,
           bigBlind,
+          scenario.actionsSetAside,
         );
 
   return (

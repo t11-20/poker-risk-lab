@@ -155,6 +155,8 @@ export interface ConsistencyVerdict {
    * the figure a fold was judged against. See `bestMeasuredCandidate`.
    */
   readonly measuredBestEv: number;
+  /** The row `measuredBestEv` was read from, so a caller names it without recomputing. */
+  readonly measuredBest: ActionCandidate | null;
   /** The margin in chips this verdict used, for showing the reader the threshold they were held to. */
   readonly marginUnits: number;
   readonly supportedActions: readonly string[];
@@ -179,6 +181,11 @@ export interface ConsistencyInput {
    * cannot widen the threshold. Every caller passes it.
    */
   readonly bigBlind?: number;
+  /**
+   * Actions the scenario says are not being evaluated (`Scenario.actionsSetAside`). Their rows are
+   * left out of the verdict, so they are neither supported nor the benchmark a fold is judged against.
+   */
+  readonly setAside?: readonly string[];
 }
 
 /**
@@ -187,7 +194,15 @@ export interface ConsistencyInput {
  * "not established", so a caller must read `pricing` before rendering it.
  */
 export function judgeConsistency(input: ConsistencyInput): ConsistencyVerdict {
-  const { report, action, to } = input;
+  const { action, to } = input;
+  const setAside = input.setAside ?? [];
+  const report =
+    setAside.length === 0
+      ? input.report
+      : {
+          ...input.report,
+          candidates: input.report.candidates.filter((row) => !setAside.includes(row.action)),
+        };
   const bigBlind = input.bigBlind ?? 1;
   const marginUnits = consistencyMarginUnits(bigBlind);
 
@@ -210,6 +225,7 @@ export function judgeConsistency(input: ConsistencyInput): ConsistencyVerdict {
       chosen: null,
       pricedSizes,
       measuredBestEv,
+      measuredBest: measured,
       marginUnits,
       supportedActions,
       availableActions,
@@ -227,6 +243,7 @@ export function judgeConsistency(input: ConsistencyInput): ConsistencyVerdict {
     chosen,
     pricedSizes,
     measuredBestEv,
+    measuredBest: measured,
     marginUnits,
     supportedActions,
     availableActions,

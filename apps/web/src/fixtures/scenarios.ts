@@ -1492,7 +1492,7 @@ export function scenarioAttemptFixture(
   const scenario = SCENARIOS_BY_ID.get(id);
   const analysis = LAB_SCENARIO_ANALYSIS[id];
   if (scenario === undefined || analysis === undefined) return null;
-  const judgement = judgeConsistency(analysis, action, to, scenario.bigBlind);
+  const judgement = judgeConsistency(analysis, action, to, scenario.bigBlind, scenario.actionsSetAside);
   return {
     consistentWithAnalysis: judgement.consistent,
     recorded: false,
