@@ -230,9 +230,19 @@ test('a scenario that sets actions aside says so in an assumption, in one fixed 
   assert.deepEqual(setAsideProblems(unsaid), [], 'control: no field and no sentence');
   unsaid['actionsSetAside'] = ['bet'];
   assert.deepEqual(setAsideProblems(unsaid), [
-    'scenarios[0].actionsSetAside: is ["bet"], so an assumption must say "betting is not being evaluated", ' +
+    'scenarios[0].actionsSetAside: is ["bet"], so an assumption must say "betting is not being evaluated" ' +
+      'at the start of a sentence or after a semicolon, ' +
       'or the learner is never told why the verdict leaves them out',
   ]);
+
+  const extra = structuredClone(river);
+  extra['assumptions'] = [...(river['assumptions'] as string[]), 'Betting is not being evaluated.'];
+  assert.equal(mentioning(setAsideProblems(extra), /say something is not evaluated 2 times/).length, 1);
+  assert.equal(setAsideProblems(extra).length, 1);
+
+  const malformed = structuredClone(river);
+  malformed['assumptions'] = 'x';
+  assert.deepEqual(setAsideProblems(malformed), [], 'a malformed assumptions list is reported only there');
 });
 
 test('a set-aside sentence in other words is refused, not guessed at', () => {
@@ -245,24 +255,25 @@ test('a set-aside sentence in other words is refused, not guessed at', () => {
     scenario['actionsSetAside'] = field;
     return mentioning(problemsFor(scenario), /actionsSetAside/);
   };
-  // Accepted: the fixed form, inside any sentence.
-  assert.deepEqual(
-    withSentence('Compared with calling, raising is not being evaluated here.', ['raise']),
-    [],
-  );
-  assert.deepEqual(withSentence('Betting and raising are not being evaluated here.', ['bet', 'raise']), []);
-  assert.deepEqual(
-    withSentence('Betting, checking and raising are not being evaluated here.', ['bet', 'check', 'raise']),
-    [],
-  );
-  // Refused, once each: a list the field does not match, other wording, and a sentence with no field.
   for (const [sentence, field] of [
-    ['Betting, checking, and raising are not evaluated here.', ['raise']],
-    ['Betting and raising are not being evaluated here.', ['raise']],
-    ["Raising isn't evaluated here.", ['raise']],
-    ["Raising isn't evaluated here.", undefined],
+    ['Betting and raising are not being evaluated here.', ['bet', 'raise']],
+    ['Betting, calling and raising are not being evaluated here.', ['bet', 'call', 'raise']],
+    ['You may call or fold; raising is not being evaluated here.', ['raise']],
   ] as const) {
-    assert.equal(withSentence(sentence, field).length, 1, `${sentence} with ${JSON.stringify(field)}`);
+    assert.deepEqual(withSentence(sentence, field), [], `accepted: ${sentence}`);
+  }
+  for (const [sentence, field, why] of [
+    ['Betting or raising is not being evaluated here.', ['raise'], /must say/],
+    ['Betting, calling and raising are not being evaluated here.', ['call', 'raise'], /must say/],
+    ['Compared with calling, raising is not being evaluated here.', ['raise'], /must say/],
+    ['Betting, calling, and raising are not evaluated here.', ['raise'], /must say/],
+    ["Raising isn't evaluated here.", ['raise'], /must say/],
+    ["Raising isn't evaluated here.", undefined, /is missing/],
+    ['Raising is not being evaluated, and betting is not being evaluated either.', ['raise'], /2 times/],
+  ] as const) {
+    const problems = withSentence(sentence, field);
+    assert.equal(problems.length, 1, `${sentence} with ${JSON.stringify(field)}: ${problems.join('; ')}`);
+    assert.match(problems[0] ?? '', why, sentence);
   }
 });
 
@@ -279,10 +290,13 @@ test('actionsSetAside is a list of action names, each reported once', () => {
     'scenarios[0].actionsSetAside: must be a non-empty list of action names, or left out',
   ]);
   assert.deepEqual(field(['raise', 'shove']), [
-    'scenarios[0].actionsSetAside[1]: expected one of fold | check | call | bet | raise, got string "shove"',
+    'scenarios[0].actionsSetAside[1]: expected one of call | bet | raise, got string "shove"',
   ]);
   assert.deepEqual(field(['raise', 'raise']), [
     'scenarios[0].actionsSetAside: names an action more than once',
+  ]);
+  assert.deepEqual(field(['check']), [
+    'scenarios[0].actionsSetAside[0]: expected one of call | bet | raise, got string "check"',
   ]);
 });
 

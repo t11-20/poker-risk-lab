@@ -1127,12 +1127,9 @@ function checkStatedFoldRate(problems: Problems, path: string, scenario: Scenari
     );
   }
 }
-
 type SetAsideAction = NonNullable<Scenario['actionsSetAside']>[number];
 
 const GERUND_OF: Readonly<Record<SetAsideAction, string>> = {
-  fold: 'folding',
-  check: 'checking',
   call: 'calling',
   bet: 'betting',
   raise: 'raising',
@@ -1146,20 +1143,22 @@ function setAsideSentence(actions: readonly SetAsideAction[]): string {
   return `${listed} ${gerunds.length === 1 ? 'is' : 'are'} not being evaluated`;
 }
 
-/** Any assumption that says something is not evaluated, in whatever words. */
-const SAYS_NOT_EVALUATED = /(?:\bnot|n['’]t)\s+(?:being\s+)?evaluated\b/iu;
+/** Saying something is not evaluated, in whatever words. */
+const NOT_EVALUATED = /(?:\bnot|n['’]t)\s+(?:being\s+)?evaluated\b/giu;
 
 /**
- * The field is the source of truth and the prose must say it in one fixed form, because free wording
- * ("compared with calling, raising is not evaluated") cannot be read reliably. Any other sentence that
- * says something is not evaluated is refused rather than guessed at.
+ * The field is the source of truth, and free wording cannot be read reliably ("compared with calling,
+ * raising is not evaluated"). So the assumptions must say "not evaluated" exactly once, as the field's
+ * own sentence at the start of a clause, where nothing before it can add an action to its list.
  */
 function checkDeclaredSetAside(problems: Problems, path: string, scenario: Scenario): void {
   const at = `${path}.actionsSetAside`;
   const field = scenario.actionsSetAside;
-  const negated = scenario.assumptions.filter((assumption) => SAYS_NOT_EVALUATED.test(assumption));
+  const said = scenario.assumptions.flatMap((assumption) =>
+    [...assumption.matchAll(NOT_EVALUATED)].map(() => assumption),
+  );
   if (field === undefined) {
-    for (const assumption of negated) {
+    for (const assumption of new Set(said)) {
       problems.add(
         at,
         `is missing, but an assumption says something is not evaluated ("${assumption}"); ` +
@@ -1169,20 +1168,20 @@ function checkDeclaredSetAside(problems: Problems, path: string, scenario: Scena
     return;
   }
   const sentence = setAsideSentence(field);
-  const says = (assumption: string) => assumption.toLowerCase().includes(sentence);
-  if (!scenario.assumptions.some(says)) {
+  const clause = new RegExp(`(?:^|[.;:]\\s+)${sentence}\\b`, 'iu');
+  if (!scenario.assumptions.some((assumption) => clause.test(assumption))) {
     problems.add(
       at,
-      `is ${JSON.stringify(field)}, so an assumption must say "${sentence}", ` +
-        'or the learner is never told why the verdict leaves them out',
+      `is ${JSON.stringify(field)}, so an assumption must say "${sentence}" at the start of a sentence or ` +
+        'after a semicolon, or the learner is never told why the verdict leaves them out',
     );
     return;
   }
-  for (const assumption of negated) {
-    if (says(assumption)) continue;
+  if (said.length > 1) {
     problems.add(
       at,
-      `an assumption says something else is not evaluated ("${assumption}"); say it as "${sentence}"`,
+      `the assumptions say something is not evaluated ${said.length} times; say it once, as ` +
+        `"${sentence}", and add any other action meant to the field`,
     );
   }
 }
@@ -1272,13 +1271,19 @@ function validateScenario(problems: Problems, path: string, raw: unknown): Scena
 
   const committed = readCommittedThisStreet(problems, path, raw['committedThisStreet']);
   const ante = raw['ante'];
-  // A malformed field is reported once, so the prose check below runs only on one that parsed.
+  // A malformed field is reported once, so the prose check below runs only when both parsed.
   const beforeSetAside = problems.count;
   const actionsSetAside =
     raw['actionsSetAside'] === undefined
       ? undefined
       : readActionsSetAside(problems, `${path}.actionsSetAside`, raw['actionsSetAside']);
   const setAsideReported = problems.count > beforeSetAside;
+  const beforeAssumptions = problems.count;
+  const assumptions = requireStringArray(problems, `${path}.assumptions`, raw['assumptions'], {
+    min: 1,
+    max: 8,
+  });
+  const assumptionsReported = problems.count > beforeAssumptions;
 
   const scenario: Scenario = {
     id: requireContentId(problems, `${path}.id`, raw['id']),
@@ -1299,7 +1304,7 @@ function validateScenario(problems: Problems, path: string, raw: unknown): Scena
     facingAction: requireString(problems, `${path}.facingAction`, raw['facingAction'], { min: 5, max: 400 }),
     toCall: requireInteger(problems, `${path}.toCall`, raw['toCall'], { min: 0, max: 10_000_000 }),
     opponentRange,
-    assumptions: requireStringArray(problems, `${path}.assumptions`, raw['assumptions'], { min: 1, max: 8 }),
+    assumptions,
     reasoning: requireString(problems, `${path}.reasoning`, raw['reasoning'], { min: 40, max: 4000 }),
     expectedInsight: claims,
     commonMistakes: requireStringArray(problems, `${path}.commonMistakes`, raw['commonMistakes'], {
@@ -1327,11 +1332,12 @@ function validateScenario(problems: Problems, path: string, raw: unknown): Scena
 
   // Last, on the assembled record, so coherence checks can trust the types.
   checkSituationCoherence(problems, path, scenario);
-  if (!setAsideReported) checkDeclaredSetAside(problems, path, scenario);
+  if (!setAsideReported && !assumptionsReported) checkDeclaredSetAside(problems, path, scenario);
   return scenario;
 }
 
-const SCENARIO_ACTIONS = ['fold', 'check', 'call', 'bet', 'raise'] as const;
+// Fold and check are what the verdict judges against, so setting either aside would change the rule.
+const SET_ASIDE_ACTIONS = ['call', 'bet', 'raise'] as const;
 
 function readActionsSetAside(
   problems: Problems,
@@ -1343,11 +1349,11 @@ function readActionsSetAside(
     return [];
   }
   const actions = raw.flatMap((action, index) => {
-    const known = SCENARIO_ACTIONS.find((name) => name === action);
+    const known = SET_ASIDE_ACTIONS.find((name) => name === action);
     if (known === undefined) {
       problems.add(
         `${path}[${index}]`,
-        `expected one of ${SCENARIO_ACTIONS.join(' | ')}, got ${describe(action)}`,
+        `expected one of ${SET_ASIDE_ACTIONS.join(' | ')}, got ${describe(action)}`,
       );
       return [];
     }

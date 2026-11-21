@@ -276,7 +276,7 @@ export interface Scenario {
    * Actions an assumption says are not being evaluated. The verdict leaves them out, so it never
    * supports an action the learner was told is out of scope. `validate.ts` holds the two together.
    */
-  readonly actionsSetAside?: readonly ('fold' | 'check' | 'call' | 'bet' | 'raise')[];
+  readonly actionsSetAside?: readonly ('call' | 'bet' | 'raise')[];
   /** Assumptions the analysis depends on, shown next to every number. */
   readonly assumptions: readonly string[];
   /** The reasoning the learner should arrive at, in prose. */
