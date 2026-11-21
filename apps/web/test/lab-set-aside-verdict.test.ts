@@ -40,10 +40,19 @@ describe('a set-aside action on the Lab screen', () => {
     assert.equal(control.pricing, 'priced', 'control: without the set-aside the raise is graded');
   });
 
+  it('is not offered as the reading beside the verdict', () => {
+    assert.equal(report.suggestion.action, 'call', 'premise: the Coach suggests a call');
+    const both = judgeConsistency(report, 'fold', undefined, scenario.bigBlind, ['call', 'raise']);
+    assert.equal(both.reading, null);
+    const control = judgeConsistency(report, 'fold', undefined, scenario.bigBlind, scenario.actionsSetAside);
+    assert.notEqual(control.reading, null, 'control: a reading that is not set aside is offered');
+  });
+
   it('is passed by the screen and by the bundled attempt', () => {
     const stage = readFileSync(join(SRC, 'components', 'ScenarioStage.tsx'), 'utf8');
     assert.match(stage, /bigBlind,\s*scenario\.actionsSetAside,\s*\)/);
     assert.match(stage, /this scenario does not evaluate that action/);
+    assert.match(stage, /judgement\.setAside \? 'not evaluated in this scenario'/);
     const fixtures = readFileSync(join(SRC, 'fixtures', 'scenarios.ts'), 'utf8');
     assert.match(
       fixtures,

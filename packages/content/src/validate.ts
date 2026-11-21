@@ -1128,8 +1128,17 @@ function checkStatedFoldRate(problems: Problems, path: string, scenario: Scenari
   }
 }
 
-/** An assumption that sets an action aside, in the words the scenarios use: "raising is not being evaluated". */
-const SET_ASIDE = /\b(folding|checking|calling|betting|raising) is not (?:being )?evaluated\b/giu;
+const GERUND = '(?:folding|checking|calling|betting|raising)';
+
+/**
+ * An assumption that sets actions aside: "raising is not being evaluated", "betting and raising are not
+ * evaluated", "raising isn't evaluated". The first group is the list of actions.
+ */
+const SET_ASIDE = new RegExp(
+  `\\b(${GERUND}(?:(?:,\\s*|\\s+(?:and|or)\\s+)${GERUND})*)\\s+(?:is|are)(?:\\s+not|n['’]t)\\s+(?:being\\s+)?evaluated\\b`,
+  'giu',
+);
+const GERUNDS = new RegExp(GERUND, 'giu');
 
 const SET_ASIDE_ACTION: Readonly<Record<string, NonNullable<Scenario['actionsSetAside']>[number]>> = {
   folding: 'fold',
@@ -1143,10 +1152,12 @@ const SET_ASIDE_ACTION: Readonly<Record<string, NonNullable<Scenario['actionsSet
 function checkDeclaredSetAside(problems: Problems, path: string, scenario: Scenario): void {
   const said = new Set(
     scenario.assumptions.flatMap((assumption) =>
-      [...assumption.matchAll(SET_ASIDE)].flatMap((match) => {
-        const action = SET_ASIDE_ACTION[(match[1] ?? '').toLowerCase()];
-        return action === undefined ? [] : [action];
-      }),
+      [...assumption.matchAll(SET_ASIDE)].flatMap((match) =>
+        [...(match[1] ?? '').matchAll(GERUNDS)].flatMap((gerund) => {
+          const action = SET_ASIDE_ACTION[gerund[0].toLowerCase()];
+          return action === undefined ? [] : [action];
+        }),
+      ),
     ),
   );
   const field = new Set(scenario.actionsSetAside ?? []);

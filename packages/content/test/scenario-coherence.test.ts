@@ -235,6 +235,25 @@ test('an action an assumption says is not being evaluated is the one the scenari
   assert.equal(mentioning(setAsideProblems(unsaid), /lists "bet", but no assumption says/).length, 1);
 });
 
+test('a set-aside sentence is read in the plural and with a contraction', () => {
+  const setAsideProblems = (sentence: string, field: unknown) => {
+    const scenario = scenarioNamed('fl-board-plays-itself-river');
+    const assumptions = scenario['assumptions'] as string[];
+    scenario['assumptions'] = assumptions.map((text) =>
+      /raising is not being evaluated/.test(text) ? sentence : text,
+    );
+    scenario['actionsSetAside'] = field;
+    return mentioning(problemsFor(scenario), /actionsSetAside/);
+  };
+  const plural = 'You are choosing between calling and folding; betting and raising are not evaluated here.';
+  assert.deepEqual(setAsideProblems(plural, ['bet', 'raise']), []);
+  assert.equal(setAsideProblems(plural, undefined).length, 2, 'both actions must be declared');
+  assert.deepEqual(setAsideProblems("Raising isn't evaluated here.", ['raise']), []);
+  assert.equal(setAsideProblems("Raising isn't evaluated here.", undefined).length, 1);
+  // "calling and folding" is not followed by "not evaluated", so neither is read as set aside.
+  assert.equal(mentioning(setAsideProblems(plural, ['bet', 'raise']), /call|fold/).length, 0);
+});
+
 test('actionsSetAside is a list of action names, each reported once', () => {
   const field = (value: unknown) => {
     const scenario = scenarioNamed('fl-board-plays-itself-river');

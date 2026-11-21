@@ -88,7 +88,9 @@ export function judgeConsistency(
     ...(setAside === undefined ? {} : { setAside }),
   });
   const chosenEv = verdict.chosen === null ? null : verdict.chosen.ev;
-  const reading = suggestedCandidate(report);
+  const suggested = suggestedCandidate(report);
+  // A reading the scenario sets aside is not offered beside the verdict, which leaves it out.
+  const reading = suggested !== null && setAside?.includes(suggested.action) === true ? null : suggested;
   const benchmarkEv = action === 'fold' ? verdict.measuredBestEv : 0;
 
   return {

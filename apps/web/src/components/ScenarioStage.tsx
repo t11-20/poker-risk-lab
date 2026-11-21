@@ -142,6 +142,12 @@ function BenchmarkRows({
   );
 }
 
+function chosenWorth(judgement: Consistency): string {
+  if (judgement.chosenEv !== null) return formatSignedUnits(judgement.chosenEv, { decimals: 1 });
+  // The Coach's table below still prices a set-aside action, so "not priced" would contradict it.
+  return judgement.setAside ? 'not evaluated in this scenario' : 'the analysis did not price this action';
+}
+
 function unpricedChip(judgement: Consistency): string {
   if (judgement.setAside) return 'this scenario does not evaluate that action';
   return judgement.pricing === 'sizing-not-priced'
@@ -215,11 +221,7 @@ function Verdict({
       <dl className="prl-stage__ev">
         <div className="prl-stage__ev-row">
           <dt className="prl-label">Your action is worth</dt>
-          <dd className="prl-stage__ev-value">
-            {judgement.chosenEv === null
-              ? 'the analysis did not price this action'
-              : formatSignedUnits(judgement.chosenEv, { decimals: 1 })}
-          </dd>
+          <dd className="prl-stage__ev-value">{chosenWorth(judgement)}</dd>
         </div>
         {judgement.reading === null ? null : (
           <div className="prl-stage__ev-row">

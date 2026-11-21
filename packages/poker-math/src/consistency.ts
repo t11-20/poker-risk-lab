@@ -133,7 +133,7 @@ export function defensibleActions(report: CoachReport, marginUnits: number): rea
  * Whether the analysis priced the submitted action.
  *
  * - `'priced'` means a row exists for this exact decision.
- * - `'action-not-priced'` means no row exists for this action name.
+ * - `'action-not-priced'` means no row exists for this action name, or the scenario set it aside.
  * - `'sizing-not-priced'` means the action was priced, but at other sizes.
  *
  * In the last two `consistent` is `false` as "not established", never as "wrong". A caller writing a
@@ -160,7 +160,7 @@ export interface ConsistencyVerdict {
   /** The margin in chips this verdict used, for showing the reader the threshold they were held to. */
   readonly marginUnits: number;
   readonly supportedActions: readonly string[];
-  /** Every action the analysis priced at all, supported or not. */
+  /** Every action the analysis priced at all, supported or not, less any the scenario set aside. */
   readonly availableActions: readonly string[];
   /**
    * True when exactly one action is defensible. Stored as `scenario_attempts.matched_expected` only
