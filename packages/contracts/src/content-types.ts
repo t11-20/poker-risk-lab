@@ -88,6 +88,7 @@ export type LiveCalculation =
       readonly kind: 'equity';
       readonly heroCards: string;
       readonly board?: string;
+      /** Exact two-card holdings, as the browser computes them. `validate.ts` refuses a range. */
       readonly opponents: readonly string[];
     }
   | {

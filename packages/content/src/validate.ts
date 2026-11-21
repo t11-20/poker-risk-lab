@@ -224,40 +224,6 @@ function checkRangeDealable(
   }
 }
 
-/**
- * The equity planner's order in `apps/api/src/calc/parse.ts`: `top:NN`, then exact cards, then range
- * notation. Returns the cards an exact holding names, for the distinct-card check.
- */
-function checkEquityOpponent(
-  problems: Problems,
-  path: string,
-  text: string,
-  blockers: readonly Card[],
-): Card[] {
-  const trimmed = text.trim();
-  if (trimmed.toLowerCase().startsWith('top:')) {
-    const percent = Number(trimmed.slice('top:'.length));
-    if (!Number.isInteger(percent) || percent < 1 || percent > 100) {
-      problems.add(
-        path,
-        `a top-percentage is written "top:15", a whole number from 1 to 100, got "${trimmed}"`,
-      );
-    }
-    return [];
-  }
-  let cards: Card[];
-  try {
-    cards = parseCards(trimmed);
-  } catch {
-    checkRangeDealable(problems, path, trimmed, blockers);
-    return [];
-  }
-  if (cards.length === 2) return cards;
-  if (cards.length === 0) checkRangeDealable(problems, path, trimmed, blockers);
-  else problems.add(path, `an opponent is exactly 2 cards or a range, got ${cards.length} cards`);
-  return [];
-}
-
 function validateGlossaryEntry(problems: Problems, path: string, raw: unknown): GlossaryEntry {
   if (!isRecord(raw)) {
     problems.add(path, `expected an object, got ${describe(raw)}`);
@@ -289,10 +255,18 @@ function validateEquityCalculation(
   raw: Record<string, unknown>,
 ): Extract<LiveCalculation, { kind: 'equity' }> {
   const { text: heroCards, cards: hero } = requireHolding(problems, `${path}.heroCards`, raw['heroCards']);
-  const opponents = requireStringArray(problems, `${path}.opponents`, raw['opponents'], {
-    min: 1,
-    max: 5,
-  });
+  // Exact holdings only: the browser computes a lesson's equity with `exactRange`, which takes no range
+  // or `top:NN`, although the API's planner would.
+  const listed = Array.isArray(raw['opponents']) ? raw['opponents'] : [];
+  if (!Array.isArray(raw['opponents'])) {
+    problems.add(`${path}.opponents`, `expected an array, got ${describe(raw['opponents'])}`);
+  } else if (listed.length < 1 || listed.length > 5) {
+    problems.add(`${path}.opponents`, `an equity calculation has 1 to 5 opponents, got ${listed.length}`);
+  }
+  const held = listed.map((opponent, index) =>
+    requireHolding(problems, `${path}.opponents[${index}]`, opponent),
+  );
+  const opponents = held.map((holding) => holding.text);
   // Preflop is a board left out. A present board that is not a string, or names no cards, is refused,
   // because the calculators would otherwise run it as preflop. Each bad board is reported once.
   const before = problems.count;
@@ -312,13 +286,7 @@ function validateEquityCalculation(
     ['heroCards', hero],
     ['board', boardCards],
   ];
-  for (const [index, opponent] of opponents.entries()) {
-    const held = checkEquityOpponent(problems, `${path}.opponents[${index}]`, opponent, [
-      ...hero,
-      ...boardCards,
-    ]);
-    seen.push([`opponents[${index}]`, held]);
-  }
+  for (const [index, holding] of held.entries()) seen.push([`opponents[${index}]`, holding.cards]);
   checkCardsDistinct(problems, path, seen);
   return { kind: 'equity', heroCards, opponents, ...(board === undefined ? {} : { board }) };
 }
