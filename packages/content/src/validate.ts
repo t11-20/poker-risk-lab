@@ -185,7 +185,7 @@ function parseCardsSafely(problems: Problems, path: string, text: string): Card[
 function requireHolding(problems: Problems, path: string, raw: unknown): { text: string; cards: Card[] } {
   const before = problems.count;
   const text = requireString(problems, path, raw, { max: 24 });
-  const cards = parseCardsSafely(problems, path, text);
+  const cards = problems.count === before ? parseCardsSafely(problems, path, text) : [];
   if (problems.count === before && cards.length !== 2) {
     problems.add(path, `a holding is exactly 2 cards, got ${cards.length}`);
   }
@@ -300,7 +300,8 @@ function validateEquityCalculation(
     raw['board'] === undefined
       ? undefined
       : requireString(problems, `${path}.board`, raw['board'], { max: 24 });
-  const boardCards = board === undefined ? [] : parseCardsSafely(problems, `${path}.board`, board);
+  const boardCards =
+    board === undefined || problems.count > before ? [] : parseCardsSafely(problems, `${path}.board`, board);
   if (board !== undefined && problems.count === before && ![3, 4, 5].includes(boardCards.length)) {
     problems.add(
       `${path}.board`,
@@ -331,7 +332,7 @@ function validateOutsCalculation(
   // Blank or separator-only text parses as no cards without a problem, so a report is counted, not guessed.
   const before = problems.count;
   const board = requireString(problems, `${path}.board`, raw['board'], { max: 24 });
-  const boardCards = parseCardsSafely(problems, `${path}.board`, board);
+  const boardCards = problems.count === before ? parseCardsSafely(problems, `${path}.board`, board) : [];
   const boardReported = problems.count > before;
   if (!boardReported && boardCards.length !== 3 && boardCards.length !== 4) {
     problems.add(

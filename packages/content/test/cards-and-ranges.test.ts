@@ -191,6 +191,17 @@ describe("a quiz calculation's board, as the calculators will take it", () => {
     }
   });
 
+  it('reports an overlong outs board once, not also as unparseable', () => {
+    const problems = withCalculation('counting-outs-q4', (calculation) => {
+      calculation['board'] = 'Xx'.repeat(13);
+    });
+    assert.equal(
+      problems.filter((problem) => problem.includes('.calculation.board:')).length,
+      1,
+      problems.join('; '),
+    );
+  });
+
   it('reports an unparseable outs board once, not also as zero cards', () => {
     const problems = withCalculation('counting-outs-q4', (calculation) => {
       calculation['board'] = 'Ah7hXx';
@@ -213,7 +224,19 @@ describe("a calculation's holdings and equity board, each refused once", () => {
 
   it('refuses a holding that is missing, blank, unparseable or not two cards', () => {
     for (const { question, field } of holdings) {
-      for (const value of [undefined, null, 7, '', '   ', ',', ' , ', 'Xx', '9c', '9c8c6c']) {
+      for (const value of [
+        undefined,
+        null,
+        7,
+        '',
+        '   ',
+        ',',
+        ' , ',
+        'Xx',
+        '9c',
+        '9c8c6c',
+        'Xx'.repeat(13),
+      ]) {
         if (field === 'opponentCards' && value === undefined) continue;
         const problems = withCalculation(question, (calculation) => {
           calculation[field] = value;
@@ -237,7 +260,7 @@ describe("a calculation's holdings and equity board, each refused once", () => {
   });
 
   it('refuses an equity board that is present but is not a string or names no cards', () => {
-    for (const board of [null, 7, ['Qh', '7h', '2c'], '', '   ', ',', 'Xx', 'Qh']) {
+    for (const board of [null, 7, ['Qh', '7h', '2c'], '', '   ', ',', 'Xx', 'Qh', 'Xx'.repeat(13)]) {
       const problems = withCalculation('reading-board-q4', (calculation) => {
         calculation['board'] = board;
       });
