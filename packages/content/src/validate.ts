@@ -277,6 +277,71 @@ function validateGlossaryEntry(problems: Problems, path: string, raw: unknown): 
   return entry;
 }
 
+function validateEquityCalculation(
+  problems: Problems,
+  path: string,
+  raw: Record<string, unknown>,
+): Extract<LiveCalculation, { kind: 'equity' }> {
+  const heroCards = requireString(problems, `${path}.heroCards`, raw['heroCards'], { max: 24 });
+  const hero = parseHoleCards(problems, `${path}.heroCards`, heroCards);
+  const opponents = requireStringArray(problems, `${path}.opponents`, raw['opponents'], {
+    min: 1,
+    max: 5,
+  });
+  const board = typeof raw['board'] === 'string' ? raw['board'] : undefined;
+  const boardCards = board === undefined ? [] : parseCardsSafely(problems, `${path}.board`, board);
+  // An unparseable board parses as no cards, which is a legal length, so it is reported once.
+  if (![0, 3, 4, 5].includes(boardCards.length)) {
+    problems.add(`${path}.board`, `an equity board has 0, 3, 4 or 5 cards, got ${boardCards.length}`);
+  }
+  const seen: [string, readonly Card[]][] = [
+    ['heroCards', hero],
+    ['board', boardCards],
+  ];
+  for (const [index, opponent] of opponents.entries()) {
+    const held = checkEquityOpponent(problems, `${path}.opponents[${index}]`, opponent, [
+      ...hero,
+      ...boardCards,
+    ]);
+    seen.push([`opponents[${index}]`, held]);
+  }
+  checkCardsDistinct(problems, path, seen);
+  return { kind: 'equity', heroCards, opponents, ...(board === undefined ? {} : { board }) };
+}
+
+function validateOutsCalculation(
+  problems: Problems,
+  path: string,
+  raw: Record<string, unknown>,
+): Extract<LiveCalculation, { kind: 'outs' }> {
+  const heroCards = requireString(problems, `${path}.heroCards`, raw['heroCards'], { max: 24 });
+  // Blank or separator-only text parses as no cards without a problem, so a report is counted, not guessed.
+  const before = problems.count;
+  const board = requireString(problems, `${path}.board`, raw['board'], { max: 24 });
+  const boardCards = parseCardsSafely(problems, `${path}.board`, board);
+  const boardReported = problems.count > before;
+  const hero = parseHoleCards(problems, `${path}.heroCards`, heroCards);
+  if (!boardReported && boardCards.length !== 3 && boardCards.length !== 4) {
+    problems.add(
+      `${path}.board`,
+      `outs are counted on a flop or a turn, 3 or 4 cards, got ${boardCards.length}`,
+    );
+  }
+  // Present means an exact holding: the API hands it to `exactRange`, which throws on anything else.
+  const opponentCards =
+    raw['opponentCards'] === undefined
+      ? undefined
+      : requireString(problems, `${path}.opponentCards`, raw['opponentCards'], { max: 24 });
+  const opponent =
+    opponentCards === undefined ? [] : parseHoleCards(problems, `${path}.opponentCards`, opponentCards);
+  checkCardsDistinct(problems, path, [
+    ['heroCards', hero],
+    ['board', boardCards],
+    ['opponentCards', opponent],
+  ]);
+  return { kind: 'outs', heroCards, board, ...(opponentCards === undefined ? {} : { opponentCards }) };
+}
+
 function validateIcmCalculation(
   problems: Problems,
   path: string,
@@ -322,48 +387,10 @@ function validateLiveCalculation(problems: Problems, path: string, raw: unknown)
   }
   const kind = requireOneOf(problems, `${path}.kind`, raw['kind'], CALCULATION_KINDS);
   switch (kind) {
-    case 'equity': {
-      const heroCards = requireString(problems, `${path}.heroCards`, raw['heroCards'], { max: 24 });
-      const hero = parseHoleCards(problems, `${path}.heroCards`, heroCards);
-      const opponents = requireStringArray(problems, `${path}.opponents`, raw['opponents'], {
-        min: 1,
-        max: 5,
-      });
-      const board = typeof raw['board'] === 'string' ? raw['board'] : undefined;
-      const boardCards = board === undefined ? [] : parseCardsSafely(problems, `${path}.board`, board);
-      const seen: [string, readonly Card[]][] = [
-        ['heroCards', hero],
-        ['board', boardCards],
-      ];
-      for (const [index, opponent] of opponents.entries()) {
-        const held = checkEquityOpponent(problems, `${path}.opponents[${index}]`, opponent, [
-          ...hero,
-          ...boardCards,
-        ]);
-        seen.push([`opponents[${index}]`, held]);
-      }
-      checkCardsDistinct(problems, path, seen);
-      return { kind, heroCards, opponents, ...(board === undefined ? {} : { board }) };
-    }
-    case 'outs': {
-      const heroCards = requireString(problems, `${path}.heroCards`, raw['heroCards'], { max: 24 });
-      const board = requireString(problems, `${path}.board`, raw['board'], { max: 24 });
-      const hero = parseHoleCards(problems, `${path}.heroCards`, heroCards);
-      const boardCards = parseCardsSafely(problems, `${path}.board`, board);
-      // Present means an exact holding: the API hands it to `exactRange`, which throws on anything else.
-      const opponentCards =
-        raw['opponentCards'] === undefined
-          ? undefined
-          : requireString(problems, `${path}.opponentCards`, raw['opponentCards'], { max: 24 });
-      const opponent =
-        opponentCards === undefined ? [] : parseHoleCards(problems, `${path}.opponentCards`, opponentCards);
-      checkCardsDistinct(problems, path, [
-        ['heroCards', hero],
-        ['board', boardCards],
-        ['opponentCards', opponent],
-      ]);
-      return { kind, heroCards, board, ...(opponentCards === undefined ? {} : { opponentCards }) };
-    }
+    case 'equity':
+      return validateEquityCalculation(problems, path, raw);
+    case 'outs':
+      return validateOutsCalculation(problems, path, raw);
     case 'potOdds':
       return {
         kind,
