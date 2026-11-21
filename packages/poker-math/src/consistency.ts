@@ -146,9 +146,9 @@ export interface ConsistencyVerdict {
   readonly consistent: boolean;
   /** Whether the analysis priced this exact decision, and if not, in which of the two ways. */
   readonly pricing: ConsistencyPricing;
-  /** The row the chosen action was judged on, or null when the analysis did not price it. */
+  /** The row the chosen action was judged on. Null when it was not priced, or was set aside. */
   readonly chosen: ActionCandidate | null;
-  /** Sizes priced for the submitted action name. Empty when none were priced or it moves no chips. */
+  /** Sizes priced for the submitted action. Empty when none were, it moves no chips, or it was set aside. */
   readonly pricedSizes: readonly number[];
   /**
    * The best EV among rows that do not rest on an assumed fold frequency, floored at zero. This is

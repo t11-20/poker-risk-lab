@@ -1128,53 +1128,61 @@ function checkStatedFoldRate(problems: Problems, path: string, scenario: Scenari
   }
 }
 
-const GERUND = '(?:folding|checking|calling|betting|raising)';
+type SetAsideAction = NonNullable<Scenario['actionsSetAside']>[number];
 
-/**
- * An assumption that sets actions aside: "raising is not being evaluated", "betting and raising are not
- * evaluated", "raising isn't evaluated". The first group is the list of actions.
- */
-const SET_ASIDE = new RegExp(
-  `\\b(${GERUND}(?:(?:,\\s*|\\s+(?:and|or)\\s+)${GERUND})*)\\s+(?:is|are)(?:\\s+not|n['’]t)\\s+(?:being\\s+)?evaluated\\b`,
-  'giu',
-);
-const GERUNDS = new RegExp(GERUND, 'giu');
-
-const SET_ASIDE_ACTION: Readonly<Record<string, NonNullable<Scenario['actionsSetAside']>[number]>> = {
-  folding: 'fold',
-  checking: 'check',
-  calling: 'call',
-  betting: 'bet',
-  raising: 'raise',
+const GERUND_OF: Readonly<Record<SetAsideAction, string>> = {
+  fold: 'folding',
+  check: 'checking',
+  call: 'calling',
+  bet: 'betting',
+  raise: 'raising',
 };
 
-/** The prose and the field set aside the same actions, or the verdict supports one the learner was told is out. */
+/** "raising is not being evaluated", "betting and raising are not being evaluated", "a, b and c are ...". */
+function setAsideSentence(actions: readonly SetAsideAction[]): string {
+  const gerunds = actions.map((action) => GERUND_OF[action]);
+  const listed =
+    gerunds.length === 1 ? gerunds.join('') : `${gerunds.slice(0, -1).join(', ')} and ${gerunds.at(-1)}`;
+  return `${listed} ${gerunds.length === 1 ? 'is' : 'are'} not being evaluated`;
+}
+
+/** Any assumption that says something is not evaluated, in whatever words. */
+const SAYS_NOT_EVALUATED = /(?:\bnot|n['’]t)\s+(?:being\s+)?evaluated\b/iu;
+
+/**
+ * The field is the source of truth and the prose must say it in one fixed form, because free wording
+ * ("compared with calling, raising is not evaluated") cannot be read reliably. Any other sentence that
+ * says something is not evaluated is refused rather than guessed at.
+ */
 function checkDeclaredSetAside(problems: Problems, path: string, scenario: Scenario): void {
-  const said = new Set(
-    scenario.assumptions.flatMap((assumption) =>
-      [...assumption.matchAll(SET_ASIDE)].flatMap((match) =>
-        [...(match[1] ?? '').matchAll(GERUNDS)].flatMap((gerund) => {
-          const action = SET_ASIDE_ACTION[gerund[0].toLowerCase()];
-          return action === undefined ? [] : [action];
-        }),
-      ),
-    ),
-  );
-  const field = new Set(scenario.actionsSetAside ?? []);
-  for (const action of said) {
-    if (field.has(action)) continue;
-    problems.add(
-      `${path}.actionsSetAside`,
-      `must include "${action}": an assumption says it is not being evaluated, and without it the verdict ` +
-        'can still name it as supported',
-    );
+  const at = `${path}.actionsSetAside`;
+  const field = scenario.actionsSetAside;
+  const negated = scenario.assumptions.filter((assumption) => SAYS_NOT_EVALUATED.test(assumption));
+  if (field === undefined) {
+    for (const assumption of negated) {
+      problems.add(
+        at,
+        `is missing, but an assumption says something is not evaluated ("${assumption}"); ` +
+          'name those actions here, or the verdict can still support them',
+      );
+    }
+    return;
   }
-  for (const action of field) {
-    if (said.has(action)) continue;
+  const sentence = setAsideSentence(field);
+  const says = (assumption: string) => assumption.toLowerCase().includes(sentence);
+  if (!scenario.assumptions.some(says)) {
     problems.add(
-      `${path}.actionsSetAside`,
-      `lists "${action}", but no assumption says it is not being evaluated, so the learner is never told ` +
-        'why the verdict leaves it out',
+      at,
+      `is ${JSON.stringify(field)}, so an assumption must say "${sentence}", ` +
+        'or the learner is never told why the verdict leaves them out',
+    );
+    return;
+  }
+  for (const assumption of negated) {
+    if (says(assumption)) continue;
+    problems.add(
+      at,
+      `an assumption says something else is not evaluated ("${assumption}"); say it as "${sentence}"`,
     );
   }
 }

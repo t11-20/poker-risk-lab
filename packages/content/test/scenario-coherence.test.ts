@@ -216,7 +216,7 @@ test('a scenario that says the opponent does not fold must declare that the whol
   assert.equal(mentioning(problemsFor(range), /wholeRangeContinues.*no assumption says/).length, 1);
 });
 
-test('an action an assumption says is not being evaluated is the one the scenario sets aside', () => {
+test('a scenario that sets actions aside says so in an assumption, in one fixed form', () => {
   const setAsideProblems = (scenario: RawScenario) => mentioning(problemsFor(scenario), /actionsSetAside/);
   const river = scenarioNamed('fl-board-plays-itself-river');
   assert.deepEqual(river['actionsSetAside'], ['raise']);
@@ -224,19 +224,19 @@ test('an action an assumption says is not being evaluated is the one the scenari
 
   const undeclared = structuredClone(river);
   undeclared['actionsSetAside'] = undefined;
-  assert.deepEqual(setAsideProblems(undeclared), [
-    'scenarios[0].actionsSetAside: must include "raise": an assumption says it is not being evaluated, ' +
-      'and without it the verdict can still name it as supported',
-  ]);
+  assert.equal(mentioning(setAsideProblems(undeclared), /is missing, but an assumption says/).length, 1);
 
   const unsaid = scenarioNamed('rk-high-spr-same-top-pair');
   assert.deepEqual(setAsideProblems(unsaid), [], 'control: no field and no sentence');
   unsaid['actionsSetAside'] = ['bet'];
-  assert.equal(mentioning(setAsideProblems(unsaid), /lists "bet", but no assumption says/).length, 1);
+  assert.deepEqual(setAsideProblems(unsaid), [
+    'scenarios[0].actionsSetAside: is ["bet"], so an assumption must say "betting is not being evaluated", ' +
+      'or the learner is never told why the verdict leaves them out',
+  ]);
 });
 
-test('a set-aside sentence is read in the plural and with a contraction', () => {
-  const setAsideProblems = (sentence: string, field: unknown) => {
+test('a set-aside sentence in other words is refused, not guessed at', () => {
+  const withSentence = (sentence: string, field: unknown) => {
     const scenario = scenarioNamed('fl-board-plays-itself-river');
     const assumptions = scenario['assumptions'] as string[];
     scenario['assumptions'] = assumptions.map((text) =>
@@ -245,13 +245,25 @@ test('a set-aside sentence is read in the plural and with a contraction', () => 
     scenario['actionsSetAside'] = field;
     return mentioning(problemsFor(scenario), /actionsSetAside/);
   };
-  const plural = 'You are choosing between calling and folding; betting and raising are not evaluated here.';
-  assert.deepEqual(setAsideProblems(plural, ['bet', 'raise']), []);
-  assert.equal(setAsideProblems(plural, undefined).length, 2, 'both actions must be declared');
-  assert.deepEqual(setAsideProblems("Raising isn't evaluated here.", ['raise']), []);
-  assert.equal(setAsideProblems("Raising isn't evaluated here.", undefined).length, 1);
-  // "calling and folding" is not followed by "not evaluated", so neither is read as set aside.
-  assert.equal(mentioning(setAsideProblems(plural, ['bet', 'raise']), /call|fold/).length, 0);
+  // Accepted: the fixed form, inside any sentence.
+  assert.deepEqual(
+    withSentence('Compared with calling, raising is not being evaluated here.', ['raise']),
+    [],
+  );
+  assert.deepEqual(withSentence('Betting and raising are not being evaluated here.', ['bet', 'raise']), []);
+  assert.deepEqual(
+    withSentence('Betting, checking and raising are not being evaluated here.', ['bet', 'check', 'raise']),
+    [],
+  );
+  // Refused, once each: a list the field does not match, other wording, and a sentence with no field.
+  for (const [sentence, field] of [
+    ['Betting, checking, and raising are not evaluated here.', ['raise']],
+    ['Betting and raising are not being evaluated here.', ['raise']],
+    ["Raising isn't evaluated here.", ['raise']],
+    ["Raising isn't evaluated here.", undefined],
+  ] as const) {
+    assert.equal(withSentence(sentence, field).length, 1, `${sentence} with ${JSON.stringify(field)}`);
+  }
 });
 
 test('actionsSetAside is a list of action names, each reported once', () => {

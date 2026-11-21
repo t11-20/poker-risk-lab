@@ -22,7 +22,7 @@ export type ScenarioAction = ActionCandidate['action'];
 export interface Consistency {
   /** True when the chosen action is defensible against the stated range. From the shared rule. */
   readonly consistent: boolean;
-  /** The chosen action's EV, or null when the report has no candidate for it. */
+  /** The chosen action's EV, or null when the report has no candidate for it or the scenario set it aside. */
   readonly chosenEv: number | null;
   /**
    * The row the Coach's reading stands on (`suggestedCandidate`), named as `rowName` names it, not the
