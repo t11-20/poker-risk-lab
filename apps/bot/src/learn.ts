@@ -281,10 +281,6 @@ function compute(calculation: LiveCalculation): Calculation {
       };
     }
     case 'outs': {
-      // Outs need the holding they beat, as on the web.
-      if (calculation.opponentCards === undefined) {
-        throw new Error('an outs calculation needs the opponent holding it is counted against');
-      }
       const outs = computeOuts({
         heroCards: parseCards(calculation.heroCards),
         board: parseCards(calculation.board),

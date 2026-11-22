@@ -315,6 +315,14 @@ function validateEquityCalculation(
   return { kind: 'equity', heroCards, opponents, ...(board === undefined ? {} : { board }) };
 }
 
+function missingOutsOpponent(problems: Problems, path: string): { text: string; cards: Card[] } {
+  problems.add(
+    path,
+    'an outs calculation names the opponent\'s exact two cards, such as "AsKs", because a card is a clean or a dirty out only against one hand',
+  );
+  return { text: '', cards: [] };
+}
+
 function validateOutsCalculation(
   problems: Problems,
   path: string,
@@ -332,19 +340,16 @@ function validateOutsCalculation(
       `outs are counted on a flop or a turn, 3 or 4 cards, got ${boardCards.length}`,
     );
   }
-  // Present means an exact holding: the API hands it to `exactRange`, which throws on anything else.
   const named =
     raw['opponentCards'] === undefined
-      ? undefined
+      ? missingOutsOpponent(problems, `${path}.opponentCards`)
       : requireHolding(problems, `${path}.opponentCards`, raw['opponentCards']);
-  const opponentCards = named?.text;
-  const opponent = named?.cards ?? [];
   checkCardsDistinct(problems, path, [
     ['heroCards', hero],
     ['board', boardCards],
-    ['opponentCards', opponent],
+    ['opponentCards', named.cards],
   ]);
-  return { kind: 'outs', heroCards, board, ...(opponentCards === undefined ? {} : { opponentCards }) };
+  return { kind: 'outs', heroCards, board, opponentCards: named.text };
 }
 
 function validateIcmCalculation(

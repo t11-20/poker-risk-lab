@@ -95,7 +95,8 @@ export type LiveCalculation =
       readonly kind: 'outs';
       readonly heroCards: string;
       readonly board: string;
-      readonly opponentCards?: string;
+      /** Exact two cards: a card is a clean or a dirty out only against one hand. `validate.ts` requires it. */
+      readonly opponentCards: string;
     }
   | { readonly kind: 'potOdds'; readonly pot: number; readonly toCall: number }
   | {

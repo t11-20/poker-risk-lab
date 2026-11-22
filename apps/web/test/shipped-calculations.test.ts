@@ -74,11 +74,15 @@ describe('every shipped calculation, through the browser calculator', () => {
   }
 
   it('control: a calculation the browser cannot compute is caught', () => {
-    // The browser takes equity opponents only as exact cards, which load now refuses, and outs only
-    // against a named opponent, which load still accepts.
+    // Load refuses both, so neither can ship; the browser throws on each.
     const range: LiveCalculation = { kind: 'equity', heroCards: 'AhKh', board: 'Qh7h2c', opponents: ['QQ+'] };
-    const noOpponent: LiveCalculation = { kind: 'outs', heroCards: 'Th9h', board: 'Ah7h2c4d' };
+    const river: LiveCalculation = {
+      kind: 'outs',
+      heroCards: 'Th9h',
+      board: 'Ah7h2c4d5s',
+      opponentCards: 'AsKs',
+    };
     assert.notEqual(failure({ where: 'range', calculation: range }), null);
-    assert.notEqual(failure({ where: 'no opponent', calculation: noOpponent }), null);
+    assert.notEqual(failure({ where: 'river', calculation: river }), null);
   });
 });

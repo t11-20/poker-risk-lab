@@ -156,7 +156,18 @@ describe("a quiz calculation's cards", () => {
     refused(opponent, /\.calculation\.opponents\[0\]: a holding is exactly 2 cards, got 3/);
   });
 
-  it('are refused when an outs opponent is present and empty', () => {
+  it('are refused when an outs calculation names no opponent', () => {
+    // The browser and the bot count outs only against one exact hand, so a missing one cannot be shown.
+    const missing = withCalculation('counting-outs-q4', (calculation) => {
+      calculation['opponentCards'] = undefined;
+    });
+    refused(
+      missing,
+      /\.calculation\.opponentCards: an outs calculation names the opponent's exact two cards/,
+    );
+  });
+
+  it('are refused when an outs opponent is empty', () => {
     const empty = withCalculation('counting-outs-q4', (calculation) => {
       calculation['opponentCards'] = '';
     });
@@ -254,7 +265,6 @@ describe("a calculation's holdings and equity board, each refused once", () => {
         '9c8c6c',
         'Xx'.repeat(13),
       ]) {
-        if (field === 'opponentCards' && value === undefined) continue;
         const problems = withCalculation(question, (calculation) => {
           calculation[field] = value;
         });
