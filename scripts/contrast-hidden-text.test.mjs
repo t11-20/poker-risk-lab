@@ -54,6 +54,8 @@ describe('text that still paints', () => {
       false,
     );
     assert.equal(hidesItsText(style({ display: 'inline', overflow: 'hidden' }), DOT), false);
+    const boxless = { width: 0, height: 0 };
+    assert.equal(hidesItsText(style({ display: 'contents', clipPath: 'inset(0px)' }), boxless), false);
   });
 
   it('carries no reference to anything outside itself, as it runs stringified in the page', () => {

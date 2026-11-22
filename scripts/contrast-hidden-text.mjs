@@ -4,6 +4,8 @@
  * box's border rect. A false `true` is the unsafe direction, because the gate then skips visible text.
  */
 export function hidesItsText(style, box) {
+  // With no box of its own, clip-path, clip and overflow do nothing to its children.
+  if (style.display === 'contents') return false;
   const inset = /^inset\(([^)]*)\)/u.exec(style.clipPath ?? '');
   if (inset !== null) {
     const lengths = inset[1]
@@ -23,7 +25,7 @@ export function hidesItsText(style, box) {
   // `clip` applies only to an absolutely positioned box; on any other it is ignored.
   const positioned = style.position === 'absolute' || style.position === 'fixed';
   if (positioned && style.clip === 'rect(0px, 0px, 0px, 0px)') return true;
-  // `overflow` does not clip an inline box or one with no box at all.
-  if (style.display === 'contents' || style.display === 'inline') return false;
+  // `overflow` does not clip an inline box.
+  if (style.display === 'inline') return false;
   return box.width <= 2 && box.height <= 2 && style.overflow === 'hidden';
 }
