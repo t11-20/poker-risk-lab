@@ -18,6 +18,7 @@ interface SeatProps {
   readonly name: string;
   readonly ringIndex: number;
   readonly ringCount: number;
+  readonly lastAction?: string | null;
   readonly as?: 'li' | 'div';
 }
 
