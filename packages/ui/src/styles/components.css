@@ -1837,19 +1837,16 @@
   color: var(--prl-suit-red);
 }
 
-/**
- * No logo or crest. A visually-hidden string supplies the accessible name. The pale border is a real
- * deck's white margin, and it is what separates a dark back from a dark table.
- */
+/** No logo or crest. A visually-hidden string supplies the accessible name. */
 .prl-card--face-down {
-  border-color: var(--prl-card-face);
+  border-color: var(--prl-card-back);
   background-color: var(--prl-card-back);
   background-image: repeating-linear-gradient(
     -45deg,
     var(--prl-card-back-pattern) 0 var(--prl-space-1),
     transparent var(--prl-space-1) var(--prl-space-3)
   );
-  color: var(--prl-card-back-ink);
+  color: var(--prl-ink-000);
 }
 
 /** An accent border AND a corner notch, because the notch survives greyscale. */

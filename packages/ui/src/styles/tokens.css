@@ -25,8 +25,8 @@
   --prl-surface-hover: #2d2924;
   --prl-surface-active: #36312b;
 
-  --prl-surface-table: #1a1815;
-  --prl-table-grid-color: #24211d;
+  --prl-surface-table: #111838;
+  --prl-table-grid-color: #1a2146;
   --prl-table-grid-size: 32px;
 
   --prl-scrim: rgb(10 9 8 / 72%);
@@ -70,14 +70,13 @@
 
   /* CARD FACES. Light in both themes, because a dark card is unreadable at six-max sizes. Two inks, as on
      a real deck. Suit is never colour alone: every card carries its symbol and an aria-label. */
-  --prl-card-face: #f4f1ea;
-  --prl-card-face-dim: #e2ddd3;
-  --prl-card-edge: #b9b2a5;
-  --prl-card-back: #1f4a37;
-  --prl-card-back-pattern: #2d6049;
-  --prl-card-back-ink: #f3efe7;
-  --prl-suit-black: #1f1d1a;
-  --prl-suit-red: #b3262d;
+  --prl-card-face: #f7f8fb;
+  --prl-card-face-dim: #e4e7ef;
+  --prl-card-edge: #b9becd;
+  --prl-card-back: #22308a;
+  --prl-card-back-pattern: #3142a8;
+  --prl-suit-black: #161b33;
+  --prl-suit-red: #c02637;
   /* A card named in prose sits on the page, not a face, so it needs page-legible inks. */
   --prl-mark-spade: var(--prl-text);
   --prl-mark-heart: #f08a8a;
@@ -101,6 +100,7 @@
     var(--prl-focus-halo);
 
   /* DEPRECATED ALIASES. Inert, kept only so parallel branches still resolve. Delete once they merge. */
+  --prl-ink-000: #f1f3fa;
   --prl-info: var(--prl-text-secondary);
   --prl-line-accent: var(--prl-accent-edge);
   --prl-accent-300: var(--prl-focus-color);
@@ -287,8 +287,8 @@
     --prl-surface-inset: #eeeae2;
     --prl-surface-hover: #e9e4db;
     --prl-surface-active: #dfd9ce;
-    --prl-surface-table: #efebe4;
-    --prl-table-grid-color: #e2ddd4;
+    --prl-surface-table: #e9edf4;
+    --prl-table-grid-color: #d6dce8;
 
     --prl-scrim: rgb(36 33 29 / 44%);
 
@@ -319,9 +319,8 @@
     --prl-series-e: #6b645a;
     --prl-series-f: #7d6739;
 
-    --prl-card-face: #fdfcf9;
-    --prl-card-face-dim: #e7e3da;
-    --prl-card-back-pattern: #2a5a44;
+    --prl-card-face: #ffffff;
+    --prl-card-face-dim: #e6e8ee;
     --prl-mark-heart: #a5332a;
 
     --prl-focus-color: #174a33;
@@ -339,8 +338,8 @@
   --prl-surface-inset: #eeeae2;
   --prl-surface-hover: #e9e4db;
   --prl-surface-active: #dfd9ce;
-  --prl-surface-table: #efebe4;
-  --prl-table-grid-color: #e2ddd4;
+  --prl-surface-table: #e9edf4;
+  --prl-table-grid-color: #d6dce8;
 
   --prl-scrim: rgb(36 33 29 / 44%);
 
@@ -371,9 +370,8 @@
   --prl-series-e: #6b645a;
   --prl-series-f: #7d6739;
 
-  --prl-card-face: #fdfcf9;
-  --prl-card-face-dim: #e7e3da;
-  --prl-card-back-pattern: #2a5a44;
+  --prl-card-face: #ffffff;
+  --prl-card-face-dim: #e6e8ee;
   --prl-mark-heart: #a5332a;
 
   --prl-focus-color: #174a33;
