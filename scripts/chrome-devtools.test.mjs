@@ -3,7 +3,8 @@ import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { describe, it } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
-import { waitForDevtools } from './chrome-devtools.mjs';
+import { readdirSync, readFileSync } from 'node:fs';
+import { awaitReply, waitForDevtools } from './chrome-devtools.mjs';
 
 const VERSION = { Browser: 'Stand-in/1.0' };
 
@@ -119,5 +120,37 @@ describe('waitForDevtools', () => {
       child.kill();
       await stalled.close();
     }
+  });
+});
+
+describe('awaitReply', () => {
+  it('rejects a call Chrome never answers, and forgets it', async () => {
+    const pending = new Map();
+    const reply = awaitReply(pending, 7, 'Runtime.evaluate', 20);
+    assert.equal(pending.has(7), true);
+    await assert.rejects(reply, /Chrome did not answer Runtime\.evaluate within 0\.02s/u);
+    assert.equal(pending.has(7), false);
+  });
+
+  it('settles with the answer when one arrives first', async () => {
+    const pending = new Map();
+    const reply = awaitReply(pending, 1, 'Page.navigate', 1_000);
+    pending.get(1).resolve({ frameId: 'f' });
+    assert.deepEqual(await reply, { frameId: 'f' });
+  });
+
+  it('is how every gate that drives DevTools waits for an answer', () => {
+    const scripts = readdirSync(new URL('.', import.meta.url)).filter(
+      (name) => name.endsWith('.mjs') && !name.endsWith('.test.mjs') && name !== 'chrome-devtools.mjs',
+    );
+    const drivers = scripts.filter((name) =>
+      readFileSync(new URL(name, import.meta.url), 'utf8').includes('#pending'),
+    );
+    assert.ok(drivers.length >= 6, `found ${drivers.length} DevTools drivers; the scan read too little`);
+    const unbounded = drivers.filter((name) => {
+      const source = readFileSync(new URL(name, import.meta.url), 'utf8');
+      return source.includes('#pending.set(') || !source.includes('awaitReply(this.#pending');
+    });
+    assert.deepEqual(unbounded, [], 'these wait for Chrome with no time limit');
   });
 });

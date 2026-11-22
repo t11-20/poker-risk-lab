@@ -21,7 +21,7 @@ import {
   AGE_GATE_MINIMUM_CEILING,
   AGE_GATE_PATH,
 } from '../apps/web/src/lib/age-gate.ts';
-import { withChrome } from './chrome-devtools.mjs';
+import { awaitReply, withChrome } from './chrome-devtools.mjs';
 import { ManagedServer, refuseOccupiedPort } from './gate-servers.mjs';
 
 const args = process.argv.slice(2);
@@ -136,10 +136,9 @@ class Page {
 
   send(method, params = {}) {
     const id = this.#nextId++;
-    return new Promise((resolve, reject) => {
-      this.#pending.set(id, { resolve, reject });
-      this.#socket.send(JSON.stringify({ id, method, params }));
-    });
+    const reply = awaitReply(this.#pending, id, method);
+    this.#socket.send(JSON.stringify({ id, method, params }));
+    return reply;
   }
 
   async evaluate(expression) {

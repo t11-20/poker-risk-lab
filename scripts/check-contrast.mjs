@@ -15,7 +15,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inflateSync } from 'node:zlib';
-import { withChrome } from './chrome-devtools.mjs';
+import { awaitReply, withChrome } from './chrome-devtools.mjs';
 import { ManagedServer, refuseOccupiedPort } from './gate-servers.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -1454,10 +1454,9 @@ class Page {
 
   send(method, params = {}) {
     const id = this.#nextId++;
-    return new Promise((resolveSend, reject) => {
-      this.#pending.set(id, { resolve: resolveSend, reject });
-      this.#socket.send(JSON.stringify({ id, method, params }));
-    });
+    const reply = awaitReply(this.#pending, id, method);
+    this.#socket.send(JSON.stringify({ id, method, params }));
+    return reply;
   }
 
   async evaluate(expression) {

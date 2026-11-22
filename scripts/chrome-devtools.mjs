@@ -13,6 +13,11 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 export const DEVTOOLS_STARTUP_TIMEOUT_MS = 30_000;
+/**
+ * No DevTools call a gate makes takes minutes. Without a bound, a headless Chrome that stopped answering
+ * on 2026-11-22 held `test:age-gate`, and `verify` behind it, for three hours.
+ */
+export const CDP_CALL_TIMEOUT_MS = 300_000;
 const POLL_MS = 150;
 const POLL_TIMEOUT_MS = 1_000;
 
@@ -111,4 +116,27 @@ export async function withChrome({ headful, port, profile, freshProfile, flags, 
       }
     }
   }
+}
+
+/**
+ * Registers call `id` in `pending`, the map a page's message handler settles, and rejects it if Chrome
+ * never answers, so a frozen browser fails the gate instead of hanging it.
+ */
+export function awaitReply(pending, id, method, timeoutMs = CDP_CALL_TIMEOUT_MS) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pending.delete(id);
+      reject(new Error(`Chrome did not answer ${method} within ${timeoutMs / 1000}s`));
+    }, timeoutMs);
+    pending.set(id, {
+      resolve: (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      reject: (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    });
+  });
 }

@@ -25,7 +25,7 @@ import {
   AGE_GATE_MINIMUM_CEILING,
   AGE_GATE_PATH,
 } from '../apps/web/src/lib/age-gate.ts';
-import { withChrome } from './chrome-devtools.mjs';
+import { awaitReply, withChrome } from './chrome-devtools.mjs';
 import { ManagedServer, refuseOccupiedPort } from './gate-servers.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -351,10 +351,9 @@ class Page {
 
   send(method, params = {}) {
     const id = this.#nextId++;
-    return new Promise((resolveSend, reject) => {
-      this.#pending.set(id, { resolve: resolveSend, reject });
-      this.#socket.send(JSON.stringify({ id, method, params }));
-    });
+    const reply = awaitReply(this.#pending, id, method);
+    this.#socket.send(JSON.stringify({ id, method, params }));
+    return reply;
   }
 
   /** Install and inspect only. A DevTools evaluation is exempt from the page's policy. */

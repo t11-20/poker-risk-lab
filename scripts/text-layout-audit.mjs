@@ -21,7 +21,7 @@ import { writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
-import { withChrome } from './chrome-devtools.mjs';
+import { awaitReply, withChrome } from './chrome-devtools.mjs';
 import { ManagedServer, refuseOccupiedPort } from './gate-servers.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -1082,10 +1082,9 @@ class Page {
 
   send(method, params = {}) {
     const id = this.#nextId++;
-    return new Promise((resolveSend, reject) => {
-      this.#pending.set(id, { resolve: resolveSend, reject });
-      this.#socket.send(JSON.stringify({ id, method, params }));
-    });
+    const reply = awaitReply(this.#pending, id, method);
+    this.#socket.send(JSON.stringify({ id, method, params }));
+    return reply;
   }
 
   async evaluate(expression) {
