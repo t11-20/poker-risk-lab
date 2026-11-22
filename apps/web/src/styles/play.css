@@ -110,22 +110,42 @@
   gap: var(--prl-space-6);
 }
 
-/** The empty table, on the same surface as the dealt table, so dealing in fills the drawing. */
+/**
+ * The empty table, on the same surface as the dealt table, so dealing in fills the drawing. The felt is
+ * this box's `::before`, an ancestor layer of the message, and the box grows with the message, so at
+ * 200% text or WCAG 1.4.12 spacing the felt inks never land on the page.
+ */
 .prl-play__idle {
+  --prl-idle-felt-block: var(--prl-space-9);
+  --prl-idle-felt-inline: var(--prl-space-7);
+  /* From the rail to the centre of a corner seat, and on to the inner edge of its disc. */
+  --prl-idle-seat-drop: var(--prl-space-7);
+  --prl-idle-seat-reach: calc(var(--prl-idle-seat-drop) + var(--prl-space-11) / 2);
+
   position: relative;
+  isolation: isolate;
   display: grid;
   place-items: center;
   /* A height from the width, not `aspect-ratio`, which with a min-height widened 360px to 718px. */
-  block-size: clamp(16rem, 42vw, 26rem);
-  padding: var(--prl-space-11) var(--prl-space-9);
+  min-block-size: clamp(16rem, 42vw, 26rem);
+  /* Clears the seat discs on the rail, so no word runs under one. */
+  padding-block: calc(var(--prl-idle-felt-block) + var(--prl-idle-seat-reach) + var(--prl-space-3));
+  padding-inline: calc(var(--prl-idle-felt-inline) + var(--prl-space-7));
+}
+
+.prl-play__idle::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: var(--prl-idle-felt-block) var(--prl-idle-felt-inline);
+  border: var(--prl-rail-width) solid var(--prl-rail);
+  border-radius: var(--prl-radius-pill);
+  background-color: var(--prl-felt);
 }
 
 .prl-play__idle-table {
   position: absolute;
-  inset: var(--prl-space-9) var(--prl-space-7);
-  border: var(--prl-rail-width) solid var(--prl-rail);
-  border-radius: var(--prl-radius-pill);
-  background-color: var(--prl-felt);
+  inset: var(--prl-idle-felt-block) var(--prl-idle-felt-inline);
 }
 
 .prl-play__idle-seat {
@@ -144,7 +164,7 @@
 }
 
 .prl-play__idle-seat[data-seat="top-left"] {
-  inset-block-start: 8%;
+  inset-block-start: var(--prl-idle-seat-drop);
   inset-inline-start: 22%;
 }
 
@@ -154,12 +174,12 @@
 }
 
 .prl-play__idle-seat[data-seat="top-right"] {
-  inset-block-start: 8%;
+  inset-block-start: var(--prl-idle-seat-drop);
   inset-inline-start: 78%;
 }
 
 .prl-play__idle-seat[data-seat="bottom-right"] {
-  inset-block-start: 92%;
+  inset-block-start: calc(100% - var(--prl-idle-seat-drop));
   inset-inline-start: 78%;
 }
 
@@ -171,7 +191,7 @@
 }
 
 .prl-play__idle-seat[data-seat="bottom-left"] {
-  inset-block-start: 92%;
+  inset-block-start: calc(100% - var(--prl-idle-seat-drop));
   inset-inline-start: 22%;
 }
 

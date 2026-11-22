@@ -227,7 +227,7 @@ const TABLE_COLOUR_READERS: ReadonlyMap<string, readonly string[]> = new Map([
   ['apps/web/src/styles/home.css', ['.prl-spot__table', '.prl-spot__who', '.prl-spot__slot']],
   [
     'apps/web/src/styles/play.css',
-    ['.prl-play__idle-table', '.prl-play__idle-text', '.prl-play__idle-title'],
+    ['.prl-play__idle::before', '.prl-play__idle-text', '.prl-play__idle-title'],
   ],
   ['apps/web/src/styles/nav.css', ['.prl-pillbar__brand .prl-shell__brand-index', '.prl-shell__brand-suit']],
 ]);

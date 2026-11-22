@@ -87,6 +87,30 @@ describe('the play screen never pins a surface over the table', () => {
   });
 });
 
+/**
+ * The idle message is set in felt inks. Painted by a sibling of a fixed-height box, the felt stayed put
+ * while 200% text pushed the message off it onto the page, light green on cream.
+ */
+describe('the idle table message always sits on the felt it was measured against', () => {
+  it('paints the felt on the box that holds the message, and lets that box grow', () => {
+    const felt = /background-color\s*:\s*var\(--prl-felt\)/u;
+    assert.ok(
+      declarationsFor(playCss, '.prl-play__idle::before').some((block) => felt.test(block)),
+      'the felt is `.prl-play__idle::before`, an ancestor layer of `.prl-play__idle-text`',
+    );
+    for (const sibling of ['.prl-play__idle-table', '.prl-play__idle-seat']) {
+      for (const block of declarationsFor(playCss, sibling)) assert.doesNotMatch(block, felt, sibling);
+    }
+    for (const block of declarationsFor(playCss, '.prl-play__idle')) {
+      assert.doesNotMatch(
+        block,
+        /(?:^|;)\s*(?:block-size|height)\s*:/u,
+        'a fixed height strands the message',
+      );
+    }
+  });
+});
+
 describe('the sticky action row is bounded by a bar that stays in flow', () => {
   // The action row is sticky below 46rem of column, which is safe only because its containing block,
   // the ActionBar, sits below the table. Pinning or dissolving the bar covers the table.
