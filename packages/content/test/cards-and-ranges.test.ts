@@ -85,7 +85,7 @@ describe("a quiz calculation's cards", () => {
     const problems = withCalculation('reading-board-q4', (calculation) => {
       calculation['opponents'] = ['AhQd'];
     });
-    refused(problems, /\.calculation: card appears twice — in heroCards and in opponents\[0\]/);
+    refused(problems, /\.calculation: card Ah appears twice — in heroCards and in opponents\[0\]/);
   });
 
   it('are refused when an equity opponent is a range or a top percentage, not an exact hand', () => {
@@ -140,7 +140,7 @@ describe("a quiz calculation's cards", () => {
     const problems = withCalculation('counting-outs-q4', (calculation) => {
       calculation['opponentCards'] = 'AhKs';
     });
-    refused(problems, /\.calculation: card appears twice — in board and in opponentCards/);
+    refused(problems, /\.calculation: card Ah appears twice — in board and in opponentCards/);
   });
   it('are refused when hero is not two cards', () => {
     const hero = withCalculation('reading-board-q4', (calculation) => {
@@ -165,6 +165,20 @@ describe("a quiz calculation's cards", () => {
       missing,
       /\.calculation\.opponentCards: an outs calculation names the opponent's exact two cards/,
     );
+  });
+
+  it('are refused once when an equity opponent holds the same card twice', () => {
+    // reading-board-q4: hero AhKh, so the old check also reported Ah as a clash, twice.
+    const problems = withCalculation('reading-board-q4', (calculation) => {
+      calculation['opponents'] = ['AhAh'];
+    });
+    assert.deepEqual(
+      problems.filter((problem) => problem.includes('.calculation')),
+      problems.filter((problem) =>
+        problem.includes('.calculation.opponents[0]: a holding is two different cards'),
+      ),
+    );
+    refused(problems, /\.calculation\.opponents\[0\]: a holding is two different cards, got "AhAh"/);
   });
 
   it('are refused when an outs opponent is empty', () => {

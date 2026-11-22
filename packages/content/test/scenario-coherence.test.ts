@@ -324,3 +324,46 @@ test('a fold rate stated in an assumption is the one the scenario declares', () 
   silent['assumedFoldEquity'] = 0.3;
   assert.match(foldRateProblems(silent).join('\n'), /is 0\.3, but no assumption states the rate/);
 });
+
+test("a scenario's board, seat cards and exact range are each refused once", () => {
+  // eq-equity-against-one-known-hand: turn, board "Qd 9s 5c 3h", hero QcJd, BTN QhTs, exact QhTs.
+  const id = 'eq-equity-against-one-known-hand';
+  const bad = [7, '', '   ', ',', 'Xx', 'QhTs9c', 'AhAh', 'Xx'.repeat(13)];
+  const cases: [string, string, (scenario: RawScenario, value: unknown) => void][] = [
+    ['board', 'scenarios[0].board', (scenario, value) => (scenario['board'] = value)],
+    ['hero', 'scenarios[0].seats[0].holeCards', (scenario, value) => (heroOf(scenario)['holeCards'] = value)],
+    [
+      'opponent seat',
+      'scenarios[0].seats[1].holeCards',
+      (scenario, value) => (seatLabelled(scenario, 'BTN')['holeCards'] = value),
+    ],
+    [
+      'exact range',
+      'scenarios[0].opponentRange.cards',
+      (scenario, value) => ((scenario['opponentRange'] as RawScenario)['cards'] = value),
+    ],
+  ];
+  for (const [where, path, edit] of cases) {
+    for (const value of bad) {
+      // An empty board is preflop, which this turn scenario is not, so it is refused for its length.
+      const scenario = scenarioNamed(id);
+      edit(scenario, value);
+      const problems = problemsFor(scenario);
+      const label = `${where} ${JSON.stringify(value)}: ${problems.join('; ')}`;
+      assert.equal(
+        mentioning(problems, new RegExp(`^${path.replace(/[.[\]]/gu, '\\$&')}:`, 'u')).length,
+        1,
+        label,
+      );
+      assert.deepEqual(mentioning(problems, /appears twice/u), [], label);
+    }
+  }
+});
+
+test('a seat holding the same card twice is refused as a holding, not reported as a clash with itself', () => {
+  const scenario = scenarioNamed('eq-equity-against-one-known-hand');
+  heroOf(scenario)['holeCards'] = 'AhAh';
+  assert.deepEqual(problemsFor(scenario), [
+    'scenarios[0].seats[0].holeCards: a holding is two different cards, got "AhAh"',
+  ]);
+});
