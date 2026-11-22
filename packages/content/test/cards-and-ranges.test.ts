@@ -167,6 +167,21 @@ describe("a quiz calculation's cards", () => {
     );
   });
 
+  it('are refused once, as a board, when a board repeats a card', () => {
+    // reading-board-q4 is equity with hero AhKh; counting-outs-q4 is outs with hero Th9h.
+    for (const question of ['reading-board-q4', 'counting-outs-q4']) {
+      const problems = withCalculation(question, (calculation) => {
+        calculation['board'] = 'AhAh7c';
+      });
+      assert.deepEqual(
+        problems.filter((problem) => problem.includes('.calculation')),
+        problems.filter((problem) => problem.includes('.calculation.board: a board names each card once')),
+        question,
+      );
+      refused(problems, /\.calculation\.board: a board names each card once, got "AhAh7c"/);
+    }
+  });
+
   it('are refused once when an equity opponent holds the same card twice', () => {
     // reading-board-q4: hero AhKh, so the old check also reported Ah as a clash, twice.
     const problems = withCalculation('reading-board-q4', (calculation) => {

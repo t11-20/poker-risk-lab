@@ -328,8 +328,20 @@ test('a fold rate stated in an assumption is the one the scenario declares', () 
 test("a scenario's board, seat cards and exact range are each refused once", () => {
   // eq-equity-against-one-known-hand: turn, board "Qd 9s 5c 3h", hero QcJd, BTN QhTs, exact QhTs.
   const id = 'eq-equity-against-one-known-hand';
-  // `Qd … Ah` parses but is over the length limit, so its Qd must not reach the clash check.
-  const bad = [7, '', '   ', ',', 'Xx', 'QhTs9c', 'AhAh', 'Xx'.repeat(13), `Qd${' '.repeat(30)}Ah`];
+  // `Qd … Ah` parses but is over the length limit, and `Qd Qd 5c 3h` repeats the board's Qd, so neither's
+  // cards may reach the clash check.
+  const bad = [
+    7,
+    '',
+    '   ',
+    ',',
+    'Xx',
+    'QhTs9c',
+    'AhAh',
+    'Xx'.repeat(13),
+    `Qd${' '.repeat(30)}Ah`,
+    'Qd Qd 5c 3h',
+  ];
   const cases: [string, string, (scenario: RawScenario, value: unknown) => void][] = [
     ['board', 'scenarios[0].board', (scenario, value) => (scenario['board'] = value)],
     ['hero', 'scenarios[0].seats[0].holeCards', (scenario, value) => (heroOf(scenario)['holeCards'] = value)],
@@ -382,4 +394,14 @@ test('a refused hand or board is not used as blockers for a notation range', () 
     const problems = problemsFor(scenario);
     assert.equal(problems.length, 1, `${name}: ${problems.join('; ')}`);
   }
+});
+
+test("an exact range of hero's own cards is refused, not read as restating a seat", () => {
+  // Hero holds QcJd. The analysis cannot deal an opponent hero's cards, so this must fail at load.
+  const scenario = scenarioNamed('eq-equity-against-one-known-hand');
+  scenario['opponentRange'] = { kind: 'exact', cards: 'QcJd' };
+  assert.deepEqual(problemsFor(scenario), [
+    "scenarios[0]: card Qc appears twice — in seat 1's hole cards and in the opponent range",
+    "scenarios[0]: card Jd appears twice — in seat 1's hole cards and in the opponent range",
+  ]);
 });

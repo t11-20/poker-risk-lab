@@ -201,6 +201,28 @@ function acceptedHolding(text: string | undefined): Card[] {
   return text === undefined ? [] : requireHolding(new Problems(), '', text).cards;
 }
 
+/** A board, reported once if refused. A refused board passes no cards on, so nothing reports it again. */
+function requireBoard(
+  problems: Problems,
+  path: string,
+  raw: unknown,
+  rule: {
+    readonly min: number;
+    readonly allows: (length: number) => boolean;
+    readonly says: (length: number) => string;
+  },
+): { text: string; cards: Card[] } {
+  const before = problems.count;
+  const text = requireString(problems, path, raw, { min: rule.min, max: 24 });
+  // Blank or separator-only text parses as no cards without a problem, so the length is always checked.
+  const cards = problems.count === before ? parseCardsSafely(problems, path, text) : [];
+  if (problems.count === before && !rule.allows(cards.length)) problems.add(path, rule.says(cards.length));
+  if (problems.count === before && new Set(cards).size !== cards.length) {
+    problems.add(path, `a board names each card once, got "${text}"`);
+  }
+  return { text, cards: problems.count === before ? cards : [] };
+}
+
 /** An equity opponent, refused in words a content author can act on when it is written as a range. */
 function requireExactOpponent(
   problems: Problems,
@@ -300,23 +322,20 @@ function validateEquityCalculation(
   );
   const opponents = held.map((holding) => holding.text);
   // Preflop is a board left out. A present board that is not a string, or names no cards, is refused,
-  // because the calculators would otherwise run it as preflop. Each bad board is reported once.
-  const before = problems.count;
-  const board =
+  // because the calculators would otherwise run it as preflop.
+  const named =
     raw['board'] === undefined
       ? undefined
-      : requireString(problems, `${path}.board`, raw['board'], { max: 24 });
-  const boardCards =
-    board === undefined || problems.count > before ? [] : parseCardsSafely(problems, `${path}.board`, board);
-  if (board !== undefined && problems.count === before && ![3, 4, 5].includes(boardCards.length)) {
-    problems.add(
-      `${path}.board`,
-      `an equity board is left out before the flop, or has 3, 4 or 5 cards, got ${boardCards.length}`,
-    );
-  }
+      : requireBoard(problems, `${path}.board`, raw['board'], {
+          min: 1,
+          allows: (length) => [3, 4, 5].includes(length),
+          says: (length) =>
+            `an equity board is left out before the flop, or has 3, 4 or 5 cards, got ${length}`,
+        });
+  const board = named?.text;
   const seen: [string, readonly Card[]][] = [
     ['heroCards', hero],
-    ['board', problems.count === before ? boardCards : []],
+    ['board', named?.cards ?? []],
   ];
   for (const [index, holding] of held.entries()) seen.push([`opponents[${index}]`, holding.cards]);
   checkCardsDistinct(problems, path, seen);
@@ -337,24 +356,18 @@ function validateOutsCalculation(
   raw: Record<string, unknown>,
 ): Extract<LiveCalculation, { kind: 'outs' }> {
   const { text: heroCards, cards: hero } = requireHolding(problems, `${path}.heroCards`, raw['heroCards']);
-  // Blank or separator-only text parses as no cards without a problem, so a report is counted, not guessed.
-  const before = problems.count;
-  const board = requireString(problems, `${path}.board`, raw['board'], { max: 24 });
-  const boardCards = problems.count === before ? parseCardsSafely(problems, `${path}.board`, board) : [];
-  if (problems.count === before && boardCards.length !== 3 && boardCards.length !== 4) {
-    problems.add(
-      `${path}.board`,
-      `outs are counted on a flop or a turn, 3 or 4 cards, got ${boardCards.length}`,
-    );
-  }
-  const boardAccepted = problems.count === before;
+  const { text: board, cards: boardCards } = requireBoard(problems, `${path}.board`, raw['board'], {
+    min: 1,
+    allows: (length) => length === 3 || length === 4,
+    says: (length) => `outs are counted on a flop or a turn, 3 or 4 cards, got ${length}`,
+  });
   const named =
     raw['opponentCards'] === undefined
       ? missingOutsOpponent(problems, `${path}.opponentCards`)
       : requireHolding(problems, `${path}.opponentCards`, raw['opponentCards']);
   checkCardsDistinct(problems, path, [
     ['heroCards', hero],
-    ['board', boardAccepted ? boardCards : []],
+    ['board', boardCards],
     ['opponentCards', named.cards],
   ]);
   return { kind: 'outs', heroCards, board, opponentCards: named.text };
@@ -1234,17 +1247,13 @@ function validateScenario(problems: Problems, path: string, raw: unknown): Scena
   }
 
   const street = requireOneOf(problems, `${path}.street`, raw['street'], STREETS);
-  const beforeBoard = problems.count;
-  const board = requireString(problems, `${path}.board`, raw['board'], { min: 0, max: 24 });
-  const boardCards = problems.count === beforeBoard ? parseCardsSafely(problems, `${path}.board`, board) : [];
   const expectedBoardLength = BOARD_LENGTH_BY_STREET[street];
-  if (problems.count === beforeBoard && boardCards.length !== expectedBoardLength) {
-    problems.add(
-      `${path}.board`,
-      `street "${street}" needs ${expectedBoardLength} community card(s) but the board has ${boardCards.length}`,
-    );
-  }
-  const boardAccepted = problems.count === beforeBoard;
+  const { text: board, cards: boardCards } = requireBoard(problems, `${path}.board`, raw['board'], {
+    min: 0,
+    allows: (length) => length === expectedBoardLength,
+    says: (length) =>
+      `street "${street}" needs ${expectedBoardLength} community card(s) but the board has ${length}`,
+  });
 
   const seatsRaw = Array.isArray(raw['seats']) ? raw['seats'] : [];
   if (!Array.isArray(raw['seats'])) problems.add(`${path}.seats`, 'expected an array of seats');
@@ -1256,14 +1265,8 @@ function validateScenario(problems: Problems, path: string, raw: unknown): Scena
   checkSeatSet(problems, path, seats, buttonSeat);
 
   const opponentRange = validateRangeSpec(problems, `${path}.opponentRange`, raw['opponentRange']);
-  checkNoCardAppearsTwice(problems, path, boardAccepted ? boardCards : [], seats, opponentRange);
-  checkOpponentRange(
-    problems,
-    `${path}.opponentRange`,
-    boardAccepted ? boardCards : [],
-    seats,
-    opponentRange,
-  );
+  checkNoCardAppearsTwice(problems, path, boardCards, seats, opponentRange);
+  checkOpponentRange(problems, `${path}.opponentRange`, boardCards, seats, opponentRange);
 
   const claimsRaw = Array.isArray(raw['expectedInsight']) ? raw['expectedInsight'] : [];
   if (!Array.isArray(raw['expectedInsight'])) problems.add(`${path}.expectedInsight`, 'expected an array');
@@ -1415,12 +1418,12 @@ function checkNoCardAppearsTwice(
   for (const seat of seats) groups.push([`seat ${seat.seat}'s hole cards`, acceptedHolding(seat.holeCards)]);
   if (opponentRange.kind === 'exact') {
     const rangeCards = acceptedHolding(opponentRange.cards);
-    // An exact range usually restates a seat's cards. Only cards no seat holds count as extra.
-    const restatesASeat = groups.some(
-      ([where, cards]) =>
-        where !== 'the board' && cards.length === 2 && cards.every((card) => rangeCards.includes(card)),
-    );
-    if (!restatesASeat) groups.push(['the opponent range', rangeCards]);
+    // An exact range usually restates an opponent's cards, which is no clash. Hero's cards are one.
+    const restatesAnOpponent = seats.some((seat) => {
+      const cards = acceptedHolding(seat.holeCards);
+      return seat.isHero !== true && cards.length === 2 && cards.every((card) => rangeCards.includes(card));
+    });
+    if (!restatesAnOpponent) groups.push(['the opponent range', rangeCards]);
   }
   checkCardsDistinct(problems, path, groups);
 }
