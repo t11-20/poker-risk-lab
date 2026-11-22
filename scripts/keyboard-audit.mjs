@@ -21,7 +21,7 @@ import {
   AGE_GATE_MINIMUM_CEILING,
   AGE_GATE_PATH,
 } from '../apps/web/src/lib/age-gate.ts';
-import { withChrome } from './chrome-devtools.mjs';
+import { DevtoolsReplies, withChrome } from './chrome-devtools.mjs';
 import { ManagedServer, refuseOccupiedPort } from './gate-servers.mjs';
 
 const args = process.argv.slice(2);
@@ -109,18 +109,15 @@ export function ageDeclarationCookies(origin) {
 class Page {
   #socket;
   #nextId = 1;
-  #pending = new Map();
+  #replies = new DevtoolsReplies();
 
   constructor(socket) {
     this.#socket = socket;
     socket.addEventListener('message', (event) => {
       const message = JSON.parse(String(event.data));
-      const waiter = this.#pending.get(message.id);
-      if (waiter === undefined) return;
-      this.#pending.delete(message.id);
-      if (message.error !== undefined) waiter.reject(new Error(JSON.stringify(message.error)));
-      else waiter.resolve(message.result);
+      this.#replies.settle(message);
     });
+    socket.addEventListener('close', () => this.#replies.fail(new Error('the DevTools socket closed')));
   }
 
   static async open(wsUrl) {
@@ -136,10 +133,13 @@ class Page {
 
   send(method, params = {}) {
     const id = this.#nextId++;
-    return new Promise((resolve, reject) => {
-      this.#pending.set(id, { resolve, reject });
+    const reply = this.#replies.expect(id, method);
+    try {
       this.#socket.send(JSON.stringify({ id, method, params }));
-    });
+    } catch (error) {
+      this.#replies.fail(error);
+    }
+    return reply;
   }
 
   async evaluate(expression) {

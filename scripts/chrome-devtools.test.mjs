@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { readdirSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { describe, it } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
-import { waitForDevtools } from './chrome-devtools.mjs';
+import { DevtoolsReplies, waitForDevtools } from './chrome-devtools.mjs';
 
 const VERSION = { Browser: 'Stand-in/1.0' };
 
@@ -119,5 +120,56 @@ describe('waitForDevtools', () => {
       child.kill();
       await stalled.close();
     }
+  });
+});
+
+describe('DevtoolsReplies', () => {
+  it('rejects a call Chrome never answers, and every later call at once', async () => {
+    const replies = new DevtoolsReplies(200);
+    await assert.rejects(
+      replies.expect(1, 'Runtime.evaluate'),
+      /did not answer Runtime\.evaluate within 0\.2s/u,
+    );
+    const started = Date.now();
+    await assert.rejects(replies.expect(2, 'Runtime.evaluate'), /did not answer Runtime\.evaluate/u);
+    assert.ok(Date.now() - started < 100, 'a retry after a timeout waited the bound again');
+  });
+
+  it('settles a call with its answer and leaves no timer to break the page later', async () => {
+    const replies = new DevtoolsReplies(20);
+    const reply = replies.expect(1, 'Page.navigate');
+    replies.settle({ id: 1, result: { frameId: 'f' } });
+    assert.deepEqual(await reply, { frameId: 'f' });
+    await delay(40);
+    const next = replies.expect(2, 'Page.enable');
+    replies.settle({ id: 2, result: {} });
+    assert.deepEqual(await next, {});
+  });
+
+  it('rejects what is waiting when the socket closes, and reports the first failure, not a later one', async () => {
+    const replies = new DevtoolsReplies(1_000);
+    const reply = replies.expect(1, 'Runtime.evaluate');
+    replies.fail(new Error('the DevTools socket closed'));
+    await assert.rejects(reply, /socket closed/u);
+    replies.fail(new Error('a later failure'));
+    await assert.rejects(replies.expect(2, 'Page.enable'), /socket closed/u);
+  });
+
+  it('is how every script that sends DevTools commands waits for an answer', () => {
+    const root = new URL('.', import.meta.url);
+    const scripts = readdirSync(root, { recursive: true }).filter(
+      (name) => name.endsWith('.mjs') && !name.endsWith('.test.mjs') && name !== 'chrome-devtools.mjs',
+    );
+    const senders = scripts.filter((name) =>
+      readFileSync(new URL(name, root), 'utf8').includes('JSON.stringify({ id, method'),
+    );
+    assert.ok(senders.length >= 6, `found ${senders.length} DevTools senders; the scan read too little`);
+    const unbounded = senders.filter((name) => {
+      const source = readFileSync(new URL(name, root), 'utf8');
+      return (
+        !source.includes('this.#replies.expect(id, method)') || !source.includes("addEventListener('close'")
+      );
+    });
+    assert.deepEqual(unbounded, [], 'these wait for Chrome with no time limit');
   });
 });
