@@ -202,9 +202,9 @@ function allBlocks(css: string): readonly { selector: string; body: string }[] {
   return out;
 }
 
-/** Every stylesheet a glass fill can reach. The ghosting bug shipped in an `apps/web` route stylesheet. */
+/** Every component and route stylesheet. tokens.css is not one: it keeps the removed names as aliases. */
 const ROUTE_STYLE_DIR = new URL('../../../apps/web/src/styles/', import.meta.url);
-const GLASS_SCANNED: readonly (readonly [string, string])[] = [
+const STYLESHEETS: readonly (readonly [string, string])[] = [
   ['packages/ui components.css', componentsCss],
   [
     'apps/web globals.css',
@@ -217,56 +217,57 @@ const GLASS_SCANNED: readonly (readonly [string, string])[] = [
 ];
 
 describe('the design system rules that are stated in prose and checked nowhere', () => {
-  /**
-   * A shadow is never a literal. Every `box-shadow` part is `--prl-elevation-*`, `--prl-focus-ring`,
-   * the ring variable with its empty shadow (base.css), or `none` to cancel an inherited elevation.
-   */
-  const SHADOW_VALUE = /box-shadow\s*:\s*([^;]+)/g;
-  const ALLOWED_SHADOW_PART =
-    /^(none|var\(--prl-elevation-[0-4]\)|var\(--prl-focus-ring\)|var\(--_ring, 0 0 transparent\))$/;
+  const FLAT_SCANNED: readonly (readonly [string, string])[] = [
+    ['packages/ui base.css', readFileSync(new URL('../src/styles/base.css', import.meta.url), 'utf8')],
+    ...STYLESHEETS,
+  ];
 
-  it('spends a shadow only through an elevation or focus-ring token, never as a literal', () => {
-    for (const [name, css] of GLASS_SCANNED) {
-      const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, '');
-      for (const match of withoutComments.matchAll(SHADOW_VALUE)) {
-        const value = (match[1] ?? '').trim();
-        // Commas inside `var(..., fallback)` do not separate shadows.
-        for (const part of value.split(/,(?![^(]*\))/).map((piece) => piece.trim())) {
-          assert.match(
-            part,
-            ALLOWED_SHADOW_PART,
-            `${name}: \`box-shadow: ${value}\` spends a literal. Elevation is a level on the ` +
-              'material ladder (design system section 2.7); add a token before you add a shadow.',
+  /** The table, seats, cards and pot are a material of their own, restyled separately from the page. */
+  const TABLE_OWNED = /(?<![\w-])\.prl-(?:table|seat|card|pot|hand-glance|turn|board)(?![a-z0-9])/u;
+  const pageBlocks = (css: string) => allBlocks(css).filter((block) => !TABLE_OWNED.test(block.selector));
+
+  /**
+   * Surfaces are flat. A shadow is only ever the focus halo, on a focus rule: any other `box-shadow`
+   * in a component rule out-ranks base.css's halo and deletes it while the control is focused.
+   */
+  it('spends a box-shadow only on the focus halo, never on elevation', () => {
+    let seen = 0;
+    for (const [name, css] of FLAT_SCANNED) {
+      for (const block of pageBlocks(css)) {
+        for (const match of block.body.matchAll(/box-shadow\s*:\s*([^;]+)/g)) {
+          seen += 1;
+          const value = (match[1] ?? '').trim();
+          assert.equal(
+            value,
+            'var(--prl-focus-ring)',
+            `${name}: \`${block.selector}\` sets \`box-shadow: ${value}\`. Depth is a fill and a ` +
+              'hairline (design system section 2.6), and a shadow here deletes the focus halo.',
           );
+          assert.match(block.selector, /focus/u, `${name}: \`${block.selector}\` rings outside a focus rule`);
         }
       }
     }
+    // A sweep of nothing is not a pass: base.css's own halo must have been read.
+    assert.ok(seen > 0, 'no box-shadow was read at all, so the scan saw none of the stylesheets');
   });
 
   /**
-   * The ghosting guard (`apps/web/src/styles/nav.css`). A translucent fill with no blur leaves the
-   * text behind legible. Wherever a glass fill token goes, `backdrop-filter` goes in the same block,
-   * a `:hover` block included. Scoped to the fill tokens, not `--prl-glass-filter`.
+   * No glass and no wash. A translucent pane needs a blur to stop the text behind it ghosting through,
+   * and neither is part of this design, so neither may come back piecemeal.
    */
-  const GLASS_FILL = /var\(--prl-glass-(?:floating|overlay)(?:-hover|-active)?\)/;
-
-  it('never uses a glass fill without the blur that makes it legible', () => {
-    let seen = 0;
-    for (const [name, css] of GLASS_SCANNED) {
-      for (const block of allBlocks(css)) {
-        if (!GLASS_FILL.test(block.body)) continue;
-        seen += 1;
-        assert.match(
+  it('uses no backdrop-filter, glass fill, page wash or elevation token anywhere', () => {
+    let blocks = 0;
+    for (const [name, css] of FLAT_SCANNED) {
+      for (const block of pageBlocks(css)) {
+        blocks += 1;
+        assert.doesNotMatch(
           block.body,
-          /backdrop-filter\s*:/,
-          `${name}: \`${block.selector}\` sets a translucent glass fill with no backdrop-filter. ` +
-            'That is the ghosting bug in the header comment of apps/web/src/styles/nav.css: the ' +
-            'content behind stays perfectly legible, in the wrong place, as a second layer of text.',
+          /backdrop-filter\s*:|--prl-(?:glass|elevation|page-wash|edge|veil)\b/u,
+          `${name}: \`${block.selector}\` brings back a material this design removed`,
         );
       }
     }
-    // A sweep of nothing is not a pass.
-    assert.ok(seen > 0, 'expected at least one glass fill to exist to be checked');
+    assert.ok(blocks > 500, `only ${blocks} blocks were read, so the scan missed stylesheets`);
   });
 
   it('spends no raw duration or easing curve outside the token layer', () => {
@@ -298,7 +299,7 @@ describe('numeric columns are actually end-aligned', () => {
   it('never end-aligns a cell through a selector that loses to its own table (REGRESSION)', () => {
     const offenders: string[] = [];
     let tablesFound = 0;
-    for (const [name, raw] of GLASS_SCANNED) {
+    for (const [name, raw] of STYLESHEETS) {
       // Comments stripped first, or prose explaining the defect is reported as the defect.
       const css = strip(raw);
 
@@ -439,7 +440,7 @@ describe('a block never lets its element rules out-rank its own parts', () => {
     const unqualified: string[] = [];
     const misordered: string[] = [];
 
-    for (const [name, raw] of GLASS_SCANNED) {
+    for (const [name, raw] of STYLESHEETS) {
       const css = raw.replace(/\/\*[\s\S]*?\*\//gu, '');
       const blocks = allBlocks(css).map((block) => ({ ...block, at: css.indexOf(block.selector) }));
 

@@ -5,9 +5,9 @@
  *
  * Every value is a `--prl-*` token. The literals are a 1px hairline, structural geometry, the
  * 600/900/1280 breakpoints (`var()` is invalid in a media feature), gradient stop positions and `em`
- * proportions inside a card. A shadow is a `--prl-elevation-*` level or `--prl-focus-ring`
- * (layout-guarantees.test.ts). Only transform and opacity animate, and `backdrop-filter` never
- * transitions. Mobile-first, so no fractional width falls between two queries.
+ * proportions inside a card. Outside the table, nothing casts a shadow but the focus halo
+ * (layout-guarantees.test.ts). Only transform and opacity animate. Mobile-first, so no fractional
+ * width falls between two queries.
  */
 
 /* 0. FEATURE-LOCAL VALUES. Route-only, so not in `tokens.css`. A width past 10rem is two ramp steps
@@ -210,7 +210,7 @@
   gap: var(--prl-space-4);
   max-width: var(--prl-measure);
   padding: var(--prl-space-5) var(--prl-space-6);
-  border-inline-start: 2px solid var(--prl-accent-edge);
+  border: var(--prl-hairline-strong);
   border-radius: var(--prl-radius-1);
   background-color: var(--prl-surface-inset);
 }
@@ -276,8 +276,8 @@
    In flow at every width. Never pin it. A bottom-sticky band covers the last H pixels of the viewport
    while its flow position is below the fold, so the table above it ends underneath, whatever H is.
    The plate moves beside the controls from 46rem of column (section 8.1), and the band measured 342px at
-   1440x900. Below 46rem only the button row sticks, inside its own bar (section 3.1). There is no
-   fill or top rule, so the page wash shows through the ActionBar's glass. */
+   1440x900. Below 46rem only the button row sticks, inside its own bar (section 3.1). The band has no
+   fill or top rule of its own; the ActionBar carries both. */
 
 /* Start, because the follow holds the band's height between decisions on a phone. Stretched, the rows
    pushed the bar down and scroll anchoring moved the page 334px to follow it (390x844). */
@@ -345,7 +345,7 @@
    At 390x844 Fold was 2,107px down the page. This is not the pin section 3 forbids. A sticky box
    travels inside its containing block, here `.prl-action-bar`, which stays in flow below the table
    (layout-guarantees.test.ts). So the row never covers the table, measured from 360 to 1024 in both
-   themes. `position: fixed` cannot work, because the bar's `backdrop-filter` contains it.
+   themes. Never `position: fixed`: the row belongs to the bar and must not leave it.
    The inset is `--prl-space-0` from 600px, a unitless 0, so never wrap it in `calc()` (it computed to
    `auto`). Each sizer control carries a scroll margin of the row's height, so Tab never leaves it
    under the row (WCAG 2.4.11). Without the margin every control stayed 44px under it. */
@@ -362,10 +362,7 @@
     margin: calc(-1 * var(--prl-space-4)) calc(-1 * var(--prl-space-7));
     padding: var(--prl-space-4) var(--prl-space-7);
     border-block-start: var(--prl-hairline);
-    border-block-start-color: var(--prl-edge-lit);
-    background-color: var(--prl-glass-floating);
-    -webkit-backdrop-filter: var(--prl-glass-filter);
-    backdrop-filter: var(--prl-glass-filter);
+    background-color: var(--prl-surface-raised);
   }
 
   .prl-play .prl-sizer button,
@@ -976,24 +973,15 @@
     repeating-linear-gradient(45deg, var(--prl-card-back-pattern) 0 1px, transparent 1px var(--prl-space-3));
 }
 
-/* 12.5  THE ACTION BAR IS THE HERO
-   Level 3 glass. The fill and `--prl-glass-filter` stay in one block (layout-guarantees.test.ts).
-   It is bounded, promoted by `isolation: isolate` and still, and on desktop the only blurred element.
-   `--prl-glass-floating` is 90% opaque in dark and 94% in light, and check-contrast.mjs measures text
-   over both bounding backdrops. */
+/* 12.5  THE ACTION BAR IS THE HERO. A raised surface with a hairline; size and the one filled
+   button make it the hero, not a shadow. */
 
 .prl-play__decision > .prl-action-bar {
-  isolation: isolate;
   gap: var(--prl-space-5) var(--prl-space-8);
   padding: var(--prl-space-6) var(--prl-space-7);
-  border-color: var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
+  border-color: var(--prl-line);
   border-radius: var(--prl-radius-3);
-  background-color: var(--prl-glass-floating);
-  -webkit-backdrop-filter: var(--prl-glass-filter);
-  backdrop-filter: var(--prl-glass-filter);
-  box-shadow: var(--prl-elevation-2);
+  background-color: var(--prl-surface-raised);
 }
 
 /** `--prl-numeric` is restated on the price figures, so a changing figure keeps its width. */
@@ -1005,85 +993,56 @@
   font-variant-numeric: var(--prl-numeric);
 }
 
-/**
- * The border stays `--prl-line-strong`, because a component boundary needs 3:1 (WCAG 1.4.11) and the
- * edge tokens measure about 1.5:1.
- */
+/** The border stays `--prl-line-strong`, because a component boundary needs 3:1 (WCAG 1.4.11). */
 .prl-play .prl-action-btn {
   min-height: calc(var(--prl-space-12) + var(--prl-space-4));
   border-radius: var(--prl-radius-3);
-  background-color: var(--prl-veil-4);
-  box-shadow: var(--_ring, 0 0 transparent), var(--prl-elevation-1);
+  background-color: var(--prl-surface-inset);
   transition:
     background-color var(--prl-dur-fast) var(--prl-ease-material),
     border-color var(--prl-dur-fast) var(--prl-ease-material),
-    box-shadow var(--prl-dur-fast) var(--prl-ease-material),
     transform var(--prl-dur-fast) var(--prl-ease-material);
 }
 
 .prl-play .prl-action-btn:hover:not(:disabled) {
-  background-color: var(--prl-veil-8);
-  box-shadow: var(--_ring, 0 0 transparent), var(--prl-elevation-2);
-  transform: translateY(-1px);
+  background-color: var(--prl-surface-hover);
 }
 
 .prl-play .prl-action-btn:active:not(:disabled) {
-  box-shadow: var(--_ring, 0 0 transparent);
   transform: translateY(1px);
 }
 
-/** Disabled drops a level instead of fading, which would pull the label towards the backdrop. */
+/** Disabled loses its fill instead of fading, which would pull the label towards the backdrop. */
 .prl-play .prl-action-btn:disabled {
   background-color: transparent;
-  box-shadow: var(--prl-elevation-0);
 }
 
-/**
- * A lit gradient from `--prl-accent-400` to `--prl-accent-600`. The worst stop for
- * `--prl-text-on-accent` is 6.68:1 in dark and 6.97:1 in light (floor 4.5:1). The gradient sits on
- * `::before` over the flat fill, which forced colours keep.
- */
+/** Wider as well as filled, so the primary action is not told by hue alone. */
 .prl-play .prl-action-btn--primary {
   flex-grow: 1.6;
-  box-shadow: var(--_ring, 0 0 transparent), var(--prl-elevation-2);
 }
 
 .prl-play .prl-action-btn--primary::before {
   border-radius: var(--prl-radius-3);
-  background-image: linear-gradient(to bottom, var(--prl-accent-400), var(--prl-accent-600));
 }
 
-.prl-play .prl-action-btn--primary:hover:not(:disabled) {
-  box-shadow: var(--_ring, 0 0 transparent), var(--prl-elevation-3);
-}
-
-.prl-play .prl-action-btn--primary:hover:not(:disabled)::before {
-  background-image: linear-gradient(to bottom, var(--prl-accent-300), var(--prl-accent-500));
-}
-
-.prl-play .prl-action-btn--primary:active:not(:disabled) {
-  box-shadow: var(--_ring, 0 0 transparent), var(--prl-elevation-1);
-}
-
-/* 12.6  THE BET SIZER. A translucent `--prl-veil-4` tray, because an opaque block would cancel the glass. */
+/* 12.6  THE BET SIZER, an inset tray. */
 
 .prl-play .prl-sizer {
-  border-color: var(--prl-edge);
-  border-block-start-color: var(--prl-edge-shade);
-  border-block-end-color: var(--prl-edge-lit);
+  border-color: var(--prl-line);
   border-radius: var(--prl-radius-3);
-  background-color: var(--prl-veil-4);
+  background-color: var(--prl-surface-inset);
 }
 
 .prl-play .prl-preset {
-  background-color: var(--prl-veil-4);
+  background-color: var(--prl-surface-inset);
   transition:
     background-color var(--prl-dur-fast) var(--prl-ease-material),
     border-color var(--prl-dur-fast) var(--prl-ease-material);
 }
 
 .prl-play .prl-preset[aria-pressed="true"] {
-  background-color: var(--prl-veil-8);
+  background-color: var(--prl-surface-hover);
 }
 
 /**
@@ -1106,45 +1065,36 @@
   border: 2px solid var(--prl-accent-edge);
   border-radius: var(--prl-radius-pill);
   background-color: var(--prl-surface-panel);
-  box-shadow: var(--prl-elevation-2);
 }
 
 .prl-play .prl-range::-moz-range-thumb {
   border: 2px solid var(--prl-accent-edge);
   border-radius: var(--prl-radius-pill);
   background-color: var(--prl-surface-panel);
-  box-shadow: var(--prl-elevation-2);
 }
 
 /* 12.7  THE COACH: A TYPOGRAPHIC HIERARCHY, NOT A STACK OF BOXES
-   The panel is L2, the equity block L1 one step up, and every other figure a ruled row with a
+   The panel is a bordered surface, the equity block one step up, and every other figure a ruled row with a
    right-aligned value. */
 
 .prl-play .prl-coach {
   gap: var(--prl-space-8);
   padding: var(--prl-space-8);
-  border-color: var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
+  border-color: var(--prl-line);
   border-radius: var(--prl-radius-3);
-  box-shadow: var(--prl-elevation-1);
 }
 
 .prl-play .prl-coach__section {
   gap: var(--prl-space-6);
   padding: var(--prl-space-6);
-  border-color: var(--prl-edge);
+  border-color: var(--prl-line);
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-raised);
-  box-shadow: var(--prl-elevation-0);
 }
 
 /** The equity block gets a lit top edge and a contact shadow, so the eye lands there first. */
 .prl-play .prl-coach__section--equity {
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
   background-color: var(--prl-surface-inset);
-  box-shadow: var(--prl-elevation-1);
 }
 
 /** Supporting figures drop to `metric-sm`, so the headline figure is the panel's subject. */
@@ -1223,16 +1173,13 @@
 }
 
 /* 12.8  THE COACH SHEET, ON A PHONE
-   Below 600px the sheet is level 4, and `--prl-glass-filter-strong` stops the table reading through
-   it. From 600px fill and filter are removed, because a live `backdrop-filter` costs even when opaque. */
+   Below 600px the sheet is an opaque panel with a strong top edge over the table. From 600px it is a
+   column in the page. */
 
 .prl-play__coach {
   border-start-start-radius: var(--prl-radius-3);
   border-start-end-radius: var(--prl-radius-3);
-  background-color: var(--prl-glass-overlay);
-  -webkit-backdrop-filter: var(--prl-glass-filter-strong);
-  backdrop-filter: var(--prl-glass-filter-strong);
-  box-shadow: var(--prl-elevation-3);
+  background-color: var(--prl-surface-panel);
 }
 
 .prl-play__handle-grip {
@@ -1247,7 +1194,6 @@
     border: 0;
     border-radius: var(--prl-radius-0);
     background-color: transparent;
-    box-shadow: var(--prl-elevation-0);
   }
 
   /* Visual order only. The DOM keeps equity and the price first, so a screen reader still meets them first. */
@@ -1265,9 +1211,6 @@
     border-start-start-radius: var(--prl-radius-0);
     border-start-end-radius: var(--prl-radius-0);
     background-color: transparent;
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
-    box-shadow: var(--prl-elevation-0);
   }
 }
 
@@ -1311,7 +1254,7 @@
     border-color: CanvasText;
   }
 
-  /* Forced colours keep the replaced colour's alpha, so the glass became 90% black. `Canvas` is opaque. */
+  /* `Canvas`, so the sticky row stays opaque whatever this mode maps the surface to. */
   .prl-play .prl-action-bar__actions {
     background-color: Canvas;
   }

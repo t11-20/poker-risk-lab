@@ -140,12 +140,9 @@
  */
 .prl-review-scroll {
   overflow-x: auto;
-  border: 1px solid var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
+  border: 1px solid var(--prl-line);
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-panel);
-  box-shadow: var(--prl-elevation-1);
 }
 
 .prl-review-table {
@@ -425,7 +422,7 @@ span.prl-review-table__cell-label {
 }
 
 /**
- * Material level 1 with no elevation, because the figures are part of the header. Rules between them,
+ * A raised well, because the figures are part of the header. Rules between them,
  * not gaps, make one readout with four fields.
  */
 .prl-review-summary {
@@ -434,12 +431,9 @@ span.prl-review-table__cell-label {
   gap: var(--prl-space-6) var(--prl-space-0);
   margin: 0;
   padding: var(--prl-space-6) var(--prl-space-7);
-  border: 1px solid var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
+  border: 1px solid var(--prl-line);
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-raised);
-  box-shadow: var(--prl-elevation-0);
   list-style: none;
 }
 
@@ -477,12 +471,9 @@ span.prl-review-table__cell-label {
   margin-block: var(--prl-space-7);
   margin-inline: 0;
   padding: var(--prl-space-8);
-  border: 1px solid var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
+  border: 1px solid var(--prl-line);
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-panel);
-  box-shadow: var(--prl-elevation-1);
 }
 
 .prl-timeline__streets {
@@ -501,9 +492,9 @@ span.prl-review-table__cell-label {
   align-content: start;
   justify-items: start;
   gap: var(--prl-space-5);
-  /* The accent, because a decorative hairline does not clear 3:1 against the panel. */
+  /* `--prl-line-strong`, because a decorative hairline does not clear 3:1 against the panel. */
   padding-inline-start: var(--prl-space-6);
-  border-inline-start: var(--prl-focus-width) solid var(--prl-line-accent);
+  border-inline-start: 1px solid var(--prl-line-strong);
 }
 
 .prl-timeline__street-head {
@@ -559,7 +550,7 @@ span.prl-review-table__cell-label {
 }
 
 /**
- * A resting marker is recessed with no elevation, hover lifts it 1px, and the current one is an
+ * A resting marker is recessed, hover takes the accent edge, and the current one is an
  * accent fill lifted 2px. Rest uses `--prl-line`, because its edge carries no meaning. WCAG 1.4.11's
  * 3:1 applies to the current and hovered states, which both take the accent.
  */
@@ -574,7 +565,6 @@ span.prl-review-table__cell-label {
   border: 1px solid var(--prl-line);
   border-radius: var(--prl-radius-2);
   background-color: var(--prl-surface-inset);
-  box-shadow: var(--prl-elevation-0);
   color: var(--prl-text-secondary);
   font-family: var(--prl-font-sans);
   /* `body-sm` with no extra tracking, because a marker's text is content, read in sequence. */
@@ -582,11 +572,10 @@ span.prl-review-table__cell-label {
   font-variant-numeric: var(--prl-numeric);
   font-weight: var(--prl-weight-medium);
   cursor: pointer;
-  /* Transform, colour and elevation only, on the material band. `--prl-dur-instant` reads as a jump cut. */
+  /* Transform and colour only, on the material band. `--prl-dur-instant` reads as a jump cut. */
   transition:
     background-color var(--prl-dur-fast) var(--prl-ease-material),
     border-color var(--prl-dur-fast) var(--prl-ease-material),
-    box-shadow var(--prl-dur-fast) var(--prl-ease-material),
     color var(--prl-dur-fast) var(--prl-ease-material),
     transform var(--prl-dur-fast) var(--prl-ease-material);
 }
@@ -594,14 +583,7 @@ span.prl-review-table__cell-label {
 .prl-timeline__marker:hover {
   border-color: var(--prl-accent-edge);
   background-color: var(--prl-surface-panel);
-  box-shadow: var(--prl-elevation-1);
   color: var(--prl-text);
-  transform: translateY(calc(-1 * var(--prl-space-1)));
-}
-
-/** Focus lifts a marker as hover does. Above `[aria-current]`, which wins the tie and keeps its level. */
-.prl-timeline__marker:focus-visible {
-  box-shadow: var(--_ring, 0 0 transparent), var(--prl-elevation-1);
 }
 
 .prl-timeline__marker[data-viewer="true"] {
@@ -613,11 +595,10 @@ span.prl-review-table__cell-label {
   border-style: dashed;
 }
 
-/** `--prl-text-on-accent`, never white. The lift, elevation, `aria-current` and glyph also mark it. */
+/** `--prl-text-on-accent`, never white. The lift, weight, `aria-current` and glyph also mark it. */
 .prl-timeline__marker[aria-current="step"] {
   border-color: var(--prl-accent-edge);
   background-color: var(--prl-accent-fill);
-  box-shadow: var(--_ring, 0 0 transparent), var(--prl-elevation-2);
   color: var(--prl-text-on-accent);
   font-weight: var(--prl-weight-semibold);
   transform: translateY(calc(-1 * var(--prl-space-2)));
@@ -655,35 +636,27 @@ span.prl-review-table__cell-label {
 }
 
 /**
- * The transport is sticky, so the step buttons stay on screen over a 1,100px stage. It meets the four
- * `tokens.css` conditions for glass: sticky, small, `isolation: isolate` and not animated. The blur sits
- * beside the fill, because translucency with no blur ghosts the content underneath, and
- * `-webkit-backdrop-filter` because Safari needs it. `layout-guarantees.test.ts` checks the pairing.
- * `backdrop-filter` is never in a transition list here.
+ * The transport is sticky, so the step buttons stay on screen over a 1,100px stage. Opaque, so the
+ * content scrolled under it never reads through.
  */
 .prl-replay__transport {
   position: sticky;
   z-index: var(--prl-z-sticky);
   isolation: isolate;
   inset-block-start: var(--prl-space-13);
-  /* Three tracks, never wrapping. A wrapping row took 126px of sticky glass at 360. */
+  /* Three tracks, never wrapping. A wrapping row took 126px of sticky bar at 360. */
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--prl-space-5);
-  /* Bounded, because `tokens.css` forbids glass on a full-width strip. 40rem holds "Quartile raised
-     to 1,250 units." on one line. */
+  /* Bounded, so it covers as little of the stage as it can. 40rem holds "Quartile raised to 1,250
+     units." on one line. */
   max-inline-size: calc(4 * var(--prl-space-16));
   margin-inline: auto;
   padding: var(--prl-space-5) var(--prl-space-6);
-  border: 1px solid var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
+  border: 1px solid var(--prl-line);
   border-radius: var(--prl-radius-3);
-  background-color: var(--prl-glass-floating);
-  -webkit-backdrop-filter: var(--prl-glass-filter);
-  backdrop-filter: var(--prl-glass-filter);
-  box-shadow: var(--prl-elevation-2);
+  background-color: var(--prl-surface-raised);
 }
 
 /** `metric-md`, because the counter confirms each press and is the loudest thing in the bar. */
@@ -875,12 +848,9 @@ span.prl-review-table__cell-label {
   display: grid;
   gap: var(--prl-space-6);
   padding: var(--prl-space-8);
-  border: 1px solid var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
+  border: 1px solid var(--prl-line);
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-panel);
-  box-shadow: var(--prl-elevation-1);
 }
 
 .prl-verifier__head {

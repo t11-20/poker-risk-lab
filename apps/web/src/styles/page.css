@@ -75,18 +75,14 @@
 
 /* Fixture notice. Quiet on purpose, because it shows on every screen rendered without the API. */
 
-/** Material level 1 (raised, lit hairline, no elevation), because it is an aside in the page flow. */
+/** A raised surface and a hairline, because it is an aside in the page flow. */
 .prl-source-note {
   display: block;
   margin-block: var(--prl-space-7) 0;
   padding: var(--prl-space-6) var(--prl-space-7);
-  border: 1px solid var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
-  border-inline-start: var(--prl-focus-width) solid var(--prl-line-strong);
+  border: 1px solid var(--prl-line);
   border-radius: var(--prl-radius-2);
   background-color: var(--prl-surface-raised);
-  box-shadow: var(--prl-elevation-0);
 }
 
 .prl-source-note .prl-label {

@@ -52,38 +52,20 @@
   pointer-events: none;
 }
 
-/**
- * The glass strip. Fill and filter stay literal tokens in one block (see the shell tokens). Neither may ever
- * transition, because a changing `backdrop-filter` re-evaluates the whole backdrop every frame.
- */
+/** Opaque page ground and one hairline, so text scrolled under the bar never shows through it. */
 .prl-shell__header {
   position: sticky;
   z-index: var(--prl-z-nav);
   inset-block-start: 0;
-  border-block-end: 1px solid var(--prl-edge-shade);
+  border-block-end: 1px solid var(--prl-line);
+  background-color: var(--prl-surface-page);
   /* Colour only, which neither lays out nor composites badly. */
   transition:
     background-color var(--prl-dur-quick) var(--prl-ease-standard),
     border-color var(--prl-dur-quick) var(--prl-ease-standard);
 }
 
-/**
- * The glass is a layer behind the bar. A `backdrop-filter` makes an element the containing block for
- * its fixed descendants, so on the header the menu sheet opened 76px tall at 360x640. `z-index: -1`
- * stays inside the header's stacking context, above the page and below the pills.
- */
-.prl-shell__header::before {
-  position: absolute;
-  z-index: -1;
-  inset: 0;
-  background-color: var(--prl-glass-floating);
-  -webkit-backdrop-filter: var(--prl-glass-filter);
-  backdrop-filter: var(--prl-glass-filter);
-  content: "";
-  pointer-events: none;
-}
-
-/** Past the sentinel the hairline separates two layers, so it becomes `--prl-line-strong` (3.63:1 on dark glass). */
+/** Past the sentinel the hairline separates the bar from content, so it becomes `--prl-line-strong`. */
 .prl-shell__header[data-stuck="true"] {
   border-block-end-color: var(--prl-line-strong);
 }
@@ -186,14 +168,14 @@
 }
 
 .prl-nav__link:hover {
-  background-color: var(--prl-veil-4);
+  background-color: var(--prl-surface-inset);
   color: var(--prl-text);
 }
 
 /** The current page is marked by underline, colour and fill, never colour alone (WCAG 1.4.1). */
 .prl-nav__link[aria-current="page"] {
   border-block-end-color: var(--prl-accent-edge);
-  background-color: var(--prl-veil-8);
+  background-color: var(--prl-surface-hover);
   color: var(--prl-accent-text);
 }
 
@@ -501,10 +483,7 @@
   padding-block: var(--prl-space-12);
 }
 
-/**
- * No fill, so the backdrop field continues under it. Its text sits on the page ground that
- * check-contrast.mjs measures as `--prl-surface-wash`.
- */
+/** No fill: its text sits on the page ground. */
 .prl-footer {
   border-block-start: var(--prl-hairline);
 }

@@ -3,17 +3,10 @@
  * `globals.css`, which owns the shell's skeleton. A rule restating one from there adds a class, so it
  * wins on specificity rather than on import order.
  *
- * The ghosting bug: a translucent fill with no `backdrop-filter` leaves headings scrolled under it
- * legible as a second layer of text. Opacity keeps the backdrop's legibility and colour. Blur plus
- * saturate removes the legibility and keeps the colour. So a glass fill never
- * appears without `--prl-glass-filter` in the same block (layout-guarantees.test.ts), the strip is
- * blurred from first paint, and the 20px blur exceeds the largest reading size (17px). Under reduced
- * transparency, `prefers-contrast: more` and forced colours, `tokens.css` turns the fill opaque and
- * the filter to `none` as a pair. Nothing here may animate a `backdrop-filter`.
- *
- * The pills stay opaque (`--prl-shell-nav-fill`), because glass on glass would match the strip. The
- * header is sticky, not fixed, so the page starts below it, and the `scroll-padding` rule below keeps
- * anchors and focused controls out from under it.
+ * The bar is opaque, so headings scrolled under it never read through as a second layer of text. The
+ * pills sit one step down the surface ramp (`--prl-shell-nav-fill`). The header is sticky, not fixed,
+ * so the page starts below it, and the `scroll-padding` rule below keeps anchors and focused controls
+ * out from under it.
  */
 
 :root {
@@ -27,7 +20,7 @@
   /**
    * The tallest the bar can be at this width. Two rows by default, because the tools wrap (129px up
    * to 381px, measured with scripting off). 129px is `2 * 44 + 8 + 2 * 16` plus the 1px edge. A
-   * one-row 92px leaves 37px of a scrolled-to control behind the glass.
+   * one-row 92px leaves 37px of a scrolled-to control behind the bar.
    */
   --prl-pillbar-h: calc(2 * var(--prl-pill-h) + var(--prl-space-4) + 2 * var(--prl-pillbar-pad-block));
 }
@@ -53,20 +46,9 @@
   scroll-padding-block-start: calc(var(--prl-pillbar-h) + var(--prl-space-6));
 }
 
-/**
- * Fill and filter are restated together, because a block with the fill and no filter is the ghosting
- * bug (layout-guarantees.test.ts). Both sit on `::before`. A filter on the header made it the
- * containing block for the fixed menu sheet, which then opened 76px tall (see `globals.css`).
- */
 .prl-shell__header {
   padding-block: var(--prl-pillbar-pad-block);
-  border-block-end: 1px solid var(--prl-edge-shade);
-}
-
-.prl-shell__header::before {
-  background-color: var(--prl-glass-floating);
-  -webkit-backdrop-filter: var(--prl-glass-filter);
-  backdrop-filter: var(--prl-glass-filter);
+  border-block-end: 1px solid var(--prl-line);
 }
 
 /** Past the sentinel this edge separates two layers, so it is `--prl-line-strong` (WCAG 1.4.11). */
@@ -85,18 +67,14 @@
   padding-block: 0;
 }
 
-/** Every floating object shares `.prl-pill-group`, so the four pills cannot drift apart. */
-/** Lit hairline and `--prl-elevation-2`, a token because layout-guarantees.test.ts fails a literal. */
+/** Every pill shares `.prl-pill-group`, so they cannot drift apart. A hairline, no shadow. */
 .prl-pill-group {
   display: flex;
   align-items: center;
   min-height: var(--prl-pill-h);
-  border: 1px solid var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
+  border: 1px solid var(--prl-line);
   border-radius: var(--prl-radius-pill);
   background-color: var(--prl-shell-nav-fill);
-  box-shadow: var(--_ring, 0 0 transparent), var(--prl-elevation-2);
   transition: border-color var(--prl-dur-quick) var(--prl-ease-standard);
 }
 
@@ -117,7 +95,6 @@
   border: 1px solid var(--prl-card-edge);
   border-radius: var(--prl-radius-2);
   background-color: var(--prl-card-face);
-  box-shadow: var(--prl-elevation-1);
   color: var(--prl-suit-black);
   font-family: var(--prl-font-display);
   font-stretch: var(--prl-stretch-display);
@@ -245,11 +222,8 @@
 .prl-pillbar .prl-units__value {
   min-height: var(--prl-pill-h);
   padding-inline: var(--prl-space-6);
-  border-color: var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
+  border-color: var(--prl-line);
   background-color: var(--prl-shell-nav-fill);
-  box-shadow: var(--_ring, 0 0 transparent), var(--prl-elevation-2);
   font-size: var(--prl-type-body-sm);
 }
 
@@ -265,7 +239,6 @@
   width: var(--prl-pill-h);
   height: var(--prl-pill-h);
   background-color: var(--prl-shell-nav-fill);
-  box-shadow: var(--_ring, 0 0 transparent), var(--prl-elevation-2);
   font-size: var(--prl-type-body);
 }
 
@@ -320,7 +293,7 @@
 
 .prl-pillbar__cta:hover {
   border-color: var(--prl-accent-edge);
-  background-color: var(--prl-accent-600);
+  background-color: var(--prl-accent-fill-hover);
   color: var(--prl-text-on-accent);
   text-decoration: none;
 }
@@ -365,7 +338,6 @@
   padding-inline: var(--prl-space-6);
   border-radius: var(--prl-radius-pill);
   background-color: var(--prl-shell-nav-fill);
-  box-shadow: var(--_ring, 0 0 transparent), var(--prl-elevation-2);
 }
 
 .prl-nav-trigger .prl-nav-trigger__word {
@@ -424,7 +396,6 @@
 .prl-sheet__foot .prl-theme {
   border-radius: var(--prl-radius-pill);
   background-color: var(--prl-shell-nav-fill);
-  box-shadow: var(--prl-elevation-1);
 }
 
 .prl-shell__theme .prl-theme__word,
@@ -449,9 +420,9 @@
   outline-offset: calc(-1 * var(--prl-focus-offset));
 }
 
-/* Floating state. Past the sentinel every pill edge separates two layers, so the whole border
-   moves from the lit hairline (~1.5:1) to `--prl-line-strong` (3.63:1 on dark glass), per WCAG 1.4.11. These rules
-   come after every rule they override. */
+/* Floating state. Past the sentinel every pill edge separates two layers, so the border moves from
+   the decorative hairline to `--prl-line-strong`, per WCAG 1.4.11. These rules come after every rule
+   they override. */
 
 .prl-shell__header[data-stuck="true"] .prl-pill-group,
 .prl-shell__header[data-stuck="true"] .prl-units__value,
@@ -483,7 +454,6 @@
   border: 1px solid var(--prl-line-strong);
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-panel);
-  box-shadow: var(--prl-elevation-3);
   color: var(--prl-text);
   font-size: var(--prl-type-body-sm);
   line-height: var(--prl-leading-snug);

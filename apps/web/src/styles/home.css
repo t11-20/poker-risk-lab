@@ -119,10 +119,9 @@
   gap: 0;
   margin: 0;
   align-self: start;
-  border: 1px solid var(--prl-edge);
+  border: 1px solid var(--prl-line);
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-panel);
-  box-shadow: var(--prl-elevation-2);
   overflow: hidden;
 }
 
@@ -211,7 +210,7 @@
   inset-inline-start: 0;
   inline-size: var(--prl-spot-have);
   border-radius: inherit;
-  background-color: var(--prl-accent-500);
+  background-color: var(--prl-accent-fill);
 }
 
 .prl-spot__bar-need {

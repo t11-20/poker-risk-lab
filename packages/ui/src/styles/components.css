@@ -4,9 +4,9 @@
  * Every value is a `--prl-*` token, except `1px` hairlines, structural geometry and media-query
  * lengths (`var()` is invalid in a media feature). Rules, per docs/frontend-design-system.md:
  *   1. Nothing means anything by colour alone.
- *   2. Shadows only through `--prl-elevation-*` (layout-guarantees.test.ts).
+ *   2. Flat: no shadow but the focus halo, no blur, no gradient wash (layout-guarantees.test.ts).
  *   3. Nothing interactive is smaller than `--prl-target-min` (44px). Only the ink may be.
- *   4. Animate only transform, opacity, colour and elevation steps, never `backdrop-filter`.
+ *   4. Animate only transform, opacity and colour.
  */
 
 /* Layout. The container is a token, so a page cannot invent its own width. */
@@ -184,7 +184,7 @@
   line-height: var(--prl-leading-body);
 }
 
-/** `--prl-text-muted`, not the doc's ink-300, which is 3.57:1 on light `--prl-surface-active`. */
+/** `--prl-text-muted`, which clears 4.5:1 on every surface including light `--prl-surface-active`. */
 .prl-label {
   display: inline-block;
   color: var(--prl-text-muted);
@@ -318,151 +318,96 @@
   grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--prl-space-15)), 1fr));
 }
 
-/* Materials. The tokens.css ladder as classes. A glass fill always has `backdrop-filter` in the
-   same block, `:hover` included, or text behind it ghosts through (layout-guarantees.test.ts). */
+/* Surfaces. Flat: a level is a fill and a hairline, never a shadow, a blur or a tint over a backdrop.
+   The class names stay because components choose a level by role. */
 
-/** A border, not an inset shadow, so it survives forced colors. Never transition `backdrop-filter`. */
+/** A border, not an inset shadow, so it survives forced colors. */
 .prl-material {
-  border: 1px solid var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
+  border: 1px solid var(--prl-line);
   border-radius: var(--prl-radius-2);
   transition:
     background-color var(--prl-dur-fast) var(--prl-ease-material),
-    border-color var(--prl-dur-fast) var(--prl-ease-material),
-    box-shadow var(--prl-dur-base) var(--prl-ease-material),
-    transform var(--prl-dur-fast) var(--prl-ease-material);
+    border-color var(--prl-dur-fast) var(--prl-ease-material);
 }
 
-/** L1 GROUPED. Told from L2 by no elevation, not by fill. In light it is brighter than the page. */
+/** Rows that belong together. */
 .prl-material--grouped {
-  border-color: var(--prl-edge);
   background-color: var(--prl-surface-raised);
-  box-shadow: var(--prl-elevation-0);
 }
 
-/** L2 RAISED. Where body text lives. Opaque, because no tint makes long prose legible over a backdrop. */
+/** Where body text lives. */
 .prl-material--raised {
   background-color: var(--prl-surface-panel);
-  box-shadow: var(--prl-elevation-1);
 }
 
-/** L3 FLOATING. `isolation: isolate` stops the filter sampling siblings not meant to be behind it. */
+/** Chrome that travels with the content: toolbars, chips, the transport row. */
 .prl-material--floating {
-  isolation: isolate;
   border-radius: var(--prl-radius-3);
-  background-color: var(--prl-glass-floating);
-  -webkit-backdrop-filter: var(--prl-glass-filter);
-  backdrop-filter: var(--prl-glass-filter);
-  box-shadow: var(--_ring, 0 0 transparent), var(--prl-elevation-2);
-}
-
-/** L4 OVERLAY. Popovers, menus, sheets. Darker and more opaque than L3, because it carries body text. */
-.prl-material--overlay {
-  isolation: isolate;
-  border-radius: var(--prl-radius-3);
-  background-color: var(--prl-glass-overlay);
-  -webkit-backdrop-filter: var(--prl-glass-filter-strong);
-  backdrop-filter: var(--prl-glass-filter-strong);
-  box-shadow: var(--_ring, 0 0 transparent), var(--prl-elevation-3);
-}
-
-/** L5 MODAL. The `--prl-scrim` behind it belongs to whatever owns the dialog, not to the pane. */
-.prl-material--modal {
-  isolation: isolate;
-  border-radius: var(--prl-radius-3);
-  background-color: var(--prl-glass-overlay);
-  -webkit-backdrop-filter: var(--prl-glass-filter-strong);
-  backdrop-filter: var(--prl-glass-filter-strong);
-  box-shadow: var(--prl-elevation-4);
+  background-color: var(--prl-surface-raised);
 }
 
 /**
- * States firm the glass (90% -> 94% -> 97%), not only brighten it. A brighter-only hover took
- * `--prl-line-strong` to 2.71:1.
+ * Popovers, menus, sheets and dialogs sit over content with no shadow to lift them, so their edge is
+ * `--prl-line-strong`, which clears 3:1 against any surface (WCAG 1.4.11).
  */
-.prl-material--floating.prl-material--interactive:hover {
-  border-color: var(--prl-edge-lit);
-  background-color: var(--prl-glass-floating-hover);
-  -webkit-backdrop-filter: var(--prl-glass-filter);
-  backdrop-filter: var(--prl-glass-filter);
+.prl-material--overlay,
+.prl-material--modal {
+  border-color: var(--prl-line-strong);
+  border-radius: var(--prl-radius-3);
+  background-color: var(--prl-surface-panel);
+}
+
+.prl-material--floating.prl-material--interactive:hover,
+.prl-material--overlay.prl-material--interactive:hover {
+  background-color: var(--prl-surface-hover);
 }
 
 .prl-material--floating.prl-material--interactive:active {
-  background-color: var(--prl-glass-floating-active);
-  -webkit-backdrop-filter: var(--prl-glass-filter);
-  backdrop-filter: var(--prl-glass-filter);
-  box-shadow: var(--prl-elevation-1);
-  transform: translateY(1px);
+  background-color: var(--prl-surface-active);
 }
 
-.prl-material--overlay.prl-material--interactive:hover {
-  background-color: var(--prl-glass-overlay-hover);
-  -webkit-backdrop-filter: var(--prl-glass-filter-strong);
-  backdrop-filter: var(--prl-glass-filter-strong);
-}
-
-/** A pane is ringed while anything inside it has focus, as well as when it has focus itself. */
-.prl-material--floating:has(:focus-visible),
-.prl-material--overlay:has(:focus-visible) {
-  --_ring: var(--prl-focus-ring);
-}
-
-/** Drops to the opaque level below. `opacity` would fade the label and let more backdrop through. */
+/** Swaps tokens instead of fading, because `opacity` takes a 4.5:1 label towards 2:1. */
 .prl-material--floating:disabled,
 .prl-material--floating[aria-disabled="true"],
 .prl-material--overlay:disabled,
 .prl-material--overlay[aria-disabled="true"] {
   border-color: var(--prl-line-subtle);
   background-color: var(--prl-surface-raised);
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
-  box-shadow: var(--prl-elevation-0);
   color: var(--prl-text-disabled);
   cursor: not-allowed;
 }
 
-/* Panel. Level 2 of the ladder. Not glass, because a panel is where prose and tables live. */
+/* Panel. Where prose and tables live. */
 
 .prl-panel {
   display: grid;
   align-content: start;
   gap: var(--prl-space-6);
   padding: var(--prl-space-7);
-  border: 1px solid var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
+  border: 1px solid var(--prl-line);
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-panel);
-  box-shadow: var(--prl-elevation-1);
 }
 
 .prl-panel--inset {
   background-color: var(--prl-surface-inset);
 }
 
-/** No surface, so no edge and no elevation either. A shadow under a transparent box is cast by nothing. */
+/** No surface, so no edge either. */
 .prl-panel--quiet {
   border-color: transparent;
   background-color: transparent;
-  box-shadow: var(--prl-elevation-0);
 }
 
-/** Level 3, for a panel that floats over content (a sticky summary). Not for one simply on the page. */
+/** For a panel that travels over content (a sticky summary). Opaque, so nothing reads through. */
 .prl-panel--floating {
-  isolation: isolate;
-  background-color: var(--prl-glass-floating);
-  -webkit-backdrop-filter: var(--prl-glass-filter);
-  backdrop-filter: var(--prl-glass-filter);
-  box-shadow: var(--prl-elevation-2);
+  background-color: var(--prl-surface-raised);
 }
 
+/** Over content with no shadow to lift it, so its edge is `--prl-line-strong`. */
 .prl-panel--overlay {
-  isolation: isolate;
-  background-color: var(--prl-glass-overlay);
-  -webkit-backdrop-filter: var(--prl-glass-filter-strong);
-  backdrop-filter: var(--prl-glass-filter-strong);
-  box-shadow: var(--prl-elevation-3);
+  border-color: var(--prl-line-strong);
+  background-color: var(--prl-surface-panel);
 }
 
 /** Matches what `Panel.tsx` emits, or every panel header renders unstyled. */
@@ -521,7 +466,7 @@
   font-size: var(--prl-type-body-sm);
 }
 
-/* Buttons. Pill-shaped to match the header's glass capsules. No `clip-path` chamfer, because it
+/* Buttons. Pill-shaped to match the header's controls. No `clip-path` chamfer, because it
    clips the `outline` and would bite the focus ring, so the fill is a `::before` plate at
    `z-index: -1`. `--prl-control-*` is shared with the form controls so they line up in one row. */
 
@@ -555,10 +500,7 @@
   line-height: var(--prl-leading-snug);
   text-align: center;
   text-decoration: none;
-  /**
-   * No `box-shadow` here. A hover rule at (0,3,0) setting an elevation would out-rank the family's
-   * `var(--_ring, ...)` list and delete the halo of a hovered, focused button.
-   */
+  /** No `box-shadow` here or in any state: it would out-rank base.css's focus halo and delete it. */
   transition:
     background-color var(--prl-dur-fast) var(--prl-ease-material),
     border-color var(--prl-dur-fast) var(--prl-ease-material),
@@ -591,20 +533,14 @@
   width: 100%;
 }
 
-/** `--prl-edge-lit` top edge. On a filled control the fill identifies it, so rule B does not apply. */
+/** Filled and semibold, where the secondary is outlined, so the primary action is not told by hue. */
 .prl-btn--primary {
   border-color: var(--prl-accent-fill);
-  border-block-start-color: var(--prl-edge-lit);
-  box-shadow: var(--_ring, 0 0 transparent), var(--prl-elevation-1);
   color: var(--prl-text-on-accent);
   font-weight: var(--prl-weight-semibold);
 }
 
-/** The fill plate, behind the label so the outline is never painted over. */
-/**
- * `--prl-veil-8` flips with the theme, so the sheen raises ink contrast in both, and it reaches
- * `transparent` before halfway. A fixed white veil would erode the light theme.
- */
+/** The fill plate, behind the label so the outline is never painted over. One flat colour. */
 .prl-btn--primary::before {
   content: "";
   position: absolute;
@@ -612,53 +548,40 @@
   inset: 0;
   border-radius: inherit;
   background-color: var(--prl-accent-fill);
-  background-image: linear-gradient(to bottom, var(--prl-veil-8), transparent 58%);
   transition: background-color var(--prl-dur-fast) var(--prl-ease-material);
 }
 
 .prl-btn--primary:hover:not(:disabled, [aria-disabled="true"]) {
-  border-color: var(--prl-accent-400);
+  border-color: var(--prl-accent-fill);
 }
 
-/** The veil does the work in light, where accent 400 and 500 are the same value. */
 .prl-btn--primary:hover:not(:disabled, [aria-disabled="true"])::before {
-  background-color: var(--prl-accent-400);
-  background-image: linear-gradient(to bottom, var(--prl-veil-8), var(--prl-veil-4));
+  background-color: var(--prl-accent-fill-hover);
 }
 
-/** A transform and a darker plate, never an elevation change. 1px, so it reads as a key. */
+/** A 1px press, so it reads as a key. */
 .prl-btn--primary:active:not(:disabled, [aria-disabled="true"]) {
   transform: translateY(1px);
 }
 
 .prl-btn--primary:active:not(:disabled, [aria-disabled="true"])::before {
-  background-color: var(--prl-accent-600);
+  background-color: var(--prl-accent-fill-hover);
 }
 
-/**
- * L3 glass like `.prl-pill-group`, fill and filter in every state block. All four edges are
- * `--prl-line-strong`, because with no fill the border is the WCAG 1.4.11 boundary.
- */
+/** All four edges are `--prl-line-strong`, because the border is the WCAG 1.4.11 boundary. */
 .prl-btn--secondary {
   border-color: var(--prl-line-strong);
-  background-color: var(--prl-glass-floating);
-  -webkit-backdrop-filter: var(--prl-glass-filter);
-  backdrop-filter: var(--prl-glass-filter);
-  box-shadow: var(--_ring, 0 0 transparent), var(--prl-elevation-1);
+  background-color: var(--prl-surface-raised);
 }
 
 .prl-btn--secondary:hover:not(:disabled, [aria-disabled="true"]) {
   border-color: var(--prl-accent-edge);
-  background-color: var(--prl-glass-floating-hover);
-  -webkit-backdrop-filter: var(--prl-glass-filter);
-  backdrop-filter: var(--prl-glass-filter);
+  background-color: var(--prl-surface-hover);
   color: var(--prl-accent-text);
 }
 
 .prl-btn--secondary:active:not(:disabled, [aria-disabled="true"]) {
-  background-color: var(--prl-glass-floating-active);
-  -webkit-backdrop-filter: var(--prl-glass-filter);
-  backdrop-filter: var(--prl-glass-filter);
+  background-color: var(--prl-surface-active);
   transform: translateY(1px);
 }
 
@@ -680,41 +603,31 @@
   transform: translateY(1px);
 }
 
-/** Outline only. Neither ink-900 nor white clears 4.5:1 on the light theme's rose. */
+/** Outline only, so red stays a word's colour and never a fill behind one. */
 .prl-btn--danger {
   border-color: var(--prl-adverse);
-  background-color: var(--prl-glass-floating);
-  -webkit-backdrop-filter: var(--prl-glass-filter);
-  backdrop-filter: var(--prl-glass-filter);
-  box-shadow: var(--_ring, 0 0 transparent), var(--prl-elevation-1);
+  background-color: var(--prl-surface-raised);
   color: var(--prl-adverse);
 }
 
 .prl-btn--danger:hover:not(:disabled, [aria-disabled="true"]) {
   border-color: var(--prl-adverse);
-  background-color: var(--prl-glass-floating-hover);
-  -webkit-backdrop-filter: var(--prl-glass-filter);
-  backdrop-filter: var(--prl-glass-filter);
+  background-color: var(--prl-surface-hover);
 }
 
 .prl-btn--danger:active:not(:disabled, [aria-disabled="true"]) {
-  background-color: var(--prl-glass-floating-active);
-  -webkit-backdrop-filter: var(--prl-glass-filter);
-  backdrop-filter: var(--prl-glass-filter);
+  background-color: var(--prl-surface-active);
   transform: translateY(1px);
 }
 
 /**
- * Opaque level below, no sheen, never `opacity`. `[aria-disabled]` covers anchors styled as buttons, and
+ * The inset surface, never `opacity`. `[aria-disabled]` covers anchors styled as buttons, and
  * buttons that must keep focus while unavailable, which is why the hover and active rules exclude it too.
  */
 .prl-btn:disabled,
 .prl-btn[aria-disabled="true"] {
   border-color: var(--prl-line-subtle);
   background-color: var(--prl-surface-inset);
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
-  box-shadow: var(--prl-elevation-0);
   color: var(--prl-text-disabled);
   cursor: not-allowed;
 }
@@ -722,7 +635,6 @@
 .prl-btn:disabled::before,
 .prl-btn[aria-disabled="true"]::before {
   background-color: var(--prl-surface-inset);
-  background-image: none;
 }
 
 /** Busy stays focusable, so a keyboard user keeps their place. Announced by `aria-busy`. */
@@ -880,7 +792,6 @@
   border: 1px solid var(--prl-accent-edge);
   border-radius: var(--prl-radius-pill);
   background-color: var(--prl-accent-fill);
-  background-image: linear-gradient(to bottom, var(--prl-veil-8), transparent 58%);
   appearance: none;
 }
 
@@ -897,7 +808,6 @@
   border: 1px solid var(--prl-accent-edge);
   border-radius: var(--prl-radius-pill);
   background-color: var(--prl-accent-fill);
-  background-image: linear-gradient(to bottom, var(--prl-veil-8), transparent 58%);
 }
 
 .prl-range:disabled {
@@ -986,8 +896,8 @@
 
 .prl-chip--info,
 .prl-chip[data-tone="info"] {
-  border-color: var(--prl-info);
-  color: var(--prl-info);
+  border-color: var(--prl-text-secondary);
+  color: var(--prl-text-secondary);
 }
 
 .prl-chip--neutral,
@@ -1003,8 +913,8 @@
 }
 
 .prl-chip--method {
-  border-color: var(--prl-info);
-  color: var(--prl-info);
+  border-color: var(--prl-text-secondary);
+  color: var(--prl-text-secondary);
 }
 
 /** The letter "D" is the information, not the circle. */
@@ -1479,7 +1389,7 @@
 }
 
 /**
- * The wash is `--prl-veil-8` (no accent-with-alpha token). `overflow: hidden` confines the hidden
+ * The shape is filled with `--prl-surface-hover`, one step off the panel. `overflow: hidden` confines the hidden
  * data `<table>`, which floors at min-content and scrolled every radar page sideways.
  */
 .prl-radar {
@@ -1514,7 +1424,7 @@
 
 /** `__shape` is what `RadarChart` emits. With no `fill` an SVG polygon paints opaque black. */
 .prl-radar__shape {
-  fill: var(--prl-veil-8);
+  fill: var(--prl-surface-hover);
   stroke: var(--prl-accent-edge);
   stroke-width: 1.5;
   stroke-linejoin: round;
@@ -1545,7 +1455,7 @@
 }
 
 .prl-sparkline__area {
-  fill: var(--prl-veil-8);
+  fill: var(--prl-surface-hover);
   stroke: none;
 }
 
@@ -1620,7 +1530,7 @@
   content: "";
   position: absolute;
   inset: 0;
-  background-image: linear-gradient(90deg, transparent, var(--prl-veil-8), transparent);
+  background-image: linear-gradient(90deg, transparent, var(--prl-surface-hover), transparent);
   animation: prl-skeleton-sweep var(--prl-dur-count) var(--prl-ease-standard) infinite;
 }
 
@@ -1674,7 +1584,6 @@
   gap: var(--prl-space-4);
   padding: var(--prl-space-6);
   border: 1px solid var(--prl-adverse);
-  border-inline-start-width: var(--prl-space-1);
   border-radius: var(--prl-radius-2);
   background-color: var(--prl-surface-inset);
   color: var(--prl-text);
@@ -2411,7 +2320,7 @@
 }
 
 .prl-action-btn--primary:hover:not(:disabled)::before {
-  background-color: var(--prl-accent-400);
+  background-color: var(--prl-accent-fill);
 }
 
 .prl-action-btn--primary .prl-action-btn__cost {
@@ -2936,13 +2845,12 @@ td.prl-candidates__ev,
 
 /* CoachPanel: suggestion */
 
-/** An accent edge, never a wash. The markup never calls a suggestion correct or optimal. */
+/** A plain box, never a highlight. The markup never calls a suggestion correct or optimal. */
 .prl-suggestion {
   display: grid;
   gap: var(--prl-space-3);
   padding: var(--prl-space-6);
   border: 1px solid var(--prl-line-strong);
-  border-inline-start: var(--prl-space-1) solid var(--prl-accent-edge);
   border-radius: var(--prl-radius-1);
   background-color: var(--prl-surface-inset);
 }
@@ -2986,7 +2894,7 @@ td.prl-candidates__ev,
 }
 
 .prl-suggestion__confidence[data-confidence="moderate"] {
-  color: var(--prl-info);
+  color: var(--prl-text-secondary);
 }
 
 .prl-suggestion__confidence[data-confidence="reasonable"] {
@@ -3164,18 +3072,19 @@ td.prl-candidates__ev,
   max-width: calc(var(--prl-measure) + 2 * var(--prl-space-6));
   gap: var(--prl-space-3);
   padding: var(--prl-space-6);
-  border: var(--prl-hairline);
-  border-inline-start: var(--prl-space-1) solid var(--prl-line-strong);
+  border: var(--prl-hairline-strong);
   border-radius: var(--prl-radius-1);
   background-color: var(--prl-surface-inset);
 }
 
+/** The word names the tone, and it is set semibold so it leads the box without a coloured edge. */
 .prl-callout__marker {
   display: inline-flex;
   align-items: center;
   gap: var(--prl-space-3);
+  color: var(--prl-text-secondary);
   font-size: var(--prl-type-label);
-  font-weight: var(--prl-weight-medium);
+  font-weight: var(--prl-weight-semibold);
   letter-spacing: var(--prl-tracking-label);
 }
 
@@ -3192,24 +3101,9 @@ td.prl-candidates__ev,
   line-height: var(--prl-leading-body);
 }
 
-.prl-callout--insight {
-  border-inline-start-color: var(--prl-info);
-}
-
-.prl-callout--insight .prl-callout__marker {
-  color: var(--prl-info);
-}
-
-.prl-callout--warning {
-  border-inline-start-color: var(--prl-caution);
-}
-
+/** Caution and adverse only where the callout is about a risk or a mistake. */
 .prl-callout--warning .prl-callout__marker {
   color: var(--prl-caution);
-}
-
-.prl-callout--misconception {
-  border-inline-start-color: var(--prl-adverse);
 }
 
 .prl-callout--misconception .prl-callout__marker {
@@ -3302,7 +3196,6 @@ td.prl-candidates__ev,
   gap: var(--prl-space-3);
   padding: var(--prl-space-6);
   border: 1px solid var(--prl-line-strong);
-  border-inline-start: var(--prl-space-1) solid var(--prl-info);
   border-radius: var(--prl-radius-1);
   background-color: var(--prl-surface-inset);
 }
@@ -3320,9 +3213,9 @@ td.prl-candidates__ev,
 .prl-uncertainty__method {
   display: inline-block;
   padding-inline: var(--prl-space-4);
-  border: 1px solid var(--prl-info);
+  border: 1px solid var(--prl-text-secondary);
   border-radius: var(--prl-radius-pill);
-  color: var(--prl-info);
+  color: var(--prl-text-secondary);
   font-family: var(--prl-font-mono);
   font-size: var(--prl-type-label);
   font-weight: var(--prl-weight-medium);
@@ -3430,7 +3323,7 @@ td.prl-candidates__ev,
   flex: 1 1 var(--prl-space-16);
   margin: 0;
   padding: var(--prl-space-4) var(--prl-space-5);
-  border: 1px solid var(--prl-info);
+  border: 1px solid var(--prl-text-secondary);
   border-radius: var(--prl-radius-1);
   background-color: var(--prl-surface-inset);
   color: var(--prl-text);
@@ -3537,13 +3430,6 @@ td.prl-candidates__ev,
   .prl-outs__swatch,
   .prl-equity-bar__swatch {
     border-color: CanvasText;
-  }
-
-  /* Both carried meaning in border colour, now CanvasText for both. A style change restores it. */
-  .prl-callout,
-  .prl-suggestion,
-  .prl-uncertainty {
-    border-inline-start-style: double;
   }
 
   .prl-card {

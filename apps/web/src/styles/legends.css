@@ -1,7 +1,6 @@
 /**
- * The AI Legends screens (`.prl-legend-*`), imported by `app/legends/layout.tsx`. Shadows go through
- * `--prl-elevation-*` only (`layout-guarantees.test.ts`), and nothing is glass because nothing is sticky.
- * Profile cards are elevated objects (L2) and control groups are flat wells (L1).
+ * The AI Legends screens (`.prl-legend-*`), imported by `app/legends/layout.tsx`. Flat: no shadow
+ * (`layout-guarantees.test.ts`). Profile cards are bordered panels and control groups are inset wells.
  */
 
 /* Component-local values. A transform angle is geometry, not a token. */
@@ -144,19 +143,16 @@
 }
 
 /**
- * "Start a match" (`LegendQuickStart.tsx`) is level 1, a control group, so the cards stay the only
- * elevated objects. The row is capped at two card floors, because uncapped the select ran to 1,100px.
+ * "Start a match" (`LegendQuickStart.tsx`) is an inset control group, so the cards stay the only
+ * bordered objects. The row is capped at two card floors, because uncapped the select ran to 1,100px.
  */
 .prl-legend-quick {
   display: grid;
   gap: var(--prl-space-5);
   padding: var(--prl-space-8);
-  border: 1px solid var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
+  border: 1px solid var(--prl-line);
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-raised);
-  box-shadow: var(--prl-elevation-0);
 }
 
 /** An `h2` at panel-title size. At the default `h2` size it competed with the masthead. */
@@ -196,7 +192,6 @@
     padding: var(--prl-space-0);
     border: 0;
     background-color: transparent;
-    box-shadow: none;
   }
 }
 
@@ -207,8 +202,7 @@
   display: grid;
   gap: var(--prl-space-5);
   padding: var(--prl-space-6) var(--prl-space-7);
-  border: 1px solid var(--prl-line-subtle);
-  border-inline-start: var(--prl-space-1) solid var(--prl-line-strong);
+  border: 1px solid var(--prl-line);
   border-radius: var(--prl-radius-2);
   background-color: var(--prl-surface-inset);
 }
@@ -348,21 +342,17 @@
   }
 }
 
-/** Level 2. In dark mode a hairline box was a 1.15:1 step behind a 1.44:1 border and cards ran together. */
+/** A panel with a full hairline, so adjacent cards do not run together in dark. */
 .prl-legend-card {
   display: grid;
   align-content: start;
   gap: var(--prl-space-6);
   padding: var(--prl-space-8);
-  border: 1px solid var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
+  border: 1px solid var(--prl-line);
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-panel);
-  box-shadow: var(--prl-elevation-1);
   transition:
     border-color var(--prl-dur-fast) var(--prl-ease-material),
-    box-shadow var(--prl-dur-base) var(--prl-ease-material),
     transform var(--prl-dur-fast) var(--prl-ease-material);
 }
 
@@ -373,8 +363,6 @@
 .prl-legend-card:hover,
 .prl-legend-card:focus-within {
   border-color: var(--prl-accent-edge);
-  box-shadow: var(--prl-elevation-2);
-  transform: translateY(calc(-1 * var(--prl-space-2)));
 }
 
 /** `--prl-line-subtle`, because these rules divide a card's contents, not an object's edge. */
@@ -561,18 +549,15 @@
 /* Difficulty picker. A GET form with a visible submit that never navigates on change, because
    that fails WCAG 3.2.2 and makes the third option unreachable by keyboard. */
 
-/** Level 1, a flat well, so the control group does not compete with the elevated cards. */
+/** An inset well, so the control group does not compete with the cards. */
 .prl-legend-difficulty {
   container: prl-legend-difficulty / inline-size;
   display: grid;
   gap: var(--prl-space-6);
   padding: var(--prl-space-8);
-  border: 1px solid var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
+  border: 1px solid var(--prl-line);
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-raised);
-  box-shadow: var(--prl-elevation-0);
 }
 
 .prl-legend-difficulty__legend {
@@ -611,8 +596,7 @@
   cursor: pointer;
   transition:
     background-color var(--prl-dur-fast) var(--prl-ease-material),
-    border-color var(--prl-dur-fast) var(--prl-ease-material),
-    box-shadow var(--prl-dur-base) var(--prl-ease-material);
+    border-color var(--prl-dur-fast) var(--prl-ease-material);
 }
 
 .prl-legend-difficulty__option:hover {
@@ -621,13 +605,12 @@
 }
 
 /**
- * Selected is an accent border, a surface step, an elevation, the checked dot and the label word,
+ * Selected is an accent border, a surface step, the checked dot and the label word,
  * never the border alone (the forced-colors block restates it). Same idiom as the quiz in `learn.css`.
  */
 .prl-legend-difficulty__option:has(input:checked) {
   border-color: var(--prl-accent-edge);
   background-color: var(--prl-surface-active);
-  box-shadow: var(--prl-elevation-1);
 }
 
 /**
@@ -756,8 +739,7 @@
   cursor: pointer;
   transition:
     background-color var(--prl-dur-fast) var(--prl-ease-material),
-    border-color var(--prl-dur-fast) var(--prl-ease-material),
-    box-shadow var(--prl-dur-base) var(--prl-ease-material);
+    border-color var(--prl-dur-fast) var(--prl-ease-material);
 }
 
 .prl-legend-picker__option:hover {
@@ -768,7 +750,6 @@
 .prl-legend-picker__option:has(input:checked) {
   border-color: var(--prl-accent-edge);
   background-color: var(--prl-surface-active);
-  box-shadow: var(--prl-elevation-1);
 }
 
 .prl-legend-picker__control {
@@ -867,20 +848,14 @@
   align-content: start;
   gap: var(--prl-space-6);
   padding: var(--prl-space-8);
-  border: 1px solid var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
+  border: 1px solid var(--prl-line);
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-panel);
-  box-shadow: var(--prl-elevation-1);
 }
 
+/** The page tells the reader their own decisions carry an accent edge as well as the word "you". */
 .prl-legend-decision[data-actor="you"] {
-  border-inline-start: var(--prl-space-1) solid var(--prl-accent-edge);
-}
-
-.prl-legend-decision[data-actor="model"] {
-  border-inline-start: var(--prl-space-1) solid var(--prl-line-strong);
+  border-color: var(--prl-accent-edge);
 }
 
 .prl-legend-decision__head {
@@ -1005,12 +980,9 @@
   align-content: start;
   gap: var(--prl-space-6);
   padding: var(--prl-space-8);
-  border: 1px solid var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
+  border: 1px solid var(--prl-line);
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-panel);
-  box-shadow: var(--prl-elevation-1);
 }
 
 /* Observed versus declared, and the contrast section */

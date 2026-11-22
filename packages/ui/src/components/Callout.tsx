@@ -1,6 +1,6 @@
 /**
  * A tonal aside. Tones match the `LessonBlock` callout tones in `@prl/contracts`, so a lesson passes
- * its tone straight through. Each tone shows a marker word and a glyph as well as colour.
+ * its tone straight through. Each tone shows a marker word; the two that warn also carry a glyph.
  * `role="note"` and not `<aside>`, because six lesson callouts would add six `complementary` landmarks.
  */
 
@@ -16,8 +16,9 @@ export interface CalloutProps {
   readonly className?: string;
 }
 
-const MARKERS: Readonly<Record<CalloutTone, { readonly word: string; readonly glyph: string }>> = {
-  insight: { word: 'Insight', glyph: '◆' },
+/** No glyph on an insight: the word says it, and a diamond beside it was decoration. */
+const MARKERS: Readonly<Record<CalloutTone, { readonly word: string; readonly glyph?: string }>> = {
+  insight: { word: 'Insight' },
   warning: { word: 'Watch out', glyph: '▲' },
   misconception: { word: 'Common misconception', glyph: '✕' },
 };
@@ -35,7 +36,7 @@ export function Callout(props: CalloutProps): ReactElement {
   return (
     <div className={cx('prl-callout', TONE_CLASS[tone], className)} role="note">
       <span className="prl-callout__marker prl-label">
-        <span aria-hidden="true">{marker.glyph}</span>
+        {marker.glyph === undefined ? null : <span aria-hidden="true">{marker.glyph}</span>}
         {marker.word}
       </span>
       {title === undefined ? null : <p className="prl-callout__title">{title}</p>}
