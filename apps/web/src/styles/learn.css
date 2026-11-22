@@ -393,6 +393,10 @@
   border-width: 2px;
   border-color: var(--prl-accent-edge);
   background-color: var(--prl-surface-active);
+}
+
+/** On the digits, because `.prl-index` sets its own muted, regular ink. */
+.prl-learn-onboarding__step-btn[aria-current="step"] .prl-index {
   color: var(--prl-text);
   font-weight: var(--prl-weight-bold);
 }
