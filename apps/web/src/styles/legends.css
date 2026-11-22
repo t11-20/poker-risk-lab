@@ -57,6 +57,11 @@
   border-block-end: var(--prl-hairline-strong);
 }
 
+/** A grid item stretches, and `.prl-suit-mark` centres its glyph, so it floated over the title's middle. */
+.prl-legend-head > .prl-suit-mark {
+  justify-self: start;
+}
+
 .prl-legend-head__title {
   margin: 0;
 }
