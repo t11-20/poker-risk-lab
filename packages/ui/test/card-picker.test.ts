@@ -201,16 +201,29 @@ describe('the rendered picker', () => {
     assert.match(markup, /aria-label="Hole 1: ace of hearts"/u);
   });
 
-  it('draws suits as symbols and never as letters', async () => {
+  it('draws every deck card and every filled slot with its generated face, hidden behind the name', async () => {
     const markup = await render();
-    const ranks = [...markup.matchAll(/<span class="prl-card__pip">([^<]*)<\/span>/gu)].map(
-      (match) => match[1],
-    );
-    assert.ok(ranks.length >= 52);
-    assert.ok(
-      ranks.every((pip) => ['♠', '♥', '♦', '♣'].includes(pip ?? '')),
-      ranks.join(''),
-    );
+    const deck = [...markup.matchAll(/<button[^>]*class="prl-picker__card"[^>]*>(.*?)<\/button>/gu)];
+    assert.equal(deck.length, 52);
+    const files = deck.map(([, inner]) => {
+      assert.match(inner ?? '', /^<span class="prl-picker__face" aria-hidden="true"><span class="prl-card /u);
+      return /<img class="prl-card__image" src="\/cards\/([2-9TJQKA][SHDC])\.svg"/u.exec(inner ?? '')?.[1];
+    });
+    assert.equal(new Set(files).size, 52, files.join(' '));
+    const slot = /<button[^>]*aria-label="Hole 1: ace of hearts"[^>]*>(.*?)<\/button>/u.exec(markup)?.[1];
+    assert.match(slot ?? '', /<span class="prl-picker__face" aria-hidden="true">.*src="\/cards\/AH\.svg"/u);
+  });
+
+  it('draws no card from text: no rank, pip or suit letter on any face', async () => {
+    const markup = await render();
+    assert.ok(!/prl-card__(rank|pip|face)/u.test(markup), 'the text-drawn card classes are gone');
+    const drawn = markup
+      .replace(/<p[^>]*>.*?<\/p>/gu, '')
+      .replace(/<legend[^>]*>.*?<\/legend>/gu, '')
+      .replace(/<button[^>]*class="prl-btn[^"]*"[^>]*>.*?<\/button>/gu, '')
+      .replace(/<[^>]+>/gu, ' ');
+    assert.ok(drawn.trim().length > 0, 'read the slot and deck text');
+    assert.doesNotMatch(drawn, /[♠♥♦♣]|\b(?:[2-9TJQKA]|10)[shdc]\b/u, drawn);
   });
 
   it('offers removal only for the chosen slot when it holds a card', async () => {

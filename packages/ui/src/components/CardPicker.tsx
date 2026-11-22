@@ -17,6 +17,7 @@ import {
 } from '../card-picker.ts';
 import { describeCard } from '../cards.ts';
 import { cx } from '../cx.ts';
+import { PlayingCard } from './PlayingCard.tsx';
 
 export interface CardPickerGroup {
   readonly label: string;
@@ -38,25 +39,11 @@ export interface CardPickerProps {
   readonly className?: string;
 }
 
-function CardFace({
-  card,
-  dimmed,
-}: {
-  readonly card: number;
-  readonly dimmed: boolean;
-}): ReactElement | null {
-  const described = describeCard(card);
-  if (described === null) return null;
+/** The button carries the name, so the face is hidden and a reader hears one name per card. */
+function CardFace({ card }: { readonly card: number }): ReactElement {
   return (
-    <span
-      className={cx('prl-card', 'prl-card--sm', dimmed && 'prl-card--dimmed')}
-      data-suit={described.suitKey}
-      aria-hidden="true"
-    >
-      <span className="prl-card__face">
-        <span className="prl-card__rank">{described.face}</span>
-        <span className="prl-card__pip">{described.suitSymbol}</span>
-      </span>
+    <span className="prl-picker__face" aria-hidden="true">
+      <PlayingCard card={card} size="sm" />
     </span>
   );
 }
@@ -123,7 +110,7 @@ export function CardPicker(props: CardPickerProps): ReactElement {
                     {slot.card === null ? (
                       <span className="prl-picker__empty" aria-hidden="true" />
                     ) : (
-                      <CardFace card={slot.card} dimmed={false} />
+                      <CardFace card={slot.card} />
                     )}
                   </button>
                 );
@@ -172,7 +159,7 @@ export function CardPicker(props: CardPickerProps): ReactElement {
                 onKeyDown={(event) => onDeckKey(event, index)}
                 onClick={() => onPick(card)}
               >
-                <CardFace card={card} dimmed={owner !== undefined} />
+                <CardFace card={card} />
                 <span className="prl-picker__used" aria-hidden="true">
                   {owner === undefined ? '' : (owner.short ?? owner.label)}
                 </span>
