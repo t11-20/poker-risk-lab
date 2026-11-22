@@ -900,14 +900,7 @@
   }
 }
 
-/* 12.4  THE CARDS
-   Every length is proportional to `--prl-card-w`, so one rule serves `sm`, `md` and `lg`. The radius
-   is a twelfth of the width, like a real card. */
-
-.prl-play .prl-card {
-  border-radius: calc(var(--prl-card-w) / 12);
-  box-shadow: var(--prl-elevation-1);
-}
+/* 12.4  THE CARDS */
 
 /**
  * The board at `--prl-space-12` (4rem). Checked against the oval constraints in `components.css` at
@@ -955,25 +948,6 @@
   display: block;
   width: calc(var(--prl-seat-card-w) * 2 + var(--prl-space-2));
   height: calc(var(--prl-seat-card-w) / 5 * 7);
-}
-
-/**
- * The back is a lattice panel inset with a hairline. It has no text node, `data-` attribute or class
- * carrying a value, so the J3.8 confidentiality assertion in `scripts/ax-assertions.mjs` finds nothing.
- */
-.prl-play .prl-card--face-down {
-  border-color: var(--prl-card-back-pattern);
-  background-image: none;
-}
-
-.prl-play .prl-card__back {
-  display: block;
-  margin: 0.11em;
-  border: 1px solid var(--prl-card-back-pattern);
-  border-radius: calc(var(--prl-card-w) / 18);
-  background-image:
-    repeating-linear-gradient(-45deg, var(--prl-card-back-pattern) 0 1px, transparent 1px var(--prl-space-3)),
-    repeating-linear-gradient(45deg, var(--prl-card-back-pattern) 0 1px, transparent 1px var(--prl-space-3));
 }
 
 /* 12.5  THE ACTION BAR IS THE HERO

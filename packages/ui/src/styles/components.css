@@ -1776,21 +1776,21 @@
 
 /* PlayingCard */
 
-/** A `<span>`, not an image. One `--prl-card-w` per size, and everything inside is `em`-relative. */
+/**
+ * The face is a generated SVG file (`PlayingCard.tsx`), so only the box and the mark live here. One
+ * `--prl-card-w` per size. The radius matches the files' corners, so the notch is clipped to the card.
+ */
 .prl-card {
   --prl-card-w: var(--prl-space-11);
 
   position: relative;
-  display: inline-grid;
+  display: inline-block;
   flex: 0 0 auto;
   width: var(--prl-card-w);
   aspect-ratio: 5 / 7;
-  border: 1px solid var(--prl-card-edge);
-  border-radius: var(--prl-radius-1);
-  background-color: var(--prl-card-face);
-  color: var(--prl-suit-black);
-  font-size: calc(var(--prl-card-w) / 3);
-  line-height: 1;
+  overflow: hidden;
+  border-radius: calc(var(--prl-card-w) * 0.072);
+  line-height: 0;
   user-select: none;
 }
 
@@ -1806,52 +1806,25 @@
   --prl-card-w: var(--prl-space-12);
 }
 
-/** A corner index, as on a real card: the rank at the top, a large suit symbol below it. */
-.prl-card__face {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  justify-items: start;
-  padding: 0.18em 0.22em;
-  overflow: hidden;
+.prl-card__image {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
-.prl-card__rank {
-  font-family: var(--prl-font-display);
-  font-size: 1.6em;
-  font-stretch: var(--prl-stretch-display);
-  font-weight: var(--prl-weight-bold);
-  letter-spacing: var(--prl-tracking-display-2);
-  line-height: 0.9;
+/** A value outside 0..51. A dashed empty card, so a missing card is never drawn as a real one. */
+.prl-card--unknown {
+  display: inline-grid;
+  place-items: center;
+  border: 1px dashed var(--prl-line-strong);
+  color: var(--prl-text-muted);
+  font-size: calc(var(--prl-card-w) / 3);
+  line-height: 1;
 }
 
-/** Large, because with two inks the symbol's shape is all that tells a club from a spade. */
-.prl-card__pip {
-  align-self: end;
-  justify-self: end;
-  font-size: 2em;
-  line-height: 0.8;
-}
-
-.prl-card[data-suit="heart"],
-.prl-card[data-suit="diamond"] {
-  color: var(--prl-suit-red);
-}
-
-/** No logo or crest. A visually-hidden string supplies the accessible name. */
-.prl-card--face-down {
-  border-color: var(--prl-card-back);
-  background-color: var(--prl-card-back);
-  background-image: repeating-linear-gradient(
-    -45deg,
-    var(--prl-card-back-pattern) 0 var(--prl-space-1),
-    transparent var(--prl-space-1) var(--prl-space-3)
-  );
-  color: var(--prl-ink-000);
-}
-
-/** An accent border AND a corner notch, because the notch survives greyscale. */
+/** A corner notch and a lift, so the mark survives greyscale and forced colours. */
 .prl-card--highlighted {
-  border-color: var(--prl-accent-edge);
+  translate: 0 calc(var(--prl-space-3) * -1);
 }
 
 .prl-card--highlighted::after {
@@ -1859,13 +1832,8 @@
   position: absolute;
   inset-block-start: 0;
   inset-inline-end: 0;
-  border-block-start: calc(var(--prl-card-w) / 7) solid var(--prl-accent-edge);
-  border-inline-start: calc(var(--prl-card-w) / 7) solid transparent;
-}
-
-/** The dim face keeps every suit over 4.5:1 (worst, heart in dark at 4.75:1). */
-.prl-card--dimmed {
-  background-color: var(--prl-card-face-dim);
+  border-block-start: calc(var(--prl-card-w) / 4) solid var(--prl-accent-edge);
+  border-inline-start: calc(var(--prl-card-w) / 4) solid transparent;
 }
 
 /* CardText */
@@ -3546,13 +3514,9 @@ td.prl-candidates__ev,
     border-inline-start-style: double;
   }
 
-  .prl-card {
-    border-color: CanvasText;
-  }
-
   .prl-card--highlighted {
     outline: 1px dashed CanvasText;
-    outline-offset: 1px;
+    outline-offset: -1px;
   }
 
   .prl-skeleton {

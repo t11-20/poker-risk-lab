@@ -51,6 +51,8 @@ export interface CardDescription {
   readonly suitKey: SuitKey;
   readonly suitSymbol: string;
   readonly accessibleName: string;
+  /** `"AH.svg"`, the file `scripts/cards/generate.mjs` draws this card in. */
+  readonly file: string;
 }
 
 export function isCardValue(value: unknown): value is CardValue {
@@ -75,6 +77,7 @@ export function describeCard(card: number): CardDescription | null {
     suitKey: suit.key,
     suitSymbol: suit.symbol,
     accessibleName: `${word} of ${suit.word}`,
+    file: `${short}${suit.letter.toUpperCase()}.svg`,
   };
 }
 
