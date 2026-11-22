@@ -1,9 +1,14 @@
 /**
  * Every colour is a token in `tokens.css`, so a theme is one file and the contrast gate sees every
  * value. A literal anywhere else is a colour the gate never measured and a theme switch never moves.
- * Scans every stylesheet in both packages and every `.tsx` source, where a style object or attribute
- * could carry one. System colours are allowed, because forced-colors rules and `global-error.tsx`
- * (which loads no stylesheet) need them.
+ * Scans every stylesheet in both packages and every `.ts` and `.tsx` source, where a style object,
+ * an attribute or a built string could carry one. System colours are allowed, because forced-colors
+ * rules and `global-error.tsx` (which loads no stylesheet) need them.
+ *
+ * Out of scope: the `.svg` files. An SVG loaded as an image cannot read the page's custom
+ * properties, so the favicon and the deck in `apps/web/public/cards` must hold literal colours.
+ * The deck's are copied from `--prl-deck-*` by `scripts/cards/generate.mjs`, and `cards:check`
+ * fails when they drift.
  */
 
 import assert from 'node:assert/strict';
@@ -39,6 +44,8 @@ const NAMED = new Set(
 
 const FUNCTION = /(?<![\w-])(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\(/iu;
 const HEX = /#[\da-f]{3,8}(?![\w-])/iu;
+/** A hex colour inside a longer string. Not after `&` (`&#160;`), `#` or a word character (`/a#b`). */
+const HEX_IN_TEXT = /(?<![\w&#])#(?:[\da-f]{8}|[\da-f]{6}|[\da-f]{3,4})(?![\w-])/iu;
 const IDENT = /(?<![\w-])[a-z]+(?![\w-])/giu;
 
 const stripComments = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//gu, ' ');
@@ -71,17 +78,17 @@ const PAINT_KEY =
   /\b(?:color|background(?:Color)?|border(?:Top|Right|Bottom|Left|Block|Inline)?(?:Start|End)?Color|outlineColor|caretColor|textDecorationColor|accentColor|fill|stroke|stopColor|floodColor|lightingColor)\s*[:=]\s*\{?\s*['"]([a-z]+)['"]/giu;
 
 /**
- * The colours in a `.tsx` file: a string that is a hex value or a colour function anywhere, and a
- * colour NAME only where it is painted, as a style-object value or an SVG paint attribute. A name
- * elsewhere is data (`'red'` naming a suit), and a hex must be the whole string, so `href="#main"`
- * never matches.
+ * The colours in a `.ts` or `.tsx` file: a hex value or a colour function anywhere inside a string,
+ * and a colour NAME only where it is painted, as a style-object value or an SVG paint attribute. A
+ * name elsewhere is data (`'red'` naming a suit). A hex has to stand alone, so `href="#main"`,
+ * `'/learn#odds'` and `'&#160;'` never match.
  */
-function tsxFindings(source: string): string[] {
+function sourceFindings(source: string): string[] {
   const findings: string[] = [];
   const code = source.replace(/\/\*[\s\S]*?\*\//gu, ' ').replace(/(^|[^:])\/\/.*$/gmu, '$1');
   for (const match of code.matchAll(/'([^'\n]*)'|"([^"\n]*)"|`([^`]*)`/gu)) {
     const text = (match[1] ?? match[2] ?? match[3] ?? '').trim();
-    if (FUNCTION.test(text) || /^#[\da-f]{3,8}$/iu.test(text)) findings.push(text);
+    if (FUNCTION.test(text) || HEX_IN_TEXT.test(text)) findings.push(text);
   }
   for (const match of code.matchAll(PAINT_KEY)) {
     const name = match[1] ?? '';
@@ -103,7 +110,7 @@ function walk(dir: string, keep: (file: string) => boolean): string[] {
 
 const SOURCE_ROOTS = ['packages/ui/src', 'apps/web/src'].map((root) => join(REPO, root));
 const stylesheets = SOURCE_ROOTS.flatMap((root) => walk(root, (file) => file.endsWith('.css')));
-const components = SOURCE_ROOTS.flatMap((root) => walk(root, (file) => file.endsWith('.tsx')));
+const sources = SOURCE_ROOTS.flatMap((root) => walk(root, (file) => /\.tsx?$/u.test(file)));
 
 describe('a colour is declared once, in tokens.css', () => {
   it('reads a non-empty set of stylesheets and components (a sweep of nothing is not a pass)', () => {
@@ -113,7 +120,14 @@ describe('a colour is declared once, in tokens.css', () => {
       'tokens.css was not found, so the exemption below exempts nothing',
     );
     assert.ok(stylesheets.length >= 10, `only ${stylesheets.length} stylesheets were found`);
-    assert.ok(components.length >= 50, `only ${components.length} .tsx files were found`);
+    assert.ok(
+      sources.filter((file) => file.endsWith('.tsx')).length >= 50,
+      'fewer than 50 .tsx files were found',
+    );
+    assert.ok(
+      sources.filter((file) => file.endsWith('.ts')).length >= 50,
+      'fewer than 50 .ts files were found',
+    );
   });
 
   it('finds the literals it exists to find (negative controls on the detector itself)', () => {
@@ -130,18 +144,30 @@ describe('a colour is declared once, in tokens.css', () => {
       ),
       [],
     );
-    assert.deepEqual(tsxFindings(`const A = { color: '#161b33', b: 'rgb(1 2 3)', fill: "red" };`), [
+    assert.deepEqual(sourceFindings(`const A = { color: '#161b33', b: 'rgb(1 2 3)', fill: "red" };`), [
       '#161b33',
       'rgb(1 2 3)',
       'red',
     ]);
-    assert.deepEqual(tsxFindings(`<path fill="black" /><b style={{ backgroundColor: 'white' }} />`), [
+    assert.deepEqual(sourceFindings(`<path fill="black" /><b style={{ backgroundColor: 'white' }} />`), [
       'black',
       'white',
     ]);
     assert.deepEqual(
-      tsxFindings(
+      sourceFindings(
         `const A = { color: 'CanvasText' }; const SUITS = ['red', 'black']; <a href="#main">Red</a>; // '#fff'`,
+      ),
+      [],
+    );
+    assert.deepEqual(
+      sourceFindings(
+        "const edge = '1px solid #2563eb'; const glow = `0 0 4px ${size} #0000`; el.style.cssText = 'color:#abc';",
+      ),
+      ['1px solid #2563eb', '0 0 4px ${size} #0000', 'color:#abc'],
+    );
+    assert.deepEqual(
+      sourceFindings(
+        "const a = '/learn#pot-odds'; const b = '&#160;'; const c = '#prl-onboarding-step'; const d = '#fade-in';",
       ),
       [],
     );
@@ -157,10 +183,10 @@ describe('a colour is declared once, in tokens.css', () => {
     assert.deepEqual(offenders, [], 'Add a token to tokens.css and read it with var() instead.');
   });
 
-  it('puts no colour literal in a component, a style attribute or a style object', () => {
+  it('puts no colour literal in a component, a style attribute, a style object or a built string', () => {
     const offenders: string[] = [];
-    for (const file of components) {
-      for (const finding of tsxFindings(readFileSync(file, 'utf8'))) {
+    for (const file of sources) {
+      for (const finding of sourceFindings(readFileSync(file, 'utf8'))) {
         offenders.push(`${relative(REPO, file)}  ${finding}`);
       }
     }
