@@ -659,12 +659,13 @@
   }
 
   /**
-   * The selected option uses the `Highlight` pair. `HighlightText` alone often equals `Canvas`, which
-   * painted the word invisibly. A system colour survives this mode where `--prl-accent-fill` does not.
+   * The selected option uses the `Highlight` pair, unadjusted. Adjusted, Chrome laid a `Canvas`
+   * backplate under the word and painted `HighlightText` on it, which hid the word.
    */
   .prl-theme__input:checked + .prl-theme__word {
     border: 1px solid Highlight;
     background-color: Highlight;
     color: HighlightText;
+    forced-color-adjust: none;
   }
 }

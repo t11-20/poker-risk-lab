@@ -292,6 +292,28 @@ describe('the design system rules that are stated in prose and checked nowhere',
     }
   });
 
+  /**
+   * Adjusted, Chrome lays a `Canvas` backplate under the text of a forced fill, so a word in
+   * `HighlightText` on `Highlight` is painted on Canvas and vanishes (the header's theme switch did).
+   */
+  it('paints a forced-colours fill only where the browser will not lay a backplate over it', () => {
+    let fills = 0;
+    for (const [name, css] of FLAT_SCANNED) {
+      for (const block of allBlocks(css)) {
+        const fill =
+          /background(?:-color)?\s*:\s*(Highlight|Mark|SelectedItem|AccentColor|ButtonText|CanvasText)\b/u;
+        if (!fill.test(block.body)) continue;
+        fills += 1;
+        assert.match(
+          block.body,
+          /forced-color-adjust\s*:\s*none/u,
+          `${name}: \`${block.selector}\` fills with a system colour but keeps the backplate`,
+        );
+      }
+    }
+    assert.ok(fills > 0, 'no forced-colours fill was read, so the theme switch rule was not found');
+  });
+
   it('spends no raw duration or easing curve outside the token layer', () => {
     for (const [name, css] of [
       ['components.css', componentsCss],
