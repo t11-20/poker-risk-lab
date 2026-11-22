@@ -228,7 +228,7 @@ describe('the plates, rendered', () => {
     assert.equal(lines.filter((line) => line === 'folded').length, 2);
   });
 
-  it('NEGATIVE CONTROL: without it, a live plate has no status line and only folds are named', async () => {
+  it('NEGATIVE CONTROL: without it, a live plate’s status line is blank and only folds are named', async () => {
     const lines = statusLines(await table({ view: view('turn') }));
     assert.deepEqual([...lines].sort(), ['folded', 'folded']);
   });

@@ -1164,11 +1164,6 @@
   white-space: nowrap;
 }
 
-/** A bet line with nothing to say keeps its height, so every plate is one size. */
-.prl-seat__stat--reserved {
-  visibility: hidden;
-}
-
 .prl-seat__status {
   margin: 0;
   color: var(--prl-text-secondary);

@@ -38,11 +38,11 @@ function seatWith(status: SeatStatus): SeatView {
   };
 }
 
-async function render(status: SeatStatus, street: Street): Promise<string> {
+async function render(status: SeatStatus, street: Street, committedThisStreet = 0): Promise<string> {
   const Seat = await loadComponent<SeatProps>('components/Seat', 'Seat');
   return renderToStaticMarkup(
     createElement(Seat, {
-      seat: seatWith(status),
+      seat: { ...seatWith(status), committedThisStreet },
       street,
       name: 'You',
       ringIndex: 0,
@@ -58,8 +58,8 @@ function statusLine(markup: string): string {
   return (found[1] ?? '').trim();
 }
 
-/** A live seat with no action yet keeps a blank, hidden status line, so its plate stays one height. */
-function hasNoStatusLine(markup: string): boolean {
+/** A live seat with no action yet keeps a blank, hidden status line, so its plate does not shrink. */
+function hasBlankStatusLine(markup: string): boolean {
   return /<p class="prl-seat__status" aria-hidden="true">\u00a0<\/p>/u.test(markup);
 }
 
@@ -70,15 +70,15 @@ function hasAllInChip(markup: string): boolean {
 describe('a seat in a hand that is still being played', () => {
   it('says nothing of a seat that is simply in, and badges an outstanding all-in', async () => {
     for (const street of ['preflop', 'flop', 'turn', 'river'] as const) {
-      assert.equal(hasNoStatusLine(await render('active', street)), true, street);
+      assert.equal(hasBlankStatusLine(await render('active', street)), true, street);
       assert.equal(statusLine(await render('allIn', street)), 'all in', street);
       assert.equal(hasAllInChip(await render('allIn', street)), true, `${street}: no all-in badge`);
     }
   });
 
   it('says nothing at showdown either, because the pot has not been awarded yet', async () => {
-    // Deliberately unchanged. The cards are being compared, so a seat that has not folded is still in.
-    assert.equal(hasNoStatusLine(await render('active', 'showdown')), true);
+    // The cards are being compared, so a seat that has not folded is still in, and that needs no words.
+    assert.equal(hasBlankStatusLine(await render('active', 'showdown')), true);
     assert.equal(hasAllInChip(await render('allIn', 'showdown')), true);
   });
 });
@@ -113,6 +113,17 @@ describe('a seat in a hand that is over', () => {
     assert.equal(hasAllInChip(live), true);
     assert.notEqual(statusLine(live), statusLine(await render('allIn', 'complete')));
 
-    assert.equal(hasNoStatusLine(await render('folded', 'river')), false, 'the detector never fires');
+    assert.equal(hasBlankStatusLine(await render('folded', 'river')), false, 'the detector never fires');
+  });
+});
+
+describe('what a seat has in front of it', () => {
+  it('names a blind on the status line when no action has named an amount yet', async () => {
+    assert.equal(statusLine(await render('active', 'preflop', 10)), 'bet 10');
+  });
+
+  it('keeps the plate to one line for it: no separate bet row', async () => {
+    const markup = await render('active', 'preflop', 10);
+    assert.equal([...markup.matchAll(/class="prl-seat__stat"/gu)].length, 1, 'only the stack pair');
   });
 });

@@ -316,3 +316,42 @@ describe('How betting works matches the spot', () => {
     assert.match(await render(), /size the raise as a share of the pot after you call\./u);
   });
 });
+
+describe('the sizer readout and the call help', () => {
+  it('keeps "Stack after" and its figure in one item, so the readout gap cannot split them', async () => {
+    assert.match(
+      await render(),
+      /<p class="prl-sizer__readout"><span>Stack after <span class="prl-sizer__readout-value">[\d,]+<\/span><\/span><\/p>/u,
+    );
+  });
+
+  it('says a short call puts the stack in, and does not tell the reader to match the bet', async () => {
+    const markup = await render({
+      legalActions: [
+        { type: 'fold' },
+        {
+          type: 'call',
+          minTo: 62,
+          costAtMin: 62,
+          allInAtMax: true,
+          note: 'Calling puts your whole remaining stack in.',
+        },
+      ],
+      toCall: 100,
+    });
+    assert.match(markup, /<strong>Call<\/strong>: Calling puts your whole remaining stack in\./u);
+    assert.ok(!markup.includes('match the bet'), 'a short stack cannot match the bet');
+  });
+
+  it('describes the pot buttons only when there is more than one size', async () => {
+    const shoveOnly = await render({
+      legalActions: [
+        { type: 'fold' },
+        { type: 'call', minTo: 100, costAtMin: 100 },
+        { type: 'raise', minTo: 340, maxTo: 340 },
+      ],
+    });
+    assert.ok(!shoveOnly.includes('The pot buttons'), 'only All in is offered');
+    assert.match(await render(), /The pot buttons/u);
+  });
+});

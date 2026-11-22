@@ -249,7 +249,7 @@ function BetSizer(props: BetSizerProps): ReactElement {
         {`Min ${formatChips(bounds.min)}, max ${formatChips(bounds.max)}`}
       </p>
 
-      {/* One span, because the readout is a flex row and its gap split the label from the figure. */}
+      {/* One span, so the readout's flex gap cannot separate the label from its figure. */}
       <p className="prl-sizer__readout">
         {isAllIn ? (
           <span className="prl-sizer__readout-value">All in</span>
@@ -291,8 +291,7 @@ function ActionHelp(props: {
         {canCall ? (
           <li>
             <strong>Call</strong>
-            {': match the bet to stay in.'}
-            {allInCallNote === null ? null : ` ${allInCallNote}`}
+            {allInCallNote === null ? ': match the bet to stay in.' : `: ${allInCallNote}`}
           </li>
         ) : null}
         {sized === null ? null : (
@@ -303,7 +302,7 @@ function ActionHelp(props: {
               : `: make the bet bigger. "Raise to" is your total for this round, from ${formatChips(sized.bounds.min)} up to all your chips.`}
           </li>
         )}
-        {sized === null ? null : (
+        {sized === null || sized.bounds.min >= sized.bounds.max ? null : (
           <li>
             <strong>The pot buttons</strong>
             {canCall

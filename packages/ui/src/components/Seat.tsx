@@ -89,9 +89,14 @@ function statusLine(status: SeatStatus, settled: boolean, lastAction: string | n
   return lastAction !== null && status !== 'sittingOut' ? lastAction : STATUS_TEXT[status];
 }
 
-/** Hidden once a last action on the line above names the amount ("called 35"). */
-function visibleBet(committed: number, settled: boolean, lastAction: string | null): number | null {
-  return committed > 0 && (settled || lastAction === null) ? committed : null;
+/**
+ * One line for what the seat did: its last action ("called 35"), else what it has in front (a blind),
+ * else blank. One shared line, because six 13rem plates have no height for a separate bet row.
+ */
+function seatLine(seat: SeatView, settled: boolean, lastAction: string | null): string {
+  const status = statusLine(seat.status, settled, lastAction);
+  if (status !== '' || seat.committedThisStreet <= 0) return status;
+  return `bet ${formatChips(seat.committedThisStreet)}`;
 }
 
 /** Skipped after a name that already says it. Fixtures name the reader "You", which read "You (you)". */
@@ -99,34 +104,7 @@ function needsSelfMarker(isSelf: boolean, name: string): boolean {
   return isSelf && name !== 'You';
 }
 
-/** One `div` per pair, so a wrapping row breaks between pairs, never inside one. */
-function SeatStats({ stack, bet }: { readonly stack: number; readonly bet: number | null }): ReactElement {
-  return (
-    <dl className="prl-seat__stats">
-      <div className="prl-seat__stat">
-        <dt className="prl-seat__stat-label">Stack</dt>
-        <dd className="prl-seat__stat-value">{formatChips(stack)}</dd>
-      </div>
-      {/* Reserved when empty, for the same reason as the status line. */}
-      {bet === null ? (
-        <div className="prl-seat__stat prl-seat__stat--reserved" aria-hidden="true">
-          <dt className="prl-seat__stat-label">Bet</dt>
-          <dd className="prl-seat__stat-value">0</dd>
-        </div>
-      ) : (
-        <div className="prl-seat__stat">
-          <dt className="prl-seat__stat-label">
-            {'Bet'}
-            <span className="prl-visually-hidden">{' this round'}</span>
-          </dt>
-          <dd className="prl-seat__stat-value">{formatChips(bet)}</dd>
-        </div>
-      )}
-    </dl>
-  );
-}
-
-/** Kept when empty, so every plate on the oval is one height and the stacks stay level. */
+/** Kept when blank, so a plate does not shrink while its seat has yet to act. */
 function StatusLine({ text }: { readonly text: string }): ReactElement {
   return text === '' ? (
     <p className="prl-seat__status" aria-hidden="true">
@@ -150,7 +128,7 @@ export function Seat(props: SeatProps): ReactElement {
   if (holeCards !== null) cards = holeCards;
   else if (isHoldingCards) cards = FACE_DOWN_PAIR;
 
-  const status = statusLine(seat.status, settled, lastAction);
+  const status = seatLine(seat, settled, lastAction);
 
   /**
    * The plate-level mark for a seat holding ringed cards (`styles/play.css` section 12.3). Not called
@@ -211,7 +189,13 @@ export function Seat(props: SeatProps): ReactElement {
         {needsSelfMarker(seat.isSelf, name) ? <span className="prl-seat__you">{' (you)'}</span> : null}
       </p>
 
-      <SeatStats stack={seat.stack} bet={visibleBet(seat.committedThisStreet, settled, lastAction)} />
+      {/* One `div` per pair, so a wrapping row breaks between pairs, never inside one. */}
+      <dl className="prl-seat__stats">
+        <div className="prl-seat__stat">
+          <dt className="prl-seat__stat-label">Stack</dt>
+          <dd className="prl-seat__stat-value">{formatChips(seat.stack)}</dd>
+        </div>
+      </dl>
 
       {/* The last action rides on the status line, because six 13rem plates have no height to spare. */}
       <StatusLine text={status} />

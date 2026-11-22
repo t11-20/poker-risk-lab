@@ -134,10 +134,7 @@ function potsShown(view: PlayerView): { readonly total: number; readonly pots: r
   return { total: view.potTotal - back, pots };
 }
 
-/**
- * By position, the name the plates use. Found by chair, not by index: the view lists only dealt-in seats,
- * so an empty chair below the actor shifted an indexed lookup onto the wrong seat.
- */
+/** By position, the name the plates use. Found by chair: the view lists only dealt-in seats. */
 export function toActText(view: Pick<PlayerView, 'toAct' | 'viewerSeat' | 'seats'>): string {
   if (view.toAct === null) return '';
   if (view.toAct === view.viewerSeat) return 'Your turn';

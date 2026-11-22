@@ -75,7 +75,7 @@ export function isDraftMalformed(draft: BetDraft | null): boolean {
 
 /**
  * A draft carries the bounds it was typed against, because bounds move each street and the text does
- * not. Without it the flop field read `1000` beside a button reading "Bet to 980".
+ * not. Without it the flop field read `1000` beside a button reading "Bet 980".
  * A stamp, not an effect, keeps this derivable during render with no reset-on-prop-change.
  */
 export interface StampedDraft extends BetDraft {
