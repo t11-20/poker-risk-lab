@@ -611,7 +611,9 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
             <p className="prl-spot-editor__price" aria-live="off">
               {price === null
                 ? 'The pot and the price show once the amounts are whole numbers.'
-                : `Pot now ${formatChips(price.pot)}. To call ${formatChips(price.toCall)}.`}
+                : `Pot now ${formatChips(price.pot)}. To call ${formatChips(price.toCall)}${
+                    price.allIn ? ', which puts you all in' : ''
+                  }.`}
             </p>
           </Panel>
 

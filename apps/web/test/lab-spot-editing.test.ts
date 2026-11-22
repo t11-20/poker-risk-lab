@@ -135,8 +135,16 @@ describe('opponents', () => {
 
   it('the price line derives the pot and the call from the seats', () => {
     const draft = updateOpponent({ ...blankDraft(), potBefore: '100', heroBet: '10' }, 'o1', { bet: '60' });
-    assert.deepEqual(priceLine(draft), { pot: 170, toCall: 50 });
+    assert.deepEqual(priceLine(draft), { pot: 170, toCall: 50, allIn: false });
     assert.equal(priceLine({ ...draft, potBefore: 'x' }), null);
+  });
+
+  it('the price line caps the call at what you have behind, and says it is all in', () => {
+    const draft = updateOpponent({ ...blankDraft(), potBefore: '100', heroStack: '100' }, 'o1', {
+      stack: '1000',
+      bet: '500',
+    });
+    assert.deepEqual(priceLine(draft), { pot: 600, toCall: 100, allIn: true });
   });
 });
 

@@ -167,6 +167,39 @@ export function blankDraft(): SpotDraft {
   };
 }
 
+export interface TablePrice {
+  /** Every chip in the middle before hero acts. */
+  readonly pot: number;
+  /** What hero adds to call: the gap to the largest bet, never more than hero has behind. */
+  readonly toCall: number;
+  /** The part of `pot` hero can win: from each bet, only what hero's total can match. */
+  readonly winnable: number;
+  /** Calling uses every chip hero has behind. */
+  readonly allIn: boolean;
+}
+
+/**
+ * The one reading of the seats both the price line and the analysis use. Capped as the engine's
+ * `amountToCall` caps it, because an uncapped call priced 500 against a stack of 100.
+ */
+export function tablePrice(seats: {
+  readonly potBefore: number;
+  readonly heroStack: number;
+  readonly heroBet: number;
+  readonly bets: readonly number[];
+}): TablePrice {
+  const { potBefore, heroStack, heroBet, bets } = seats;
+  const behind = heroStack - heroBet;
+  const toCall = Math.max(0, Math.min(Math.max(0, ...bets) - heroBet, behind));
+  const sum = (values: readonly number[]): number => values.reduce((total, value) => total + value, 0);
+  return {
+    pot: potBefore + heroBet + sum(bets),
+    toCall,
+    winnable: potBefore + heroBet + sum(bets.map((bet) => Math.min(bet, heroStack))),
+    allIn: toCall > 0 && toCall === behind,
+  };
+}
+
 export function streetOf(board: Board): Street {
   return board.length === 0 ? 'preflop' : board.length === 3 ? 'flop' : board.length === 4 ? 'turn' : 'river';
 }

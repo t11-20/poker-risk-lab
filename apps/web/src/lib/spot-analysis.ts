@@ -12,12 +12,11 @@ import {
   type AssumedRange,
   buildCoachReport,
   type CoachInput,
-  deriveContestablePot,
   deriveLegalActions,
   exactRange,
   expandAssumedRange,
 } from '@prl/poker-math';
-import { type OpponentHand, type Spot, streetOf } from './spot.ts';
+import { type OpponentHand, type Spot, streetOf, tablePrice } from './spot.ts';
 import { topPercentOf, undealableSentence } from './spot-validate.ts';
 
 /**
@@ -47,9 +46,15 @@ export function coachInputForSpot(spot: Spot): CoachInput {
     behind: opponent.stack - opponent.bet,
     committedThisStreet: opponent.bet,
   }));
+  const price = tablePrice({
+    potBefore: spot.potBefore,
+    heroStack: spot.hero.stack,
+    heroBet: spot.hero.bet,
+    bets: spot.opponents.map((opponent) => opponent.bet),
+  });
   const priced = {
-    pot: spot.potBefore + spot.hero.bet + spot.opponents.reduce((sum, opponent) => sum + opponent.bet, 0),
-    toCall: Math.max(...spot.opponents.map((opponent) => opponent.bet)) - spot.hero.bet,
+    pot: price.pot,
+    toCall: price.toCall,
     heroCommittedThisStreet: spot.hero.bet,
     heroStack: spot.hero.stack - spot.hero.bet,
     opponentStacks,
@@ -60,7 +65,8 @@ export function coachInputForSpot(spot: Spot): CoachInput {
     street: streetOf(spot.board),
     opponents,
     ...priced,
-    contestablePot: deriveContestablePot(priced),
+    // Per seat rather than `deriveContestablePot`, which multiway leaves a second bettor's excess in.
+    contestablePot: price.winnable,
     bigBlind: spot.bigBlind,
     legalActions: deriveLegalActions(priced),
     ...(spot.neverFolds ? { wholeRangeContinues: true } : {}),

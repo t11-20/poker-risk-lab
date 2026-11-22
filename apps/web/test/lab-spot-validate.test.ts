@@ -238,6 +238,62 @@ describe('each rule, with its message', () => {
   });
 });
 
+describe('a hero short of the bet', () => {
+  const seat = (key: string, name: string, stack: string, bet: string): OpponentDraft => ({
+    ...(good().opponents[0] as OpponentDraft),
+    key,
+    name,
+    stack,
+    bet,
+    range: '22+, A2s+, KTo+, QTo+',
+  });
+  const short = (opponents: readonly OpponentDraft[]): SpotDraft => ({
+    ...good(),
+    heroStack: '100',
+    potBefore: '100',
+    opponents,
+  });
+  const priced = (draft: SpotDraft) => {
+    const checked = validateDraft(draft);
+    assert.ok(checked.ok, checked.ok ? '' : [...checked.errors.values()].join(' '));
+    const result = reportForSpot(checked.spot);
+    assert.ok(result.ok, result.ok ? '' : result.message);
+    const call = result.report.candidates.find((candidate) => candidate.action === 'call');
+    assert.ok(call !== undefined, 'no call row');
+    return { report: result.report, call };
+  };
+
+  it('prices the call it can make: the price, break-even and EV agree', () => {
+    const { report, call } = priced(short([seat('o1', 'Ledger', '1000', '500')]));
+    assert.equal(call.cost, 100);
+    assert.equal(report.potOdds.toCall, call.cost, 'the price line and the call row name one cost');
+    assert.equal(report.potOdds.pot, 200, 'the 100 before plus the 100 of the bet hero can match');
+    assert.ok(Math.abs(report.potOdds.breakEvenEquity - 100 / 300) < 1e-12);
+    const equity = report.equity.heroEquity;
+    assert.ok(Math.abs(call.ev - (equity * 300 - 100)) < 1e-9, 'EV is against the pot break-even uses');
+    assert.match(report.potOdds.explanation, /You risk 100 to win the 200/u);
+    assert.match(report.potOdds.explanation, /goes back to the bettor uncalled/u);
+  });
+
+  it('multiway, counts from each bet only what hero can match', () => {
+    const both = priced(short([seat('o1', 'Ledger', '1000', '500'), seat('o2', 'Mira', '1000', '500')]));
+    assert.equal(both.report.potOdds.pot, 300);
+    assert.equal(both.report.potOdds.toCall, 100);
+    assert.equal(both.report.outOfReach, 'side-pot');
+    assert.match(both.report.potOdds.explanation, /800 of it is a side pot you are not in/u);
+    const mixed = priced(short([seat('o1', 'Ledger', '1000', '500'), seat('o2', 'Mira', '60', '60')]));
+    assert.equal(mixed.report.potOdds.pot, 260, "100 before, Mira's 60 and 100 of Ledger's 500");
+    assert.equal(mixed.report.outOfReach, 'uncalled');
+  });
+
+  it('a call of exactly the stack is all in with nothing out of reach', () => {
+    const { report, call } = priced(short([seat('o1', 'Ledger', '1000', '100')]));
+    assert.equal(call.cost, 100);
+    assert.equal(report.potOdds.pot, 200);
+    assert.equal(report.outOfReach, undefined);
+  });
+});
+
 describe('the contract with the maths', () => {
   it('a spot that passes is one buildCoachReport accepts', () => {
     // A fixed walk over street, bets, stacks, hands and assumptions, so a failure reproduces.

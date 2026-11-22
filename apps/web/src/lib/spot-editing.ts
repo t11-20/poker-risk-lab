@@ -19,6 +19,8 @@ import {
   type RandomBytes,
   SLOT_LABELS,
   type SpotDraft,
+  type TablePrice,
+  tablePrice,
 } from './spot.ts';
 
 function opponentLabel(opponent: OpponentDraft, index: number): string {
@@ -125,16 +127,19 @@ export function updateOpponent(
 }
 
 /** Derived figures shown beside the fields, or `null` while an amount does not parse. */
-export function priceLine(draft: SpotDraft): { readonly pot: number; readonly toCall: number } | null {
+export function priceLine(draft: SpotDraft): Omit<TablePrice, 'winnable'> | null {
   const whole = (text: string): number | null => (/^\d+$/u.test(text.trim()) ? Number(text.trim()) : null);
-  const before = whole(draft.potBefore);
+  const potBefore = whole(draft.potBefore);
+  const heroStack = whole(draft.heroStack);
   const heroBet = whole(draft.heroBet);
   const bets = draft.opponents.map((opponent) => whole(opponent.bet));
-  if (before === null || heroBet === null || bets.length === 0 || bets.some((bet) => bet === null))
-    return null;
-  const counted = bets.filter((bet): bet is number => bet !== null);
-  return {
-    pot: before + heroBet + counted.reduce((sum, bet) => sum + bet, 0),
-    toCall: Math.max(0, Math.max(...counted) - heroBet),
-  };
+  if (potBefore === null || heroStack === null || heroBet === null || heroBet > heroStack) return null;
+  if (bets.length === 0 || bets.some((bet) => bet === null)) return null;
+  const { pot, toCall, allIn } = tablePrice({
+    potBefore,
+    heroStack,
+    heroBet,
+    bets: bets.filter((bet): bet is number => bet !== null),
+  });
+  return { pot, toCall, allIn };
 }
