@@ -668,4 +668,9 @@
     color: HighlightText;
     forced-color-adjust: none;
   }
+
+  /** Unadjusted, the ring keeps its white token, which vanished on a light Canvas. */
+  .prl-theme__input:checked:focus-visible + .prl-theme__word {
+    outline-color: CanvasText;
+  }
 }

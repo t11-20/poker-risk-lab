@@ -308,6 +308,18 @@ describe('the design system rules that are stated in prose and checked nowhere',
       }
     }
     assert.ok(fills > 0, 'no forced-colours fill was read, so the theme switch rule was not found');
+    // Unadjusted, its focus ring keeps the token colour too, so the last word on it is a system colour.
+    const ring = allBlocks(FLAT_SCANNED.find(([name]) => name === 'apps/web globals.css')?.[1] ?? '')
+      .filter((block) => block.selector === '.prl-theme__input:checked:focus-visible + .prl-theme__word')
+      .flatMap((block) =>
+        [...block.body.matchAll(/outline-color\s*:\s*([^;]+)/gu)].map((m) => (m[1] ?? '').trim()),
+      )
+      .at(-1);
+    assert.match(
+      ring ?? '(none)',
+      /^(?:CanvasText|Highlight)$/u,
+      `the chosen word's forced-colours ring is ${ring}`,
+    );
   });
 
   /** Design system 2.4: with no shadow to lift it, a surface over content needs a 3:1 edge. */
