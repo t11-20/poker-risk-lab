@@ -259,6 +259,10 @@ export default function PrivacyPage(): ReactElement {
               <code>prl.learn.onboarding.dismissed</code> in local storage).
             </li>
             <li>
+              <strong>Whether you closed the “How to use” guide</strong> that opens on your first visit to the
+              Scenario Lab (<code>prl.tour.dismissed</code> in local storage).
+            </li>
+            <li>
               <strong>The sitting timer in the footer</strong>: when this tab was opened (
               <code>prl.session.startedAt</code> in session storage), the reminder interval you chose if you
               chose one (<code>prl.session.reminderMinutes</code> in local storage), when you last
