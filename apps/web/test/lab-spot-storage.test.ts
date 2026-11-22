@@ -16,6 +16,7 @@ import {
   noticeSentence,
   parseLibrary,
   readLibrary,
+  refusalSentence,
   resetToOriginal,
   SPOTS_STORAGE_KEY,
   type SpotStore,
@@ -197,6 +198,60 @@ describe('what storage holds', () => {
       reason: 'unavailable',
     });
     assert.deepEqual(readLibrary(null).notice, { kind: 'unavailable' });
+  });
+
+  it('saves the form it reads back: padded amounts, spaced names and an unused long range', () => {
+    const base = draft('  Padded  ');
+    const padded: SpotDraft = {
+      ...base,
+      heroStack: `${'0'.repeat(30)}1000`,
+      heroBet: ' 0 ',
+      opponents: base.opponents.map((o) => ({
+        ...o,
+        name: `   ${o.name}   `,
+        stack: ' 0900',
+        handKind: 'cards' as const,
+        range: 'x'.repeat(1000),
+      })),
+    };
+    const { spots } = saveSpot([], { id: null, from: null, draft: padded }, 5, ids);
+    const back = parseLibrary(serialiseLibrary(spots));
+    assert.equal(back.notice, null);
+    assert.equal(back.spots.length, 1);
+    const stored = back.spots[0]?.draft;
+    assert.equal(stored?.heroStack, '1000');
+    assert.equal(stored?.heroBet, '0');
+    assert.equal(stored?.name, 'Padded');
+    assert.equal(stored?.opponents[0]?.name, 'Big blind');
+    assert.equal(stored?.opponents[0]?.stack, '900');
+    assert.deepEqual(back.spots, spots, 'what is kept in memory is what storage gives back');
+  });
+
+  it('refuses a write that would not read back, and leaves storage as it was', () => {
+    const store = new MemoryStore();
+    store.setItem(SPOTS_STORAGE_KEY, serialiseLibrary([]));
+    const before = store.getItem(SPOTS_STORAGE_KEY);
+    const broken: SavedSpot = {
+      id: ids(),
+      from: null,
+      updatedAt: 1,
+      draft: { ...draft('B'), heroStack: 'x'.repeat(40) },
+    };
+    assert.deepEqual(writeLibrary(store, readLibrary(store), [broken]), { ok: false, reason: 'unreadable' });
+    assert.equal(store.getItem(SPOTS_STORAGE_KEY), before);
+    assert.match(refusalSentence('unreadable'), /^Not saved/u);
+  });
+
+  it('names a full store as full, not as a browser that stores nothing', () => {
+    const full: SpotStore = {
+      getItem: () => null,
+      setItem: () => {
+        throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
+      },
+    };
+    assert.deepEqual(writeLibrary(full, readLibrary(full), []), { ok: false, reason: 'full' });
+    assert.match(refusalSentence('full'), /full/u);
+    assert.doesNotMatch(refusalSentence('full'), /not letting/u);
   });
 
   it('writes what it reads back', () => {

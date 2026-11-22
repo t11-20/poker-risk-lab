@@ -13,6 +13,7 @@ import {
   duplicateDraft,
   newSpotId,
   noticeSentence,
+  refusalSentence,
   resetToOriginal,
   type WriteResult,
 } from '../lib/spot-storage.ts';
@@ -113,7 +114,7 @@ export function SpotList({ titles }: SpotListProps): ReactElement {
   }, [confirming]);
 
   const written = (result: WriteResult, success: string): void => {
-    setStatus(result.ok ? success : 'Not saved: this browser is not letting the page store anything.');
+    setStatus(result.ok ? success : refusalSentence(result.reason));
   };
 
   if (!library.ready) return <p className="prl-note">Reading the spots saved in this browser.</p>;

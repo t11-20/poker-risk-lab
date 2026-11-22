@@ -36,6 +36,7 @@ import {
   editOf,
   newSpotId,
   noticeSentence,
+  refusalSentence,
   resetToOriginal,
   saveSpot,
   type WriteResult,
@@ -72,11 +73,6 @@ const HAND_KINDS: readonly { readonly kind: HandKind; readonly label: string }[]
   { kind: 'cards', label: 'Exact cards' },
   { kind: 'none', label: 'Not modelled' },
 ];
-
-const STORAGE_REFUSAL: Readonly<Record<Extract<WriteResult, { ok: false }>['reason'], string>> = {
-  unavailable: 'Not saved: this browser is not letting the page store anything.',
-  newer: 'Not saved: your saved spots come from a newer version of this page. Reload first.',
-};
 
 function draftsMatch(a: SpotDraft | null, b: SpotDraft): boolean {
   return a !== null && JSON.stringify(a) === JSON.stringify(b);
@@ -401,7 +397,7 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
   };
 
   const written = (result: WriteResult, success: string): boolean => {
-    setSaveStatus(result.ok ? success : STORAGE_REFUSAL[result.reason]);
+    setSaveStatus(result.ok ? success : refusalSentence(result.reason));
     return result.ok;
   };
 

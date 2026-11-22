@@ -15,8 +15,10 @@ import {
   EMPTY_CARDS,
   fillRandom,
   type HandKind,
+  type HandLabel,
   MAX_NAME_LENGTH,
   MAX_OPPONENTS,
+  MAX_RANGE_LENGTH,
   type OpponentDraft,
   type RandomBytes,
   type SavedSpot,
@@ -91,7 +93,18 @@ function readOpponent(value: unknown): OpponentDraft | null {
   const first = storedCard(cards[0]);
   const second = storedCard(cards[1]);
   if (first === undefined || second === undefined) return null;
-  return { key, name, stack, bet, handKind, range, cards: [first, second] };
+  const handLabel = readHandLabel(value['handLabel']);
+  if (handLabel === undefined) return null;
+  return { key, name, stack, bet, handKind, range, cards: [first, second], handLabel };
+}
+
+/** Absent in spots saved before it existed, which read as having none. `undefined` means not a label. */
+function readHandLabel(value: unknown): HandLabel | null | undefined {
+  if (value === undefined || value === null) return null;
+  if (!isRecord(value)) return undefined;
+  const label = text(value['label'], 400);
+  const hand = text(value['hand'], 420);
+  return label === null || hand === null ? undefined : { label, hand };
 }
 
 function readSpot(value: unknown): SavedSpot | null {
@@ -190,6 +203,7 @@ function storedDraft(spot: SavedSpot): Record<string, unknown> {
       hand: opponent.handKind,
       range: opponent.range,
       cards: opponent.cards.map((card) => (card === null ? null : cardToText(card))),
+      handLabel: opponent.handLabel,
     })),
     neverFolds: draft.neverFolds,
     foldRate: draft.foldRate,
@@ -212,11 +226,22 @@ export function readLibrary(store: SpotStore | null): SpotLibrary {
   return { spots, notice, writable: !newer };
 }
 
-export type WriteResult =
-  | { readonly ok: true }
-  | { readonly ok: false; readonly reason: 'unavailable' | 'newer' };
+export type WriteRefusal = 'unavailable' | 'full' | 'newer' | 'unreadable';
 
-/** Reports failure, unlike `writeStorage`, because the editor has to say that a save did not happen. */
+export type WriteResult = { readonly ok: true } | { readonly ok: false; readonly reason: WriteRefusal };
+
+/** Safari and Chrome name it; Firefox's older name is kept because the error crosses no API boundary. */
+function isQuotaError(error: unknown): boolean {
+  return (
+    error instanceof DOMException &&
+    (error.name === 'QuotaExceededError' || error.name === 'NS_ERROR_DOM_QUOTA_REACHED')
+  );
+}
+
+/**
+ * Reports failure, unlike `writeStorage`, because the editor has to say that a save did not happen.
+ * Refuses a list that would not read back whole, since the next save would drop the entry unannounced.
+ */
 export function writeLibrary(
   store: SpotStore | null,
   library: SpotLibrary,
@@ -224,12 +249,59 @@ export function writeLibrary(
 ): WriteResult {
   if (library.notice?.kind === 'newer') return { ok: false, reason: 'newer' };
   if (store === null) return { ok: false, reason: 'unavailable' };
+  const text = serialiseLibrary(spots);
+  if (parseLibrary(text).spots.length !== spots.length) return { ok: false, reason: 'unreadable' };
   try {
-    store.setItem(SPOTS_STORAGE_KEY, serialiseLibrary(spots));
+    store.setItem(SPOTS_STORAGE_KEY, text);
     return { ok: true };
-  } catch {
-    return { ok: false, reason: 'unavailable' };
+  } catch (error) {
+    return { ok: false, reason: isQuotaError(error) ? 'full' : 'unavailable' };
   }
+}
+
+export function refusalSentence(reason: WriteRefusal): string {
+  switch (reason) {
+    case 'unavailable':
+      return 'Not saved: this browser is not letting the page store anything.';
+    case 'full':
+      return "Not saved: this browser's storage for this site is full. Delete a spot you no longer need and save again.";
+    case 'newer':
+      return 'Not saved: your saved spots come from a newer version of this page. Reload first.';
+    case 'unreadable':
+      return 'Not saved: this spot has a field too long to keep. Shorten the longest name or range and save again.';
+  }
+}
+
+const wholeChips = (text: string): string => {
+  const trimmed = text.trim();
+  return /^\d+$/u.test(trimmed) ? String(Number(trimmed)) : trimmed;
+};
+
+/**
+ * The draft as it is stored and read back: trimmed, and amounts without leading zeros, because the
+ * validator reads `"000…1000"` as 1000 while storage bounds the text it keeps. A range the hand does
+ * not use is kept only while it fits the range field.
+ */
+export function storedForm(draft: SpotDraft): SpotDraft {
+  return {
+    ...draft,
+    name: draft.name.trim(),
+    heroStack: wholeChips(draft.heroStack),
+    heroBet: wholeChips(draft.heroBet),
+    potBefore: wholeChips(draft.potBefore),
+    bigBlind: wholeChips(draft.bigBlind),
+    foldRate: draft.foldRate.trim(),
+    opponents: draft.opponents.map((opponent) => {
+      const range = opponent.range.trim();
+      return {
+        ...opponent,
+        name: opponent.name.trim(),
+        stack: wholeChips(opponent.stack),
+        bet: wholeChips(opponent.bet),
+        range: opponent.handKind === 'range' || range.length <= MAX_RANGE_LENGTH ? range : '',
+      };
+    }),
+  };
 }
 
 /** Twelve hex digits from `crypto.getRandomValues`, prefixed so an id never reads as a scenario's. */
@@ -266,7 +338,7 @@ export function saveSpot(
     id: existing?.id ?? makeId(),
     from: existing?.from ?? request.from,
     updatedAt: now,
-    draft: request.draft,
+    draft: storedForm(request.draft),
   };
   if (existing === undefined) return { spots: [...spots, saved], saved };
   return { spots: spots.map((spot) => (spot.id === saved.id ? saved : spot)), saved };
@@ -280,7 +352,12 @@ export function duplicateDraft(
   makeId: () => string,
 ): { readonly spots: readonly SavedSpot[]; readonly saved: SavedSpot } {
   const name = `${draft.name.trim()} (copy)`.slice(0, MAX_NAME_LENGTH);
-  const saved: SavedSpot = { id: makeId(), from: null, updatedAt: now, draft: { ...draft, name } };
+  const saved: SavedSpot = {
+    id: makeId(),
+    from: null,
+    updatedAt: now,
+    draft: storedForm({ ...draft, name }),
+  };
   return { spots: [...spots, saved], saved };
 }
 
