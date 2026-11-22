@@ -328,8 +328,8 @@ test('a fold rate stated in an assumption is the one the scenario declares', () 
 test("a scenario's board, seat cards and exact range are each refused once", () => {
   // eq-equity-against-one-known-hand: turn, board "Qd 9s 5c 3h", hero QcJd, BTN QhTs, exact QhTs.
   const id = 'eq-equity-against-one-known-hand';
-  // `Qd … Ah` parses but is over the length limit, and `Qd Qd 5c 3h` repeats the board's Qd, so neither's
-  // cards may reach the clash check.
+  // `Qd … Ah` parses but is over the length limit. `Qd Qd 5c 3h` repeats a card, and as a board it also
+  // repeats the board's Qd. Neither value's cards may reach the clash check.
   const bad = [
     7,
     '',
@@ -403,5 +403,17 @@ test("an exact range of hero's own cards is refused, not read as restating a sea
   assert.deepEqual(problemsFor(scenario), [
     "scenarios[0]: card Qc appears twice — in seat 1's hole cards and in the opponent range",
     "scenarios[0]: card Jd appears twice — in seat 1's hole cards and in the opponent range",
+  ]);
+});
+
+test("an exact range of a folded seat's cards is refused, since no live opponent can hold them", () => {
+  // BTN holds QhTs and the range restates it. Folding BTN and seating a live opponent leaves the range
+  // naming cards that are out of the hand.
+  const scenario = scenarioNamed('eq-equity-against-one-known-hand');
+  seatLabelled(scenario, 'BTN')['folded'] = true;
+  (scenario['seats'] as unknown[]).push({ seat: 4, label: 'CO', stack: 1000 });
+  assert.deepEqual(mentioning(problemsFor(scenario), /appears twice/u), [
+    "scenarios[0]: card Qh appears twice — in seat 5's hole cards and in the opponent range",
+    "scenarios[0]: card Ts appears twice — in seat 5's hole cards and in the opponent range",
   ]);
 });

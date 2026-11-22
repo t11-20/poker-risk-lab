@@ -1418,10 +1418,15 @@ function checkNoCardAppearsTwice(
   for (const seat of seats) groups.push([`seat ${seat.seat}'s hole cards`, acceptedHolding(seat.holeCards)]);
   if (opponentRange.kind === 'exact') {
     const rangeCards = acceptedHolding(opponentRange.cards);
-    // An exact range usually restates an opponent's cards, which is no clash. Hero's cards are one.
+    // An exact range usually restates a live opponent's cards, which is no clash. Hero's or a folded seat's are.
     const restatesAnOpponent = seats.some((seat) => {
       const cards = acceptedHolding(seat.holeCards);
-      return seat.isHero !== true && cards.length === 2 && cards.every((card) => rangeCards.includes(card));
+      return (
+        seat.isHero !== true &&
+        seat.folded !== true &&
+        cards.length === 2 &&
+        cards.every((card) => rangeCards.includes(card))
+      );
     });
     if (!restatesAnOpponent) groups.push(['the opponent range', rangeCards]);
   }
