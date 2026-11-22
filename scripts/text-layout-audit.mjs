@@ -13,8 +13,7 @@
  * collapsed row's real numbers.
  *
  * Negative controls run on every invocation (`--controls-only` runs only them). Each injects CSS that
- * re-creates one defect shape and must be caught. With the real defect rebuilt into play.css the
- * sweep reported 52 findings, and the collision showed only at 1024, 1440 and 1920.
+ * re-creates one defect shape and must be caught.
  */
 
 import { writeFileSync } from 'node:fs';

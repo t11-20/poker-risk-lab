@@ -90,13 +90,16 @@ function statusLine(status: SeatStatus, settled: boolean, lastAction: string | n
 }
 
 /**
- * One line for what the seat did: its last action ("called 35"), else what it has in front (a blind),
- * else blank. One shared line, because six 13rem plates have no height for a separate bet row.
+ * One line for what the seat did and what it has in this street: "called 35", "10 in", "folded, 5 in".
+ * The chips are added unless the action already names them, so no seat's commitment is ever dropped.
+ * One shared line, because six 13rem plates have no height for a separate row.
  */
 function seatLine(seat: SeatView, settled: boolean, lastAction: string | null): string {
   const status = statusLine(seat.status, settled, lastAction);
-  if (status !== '' || seat.committedThisStreet <= 0) return status;
-  return `bet ${formatChips(seat.committedThisStreet)}`;
+  if (seat.committedThisStreet <= 0) return status;
+  const amount = formatChips(seat.committedThisStreet);
+  if (new RegExp(`(^|\\s)${amount}(,|$)`, 'u').test(status)) return status;
+  return status === '' ? `${amount} in` : `${status}, ${amount} in`;
 }
 
 /** Skipped after a name that already says it. Fixtures name the reader "You", which read "You (you)". */
@@ -197,7 +200,6 @@ export function Seat(props: SeatProps): ReactElement {
         </div>
       </dl>
 
-      {/* The last action rides on the status line, because six 13rem plates have no height to spare. */}
       <StatusLine text={status} />
 
       {seat.status === 'sittingOut' ? null : (

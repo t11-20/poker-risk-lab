@@ -119,12 +119,17 @@ describe('a seat in a hand that is over', () => {
 
 describe('what a seat has in front of it', () => {
   it('names a blind on the status line when no action has named an amount yet', async () => {
-    assert.equal(statusLine(await render('active', 'preflop', 10)), 'bet 10');
+    assert.equal(statusLine(await render('active', 'preflop', 10)), '10 in');
+  });
+
+  it('keeps the chips of a folded or all-in seat, which no action names (REGRESSION)', async () => {
+    assert.equal(statusLine(await render('folded', 'preflop', 5)), 'folded, 5 in');
+    assert.equal(statusLine(await render('allIn', 'turn', 900)), 'all in, 900 in');
   });
 
   it('keeps the plate to one line for it: no separate bet row', async () => {
     const markup = await render('active', 'preflop', 10);
-    assert.equal([...markup.matchAll(/class="prl-seat__stat"/gu)].length, 1, 'only the stack pair');
+    assert.equal([...markup.matchAll(/<dt\b/gu)].length, 1, 'only the stack pair');
   });
 });
 
