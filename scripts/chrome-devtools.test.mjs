@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { readdirSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { describe, it } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
-import { readdirSync, readFileSync } from 'node:fs';
 import { awaitReply, waitForDevtools } from './chrome-devtools.mjs';
 
 const VERSION = { Browser: 'Stand-in/1.0' };
