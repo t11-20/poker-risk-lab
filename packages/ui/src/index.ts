@@ -64,6 +64,7 @@ export { type RadarAxisLabels, RadarChart, type RadarChartProps } from './compon
 export { Reveal, type RevealProps } from './components/Reveal.tsx';
 export { Seat, type SeatProps, seatRingPosition } from './components/Seat.tsx';
 export { StatTile, type StatTileProps, type StatTone } from './components/StatTile.tsx';
+export { Tip, type TipProps } from './components/Tip.tsx';
 export { type TurnClock, TurnTimer, type TurnTimerProps } from './components/TurnTimer.tsx';
 export { UncertaintyNote, type UncertaintyNoteProps } from './components/UncertaintyNote.tsx';
 export { UNITS_EXPLANATION, UnitsBadge, type UnitsBadgeProps } from './components/UnitsBadge.tsx';
@@ -159,6 +160,17 @@ export {
 } from './radar.ts';
 export { lastActionsThisStreet } from './seat-actions.ts';
 export { latestAction, STREET_SUMMARY_LIMIT, type StreetSummary, streetSummary } from './street-summary.ts';
+export {
+  countsAsHover,
+  nextTipState,
+  placeTip,
+  type TipBox,
+  type TipEvent,
+  type TipPlacement,
+  type TipPlacementInput,
+  type TipState,
+} from './tip-state.ts';
+export { TIP_MAX_LENGTH, type TipCopy, tipSentenceProblems, UI_TIPS } from './tips.ts';
 export type {
   ActionName,
   LegalAction,

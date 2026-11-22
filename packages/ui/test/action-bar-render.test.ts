@@ -321,7 +321,8 @@ describe('the sizer readout and the call help', () => {
   it('keeps "Stack after" and its figure in one item, so the readout gap cannot split them', async () => {
     assert.match(
       await render(),
-      /<p class="prl-sizer__readout"><span>Stack after <span class="prl-sizer__readout-value">[\d,]+<\/span><\/span><\/p>/u,
+      // The tip rides inside the same item, after the figure.
+      /<p class="prl-sizer__readout"><span>Stack after <span class="prl-sizer__readout-value">[\d,]+<\/span>(?:<span class="prl-tip">[\s\S]*?<\/span><\/span>)?<\/span><\/p>/u,
     );
   });
 
