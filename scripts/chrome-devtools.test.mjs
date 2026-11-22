@@ -125,14 +125,14 @@ describe('waitForDevtools', () => {
 
 describe('DevtoolsReplies', () => {
   it('rejects a call Chrome never answers, and every later call at once', async () => {
-    const replies = new DevtoolsReplies(20);
+    const replies = new DevtoolsReplies(200);
     await assert.rejects(
       replies.expect(1, 'Runtime.evaluate'),
-      /did not answer Runtime\.evaluate within 0\.02s/u,
+      /did not answer Runtime\.evaluate within 0\.2s/u,
     );
     const started = Date.now();
     await assert.rejects(replies.expect(2, 'Runtime.evaluate'), /did not answer Runtime\.evaluate/u);
-    assert.ok(Date.now() - started < 15, 'a retry after a timeout waited the bound again');
+    assert.ok(Date.now() - started < 100, 'a retry after a timeout waited the bound again');
   });
 
   it('settles a call with its answer and leaves no timer to break the page later', async () => {
