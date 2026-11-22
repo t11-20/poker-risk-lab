@@ -298,7 +298,7 @@ function EquitySection({ equity, interval, surplus }: EquitySectionProps): React
    * `isProbabilityDifference`. Checked apart from the equity, so one bad delta keeps the headline.
    */
   const deltaProps = isProbabilityDifference(surplus)
-    ? { delta: { value: surplus, label: `${surplusPreposition(surplus)} the break-even equity` } }
+    ? { delta: { value: surplus, label: `${surplusPreposition(surplus)} break-even` } }
     : {};
 
   return (
@@ -363,7 +363,7 @@ function PriceSection({
           value={potOdds.breakEvenEquity}
           format="percent"
           size="md"
-          note="The share of the pot a call has to win, on average, just to break even."
+          note="What a call has to win, on average, to pay for itself."
         />
       ) : (
         <RefusedFigure label="Break-even equity" what="the break-even equity" />
@@ -375,20 +375,20 @@ function PriceSection({
       */}
       {potOdds.oddsRatio === null ? (
         <StatTile
-          label="Price offered"
+          label="Pot odds"
           value={formatOdds(potOdds.oddsRatio)}
-          note="There is nothing to call, so no price is being laid. Any chance of winning is enough to see the next card."
+          note="Nothing to call, so any chance of winning is enough to see the next card."
         />
       ) : (
-        <Metric label="Price offered" value={potOdds.oddsRatio} format="odds" size="sm" />
+        <Metric label="Pot odds" value={potOdds.oddsRatio} format="odds" size="sm" />
       )}
 
       <StatTile
         label="Pot and price"
         value={
           beyondReach > 0
-            ? `${formatUnits(potOdds.pot)} of the ${formatUnits(potTotal)} in the middle, ${formatUnits(potOdds.toCall)} to call`
-            : `${formatUnits(potOdds.pot)} in the middle, ${formatUnits(potOdds.toCall)} to call`
+            ? `${formatChips(potOdds.pot)} of the ${formatChips(potTotal)} in the pot, ${formatChips(potOdds.toCall)} to call`
+            : `${formatChips(potOdds.pot)} in the pot, ${formatChips(potOdds.toCall)} to call`
         }
         {...(beyondReach > 0
           ? {
@@ -697,12 +697,10 @@ export function CoachPanel(props: CoachPanelProps): ReactElement {
         landmark (axe `landmark-unique`). Pages own landmarks.
       */}
       <div className="prl-coach__header">
-        <span className="prl-eyebrow">Coach</span>
         <h2 className="prl-coach__title">{title}</h2>
+        {/* The street only: the pot and the price are on the table, the action bar and in The price. */}
         <p className="prl-coach__summary">
-          {`${report.street} · ${formatUnits(report.potTotal)} in the pot · ${
-            report.toCall > 0 ? `${formatUnits(report.toCall)} to call` : 'nothing to call'
-          }`}
+          {report.street === 'preflop' ? 'Before the flop' : `On the ${report.street}`}
         </p>
       </div>
 

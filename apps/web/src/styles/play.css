@@ -882,35 +882,6 @@
   text-align: end;
 }
 
-/**
- * Seat cards stay `sm` on the oval, where a wider pair clipped "Loose-aggressive bot" at 1440. Stacked,
- * a plate is a full row, so they step up and a rank reads at a glance.
- */
-.prl-play .prl-seat__cards {
-  --prl-seat-card-w: var(--prl-space-9);
-}
-
-@container prl-table (width < 46rem) {
-  .prl-play .prl-seat__cards {
-    --prl-seat-card-w: var(--prl-space-10);
-  }
-}
-
-.prl-play .prl-seat__cards .prl-card {
-  --prl-card-w: var(--prl-seat-card-w);
-}
-
-/**
- * The empty card slot takes the card pair's footprint (card width, `--prl-space-2` gap, 5/7 ratio),
- * so folded plates align with the rest. Unsized, it staggered the stack figures 9.2px around the ring.
- * Scoped to seats, because the board and outs rows want a sentence.
- */
-.prl-play .prl-seat__cards .prl-card-row__empty {
-  display: block;
-  width: calc(var(--prl-seat-card-w) * 2 + var(--prl-space-2));
-  height: calc(var(--prl-seat-card-w) / 5 * 7);
-}
-
 /* 12.3.1  A NAME IS TWO LINES, ALWAYS
    Names at 17px gave the ring four plate heights (a 44.2px spread at 1440x900). 15px with a two-line
    `min-height` and clamp makes every name box 39px. `Loose-aggressive bot` loses its shared suffix.
@@ -955,6 +926,35 @@
   .prl-play .prl-table__board .prl-card {
     --prl-card-w: min(var(--prl-space-12), calc((100cqi - var(--prl-space-11)) / 5));
   }
+}
+
+/**
+ * Seat cards stay `sm` on the oval, where a wider pair clipped "Loose-aggressive bot" at 1440. Stacked,
+ * a plate is a full row, so they step up and a rank reads at a glance.
+ */
+.prl-play .prl-seat__cards {
+  --prl-seat-card-w: var(--prl-space-9);
+}
+
+@container prl-table (width < 46rem) {
+  .prl-play .prl-seat__cards {
+    --prl-seat-card-w: var(--prl-space-10);
+  }
+}
+
+.prl-play .prl-seat__cards .prl-card {
+  --prl-card-w: var(--prl-seat-card-w);
+}
+
+/**
+ * The empty card slot takes the card pair's footprint (card width, `--prl-space-2` gap, 5/7 ratio),
+ * so folded plates align with the rest. Unsized, it staggered the stack figures 9.2px around the ring.
+ * Scoped to seats, because the board and outs rows want a sentence.
+ */
+.prl-play .prl-seat__cards .prl-card-row__empty {
+  display: block;
+  width: calc(var(--prl-seat-card-w) * 2 + var(--prl-space-2));
+  height: calc(var(--prl-seat-card-w) / 5 * 7);
 }
 
 /**

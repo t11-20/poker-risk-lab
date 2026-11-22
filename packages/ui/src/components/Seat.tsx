@@ -89,9 +89,35 @@ function statusLine(status: SeatStatus, settled: boolean, lastAction: string | n
   return lastAction !== null && status !== 'sittingOut' ? lastAction : STATUS_TEXT[status];
 }
 
+/** The last action already names the amount ("called 35"), so the bet line shows only blinds. */
+function visibleBet(committed: number, settled: boolean, lastAction: string | null): number | null {
+  return committed > 0 && (settled || lastAction === null) ? committed : null;
+}
+
 /** Skipped after a name that already says it. Fixtures name the reader "You", which read "You (you)". */
 function needsSelfMarker(isSelf: boolean, name: string): boolean {
   return isSelf && name !== 'You';
+}
+
+/** One `div` per pair, so a wrapping row breaks between pairs, never inside one. */
+function SeatStats({ stack, bet }: { readonly stack: number; readonly bet: number | null }): ReactElement {
+  return (
+    <dl className="prl-seat__stats">
+      <div className="prl-seat__stat">
+        <dt className="prl-seat__stat-label">Stack</dt>
+        <dd className="prl-seat__stat-value">{formatChips(stack)}</dd>
+      </div>
+      {bet === null ? null : (
+        <div className="prl-seat__stat">
+          <dt className="prl-seat__stat-label">
+            {'Bet'}
+            <span className="prl-visually-hidden">{' this round'}</span>
+          </dt>
+          <dd className="prl-seat__stat-value">{formatChips(bet)}</dd>
+        </div>
+      )}
+    </dl>
+  );
 }
 
 export function Seat(props: SeatProps): ReactElement {
@@ -112,8 +138,6 @@ export function Seat(props: SeatProps): ReactElement {
    * `--won`, because review marks cards for reasons other than winning.
    */
   const status = statusLine(seat.status, settled, lastAction);
-  // The last action already names the amount ("called 35"), so the bet line shows only blinds.
-  const showBet = seat.committedThisStreet > 0 && (settled || lastAction === null);
 
   const marked =
     highlightedCards !== undefined &&
@@ -170,22 +194,7 @@ export function Seat(props: SeatProps): ReactElement {
         {needsSelfMarker(seat.isSelf, name) ? <span className="prl-seat__you">{' (you)'}</span> : null}
       </p>
 
-      {/* One `div` per pair, so a wrapping row breaks between pairs, never inside one. */}
-      <dl className="prl-seat__stats">
-        <div className="prl-seat__stat">
-          <dt className="prl-seat__stat-label">Stack</dt>
-          <dd className="prl-seat__stat-value">{formatChips(seat.stack)}</dd>
-        </div>
-        {showBet ? (
-          <div className="prl-seat__stat">
-            <dt className="prl-seat__stat-label">
-              {'Bet'}
-              <span className="prl-visually-hidden">{' this round'}</span>
-            </dt>
-            <dd className="prl-seat__stat-value">{formatChips(seat.committedThisStreet)}</dd>
-          </div>
-        ) : null}
-      </dl>
+      <SeatStats stack={seat.stack} bet={visibleBet(seat.committedThisStreet, settled, lastAction)} />
 
       {/* The last action rides on the status line, because six 13rem plates have no height to spare. */}
       {status === '' ? null : <p className="prl-seat__status">{status}</p>}

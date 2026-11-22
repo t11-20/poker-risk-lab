@@ -635,10 +635,10 @@ test('a negative margin over break-even is said to be under it (REGRESSION)', as
     ...NINE_OUT_DRAW,
     potOdds: { ...NINE_OUT_DRAW.potOdds, equitySurplus: surplus },
   });
-  assert.equal(label(await render(priced(-0.27))), 'under the break-even equity');
-  assert.equal(label(await render(priced(0.0616))), 'over the break-even equity');
+  assert.equal(label(await render(priced(-0.27))), 'under break-even');
+  assert.equal(label(await render(priced(0.0616))), 'over break-even');
   // Rounds to 0.0 points, which the metric renders flat: neither over nor under.
-  assert.equal(label(await render(priced(-0.0004))), 'at the break-even equity');
+  assert.equal(label(await render(priced(-0.0004))), 'at break-even');
 });
 
 /** The Outs section's text, tags stripped, so a reason is read as the learner reads it. */
