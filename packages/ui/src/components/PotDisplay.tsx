@@ -45,7 +45,7 @@ export function PotDisplay(props: PotDisplayProps): ReactElement {
 
   return (
     <div className={cx('prl-pot', className)}>
-      <Metric label={label} value={total} format="units" size="lg" countUp {...noteProps} />
+      <Metric label={label} value={total} format="units" size="md" countUp {...noteProps} />
 
       {sides.length === 0 ? null : (
         <ul className="prl-pot__sides">

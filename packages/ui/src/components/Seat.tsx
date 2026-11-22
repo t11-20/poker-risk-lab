@@ -2,20 +2,22 @@
  * One seat at the table.
  * 1. `faceDown` comes from `holeCards` being `null`, the server's silence. The placeholder is `-1`,
  *    not `0`, because 0 is the two of clubs.
- * 2. The seat to act has three cues (accent edge, `TO ACT` chip, turn ring), so each survives forced
- *    colors or reduced motion removing another.
- * 3. On `complete` the status is past tense and the live "all in" chip is dropped, because the engine
- *    still sends last statuses after the pot is awarded. `showdown` is not settled.
- * 4. Folded seats swap the surface, never the opacity, which would take a 4.5:1 label under the floor.
- * `as` is a prop, not a wrapper, because the element carries the oval placement.
+ * 2. The seat to act has three cues (a second outline, the words "to act", the turn ring), so each
+ *    survives forced colors or reduced motion removing another.
+ * 3. On `complete` the status is past tense, because the engine still sends last statuses after the pot
+ *    is awarded. `showdown` is not settled. "All in" is said on the status line, never as a badge.
+ * 4. Folded seats swap the outline and the ink, never the opacity, which would take a 4.5:1 label under
+ *    the floor.
+ * The plate (`__plate`) is the box with the words in it. An opponent's cards sit inside the seat's
+ * outline, the viewer's beside their plate.
+ * `as` is a prop, not a wrapper, because the element carries its place at the table (`data-slot`).
  */
 
 import type { ReactElement } from 'react';
-import { cx, type StyleWithVars } from '../cx.ts';
+import { cx } from '../cx.ts';
 import { formatChips } from '../format.ts';
 import type { SeatStatus, SeatView, Street } from '../view-types.ts';
 import { CardRow } from './CardRow.tsx';
-import { Chip } from './Chip.tsx';
 import { type TurnClock, TurnTimer } from './TurnTimer.tsx';
 
 export interface SeatProps {
@@ -24,7 +26,7 @@ export interface SeatProps {
   readonly street: Street;
   /** `playerId` is opaque and never shown. */
   readonly name: string;
-  /** 0-based, with 0 at the bottom where the viewer sits. Ignored by the stacked layout. */
+  /** 0-based, clockwise from the bottom, where the viewer sits. */
   readonly ringIndex: number;
   readonly ringCount: number;
   /** `null` renders the other two active cues without a ring. */
@@ -68,20 +70,21 @@ const STATUS_CLASS: Readonly<Record<SeatStatus, string>> = {
 
 const FACE_DOWN_PAIR: readonly number[] = [-1, -1];
 
-/**
- * Screen coordinates, so `PI / 2` puts ring index 0 at the bottom. The radii leave half a plate of
- * margin, because seats are positioned by their centre. They pair with the `min-height` in the
- * `@container prl-table` block of components.css. Change both together.
- */
-const RING_RADIUS_X = 38;
-const RING_RADIUS_Y = 36;
+/** Where a seat sits round the table. The grid in the PokerTable block of components.css places each. */
+export type SeatSlot = 'hero' | 'left-low' | 'left-high' | 'top' | 'right-high' | 'right-low';
 
-export function seatRingPosition(index: number, count: number): StyleWithVars {
-  const safeCount = Math.max(count, 1);
-  const angle = Math.PI / 2 + (index * 2 * Math.PI) / safeCount;
-  const x = 50 + RING_RADIUS_X * Math.cos(angle);
-  const y = 50 + RING_RADIUS_Y * Math.sin(angle);
-  return { '--prl-seat-x': `${x.toFixed(2)}%`, '--prl-seat-y': `${y.toFixed(2)}%` };
+/** Clockwise from the viewer at the bottom, by how many are dealt in. Rooms seat two to six. */
+const SLOTS_BY_COUNT: Readonly<Record<number, readonly SeatSlot[]>> = {
+  1: ['hero'],
+  2: ['hero', 'top'],
+  3: ['hero', 'left-high', 'right-high'],
+  4: ['hero', 'left-low', 'top', 'right-low'],
+  5: ['hero', 'left-low', 'left-high', 'right-high', 'right-low'],
+  6: ['hero', 'left-low', 'left-high', 'top', 'right-high', 'right-low'],
+};
+
+export function seatSlot(index: number, count: number): SeatSlot {
+  return SLOTS_BY_COUNT[count]?.[index] ?? SLOTS_BY_COUNT[6]?.[index] ?? 'top';
 }
 
 function statusLine(status: SeatStatus, settled: boolean, lastAction: string | null): string {
@@ -135,10 +138,7 @@ export function Seat(props: SeatProps): ReactElement {
 
   const status = seatLine(seat, settled, lastAction);
 
-  /**
-   * The plate-level mark for a seat holding ringed cards (`styles/play.css` section 12.3). Not called
-   * `--won`, because review marks cards for reasons other than winning.
-   */
+  /** The seat-level mark for a seat holding ringed cards. Not `--won`: review marks cards for other reasons. */
   const marked =
     highlightedCards !== undefined &&
     highlightedCards.length > 0 &&
@@ -154,55 +154,45 @@ export function Seat(props: SeatProps): ReactElement {
         marked && 'prl-seat--marked',
         className,
       )}
-      style={seatRingPosition(ringIndex, ringCount)}
+      data-slot={seatSlot(ringIndex, ringCount)}
       data-status={seat.status}
       data-to-act={seat.isToAct ? 'true' : 'false'}
     >
-      <div className="prl-seat__top">
-        {seat.position === null ? (
-          <span className="prl-seat__position prl-label">no position</span>
-        ) : (
-          <span className="prl-seat__position prl-label">{seat.position}</span>
-        )}
-        <span className="prl-seat__badges">
+      <div className="prl-seat__plate">
+        <div className="prl-seat__top">
+          {seat.position === null ? (
+            <span className="prl-seat__position prl-label">no position</span>
+          ) : (
+            <span className="prl-seat__position prl-label">{seat.position}</span>
+          )}
           {seat.isButton ? (
             <span className="prl-badge prl-badge--dealer">
               <span aria-hidden="true">D</span>
               <span className="prl-visually-hidden">dealer button</span>
             </span>
           ) : null}
-          {seat.isToAct ? (
-            <Chip tone="accent" pill>
-              to act
-            </Chip>
-          ) : null}
-          {/* A live badge, gone once the hand is settled. On the winner it read as a stake still out. */}
-          {seat.status === 'allIn' && !settled ? (
-            <Chip tone="caution" pill>
-              all in
-            </Chip>
-          ) : null}
+          {seat.isToAct ? <span className="prl-seat__turn">to act</span> : null}
           {seat.isToAct && turn !== null ? (
             /* "Ada's turn timer" reads correctly, "You turn timer" does not. */
             <TurnTimer clock={turn} label={seat.isSelf ? 'Your turn timer' : `${name} turn timer`} />
           ) : null}
-        </span>
-      </div>
-
-      <p className="prl-seat__name">
-        {name}
-        {needsSelfMarker(seat.isSelf, name) ? <span className="prl-seat__you">{' (you)'}</span> : null}
-      </p>
-
-      {/* One `div` per pair, so a wrapping row breaks between pairs, never inside one. */}
-      <dl className="prl-seat__stats">
-        <div className="prl-seat__stat">
-          <dt className="prl-seat__stat-label">Stack</dt>
-          <dd className="prl-seat__stat-value">{formatChips(seat.stack)}</dd>
         </div>
-      </dl>
 
-      <StatusLine text={status} />
+        <p className="prl-seat__name">
+          {name}
+          {needsSelfMarker(seat.isSelf, name) ? <span className="prl-seat__you">{' (you)'}</span> : null}
+        </p>
+
+        {/* The figure alone is drawn, as on a real table. The label is still spoken. */}
+        <dl className="prl-seat__stats">
+          <div className="prl-seat__stat">
+            <dt className="prl-seat__stat-label prl-visually-hidden">Stack</dt>
+            <dd className="prl-seat__stat-value">{formatChips(seat.stack)}</dd>
+          </div>
+        </dl>
+
+        <StatusLine text={status} />
+      </div>
 
       {seat.status === 'sittingOut' ? null : (
         <CardRow
@@ -210,7 +200,7 @@ export function Seat(props: SeatProps): ReactElement {
           label={`${name} hole cards`}
           showLabel={false}
           faceDown={faceDown}
-          size="sm"
+          size={seat.isSelf ? 'lg' : 'sm'}
           tight
           {...(highlightedCards === undefined ? {} : { highlightedCards })}
           {...(highlightLabel === undefined ? {} : { highlightLabel })}

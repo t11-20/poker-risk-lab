@@ -582,4 +582,40 @@
   --prl-deck-back-green-line: #33664f;
   --prl-deck-back-wine: #5b1f2b;
   --prl-deck-back-wine-line: #7a3543;
+
+  /* Card sizes. A board card is about 46 x 64px and the viewer's own about 58 x 81px. */
+  --prl-card-board: 2.875rem;
+  --prl-card-hero: 3.625rem;
+  --prl-card-back-small: 1.375rem;
+
+  --prl-rail-width: 0.875rem;
+
+  /* Dark. The felt is a step deeper than in light, so it does not glow on a near-black page. */
+  --prl-felt: #23503c;
+  --prl-felt-line: #356a52;
+  --prl-felt-ink: #f3efe7;
+  --prl-felt-ink-muted: #cfdcd3;
+  --prl-felt-slot: #86ad99;
+  --prl-rail: #4a3727;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --prl-felt: #2d6a4f;
+    --prl-felt-line: #4b836a;
+    --prl-felt-ink: #ffffff;
+    --prl-felt-ink-muted: #dcebe2;
+    --prl-felt-slot: #9cc4b0;
+    --prl-rail: #3b2a1d;
+  }
+}
+
+/* Mirrors the media-query block above; change both. */
+:root[data-theme="light"] {
+  --prl-felt: #2d6a4f;
+  --prl-felt-line: #4b836a;
+  --prl-felt-ink: #ffffff;
+  --prl-felt-ink-muted: #dcebe2;
+  --prl-felt-slot: #9cc4b0;
+  --prl-rail: #3b2a1d;
 }
