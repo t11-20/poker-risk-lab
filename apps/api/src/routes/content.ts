@@ -59,7 +59,6 @@ import {
   judgeConsistency,
   maximumTo,
   minimumAggressiveTo,
-  parseRange,
   potOdds,
   projectResults,
   riskOfRuin,
@@ -417,16 +416,12 @@ function riskOfRuinFields(calculation: Extract<LiveCalculation, { kind: 'riskOfR
   };
 }
 
-/** Against the named opponent cards, or a uniformly random hand when none are given. */
 function outsFields(calculation: Extract<LiveCalculation, { kind: 'outs' }>): FieldTable {
-  const heroCards = cardsOf(calculation.heroCards);
-  const board = cardsOf(calculation.board);
-  const blockers = [...heroCards, ...board];
-  const opponent =
-    calculation.opponentCards === undefined
-      ? parseRange('random', blockers)
-      : exactRange(cardsOf(calculation.opponentCards));
-  const outs = computeOuts({ heroCards, board, opponent });
+  const outs = computeOuts({
+    heroCards: cardsOf(calculation.heroCards),
+    board: cardsOf(calculation.board),
+    opponent: exactRange(cardsOf(calculation.opponentCards)),
+  });
   return {
     working: `${outs.explanation} ${outs.assumptions.join(' ')}`,
     fields: {

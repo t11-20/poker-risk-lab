@@ -85,7 +85,7 @@ describe("a quiz calculation's cards", () => {
     const problems = withCalculation('reading-board-q4', (calculation) => {
       calculation['opponents'] = ['AhQd'];
     });
-    refused(problems, /\.calculation: card appears twice — in heroCards and in opponents\[0\]/);
+    refused(problems, /\.calculation: card Ah appears twice — in heroCards and in opponents\[0\]/);
   });
 
   it('are refused when an equity opponent is a range or a top percentage, not an exact hand', () => {
@@ -140,7 +140,7 @@ describe("a quiz calculation's cards", () => {
     const problems = withCalculation('counting-outs-q4', (calculation) => {
       calculation['opponentCards'] = 'AhKs';
     });
-    refused(problems, /\.calculation: card appears twice — in board and in opponentCards/);
+    refused(problems, /\.calculation: card Ah appears twice — in board and in opponentCards/);
   });
   it('are refused when hero is not two cards', () => {
     const hero = withCalculation('reading-board-q4', (calculation) => {
@@ -156,7 +156,47 @@ describe("a quiz calculation's cards", () => {
     refused(opponent, /\.calculation\.opponents\[0\]: a holding is exactly 2 cards, got 3/);
   });
 
-  it('are refused when an outs opponent is present and empty', () => {
+  it('are refused when an outs calculation names no opponent', () => {
+    // The browser and the bot count outs only against one exact hand, so a missing one cannot be shown.
+    const missing = withCalculation('counting-outs-q4', (calculation) => {
+      calculation['opponentCards'] = undefined;
+    });
+    refused(
+      missing,
+      /\.calculation\.opponentCards: an outs calculation names the opponent's exact two cards/,
+    );
+  });
+
+  it('are refused once, as a board, when a board repeats a card', () => {
+    // reading-board-q4 is equity with hero AhKh; counting-outs-q4 is outs with hero Th9h.
+    for (const question of ['reading-board-q4', 'counting-outs-q4']) {
+      const problems = withCalculation(question, (calculation) => {
+        calculation['board'] = 'AhAh7c';
+      });
+      assert.deepEqual(
+        problems.filter((problem) => problem.includes('.calculation')),
+        problems.filter((problem) => problem.includes('.calculation.board: a board names each card once')),
+        question,
+      );
+      refused(problems, /\.calculation\.board: a board names each card once, got "AhAh7c"/);
+    }
+  });
+
+  it('are refused once when an equity opponent holds the same card twice', () => {
+    // reading-board-q4: hero AhKh, so the old check also reported Ah as a clash, twice.
+    const problems = withCalculation('reading-board-q4', (calculation) => {
+      calculation['opponents'] = ['AhAh'];
+    });
+    assert.deepEqual(
+      problems.filter((problem) => problem.includes('.calculation')),
+      problems.filter((problem) =>
+        problem.includes('.calculation.opponents[0]: a holding is two different cards'),
+      ),
+    );
+    refused(problems, /\.calculation\.opponents\[0\]: a holding is two different cards, got "AhAh"/);
+  });
+
+  it('are refused when an outs opponent is empty', () => {
     const empty = withCalculation('counting-outs-q4', (calculation) => {
       calculation['opponentCards'] = '';
     });
@@ -254,7 +294,6 @@ describe("a calculation's holdings and equity board, each refused once", () => {
         '9c8c6c',
         'Xx'.repeat(13),
       ]) {
-        if (field === 'opponentCards' && value === undefined) continue;
         const problems = withCalculation(question, (calculation) => {
           calculation[field] = value;
         });

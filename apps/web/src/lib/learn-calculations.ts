@@ -626,11 +626,6 @@ function resolveEquity(calculation: Extract<LiveCalculation, { kind: 'equity' }>
 }
 
 function resolveOuts(calculation: Extract<LiveCalculation, { kind: 'outs' }>): CalculationResult {
-  if (calculation.opponentCards === undefined) {
-    throw new Error(
-      'an outs breakdown sorts each card into clean or dirty against a specific opponent holding, and this calculation did not name one',
-    );
-  }
   const result = computeOuts({
     heroCards: parseCards(calculation.heroCards),
     board: parseCards(calculation.board),

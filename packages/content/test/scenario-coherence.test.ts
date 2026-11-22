@@ -324,3 +324,96 @@ test('a fold rate stated in an assumption is the one the scenario declares', () 
   silent['assumedFoldEquity'] = 0.3;
   assert.match(foldRateProblems(silent).join('\n'), /is 0\.3, but no assumption states the rate/);
 });
+
+test("a scenario's board, seat cards and exact range are each refused once", () => {
+  // eq-equity-against-one-known-hand: turn, board "Qd 9s 5c 3h", hero QcJd, BTN QhTs, exact QhTs.
+  const id = 'eq-equity-against-one-known-hand';
+  // `Qd … Ah` parses but is over the length limit. `Qd Qd 5c 3h` repeats a card, and as a board it also
+  // repeats the board's Qd. Neither value's cards may reach the clash check.
+  const bad = [
+    7,
+    '',
+    '   ',
+    ',',
+    'Xx',
+    'QhTs9c',
+    'AhAh',
+    'Xx'.repeat(13),
+    `Qd${' '.repeat(30)}Ah`,
+    'Qd Qd 5c 3h',
+  ];
+  const cases: [string, string, (scenario: RawScenario, value: unknown) => void][] = [
+    ['board', 'scenarios[0].board', (scenario, value) => (scenario['board'] = value)],
+    ['hero', 'scenarios[0].seats[0].holeCards', (scenario, value) => (heroOf(scenario)['holeCards'] = value)],
+    [
+      'opponent seat',
+      'scenarios[0].seats[1].holeCards',
+      (scenario, value) => (seatLabelled(scenario, 'BTN')['holeCards'] = value),
+    ],
+    [
+      'exact range',
+      'scenarios[0].opponentRange.cards',
+      (scenario, value) => ((scenario['opponentRange'] as RawScenario)['cards'] = value),
+    ],
+  ];
+  for (const [where, path, edit] of cases) {
+    for (const value of bad) {
+      // An empty board is preflop, which this turn scenario is not, so it is refused for its length.
+      const scenario = scenarioNamed(id);
+      edit(scenario, value);
+      const problems = problemsFor(scenario);
+      const label = `${where} ${JSON.stringify(value)}: ${problems.join('; ')}`;
+      assert.equal(
+        mentioning(problems, new RegExp(`^${path.replace(/[.[\]]/gu, '\\$&')}:`, 'u')).length,
+        1,
+        label,
+      );
+      assert.deepEqual(mentioning(problems, /appears twice/u), [], label);
+    }
+  }
+});
+
+test('a seat holding the same card twice is refused as a holding, not reported as a clash with itself', () => {
+  const scenario = scenarioNamed('eq-equity-against-one-known-hand');
+  heroOf(scenario)['holeCards'] = 'AhAh';
+  assert.deepEqual(problemsFor(scenario), [
+    'scenarios[0].seats[0].holeCards: a holding is two different cards, got "AhAh"',
+  ]);
+});
+
+test('a refused hand or board is not used as blockers for a notation range', () => {
+  // On board "Qd 9s 5c 3h", "AA" can be dealt unless a refused value's aces are counted as blockers.
+  const edits: [string, (scenario: RawScenario) => void][] = [
+    ['hero of three aces', (scenario) => (heroOf(scenario)['holeCards'] = 'AsAhAd')],
+    ['five-card board on the turn', (scenario) => (scenario['board'] = 'As Ah Ad 9s 5c')],
+  ];
+  for (const [name, edit] of edits) {
+    const scenario = scenarioNamed('eq-equity-against-one-known-hand');
+    scenario['opponentRange'] = { kind: 'notation', notation: 'AA', label: 'aces' };
+    edit(scenario);
+    const problems = problemsFor(scenario);
+    assert.equal(problems.length, 1, `${name}: ${problems.join('; ')}`);
+  }
+});
+
+test("an exact range of hero's own cards is refused, not read as restating a seat", () => {
+  // Hero holds QcJd. The analysis cannot deal an opponent hero's cards, so this must fail at load.
+  const scenario = scenarioNamed('eq-equity-against-one-known-hand');
+  scenario['opponentRange'] = { kind: 'exact', cards: 'QcJd' };
+  assert.deepEqual(problemsFor(scenario), [
+    "scenarios[0]: card Qc appears twice — in seat 1's hole cards and in the opponent range",
+    "scenarios[0]: card Jd appears twice — in seat 1's hole cards and in the opponent range",
+  ]);
+});
+
+test("an exact range of a folded seat's cards is refused, since no live opponent can hold them", () => {
+  // BTN holds QhTs and the range restates it. Folding BTN and seating a live opponent leaves the range
+  // naming cards that are out of the hand.
+  const scenario = scenarioNamed('eq-equity-against-one-known-hand');
+  seatLabelled(scenario, 'BTN')['folded'] = true;
+  (scenario['seats'] as unknown[]).push({ seat: 4, label: 'CO', stack: 1000 });
+  assert.deepEqual(mentioning(problemsFor(scenario), /appears twice/u), [
+    "scenarios[0]: card Qh appears twice — in seat 5's hole cards and in the opponent range",
+    "scenarios[0]: card Ts appears twice — in seat 5's hole cards and in the opponent range",
+  ]);
+});
