@@ -304,7 +304,10 @@ const CONSUMED_CLASSES: ReadonlySet<string> = (() => {
 const EDGE =
   /(?:^|;)\s*border(?:-(?:block|inline)(?:-(?:start|end))?|-(?:top|right|bottom|left))?(?:-color)?\s*:\s*([^;]+)/gu;
 
-/** Design system 2.4: with no shadow to lift it, a surface over content needs a 3:1 edge on every side it draws. */
+/**
+ * Design system 2.4: with no shadow to lift it, a surface over content needs a 3:1 edge on every side it
+ * draws.
+ */
 function overlayEdgeFaults(sheets: Sheets, consumed: ReadonlySet<string>) {
   const offenders: string[] = [];
   let surfaces = 0;
@@ -688,7 +691,7 @@ describe('a filled button is one colour from rim to plate in every state', () =>
     });
   }
 
-  it('catches a rim left behind, a press that shows nothing, and a lost Highlight edge (NEGATIVE CONTROL)', () => {
+  it('catches a rim left behind, a still press and a lost Highlight edge (NEGATIVE CONTROL)', () => {
     const css = `.b { border-color: var(--a) }
 .b::before { background-color: var(--a) }
 .b:hover:not(:disabled)::before { background-color: var(--a-hover) }

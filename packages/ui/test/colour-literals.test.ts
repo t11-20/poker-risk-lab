@@ -340,9 +340,10 @@ describe('every token a stylesheet or component reads is declared', () => {
     assert.deepEqual(undeclared, [], 'Read a token tokens.css declares, or give the var() a fallback.');
   });
 
-  it('catches a retired token read with no fallback, and passes one with a fallback (NEGATIVE CONTROL)', () => {
+  it('catches a retired token read with no fallback, and passes a fallback (NEGATIVE CONTROL)', () => {
     const reads = unfallbackedReads(
-      '.a { background: var(--prl-surface-table) } .b { color: var(--prl-gone, CanvasText) } /* var(--prl-x) */',
+      '.a { background: var(--prl-surface-table) } .b { color: var(--prl-gone, CanvasText) }' +
+        ' /* var(--prl-x) */',
     );
     assert.deepEqual(reads, ['--prl-surface-table']);
     assert.equal(declared.has('--prl-surface-table'), false, 'the navy table token is retired');

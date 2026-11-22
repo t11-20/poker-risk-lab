@@ -2,8 +2,8 @@
 /**
  * Writes the deck the web app shows: one SVG per card (`KH.svg`, `TS.svg`) and the backs, into
  * `apps/web/public/cards/`. Ranks and suits are paths authored here, never `<text>`, so a face does not
- * depend on the reader's fonts. Each file's `<title>` names the card in words: metadata, never drawn. The colours come from `--prl-deck-*` in tokens.css, so the contrast gate
- * measures what the files paint.
+ * depend on the reader's fonts. Each file's `<title>` names the card in words: metadata, never drawn.
+ * The colours come from `--prl-deck-*` in tokens.css, so the contrast gate measures what the files paint.
  *
  *   node scripts/cards/generate.mjs           # rewrite the files
  *   node scripts/cards/generate.mjs --check   # report drift, change nothing

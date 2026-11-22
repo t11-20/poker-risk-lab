@@ -2,8 +2,8 @@
  * One playing card from the engine's integer encoding, drawn by its generated SVG file
  * (`apps/web/public/cards`, written by `scripts/cards/generate.mjs`).
  * The name is on the wrapper (`role="img"` plus `aria-label`), so the `<img>` inside is `alt=""` and
- * `aria-hidden` and a reader hears one name. `highlighted` adds a corner notch, a lift and a phrase in the accessible name,
- * so the mark is never colour alone (WCAG 1.4.1).
+ * `aria-hidden` and a reader hears one name. `highlighted` adds a corner notch, a lift and a phrase in
+ * the accessible name, so the mark is never colour alone (WCAG 1.4.1).
  */
 
 import type { ReactElement } from 'react';
