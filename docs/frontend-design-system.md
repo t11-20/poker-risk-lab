@@ -166,7 +166,7 @@ with nothing to lift it — a popover, the glossary panel, the phone Coach sheet
 `--prl-line-strong` edge instead. Sticky bars (the header, the replay transport) are opaque, so text
 scrolled under them never reads through. `packages/ui/test/layout-guarantees.test.ts` fails any
 `box-shadow` that is not `var(--prl-focus-ring)` on a focus rule, and any `backdrop-filter`, glass,
-wash, edge, veil or elevation token, outside the table's own rules.
+wash, edge, veil or elevation token, in any rule, the table's included.
 
 `.prl-material--*` and `.prl-panel--*` keep their names, because components choose a surface by
 role; their rules are now flat. `--prl-edge*`, `--prl-veil-*` and `--prl-elevation-*` keep their 4.0
@@ -417,8 +417,8 @@ are how surfaces separate.
 
 Surfaces separate by fill and hairline (§2.4). The only `box-shadow` in the app is the focus halo
 (§7.1), set by `base.css` on `:focus-visible`; any other `box-shadow` in a component rule would
-out-rank it and delete it, which is why `layout-guarantees.test.ts` fails one. The table's own rules
-are restyled separately and are outside that check.
+out-rank it and delete it, which is why `layout-guarantees.test.ts` fails one, on the table as
+everywhere else.
 
 ---
 

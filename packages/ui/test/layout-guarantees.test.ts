@@ -222,10 +222,6 @@ describe('the design system rules that are stated in prose and checked nowhere',
     ...STYLESHEETS,
   ];
 
-  /** The table, seats, cards and pot are a material of their own, restyled separately from the page. */
-  const TABLE_OWNED = /(?<![\w-])\.prl-(?:table|seat|card|pot|hand-glance|turn|board)(?![a-z0-9])/u;
-  const pageBlocks = (css: string) => allBlocks(css).filter((block) => !TABLE_OWNED.test(block.selector));
-
   /**
    * Surfaces are flat. A shadow is only ever the focus halo, on a focus rule: any other `box-shadow`
    * in a component rule out-ranks base.css's halo and deletes it while the control is focused.
@@ -233,7 +229,7 @@ describe('the design system rules that are stated in prose and checked nowhere',
   it('spends a box-shadow only on the focus halo, never on elevation', () => {
     let seen = 0;
     for (const [name, css] of FLAT_SCANNED) {
-      for (const block of pageBlocks(css)) {
+      for (const block of allBlocks(css)) {
         for (const match of block.body.matchAll(/box-shadow\s*:\s*([^;]+)/g)) {
           seen += 1;
           const value = (match[1] ?? '').trim();
@@ -258,7 +254,7 @@ describe('the design system rules that are stated in prose and checked nowhere',
   it('uses no backdrop-filter, glass fill, page wash or elevation token anywhere', () => {
     let blocks = 0;
     for (const [name, css] of FLAT_SCANNED) {
-      for (const block of pageBlocks(css)) {
+      for (const block of allBlocks(css)) {
         blocks += 1;
         assert.doesNotMatch(
           block.body,
@@ -318,7 +314,7 @@ describe('the design system rules that are stated in prose and checked nowhere',
   it('edges every sticky or floating surface in --prl-line-strong', () => {
     let surfaces = 0;
     for (const [name, css] of FLAT_SCANNED) {
-      for (const block of pageBlocks(css)) {
+      for (const block of allBlocks(css)) {
         const sticky = /position\s*:\s*sticky/u.test(block.body);
         const floating = /^\.prl-[a-z-]+--floating$/u.test(block.selector);
         const edge = /(?:^|;)\s*border(?:-color)?\s*:\s*([^;]+)/u.exec(block.body)?.[1];
