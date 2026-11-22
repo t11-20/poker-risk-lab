@@ -60,12 +60,11 @@ is method — restraint, hairlines over shadows, one accent, technical labels, b
 Since 5.0 there are two themes, warm and flat, chosen by the reader's system setting unless they
 pick one in the header (§9). **Every colour is declared in `packages/ui/src/styles/tokens.css` and
 nowhere else.** `packages/ui/test/colour-literals.test.ts` fails a hex, `rgb()`, `hsl()` or named
-colour in any other stylesheet, in any `.tsx` style object or attribute; CSS system colours
+colour in any other stylesheet, and in any `.ts` or `.tsx` string; CSS system colours
 (`Canvas`, `Highlight` …) are allowed for forced-colors rules and `global-error.tsx`.
 
-There is **no blue**: not in the ink, the surfaces, the focus ring, the links or the chart series.
-The table, seat, card and suit tokens are restyled separately and are the one exception until that
-work lands (§2.5).
+There is **no blue**: not in the ink, the surfaces, the focus ring, the links, the chart series or
+the table.
 
 Reproduce every ratio below with `node scripts/check-contrast.mjs`. Its first two passes read the
 stylesheets alone; the third composites real pages in Chrome (§7.3).
@@ -120,8 +119,7 @@ The light value of each is declared twice (the `prefers-color-scheme` block and
 * **Accent green and good green are told apart** by hue (the accent leans blue-green, `favourable`
   leans yellow-green) and never by hue alone: a favourable figure carries `▲`/`+`; the primary
   button is filled and semibold where the others are outlined; the current page is filled and
-  semibold; the quiz's matched verdict carries its mark glyph. The seats' to-act and marked states
-  belong to the table's own restyle (§2.5) and are not covered here.
+  semibold; the quiz's matched verdict carries its mark glyph.
 * **The suit marks** beside the section names (Learn ♠, Lab ♦, Play ♥, Review ♣) take the text
   colour. A red heart or green club there would read as a risk or a result, and the shape plus the
   word already name the place. The header bar no longer carries them: the words name each place, and
@@ -169,9 +167,9 @@ scrolled under them never reads through. `packages/ui/test/layout-guarantees.tes
 wash, edge, veil or elevation token, in any rule, the table's included.
 
 `.prl-material--*` and `.prl-panel--*` keep their names, because components choose a surface by
-role; their rules are now flat. `--prl-edge*`, `--prl-veil-*` and `--prl-elevation-*` keep their 4.0
-values, because the table, seat and card rules still read them; nothing else may. The glass, wash,
-`info` and numbered accent tokens survive only as inert aliases (opaque surfaces) until the parallel
+role; their rules are now flat. The 4.0 edge and veil tokens are gone, with the navy table and the
+old card tokens, now that the table is flat too. The elevation tokens, and the glass, wash, `info`
+and numbered accent tokens (inert aliases to opaque surfaces), survive only until the parallel
 branches that may still read them merge; delete them then.
 
 **Removed, and why.** The 4.0 system built depth from translucent "glass" panes over a tinted page
@@ -233,6 +231,11 @@ A flat felt oval: `--prl-felt` with a `--prl-rail` border and one faint `--prl-f
 a step deeper in dark. No gradient, glow or shadow. The pot, the bet and the side pots are plain text
 on the felt in `--prl-felt-ink` and `--prl-felt-ink-muted`, and an empty board place is a dashed
 `--prl-felt-slot` outline. `check-contrast.mjs` asserts each of those pairs.
+
+The felt, rail and deck colours are read only by the table and three pictures of it: the home page's
+example hand, the empty table on /play, and the card-shaped brand mark in the header.
+`colour-literals.test.ts` names each reader, so a page rule cannot paint a pair the gate never
+measured.
 
 
 ## 3. Typography
@@ -973,7 +976,7 @@ not.**
 ## 12. What is deliberately absent
 
 * **Shadows, blur, glass and washes.** The only shadow is the focus halo (§4.1, §2.4).
-* **Blue.** Nowhere outside the table's own tokens while that work lands (§2.5).
+* **Blue.** Nowhere (§2.1).
 * **A second font family.** One grotesk with four weights is enough, and a second family is
   a second thing to get wrong.
 * **Any celebration animation on winning a pot.** Chips move to the winner and the stack

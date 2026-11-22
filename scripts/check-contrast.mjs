@@ -210,7 +210,6 @@ const CONTENT_SURFACES = [
   '--prl-surface-raised',
   '--prl-surface-panel',
   '--prl-surface-inset',
-  '--prl-surface-table',
 ];
 
 const INTERACTION_SURFACES = ['--prl-surface-hover', '--prl-surface-active'];
@@ -274,14 +273,6 @@ const GROUPS = [
       '--prl-series-f',
     ],
     backgrounds: ALL_SURFACES,
-  },
-  {
-    id: 'suits',
-    title: 'Suits on both card faces',
-    rule: 'WCAG 1.4.3. Card faces stay light in both themes',
-    min: AA_TEXT,
-    foregrounds: ['--prl-suit-black', '--prl-suit-red'],
-    backgrounds: ['--prl-card-face', '--prl-card-face-dim'],
   },
   {
     id: 'felt-text',

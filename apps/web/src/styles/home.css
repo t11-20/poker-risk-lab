@@ -125,22 +125,19 @@
   overflow: hidden;
 }
 
+/** The Play table's felt and inks, so the example reads as the table it previews. */
 .prl-spot__table {
   display: grid;
   gap: var(--prl-space-7);
   justify-items: center;
   padding: var(--prl-space-8) var(--prl-space-6);
-  background-color: var(--prl-surface-table);
-  background-image:
-    linear-gradient(var(--prl-table-grid-color) 1px, transparent 1px),
-    linear-gradient(90deg, var(--prl-table-grid-color) 1px, transparent 1px);
-  background-size: var(--prl-table-grid-size) var(--prl-table-grid-size);
+  background-color: var(--prl-felt);
   text-align: center;
 }
 
 .prl-spot__who {
   margin: 0 0 var(--prl-space-3);
-  color: var(--prl-text-muted);
+  color: var(--prl-felt-ink-muted);
   font-size: var(--prl-type-body-sm);
 }
 
@@ -153,7 +150,7 @@
 .prl-spot__slot {
   inline-size: var(--prl-card-w-md, 3.25rem);
   aspect-ratio: 5 / 7;
-  border: 1px dashed var(--prl-line-strong);
+  border: 1px dashed var(--prl-felt-slot);
   border-radius: var(--prl-radius-2);
 }
 

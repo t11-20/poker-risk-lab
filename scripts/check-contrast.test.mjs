@@ -34,7 +34,7 @@ const chromeSkip =
 
 const INK = '#55606f'; // --prl-text-muted, light theme
 const CARD = '#f5f7f9'; // --prl-surface-page, light theme
-const GROUND = '#e8edf1'; // --prl-surface-table, light theme — the felt the seat plate lies on
+const GROUND = '#e8edf1'; // a ground a step darker than the card, as a seat plate lies on
 const FADE = 0.8;
 const PLATE = '#1e5c40'; // --prl-accent-fill, light theme: a primary button's `::before` plate
 // Long enough that its unclipped glyph rects run far past the button, as on /legends.

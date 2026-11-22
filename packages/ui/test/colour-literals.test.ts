@@ -139,7 +139,7 @@ describe('a colour is declared once, in tokens.css', () => {
     assert.deepEqual(
       cssFindings(
         '.a { color: currentcolor; background: transparent; border-color: inherit; }' +
-          ' .b { color: var(--prl-suit-red); outline-color: Highlight; white-space: nowrap; }' +
+          ' .b { color: var(--prl-mark-heart); outline-color: Highlight; white-space: nowrap; }' +
           ' .c::after { content: "red"; } /* color: #fff */',
       ),
       [],
@@ -161,9 +161,9 @@ describe('a colour is declared once, in tokens.css', () => {
     );
     assert.deepEqual(
       sourceFindings(
-        "const edge = '1px solid #2563eb'; const glow = `0 0 4px ${size} #0000`; el.style.cssText = 'color:#abc';",
+        "const edge = '1px solid #2563eb'; const glow = `0 0 4px #0000`; el.style.cssText = 'color:#abc';",
       ),
-      ['1px solid #2563eb', '0 0 4px ${size} #0000', 'color:#abc'],
+      ['1px solid #2563eb', '0 0 4px #0000', 'color:#abc'],
     );
     assert.deepEqual(
       sourceFindings(
@@ -191,5 +191,119 @@ describe('a colour is declared once, in tokens.css', () => {
       }
     }
     assert.deepEqual(offenders, [], 'Style it with a class that reads a --prl-* token.');
+  });
+});
+
+/**
+ * The felt, rail and deck colours are measured only against each other (check-contrast.mjs's felt
+ * and deck groups), so a page rule that reads one paints a pair nobody measured. The home hero once
+ * painted the old navy table behind page-muted text that way. Each reader is named exactly.
+ */
+const TABLE_COLOUR =
+  /var\(\s*(--prl-(?:felt(?:-line|-ink(?:-muted)?|-slot)?|rail|deck-[a-z-]+|card-mark))\s*[,)]/gu;
+
+const TABLE_COLOUR_READERS: ReadonlyMap<string, readonly string[]> = new Map([
+  [
+    'packages/ui/src/styles/components.css',
+    [
+      '.prl-card--highlighted::after',
+      '.prl-table__field::before',
+      '.prl-table__field::after',
+      '.prl-table__centre',
+      '.prl-table__centre .prl-metric__label',
+      '.prl-table__centre .prl-metric__value',
+      '.prl-table__centre .prl-pot__sides',
+      '.prl-table__bet-label',
+      '.prl-card-row__slot',
+    ],
+  ],
+  // Pictures of the table and of a card, drawn outside them.
+  ['apps/web/src/styles/home.css', ['.prl-spot__table', '.prl-spot__who', '.prl-spot__slot']],
+  [
+    'apps/web/src/styles/play.css',
+    ['.prl-play__idle-table', '.prl-play__idle-text', '.prl-play__idle-title'],
+  ],
+  ['apps/web/src/styles/nav.css', ['.prl-pillbar__brand .prl-shell__brand-index', '.prl-shell__brand-suit']],
+]);
+
+/** `selector -> table colour` for each rule that reads one. The first selector of a list names it. */
+function tableColourReaders(css: string): string[] {
+  const found: string[] = [];
+  for (const match of stripComments(css).matchAll(/([^{}]+)\{([^{}]*)\}/gu)) {
+    const selector = (match[1] ?? '').split(',')[0]?.trim() ?? '';
+    for (const token of (match[2] ?? '').matchAll(TABLE_COLOUR)) found.push(`${selector} -> ${token[1]}`);
+  }
+  return found;
+}
+
+describe('the table colours are read by the table and its named pictures only', () => {
+  it('finds a reader it exists to find, and ignores the table layout properties', () => {
+    assert.deepEqual(
+      tableColourReaders('.a { color: var(--prl-felt-ink); border: 1px solid var(--prl-rail) }'),
+      ['.a -> --prl-felt-ink', '.a -> --prl-rail'],
+    );
+    assert.deepEqual(
+      tableColourReaders('.a { inset: var(--prl-felt-inset-top); border-width: var(--prl-rail-width) }'),
+      [],
+    );
+  });
+
+  it('has no reader outside the list, and every listed reader still reads one', () => {
+    const offenders: string[] = [];
+    let readers = 0;
+    for (const file of stylesheets) {
+      const name = relative(REPO, file);
+      if (name === TOKEN_SHEET) continue;
+      const allowed = TABLE_COLOUR_READERS.get(name) ?? [];
+      const found = tableColourReaders(readFileSync(file, 'utf8'));
+      readers += found.length;
+      for (const entry of found) {
+        if (!allowed.includes(entry.split(' -> ')[0] ?? '')) offenders.push(`${name}  ${entry}`);
+      }
+      for (const selector of allowed) {
+        if (!found.some((entry) => entry.startsWith(`${selector} -> `)))
+          offenders.push(`${name}  ${selector} is stale`);
+      }
+    }
+    assert.ok(
+      readers >= 15,
+      `only ${readers} table colour reads were found, so the sweep missed stylesheets`,
+    );
+    assert.deepEqual(offenders, [], 'Use a page token, or name the rule here if it really draws the table.');
+  });
+});
+
+/**
+ * A read of an undeclared token is `unset`: no error, and a colour that quietly falls back to its
+ * inherited value. It is also how a retired token (the navy `--prl-surface-table`) would come back.
+ */
+describe('every token a stylesheet or component reads is declared', () => {
+  const declared = new Set<string>();
+  for (const file of stylesheets) {
+    for (const match of stripComments(readFileSync(file, 'utf8')).matchAll(/(--prl-[\w-]+)\s*:/gu)) {
+      declared.add(match[1] ?? '');
+    }
+  }
+  for (const file of sources) {
+    const source = readFileSync(file, 'utf8');
+    for (const match of source.matchAll(/['"](--prl-[\w-]+)['"]\s*[:,]/gu)) declared.add(match[1] ?? '');
+  }
+
+  it('reads none without a fallback that nothing declares', () => {
+    const undeclared: string[] = [];
+    let reads = 0;
+    for (const file of [...stylesheets, ...sources]) {
+      for (const match of stripComments(readFileSync(file, 'utf8')).matchAll(
+        /var\(\s*(--prl-[\w-]+)\s*\)/gu,
+      )) {
+        reads += 1;
+        if (!declared.has(match[1] ?? '')) undeclared.push(`${relative(REPO, file)}  ${match[1]}`);
+      }
+    }
+    assert.ok(
+      declared.size >= 150 && reads >= 1000,
+      `${declared.size} declared, ${reads} read: a sweep of nothing`,
+    );
+    assert.deepEqual(undeclared, [], 'Read a token tokens.css declares, or give the var() a fallback.');
   });
 });

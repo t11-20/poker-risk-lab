@@ -92,10 +92,10 @@
   gap: 0;
   width: calc(var(--prl-pill-h) * 5 / 7);
   height: var(--prl-pill-h);
-  border: 1px solid var(--prl-card-edge);
+  border: 1px solid var(--prl-deck-edge);
   border-radius: var(--prl-radius-2);
-  background-color: var(--prl-card-face);
-  color: var(--prl-suit-black);
+  background-color: var(--prl-deck-face);
+  color: var(--prl-deck-black);
   font-family: var(--prl-font-display);
   font-stretch: var(--prl-stretch-display);
   font-weight: 800;
@@ -108,7 +108,7 @@
 }
 
 .prl-shell__brand-suit {
-  color: var(--prl-suit-red);
+  color: var(--prl-deck-red);
   font-size: var(--prl-type-body-sm);
 }
 

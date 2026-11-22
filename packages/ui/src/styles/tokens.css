@@ -3,10 +3,9 @@
  * (colour-literals.test.ts fails a literal anywhere else). Rationale and the measured contrast table are
  * in docs/frontend-design-system.md section 2. Reproduce every ratio with `node scripts/check-contrast.mjs`.
  *
- * Warm neutrals, one felt-green accent, no blue outside the table and card tokens, which keep their
- * own values until they are restyled. Red, amber and green mean risk or result and nothing else, and
- * always travel with a word, sign or glyph (WCAG 1.4.1).
- * Flat: no glass, no wash, no elevation outside the table. A surface is a fill and a hairline.
+ * Warm neutrals, one felt-green accent, no blue. Red, amber and green mean risk or result and nothing
+ * else, and always travel with a word, sign or glyph (WCAG 1.4.1).
+ * Flat: no glass, no wash, no elevation. A surface is a fill and a hairline.
  *
  * Rule A. Text on the accent fill is `--prl-text-on-accent`, never a literal.
  * Rule B. `--prl-line-subtle` and `--prl-line` are decorative (under 3:1). A border that
@@ -25,10 +24,6 @@
   --prl-surface-inset: #282420;
   --prl-surface-hover: #2d2924;
   --prl-surface-active: #36312b;
-
-  --prl-surface-table: #111838;
-  --prl-table-grid-color: #1a2146;
-  --prl-table-grid-size: 32px;
 
   --prl-scrim: rgb(10 9 8 / 72%);
 
@@ -69,14 +64,8 @@
   --prl-series-e: #a8a092;
   --prl-series-f: #c7ae7a;
 
-  /* CARD FACES. Light in both themes, because a dark card is unreadable at six-max sizes. Two inks, as on
-     a real deck. Suit is never colour alone: every card carries its symbol and an aria-label. */
-  --prl-card-face: #f7f8fb;
-  --prl-card-face-dim: #e4e7ef;
-  --prl-card-edge: #b9becd;
-  --prl-suit-black: #161b33;
-  --prl-suit-red: #c02637;
-  /* A card named in prose sits on the page, not a face, so it needs page-legible inks. */
+  /* A card named in prose sits on the page, not a face, so it needs page-legible inks. Suit is never
+     colour alone: every card carries its symbol and an aria-label. */
   --prl-mark-spade: var(--prl-text);
   --prl-mark-heart: #f08a8a;
 
@@ -98,13 +87,8 @@
   --prl-focus-ring: 0 0 0 calc(var(--prl-focus-offset) + var(--prl-focus-width) + var(--prl-focus-halo-width))
     var(--prl-focus-halo);
 
-  /* READ ONLY BY THE TABLE, SEAT AND CARD RULES, which keep their 4.0 material until they are
-     restyled. Nothing else may use them (layout-guarantees.test.ts). Values as on main. */
-  --prl-veil-8: rgb(241 243 250 / 8%);
-  --prl-veil-4: rgb(241 243 250 / 4%);
-  --prl-edge: rgb(241 243 250 / 12%);
-  --prl-edge-lit: rgb(241 243 250 / 24%);
-  --prl-edge-shade: rgb(0 0 0 / 34%);
+  /* Read by no rule here, and banned in rules (layout-guarantees.test.ts). Kept because two branches
+     in flight add reads of 1 and 2; delete once they merge. */
   --prl-elevation-0: none;
   --prl-elevation-1: 0 1px 2px rgb(0 0 0 / 24%), 0 2px 8px rgb(0 0 0 / 18%);
   --prl-elevation-2: 0 2px 6px rgb(0 0 0 / 28%), 0 10px 24px rgb(0 0 0 / 26%);
@@ -112,7 +96,6 @@
   --prl-elevation-4: 0 8px 24px rgb(0 0 0 / 36%), 0 36px 80px rgb(0 0 0 / 48%);
 
   /* DEPRECATED ALIASES. Inert, kept only so parallel branches still resolve. Delete once they merge. */
-  --prl-ink-000: #f1f3fa;
   --prl-info: var(--prl-text-secondary);
   --prl-line-accent: var(--prl-accent-edge);
   --prl-accent-300: var(--prl-focus-color);
@@ -289,8 +272,6 @@
     --prl-surface-inset: #eeeae2;
     --prl-surface-hover: #e9e4db;
     --prl-surface-active: #dfd9ce;
-    --prl-surface-table: #e9edf4;
-    --prl-table-grid-color: #d6dce8;
 
     --prl-scrim: rgb(36 33 29 / 44%);
 
@@ -321,18 +302,11 @@
     --prl-series-e: #6b645a;
     --prl-series-f: #7d6739;
 
-    --prl-card-face: #ffffff;
-    --prl-card-face-dim: #e6e8ee;
     --prl-mark-heart: #a5332a;
 
     --prl-focus-color: #174a33;
     --prl-focus-halo: #ffffff;
 
-    --prl-veil-8: rgb(22 27 51 / 6%);
-    --prl-veil-4: rgb(22 27 51 / 3%);
-    --prl-edge: rgb(22 27 51 / 10%);
-    --prl-edge-lit: rgb(255 255 255 / 90%);
-    --prl-edge-shade: rgb(22 27 51 / 14%);
     --prl-elevation-1: 0 1px 2px rgb(22 27 51 / 6%), 0 2px 8px rgb(22 27 51 / 5%);
     --prl-elevation-2: 0 2px 6px rgb(22 27 51 / 8%), 0 10px 24px rgb(22 27 51 / 8%);
     --prl-elevation-3: 0 4px 12px rgb(22 27 51 / 10%), 0 20px 48px rgb(22 27 51 / 12%);
@@ -350,8 +324,6 @@
   --prl-surface-inset: #eeeae2;
   --prl-surface-hover: #e9e4db;
   --prl-surface-active: #dfd9ce;
-  --prl-surface-table: #e9edf4;
-  --prl-table-grid-color: #d6dce8;
 
   --prl-scrim: rgb(36 33 29 / 44%);
 
@@ -382,18 +354,11 @@
   --prl-series-e: #6b645a;
   --prl-series-f: #7d6739;
 
-  --prl-card-face: #ffffff;
-  --prl-card-face-dim: #e6e8ee;
   --prl-mark-heart: #a5332a;
 
   --prl-focus-color: #174a33;
   --prl-focus-halo: #ffffff;
 
-  --prl-veil-8: rgb(22 27 51 / 6%);
-  --prl-veil-4: rgb(22 27 51 / 3%);
-  --prl-edge: rgb(22 27 51 / 10%);
-  --prl-edge-lit: rgb(255 255 255 / 90%);
-  --prl-edge-shade: rgb(22 27 51 / 14%);
   --prl-elevation-1: 0 1px 2px rgb(22 27 51 / 6%), 0 2px 8px rgb(22 27 51 / 5%);
   --prl-elevation-2: 0 2px 6px rgb(22 27 51 / 8%), 0 10px 24px rgb(22 27 51 / 8%);
   --prl-elevation-3: 0 4px 12px rgb(22 27 51 / 10%), 0 20px 48px rgb(22 27 51 / 12%);
@@ -428,9 +393,6 @@
   :root:root {
     --prl-line-subtle: var(--prl-line-strong);
     --prl-line: var(--prl-line-strong);
-    --prl-edge: var(--prl-line-strong);
-    --prl-edge-lit: var(--prl-line-strong);
-    --prl-edge-shade: var(--prl-line-strong);
 
     --prl-focus-width: 3px;
   }
@@ -444,9 +406,6 @@
     --prl-line: CanvasText;
     --prl-line-strong: CanvasText;
     --prl-focus-color: Highlight;
-    --prl-edge: CanvasText;
-    --prl-edge-lit: CanvasText;
-    --prl-edge-shade: CanvasText;
   }
 }
 

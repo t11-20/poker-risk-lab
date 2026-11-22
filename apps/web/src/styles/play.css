@@ -123,13 +123,9 @@
 .prl-play__idle-table {
   position: absolute;
   inset: var(--prl-space-9) var(--prl-space-7);
-  border: 2px solid var(--prl-line-strong);
-  border-radius: 50% / 46%;
-  background-color: var(--prl-surface-table);
-  background-image:
-    linear-gradient(var(--prl-table-grid-color) 1px, transparent 1px),
-    linear-gradient(90deg, var(--prl-table-grid-color) 1px, transparent 1px);
-  background-size: var(--prl-table-grid-size) var(--prl-table-grid-size);
+  border: var(--prl-rail-width) solid var(--prl-rail);
+  border-radius: var(--prl-radius-pill);
+  background-color: var(--prl-felt);
 }
 
 .prl-play__idle-seat {
@@ -184,7 +180,7 @@
   display: grid;
   gap: var(--prl-space-3);
   max-width: 34ch;
-  color: var(--prl-text-secondary);
+  color: var(--prl-felt-ink-muted);
   text-align: center;
 }
 
@@ -193,7 +189,7 @@
 }
 
 .prl-play__idle-title {
-  color: var(--prl-text);
+  color: var(--prl-felt-ink);
   font-family: var(--prl-font-display);
   font-size: var(--prl-type-display-3);
   font-stretch: var(--prl-stretch-display);
