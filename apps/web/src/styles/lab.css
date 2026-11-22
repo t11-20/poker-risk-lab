@@ -1,9 +1,9 @@
 /**
  * The Scenario Lab's own rules: the filter bar, the card grid and the staged scenario, prefixed
  * `prl-lab-` or `prl-stage-`. Imported by the two Lab routes only. Chrome shared with Review lives in
- * `page.css`. Every value is a `--prl-*` token, and shadows come only from `--prl-elevation-*`
- * (layout-guarantees.test.ts). No glass on this route. Meaningful borders are `--prl-line-strong` or
- * the accent (§2.4 rule B). Only transform, opacity and colour animate.
+ * `page.css`. Every value is a `--prl-*` token, and nothing casts a shadow (layout-guarantees.test.ts).
+ * Meaningful borders are `--prl-line-strong` or
+ * the accent (§2.3 rule 2). Only transform, opacity and colour animate.
  */
 
 /* The reading measure, narrowed for this route group.
@@ -42,10 +42,8 @@
   margin: 0;
   padding: var(--prl-space-8);
   border: 1px solid var(--prl-line-strong);
-  border-block-start-color: var(--prl-edge-lit);
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-raised);
-  box-shadow: var(--prl-elevation-1);
 }
 
 /* One step tighter on a phone. Difficulty and Street side by side clip "Advanced (14)" at 360, and
@@ -135,26 +133,20 @@
   grid-template-rows: auto auto minmax(0, 1fr) auto auto;
   gap: var(--prl-space-5);
   padding: var(--prl-space-8) var(--prl-space-8) 0;
-  border: 1px solid var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
+  border: 1px solid var(--prl-line);
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-panel);
-  box-shadow: var(--prl-elevation-1);
   transition:
     background-color var(--prl-dur-fast) var(--prl-ease-material),
     border-color var(--prl-dur-fast) var(--prl-ease-material),
-    box-shadow var(--prl-dur-base) var(--prl-ease-material),
     transform var(--prl-dur-fast) var(--prl-ease-material);
 }
 
-/** `:focus-within` lifts the card for keyboard arrival too. `translateY`, because transform composites. */
+/** `:focus-within` marks the card for keyboard arrival too. A colour change, never a lift. */
 .prl-lab-card:hover,
 .prl-lab-card:focus-within {
   border-color: var(--prl-accent-edge);
   background-color: var(--prl-surface-hover);
-  box-shadow: var(--prl-elevation-2);
-  transform: translateY(calc(-1 * var(--prl-space-2)));
 }
 
 .prl-lab-card__index {
@@ -227,7 +219,7 @@
 
 /**
  * The state strip. Its negative margins equal the card's inline padding. Unattempted is a recessed
- * veil and attempted a raised step with an accent edge, two cues that survive greyscale.
+ * strip and attempted a darker step in semibold, two cues that survive greyscale, with its own words.
  */
 .prl-lab-card__state {
   /* `none`, because `base.css` caps every `<p>` at the measure and the strip stopped short of the edge. */
@@ -236,10 +228,9 @@
   align-self: end;
   padding: var(--prl-space-5) var(--prl-space-8);
   border-block-start: var(--prl-hairline);
-  border-inline-start: var(--prl-space-1) solid transparent;
   border-end-start-radius: var(--prl-radius-3);
   border-end-end-radius: var(--prl-radius-3);
-  background-color: var(--prl-veil-4);
+  background-color: var(--prl-surface-inset);
   color: var(--prl-text-muted);
   font-size: var(--prl-type-label);
   font-weight: var(--prl-weight-medium);
@@ -249,11 +240,11 @@
     color var(--prl-dur-fast) var(--prl-ease-material);
 }
 
-/* The edge is transparent at rest, not absent, so nothing shifts when a scenario is attempted. */
+/* Weight as well as fill, so an attempted scenario is not told by colour alone. */
 .prl-lab-card__state[data-attempted="true"] {
-  border-inline-start-color: var(--prl-accent-edge);
   background-color: var(--prl-surface-active);
-  color: var(--prl-accent-text);
+  color: var(--prl-text);
+  font-weight: var(--prl-weight-semibold);
 }
 
 /* Staged scenario. One column, so the reader meets the assumptions before the analysis. */
@@ -264,7 +255,7 @@
   margin-block: var(--prl-space-9);
 }
 
-/** Level 2 with an accent edge, because this block is the reader's own decision. */
+/** A panel with a strong edge, because this block is the reader's own decision. */
 .prl-stage__chosen {
   display: flex;
   flex-wrap: wrap;
@@ -272,13 +263,9 @@
   justify-content: space-between;
   gap: var(--prl-space-5);
   padding: var(--prl-space-7);
-  border: 1px solid var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
-  border-inline-start: var(--prl-space-1) solid var(--prl-accent-edge);
+  border: 1px solid var(--prl-line-strong);
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-panel);
-  box-shadow: var(--prl-elevation-1);
 }
 
 .prl-stage__chosen-line {
@@ -439,9 +426,8 @@
     border-width: var(--prl-focus-width);
   }
 
-  /* `Highlight` is the one colour this mode keeps distinct from `CanvasText`. The underline survives that. */
+  /* The fill is discarded here, so an underline carries the attempted state. */
   .prl-lab-card__state[data-attempted="true"] {
-    border-inline-start-color: Highlight;
     text-decoration: underline;
   }
 }

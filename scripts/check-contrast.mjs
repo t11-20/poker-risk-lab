@@ -2,11 +2,10 @@
 /**
  * `pnpm run design:contrast`: recomputes every contrast ratio the design system claims, in both
  * themes, with no dependencies. The WCAG 2.x formulas reproduce every ratio in the design doc
- * (`docs/frontend-design-system.md` §2.4 to §2.7).
+ * (`docs/frontend-design-system.md` §2.3 and §7).
  *
- * Pass 1 reads tokens.css alone (what the doc claims). Pass 2 adds base.css's derived pairings and
- * light-theme repairs (what a browser paints). Pass 3 composites every text element's real
- * background in Chrome. Glass tints are composited over black and white and asserted on the worse.
+ * Pass 1 reads tokens.css alone (what the doc claims). Pass 2 adds base.css, which must override no
+ * colour, so the two agree. Pass 3 composites every text element's real background in Chrome.
  * The two-tone focus ring is solved in closed form over every backdrop luminance. Disabled text is
  * reported but not asserted (WCAG exempts inactive controls). Exits 1 if any pass fails.
  */
@@ -16,6 +15,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inflateSync } from 'node:zlib';
 import { DevtoolsReplies, withChrome } from './chrome-devtools.mjs';
+import { hidesItsText } from './contrast-hidden-text.mjs';
 import { ManagedServer, refuseOccupiedPort } from './gate-servers.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -211,9 +211,6 @@ const CONTENT_SURFACES = [
   '--prl-surface-raised',
   '--prl-surface-panel',
   '--prl-surface-inset',
-  '--prl-surface-table',
-  // The brightest page-wash stop over the ground. See `deriveSurfaces`.
-  '--prl-surface-wash',
 ];
 
 const INTERACTION_SURFACES = ['--prl-surface-hover', '--prl-surface-active'];
@@ -222,25 +219,14 @@ const ALL_SURFACES = [...CONTENT_SURFACES, ...INTERACTION_SURFACES];
 const AA_TEXT = 4.5;
 const AA_NON_TEXT = 3;
 
-/** 200 to 500 carry text. 600 and below never do, so they are printed but not asserted. */
-const ACCENT_FILL_STEPS = [
-  '--prl-accent-200',
-  '--prl-accent-300',
-  '--prl-accent-400',
-  '--prl-accent-500',
-  // Declared in base.css, so it prints as `-` in pass 1.
-  '--prl-accent-fill',
-];
+/** The two fills a label sits on: the resting button and its hover. */
+const ACCENT_FILL_STEPS = ['--prl-accent-fill', '--prl-accent-fill-hover'];
 
 const ACCENT_RAMP = [
-  '--prl-accent-200',
-  '--prl-accent-300',
-  '--prl-accent-400',
-  '--prl-accent-500',
-  '--prl-accent-600',
-  '--prl-accent-700',
-  '--prl-accent-800',
-  '--prl-accent-900',
+  '--prl-accent-fill',
+  '--prl-accent-fill-hover',
+  '--prl-accent-edge',
+  '--prl-accent-text',
 ];
 
 const GROUPS = [
@@ -257,7 +243,13 @@ const GROUPS = [
     title: 'Semantic and accent colours used as text',
     rule: 'WCAG 1.4.3. These carry a sign, glyph or word as well as the colour',
     min: AA_TEXT,
-    foregrounds: ['--prl-favourable', '--prl-adverse', '--prl-caution', '--prl-info', '--prl-accent-text'],
+    foregrounds: [
+      '--prl-favourable',
+      '--prl-adverse',
+      '--prl-caution',
+      '--prl-accent-text',
+      '--prl-mark-heart',
+    ],
     backgrounds: CONTENT_SURFACES,
   },
   {
@@ -265,7 +257,7 @@ const GROUPS = [
     title: 'Meaningful borders and the focus ring',
     rule: 'WCAG 1.4.11 Non-text Contrast. Decorative hairlines are exempt and excluded',
     min: AA_NON_TEXT,
-    foregrounds: ['--prl-line-strong', '--prl-line-accent', '--prl-accent-edge', '--prl-focus-color'],
+    foregrounds: ['--prl-line-strong', '--prl-accent-edge', '--prl-focus-color'],
     backgrounds: ALL_SURFACES,
   },
   {
@@ -284,17 +276,41 @@ const GROUPS = [
     backgrounds: ALL_SURFACES,
   },
   {
-    id: 'suits',
-    title: 'Suits on both card faces',
-    rule: 'WCAG 1.4.3. Card faces stay light in both themes',
+    id: 'felt-text',
+    title: 'The pot, the bet and the side pots on the felt',
+    rule: 'WCAG 1.4.3. The felt is a fill of its own, in both themes',
     min: AA_TEXT,
-    foregrounds: ['--prl-suit-black', '--prl-suit-red'],
-    backgrounds: ['--prl-card-face', '--prl-card-face-dim'],
+    foregrounds: ['--prl-felt-ink', '--prl-felt-ink-muted'],
+    backgrounds: ['--prl-felt'],
+  },
+  {
+    id: 'deck',
+    title: 'Inks on the generated card faces',
+    rule: 'WCAG 1.4.3. Baked into the card files by scripts/cards/generate.mjs, one value for both themes',
+    min: AA_TEXT,
+    foregrounds: ['--prl-deck-black', '--prl-deck-red'],
+    backgrounds: ['--prl-deck-face'],
+  },
+  {
+    id: 'felt-marks',
+    title: 'An empty board place on the felt',
+    rule: 'WCAG 1.4.11. The dashed outline is the only drawing of a card still to come',
+    min: AA_NON_TEXT,
+    foregrounds: ['--prl-felt-slot'],
+    backgrounds: ['--prl-felt'],
+  },
+  {
+    id: 'card-mark',
+    title: 'The notch on a highlighted card',
+    rule: 'WCAG 1.4.11. Drawn on the face, beside a lift and a phrase in the card name',
+    min: AA_NON_TEXT,
+    foregrounds: ['--prl-card-mark'],
+    backgrounds: ['--prl-deck-face'],
   },
   {
     id: 'text-on-accent',
     title: 'Text on an accent fill',
-    rule: 'WCAG 1.4.3. The ink INVERTS with the theme; see the ink-on-accent control below',
+    rule: 'WCAG 1.4.3. See the ink-on-accent control below',
     min: AA_TEXT,
     foregrounds: ['--prl-text-on-accent'],
     backgrounds: ACCENT_FILL_STEPS,
@@ -312,52 +328,6 @@ const INFORMATIONAL = [
   },
 ];
 
-/* Glass has no single ratio. Every tint is composited over the bounding backdrops
-   (`--prl-glass-backdrop-min`/`-max`, black and white) and the worse result is asserted. Which
-   extreme binds flips with the theme. */
-
-const GLASS_LEVELS = [
-  { tint: '--prl-glass-floating', title: 'L3 floating  - pills, toolbars, chips, action bar' },
-  { tint: '--prl-glass-floating-hover', title: 'L3 floating, hovered' },
-  { tint: '--prl-glass-floating-active', title: 'L3 floating, pressed' },
-  { tint: '--prl-glass-overlay', title: 'L4 overlay   - popovers, menus, sheets' },
-  { tint: '--prl-glass-overlay-hover', title: 'L4 overlay, hovered' },
-];
-
-/**
- * The whole content ramp, `--prl-text-faint` included. At 4.55:1 worst it has the least headroom, so
- * it is the row that notices first if a tint gets more transparent.
- */
-const GLASS_TEXT = [
-  '--prl-text',
-  '--prl-text-secondary',
-  '--prl-text-muted',
-  '--prl-text-faint',
-  '--prl-accent-text',
-  '--prl-favourable',
-  '--prl-adverse',
-  '--prl-caution',
-  '--prl-info',
-];
-
-const GLASS_NON_TEXT = ['--prl-line-strong', '--prl-accent-edge', '--prl-focus-color'];
-
-/**
- * Expected to FAIL: the negative control for the glass rows. Both tokens are decorative by definition
- * (tokens.css rule B). A row that starts clearing its floor is reported, not failed.
- */
-const GLASS_EXCLUDED = [
-  { tint: '--prl-line', floor: AA_NON_TEXT },
-  { tint: '--prl-line-subtle', floor: AA_NON_TEXT },
-];
-
-function glassOver(tintToken, backdropToken, map) {
-  const backdrop = colorOf(backdropToken, map);
-  const tint = colorOf(tintToken, map);
-  if (backdrop === null || tint === null) return null;
-  return composite(tint, backdrop);
-}
-
 /**
  * Each colour clears 3:1 for `Lb <= (Lf + 0.05) / 3 - 0.05` or `Lb >= 3 * (Lf + 0.05) - 0.05`, so it
  * fails only inside `(lo, hi)`. The ring and halo work everywhere when their failure intervals do not
@@ -371,17 +341,6 @@ function ringCoverage(color) {
 const shortName = (token) => token.replace('--prl-', '');
 
 const toHex = ({ r, g, b }) => `#${[r, g, b].map((n) => n.toString(16).padStart(2, '0')).join('')}`;
-
-/**
- * `--prl-page-wash` is a gradient, so its brightest stop (`--prl-wash-tint`) is composited over the
- * ground and treated as covering the page. Injected into the theme maps only, never the light scopes
- * compared for drift.
- */
-function deriveSurfaces(map) {
-  const page = colorOf('--prl-surface-page', map);
-  const tint = colorOf('--prl-wash-tint', map);
-  if (page !== null && tint !== null) map.set('--prl-surface-wash', toHex(composite(tint, page)));
-}
 
 function colorOf(token, map, backdrop) {
   const resolved = resolveToken(token, map);
@@ -437,74 +396,6 @@ function printMatrix(group, result) {
   }
 }
 
-/** Prints the tint over black, over white, and the worse of the two, and asserts on the worse. */
-function evaluateGlass(map, themeName) {
-  const failures = [];
-  const min = '--prl-glass-backdrop-min';
-  const max = '--prl-glass-backdrop-max';
-  if (colorOf(min, map) === null || colorOf(max, map) === null) return failures;
-
-  console.log('');
-  console.log(`  Glass: every tint over BOTH bounding backdrops  ${dim('worst of the two is asserted')}`);
-  console.log(
-    dim(`  backdrop range ${resolveToken(min, map)} .. ${resolveToken(max, map)} - nothing a display`),
-  );
-  console.log(dim('  can paint is outside it, so a ratio that holds at both holds over any content'));
-
-  const rows = [
-    ...GLASS_TEXT.map((fg) => ({ fg, floor: AA_TEXT, asserted: true })),
-    ...GLASS_NON_TEXT.map((fg) => ({ fg, floor: AA_NON_TEXT, asserted: true })),
-    ...GLASS_EXCLUDED.map((row) => ({ fg: row.tint, floor: row.floor, asserted: false })),
-  ];
-
-  for (const level of GLASS_LEVELS) {
-    const dark = glassOver(level.tint, min, map);
-    const light = glassOver(level.tint, max, map);
-    if (dark === null || light === null) continue;
-
-    console.log('');
-    console.log(`  ${shortName(level.tint).padEnd(LABEL)}${dim(level.title)}`);
-    console.log(
-      `  ${''.padEnd(LABEL)}${dim(['over min', 'over max', 'worst'].map((h) => h.padStart(COL)).join(''))}`,
-    );
-
-    for (const row of rows) {
-      const overDark = colorOf(row.fg, map, dark);
-      const overLight = colorOf(row.fg, map, light);
-      if (overDark === null || overLight === null) continue;
-      const a = contrastRatio(overDark, dark);
-      const b = contrastRatio(overLight, light);
-      const worst = Math.min(a, b);
-      const bad = worst < row.floor;
-      const cells = [a, b, worst].map((n) => n.toFixed(2).padStart(COL));
-      const line = `  ${shortName(row.fg).padEnd(LABEL)}${cells.join('')}`;
-
-      if (!row.asserted) {
-        // The negative control. Reported either way, never asserted.
-        const note = bad
-          ? dim(`  decorative only, as expected (a meaningful border needs ${row.floor.toFixed(1)}:1)`)
-          : yellow(`  now clears ${row.floor.toFixed(1)}:1 - re-read the exclusion, it may be stale`);
-        console.log(dim(line) + note);
-        continue;
-      }
-
-      console.log(bad ? red(`${line}!`) : line);
-      if (bad) {
-        failures.push({
-          group: 'glass',
-          fg: row.fg,
-          bg: level.tint,
-          ratio: worst,
-          min: row.floor,
-          theme: themeName,
-        });
-      }
-    }
-  }
-
-  return failures;
-}
-
 /** The assertion is that the ring's and halo's failure intervals do not overlap at all. */
 function evaluateFocusIndicator(map, themeName) {
   const ringColor = colorOf('--prl-focus-color', map);
@@ -519,7 +410,7 @@ function evaluateFocusIndicator(map, themeName) {
 
   const span = ({ lo, hi }) => `fails only for backdrop L in (${lo.toFixed(3)}, ${hi.toFixed(3)})`;
   console.log('');
-  console.log('  Focus indicator on glass: no backdrop may defeat BOTH tones');
+  console.log('  Focus indicator: no backdrop may defeat BOTH tones');
   console.log(dim('  WCAG 1.4.11 at 3:1, solved over every backdrop luminance in [0, 1]'));
   console.log(`  ${'focus-color'.padEnd(LABEL)}${dim(span(ring))}`);
   console.log(`  ${'focus-halo'.padEnd(LABEL)}${dim(span(halo))}`);
@@ -555,7 +446,6 @@ function runPass(label, files, note) {
 
   for (const themeName of ['dark', 'light']) {
     const map = themes[themeName];
-    deriveSurfaces(map);
     console.log('');
     console.log(`  ${bold(themeName.toUpperCase())}`);
 
@@ -588,15 +478,14 @@ function runPass(label, files, note) {
       console.log(`  ${shortName(step).padEnd(LABEL)}${ratio.toFixed(2).padStart(COL)}  ${verdict}`);
     }
 
-    /**
-     * `--prl-text-on-accent` must be the better of near-black and white on the current fill. The light
-     * theme inverts the fill, so it must invert the ink (dark: ink-900 9.39:1, white 2.07:1).
-     */
-    const fill = colorOf('--prl-accent-fill', map) ?? colorOf('--prl-accent-500', map);
+    /** `--prl-text-on-accent` must be the better of the theme's darkest ink and white on the fill. */
+    const fill = colorOf('--prl-accent-fill', map);
     const ink = colorOf('--prl-text-on-accent', map);
     if (fill !== null && ink !== null) {
       const white = { r: 255, g: 255, b: 255, a: 1 };
-      const nearBlack = colorOf('--prl-ink-900', map) ?? { r: 0, g: 0, b: 0, a: 1 };
+      const inks = [colorOf('--prl-text', map), colorOf('--prl-surface-page', map)].filter((c) => c !== null);
+      if (inks.length !== 2) throw new Error('text and page tokens must both resolve to compare inks');
+      const nearBlack = relativeLuminance(inks[0]) < relativeLuminance(inks[1]) ? inks[0] : inks[1];
       const chosen = contrastRatio(ink, fill);
       const whiteRatio = contrastRatio(white, fill);
       const blackRatio = contrastRatio(nearBlack, fill);
@@ -606,7 +495,7 @@ function runPass(label, files, note) {
       console.log('');
       console.log('  Ink on the accent fill: the token must be the BETTER of the two candidates');
       console.log(`  ${'white'.padEnd(LABEL)}${whiteRatio.toFixed(2).padStart(COL)}`);
-      console.log(`  ${'ink-900'.padEnd(LABEL)}${blackRatio.toFixed(2).padStart(COL)}`);
+      console.log(`  ${'darkest ink'.padEnd(LABEL)}${blackRatio.toFixed(2).padStart(COL)}`);
       const verdict = isBest ? green('picked the better ink') : red('picked the WORSE ink');
       console.log(`  ${'text-on-accent'.padEnd(LABEL)}${chosen.toFixed(2).padStart(COL)}  ${verdict}`);
       if (!isBest) {
@@ -621,7 +510,6 @@ function runPass(label, files, note) {
       }
     }
 
-    for (const failure of evaluateGlass(map, themeName)) failures.push(failure);
     for (const failure of evaluateFocusIndicator(map, themeName)) failures.push(failure);
   }
 
@@ -703,18 +591,10 @@ const PAINTED_ROUTES = [
   '/checks',
 ];
 
-/**
- * tokens.css collapses glass to opaque surfaces under these preferences, which changes which token
- * each pane resolves to. Two routes each.
- */
+/** tokens.css turns every decorative hairline into `--prl-line-strong` under this preference. */
 const PAINTED_CONDITIONS = [
   // `id`, not `key`: secret-scan.mjs reads a `key` name with a 20+ character literal as a credential.
   { id: 'default', media: [], routes: PAINTED_ROUTES },
-  {
-    id: 'reduced-transparency',
-    media: [{ name: 'prefers-reduced-transparency', value: 'reduce' }],
-    routes: ['/play?state=decision', '/learn'],
-  },
   {
     id: 'contrast-more',
     media: [{ name: 'prefers-contrast', value: 'more' }],
@@ -949,19 +829,26 @@ const PAINT_WALKER = String.raw`
     return false;
   };
 
-  const CLIPPED_AWAY = /^inset\(\s*(\d+(\.\d+)?)%/;
+  const HIDES_TEXT = HIDES_TEXT_ARGUMENT;
+  const hidesItsText = (node) => HIDES_TEXT(getComputedStyle(node), node.getBoundingClientRect());
   const isVisuallyHidden = (el) => {
-    let node = el;
-    while (node !== null && node !== document.body) {
-      const style = getComputedStyle(node);
-      const clip = CLIPPED_AWAY.exec(style.clipPath);
-      if (clip !== null && Number(clip[1]) >= 50) return true;
-      if (style.clip === 'rect(0px, 0px, 0px, 0px)') return true;
-      const box = node.getBoundingClientRect();
-      if (box.width <= 2 && box.height <= 2 && style.overflow === 'hidden') return true;
-      node = node.parentElement;
+    for (let node = el; node !== null && node !== document.body; node = node.parentElement) {
+      if (hidesItsText(node)) return true;
     }
     return false;
+  };
+
+  /* A clipped descendant still reports its unclipped glyph rects, so a button carrying a visually
+     hidden suffix measured 481px of text in a 151px box and read its own fill plate as partial. */
+  const paintedTextOf = (el) => {
+    const hidden = Array.from(el.querySelectorAll('*')).filter(hidesItsText);
+    if (hidden.length === 0) return [el];
+    const shown = [];
+    const texts = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    for (let text = texts.nextNode(); text !== null; text = texts.nextNode()) {
+      if (!hidden.some((h) => h.contains(text))) shown.push(text);
+    }
+    return shown;
   };
 
   /* Every box that casts a shadow, with the box that shadow can reach. A drop shadow is painted
@@ -1017,11 +904,13 @@ const PAINT_WALKER = String.raw`
     if (state.seen.has(el)) continue;
 
     const range = document.createRange();
-    range.selectNodeContents(el);
     const glyphRects = [];
-    const list = range.getClientRects();
-    for (let i = 0; i < list.length; i += 1) {
-      if (list[i].width > 0 && list[i].height > 0) glyphRects.push(list[i]);
+    for (const source of paintedTextOf(el)) {
+      range.selectNodeContents(source);
+      const list = range.getClientRects();
+      for (let i = 0; i < list.length; i += 1) {
+        if (list[i].width > 0 && list[i].height > 0) glyphRects.push(list[i]);
+      }
     }
     if (glyphRects.length === 0) {
       state.seen.add(el);
@@ -1536,10 +1425,9 @@ async function withPage(headful, run) {
 }
 
 const walkerSource = (measureAll, probeBudget) =>
-  PAINT_WALKER.replace('MEASURE_ALL_ARGUMENT', String(measureAll)).replace(
-    'PROBE_BUDGET_ARGUMENT',
-    String(probeBudget),
-  );
+  PAINT_WALKER.replace('MEASURE_ALL_ARGUMENT', String(measureAll))
+    .replace('PROBE_BUDGET_ARGUMENT', String(probeBudget))
+    .replace('HIDES_TEXT_ARGUMENT', () => String(hidesItsText));
 
 /** Returns failures. Never throws for content. */
 async function measurePage(page, url, label, theme, failures, tally) {

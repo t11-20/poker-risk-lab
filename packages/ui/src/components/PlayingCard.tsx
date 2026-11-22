@@ -1,10 +1,9 @@
 /**
- * One playing card from the engine's integer encoding, as text rather than an image.
- * Suits differ by symbol and, red or black, by colour, as on a real deck.
- * `role="img"` with an `aria-label`, because `aria-label` on a generic span announces nothing.
- * The face stays light in both themes (§2.5). `highlighted` adds a border, a corner notch and a phrase
- * in the accessible name (WCAG 1.4.1). The notch is a `::after` in `components.css`, not a glyph,
- * because a glyph in the face grid was clipped.
+ * One playing card from the engine's integer encoding, drawn by its generated SVG file
+ * (`apps/web/public/cards`, written by `scripts/cards/generate.mjs`).
+ * The name is on the wrapper (`role="img"` plus `aria-label`), so the `<img>` inside is `alt=""` and
+ * `aria-hidden` and a reader hears one name. `highlighted` adds a corner notch, a lift and a phrase in
+ * the accessible name, so the mark is never colour alone (WCAG 1.4.1).
  */
 
 import type { ReactElement } from 'react';
@@ -32,6 +31,25 @@ const SIZE_CLASS: Readonly<Record<CardSize, string>> = {
   lg: 'prl-card--lg',
 };
 
+/** Served by the web app from `public/`. */
+export const CARD_DIR = '/cards/';
+export const CARD_BACK_FILE = 'back.svg';
+
+function CardImage({ file }: { readonly file: string }): ReactElement {
+  return (
+    <img
+      className="prl-card__image"
+      src={`${CARD_DIR}${file}`}
+      alt=""
+      aria-hidden="true"
+      width={250}
+      height={350}
+      draggable={false}
+      decoding="async"
+    />
+  );
+}
+
 export function PlayingCard(props: PlayingCardProps): ReactElement {
   const {
     card,
@@ -58,7 +76,7 @@ export function PlayingCard(props: PlayingCardProps): ReactElement {
   if (faceDown) {
     return (
       <span className={classes} role="img" aria-label="face-down card">
-        <span className="prl-card__back" aria-hidden="true" />
+        <CardImage file={CARD_BACK_FILE} />
       </span>
     );
   }
@@ -66,11 +84,8 @@ export function PlayingCard(props: PlayingCardProps): ReactElement {
   // A value outside 0..51 renders a placeholder rather than throwing and blanking the table.
   if (described === null) {
     return (
-      <span className={classes} role="img" aria-label="unknown card">
-        <span className="prl-card__face" aria-hidden="true">
-          <span className="prl-card__rank">?</span>
-          <span className="prl-card__pip">?</span>
-        </span>
+      <span className={cx(classes, 'prl-card--unknown')} role="img" aria-label="unknown card">
+        <span aria-hidden="true">?</span>
       </span>
     );
   }
@@ -80,11 +95,8 @@ export function PlayingCard(props: PlayingCardProps): ReactElement {
     : described.accessibleName;
 
   return (
-    <span className={classes} data-suit={described.suitKey} role="img" aria-label={accessibleName}>
-      <span className="prl-card__face" aria-hidden="true">
-        <span className="prl-card__rank">{described.face}</span>
-        <span className="prl-card__pip">{described.suitSymbol}</span>
-      </span>
+    <span className={classes} role="img" aria-label={accessibleName}>
+      <CardImage file={described.file} />
     </span>
   );
 }

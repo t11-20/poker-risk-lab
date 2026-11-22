@@ -87,6 +87,30 @@ describe('the play screen never pins a surface over the table', () => {
   });
 });
 
+/**
+ * The idle message is set in felt inks. Painted by a sibling of a fixed-height box, the felt stayed put
+ * while 200% text pushed the message off it onto the page, light green on cream.
+ */
+describe('the idle table message always sits on the felt it was measured against', () => {
+  it('paints the felt on the box that holds the message, and lets that box grow', () => {
+    const felt = /background-color\s*:\s*var\(--prl-felt\)/u;
+    assert.ok(
+      declarationsFor(playCss, '.prl-play__idle::before').some((block) => felt.test(block)),
+      'the felt is `.prl-play__idle::before`, an ancestor layer of `.prl-play__idle-text`',
+    );
+    for (const sibling of ['.prl-play__idle-table', '.prl-play__idle-seat']) {
+      for (const block of declarationsFor(playCss, sibling)) assert.doesNotMatch(block, felt, sibling);
+    }
+    for (const block of declarationsFor(playCss, '.prl-play__idle')) {
+      assert.doesNotMatch(
+        block,
+        /(?:^|;)\s*(?:block-size|height)\s*:/u,
+        'a fixed height strands the message',
+      );
+    }
+  });
+});
+
 describe('the sticky action row is bounded by a bar that stays in flow', () => {
   // The action row is sticky below 46rem of column, which is safe only because its containing block,
   // the ActionBar, sits below the table. Pinning or dissolving the bar covers the table.
@@ -202,9 +226,9 @@ function allBlocks(css: string): readonly { selector: string; body: string }[] {
   return out;
 }
 
-/** Every stylesheet a glass fill can reach. The ghosting bug shipped in an `apps/web` route stylesheet. */
+/** Every component and route stylesheet. tokens.css is not one: it keeps the removed names as aliases. */
 const ROUTE_STYLE_DIR = new URL('../../../apps/web/src/styles/', import.meta.url);
-const GLASS_SCANNED: readonly (readonly [string, string])[] = [
+const STYLESHEETS: readonly (readonly [string, string])[] = [
   ['packages/ui components.css', componentsCss],
   ['packages/ui tip.css', readFileSync(new URL('../src/styles/tip.css', import.meta.url), 'utf8')],
   [
@@ -217,57 +241,221 @@ const GLASS_SCANNED: readonly (readonly [string, string])[] = [
     .map((file) => [`apps/web ${file}`, readFileSync(new URL(file, ROUTE_STYLE_DIR), 'utf8')] as const),
 ];
 
-describe('the design system rules that are stated in prose and checked nowhere', () => {
-  /**
-   * A shadow is never a literal. Every `box-shadow` part is `--prl-elevation-*`, `--prl-focus-ring`,
-   * the ring variable with its empty shadow (base.css), or `none` to cancel an inherited elevation.
-   */
-  const SHADOW_VALUE = /box-shadow\s*:\s*([^;]+)/g;
-  const ALLOWED_SHADOW_PART =
-    /^(none|var\(--prl-elevation-[0-4]\)|var\(--prl-focus-ring\)|var\(--_ring, 0 0 #0000\))$/;
+type Sheets = readonly (readonly [string, string])[];
 
-  it('spends a shadow only through an elevation or focus-ring token, never as a literal', () => {
-    for (const [name, css] of GLASS_SCANNED) {
-      const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, '');
-      for (const match of withoutComments.matchAll(SHADOW_VALUE)) {
+/** Chrome draws an unstyled radio or checkbox in its own blue, which this palette does not have. */
+function accentTickFaults(sheets: Sheets) {
+  const [, baseCss] = sheets[0] ?? ['', ''];
+  const rootTicks = allBlocks(baseCss).some(
+    (block) => block.selector === 'html' && /accent-color\s*:\s*var\(--prl-accent-edge\)/u.test(block.body),
+  );
+  const offenders: string[] = [];
+  let read = 0;
+  for (const [name, css] of sheets) {
+    for (const block of allBlocks(css)) {
+      for (const match of block.body.matchAll(/accent-color\s*:\s*([^;]+)/gu)) {
+        read += 1;
         const value = (match[1] ?? '').trim();
-        // Commas inside `var(..., fallback)` do not separate shadows.
-        for (const part of value.split(/,(?![^(]*\))/).map((piece) => piece.trim())) {
-          assert.match(
-            part,
-            ALLOWED_SHADOW_PART,
-            `${name}: \`box-shadow: ${value}\` spends a literal. Elevation is a level on the ` +
-              'material ladder (design system section 2.7); add a token before you add a shadow.',
+        if (!/^var\(--prl-accent-[a-z-]+\)$/u.test(value))
+          offenders.push(`${name}: \`${block.selector}\` ticks in ${value}`);
+      }
+    }
+  }
+  return { rootTicks, offenders, read };
+}
+
+/**
+ * Adjusted, Chrome lays a `Canvas` backplate under the text of a forced fill, so a word in
+ * `HighlightText` on `Highlight` is painted on Canvas and vanishes (the header's theme switch did).
+ * Case-insensitive, because CSS keywords are.
+ */
+function forcedFillFaults(sheets: Sheets) {
+  const fill =
+    /background(?:-color)?\s*:\s*(?:Highlight|Mark|SelectedItem|AccentColor|ButtonText|CanvasText)\b/iu;
+  const offenders: string[] = [];
+  let fills = 0;
+  for (const [name, css] of sheets) {
+    for (const block of allBlocks(css)) {
+      if (!fill.test(block.body)) continue;
+      fills += 1;
+      if (!/forced-color-adjust\s*:\s*none/iu.test(block.body))
+        offenders.push(`${name}: \`${block.selector}\` fills with a system colour but keeps the backplate`);
+    }
+  }
+  return { fills, offenders };
+}
+
+/** Every `prl-` class a component or page names, so a floating rule nothing renders does not count. */
+const CONSUMED_CLASSES: ReadonlySet<string> = (() => {
+  const roots = ['../src/', '../../../apps/web/src/'].map((dir) => new URL(dir, import.meta.url));
+  const names = new Set<string>();
+  let files = 0;
+  for (const root of roots) {
+    for (const file of readdirSync(root, { recursive: true, encoding: 'utf8' })) {
+      if (!/\.tsx?$/u.test(file)) continue;
+      files += 1;
+      for (const match of readFileSync(new URL(file, root), 'utf8').matchAll(/prl-[a-z0-9_-]+/gu))
+        names.add(match[0]);
+    }
+  }
+  assert.ok(files > 50 && names.size > 100, `read ${files} sources and ${names.size} class names`);
+  return names;
+})();
+
+const EDGE =
+  /(?:^|;)\s*border(?:-(?:block|inline)(?:-(?:start|end))?|-(?:top|right|bottom|left))?(?:-color)?\s*:\s*([^;]+)/gu;
+
+/**
+ * Design system 2.4: with no shadow to lift it, a surface over content needs a 3:1 edge on every side it
+ * draws.
+ */
+function overlayEdgeFaults(sheets: Sheets, consumed: ReadonlySet<string>) {
+  const offenders: string[] = [];
+  let surfaces = 0;
+  for (const [name, css] of sheets) {
+    for (const block of allBlocks(css)) {
+      const sticky = /position\s*:\s*sticky/u.test(block.body);
+      const floating = /^\.(prl-[a-z-]+--floating)$/u.exec(block.selector)?.[1];
+      const edges = [...block.body.matchAll(EDGE)].map((m) => (m[1] ?? '').trim());
+      if (floating !== undefined ? !consumed.has(floating) : !(sticky && edges.length > 0)) continue;
+      surfaces += 1;
+      // The header is over nothing until it sticks, and its stuck state carries the strong edge.
+      const stuck = allBlocks(css).find((other) => other.selector === `${block.selector}[data-stuck="true"]`);
+      if (stuck !== undefined && /var\(--prl-line-strong\)/u.test(stuck.body)) continue;
+      for (const edge of edges.length > 0 ? edges : ['default']) {
+        if (!/var\(--prl-line-strong\)/u.test(edge))
+          offenders.push(`${name}: \`${block.selector}\` sits over content on a ${edge} edge`);
+      }
+    }
+  }
+  return { surfaces, offenders };
+}
+
+describe('the design system rules that are stated in prose and checked nowhere', () => {
+  const FLAT_SCANNED: readonly (readonly [string, string])[] = [
+    ['packages/ui base.css', readFileSync(new URL('../src/styles/base.css', import.meta.url), 'utf8')],
+    ...STYLESHEETS,
+  ];
+
+  /**
+   * Surfaces are flat. A shadow is only ever the focus halo, on a focus rule: any other `box-shadow`
+   * in a component rule out-ranks base.css's halo and deletes it while the control is focused.
+   */
+  it('spends a box-shadow only on the focus halo, never on elevation', () => {
+    let seen = 0;
+    for (const [name, css] of FLAT_SCANNED) {
+      for (const block of allBlocks(css)) {
+        for (const match of block.body.matchAll(/box-shadow\s*:\s*([^;]+)/g)) {
+          seen += 1;
+          const value = (match[1] ?? '').trim();
+          assert.equal(
+            value,
+            'var(--prl-focus-ring)',
+            `${name}: \`${block.selector}\` sets \`box-shadow: ${value}\`. Depth is a fill and a ` +
+              'hairline (design system section 2.4), and a shadow here deletes the focus halo.',
           );
+          assert.match(block.selector, /focus/u, `${name}: \`${block.selector}\` rings outside a focus rule`);
         }
       }
     }
+    // A sweep of nothing is not a pass: base.css's own halo must have been read.
+    assert.ok(seen > 0, 'no box-shadow was read at all, so the scan saw none of the stylesheets');
   });
 
   /**
-   * The ghosting guard (`apps/web/src/styles/nav.css`). A translucent fill with no blur leaves the
-   * text behind legible. Wherever a glass fill token goes, `backdrop-filter` goes in the same block,
-   * a `:hover` block included. Scoped to the fill tokens, not `--prl-glass-filter`.
+   * No glass and no wash. A translucent pane needs a blur to stop the text behind it ghosting through,
+   * and neither is part of this design, so neither may come back piecemeal.
    */
-  const GLASS_FILL = /var\(--prl-glass-(?:floating|overlay)(?:-hover|-active)?\)/;
-
-  it('never uses a glass fill without the blur that makes it legible', () => {
-    let seen = 0;
-    for (const [name, css] of GLASS_SCANNED) {
+  it('uses no backdrop-filter, glass fill, page wash or elevation token anywhere', () => {
+    let blocks = 0;
+    for (const [name, css] of FLAT_SCANNED) {
       for (const block of allBlocks(css)) {
-        if (!GLASS_FILL.test(block.body)) continue;
-        seen += 1;
-        assert.match(
+        blocks += 1;
+        assert.doesNotMatch(
           block.body,
-          /backdrop-filter\s*:/,
-          `${name}: \`${block.selector}\` sets a translucent glass fill with no backdrop-filter. ` +
-            'That is the ghosting bug in the header comment of apps/web/src/styles/nav.css: the ' +
-            'content behind stays perfectly legible, in the wrong place, as a second layer of text.',
+          /backdrop-filter\s*:|--prl-(?:glass|elevation|page-wash|edge|veil)\b/u,
+          `${name}: \`${block.selector}\` brings back a material this design removed`,
         );
       }
     }
-    // A sweep of nothing is not a pass.
-    assert.ok(seen > 0, 'expected at least one glass fill to exist to be checked');
+    assert.ok(blocks > 500, `only ${blocks} blocks were read, so the scan missed stylesheets`);
+  });
+
+  it('ticks every native radio and checkbox in the accent', () => {
+    const { rootTicks, offenders, read } = accentTickFaults(FLAT_SCANNED);
+    assert.ok(read > 0, 'read no accent-color declaration, so the scan missed base.css');
+    assert.ok(
+      rootTicks,
+      'base.css `html` must set `accent-color` from the accent, so every control inherits it',
+    );
+    assert.deepEqual(offenders, []);
+  });
+
+  it('catches a tick in a colour outside the accent, and a root that sets none (NEGATIVE CONTROL)', () => {
+    const faults = accentTickFaults([
+      ['base.css', 'html { color: var(--prl-text) }'],
+      ['x.css', '.a input { accent-color: #1a73e8 }'],
+    ]);
+    assert.equal(faults.rootTicks, false);
+    assert.deepEqual(faults.offenders, ['x.css: `.a input` ticks in #1a73e8']);
+  });
+
+  it('paints a forced-colours fill only where the browser will not lay a backplate over it', () => {
+    const { fills, offenders } = forcedFillFaults(FLAT_SCANNED);
+    assert.ok(fills > 0, 'no forced-colours fill was read, so the theme switch rule was not found');
+    assert.deepEqual(offenders, []);
+    // Unadjusted, its focus ring keeps the token colour too, so the last word on it is a system colour.
+    const ring = allBlocks(FLAT_SCANNED.find(([name]) => name === 'apps/web globals.css')?.[1] ?? '')
+      .filter((block) => block.selector === '.prl-theme__input:checked:focus-visible + .prl-theme__word')
+      .flatMap((block) =>
+        [...block.body.matchAll(/outline-color\s*:\s*([^;]+)/gu)].map((m) => (m[1] ?? '').trim()),
+      )
+      .at(-1);
+    assert.match(
+      ring ?? '(none)',
+      /^(?:CanvasText|Highlight)$/u,
+      `the chosen word's forced-colours ring is ${ring}`,
+    );
+  });
+
+  it('catches a forced fill that keeps its backplate, in any letter case (NEGATIVE CONTROL)', () => {
+    const { fills, offenders } = forcedFillFaults([
+      ['x.css', '.a { background: highlight } .b { background-color: Mark; forced-color-adjust: none }'],
+    ]);
+    assert.equal(fills, 2);
+    assert.deepEqual(offenders, ['x.css: `.a` fills with a system colour but keeps the backplate']);
+  });
+
+  it('edges every sticky or floating surface in --prl-line-strong', () => {
+    const { surfaces, offenders } = overlayEdgeFaults(FLAT_SCANNED, CONSUMED_CLASSES);
+    assert.ok(
+      surfaces >= 4,
+      `only ${surfaces} sticky or floating surfaces were read, so the scan missed some`,
+    );
+    assert.deepEqual(offenders, []);
+  });
+
+  it('catches a weak edge on any side, and counts no floating rule nothing uses (NEGATIVE CONTROL)', () => {
+    const { surfaces, offenders } = overlayEdgeFaults(
+      [
+        [
+          'x.css',
+          '.a { position: sticky; border-block-start: var(--prl-hairline) }' +
+            '.b { position: sticky; border: 1px solid var(--prl-line-strong) }' +
+            '.c { position: sticky }' +
+            '.d { position: sticky; border-block-end: 1px solid var(--prl-line) }' +
+            '.d[data-stuck="true"] { border-block-end-color: var(--prl-line-strong) }' +
+            '.prl-used--floating { border-color: var(--prl-line) }' +
+            '.prl-unused--floating { border-color: var(--prl-line-strong) }',
+        ],
+      ],
+      new Set(['prl-used--floating']),
+    );
+    assert.equal(surfaces, 4, 'the sticky rule with no edge and the unused floating rule are not surfaces');
+    assert.deepEqual(offenders, [
+      'x.css: `.a` sits over content on a var(--prl-hairline) edge',
+      'x.css: `.prl-used--floating` sits over content on a var(--prl-line) edge',
+    ]);
   });
 
   it('spends no raw duration or easing curve outside the token layer', () => {
@@ -299,7 +487,7 @@ describe('numeric columns are actually end-aligned', () => {
   it('never end-aligns a cell through a selector that loses to its own table (REGRESSION)', () => {
     const offenders: string[] = [];
     let tablesFound = 0;
-    for (const [name, raw] of GLASS_SCANNED) {
+    for (const [name, raw] of STYLESHEETS) {
       // Comments stripped first, or prose explaining the defect is reported as the defect.
       const css = strip(raw);
 
@@ -409,6 +597,120 @@ describe('numeric columns are actually end-aligned', () => {
   });
 });
 
+/** A selector list split on its lines, because `:not(:disabled, [aria-disabled="true"])` holds a comma. */
+const selectorParts = (selector: string): string[] => selector.split(/,\s*\n/u).map((part) => part.trim());
+
+/** The first declaration, because the forced-colors block further down restates the border. */
+function firstDeclared(css: string, selector: string, property: string): string | undefined {
+  for (const block of allBlocks(css)) {
+    if (!selectorParts(block.selector).includes(selector)) continue;
+    const match = new RegExp(`(?:^|;)\\s*${property}\\s*:\\s*([^;]+)`, 'u').exec(block.body);
+    if (match?.[1] !== undefined) return match[1].trim();
+  }
+  return undefined;
+}
+
+function rimPlateFaults(css: string, button: string, enabled: string): string[] {
+  const faults: string[] = [];
+  const rest = firstDeclared(css, `${button}::before`, 'background-color');
+  if (firstDeclared(css, button, 'border-color') !== rest)
+    faults.push(`${button} at rest: rim and plate differ`);
+  for (const state of [':hover', ':active']) {
+    const selector = `${button}${state}${enabled}`;
+    const plate = firstDeclared(css, `${selector}::before`, 'background-color');
+    if (plate === undefined) faults.push(`${selector}::before sets no fill`);
+    else if (plate === rest)
+      faults.push(`${selector} paints the plate it has at rest, so ${state} shows nothing`);
+    if (firstDeclared(css, selector, 'border-color') !== plate)
+      faults.push(`${selector}: the rim is not the plate`);
+  }
+  return faults;
+}
+
+/** The `@media (forced-colors: active)` bodies of `css`, and what is left outside them. */
+function splitForced(css: string): { forced: string; unforced: string } {
+  const text = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  let forced = '';
+  let unforced = '';
+  let at = 0;
+  for (const match of text.matchAll(/@media\s*\(forced-colors:\s*active\)\s*\{/gu)) {
+    const open = (match.index ?? 0) + match[0].length;
+    let depth = 1;
+    let end = open;
+    while (depth > 0 && end < text.length) {
+      if (text[end] === '{') depth += 1;
+      if (text[end] === '}') depth -= 1;
+      end += 1;
+    }
+    unforced += text.slice(at, match.index);
+    forced += text.slice(open, end - 1);
+    at = end;
+  }
+  return { forced, unforced: unforced + text.slice(at) };
+}
+
+/**
+ * A state rule that sets a primary button's border out-ranks the forced-colors `Highlight` edge, and
+ * Chrome then forces it to the plain button border, so the primary loses its mark while pressed.
+ */
+function forcedEdgeFaults(css: string, button: string): string[] {
+  const { forced, unforced } = splitForced(css);
+  const highlighted = new Set(
+    allBlocks(forced)
+      .filter((block) => /(?:^|;)\s*border-color\s*:\s*Highlight\b/iu.test(block.body))
+      .flatMap((block) => selectorParts(block.selector)),
+  );
+  const faults: string[] = [];
+  for (const block of allBlocks(unforced)) {
+    if (!/(?:^|;)\s*border(?:-color)?\s*:/u.test(block.body)) continue;
+    for (const part of selectorParts(block.selector)) {
+      if (part.startsWith(button) && !part.includes('::') && !highlighted.has(part))
+        faults.push(`${part} sets a border that forced colours do not restate as Highlight`);
+    }
+  }
+  return faults;
+}
+
+/**
+ * A filled button paints its fill on a `::before` plate inside a border. The two have to move
+ * together: a hover that darkens only the plate leaves a lighter rim, and one that changes neither
+ * is no hover at all.
+ */
+describe('a filled button is one colour from rim to plate in every state', () => {
+  const BUTTONS = [
+    ['.prl-btn--primary', ':not(:disabled, [aria-disabled="true"])'],
+    ['.prl-action-btn--primary', ':not(:disabled)'],
+  ] as const;
+
+  for (const [button, enabled] of BUTTONS) {
+    it(`${button} changes its rim with its plate on hover and press`, () => {
+      assert.deepEqual(rimPlateFaults(componentsCss, button, enabled), []);
+    });
+
+    it(`${button} keeps its Highlight edge in forced colours in every state`, () => {
+      assert.deepEqual(forcedEdgeFaults(componentsCss, button), []);
+    });
+  }
+
+  it('catches a rim left behind, a still press and a lost Highlight edge (NEGATIVE CONTROL)', () => {
+    const css = `.b { border-color: var(--a) }
+.b::before { background-color: var(--a) }
+.b:hover:not(:disabled)::before { background-color: var(--a-hover) }
+.b:active:not(:disabled) { border-color: var(--a) }
+.b:active:not(:disabled)::before { background-color: var(--a) }
+@media (forced-colors: active) {
+  .b { border-color: Highlight }
+}`;
+    assert.deepEqual(rimPlateFaults(css, '.b', ':not(:disabled)'), [
+      '.b:hover:not(:disabled): the rim is not the plate',
+      '.b:active:not(:disabled) paints the plate it has at rest, so :active shows nothing',
+    ]);
+    assert.deepEqual(forcedEdgeFaults(css, '.b'), [
+      '.b:active:not(:disabled) sets a border that forced colours do not restate as Highlight',
+    ]);
+  });
+});
+
 /**
  * The same trap outside tables. `.prl-legal-flag p` (0,1,1) beat `.prl-legal-flag__mark` (0,1,0), so
  * the caution colour never painted on any of the fifteen legal-page marks.
@@ -440,7 +742,7 @@ describe('a block never lets its element rules out-rank its own parts', () => {
     const unqualified: string[] = [];
     const misordered: string[] = [];
 
-    for (const [name, raw] of GLASS_SCANNED) {
+    for (const [name, raw] of STYLESHEETS) {
       const css = raw.replace(/\/\*[\s\S]*?\*\//gu, '');
       const blocks = allBlocks(css).map((block) => ({ ...block, at: css.indexOf(block.selector) }));
 

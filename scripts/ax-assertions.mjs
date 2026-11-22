@@ -449,7 +449,7 @@ const GLOBAL_CHECKS = [
     what: 'the theme control is a three-option radio group with exactly one option selected',
     decide: (e) => {
       if (e.themeGroups.length === 0) return fail('no group named "Colour theme" in the computed tree');
-      const words = ['auto', 'light', 'dark'];
+      const words = ['light', 'dark', 'system'];
       const named = words.map((word) =>
         e.themeOptions.find((option) => new RegExp(`^${word}\\b`, 'iu').test(option.name)),
       );
@@ -467,7 +467,7 @@ const GLOBAL_CHECKS = [
             'nothing about the current theme or that two are current at once',
         );
       }
-      return pass(`Auto/Light/Dark, "${selected[0].name}" selected`);
+      return pass(`Light/Dark/System, "${selected[0].name}" selected`);
     },
   },
   {

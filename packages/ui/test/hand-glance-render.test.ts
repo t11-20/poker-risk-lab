@@ -47,7 +47,11 @@ const FLOP = [QUEEN_OF_HEARTS, JACK_OF_SPADES, TWO_OF_CLUBS];
 
 async function glance(board: readonly number[], extra: Partial<HandGlanceProps> = {}): Promise<string> {
   const HandGlance = await loadComponent<HandGlanceProps>('components/HandGlance', 'HandGlance');
-  return renderToStaticMarkup(createElement(HandGlance, { hole: HOLE, board, ...extra }));
+  // React hoists an image preload hint to the head of a page; rendered alone it leads the markup.
+  return renderToStaticMarkup(createElement(HandGlance, { hole: HOLE, board, ...extra })).replace(
+    /<link rel="preload"[^>]*>/gu,
+    '',
+  );
 }
 
 /** Twenty of thirty seconds left, as a frame would carry it. */

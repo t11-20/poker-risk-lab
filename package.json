@@ -39,6 +39,8 @@
     "test:all": "pnpm run test && pnpm run test:exhaustive && pnpm run test:simulation && pnpm run test:a11y && pnpm run test:ax && pnpm run test:keyboard && pnpm run test:layout",
     "fixtures:regenerate": "node scripts/regenerate-web-fixtures.mjs",
     "fixtures:check": "node scripts/regenerate-web-fixtures.mjs --check",
+    "cards:generate": "node scripts/cards/generate.mjs",
+    "cards:check": "node scripts/cards/generate.mjs --check",
     "design:contrast": "node scripts/check-contrast.mjs",
     "db:up": "docker compose up -d postgres",
     "db:down": "docker compose down",

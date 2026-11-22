@@ -5,8 +5,9 @@
  * the narrow-viewport menu.
  *
  * `<nav aria-label="Primary">` wraps the pill and the `Play` call to action, so all five destinations
- * are in one landmark. The theme control lives in the footer and the sheet, because at 1280px the bar
- * needs 1067 of 1200px and the switch needs 217 more.
+ * are in one landmark. The theme control is in the bar from 860px and in the menu sheet below it, so
+ * exactly one copy is ever rendered. The bar carries no suit marks: the words name each place, and the
+ * marks' width is what the switch needed to fit one row at 860px.
  *
  * The `/lab` count is fetched, never typed, and renders nothing when the request fails. The floating
  * state comes from an `IntersectionObserver` on a sentinel, never a `scroll` listener (design system
@@ -23,11 +24,11 @@ import { UnitsBadge } from '@prl/ui';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { type ReactElement, useEffect, useRef, useState } from 'react';
-import { SuitMark } from '@/components/SuitMark.tsx';
 import { API_PATHS, apiGet, fetchSession, safeFetch, subscribeToAcceptedMutations } from '@/lib/api.ts';
 import { isCurrentDestination, NAV_DESTINATIONS, RECORD_DESTINATION } from '@/lib/nav.ts';
 import { MobileNav } from './MobileNav.tsx';
 import { NavigationPending } from './NavigationPending.tsx';
+import { ThemeToggle } from './ThemeToggle.tsx';
 import { TourButton } from './TourButton.tsx';
 
 /** The destination promoted out of the link list and into the accent pill. */
@@ -189,7 +190,6 @@ export function SiteHeader(props: SiteHeaderProps): ReactElement {
                       className="prl-nav__link"
                       href={destination.href}
                     >
-                      <SuitMark area={destination.area ?? null} className="prl-nav__mark" />
                       <span className="prl-nav__label">{destination.label}</span>
                       {/* Always rendered. `:empty` collapses it when there is no count. */}
                       <span className="prl-nav__count">
@@ -207,13 +207,13 @@ export function SiteHeader(props: SiteHeaderProps): ReactElement {
               className="prl-pillbar__cta prl-pill-group"
               href={CTA_DESTINATION.href}
             >
-              <SuitMark area="play" className="prl-pillbar__cta-mark" />
               <span>{CTA_DESTINATION.label}</span>
             </Link>
           </nav>
 
           <div className="prl-shell__header-tools">
             <TourButton />
+            <ThemeToggle className="prl-shell__theme" />
             {units.state === 'unknown' ? (
               <UnitsUnknown />
             ) : (

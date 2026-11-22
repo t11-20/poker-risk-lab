@@ -75,18 +75,19 @@ function hasAllInChip(markup: string): boolean {
 }
 
 describe('a seat in a hand that is still being played', () => {
-  it('says nothing of a seat that is simply in, and badges an outstanding all-in', async () => {
+  it('says nothing of a seat that is simply in, and says an outstanding all-in once, on its status line', async () => {
     for (const street of ['preflop', 'flop', 'turn', 'river'] as const) {
       assert.equal(hasBlankStatusLine(await render('active', street)), true, street);
       assert.equal(statusLine(await render('allIn', street)), 'all in', street);
-      assert.equal(hasAllInChip(await render('allIn', street)), true, `${street}: no all-in badge`);
+      // The plain seat box has no badges. A chip beside the status line said "all in" twice.
+      assert.equal(hasAllInChip(await render('allIn', street)), false, `${street}: an all-in badge as well`);
     }
   });
 
   it('says nothing at showdown either, because the pot has not been awarded yet', async () => {
     // The cards are being compared, so a seat that has not folded is still in, and that needs no words.
     assert.equal(hasBlankStatusLine(await render('active', 'showdown')), true);
-    assert.equal(hasAllInChip(await render('allIn', 'showdown')), true);
+    assert.equal(statusLine(await render('allIn', 'showdown')), 'all in');
   });
 });
 
@@ -117,7 +118,7 @@ describe('a seat in a hand that is over', () => {
     // The old component rendered the live wording on every street, so the live markup stands in for it.
     const live = await render('allIn', 'river');
     assert.equal(statusLine(live), 'all in');
-    assert.equal(hasAllInChip(live), true);
+    assert.equal(hasAllInChip('<span class="prl-chip prl-chip--caution prl-chip--pill">all in</span>'), true);
     assert.notEqual(statusLine(live), statusLine(await render('allIn', 'complete')));
 
     assert.equal(hasBlankStatusLine(await render('folded', 'river')), false, 'the detector never fires');

@@ -3,41 +3,18 @@
  * browser defaults, this file makes choices, and every value comes from a `--prl-*` token.
  */
 
-/* 0. ACCENT ROLES. A fill is judged against the text on it, a border against the surface behind
-   it, and ink against that surface at the text threshold, so one accent step cannot do all three.
-
-     --prl-accent-fill   a background that carries --prl-text-on-accent   (>= 4.5:1)
-     --prl-accent-edge   a border or graphic mark that carries meaning    (>= 3:1)
-     --prl-accent-text   accent-coloured TEXT                             (>= 4.5:1)
-
-   Use these, not `--prl-accent-400/500`, wherever the accent must be legible. No theme split is
-   needed because tokens.css remaps the whole ramp for light. Do not add light-theme repairs here.
-   Fix the token at source, so the gate's token pass and rendered pass stay identical. */
-
-:root {
-  --prl-accent-fill: var(--prl-accent-500);
-  --prl-accent-edge: var(--prl-accent-500);
-  --prl-accent-text: var(--prl-accent-400);
-}
-
 /* 1. PAGE */
 
 html {
   /** A focused element must never land under the sticky header (WCAG 2.4.11). Generous on purpose. */
   scroll-padding-block-start: var(--prl-space-13);
+  /** Inherited, so every native radio, checkbox and range ticks in the accent, not the browser's blue. */
+  accent-color: var(--prl-accent-edge);
 }
 
 body {
   /** Required. A transparent body inherits the host's paint, which gives dark-on-dark text. */
   background-color: var(--prl-surface-page);
-  /**
-   * The wash makes glass read as material (tokens.css MATERIALS). `scroll`, never `fixed`, which
-   * re-resolves against the viewport every scroll frame. `--prl-page-wash` is already `none` under
-   * reduced transparency, increased contrast and forced colors.
-   */
-  background-image: var(--prl-page-wash);
-  background-repeat: no-repeat;
-  background-attachment: scroll;
   color: var(--prl-text);
   font-family: var(--prl-font-sans);
   font-size: var(--prl-type-body);
@@ -253,24 +230,17 @@ a:hover {
    which reshapes every focused control to its parent's radius. Design system section 7.1. */
 
 /**
- * Two tones, because a floating control's ring sits on a backdrop this stylesheet does not own
- * (`accent-300` is 1.52:1 on white). check-contrast.mjs proves no backdrop luminance defeats both:
- * dark ring L <= 0.180 and halo L >= 0.112, light ring L >= 0.246 and halo L <= 0.300.
+ * Two tones, because a ring on an accent fill or a card face sits on a colour unlike the page.
+ * check-contrast.mjs proves no backdrop luminance defeats both: dark ring L <= 0.177 and halo
+ * L >= 0.121, light ring L >= 0.260 and halo L <= 0.300.
  * The halo is a box-shadow, so it is clipped by `overflow` and dropped under forced colors, and the
- * outline stays the primary tone. An elevated rule writes `var(--_ring, 0 0 #0000)` before its
- * elevation, because `box-shadow` is one property and this rule would otherwise lose to it.
+ * outline stays the primary tone. No other rule sets `box-shadow`, which is one property and would
+ * delete the halo (layout-guarantees.test.ts).
  */
 :focus-visible {
-  --_ring: var(--prl-focus-ring);
   outline: var(--prl-focus-width) solid var(--prl-focus-color);
   outline-offset: var(--prl-focus-offset);
   box-shadow: var(--prl-focus-ring);
-}
-
-/** Not inherited, or a focused container would ring every elevated control inside it. */
-@property --_ring {
-  syntax: "*";
-  inherits: false;
 }
 
 :focus:not(:focus-visible) {

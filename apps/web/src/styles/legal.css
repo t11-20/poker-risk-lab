@@ -66,18 +66,15 @@
 
 /* The document's own metadata, at the top so a reader knows it is a draft before reading it. */
 
-/** Material level 1 (tokens.css). `--prl-elevation-0` is stated to cancel any inherited elevation. */
+/** An inset well for the document's metadata. */
 .prl-legal__meta {
   display: grid;
   gap: var(--prl-space-4) var(--prl-space-8);
   margin: 0;
   padding: var(--prl-space-7) var(--prl-space-8);
-  border: 1px solid var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
+  border: 1px solid var(--prl-line);
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-raised);
-  box-shadow: var(--prl-elevation-0);
 }
 
 .prl-legal__meta dt {
@@ -135,11 +132,7 @@ p.prl-legal__banner-mark {
   display: grid;
   gap: var(--prl-space-4);
   padding: var(--prl-space-7);
-  border: 1px solid var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
-  /* Declared after the shorthand and the lit-edge colours so nothing overrides the caution rule. */
-  border-inline-start: var(--prl-space-1) solid var(--prl-caution);
+  border: 1px solid var(--prl-caution);
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-inset);
 }
@@ -185,19 +178,16 @@ p.prl-legal-flag__mark {
 
 /* The age check. A page, not an overlay, so it needs no scrim, trap or z-index. */
 
-/** Material level 2, one step of elevation, above the level-1 metadata well. */
+/** A bordered panel, above the inset metadata well. */
 .prl-gate {
   display: grid;
   gap: var(--prl-space-7);
   max-width: var(--prl-measure);
   margin-block: var(--prl-space-10);
   padding: var(--prl-space-10);
-  border: 1px solid var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
+  border: 1px solid var(--prl-line);
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-panel);
-  box-shadow: var(--prl-elevation-1);
 }
 
 .prl-gate__title {
@@ -214,9 +204,8 @@ p.prl-legal-flag__mark {
 /** Inset rather than small print, because these paragraphs say what the control does not do. */
 .prl-gate__caveat {
   padding: var(--prl-space-6) var(--prl-space-7);
-  border-inline-start: var(--prl-focus-width) solid var(--prl-line-strong);
-  border-start-end-radius: var(--prl-radius-2);
-  border-end-end-radius: var(--prl-radius-2);
+  border: var(--prl-hairline);
+  border-radius: var(--prl-radius-2);
   background-color: var(--prl-surface-inset);
   color: var(--prl-text);
 }

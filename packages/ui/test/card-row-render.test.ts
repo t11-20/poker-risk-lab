@@ -22,7 +22,8 @@ interface CardRowProps {
 
 async function render(props: CardRowProps): Promise<string> {
   const CardRow = await loadComponent<CardRowProps>('components/CardRow', 'CardRow');
-  return renderToStaticMarkup(createElement(CardRow, props));
+  // React hoists an image preload hint to the head of a page; rendered alone it leads the markup.
+  return renderToStaticMarkup(createElement(CardRow, props)).replace(/<link rel="preload"[^>]*>/gu, '');
 }
 
 /** Every `aria-label` in the markup, in document order. */

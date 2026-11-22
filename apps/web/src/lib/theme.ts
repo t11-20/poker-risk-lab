@@ -23,22 +23,22 @@ export const BOOT_ATTRIBUTE = 'data-boot';
 export const BOOT_SKIP = 'skip';
 
 /** `system` is a real preference, so a two-state toggle would overwrite it on first touch. */
-export const THEME_CHOICES = ['system', 'light', 'dark'] as const;
+export const THEME_CHOICES = ['light', 'dark', 'system'] as const;
 
 export type ThemeChoice = (typeof THEME_CHOICES)[number];
 
-/** Words, not icons (§12). Short because three sit in a header, and no glyph says "auto". */
+/** Words, not icons (§12), short because three sit in the header. */
 export const THEME_LABELS: Readonly<Record<ThemeChoice, string>> = {
-  system: 'Auto',
   light: 'Light',
   dark: 'Dark',
+  system: 'System',
 };
 
 /** What a screen reader hears in place of the short word. */
 export const THEME_DESCRIPTIONS: Readonly<Record<ThemeChoice, string>> = {
-  system: 'Follow the system setting',
   light: 'Light theme',
   dark: 'Dark theme',
+  system: 'Follow the system setting',
 };
 
 export function isThemeChoice(value: unknown): value is ThemeChoice {

@@ -77,7 +77,7 @@ export { PokerTable, type PokerTableProps } from './components/PokerTable.tsx';
 export { PotDisplay, type PotDisplayProps } from './components/PotDisplay.tsx';
 export { type RadarAxisLabels, RadarChart, type RadarChartProps } from './components/RadarChart.tsx';
 export { Reveal, type RevealProps } from './components/Reveal.tsx';
-export { Seat, type SeatProps, seatRingPosition } from './components/Seat.tsx';
+export { Seat, type SeatProps, type SeatSlot, seatSlot } from './components/Seat.tsx';
 export { StatTile, type StatTileProps, type StatTone } from './components/StatTile.tsx';
 export { Tip, type TipProps } from './components/Tip.tsx';
 export { type TurnClock, TurnTimer, type TurnTimerProps } from './components/TurnTimer.tsx';
