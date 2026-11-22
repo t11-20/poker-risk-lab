@@ -13,7 +13,7 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const REPO = fileURLToPath(new URL('../../../', import.meta.url));
-const TOKENS = 'packages/ui/src/styles/tokens.css';
+const TOKEN_SHEET = 'packages/ui/src/styles/tokens.css';
 
 /** The CSS Color 4 named colours. Keywords and system colours are deliberately absent. */
 const NAMED = new Set(
@@ -108,7 +108,10 @@ const components = SOURCE_ROOTS.flatMap((root) => walk(root, (file) => file.ends
 describe('a colour is declared once, in tokens.css', () => {
   it('reads a non-empty set of stylesheets and components (a sweep of nothing is not a pass)', () => {
     const names = stylesheets.map((file) => relative(REPO, file));
-    assert.ok(names.includes(TOKENS), 'tokens.css was not found, so the exemption below exempts nothing');
+    assert.ok(
+      names.includes(TOKEN_SHEET),
+      'tokens.css was not found, so the exemption below exempts nothing',
+    );
     assert.ok(stylesheets.length >= 10, `only ${stylesheets.length} stylesheets were found`);
     assert.ok(components.length >= 50, `only ${components.length} .tsx files were found`);
   });
@@ -148,7 +151,7 @@ describe('a colour is declared once, in tokens.css', () => {
     const offenders: string[] = [];
     for (const file of stylesheets) {
       const name = relative(REPO, file);
-      if (name === TOKENS) continue;
+      if (name === TOKEN_SHEET) continue;
       for (const finding of cssFindings(readFileSync(file, 'utf8'))) offenders.push(`${name}  ${finding}`);
     }
     assert.deepEqual(offenders, [], 'Add a token to tokens.css and read it with var() instead.');
