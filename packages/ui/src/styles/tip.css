@@ -55,7 +55,7 @@
 /**
  * Fixed, and in the top layer when the browser has the Popover API. Every inherited text property is
  * reset, because the bubble sits inside a label, a `<dt>` or a sizer line and would take their style.
- * Opaque level 2, not glass: it carries a sentence over whatever is behind it.
+ * Opaque with the 3:1 edge, because it carries a sentence over whatever is behind it.
  */
 .prl-tip__bubble {
   position: fixed;
@@ -73,7 +73,6 @@
   border: 1px solid var(--prl-line-strong);
   border-radius: var(--prl-radius-2);
   background-color: var(--prl-surface-panel);
-  box-shadow: var(--prl-elevation-1);
   color: var(--prl-text);
   font-family: var(--prl-font-sans);
   font-size: var(--prl-type-body-sm);

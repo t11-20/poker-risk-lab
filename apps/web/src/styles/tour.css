@@ -10,7 +10,6 @@
   border: 1px solid var(--prl-line-strong);
   border-radius: var(--prl-radius-pill);
   background-color: var(--prl-shell-nav-fill);
-  box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-2);
   color: var(--prl-text);
   font-size: var(--prl-type-body-sm);
   white-space: nowrap;
@@ -83,7 +82,6 @@
   border: 1px solid var(--prl-line-strong);
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-panel);
-  box-shadow: var(--prl-elevation-1);
 }
 
 .prl-tour__head {
