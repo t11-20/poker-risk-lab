@@ -916,9 +916,8 @@
 }
 
 /* 12.4  THE CARDS
-   Every length is proportional to `--prl-card-w`, so one rule serves `sm`, `md` and `lg`. The index
-   is rank over suit letter in the corner. The spans are `aria-hidden` inside a `role="img"`, so the
-   order is visual only. The radius is a twelfth of the width, like a real card. */
+   Every length is proportional to `--prl-card-w`, so one rule serves `sm`, `md` and `lg`. The radius
+   is a twelfth of the width, like a real card. */
 
 .prl-play .prl-card {
   border-radius: calc(var(--prl-card-w) / 12);
@@ -942,35 +941,6 @@
   .prl-play .prl-table__board .prl-card {
     --prl-card-w: min(var(--prl-space-12), calc((100cqi - var(--prl-space-11)) / 5));
   }
-}
-
-.prl-play .prl-card__face {
-  grid-template-rows: auto auto minmax(0, 1fr);
-  justify-items: start;
-  padding: 0.2em 0.24em;
-}
-
-.prl-play .prl-card__rank {
-  grid-row: 1;
-  font-size: 1.24em;
-  letter-spacing: var(--prl-tracking-display-2);
-  line-height: 0.88;
-}
-
-/** Row 2, so the index reads rank over suit while the DOM order is rank, pip, letter. */
-.prl-play .prl-card__suit-letter {
-  grid-row: 2;
-  /* Never below 0.62em. This glyph tells a club from a spade under protanopia. */
-  font-size: 0.66em;
-  line-height: 1.05;
-}
-
-.prl-play .prl-card__pip {
-  grid-row: 3;
-  align-self: end;
-  justify-self: end;
-  font-size: 1.5em;
-  line-height: 0.78;
 }
 
 /**

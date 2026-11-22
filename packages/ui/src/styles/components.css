@@ -1788,7 +1788,7 @@
   border: 1px solid var(--prl-card-edge);
   border-radius: var(--prl-radius-1);
   background-color: var(--prl-card-face);
-  color: var(--prl-suit-spade);
+  color: var(--prl-suit-black);
   font-size: calc(var(--prl-card-w) / 3);
   line-height: 1;
   user-select: none;
@@ -1806,54 +1806,35 @@
   --prl-card-w: var(--prl-space-12);
 }
 
+/** A corner index, as on a real card: the rank at the top, a large suit symbol below it. */
 .prl-card__face {
   display: grid;
-  grid-template-rows: auto 1fr auto;
-  justify-items: center;
-  padding: 0.28em 0.2em;
+  grid-template-rows: auto minmax(0, 1fr);
+  justify-items: start;
+  padding: 0.18em 0.22em;
   overflow: hidden;
 }
 
 .prl-card__rank {
-  font-size: 1.05em;
+  font-family: var(--prl-font-display);
+  font-size: 1.6em;
+  font-stretch: var(--prl-stretch-display);
   font-weight: var(--prl-weight-bold);
-  letter-spacing: var(--prl-tracking-display-1);
+  letter-spacing: var(--prl-tracking-display-2);
+  line-height: 0.9;
 }
 
+/** Large, because with two inks the symbol's shape is all that tells a club from a spade. */
 .prl-card__pip {
-  align-self: center;
-  font-size: 1.3em;
-  line-height: 1;
+  align-self: end;
+  justify-self: end;
+  font-size: 2em;
+  line-height: 0.8;
 }
 
-/** The non-colour cue. At 34px a club and a spade are similar shapes, and protanopia merges their hue. */
-.prl-card__suit-letter {
-  font-family: var(--prl-font-mono);
-  font-size: 0.62em;
-  font-weight: var(--prl-weight-bold);
-  letter-spacing: var(--prl-tracking-label);
-}
-
-.prl-card[data-suit="spade"] {
-  --prl-card-suit-colour: var(--prl-suit-spade);
-}
-
-.prl-card[data-suit="heart"] {
-  --prl-card-suit-colour: var(--prl-suit-heart);
-}
-
+.prl-card[data-suit="heart"],
 .prl-card[data-suit="diamond"] {
-  --prl-card-suit-colour: var(--prl-suit-diamond);
-}
-
-.prl-card[data-suit="club"] {
-  --prl-card-suit-colour: var(--prl-suit-club);
-}
-
-.prl-card__rank,
-.prl-card__pip,
-.prl-card__suit-letter {
-  color: var(--prl-card-suit-colour, var(--prl-suit-spade));
+  color: var(--prl-suit-red);
 }
 
 /** No logo or crest. A visually-hidden string supplies the accessible name. */
@@ -1889,7 +1870,7 @@
 
 /* CardText */
 
-/** Page-surface suit colours, because the card-face ones put navy spades on a dark page. */
+/** Page-surface inks, red and black as on the faces, because the card ones put navy on a dark page. */
 .prl-card-text {
   white-space: nowrap;
 }
@@ -1899,16 +1880,9 @@
   font-weight: var(--prl-weight-bold);
 }
 
-.prl-card-text__card[data-suit="heart"] {
-  color: var(--prl-mark-heart);
-}
-
+.prl-card-text__card[data-suit="heart"],
 .prl-card-text__card[data-suit="diamond"] {
-  color: var(--prl-mark-diamond);
-}
-
-.prl-card-text__card[data-suit="club"] {
-  color: var(--prl-mark-club);
+  color: var(--prl-mark-heart);
 }
 
 /* CardRow */

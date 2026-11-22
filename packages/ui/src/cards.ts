@@ -33,8 +33,8 @@ const RANK_WORDS = [
 ] as const;
 
 /**
- * In the engine's `c d h s` order. `letter` is the non-colour cue that separates suits for any
- * colour-vision deficiency. All four glyphs are filled so no suit looks lighter.
+ * In the engine's `c d h s` order. `letter` is the engine's short form ("Ah"), never drawn on a face.
+ * All four glyphs are filled so no suit looks lighter.
  */
 const SUITS = [
   { key: 'club', symbol: '♣', letter: 'c', word: 'clubs' },
@@ -50,7 +50,6 @@ export interface CardDescription {
   readonly short: string;
   readonly suitKey: SuitKey;
   readonly suitSymbol: string;
-  readonly suitLetter: string;
   readonly accessibleName: string;
 }
 
@@ -75,7 +74,6 @@ export function describeCard(card: number): CardDescription | null {
     short: `${short}${suit.letter}`,
     suitKey: suit.key,
     suitSymbol: suit.symbol,
-    suitLetter: suit.letter,
     accessibleName: `${word} of ${suit.word}`,
   };
 }

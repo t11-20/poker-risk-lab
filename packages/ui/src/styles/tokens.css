@@ -143,17 +143,15 @@
   --prl-hairline: 1px solid var(--prl-line-subtle);
   --prl-hairline-strong: 1px solid var(--prl-line-strong);
 
-  /* CARD FACES. Light in both themes, because a dark card is unreadable at six-max sizes. Every card
-     also carries its glyph and an aria-label, so suit is never colour alone. */
+  /* CARD FACES. Light in both themes, because a dark card is unreadable at six-max sizes. Two inks, as on
+     a real deck. Suit is never colour alone: every card carries its symbol and an aria-label. */
   --prl-card-face: #f7f8fb;
   --prl-card-face-dim: #e4e7ef;
   --prl-card-edge: #b9becd;
   --prl-card-back: #22308a;
   --prl-card-back-pattern: #3142a8;
-  --prl-suit-spade: #161b33;
-  --prl-suit-club: #127152;
-  --prl-suit-heart: #c02637;
-  --prl-suit-diamond: #2b44d4;
+  --prl-suit-black: #161b33;
+  --prl-suit-red: #c02637;
   /* Suit marks on the page (`SuitMark`). The card inks would be navy on navy in dark. */
   --prl-mark-spade: var(--prl-ink-000);
   --prl-mark-heart: #ff8593;

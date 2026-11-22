@@ -288,7 +288,7 @@ const GROUPS = [
     title: 'Suits on both card faces',
     rule: 'WCAG 1.4.3. Card faces stay light in both themes',
     min: AA_TEXT,
-    foregrounds: ['--prl-suit-spade', '--prl-suit-heart', '--prl-suit-diamond', '--prl-suit-club'],
+    foregrounds: ['--prl-suit-black', '--prl-suit-red'],
     backgrounds: ['--prl-card-face', '--prl-card-face-dim'],
   },
   {
@@ -680,7 +680,7 @@ const PAINTED_ROUTES = [
   '/',
   '/learn',
   '/learn/pot-odds',
-  // Its assumptions draw cards in prose (`CardText`) in all four suit colours.
+  // Its assumptions draw cards in prose (`CardText`) in both suit colours.
   '/learn/counting-outs',
   '/play?state=decision',
   '/play?state=complete',

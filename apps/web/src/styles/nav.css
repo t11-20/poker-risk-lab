@@ -118,7 +118,7 @@
   border-radius: var(--prl-radius-2);
   background-color: var(--prl-card-face);
   box-shadow: var(--prl-elevation-1);
-  color: var(--prl-suit-spade);
+  color: var(--prl-suit-black);
   font-family: var(--prl-font-display);
   font-stretch: var(--prl-stretch-display);
   font-weight: 800;
@@ -131,7 +131,7 @@
 }
 
 .prl-shell__brand-suit {
-  color: var(--prl-suit-diamond);
+  color: var(--prl-suit-red);
   font-size: var(--prl-type-body-sm);
 }
 
