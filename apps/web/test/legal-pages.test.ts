@@ -289,7 +289,7 @@ describe('the required disclosures are on the pages', () => {
       potBefore: 'the pot before bets',
       bigBlind: 'the big blind',
       opponents: 'for each opponent',
-      key: 'for each opponent',
+      key: 'internal label for each opponent',
       stack: 'their stack',
       bet: 'bet',
       hand: 'a range, exact cards or neither',

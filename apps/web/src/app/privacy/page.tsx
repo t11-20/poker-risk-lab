@@ -265,14 +265,15 @@ export default function PrivacyPage(): ReactElement {
               big blind; for each opponent, the name you give them, their stack and their bet, whether you set
               a range, exact cards or neither, and that range or those cards; whether the opponent never
               folds, and the fold rate you entered; the built-in scenario it was copied from, if any, and that
-              scenario&rsquo;s own name for the opponent&rsquo;s hand; when you last saved it; and a random
-              identifier for the spot and for each opponent. Both kinds of name are whatever you type, kept as
-              you typed them apart from spaces at either end.
+              scenario&rsquo;s own name for the opponent&rsquo;s hand; when you last saved it; a random
+              identifier for the spot; and a short internal label for each opponent, such as <code>o1</code>.
+              Both kinds of name are whatever you type, kept as you typed them apart from spaces at either
+              end.
             </li>
             <li>
               <strong>Whether you closed the “How to use” guide</strong> on the Scenario Lab (
               <code>prl.tour.dismissed</code> in local storage). Until you press Skip or Close in it, the
-              guide opens by itself each time you load the Scenario Lab page.
+              guide can open by itself again whenever you load the Scenario Lab page, not just the first time.
             </li>
             <li>
               <strong>The sitting timer in the footer</strong>: when this tab was opened (

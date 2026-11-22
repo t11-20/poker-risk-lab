@@ -818,6 +818,8 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
         <div className="prl-spot-editor__inputs">
           <Panel title="Cards" headingLevel={2} className="prl-spot-editor__cards">
             <div data-tour="hand-board">
+              {/* Above the slots, because below the 52-card deck it sat a screen away from them at 390px. */}
+              <ErrorLine id={cardsErrorId} message={cardsError} />
               <CardPicker
                 groups={pickerGroups(draft)}
                 active={active}
@@ -827,7 +829,6 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
                 status={pickerStatus}
                 {...(cardsError === undefined ? {} : { errorId: cardsErrorId })}
               />
-              <ErrorLine id={cardsErrorId} message={cardsError} />
               <div className="prl-btn-row prl-spot-editor__card-tools">
                 <Button
                   size="sm"

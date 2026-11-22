@@ -413,21 +413,23 @@ describe('the contract with the maths', () => {
     for (const board of boards) {
       for (const hand of hands) {
         for (const [heroBet, bet, stack, heroStack, rowRefusal] of rows) {
-          for (const extra of [false, true]) {
+          // A second seat with a range, one the analysis does not model, or none.
+          for (const extra of [null, 'range', 'none'] as const) {
             const opponents: OpponentDraft[] = [
               { ...(good().opponents[0] as OpponentDraft), stack, bet, ...hand },
-              ...(extra
-                ? [
+              ...(extra === null
+                ? []
+                : [
                     {
                       ...(good().opponents[0] as OpponentDraft),
                       key: 'o2',
                       name: 'Mira',
+                      handKind: extra,
                       range: 'TT+',
                       stack: '600',
                       bet: '0',
                     },
-                  ]
-                : []),
+                  ]),
             ];
             for (const [assumption, assumed] of assumptions) {
               const unposted = board.flop1 === null && Math.max(Number(heroBet), Number(bet)) < 20;
@@ -439,7 +441,9 @@ describe('the contract with the maths', () => {
                 opponents,
                 ...assumption,
               };
-              drafts.push([draft, rowRefusal ?? assumed ?? (unposted ? 'bigBlind' : null)]);
+              const unmodelledBesideAllIn = extra === 'none' && stack === bet;
+              const table = unposted ? 'bigBlind' : unmodelledBesideAllIn ? 'opponents' : null;
+              drafts.push([draft, rowRefusal ?? assumed ?? table]);
             }
           }
         }
