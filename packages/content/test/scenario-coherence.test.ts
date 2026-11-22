@@ -328,7 +328,8 @@ test('a fold rate stated in an assumption is the one the scenario declares', () 
 test("a scenario's board, seat cards and exact range are each refused once", () => {
   // eq-equity-against-one-known-hand: turn, board "Qd 9s 5c 3h", hero QcJd, BTN QhTs, exact QhTs.
   const id = 'eq-equity-against-one-known-hand';
-  const bad = [7, '', '   ', ',', 'Xx', 'QhTs9c', 'AhAh', 'Xx'.repeat(13)];
+  // `Qd … Ah` parses but is over the length limit, so its Qd must not reach the clash check.
+  const bad = [7, '', '   ', ',', 'Xx', 'QhTs9c', 'AhAh', 'Xx'.repeat(13), `Qd${' '.repeat(30)}Ah`];
   const cases: [string, string, (scenario: RawScenario, value: unknown) => void][] = [
     ['board', 'scenarios[0].board', (scenario, value) => (scenario['board'] = value)],
     ['hero', 'scenarios[0].seats[0].holeCards', (scenario, value) => (heroOf(scenario)['holeCards'] = value)],
@@ -366,4 +367,19 @@ test('a seat holding the same card twice is refused as a holding, not reported a
   assert.deepEqual(problemsFor(scenario), [
     'scenarios[0].seats[0].holeCards: a holding is two different cards, got "AhAh"',
   ]);
+});
+
+test('a refused hand or board is not used as blockers for a notation range', () => {
+  // On board "Qd 9s 5c 3h", "AA" can be dealt unless a refused value's aces are counted as blockers.
+  const edits: [string, (scenario: RawScenario) => void][] = [
+    ['hero of three aces', (scenario) => (heroOf(scenario)['holeCards'] = 'AsAhAd')],
+    ['five-card board on the turn', (scenario) => (scenario['board'] = 'As Ah Ad 9s 5c')],
+  ];
+  for (const [name, edit] of edits) {
+    const scenario = scenarioNamed('eq-equity-against-one-known-hand');
+    scenario['opponentRange'] = { kind: 'notation', notation: 'AA', label: 'aces' };
+    edit(scenario);
+    const problems = problemsFor(scenario);
+    assert.equal(problems.length, 1, `${name}: ${problems.join('; ')}`);
+  }
 });

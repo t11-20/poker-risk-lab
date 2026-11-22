@@ -196,15 +196,9 @@ function requireHolding(problems: Problems, path: string, raw: unknown): { text:
   return { text, cards: problems.count === before ? cards : [] };
 }
 
-/** The cards of a holding `requireHolding` accepted. A refused one was reported there, so it adds none. */
+/** The cards of a holding `requireHolding` accepts. A refused one was reported there, so it adds none. */
 function acceptedHolding(text: string | undefined): Card[] {
-  if (text === undefined) return [];
-  try {
-    const cards = parseCards(text);
-    return cards.length === 2 && cards[0] !== cards[1] ? cards : [];
-  } catch {
-    return [];
-  }
+  return text === undefined ? [] : requireHolding(new Problems(), '', text).cards;
 }
 
 /** An equity opponent, refused in words a content author can act on when it is written as a range. */
@@ -1263,7 +1257,13 @@ function validateScenario(problems: Problems, path: string, raw: unknown): Scena
 
   const opponentRange = validateRangeSpec(problems, `${path}.opponentRange`, raw['opponentRange']);
   checkNoCardAppearsTwice(problems, path, boardAccepted ? boardCards : [], seats, opponentRange);
-  checkOpponentRange(problems, `${path}.opponentRange`, boardCards, seats, opponentRange);
+  checkOpponentRange(
+    problems,
+    `${path}.opponentRange`,
+    boardAccepted ? boardCards : [],
+    seats,
+    opponentRange,
+  );
 
   const claimsRaw = Array.isArray(raw['expectedInsight']) ? raw['expectedInsight'] : [];
   if (!Array.isArray(raw['expectedInsight'])) problems.add(`${path}.expectedInsight`, 'expected an array');
@@ -1434,13 +1434,8 @@ function checkOpponentRange(
   opponentRange: RangeSpec,
 ): void {
   if (opponentRange.kind === 'exact') return;
-  const heroText = seats.find((seat) => seat.isHero === true)?.holeCards ?? '';
-  let blockers: Card[] = [...boardCards];
-  try {
-    blockers = [...parseCards(heroText), ...boardCards];
-  } catch {
-    // Already reported on the seat. The range is still checked, against the board alone.
-  }
+  // A refused hand or board was reported already, so the range is checked against what was accepted.
+  const blockers = [...acceptedHolding(seats.find((seat) => seat.isHero === true)?.holeCards), ...boardCards];
   if (opponentRange.kind === 'notation') {
     checkRangeDealable(problems, `${path}.notation`, opponentRange.notation, blockers);
     return;
