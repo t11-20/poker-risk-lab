@@ -39,8 +39,8 @@ export function pickerGroups(draft: SpotDraft): readonly CardPickerGroup[] {
     groups.push({
       label: `${name}'s hand`,
       slots: [
-        { id: first, label: `${name} 1`, card: opponent.cards[0] },
-        { id: second, label: `${name} 2`, card: opponent.cards[1] },
+        { id: first, label: `${name}, card 1`, card: opponent.cards[0], short: `Opp ${index + 1}` },
+        { id: second, label: `${name}, card 2`, card: opponent.cards[1], short: `Opp ${index + 1}` },
       ],
     });
   }

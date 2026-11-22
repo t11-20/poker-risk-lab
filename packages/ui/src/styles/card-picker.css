@@ -27,12 +27,15 @@
 .prl-picker__group {
   display: grid;
   align-content: start;
+  max-width: 100%;
   gap: var(--prl-space-2);
 }
 
 .prl-picker__group-label {
+  max-width: 100%;
   margin: 0 0 var(--prl-space-2);
   padding: 0;
+  overflow-wrap: anywhere;
   color: var(--prl-text-muted);
   font-size: var(--prl-type-label);
   font-weight: var(--prl-weight-medium);

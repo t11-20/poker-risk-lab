@@ -70,7 +70,7 @@ describe('the picker on a draft', () => {
     );
     assert.deepEqual(
       allSlots(draft).map((slot) => slot.label),
-      ['Hole 1', 'Hole 2', 'Flop 1', 'Flop 2', 'Flop 3', 'Turn', 'River', 'Ledger 1', 'Ledger 2'],
+      ['Hole 1', 'Hole 2', 'Flop 1', 'Flop 2', 'Flop 3', 'Turn', 'River', 'Ledger, card 1', 'Ledger, card 2'],
     );
   });
 
@@ -79,7 +79,7 @@ describe('the picker on a draft', () => {
     const [first] = opponentSlotIds('o1');
     draft = withSlotCard(draft, first, c('As'));
     assert.equal(draft.opponents[0]?.cards[0], c('As'));
-    assert.equal(cardOwners(allSlots(draft)).get(c('As'))?.label, 'Opponent 1 1');
+    assert.equal(cardOwners(allSlots(draft)).get(c('As'))?.label, 'Opponent 1, card 1');
     assert.equal(pickCard(allSlots(draft), 'flop1', c('As')).placed, null);
   });
 

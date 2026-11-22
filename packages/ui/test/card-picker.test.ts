@@ -145,6 +145,18 @@ function deckButtons(markup: string): readonly string[] {
 }
 
 describe('the rendered picker', () => {
+  it('shows a short label where one is given and speaks the full one', async () => {
+    const long = 'the tight range that keeps playing, card 1';
+    const markup = await render({
+      groups: [{ label: 'Their hand', slots: [{ id: 'o1', label: long, short: 'Opp 1', card: card('As') }] }],
+      active: null,
+    });
+    assert.match(markup, new RegExp(`aria-label="${long}: ace of spades"`, 'u'));
+    assert.match(markup, /aria-label="ace of spades, in use as the tight range[^"]*"/u);
+    assert.match(markup, /<span class="prl-picker__used" aria-hidden="true">Opp 1<\/span>/u);
+    assert.ok(!markup.includes(`>${long}<`), 'the long label is never drawn');
+  });
+
   it('draws 52 deck buttons, one of them in the tab order', async () => {
     const buttons = deckButtons(await render());
     assert.equal(buttons.length, 52);

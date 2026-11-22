@@ -8,9 +8,11 @@ import { type CardValue, describeCard } from './cards.ts';
 
 export interface PickerSlot {
   readonly id: string;
-  /** Shown and spoken, e.g. "Flop 1". */
+  /** Spoken, and shown unless `short` is given, e.g. "Flop 1". */
   readonly label: string;
   readonly card: CardValue | null;
+  /** Shown in place of `label` where a long one, such as an opponent's name, would not fit. */
+  readonly short?: string;
 }
 
 const RANKS_HIGH_FIRST = [12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0] as const;
