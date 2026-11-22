@@ -22,6 +22,7 @@ import {
   type TablePrice,
   tablePrice,
 } from './spot.ts';
+import { type FieldErrors, type FieldKey, opponentField } from './spot-validate.ts';
 
 function opponentLabel(opponent: OpponentDraft, index: number): string {
   return opponent.name.trim() === '' ? `Opponent ${index + 1}` : opponent.name.trim();
@@ -142,4 +143,49 @@ export function priceLine(draft: SpotDraft): Omit<TablePrice, 'winnable'> | null
     bets: bets.filter((bet): bet is number => bet !== null),
   });
   return { pot, toCall, allIn };
+}
+
+/** Rules about the seats together, shown once the reader has touched any seat. */
+const TABLE_KEYS: readonly FieldKey[] = ['opponents'];
+
+/**
+ * The errors to mark. None on a field the reader has not touched, so a new spot does not open in red;
+ * all of them once Save has been pressed. Card errors wait for Save, because picking the first hole
+ * card would otherwise mark the second before the reader could reach it.
+ */
+export function errorsToShow(
+  errors: FieldErrors,
+  touched: ReadonlySet<FieldKey>,
+  submitted: boolean,
+): FieldErrors {
+  if (submitted) return errors;
+  const seatTouched = [...touched].some((key) => key.startsWith('opponent.'));
+  return new Map(
+    [...errors].filter(([key]) => touched.has(key) || (seatTouched && TABLE_KEYS.includes(key))),
+  );
+}
+
+/** The slot Save focuses when the first problem is a card: the first empty or doubled one at fault. */
+export function focusSlotFor(errors: FieldErrors, draft: SpotDraft): string | null {
+  const groups: readonly (readonly [FieldKey, readonly string[]])[] = [
+    ['hole', HERO_SLOTS],
+    ['board', BOARD_SLOTS],
+    ...draft.opponents.map(
+      (opponent) => [opponentField(opponent.key, 'cards'), opponentSlotIds(opponent.key)] as const,
+    ),
+  ];
+  const cards = new Map(allSlots(draft).map((slot) => [slot.id, slot.card]));
+  for (const [key, slots] of groups) {
+    if (!errors.has(key)) continue;
+    const open = key === 'board' ? boardGap(draft) : slots.find((id) => cards.get(id) == null);
+    return open ?? slots[0] ?? null;
+  }
+  return null;
+}
+
+/** The first board slot out of street order: an empty flop card, or the turn missing before a river. */
+function boardGap(draft: SpotDraft): string | undefined {
+  const filled = BOARD_SLOTS.map((slot) => draft.cards[slot] !== null);
+  const last = filled.lastIndexOf(true);
+  return BOARD_SLOTS.find((_slot, index) => index < Math.max(3, last + 1) && !filled[index]);
 }

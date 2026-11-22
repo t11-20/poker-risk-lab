@@ -67,6 +67,8 @@ function subscribe(listener: () => void): () => void {
 
 export function useSpotLibrary(): {
   readonly library: LoadedLibrary;
+  /** Storage as it is now, so a write is built on what another tab saved, not on the last render. */
+  readonly read: () => LoadedLibrary;
   readonly commit: (spots: readonly SavedSpot[]) => WriteResult;
 } {
   const library = useSyncExternalStore(subscribe, snapshot, () => PENDING);
@@ -75,5 +77,5 @@ export function useSpotLibrary(): {
     for (const listener of listeners) listener();
     return result;
   }, []);
-  return { library, commit };
+  return { library, read: snapshot, commit };
 }

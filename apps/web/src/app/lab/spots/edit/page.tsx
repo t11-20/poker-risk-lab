@@ -29,16 +29,11 @@ function first(value: string | string[] | undefined): string | null {
 
 export default async function SpotEditorPage({ searchParams }: EditorPageProps): Promise<ReactElement> {
   const query = await searchParams;
-  const originals = builtInOriginals();
   const id = first(query['id']);
   const from = first(query['from']);
-  const unknownFrom = from !== null && originals[from] === undefined;
+  // An unknown `from` still goes to the editor, which may hold a saved edit of a built-in now gone.
   const target: EditorTarget =
-    id !== null
-      ? { mode: 'id', id }
-      : from !== null && !unknownFrom
-        ? { mode: 'from', scenarioId: from }
-        : { mode: 'new' };
+    id !== null ? { mode: 'id', id } : from !== null ? { mode: 'from', scenarioId: from } : { mode: 'new' };
 
   return (
     <div className="prl-container prl-lab-page">
@@ -58,10 +53,7 @@ export default async function SpotEditorPage({ searchParams }: EditorPageProps):
           go. Spots save in this browser only.
         </p>
       </header>
-      {unknownFrom ? (
-        <p className="prl-note">That scenario is not one this page knows, so this is a blank spot instead.</p>
-      ) : null}
-      <SpotEditor target={target} originals={originals} />
+      <SpotEditor target={target} originals={builtInOriginals()} />
     </div>
   );
 }

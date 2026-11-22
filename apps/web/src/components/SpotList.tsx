@@ -11,10 +11,12 @@ import { type SavedSpot, streetOf } from '../lib/spot.ts';
 import {
   deleteSpot,
   duplicateDraft,
+  isEditOfBuiltIn,
   newSpotId,
   noticeSentence,
   refusalSentence,
   resetToOriginal,
+  spotHref,
   type WriteResult,
 } from '../lib/spot-storage.ts';
 import { validateDraft } from '../lib/spot-validate.ts';
@@ -25,12 +27,6 @@ export interface SpotListProps {
 }
 
 const STREET_WORD = { preflop: 'Preflop', flop: 'Flop', turn: 'Turn', river: 'River' } as const;
-
-function editHref(spot: SavedSpot): string {
-  return spot.from === null
-    ? `/lab/spots/edit?id=${encodeURIComponent(spot.id)}`
-    : `/lab/spots/edit?from=${encodeURIComponent(spot.from)}`;
-}
 
 function SpotCards({ spot }: { readonly spot: SavedSpot }): ReactElement {
   const checked = validateDraft(spot.draft);
@@ -51,6 +47,8 @@ function SpotCards({ spot }: { readonly spot: SavedSpot }): ReactElement {
 
 function SpotItem(props: {
   readonly spot: SavedSpot;
+  readonly href: string;
+  /** The built-in's title for an edit of one this page still has. */
   readonly original: string | undefined;
   readonly confirming: boolean;
   readonly keepRef: RefObject<HTMLButtonElement | null>;
@@ -59,14 +57,14 @@ function SpotItem(props: {
   readonly onRemove: (name: string) => void;
   readonly onDuplicate: () => void;
 }): ReactElement {
-  const { spot, original, confirming, keepRef, onAsk, onCancel, onRemove, onDuplicate } = props;
+  const { spot, href, original, confirming, keepRef, onAsk, onCancel, onRemove, onDuplicate } = props;
   const name = spot.draft.name.trim() === '' ? 'Untitled spot' : spot.draft.name.trim();
-  const own = spot.from === null;
+  const own = original === undefined;
   const removal = own ? 'Delete' : 'Reset to original';
   return (
     <li className="prl-spot-list__item">
       <h2 className="prl-spot-list__title">
-        <a href={editHref(spot)}>{name}</a>
+        <a href={href}>{name}</a>
       </h2>
       <p className="prl-note">{original === undefined ? 'Your own spot' : `Your edit of "${original}"`}</p>
       <SpotCards spot={spot} />
@@ -84,11 +82,7 @@ function SpotItem(props: {
         </div>
       ) : (
         <div className="prl-btn-row">
-          <a
-            className="prl-btn prl-btn--secondary prl-btn--sm"
-            href={editHref(spot)}
-            aria-label={`Edit ${name}`}
-          >
+          <a className="prl-btn prl-btn--secondary prl-btn--sm" href={href} aria-label={`Edit ${name}`}>
             Edit
           </a>
           <Button size="sm" aria-label={`Duplicate ${name}`} onClick={onDuplicate}>
@@ -104,7 +98,8 @@ function SpotItem(props: {
 }
 
 export function SpotList({ titles }: SpotListProps): ReactElement {
-  const { library, commit } = useSpotLibrary();
+  const { library, read, commit } = useSpotLibrary();
+  const isBuiltIn = (id: string): boolean => titles[id] !== undefined;
   const [confirming, setConfirming] = useState<string | null>(null);
   const [status, setStatus] = useState('');
   const keepRef = useRef<HTMLButtonElement>(null);
@@ -135,21 +130,24 @@ export function SpotList({ titles }: SpotListProps): ReactElement {
             <SpotItem
               key={spot.id}
               spot={spot}
-              original={spot.from === null ? undefined : titles[spot.from]}
+              href={spotHref(spot, isBuiltIn)}
+              original={
+                isEditOfBuiltIn(spot, isBuiltIn) && spot.from !== null ? titles[spot.from] : undefined
+              }
               confirming={confirming === spot.id}
               keepRef={keepRef}
               onAsk={() => setConfirming(spot.id)}
               onCancel={() => setConfirming(null)}
               onRemove={(name) => {
                 setConfirming(null);
-                const own = spot.from === null;
+                const own = !isEditOfBuiltIn(spot, isBuiltIn);
                 const next = own
-                  ? deleteSpot(library.spots, spot.id)
-                  : resetToOriginal(library.spots, spot.from ?? '');
+                  ? deleteSpot(read().spots, spot.id)
+                  : resetToOriginal(read().spots, spot.from ?? '');
                 written(commit(next), own ? `Deleted "${name}".` : `"${name}" is back to the original.`);
               }}
               onDuplicate={() => {
-                const next = duplicateDraft(library.spots, spot.draft, Date.now(), () => newSpotId());
+                const next = duplicateDraft(read().spots, spot.draft, Date.now(), () => newSpotId());
                 written(commit(next.spots), `Saved a copy called "${next.saved.draft.name}".`);
               }}
             />

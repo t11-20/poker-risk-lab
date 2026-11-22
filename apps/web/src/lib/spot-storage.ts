@@ -314,6 +314,40 @@ export function editOf(spots: readonly SavedSpot[], scenarioId: string): SavedSp
   return spots.find((spot) => spot.from === scenarioId);
 }
 
+/** An edit of a built-in this page still has. One whose built-in is gone is the player's own spot. */
+export function isEditOfBuiltIn(spot: SavedSpot, isBuiltIn: (id: string) => boolean): boolean {
+  return spot.from !== null && isBuiltIn(spot.from);
+}
+
+export function spotHref(spot: SavedSpot, isBuiltIn: (id: string) => boolean): string {
+  return isEditOfBuiltIn(spot, isBuiltIn) && spot.from !== null
+    ? `/lab/spots/edit?from=${encodeURIComponent(spot.from)}`
+    : `/lab/spots/edit?id=${encodeURIComponent(spot.id)}`;
+}
+
+export type StoredSync =
+  | { readonly kind: 'same' }
+  /** Saved in another tab, and this tab has no change of its own to lose. */
+  | { readonly kind: 'adopt'; readonly spot: SavedSpot }
+  /** Saved in another tab while this tab has changes, so the reader chooses. */
+  | { readonly kind: 'changed'; readonly spot: SavedSpot }
+  | { readonly kind: 'deleted' };
+
+/**
+ * How the stored copy relates to the one this tab holds. `heldAt` is the `updatedAt` this tab last
+ * read or wrote, `null` before it has one; another tab's write changes it, and the `storage` event
+ * brings that write here.
+ */
+export function syncWithStored(
+  heldAt: number | null,
+  stored: SavedSpot | undefined,
+  edited: boolean,
+): StoredSync {
+  if (stored === undefined) return heldAt === null ? { kind: 'same' } : { kind: 'deleted' };
+  if (stored.updatedAt === heldAt) return { kind: 'same' };
+  return edited ? { kind: 'changed', spot: stored } : { kind: 'adopt', spot: stored };
+}
+
 export interface SaveRequest {
   /** The spot being edited, or `null` for one not saved yet. */
   readonly id: string | null;

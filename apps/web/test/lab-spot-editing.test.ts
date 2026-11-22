@@ -22,6 +22,8 @@ import {
   addOpponent,
   allSlots,
   clearBoard,
+  errorsToShow,
+  focusSlotFor,
   pickerGroups,
   priceLine,
   randomHand,
@@ -29,6 +31,7 @@ import {
   updateOpponent,
   withSlotCard,
 } from '../src/lib/spot-editing.ts';
+import { type FieldKey, opponentField, validateDraft } from '../src/lib/spot-validate.ts';
 
 function c(text: string): number {
   const card = parseCardText(text);
@@ -149,6 +152,44 @@ describe('opponents', () => {
       },
     );
     assert.deepEqual(priceLine(draft), { pot: 600, toCall: 100, allIn: true });
+  });
+});
+
+describe('errors, and where Save sends the reader', () => {
+  const errorsOf = (draft: SpotDraft) => {
+    const checked = validateDraft(draft);
+    assert.ok(!checked.ok, 'expected errors');
+    return checked.errors;
+  };
+
+  it('shows no error on a field nobody has touched, and every error once Save is pressed', () => {
+    const errors = errorsOf({ ...blankDraft(), heroStack: '' });
+    assert.ok(errors.has('hole') && errors.has('heroStack'));
+    assert.equal(errorsToShow(errors, new Set(), false).size, 0, 'a blank spot opens with no red');
+    assert.deepEqual(
+      [...errorsToShow(errors, new Set<FieldKey>(['heroStack']), false).keys()],
+      ['heroStack'],
+    );
+    assert.equal(errorsToShow(errors, new Set(), true).size, errors.size);
+  });
+
+  it('shows a seat-wide rule once any of that table has been touched', () => {
+    const draft = { ...blankDraft(), opponents: [] };
+    const errors = errorsOf(draft);
+    assert.equal(errorsToShow(errors, new Set<FieldKey>(['heroStack']), false).has('opponents'), false);
+    assert.ok(errorsToShow(errors, new Set<FieldKey>([opponentField('o1', 'bet')]), false).has('opponents'));
+  });
+
+  it('sends Save to the first card slot at fault when a card is the problem', () => {
+    const blank = blankDraft();
+    assert.equal(focusSlotFor(errorsOf(blank), blank), 'hole1');
+    const one = { ...blank, cards: { ...blank.cards, hole1: c('Ah') } };
+    assert.equal(focusSlotFor(errorsOf(one), one), 'hole2');
+    const flop = { ...filled(), cards: { ...filled().cards, turn: null, flop3: null } };
+    assert.equal(focusSlotFor(errorsOf(flop), flop), 'flop3');
+    const exact = updateOpponent(filled(), 'o1', { handKind: 'cards' });
+    assert.equal(focusSlotFor(errorsOf(exact), exact), opponentSlotIds('o1')[0]);
+    assert.equal(focusSlotFor(errorsOf({ ...filled(), heroStack: '' }), filled()), null);
   });
 });
 

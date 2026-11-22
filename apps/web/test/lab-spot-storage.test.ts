@@ -12,6 +12,7 @@ import {
   deleteSpot,
   duplicateDraft,
   editOf,
+  isEditOfBuiltIn,
   newSpotId,
   noticeSentence,
   parseLibrary,
@@ -22,6 +23,8 @@ import {
   type SpotStore,
   saveSpot,
   serialiseLibrary,
+  spotHref,
+  syncWithStored,
   writeLibrary,
 } from '../src/lib/spot-storage.ts';
 
@@ -260,5 +263,37 @@ describe('what storage holds', () => {
     assert.deepEqual(writeLibrary(store, readLibrary(store), spots), { ok: true });
     const back: readonly SavedSpot[] = readLibrary(store).spots;
     assert.deepEqual(back, spots);
+  });
+});
+
+describe('a spot whose built-in is gone, and a spot changed in another tab', () => {
+  const known = (id: string): boolean => id === 'eq-flush-draw-turn-small-bet';
+  const spot = (from: string | null): SavedSpot => ({
+    id: 'spot-00000000000a',
+    from,
+    updatedAt: 7,
+    draft: draft('S'),
+  });
+
+  it('opens an edit of a built-in this page no longer has by its own id, as the player own spot', () => {
+    assert.equal(spotHref(spot('gone-scenario'), known), '/lab/spots/edit?id=spot-00000000000a');
+    assert.equal(isEditOfBuiltIn(spot('gone-scenario'), known), false);
+    assert.equal(
+      spotHref(spot('eq-flush-draw-turn-small-bet'), known),
+      '/lab/spots/edit?from=eq-flush-draw-turn-small-bet',
+    );
+    assert.equal(isEditOfBuiltIn(spot('eq-flush-draw-turn-small-bet'), known), true);
+    assert.equal(spotHref(spot(null), known), '/lab/spots/edit?id=spot-00000000000a');
+  });
+
+  it('takes another tab save quietly only when there is nothing here to lose', () => {
+    const stored = spot(null);
+    assert.deepEqual(syncWithStored(7, stored, true), { kind: 'same' });
+    assert.deepEqual(syncWithStored(3, stored, false), { kind: 'adopt', spot: stored });
+    assert.deepEqual(syncWithStored(3, stored, true), { kind: 'changed', spot: stored });
+    assert.deepEqual(syncWithStored(null, stored, false), { kind: 'adopt', spot: stored });
+    assert.deepEqual(syncWithStored(null, stored, true), { kind: 'changed', spot: stored });
+    assert.deepEqual(syncWithStored(3, undefined, true), { kind: 'deleted' });
+    assert.deepEqual(syncWithStored(null, undefined, true), { kind: 'same' });
   });
 });
