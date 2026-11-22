@@ -393,6 +393,13 @@ export function exactEquity(spec: EquitySpec): EquityResult {
   let matchups = 0;
 
   const hands: Card[][] = Array.from({ length: playerCount }, () => []);
+  // A player with one combo scores the same on a run-out in every matchup, so on the flop and turn the
+  // score is kept per run-out. The tally sees the same scores in the same order, so results are unchanged.
+  const memos = spec.players.map((player) =>
+    player.range.combos.length === 1 && (needed === 1 || needed === 2)
+      ? new Float64Array(DECK_SIZE * DECK_SIZE).fill(Number.NaN)
+      : undefined,
+  );
 
   for (const matchup of enumerateMatchups(spec.players, blocked)) {
     matchups += 1;
@@ -423,11 +430,19 @@ export function exactEquity(spec: EquitySpec): EquityResult {
     const n = deck.length;
     const pick = new Array<Card>(needed);
     const runBoard = (): void => {
+      const key = needed === 1 ? (pick[0] ?? 0) : (pick[0] ?? 0) * DECK_SIZE + (pick[1] ?? 0);
       for (let i = 0; i < playerCount; i++) {
+        const memo = memos[i];
+        const known = memo?.[key] ?? Number.NaN;
+        if (!Number.isNaN(known)) {
+          scores[i] = known;
+          continue;
+        }
         const hand = hands[i];
         if (hand === undefined) throw new EquityError('hand missing');
-        const full = needed === 0 ? hand : [...hand, ...pick];
-        scores[i] = evaluate(full);
+        const score = evaluate([...hand, ...pick]);
+        scores[i] = score;
+        if (memo !== undefined) memo[key] = score;
       }
       tally.record(scores);
     };
