@@ -551,8 +551,10 @@
   transition: background-color var(--prl-dur-fast) var(--prl-ease-material);
 }
 
-.prl-btn--primary:hover:not(:disabled, [aria-disabled="true"]) {
-  border-color: var(--prl-accent-fill);
+/** The border takes the plate's colour in every state, or a lighter rim rings the darker plate. */
+.prl-btn--primary:hover:not(:disabled, [aria-disabled="true"]),
+.prl-btn--primary:active:not(:disabled, [aria-disabled="true"]) {
+  border-color: var(--prl-accent-fill-hover);
 }
 
 .prl-btn--primary:hover:not(:disabled, [aria-disabled="true"])::before {
@@ -2347,7 +2349,7 @@
 }
 
 .prl-action-btn--primary {
-  border-color: transparent;
+  border-color: var(--prl-accent-fill);
   color: var(--prl-text-on-accent);
 }
 
@@ -2362,8 +2364,14 @@
   transition: background-color var(--prl-dur-instant) var(--prl-ease-hover);
 }
 
-.prl-action-btn--primary:hover:not(:disabled)::before {
-  background-color: var(--prl-accent-fill);
+.prl-action-btn--primary:hover:not(:disabled),
+.prl-action-btn--primary:active:not(:disabled) {
+  border-color: var(--prl-accent-fill-hover);
+}
+
+.prl-action-btn--primary:hover:not(:disabled)::before,
+.prl-action-btn--primary:active:not(:disabled)::before {
+  background-color: var(--prl-accent-fill-hover);
 }
 
 .prl-action-btn--primary .prl-action-btn__cost {

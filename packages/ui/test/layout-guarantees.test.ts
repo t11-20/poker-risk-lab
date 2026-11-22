@@ -454,6 +454,47 @@ describe('numeric columns are actually end-aligned', () => {
 });
 
 /**
+ * A filled button paints its fill on a `::before` plate inside a border. The two have to move
+ * together: a hover that darkens only the plate leaves a lighter rim, and one that changes neither
+ * is no hover at all.
+ */
+describe('a filled button is one colour from rim to plate in every state', () => {
+  const blocks = allBlocks(componentsCss);
+  /** The first declaration, because the forced-colors block further down restates the border. */
+  const declared = (selector: string, property: string): string | undefined => {
+    for (const block of blocks) {
+      if (!block.selector.split(/,\s*\n/u).some((part) => part.trim() === selector)) continue;
+      const match = new RegExp(`(?:^|;)\\s*${property}\\s*:\\s*([^;]+)`, 'u').exec(block.body);
+      if (match?.[1] !== undefined) return match[1].trim();
+    }
+    return undefined;
+  };
+
+  const BUTTONS = [
+    ['.prl-btn--primary', ':not(:disabled, [aria-disabled="true"])'],
+    ['.prl-action-btn--primary', ':not(:disabled)'],
+  ] as const;
+
+  for (const [button, enabled] of BUTTONS) {
+    it(`${button} changes its rim with its plate on hover and press`, () => {
+      const rest = declared(`${button}::before`, 'background-color');
+      assert.equal(declared(button, 'border-color'), rest, `${button} at rest: rim and plate differ`);
+      for (const state of [':hover', ':active']) {
+        const selector = `${button}${state}${enabled}`;
+        const plate = declared(`${selector}::before`, 'background-color');
+        assert.ok(plate !== undefined, `${selector}::before sets no fill`);
+        assert.notEqual(
+          plate,
+          rest,
+          `${selector} paints the plate it has at rest, so ${state} shows nothing`,
+        );
+        assert.equal(declared(selector, 'border-color'), plate, `${selector}: the rim is not the plate`);
+      }
+    });
+  }
+});
+
+/**
  * The same trap outside tables. `.prl-legal-flag p` (0,1,1) beat `.prl-legal-flag__mark` (0,1,0), so
  * the caution colour never painted on any of the fifteen legal-page marks.
  * A part class competing with its block's element rule must be type-qualified (`p.prl-legal-flag__mark`)
