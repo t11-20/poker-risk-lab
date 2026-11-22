@@ -201,12 +201,39 @@ shimmer (a loading state), the turn-timer ring, and the table's own material.
 
 ### 2.5 Card faces and the table
 
-Card faces stay light in both themes, because a dark playing card is unreadable at the sizes a
-six-max table needs. Two inks, red for hearts and diamonds and black for spades and clubs, plus the
-symbol and an `aria-label`; never a suit letter. The card, suit, card-back and table tokens
-(`--prl-card-*`, `--prl-suit-*`, `--prl-surface-table`, `--prl-table-grid-*`) and the table, seat
-and card rules are restyled separately and keep their 4.0 values here; the gate still asserts the
-suit inks on both faces (worst: red on the dim face, 4.75:1 dark).
+Card faces stay light in both themes, because a dark playing card is unreadable at the
+sizes a six-max table needs and because inverting a card is a novelty that costs
+legibility.
+
+The cards are SVG files, one per card plus the backs, in `apps/web/public/cards/`, written by
+`scripts/cards/generate.mjs` (`pnpm run cards:generate`; `cards:check` and
+`scripts/cards/generate.test.mjs` fail on a stale file). Ranks and suits are paths drawn in that
+script, never text, so a face does not depend on the reader's fonts. A file loaded as an image
+cannot follow the theme, so the face and inks are one value for both, `--prl-deck-*` in the TABLE
+AND CARDS block of `tokens.css`, which the generator reads.
+
+| Ink | Suits | Hex | On the face `#fcfbf8` |
+| --- | --- | --- | --- |
+| `--prl-deck-black` | spades, clubs | `#1f1d1a` | 16.25:1 |
+| `--prl-deck-red` | hearts, diamonds | `#b3262d` | 6.28:1 |
+
+The backs are a white margin round a lattice panel; the margin is what separates a dark back from
+the felt. Three are generated (charcoal, deep green, dark wine) and `back.svg` is charcoal until the
+owner picks one.
+
+**Two inks, as on a real deck, and never colour alone.** Each card carries its rank, a large suit
+symbol and its `aria-label` ("ace of hearts"). The deck was four-colour with a suit letter under
+the rank until November 2026, when the owner asked for the familiar red and black without the
+letter. Shape is now the only visual cue between a club and a spade, or a heart and a diamond, so
+the centre symbol is large and the corner index carries the suit under the rank.
+
+### 2.6 The table surface
+
+A flat felt oval: `--prl-felt` with a `--prl-rail` border and one faint `--prl-felt-line` inside it,
+a step deeper in dark. No gradient, glow or shadow. The pot, the bet and the side pots are plain text
+on the felt in `--prl-felt-ink` and `--prl-felt-ink-muted`, and an empty board place is a dashed
+`--prl-felt-slot` outline. `check-contrast.mjs` asserts each of those pairs.
+
 
 ## 3. Typography
 
@@ -529,21 +556,23 @@ inline styles:
 
 ### 6.1 The poker table (highest priority)
 
-* Surface `--prl-surface-table` with the 32px hairline grid. **No felt, no baize, no wood.**
-* Seats are **hairlined rectangles with a chamfered inner corner**, not ovals. Each carries:
-  position label (`--prl-type-label`), name, stack (tabular), current street commitment,
-  and status.
-* The **active seat** is marked three ways at once — accent border, a `--prl-type-label`
-  "TO ACT" chip, and the turn-timer arc. Never by colour alone.
+* A flat felt oval (§2.6). Seats are placed by a grid (`seatSlot` in `Seat.tsx`), so no seat can
+  cover another or the board: portrait below 42rem of table, with the board on its own row,
+  landscape from 42rem. The viewer is always bottom centre, and the oval shows at every width.
+* A seat is a **small plain box**: name, stack, one status line, with the position, the dealer
+  button and the turn cues beside the stack. The "Stack" label is spoken, not drawn. An opponent
+  still in the hand shows two small backs inside the box; a folded seat is dashed and muted, with
+  no cards.
+* The **seat to act** is marked three ways at once: a second line inside its outline, the words
+  "to act", and the turn-timer ring. Never by colour alone.
+* The **viewer's seat** has a 2px outline, and its cards, about 58 x 81px, are fanned at -4 and +4
+  degrees beside it. Board cards are about 46 x 64px.
 * The **turn timer** is a conic-gradient ring animated with a single custom property, so it
   is one composited element rather than an animated SVG.
-* The **pot** is a metric block (`--prl-type-metric-lg`, tabular) with side pots listed
-  beneath as indexed rows (`01`, `02`).
+* The **pot** is a counted metric on the felt, then the bet to match this street, then the
+  board, with side pots listed beneath as indexed rows (`01`, `02`).
 * **Community cards** deal in with a 120ms stagger, `translateY(-8px) → 0` plus opacity.
   Under reduced motion they are simply present.
-* Responsive: below 900px the oval becomes a **vertical stack** — hero seat pinned to the
-  bottom, opponents in a scrollable row, board fixed centre. Information is never removed to
-  fit, only re-flowed.
 
 ### 6.2 The Coach panel
 

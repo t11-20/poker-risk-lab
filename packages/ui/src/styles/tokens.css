@@ -74,8 +74,6 @@
   --prl-card-face: #f7f8fb;
   --prl-card-face-dim: #e4e7ef;
   --prl-card-edge: #b9becd;
-  --prl-card-back: #22308a;
-  --prl-card-back-pattern: #3142a8;
   --prl-suit-black: #161b33;
   --prl-suit-red: #c02637;
   /* A card named in prose sits on the page, not a face, so it needs page-legible inks. */
@@ -450,4 +448,58 @@
     --prl-edge-lit: CanvasText;
     --prl-edge-shade: CanvasText;
   }
+}
+
+/* TABLE AND CARDS. The felt, the rail, the seats and the generated deck.
+   The `--prl-deck-*` colours are baked into `apps/web/public/cards/*.svg` by `scripts/cards/generate.mjs`,
+   which reads them from this block, so each is declared once and is the same in both themes. */
+:root {
+  --prl-deck-face: #fcfbf8;
+  --prl-deck-edge: #c9c2b6;
+  --prl-deck-red: #b3262d;
+  --prl-deck-black: #1f1d1a;
+  --prl-deck-back-charcoal: #2e2c29;
+  --prl-deck-back-charcoal-line: #4a4640;
+  --prl-deck-back-green: #1f4a37;
+  --prl-deck-back-green-line: #33664f;
+  --prl-deck-back-wine: #5b1f2b;
+  --prl-deck-back-wine-line: #7a3543;
+  /* The notch on a highlighted card. On the face, so it is the same in both themes. */
+  --prl-card-mark: #1e5c40;
+
+  /* Card sizes. A board card is about 46 x 64px and the viewer's own about 58 x 81px. */
+  --prl-card-board: 2.875rem;
+  --prl-card-hero: 3.625rem;
+  --prl-card-back-small: 1.375rem;
+
+  --prl-rail-width: 0.875rem;
+
+  /* Dark. The felt is a step deeper than in light, so it does not glow on a near-black page. */
+  --prl-felt: #23503c;
+  --prl-felt-line: #356a52;
+  --prl-felt-ink: #f3efe7;
+  --prl-felt-ink-muted: #cfdcd3;
+  --prl-felt-slot: #86ad99;
+  --prl-rail: #4a3727;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --prl-felt: #2d6a4f;
+    --prl-felt-line: #4b836a;
+    --prl-felt-ink: #ffffff;
+    --prl-felt-ink-muted: #dcebe2;
+    --prl-felt-slot: #9cc4b0;
+    --prl-rail: #3b2a1d;
+  }
+}
+
+/* Mirrors the media-query block above; change both. */
+:root[data-theme="light"] {
+  --prl-felt: #2d6a4f;
+  --prl-felt-line: #4b836a;
+  --prl-felt-ink: #ffffff;
+  --prl-felt-ink-muted: #dcebe2;
+  --prl-felt-slot: #9cc4b0;
+  --prl-rail: #3b2a1d;
 }
