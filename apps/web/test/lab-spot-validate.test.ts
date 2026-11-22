@@ -255,12 +255,16 @@ describe('the contract with the maths', () => {
     let checkedCount = 0;
     for (const board of boards) {
       for (const hand of hands) {
-        for (const [heroBet, bet, stack] of [
-          ['0', '0', '900'],
-          ['0', '50', '900'],
-          ['20', '20', '900'],
-          ['0', '900', '900'],
-          ['10', '400', '1500'],
+        // The last three are refused. Without its rule, a bet above a stack or a hero over the bet throws here.
+        for (const [heroBet, bet, stack, heroStack] of [
+          ['0', '0', '900', '1000'],
+          ['0', '50', '900', '1000'],
+          ['20', '20', '900', '1000'],
+          ['0', '900', '900', '1000'],
+          ['10', '400', '1500', '1000'],
+          ['0', '900', '400', '1000'],
+          ['20', '20', '900', '20'],
+          ['60', '50', '900', '1000'],
         ] as const) {
           for (const extra of [false, true]) {
             const opponents: OpponentDraft[] = [
@@ -283,6 +287,7 @@ describe('the contract with the maths', () => {
                 ...good(),
                 cards: { ...good().cards, ...board },
                 heroBet,
+                heroStack,
                 opponents,
                 ...assumption,
               };
