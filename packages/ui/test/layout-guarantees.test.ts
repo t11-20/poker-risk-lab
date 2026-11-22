@@ -206,6 +206,7 @@ function allBlocks(css: string): readonly { selector: string; body: string }[] {
 const ROUTE_STYLE_DIR = new URL('../../../apps/web/src/styles/', import.meta.url);
 const GLASS_SCANNED: readonly (readonly [string, string])[] = [
   ['packages/ui components.css', componentsCss],
+  ['packages/ui tip.css', readFileSync(new URL('../src/styles/tip.css', import.meta.url), 'utf8')],
   [
     'apps/web globals.css',
     readFileSync(new URL('../../../apps/web/src/app/globals.css', import.meta.url), 'utf8'),

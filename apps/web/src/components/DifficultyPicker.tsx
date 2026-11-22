@@ -7,10 +7,11 @@
  */
 
 import type { LegendDifficulty, LegendDifficultyDto } from '@prl/contracts';
-import { Button, Chip, cx } from '@prl/ui';
+import { Button, Chip, cx, Tip } from '@prl/ui';
 import type { ReactElement } from 'react';
 import { MATCH_DIFFICULTY_PARAM } from '@/lib/legend-links.ts';
 import { coachWords } from '@/lib/legend-match-copy.ts';
+import { WEB_TIPS } from '@/lib/tips.ts';
 import { ScopedDifficultyNote, ScopedOpponentInput } from './LegendDifficultyScope.tsx';
 
 export interface DifficultyPickerProps {
@@ -84,9 +85,13 @@ export function DifficultyPicker(props: DifficultyPickerProps): ReactElement {
         </div>
       </fieldset>
       <div className="prl-legend-difficulty__actions">
-        <Button type="submit" variant="secondary">
-          Apply setting
-        </Button>
+        {/* Beside the button, because a tip in the legend would join the radio group's name. */}
+        <span className="prl-tip-row">
+          <Button type="submit" variant="secondary">
+            Apply setting
+          </Button>
+          <Tip tip={WEB_TIPS.legendSetting} />
+        </span>
         <p className="prl-legend-difficulty__note">
           {/* The children are the no-script sentence, and the only true one outside `/legends`. */}
           <ScopedDifficultyNote following="Every Play button and link on this page starts a match at the option you tick. Applying it also puts it in the address bar, so the page can be shared exactly as it was read.">

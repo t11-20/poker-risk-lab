@@ -47,7 +47,9 @@ import { cx } from '../cx.ts';
 import { useFocusRescue } from '../focus-rescue.ts';
 import { foldPress, spotSignature } from '../fold-guard.ts';
 import { formatChips, formatUnits } from '../format.ts';
+import { UI_TIPS } from '../tips.ts';
 import type { LegalAction, TableAction } from '../view-types.ts';
+import { Tip } from './Tip.tsx';
 
 export interface ActionBarProps {
   /** From `PlayerView.legalActions`. Empty when it is not this seat's turn. */
@@ -190,6 +192,8 @@ function BetSizer(props: BetSizerProps): ReactElement {
             </button>
           );
         })}
+        {/* One tip for the row, after it, so the bubble opens over the slider and not the buttons. */}
+        <Tip tip={UI_TIPS.sizeButtons} />
       </div>
 
       <div className="prl-sizer__controls">
@@ -245,8 +249,10 @@ function BetSizer(props: BetSizerProps): ReactElement {
         </p>
       )}
 
-      <p className="prl-sizer__bounds" id={boundsId}>
-        {`Min ${formatChips(bounds.min)}, max ${formatChips(bounds.max)}`}
+      {/* The id is on the text alone, so the tip's name and sentence stay out of the field's description. */}
+      <p className="prl-sizer__bounds">
+        <span id={boundsId}>{`Min ${formatChips(bounds.min)}, max ${formatChips(bounds.max)}`}</span>
+        <Tip tip={UI_TIPS.betBounds} />
       </p>
 
       {/* One span, so the readout's flex gap cannot separate the label from its figure. */}
@@ -257,6 +263,7 @@ function BetSizer(props: BetSizerProps): ReactElement {
           <span>
             {'Stack after '}
             <span className="prl-sizer__readout-value">{formatChips(remainingAfter)}</span>
+            <Tip tip={UI_TIPS.stackAfter} />
           </span>
         )}
       </p>

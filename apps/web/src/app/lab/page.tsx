@@ -229,7 +229,7 @@ export default async function LabIndexPage({ searchParams }: LabIndexProps): Pro
           </a>
         </div>
       ) : (
-        <ul className="prl-grid prl-lab-grid">
+        <ul className="prl-grid prl-lab-grid" data-tour="pick-scenario">
           {shown.map((scenario, position) => (
             <ScenarioCard
               key={scenario.id}

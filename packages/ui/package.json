@@ -10,6 +10,7 @@
     "./cards": "./src/cards.ts",
     "./format": "./src/format.ts",
     "./probability": "./src/probability.ts",
+    "./tips": "./src/tips.ts",
     "./styles.css": "./src/styles/index.css"
   },
   "scripts": {
