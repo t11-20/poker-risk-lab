@@ -1669,6 +1669,8 @@ export const ROUTES = [
   { title: 'Guided practice (lesson)', path: '/learn/pot-odds', extra: checkFocusSurvivesUpdate },
   { title: 'Scenario Lab', path: '/lab', extra: checkDisclosures },
   { title: 'Scenario Lab (a spot)', path: '/lab/fl-same-cards-under-the-gun', extra: checkSliders },
+  { title: 'Your spots', path: '/lab/spots' },
+  { title: 'Spot editor', path: '/lab/spots/edit?from=fl-same-cards-under-the-gun' },
   { title: 'AI Legends', path: '/legends', extra: checkDisclosures },
   { title: 'AI Legends (a profile)', path: '/legends/adaptive-exploiter' },
   { title: 'Legends hand review', path: '/legends/hand-review' },

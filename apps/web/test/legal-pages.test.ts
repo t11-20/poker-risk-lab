@@ -251,6 +251,7 @@ describe('the required disclosures are on the pages', () => {
     const timer = read('lib', 'session-sitting.ts');
     const theme = read('lib', 'theme.ts');
     const onboarding = read('components', 'Onboarding.tsx');
+    const spots = read('lib', 'spot-storage.ts');
     const keys = [
       'prl.session.startedAt',
       'prl.session.reminderMinutes',
@@ -259,9 +260,10 @@ describe('the required disclosures are on the pages', () => {
       'prl-theme',
       'prl-booted',
       'prl.learn.onboarding.dismissed',
+      'prl.lab.spots',
     ];
     assert.ok(keys.length > 5);
-    const sources = `${timer}\n${theme}\n${onboarding}`;
+    const sources = `${timer}\n${theme}\n${onboarding}\n${spots}`;
     for (const key of keys) {
       assert.ok(sources.includes(key), `${key} must still exist in the source`);
       assert.ok(privacy.includes(key), `/privacy must name ${key}`);

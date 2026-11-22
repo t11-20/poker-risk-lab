@@ -8,6 +8,7 @@ import { scenarios } from '@prl/content';
 import type { ScenarioListResponse, ScenarioResponse } from '@prl/contracts';
 import type { Metadata } from 'next';
 import type { ReactElement } from 'react';
+import { ScenarioSpotLinks } from '../../../components/ScenarioSpotLinks.tsx';
 import { ScenarioStage } from '../../../components/ScenarioStage.tsx';
 import { LAB_SCENARIO_SUMMARIES, scenarioFixture } from '../../../fixtures/scenarios.ts';
 import { API_PATHS, apiGet, isApiUnavailable, isMissingResource, safeFetch } from '../../../lib/api.ts';
@@ -18,6 +19,7 @@ import { scenarioSeatName, scenarioToPlayerView } from '../../../lib/scenario-vi
 import { NotFoundBody } from '../../not-found.tsx';
 import '../../../styles/page.css';
 import '../../../styles/lab.css';
+import '../../../styles/spot-editor.css';
 
 interface RouteParams {
   readonly scenarioId: string;
@@ -165,6 +167,8 @@ export default async function ScenarioPage({
         <h1 className="prl-display-2 prl-page-head__title">{scenario.title}</h1>
         <p className="prl-page-head__standfirst">{scenario.question}</p>
       </header>
+
+      <ScenarioSpotLinks scenarioId={scenario.id} />
 
       {data.state === 'sampled' ? (
         <p className="prl-source-note prl-note">

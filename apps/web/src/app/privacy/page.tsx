@@ -259,6 +259,11 @@ export default function PrivacyPage(): ReactElement {
               <code>prl.learn.onboarding.dismissed</code> in local storage).
             </li>
             <li>
+              <strong>Spots you save in the Lab&rsquo;s spot editor</strong> (<code>prl.lab.spots</code> in
+              local storage): the cards, stacks, bets and ranges of each one, and which built-in scenario it
+              was copied from, if any.
+            </li>
+            <li>
               <strong>The sitting timer in the footer</strong>: when this tab was opened (
               <code>prl.session.startedAt</code> in session storage), the reminder interval you chose if you
               chose one (<code>prl.session.reminderMinutes</code> in local storage), when you last

@@ -21,6 +21,20 @@ export {
   type SizingPreset,
 } from './bet-sizing.ts';
 export {
+  cardOwners,
+  DECK_RANKS,
+  DECK_SUITS,
+  type DeckFlow,
+  deckCardName,
+  moveInDeck,
+  nextOpenSlot,
+  PICKER_DECK,
+  type PickerSlot,
+  type PickResult,
+  pickCard,
+  removeCard,
+} from './card-picker.ts';
+export {
   type CardDescription,
   type CardValue,
   cardTextSegments,
@@ -40,6 +54,7 @@ export {
 } from './components/AssumptionList.tsx';
 export { Button, type ButtonProps, type ButtonSize, type ButtonVariant } from './components/Button.tsx';
 export { Callout, type CalloutProps, type CalloutTone } from './components/Callout.tsx';
+export { CardPicker, type CardPickerGroup, type CardPickerProps } from './components/CardPicker.tsx';
 export { type CardEntry, CardRow, type CardRowProps } from './components/CardRow.tsx';
 export { CardRun, CardText } from './components/CardText.tsx';
 export { Chip, type ChipProps, type ChipTone } from './components/Chip.tsx';
