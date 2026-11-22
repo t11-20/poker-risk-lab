@@ -212,7 +212,13 @@ const TABLE_COLOUR_READERS: ReadonlyMap<string, readonly string[]> = new Map([
       '.prl-table__centre',
       '.prl-table__centre .prl-metric__label',
       '.prl-table__centre .prl-metric__value',
+      '.prl-table__centre .prl-metric__unit',
+      '.prl-table__centre .prl-metric__note',
       '.prl-table__centre .prl-pot__sides',
+      '.prl-table__centre .prl-pot__side',
+      '.prl-table__centre .prl-pot__side-index',
+      '.prl-table__centre .prl-pot__side-seats',
+      '.prl-table__centre .prl-pot__side-amount',
       '.prl-table__bet-label',
       '.prl-card-row__slot',
     ],
@@ -226,12 +232,30 @@ const TABLE_COLOUR_READERS: ReadonlyMap<string, readonly string[]> = new Map([
   ['apps/web/src/styles/nav.css', ['.prl-pillbar__brand .prl-shell__brand-index', '.prl-shell__brand-suit']],
 ]);
 
-/** `selector -> table colour` for each rule that reads one. The first selector of a list names it. */
+/** A selector list's members, split at the commas outside `:not(...)` and `:is(...)`. */
+function selectorList(selector: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let current = '';
+  for (const char of selector) {
+    if (char === '(') depth += 1;
+    if (char === ')') depth -= 1;
+    if (char === ',' && depth === 0) {
+      parts.push(current.trim());
+      current = '';
+    } else current += char;
+  }
+  parts.push(current.trim());
+  return parts.filter((part) => part !== '');
+}
+
+/** `selector -> table colour` for each member of each rule that reads one. */
 function tableColourReaders(css: string): string[] {
   const found: string[] = [];
   for (const match of stripComments(css).matchAll(/([^{}]+)\{([^{}]*)\}/gu)) {
-    const selector = (match[1] ?? '').split(',')[0]?.trim() ?? '';
-    for (const token of (match[2] ?? '').matchAll(TABLE_COLOUR)) found.push(`${selector} -> ${token[1]}`);
+    for (const token of (match[2] ?? '').matchAll(TABLE_COLOUR)) {
+      for (const selector of selectorList(match[1] ?? '')) found.push(`${selector} -> ${token[1]}`);
+    }
   }
   return found;
 }
@@ -246,6 +270,13 @@ describe('the table colours are read by the table and its named pictures only', 
       tableColourReaders('.a { inset: var(--prl-felt-inset-top); border-width: var(--prl-rail-width) }'),
       [],
     );
+  });
+
+  it('names every selector in a list, not only the first (NEGATIVE CONTROL)', () => {
+    assert.deepEqual(tableColourReaders('.a,\n.b:not(.c, .d) { color: var(--prl-felt-ink) }'), [
+      '.a -> --prl-felt-ink',
+      '.b:not(.c, .d) -> --prl-felt-ink',
+    ]);
   });
 
   it('has no reader outside the list, and every listed reader still reads one', () => {
@@ -289,15 +320,17 @@ describe('every token a stylesheet or component reads is declared', () => {
     for (const match of source.matchAll(/['"](--prl-[\w-]+)['"]\s*[:,]/gu)) declared.add(match[1] ?? '');
   }
 
+  /** Each token `text` reads with no fallback, and the ones of those `declared` lacks. */
+  const unfallbackedReads = (text: string) =>
+    [...stripComments(text).matchAll(/var\(\s*(--prl-[\w-]+)\s*\)/gu)].map((match) => match[1] ?? '');
+
   it('reads none without a fallback that nothing declares', () => {
     const undeclared: string[] = [];
     let reads = 0;
     for (const file of [...stylesheets, ...sources]) {
-      for (const match of stripComments(readFileSync(file, 'utf8')).matchAll(
-        /var\(\s*(--prl-[\w-]+)\s*\)/gu,
-      )) {
+      for (const token of unfallbackedReads(readFileSync(file, 'utf8'))) {
         reads += 1;
-        if (!declared.has(match[1] ?? '')) undeclared.push(`${relative(REPO, file)}  ${match[1]}`);
+        if (!declared.has(token)) undeclared.push(`${relative(REPO, file)}  ${token}`);
       }
     }
     assert.ok(
@@ -305,5 +338,14 @@ describe('every token a stylesheet or component reads is declared', () => {
       `${declared.size} declared, ${reads} read: a sweep of nothing`,
     );
     assert.deepEqual(undeclared, [], 'Read a token tokens.css declares, or give the var() a fallback.');
+  });
+
+  it('catches a retired token read with no fallback, and passes one with a fallback (NEGATIVE CONTROL)', () => {
+    const reads = unfallbackedReads(
+      '.a { background: var(--prl-surface-table) } .b { color: var(--prl-gone, CanvasText) } /* var(--prl-x) */',
+    );
+    assert.deepEqual(reads, ['--prl-surface-table']);
+    assert.equal(declared.has('--prl-surface-table'), false, 'the navy table token is retired');
+    assert.equal(declared.has('--prl-felt'), true, 'a declared token is found');
   });
 });
