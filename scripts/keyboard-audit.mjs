@@ -718,27 +718,58 @@ async function checkPokerActions(page, route) {
   await checkSliders(page, route);
 }
 
+/**
+ * `hidden` for anything a reader never meets, so the decorative `<img alt="">` inside a named card is not
+ * held to a name of its own. A strip of named cards carries their names. Runs stringified in the page.
+ */
+export function cardElementVerdict(el) {
+  for (let node = el; node !== null; node = node.parentElement) {
+    if (node.getAttribute('aria-hidden') === 'true') return 'hidden';
+  }
+  if ((el.getAttribute('aria-label') ?? '').trim() !== '') return 'named';
+  if ((el.textContent ?? '').trim() !== '') return 'named';
+  const pending = [...el.children];
+  while (pending.length > 0) {
+    const node = pending.pop();
+    if (node.getAttribute('aria-hidden') === 'true') continue;
+    if (/visually-hidden|prl-sr-only/u.test(node.getAttribute('class') ?? '')) return 'named';
+    const label = (node.getAttribute('aria-label') ?? '').trim();
+    if (node.getAttribute('role') === 'img' && label !== '') return 'named';
+    pending.push(...node.children);
+  }
+  return 'unnamed';
+}
+
 async function checkCardText(page, route) {
   const cards = await page.evaluate(
     `(() => {
+      const verdict = ${String(cardElementVerdict)};
       const nodes = [...document.querySelectorAll('[class*="card"], [data-rank], [data-suit]')].filter(
         (el) => el.getClientRects().length > 0,
       );
-      const named = nodes.filter((el) => {
-        const label = el.getAttribute('aria-label') ?? '';
-        const text = (el.textContent ?? '').trim();
-        return label.length > 0 || text.length > 0 || el.querySelector('[class*="visually-hidden"], .prl-sr-only') !== null;
-      });
-      return { total: nodes.length, named: named.length };
+      const judged = nodes.map((el) => ({ el, verdict: verdict(el) }));
+      const unnamed = judged
+        .filter((entry) => entry.verdict === 'unnamed')
+        .map((entry) => [entry.el.tagName.toLowerCase(), ...entry.el.classList].join('.'));
+      const hidden = judged.filter((entry) => entry.verdict === 'hidden').length;
+      return { total: nodes.length - hidden, hidden, unnamed };
     })()`,
   );
-  if (cards.total === 0) return;
-  if (cards.named === cards.total) {
-    ok(`${route.title}: every card element carries text`, `${cards.total} checked`);
+  // A route that runs this check shows cards, so finding none means the selector stopped matching.
+  if (cards.total === 0) {
+    bad(`${route.title}: card text`, 'found no visible card element a reader meets');
+    return;
+  }
+  if (cards.unnamed.length === 0) {
+    ok(
+      `${route.title}: every card element carries text`,
+      `${cards.total} checked, ${cards.hidden} hidden from readers skipped`,
+    );
   } else {
     warn(
       `${route.title}: card text`,
-      `${cards.total - cards.named} of ${cards.total} card elements carry neither text nor a label`,
+      `${cards.unnamed.length} of ${cards.total} card elements carry neither text nor a label: ` +
+        [...new Set(cards.unnamed)].join(', '),
     );
   }
 }
