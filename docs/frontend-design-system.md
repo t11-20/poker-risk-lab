@@ -120,8 +120,8 @@ The light value of each is declared twice (the `prefers-color-scheme` block and
 * **Accent green and good green are told apart** by hue (the accent leans blue-green, `favourable`
   leans yellow-green) and never by hue alone: a favourable figure carries `▲`/`+`; the primary
   button is filled and semibold where the others are outlined; the current page is filled and
-  semibold; the quiz's matched verdict carries its mark glyph. The table's to-act and marked seats
-  carry their words ("to act", the timer) in the markup.
+  semibold; the quiz's matched verdict carries its mark glyph. The seats' to-act and marked states
+  belong to the table's own restyle (§2.5) and are not covered here.
 * **The suit marks** beside the section names (Learn ♠, Lab ♦, Play ♥, Review ♣) take the text
   colour. A red heart or green club there would read as a risk or a result, and the shape plus the
   word already name the place. The header bar no longer carries them: the words name each place, and
@@ -169,8 +169,9 @@ scrolled under them never reads through. `packages/ui/test/layout-guarantees.tes
 wash, edge, veil or elevation token, outside the table's own rules.
 
 `.prl-material--*` and `.prl-panel--*` keep their names, because components choose a surface by
-role; their rules are now flat. The glass, elevation, edge, veil, wash, `info` and numbered accent
-tokens survive in `tokens.css` only as inert aliases (opaque surfaces, no shadow) until the parallel
+role; their rules are now flat. `--prl-edge*`, `--prl-veil-*` and `--prl-elevation-*` keep their 4.0
+values, because the table, seat and card rules still read them; nothing else may. The glass, wash,
+`info` and numbered accent tokens survive only as inert aliases (opaque surfaces) until the parallel
 branches that may still read them merge; delete them then.
 
 **Removed, and why.** The 4.0 system built depth from translucent "glass" panes over a tinted page
@@ -840,10 +841,10 @@ threshold stays in the token system instead of becoming a literal in a compariso
 Headings scrolled under a translucent bar stay legible as a second layer of type in the wrong place
 (the 3.0 "ghosting" bug). 4.0 answered it with a blur; 5.0 answers it with no translucency at all.
 The bar is `--prl-surface-page`, its pills `--prl-shell-nav-fill` with a hairline, and nothing under
-it can read through. The bar holds one row from 860px — measured at 79px tall at 860, 1024, 1280
-and 1440px with the theme switch in it — which `--prl-pillbar-h` and the root `scroll-padding`
-assume. The suit marks left the bar to make that row fit (§2.2). A balance of seven digits or more
-can still wrap it at exactly 860px, as before.
+it can read through. The bar holds one row from 860px — 77px tall at 860, 1024, 1280 and 1440px with the theme switch in
+it — which `--prl-pillbar-h` and the root `scroll-padding` assume. The suit marks left the bar to
+make that row fit (§2.2). Measured with the figure replaced: at 860px a balance up to 100,000 keeps
+one row and 1,000,000 wraps it to two (129px); at 900px 1,000,000 fits.
 
 **Also of note:** a 2px rule is written as `var(--prl-space-1)` (0.125rem), never as
 `var(--prl-focus-width)`. Both resolve to 2px and only one of them means it; borrowing the focus

@@ -409,8 +409,12 @@
   letter-spacing: var(--prl-tracking-label);
 }
 
-/** Narrower in the bar, where the switch shares a row with the navigation. */
+/**
+ * Narrower in the bar, where the switch shares a row with the navigation. The words overlap the
+ * fieldset's 1px border, so the switch is one pill tall and each word still a 44px target.
+ */
 .prl-shell__theme .prl-theme__word {
+  margin-block: -1px;
   padding-inline: var(--prl-space-4);
 }
 

@@ -66,23 +66,26 @@ function cssFindings(css: string): string[] {
   return findings;
 }
 
+/** Style-object keys and SVG paint attributes whose value is a colour. */
+const PAINT_KEY =
+  /\b(?:color|background(?:Color)?|border(?:Top|Right|Bottom|Left|Block|Inline)?(?:Start|End)?Color|outlineColor|caretColor|textDecorationColor|accentColor|fill|stroke|stopColor|floodColor|lightingColor)\s*[:=]\s*\{?\s*['"]([a-z]+)['"]/giu;
+
 /**
- * The string literals of a `.tsx` file that are colours: a style object's value (`'#fff'`,
- * `'rgb(0 0 0)'`, `'red'`) or a JSX attribute string such as `fill="red"`. A string that is a whole
- * sentence is not scanned for names, so prose saying "red" is not a colour.
+ * The colours in a `.tsx` file: a string that is a hex value or a colour function anywhere, and a
+ * colour NAME only where it is painted, as a style-object value or an SVG paint attribute. A name
+ * elsewhere is data (`'red'` naming a suit), and a hex must be the whole string, so `href="#main"`
+ * never matches.
  */
 function tsxFindings(source: string): string[] {
   const findings: string[] = [];
   const code = source.replace(/\/\*[\s\S]*?\*\//gu, ' ').replace(/(^|[^:])\/\/.*$/gmu, '$1');
   for (const match of code.matchAll(/'([^'\n]*)'|"([^"\n]*)"|`([^`]*)`/gu)) {
-    const text = match[1] ?? match[2] ?? match[3] ?? '';
-    const hexOrFn = HEX.exec(text) ?? FUNCTION.exec(text);
-    // A hex string must be the whole value, so `href="#main"` and ids never match.
-    if (hexOrFn !== null && (FUNCTION.test(text) || /^#[\da-f]{3,8}$/iu.test(text.trim()))) {
-      findings.push(text);
-      continue;
-    }
-    if (/^[a-z]+$/iu.test(text.trim()) && NAMED.has(text.trim().toLowerCase())) findings.push(text);
+    const text = (match[1] ?? match[2] ?? match[3] ?? '').trim();
+    if (FUNCTION.test(text) || /^#[\da-f]{3,8}$/iu.test(text)) findings.push(text);
+  }
+  for (const match of code.matchAll(PAINT_KEY)) {
+    const name = match[1] ?? '';
+    if (NAMED.has(name.toLowerCase())) findings.push(name);
   }
   return findings;
 }
@@ -124,13 +127,19 @@ describe('a colour is declared once, in tokens.css', () => {
       ),
       [],
     );
-    assert.deepEqual(tsxFindings(`const A = { color: '#161b33', fill: "red", b: 'rgb(1 2 3)' };`), [
+    assert.deepEqual(tsxFindings(`const A = { color: '#161b33', b: 'rgb(1 2 3)', fill: "red" };`), [
       '#161b33',
-      'red',
       'rgb(1 2 3)',
+      'red',
+    ]);
+    assert.deepEqual(tsxFindings(`<path fill="black" /><b style={{ backgroundColor: 'white' }} />`), [
+      'black',
+      'white',
     ]);
     assert.deepEqual(
-      tsxFindings(`const A = { color: 'CanvasText' }; <a href="#main">Red cards</a>; // '#fff'`),
+      tsxFindings(
+        `const A = { color: 'CanvasText' }; const SUITS = ['red', 'black']; <a href="#main">Red</a>; // '#fff'`,
+      ),
       [],
     );
   });

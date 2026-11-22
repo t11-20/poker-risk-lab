@@ -3,9 +3,10 @@
  * (colour-literals.test.ts fails a literal anywhere else). Rationale and the measured contrast table are
  * in docs/frontend-design-system.md section 2. Reproduce every ratio with `node scripts/check-contrast.mjs`.
  *
- * Warm neutrals, one felt-green accent, no blue anywhere. Red, amber and green mean risk or result
- * and nothing else, and always travel with a word, sign or glyph (WCAG 1.4.1).
- * Flat: no glass, no wash, no elevation. A surface is told apart by its fill and a hairline.
+ * Warm neutrals, one felt-green accent, no blue outside the table and card tokens, which keep their
+ * own values until they are restyled. Red, amber and green mean risk or result and nothing else, and
+ * always travel with a word, sign or glyph (WCAG 1.4.1).
+ * Flat: no glass, no wash, no elevation outside the table. A surface is a fill and a hairline.
  *
  * Rule A. Text on the accent fill is `--prl-text-on-accent`, never a literal.
  * Rule B. `--prl-line-subtle` and `--prl-line` are decorative (under 3:1). A border that
@@ -99,6 +100,19 @@
   --prl-focus-ring: 0 0 0 calc(var(--prl-focus-offset) + var(--prl-focus-width) + var(--prl-focus-halo-width))
     var(--prl-focus-halo);
 
+  /* READ ONLY BY THE TABLE, SEAT AND CARD RULES, which keep their 4.0 material until they are
+     restyled. Nothing else may use them (layout-guarantees.test.ts). Values as on main. */
+  --prl-veil-8: rgb(241 243 250 / 8%);
+  --prl-veil-4: rgb(241 243 250 / 4%);
+  --prl-edge: rgb(241 243 250 / 12%);
+  --prl-edge-lit: rgb(241 243 250 / 24%);
+  --prl-edge-shade: rgb(0 0 0 / 34%);
+  --prl-elevation-0: none;
+  --prl-elevation-1: 0 1px 2px rgb(0 0 0 / 24%), 0 2px 8px rgb(0 0 0 / 18%);
+  --prl-elevation-2: 0 2px 6px rgb(0 0 0 / 28%), 0 10px 24px rgb(0 0 0 / 26%);
+  --prl-elevation-3: 0 4px 12px rgb(0 0 0 / 32%), 0 20px 48px rgb(0 0 0 / 36%);
+  --prl-elevation-4: 0 8px 24px rgb(0 0 0 / 36%), 0 36px 80px rgb(0 0 0 / 48%);
+
   /* DEPRECATED ALIASES. Inert, kept only so parallel branches still resolve. Delete once they merge. */
   --prl-ink-000: #f1f3fa;
   --prl-info: var(--prl-text-secondary);
@@ -107,11 +121,6 @@
   --prl-accent-400: var(--prl-accent-text);
   --prl-accent-500: var(--prl-accent-fill);
   --prl-accent-600: var(--prl-accent-fill-hover);
-  --prl-veil-4: var(--prl-surface-inset);
-  --prl-veil-8: var(--prl-surface-hover);
-  --prl-edge: var(--prl-line-subtle);
-  --prl-edge-lit: var(--prl-line-subtle);
-  --prl-edge-shade: var(--prl-line-subtle);
   --prl-glass-floating: var(--prl-surface-raised);
   --prl-glass-floating-hover: var(--prl-surface-hover);
   --prl-glass-floating-active: var(--prl-surface-active);
@@ -120,11 +129,6 @@
   --prl-glass-filter: none;
   --prl-glass-filter-strong: none;
   --prl-page-wash: none;
-  --prl-elevation-0: 0 0 0 transparent;
-  --prl-elevation-1: 0 0 0 transparent;
-  --prl-elevation-2: 0 0 0 transparent;
-  --prl-elevation-3: 0 0 0 transparent;
-  --prl-elevation-4: 0 0 0 transparent;
 
   /* TYPOGRAPHY. Archivo is self-hosted. Supply-chain policy forbids remote assets and the CSP has no font host. */
   --prl-font-sans:
@@ -325,6 +329,16 @@
 
     --prl-focus-color: #174a33;
     --prl-focus-halo: #ffffff;
+
+    --prl-veil-8: rgb(22 27 51 / 6%);
+    --prl-veil-4: rgb(22 27 51 / 3%);
+    --prl-edge: rgb(22 27 51 / 10%);
+    --prl-edge-lit: rgb(255 255 255 / 90%);
+    --prl-edge-shade: rgb(22 27 51 / 14%);
+    --prl-elevation-1: 0 1px 2px rgb(22 27 51 / 6%), 0 2px 8px rgb(22 27 51 / 5%);
+    --prl-elevation-2: 0 2px 6px rgb(22 27 51 / 8%), 0 10px 24px rgb(22 27 51 / 8%);
+    --prl-elevation-3: 0 4px 12px rgb(22 27 51 / 10%), 0 20px 48px rgb(22 27 51 / 12%);
+    --prl-elevation-4: 0 8px 24px rgb(22 27 51 / 12%), 0 36px 80px rgb(22 27 51 / 16%);
   }
 }
 
@@ -376,6 +390,16 @@
 
   --prl-focus-color: #174a33;
   --prl-focus-halo: #ffffff;
+
+  --prl-veil-8: rgb(22 27 51 / 6%);
+  --prl-veil-4: rgb(22 27 51 / 3%);
+  --prl-edge: rgb(22 27 51 / 10%);
+  --prl-edge-lit: rgb(255 255 255 / 90%);
+  --prl-edge-shade: rgb(22 27 51 / 14%);
+  --prl-elevation-1: 0 1px 2px rgb(22 27 51 / 6%), 0 2px 8px rgb(22 27 51 / 5%);
+  --prl-elevation-2: 0 2px 6px rgb(22 27 51 / 8%), 0 10px 24px rgb(22 27 51 / 8%);
+  --prl-elevation-3: 0 4px 12px rgb(22 27 51 / 10%), 0 20px 48px rgb(22 27 51 / 12%);
+  --prl-elevation-4: 0 8px 24px rgb(22 27 51 / 12%), 0 36px 80px rgb(22 27 51 / 16%);
 }
 
 :root[data-theme="dark"] {
@@ -406,6 +430,9 @@
   :root:root {
     --prl-line-subtle: var(--prl-line-strong);
     --prl-line: var(--prl-line-strong);
+    --prl-edge: var(--prl-line-strong);
+    --prl-edge-lit: var(--prl-line-strong);
+    --prl-edge-shade: var(--prl-line-strong);
 
     --prl-focus-width: 3px;
   }
@@ -419,5 +446,8 @@
     --prl-line: CanvasText;
     --prl-line-strong: CanvasText;
     --prl-focus-color: Highlight;
+    --prl-edge: CanvasText;
+    --prl-edge-lit: CanvasText;
+    --prl-edge-shade: CanvasText;
   }
 }

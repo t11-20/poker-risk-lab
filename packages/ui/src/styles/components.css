@@ -2677,7 +2677,7 @@
 }
 
 .prl-outs__bucket--clean .prl-outs__swatch {
-  background-color: var(--prl-accent-fill);
+  background-color: var(--prl-accent-edge);
 }
 
 .prl-outs__bucket--dirty .prl-outs__swatch {
