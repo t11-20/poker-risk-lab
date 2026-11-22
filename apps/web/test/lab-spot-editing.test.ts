@@ -210,7 +210,8 @@ describe('the fences', () => {
     '../src/components/ScenarioSpotLinks.tsx',
   ];
 
-  it('nothing the browser loads for the editor imports the engine, the content bundle or the API', () => {
+  // Direct imports only: `@prl/poker-math`, which the analysis needs, itself imports the engine.
+  it("none of the editor's own files imports the engine, the content bundle or the API directly", () => {
     assert.ok(CLIENT.length > 10, 'a sweep of nothing is not a pass');
     for (const path of CLIENT) {
       const source = read(path);
