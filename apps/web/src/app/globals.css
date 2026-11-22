@@ -124,10 +124,6 @@
   text-align: center;
 }
 
-.prl-nav__mark {
-  margin-inline-end: var(--prl-space-2);
-}
-
 /* Page-head eyebrows set the mark and the area's name as two inline items with no gap of their own. */
 .prl-eyebrow .prl-suit-mark,
 .prl-play__eyebrow .prl-suit-mark,

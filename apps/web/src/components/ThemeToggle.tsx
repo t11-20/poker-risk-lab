@@ -4,7 +4,7 @@
  * The theme control, three visually hidden native radios, so every option is stated and arrow keys
  * work. The focus ring is drawn on the sibling word (`globals.css`). The source of truth is
  * `<html data-theme>`, set before first paint by `theme.ts` and observed here, because two copies
- * (footer and `MobileNav` sheet) must never disagree. The server snapshot is `system`, so hydration
+ * (header and `MobileNav` sheet) must never disagree. The server snapshot is `system`, so hydration
  * only changes which word is marked, never the page luminance.
  */
 

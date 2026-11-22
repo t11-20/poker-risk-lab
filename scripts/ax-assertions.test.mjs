@@ -302,9 +302,9 @@ describe('NEGATIVE CONTROL — G6, the theme control', () => {
   const healthy = {
     themeGroups: [{ role: 'group', name: 'Colour theme' }],
     themeOptions: [
-      { name: 'Auto Follow the system setting', checked: 'true' },
       { name: 'Light Light theme', checked: 'false' },
       { name: 'Dark Dark theme', checked: 'false' },
+      { name: 'System Follow the system setting', checked: 'true' },
     ],
   };
 
@@ -325,10 +325,21 @@ describe('NEGATIVE CONTROL — G6, the theme control', () => {
   });
 
   it('fires when an option loses its name', () => {
-    const options = [healthy.themeOptions[0], { name: '', checked: 'false' }, healthy.themeOptions[2]];
+    const options = [{ name: '', checked: 'false' }, healthy.themeOptions[1], healthy.themeOptions[2]];
     const verdict = check.decide({ ...healthy, themeOptions: options });
     assert.equal(verdict.ok, false);
     assert.match(verdict.detail, /no radio announces as light/u);
+  });
+
+  it('fires when the follow-the-system option is still called Auto', () => {
+    const options = [
+      healthy.themeOptions[0],
+      healthy.themeOptions[1],
+      { name: 'Auto Follow the system setting', checked: 'true' },
+    ];
+    const verdict = check.decide({ ...healthy, themeOptions: options });
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /no radio announces as system/u);
   });
 });
 

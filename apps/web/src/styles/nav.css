@@ -299,13 +299,6 @@
   }
 }
 
-/* Theme switch. Its shape is at `.prl-footer__theme`. */
-
-/** Not in the bar. At 1280px the bar's four objects need 1067 of 1200px and the switch needs 217 more. */
-.prl-pillbar .prl-shell__theme {
-  display: none;
-}
-
 /* Call to action. `--prl-accent-fill` with `--prl-text-on-accent` measures 7.29:1 light and
    6.74:1 dark, enforced by `scripts/check-contrast.mjs`. */
 
@@ -330,11 +323,6 @@
   background-color: var(--prl-accent-600);
   color: var(--prl-text-on-accent);
   text-decoration: none;
-}
-
-/** Text colour on the accent fill. A red heart measured 1.9:1 there. Two classes beat the suit rule. */
-.prl-pillbar__cta .prl-pillbar__cta-mark {
-  color: inherit;
 }
 
 /** On `/play` the current page is an inset ring plus `aria-current`, not an inverted fill. */
@@ -431,34 +419,15 @@
   gap: var(--prl-space-5);
 }
 
-/* The theme control's permanent home, the footer copy, spanning the footer grid. */
-
-/** Flex, because in a block container the `<fieldset>` stretches to the footer's full width. */
-.prl-footer__appearance {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--prl-space-5);
-  grid-column: 1 / -1;
-  padding-block-start: var(--prl-space-8);
-  border-block-start: var(--prl-hairline);
-}
-
-.prl-footer__appearance .prl-footer__heading {
-  margin-block-end: 0;
-}
-
-/* The inherited `--prl-line-strong` boundary marks the switch as one control (WCAG 1.4.11). */
-/* The bar's `--prl-shell-nav-fill`, so the two copies read as one control. */
-.prl-footer__theme,
+/* Theme switch. The inherited `--prl-line-strong` boundary marks it as one control (WCAG 1.4.11). */
+.prl-shell__theme,
 .prl-sheet__foot .prl-theme {
-  padding: var(--prl-space-1);
   border-radius: var(--prl-radius-pill);
   background-color: var(--prl-shell-nav-fill);
   box-shadow: var(--prl-elevation-1);
 }
 
-.prl-footer__theme .prl-theme__word,
+.prl-shell__theme .prl-theme__word,
 .prl-sheet__foot .prl-theme__word {
   min-height: var(--prl-target-min);
   min-width: 0;
@@ -469,8 +438,13 @@
   letter-spacing: var(--prl-tracking-label);
 }
 
+/** Narrower in the bar, where the switch shares a row with the navigation. */
+.prl-shell__theme .prl-theme__word {
+  padding-inline: var(--prl-space-4);
+}
+
 /* The ring, drawn inside the segment so the parent pill's corner cannot clip it. */
-.prl-footer__theme .prl-theme__input:focus-visible + .prl-theme__word,
+.prl-shell__theme .prl-theme__input:focus-visible + .prl-theme__word,
 .prl-sheet__foot .prl-theme__input:focus-visible + .prl-theme__word {
   outline-offset: calc(-1 * var(--prl-focus-offset));
 }
