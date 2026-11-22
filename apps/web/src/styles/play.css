@@ -1013,7 +1013,7 @@
   min-height: calc(var(--prl-space-12) + var(--prl-space-4));
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-veil-4);
-  box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-1);
+  box-shadow: var(--_ring, 0 0 transparent), var(--prl-elevation-1);
   transition:
     background-color var(--prl-dur-fast) var(--prl-ease-material),
     border-color var(--prl-dur-fast) var(--prl-ease-material),
@@ -1023,12 +1023,12 @@
 
 .prl-play .prl-action-btn:hover:not(:disabled) {
   background-color: var(--prl-veil-8);
-  box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-2);
+  box-shadow: var(--_ring, 0 0 transparent), var(--prl-elevation-2);
   transform: translateY(-1px);
 }
 
 .prl-play .prl-action-btn:active:not(:disabled) {
-  box-shadow: var(--_ring, 0 0 #0000);
+  box-shadow: var(--_ring, 0 0 transparent);
   transform: translateY(1px);
 }
 
@@ -1045,7 +1045,7 @@
  */
 .prl-play .prl-action-btn--primary {
   flex-grow: 1.6;
-  box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-2);
+  box-shadow: var(--_ring, 0 0 transparent), var(--prl-elevation-2);
 }
 
 .prl-play .prl-action-btn--primary::before {
@@ -1054,7 +1054,7 @@
 }
 
 .prl-play .prl-action-btn--primary:hover:not(:disabled) {
-  box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-3);
+  box-shadow: var(--_ring, 0 0 transparent), var(--prl-elevation-3);
 }
 
 .prl-play .prl-action-btn--primary:hover:not(:disabled)::before {
@@ -1062,7 +1062,7 @@
 }
 
 .prl-play .prl-action-btn--primary:active:not(:disabled) {
-  box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-1);
+  box-shadow: var(--_ring, 0 0 transparent), var(--prl-elevation-1);
 }
 
 /* 12.6  THE BET SIZER. A translucent `--prl-veil-4` tray, because an opaque block would cancel the glass. */

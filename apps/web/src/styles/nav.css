@@ -96,7 +96,7 @@
   border-block-end-color: var(--prl-edge-shade);
   border-radius: var(--prl-radius-pill);
   background-color: var(--prl-shell-nav-fill);
-  box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-2);
+  box-shadow: var(--_ring, 0 0 transparent), var(--prl-elevation-2);
   transition: border-color var(--prl-dur-quick) var(--prl-ease-standard);
 }
 
@@ -249,7 +249,7 @@
   border-block-start-color: var(--prl-edge-lit);
   border-block-end-color: var(--prl-edge-shade);
   background-color: var(--prl-shell-nav-fill);
-  box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-2);
+  box-shadow: var(--_ring, 0 0 transparent), var(--prl-elevation-2);
   font-size: var(--prl-type-body-sm);
 }
 
@@ -265,7 +265,7 @@
   width: var(--prl-pill-h);
   height: var(--prl-pill-h);
   background-color: var(--prl-shell-nav-fill);
-  box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-2);
+  box-shadow: var(--_ring, 0 0 transparent), var(--prl-elevation-2);
   font-size: var(--prl-type-body);
 }
 
@@ -377,7 +377,7 @@
   padding-inline: var(--prl-space-6);
   border-radius: var(--prl-radius-pill);
   background-color: var(--prl-shell-nav-fill);
-  box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-2);
+  box-shadow: var(--_ring, 0 0 transparent), var(--prl-elevation-2);
 }
 
 .prl-nav-trigger .prl-nav-trigger__word {

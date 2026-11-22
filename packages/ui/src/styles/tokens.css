@@ -1,164 +1,132 @@
 /**
- * Design tokens, the single source of every visual value. Rationale and the measured contrast
- * table are in docs/frontend-design-system.md (section 2.4). Read it before changing anything here.
- * Not a casino. No felt green, no gold, no metallic gradient, no glow.
- * The ramps keep their 3.0 names (`ink-*`, `accent-*`) because components read them by role.
- * Shadows only through `--prl-elevation-*`. layout-guarantees.test.ts fails a raw `box-shadow`.
+ * Design tokens: every colour in the app is declared in this file and nowhere else
+ * (colour-literals.test.ts fails a literal anywhere else). Rationale and the measured contrast table are
+ * in docs/frontend-design-system.md section 2. Reproduce every ratio with `node scripts/check-contrast.mjs`.
  *
- * Rule A. Text on the dark accent fill is `--prl-ink-900`. White on it fails AA.
+ * Warm neutrals, one felt-green accent, no blue anywhere. Red, amber and green mean risk or result
+ * and nothing else, and always travel with a word, sign or glyph (WCAG 1.4.1).
+ * Flat: no glass, no wash, no elevation. A surface is told apart by its fill and a hairline.
+ *
+ * Rule A. Text on the accent fill is `--prl-text-on-accent`, never a literal.
  * Rule B. `--prl-line-subtle` and `--prl-line` are decorative (under 3:1). A border that
- * carries meaning uses `--prl-line-strong` or the accent.
+ * carries meaning uses `--prl-line-strong` or `--prl-accent-edge`.
  *
- * Reproduce every ratio with `node scripts/check-contrast.mjs`.
+ * The bare `:root` is the dark theme. Light is declared twice below, and the two must agree.
  */
 
 :root {
   color-scheme: dark light;
 
-  /* NEUTRALS, "card back". 13 steps, with half-steps at 750/850 for the surface stack. */
-  --prl-ink-000: #f1f3fa;
-  --prl-ink-050: #e2e6f2;
-  --prl-ink-100: #c8cee2;
-  --prl-ink-200: #a6aecb;
-  --prl-ink-300: #9ba3c2;
-  --prl-ink-400: #7f88ab;
-  --prl-ink-500: #535c80;
-  --prl-ink-600: #3c4469;
-  --prl-ink-700: #2b3259;
-  --prl-ink-750: #232a50;
-  --prl-ink-800: #1a2146;
-  --prl-ink-850: #141a3c;
-  --prl-ink-900: #0e1433;
+  /* SURFACES, warm near-black. Each step is one move in lightness at the same warm hue. */
+  --prl-surface-page: #161412;
+  --prl-surface-raised: #1d1a17;
+  --prl-surface-panel: #211e1a;
+  --prl-surface-inset: #282420;
+  --prl-surface-hover: #2d2924;
+  --prl-surface-active: #36312b;
 
-  /* ACCENT, "back blue". Interaction, focus, live data. */
-  --prl-accent-200: #d6dcff;
-  --prl-accent-300: #b7c2ff;
-  --prl-accent-400: #9dabff;
-  --prl-accent-500: #8597ff;
-  --prl-accent-600: #6a7cf0;
-  --prl-accent-700: #5062d6;
-  --prl-accent-800: #3a49a8;
-  --prl-accent-900: #28327a;
-
-  /* SEMANTIC DATA COLOURS. Always paired with a sign, glyph, label or pattern (WCAG 1.4.1). */
-  --prl-favourable: #4fd3a0;
-  --prl-favourable-dim: #1f9c6c;
-  --prl-adverse: #ff8593;
-  --prl-adverse-dim: #c94259;
-  --prl-caution: #f5b93d;
-  --prl-caution-dim: #b8811f;
-  --prl-info: #8ec5ff;
-
-  /* Every series clears 3:1 on every surface (worst 6.10:1). components.css adds a fill pattern each. */
-  --prl-series-a: var(--prl-accent-400);
-  --prl-series-b: var(--prl-favourable);
-  --prl-series-c: var(--prl-caution);
-  --prl-series-d: var(--prl-adverse);
-  --prl-series-e: var(--prl-info);
-  --prl-series-f: var(--prl-ink-200);
-
-  /* SURFACES. Each step is one move on the ramp. */
-  --prl-surface-page: var(--prl-ink-900);
-  --prl-surface-raised: var(--prl-ink-850);
-  --prl-surface-panel: var(--prl-ink-800);
-  --prl-surface-inset: var(--prl-ink-750);
-  --prl-surface-hover: #1e2650;
-  --prl-surface-active: #262f5c;
-
-  --prl-surface-table: #111838;
-  --prl-table-grid-color: var(--prl-ink-800);
+  --prl-surface-table: #1a1815;
+  --prl-table-grid-color: #24211d;
   --prl-table-grid-size: 32px;
 
-  /* Low alpha and small areas only. A large backdrop-filter is among the most expensive composites. */
-  --prl-scrim: rgb(6 9 26 / 72%);
-  --prl-veil-8: rgb(241 243 250 / 8%);
-  --prl-veil-4: rgb(241 243 250 / 4%);
-
-  /* THE PAGE WASH. Glass only reads as material over a ground that varies. No
-     `background-attachment: fixed`, which repaints every scroll frame. check-contrast.mjs composites
-     `--prl-wash-tint`, the brightest stop, as `surface-wash`. Raise it if a stop gets brighter. */
-  --prl-wash-tint: rgb(133 151 255 / 8%);
-  --prl-wash-tint-2: rgb(255 133 147 / 4%);
-  --prl-page-wash:
-    radial-gradient(115% 78% at 10% -12%, var(--prl-wash-tint), transparent 62%),
-    radial-gradient(92% 62% at 92% 2%, var(--prl-wash-tint-2), transparent 58%);
-
-  /* MATERIALS, the depth ladder (design system section 2.7). Each level changes material, elevation
-     and border luminance together. L0 page, L1 grouped (no shadow), L2 raised (opaque, where body
-     text lives), L3 floating glass, L4 overlay glass (may carry body text), L5 modal (scrim + L4).
-     A glass fill always comes with `--prl-glass-filter`, or the text behind it ghosts through (the
-     nav.css header bug). Glass is for bounded floating surfaces only, never a full-width strip.
-     layout-guarantees.test.ts enforces the first rule.
-     Glass contrast is measured composited over both #000000 and #ffffff, and the worse ratio counts.
-     `--prl-text-faint` has the least headroom, 4.55:1 on a pressed floating pane over white. */
-  --prl-glass-backdrop-min: #000000;
-  --prl-glass-backdrop-max: #ffffff;
-
-  /* L3. Hover and active raise lightness and opacity together, which protects the contrast floor. */
-  --prl-glass-floating: rgb(20 26 60 / 90%);
-  --prl-glass-floating-hover: rgb(28 35 75 / 94%);
-  --prl-glass-floating-active: rgb(36 44 87 / 97%);
-
-  /* L4. Darker and more opaque than L3, because it carries body text over content it cannot see. */
-  --prl-glass-overlay: rgb(14 20 51 / 92%);
-  --prl-glass-overlay-hover: rgb(24 31 67 / 95%);
-
-  /**
-   * Saturate restores the chroma that blur averages away. Blur alone reads as fog.
-   * Safari needs `-webkit-backdrop-filter` beside every use. Never animate or transition it.
-   */
-  --prl-glass-filter: blur(20px) saturate(180%);
-  --prl-glass-filter-strong: blur(30px) saturate(180%);
-
-  /**
-   * Two shadows per level, a tight contact edge and a wide ambient one. One shadow reads as a glow.
-   * Tokens only, and nothing on the table field takes one.
-   */
-  --prl-elevation-0: none;
-  --prl-elevation-1: 0 1px 2px rgb(0 0 0 / 24%), 0 2px 8px rgb(0 0 0 / 18%);
-  --prl-elevation-2: 0 2px 6px rgb(0 0 0 / 28%), 0 10px 24px rgb(0 0 0 / 26%);
-  --prl-elevation-3: 0 4px 12px rgb(0 0 0 / 32%), 0 20px 48px rgb(0 0 0 / 36%);
-  --prl-elevation-4: 0 8px 24px rgb(0 0 0 / 36%), 0 36px 80px rgb(0 0 0 / 48%);
-
-  /**
-   * Decorative, like `--prl-line-subtle`. A border that carries meaning uses `--prl-line-strong`.
-   */
-  --prl-edge: rgb(241 243 250 / 12%);
-  --prl-edge-lit: rgb(241 243 250 / 24%);
-  --prl-edge-shade: rgb(0 0 0 / 34%);
+  --prl-scrim: rgb(10 9 8 / 72%);
 
   /* TEXT */
-  --prl-text: var(--prl-ink-000);
-  --prl-text-secondary: var(--prl-ink-100);
-  --prl-text-muted: var(--prl-ink-200);
-  --prl-text-faint: var(--prl-ink-300);
-  --prl-text-disabled: var(--prl-ink-500);
-  --prl-text-on-accent: var(--prl-ink-900); /* rule A above, never white */
+  --prl-text: #f3efe7;
+  --prl-text-secondary: #d5cfc4;
+  --prl-text-muted: #b2aa9c;
+  --prl-text-faint: #a39b8d;
+  --prl-text-disabled: #6b645a;
 
   /* LINES. Rule B. subtle and default are decorative, strong is meaningful. */
-  --prl-line-subtle: var(--prl-ink-700);
-  --prl-line: var(--prl-ink-600);
-  --prl-line-strong: var(--prl-ink-400);
-  --prl-line-accent: var(--prl-accent-600);
+  --prl-line-subtle: #2f2b26;
+  --prl-line: #433d36;
+  --prl-line-strong: #8b8274;
   --prl-hairline: 1px solid var(--prl-line-subtle);
   --prl-hairline-strong: 1px solid var(--prl-line-strong);
 
+  /* ACCENT, felt green. Buttons, links, focus and the current place. Never a result. Lifted in dark so
+     links read; the fill stays deep enough to carry white. */
+  --prl-accent-fill: #2f7a55;
+  --prl-accent-fill-hover: #276747;
+  --prl-accent-text: #86cba5;
+  --prl-accent-edge: #5ea886;
+  --prl-text-on-accent: #ffffff;
+
+  /* RISK AND RESULT. Muted, and never the only cue. `favourable` leans yellow-green so it is not the
+     blue-leaning felt accent. */
+  --prl-favourable: #b4cc72;
+  --prl-adverse: #ef9284;
+  --prl-caution: #e3b25a;
+
+  /* CHART SERIES. Categorical, so none is red, amber or green except `a`, the accent. Each also
+     carries a fill pattern (components.css). */
+  --prl-series-a: var(--prl-accent-edge);
+  --prl-series-b: #e6e0d4;
+  --prl-series-c: #d29a6c;
+  --prl-series-d: #cf93bd;
+  --prl-series-e: #a8a092;
+  --prl-series-f: #c7ae7a;
+
   /* CARD FACES. Light in both themes, because a dark card is unreadable at six-max sizes. Two inks, as on
      a real deck. Suit is never colour alone: every card carries its symbol and an aria-label. */
-  --prl-card-face: #f7f8fb;
-  --prl-card-face-dim: #e4e7ef;
-  --prl-card-edge: #b9becd;
-  --prl-card-back: #22308a;
-  --prl-card-back-pattern: #3142a8;
-  --prl-suit-black: #161b33;
-  --prl-suit-red: #c02637;
-  /* Suit marks on the page (`SuitMark`). The card inks would be navy on navy in dark. */
-  --prl-mark-spade: var(--prl-ink-000);
-  --prl-mark-heart: #ff8593;
-  --prl-mark-diamond: #9dabff;
-  --prl-mark-club: #4fd3a0;
+  --prl-card-face: #f4f1ea;
+  --prl-card-face-dim: #e2ddd3;
+  --prl-card-edge: #b9b2a5;
+  --prl-card-back: #1f4a37;
+  --prl-card-back-pattern: #2d6049;
+  --prl-card-back-ink: #f3efe7;
+  --prl-suit-black: #1f1d1a;
+  --prl-suit-red: #b3262d;
+  /* A card named in prose sits on the page, not a face, so it needs page-legible inks. */
+  --prl-mark-spade: var(--prl-text);
+  --prl-mark-heart: #f08a8a;
 
-  /* TYPOGRAPHY. No web fonts. Supply-chain policy forbids remote assets and the CSP has no font host. */
+  /* FOCUS. An `outline`, never a box-shadow, so it is outside layout, unclipped and replaced under
+     forced-colors. `:focus-visible` only, never removed. */
+  --prl-focus-color: #a6dcbf;
+  --prl-focus-width: 2px;
+  --prl-focus-offset: 2px;
+
+  /**
+   * THE HALO, the opposite polarity to the ring, so a ring on an accent fill or a card face still shows.
+   * check-contrast.mjs proves no backdrop luminance defeats both. Clipped by `overflow` and dropped
+   * under forced-colors, where the outline still stands.
+   */
+  --prl-focus-halo: #161412;
+  --prl-focus-halo-width: 1px;
+
+  /** The spread reaches one pixel past the outline and fills the offset gap (WCAG 1.4.11). */
+  --prl-focus-ring: 0 0 0 calc(var(--prl-focus-offset) + var(--prl-focus-width) + var(--prl-focus-halo-width))
+    var(--prl-focus-halo);
+
+  /* DEPRECATED ALIASES. Inert, kept only so parallel branches still resolve. Delete once they merge. */
+  --prl-info: var(--prl-text-secondary);
+  --prl-line-accent: var(--prl-accent-edge);
+  --prl-accent-300: var(--prl-focus-color);
+  --prl-accent-400: var(--prl-accent-text);
+  --prl-accent-500: var(--prl-accent-fill);
+  --prl-accent-600: var(--prl-accent-fill-hover);
+  --prl-veil-4: var(--prl-surface-inset);
+  --prl-veil-8: var(--prl-surface-hover);
+  --prl-edge: var(--prl-line-subtle);
+  --prl-edge-lit: var(--prl-line-subtle);
+  --prl-edge-shade: var(--prl-line-subtle);
+  --prl-glass-floating: var(--prl-surface-raised);
+  --prl-glass-floating-hover: var(--prl-surface-hover);
+  --prl-glass-floating-active: var(--prl-surface-active);
+  --prl-glass-overlay: var(--prl-surface-panel);
+  --prl-glass-overlay-hover: var(--prl-surface-hover);
+  --prl-glass-filter: none;
+  --prl-glass-filter-strong: none;
+  --prl-page-wash: none;
+  --prl-elevation-0: 0 0 0 transparent;
+  --prl-elevation-1: 0 0 0 transparent;
+  --prl-elevation-2: 0 0 0 transparent;
+  --prl-elevation-3: 0 0 0 transparent;
+  --prl-elevation-4: 0 0 0 transparent;
+
+  /* TYPOGRAPHY. Archivo is self-hosted. Supply-chain policy forbids remote assets and the CSP has no font host. */
   --prl-font-sans:
     "Archivo Variable", "Inter var", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text",
     "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -288,34 +256,12 @@
 
   /**
    * MATERIAL MOTION. Symmetric and 150-250ms, for a surface answering a pointer, where 420ms feels
-   * broken. Only transform, opacity and colour animate with these. Never `backdrop-filter`.
+   * broken. Only transform, opacity and colour animate with these.
    */
   --prl-ease-material: cubic-bezier(0.4, 0, 0.2, 1);
   --prl-dur-fast: 150ms; /* hover, active, a chip flipping state */
   --prl-dur-base: 200ms; /* the default for a surface changing level */
   --prl-dur-slow: 250ms; /* a popover or sheet arriving */
-
-  /* FOCUS. An `outline`, never a box-shadow, so it is outside layout, unclipped and replaced under
-     forced-colors. `:focus-visible` only, never removed. */
-  --prl-focus-color: var(--prl-accent-300);
-  --prl-focus-width: 2px;
-  --prl-focus-offset: 2px;
-
-  /**
-   * THE HALO. `accent-300` is 1.52:1 on white, so the ring alone vanishes over a light backdrop.
-   * The ring clears 3:1 on the dark half of backdrop luminance and the opposite-polarity halo on
-   * the light half, and the ranges overlap (the gate checks it). The halo is a box-shadow, so it is
-   * clipped by `overflow` and dropped under forced-colors. The outline ring still stands then.
-   */
-  --prl-focus-halo: var(--prl-ink-900);
-  --prl-focus-halo-width: 1px;
-
-  /**
-   * The spread reaches one pixel past the outline and fills the offset gap (WCAG 1.4.11).
-   * An elevated rule reads it through base.css's `--_ring`, never directly.
-   */
-  --prl-focus-ring: 0 0 0 calc(var(--prl-focus-offset) + var(--prl-focus-width) + var(--prl-focus-halo-width))
-    var(--prl-focus-halo);
 
   /* WCAG 2.2 asks 24x24. These controls are used one-handed on a phone, so the floor is 44px. */
   --prl-target-min: 44px;
@@ -330,89 +276,56 @@
   --prl-z-boot: 900;
 }
 
-/* LIGHT THEME. Only the tokens that change. The accent moves down the ramp, and text on the
-   accent fill flips to white (design system section 2.4a). */
+/* LIGHT THEME. Warm off-white. Only the tokens that change. */
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {
     color-scheme: light;
 
-    --prl-surface-page: #f4f6f9;
-    --prl-surface-raised: #ffffff;
-    --prl-surface-panel: #ffffff;
-    --prl-surface-inset: #ebeef4;
-    --prl-surface-hover: #e5e9f1;
-    --prl-surface-active: #dae0eb;
-    --prl-surface-table: #e9edf4;
-    --prl-table-grid-color: #d6dce8;
+    --prl-surface-page: #f5f2ec;
+    --prl-surface-raised: #fdfcf9;
+    --prl-surface-panel: #fdfcf9;
+    --prl-surface-inset: #eeeae2;
+    --prl-surface-hover: #e9e4db;
+    --prl-surface-active: #dfd9ce;
+    --prl-surface-table: #efebe4;
+    --prl-table-grid-color: #e2ddd4;
 
-    --prl-text: #161b33;
-    --prl-text-secondary: #353c5a;
-    --prl-text-muted: #4f5675;
+    --prl-scrim: rgb(36 33 29 / 44%);
+
+    --prl-text: #24211d;
+    --prl-text-secondary: #45403a;
+    --prl-text-muted: #5b554d;
     /* No fourth text step in light. No value that clears 4.5:1 on `--prl-surface-active` is
        visibly different from muted. */
     --prl-text-faint: var(--prl-text-muted);
-    --prl-text-disabled: #9aa0b5;
+    --prl-text-disabled: #a29b90;
 
-    --prl-line-subtle: #dde1ea;
-    --prl-line: #c4cad8;
-    /* Do not lighten. #7e8894 measured 2.78:1 on `--prl-surface-active`, under the 3:1 non-text floor. */
-    --prl-line-strong: #5c6587; /* light only: the dark ramp's ink-400 is too light to edge a pale surface */
+    --prl-line-subtle: #e2ddd4;
+    --prl-line: #cdc6ba;
+    --prl-line-strong: #7a7266;
 
-    /* Every accent step is remapped, not only the ones in use. The bright steps measure 1.21:1 to
-       2.71:1 on the light page. */
-    --prl-accent-200: #2b44d4;
-    --prl-accent-300: #1f33a8;
-    --prl-accent-400: #2b44d4;
-    --prl-accent-500: #2b44d4; /* the fill; see --prl-text-on-accent below */
-    --prl-accent-600: #1f33a8;
-    --prl-focus-color: #1f33a8;
+    --prl-accent-fill: #1e5c40;
+    --prl-accent-fill-hover: #174a33;
+    --prl-accent-text: #1e5c40;
+    --prl-accent-edge: #1e5c40;
 
-    /* The button pairing inverts. Both themes clear AA only because the label colour flips. */
-    --prl-text-on-accent: #ffffff;
+    --prl-favourable: #436410;
+    --prl-adverse: #a5332a;
+    --prl-caution: #7f5605;
 
-    --prl-favourable: #127152;
-    --prl-adverse: #c02637;
-    --prl-caution: #8a5c0d;
-    --prl-info: #1f5a9e;
+    --prl-series-b: #3b3630;
+    --prl-series-c: #8a4f2a;
+    --prl-series-d: #7d3b66;
+    --prl-series-e: #6b645a;
+    --prl-series-f: #7d6739;
 
-    /* The sixth series is not from the semantic set. ink-200 measured 2.15:1 on a white panel, and
-       ink-500 clears 3:1 on every light surface. */
-    --prl-series-f: var(--prl-ink-500);
+    --prl-card-face: #fdfcf9;
+    --prl-card-face-dim: #e7e3da;
+    --prl-card-back-pattern: #2a5a44;
+    --prl-mark-heart: #a5332a;
 
-    --prl-scrim: rgb(22 27 51 / 44%);
-    --prl-veil-8: rgb(22 27 51 / 6%);
-    --prl-veil-4: rgb(22 27 51 / 3%);
-
-    /* Light glass tints toward white, and the binding contrast extreme flips to a black backdrop.
-       The gate measures both extremes in both themes. */
-    --prl-wash-tint: rgb(43 68 212 / 6%);
-    --prl-wash-tint-2: rgb(192 38 55 / 3%);
-
-    --prl-glass-floating: rgb(255 255 255 / 94%);
-    --prl-glass-floating-hover: rgb(248 250 252 / 96%);
-    --prl-glass-floating-active: rgb(240 244 248 / 97%);
-    --prl-glass-overlay: rgb(255 255 255 / 96%);
-    --prl-glass-overlay-hover: rgb(248 250 252 / 97%);
-
-    /* An order of magnitude weaker. Dark-theme alpha reads as dirt on a light ground. */
-    --prl-elevation-1: 0 1px 2px rgb(22 27 51 / 6%), 0 2px 8px rgb(22 27 51 / 5%);
-    --prl-elevation-2: 0 2px 6px rgb(22 27 51 / 8%), 0 10px 24px rgb(22 27 51 / 8%);
-    --prl-elevation-3: 0 4px 12px rgb(22 27 51 / 10%), 0 20px 48px rgb(22 27 51 / 12%);
-    --prl-elevation-4: 0 8px 24px rgb(22 27 51 / 12%), 0 36px 80px rgb(22 27 51 / 16%);
-
-    --prl-edge: rgb(22 27 51 / 10%);
-    --prl-edge-lit: rgb(255 255 255 / 90%);
-    --prl-edge-shade: rgb(22 27 51 / 14%);
-
-    /* The halo is the opposite polarity to the ring, so it inverts with the theme. */
+    --prl-focus-color: #174a33;
     --prl-focus-halo: #ffffff;
-
-    --prl-card-face: #ffffff;
-    --prl-card-face-dim: #e6e8ee;
-    --prl-mark-spade: #161b33;
-    --prl-mark-heart: #c02637;
-    --prl-mark-diamond: #2b44d4;
-    --prl-mark-club: #127152;
   }
 }
 
@@ -420,71 +333,51 @@
 :root[data-theme="light"] {
   color-scheme: light;
 
-  --prl-surface-page: #f4f6f9;
-  --prl-surface-raised: #ffffff;
-  --prl-surface-panel: #ffffff;
-  --prl-surface-inset: #ebeef4;
-  --prl-surface-hover: #e5e9f1;
-  --prl-surface-active: #dae0eb;
-  --prl-surface-table: #e9edf4;
-  --prl-table-grid-color: #d6dce8;
+  --prl-surface-page: #f5f2ec;
+  --prl-surface-raised: #fdfcf9;
+  --prl-surface-panel: #fdfcf9;
+  --prl-surface-inset: #eeeae2;
+  --prl-surface-hover: #e9e4db;
+  --prl-surface-active: #dfd9ce;
+  --prl-surface-table: #efebe4;
+  --prl-table-grid-color: #e2ddd4;
 
-  --prl-text: #161b33;
-  --prl-text-secondary: #353c5a;
-  --prl-text-muted: #4f5675;
+  --prl-scrim: rgb(36 33 29 / 44%);
+
+  --prl-text: #24211d;
+  --prl-text-secondary: #45403a;
+  --prl-text-muted: #5b554d;
+  /* No fourth text step in light. No value that clears 4.5:1 on `--prl-surface-active` is
+     visibly different from muted. */
   --prl-text-faint: var(--prl-text-muted);
-  --prl-text-disabled: #9aa0b5;
+  --prl-text-disabled: #a29b90;
 
-  --prl-line-subtle: #dde1ea;
-  --prl-line: #c4cad8;
-  --prl-line-strong: #5c6587;
+  --prl-line-subtle: #e2ddd4;
+  --prl-line: #cdc6ba;
+  --prl-line-strong: #7a7266;
 
-  --prl-accent-200: #2b44d4;
-  --prl-accent-300: #1f33a8;
-  --prl-accent-400: #2b44d4;
-  --prl-accent-500: #2b44d4;
-  --prl-accent-600: #1f33a8;
-  --prl-focus-color: #1f33a8;
+  --prl-accent-fill: #1e5c40;
+  --prl-accent-fill-hover: #174a33;
+  --prl-accent-text: #1e5c40;
+  --prl-accent-edge: #1e5c40;
 
-  --prl-text-on-accent: #ffffff;
+  --prl-favourable: #436410;
+  --prl-adverse: #a5332a;
+  --prl-caution: #7f5605;
 
-  --prl-favourable: #127152;
-  --prl-adverse: #c02637;
-  --prl-caution: #8a5c0d;
-  --prl-info: #1f5a9e;
+  --prl-series-b: #3b3630;
+  --prl-series-c: #8a4f2a;
+  --prl-series-d: #7d3b66;
+  --prl-series-e: #6b645a;
+  --prl-series-f: #7d6739;
 
-  --prl-series-f: var(--prl-ink-500);
+  --prl-card-face: #fdfcf9;
+  --prl-card-face-dim: #e7e3da;
+  --prl-card-back-pattern: #2a5a44;
+  --prl-mark-heart: #a5332a;
 
-  --prl-scrim: rgb(22 27 51 / 44%);
-  --prl-veil-8: rgb(22 27 51 / 6%);
-  --prl-veil-4: rgb(22 27 51 / 3%);
-
-  --prl-wash-tint: rgb(43 68 212 / 6%);
-  --prl-wash-tint-2: rgb(192 38 55 / 3%);
-
-  --prl-glass-floating: rgb(255 255 255 / 94%);
-  --prl-glass-floating-hover: rgb(248 250 252 / 96%);
-  --prl-glass-floating-active: rgb(240 244 248 / 97%);
-  --prl-glass-overlay: rgb(255 255 255 / 96%);
-  --prl-glass-overlay-hover: rgb(248 250 252 / 97%);
-
-  --prl-elevation-1: 0 1px 2px rgb(22 27 51 / 6%), 0 2px 8px rgb(22 27 51 / 5%);
-  --prl-elevation-2: 0 2px 6px rgb(22 27 51 / 8%), 0 10px 24px rgb(22 27 51 / 8%);
-  --prl-elevation-3: 0 4px 12px rgb(22 27 51 / 10%), 0 20px 48px rgb(22 27 51 / 12%);
-  --prl-elevation-4: 0 8px 24px rgb(22 27 51 / 12%), 0 36px 80px rgb(22 27 51 / 16%);
-
-  --prl-edge: rgb(22 27 51 / 10%);
-  --prl-edge-lit: rgb(255 255 255 / 90%);
-  --prl-edge-shade: rgb(22 27 51 / 14%);
-
+  --prl-focus-color: #174a33;
   --prl-focus-halo: #ffffff;
-
-  --prl-card-face: #ffffff;
-  --prl-card-face-dim: #e6e8ee;
-  --prl-mark-spade: #161b33;
-  --prl-mark-heart: #c02637;
-  --prl-mark-diamond: #2b44d4;
-  --prl-mark-club: #127152;
 }
 
 :root[data-theme="dark"] {
@@ -508,64 +401,25 @@
   }
 }
 
-/* REDUCED TRANSPARENCY. Materials collapse to the opaque surface below them, and the filter goes
-   to `none` so no blur is paid for behind an opaque fill.
-   `:root:root` is required. Both light scopes are (0,2,0) and set the glass tokens, so a bare
-   `:root` (0,1,0) loses and light readers get a 94% pane with no blur. The doubled pseudo-class
-   ties and wins by source order. preference-cascade.test.ts pins it. */
-@media (prefers-reduced-transparency: reduce) {
-  :root:root {
-    --prl-glass-floating: var(--prl-surface-raised);
-    --prl-glass-floating-hover: var(--prl-surface-hover);
-    --prl-glass-floating-active: var(--prl-surface-active);
-    --prl-glass-overlay: var(--prl-surface-panel);
-    --prl-glass-overlay-hover: var(--prl-surface-hover);
-    --prl-glass-filter: none;
-    --prl-glass-filter-strong: none;
-    --prl-page-wash: none;
-  }
-}
-
-/* INCREASED CONTRAST. A superset of the reduced-transparency block, not a `var()` reference,
-   because a reader can ask for either alone. Decorative edges become `--prl-line-strong` and the
-   focus ring gains a pixel. `:root:root` for the reason in the reduced-transparency block. */
+/* INCREASED CONTRAST. Decorative hairlines become meaningful ones and the focus ring gains a pixel.
+   `:root:root`, because both light scopes are (0,2,0) and a bare `:root` would lose to them.
+   preference-cascade.test.ts pins it. */
 @media (prefers-contrast: more) {
   :root:root {
-    --prl-glass-floating: var(--prl-surface-raised);
-    --prl-glass-floating-hover: var(--prl-surface-hover);
-    --prl-glass-floating-active: var(--prl-surface-active);
-    --prl-glass-overlay: var(--prl-surface-panel);
-    --prl-glass-overlay-hover: var(--prl-surface-hover);
-    --prl-glass-filter: none;
-    --prl-glass-filter-strong: none;
-    --prl-page-wash: none;
-
-    --prl-edge: var(--prl-line-strong);
-    --prl-edge-lit: var(--prl-line-strong);
-    --prl-edge-shade: var(--prl-line-strong);
-    --prl-line-subtle: var(--prl-line);
+    --prl-line-subtle: var(--prl-line-strong);
+    --prl-line: var(--prl-line-strong);
 
     --prl-focus-width: 3px;
   }
 }
 
 /* FORCED COLORS. A meaningful border must be a real border, because a tint disappears (an active
-   seat shown only by tint loses whose turn it is). `:root:root` as in reduced transparency. */
+   seat shown only by tint loses whose turn it is). `:root:root` as in increased contrast. */
 @media (forced-colors: active) {
   :root:root {
     --prl-line-subtle: CanvasText;
     --prl-line: CanvasText;
     --prl-line-strong: CanvasText;
     --prl-focus-color: Highlight;
-
-    /* Named so that none of them is ever used as a background and disappears. */
-    --prl-edge: CanvasText;
-    --prl-edge-lit: CanvasText;
-    --prl-edge-shade: CanvasText;
-
-    /* Forced colors replaces every fill, so the blur and the wash are pure cost. */
-    --prl-glass-filter: none;
-    --prl-glass-filter-strong: none;
-    --prl-page-wash: none;
   }
 }

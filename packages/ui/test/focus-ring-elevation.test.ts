@@ -25,7 +25,7 @@ interface Rule {
   readonly body: string;
 }
 
-/** Splits on commas outside parentheses, so `:where(a, b)` and `var(--x, 0 0 #0000)` stay whole. */
+/** Splits on commas outside parentheses, so `:where(a, b)` and `var(--x, 0 0 transparent)` stay whole. */
 function splitTopLevel(text: string): string[] {
   const parts: string[] = [];
   let depth = 0;

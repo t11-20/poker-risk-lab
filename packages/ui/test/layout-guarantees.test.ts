@@ -223,7 +223,7 @@ describe('the design system rules that are stated in prose and checked nowhere',
    */
   const SHADOW_VALUE = /box-shadow\s*:\s*([^;]+)/g;
   const ALLOWED_SHADOW_PART =
-    /^(none|var\(--prl-elevation-[0-4]\)|var\(--prl-focus-ring\)|var\(--_ring, 0 0 #0000\))$/;
+    /^(none|var\(--prl-elevation-[0-4]\)|var\(--prl-focus-ring\)|var\(--_ring, 0 0 transparent\))$/;
 
   it('spends a shadow only through an elevation or focus-ring token, never as a literal', () => {
     for (const [name, css] of GLASS_SCANNED) {

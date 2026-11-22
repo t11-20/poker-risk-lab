@@ -601,7 +601,7 @@ span.prl-review-table__cell-label {
 
 /** Focus lifts a marker as hover does. Above `[aria-current]`, which wins the tie and keeps its level. */
 .prl-timeline__marker:focus-visible {
-  box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-1);
+  box-shadow: var(--_ring, 0 0 transparent), var(--prl-elevation-1);
 }
 
 .prl-timeline__marker[data-viewer="true"] {
@@ -617,7 +617,7 @@ span.prl-review-table__cell-label {
 .prl-timeline__marker[aria-current="step"] {
   border-color: var(--prl-accent-edge);
   background-color: var(--prl-accent-fill);
-  box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-2);
+  box-shadow: var(--_ring, 0 0 transparent), var(--prl-elevation-2);
   color: var(--prl-text-on-accent);
   font-weight: var(--prl-weight-semibold);
   transform: translateY(calc(-1 * var(--prl-space-2)));

@@ -354,7 +354,7 @@
   background-color: var(--prl-glass-floating);
   -webkit-backdrop-filter: var(--prl-glass-filter);
   backdrop-filter: var(--prl-glass-filter);
-  box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-2);
+  box-shadow: var(--_ring, 0 0 transparent), var(--prl-elevation-2);
 }
 
 /** L4 OVERLAY. Popovers, menus, sheets. Darker and more opaque than L3, because it carries body text. */
@@ -364,7 +364,7 @@
   background-color: var(--prl-glass-overlay);
   -webkit-backdrop-filter: var(--prl-glass-filter-strong);
   backdrop-filter: var(--prl-glass-filter-strong);
-  box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-3);
+  box-shadow: var(--_ring, 0 0 transparent), var(--prl-elevation-3);
 }
 
 /** L5 MODAL. The `--prl-scrim` behind it belongs to whatever owns the dialog, not to the pane. */
@@ -595,7 +595,7 @@
 .prl-btn--primary {
   border-color: var(--prl-accent-fill);
   border-block-start-color: var(--prl-edge-lit);
-  box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-1);
+  box-shadow: var(--_ring, 0 0 transparent), var(--prl-elevation-1);
   color: var(--prl-text-on-accent);
   font-weight: var(--prl-weight-semibold);
 }
@@ -644,7 +644,7 @@
   background-color: var(--prl-glass-floating);
   -webkit-backdrop-filter: var(--prl-glass-filter);
   backdrop-filter: var(--prl-glass-filter);
-  box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-1);
+  box-shadow: var(--_ring, 0 0 transparent), var(--prl-elevation-1);
 }
 
 .prl-btn--secondary:hover:not(:disabled, [aria-disabled="true"]) {
@@ -686,7 +686,7 @@
   background-color: var(--prl-glass-floating);
   -webkit-backdrop-filter: var(--prl-glass-filter);
   backdrop-filter: var(--prl-glass-filter);
-  box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-1);
+  box-shadow: var(--_ring, 0 0 transparent), var(--prl-elevation-1);
   color: var(--prl-adverse);
 }
 
@@ -1837,16 +1837,19 @@
   color: var(--prl-suit-red);
 }
 
-/** No logo or crest. A visually-hidden string supplies the accessible name. */
+/**
+ * No logo or crest. A visually-hidden string supplies the accessible name. The pale border is a real
+ * deck's white margin, and it is what separates a dark back from a dark table.
+ */
 .prl-card--face-down {
-  border-color: var(--prl-card-back);
+  border-color: var(--prl-card-face);
   background-color: var(--prl-card-back);
   background-image: repeating-linear-gradient(
     -45deg,
     var(--prl-card-back-pattern) 0 var(--prl-space-1),
     transparent var(--prl-space-1) var(--prl-space-3)
   );
-  color: var(--prl-ink-000);
+  color: var(--prl-card-back-ink);
 }
 
 /** An accent border AND a corner notch, because the notch survives greyscale. */
