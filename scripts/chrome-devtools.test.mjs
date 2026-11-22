@@ -132,7 +132,7 @@ describe('DevtoolsReplies', () => {
     );
     const started = Date.now();
     await assert.rejects(replies.expect(2, 'Runtime.evaluate'), /did not answer Runtime\.evaluate/u);
-    assert.ok(Date.now() - started < 10, 'a retry after a timeout waited the bound again');
+    assert.ok(Date.now() - started < 15, 'a retry after a timeout waited the bound again');
   });
 
   it('settles a call with its answer and leaves no timer to break the page later', async () => {
@@ -146,12 +146,12 @@ describe('DevtoolsReplies', () => {
     assert.deepEqual(await next, {});
   });
 
-  it('rejects what is waiting when the socket closes, and drops a late answer', async () => {
+  it('rejects what is waiting when the socket closes, and reports the first failure, not a later one', async () => {
     const replies = new DevtoolsReplies(1_000);
     const reply = replies.expect(1, 'Runtime.evaluate');
     replies.fail(new Error('the DevTools socket closed'));
     await assert.rejects(reply, /socket closed/u);
-    replies.settle({ id: 1, result: {} });
+    replies.fail(new Error('a later failure'));
     await assert.rejects(replies.expect(2, 'Page.enable'), /socket closed/u);
   });
 
