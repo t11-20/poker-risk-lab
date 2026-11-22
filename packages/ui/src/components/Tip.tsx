@@ -27,7 +27,14 @@ import {
   useState,
 } from 'react';
 import { cx } from '../cx.ts';
-import { countsAsHover, nextTipState, placeTip, type TipEvent, type TipState } from '../tip-state.ts';
+import {
+  countsAsHover,
+  nextTipState,
+  placeTip,
+  type TipEvent,
+  type TipState,
+  tipSubjectOf,
+} from '../tip-state.ts';
 import type { TipCopy } from '../tips.ts';
 
 export interface TipProps {
@@ -45,7 +52,7 @@ function canPopover(element: HTMLElement): boolean {
 }
 
 function place(root: HTMLElement, button: HTMLElement, bubble: HTMLElement): void {
-  const subject = root.parentElement?.closest('[data-tip-subject]') ?? root.parentElement ?? root;
+  const subject = tipSubjectOf<Element>(root);
   // In rem, so the gutter is `--prl-space-6` and the gap `--prl-space-2` at any text size.
   const rem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
   const { x, y, side } = placeTip({

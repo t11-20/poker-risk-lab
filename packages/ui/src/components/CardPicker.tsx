@@ -28,6 +28,7 @@ export interface CardPickerProps {
   readonly groups: readonly CardPickerGroup[];
   readonly active: string | null;
   readonly onSelectSlot: (id: string) => void;
+  /** Every press, a used card's included, so the page can say where that card already is. */
   readonly onPick: (card: number) => void;
   readonly onRemove: (id: string) => void;
   /** Announced politely, e.g. "Ace of hearts added to Flop 1." */
@@ -103,6 +104,7 @@ export function CardPicker(props: CardPickerProps): ReactElement {
                     key={slot.id}
                     type="button"
                     className="prl-picker__slot"
+                    data-slot={slot.id}
                     data-active={slot.id === active ? 'true' : undefined}
                     aria-pressed={slot.id === active}
                     aria-label={`${slot.label}: ${name}`}
@@ -168,9 +170,7 @@ export function CardPicker(props: CardPickerProps): ReactElement {
                 tabIndex={index === focusIndex ? 0 : -1}
                 onFocus={() => setFocusIndex(index)}
                 onKeyDown={(event) => onDeckKey(event, index)}
-                onClick={() => {
-                  if (owner === undefined) onPick(card);
-                }}
+                onClick={() => onPick(card)}
               >
                 <CardFace card={card} dimmed={owner !== undefined} />
                 <span className="prl-picker__used" aria-hidden="true">

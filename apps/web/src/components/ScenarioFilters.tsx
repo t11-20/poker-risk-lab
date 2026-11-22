@@ -58,8 +58,8 @@ interface FilterFieldProps {
 
 function FilterField({ id, name, label, anyLabel, options, value, tip }: FilterFieldProps): ReactElement {
   return (
-    <p className="prl-field prl-lab-filters__field">
-      {/* The tip beside the label, not in it, so the select's name stays the one word. */}
+    <p className="prl-field prl-lab-filters__field" data-tip-subject="">
+      {/* Beside the label, not in it, so the select's name stays one word. The bubble keeps off it all. */}
       <span className="prl-tip-row">
         <label className="prl-field__label" htmlFor={id}>
           {label}

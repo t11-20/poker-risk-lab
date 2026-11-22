@@ -72,6 +72,16 @@ export function pickCard(slots: readonly PickerSlot[], active: string | null, ca
   return { slots: next, active: nextOpenSlot(next, target), placed };
 }
 
+/** The sentence a pick announces, whatever `pickCard` made of it, so a refused press is never silent. */
+export function pickMessage(slots: readonly PickerSlot[], active: string | null, card: CardValue): string {
+  const name = describeCard(card)?.accessibleName ?? 'that card';
+  const owner = cardOwners(slots).get(card);
+  if (owner !== undefined) return `The ${name} is already in ${owner.label}. Remove it there to use it here.`;
+  const { placed } = pickCard(slots, active, card);
+  if (placed === null) return 'Every slot is full. Choose a slot to change it.';
+  return `${name.charAt(0).toUpperCase()}${name.slice(1)} in ${placed.label}.`;
+}
+
 /** Empties one slot and makes it the active one, so the next pick refills it. */
 export function removeCard(slots: readonly PickerSlot[], id: string): PickResult {
   const removed = slots.find((slot) => slot.id === id);

@@ -66,3 +66,14 @@ describe('every tip on a page comes from WEB_TIPS, and every entry is shown', ()
     }
   });
 });
+
+describe('a filter tip opens off the select it explains', () => {
+  it('marks the field, label and select together, as the subject the bubble keeps clear of', () => {
+    const source = readFileSync(join(SRC, 'components', 'ScenarioFilters.tsx'), 'utf8');
+    const field = /<p className="prl-field prl-lab-filters__field"([^>]*)>([\s\S]*?)<\/p>/u.exec(source);
+    assert.ok(field !== null, 'found the filter field');
+    assert.match(field[1] ?? '', /data-tip-subject=""/u);
+    const body = field[2] ?? '';
+    assert.ok(body.indexOf('<Tip') >= 0 && body.indexOf('<select') > body.indexOf('<Tip'), 'tip then select');
+  });
+});

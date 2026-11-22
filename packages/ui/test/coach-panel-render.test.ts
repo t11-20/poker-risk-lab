@@ -11,6 +11,8 @@ import { test } from 'node:test';
 import type { CoachReport } from '@prl/contracts';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { tipSubjectOf } from '../src/tip-state.ts';
+import { findAll, hasClass, markupTree } from './support/markup-tree.ts';
 import { loadComponent } from './support/render-component.ts';
 
 async function render(report: CoachReport): Promise<string> {
@@ -784,4 +786,20 @@ test('the chips past a short hero are a side pot only when a second opponent can
   );
   assert.doesNotMatch(headsUp, /side pot/u);
   assert.match(await render(short('side-pot')), /270 units is a side pot you are not in\./u);
+});
+
+test('a tip opens beside what it explains, so the equity tip never covers the share it is about', async () => {
+  const tree = markupTree(await render(NINE_OUT_DRAW));
+  const tips = findAll(tree, (element) => hasClass(element, 'prl-tip'));
+  assert.ok(tips.length >= 6, `only ${tips.length} tips rendered`);
+  const subjectOf = (term: string) => {
+    const tip = tips.find((candidate) => candidate.inner.includes(`About ${term}<`));
+    assert.ok(tip !== undefined, `no tip about ${term}`);
+    return tipSubjectOf(tip);
+  };
+  const equity = subjectOf('equity');
+  assert.ok(equity.inner.includes('Your share of the pot'), 'the share is inside what the equity tip avoids');
+  assert.ok(equity.inner.includes('prl-metric__value'), 'and so is its figure');
+  const method = subjectOf('exact and monte carlo');
+  assert.ok(!method.inner.includes('Your share of the pot'), 'the method tip keeps its own row');
 });

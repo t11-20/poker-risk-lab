@@ -34,6 +34,23 @@ export function countsAsHover(pointerType: string, deviceCanHover: boolean): boo
   return pointerType === 'mouse' && deviceCanHover;
 }
 
+/** The part of an element `tipSubjectOf` reads, so a test can walk rendered markup the same way. */
+export interface SubjectNode {
+  readonly parentElement: SubjectNode | null;
+  hasAttribute(name: string): boolean;
+}
+
+/**
+ * What a tip's bubble keeps clear of: the nearest `[data-tip-subject]` around the tip, else the tip's
+ * parent. A call site whose figure or control sits outside that parent marks a wider subject.
+ */
+export function tipSubjectOf<T extends SubjectNode>(tip: T): T {
+  for (let node = tip.parentElement; node !== null; node = node.parentElement) {
+    if (node.hasAttribute('data-tip-subject')) return node as T;
+  }
+  return (tip.parentElement as T | null) ?? tip;
+}
+
 export interface TipBox {
   readonly left: number;
   readonly top: number;

@@ -6,6 +6,7 @@
  */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -17,6 +18,7 @@ import {
   PICKER_DECK,
   type PickerSlot,
   pickCard,
+  pickMessage,
   removeCard,
 } from '../src/card-picker.ts';
 import { parseCardText } from '../src/cards.ts';
@@ -89,6 +91,24 @@ describe('picking', () => {
     assert.equal(removed.active, 'flop2');
     assert.equal(cardOwners(removed.slots).has(card('7h')), false);
     assert.equal(pickCard(removed.slots, 'hole1', card('7h')).placed?.id, 'hole1');
+  });
+
+  it('says what every pick did, and where a used card already is', () => {
+    const slots = EMPTY.map((slot) => (slot.id === 'hole1' ? { ...slot, card: card('Ah') } : slot));
+    assert.equal(pickMessage(slots, 'flop1', card('Kd')), 'King of diamonds in Flop 1.');
+    assert.equal(
+      pickMessage(slots, 'flop1', card('Ah')),
+      'The ace of hearts is already in Hole 1. Remove it there to use it here.',
+    );
+    const full = EMPTY.map((slot, index) => ({ ...slot, card: index + 10 }));
+    assert.equal(pickMessage(full, null, card('2c')), 'Every slot is full. Choose a slot to change it.');
+  });
+
+  it('hands a press on a used card to the page, so it can say where that card is', () => {
+    const source = readFileSync(new URL('../src/components/CardPicker.tsx', import.meta.url), 'utf8');
+    const deck = source.slice(source.indexOf('className="prl-picker__card"'));
+    assert.ok(deck.length > 0 && deck.includes('onClick'), 'found the deck button');
+    assert.match(deck, /onClick=\{\(\) => onPick\(card\)\}/u);
   });
 
   it('a used card is named with the slot that holds it', () => {
