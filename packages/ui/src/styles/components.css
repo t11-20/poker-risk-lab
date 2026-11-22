@@ -2005,12 +2005,17 @@
  */
 .prl-table__field {
   --prl-table-pad: var(--prl-space-4);
-  /* Half the field: a side seat fills its column, so a phone's narrow seats keep every word whole. */
-  --prl-seat-w: calc((100cqi - var(--prl-table-pad) * 2 - var(--prl-space-4)) / 2);
+  /* Half the field on a phone, so narrow seats keep every word whole; never past 11rem. */
+  --prl-seat-w: min(
+    calc((100cqi - var(--prl-table-pad) * 2 - var(--prl-space-4)) / 2),
+    calc(var(--prl-space-16) + var(--prl-space-6))
+  );
   /* Where the rail runs: through the middle of the top seat and across the viewer's cards. */
   --prl-felt-inset-top: calc(var(--prl-table-pad) + var(--prl-space-9));
   --prl-felt-inset-side: var(--prl-space-1);
   --prl-felt-inset-bottom: calc(var(--prl-table-pad) + var(--prl-space-11));
+  /* From the field's edge to the faint inner line, which the pot and board stay inside. */
+  --prl-felt-inner: calc(var(--prl-felt-inset-side) + var(--prl-rail-width) + var(--prl-space-6));
 
   position: relative;
   isolation: isolate;
@@ -2041,8 +2046,7 @@
 
 /** The faint line inside the rail. Decorative, so it may sit under 3:1. */
 .prl-table__field::after {
-  inset: calc(var(--prl-felt-inset-top) + var(--prl-rail-width) + var(--prl-space-6))
-    calc(var(--prl-felt-inset-side) + var(--prl-rail-width) + var(--prl-space-6))
+  inset: calc(var(--prl-felt-inset-top) + var(--prl-rail-width) + var(--prl-space-6)) var(--prl-felt-inner)
     calc(var(--prl-felt-inset-bottom) + var(--prl-rail-width) + var(--prl-space-6));
   border: 1px solid var(--prl-felt-line);
 }
@@ -2102,7 +2106,7 @@
   display: grid;
   justify-items: center;
   gap: var(--prl-space-3);
-  padding-block: var(--prl-space-4);
+  padding: var(--prl-space-4) calc(var(--prl-felt-inner) - var(--prl-table-pad));
   color: var(--prl-felt-ink);
   text-align: center;
 }
@@ -2159,9 +2163,12 @@
   font-weight: var(--prl-weight-semibold);
 }
 
-/** Five cards on one line at any width: never wider than the phone allows, never past 46px. */
+/** Five cards on one line inside the felt's inner line at any width, never past 46px. */
 .prl-table__board {
-  --prl-board-card-w: min(var(--prl-card-board), calc((100cqi - var(--prl-space-12)) / 5));
+  --prl-board-card-w: min(
+    var(--prl-card-board),
+    calc((100cqi - var(--prl-felt-inner) * 2 - var(--prl-space-3) * 4) / 5)
+  );
 }
 
 .prl-table__board .prl-card-row__cards {
@@ -2255,8 +2262,10 @@
     grid-area: 4 / 1 / 5 / -1;
   }
 
+  /* The middle column already sits inside the inner line. */
   .prl-table__centre {
     grid-area: 2 / 2 / 4 / 3;
+    padding-inline: var(--prl-space-0);
   }
 }
 
