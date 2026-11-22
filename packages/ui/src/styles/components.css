@@ -3419,6 +3419,14 @@ td.prl-candidates__ev,
     color: ButtonText;
   }
 
+  /* The state rules above out-rank the one before, so each restates the Highlight edge. */
+  .prl-btn--primary:hover:not(:disabled, [aria-disabled="true"]),
+  .prl-btn--primary:active:not(:disabled, [aria-disabled="true"]),
+  .prl-action-btn--primary:hover:not(:disabled),
+  .prl-action-btn--primary:active:not(:disabled) {
+    border-color: Highlight;
+  }
+
   /* The fill plate and busy bar are decoration here. The border does the work. */
   .prl-btn--primary::before,
   .prl-action-btn--primary::before {

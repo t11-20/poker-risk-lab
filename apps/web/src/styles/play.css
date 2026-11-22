@@ -357,7 +357,7 @@
     inset-block-end: var(--prl-play-sheet-peek);
     margin: calc(-1 * var(--prl-space-4)) calc(-1 * var(--prl-space-7));
     padding: var(--prl-space-4) var(--prl-space-7);
-    border-block-start: var(--prl-hairline);
+    border-block-start: 1px solid var(--prl-line-strong);
     background-color: var(--prl-surface-raised);
   }
 

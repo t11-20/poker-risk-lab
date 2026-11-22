@@ -216,6 +216,93 @@ const STYLESHEETS: readonly (readonly [string, string])[] = [
     .map((file) => [`apps/web ${file}`, readFileSync(new URL(file, ROUTE_STYLE_DIR), 'utf8')] as const),
 ];
 
+type Sheets = readonly (readonly [string, string])[];
+
+/** Chrome draws an unstyled radio or checkbox in its own blue, which this palette does not have. */
+function accentTickFaults(sheets: Sheets) {
+  const [, baseCss] = sheets[0] ?? ['', ''];
+  const rootTicks = allBlocks(baseCss).some(
+    (block) => block.selector === 'html' && /accent-color\s*:\s*var\(--prl-accent-edge\)/u.test(block.body),
+  );
+  const offenders: string[] = [];
+  let read = 0;
+  for (const [name, css] of sheets) {
+    for (const block of allBlocks(css)) {
+      for (const match of block.body.matchAll(/accent-color\s*:\s*([^;]+)/gu)) {
+        read += 1;
+        const value = (match[1] ?? '').trim();
+        if (!/^var\(--prl-accent-[a-z-]+\)$/u.test(value))
+          offenders.push(`${name}: \`${block.selector}\` ticks in ${value}`);
+      }
+    }
+  }
+  return { rootTicks, offenders, read };
+}
+
+/**
+ * Adjusted, Chrome lays a `Canvas` backplate under the text of a forced fill, so a word in
+ * `HighlightText` on `Highlight` is painted on Canvas and vanishes (the header's theme switch did).
+ * Case-insensitive, because CSS keywords are.
+ */
+function forcedFillFaults(sheets: Sheets) {
+  const fill =
+    /background(?:-color)?\s*:\s*(?:Highlight|Mark|SelectedItem|AccentColor|ButtonText|CanvasText)\b/iu;
+  const offenders: string[] = [];
+  let fills = 0;
+  for (const [name, css] of sheets) {
+    for (const block of allBlocks(css)) {
+      if (!fill.test(block.body)) continue;
+      fills += 1;
+      if (!/forced-color-adjust\s*:\s*none/iu.test(block.body))
+        offenders.push(`${name}: \`${block.selector}\` fills with a system colour but keeps the backplate`);
+    }
+  }
+  return { fills, offenders };
+}
+
+/** Every `prl-` class a component or page names, so a floating rule nothing renders does not count. */
+const CONSUMED_CLASSES: ReadonlySet<string> = (() => {
+  const roots = ['../src/', '../../../apps/web/src/'].map((dir) => new URL(dir, import.meta.url));
+  const names = new Set<string>();
+  let files = 0;
+  for (const root of roots) {
+    for (const file of readdirSync(root, { recursive: true, encoding: 'utf8' })) {
+      if (!/\.tsx?$/u.test(file)) continue;
+      files += 1;
+      for (const match of readFileSync(new URL(file, root), 'utf8').matchAll(/prl-[a-z0-9_-]+/gu))
+        names.add(match[0]);
+    }
+  }
+  assert.ok(files > 50 && names.size > 100, `read ${files} sources and ${names.size} class names`);
+  return names;
+})();
+
+const EDGE =
+  /(?:^|;)\s*border(?:-(?:block|inline)(?:-(?:start|end))?|-(?:top|right|bottom|left))?(?:-color)?\s*:\s*([^;]+)/gu;
+
+/** Design system 2.4: with no shadow to lift it, a surface over content needs a 3:1 edge on every side it draws. */
+function overlayEdgeFaults(sheets: Sheets, consumed: ReadonlySet<string>) {
+  const offenders: string[] = [];
+  let surfaces = 0;
+  for (const [name, css] of sheets) {
+    for (const block of allBlocks(css)) {
+      const sticky = /position\s*:\s*sticky/u.test(block.body);
+      const floating = /^\.(prl-[a-z-]+--floating)$/u.exec(block.selector)?.[1];
+      const edges = [...block.body.matchAll(EDGE)].map((m) => (m[1] ?? '').trim());
+      if (floating !== undefined ? !consumed.has(floating) : !(sticky && edges.length > 0)) continue;
+      surfaces += 1;
+      // The header is over nothing until it sticks, and its stuck state carries the strong edge.
+      const stuck = allBlocks(css).find((other) => other.selector === `${block.selector}[data-stuck="true"]`);
+      if (stuck !== undefined && /var\(--prl-line-strong\)/u.test(stuck.body)) continue;
+      for (const edge of edges.length > 0 ? edges : ['default']) {
+        if (!/var\(--prl-line-strong\)/u.test(edge))
+          offenders.push(`${name}: \`${block.selector}\` sits over content on a ${edge} edge`);
+      }
+    }
+  }
+  return { surfaces, offenders };
+}
+
 describe('the design system rules that are stated in prose and checked nowhere', () => {
   const FLAT_SCANNED: readonly (readonly [string, string])[] = [
     ['packages/ui base.css', readFileSync(new URL('../src/styles/base.css', import.meta.url), 'utf8')],
@@ -266,48 +353,29 @@ describe('the design system rules that are stated in prose and checked nowhere',
     assert.ok(blocks > 500, `only ${blocks} blocks were read, so the scan missed stylesheets`);
   });
 
-  /** Chrome draws an unstyled radio or checkbox in its own blue, which this palette does not have. */
   it('ticks every native radio and checkbox in the accent', () => {
-    const [, baseCss] = FLAT_SCANNED[0] ?? ['', ''];
-    const root = allBlocks(baseCss).filter((block) => block.selector === 'html');
+    const { rootTicks, offenders, read } = accentTickFaults(FLAT_SCANNED);
+    assert.ok(read > 0, 'read no accent-color declaration, so the scan missed base.css');
     assert.ok(
-      root.some((block) => /accent-color\s*:\s*var\(--prl-accent-edge\)/u.test(block.body)),
-      'base.css `html` must set `accent-color` from the accent, so every native control inherits it',
+      rootTicks,
+      'base.css `html` must set `accent-color` from the accent, so every control inherits it',
     );
-    for (const [name, css] of FLAT_SCANNED) {
-      for (const block of allBlocks(css)) {
-        for (const match of block.body.matchAll(/accent-color\s*:\s*([^;]+)/gu)) {
-          const value = (match[1] ?? '').trim();
-          assert.match(
-            value,
-            /^var\(--prl-accent-[a-z-]+\)$/u,
-            `${name}: \`${block.selector}\` ticks in ${value}`,
-          );
-        }
-      }
-    }
+    assert.deepEqual(offenders, []);
   });
 
-  /**
-   * Adjusted, Chrome lays a `Canvas` backplate under the text of a forced fill, so a word in
-   * `HighlightText` on `Highlight` is painted on Canvas and vanishes (the header's theme switch did).
-   */
+  it('catches a tick in a colour outside the accent, and a root that sets none (NEGATIVE CONTROL)', () => {
+    const faults = accentTickFaults([
+      ['base.css', 'html { color: var(--prl-text) }'],
+      ['x.css', '.a input { accent-color: #1a73e8 }'],
+    ]);
+    assert.equal(faults.rootTicks, false);
+    assert.deepEqual(faults.offenders, ['x.css: `.a input` ticks in #1a73e8']);
+  });
+
   it('paints a forced-colours fill only where the browser will not lay a backplate over it', () => {
-    let fills = 0;
-    for (const [name, css] of FLAT_SCANNED) {
-      for (const block of allBlocks(css)) {
-        const fill =
-          /background(?:-color)?\s*:\s*(Highlight|Mark|SelectedItem|AccentColor|ButtonText|CanvasText)\b/u;
-        if (!fill.test(block.body)) continue;
-        fills += 1;
-        assert.match(
-          block.body,
-          /forced-color-adjust\s*:\s*none/u,
-          `${name}: \`${block.selector}\` fills with a system colour but keeps the backplate`,
-        );
-      }
-    }
+    const { fills, offenders } = forcedFillFaults(FLAT_SCANNED);
     assert.ok(fills > 0, 'no forced-colours fill was read, so the theme switch rule was not found');
+    assert.deepEqual(offenders, []);
     // Unadjusted, its focus ring keeps the token colour too, so the last word on it is a system colour.
     const ring = allBlocks(FLAT_SCANNED.find(([name]) => name === 'apps/web globals.css')?.[1] ?? '')
       .filter((block) => block.selector === '.prl-theme__input:checked:focus-visible + .prl-theme__word')
@@ -322,24 +390,44 @@ describe('the design system rules that are stated in prose and checked nowhere',
     );
   });
 
-  /** Design system 2.4: with no shadow to lift it, a surface over content needs a 3:1 edge. */
+  it('catches a forced fill that keeps its backplate, in any letter case (NEGATIVE CONTROL)', () => {
+    const { fills, offenders } = forcedFillFaults([
+      ['x.css', '.a { background: highlight } .b { background-color: Mark; forced-color-adjust: none }'],
+    ]);
+    assert.equal(fills, 2);
+    assert.deepEqual(offenders, ['x.css: `.a` fills with a system colour but keeps the backplate']);
+  });
+
   it('edges every sticky or floating surface in --prl-line-strong', () => {
-    let surfaces = 0;
-    for (const [name, css] of FLAT_SCANNED) {
-      for (const block of allBlocks(css)) {
-        const sticky = /position\s*:\s*sticky/u.test(block.body);
-        const floating = /^\.prl-[a-z-]+--floating$/u.test(block.selector);
-        const edge = /(?:^|;)\s*border(?:-color)?\s*:\s*([^;]+)/u.exec(block.body)?.[1];
-        if (!floating && !(sticky && edge !== undefined)) continue;
-        surfaces += 1;
-        assert.match(
-          edge ?? '(none)',
-          /var\(--prl-line-strong\)/u,
-          `${name}: \`${block.selector}\` sits over content on a ${edge ?? 'default'} edge`,
-        );
-      }
-    }
-    assert.ok(surfaces >= 4, `only ${surfaces} floating surfaces were read, so the scan missed some`);
+    const { surfaces, offenders } = overlayEdgeFaults(FLAT_SCANNED, CONSUMED_CLASSES);
+    assert.ok(
+      surfaces >= 4,
+      `only ${surfaces} sticky or floating surfaces were read, so the scan missed some`,
+    );
+    assert.deepEqual(offenders, []);
+  });
+
+  it('catches a weak edge on any side, and counts no floating rule nothing uses (NEGATIVE CONTROL)', () => {
+    const { surfaces, offenders } = overlayEdgeFaults(
+      [
+        [
+          'x.css',
+          '.a { position: sticky; border-block-start: var(--prl-hairline) }' +
+            '.b { position: sticky; border: 1px solid var(--prl-line-strong) }' +
+            '.c { position: sticky }' +
+            '.d { position: sticky; border-block-end: 1px solid var(--prl-line) }' +
+            '.d[data-stuck="true"] { border-block-end-color: var(--prl-line-strong) }' +
+            '.prl-used--floating { border-color: var(--prl-line) }' +
+            '.prl-unused--floating { border-color: var(--prl-line-strong) }',
+        ],
+      ],
+      new Set(['prl-used--floating']),
+    );
+    assert.equal(surfaces, 4, 'the sticky rule with no edge and the unused floating rule are not surfaces');
+    assert.deepEqual(offenders, [
+      'x.css: `.a` sits over content on a var(--prl-hairline) edge',
+      'x.css: `.prl-used--floating` sits over content on a var(--prl-line) edge',
+    ]);
   });
 
   it('spends no raw duration or easing curve outside the token layer', () => {
@@ -481,23 +569,86 @@ describe('numeric columns are actually end-aligned', () => {
   });
 });
 
+/** A selector list split on its lines, because `:not(:disabled, [aria-disabled="true"])` holds a comma. */
+const selectorParts = (selector: string): string[] => selector.split(/,\s*\n/u).map((part) => part.trim());
+
+/** The first declaration, because the forced-colors block further down restates the border. */
+function firstDeclared(css: string, selector: string, property: string): string | undefined {
+  for (const block of allBlocks(css)) {
+    if (!selectorParts(block.selector).includes(selector)) continue;
+    const match = new RegExp(`(?:^|;)\\s*${property}\\s*:\\s*([^;]+)`, 'u').exec(block.body);
+    if (match?.[1] !== undefined) return match[1].trim();
+  }
+  return undefined;
+}
+
+function rimPlateFaults(css: string, button: string, enabled: string): string[] {
+  const faults: string[] = [];
+  const rest = firstDeclared(css, `${button}::before`, 'background-color');
+  if (firstDeclared(css, button, 'border-color') !== rest)
+    faults.push(`${button} at rest: rim and plate differ`);
+  for (const state of [':hover', ':active']) {
+    const selector = `${button}${state}${enabled}`;
+    const plate = firstDeclared(css, `${selector}::before`, 'background-color');
+    if (plate === undefined) faults.push(`${selector}::before sets no fill`);
+    else if (plate === rest)
+      faults.push(`${selector} paints the plate it has at rest, so ${state} shows nothing`);
+    if (firstDeclared(css, selector, 'border-color') !== plate)
+      faults.push(`${selector}: the rim is not the plate`);
+  }
+  return faults;
+}
+
+/** The `@media (forced-colors: active)` bodies of `css`, and what is left outside them. */
+function splitForced(css: string): { forced: string; unforced: string } {
+  const text = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  let forced = '';
+  let unforced = '';
+  let at = 0;
+  for (const match of text.matchAll(/@media\s*\(forced-colors:\s*active\)\s*\{/gu)) {
+    const open = (match.index ?? 0) + match[0].length;
+    let depth = 1;
+    let end = open;
+    while (depth > 0 && end < text.length) {
+      if (text[end] === '{') depth += 1;
+      if (text[end] === '}') depth -= 1;
+      end += 1;
+    }
+    unforced += text.slice(at, match.index);
+    forced += text.slice(open, end - 1);
+    at = end;
+  }
+  return { forced, unforced: unforced + text.slice(at) };
+}
+
+/**
+ * A state rule that sets a primary button's border out-ranks the forced-colors `Highlight` edge, and
+ * Chrome then forces it to the plain button border, so the primary loses its mark while pressed.
+ */
+function forcedEdgeFaults(css: string, button: string): string[] {
+  const { forced, unforced } = splitForced(css);
+  const highlighted = new Set(
+    allBlocks(forced)
+      .filter((block) => /(?:^|;)\s*border-color\s*:\s*Highlight\b/iu.test(block.body))
+      .flatMap((block) => selectorParts(block.selector)),
+  );
+  const faults: string[] = [];
+  for (const block of allBlocks(unforced)) {
+    if (!/(?:^|;)\s*border(?:-color)?\s*:/u.test(block.body)) continue;
+    for (const part of selectorParts(block.selector)) {
+      if (part.startsWith(button) && !part.includes('::') && !highlighted.has(part))
+        faults.push(`${part} sets a border that forced colours do not restate as Highlight`);
+    }
+  }
+  return faults;
+}
+
 /**
  * A filled button paints its fill on a `::before` plate inside a border. The two have to move
  * together: a hover that darkens only the plate leaves a lighter rim, and one that changes neither
  * is no hover at all.
  */
 describe('a filled button is one colour from rim to plate in every state', () => {
-  const blocks = allBlocks(componentsCss);
-  /** The first declaration, because the forced-colors block further down restates the border. */
-  const declared = (selector: string, property: string): string | undefined => {
-    for (const block of blocks) {
-      if (!block.selector.split(/,\s*\n/u).some((part) => part.trim() === selector)) continue;
-      const match = new RegExp(`(?:^|;)\\s*${property}\\s*:\\s*([^;]+)`, 'u').exec(block.body);
-      if (match?.[1] !== undefined) return match[1].trim();
-    }
-    return undefined;
-  };
-
   const BUTTONS = [
     ['.prl-btn--primary', ':not(:disabled, [aria-disabled="true"])'],
     ['.prl-action-btn--primary', ':not(:disabled)'],
@@ -505,21 +656,31 @@ describe('a filled button is one colour from rim to plate in every state', () =>
 
   for (const [button, enabled] of BUTTONS) {
     it(`${button} changes its rim with its plate on hover and press`, () => {
-      const rest = declared(`${button}::before`, 'background-color');
-      assert.equal(declared(button, 'border-color'), rest, `${button} at rest: rim and plate differ`);
-      for (const state of [':hover', ':active']) {
-        const selector = `${button}${state}${enabled}`;
-        const plate = declared(`${selector}::before`, 'background-color');
-        assert.ok(plate !== undefined, `${selector}::before sets no fill`);
-        assert.notEqual(
-          plate,
-          rest,
-          `${selector} paints the plate it has at rest, so ${state} shows nothing`,
-        );
-        assert.equal(declared(selector, 'border-color'), plate, `${selector}: the rim is not the plate`);
-      }
+      assert.deepEqual(rimPlateFaults(componentsCss, button, enabled), []);
+    });
+
+    it(`${button} keeps its Highlight edge in forced colours in every state`, () => {
+      assert.deepEqual(forcedEdgeFaults(componentsCss, button), []);
     });
   }
+
+  it('catches a rim left behind, a press that shows nothing, and a lost Highlight edge (NEGATIVE CONTROL)', () => {
+    const css = `.b { border-color: var(--a) }
+.b::before { background-color: var(--a) }
+.b:hover:not(:disabled)::before { background-color: var(--a-hover) }
+.b:active:not(:disabled) { border-color: var(--a) }
+.b:active:not(:disabled)::before { background-color: var(--a) }
+@media (forced-colors: active) {
+  .b { border-color: Highlight }
+}`;
+    assert.deepEqual(rimPlateFaults(css, '.b', ':not(:disabled)'), [
+      '.b:hover:not(:disabled): the rim is not the plate',
+      '.b:active:not(:disabled) paints the plate it has at rest, so :active shows nothing',
+    ]);
+    assert.deepEqual(forcedEdgeFaults(css, '.b'), [
+      '.b:active:not(:disabled) sets a border that forced colours do not restate as Highlight',
+    ]);
+  });
 });
 
 /**
