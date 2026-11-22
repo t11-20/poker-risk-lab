@@ -1138,16 +1138,19 @@
   color: var(--prl-text-muted);
 }
 
-/** The seat to act gets a second outline, outside the first, beside the words and the ring. */
+/**
+ * The seat to act gets a second line inside its outline, beside the words and the ring. Inside, so it is
+ * measured against the seat's own fill: outside, `--prl-text` on light felt was 2.5:1.
+ */
 .prl-seat--to-act {
   outline: 2px solid var(--prl-text);
-  outline-offset: 2px;
+  outline-offset: -4px;
 }
 
-/** Marked cards are named as such, so the outline is a reinforcement, not the message. */
+/** Marked cards are named as such, so the line is a reinforcement, not the message. */
 .prl-seat--marked {
   outline: 2px solid var(--prl-favourable);
-  outline-offset: 2px;
+  outline-offset: -4px;
 }
 
 /** The viewer: large fanned cards beside a plate with a stronger outline. */
@@ -1175,12 +1178,12 @@
 
 .prl-seat--self.prl-seat--to-act .prl-seat__plate {
   outline: 2px solid var(--prl-text);
-  outline-offset: 2px;
+  outline-offset: -5px;
 }
 
 .prl-seat--self.prl-seat--marked .prl-seat__plate {
   outline: 2px solid var(--prl-favourable);
-  outline-offset: 2px;
+  outline-offset: -5px;
 }
 
 .prl-seat--self .prl-seat__cards {
@@ -1839,7 +1842,7 @@
   position: absolute;
   inset-block-start: 0;
   inset-inline-end: 0;
-  border-block-start: calc(var(--prl-card-w) / 4) solid var(--prl-accent-edge);
+  border-block-start: calc(var(--prl-card-w) / 4) solid var(--prl-card-mark);
   border-inline-start: calc(var(--prl-card-w) / 4) solid transparent;
 }
 

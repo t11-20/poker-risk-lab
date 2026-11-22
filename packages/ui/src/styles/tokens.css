@@ -582,6 +582,8 @@
   --prl-deck-back-green-line: #33664f;
   --prl-deck-back-wine: #5b1f2b;
   --prl-deck-back-wine-line: #7a3543;
+  /* The notch on a highlighted card. On the face, so it is the same in both themes. */
+  --prl-card-mark: #1e5c40;
 
   /* Card sizes. A board card is about 46 x 64px and the viewer's own about 58 x 81px. */
   --prl-card-board: 2.875rem;
