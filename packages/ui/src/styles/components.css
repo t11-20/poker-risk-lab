@@ -340,8 +340,9 @@
   background-color: var(--prl-surface-panel);
 }
 
-/** Chrome that travels with the content: toolbars, chips, the transport row. */
+/** Chrome that travels over the content: toolbars, chips, the transport row. */
 .prl-material--floating {
+  border-color: var(--prl-line-strong);
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-raised);
 }
@@ -401,6 +402,7 @@
 
 /** For a panel that travels over content (a sticky summary). Opaque, so nothing reads through. */
 .prl-panel--floating {
+  border-color: var(--prl-line-strong);
   background-color: var(--prl-surface-raised);
 }
 

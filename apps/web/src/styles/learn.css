@@ -1383,6 +1383,7 @@
     inset-block-start: var(--prl-learn-sticky-top);
     overflow-y: auto;
     max-height: calc(100dvh - var(--prl-learn-sticky-top) - var(--prl-space-9));
+    border-color: var(--prl-line-strong);
     background-color: var(--prl-surface-raised);
   }
 }

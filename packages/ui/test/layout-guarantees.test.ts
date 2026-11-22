@@ -314,6 +314,26 @@ describe('the design system rules that are stated in prose and checked nowhere',
     assert.ok(fills > 0, 'no forced-colours fill was read, so the theme switch rule was not found');
   });
 
+  /** Design system 2.4: with no shadow to lift it, a surface over content needs a 3:1 edge. */
+  it('edges every sticky or floating surface in --prl-line-strong', () => {
+    let surfaces = 0;
+    for (const [name, css] of FLAT_SCANNED) {
+      for (const block of pageBlocks(css)) {
+        const sticky = /position\s*:\s*sticky/u.test(block.body);
+        const floating = /^\.prl-[a-z-]+--floating$/u.test(block.selector);
+        const edge = /(?:^|;)\s*border(?:-color)?\s*:\s*([^;]+)/u.exec(block.body)?.[1];
+        if (!floating && !(sticky && edge !== undefined)) continue;
+        surfaces += 1;
+        assert.match(
+          edge ?? '(none)',
+          /var\(--prl-line-strong\)/u,
+          `${name}: \`${block.selector}\` sits over content on a ${edge ?? 'default'} edge`,
+        );
+      }
+    }
+    assert.ok(surfaces >= 4, `only ${surfaces} floating surfaces were read, so the scan missed some`);
+  });
+
   it('spends no raw duration or easing curve outside the token layer', () => {
     for (const [name, css] of [
       ['components.css', componentsCss],
