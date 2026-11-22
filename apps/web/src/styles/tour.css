@@ -47,8 +47,8 @@
   }
 }
 
-/** Between 860 and 1280 the destinations need the width, so the bar keeps the mark and the name. */
-@media (860px <= width < 1280px) {
+/** Between 860 and 960 the destinations need the width, so the bar keeps the mark and the name. */
+@media (860px <= width < 960px) {
   .prl-shell__header-tools > .prl-tour-button {
     justify-content: center;
     inline-size: var(--prl-target-min);

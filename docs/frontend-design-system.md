@@ -873,10 +873,12 @@ threshold stays in the token system instead of becoming a literal in a compariso
 Headings scrolled under a translucent bar stay legible as a second layer of type in the wrong place
 (the 3.0 "ghosting" bug). 4.0 answered it with a blur; 5.0 answers it with no translucency at all.
 The bar is `--prl-surface-page`, its pills `--prl-shell-nav-fill` with a hairline, and nothing under
-it can read through. The bar holds one row from 860px — 77px tall at 860, 1024, 1280 and 1440px with the theme switch in
-it — which `--prl-pillbar-h` and the root `scroll-padding` assume. The suit marks left the bar to
-make that row fit (§2.2). Measured with the figure replaced: at 860px a balance up to 100,000 keeps
-one row and 1,000,000 wraps it to two (129px); at 900px 1,000,000 fits.
+it can read through. The bar holds one row from 860px — 77px tall at every 20px from 860 to 1440 with
+"How to use", the theme switch and a 999,999 balance in it — which `--prl-pillbar-h` and the root
+`scroll-padding` assume, and `test:keyboard` fails a wrap at 860, 900, 960, 1024, 1280 and 1440. The
+suit marks left the bar to make that row fit (§2.2). Below 1280 the navigation links, the gaps, Play
+and the units pill each give up one step of padding, and below 960 "How to use" is its `?` mark with
+the words as its name; without those steps it wrapped to 129px at 860 and 900px.
 
 **Also of note:** a 2px rule is written as `var(--prl-space-1)` (0.125rem), never as
 `var(--prl-focus-width)`. Both resolve to 2px and only one of them means it; borrowing the focus

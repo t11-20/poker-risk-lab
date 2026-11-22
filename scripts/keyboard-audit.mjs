@@ -1135,6 +1135,59 @@ async function auditStickyBarOcclusion(page) {
 }
 
 /**
+ * From 860px the root's scroll padding assumes a one-row bar (`--prl-pillbar-h` in nav.css), so a
+ * second row would hide 52px of every control scrolled to. The balance is written as 999,999, because
+ * a six-figure balance is the widest the bar is sized for, and the default 1,000 hid a wrap at 860.
+ */
+async function auditBarHoldsOneRow(page) {
+  section(`Wide viewport — the bar holds one row  ${DIM}860 to 1440, balance 999,999${RESET}`);
+  const widths = [860, 900, 960, 1024, 1280, 1440];
+  const wrapped = [];
+  try {
+    for (const width of widths) {
+      await page.send('Emulation.setDeviceMetricsOverride', {
+        width,
+        height: 900,
+        deviceScaleFactor: 1,
+        mobile: false,
+      });
+      await page.goto(`${WEB_ORIGIN}/lab`);
+      const bar = await page.evaluate(
+        `(async () => {
+          const header = document.querySelector('.prl-shell__header');
+          // The balance is read from storage after hydration, so the figure can arrive after load.
+          for (let i = 0; i < 30 && !header?.querySelector('.prl-units__figure'); i += 1) {
+            await new Promise((resolve) => setTimeout(resolve, 100));
+          }
+          const figure = header?.querySelector('.prl-units__figure');
+          const tour = header?.querySelector('.prl-shell__header-tools > .prl-tour-button');
+          if (!header || !figure || !tour) return null;
+          figure.textContent = '999,999';
+          const padding = parseFloat(getComputedStyle(document.documentElement).scrollPaddingBlockStart);
+          return {
+            height: Math.round(header.getBoundingClientRect().height),
+            padding: Math.round(padding),
+            tour: tour.getBoundingClientRect().width,
+          };
+        })()`,
+      );
+      if (bar === null) {
+        bad(`Bar row: ${width}px`, 'no header, units figure or "How to use" button to measure');
+        return;
+      }
+      if (bar.tour < 44) wrapped.push(`${width}px: "How to use" is ${bar.tour}px wide, not shown`);
+      // The padding is the bar, its 1px edge aside, plus a 16px step; a second row adds 52px.
+      if (bar.height > bar.padding - 15)
+        wrapped.push(`${width}px: bar ${bar.height}px, padding ${bar.padding}px`);
+    }
+    if (wrapped.length === 0) ok(`The bar holds one row at ${widths.join(', ')}px with a six-figure balance`);
+    else bad('Bar row', `the bar is taller than the scroll padding assumes: ${wrapped.join('; ')}`);
+  } finally {
+    await page.send('Emulation.clearDeviceMetricsOverride');
+  }
+}
+
+/**
  * Below 600px the Coach's closed sheet is a fixed 4rem strip. At 360x780 "Deal me in" rested at y 705
  * to 749 under a strip starting at 716, so a tap on it opened the Coach. Scroll padding cannot help a
  * control that is already in the first viewport. `elementFromPoint` checks what a tap hits, at both
@@ -1880,7 +1933,7 @@ async function main() {
           bad(`${route.title}: audit`, error instanceof Error ? error.message : String(error));
         }
       }
-      journeys += 7;
+      journeys += 8;
       try {
         await auditNarrowViewport(page);
       } catch (error) {
@@ -1890,6 +1943,11 @@ async function main() {
         await auditStickyBarOcclusion(page);
       } catch (error) {
         bad('Sticky bar: audit', error instanceof Error ? error.message : String(error));
+      }
+      try {
+        await auditBarHoldsOneRow(page);
+      } catch (error) {
+        bad('Bar row: audit', error instanceof Error ? error.message : String(error));
       }
       try {
         await auditCoachPeekOcclusion(page);
