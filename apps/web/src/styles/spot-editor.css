@@ -16,7 +16,9 @@
   gap: var(--prl-space-4);
 }
 
+/** `margin: 0`, or base.css's paragraph margin lifts the word above the buttons it sits beside. */
 .prl-spot-editor__state {
+  margin: 0;
   color: var(--prl-text-secondary);
   font-size: var(--prl-type-body-sm);
 }
@@ -150,11 +152,13 @@
   list-style: none;
 }
 
+/** `margin: 0`, because base.css spaces every list item but the last, and a row then had two heights. */
 .prl-spot-list__item {
   display: grid;
   align-content: start;
   gap: var(--prl-space-4);
   min-width: 0;
+  margin: 0;
   padding: var(--prl-space-6);
   border: 1px solid var(--prl-line);
   border-radius: var(--prl-radius-2);
