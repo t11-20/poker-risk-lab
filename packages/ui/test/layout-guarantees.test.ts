@@ -241,7 +241,7 @@ describe('the design system rules that are stated in prose and checked nowhere',
             value,
             'var(--prl-focus-ring)',
             `${name}: \`${block.selector}\` sets \`box-shadow: ${value}\`. Depth is a fill and a ` +
-              'hairline (design system section 2.6), and a shadow here deletes the focus halo.',
+              'hairline (design system section 2.4), and a shadow here deletes the focus halo.',
           );
           assert.match(block.selector, /focus/u, `${name}: \`${block.selector}\` rings outside a focus rule`);
         }

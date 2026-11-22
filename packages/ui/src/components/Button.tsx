@@ -2,7 +2,7 @@
 
 /**
  * The three-variant button. The default is `secondary` because a default primary is how a view ends up
- * with six of them. Text on the accent fill is `--prl-text-on-accent`, never white (2.07:1, §2.4).
+ * with six of them. Text on the accent fill is `--prl-text-on-accent`, never a literal (§2.3).
  * No `href` (links go through `next/link`), no spinner (it changes the width under the cursor), no
  * icon-only mode (§12). `type` defaults to `button`, because an unspecified type inside a form submits it.
  */

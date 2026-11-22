@@ -3,7 +3,7 @@
  * `prl-lab-` or `prl-stage-`. Imported by the two Lab routes only. Chrome shared with Review lives in
  * `page.css`. Every value is a `--prl-*` token, and nothing casts a shadow (layout-guarantees.test.ts).
  * Meaningful borders are `--prl-line-strong` or
- * the accent (§2.4 rule B). Only transform, opacity and colour animate.
+ * the accent (§2.3 rule 2). Only transform, opacity and colour animate.
  */
 
 /* The reading measure, narrowed for this route group.
