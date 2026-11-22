@@ -154,12 +154,12 @@ describe('the chips beside an action', () => {
   const line = async (committed: number, action: string, status: SeatStatus = 'active') =>
     statusLine(await render(status, 'flop', committed, action));
 
-  it('are not repeated when the action already names them (REGRESSION)', async () => {
+  it('are not repeated when the action already names them', async () => {
     assert.equal(await line(35, 'called 35'), 'called 35');
     assert.equal(await line(1_000, 'raised to 1,000, all in', 'allIn'), 'raised to 1,000, all in');
   });
 
-  it('are added when the action names none, or a different figure', async () => {
+  it('are added when the action names none, or a different figure (REGRESSION)', async () => {
     assert.equal(await line(10, 'checked'), 'checked, 10 in');
     assert.equal(await line(100, 'raised to 1,000'), 'raised to 1,000, 100 in');
     assert.equal(
@@ -167,6 +167,11 @@ describe('the chips beside an action', () => {
       'bet 10,500, 10 in',
       'a thousands comma does not end a figure',
     );
+    assert.equal(await line(500, 'bet 10,500'), 'bet 10,500, 500 in', 'a figure starts after a space');
+  });
+
+  it('read a figure followed by more words as named', async () => {
+    assert.equal(await line(35, 'called 35 by the server'), 'called 35 by the server');
   });
 
   it("are left off a settled seat, whose chips are already in the winners' stacks", async () => {

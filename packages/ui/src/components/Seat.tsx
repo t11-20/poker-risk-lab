@@ -91,7 +91,7 @@ function statusLine(status: SeatStatus, settled: boolean, lastAction: string | n
 
 /**
  * One line for what the seat did and what it has in this street: "called 35", "10 in", "folded, 5 in".
- * The chips are added unless the action already names them, so no seat's commitment is ever dropped.
+ * The chips are added unless the action already names them, so no live seat's commitment is dropped.
  * One shared line, because six 13rem plates have no height for a separate row.
  */
 function seatLine(seat: SeatView, settled: boolean, lastAction: string | null): string {
