@@ -32,14 +32,15 @@ export interface SeatProps {
   readonly highlightedCards?: readonly number[];
   /** Joins each ringed card's accessible name, because the ring is a visual cue only. */
   readonly highlightLabel?: string;
-  /** Replaces "in the hand" on the status line (`../seat-actions.ts`). Ignored once settled. */
+  /** The status line while the seat is live (`../seat-actions.ts`). Ignored once settled. */
   readonly lastAction?: string | null;
   readonly as?: 'li' | 'div';
   readonly className?: string;
 }
 
+/** A live seat with no action yet says nothing: its cards already show it is in. */
 const STATUS_TEXT: Readonly<Record<SeatStatus, string>> = {
-  active: 'in the hand',
+  active: '',
   folded: 'folded',
   allIn: 'all in',
   sittingOut: 'sitting out',
@@ -47,7 +48,7 @@ const STATUS_TEXT: Readonly<Record<SeatStatus, string>> = {
 
 /** Past tense for the two statuses that described a hand in progress. */
 const SETTLED_STATUS_TEXT: Readonly<Record<SeatStatus, string>> = {
-  active: 'still in at the end',
+  active: 'stayed in',
   folded: 'folded',
   allIn: 'went all in',
   sittingOut: 'sitting out',
@@ -110,6 +111,10 @@ export function Seat(props: SeatProps): ReactElement {
    * The plate-level mark for a seat holding ringed cards (`styles/play.css` section 12.3). Not called
    * `--won`, because review marks cards for reasons other than winning.
    */
+  const status = statusLine(seat.status, settled, lastAction);
+  // The last action already names the amount ("called 35"), so the bet line shows only blinds.
+  const showBet = seat.committedThisStreet > 0 && (settled || lastAction === null);
+
   const marked =
     highlightedCards !== undefined &&
     highlightedCards.length > 0 &&
@@ -171,17 +176,19 @@ export function Seat(props: SeatProps): ReactElement {
           <dt className="prl-seat__stat-label">Stack</dt>
           <dd className="prl-seat__stat-value">{formatChips(seat.stack)}</dd>
         </div>
-        <div className="prl-seat__stat">
-          <dt className="prl-seat__stat-label">
-            {'In front'}
-            <span className="prl-visually-hidden">{' this street'}</span>
-          </dt>
-          <dd className="prl-seat__stat-value">{formatChips(seat.committedThisStreet)}</dd>
-        </div>
+        {showBet ? (
+          <div className="prl-seat__stat">
+            <dt className="prl-seat__stat-label">
+              {'Bet'}
+              <span className="prl-visually-hidden">{' this round'}</span>
+            </dt>
+            <dd className="prl-seat__stat-value">{formatChips(seat.committedThisStreet)}</dd>
+          </div>
+        ) : null}
       </dl>
 
       {/* The last action rides on the status line, because six 13rem plates have no height to spare. */}
-      <p className="prl-seat__status">{statusLine(seat.status, settled, lastAction)}</p>
+      {status === '' ? null : <p className="prl-seat__status">{status}</p>}
 
       {seat.status === 'sittingOut' ? null : (
         <CardRow
@@ -193,7 +200,7 @@ export function Seat(props: SeatProps): ReactElement {
           tight
           {...(highlightedCards === undefined ? {} : { highlightedCards })}
           {...(highlightLabel === undefined ? {} : { highlightLabel })}
-          emptyText="no cards"
+          emptyText=""
           className="prl-seat__cards"
         />
       )}

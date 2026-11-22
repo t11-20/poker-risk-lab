@@ -36,7 +36,7 @@ export function isBareName(name) {
 // ("Fold0 units") took over (3.14).
 export function announcesActionAndCost(name) {
   const trimmed = (name ?? '').trim();
-  if (!/^(fold|check|call|bet to|raise to)\b/iu.test(trimmed)) return false;
+  if (!/^(fold|check|call|bet|raise to)\b/iu.test(trimmed)) return false;
   if (/[a-z]\d/iu.test(trimmed)) return false;
   return /\d[\d,]*\s+units?\b/iu.test(trimmed);
 }

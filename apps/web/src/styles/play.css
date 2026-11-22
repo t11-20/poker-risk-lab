@@ -883,18 +883,32 @@
 }
 
 /**
- * The empty card slot takes the card pair's footprint (`sm` width, `--prl-space-2` gap, 5/7 ratio),
+ * Seat cards stay `sm` on the oval, where a wider pair clipped "Loose-aggressive bot" at 1440. Stacked,
+ * a plate is a full row, so they step up and a rank reads at a glance.
+ */
+.prl-play .prl-seat__cards {
+  --prl-seat-card-w: var(--prl-space-9);
+}
+
+@container prl-table (width < 46rem) {
+  .prl-play .prl-seat__cards {
+    --prl-seat-card-w: var(--prl-space-10);
+  }
+}
+
+.prl-play .prl-seat__cards .prl-card {
+  --prl-card-w: var(--prl-seat-card-w);
+}
+
+/**
+ * The empty card slot takes the card pair's footprint (card width, `--prl-space-2` gap, 5/7 ratio),
  * so folded plates align with the rest. Unsized, it staggered the stack figures 9.2px around the ring.
  * Scoped to seats, because the board and outs rows want a sentence.
  */
 .prl-play .prl-seat__cards .prl-card-row__empty {
-  display: grid;
-  place-items: center;
-  width: calc(var(--prl-space-9) * 2 + var(--prl-space-2));
-  height: calc(var(--prl-space-9) / 5 * 7);
-  /* `--prl-type-label`, the floor. At 15px the phrase would wrap in its 68px box once type scales. */
-  font-size: var(--prl-type-label);
-  text-align: center;
+  display: block;
+  width: calc(var(--prl-seat-card-w) * 2 + var(--prl-space-2));
+  height: calc(var(--prl-seat-card-w) / 5 * 7);
 }
 
 /* 12.3.1  A NAME IS TWO LINES, ALWAYS

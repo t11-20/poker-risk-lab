@@ -2270,7 +2270,7 @@
   border-radius: var(--prl-radius-2);
 }
 
-/** Repeats the pot and the price on purpose, so the arithmetic needs one place on screen. */
+/** The pot, beside the Call button's amount, so the price needs one place on screen. */
 .prl-action-bar__price {
   display: flex;
   flex-wrap: wrap;
@@ -2348,6 +2348,7 @@
   position: relative;
   isolation: isolate;
   display: grid;
+  align-content: center;
   gap: var(--prl-space-1);
   flex: 1 1 var(--prl-space-15);
   min-height: var(--prl-space-12);
@@ -2526,11 +2527,6 @@
   font-size: var(--prl-type-body-sm);
 }
 
-.prl-sizer__readout-line {
-  margin: 0;
-  max-width: none;
-}
-
 .prl-sizer__readout-value {
   font-weight: var(--prl-weight-semibold);
   font-variant-numeric: var(--prl-numeric);
@@ -2555,10 +2551,29 @@
 
 /** `max-width: none`. Held to `--prl-measure` it wrapped, costing 20px of table. */
 .prl-action-bar__note {
+  display: grid;
+  gap: var(--prl-space-2);
   margin: 0;
   max-width: none;
   color: var(--prl-text-secondary);
   font-size: var(--prl-type-body-sm);
+}
+
+.prl-action-bar__hint {
+  margin: 0;
+  max-width: none;
+}
+
+.prl-action-help__list {
+  display: grid;
+  gap: var(--prl-space-3);
+  margin: 0;
+  padding: 0 0 var(--prl-space-5);
+  list-style: none;
+}
+
+.prl-action-help__list strong {
+  color: var(--prl-text);
 }
 
 /* CoachPanel */

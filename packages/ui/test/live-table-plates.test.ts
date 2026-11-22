@@ -217,7 +217,7 @@ const statusLines = (markup: string): string[] =>
   [...markup.matchAll(/<p class="prl-seat__status">([^<]*)<\/p>/gu)].map((match) => match[1] ?? '');
 
 describe('the plates, rendered', () => {
-  it('show the last action on this street in place of "in the hand"', async () => {
+  it('show the last action on this street on a live plate', async () => {
     const lines = statusLines(await table({ view: view('turn'), showLastActions: true }));
     assert.ok(lines.length === 4, `expected four plates, read ${lines.length}`);
     assert.ok(lines.includes('raised to 1,240'), `no raise on any plate: ${lines.join(' | ')}`);
@@ -228,9 +228,9 @@ describe('the plates, rendered', () => {
     assert.equal(lines.filter((line) => line === 'folded').length, 2);
   });
 
-  it('NEGATIVE CONTROL: without it, as before, every live plate says only "in the hand"', async () => {
+  it('NEGATIVE CONTROL: without it, a live plate has no status line and only folds are named', async () => {
     const lines = statusLines(await table({ view: view('turn') }));
-    assert.deepEqual([...lines].sort(), ['folded', 'folded', 'in the hand', 'in the hand']);
+    assert.deepEqual([...lines].sort(), ['folded', 'folded']);
   });
 });
 

@@ -139,26 +139,23 @@ export function isAllInAt(to: number, bounds: BetBounds): boolean {
   return to >= bounds.max;
 }
 
-/** The primary button's face and spoken name, which say "all in" together or not at all. */
+/**
+ * The primary button's face and spoken name, which say "all in" together or not at all. The second line
+ * appears only when it adds something: all in, or a raise whose cost differs from its total.
+ */
 export function sizedButtonText(
   kind: SizedAction['kind'],
   to: number,
   bounds: BetBounds,
   committedThisStreet: number,
 ): { readonly label: string; readonly cost: string; readonly spoken: string } {
-  const word = kind === 'bet' ? 'Bet to' : 'Raise to';
-  const cost = formatUnits(to - committedThisStreet);
-  return isAllInAt(to, bounds)
-    ? {
-        label: `${word} ${formatChips(to)}, all in`,
-        cost,
-        spoken: `${word.toLowerCase()} ${formatUnits(to)}, which is all in: ${cost} out of your stack`,
-      }
-    : {
-        label: `${word} ${formatChips(to)}`,
-        cost,
-        spoken: `${word.toLowerCase()} ${formatUnits(to)}, ${cost} out of your stack`,
-      };
+  const word = kind === 'bet' ? 'Bet' : 'Raise to';
+  const label = `${word} ${formatChips(to)}`;
+  const spokenHead = `${word.toLowerCase()} ${formatUnits(to)}`;
+  if (isAllInAt(to, bounds)) return { label, cost: 'All in', spoken: `${spokenHead}, all in` };
+  const more = to - committedThisStreet;
+  if (more === to) return { label, cost: '', spoken: spokenHead };
+  return { label, cost: `${formatChips(more)} more`, spoken: `${spokenHead}, ${formatChips(more)} more` };
 }
 
 /** An aggressive action missing a bound is dropped, because an invented maximum is an unbounded sizer. */

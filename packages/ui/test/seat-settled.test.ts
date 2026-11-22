@@ -58,14 +58,19 @@ function statusLine(markup: string): string {
   return (found[1] ?? '').trim();
 }
 
+/** A live seat with no action yet has no status line, because its cards already say it is in. */
+function hasNoStatusLine(markup: string): boolean {
+  return !markup.includes('class="prl-seat__status"');
+}
+
 function hasAllInChip(markup: string): boolean {
   return /class="[^"]*prl-chip[^"]*"[^>]*>all in</u.test(markup);
 }
 
 describe('a seat in a hand that is still being played', () => {
-  it('says it is in the hand, and badges an outstanding all-in', async () => {
+  it('says nothing of a seat that is simply in, and badges an outstanding all-in', async () => {
     for (const street of ['preflop', 'flop', 'turn', 'river'] as const) {
-      assert.equal(statusLine(await render('active', street)), 'in the hand', street);
+      assert.equal(hasNoStatusLine(await render('active', street)), true, street);
       assert.equal(statusLine(await render('allIn', street)), 'all in', street);
       assert.equal(hasAllInChip(await render('allIn', street)), true, `${street}: no all-in badge`);
     }
@@ -73,7 +78,7 @@ describe('a seat in a hand that is still being played', () => {
 
   it('keeps saying so at showdown, because the pot has not been awarded yet', async () => {
     // Deliberately unchanged. The cards are being compared, so a seat that has not folded is still in.
-    assert.equal(statusLine(await render('active', 'showdown')), 'in the hand');
+    assert.equal(hasNoStatusLine(await render('active', 'showdown')), true);
     assert.equal(hasAllInChip(await render('allIn', 'showdown')), true);
   });
 });
@@ -81,12 +86,7 @@ describe('a seat in a hand that is still being played', () => {
 describe('a seat in a hand that is over', () => {
   it('does not claim anybody is still in the hand', async () => {
     const markup = await render('active', 'complete');
-    assert.equal(statusLine(markup), 'still in at the end');
-    assert.doesNotMatch(
-      markup,
-      />in the hand</u,
-      'the settled frame still says a seat is in a hand that has been settled',
-    );
+    assert.equal(statusLine(markup), 'stayed in');
   });
 
   it('puts a finished all-in in the past tense and takes the badge off', async () => {
@@ -113,7 +113,6 @@ describe('a seat in a hand that is over', () => {
     assert.equal(hasAllInChip(live), true);
     assert.notEqual(statusLine(live), statusLine(await render('allIn', 'complete')));
 
-    const stillIn = await render('active', 'river');
-    assert.match(stillIn, />in the hand</u, 'the "in the hand" detector never matches anything');
+    assert.equal(hasNoStatusLine(await render('folded', 'river')), false, 'the detector never fires');
   });
 });

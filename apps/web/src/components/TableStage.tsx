@@ -200,13 +200,17 @@ function HeroReadout({ view }: HeroReadoutProps): ReactElement | null {
     <div className="prl-play__hud">
       <CardRow cards={hero.holeCards} label="Your cards" size="md" tight />
       <dl className="prl-play__hud-stats">
-        <dt className="prl-label">Your stack</dt>
+        <dt className="prl-label">Stack</dt>
         <dd className="prl-play__hud-value">{formatChips(hero.stack)}</dd>
-        <dt className="prl-label">
-          {'In front'}
-          <span className="prl-visually-hidden">{' this street'}</span>
-        </dt>
-        <dd className="prl-play__hud-value">{formatChips(hero.committedThisStreet)}</dd>
+        {hero.committedThisStreet > 0 ? (
+          <>
+            <dt className="prl-label">
+              {'Bet'}
+              <span className="prl-visually-hidden">{' this round'}</span>
+            </dt>
+            <dd className="prl-play__hud-value">{formatChips(hero.committedThisStreet)}</dd>
+          </>
+        ) : null}
       </dl>
     </div>
   );

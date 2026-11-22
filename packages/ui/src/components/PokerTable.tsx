@@ -134,6 +134,13 @@ function potsShown(view: PlayerView): { readonly total: number; readonly pots: r
   return { total: view.potTotal - back, pots };
 }
 
+/** By position, the name the plates use. A seat number appears nowhere else on the table. */
+function toActText(view: PlayerView): string {
+  if (view.toAct === view.viewerSeat) return 'Your turn';
+  const seat = view.seats[view.toAct ?? -1];
+  return seat?.position == null ? 'Waiting' : `${seat.position} to act`;
+}
+
 export function PokerTable(props: PokerTableProps): ReactElement {
   const { view, title, seatNames, highlightedCards, highlightLabel } = props;
   const { turn = null, className, showLastActions = false } = props;
@@ -163,11 +170,9 @@ export function PokerTable(props: PokerTableProps): ReactElement {
         </h2>
         <ul className="prl-table__meta">
           <li className="prl-badge">
-            {`blinds ${formatChips(view.config.smallBlind)} / ${formatChips(view.config.bigBlind)}`}
+            {`Blinds ${formatChips(view.config.smallBlind)}/${formatChips(view.config.bigBlind)}`}
           </li>
-          <li className="prl-badge">
-            {view.toAct === null ? 'no one to act' : `seat ${view.toAct + 1} to act`}
-          </li>
+          {view.toAct === null ? null : <li className="prl-badge">{toActText(view)}</li>}
           {view.amountToCall > 0 ? (
             <li className="prl-badge prl-badge--caution">{`${formatUnits(view.amountToCall)} to call`}</li>
           ) : null}
