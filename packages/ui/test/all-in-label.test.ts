@@ -19,10 +19,18 @@ describe('sizedButtonText', () => {
   });
 
   it('names a bet of the whole stack the same way', () => {
-    assert.deepEqual(sizedButtonText('bet', 924, bounds, 24), {
+    assert.deepEqual(sizedButtonText('bet', 924, bounds, 0), {
       label: 'Bet 924',
       cost: 'All in',
       spoken: 'bet 924 units, all in',
+    });
+  });
+
+  it('speaks what leaves the stack for an all-in raise with chips already in (REGRESSION)', () => {
+    assert.deepEqual(sizedButtonText('raise', 924, bounds, 24), {
+      label: 'Raise to 924',
+      cost: 'All in',
+      spoken: 'raise to 924 units, all in, 900 more',
     });
   });
 

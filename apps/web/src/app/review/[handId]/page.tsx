@@ -199,7 +199,7 @@ export default async function HandReviewPage({
               tone={review.hand.endedByFold ? 'neutral' : 'info'}
               glyph={review.hand.endedByFold ? '⤶' : '⇄'}
             >
-              {review.hand.endedByFold ? 'everyone folded' : 'showdown'}
+              {review.hand.endedByFold ? 'no showdown' : 'showdown'}
             </Chip>
           </li>
           <li>

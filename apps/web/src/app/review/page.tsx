@@ -354,7 +354,7 @@ export default async function ReviewIndexPage({
                     </td>
                     <td className="prl-review-table__ending">
                       <Chip tone={hand.endedByFold ? 'neutral' : 'info'} glyph={hand.endedByFold ? '⤶' : '⇄'}>
-                        {hand.endedByFold ? 'everyone folded' : 'showdown'}
+                        {hand.endedByFold ? 'no showdown' : 'showdown'}
                       </Chip>
                     </td>
                   </tr>

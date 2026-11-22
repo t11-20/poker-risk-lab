@@ -134,11 +134,15 @@ function potsShown(view: PlayerView): { readonly total: number; readonly pots: r
   return { total: view.potTotal - back, pots };
 }
 
-/** By position, the name the plates use. A seat number appears nowhere else on the table. */
-function toActText(view: PlayerView): string {
+/**
+ * By position, the name the plates use. Found by chair, not by index: the view lists only dealt-in seats,
+ * so an empty chair below the actor shifted an indexed lookup onto the wrong seat.
+ */
+export function toActText(view: Pick<PlayerView, 'toAct' | 'viewerSeat' | 'seats'>): string {
+  if (view.toAct === null) return '';
   if (view.toAct === view.viewerSeat) return 'Your turn';
-  const seat = view.seats[view.toAct ?? -1];
-  return seat?.position == null ? 'Waiting' : `${seat.position} to act`;
+  const seat = view.seats.find((candidate) => candidate.seat === view.toAct);
+  return seat?.position == null ? `Seat ${String(view.toAct + 1)} to act` : `${seat.position} to act`;
 }
 
 export function PokerTable(props: PokerTableProps): ReactElement {

@@ -283,14 +283,12 @@ describe('resolveSizedAction', () => {
     assert.deepEqual(resolveSizedAction(actions), {
       kind: 'raise',
       bounds: { min: 600, max: 840 },
-      note: 'Increase the bet.',
     });
   });
 
   it('finds a bet the same way', () => {
     const found = resolveSizedAction([{ type: 'bet', minTo: 10, maxTo: 500 }]);
     assert.equal(found?.kind, 'bet');
-    assert.equal(found?.note, null);
   });
 
   it('drops an aggressive action that is missing a bound, rather than guessing one', () => {

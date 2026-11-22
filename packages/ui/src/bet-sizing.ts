@@ -24,7 +24,6 @@ export type { BetBounds, SizingContext, SizingPreset };
 export interface SizedAction {
   readonly kind: 'bet' | 'raise';
   readonly bounds: BetBounds;
-  readonly note: string | null;
 }
 
 export const SIZING_PRESETS: readonly SizingPreset[] = TABLE_SIZING_PRESETS;
@@ -152,8 +151,11 @@ export function sizedButtonText(
   const word = kind === 'bet' ? 'Bet' : 'Raise to';
   const label = `${word} ${formatChips(to)}`;
   const spokenHead = `${word.toLowerCase()} ${formatUnits(to)}`;
-  if (isAllInAt(to, bounds)) return { label, cost: 'All in', spoken: `${spokenHead}, all in` };
   const more = to - committedThisStreet;
+  if (isAllInAt(to, bounds)) {
+    const spoken = more === to ? `${spokenHead}, all in` : `${spokenHead}, all in, ${formatChips(more)} more`;
+    return { label, cost: 'All in', spoken };
+  }
   if (more === to) return { label, cost: '', spoken: spokenHead };
   return { label, cost: `${formatChips(more)} more`, spoken: `${spokenHead}, ${formatChips(more)} more` };
 }
@@ -165,7 +167,7 @@ export function resolveSizedAction(legalActions: readonly LegalAction[]): SizedA
     const { minTo, maxTo } = action;
     if (minTo === undefined || maxTo === undefined) continue;
     if (!Number.isFinite(minTo) || !Number.isFinite(maxTo)) continue;
-    return { kind: action.type, bounds: { min: minTo, max: maxTo }, note: action.note ?? null };
+    return { kind: action.type, bounds: { min: minTo, max: maxTo } };
   }
   return null;
 }

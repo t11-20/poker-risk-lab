@@ -363,7 +363,7 @@ function PriceSection({
           value={potOdds.breakEvenEquity}
           format="percent"
           size="md"
-          note="What a call has to win, on average, to pay for itself."
+          note="The share of the pot a call has to win, on average, to pay for itself."
         />
       ) : (
         <RefusedFigure label="Break-even equity" what="the break-even equity" />
@@ -532,7 +532,7 @@ function CandidateTable({ candidates }: { readonly candidates: readonly ActionCa
   );
 }
 
-/** Worded as the table's button words the same action, "Call all in" or "Raise to 1,000, all in". */
+/** Names an all-in reading as all in, as the table's button does on its second line. */
 function allInWords(candidate: ActionCandidate | null, words: string): string {
   return candidate?.allIn === true ? words : '';
 }

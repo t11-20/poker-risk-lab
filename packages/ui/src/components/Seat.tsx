@@ -89,7 +89,7 @@ function statusLine(status: SeatStatus, settled: boolean, lastAction: string | n
   return lastAction !== null && status !== 'sittingOut' ? lastAction : STATUS_TEXT[status];
 }
 
-/** The last action already names the amount ("called 35"), so the bet line shows only blinds. */
+/** Hidden once a last action on the line above names the amount ("called 35"). */
 function visibleBet(committed: number, settled: boolean, lastAction: string | null): number | null {
   return committed > 0 && (settled || lastAction === null) ? committed : null;
 }
@@ -107,7 +107,13 @@ function SeatStats({ stack, bet }: { readonly stack: number; readonly bet: numbe
         <dt className="prl-seat__stat-label">Stack</dt>
         <dd className="prl-seat__stat-value">{formatChips(stack)}</dd>
       </div>
-      {bet === null ? null : (
+      {/* Reserved when empty, for the same reason as the status line. */}
+      {bet === null ? (
+        <div className="prl-seat__stat prl-seat__stat--reserved" aria-hidden="true">
+          <dt className="prl-seat__stat-label">Bet</dt>
+          <dd className="prl-seat__stat-value">0</dd>
+        </div>
+      ) : (
         <div className="prl-seat__stat">
           <dt className="prl-seat__stat-label">
             {'Bet'}
@@ -133,12 +139,12 @@ export function Seat(props: SeatProps): ReactElement {
   if (holeCards !== null) cards = holeCards;
   else if (isHoldingCards) cards = FACE_DOWN_PAIR;
 
+  const status = statusLine(seat.status, settled, lastAction);
+
   /**
    * The plate-level mark for a seat holding ringed cards (`styles/play.css` section 12.3). Not called
    * `--won`, because review marks cards for reasons other than winning.
    */
-  const status = statusLine(seat.status, settled, lastAction);
-
   const marked =
     highlightedCards !== undefined &&
     highlightedCards.length > 0 &&
@@ -197,7 +203,10 @@ export function Seat(props: SeatProps): ReactElement {
       <SeatStats stack={seat.stack} bet={visibleBet(seat.committedThisStreet, settled, lastAction)} />
 
       {/* The last action rides on the status line, because six 13rem plates have no height to spare. */}
-      {status === '' ? null : <p className="prl-seat__status">{status}</p>}
+      {/* Kept when empty, so every plate on the oval is one height and the stacks stay level. */}
+      <p className="prl-seat__status" aria-hidden={status === '' ? true : undefined}>
+        {status === '' ? '\u00a0' : status}
+      </p>
 
       {seat.status === 'sittingOut' ? null : (
         <CardRow

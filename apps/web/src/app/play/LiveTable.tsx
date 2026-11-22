@@ -142,7 +142,7 @@ function statusSentence(live: LiveTableModel, inLegendMatch: boolean): string {
 }
 
 function hintSentence(live: LiveTableModel): string {
-  if (live.phase !== 'ready' || live.status !== 'live') return 'Waiting for the connection.';
+  if (live.phase !== 'ready' || live.status !== 'live') return 'The table opens once you are connected.';
   if (live.dealingIn) {
     return live.table.seat === null && live.readerSeat !== null
       ? `Taking seat ${String(live.readerSeat + 1)} for you, then dealing your first hand.`

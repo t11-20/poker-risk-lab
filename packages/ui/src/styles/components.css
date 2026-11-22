@@ -1143,7 +1143,7 @@
   font-size: var(--prl-type-body-sm);
 }
 
-/* Out of the layout except in the compact row, so the two-column grid still places four cells. */
+/* Out of the layout except in the compact row, so the two-column grid places the cells directly. */
 .prl-seat__stat {
   display: contents;
 }
@@ -1162,6 +1162,18 @@
   font-weight: var(--prl-weight-semibold);
   font-variant-numeric: var(--prl-numeric);
   white-space: nowrap;
+}
+
+/** A bet line with nothing to say keeps its height, so every plate is one size. */
+.prl-seat__stat--reserved {
+  visibility: hidden;
+}
+
+/** The empty card slot keeps the pair's `sm` footprint, so a folded plate is as tall as the rest. */
+.prl-seat__cards .prl-card-row__empty {
+  display: block;
+  width: calc(var(--prl-space-9) * 2 + var(--prl-space-2));
+  height: calc(var(--prl-space-9) / 5 * 7);
 }
 
 .prl-seat__status {

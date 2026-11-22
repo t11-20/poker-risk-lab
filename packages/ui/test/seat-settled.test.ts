@@ -58,9 +58,9 @@ function statusLine(markup: string): string {
   return (found[1] ?? '').trim();
 }
 
-/** A live seat with no action yet has no status line, because its cards already say it is in. */
+/** A live seat with no action yet keeps a blank, hidden status line, so its plate stays one height. */
 function hasNoStatusLine(markup: string): boolean {
-  return !markup.includes('class="prl-seat__status"');
+  return /<p class="prl-seat__status" aria-hidden="true">\u00a0<\/p>/u.test(markup);
 }
 
 function hasAllInChip(markup: string): boolean {
@@ -76,7 +76,7 @@ describe('a seat in a hand that is still being played', () => {
     }
   });
 
-  it('keeps saying so at showdown, because the pot has not been awarded yet', async () => {
+  it('says nothing at showdown either, because the pot has not been awarded yet', async () => {
     // Deliberately unchanged. The cards are being compared, so a seat that has not folded is still in.
     assert.equal(hasNoStatusLine(await render('active', 'showdown')), true);
     assert.equal(hasAllInChip(await render('allIn', 'showdown')), true);

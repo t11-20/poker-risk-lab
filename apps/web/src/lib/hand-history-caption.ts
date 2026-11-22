@@ -8,7 +8,7 @@ export interface HistoryPage {
   readonly firstPage: boolean;
   /** The API sent a cursor for a further page. */
   readonly more: boolean;
-  /** "most recent first", as the sort control words it. */
+  /** "newest", as the sort control words it. */
   readonly order: string;
 }
 

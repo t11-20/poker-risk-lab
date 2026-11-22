@@ -296,3 +296,23 @@ describe('while the reader waits, the bar keeps its context', () => {
     );
   });
 });
+
+describe('How betting works matches the spot', () => {
+  /** The big blind's option in a limped pot: a free check and a raise, nothing to call. */
+  const OPTION: readonly LegalAction[] = [
+    { type: 'fold' },
+    { type: 'check', costAtMin: 0 },
+    { type: 'raise', minTo: 20, maxTo: 990 },
+  ];
+
+  it('does not say nobody has bet, or size a raise after a call that is not there (REGRESSION)', async () => {
+    const markup = await render({ legalActions: OPTION, toCall: 0, committedThisStreet: 10, pot: 40 });
+    assert.ok(!markup.includes('Nobody has bet'), 'the blinds and the limps are bets');
+    assert.ok(!markup.includes('after you call'), 'there is nothing to call');
+    assert.match(markup, /size the raise as a share of the pot\./u);
+  });
+
+  it('sizes a raise after the call when there is one to make', async () => {
+    assert.match(await render(), /size the raise as a share of the pot after you call\./u);
+  });
+});

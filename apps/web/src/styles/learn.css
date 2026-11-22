@@ -450,10 +450,6 @@
   text-wrap: pretty;
 }
 
-.prl-learn-lesson__prereq .prl-label {
-  margin-inline-end: var(--prl-space-3);
-}
-
 .prl-learn-lesson__back {
   color: var(--prl-text-muted);
 }

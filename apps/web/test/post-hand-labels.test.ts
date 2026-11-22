@@ -17,7 +17,7 @@ function candidatesOf(id: string) {
   return buildCoachReport(coachInputFor(scenario)).candidates;
 }
 
-test('a call is named by what it costs, and all in as its button says (REGRESSION)', () => {
+test('a call is named by what it costs, and says when it is all in (REGRESSION)', () => {
   const call = candidatesOf('rk-nine-big-blinds-call-or-fold').find((row) => row.action === 'call');
   assert.ok(call !== undefined && call.to === 7_200 && call.cost === 6_400, 'the premise');
   assert.equal(pricedRowName(call), 'Call all in, 6,400');
