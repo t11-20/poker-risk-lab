@@ -836,18 +836,32 @@ const PAINT_WALKER = String.raw`
   };
 
   const CLIPPED_AWAY = /^inset\(\s*(\d+(\.\d+)?)%/;
+  const hidesItsText = (node) => {
+    const style = getComputedStyle(node);
+    const clip = CLIPPED_AWAY.exec(style.clipPath);
+    if (clip !== null && Number(clip[1]) >= 50) return true;
+    if (style.clip === 'rect(0px, 0px, 0px, 0px)') return true;
+    const box = node.getBoundingClientRect();
+    return box.width <= 2 && box.height <= 2 && style.overflow === 'hidden';
+  };
   const isVisuallyHidden = (el) => {
-    let node = el;
-    while (node !== null && node !== document.body) {
-      const style = getComputedStyle(node);
-      const clip = CLIPPED_AWAY.exec(style.clipPath);
-      if (clip !== null && Number(clip[1]) >= 50) return true;
-      if (style.clip === 'rect(0px, 0px, 0px, 0px)') return true;
-      const box = node.getBoundingClientRect();
-      if (box.width <= 2 && box.height <= 2 && style.overflow === 'hidden') return true;
-      node = node.parentElement;
+    for (let node = el; node !== null && node !== document.body; node = node.parentElement) {
+      if (hidesItsText(node)) return true;
     }
     return false;
+  };
+
+  /* A clipped descendant still reports its unclipped glyph rects, so a button carrying a visually
+     hidden suffix measured 481px of text in a 151px box and read its own fill plate as partial. */
+  const paintedTextOf = (el) => {
+    const hidden = Array.from(el.querySelectorAll('*')).filter(hidesItsText);
+    if (hidden.length === 0) return [el];
+    const shown = [];
+    const texts = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    for (let text = texts.nextNode(); text !== null; text = texts.nextNode()) {
+      if (!hidden.some((h) => h.contains(text))) shown.push(text);
+    }
+    return shown;
   };
 
   /* Every box that casts a shadow, with the box that shadow can reach. A drop shadow is painted
@@ -903,11 +917,13 @@ const PAINT_WALKER = String.raw`
     if (state.seen.has(el)) continue;
 
     const range = document.createRange();
-    range.selectNodeContents(el);
     const glyphRects = [];
-    const list = range.getClientRects();
-    for (let i = 0; i < list.length; i += 1) {
-      if (list[i].width > 0 && list[i].height > 0) glyphRects.push(list[i]);
+    for (const source of paintedTextOf(el)) {
+      range.selectNodeContents(source);
+      const list = range.getClientRects();
+      for (let i = 0; i < list.length; i += 1) {
+        if (list[i].width > 0 && list[i].height > 0) glyphRects.push(list[i]);
+      }
     }
     if (glyphRects.length === 0) {
       state.seen.add(el);

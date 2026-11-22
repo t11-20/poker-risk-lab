@@ -36,6 +36,9 @@ const INK = '#55606f'; // --prl-text-muted, light theme
 const CARD = '#f5f7f9'; // --prl-surface-page, light theme
 const GROUND = '#e8edf1'; // --prl-surface-table, light theme — the felt the seat plate lies on
 const FADE = 0.8;
+const PLATE = '#1e5c40'; // --prl-accent-fill, light theme: a primary button's `::before` plate
+// Long enough that its unclipped glyph rects run far past the button, as on /legends.
+const HIDDEN = 'High-Variance Tournament Aggressor, educational setting';
 
 function contrastOf(foreground, background) {
   const channel = (hex, at) => Number.parseInt(hex.slice(at, at + 2), 16);
@@ -56,7 +59,7 @@ function contrastOf(foreground, background) {
  * Over twenty text lines, because pass 3 refuses a barely swept page, and padded so the probe finds a
  * glyph-free point. The two themes differ, as the gate checks the theme it measured.
  */
-function fixture(opacity) {
+function fixture(opacity, plate = null) {
   const rows = Array.from(
     { length: 24 },
     (_, i) => `<p class="label">Seat ${i + 1} &mdash; stack 1,000, in front 35, folded</p>`,
@@ -78,11 +81,18 @@ function fixture(opacity) {
         opacity: ${opacity};
       }
       .label { margin: 0 0 14px; padding: 0; color: ${INK}; font: 500 12px/1.6 system-ui, sans-serif; }
+      .btn { position: relative; isolation: isolate; display: inline-block; margin: 0 0 24px;
+        padding: 12px 24px; color: #ffffff; font: 600 16px/1.2 system-ui, sans-serif; }
+      .btn::before { content: ""; position: absolute; z-index: -1; inset: 0;
+        ${plate === 'half' ? 'right: 50%;' : ''} background-color: ${PLATE}; }
+      .hidden { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden;
+        clip-path: inset(50%); white-space: nowrap; }
     </style>
   </head>
   <body>
     <main>
       <h1 class="label">Folded seats, faded</h1>
+      ${plate === null ? '' : `<a class="btn" href="#">Play this style<span class="hidden">: ${HIDDEN}</span></a>`}
       <div class="card">
       ${rows}
       </div>
@@ -91,8 +101,8 @@ function fixture(opacity) {
 </html>`;
 }
 
-async function withFixtureServer(opacity, run) {
-  const body = fixture(opacity);
+async function withFixtureServer(opacity, run, plate = null) {
+  const body = fixture(opacity, plate);
   const server = createServer((_request, response) => {
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     response.end(body);
@@ -151,4 +161,26 @@ test('PASS 3 refuses an opacity that no token pair can see, and prints the compo
   // luminances instead gives 3.10:1.
   assert.match(output, /3\.86:1 needs 4\.5:1/, output.slice(-3000));
   assert.match(output, /label/, output.slice(-3000));
+});
+
+test('PASS 3 reads a full fill plate as full when the label carries a visually hidden suffix', {
+  skip: chromeSkip,
+  timeout: 240_000,
+}, async () => {
+  const { output } = await withFixtureServer(1, runGate, 'full');
+  assert.match(output, /PASS {2}painted layer/, output.slice(-3000));
+  assert.doesNotMatch(output, /gradient\/partial/, output.slice(-3000));
+});
+
+test('PASS 3 still takes the ground under a plate that covers half the visible label', {
+  skip: chromeSkip,
+  timeout: 240_000,
+}, async () => {
+  const { code, output } = await withFixtureServer(1, runGate, 'half');
+  assert.equal(code, 1, output.slice(-3000));
+  assert.match(
+    output,
+    /"Play this style".*#ffffff on #e8edf1 {2}\[1 gradient\/partial layer/,
+    output.slice(-3000),
+  );
 });
