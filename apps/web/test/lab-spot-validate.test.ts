@@ -34,6 +34,7 @@ function good(): SpotDraft {
       river: null,
     },
     potBefore: '100',
+    heroBet: '0',
     opponents: [{ ...(base.opponents[0] as OpponentDraft), name: 'Ledger', stack: '900', bet: '50' }],
   };
 }
@@ -231,10 +232,91 @@ describe('each rule, with its message', () => {
     assert.equal(checked.spot.foldRate, 0.333);
   });
 
+  it('never folds and a fold rate cannot both hold, so neither is silently ignored', () => {
+    assert.equal(
+      errorOn({ ...good(), neverFolds: true, foldRate: '60' }, 'foldRate'),
+      'The opponent never folds, so leave the fold rate blank.',
+    );
+    assert.ok(validateDraft({ ...good(), neverFolds: true, foldRate: ' ' }).ok);
+  });
+
   it('a draft with any error yields no spot at all', () => {
     const checked = validateDraft({ ...good(), heroStack: '12a' });
     assert.equal(checked.ok, false);
     assert.equal('spot' in checked, false);
+  });
+});
+
+describe('a new spot, and the blinds before the flop', () => {
+  const dealt = (draft: SpotDraft): SpotDraft => ({
+    ...draft,
+    cards: { ...draft.cards, hole1: c('Ah'), hole2: c('Kh') },
+  });
+
+  it('starts as a spot that can happen: preflop, facing the big blind, with no bet to open', () => {
+    const checked = validateDraft(dealt(blankDraft()));
+    assert.ok(checked.ok, checked.ok ? '' : [...checked.errors.values()].join(' '));
+    const input = coachInputForSpot(checked.spot);
+    assert.equal(input.street, 'preflop');
+    assert.equal(input.toCall, Number(blankDraft().bigBlind) - Number(blankDraft().heroBet));
+    assert.ok(!input.legalActions?.includes('bet'), `${input.legalActions?.join(', ')}`);
+    assert.ok(input.legalActions?.includes('raise'));
+  });
+
+  it('refuses a preflop spot where nobody has posted the big blind', () => {
+    const preflop = dealt({ ...good(), cards: { ...good().cards, flop1: null, flop2: null, flop3: null } });
+    assert.equal(
+      errorOn(opponent({ ...preflop, bigBlind: '20' }, { bet: '10' }), 'bigBlind'),
+      "Before the flop, someone has put in the big blind of 20. Enter it as your bet or an opponent's.",
+    );
+    assert.ok(validateDraft(opponent(preflop, { bet: '20' })).ok);
+    assert.ok(
+      validateDraft({ ...opponent(preflop, { bet: '0' }), heroBet: '0', potBefore: '30' }).ok === false,
+    );
+  });
+});
+
+describe('ranges that cannot all be dealt at once', () => {
+  const JOINT =
+    'These ranges cannot all be dealt at once. Whatever one opponent holds, another is left with no hand. Widen a range.';
+  const seats = (ranges: readonly string[]): OpponentDraft[] =>
+    ranges.map((range, index) => ({
+      ...(good().opponents[0] as OpponentDraft),
+      key: `o${index + 1}`,
+      name: `P${index + 1}`,
+      range,
+    }));
+  const aces = (ranges: readonly string[]): SpotDraft => ({
+    ...good(),
+    cards: { ...good().cards, hole1: c('Ah'), hole2: c('Ad'), flop1: c('Ac'), flop2: c('7d') },
+    opponents: seats(ranges),
+  });
+
+  it('refuses on the opponents field when every deal leaves someone without a hand', () => {
+    // Both ranges need the one ace left, though between them they hold eight different cards.
+    assert.equal(errorOn(aces(['AKs, AQs, AJs', 'AKs, AQs, AJs']), 'opponents'), JOINT);
+    assert.ok(validateDraft(aces(['AKs, AQs, AJs', 'KQs'])).ok, 'one ace each is dealable');
+  });
+
+  it('the analysis makes the same check, because a top:NN range is expanded only there', () => {
+    const checked = validateDraft(aces(['AKs, AQs, AJs', 'KQs']));
+    assert.ok(checked.ok);
+    const [first, second] = checked.spot.opponents;
+    assert.ok(first !== undefined && second !== undefined);
+    const result = reportForSpot({ ...checked.spot, opponents: [first, { ...second, hand: first.hand }] });
+    assert.equal(result.ok ? '' : result.message, JOINT);
+  });
+
+  it('answers within a frame for five wide ranges that share four cards', () => {
+    const anyAce = 'A2s+, A2o+';
+    const started = performance.now();
+    const draft: SpotDraft = {
+      ...good(),
+      cards: { ...good().cards, flop1: null, flop2: null, flop3: null, hole1: c('2c'), hole2: c('3d') },
+      opponents: seats([anyAce, anyAce, anyAce, anyAce, anyAce]),
+    };
+    assert.equal(errorOn(draft, 'opponents'), JOINT);
+    assert.ok(performance.now() - started < 50, `${Math.round(performance.now() - started)} ms`);
   });
 });
 
@@ -295,7 +377,7 @@ describe('a hero short of the bet', () => {
 });
 
 describe('the contract with the maths', () => {
-  it('a spot that passes is one buildCoachReport accepts', () => {
+  it('a spot that passes is one buildCoachReport accepts, and each refused row is refused', () => {
     // A fixed walk over street, bets, stacks, hands and assumptions, so a failure reproduces.
     const boards = [
       { flop1: null, flop2: null, flop3: null, turn: null, river: null },
@@ -308,20 +390,29 @@ describe('the contract with the maths', () => {
       { handKind: 'range', range: '22+, A2s+' },
       { handKind: 'cards', cards: [c('Js'), c('Td')] },
     ];
-    let checkedCount = 0;
+    // Each refused row names the field it is refused on. Without those rules, the maths throws.
+    const rows: readonly (readonly [string, string, string, string, FieldKey | null])[] = [
+      ['0', '0', '900', '1000', null],
+      ['0', '50', '900', '1000', null],
+      ['20', '20', '900', '1000', null],
+      ['0', '900', '900', '1000', null],
+      ['10', '400', '1500', '1000', null],
+      ['0', '900', '1500', '300', null],
+      ['20', '900', '1500', '300', null],
+      ['0', '900', '400', '1000', O('bet')],
+      ['20', '20', '900', '20', 'heroStack'],
+      ['60', '50', '900', '1000', 'heroBet'],
+    ];
+    const assumptions: readonly (readonly [Partial<SpotDraft>, FieldKey | null])[] = [
+      [{}, null],
+      [{ neverFolds: true }, null],
+      [{ foldRate: '30' }, null],
+      [{ neverFolds: true, foldRate: '30' }, 'foldRate'],
+    ];
+    const drafts: (readonly [SpotDraft, FieldKey | null])[] = [];
     for (const board of boards) {
       for (const hand of hands) {
-        // The last three are refused. Without their rules, the first and last throw in the maths.
-        for (const [heroBet, bet, stack, heroStack] of [
-          ['0', '0', '900', '1000'],
-          ['0', '50', '900', '1000'],
-          ['20', '20', '900', '1000'],
-          ['0', '900', '900', '1000'],
-          ['10', '400', '1500', '1000'],
-          ['0', '900', '400', '1000'],
-          ['20', '20', '900', '20'],
-          ['60', '50', '900', '1000'],
-        ] as const) {
+        for (const [heroBet, bet, stack, heroStack, rowRefusal] of rows) {
           for (const extra of [false, true]) {
             const opponents: OpponentDraft[] = [
               { ...(good().opponents[0] as OpponentDraft), stack, bet, ...hand },
@@ -338,7 +429,8 @@ describe('the contract with the maths', () => {
                   ]
                 : []),
             ];
-            for (const assumption of [{}, { neverFolds: true }, { foldRate: '30' }]) {
+            for (const [assumption, assumed] of assumptions) {
+              const unposted = board.flop1 === null && Math.max(Number(heroBet), Number(bet)) < 20;
               const draft: SpotDraft = {
                 ...good(),
                 cards: { ...good().cards, ...board },
@@ -347,19 +439,47 @@ describe('the contract with the maths', () => {
                 opponents,
                 ...assumption,
               };
-              const checked = validateDraft(draft);
-              if (!checked.ok) continue;
-              checkedCount += 1;
-              assert.doesNotThrow(
-                () => buildCoachReport({ ...coachInputForSpot(checked.spot), samples: 2_000 }),
-                JSON.stringify(draft),
-              );
+              drafts.push([draft, rowRefusal ?? assumed ?? (unposted ? 'bigBlind' : null)]);
             }
           }
         }
       }
     }
-    assert.ok(checkedCount > 100, `only ${checkedCount} valid spots were priced: a sweep of nothing`);
+    const crowded = (ranges: readonly string[]): SpotDraft => ({
+      ...good(),
+      cards: { ...good().cards, hole1: c('Ah'), hole2: c('Ad'), flop1: c('Ac'), flop2: c('7d') },
+      opponents: ranges.map((range, index) => ({
+        ...(good().opponents[0] as OpponentDraft),
+        key: `o${index + 1}`,
+        name: `P${index + 1}`,
+        range,
+      })),
+    });
+    drafts.push([crowded(['AKs, AQs, AJs', 'AKs, AQs, AJs']), 'opponents']);
+    drafts.push([crowded(['AKs, AQs, AJs', 'KQs']), null]);
+
+    let priced = 0;
+    let refused = 0;
+    for (const [draft, refusal] of drafts) {
+      const checked = validateDraft(draft);
+      if (refusal !== null) {
+        assert.ok(
+          !checked.ok && checked.errors.has(refusal),
+          `not refused on ${refusal}: ${JSON.stringify(draft)}`,
+        );
+        refused += 1;
+        continue;
+      }
+      assert.ok(
+        checked.ok,
+        `${checked.ok ? '' : [...checked.errors.values()].join(' ')} ${JSON.stringify(draft)}`,
+      );
+      priced += 1;
+      const report = buildCoachReport({ ...coachInputForSpot(checked.spot), samples: 2_000 });
+      const call = report.candidates.find((candidate) => candidate.action === 'call');
+      if (call !== undefined) assert.equal(report.potOdds.toCall, call.cost, JSON.stringify(draft));
+    }
+    assert.ok(priced > 300 && refused > 100, `${priced} priced, ${refused} refused: a sweep of nothing`);
   });
 
   it('a refusal comes back as a sentence, never a throw', () => {

@@ -7,10 +7,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { scenarios } from '@prl/content';
+import type { Scenario } from '@prl/contracts';
 import { parseCards } from '@prl/poker-engine';
 import { LAB_SCENARIO_ANALYSIS, LAB_SCENARIOS } from '../src/fixtures/scenarios.ts';
-import { cardsFromText } from '../src/lib/spot.ts';
-import { reportForSpot } from '../src/lib/spot-analysis.ts';
+import { cardsFromText, type SpotDraft } from '../src/lib/spot.ts';
+import { coachInputForSpot, reportForSpot } from '../src/lib/spot-analysis.ts';
 import { draftFromScenario } from '../src/lib/spot-convert.ts';
 import { validateDraft } from '../src/lib/spot-validate.ts';
 
@@ -42,6 +43,33 @@ describe('a built-in scenario, converted to a spot', () => {
       const checked = validateDraft(draft);
       assert.ok(checked.ok, `${scenario.id}: ${checked.ok ? '' : [...checked.errors.values()].join(' ')}`);
     }
+  });
+
+  it('names each opponent by seat in a few words, and keeps the range in the range field', () => {
+    const all = scenarios();
+    const names = all.flatMap((scenario) => draftFromScenario(scenario)?.opponents.map((o) => o.name) ?? []);
+    assert.ok(names.length > 40, 'a sweep of nothing is not a pass');
+    for (const name of names) assert.ok(name.length <= 16, `"${name}" is too long for a legend at 390px`);
+    const copy = draftFromScenario(all.find((s) => s.id === 'eq-flush-draw-turn-small-bet') as Scenario);
+    assert.equal(copy?.opponents[0]?.name, 'Button');
+    assert.match(copy?.opponents[0]?.range ?? '', /\S/u);
+  });
+
+  it("the analysis keeps the built-in's own name for a range until the range is changed", () => {
+    const scenario = scenarios().find((s) => s.id === 'eq-flush-draw-turn-small-bet') as Scenario;
+    const label = scenario.opponentRange.kind === 'exact' ? '' : scenario.opponentRange.label;
+    const copy = draftFromScenario(scenario);
+    assert.ok(copy !== null);
+    const labelOf = (draft: SpotDraft): string | undefined => {
+      const checked = validateDraft(draft);
+      assert.ok(checked.ok);
+      return coachInputForSpot(checked.spot).opponents[0]?.label;
+    };
+    assert.equal(labelOf(copy), label);
+    const renamed = { ...copy, opponents: copy.opponents.map((o) => ({ ...o, name: 'Bea' })) };
+    assert.equal(labelOf(renamed), label, 'a new name for the seat does not rename its range');
+    const edited = { ...copy, opponents: copy.opponents.map((o) => ({ ...o, range: 'QQ+' })) };
+    assert.equal(labelOf(edited), 'Button', 'a changed range is no longer the one the label names');
   });
 
   it('reads card text exactly as the engine does', () => {

@@ -79,7 +79,7 @@ describe('the picker on a draft', () => {
     const [first] = opponentSlotIds('o1');
     draft = withSlotCard(draft, first, c('As'));
     assert.equal(draft.opponents[0]?.cards[0], c('As'));
-    assert.equal(cardOwners(allSlots(draft)).get(c('As'))?.label, 'Opponent 1, card 1');
+    assert.equal(cardOwners(allSlots(draft)).get(c('As'))?.label, 'Big blind, card 1');
     assert.equal(pickCard(allSlots(draft), 'flop1', c('As')).placed, null);
   });
 
@@ -140,10 +140,14 @@ describe('opponents', () => {
   });
 
   it('the price line caps the call at what you have behind, and says it is all in', () => {
-    const draft = updateOpponent({ ...blankDraft(), potBefore: '100', heroStack: '100' }, 'o1', {
-      stack: '1000',
-      bet: '500',
-    });
+    const draft = updateOpponent(
+      { ...blankDraft(), potBefore: '100', heroStack: '100', heroBet: '0' },
+      'o1',
+      {
+        stack: '1000',
+        bet: '500',
+      },
+    );
     assert.deepEqual(priceLine(draft), { pot: 600, toCall: 100, allIn: true });
   });
 });

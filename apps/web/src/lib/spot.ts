@@ -13,7 +13,7 @@ import { type CardValue, describeCard, parseCardText } from '@prl/ui/cards';
 
 /** Five is `buildCoachReport`'s ceiling. */
 export const MAX_OPPONENTS = 5;
-/** Above the longest built-in range label (116), which an unedited copy carries as the name. */
+/** Generous for any name a person types. A built-in's long range label is kept apart (`HandLabel`). */
 export const MAX_NAME_LENGTH = 160;
 /** Generous for any notation a person types, and above every built-in range. */
 export const MAX_RANGE_LENGTH = 200;
@@ -39,8 +39,9 @@ export type OpponentHand =
   | { readonly kind: 'none' };
 
 export interface SpotOpponent {
-  /** The label the analysis uses for this opponent. */
   readonly name: string;
+  /** What the analysis calls this hand: a built-in's own label while its hand is unchanged, else `name`. */
+  readonly label: string;
   readonly stack: number;
   readonly bet: number;
   readonly hand: OpponentHand;
@@ -113,6 +114,26 @@ export interface OpponentDraft {
   readonly handKind: HandKind;
   readonly range: string;
   readonly cards: readonly [CardValue | null, CardValue | null];
+  readonly handLabel: HandLabel | null;
+}
+
+/**
+ * A built-in's name for a seat's hand, such as "a wide turn betting range: …", which the analysis
+ * prints. Too long for the name field, so it is kept here and applies only while `hand` still equals
+ * `handKey` of the seat: changing the range or the cards drops it.
+ */
+export interface HandLabel {
+  readonly label: string;
+  readonly hand: string;
+}
+
+/** The hand a seat is set to, as one string, so a `HandLabel` can tell whether it still applies. */
+export function handKey(opponent: Pick<OpponentDraft, 'handKind' | 'range' | 'cards'>): string {
+  if (opponent.handKind === 'range') return `range:${opponent.range.trim()}`;
+  if (opponent.handKind === 'cards') {
+    return `cards:${opponent.cards.map((card) => (card === null ? '-' : cardToText(card))).join('')}`;
+  }
+  return 'none';
 }
 
 export interface SpotDraft {
@@ -150,18 +171,20 @@ export function blankOpponent(key: string, index: number): OpponentDraft {
     handKind: 'range',
     range: DEFAULT_RANGE,
     cards: [null, null],
+    handLabel: null,
   };
 }
 
+/** Blind against blind, folded to you in the small blind: a spot that happens every orbit. */
 export function blankDraft(): SpotDraft {
   return {
     name: 'New spot',
     cards: EMPTY_CARDS,
     heroStack: '1000',
-    heroBet: '0',
-    potBefore: '30',
+    heroBet: '10',
+    potBefore: '0',
     bigBlind: '20',
-    opponents: [blankOpponent('o1', 0)],
+    opponents: [{ ...blankOpponent('o1', 0), name: 'Big blind', bet: '20' }],
     neverFolds: false,
     foldRate: '',
   };

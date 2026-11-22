@@ -11,6 +11,7 @@ import {
   type CardSlotId,
   cardsFromText,
   EMPTY_CARDS,
+  handKey,
   type OpponentDraft,
   type SpotDraft,
 } from './spot.ts';
@@ -30,6 +31,17 @@ function handOf(scenario: Scenario): Pick<OpponentDraft, 'handKind' | 'range' | 
   if (cards === null || cards.length !== 2) return null;
   return { handKind: 'cards', range: '', cards: [cards[0] ?? null, cards[1] ?? null] };
 }
+
+const SEAT_NAMES: Readonly<Record<string, string>> = {
+  BTN: 'Button',
+  SB: 'Small blind',
+  BB: 'Big blind',
+  CO: 'Cutoff',
+  HJ: 'Hijack',
+  LJ: 'Lojack',
+  UTG: 'Under the gun',
+  MP: 'Middle position',
+};
 
 /** `null` when the scenario's cards do not parse, which content validation already refuses. */
 export function draftFromScenario(scenario: Scenario): SpotDraft | null {
@@ -56,12 +68,14 @@ export function draftFromScenario(scenario: Scenario): SpotDraft | null {
   const heroBet = inFor(hero.seat);
   const opponents = live.map((seat, index): OpponentDraft => {
     const carries = anyAllIn || index === 0;
+    const held = carries ? hand : ({ handKind: 'none', range: '', cards: [null, null] } as const);
     return {
       key: `s${seat.seat}`,
-      name: carries ? rangeLabel(scenario) : seat.label,
+      name: SEAT_NAMES[seat.label] ?? seat.label,
       stack: String(seat.stack + inFor(seat.seat)),
       bet: String(inFor(seat.seat)),
-      ...(carries ? hand : { handKind: 'none', range: '', cards: [null, null] }),
+      ...held,
+      handLabel: carries ? { label: rangeLabel(scenario), hand: handKey(held) } : null,
     };
   });
 

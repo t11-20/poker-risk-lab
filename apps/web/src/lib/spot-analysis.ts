@@ -40,7 +40,7 @@ export function coachInputForSpot(spot: Spot): CoachInput {
   const board = [...spot.board];
   const dead = [...heroCards, ...board];
   const opponents = spot.opponents.flatMap((opponent) =>
-    opponent.hand.kind === 'none' ? [] : [{ label: opponent.name, range: expandHand(opponent.hand, dead) }],
+    opponent.hand.kind === 'none' ? [] : [{ label: opponent.label, range: expandHand(opponent.hand, dead) }],
   );
   const opponentStacks = spot.opponents.map((opponent) => ({
     behind: opponent.stack - opponent.bet,
@@ -88,11 +88,11 @@ export function reportForSpot(spot: Spot): SpotReport {
   try {
     const input = coachInputForSpot(spot);
     // `top:NN` is expanded only here, so its share of the dealability check waits until now.
-    const undealable = undealableSentence(input.opponents.map((opponent) => opponent.range.combos));
-    if (undealable !== null) return { ok: false, message: undealable };
     if (input.opponents.some((opponent) => opponent.range.combos.length === 0)) {
       return { ok: false, message: 'Every hand in one of these ranges uses a card already in play.' };
     }
+    const undealable = undealableSentence(input.opponents.map((opponent) => opponent.range.combos));
+    if (undealable !== null) return { ok: false, message: undealable };
     return { ok: true, report: buildCoachReport(input) };
   } catch {
     return {

@@ -12,6 +12,7 @@ import {
   type Board,
   type CardSlotId,
   cardName,
+  handKey,
   MAX_CHIPS,
   MAX_NAME_LENGTH,
   MAX_OPPONENTS,
@@ -149,13 +150,70 @@ function readHand(opponent: OpponentDraft, dead: readonly number[], name: string
   return { hand: { kind: 'range', text }, error: null, combos: parsed.combos };
 }
 
+type Combo = readonly [number, number];
+
 /**
- * `k` opponents need `2k` distinct cards between their hands. Ported from the API's thread, where an
- * unchecked five-way `top:1` held a thread for 9.4 s before failing.
+ * At most one hand per card of `cover`, when every combo holds one of its cards, so fewer cover cards
+ * than opponents proves no deal exists. Greedy, which can only overstate the cover: never a false refusal.
  */
-export function undealableSentence(
-  hands: readonly (readonly (readonly [number, number])[])[],
-): string | null {
+function coverSize(open: readonly (readonly Combo[])[], enough: number): number {
+  let left = open.flat();
+  let size = 0;
+  while (left.length > 0 && size < enough) {
+    const counts = new Uint16Array(52);
+    for (const [a, b] of left) {
+      counts[a] = (counts[a] ?? 0) + 1;
+      counts[b] = (counts[b] ?? 0) + 1;
+    }
+    const card = counts.indexOf(Math.max(...counts));
+    left = left.filter(([a, b]) => a !== card && b !== card);
+    size += 1;
+  }
+  return size;
+}
+
+/**
+ * Combos looked at before the answer is left to the analysis, so a keystroke never waits on the search.
+ * A five-seat case built to defeat the cover bound took 23 ms on an M-series laptop.
+ */
+const DEAL_SEARCH_BUDGET = 2_000_000;
+
+/**
+ * Whether one hand per opponent can be dealt with no card twice: `true`, `false`, or `null` when the
+ * search ran out first. Smallest range first, and the cover bound cuts a branch before it is walked.
+ */
+export function canDealAll(hands: readonly (readonly Combo[])[]): boolean | null {
+  const used = new Uint8Array(52);
+  let work = 0;
+  const search = (left: readonly (readonly Combo[])[]): boolean | null => {
+    if (left.length === 0) return true;
+    for (const combos of left) work += combos.length;
+    if (work > DEAL_SEARCH_BUDGET) return null;
+    const open = left.map((combos) => combos.filter(([a, b]) => used[a] === 0 && used[b] === 0));
+    if (open.some((combos) => combos.length === 0)) return false;
+    if (coverSize(open, open.length) < open.length) return false;
+    let pick = 0;
+    for (const [index, combos] of open.entries()) if (combos.length < (open[pick]?.length ?? 0)) pick = index;
+    const rest = open.filter((_combos, index) => index !== pick);
+    for (const [a, b] of open[pick] ?? []) {
+      used[a] = 1;
+      used[b] = 1;
+      const found = search(rest);
+      used[a] = 0;
+      used[b] = 0;
+      if (found !== false) return found;
+    }
+    return false;
+  };
+  return search(hands);
+}
+
+/**
+ * `null` when every opponent can be dealt a hand at once. Ported from the API's thread, where an
+ * unchecked five-way `top:1` held a thread for 9.4 s before failing; a deal no blocker allows
+ * otherwise reaches the sampler, which spends 1.6 s before refusing with no reason.
+ */
+export function undealableSentence(hands: readonly (readonly Combo[])[]): string | null {
   const support = new Set<number>();
   for (const combos of hands) {
     for (const [a, b] of combos) {
@@ -164,11 +222,15 @@ export function undealableSentence(
     }
   }
   const needed = hands.length * 2;
-  if (hands.length === 0 || support.size >= needed) return null;
-  return (
-    `These hands cannot all be dealt at once: ${hands.length} opponents need ${needed} different cards, ` +
-    `and their ranges hold only ${support.size}.`
-  );
+  if (hands.length === 0) return null;
+  if (support.size < needed) {
+    return (
+      `These hands cannot all be dealt at once: ${hands.length} opponents need ${needed} different cards, ` +
+      `and their ranges hold only ${support.size}.`
+    );
+  }
+  if (canDealAll(hands) !== false) return null;
+  return 'These ranges cannot all be dealt at once. Whatever one opponent holds, another is left with no hand. Widen a range.';
 }
 
 /** Keeps the first error per field, because the first rule broken is the one to fix first. */
@@ -243,10 +305,11 @@ function readOpponent(
   }
   const hand = readHand(opponent, dead, shown);
   if (hand.error !== null) out.fail(field(opponent.handKind === 'cards' ? 'cards' : 'range'), hand.error);
+  const named = opponent.handLabel !== null && opponent.handLabel.hand === handKey(opponent);
   const seat =
     name === null || stack === null || bet === null || hand.hand === null
       ? null
-      : { name, stack, bet, hand: hand.hand };
+      : { name, label: named ? (opponent.handLabel?.label ?? name) : name, stack, bet, hand: hand.hand };
   return { seat, allIn: stack !== null && stack === bet, hand };
 }
 
@@ -286,13 +349,25 @@ function checkTable(draft: SpotDraft, read: OpponentsRead, out: Collector): void
 }
 
 function checkPot(
-  potBefore: number | null,
-  heroBet: number | null,
+  money: {
+    readonly potBefore: number | null;
+    readonly heroBet: number | null;
+    readonly bigBlind: number | null;
+  },
+  board: Board | null,
   read: OpponentsRead,
   out: Collector,
 ): void {
+  const { potBefore, heroBet, bigBlind } = money;
   if (heroBet === null || read.opponents === null || read.opponents.length === 0) return;
   const bets = read.opponents.map((opponent) => opponent.bet);
+  // As content's `checkPreflopPosting`, less its pot rule: here a folded blind is part of the pot.
+  if (board?.length === 0 && bigBlind !== null && bigBlind > 0 && Math.max(heroBet, ...bets) < bigBlind) {
+    out.fail(
+      'bigBlind',
+      `Before the flop, someone has put in the big blind of ${formatChips(bigBlind)}. Enter it as your bet or an opponent's.`,
+    );
+  }
   if (heroBet > Math.max(...bets)) {
     out.fail(
       'heroBet',
@@ -317,13 +392,17 @@ export function validateDraft(draft: SpotDraft): Validation {
   const bigBlind = out.take('bigBlind', chips(draft.bigBlind, 'Enter the big blind.'));
   if (bigBlind === 0) out.fail('bigBlind', 'The big blind must be at least 1 chip.');
   const foldRate = out.take('foldRate', percent(draft.foldRate));
+  // The Coach reads a stated rate ahead of "never folds", so the pair would drop one without a word.
+  if (draft.neverFolds && foldRate !== null) {
+    out.fail('foldRate', 'The opponent never folds, so leave the fold rate blank.');
+  }
 
   const dead = [hole1, hole2, ...BOARD_SLOTS.map((slot) => draft.cards[slot])].filter(
     (card): card is number => card !== null,
   );
   const read = readOpponents(draft, dead, out);
   checkTable(draft, read, out);
-  checkPot(potBefore, hero.bet, read, out);
+  checkPot({ potBefore, heroBet: hero.bet, bigBlind }, board, read, out);
 
   if (out.errors.size > 0) return { ok: false, errors: out.errors };
   // Every value below is non-null when no error was recorded; the checks satisfy the compiler.
