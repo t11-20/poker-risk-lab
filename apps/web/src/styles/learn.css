@@ -362,7 +362,7 @@
   margin: 0;
 }
 
-/** A real control, so a 44px target. The current step is an accent border and `aria-current="step"`. */
+/** A real control, so a 44px target. The current step is marked by `aria-current="step"`. */
 .prl-learn-onboarding__step-btn {
   display: inline-flex;
   align-items: center;
@@ -388,10 +388,13 @@
   color: var(--prl-accent-text);
 }
 
+/** Told apart by a doubled edge and weight as well as hue; the fill step alone is 1.2:1. */
 .prl-learn-onboarding__step-btn[aria-current="step"] {
+  border-width: 2px;
   border-color: var(--prl-accent-edge);
   background-color: var(--prl-surface-active);
   color: var(--prl-text);
+  font-weight: var(--prl-weight-bold);
 }
 
 .prl-learn-onboarding__title {
