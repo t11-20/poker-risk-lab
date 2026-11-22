@@ -5,8 +5,10 @@
  * Each option's count is computed against the other two filters, so an empty combination shows first.
  */
 
+import { Tip, type TipCopy } from '@prl/ui';
 import type { ReactElement } from 'react';
 import { FILTER_ANY, type FilterOption, LAB_RESULTS_ID } from '../lib/lab-filters.ts';
+import { WEB_TIPS } from '../lib/tips.ts';
 
 export interface ScenarioFilterSelection {
   readonly topic: string;
@@ -51,14 +53,19 @@ interface FilterFieldProps {
   readonly anyLabel: string;
   readonly options: readonly FilterOption[];
   readonly value: string;
+  readonly tip: TipCopy;
 }
 
-function FilterField({ id, name, label, anyLabel, options, value }: FilterFieldProps): ReactElement {
+function FilterField({ id, name, label, anyLabel, options, value, tip }: FilterFieldProps): ReactElement {
   return (
     <p className="prl-field prl-lab-filters__field">
-      <label className="prl-field__label" htmlFor={id}>
-        {label}
-      </label>
+      {/* The tip beside the label, not in it, so the select's name stays the one word. */}
+      <span className="prl-tip-row">
+        <label className="prl-field__label" htmlFor={id}>
+          {label}
+        </label>
+        <Tip tip={tip} />
+      </span>
       <select className="prl-select" id={id} name={name} defaultValue={value}>
         <option value={FILTER_ANY}>{anyLabel}</option>
         {options.map((option) => (
@@ -90,6 +97,7 @@ export function ScenarioFilters(props: ScenarioFiltersProps): ReactElement {
             anyLabel={`Every topic (${anyCounts.topic})`}
             options={topics}
             value={selected.topic}
+            tip={WEB_TIPS.labTopic}
           />
           <FilterField
             id="prl-filter-difficulty"
@@ -98,6 +106,7 @@ export function ScenarioFilters(props: ScenarioFiltersProps): ReactElement {
             anyLabel={`Every level (${anyCounts.difficulty})`}
             options={difficulties}
             value={selected.difficulty}
+            tip={WEB_TIPS.labDifficulty}
           />
           <FilterField
             id="prl-filter-street"
@@ -106,6 +115,7 @@ export function ScenarioFilters(props: ScenarioFiltersProps): ReactElement {
             anyLabel={`Every street (${anyCounts.street})`}
             options={streets}
             value={selected.street}
+            tip={WEB_TIPS.labStreet}
           />
         </div>
 

@@ -8,7 +8,7 @@
 
 import type { HandListResponse, HandSort, HandSummary } from '@prl/contracts';
 import { DEFAULT_HAND_SORT, HAND_SORTS } from '@prl/contracts';
-import { Chip, formatSignedUnits, formatUnits, PlayingCard, parseCardText } from '@prl/ui';
+import { Chip, formatSignedUnits, formatUnits, PlayingCard, parseCardText, Tip } from '@prl/ui';
 import type { Metadata } from 'next';
 import type { ReactElement } from 'react';
 import { ScrollRegion } from '../../components/ScrollRegion.tsx';
@@ -18,6 +18,7 @@ import { historyCaption } from '../../lib/hand-history-caption.ts';
 import { formatTimestamp } from '../../lib/lab-labels.ts';
 import { netWord } from '../../lib/net-words.ts';
 import { readerCallOptions } from '../../lib/server-session.ts';
+import { WEB_TIPS } from '../../lib/tips.ts';
 import '../../styles/page.css';
 import '../../styles/review.css';
 import { SuitMark } from '@/components/SuitMark.tsx';
@@ -276,7 +277,10 @@ export default async function ReviewIndexPage({
           {/* Two forms of one control, the other `display: none`. Below 600px the links wrapped to
               247px at 360x640, so a GET form with a select takes their place and needs no script. */}
           <nav className="prl-review-sorts" aria-label="Sort hand history">
-            <p className="prl-label prl-review-sorts__heading">Order</p>
+            <p className="prl-label prl-review-sorts__heading">
+              Order
+              <Tip tip={WEB_TIPS.reviewOrder} />
+            </p>
             <ul className="prl-review-sorts__list">
               {SORTS.map((candidate) => (
                 <li key={candidate}>
@@ -294,6 +298,7 @@ export default async function ReviewIndexPage({
               <label className="prl-label" htmlFor={SORT_SELECT_ID}>
                 Order
               </label>
+              <Tip tip={WEB_TIPS.reviewOrder} />
               <select className="prl-select" id={SORT_SELECT_ID} name="sort" defaultValue={sort}>
                 {SORTS.map((candidate) => (
                   <option key={candidate} value={candidate}>
@@ -307,61 +312,67 @@ export default async function ReviewIndexPage({
             </form>
           </nav>
 
-          <ScrollRegion className="prl-review-scroll" label={TABLE_LABEL}>
-            <table className="prl-review-table">
-              <caption>
-                {`${historyCaption({
-                  count: hands.length,
-                  firstPage: cursor === null,
-                  more: response.nextCursor !== null,
-                  order: SORT_LABEL[sort].toLowerCase(),
-                })} Result includes blinds.`}
-              </caption>
-              <thead>
-                <tr>
-                  <th scope="col">Hand</th>
-                  <th scope="col">When</th>
-                  <th scope="col">Board</th>
-                  {/* The class end-aligns the header over its digits. Not `:nth-child(4)`, which breaks
-                      when a column is inserted. */}
-                  <th className="prl-review-table__pot" scope="col">
-                    Pot
-                  </th>
-                  <th scope="col">Result</th>
-                  <th scope="col">Ending</th>
-                </tr>
-              </thead>
-              <tbody>
-                {hands.map((hand) => (
-                  <tr key={hand.id}>
-                    <th className="prl-review-table__hand" scope="row">
-                      {/* The link covers the whole row (`review.css`, "THE ROW IS THE TARGET"). */}
-                      <a className="prl-review-table__link" href={`${ROUTE}/${hand.id}`}>
-                        {`Replay hand ${hand.handNumber}`}
-                      </a>
+          {/* A wrapper for the guided tour's outline, which the scroll box would clip. */}
+          <div data-tour="review">
+            <ScrollRegion className="prl-review-scroll" label={TABLE_LABEL}>
+              <table className="prl-review-table">
+                <caption>
+                  {`${historyCaption({
+                    count: hands.length,
+                    firstPage: cursor === null,
+                    more: response.nextCursor !== null,
+                    order: SORT_LABEL[sort].toLowerCase(),
+                  })} Result includes blinds.`}
+                </caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Hand</th>
+                    <th scope="col">When</th>
+                    <th scope="col">Board</th>
+                    {/* The class end-aligns the header over its digits. Not `:nth-child(4)`, which breaks
+                        when a column is inserted. */}
+                    <th className="prl-review-table__pot" scope="col">
+                      Pot
                     </th>
-                    <td className="prl-review-table__when">{formatTimestamp(hand.startedAt)}</td>
-                    <td className="prl-review-table__board">
-                      <BoardCells board={hand.board} />
-                    </td>
-                    <td className="prl-review-table__pot">
-                      <CellLabel>Pot</CellLabel>
-                      {formatUnits(hand.potTotal)}
-                    </td>
-                    <td className="prl-review-table__net">
-                      <CellLabel>Result</CellLabel>
-                      <NetCell net={hand.heroNet} />
-                    </td>
-                    <td className="prl-review-table__ending">
-                      <Chip tone={hand.endedByFold ? 'neutral' : 'info'} glyph={hand.endedByFold ? '⤶' : '⇄'}>
-                        {hand.endedByFold ? 'no showdown' : 'showdown'}
-                      </Chip>
-                    </td>
+                    <th scope="col">Result</th>
+                    <th scope="col">Ending</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </ScrollRegion>
+                </thead>
+                <tbody>
+                  {hands.map((hand) => (
+                    <tr key={hand.id}>
+                      <th className="prl-review-table__hand" scope="row">
+                        {/* The link covers the whole row (`review.css`, "THE ROW IS THE TARGET"). */}
+                        <a className="prl-review-table__link" href={`${ROUTE}/${hand.id}`}>
+                          {`Replay hand ${hand.handNumber}`}
+                        </a>
+                      </th>
+                      <td className="prl-review-table__when">{formatTimestamp(hand.startedAt)}</td>
+                      <td className="prl-review-table__board">
+                        <BoardCells board={hand.board} />
+                      </td>
+                      <td className="prl-review-table__pot">
+                        <CellLabel>Pot</CellLabel>
+                        {formatUnits(hand.potTotal)}
+                      </td>
+                      <td className="prl-review-table__net">
+                        <CellLabel>Result</CellLabel>
+                        <NetCell net={hand.heroNet} />
+                      </td>
+                      <td className="prl-review-table__ending">
+                        <Chip
+                          tone={hand.endedByFold ? 'neutral' : 'info'}
+                          glyph={hand.endedByFold ? '⤶' : '⇄'}
+                        >
+                          {hand.endedByFold ? 'no showdown' : 'showdown'}
+                        </Chip>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </ScrollRegion>
+          </div>
 
           <nav className="prl-review-paging" aria-label="Hand history pages">
             {cursor === null ? (
