@@ -13,6 +13,11 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 export const DEVTOOLS_STARTUP_TIMEOUT_MS = 30_000;
+/**
+ * No DevTools call a gate makes takes minutes. Without a bound, a headless Chrome that stopped answering
+ * on 2026-11-22 held `test:age-gate`, and `verify` behind it, for three hours.
+ */
+export const CDP_CALL_TIMEOUT_MS = 300_000;
 const POLL_MS = 150;
 const POLL_TIMEOUT_MS = 1_000;
 
@@ -110,5 +115,56 @@ export async function withChrome({ headful, port, profile, freshProfile, flags, 
         );
       }
     }
+  }
+}
+
+/**
+ * The DevTools calls one page is waiting on. Once a call goes unanswered for the bound, or the socket
+ * closes, every waiting and later call rejects at once, because the gates retry failed calls and a
+ * per-call bound alone multiplied into hours on a frozen Chrome.
+ */
+export class DevtoolsReplies {
+  #pending = new Map();
+  #broken = null;
+  #timeoutMs;
+
+  constructor(timeoutMs = CDP_CALL_TIMEOUT_MS) {
+    this.#timeoutMs = timeoutMs;
+  }
+
+  expect(id, method) {
+    if (this.#broken !== null) return Promise.reject(this.#broken);
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(
+        () => this.fail(new Error(`Chrome did not answer ${method} within ${this.#timeoutMs / 1000}s`)),
+        this.#timeoutMs,
+      );
+      this.#pending.set(id, {
+        resolve: (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      });
+    });
+  }
+
+  /** A reply to a call that already failed is dropped; ids are never reused. */
+  settle(message) {
+    const waiter = this.#pending.get(message.id);
+    if (waiter === undefined) return;
+    this.#pending.delete(message.id);
+    if (message.error !== undefined) waiter.reject(new Error(JSON.stringify(message.error)));
+    else waiter.resolve(message.result);
+  }
+
+  fail(error) {
+    this.#broken ??= error;
+    const waiting = [...this.#pending.values()];
+    this.#pending.clear();
+    for (const waiter of waiting) waiter.reject(this.#broken);
   }
 }

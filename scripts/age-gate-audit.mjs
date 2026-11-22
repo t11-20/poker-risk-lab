@@ -21,7 +21,7 @@ import {
   AGE_GATE_PATH,
   AGE_GATE_RETURN_PARAM,
 } from '../apps/web/src/lib/age-gate.ts';
-import { withChrome } from './chrome-devtools.mjs';
+import { DevtoolsReplies, withChrome } from './chrome-devtools.mjs';
 import { ManagedServer, refuseOccupiedPort } from './gate-servers.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -309,7 +309,7 @@ const describeChain = (chain) =>
 class Page {
   #socket;
   #nextId = 1;
-  #pending = new Map();
+  #replies = new DevtoolsReplies();
   #handlers = new Map();
 
   constructor(socket) {
@@ -320,12 +320,9 @@ class Page {
         for (const handler of this.#handlers.get(message.method) ?? []) handler(message.params);
         return;
       }
-      const waiter = this.#pending.get(message.id);
-      if (waiter === undefined) return;
-      this.#pending.delete(message.id);
-      if (message.error !== undefined) waiter.reject(new Error(JSON.stringify(message.error)));
-      else waiter.resolve(message.result);
+      this.#replies.settle(message);
     });
+    socket.addEventListener('close', () => this.#replies.fail(new Error('the DevTools socket closed')));
   }
 
   static async open(wsUrl) {
@@ -346,10 +343,13 @@ class Page {
 
   send(method, params = {}) {
     const id = this.#nextId++;
-    return new Promise((resolveSend, reject) => {
-      this.#pending.set(id, { resolve: resolveSend, reject });
+    const reply = this.#replies.expect(id, method);
+    try {
       this.#socket.send(JSON.stringify({ id, method, params }));
-    });
+    } catch (error) {
+      this.#replies.fail(error);
+    }
+    return reply;
   }
 
   async evaluate(expression) {
