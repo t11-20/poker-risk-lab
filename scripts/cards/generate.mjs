@@ -2,7 +2,7 @@
 /**
  * Writes the deck the web app shows: one SVG per card (`KH.svg`, `TS.svg`) and the backs, into
  * `apps/web/public/cards/`. Ranks and suits are paths authored here, never `<text>`, so a face does not
- * depend on the reader's fonts. The colours come from `--prl-deck-*` in tokens.css, so the contrast gate
+ * depend on the reader's fonts. Each file's `<title>` names the card in words: metadata, never drawn. The colours come from `--prl-deck-*` in tokens.css, so the contrast gate
  * measures what the files paint.
  *
  *   node scripts/cards/generate.mjs           # rewrite the files
@@ -37,6 +37,23 @@ export const BACKS = ['charcoal', 'green', 'wine'];
 
 const RANKS = ['2', '3', '4', '5', '6', '7', '8', '9', 'T', 'J', 'Q', 'K', 'A'];
 const SUITS = ['C', 'D', 'H', 'S'];
+const RANK_WORDS = {
+  2: 'Two',
+  3: 'Three',
+  4: 'Four',
+  5: 'Five',
+  6: 'Six',
+  7: 'Seven',
+  8: 'Eight',
+  9: 'Nine',
+  T: 'Ten',
+  J: 'Jack',
+  Q: 'Queen',
+  K: 'King',
+  A: 'Ace',
+};
+const SUIT_WORDS = { C: 'clubs', D: 'diamonds', H: 'hearts', S: 'spades' };
+export const BACK_TITLE = 'Card back';
 
 /**
  * Refuses a missing, repeated or non-hex token. Declared twice, a token could differ by theme, and a file
@@ -153,9 +170,12 @@ function frame(palette, fill) {
   return `<rect x="1.5" y="1.5" width="${W - 3}" height="${H - 3}" rx="${RADIUS}" fill="${fill}" ${edge}/>`;
 }
 
-function svg(body) {
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">${body}</svg>\n`;
+function svg(title, body) {
+  const open = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">`;
+  return `${open}<title>${title}</title>${body}</svg>\n`;
 }
+
+export const faceTitle = (rank, suit) => `${RANK_WORDS[rank]} of ${SUIT_WORDS[suit]}`;
 
 function face(rank, suit, palette) {
   const ink = RED_SUITS.has(suit) ? palette.red : palette.black;
@@ -168,7 +188,7 @@ function face(rank, suit, palette) {
     );
   }
   parts.push(suitAt(suit, W / 2, H / 2, CENTRE_SIZE[rank] ?? 96, ink));
-  return svg(parts.join(''));
+  return svg(faceTitle(rank, suit), parts.join(''));
 }
 
 /** A white margin round a lattice panel. The margin is what separates a dark back from a dark felt. */
@@ -179,6 +199,7 @@ function back(name, palette) {
     `<pattern id="lattice" width="28" height="28" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">` +
     `<path d="M0 0H28M0 0V28" stroke="${line}" stroke-width="3"/></pattern>`;
   return svg(
+    BACK_TITLE,
     `<defs>${lattice}</defs>${frame(palette, palette.face)}` +
       `<rect x="16" y="16" width="${W - 32}" height="${H - 32}" rx="10" fill="${fill}"/>` +
       `<rect x="16" y="16" width="${W - 32}" height="${H - 32}" rx="10" fill="url(#lattice)"/>` +

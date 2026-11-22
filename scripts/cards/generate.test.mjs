@@ -7,15 +7,20 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
-import { BACKS, DECK_DIR, readPalette, renderDeck, TOKENS } from './generate.mjs';
+import { BACK_TITLE, BACKS, DECK_DIR, faceTitle, readPalette, renderDeck, TOKENS } from './generate.mjs';
 
 const tokens = readFileSync(TOKENS, 'utf8');
 const palette = readPalette(tokens);
 const deck = renderDeck(palette);
 const onDisk = readdirSync(DECK_DIR).filter((name) => name.endsWith('.svg'));
 
-/** What a reader would see as characters: everything outside the tags. */
-const characterData = (svg) => svg.replace(/<[^>]*>/gu, '').trim();
+/** What a reader would see as characters: everything outside the tags, the title aside. */
+const characterData = (svg) =>
+  svg
+    .replace(/<title>[^<]*<\/title>/u, '')
+    .replace(/<[^>]*>/gu, '')
+    .trim();
+const titles = (svg) => [...svg.matchAll(/<title>([^<]*)<\/title>/gu)].map((m) => m[1]);
 
 describe('the committed deck', () => {
   it('is 52 faces and the backs, each committed', () => {
@@ -32,13 +37,24 @@ describe('the committed deck', () => {
     }
   });
 
-  it('draws every rank and suit as a path: no text, font, title or description to carry a letter', () => {
+  it('draws every rank and suit as a path: no text, font or description to carry a letter', () => {
     assert.ok(onDisk.length >= 56, 'read no card files');
     for (const name of onDisk) {
       const svg = readFileSync(join(DECK_DIR, name), 'utf8');
-      assert.doesNotMatch(svg, /<(text|tspan|title|desc|foreignObject|style)\b|font|@import/iu, name);
+      assert.doesNotMatch(svg, /<(text|tspan|desc|foreignObject|style)\b|font|@import/iu, name);
       assert.equal(characterData(svg), '', `${name} has character data outside its tags`);
       assert.doesNotMatch(svg, /[♠♣♥♦]/u, `${name} carries a suit glyph as text`);
+    }
+  });
+
+  it('names each file in words in one non-empty title, which is metadata and never drawn', () => {
+    assert.equal(faceTitle('K', 'H'), 'King of hearts');
+    assert.equal(faceTitle('T', 'C'), 'Ten of clubs');
+    for (const name of onDisk) {
+      const svg = readFileSync(join(DECK_DIR, name), 'utf8');
+      const expected = name.startsWith('back') ? BACK_TITLE : faceTitle(name[0], name[1]);
+      assert.deepEqual(titles(svg), [expected], `${name} should carry one title, "${expected}"`);
+      assert.match(svg, /^<svg [^>]*><title>/u, `${name}: the title is the first child of the root`);
     }
   });
 
