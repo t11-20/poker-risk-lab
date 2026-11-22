@@ -13,11 +13,8 @@ export const TOUR_DISMISSED_KEY = 'prl.tour.dismissed';
 /** The only page the tour opens on by itself. */
 export const TOUR_FIRST_VISIT_PATH = '/lab';
 
-/**
- * Where the spot editor lives, for the three steps it holds. `null` until that route exists: those
- * steps then say to pick a scenario first rather than send the reader to a page that is not there.
- */
-export const SPOT_EDITOR_HREF: string | null = null;
+/** The spot editor, which holds three steps' targets. With no query it opens a blank spot. */
+export const SPOT_EDITOR_HREF = '/lab/spots/edit';
 
 export type TourStepId = 'pick-scenario' | 'hand-board' | 'run' | 'result' | 'review';
 
@@ -33,7 +30,7 @@ export interface TourStep {
   readonly missing: string;
 }
 
-const IN_A_SCENARIO = 'This part is inside a scenario, so pick one from the Lab list first.';
+const IN_THE_EDITOR = 'This part is in the spot editor, which has not finished loading yet.';
 
 export const TOUR_STEPS: readonly TourStep[] = [
   {
@@ -48,21 +45,21 @@ export const TOUR_STEPS: readonly TourStep[] = [
     title: 'Set your hand and board',
     text: 'Choose your two cards and the shared cards on the table.',
     href: SPOT_EDITOR_HREF,
-    missing: IN_A_SCENARIO,
+    missing: IN_THE_EDITOR,
   },
   {
     id: 'run',
     title: 'Run it',
-    text: 'Run the numbers to see how often your hand wins from here.',
+    text: 'The numbers work themselves out again each time you change a card.',
     href: SPOT_EDITOR_HREF,
-    missing: IN_A_SCENARIO,
+    missing: IN_THE_EDITOR,
   },
   {
     id: 'result',
     title: 'Read the result',
     text: 'Compare how often you win with what a call costs you.',
     href: SPOT_EDITOR_HREF,
-    missing: IN_A_SCENARIO,
+    missing: IN_THE_EDITOR,
   },
   {
     id: 'review',
@@ -102,8 +99,17 @@ export function rememberTourDismissal(storage: TourStorage): boolean {
   }
 }
 
-export function opensByItself(pathname: string, read: DismissalRead, alreadyOpened: boolean): boolean {
-  return pathname === TOUR_FIRST_VISIT_PATH && read === 'not-dismissed' && !alreadyOpened;
+/**
+ * Not when the address has a fragment: the panel mounts after the browser has scrolled to it, and at
+ * 360px its height would push the part the link pointed at off the screen.
+ */
+export function opensByItself(
+  pathname: string,
+  read: DismissalRead,
+  alreadyOpened: boolean,
+  hasFragment = false,
+): boolean {
+  return pathname === TOUR_FIRST_VISIT_PATH && read === 'not-dismissed' && !alreadyOpened && !hasFragment;
 }
 
 export interface TourState {
@@ -174,6 +180,10 @@ export function tourReducer(state: TourState, action: TourAction): TourState {
       return { ...state, found: action.type === 'found' ? 'shown' : 'missing' };
     case 'navigated':
       if (state.awaiting === action.pathname) return { ...state, awaiting: null };
+      // Opened by itself and never used, so it stays on the Lab. The key is not written: it was not answered.
+      if (state.opener === 'first-visit' && state.shown === 0) {
+        return { ...INITIAL_TOUR_STATE, focusRequest: state.focusRequest, settled: true };
+      }
       // Somewhere the reader went on their own, so the outline would point at nothing they chose.
       return { ...state, step: null, found: null, awaiting: null };
     default:

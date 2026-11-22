@@ -57,7 +57,7 @@ export function GuidedTour(): ReactElement | null {
     }
     seenPath.current = pathname;
     const { settled } = tourStore.getSnapshot();
-    if (opensByItself(pathname, readTourDismissal(storage), settled)) {
+    if (opensByItself(pathname, readTourDismissal(storage), settled, window.location.hash !== '')) {
       tourStore.dispatch({ type: 'open-first-visit' });
     }
   }, [pathname]);

@@ -80,6 +80,24 @@ describe('it opens by itself once, on a first visit to the Lab', () => {
     assert.equal(run([{ type: 'open-first-visit' }], skipped).open, false);
   });
 
+  it('does not open by itself over a link to a fragment, which it would push off a phone screen', () => {
+    assert.equal(opensByItself('/lab', 'not-dismissed', false, true), false);
+  });
+
+  it('closes, unanswered, when the reader leaves the Lab without using it', () => {
+    const left = run([{ type: 'open-first-visit' }, { type: 'navigated', pathname: '/play' }]);
+    assert.equal(left.open, false);
+    assert.equal(left.settled, true);
+    const used = run([
+      { type: 'open-first-visit' },
+      { type: 'show', step: 'pick-scenario', awaiting: null },
+      { type: 'navigated', pathname: '/play' },
+    ]);
+    assert.equal(used.open, true);
+    const asked = run([{ type: 'open-from-button' }, { type: 'navigated', pathname: '/play' }]);
+    assert.equal(asked.open, true);
+  });
+
   it('does not take focus when it opens by itself', () => {
     const opened = run([{ type: 'open-first-visit' }]);
     assert.equal(opened.open, true);
