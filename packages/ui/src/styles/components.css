@@ -2084,8 +2084,8 @@
  * With plate height `h`, field `W` x `H` and a 13rem plate, all must hold:
  *   1. `0.36 H >= h`  2. `H >= 3.6 h`  3. `0.36 H >= (centre + h) / 2`
  *   4. `W >= 39.5rem`, a 43.5rem container with padding, hence the 46rem threshold.
- * `H = 5 x --prl-seat-h`. A to-act plate is 163px, 187px with the dealer badge, and the showdown centre
- * up to 334px, so 9rem.
+ * `H = 5 x --prl-seat-h` (720px). A to-act plate is 163px, 187px with the dealer badge, and the centre up
+ * to 334px at showdown, when nobody is to act; 3 holds for any plate beside it up to 184px, so 9rem.
  * If the plate grows, raise `--prl-seat-h` and re-measure.
  */
 @container prl-table (min-width: 46rem) {

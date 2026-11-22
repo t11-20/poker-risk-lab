@@ -38,11 +38,17 @@ function seatWith(status: SeatStatus): SeatView {
   };
 }
 
-async function render(status: SeatStatus, street: Street, committedThisStreet = 0): Promise<string> {
+async function render(
+  status: SeatStatus,
+  street: Street,
+  committedThisStreet = 0,
+  lastAction: string | null = null,
+): Promise<string> {
   const Seat = await loadComponent<SeatProps>('components/Seat', 'Seat');
   return renderToStaticMarkup(
     createElement(Seat, {
       seat: { ...seatWith(status), committedThisStreet },
+      lastAction,
       street,
       name: 'You',
       ringIndex: 0,
@@ -140,5 +146,29 @@ describe('a seat with no cards', () => {
       /<span class="prl-card-row__empty"><span class="prl-visually-hidden">no cards<\/span><\/span>/u,
       'an empty slot with no text is a card element a reader meets as nothing',
     );
+  });
+});
+
+describe('the chips beside an action', () => {
+  const line = async (committed: number, action: string, status: SeatStatus = 'active') =>
+    statusLine(await render(status, 'flop', committed, action));
+
+  it('are not repeated when the action already names them (REGRESSION)', async () => {
+    assert.equal(await line(35, 'called 35'), 'called 35');
+    assert.equal(await line(1_000, 'raised to 1,000, all in', 'allIn'), 'raised to 1,000, all in');
+  });
+
+  it('are added when the action names none, or a different figure', async () => {
+    assert.equal(await line(10, 'checked'), 'checked, 10 in');
+    assert.equal(await line(100, 'raised to 1,000'), 'raised to 1,000, 100 in');
+    assert.equal(
+      await line(10, 'bet 10,500'),
+      'bet 10,500, 10 in',
+      'a thousands comma does not end a figure',
+    );
+  });
+
+  it("are left off a settled seat, whose chips are already in the winners' stacks", async () => {
+    assert.equal(statusLine(await render('allIn', 'complete', 900)), 'went all in');
   });
 });

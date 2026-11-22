@@ -96,9 +96,11 @@ function statusLine(status: SeatStatus, settled: boolean, lastAction: string | n
  */
 function seatLine(seat: SeatView, settled: boolean, lastAction: string | null): string {
   const status = statusLine(seat.status, settled, lastAction);
-  if (seat.committedThisStreet <= 0) return status;
+  // Settled chips are in the winners' stacks, and a figure beside "went all in" read as a stake still out.
+  if (settled || seat.committedThisStreet <= 0) return status;
   const amount = formatChips(seat.committedThisStreet);
-  if (new RegExp(`(^|\\s)${amount}(,|$)`, 'u').test(status)) return status;
+  // A thousands comma is part of a figure, so only a comma not followed by a digit ends one.
+  if (new RegExp(`(^|\\s)${amount}(?=$|\\s|,(?!\\d))`, 'u').test(status)) return status;
   return status === '' ? `${amount} in` : `${status}, ${amount} in`;
 }
 
