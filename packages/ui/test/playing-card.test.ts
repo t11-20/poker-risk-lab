@@ -57,10 +57,11 @@ describe('a face-up card', () => {
     assert.equal(seen.size, 52);
   });
 
-  it('names the card once, on the wrapper, and leaves the image unnamed', async () => {
+  it('names the card once, on the wrapper, and hides the decorative image from readers', async () => {
     const markup = await card({ card: 11 * 4 + 2 });
     assert.match(markup, /<span class="prl-card prl-card--md" role="img" aria-label="king of hearts"><img /u);
     assert.match(markup, /<img [^>]*alt=""/u);
+    assert.match(markup, /<img [^>]*aria-hidden="true"/u);
     assert.equal([...markup.matchAll(/aria-label=/gu)].length, 1);
   });
 
@@ -82,6 +83,7 @@ describe('a face-down card', () => {
       const markup = await card({ card: value, faceDown: true });
       assert.deepEqual(sources(markup), ['/cards/back.svg'], `card ${value}`);
       assert.match(markup, /aria-label="face-down card"/u);
+      assert.match(markup, /<img [^>]*aria-hidden="true"/u, 'the back is named once, on the wrapper');
     }
   });
 
