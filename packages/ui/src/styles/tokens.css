@@ -569,3 +569,19 @@
     --prl-page-wash: none;
   }
 }
+
+/* TABLE AND CARDS. The felt, the rail, the seats and the generated deck.
+   The `--prl-deck-*` colours are baked into `apps/web/public/cards/*.svg` by `scripts/cards/generate.mjs`,
+   which reads them from this block, so each is declared once and is the same in both themes. */
+:root {
+  --prl-deck-face: #fcfbf8;
+  --prl-deck-edge: #c9c2b6;
+  --prl-deck-red: #b3262d;
+  --prl-deck-black: #1f1d1a;
+  --prl-deck-back-charcoal: #2e2c29;
+  --prl-deck-back-charcoal-line: #4a4640;
+  --prl-deck-back-green: #1f4a37;
+  --prl-deck-back-green-line: #33664f;
+  --prl-deck-back-wine: #5b1f2b;
+  --prl-deck-back-wine-line: #7a3543;
+}
