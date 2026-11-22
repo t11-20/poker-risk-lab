@@ -622,7 +622,7 @@ body {
 
 .prl-footer__list {
   display: grid;
-  gap: var(--prl-space-5);
+  gap: var(--prl-space-7);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -635,9 +635,10 @@ body {
 }
 
 /** The underline is left to `base.css`, whose hover thickens it, a cue that does not depend on colour. */
+/** Centred, so a description sits nearer its own link than the next one. */
 .prl-footer__link {
   display: inline-flex;
-  align-items: baseline;
+  align-items: center;
   gap: var(--prl-space-4);
   min-height: var(--prl-target-min);
 }

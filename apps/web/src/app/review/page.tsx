@@ -43,11 +43,11 @@ const SORTS = HAND_SORTS;
 type Sort = HandSort;
 
 const SORT_LABEL: Readonly<Record<Sort, string>> = {
-  recent: 'Most recent first',
-  oldest: 'Oldest first',
-  'net-high': 'Biggest gain first',
-  'net-low': 'Biggest loss first',
-  'pot-high': 'Largest pot first',
+  recent: 'Newest',
+  oldest: 'Oldest',
+  'net-high': 'Biggest win',
+  'net-low': 'Biggest loss',
+  'pot-high': 'Biggest pot',
 };
 
 function readSort(value: string | string[] | undefined): Sort {
@@ -315,7 +315,7 @@ export default async function ReviewIndexPage({
                   firstPage: cursor === null,
                   more: response.nextCursor !== null,
                   order: SORT_LABEL[sort].toLowerCase(),
-                })} Net is the change across the whole hand, blinds included.`}
+                })} Result includes blinds.`}
               </caption>
               <thead>
                 <tr>
@@ -327,7 +327,7 @@ export default async function ReviewIndexPage({
                   <th className="prl-review-table__pot" scope="col">
                     Pot
                   </th>
-                  <th scope="col">Net to you</th>
+                  <th scope="col">Result</th>
                   <th scope="col">Ending</th>
                 </tr>
               </thead>
@@ -349,12 +349,12 @@ export default async function ReviewIndexPage({
                       {formatUnits(hand.potTotal)}
                     </td>
                     <td className="prl-review-table__net">
-                      <CellLabel>Net to you</CellLabel>
+                      <CellLabel>Result</CellLabel>
                       <NetCell net={hand.heroNet} />
                     </td>
                     <td className="prl-review-table__ending">
                       <Chip tone={hand.endedByFold ? 'neutral' : 'info'} glyph={hand.endedByFold ? '⤶' : '⇄'}>
-                        {hand.endedByFold ? 'folded out' : 'showdown'}
+                        {hand.endedByFold ? 'everyone folded' : 'showdown'}
                       </Chip>
                     </td>
                   </tr>

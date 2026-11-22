@@ -79,7 +79,7 @@ function coachUnavailableProps(
 }
 
 /** One line, because the connection card above already says what "Deal me in" does. */
-const IDLE_TABLE_MESSAGE = 'Your table is drawn here, from the server’s own frames, once you are dealt in.';
+const IDLE_TABLE_MESSAGE = 'Your table appears here once you are dealt in.';
 
 const STATUS_LEDE: Readonly<Record<TableSocketStatus, string>> = {
   connecting: 'Opening a connection to the table.',
@@ -121,21 +121,17 @@ function statusSentence(live: LiveTableModel, inLegendMatch: boolean): string {
   if (live.phase === 'idle' && live.resuming) return 'Reconnecting you to the table you were at.';
   if (live.phase === 'idle' && inLegendMatch) {
     return (
-      'Not connected yet. “Deal me in” starts a guest session if you need one, with no email and no ' +
-      'password, and opens your match against this style: the one still running, or a new one with ' +
-      '1,000 units. Then it takes your seat and deals, unless a hand is already being played. ' +
-      'Each table keeps its own units, and if this would close another table you have open, you are ' +
-      'asked first.'
+      'Press “Deal me in” to play this style: the match still running, or a new one with 1,000 units. ' +
+      'No sign-up needed. ' +
+      'Each table keeps its own units, and if this would close another table, you are asked first.'
     );
   }
   if (live.phase === 'idle') {
     // `chooseRoom` may reuse a held table or create one, and the page cannot know which yet.
     return (
-      'Not connected yet. “Deal me in” starts a guest session if you need one, with no email and no ' +
-      'password, and opens your bot table: the one you already have, or a new one with bots already ' +
-      'seated. Then it takes your seat and deals, unless a hand is already being played. ' +
-      'Each table keeps its own units: a new one starts with 1,000, and if it would close a Legends ' +
-      'match you have open, you are asked first.'
+      'Press “Deal me in” to sit at your bot table: the one you already have, or a new one with 1,000 units. ' +
+      'No sign-up needed. ' +
+      'Each table keeps its own units, and if this would close a Legends match, you are asked first.'
     );
   }
   if (live.phase === 'preparing') {
@@ -146,7 +142,7 @@ function statusSentence(live: LiveTableModel, inLegendMatch: boolean): string {
 }
 
 function hintSentence(live: LiveTableModel): string {
-  if (live.phase !== 'ready' || live.status !== 'live') return 'The table opens once the connection is live.';
+  if (live.phase !== 'ready' || live.status !== 'live') return 'Waiting for the connection.';
   if (live.dealingIn) {
     return live.table.seat === null && live.readerSeat !== null
       ? `Taking seat ${String(live.readerSeat + 1)} for you, then dealing your first hand.`

@@ -2481,9 +2481,10 @@
 }
 
 .prl-preset {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: var(--prl-space-2);
+  justify-content: center;
   min-height: var(--prl-target-min);
   padding-inline: var(--prl-space-4);
   border: 1px solid var(--prl-line-strong);
@@ -2501,8 +2502,23 @@
   background-color: var(--prl-surface-hover);
 }
 
-/** `visibility: hidden`, not `display: none`, so the presets do not shift as the selection moves. */
+/**
+ * A badge on the pill's corner, out of the flow: held in line, the hidden tick pushed every label
+ * off centre. `visibility`, not `display`, so pressing never moves anything.
+ */
 .prl-preset__mark {
+  position: absolute;
+  inset-block-start: calc(var(--prl-space-2) * -1);
+  inset-inline-end: calc(var(--prl-space-1) * -1);
+  display: grid;
+  place-items: center;
+  width: var(--prl-space-6);
+  height: var(--prl-space-6);
+  border-radius: var(--prl-radius-pill);
+  background-color: var(--prl-accent-fill);
+  color: var(--prl-text-on-accent);
+  font-size: var(--prl-type-label);
+  line-height: 1;
   visibility: hidden;
 }
 

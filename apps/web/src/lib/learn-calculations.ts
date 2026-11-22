@@ -198,7 +198,7 @@ function resolvePotOdds(calculation: Extract<LiveCalculation, { kind: 'potOdds' 
       : [
           {
             key: 'oddsRatio',
-            label: 'Price offered',
+            label: 'Pot odds',
             value: odds.oddsRatio,
             scale: 'ratio',
             format: 'odds',

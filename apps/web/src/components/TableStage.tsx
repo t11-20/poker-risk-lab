@@ -133,10 +133,7 @@ function IdleTable({ message }: { readonly message: string | undefined }): React
       </div>
       <div className="prl-play__idle-text">
         <p className="prl-play__idle-title">No table yet</p>
-        <p>
-          {message ??
-            'Nothing has been dealt and nothing is loading. The table is drawn here once there is one.'}
-        </p>
+        <p>{message ?? 'Nothing has been dealt yet.'}</p>
       </div>
     </div>
   );
@@ -159,14 +156,7 @@ function CoachUnavailable({ reason }: { readonly reason: string | undefined }): 
   return (
     <div className="prl-empty">
       <p className="prl-label">No analysis</p>
-      <p>
-        {reason ??
-          'The Coach prices the decision in front of you, so with no table state there is nothing to price.'}
-      </p>
-      <p>
-        Nothing is estimated from a partial view — a figure without the spot it came from cannot be checked,
-        and an unverifiable figure is worse than none.
-      </p>
+      <p>{reason ?? 'The Coach appears when it is your turn.'}</p>
     </div>
   );
 }
@@ -176,11 +166,12 @@ function CoachHandOver({ reviewHref }: { readonly reviewHref: string | undefined
   return (
     <div className="prl-empty">
       <p className="prl-label">Hand over</p>
-      <p>There is no decision left to price, so there is no analysis beside a finished hand.</p>
-      {reviewHref === undefined ? null : (
+      {reviewHref === undefined ? (
+        <p>Nothing left to decide.</p>
+      ) : (
         <p>
           <Link href={reviewHref}>Review this hand</Link>
-          {': every decision you made in it, priced against the cards that were dealt.'}
+          {' to see how each of your choices did.'}
         </p>
       )}
     </div>
@@ -330,7 +321,7 @@ function TableRegion(props: TableRegionProps): ReactElement {
 
 const NO_VIEW_LINE: Readonly<Record<'error' | 'idle' | 'waiting', string>> = {
   error: 'No controls while the table is unreachable.',
-  idle: 'Nothing to decide until you are dealt in.',
+  idle: 'Deal in to play.',
   waiting: 'Waiting for the table.',
 };
 
@@ -466,11 +457,7 @@ function DecisionBand(props: DecisionBandProps): ReactElement {
           committedThisStreet={view.seats.find((seat) => seat.isSelf)?.committedThisStreet ?? 0}
           disabled={pending}
           context={handGlanceFor(view, turn, seatNames)}
-          idleText={
-            status === 'complete'
-              ? 'This hand is complete. Nothing is owed and there is nothing to decide.'
-              : 'Waiting for another player to act.'
-          }
+          idleText={status === 'complete' ? 'Hand over.' : 'Waiting for another player to act.'}
           {...(offeringDeal
             ? {
                 idleAction: (

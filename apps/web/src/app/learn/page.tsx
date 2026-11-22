@@ -73,10 +73,10 @@ function EntryCard({
             <span className="prl-label">Read first</span>
             {entry.prerequisites.map((prerequisite, position) => (
               <span key={prerequisite.id}>
-                {position === 0 ? '' : ', '}
                 <Link className="prl-learn-entry__prereq-link" href={lessonHref(prerequisite.id)}>
                   {prerequisite.title}
                 </Link>
+                {position === entry.prerequisites.length - 1 ? '' : ','}
               </span>
             ))}
             {/* `false` only. `unlocked` is `null` when nobody checked. */}
