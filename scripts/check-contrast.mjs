@@ -15,6 +15,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inflateSync } from 'node:zlib';
 import { DevtoolsReplies, withChrome } from './chrome-devtools.mjs';
+import { hidesItsText } from './contrast-hidden-text.mjs';
 import { ManagedServer, refuseOccupiedPort } from './gate-servers.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -826,15 +827,8 @@ const PAINT_WALKER = String.raw`
     return false;
   };
 
-  const CLIPPED_AWAY = /^inset\(\s*(\d+(\.\d+)?)%/;
-  const hidesItsText = (node) => {
-    const style = getComputedStyle(node);
-    const clip = CLIPPED_AWAY.exec(style.clipPath);
-    if (clip !== null && Number(clip[1]) >= 50) return true;
-    if (style.clip === 'rect(0px, 0px, 0px, 0px)') return true;
-    const box = node.getBoundingClientRect();
-    return box.width <= 2 && box.height <= 2 && style.overflow === 'hidden';
-  };
+  const HIDES_TEXT = HIDES_TEXT_ARGUMENT;
+  const hidesItsText = (node) => HIDES_TEXT(getComputedStyle(node), node.getBoundingClientRect());
   const isVisuallyHidden = (el) => {
     for (let node = el; node !== null && node !== document.body; node = node.parentElement) {
       if (hidesItsText(node)) return true;
@@ -1429,10 +1423,9 @@ async function withPage(headful, run) {
 }
 
 const walkerSource = (measureAll, probeBudget) =>
-  PAINT_WALKER.replace('MEASURE_ALL_ARGUMENT', String(measureAll)).replace(
-    'PROBE_BUDGET_ARGUMENT',
-    String(probeBudget),
-  );
+  PAINT_WALKER.replace('MEASURE_ALL_ARGUMENT', String(measureAll))
+    .replace('PROBE_BUDGET_ARGUMENT', String(probeBudget))
+    .replace('HIDES_TEXT_ARGUMENT', () => String(hidesItsText));
 
 /** Returns failures. Never throws for content. */
 async function measurePage(page, url, label, theme, failures, tally) {
