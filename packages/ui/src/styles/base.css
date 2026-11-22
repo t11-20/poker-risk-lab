@@ -8,6 +8,8 @@
 html {
   /** A focused element must never land under the sticky header (WCAG 2.4.11). Generous on purpose. */
   scroll-padding-block-start: var(--prl-space-13);
+  /** Inherited, so every native radio, checkbox and range ticks in the accent, not the browser's blue. */
+  accent-color: var(--prl-accent-edge);
 }
 
 body {

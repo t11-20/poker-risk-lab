@@ -270,6 +270,28 @@ describe('the design system rules that are stated in prose and checked nowhere',
     assert.ok(blocks > 500, `only ${blocks} blocks were read, so the scan missed stylesheets`);
   });
 
+  /** Chrome draws an unstyled radio or checkbox in its own blue, which this palette does not have. */
+  it('ticks every native radio and checkbox in the accent', () => {
+    const [, baseCss] = FLAT_SCANNED[0] ?? ['', ''];
+    const root = allBlocks(baseCss).filter((block) => block.selector === 'html');
+    assert.ok(
+      root.some((block) => /accent-color\s*:\s*var\(--prl-accent-edge\)/u.test(block.body)),
+      'base.css `html` must set `accent-color` from the accent, so every native control inherits it',
+    );
+    for (const [name, css] of FLAT_SCANNED) {
+      for (const block of allBlocks(css)) {
+        for (const match of block.body.matchAll(/accent-color\s*:\s*([^;]+)/gu)) {
+          const value = (match[1] ?? '').trim();
+          assert.match(
+            value,
+            /^var\(--prl-accent-[a-z-]+\)$/u,
+            `${name}: \`${block.selector}\` ticks in ${value}`,
+          );
+        }
+      }
+    }
+  });
+
   it('spends no raw duration or easing curve outside the token layer', () => {
     for (const [name, css] of [
       ['components.css', componentsCss],
