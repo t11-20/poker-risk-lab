@@ -127,3 +127,13 @@ describe('what a seat has in front of it', () => {
     assert.equal([...markup.matchAll(/class="prl-seat__stat"/gu)].length, 1, 'only the stack pair');
   });
 });
+
+describe('a seat with no cards', () => {
+  it('speaks "no cards" in its empty slot without drawing it (REGRESSION)', async () => {
+    assert.match(
+      await render('folded', 'river'),
+      /<span class="prl-card-row__empty"><span class="prl-visually-hidden">no cards<\/span><\/span>/u,
+      'an empty slot with no text is a card element a reader meets as nothing',
+    );
+  });
+});

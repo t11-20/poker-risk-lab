@@ -210,7 +210,8 @@ export function Seat(props: SeatProps): ReactElement {
           tight
           {...(highlightedCards === undefined ? {} : { highlightedCards })}
           {...(highlightLabel === undefined ? {} : { highlightLabel })}
-          emptyText=""
+          emptyText="no cards"
+          emptyTextHidden
           className="prl-seat__cards"
         />
       )}
