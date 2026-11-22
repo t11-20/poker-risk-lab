@@ -164,29 +164,28 @@ describe('a call that takes the whole stack says so', () => {
     },
   ];
 
-  it('speaks the all-in and prints the engine sentence (REGRESSION)', async () => {
+  it('speaks the all-in (REGRESSION)', async () => {
     // Over 3,000 hands, 3,569 of 15,137 call offers were all-in calls.
     const markup = await render({ legalActions: ALL_IN_CALL, toCall: 62 });
     assert.match(
       markup,
-      /aria-label="call all in, 62 units"/u,
+      /aria-label="call 62 units, all in"/u,
       'the spoken name must begin with the visible label',
     );
-    assert.match(markup, /Calling puts your whole remaining stack in\./u, "the engine's note must be shown");
   });
 
   it('prints the all-in on the button as well as speaking it', async () => {
     const markup = await render({ legalActions: ALL_IN_CALL, toCall: 62 });
-    assert.match(markup, /<span class="prl-action-btn__label">Call all in<\/span>/u, markup);
+    assert.match(markup, /<span class="prl-action-btn__label">Call 62<\/span>/u, markup);
+    assert.match(markup, /<span class="prl-action-btn__cost">All in<\/span>/u, markup);
   });
 
   it('says nothing of the sort on an ordinary call, so the wording is conditional', async () => {
     const markup = await render();
-    assert.match(markup, /<span class="prl-action-btn__label">Call<\/span>/u, markup);
-    assert.ok(!markup.includes('which is all in'), 'an ordinary call must not be announced as all in');
-    assert.ok(
-      !markup.includes('Calling puts your whole remaining stack in.'),
-      'an ordinary call must not carry the all-in note',
+    assert.match(
+      markup,
+      /aria-label="call 100 units"><span class="prl-action-btn__label">Call 100<\/span><\/button>/u,
+      'an ordinary call is not announced or printed as all in',
     );
   });
 });
@@ -201,11 +200,12 @@ describe('a bet or raise of the whole stack says so on the button', () => {
 
   it('prints and speaks the all-in when the only raise is the whole stack (REGRESSION)', async () => {
     const markup = await render({ legalActions: SHOVE_ONLY });
-    assert.match(markup, /<span class="prl-action-btn__label">Raise to 340, all in<\/span>/u, markup);
-    assert.match(markup, /aria-label="raise to 340 units, which is all in: 340 units out of your stack"/u);
+    assert.match(markup, /<span class="prl-action-btn__label">Raise to 340<\/span>/u, markup);
+    assert.match(markup, /<span class="prl-action-btn__cost">All in<\/span>/u, markup);
+    assert.match(markup, /aria-label="raise to 340 units, all in"/u);
     assert.match(
       markup,
-      /leaving 0 units behind — this is all in\./u,
+      /<span class="prl-sizer__readout-value">All in<\/span>/u,
       'the readout must agree with the button',
     );
   });
@@ -225,17 +225,10 @@ describe('a fold where checking is free says what it gives up', () => {
     { type: 'bet', minTo: 10, maxTo: 840 },
   ];
 
-  it('prints and speaks both prices beside a free check (REGRESSION)', async () => {
+  it('prints and speaks that checking is free beside Fold (REGRESSION)', async () => {
     const markup = await render({ legalActions: CHECK_IS_FREE, toCall: 0 });
-    assert.match(
-      markup,
-      /Checking costs nothing here; folding gives up any claim on the pot for no saving\./u,
-    );
-    assert.match(
-      markup,
-      /fold, costs 0 units, gives up the hand and any claim on the pot; checking also costs 0 units/u,
-    );
-    assert.ok(!markup.includes('Folding costs nothing and'), 'the facing-a-bet sentence must not appear');
+    assert.match(markup, /<p class="prl-action-bar__hint">Checking is free\.<\/p>/u);
+    assert.match(markup, /fold, costs 0 units and gives up the hand, though checking is free/u);
   });
 
   it('draws Fold as plain Fold beside a free check until a pointer has pressed it once', async () => {
@@ -257,10 +250,10 @@ describe('a fold where checking is free says what it gives up', () => {
     );
   });
 
-  it('keeps the facing-a-bet sentence when there is something to call', async () => {
+  it('says nothing of a free check when there is something to call', async () => {
     const markup = await render();
-    assert.match(markup, /Folding costs nothing and gives up any claim on the pot\./u);
-    assert.ok(!markup.includes('Checking costs nothing here'), 'no free check is on offer');
+    assert.ok(!markup.includes('Checking is free'), 'no free check is on offer');
+    assert.match(markup, /aria-label="fold, costs 0 units and gives up the hand"/u);
   });
 });
 
@@ -301,5 +294,64 @@ describe('while the reader waits, the bar keeps its context', () => {
       drawn < markup.indexOf('prl-action-bar__idle'),
       `the context is not above the idle line: ${markup}`,
     );
+  });
+});
+
+describe('How betting works matches the spot', () => {
+  /** The big blind's option in a limped pot: a free check and a raise, nothing to call. */
+  const OPTION: readonly LegalAction[] = [
+    { type: 'fold' },
+    { type: 'check', costAtMin: 0 },
+    { type: 'raise', minTo: 20, maxTo: 990 },
+  ];
+
+  it('does not say nobody has bet, or size a raise after a call that is not there (REGRESSION)', async () => {
+    const markup = await render({ legalActions: OPTION, toCall: 0, committedThisStreet: 10, pot: 40 });
+    assert.ok(!markup.includes('Nobody has bet'), 'the blinds and the limps are bets');
+    assert.ok(!markup.includes('after you call'), 'there is nothing to call');
+    assert.match(markup, /size the raise as a share of the pot\./u);
+  });
+
+  it('sizes a raise after the call when there is one to make', async () => {
+    assert.match(await render(), /size the raise as a share of the pot after you call\./u);
+  });
+});
+
+describe('the sizer readout and the call help', () => {
+  it('keeps "Stack after" and its figure in one item, so the readout gap cannot split them', async () => {
+    assert.match(
+      await render(),
+      /<p class="prl-sizer__readout"><span>Stack after <span class="prl-sizer__readout-value">[\d,]+<\/span><\/span><\/p>/u,
+    );
+  });
+
+  it('says a short call puts the stack in, and does not tell the reader to match the bet', async () => {
+    const markup = await render({
+      legalActions: [
+        { type: 'fold' },
+        {
+          type: 'call',
+          minTo: 62,
+          costAtMin: 62,
+          allInAtMax: true,
+          note: 'Calling puts your whole remaining stack in.',
+        },
+      ],
+      toCall: 100,
+    });
+    assert.match(markup, /<strong>Call<\/strong>: Calling puts your whole remaining stack in\./u);
+    assert.ok(!markup.includes('match the bet'), 'a short stack cannot match the bet');
+  });
+
+  it('describes the pot buttons only when there is more than one size', async () => {
+    const shoveOnly = await render({
+      legalActions: [
+        { type: 'fold' },
+        { type: 'call', minTo: 100, costAtMin: 100 },
+        { type: 'raise', minTo: 340, maxTo: 340 },
+      ],
+    });
+    assert.ok(!shoveOnly.includes('The pot buttons'), 'only All in is offered');
+    assert.match(await render(), /The pot buttons/u);
   });
 });

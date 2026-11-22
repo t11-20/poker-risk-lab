@@ -10,8 +10,8 @@
  * (`draftForBounds`), so a draft from an earlier street cannot outlive its spot. It carries `badInput`
  * because a number input sanitises unparseable text to `''`.
  *
- * Each button shows its cost in tabular figures and has an `aria-label` sentence with action and cost.
- * Without it a screen reader runs the two spans together and reads a bare `0` for fold and check.
+ * Each button shows its amount, if any, and has an `aria-label` sentence with the action and its amount
+ * in units. Without it a screen reader runs the spans together and reads a bare figure.
  * The sizer comes first in the DOM, so tab order is "choose a size, then act". Presets use
  * `aria-pressed` plus a check glyph, so selection is not signalled by colour alone.
  */
@@ -74,7 +74,8 @@ export interface ActionBarProps {
 
 interface ActionButtonProps {
   readonly label: string;
-  readonly cost: string;
+  /** A second line only when it adds something, such as "All in" or "60 more". */
+  readonly cost?: string;
   /** The whole button as one sentence for assistive tech. Always states the cost. */
   readonly spoken: string;
   readonly primary?: boolean;
@@ -93,7 +94,7 @@ function ActionButton(props: ActionButtonProps): ReactElement {
       onClick={onClick}
     >
       <span className="prl-action-btn__label">{label}</span>
-      <span className="prl-action-btn__cost">{cost}</span>
+      {cost === undefined || cost === '' ? null : <span className="prl-action-btn__cost">{cost}</span>}
     </button>
   );
 }
@@ -113,11 +114,10 @@ function FoldButton(props: {
   return (
     <ActionButton
       label={armed ? 'Fold anyway' : 'Fold'}
-      cost={formatUnits(0)}
       spoken={
         canCheck
-          ? `${verb}, costs ${formatUnits(0)}, gives up the hand and any claim on the pot; checking also costs ${formatUnits(0)}`
-          : `fold, costs ${formatUnits(0)}, gives up the hand and any claim on the pot`
+          ? `${verb}, costs ${formatUnits(0)} and gives up the hand, though checking is free`
+          : `fold, costs ${formatUnits(0)} and gives up the hand`
       }
       disabled={disabled}
       onClick={onClick}
@@ -148,8 +148,6 @@ function BetSizer(props: BetSizerProps): ReactElement {
 
   const { bounds } = sized;
   const isBet = sized.kind === 'bet';
-  const stackBehind = bounds.max - committedThisStreet;
-  const cost = to - committedThisStreet;
   const remainingAfter = bounds.max - to;
   const isAllIn = isAllInAt(to, bounds);
 
@@ -170,7 +168,7 @@ function BetSizer(props: BetSizerProps): ReactElement {
 
   return (
     <fieldset className="prl-sizer" disabled={disabled}>
-      <legend className="prl-sizer__legend">{isBet ? 'How much to bet' : 'How much to raise to'}</legend>
+      <legend className="prl-sizer__legend">{isBet ? 'Bet size' : 'Raise size'}</legend>
 
       <div className="prl-sizer__presets">
         {offeredPresets(context).map((preset) => {
@@ -211,7 +209,7 @@ function BetSizer(props: BetSizerProps): ReactElement {
         />
         <span className="prl-sizer__field">
           <label className="prl-sizer__field-label" htmlFor={numberId}>
-            {isBet ? 'Bet to' : 'Raise to'}
+            {isBet ? 'Bet' : 'Raise to'}
           </label>
           <input
             id={numberId}
@@ -237,35 +235,83 @@ function BetSizer(props: BetSizerProps): ReactElement {
       {malformed ? (
         <p className="prl-field__error prl-sizer__error" id={invalidId}>
           <span aria-hidden="true">{'▲ '}</span>
-          {
-            'That is not an amount. Type whole units — or use the slider or a preset above, which always set a legal size.'
-          }
+          {'Type a whole number, or use the slider or a size button.'}
         </p>
       ) : null}
 
       {clamped === null ? null : (
         <p className="prl-field__hint prl-sizer__clamped" id={clampedId}>
-          {`${clamped > bounds.max ? `${formatChips(clamped)} is above the most you can put in` : clamped < bounds.min ? `${formatChips(clamped)} is below the minimum` : 'Units are whole'}, so the ${isBet ? 'bet' : 'raise'} will be to ${formatChips(to)}${isAllIn ? ' — all in' : ''}.`}
+          {`${clamped > bounds.max ? `${formatChips(clamped)} is over the max` : clamped < bounds.min ? `${formatChips(clamped)} is under the min` : 'Whole numbers only'}, so it will be ${formatChips(to)}${isAllIn ? ', all in' : ''}.`}
         </p>
       )}
 
       <p className="prl-sizer__bounds" id={boundsId}>
-        {`Allowed range ${formatChips(bounds.min)} to ${formatChips(bounds.max)} units. Presets are a fraction of the pot after your call.`}
+        {`Min ${formatChips(bounds.min)}, max ${formatChips(bounds.max)}`}
       </p>
 
-      <div className="prl-sizer__readout">
-        <p className="prl-sizer__readout-line">
-          {'Total commitment this street: '}
-          <span className="prl-sizer__readout-value">{formatUnits(to)}</span>
-        </p>
-        <p className="prl-sizer__readout-line">
-          {'Out of your stack: '}
-          <span className="prl-sizer__readout-value">{formatUnits(cost)}</span>
-          {` of ${formatUnits(stackBehind)}, leaving ${formatUnits(remainingAfter)} behind`}
-          {isAllIn ? ' — this is all in.' : '.'}
-        </p>
-      </div>
+      {/* One span, so the readout's flex gap cannot separate the label from its figure. */}
+      <p className="prl-sizer__readout">
+        {isAllIn ? (
+          <span className="prl-sizer__readout-value">All in</span>
+        ) : (
+          <span>
+            {'Stack after '}
+            <span className="prl-sizer__readout-value">{formatChips(remainingAfter)}</span>
+          </span>
+        )}
+      </p>
     </fieldset>
+  );
+}
+
+/** The rules behind the buttons, one tap away, so the row itself can stay short. */
+function ActionHelp(props: {
+  readonly canCheck: boolean;
+  readonly canCall: boolean;
+  readonly sized: SizedAction | null;
+  /** The engine's sentence for an all-in call, when calling takes the whole stack. */
+  readonly allInCallNote: string | null;
+}): ReactElement {
+  const { canCheck, canCall, sized, allInCallNote } = props;
+  const bet = sized?.kind === 'bet';
+  return (
+    <details className="prl-disclose prl-action-help">
+      <summary className="prl-disclose__summary">How betting works</summary>
+      <ul className="prl-action-help__list">
+        <li>
+          <strong>Fold</strong>
+          {': give up this hand. Chips you have already put in stay in the pot.'}
+        </li>
+        {canCheck ? (
+          <li>
+            <strong>Check</strong>
+            {': stay in without putting in any more chips.'}
+          </li>
+        ) : null}
+        {canCall ? (
+          <li>
+            <strong>Call</strong>
+            {allInCallNote === null ? ': match the bet to stay in.' : `: ${allInCallNote}`}
+          </li>
+        ) : null}
+        {sized === null ? null : (
+          <li>
+            <strong>{bet ? 'Bet' : 'Raise'}</strong>
+            {bet
+              ? `: put chips in for others to match, from ${formatChips(sized.bounds.min)} up to all your chips.`
+              : `: make the bet bigger. "Raise to" is your total for this round, from ${formatChips(sized.bounds.min)} up to all your chips.`}
+          </li>
+        )}
+        {sized === null || sized.bounds.min >= sized.bounds.max ? null : (
+          <li>
+            <strong>The pot buttons</strong>
+            {canCall
+              ? ': size the raise as a share of the pot after you call.'
+              : `: size the ${bet ? 'bet' : 'raise'} as a share of the pot.`}
+          </li>
+        )}
+      </ul>
+    </details>
   );
 }
 
@@ -413,14 +459,11 @@ export function ActionBar(props: ActionBarProps): ReactElement {
       onBlurCapture={onBlurCapture}
       onFocusCapture={onFocusCapture}
     >
+      {/* The amount to call is on the Call button, so the pot is the one figure this line adds. */}
       <p className="prl-action-bar__price">
         <span className="prl-action-bar__price-item">
-          <span className="prl-label">In the pot</span>
-          <span className="prl-action-bar__price-value">{formatUnits(pot)}</span>
-        </span>
-        <span className="prl-action-bar__price-item">
-          <span className="prl-label">To continue</span>
-          <span className="prl-action-bar__price-value">{toCall > 0 ? formatUnits(toCall) : 'nothing'}</span>
+          <span className="prl-label">Pot</span>
+          <span className="prl-action-bar__price-value">{formatChips(pot)}</span>
         </span>
       </p>
 
@@ -447,8 +490,7 @@ export function ActionBar(props: ActionBarProps): ReactElement {
         {canCheck ? (
           <ActionButton
             label="Check"
-            cost={formatUnits(0)}
-            spoken={`check, costs ${formatUnits(0)}, stays in the hand and passes the decision on`}
+            spoken={`check, costs ${formatUnits(0)}`}
             disabled={disabled}
             onClick={() => actFromBar({ type: 'check' })}
           />
@@ -456,11 +498,11 @@ export function ActionBar(props: ActionBarProps): ReactElement {
 
         {call === undefined ? null : (
           <ActionButton
-            label={call.allInAtMax ? 'Call all in' : 'Call'}
-            cost={formatUnits(callCost)}
+            label={`Call ${formatChips(callCost)}`}
             // An all-in call says so (`allInAtMax`). In 3,000 hands, 3,569 of 15,137 call offers were all-in.
+            {...(call.allInAtMax ? { cost: 'All in' } : {})}
             spoken={
-              call.allInAtMax ? `call all in, ${formatUnits(callCost)}` : `call ${formatUnits(callCost)}`
+              call.allInAtMax ? `call ${formatUnits(callCost)}, all in` : `call ${formatUnits(callCost)}`
             }
             disabled={disabled}
             onClick={() => actFromBar({ type: 'call' })}
@@ -494,14 +536,16 @@ export function ActionBar(props: ActionBarProps): ReactElement {
         ) : null}
       </div>
 
-      <p className="prl-action-bar__note">
-        {/* Beside a free check, state both prices. "Folding costs nothing" read as a reason to fold. */}
-        {canCheck
-          ? 'Checking costs nothing here; folding gives up any claim on the pot for no saving. '
-          : 'Folding costs nothing and gives up any claim on the pot. '}
-        {call?.allInAtMax === true ? `${call.note} ` : ''}
-        {sized?.note ?? ''}
-      </p>
+      <div className="prl-action-bar__note">
+        {/* Beside a free check, folding throws a hand away for no saving. */}
+        {canCheck ? <p className="prl-action-bar__hint">Checking is free.</p> : null}
+        <ActionHelp
+          canCheck={canCheck}
+          canCall={call !== undefined}
+          sized={sized}
+          allInCallNote={call?.allInAtMax === true ? (call.note ?? null) : null}
+        />
+      </div>
     </div>
   );
 }

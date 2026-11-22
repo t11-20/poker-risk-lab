@@ -1,10 +1,10 @@
 /**
  * One playing card from the engine's integer encoding, as text rather than an image.
- * Suits differ by symbol, letter and colour. The letter separates clubs from spades under deuteranopia.
+ * Suits differ by symbol and, red or black, by colour, as on a real deck.
  * `role="img"` with an `aria-label`, because `aria-label` on a generic span announces nothing.
  * The face stays light in both themes (§2.5). `highlighted` adds a border, a corner notch and a phrase
  * in the accessible name (WCAG 1.4.1). The notch is a `::after` in `components.css`, not a glyph,
- * because a glyph in the face grid was clipped and crowded the suit letter.
+ * because a glyph in the face grid was clipped.
  */
 
 import type { ReactElement } from 'react';
@@ -70,7 +70,6 @@ export function PlayingCard(props: PlayingCardProps): ReactElement {
         <span className="prl-card__face" aria-hidden="true">
           <span className="prl-card__rank">?</span>
           <span className="prl-card__pip">?</span>
-          <span className="prl-card__suit-letter">?</span>
         </span>
       </span>
     );
@@ -85,7 +84,6 @@ export function PlayingCard(props: PlayingCardProps): ReactElement {
       <span className="prl-card__face" aria-hidden="true">
         <span className="prl-card__rank">{described.face}</span>
         <span className="prl-card__pip">{described.suitSymbol}</span>
-        <span className="prl-card__suit-letter">{described.suitLetter}</span>
       </span>
     </span>
   );

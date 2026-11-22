@@ -13,8 +13,7 @@
  * collapsed row's real numbers.
  *
  * Negative controls run on every invocation (`--controls-only` runs only them). Each injects CSS that
- * re-creates one defect shape and must be caught. With the real defect rebuilt into play.css the
- * sweep reported 52 findings, and the collision showed only at 1024, 1440 and 1920.
+ * re-creates one defect shape and must be caught.
  */
 
 import { writeFileSync } from 'node:fs';
@@ -138,6 +137,8 @@ const EXEMPTIONS = [];
  * @property {string} what    what it re-creates, for the log
  */
 
+const NARROW_COACH = '.prl-play .prl-play__coach { inline-size: 15rem; }';
+
 /** @type {Control[]} */
 const CONTROLS = [
   {
@@ -146,7 +147,11 @@ const CONTROLS = [
     width: 1440,
     expect: 'squeezed',
     what: 'the shipped Coach defect, put back: a bare `auto` track floored at max-content',
-    css: '.prl-play .prl-coach__section .prl-stat__pair { grid-template-columns: minmax(0, 1fr) auto; }',
+    // Since "Pot and price" shortened to "100 in the pot, 35 to call" it fits a 1440px rail even with
+    // the defect, so the rail is narrowed to bring the value wider than its share again.
+    css:
+      '.prl-play .prl-coach__section .prl-stat__pair { grid-template-columns: minmax(0, 1fr) auto; } ' +
+      `${NARROW_COACH}`,
   },
   {
     id: 'coach-track-collision',
@@ -162,7 +167,8 @@ const CONTROLS = [
     // sentence covers the label at any face, so the control tests the detector and not the font.
     css:
       '.prl-play .prl-coach__section .prl-stat__pair { grid-template-columns: minmax(0, 1fr) auto; column-gap: 0; } ' +
-      '.prl-play .prl-coach__section .prl-stat__value { justify-content: flex-start; text-align: start; }',
+      '.prl-play .prl-coach__section .prl-stat__value { justify-content: flex-start; text-align: start; } ' +
+      `${NARROW_COACH}`,
   },
   {
     id: 'negative-margin',

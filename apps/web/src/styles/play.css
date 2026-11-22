@@ -882,21 +882,6 @@
   text-align: end;
 }
 
-/**
- * The empty card slot takes the card pair's footprint (`sm` width, `--prl-space-2` gap, 5/7 ratio),
- * so folded plates align with the rest. Unsized, it staggered the stack figures 9.2px around the ring.
- * Scoped to seats, because the board and outs rows want a sentence.
- */
-.prl-play .prl-seat__cards .prl-card-row__empty {
-  display: grid;
-  place-items: center;
-  width: calc(var(--prl-space-9) * 2 + var(--prl-space-2));
-  height: calc(var(--prl-space-9) / 5 * 7);
-  /* `--prl-type-label`, the floor. At 15px the phrase would wrap in its 68px box once type scales. */
-  font-size: var(--prl-type-label);
-  text-align: center;
-}
-
 /* 12.3.1  A NAME IS TWO LINES, ALWAYS
    Names at 17px gave the ring four plate heights (a 44.2px spread at 1440x900). 15px with a two-line
    `min-height` and clamp makes every name box 39px. `Loose-aggressive bot` loses its shared suffix.
@@ -916,9 +901,8 @@
 }
 
 /* 12.4  THE CARDS
-   Every length is proportional to `--prl-card-w`, so one rule serves `sm`, `md` and `lg`. The index
-   is rank over suit letter in the corner. The spans are `aria-hidden` inside a `role="img"`, so the
-   order is visual only. The radius is a twelfth of the width, like a real card. */
+   Every length is proportional to `--prl-card-w`, so one rule serves `sm`, `md` and `lg`. The radius
+   is a twelfth of the width, like a real card. */
 
 .prl-play .prl-card {
   border-radius: calc(var(--prl-card-w) / 12);
@@ -944,33 +928,33 @@
   }
 }
 
-.prl-play .prl-card__face {
-  grid-template-rows: auto auto minmax(0, 1fr);
-  justify-items: start;
-  padding: 0.2em 0.24em;
+/**
+ * Seat cards stay `sm` on the oval, where a wider pair clipped "Loose-aggressive bot" at 1440. Stacked,
+ * a plate is a full row, so they step up and a rank reads at a glance.
+ */
+.prl-play .prl-seat__cards {
+  --prl-seat-card-w: var(--prl-space-9);
 }
 
-.prl-play .prl-card__rank {
-  grid-row: 1;
-  font-size: 1.24em;
-  letter-spacing: var(--prl-tracking-display-2);
-  line-height: 0.88;
+@container prl-table (width < 46rem) {
+  .prl-play .prl-seat__cards {
+    --prl-seat-card-w: var(--prl-space-10);
+  }
 }
 
-/** Row 2, so the index reads rank over suit while the DOM order is rank, pip, letter. */
-.prl-play .prl-card__suit-letter {
-  grid-row: 2;
-  /* Never below 0.62em. This glyph tells a club from a spade under protanopia. */
-  font-size: 0.66em;
-  line-height: 1.05;
+.prl-play .prl-seat__cards .prl-card {
+  --prl-card-w: var(--prl-seat-card-w);
 }
 
-.prl-play .prl-card__pip {
-  grid-row: 3;
-  align-self: end;
-  justify-self: end;
-  font-size: 1.5em;
-  line-height: 0.78;
+/**
+ * The empty card slot takes the card pair's footprint (card width, `--prl-space-2` gap, 5/7 ratio),
+ * so folded plates align with the rest. Unsized, it staggered the stack figures 9.2px around the ring.
+ * Scoped to seats, because the board and outs rows want a sentence.
+ */
+.prl-play .prl-seat__cards .prl-card-row__empty {
+  display: block;
+  width: calc(var(--prl-seat-card-w) * 2 + var(--prl-space-2));
+  height: calc(var(--prl-seat-card-w) / 5 * 7);
 }
 
 /**

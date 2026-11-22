@@ -125,11 +125,11 @@ export default async function LessonPage({ params }: LessonPageProps): Promise<R
         </div>
         {prerequisites.length === 0 ? null : (
           <p className="prl-learn-lesson__prereq">
-            <span className="prl-label">Assumes you have read</span>
+            <span className="prl-label">Read first</span>
             {prerequisites.map((prerequisite, position) => (
               <span key={prerequisite.id}>
-                {position === 0 ? '' : ', '}
                 <Link href={lessonHref(prerequisite.id)}>{prerequisite.title}</Link>
+                {position === prerequisites.length - 1 ? '' : ','}
               </span>
             ))}
           </p>

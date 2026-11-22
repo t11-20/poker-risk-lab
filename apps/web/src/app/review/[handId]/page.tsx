@@ -184,7 +184,7 @@ export default async function HandReviewPage({
             <span className="prl-review-summary__value">{formatUnits(review.hand.potTotal)}</span>
           </li>
           <li>
-            <span className="prl-label">Net to you</span>
+            <span className="prl-label">Result</span>
             <span
               className="prl-review-summary__value prl-review-net"
               data-sign={net === null ? 'unknown' : net > 0 ? 'positive' : net < 0 ? 'negative' : 'neutral'}
@@ -199,7 +199,7 @@ export default async function HandReviewPage({
               tone={review.hand.endedByFold ? 'neutral' : 'info'}
               glyph={review.hand.endedByFold ? '⤶' : '⇄'}
             >
-              {review.hand.endedByFold ? 'folded out' : 'showdown'}
+              {review.hand.endedByFold ? 'no showdown' : 'showdown'}
             </Chip>
           </li>
           <li>

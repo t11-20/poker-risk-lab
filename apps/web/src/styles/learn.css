@@ -286,8 +286,16 @@
   line-height: var(--prl-leading-snug);
 }
 
-.prl-learn-entry__prereq .prl-label {
-  margin-inline-end: var(--prl-space-3);
+/**
+ * One flex item per link, its comma trailing it, so 44px links wrap as whole rows. As inline boxes in
+ * a sentence they left a comma stranded at a line end and a link indented under the first.
+ */
+.prl-learn-entry__prereq,
+.prl-learn-lesson__prereq {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: var(--prl-space-3);
 }
 
 /**
@@ -433,7 +441,6 @@
  * still wraps.
  */
 .prl-learn-lesson__prereq {
-  display: block;
   /* `none`, because `base.css` caps every bare `<p>` at the measure. */
   max-width: none;
   margin: 0;
@@ -441,10 +448,6 @@
   font-size: var(--prl-type-body-sm);
   line-height: var(--prl-leading-body);
   text-wrap: pretty;
-}
-
-.prl-learn-lesson__prereq .prl-label {
-  margin-inline-end: var(--prl-space-3);
 }
 
 .prl-learn-lesson__back {

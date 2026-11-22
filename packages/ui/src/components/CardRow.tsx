@@ -30,6 +30,8 @@ export interface CardRowProps {
   /** Forwarded to each marked card's accessible name, because the border is a visual cue only. */
   readonly highlightLabel?: string;
   readonly emptyText?: string;
+  /** Speaks `emptyText` without drawing it, where the empty slot is only there to keep a height. */
+  readonly emptyTextHidden?: boolean;
   readonly tight?: boolean;
   readonly className?: string;
 }
@@ -44,6 +46,7 @@ export function CardRow(props: CardRowProps): ReactElement {
     highlightedCards,
     highlightLabel,
     emptyText = 'no cards yet',
+    emptyTextHidden = false,
     tight = false,
     className,
   } = props;
@@ -58,7 +61,9 @@ export function CardRow(props: CardRowProps): ReactElement {
         {label}
       </figcaption>
       {keyed.length === 0 ? (
-        <span className="prl-card-row__empty">{emptyText}</span>
+        <span className="prl-card-row__empty">
+          {emptyTextHidden ? <span className="prl-visually-hidden">{emptyText}</span> : emptyText}
+        </span>
       ) : (
         <span className="prl-card-row__cards">
           {keyed.map((entry) => {

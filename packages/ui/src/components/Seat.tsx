@@ -32,14 +32,15 @@ export interface SeatProps {
   readonly highlightedCards?: readonly number[];
   /** Joins each ringed card's accessible name, because the ring is a visual cue only. */
   readonly highlightLabel?: string;
-  /** Replaces "in the hand" on the status line (`../seat-actions.ts`). Ignored once settled. */
+  /** The status line while the seat is live (`../seat-actions.ts`). Ignored once settled. */
   readonly lastAction?: string | null;
   readonly as?: 'li' | 'div';
   readonly className?: string;
 }
 
+/** A live seat with no action yet says nothing: its cards already show it is in. */
 const STATUS_TEXT: Readonly<Record<SeatStatus, string>> = {
-  active: 'in the hand',
+  active: '',
   folded: 'folded',
   allIn: 'all in',
   sittingOut: 'sitting out',
@@ -47,7 +48,7 @@ const STATUS_TEXT: Readonly<Record<SeatStatus, string>> = {
 
 /** Past tense for the two statuses that described a hand in progress. */
 const SETTLED_STATUS_TEXT: Readonly<Record<SeatStatus, string>> = {
-  active: 'still in at the end',
+  active: 'stayed in',
   folded: 'folded',
   allIn: 'went all in',
   sittingOut: 'sitting out',
@@ -88,9 +89,35 @@ function statusLine(status: SeatStatus, settled: boolean, lastAction: string | n
   return lastAction !== null && status !== 'sittingOut' ? lastAction : STATUS_TEXT[status];
 }
 
+/**
+ * One line for what the seat did and what it has in this street: "called 35", "10 in", "folded, 5 in".
+ * The chips are added unless the action already names them, so no live seat's commitment is dropped.
+ * One shared line, because six 13rem plates have no height for a separate row.
+ */
+function seatLine(seat: SeatView, settled: boolean, lastAction: string | null): string {
+  const status = statusLine(seat.status, settled, lastAction);
+  // Settled chips are in the winners' stacks, and a figure beside "went all in" read as a stake still out.
+  if (settled || seat.committedThisStreet <= 0) return status;
+  const amount = formatChips(seat.committedThisStreet);
+  // A thousands comma is part of a figure, so only a comma not followed by a digit ends one.
+  if (new RegExp(`(^|\\s)${amount}(?=$|\\s|,(?!\\d))`, 'u').test(status)) return status;
+  return status === '' ? `${amount} in` : `${status}, ${amount} in`;
+}
+
 /** Skipped after a name that already says it. Fixtures name the reader "You", which read "You (you)". */
 function needsSelfMarker(isSelf: boolean, name: string): boolean {
   return isSelf && name !== 'You';
+}
+
+/** Kept when blank, so a plate does not shrink while its seat has yet to act. */
+function StatusLine({ text }: { readonly text: string }): ReactElement {
+  return text === '' ? (
+    <p className="prl-seat__status" aria-hidden="true">
+      {'\u00a0'}
+    </p>
+  ) : (
+    <p className="prl-seat__status">{text}</p>
+  );
 }
 
 export function Seat(props: SeatProps): ReactElement {
@@ -105,6 +132,8 @@ export function Seat(props: SeatProps): ReactElement {
   let cards: readonly number[] = [];
   if (holeCards !== null) cards = holeCards;
   else if (isHoldingCards) cards = FACE_DOWN_PAIR;
+
+  const status = seatLine(seat, settled, lastAction);
 
   /**
    * The plate-level mark for a seat holding ringed cards (`styles/play.css` section 12.3). Not called
@@ -171,17 +200,9 @@ export function Seat(props: SeatProps): ReactElement {
           <dt className="prl-seat__stat-label">Stack</dt>
           <dd className="prl-seat__stat-value">{formatChips(seat.stack)}</dd>
         </div>
-        <div className="prl-seat__stat">
-          <dt className="prl-seat__stat-label">
-            {'In front'}
-            <span className="prl-visually-hidden">{' this street'}</span>
-          </dt>
-          <dd className="prl-seat__stat-value">{formatChips(seat.committedThisStreet)}</dd>
-        </div>
       </dl>
 
-      {/* The last action rides on the status line, because six 13rem plates have no height to spare. */}
-      <p className="prl-seat__status">{statusLine(seat.status, settled, lastAction)}</p>
+      <StatusLine text={status} />
 
       {seat.status === 'sittingOut' ? null : (
         <CardRow
@@ -194,6 +215,7 @@ export function Seat(props: SeatProps): ReactElement {
           {...(highlightedCards === undefined ? {} : { highlightedCards })}
           {...(highlightLabel === undefined ? {} : { highlightLabel })}
           emptyText="no cards"
+          emptyTextHidden
           className="prl-seat__cards"
         />
       )}

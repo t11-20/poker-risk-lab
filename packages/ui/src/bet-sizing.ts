@@ -24,7 +24,6 @@ export type { BetBounds, SizingContext, SizingPreset };
 export interface SizedAction {
   readonly kind: 'bet' | 'raise';
   readonly bounds: BetBounds;
-  readonly note: string | null;
 }
 
 export const SIZING_PRESETS: readonly SizingPreset[] = TABLE_SIZING_PRESETS;
@@ -76,7 +75,7 @@ export function isDraftMalformed(draft: BetDraft | null): boolean {
 
 /**
  * A draft carries the bounds it was typed against, because bounds move each street and the text does
- * not. Without it the flop field read `1000` beside a button reading "Bet to 980".
+ * not. Without it the flop field read `1000` beside a button reading "Bet 980".
  * A stamp, not an effect, keeps this derivable during render with no reset-on-prop-change.
  */
 export interface StampedDraft extends BetDraft {
@@ -139,26 +138,26 @@ export function isAllInAt(to: number, bounds: BetBounds): boolean {
   return to >= bounds.max;
 }
 
-/** The primary button's face and spoken name, which say "all in" together or not at all. */
+/**
+ * The primary button's face and spoken name, which say "all in" together or not at all. The second line
+ * appears only when it adds something: all in, or a raise whose cost differs from its total.
+ */
 export function sizedButtonText(
   kind: SizedAction['kind'],
   to: number,
   bounds: BetBounds,
   committedThisStreet: number,
 ): { readonly label: string; readonly cost: string; readonly spoken: string } {
-  const word = kind === 'bet' ? 'Bet to' : 'Raise to';
-  const cost = formatUnits(to - committedThisStreet);
-  return isAllInAt(to, bounds)
-    ? {
-        label: `${word} ${formatChips(to)}, all in`,
-        cost,
-        spoken: `${word.toLowerCase()} ${formatUnits(to)}, which is all in: ${cost} out of your stack`,
-      }
-    : {
-        label: `${word} ${formatChips(to)}`,
-        cost,
-        spoken: `${word.toLowerCase()} ${formatUnits(to)}, ${cost} out of your stack`,
-      };
+  const word = kind === 'bet' ? 'Bet' : 'Raise to';
+  const label = `${word} ${formatChips(to)}`;
+  const spokenHead = `${word.toLowerCase()} ${formatUnits(to)}`;
+  const more = to - committedThisStreet;
+  if (isAllInAt(to, bounds)) {
+    const spoken = more === to ? `${spokenHead}, all in` : `${spokenHead}, all in, ${formatChips(more)} more`;
+    return { label, cost: 'All in', spoken };
+  }
+  if (more === to) return { label, cost: '', spoken: spokenHead };
+  return { label, cost: `${formatChips(more)} more`, spoken: `${spokenHead}, ${formatChips(more)} more` };
 }
 
 /** An aggressive action missing a bound is dropped, because an invented maximum is an unbounded sizer. */
@@ -168,7 +167,7 @@ export function resolveSizedAction(legalActions: readonly LegalAction[]): SizedA
     const { minTo, maxTo } = action;
     if (minTo === undefined || maxTo === undefined) continue;
     if (!Number.isFinite(minTo) || !Number.isFinite(maxTo)) continue;
-    return { kind: action.type, bounds: { min: minTo, max: maxTo }, note: action.note ?? null };
+    return { kind: action.type, bounds: { min: minTo, max: maxTo } };
   }
   return null;
 }

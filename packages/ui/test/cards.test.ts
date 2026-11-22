@@ -57,7 +57,6 @@ describe('describeCard', () => {
         assert.equal(described.face, RANK_FACES[rankIndex]);
         assert.equal(described.short, `${RANK_SHORT[rankIndex]}${SUIT_LETTERS[suitIndex]}`);
         assert.equal(described.suitKey, SUIT_KEYS[suitIndex]);
-        assert.equal(described.suitLetter, SUIT_LETTERS[suitIndex]);
         assert.equal(described.suitSymbol, SUIT_SYMBOLS[suitIndex]);
         assert.equal(described.accessibleName, `${RANK_WORDS[rankIndex]} of ${SUIT_WORDS[suitIndex]}`);
       }
@@ -86,16 +85,13 @@ describe('describeCard', () => {
     assert.equal(shorts.size, 52);
   });
 
-  it('pairs every suit with a letter, so colour is never the only cue', () => {
-    const letters = new Set<string>();
+  it('gives every suit its own symbol, so colour is never the only cue', () => {
     const symbols = new Set<string>();
     for (let suitIndex = 0; suitIndex < 4; suitIndex++) {
       const described = describeCard(suitIndex);
       assert.ok(described !== null);
-      letters.add(described.suitLetter);
       symbols.add(described.suitSymbol);
     }
-    assert.equal(letters.size, 4, 'four distinct suit letters');
     assert.equal(symbols.size, 4, 'four distinct suit symbols');
   });
 

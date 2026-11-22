@@ -130,7 +130,7 @@ function DecisionMaths({
           label="Break-even equity"
           note={
             priced
-              ? 'What a call has to win to pay for itself, from the price alone.'
+              ? 'The share of the pot a call has to win to pay for itself, from the price alone.'
               : 'Nothing to call, so there is no break-even point on this street.'
           }
           value={report.potOdds.breakEvenEquity}

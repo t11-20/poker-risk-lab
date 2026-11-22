@@ -230,6 +230,8 @@
  * veil and attempted a raised step with an accent edge, two cues that survive greyscale.
  */
 .prl-lab-card__state {
+  /* `none`, because `base.css` caps every `<p>` at the measure and the strip stopped short of the edge. */
+  max-width: none;
   margin: var(--prl-space-4) calc(-1 * var(--prl-space-8)) 0;
   align-self: end;
   padding: var(--prl-space-5) var(--prl-space-8);

@@ -34,8 +34,8 @@ is not in here, it does not belong in a component — see §11.
 **The deck is the instrument.** (4.0; it was "a high-performance decision laboratory that
 happens to have a poker table in it".)
 
-Printed, precise, confident. The interface is set on card stock, in the four inks of a
-four-colour deck, and its headlines read like a card's corner index or a printed odds board.
+Printed, precise, confident. The interface is set on card stock, and its headlines read like a
+card's corner index or a printed odds board.
 Numbers are still the heroes: the boldest type on a screen is a figure or a headline, and the
 boldest object is a card. Spend boldness in one place per screen and keep the rest quiet.
 
@@ -252,19 +252,19 @@ legibility.
 The suit inks are the same in both themes; the face is `#f7f8fb` (dim `#e4e7ef`) in dark and
 `#ffffff` (dim `#e6e8ee`) in light. The dim face is `.prl-card--dimmed`.
 
-| Suit | Hex | Dark face / dim | Light face / dim |
-| --- | --- | --- | --- |
-| spade | `#161b33` | 15.96:1 / 13.70:1 | 16.95:1 / 13.84:1 |
-| club | `#127152` | 5.63:1 / 4.84:1 | 5.98:1 / 4.88:1 |
-| heart | `#c02637` | 5.53:1 / **4.75:1** | 5.88:1 / 4.80:1 |
-| diamond | `#2b44d4` | 6.87:1 / 5.89:1 | 7.29:1 / 5.95:1 |
+| Ink | Suits | Hex | Dark face / dim | Light face / dim |
+| --- | --- | --- | --- | --- |
+| `--prl-suit-black` | spades, clubs | `#161b33` | 15.96:1 / 13.70:1 | 16.95:1 / 13.84:1 |
+| `--prl-suit-red` | hearts, diamonds | `#c02637` | 5.53:1 / **4.75:1** | 5.88:1 / 4.80:1 |
 
-A heart on a dim face in dark (4.75:1) is the least headroom of any text pairing the gate asserts,
+Red on a dim face in dark (4.75:1) is the least headroom of any text pairing the gate asserts,
 so the dim face is the token not to darken.
 
-**Four-colour by default, and never colour alone.** Each suit carries its glyph *and* its
-`aria-label` ("ace of hearts"). A red/black-only deck plus colour-coded meaning is exactly
-the pattern that fails for colour-vision deficiency.
+**Two inks, as on a real deck, and never colour alone.** Each card carries its rank, a large suit
+symbol and its `aria-label` ("ace of hearts"). The deck was four-colour with a suit letter under
+the rank until November 2026, when the owner asked for the familiar red and black without the
+letter. Shape is now the only visual cue between a club and a spade, or a heart and a diamond, so
+the symbol is drawn at twice the card's base size and must not shrink.
 
 ### 2.6 The table surface
 

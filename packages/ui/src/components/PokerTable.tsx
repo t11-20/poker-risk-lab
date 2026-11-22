@@ -134,6 +134,14 @@ function potsShown(view: PlayerView): { readonly total: number; readonly pots: r
   return { total: view.potTotal - back, pots };
 }
 
+/** By position, the name the plates use. Found by chair: the view lists only dealt-in seats. */
+export function toActText(view: Pick<PlayerView, 'toAct' | 'viewerSeat' | 'seats'>): string {
+  if (view.toAct === null) return '';
+  if (view.toAct === view.viewerSeat) return 'Your turn';
+  const seat = view.seats.find((candidate) => candidate.seat === view.toAct);
+  return seat?.position == null ? `Seat ${String(view.toAct + 1)} to act` : `${seat.position} to act`;
+}
+
 export function PokerTable(props: PokerTableProps): ReactElement {
   const { view, title, seatNames, highlightedCards, highlightLabel } = props;
   const { turn = null, className, showLastActions = false } = props;
@@ -163,11 +171,9 @@ export function PokerTable(props: PokerTableProps): ReactElement {
         </h2>
         <ul className="prl-table__meta">
           <li className="prl-badge">
-            {`blinds ${formatChips(view.config.smallBlind)} / ${formatChips(view.config.bigBlind)}`}
+            {`Blinds ${formatChips(view.config.smallBlind)}/${formatChips(view.config.bigBlind)}`}
           </li>
-          <li className="prl-badge">
-            {view.toAct === null ? 'no one to act' : `seat ${view.toAct + 1} to act`}
-          </li>
+          {view.toAct === null ? null : <li className="prl-badge">{toActText(view)}</li>}
           {view.amountToCall > 0 ? (
             <li className="prl-badge prl-badge--caution">{`${formatUnits(view.amountToCall)} to call`}</li>
           ) : null}

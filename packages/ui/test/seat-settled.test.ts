@@ -18,6 +18,7 @@ interface SeatProps {
   readonly name: string;
   readonly ringIndex: number;
   readonly ringCount: number;
+  readonly lastAction?: string | null;
   readonly as?: 'li' | 'div';
 }
 
@@ -38,11 +39,17 @@ function seatWith(status: SeatStatus): SeatView {
   };
 }
 
-async function render(status: SeatStatus, street: Street): Promise<string> {
+async function render(
+  status: SeatStatus,
+  street: Street,
+  committedThisStreet = 0,
+  lastAction: string | null = null,
+): Promise<string> {
   const Seat = await loadComponent<SeatProps>('components/Seat', 'Seat');
   return renderToStaticMarkup(
     createElement(Seat, {
-      seat: seatWith(status),
+      seat: { ...seatWith(status), committedThisStreet },
+      lastAction,
       street,
       name: 'You',
       ringIndex: 0,
@@ -58,22 +65,27 @@ function statusLine(markup: string): string {
   return (found[1] ?? '').trim();
 }
 
+/** A live seat with no action yet keeps a blank, hidden status line, so its plate does not shrink. */
+function hasBlankStatusLine(markup: string): boolean {
+  return /<p class="prl-seat__status" aria-hidden="true">\u00a0<\/p>/u.test(markup);
+}
+
 function hasAllInChip(markup: string): boolean {
   return /class="[^"]*prl-chip[^"]*"[^>]*>all in</u.test(markup);
 }
 
 describe('a seat in a hand that is still being played', () => {
-  it('says it is in the hand, and badges an outstanding all-in', async () => {
+  it('says nothing of a seat that is simply in, and badges an outstanding all-in', async () => {
     for (const street of ['preflop', 'flop', 'turn', 'river'] as const) {
-      assert.equal(statusLine(await render('active', street)), 'in the hand', street);
+      assert.equal(hasBlankStatusLine(await render('active', street)), true, street);
       assert.equal(statusLine(await render('allIn', street)), 'all in', street);
       assert.equal(hasAllInChip(await render('allIn', street)), true, `${street}: no all-in badge`);
     }
   });
 
-  it('keeps saying so at showdown, because the pot has not been awarded yet', async () => {
-    // Deliberately unchanged. The cards are being compared, so a seat that has not folded is still in.
-    assert.equal(statusLine(await render('active', 'showdown')), 'in the hand');
+  it('says nothing at showdown either, because the pot has not been awarded yet', async () => {
+    // The cards are being compared, so a seat that has not folded is still in, and that needs no words.
+    assert.equal(hasBlankStatusLine(await render('active', 'showdown')), true);
     assert.equal(hasAllInChip(await render('allIn', 'showdown')), true);
   });
 });
@@ -81,12 +93,7 @@ describe('a seat in a hand that is still being played', () => {
 describe('a seat in a hand that is over', () => {
   it('does not claim anybody is still in the hand', async () => {
     const markup = await render('active', 'complete');
-    assert.equal(statusLine(markup), 'still in at the end');
-    assert.doesNotMatch(
-      markup,
-      />in the hand</u,
-      'the settled frame still says a seat is in a hand that has been settled',
-    );
+    assert.equal(statusLine(markup), 'stayed in');
   });
 
   it('puts a finished all-in in the past tense and takes the badge off', async () => {
@@ -113,7 +120,61 @@ describe('a seat in a hand that is over', () => {
     assert.equal(hasAllInChip(live), true);
     assert.notEqual(statusLine(live), statusLine(await render('allIn', 'complete')));
 
-    const stillIn = await render('active', 'river');
-    assert.match(stillIn, />in the hand</u, 'the "in the hand" detector never matches anything');
+    assert.equal(hasBlankStatusLine(await render('folded', 'river')), false, 'the detector never fires');
+  });
+});
+
+describe('what a seat has in front of it', () => {
+  it('names a blind on the status line when no action has named an amount yet', async () => {
+    assert.equal(statusLine(await render('active', 'preflop', 10)), '10 in');
+  });
+
+  it('keeps the chips of a folded or all-in seat, which no action names (REGRESSION)', async () => {
+    assert.equal(statusLine(await render('folded', 'preflop', 5)), 'folded, 5 in');
+    assert.equal(statusLine(await render('allIn', 'turn', 900)), 'all in, 900 in');
+  });
+
+  it('keeps the plate to one line for it: no separate bet row', async () => {
+    const markup = await render('active', 'preflop', 10);
+    assert.equal([...markup.matchAll(/<dt\b/gu)].length, 1, 'only the stack pair');
+  });
+});
+
+describe('a seat with no cards', () => {
+  it('speaks "no cards" in its empty slot without drawing it (REGRESSION)', async () => {
+    assert.match(
+      await render('folded', 'river'),
+      /<span class="prl-card-row__empty"><span class="prl-visually-hidden">no cards<\/span><\/span>/u,
+      'an empty slot with no text is a card element a reader meets as nothing',
+    );
+  });
+});
+
+describe('the chips beside an action', () => {
+  const line = async (committed: number, action: string, status: SeatStatus = 'active') =>
+    statusLine(await render(status, 'flop', committed, action));
+
+  it('are not repeated when the action already names them', async () => {
+    assert.equal(await line(35, 'called 35'), 'called 35');
+    assert.equal(await line(1_000, 'raised to 1,000, all in', 'allIn'), 'raised to 1,000, all in');
+  });
+
+  it('are added when the action names none, or a different figure (REGRESSION)', async () => {
+    assert.equal(await line(10, 'checked'), 'checked, 10 in');
+    assert.equal(await line(100, 'raised to 1,000'), 'raised to 1,000, 100 in');
+    assert.equal(
+      await line(10, 'bet 10,500'),
+      'bet 10,500, 10 in',
+      'a thousands comma does not end a figure',
+    );
+    assert.equal(await line(500, 'bet 10,500'), 'bet 10,500, 500 in', 'a figure starts after a space');
+  });
+
+  it('read a figure followed by more words as named', async () => {
+    assert.equal(await line(35, 'called 35 by the server'), 'called 35 by the server');
+  });
+
+  it("are left off a settled seat, whose chips are already in the winners' stacks", async () => {
+    assert.equal(statusLine(await render('allIn', 'complete', 900)), 'went all in');
   });
 });

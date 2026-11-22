@@ -183,7 +183,7 @@ describe('a card the server hid stays hidden', () => {
     assert.doesNotMatch(
       branch,
       /described/u,
-      'the face-down branch must not touch the decoded card at all: rank, pip, suit letter and ' +
+      'the face-down branch must not touch the decoded card at all: rank, pip and ' +
         'data-suit are all values the server deliberately did not send',
     );
   });

@@ -200,11 +200,16 @@ describe('isBareName', () => {
 describe('announcesActionAndCost', () => {
   it('accepts the sentences ActionBar actually ships', () => {
     for (const name of [
-      'fold, costs 0 units, gives up the hand and any claim on the pot',
-      'check, costs 0 units, stays in the hand and passes the decision on',
+      'fold, costs 0 units and gives up the hand',
+      'fold, costs 0 units and gives up the hand, though checking is free',
+      'check, costs 0 units',
       'call 35 units',
-      'raise to 70 units, 70 units out of your stack',
-      'bet to 120 units, which is all in: 120 units out of your stack',
+      'call 62 units, all in',
+      'raise to 70 units',
+      'raise to 300 units, 250 more',
+      'raise to 924 units, all in, 900 more',
+      'bet 120 units',
+      'bet 924 units, all in',
     ]) {
       assert.equal(announcesActionAndCost(name), true, name);
     }
@@ -216,6 +221,7 @@ describe('announcesActionAndCost', () => {
     assert.equal(announcesActionAndCost('Fold'), false, 'no cost at all');
     assert.equal(announcesActionAndCost(''), false);
     assert.equal(announcesActionAndCost('submit 35 units'), false, 'not one of the legal actions');
+    assert.equal(announcesActionAndCost('bet'), false, 'a bet with no amount');
   });
 });
 
@@ -408,9 +414,9 @@ describe('NEGATIVE CONTROL — 3.14, an action button named from its own content
   const check = checkFor('J3.14');
   const healthy = {
     actionButtons: [
-      { ariaLabel: 'fold, costs 0 units, gives up the hand and any claim on the pot', text: 'Fold0 units' },
-      { ariaLabel: 'call 35 units', text: 'Call35 units' },
-      { ariaLabel: 'raise to 70 units, 70 units out of your stack', text: 'Raise to 7070 units' },
+      { ariaLabel: 'fold, costs 0 units and gives up the hand', text: 'Fold' },
+      { ariaLabel: 'call 35 units', text: 'Call 35' },
+      { ariaLabel: 'raise to 70 units', text: 'Raise to 70' },
     ],
   };
 
@@ -419,13 +425,12 @@ describe('NEGATIVE CONTROL — 3.14, an action button named from its own content
   });
 
   it('fires when the aria-label is removed, even though the computed name still reads well', () => {
-    // Without the label Chrome names the button "Fold 0 units" from its two spans, which a name-only
-    // check passes.
+    // Without the label Chrome names the button "Call 35" from its text, which a name-only check passes.
     const stripped = healthy.actionButtons.map((button) => ({ ...button, ariaLabel: '' }));
     const verdict = check.decide({ actionButtons: stripped });
     assert.equal(verdict.ok, false);
     assert.match(verdict.detail, /carry no aria-label/u);
-    assert.match(verdict.detail, /"Fold0 units"/u);
+    assert.match(verdict.detail, /"Call 35"/u);
   });
 
   it('fires on a label that names an action with no cost', () => {
