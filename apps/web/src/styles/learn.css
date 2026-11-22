@@ -1057,8 +1057,8 @@
 }
 
 /**
- * Each verdict carries its chip's mark. A match takes the accent edge. A miss keeps the neutral
- * `--prl-line-strong` edge, because nothing is deducted. `design:contrast` gates both edges.
+ * Each verdict carries its chip's mark, which is what tells a match from a miss. A match also takes
+ * the strong edge. A miss keeps the panel's edge, because nothing is deducted.
  */
 .prl-learn-quiz__verdict[data-matched="true"] {
   border-color: var(--prl-line-strong);

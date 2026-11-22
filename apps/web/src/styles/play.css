@@ -560,7 +560,7 @@
 
 /* 7. 600px, THE SHEET BECOMES A PANEL */
 
-/* The footer is outside `.prl-play`, and the closed sheet covered 16px of its Appearance toggle at 390. */
+/* The footer is outside `.prl-play`, and the closed sheet covered its last 16px at 390. */
 @media (width < 600px) {
   :root:has(.prl-play) .prl-footer {
     margin-block-end: var(--prl-space-12);
@@ -736,10 +736,8 @@
 
 /* 12. THE MATERIAL OF THE TABLE
    Surfaces, edges and heights for the shared `@prl/ui` components, scoped as `.prl-play <selector>`
-   so they apply to this screen only and win by one class without `!important`. The performance rule
-   holds. `backdrop-filter` is on one bounded, promoted element on desktop (the ActionBar), never on
-   the table field. Every shadow is on a static element, and none changes per frame. No gold, metallic
-   gradient or glow. */
+   so they apply to this screen only and win by one class without `!important`. Flat like the rest of
+   the app: no blur, shadow, gold, metallic gradient or glow. */
 
 /* 12.1 to 12.4  THE FELT, THE POT, THE SEATS AND THE CARDS are the shared components' own
    (components.css, PokerTable and Seat), flat and the same on every screen. */

@@ -428,7 +428,7 @@
   color: var(--prl-text);
 }
 
-/** `--prl-text-on-accent` flips with the theme, which keeps the pairing at 6.74:1 dark and 7.29:1 light. */
+/** White on the accent fill in both themes: 5.20:1 dark and 7.89:1 light. */
 .prl-theme__input:checked + .prl-theme__word {
   background-color: var(--prl-accent-fill);
   color: var(--prl-text-on-accent);

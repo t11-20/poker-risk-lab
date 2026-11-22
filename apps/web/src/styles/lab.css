@@ -240,7 +240,7 @@
     color var(--prl-dur-fast) var(--prl-ease-material);
 }
 
-/* The edge is transparent at rest, not absent, so nothing shifts when a scenario is attempted. */
+/* Weight as well as fill, so an attempted scenario is not told by colour alone. */
 .prl-lab-card__state[data-attempted="true"] {
   background-color: var(--prl-surface-active);
   color: var(--prl-text);
@@ -426,7 +426,7 @@
     border-width: var(--prl-focus-width);
   }
 
-  /* `Highlight` is the one colour this mode keeps distinct from `CanvasText`. The underline survives that. */
+  /* The fill is discarded here, so an underline carries the attempted state. */
   .prl-lab-card__state[data-attempted="true"] {
     text-decoration: underline;
   }
