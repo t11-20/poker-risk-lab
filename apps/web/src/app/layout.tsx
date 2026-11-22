@@ -12,11 +12,13 @@ import '@fontsource-variable/archivo/wdth.css';
 import '@prl/ui/styles.css';
 import './globals.css';
 import '@/styles/nav.css';
+import '@/styles/tour.css';
 
 import type { Metadata, Viewport } from 'next';
 import { headers } from 'next/headers';
 import type { ReactElement, ReactNode } from 'react';
 import { BootSequence } from '@/components/BootSequence.tsx';
+import { GuidedTour } from '@/components/GuidedTour.tsx';
 import { RouteAnnouncer } from '@/components/RouteAnnouncer.tsx';
 import { SiteFooter } from '@/components/SiteFooter.tsx';
 import { SiteHeader } from '@/components/SiteHeader.tsx';
@@ -61,6 +63,8 @@ export default async function RootLayout({
         <RouteAnnouncer />
         <div className="prl-app">
           <SiteHeader fallbackUnits={STARTING_UNITS} />
+          {/* Between the header and `main`, so it is not page content and the skip link passes it. */}
+          <GuidedTour />
           {/*
             `tabIndex={-1}` makes the skip link move focus, not only the navigation starting point.
             `-1`, so it adds no tab stop.

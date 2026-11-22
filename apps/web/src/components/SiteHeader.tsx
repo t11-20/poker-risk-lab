@@ -28,6 +28,7 @@ import { API_PATHS, apiGet, fetchSession, safeFetch, subscribeToAcceptedMutation
 import { isCurrentDestination, NAV_DESTINATIONS, RECORD_DESTINATION } from '@/lib/nav.ts';
 import { MobileNav } from './MobileNav.tsx';
 import { NavigationPending } from './NavigationPending.tsx';
+import { TourButton } from './TourButton.tsx';
 
 /** The destination promoted out of the link list and into the accent pill. */
 const CTA_HREF = '/play';
@@ -212,6 +213,7 @@ export function SiteHeader(props: SiteHeaderProps): ReactElement {
           </nav>
 
           <div className="prl-shell__header-tools">
+            <TourButton />
             {units.state === 'unknown' ? (
               <UnitsUnknown />
             ) : (

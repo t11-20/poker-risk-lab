@@ -28,6 +28,7 @@ import {
 import { SuitMark } from '@/components/SuitMark.tsx';
 import { isCurrentDestination, NAV_DESTINATIONS, NAV_SHEET_QUERY, RECORD_DESTINATION } from '@/lib/nav.ts';
 import { ThemeToggle } from './ThemeToggle.tsx';
+import { TourButton } from './TourButton.tsx';
 
 /** Narrow on purpose. `[tabindex]:not([tabindex='-1'])` catches a focusable control a later edit adds. */
 const FOCUSABLE_SELECTOR = [
@@ -272,6 +273,10 @@ export function MobileNav(props: MobileNavProps): ReactElement {
             </li>
           </ul>
         </nav>
+
+        <div className="prl-sheet__help">
+          <TourButton beforeOpen={close} />
+        </div>
 
         {/* Labelled with the footer's wording for the same control. */}
         <div className="prl-sheet__foot">

@@ -1,0 +1,187 @@
+/* The guided tour (components/GuidedTour.tsx) and its "How to use" button (components/TourButton.tsx). */
+
+/** The menu trigger's object, so the bar's controls read as one set. */
+.prl-tour-button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--prl-space-3);
+  min-height: var(--prl-target-min);
+  padding-inline: var(--prl-space-5) var(--prl-space-6);
+  border: 1px solid var(--prl-line-strong);
+  border-radius: var(--prl-radius-pill);
+  background-color: var(--prl-shell-nav-fill);
+  box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-2);
+  color: var(--prl-text);
+  font-size: var(--prl-type-body-sm);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--prl-dur-fast) var(--prl-ease-material),
+    border-color var(--prl-dur-fast) var(--prl-ease-material);
+}
+
+.prl-tour-button:hover {
+  border-color: var(--prl-accent-edge);
+  background-color: var(--prl-surface-hover);
+}
+
+.prl-tour-button__mark {
+  display: inline-grid;
+  place-items: center;
+  width: var(--prl-space-7);
+  height: var(--prl-space-7);
+  border: 1px solid currentcolor;
+  border-radius: var(--prl-radius-pill);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-semibold);
+  line-height: 1;
+}
+
+.prl-tour-button__word {
+  color: var(--prl-text-secondary);
+}
+
+/** Below 860px the bar has no width to spare (see nav.css), so the button lives in the menu sheet. */
+@media (width < 860px) {
+  .prl-shell__header-tools > .prl-tour-button {
+    display: none;
+  }
+}
+
+/** Between 860 and 1280 the destinations need the width, so the bar keeps the mark and the name. */
+@media (860px <= width < 1280px) {
+  .prl-shell__header-tools > .prl-tour-button {
+    justify-content: center;
+    inline-size: var(--prl-target-min);
+    padding-inline: 0;
+  }
+
+  .prl-shell__header-tools > .prl-tour-button .prl-tour-button__word {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    border: 0;
+    white-space: nowrap;
+  }
+}
+
+.prl-sheet__help {
+  padding-block: var(--prl-space-6);
+}
+
+/* The panel. In flow under the header: it pushes the page down and covers none of it. */
+
+.prl-tour {
+  display: grid;
+  gap: var(--prl-space-4);
+  margin-block-start: var(--prl-space-6);
+  padding: var(--prl-space-5) var(--prl-space-6);
+  border: 1px solid var(--prl-line-strong);
+  border-radius: var(--prl-radius-3);
+  background-color: var(--prl-surface-panel);
+  box-shadow: var(--prl-elevation-1);
+}
+
+.prl-tour__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--prl-space-4);
+}
+
+.prl-tour__title {
+  margin: 0;
+  font-size: var(--prl-type-body);
+  font-weight: var(--prl-weight-semibold);
+}
+
+/** One column on a phone, five across once each can hold its sentence on about three lines. */
+.prl-tour__steps {
+  display: grid;
+  gap: var(--prl-space-4) var(--prl-space-6);
+  grid-template-columns: repeat(
+      auto-fit,
+      minmax(min(100%, calc(var(--prl-space-15) + var(--prl-space-12))), 1fr)
+    );
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prl-tour__step {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-content: start;
+  gap: var(--prl-space-2) var(--prl-space-4);
+  min-width: 0;
+}
+
+.prl-tour__index {
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label);
+  font-variant-numeric: var(--prl-numeric);
+  line-height: var(--prl-leading-body);
+}
+
+.prl-tour__step-title {
+  font-size: var(--prl-type-body-sm);
+  font-weight: var(--prl-weight-semibold);
+  line-height: var(--prl-leading-body);
+}
+
+.prl-tour__step-text,
+.prl-tour__missing {
+  grid-column: 2;
+}
+
+.prl-tour__step-text {
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+  line-height: var(--prl-leading-snug);
+}
+
+/** A text button in the sentence's line: underlined, its line box at the 24px target floor. */
+.prl-tour__show {
+  display: inline-block;
+  min-height: var(--prl-space-8);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--prl-accent-text);
+  font-size: var(--prl-type-body-sm);
+  font-weight: var(--prl-weight-medium);
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+  cursor: pointer;
+}
+
+/** The shown step's title is underlined, a shape as well as a colour, and its status is spoken. */
+.prl-tour__step[data-showing="true"] .prl-tour__step-title {
+  text-decoration: underline;
+  text-decoration-color: var(--prl-accent-edge);
+  text-decoration-thickness: var(--prl-space-1);
+  text-underline-offset: 0.25em;
+}
+
+.prl-tour__missing {
+  color: var(--prl-text);
+  font-size: var(--prl-type-body-sm);
+  line-height: var(--prl-leading-snug);
+}
+
+/* The outline on the part being shown. One rule per step, keyed on an attribute of the root. */
+
+:root[data-tour-showing="pick-scenario"] [data-tour="pick-scenario"],
+:root[data-tour-showing="hand-board"] [data-tour="hand-board"],
+:root[data-tour-showing="run"] [data-tour="run"],
+:root[data-tour-showing="result"] [data-tour="result"],
+:root[data-tour-showing="review"] [data-tour="review"] {
+  outline: 2px solid var(--prl-accent-edge);
+  outline-offset: var(--prl-space-3);
+  border-radius: var(--prl-radius-2);
+}
