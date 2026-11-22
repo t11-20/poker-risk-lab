@@ -22,7 +22,7 @@ import { topPercentOf, undealableSentence } from './spot-validate.ts';
 
 /**
  * `SCENARIO_ANALYSIS_SAMPLES` and `SCENARIO_ANALYSIS_SEED` from `@prl/content`, restated because the
- * content bundle must stay out of the browser. `test/lab-spot-analysis.test.ts` holds them equal.
+ * content bundle must stay out of the browser. `test/lab-spot-editing.test.ts` holds them equal.
  */
 export const SPOT_SAMPLES = 40_000;
 export const SPOT_SEED = 20_260_817;

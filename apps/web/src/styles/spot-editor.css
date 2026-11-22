@@ -83,7 +83,7 @@
   list-style: none;
 }
 
-/** `min-width: 0`, because a fieldset's default minimum is its content's, which pushed a long range off a phone. */
+/** `min-width: 0`, because a fieldset's default minimum is its content's width. */
 .prl-spot-editor__opponent {
   display: grid;
   gap: var(--prl-space-5);

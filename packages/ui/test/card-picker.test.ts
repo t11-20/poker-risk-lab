@@ -1,8 +1,8 @@
 /**
  * The card picker: a used card cannot be picked and says why, a pick fills the next open slot,
  * removing a card frees it, and the arrow keys follow the layout on screen. The model is tested
- * directly and the component through its rendered markup; focus moves need a browser, so
- * `scripts/keyboard-audit.mjs` covers those on `/lab/spots/edit`.
+ * directly and the component through its markup. Moving focus needs a browser, which this harness
+ * has not got, so the component's key handler is a call to `moveInDeck` and nothing more.
  */
 
 import assert from 'node:assert/strict';

@@ -111,7 +111,7 @@ export function moveInDeck(index: number, key: string, flow: DeckFlow): number |
   return null;
 }
 
-/** The deck button's accessible name. A used card says where it is, because greying it says nothing to a screen reader. */
+/** A used card's name says where it is, because greying it says nothing to a screen reader. */
 export function deckCardName(card: CardValue, owner: PickerSlot | undefined): string {
   const name = describeCard(card)?.accessibleName ?? 'unknown card';
   return owner === undefined ? name : `${name}, in use as ${owner.label}`;

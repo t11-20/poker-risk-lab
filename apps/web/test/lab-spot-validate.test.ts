@@ -255,7 +255,7 @@ describe('the contract with the maths', () => {
     let checkedCount = 0;
     for (const board of boards) {
       for (const hand of hands) {
-        // The last three are refused. Without its rule, a bet above a stack or a hero over the bet throws here.
+        // The last three are refused. Without their rules, the first and last throw in the maths.
         for (const [heroBet, bet, stack, heroStack] of [
           ['0', '0', '900', '1000'],
           ['0', '50', '900', '1000'],
