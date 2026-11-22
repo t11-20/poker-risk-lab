@@ -241,7 +241,7 @@
 
 /**
  * The column is the container the decision band queries, because it is not the viewport. It is about
- * 29rem at a 900px viewport and 50rem at 1280px. 46rem matches the table's oval threshold.
+ * 29rem at a 900px viewport and 50rem at 1280px. The table turns its oval on its side at 42rem.
  */
 .prl-play__main {
   container-type: inline-size;
@@ -497,8 +497,8 @@
   background-color: var(--prl-surface-panel);
 }
 
-/* 5. LOADING. Skeletons at the real content's size. The field skeleton is `5 x --prl-space-14`, the
-   oval layout's `min-height` in `components.css`, so change both together. */
+/* 5. LOADING. Skeletons at the real content's size. The field skeleton is `5 x --prl-space-14`, 520px,
+   inside the felt table's measured 378px (1440, decision) to 613px (360, complete). */
 
 .prl-play__skeletons {
   display: grid;
@@ -619,8 +619,8 @@
 
 /* 8. 900px, THE RAIL
    The Coach is a 22rem sticky rail whose first block is the equity figure. Its `<summary>` elements
-   make it keyboard-scrollable without a `tabindex`. The oval waits for 46rem of column (plates stop
-   overlapping at about 43rem), not this viewport query. */
+   make it keyboard-scrollable without a `tabindex`. The table's own container query, not this viewport
+   query, decides its shape. */
 
 @media (min-width: 900px) {
   /**

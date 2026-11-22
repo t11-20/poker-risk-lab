@@ -2351,7 +2351,7 @@
   gap: var(--prl-space-2) var(--prl-space-5);
 }
 
-/** A row of its own, so the cards keep their line at 360px. The ring is the oval plate's 2rem, not 2.5rem. */
+/** A row of its own, so the cards keep their line at 360px. The ring is the seat's 2rem, not 2.5rem. */
 .prl-hand-glance__now {
   flex: 1 1 100%;
   display: flex;
