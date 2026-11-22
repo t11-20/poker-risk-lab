@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
  * Tests for the pure half of `scripts/keyboard-audit.mjs`, the poker-action matcher, the age gate
- * predicate, and the gate wiring in `package.json`. An action button's `textContent` is
- * `Fold0 units`, and `/^fold\b/i` misses it, so the old matcher checked one button in three.
+ * predicate, which card elements need a name, and the gate wiring in `package.json`. An action button's
+ * `textContent` is `Fold0 units`, and `/^fold\b/i` misses it, so the old matcher checked one button in three.
  * The names below are what Chrome reported for `/play?state=decision`. Reverting the matcher fails
  * 5 of 21 tests.
  */
@@ -19,6 +19,7 @@ import {
 import {
   actionControlName,
   ageDeclarationCookies,
+  cardElementVerdict,
   isPokerActionName,
   landedOnAgeGate,
   ROUTES,
@@ -138,6 +139,76 @@ describe('the matcher survives being stringified into the page', () => {
     );
     assert.equal(injected(DECISION_ROW[0]), true);
     assert.equal(injected(button(null, 'Deal me in')), false);
+  });
+});
+
+/** Enough of an element for `cardElementVerdict`, which only walks attributes, children and parents. */
+function node(attributes, children = [], text = '') {
+  const element = {
+    getAttribute: (name) => attributes[name] ?? null,
+    children,
+    parentElement: null,
+    get textContent() {
+      return text + children.map((child) => child.textContent).join('');
+    },
+  };
+  for (const child of children) child.parentElement = element;
+  return element;
+}
+
+/** As `<PlayingCard>` and `<CardRow>` render them now: an image card, a strip, an open slot. */
+function boardRow() {
+  const image = node({ class: 'prl-card__image', alt: '', 'aria-hidden': 'true' });
+  const card = node({ class: 'prl-card prl-card--md', role: 'img', 'aria-label': 'king of hearts' }, [image]);
+  const slot = node({ class: 'prl-card-row__slot', 'aria-hidden': 'true' });
+  const strip = node({ class: 'prl-card-row__cards' }, [card, slot]);
+  return { image, card, slot, strip };
+}
+
+describe('which card elements a reader has to be able to name', () => {
+  it('keeps the name on a card drawn by an image', () => {
+    assert.equal(cardElementVerdict(boardRow().card), 'named');
+  });
+
+  it('skips the decorative image inside a named card, and an open slot, which are aria-hidden', () => {
+    const { image, slot } = boardRow();
+    assert.equal(cardElementVerdict(image), 'hidden');
+    assert.equal(cardElementVerdict(slot), 'hidden');
+  });
+
+  it('skips anything inside an aria-hidden subtree, not only the element marked', () => {
+    const inner = node({ class: 'prl-card__face' });
+    node({ 'aria-hidden': 'true' }, [node({ class: 'prl-card' }, [inner])]);
+    assert.equal(cardElementVerdict(inner), 'hidden');
+  });
+
+  it('counts a strip of named cards as carrying their names', () => {
+    assert.equal(cardElementVerdict(boardRow().strip), 'named');
+  });
+
+  it('still reports a visible card with no name, and a strip whose only card has none', () => {
+    const bare = node({ class: 'prl-card', role: 'img' }, [node({ class: 'prl-card__image', alt: '' })]);
+    assert.equal(cardElementVerdict(bare), 'unnamed');
+    assert.equal(cardElementVerdict(node({ class: 'prl-card-row__cards' }, [bare])), 'unnamed');
+    const hiddenName = node({ class: 'prl-card-row__cards' }, [
+      node({ 'aria-hidden': 'true' }, [node({ role: 'img', 'aria-label': 'ace of spades' })]),
+    ]);
+    assert.equal(cardElementVerdict(hiddenName), 'unnamed', 'a name hidden from readers is no name');
+  });
+
+  it('accepts a visually hidden name, as the empty board uses', () => {
+    const empty = node({ class: 'prl-card-row__empty' }, [
+      node({ class: 'prl-visually-hidden' }, [], 'no cards yet'),
+    ]);
+    assert.equal(cardElementVerdict(empty), 'named');
+  });
+
+  it('carries no reference to anything outside itself', () => {
+    const injected = new Function(
+      `const verdict = ${String(cardElementVerdict)}; return verdict(arguments[0]);`,
+    );
+    assert.equal(injected(boardRow().image), 'hidden');
+    assert.equal(injected(boardRow().strip), 'named');
   });
 });
 

@@ -32,6 +32,8 @@ export interface CardRowProps {
   readonly emptyText?: string;
   /** Speaks `emptyText` without drawing it, where the empty slot is only there to keep a height. */
   readonly emptyTextHidden?: boolean;
+  /** Draws an empty outline for each card still to come, up to this many places. Never named. */
+  readonly slots?: number;
   readonly tight?: boolean;
   readonly className?: string;
 }
@@ -48,19 +50,25 @@ export function CardRow(props: CardRowProps): ReactElement {
     emptyText = 'no cards yet',
     emptyTextHidden = false,
     tight = false,
+    slots = 0,
     className,
   } = props;
 
   const highlighted = new Set(highlightedCards ?? []);
   // Content-derived keys, so a board that grows keeps the flop's DOM nodes.
   const keyed = withKeys(cards, `card-row-${label}`);
+  // Numbered by place, so a slot keeps its key while the cards before it are dealt.
+  const openPlaces = Array.from(
+    { length: Math.max(0, slots - keyed.length) },
+    (_, at) => keyed.length + at + 1,
+  );
 
   return (
     <figure className={cx('prl-card-row', tight && 'prl-card-row--tight', className)}>
       <figcaption className={cx('prl-card-row__label', 'prl-label', !showLabel && 'prl-visually-hidden')}>
         {label}
       </figcaption>
-      {keyed.length === 0 ? (
+      {keyed.length === 0 && openPlaces.length === 0 ? (
         <span className="prl-card-row__empty">
           {emptyTextHidden ? <span className="prl-visually-hidden">{emptyText}</span> : emptyText}
         </span>
@@ -92,6 +100,10 @@ export function CardRow(props: CardRowProps): ReactElement {
               />
             );
           })}
+          {openPlaces.map((place) => (
+            <span className="prl-card-row__slot" key={`slot-${place}`} aria-hidden="true" />
+          ))}
+          {keyed.length === 0 ? <span className="prl-visually-hidden">{emptyText}</span> : null}
         </span>
       )}
     </figure>

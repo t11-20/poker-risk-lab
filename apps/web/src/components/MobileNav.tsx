@@ -273,7 +273,7 @@ export function MobileNav(props: MobileNavProps): ReactElement {
           </ul>
         </nav>
 
-        {/* Labelled with the footer's wording for the same control. */}
+        {/* Below 860px the only theme control; from 860px it is in the header bar. */}
         <div className="prl-sheet__foot">
           <p className="prl-sheet__title prl-label">Appearance</p>
           <ThemeToggle />

@@ -1,6 +1,6 @@
 /**
  * A small piece of labelled state (`EXACT`, `TO ACT`, `Ah`). Its content is its label, so tone is never
- * the only cue. There is no danger tone, and `adverse` is a rose rather than alarm red (design system §2.3).
+ * the only cue. There is no danger tone, and `adverse` is a muted red rather than alarm red (design system §2.2).
  */
 
 import type { ReactElement, ReactNode } from 'react';

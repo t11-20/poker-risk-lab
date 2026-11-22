@@ -597,7 +597,7 @@ weaker claim than either.
 | G3 | auto | The landmark rotor lists exactly: one **banner** ("Site"), one **main**, one **contentinfo** ("About Poker Risk Lab"), and navigation landmarks that are **differently named** ("Primary", "Sections", and at narrow widths "All sections"). No two landmarks of the same role share a name. | |
 | G4 | auto | The heading rotor shows exactly **one level-1 heading** on the page, and no level is skipped going down the list. | |
 | G5 | auto | Every control the reader lands on announces a name and a role. Nothing is announced as a bare "button", "link" or "image". | |
-| G6 | auto | The theme control announces as a radio group with three options (Auto, Light, Dark), the current one announced as selected. | |
+| G6 | auto | The theme control announces as a radio group with three options (Light, Dark, System), the current one announced as selected. | |
 
 ### Route announcement (the assertion most likely to fail, and the one most likely to be misread)
 

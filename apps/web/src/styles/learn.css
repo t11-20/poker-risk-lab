@@ -1,7 +1,6 @@
 /**
- * The Learn section (`.prl-learn-*`, `.prl-term-*`), imported by `app/learn/layout.tsx`. Shadows go
- * through `--prl-elevation-*`, and every glass fill sits beside its filter (`layout-guarantees.test.ts`).
- * Glass is only for the sticky rail and the quiz pill. Lesson prose sits on an opaque L2 sheet.
+ * The Learn section (`.prl-learn-*`, `.prl-term-*`), imported by `app/learn/layout.tsx`. Flat: no
+ * shadow and no glass (`layout-guarantees.test.ts`). Lesson prose sits on an opaque panel.
  * Breakpoints are literals, because `var()` is invalid in a media query.
  */
 
@@ -170,8 +169,8 @@
 }
 
 /**
- * A lesson card is level 2, so seventeen read as objects. The number keeps its own column at every
- * width. The hover lift is a `translateY`, because transform composites.
+ * A lesson card is a bordered panel, so seventeen read as objects. The number keeps its own column at
+ * every width. Hover is a surface step and a stronger edge, never a lift.
  */
 .prl-learn-entry {
   /* The containing block for the title link's stretched `::after`. */
@@ -180,38 +179,29 @@
   gap: var(--prl-space-4) var(--prl-space-6);
   grid-template-columns: auto minmax(0, 1fr);
   padding: var(--prl-space-7);
-  border: 1px solid var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
+  border: 1px solid var(--prl-line);
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-panel);
-  box-shadow: var(--prl-elevation-1);
   transition:
     background-color var(--prl-dur-fast) var(--prl-ease-material),
     border-color var(--prl-dur-fast) var(--prl-ease-material),
-    box-shadow var(--prl-dur-base) var(--prl-ease-material),
     transform var(--prl-dur-fast) var(--prl-ease-material);
 }
 
 .prl-learn-entry:hover,
 .prl-learn-entry:focus-within {
-  border-color: var(--prl-edge-lit);
+  border-color: var(--prl-line-strong);
   background-color: var(--prl-surface-hover);
-  box-shadow: var(--prl-elevation-2);
-  transform: translateY(calc(-1 * var(--prl-space-1)));
 }
 
-/** The suggested lesson takes an accent edge, more elevation and a chip, never the edge alone. */
+/** The suggested lesson takes an accent edge and a chip, never the edge alone. */
 .prl-learn-entry[data-start="true"] {
   border-color: var(--prl-accent-edge);
-  border-inline-start-width: var(--prl-space-1);
-  box-shadow: var(--prl-elevation-2);
 }
 
 .prl-learn-entry[data-start="true"]:hover,
 .prl-learn-entry[data-start="true"]:focus-within {
   border-color: var(--prl-accent-edge);
-  box-shadow: var(--prl-elevation-3);
 }
 
 .prl-learn-entry__index {
@@ -345,12 +335,9 @@
   align-content: start;
   gap: var(--prl-space-6);
   padding: var(--prl-space-8);
-  border: 1px solid var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
+  border: 1px solid var(--prl-line);
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-panel);
-  box-shadow: var(--prl-elevation-1);
 }
 
 .prl-learn-onboarding__head {
@@ -375,7 +362,7 @@
   margin: 0;
 }
 
-/** A real control, so a 44px target. The current step is an accent border and `aria-current="step"`. */
+/** A real control, so a 44px target. The current step is marked by `aria-current="step"`. */
 .prl-learn-onboarding__step-btn {
   display: inline-flex;
   align-items: center;
@@ -392,7 +379,6 @@
   transition:
     background-color var(--prl-dur-fast) var(--prl-ease-material),
     border-color var(--prl-dur-fast) var(--prl-ease-material),
-    box-shadow var(--prl-dur-base) var(--prl-ease-material),
     color var(--prl-dur-fast) var(--prl-ease-material);
 }
 
@@ -402,11 +388,17 @@
   color: var(--prl-accent-text);
 }
 
+/** Told apart by a doubled edge and weight as well as hue; the fill step alone is 1.2:1. */
 .prl-learn-onboarding__step-btn[aria-current="step"] {
+  border-width: 2px;
   border-color: var(--prl-accent-edge);
   background-color: var(--prl-surface-active);
-  box-shadow: var(--prl-elevation-1);
+}
+
+/** On the digits, because `.prl-index` sets its own muted, regular ink. */
+.prl-learn-onboarding__step-btn[aria-current="step"] .prl-index {
   color: var(--prl-text);
+  font-weight: var(--prl-weight-bold);
 }
 
 .prl-learn-onboarding__title {
@@ -468,8 +460,7 @@
 }
 
 /**
- * The reading sheet is level 2 and opaque on purpose, because prose over a varying backdrop is a
- * legibility problem no tint solves. Everything translucent in this feature travels over it.
+ * The reading sheet is an opaque panel, because prose wants one quiet surface.
  */
 .prl-learn-lesson__blocks {
   display: grid;
@@ -477,12 +468,9 @@
   gap: var(--prl-space-7);
   min-width: 0;
   padding: var(--prl-space-10) var(--prl-learn-sheet-x) var(--prl-space-11);
-  border: 1px solid var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
+  border: 1px solid var(--prl-line);
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-panel);
-  box-shadow: var(--prl-elevation-1);
 }
 
 /** More space above a heading than below it, and a hairline marks where the previous section ends. */
@@ -553,20 +541,16 @@
 /* Contents rail */
 
 /**
- * Below 1280px the rail is a level 1 block in the flow. It becomes glass only in the 1280px block,
- * where it is sticky and travels over the sheet.
+ * Below 1280px the rail is a block in the flow. From 1280px it is sticky and travels beside the sheet.
  */
 .prl-learn-contents {
   display: grid;
   align-content: start;
   gap: var(--prl-space-5);
   padding: var(--prl-space-6);
-  border: 1px solid var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
+  border: 1px solid var(--prl-line);
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-raised);
-  box-shadow: var(--prl-elevation-0);
 }
 
 .prl-learn-contents__label {
@@ -617,18 +601,18 @@
 }
 
 .prl-learn-contents__link:hover {
-  background-color: var(--prl-veil-8);
+  background-color: var(--prl-surface-hover);
   color: var(--prl-text);
   text-decoration: underline;
 }
 
 /**
  * An accent bar, an accent index and weight, with `aria-current="true"` in the markup. The
- * forced-colors block restates it. `--prl-veil-8`, because an opaque fill would punch through the glass.
+ * forced-colors block restates it. The bar stays because this is where you are, not decoration.
  */
 .prl-learn-contents__link[aria-current="true"] {
   border-inline-start-color: var(--prl-accent-edge);
-  background-color: var(--prl-veil-8);
+  background-color: var(--prl-surface-hover);
   color: var(--prl-text);
   font-weight: var(--prl-weight-medium);
 }
@@ -662,20 +646,16 @@
 
 /* Scenario link */
 
-/** L2 with an accent leading edge, not an accent fill, because the button inside is the accent action. */
+/** A bordered panel, not an accent fill, because the button inside is the accent action. */
 .prl-learn-scenario {
   display: grid;
   align-content: start;
   justify-items: start;
   gap: var(--prl-space-5);
   padding: var(--prl-space-8);
-  border: 1px solid var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
-  border-inline-start: var(--prl-space-1) solid var(--prl-accent-edge);
+  border: 1px solid var(--prl-line);
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-panel);
-  box-shadow: var(--prl-elevation-1);
 }
 
 .prl-learn-scenario__prompt {
@@ -883,9 +863,8 @@
 }
 
 /**
- * Level 4, the one overlay in this feature, with the more opaque overlay tint because it carries body
- * text. The fill and `--prl-glass-filter-strong` sit together, or the sentence behind reads through.
- * It animates `transform` and `opacity` only, never `backdrop-filter`.
+ * The one overlay in this feature, opaque because it carries body text, with a `--prl-line-strong` edge
+ * because no shadow lifts it. It animates `transform` and `opacity` only.
  */
 .prl-term__panel {
   position: absolute;
@@ -897,15 +876,9 @@
   align-content: start;
   gap: var(--prl-space-5);
   padding: var(--prl-space-7);
-  border: 1px solid var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
-  border-inline-start: var(--prl-space-1) solid var(--prl-accent-edge);
+  border: 1px solid var(--prl-line-strong);
   border-radius: var(--prl-radius-3);
-  background-color: var(--prl-glass-overlay);
-  -webkit-backdrop-filter: var(--prl-glass-filter-strong);
-  backdrop-filter: var(--prl-glass-filter-strong);
-  box-shadow: var(--prl-elevation-3);
+  background-color: var(--prl-surface-panel);
   font-size: var(--prl-type-body);
   line-height: var(--prl-leading-body);
   animation: prl-term-open var(--prl-dur-slow) var(--prl-ease-material) both;
@@ -980,8 +953,7 @@
 }
 
 /**
- * The second glass surface. The page wash and sheet pass under it as the panel scrolls, and it keeps
- * the same material wherever it appears. It is a position in a sequence, not a score.
+ * A pill that keeps the same surface wherever it appears. It is a position in a sequence, not a score.
  */
 .prl-learn-quiz__position {
   isolation: isolate;
@@ -989,14 +961,9 @@
   align-items: center;
   gap: var(--prl-space-2);
   padding: var(--prl-space-2) var(--prl-space-5);
-  border: 1px solid var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
+  border: 1px solid var(--prl-line);
   border-radius: var(--prl-radius-pill);
-  background-color: var(--prl-glass-floating);
-  -webkit-backdrop-filter: var(--prl-glass-filter);
-  backdrop-filter: var(--prl-glass-filter);
-  box-shadow: var(--prl-elevation-2);
+  background-color: var(--prl-surface-raised);
   color: var(--prl-text-secondary);
   font-variant-numeric: var(--prl-numeric);
 }
@@ -1025,8 +992,7 @@
   background-color: var(--prl-surface-inset);
   transition:
     background-color var(--prl-dur-fast) var(--prl-ease-material),
-    border-color var(--prl-dur-fast) var(--prl-ease-material),
-    box-shadow var(--prl-dur-base) var(--prl-ease-material);
+    border-color var(--prl-dur-fast) var(--prl-ease-material);
 }
 
 /** `start`, because centred the radio drifted off the first line of a multi-line label. */
@@ -1046,11 +1012,10 @@
   background-color: var(--prl-surface-hover);
 }
 
-/** Accent edge, a surface step, elevation and the checked dot, none of them hue alone. */
+/** Accent edge, a surface step and the checked dot, none of them hue alone. */
 .prl-learn-quiz__option:has(.prl-choice__control:checked) {
   border-color: var(--prl-accent-edge);
   background-color: var(--prl-surface-active);
-  box-shadow: var(--prl-elevation-1);
 }
 
 /**
@@ -1084,10 +1049,7 @@
 
 .prl-learn-quiz__verdict:not(:empty) {
   padding: var(--prl-space-6) var(--prl-space-7);
-  border: 1px solid var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
-  border-inline-start: var(--prl-space-1) solid var(--prl-line-strong);
+  border: 1px solid var(--prl-line);
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-raised);
   font-size: var(--prl-type-body-lg);
@@ -1099,11 +1061,11 @@
 }
 
 /**
- * Each verdict carries its chip's mark. A match takes the accent edge. A miss keeps the neutral
- * `--prl-line-strong` edge, because nothing is deducted. `design:contrast` gates both edges.
+ * Each verdict carries its chip's mark, which is what tells a match from a miss. A match also takes
+ * the strong edge. A miss keeps the panel's edge, because nothing is deducted.
  */
 .prl-learn-quiz__verdict[data-matched="true"] {
-  border-inline-start-color: var(--prl-accent-edge);
+  border-color: var(--prl-line-strong);
 }
 
 .prl-learn-quiz__verdict[data-mark]::before {
@@ -1115,7 +1077,7 @@
 }
 
 .prl-learn-quiz__verdict[data-matched="true"]::before {
-  color: var(--prl-accent-text);
+  color: var(--prl-favourable);
 }
 
 /** The cap goes on the control, not the `.prl-field`, so the hint keeps its width. */
@@ -1137,7 +1099,7 @@
  */
 .prl-learn-quiz__numeric .prl-field__error {
   padding: var(--prl-space-4) var(--prl-space-5);
-  border-inline-start: var(--prl-space-1) solid var(--prl-caution);
+  border: 1px solid var(--prl-caution);
   border-radius: var(--prl-radius-1);
   background-color: var(--prl-surface-inset);
   color: var(--prl-text);
@@ -1162,19 +1124,15 @@
   line-height: var(--prl-leading-body);
 }
 
-/** The info edge and a step up the ramp, so the explanation stands above the option wells. */
+/** A step up the ramp and a stronger edge, so the explanation stands above the option wells. */
 .prl-learn-quiz__explanation {
   display: grid;
   gap: var(--prl-space-4);
   justify-items: start;
   padding: var(--prl-space-7);
-  border: 1px solid var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
-  border-inline-start: var(--prl-space-1) solid var(--prl-info);
+  border: 1px solid var(--prl-line-strong);
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-raised);
-  box-shadow: var(--prl-elevation-1);
 }
 
 .prl-learn-quiz__explanation p {
@@ -1218,12 +1176,9 @@
   grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--prl-space-16)), 1fr));
   align-items: start;
   padding: var(--prl-space-7);
-  border: 1px solid var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
+  border: 1px solid var(--prl-line);
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-panel);
-  box-shadow: var(--prl-elevation-1);
 }
 
 /** Each letter is a 44px target. */
@@ -1289,22 +1244,16 @@
   align-content: start;
   gap: var(--prl-space-5);
   padding: var(--prl-space-7);
-  border: 1px solid var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
+  border: 1px solid var(--prl-line);
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-panel);
-  box-shadow: var(--prl-elevation-1);
   scroll-margin-block-start: var(--prl-learn-sticky-top);
-  transition:
-    border-color var(--prl-dur-fast) var(--prl-ease-material),
-    box-shadow var(--prl-dur-base) var(--prl-ease-material);
+  transition: border-color var(--prl-dur-fast) var(--prl-ease-material);
 }
 
 .prl-learn-glossary__entry:target,
 .prl-learn-glossary__entry:focus-within {
   border-color: var(--prl-accent-edge);
-  box-shadow: var(--prl-elevation-2);
 }
 
 .prl-learn-glossary__term {
@@ -1434,21 +1383,15 @@
     grid-template-columns: var(--prl-learn-rail) minmax(0, 1fr);
   }
 
-  /**
-   * Sticky from here, so it travels over the sheet and earns glass (level 3). The blur sits beside the
-   * fill, because without it the headings underneath read through (`layout-guarantees.test.ts`), and
-   * `-webkit-backdrop-filter` because Safari needs it. `dvh`, because mobile toolbars make `vh` too tall.
-   */
+  /** Sticky from here, on an opaque surface. `dvh`, because mobile toolbars make `vh` too tall. */
   .prl-learn-contents {
     position: sticky;
     isolation: isolate;
     inset-block-start: var(--prl-learn-sticky-top);
     overflow-y: auto;
     max-height: calc(100dvh - var(--prl-learn-sticky-top) - var(--prl-space-9));
-    background-color: var(--prl-glass-floating);
-    -webkit-backdrop-filter: var(--prl-glass-filter);
-    backdrop-filter: var(--prl-glass-filter);
-    box-shadow: var(--prl-elevation-2);
+    border-color: var(--prl-line-strong);
+    background-color: var(--prl-surface-raised);
   }
 }
 
@@ -1471,7 +1414,7 @@
     border-color: Highlight;
   }
 
-  /* Fill, edge and elevation are all lost here, so `Highlight` and a wider border restate the choice. */
+  /* Fill and edge colour are lost here, so `Highlight` and a wider border restate the choice. */
   .prl-learn-quiz__option:has(.prl-choice__control:checked) {
     border-color: Highlight;
     border-width: var(--prl-focus-width);
@@ -1479,15 +1422,5 @@
 
   .prl-term__trigger[aria-expanded="true"] {
     text-decoration-color: Highlight;
-  }
-
-  .prl-term__panel {
-    border-color: CanvasText;
-    border-inline-start-color: Highlight;
-  }
-
-  /* The info edge is `CanvasText` here, so a double style keeps it distinct. */
-  .prl-learn-quiz__explanation {
-    border-inline-start-style: double;
   }
 }

@@ -4,9 +4,9 @@
  * Every value is a `--prl-*` token, except `1px` hairlines, structural geometry and media-query
  * lengths (`var()` is invalid in a media feature). Rules, per docs/frontend-design-system.md:
  *   1. Nothing means anything by colour alone.
- *   2. Shadows only through `--prl-elevation-*` (layout-guarantees.test.ts).
+ *   2. Flat: no shadow but the focus halo, no blur, no gradient wash (layout-guarantees.test.ts).
  *   3. Nothing interactive is smaller than `--prl-target-min` (44px). Only the ink may be.
- *   4. Animate only transform, opacity, colour and elevation steps, never `backdrop-filter`.
+ *   4. Animate only transform, opacity and colour.
  */
 
 /* Layout. The container is a token, so a page cannot invent its own width. */
@@ -184,7 +184,7 @@
   line-height: var(--prl-leading-body);
 }
 
-/** `--prl-text-muted`, not the doc's ink-300, which is 3.57:1 on light `--prl-surface-active`. */
+/** `--prl-text-muted`, which clears 4.5:1 on every surface including light `--prl-surface-active`. */
 .prl-label {
   display: inline-block;
   color: var(--prl-text-muted);
@@ -318,151 +318,98 @@
   grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--prl-space-15)), 1fr));
 }
 
-/* Materials. The tokens.css ladder as classes. A glass fill always has `backdrop-filter` in the
-   same block, `:hover` included, or text behind it ghosts through (layout-guarantees.test.ts). */
+/* Surfaces. Flat: a level is a fill and a hairline, never a shadow, a blur or a tint over a backdrop.
+   The class names stay because components choose a level by role. */
 
-/** A border, not an inset shadow, so it survives forced colors. Never transition `backdrop-filter`. */
+/** A border, not an inset shadow, so it survives forced colors. */
 .prl-material {
-  border: 1px solid var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
+  border: 1px solid var(--prl-line);
   border-radius: var(--prl-radius-2);
   transition:
     background-color var(--prl-dur-fast) var(--prl-ease-material),
-    border-color var(--prl-dur-fast) var(--prl-ease-material),
-    box-shadow var(--prl-dur-base) var(--prl-ease-material),
-    transform var(--prl-dur-fast) var(--prl-ease-material);
+    border-color var(--prl-dur-fast) var(--prl-ease-material);
 }
 
-/** L1 GROUPED. Told from L2 by no elevation, not by fill. In light it is brighter than the page. */
+/** Rows that belong together. */
 .prl-material--grouped {
-  border-color: var(--prl-edge);
   background-color: var(--prl-surface-raised);
-  box-shadow: var(--prl-elevation-0);
 }
 
-/** L2 RAISED. Where body text lives. Opaque, because no tint makes long prose legible over a backdrop. */
+/** Where body text lives. */
 .prl-material--raised {
   background-color: var(--prl-surface-panel);
-  box-shadow: var(--prl-elevation-1);
 }
 
-/** L3 FLOATING. `isolation: isolate` stops the filter sampling siblings not meant to be behind it. */
+/** Chrome that travels over the content: toolbars, chips, the transport row. */
 .prl-material--floating {
-  isolation: isolate;
+  border-color: var(--prl-line-strong);
   border-radius: var(--prl-radius-3);
-  background-color: var(--prl-glass-floating);
-  -webkit-backdrop-filter: var(--prl-glass-filter);
-  backdrop-filter: var(--prl-glass-filter);
-  box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-2);
-}
-
-/** L4 OVERLAY. Popovers, menus, sheets. Darker and more opaque than L3, because it carries body text. */
-.prl-material--overlay {
-  isolation: isolate;
-  border-radius: var(--prl-radius-3);
-  background-color: var(--prl-glass-overlay);
-  -webkit-backdrop-filter: var(--prl-glass-filter-strong);
-  backdrop-filter: var(--prl-glass-filter-strong);
-  box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-3);
-}
-
-/** L5 MODAL. The `--prl-scrim` behind it belongs to whatever owns the dialog, not to the pane. */
-.prl-material--modal {
-  isolation: isolate;
-  border-radius: var(--prl-radius-3);
-  background-color: var(--prl-glass-overlay);
-  -webkit-backdrop-filter: var(--prl-glass-filter-strong);
-  backdrop-filter: var(--prl-glass-filter-strong);
-  box-shadow: var(--prl-elevation-4);
+  background-color: var(--prl-surface-raised);
 }
 
 /**
- * States firm the glass (90% -> 94% -> 97%), not only brighten it. A brighter-only hover took
- * `--prl-line-strong` to 2.71:1.
+ * Popovers, menus, sheets and dialogs sit over content with no shadow to lift them, so their edge is
+ * `--prl-line-strong`, which clears 3:1 against any surface (WCAG 1.4.11).
  */
-.prl-material--floating.prl-material--interactive:hover {
-  border-color: var(--prl-edge-lit);
-  background-color: var(--prl-glass-floating-hover);
-  -webkit-backdrop-filter: var(--prl-glass-filter);
-  backdrop-filter: var(--prl-glass-filter);
+.prl-material--overlay,
+.prl-material--modal {
+  border-color: var(--prl-line-strong);
+  border-radius: var(--prl-radius-3);
+  background-color: var(--prl-surface-panel);
+}
+
+.prl-material--floating.prl-material--interactive:hover,
+.prl-material--overlay.prl-material--interactive:hover {
+  background-color: var(--prl-surface-hover);
 }
 
 .prl-material--floating.prl-material--interactive:active {
-  background-color: var(--prl-glass-floating-active);
-  -webkit-backdrop-filter: var(--prl-glass-filter);
-  backdrop-filter: var(--prl-glass-filter);
-  box-shadow: var(--prl-elevation-1);
-  transform: translateY(1px);
+  background-color: var(--prl-surface-active);
 }
 
-.prl-material--overlay.prl-material--interactive:hover {
-  background-color: var(--prl-glass-overlay-hover);
-  -webkit-backdrop-filter: var(--prl-glass-filter-strong);
-  backdrop-filter: var(--prl-glass-filter-strong);
-}
-
-/** A pane is ringed while anything inside it has focus, as well as when it has focus itself. */
-.prl-material--floating:has(:focus-visible),
-.prl-material--overlay:has(:focus-visible) {
-  --_ring: var(--prl-focus-ring);
-}
-
-/** Drops to the opaque level below. `opacity` would fade the label and let more backdrop through. */
+/** Swaps tokens instead of fading, because `opacity` takes a 4.5:1 label towards 2:1. */
 .prl-material--floating:disabled,
 .prl-material--floating[aria-disabled="true"],
 .prl-material--overlay:disabled,
 .prl-material--overlay[aria-disabled="true"] {
   border-color: var(--prl-line-subtle);
   background-color: var(--prl-surface-raised);
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
-  box-shadow: var(--prl-elevation-0);
   color: var(--prl-text-disabled);
   cursor: not-allowed;
 }
 
-/* Panel. Level 2 of the ladder. Not glass, because a panel is where prose and tables live. */
+/* Panel. Where prose and tables live. */
 
 .prl-panel {
   display: grid;
   align-content: start;
   gap: var(--prl-space-6);
   padding: var(--prl-space-7);
-  border: 1px solid var(--prl-edge);
-  border-block-start-color: var(--prl-edge-lit);
-  border-block-end-color: var(--prl-edge-shade);
+  border: 1px solid var(--prl-line);
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-panel);
-  box-shadow: var(--prl-elevation-1);
 }
 
 .prl-panel--inset {
   background-color: var(--prl-surface-inset);
 }
 
-/** No surface, so no edge and no elevation either. A shadow under a transparent box is cast by nothing. */
+/** No surface, so no edge either. */
 .prl-panel--quiet {
   border-color: transparent;
   background-color: transparent;
-  box-shadow: var(--prl-elevation-0);
 }
 
-/** Level 3, for a panel that floats over content (a sticky summary). Not for one simply on the page. */
+/** For a panel that travels over content (a sticky summary). Opaque, so nothing reads through. */
 .prl-panel--floating {
-  isolation: isolate;
-  background-color: var(--prl-glass-floating);
-  -webkit-backdrop-filter: var(--prl-glass-filter);
-  backdrop-filter: var(--prl-glass-filter);
-  box-shadow: var(--prl-elevation-2);
+  border-color: var(--prl-line-strong);
+  background-color: var(--prl-surface-raised);
 }
 
+/** Over content with no shadow to lift it, so its edge is `--prl-line-strong`. */
 .prl-panel--overlay {
-  isolation: isolate;
-  background-color: var(--prl-glass-overlay);
-  -webkit-backdrop-filter: var(--prl-glass-filter-strong);
-  backdrop-filter: var(--prl-glass-filter-strong);
-  box-shadow: var(--prl-elevation-3);
+  border-color: var(--prl-line-strong);
+  background-color: var(--prl-surface-panel);
 }
 
 /** Matches what `Panel.tsx` emits, or every panel header renders unstyled. */
@@ -521,7 +468,7 @@
   font-size: var(--prl-type-body-sm);
 }
 
-/* Buttons. Pill-shaped to match the header's glass capsules. No `clip-path` chamfer, because it
+/* Buttons. Pill-shaped to match the header's controls. No `clip-path` chamfer, because it
    clips the `outline` and would bite the focus ring, so the fill is a `::before` plate at
    `z-index: -1`. `--prl-control-*` is shared with the form controls so they line up in one row. */
 
@@ -555,10 +502,7 @@
   line-height: var(--prl-leading-snug);
   text-align: center;
   text-decoration: none;
-  /**
-   * No `box-shadow` here. A hover rule at (0,3,0) setting an elevation would out-rank the family's
-   * `var(--_ring, ...)` list and delete the halo of a hovered, focused button.
-   */
+  /** No `box-shadow` here or in any state: it would out-rank base.css's focus halo and delete it. */
   transition:
     background-color var(--prl-dur-fast) var(--prl-ease-material),
     border-color var(--prl-dur-fast) var(--prl-ease-material),
@@ -591,20 +535,14 @@
   width: 100%;
 }
 
-/** `--prl-edge-lit` top edge. On a filled control the fill identifies it, so rule B does not apply. */
+/** Filled and semibold, where the secondary is outlined, so the primary action is not told by hue. */
 .prl-btn--primary {
   border-color: var(--prl-accent-fill);
-  border-block-start-color: var(--prl-edge-lit);
-  box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-1);
   color: var(--prl-text-on-accent);
   font-weight: var(--prl-weight-semibold);
 }
 
-/** The fill plate, behind the label so the outline is never painted over. */
-/**
- * `--prl-veil-8` flips with the theme, so the sheen raises ink contrast in both, and it reaches
- * `transparent` before halfway. A fixed white veil would erode the light theme.
- */
+/** The fill plate, behind the label so the outline is never painted over. One flat colour. */
 .prl-btn--primary::before {
   content: "";
   position: absolute;
@@ -612,53 +550,42 @@
   inset: 0;
   border-radius: inherit;
   background-color: var(--prl-accent-fill);
-  background-image: linear-gradient(to bottom, var(--prl-veil-8), transparent 58%);
   transition: background-color var(--prl-dur-fast) var(--prl-ease-material);
 }
 
-.prl-btn--primary:hover:not(:disabled, [aria-disabled="true"]) {
-  border-color: var(--prl-accent-400);
+/** The border takes the plate's colour in every state, or a lighter rim rings the darker plate. */
+.prl-btn--primary:hover:not(:disabled, [aria-disabled="true"]),
+.prl-btn--primary:active:not(:disabled, [aria-disabled="true"]) {
+  border-color: var(--prl-accent-fill-hover);
 }
 
-/** The veil does the work in light, where accent 400 and 500 are the same value. */
 .prl-btn--primary:hover:not(:disabled, [aria-disabled="true"])::before {
-  background-color: var(--prl-accent-400);
-  background-image: linear-gradient(to bottom, var(--prl-veil-8), var(--prl-veil-4));
+  background-color: var(--prl-accent-fill-hover);
 }
 
-/** A transform and a darker plate, never an elevation change. 1px, so it reads as a key. */
+/** A 1px press, so it reads as a key. */
 .prl-btn--primary:active:not(:disabled, [aria-disabled="true"]) {
   transform: translateY(1px);
 }
 
 .prl-btn--primary:active:not(:disabled, [aria-disabled="true"])::before {
-  background-color: var(--prl-accent-600);
+  background-color: var(--prl-accent-fill-hover);
 }
 
-/**
- * L3 glass like `.prl-pill-group`, fill and filter in every state block. All four edges are
- * `--prl-line-strong`, because with no fill the border is the WCAG 1.4.11 boundary.
- */
+/** All four edges are `--prl-line-strong`, because the border is the WCAG 1.4.11 boundary. */
 .prl-btn--secondary {
   border-color: var(--prl-line-strong);
-  background-color: var(--prl-glass-floating);
-  -webkit-backdrop-filter: var(--prl-glass-filter);
-  backdrop-filter: var(--prl-glass-filter);
-  box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-1);
+  background-color: var(--prl-surface-raised);
 }
 
 .prl-btn--secondary:hover:not(:disabled, [aria-disabled="true"]) {
   border-color: var(--prl-accent-edge);
-  background-color: var(--prl-glass-floating-hover);
-  -webkit-backdrop-filter: var(--prl-glass-filter);
-  backdrop-filter: var(--prl-glass-filter);
+  background-color: var(--prl-surface-hover);
   color: var(--prl-accent-text);
 }
 
 .prl-btn--secondary:active:not(:disabled, [aria-disabled="true"]) {
-  background-color: var(--prl-glass-floating-active);
-  -webkit-backdrop-filter: var(--prl-glass-filter);
-  backdrop-filter: var(--prl-glass-filter);
+  background-color: var(--prl-surface-active);
   transform: translateY(1px);
 }
 
@@ -680,41 +607,31 @@
   transform: translateY(1px);
 }
 
-/** Outline only. Neither ink-900 nor white clears 4.5:1 on the light theme's rose. */
+/** Outline only, so red stays a word's colour and never a fill behind one. */
 .prl-btn--danger {
   border-color: var(--prl-adverse);
-  background-color: var(--prl-glass-floating);
-  -webkit-backdrop-filter: var(--prl-glass-filter);
-  backdrop-filter: var(--prl-glass-filter);
-  box-shadow: var(--_ring, 0 0 #0000), var(--prl-elevation-1);
+  background-color: var(--prl-surface-raised);
   color: var(--prl-adverse);
 }
 
 .prl-btn--danger:hover:not(:disabled, [aria-disabled="true"]) {
   border-color: var(--prl-adverse);
-  background-color: var(--prl-glass-floating-hover);
-  -webkit-backdrop-filter: var(--prl-glass-filter);
-  backdrop-filter: var(--prl-glass-filter);
+  background-color: var(--prl-surface-hover);
 }
 
 .prl-btn--danger:active:not(:disabled, [aria-disabled="true"]) {
-  background-color: var(--prl-glass-floating-active);
-  -webkit-backdrop-filter: var(--prl-glass-filter);
-  backdrop-filter: var(--prl-glass-filter);
+  background-color: var(--prl-surface-active);
   transform: translateY(1px);
 }
 
 /**
- * Opaque level below, no sheen, never `opacity`. `[aria-disabled]` covers anchors styled as buttons, and
+ * The inset surface, never `opacity`. `[aria-disabled]` covers anchors styled as buttons, and
  * buttons that must keep focus while unavailable, which is why the hover and active rules exclude it too.
  */
 .prl-btn:disabled,
 .prl-btn[aria-disabled="true"] {
   border-color: var(--prl-line-subtle);
   background-color: var(--prl-surface-inset);
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
-  box-shadow: var(--prl-elevation-0);
   color: var(--prl-text-disabled);
   cursor: not-allowed;
 }
@@ -722,7 +639,6 @@
 .prl-btn:disabled::before,
 .prl-btn[aria-disabled="true"]::before {
   background-color: var(--prl-surface-inset);
-  background-image: none;
 }
 
 /** Busy stays focusable, so a keyboard user keeps their place. Announced by `aria-busy`. */
@@ -880,7 +796,6 @@
   border: 1px solid var(--prl-accent-edge);
   border-radius: var(--prl-radius-pill);
   background-color: var(--prl-accent-fill);
-  background-image: linear-gradient(to bottom, var(--prl-veil-8), transparent 58%);
   appearance: none;
 }
 
@@ -897,7 +812,6 @@
   border: 1px solid var(--prl-accent-edge);
   border-radius: var(--prl-radius-pill);
   background-color: var(--prl-accent-fill);
-  background-image: linear-gradient(to bottom, var(--prl-veil-8), transparent 58%);
 }
 
 .prl-range:disabled {
@@ -923,7 +837,6 @@
   min-height: 0;
   margin: 0;
   padding: 0;
-  accent-color: var(--prl-accent-fill);
   cursor: pointer;
 }
 
@@ -986,8 +899,8 @@
 
 .prl-chip--info,
 .prl-chip[data-tone="info"] {
-  border-color: var(--prl-info);
-  color: var(--prl-info);
+  border-color: var(--prl-text-secondary);
+  color: var(--prl-text-secondary);
 }
 
 .prl-chip--neutral,
@@ -1003,8 +916,8 @@
 }
 
 .prl-chip--method {
-  border-color: var(--prl-info);
-  color: var(--prl-info);
+  border-color: var(--prl-text-secondary);
+  color: var(--prl-text-secondary);
 }
 
 /** The letter "D" is the information, not the circle. */
@@ -1019,107 +932,60 @@
   font-weight: var(--prl-weight-bold);
 }
 
-/* Table primitives. No felt, no baize, no wood, no rail highlight. Graph paper. */
+/* Table primitives. The felt and the field are in the PokerTable block below. */
 
-/** Two gradients on one element. One paint, no asset for the CSP to refuse. */
-.prl-table-surface,
-.prl-table__field {
-  position: relative;
-  container-type: inline-size;
-  container-name: prl-table-surface;
-  border: var(--prl-hairline);
+/**
+ * A seat is a small plain box: name, stack, one status line. Its fill is opaque, so its words are
+ * measured against it wherever it crosses the rail. An opponent's cards sit inside the outline.
+ */
+/** `min-content`, so cards never squeeze the words: a seat too narrow for both overflows instead. */
+.prl-seat {
+  /* A shown hand is read at a glance on a desktop; on a phone it gives way to the words. */
+  --prl-seat-card: var(--prl-space-8);
+
+  display: grid;
+  grid-template-columns: minmax(min-content, 1fr) auto;
+  align-items: center;
+  gap: var(--prl-space-3);
+  padding: var(--prl-space-3) var(--prl-space-4);
+  border: 1px solid var(--prl-line);
   border-radius: var(--prl-radius-2);
-  background-color: var(--prl-surface-table);
-  background-image:
-    repeating-linear-gradient(
-      to right,
-      var(--prl-table-grid-color) 0 1px,
-      transparent 1px var(--prl-table-grid-size)
-    ),
-    repeating-linear-gradient(
-      to bottom,
-      var(--prl-table-grid-color) 0 1px,
-      transparent 1px var(--prl-table-grid-size)
-    );
+  background-color: var(--prl-surface-raised);
+  color: var(--prl-text);
+  font-size: var(--prl-type-body-sm);
+  line-height: var(--prl-leading-snug);
 }
 
 /**
- * Pseudo-elements, because a `clip-path` on the seat would clip the focus ring inside it.
- * `::before` is the border clipped to the polygon, `::after` the fill inset by 1px.
+ * Name over stack, the position and any turn cues beside the stack, the status line under both. The
+ * plate is the box for the viewer, whose cards are too large to sit inside it.
  */
-.prl-seat {
-  position: relative;
-  isolation: isolate;
+.prl-seat__plate {
   display: grid;
-  gap: var(--prl-space-3);
-  padding: var(--prl-space-5);
-  color: var(--prl-text);
-}
-
-.prl-seat::before,
-.prl-seat::after {
-  content: "";
-  position: absolute;
-  z-index: -1;
-  border-radius: var(--prl-radius-1);
-  clip-path: polygon(
-    0 0,
-    100% 0,
-    100% calc(100% - var(--prl-chamfer)),
-    calc(100% - var(--prl-chamfer)) 100%,
-    0 100%
-  );
-}
-
-.prl-seat::before {
-  inset: 0;
-  background-color: var(--prl-line-subtle);
-}
-
-.prl-seat::after {
-  inset: 1px;
-  background-color: var(--prl-surface-panel);
-}
-
-/** Your own seat. Paired with the word "you" in the markup. */
-.prl-seat--self::before {
-  background-color: var(--prl-line-strong);
-}
-
-/** Marked three ways (accent edge, a "TO ACT" chip in text, the turn ring), never by colour alone. */
-.prl-seat--active::before,
-.prl-seat--to-act::before {
-  background-color: var(--prl-accent-edge);
-}
-
-/** Swap the surface, never the opacity, which would take a 4.5:1 label under the floor. */
-.prl-seat--folded::after,
-.prl-seat--sitting-out::after {
-  background-color: var(--prl-surface-page);
-}
-
-.prl-seat--folded,
-.prl-seat--sitting-out {
-  color: var(--prl-text-secondary);
-}
-
-.prl-seat--all-in::before {
-  background-color: var(--prl-caution);
+  grid-template-columns: auto auto;
+  justify-content: space-between;
+  grid-template-areas:
+    "name name"
+    "stats top"
+    "status status";
+  align-items: center;
+  gap: var(--prl-space-1) var(--prl-space-4);
+  min-width: 0;
 }
 
 .prl-seat__top {
+  grid-area: top;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  gap: var(--prl-space-3);
+  justify-content: flex-end;
+  gap: var(--prl-space-2) var(--prl-space-3);
 }
 
 .prl-seat__name {
+  grid-area: name;
   margin: 0;
-  font-size: var(--prl-type-body);
   font-weight: var(--prl-weight-semibold);
-  line-height: var(--prl-leading-snug);
 }
 
 .prl-seat__position {
@@ -1129,31 +995,25 @@
   letter-spacing: var(--prl-tracking-label);
 }
 
-.prl-seat__badges {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--prl-space-2);
+.prl-seat .prl-badge--dealer {
+  min-width: var(--prl-space-7);
+  min-height: var(--prl-space-7);
+  font-size: var(--prl-type-label-sm);
+}
+
+/** Words, beside the second outline and the ring, so the turn is never shown by one cue alone. */
+.prl-seat__turn {
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-semibold);
 }
 
 .prl-seat__stats {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--prl-space-2) var(--prl-space-5);
+  grid-area: stats;
   margin: 0;
-  font-size: var(--prl-type-body-sm);
 }
 
-/* Out of the layout except in the compact row, so the two-column grid places the cells directly. */
 .prl-seat__stat {
   display: contents;
-}
-
-.prl-seat__stat-label {
-  color: var(--prl-text-muted);
-  font-size: var(--prl-type-label-sm);
-  font-weight: var(--prl-weight-medium);
-  letter-spacing: var(--prl-tracking-label-sm);
-  white-space: nowrap;
 }
 
 /** `nowrap`. `1,000` broken across lines reads as "1,00" and "0". */
@@ -1165,20 +1025,83 @@
 }
 
 .prl-seat__status {
+  grid-area: status;
   margin: 0;
-  color: var(--prl-text-secondary);
-  font-size: var(--prl-type-body-sm);
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label);
 }
 
-/** Present in words, because the accent edge and the position are not available to a screen reader. */
+/** Present in words, because the outline is not available to a screen reader. */
 .prl-seat__you {
   color: var(--prl-text-muted);
   font-weight: var(--prl-weight-regular);
 }
 
-/** The seat's own hole cards. `margin: 0` because `CardRow` is a `<figure>`. */
+/** `margin: 0` because `CardRow` is a `<figure>`. */
 .prl-seat__cards {
   margin: 0;
+}
+
+/** A dashed outline and muted ink, and no cards. Never opacity, which would take a label under 4.5:1. */
+.prl-seat--folded,
+.prl-seat--sitting-out {
+  border-style: dashed;
+  border-color: var(--prl-line-strong);
+  background-color: var(--prl-surface-page);
+  color: var(--prl-text-muted);
+}
+
+/**
+ * The seat to act gets a second line inside its outline, beside the words and the ring. Inside, so it is
+ * measured against the seat's own fill: outside, `--prl-text` on light felt was 2.5:1.
+ */
+.prl-seat--to-act {
+  outline: 2px solid var(--prl-text);
+  outline-offset: -4px;
+}
+
+/** Marked cards are named as such, so the line is a reinforcement, not the message. */
+.prl-seat--marked {
+  outline: 2px solid var(--prl-favourable);
+  outline-offset: -4px;
+}
+
+/** The viewer: large fanned cards beside a plate with a stronger outline. */
+.prl-seat--self {
+  grid-template-columns: auto auto;
+  gap: var(--prl-space-5);
+  padding: 0;
+  border: 0;
+  background-color: transparent;
+}
+
+.prl-seat--self.prl-seat--to-act,
+.prl-seat--self.prl-seat--marked {
+  outline: 0;
+}
+
+.prl-seat--self .prl-seat__plate {
+  grid-column: 2;
+  grid-row: 1;
+  padding: var(--prl-space-3) var(--prl-space-5);
+  border: 2px solid var(--prl-text);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-raised);
+}
+
+.prl-seat--self.prl-seat--to-act .prl-seat__plate {
+  outline: 2px solid var(--prl-text);
+  outline-offset: -5px;
+}
+
+.prl-seat--self.prl-seat--marked .prl-seat__plate {
+  outline: 2px solid var(--prl-favourable);
+  outline-offset: -5px;
+}
+
+.prl-seat--self .prl-seat__cards {
+  grid-column: 1;
+  grid-row: 1;
 }
 
 .prl-pot {
@@ -1479,7 +1402,7 @@
 }
 
 /**
- * The wash is `--prl-veil-8` (no accent-with-alpha token). `overflow: hidden` confines the hidden
+ * The shape is filled with `--prl-surface-hover`, one step off the panel. `overflow: hidden` confines the hidden
  * data `<table>`, which floors at min-content and scrolled every radar page sideways.
  */
 .prl-radar {
@@ -1514,7 +1437,7 @@
 
 /** `__shape` is what `RadarChart` emits. With no `fill` an SVG polygon paints opaque black. */
 .prl-radar__shape {
-  fill: var(--prl-veil-8);
+  fill: var(--prl-surface-hover);
   stroke: var(--prl-accent-edge);
   stroke-width: 1.5;
   stroke-linejoin: round;
@@ -1545,7 +1468,7 @@
 }
 
 .prl-sparkline__area {
-  fill: var(--prl-veil-8);
+  fill: var(--prl-surface-hover);
   stroke: none;
 }
 
@@ -1620,7 +1543,7 @@
   content: "";
   position: absolute;
   inset: 0;
-  background-image: linear-gradient(90deg, transparent, var(--prl-veil-8), transparent);
+  background-image: linear-gradient(90deg, transparent, var(--prl-surface-hover), transparent);
   animation: prl-skeleton-sweep var(--prl-dur-count) var(--prl-ease-standard) infinite;
 }
 
@@ -1674,7 +1597,6 @@
   gap: var(--prl-space-4);
   padding: var(--prl-space-6);
   border: 1px solid var(--prl-adverse);
-  border-inline-start-width: var(--prl-space-1);
   border-radius: var(--prl-radius-2);
   background-color: var(--prl-surface-inset);
   color: var(--prl-text);
@@ -1776,21 +1698,21 @@
 
 /* PlayingCard */
 
-/** A `<span>`, not an image. One `--prl-card-w` per size, and everything inside is `em`-relative. */
+/**
+ * The face is a generated SVG file (`PlayingCard.tsx`), so only the box and the mark live here. One
+ * `--prl-card-w` per size. The radius matches the files' corners, so the notch is clipped to the card.
+ */
 .prl-card {
   --prl-card-w: var(--prl-space-11);
 
   position: relative;
-  display: inline-grid;
+  display: inline-block;
   flex: 0 0 auto;
   width: var(--prl-card-w);
   aspect-ratio: 5 / 7;
-  border: 1px solid var(--prl-card-edge);
-  border-radius: var(--prl-radius-1);
-  background-color: var(--prl-card-face);
-  color: var(--prl-suit-black);
-  font-size: calc(var(--prl-card-w) / 3);
-  line-height: 1;
+  overflow: hidden;
+  border-radius: calc(var(--prl-card-w) * 0.072);
+  line-height: 0;
   user-select: none;
 }
 
@@ -1806,52 +1728,25 @@
   --prl-card-w: var(--prl-space-12);
 }
 
-/** A corner index, as on a real card: the rank at the top, a large suit symbol below it. */
-.prl-card__face {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  justify-items: start;
-  padding: 0.18em 0.22em;
-  overflow: hidden;
+.prl-card__image {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
-.prl-card__rank {
-  font-family: var(--prl-font-display);
-  font-size: 1.6em;
-  font-stretch: var(--prl-stretch-display);
-  font-weight: var(--prl-weight-bold);
-  letter-spacing: var(--prl-tracking-display-2);
-  line-height: 0.9;
+/** A value outside 0..51. A dashed empty card, so a missing card is never drawn as a real one. */
+.prl-card--unknown {
+  display: inline-grid;
+  place-items: center;
+  border: 1px dashed var(--prl-line-strong);
+  color: var(--prl-text-muted);
+  font-size: calc(var(--prl-card-w) / 3);
+  line-height: 1;
 }
 
-/** Large, because with two inks the symbol's shape is all that tells a club from a spade. */
-.prl-card__pip {
-  align-self: end;
-  justify-self: end;
-  font-size: 2em;
-  line-height: 0.8;
-}
-
-.prl-card[data-suit="heart"],
-.prl-card[data-suit="diamond"] {
-  color: var(--prl-suit-red);
-}
-
-/** No logo or crest. A visually-hidden string supplies the accessible name. */
-.prl-card--face-down {
-  border-color: var(--prl-card-back);
-  background-color: var(--prl-card-back);
-  background-image: repeating-linear-gradient(
-    -45deg,
-    var(--prl-card-back-pattern) 0 var(--prl-space-1),
-    transparent var(--prl-space-1) var(--prl-space-3)
-  );
-  color: var(--prl-ink-000);
-}
-
-/** An accent border AND a corner notch, because the notch survives greyscale. */
+/** A corner notch and a lift, so the mark survives greyscale and forced colours. */
 .prl-card--highlighted {
-  border-color: var(--prl-accent-edge);
+  translate: 0 calc(var(--prl-space-3) * -1);
 }
 
 .prl-card--highlighted::after {
@@ -1859,13 +1754,8 @@
   position: absolute;
   inset-block-start: 0;
   inset-inline-end: 0;
-  border-block-start: calc(var(--prl-card-w) / 7) solid var(--prl-accent-edge);
-  border-inline-start: calc(var(--prl-card-w) / 7) solid transparent;
-}
-
-/** The dim face keeps every suit over 4.5:1 (worst, heart in dark at 4.75:1). */
-.prl-card--dimmed {
-  background-color: var(--prl-card-face-dim);
+  border-block-start: calc(var(--prl-card-w) / 4) solid var(--prl-card-mark);
+  border-inline-start: calc(var(--prl-card-w) / 4) solid transparent;
 }
 
 /* CardText */
@@ -1917,13 +1807,6 @@
   font-size: var(--prl-type-body-sm);
 }
 
-/** The empty card slot keeps the pair's `sm` footprint, so a folded plate is as tall as the rest. */
-.prl-seat__cards .prl-card-row__empty {
-  display: block;
-  width: calc(var(--prl-space-9) * 2 + var(--prl-space-2));
-  height: calc(var(--prl-space-9) / 5 * 7);
-}
-
 /**
  * `nth-child`, so each position keeps a fixed delay. `CardRow` keys by content and a changed delay
  * can replay a finished animation. The turn and river arrive alone, so they get no delay.
@@ -1955,10 +1838,7 @@
 
 /* PokerTable */
 
-/**
- * DOM order is the read-aloud order, and the stacked layout reorders it visually. Safe only while
- * nothing in the field is focusable; add a focusable control and `order` must go.
- */
+/** DOM order is the read-aloud order. The field's grid places each part, so no `order` is needed. */
 .prl-table {
   container-type: inline-size;
   container-name: prl-table;
@@ -2028,200 +1908,276 @@
   border-block-end: var(--prl-focus-width) solid var(--prl-accent-edge);
 }
 
+/**
+ * The field is a grid, and each seat takes a cell by its `data-slot` (`seatSlot` in `Seat.tsx`). Cells
+ * cannot overlap, so no seat covers another or the board at any width. The opponents list and the
+ * viewer's wrapper are subgrids, so their seats are placed on the field's own tracks.
+ * Portrait below 42rem: the board gets a row of its own, because five board cards take most of a phone.
+ * Landscape from 42rem: two seat columns either side of the board, 2 x 11rem plus a 17.5rem board.
+ */
 .prl-table__field {
+  --prl-table-pad: var(--prl-space-4);
+  /* Half the field on a phone, so narrow seats keep every word whole; never past 11rem. */
+  --prl-seat-w: min(
+    calc((100cqi - var(--prl-table-pad) * 2 - var(--prl-space-4)) / 2),
+    calc(var(--prl-space-16) + var(--prl-space-6))
+  );
+  /* Where the rail runs: through the middle of the top seat and across the viewer's cards. */
+  --prl-felt-inset-top: calc(var(--prl-table-pad) + var(--prl-space-9));
+  --prl-felt-inset-side: var(--prl-space-1);
+  --prl-felt-inset-bottom: calc(var(--prl-table-pad) + var(--prl-space-11));
+  /* From the field's edge to the faint inner line, which the pot and board stay inside. */
+  --prl-felt-inner: calc(var(--prl-felt-inset-side) + var(--prl-rail-width) + var(--prl-space-6));
+
+  position: relative;
+  isolation: isolate;
   display: grid;
-  gap: var(--prl-space-6);
-  padding: var(--prl-space-6);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(5, auto);
+  gap: var(--prl-space-5) var(--prl-space-4);
+  padding: var(--prl-table-pad);
 }
 
-.prl-table__oval {
-  display: none;
+/**
+ * The felt and its rail, as the field's pseudo-elements, so the felt is an ancestor layer of the pot and
+ * board text and `check-contrast.mjs` composites that text over it. Flat: one fill, one border, no shadow.
+ */
+.prl-table__field::before,
+.prl-table__field::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  border-radius: var(--prl-radius-pill);
 }
 
-.prl-table__centre {
-  order: 2;
+.prl-table__field::before {
+  inset: var(--prl-felt-inset-top) var(--prl-felt-inset-side) var(--prl-felt-inset-bottom);
+  border: var(--prl-rail-width) solid var(--prl-rail);
+  background-color: var(--prl-felt);
+}
+
+/** The faint line inside the rail. Decorative, so it may sit under 3:1. */
+.prl-table__field::after {
+  inset: calc(var(--prl-felt-inset-top) + var(--prl-rail-width) + var(--prl-space-6)) var(--prl-felt-inner)
+    calc(var(--prl-felt-inset-bottom) + var(--prl-rail-width) + var(--prl-space-6));
+  border: 1px solid var(--prl-felt-line);
+}
+
+.prl-table__opponents,
+.prl-table__hero {
   display: grid;
-  justify-items: center;
-  gap: var(--prl-space-5);
-  padding: var(--prl-space-5);
-  border: var(--prl-hairline);
-  border-radius: var(--prl-radius-2);
-  background-color: var(--prl-surface-raised);
-  text-align: center;
-}
-
-.prl-table__board {
-  display: grid;
-  justify-items: center;
-  gap: var(--prl-space-3);
-}
-
-.prl-table__board-label {
-  color: var(--prl-text-muted);
-}
-
-/** A wrapping grid, never a horizontal scroller (WCAG 2.1.1). Both container queries replace it. */
-.prl-table__opponents {
-  order: 1;
-  display: grid;
-  gap: var(--prl-space-5);
+  grid-row: 1 / -1;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  grid-template-rows: subgrid;
   margin: 0;
   padding: 0;
   list-style: none;
-  grid-template-columns: repeat(
-      auto-fit,
-      minmax(min(100%, calc(var(--prl-space-16) + var(--prl-space-11))), 1fr)
-    );
 }
 
-.prl-table__hero {
-  order: 3;
+.prl-table__field .prl-seat {
+  align-self: center;
+  width: var(--prl-seat-w);
+}
+
+.prl-table__field [data-slot="top"] {
+  grid-area: 1 / 1 / 2 / -1;
+  justify-self: center;
+}
+
+.prl-table__field [data-slot="left-high"] {
+  grid-area: 2 / 1;
+  justify-self: start;
+}
+
+.prl-table__field [data-slot="right-high"] {
+  grid-area: 2 / 2;
+  justify-self: end;
+}
+
+.prl-table__field [data-slot="left-low"] {
+  grid-area: 4 / 1;
+  justify-self: start;
+}
+
+.prl-table__field [data-slot="right-low"] {
+  grid-area: 4 / 2;
+  justify-self: end;
+}
+
+.prl-table__field [data-slot="hero"] {
+  grid-area: 5 / 1 / 6 / -1;
+  justify-self: center;
+  width: auto;
+}
+
+/** Plain text on the felt: the pot, the bet to match, then the board with an outline per card to come. */
+.prl-table__centre {
+  grid-area: 3 / 1 / 4 / -1;
+  align-self: center;
   display: grid;
+  justify-items: center;
+  gap: var(--prl-space-3);
+  padding: var(--prl-space-4) calc(var(--prl-felt-inner) - var(--prl-table-pad));
+  color: var(--prl-felt-ink);
+  text-align: center;
 }
 
-/**
- * The oval. Radii are tied to `Seat.seatRingPosition` (38% x, 36% y), seats placed by centre.
- * With plate height `h`, field `W` x `H` and a 13rem plate, all must hold:
- *   1. `0.36 H >= h`  2. `H >= 3.6 h`  3. `0.36 H >= (centre + h) / 2`
- *   4. `W >= 39.5rem`, a 43.5rem container with padding, hence the 46rem threshold.
- * `H = 5 x --prl-seat-h` (720px). A to-act plate is 163px, 187px with the dealer badge, and the centre up
- * to 334px at showdown, when nobody is to act; 3 holds for any plate beside it up to 184px, so 9rem.
- * If the plate grows, raise `--prl-seat-h` and re-measure.
- */
-@container prl-table (min-width: 46rem) {
+.prl-table__centre .prl-pot {
+  gap: var(--prl-space-2);
+  padding: 0;
+  border: 0;
+  background-color: transparent;
+}
+
+.prl-table__centre .prl-metric {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: baseline;
+  gap: var(--prl-space-2) var(--prl-space-4);
+}
+
+.prl-table__centre .prl-metric__label,
+.prl-table__centre .prl-metric__unit,
+.prl-table__centre .prl-metric__note,
+.prl-table__centre .prl-pot__side,
+.prl-table__centre .prl-pot__side-index,
+.prl-table__centre .prl-pot__side-seats {
+  color: var(--prl-felt-ink-muted);
+}
+
+.prl-table__centre .prl-metric__value,
+.prl-table__centre .prl-pot__side-amount {
+  color: var(--prl-felt-ink);
+}
+
+/** The main pot's note has a line of its own, under the figure it qualifies. */
+.prl-table__centre .prl-metric__note {
+  flex-basis: 100%;
+}
+
+.prl-table__centre .prl-pot__sides {
+  border-block-start-color: var(--prl-felt-line);
+}
+
+.prl-table__bet {
+  margin: 0;
+  font-size: var(--prl-type-body-sm);
+  font-variant-numeric: var(--prl-numeric);
+}
+
+.prl-table__bet-label {
+  color: var(--prl-felt-ink-muted);
+}
+
+.prl-table__bet-value {
+  font-weight: var(--prl-weight-semibold);
+}
+
+/** Five cards on one line inside the felt's inner line at any width, never past 46px. */
+.prl-table__board {
+  --prl-board-card-w: min(
+    var(--prl-card-board),
+    calc((100cqi - var(--prl-felt-inner) * 2 - var(--prl-space-3) * 4) / 5)
+  );
+}
+
+.prl-table__board .prl-card-row__cards {
+  flex-wrap: nowrap;
+  justify-content: center;
+  gap: var(--prl-space-3);
+}
+
+.prl-table__board .prl-card {
+  --prl-card-w: var(--prl-board-card-w);
+}
+
+/** An empty place on the board: a dashed outline on the felt, no fill. Never named. */
+.prl-card-row__slot {
+  flex: 0 0 auto;
+  width: var(--prl-board-card-w);
+  aspect-ratio: 5 / 7;
+  border: 1px dashed var(--prl-felt-slot);
+  border-radius: calc(var(--prl-board-card-w) * 0.072);
+}
+
+/* The seats' cards and clock, after the base card, row and timer rules they refine. */
+
+/** The 24px hole holds three bare digits. */
+.prl-seat .prl-turn-timer {
+  --prl-turn-size: var(--prl-space-9);
+}
+
+.prl-seat__cards .prl-card-row__cards {
+  flex-wrap: nowrap;
+  gap: var(--prl-space-1);
+}
+
+.prl-seat .prl-card {
+  --prl-card-w: var(--prl-seat-card);
+}
+
+.prl-seat .prl-card--face-down {
+  --prl-card-w: var(--prl-card-back-small);
+}
+
+.prl-seat--self .prl-seat__cards .prl-card-row__cards {
+  gap: var(--prl-space-3);
+}
+
+/** Fanned 4 degrees each way. `rotate`, so it composes with the deal and the highlight lift. */
+.prl-seat--self .prl-card {
+  --prl-card-w: var(--prl-card-hero);
+
+  rotate: -4deg;
+  transform-origin: 50% 100%;
+}
+
+.prl-seat--self .prl-card + .prl-card {
+  rotate: 4deg;
+}
+
+@container prl-table (min-width: 42rem) {
   .prl-table__field {
-    --prl-seat-h: calc(var(--prl-space-15) + var(--prl-space-6));
+    --prl-table-pad: var(--prl-space-6);
+    --prl-seat-w: calc(var(--prl-space-16) + var(--prl-space-9));
+    --prl-felt-inset-side: calc(var(--prl-table-pad) + var(--prl-seat-w) / 2);
 
-    min-height: calc(var(--prl-seat-h) * 5);
-    padding: var(--prl-space-9);
+    grid-template-columns: var(--prl-seat-w) minmax(0, 1fr) var(--prl-seat-w);
+    /* A floor on the two middle rows, so the felt keeps an oval's height when every seat is short. */
+    grid-template-rows: auto repeat(2, minmax(var(--prl-space-13), auto)) auto;
+    row-gap: var(--prl-space-4);
   }
 
-  .prl-table__oval {
-    display: block;
-    position: absolute;
-    inset: 17% 7%;
-    border: 1px solid var(--prl-line-subtle);
-    border-radius: 50%;
+  .prl-table__field .prl-seat {
+    --prl-seat-card: var(--prl-space-9);
   }
 
+  .prl-table__field [data-slot="top"] {
+    grid-area: 1 / 2;
+  }
+
+  .prl-table__field [data-slot="right-high"] {
+    grid-area: 2 / 3;
+  }
+
+  .prl-table__field [data-slot="left-low"] {
+    grid-area: 3 / 1;
+  }
+
+  .prl-table__field [data-slot="right-low"] {
+    grid-area: 3 / 3;
+  }
+
+  .prl-table__field [data-slot="hero"] {
+    grid-area: 4 / 1 / 5 / -1;
+  }
+
+  /* The middle column already sits inside the inner line. */
   .prl-table__centre {
-    position: absolute;
-    inset-inline-start: 50%;
-    inset-block-start: 50%;
-    min-width: var(--prl-space-16);
-    translate: -50% -50%;
-  }
-
-  /* Seats inside are positioned against `.prl-table__field`, the only positioned ancestor. */
-  .prl-table__opponents,
-  .prl-table__hero {
-    display: block;
-  }
-
-  .prl-seat {
-    position: absolute;
-    inset-inline-start: var(--prl-seat-x, 50%);
-    inset-block-start: var(--prl-seat-y, 50%);
-    width: calc(var(--prl-space-16) + var(--prl-space-11));
-    grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas:
-      "head cards"
-      "name cards"
-      "stats cards"
-      "status cards";
-    gap: var(--prl-space-1) var(--prl-space-4);
-    padding: var(--prl-space-4);
-    translate: -50% -50%;
-  }
-
-  .prl-seat__top {
-    grid-area: head;
-  }
-
-  .prl-seat__name {
-    grid-area: name;
-  }
-
-  /** `auto` for the label, because two `1fr` tracks once squeezed a label into its figure. */
-  .prl-seat__stats {
-    grid-area: stats;
-    grid-template-columns: auto minmax(0, 1fr);
-    column-gap: var(--prl-space-2);
-  }
-
-  .prl-seat__status {
-    grid-area: status;
-  }
-
-  .prl-seat__cards {
-    grid-area: cards;
-    align-self: center;
-  }
-
-  /* Each 0.5rem of plate costs 2.5rem of field. The 24px hole holds three bare digits. */
-  .prl-turn-timer {
-    --prl-turn-size: var(--prl-space-9);
-  }
-}
-
-/**
- * Full-width rows below 46rem, which moved Fold from 2,725px to 2,120px at 390px. `.prl-table__field`
- * is for specificity, to beat play.css's `.prl-play .prl-seat` padding.
- */
-@container prl-table (width < 46rem) {
-  .prl-table__opponents {
-    grid-template-columns: minmax(0, 1fr);
-    gap: var(--prl-space-4);
-  }
-
-  /* An `auto` status track is floored at max-content and squeezed "CO" at 360px (`test:layout`). */
-  .prl-table__field .prl-table__opponents > .prl-seat {
-    grid-template-columns: auto minmax(min-content, 1fr) auto;
-    /* Under the cards. Beside them, at the Lab's 282px plate, the pairs got 182px of the 195 they need. */
-    grid-template-areas:
-      "head status cards"
-      "name name cards"
-      "stats stats stats";
-    align-items: baseline;
-    gap: var(--prl-space-1) var(--prl-space-4);
-    padding: var(--prl-space-4) var(--prl-space-5);
-  }
-
-  /* Start-aligned, so the dealer badge sits beside the position it names. */
-  .prl-table__opponents > .prl-seat .prl-seat__top {
-    grid-area: head;
-    justify-content: flex-start;
-  }
-
-  .prl-table__opponents > .prl-seat .prl-seat__name {
-    grid-area: name;
-    font-size: var(--prl-type-body-sm);
-  }
-
-  .prl-table__opponents > .prl-seat .prl-seat__status {
-    grid-area: status;
-    justify-self: end;
-    text-align: end;
-  }
-
-  /* Each pair is one flex item, so the row wraps between pairs, never inside one. */
-  .prl-table__opponents > .prl-seat .prl-seat__stats {
-    grid-area: stats;
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: var(--prl-space-1) var(--prl-space-6);
-  }
-
-  .prl-table__opponents > .prl-seat .prl-seat__stat {
-    display: inline-flex;
-    align-items: baseline;
-    gap: var(--prl-space-3);
-  }
-
-  .prl-table__opponents > .prl-seat .prl-seat__cards {
-    grid-area: cards;
-    align-self: center;
+    grid-area: 2 / 2 / 4 / 3;
+    padding-inline: var(--prl-space-0);
   }
 }
 
@@ -2316,7 +2272,7 @@
   gap: var(--prl-space-2) var(--prl-space-5);
 }
 
-/** A row of its own, so the cards keep their line at 360px. The ring is the oval plate's 2rem, not 2.5rem. */
+/** A row of its own, so the cards keep their line at 360px. The ring is the seat's 2rem, not 2.5rem. */
 .prl-hand-glance__now {
   flex: 1 1 100%;
   display: flex;
@@ -2395,7 +2351,7 @@
 }
 
 .prl-action-btn--primary {
-  border-color: transparent;
+  border-color: var(--prl-accent-fill);
   color: var(--prl-text-on-accent);
 }
 
@@ -2410,8 +2366,14 @@
   transition: background-color var(--prl-dur-instant) var(--prl-ease-hover);
 }
 
-.prl-action-btn--primary:hover:not(:disabled)::before {
-  background-color: var(--prl-accent-400);
+.prl-action-btn--primary:hover:not(:disabled),
+.prl-action-btn--primary:active:not(:disabled) {
+  border-color: var(--prl-accent-fill-hover);
+}
+
+.prl-action-btn--primary:hover:not(:disabled)::before,
+.prl-action-btn--primary:active:not(:disabled)::before {
+  background-color: var(--prl-accent-fill-hover);
 }
 
 .prl-action-btn--primary .prl-action-btn__cost {
@@ -2768,7 +2730,7 @@
 }
 
 .prl-outs__bucket--clean .prl-outs__swatch {
-  background-color: var(--prl-accent-fill);
+  background-color: var(--prl-accent-edge);
 }
 
 .prl-outs__bucket--dirty .prl-outs__swatch {
@@ -2936,13 +2898,12 @@ td.prl-candidates__ev,
 
 /* CoachPanel: suggestion */
 
-/** An accent edge, never a wash. The markup never calls a suggestion correct or optimal. */
+/** A plain box, never a highlight. The markup never calls a suggestion correct or optimal. */
 .prl-suggestion {
   display: grid;
   gap: var(--prl-space-3);
   padding: var(--prl-space-6);
   border: 1px solid var(--prl-line-strong);
-  border-inline-start: var(--prl-space-1) solid var(--prl-accent-edge);
   border-radius: var(--prl-radius-1);
   background-color: var(--prl-surface-inset);
 }
@@ -2986,7 +2947,7 @@ td.prl-candidates__ev,
 }
 
 .prl-suggestion__confidence[data-confidence="moderate"] {
-  color: var(--prl-info);
+  color: var(--prl-text-secondary);
 }
 
 .prl-suggestion__confidence[data-confidence="reasonable"] {
@@ -3164,18 +3125,19 @@ td.prl-candidates__ev,
   max-width: calc(var(--prl-measure) + 2 * var(--prl-space-6));
   gap: var(--prl-space-3);
   padding: var(--prl-space-6);
-  border: var(--prl-hairline);
-  border-inline-start: var(--prl-space-1) solid var(--prl-line-strong);
+  border: var(--prl-hairline-strong);
   border-radius: var(--prl-radius-1);
   background-color: var(--prl-surface-inset);
 }
 
+/** The word names the tone, and it is set semibold so it leads the box without a coloured edge. */
 .prl-callout__marker {
   display: inline-flex;
   align-items: center;
   gap: var(--prl-space-3);
+  color: var(--prl-text-secondary);
   font-size: var(--prl-type-label);
-  font-weight: var(--prl-weight-medium);
+  font-weight: var(--prl-weight-semibold);
   letter-spacing: var(--prl-tracking-label);
 }
 
@@ -3192,24 +3154,9 @@ td.prl-candidates__ev,
   line-height: var(--prl-leading-body);
 }
 
-.prl-callout--insight {
-  border-inline-start-color: var(--prl-info);
-}
-
-.prl-callout--insight .prl-callout__marker {
-  color: var(--prl-info);
-}
-
-.prl-callout--warning {
-  border-inline-start-color: var(--prl-caution);
-}
-
+/** Caution and adverse only where the callout is about a risk or a mistake. */
 .prl-callout--warning .prl-callout__marker {
   color: var(--prl-caution);
-}
-
-.prl-callout--misconception {
-  border-inline-start-color: var(--prl-adverse);
 }
 
 .prl-callout--misconception .prl-callout__marker {
@@ -3302,7 +3249,6 @@ td.prl-candidates__ev,
   gap: var(--prl-space-3);
   padding: var(--prl-space-6);
   border: 1px solid var(--prl-line-strong);
-  border-inline-start: var(--prl-space-1) solid var(--prl-info);
   border-radius: var(--prl-radius-1);
   background-color: var(--prl-surface-inset);
 }
@@ -3320,9 +3266,9 @@ td.prl-candidates__ev,
 .prl-uncertainty__method {
   display: inline-block;
   padding-inline: var(--prl-space-4);
-  border: 1px solid var(--prl-info);
+  border: 1px solid var(--prl-text-secondary);
   border-radius: var(--prl-radius-pill);
-  color: var(--prl-info);
+  color: var(--prl-text-secondary);
   font-family: var(--prl-font-mono);
   font-size: var(--prl-type-label);
   font-weight: var(--prl-weight-medium);
@@ -3430,7 +3376,7 @@ td.prl-candidates__ev,
   flex: 1 1 var(--prl-space-16);
   margin: 0;
   padding: var(--prl-space-4) var(--prl-space-5);
-  border: 1px solid var(--prl-info);
+  border: 1px solid var(--prl-text-secondary);
   border-radius: var(--prl-radius-1);
   background-color: var(--prl-surface-inset);
   color: var(--prl-text);
@@ -3471,6 +3417,14 @@ td.prl-candidates__ev,
   .prl-action-btn--primary {
     border-color: Highlight;
     color: ButtonText;
+  }
+
+  /* The state rules above out-rank the one before, so each restates the Highlight edge. */
+  .prl-btn--primary:hover:not(:disabled, [aria-disabled="true"]),
+  .prl-btn--primary:active:not(:disabled, [aria-disabled="true"]),
+  .prl-action-btn--primary:hover:not(:disabled),
+  .prl-action-btn--primary:active:not(:disabled) {
+    border-color: Highlight;
   }
 
   /* The fill plate and busy bar are decoration here. The border does the work. */
@@ -3539,20 +3493,9 @@ td.prl-candidates__ev,
     border-color: CanvasText;
   }
 
-  /* Both carried meaning in border colour, now CanvasText for both. A style change restores it. */
-  .prl-callout,
-  .prl-suggestion,
-  .prl-uncertainty {
-    border-inline-start-style: double;
-  }
-
-  .prl-card {
-    border-color: CanvasText;
-  }
-
   .prl-card--highlighted {
     outline: 1px dashed CanvasText;
-    outline-offset: 1px;
+    outline-offset: -1px;
   }
 
   .prl-skeleton {

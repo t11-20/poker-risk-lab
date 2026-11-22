@@ -52,11 +52,7 @@ export function TraitBars(props: TraitBarsProps): ReactElement {
                 {axisMarker(index)}
               </span>
               <span className="prl-legend-traits__label">{axis.label}</span>
-              {isSignature ? (
-                <Chip glyph="◆" tone="accent">
-                  Signature axis
-                </Chip>
-              ) : null}
+              {isSignature ? <Chip tone="accent">Signature axis</Chip> : null}
               {/* One unit, because as two flex items the scale wrapped alone at 360px. */}
               <span className="prl-legend-traits__figure">
                 <span className="prl-legend-traits__value">

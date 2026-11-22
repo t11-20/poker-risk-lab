@@ -13,7 +13,6 @@ import { CHECKS_PATH } from '@/lib/checks.ts';
 import { DOCUMENT_DESTINATIONS, NAV_DESTINATIONS, RECORD_DESTINATION } from '@/lib/nav.ts';
 import { RECORD_PATH } from '@/lib/record-data.ts';
 import { SessionDuration } from './SessionDuration.tsx';
-import { ThemeToggle } from './ThemeToggle.tsx';
 
 /** A fixed id, not `useId()`, so the name G3 of the screen-reader certification quotes is greppable. */
 const FOOTER_HEADING_ID = 'prl-footer-heading';
@@ -91,12 +90,6 @@ export function SiteFooter(): ReactElement {
         </nav>
 
         <SessionDuration />
-
-        {/* Above 860px this is the only theme control. The other copy is in the `MobileNav` sheet. */}
-        <div className="prl-footer__appearance">
-          <p className="prl-footer__heading prl-label">Appearance</p>
-          <ThemeToggle className="prl-footer__theme" />
-        </div>
       </div>
     </footer>
   );

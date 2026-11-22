@@ -1,13 +1,10 @@
 /**
  * The table (phase spine, pot, board and every seat), drawn only from the server's redacted `PlayerView`.
- * The surface is graph paper, not a casino. No felt, no green.
- * Layout switches on a container query at 46rem (the arithmetic is in `@container prl-table`).
- * DOM order is pot and board, opponents, then the viewer, which reads well aloud. The stacked layout
- * reorders visually with `order`, which is safe only because nothing in the table field is focusable.
- * If a seat ever gets a focusable control, the `order` declarations must go.
- * The opponents grid wraps rather than scrolls, because a scroller with no focusable content fails
- * WCAG 2.1.1. The narration region lives in `TableStage`, outside the conditional that renders this,
- * so the first hand of a session is announced.
+ * A flat felt oval with a rail, seats placed round it by a grid (`seatSlot` in `Seat.tsx`, the PokerTable
+ * block of components.css), so no seat can overlap another or the board at any width.
+ * DOM order is pot and board, opponents, then the viewer, which reads well aloud. The grid places them,
+ * not `order`, so the reading order never depends on the layout. The narration region lives in
+ * `TableStage`, outside the conditional that renders this, so the first hand of a session is announced.
  */
 
 import { unmatchedPartOf } from '@prl/contracts';
@@ -36,6 +33,8 @@ export interface PokerTableProps {
   readonly showLastActions?: boolean;
   readonly className?: string;
 }
+
+const BOARD_SIZE = 5;
 
 /** Five steps, not the engine's six streets. `showdown` and `complete` are one phase to a reader. */
 const PHASES = ['preflop', 'flop', 'turn', 'river', 'showdown'] as const;
@@ -134,6 +133,12 @@ function potsShown(view: PlayerView): { readonly total: number; readonly pots: r
   return { total: view.potTotal - back, pots };
 }
 
+/** The most anybody has put in on this street, which a call has to match. None once the pot is paid. */
+function currentBet(view: Pick<PlayerView, 'seats' | 'street'>): number {
+  if (view.street === 'complete') return 0;
+  return Math.max(0, ...view.seats.map((seat) => seat.committedThisStreet));
+}
+
 /** By position, the name the plates use. Found by chair: the view lists only dealt-in seats. */
 export function toActText(view: Pick<PlayerView, 'toAct' | 'viewerSeat' | 'seats'>): string {
   if (view.toAct === null) return '';
@@ -152,8 +157,9 @@ export function PokerTable(props: PokerTableProps): ReactElement {
   const headingId = `prl-table-heading-${view.handId}`;
   const board = [...view.board];
   const shown = potsShown(view);
+  const bet = currentBet(view);
 
-  // The viewer's plate sits outside the opponents list so the stacked layout can pin it.
+  // The viewer's plate sits outside the opponents list, so the list holds only the other players.
   // Found rather than indexed, because `!` is banned repo-wide.
   const heroIndex = seats.findIndex((seat) => seat.isSelf);
   const hero = seats.find((seat) => seat.isSelf) ?? null;
@@ -182,8 +188,6 @@ export function PokerTable(props: PokerTableProps): ReactElement {
       </div>
 
       <div className="prl-table__field">
-        <div className="prl-table__oval" aria-hidden="true" />
-
         <div className="prl-table__centre">
           {/* Once settled these chips are in the winners' stacks, so a bare "Pot" would count them twice. */}
           <PotDisplay
@@ -192,17 +196,23 @@ export function PokerTable(props: PokerTableProps): ReactElement {
             label={view.street === 'complete' ? 'Pot paid out' : 'Pot'}
             {...(seatNames === undefined ? {} : { seatNames })}
           />
+          {bet > 0 ? (
+            <p className="prl-table__bet">
+              <span className="prl-table__bet-label">
+                {'Bet'}
+                <span className="prl-visually-hidden">{' this round'}</span>
+              </span>{' '}
+              <span className="prl-table__bet-value">{formatChips(bet)}</span>
+            </p>
+          ) : null}
           <div className="prl-table__board">
-            <span className="prl-table__board-label prl-label" aria-hidden="true">
-              Board
-            </span>
             <CardRow
               cards={board}
               label={boardName(board)}
               showLabel={false}
-              size="md"
               {...highlightProps}
               emptyText="no community cards yet"
+              slots={BOARD_SIZE}
               className="prl-card-row--dealing"
             />
           </div>
