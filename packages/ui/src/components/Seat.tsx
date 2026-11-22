@@ -126,6 +126,17 @@ function SeatStats({ stack, bet }: { readonly stack: number; readonly bet: numbe
   );
 }
 
+/** Kept when empty, so every plate on the oval is one height and the stacks stay level. */
+function StatusLine({ text }: { readonly text: string }): ReactElement {
+  return text === '' ? (
+    <p className="prl-seat__status" aria-hidden="true">
+      {'\u00a0'}
+    </p>
+  ) : (
+    <p className="prl-seat__status">{text}</p>
+  );
+}
+
 export function Seat(props: SeatProps): ReactElement {
   const { seat, street, name, ringIndex, ringCount, turn = null, highlightedCards, highlightLabel } = props;
   const { as = 'li', className, lastAction = null } = props;
@@ -203,10 +214,7 @@ export function Seat(props: SeatProps): ReactElement {
       <SeatStats stack={seat.stack} bet={visibleBet(seat.committedThisStreet, settled, lastAction)} />
 
       {/* The last action rides on the status line, because six 13rem plates have no height to spare. */}
-      {/* Kept when empty, so every plate on the oval is one height and the stacks stay level. */}
-      <p className="prl-seat__status" aria-hidden={status === '' ? true : undefined}>
-        {status === '' ? '\u00a0' : status}
-      </p>
+      <StatusLine text={status} />
 
       {seat.status === 'sittingOut' ? null : (
         <CardRow

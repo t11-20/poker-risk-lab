@@ -1169,13 +1169,6 @@
   visibility: hidden;
 }
 
-/** The empty card slot keeps the pair's `sm` footprint, so a folded plate is as tall as the rest. */
-.prl-seat__cards .prl-card-row__empty {
-  display: block;
-  width: calc(var(--prl-space-9) * 2 + var(--prl-space-2));
-  height: calc(var(--prl-space-9) / 5 * 7);
-}
-
 .prl-seat__status {
   margin: 0;
   color: var(--prl-text-secondary);
@@ -1927,6 +1920,13 @@
 .prl-card-row__empty {
   color: var(--prl-text-muted);
   font-size: var(--prl-type-body-sm);
+}
+
+/** The empty card slot keeps the pair's `sm` footprint, so a folded plate is as tall as the rest. */
+.prl-seat__cards .prl-card-row__empty {
+  display: block;
+  width: calc(var(--prl-space-9) * 2 + var(--prl-space-2));
+  height: calc(var(--prl-space-9) / 5 * 7);
 }
 
 /**
