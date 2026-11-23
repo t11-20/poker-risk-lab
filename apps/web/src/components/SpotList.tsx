@@ -21,6 +21,7 @@ import {
   removeSpot,
   repeated,
   savedAt,
+  serialiseLibrary,
   spotHref,
   type WriteResult,
 } from '../lib/spot-storage.ts';
@@ -148,9 +149,10 @@ export function SpotList({ titles }: SpotListProps): ReactElement {
   // The prompt follows the entry it asked about, onto a new id when another tab reset and edited it.
   const now = asked === null || !library.ready ? null : askedCopy(library.spots, asked.request);
   const promptId = now === null || now.kind === 'gone' ? null : now.spot.id;
-  const changedSpot = now?.kind === 'changed' ? now.spot : null;
+  // As text, because every write re-reads storage into new objects and the effect below would fire again.
+  const changedCopy = now?.kind === 'changed' ? serialiseLibrary([now.spot]) : null;
   const changedLine =
-    changedSpot === null || asked === null ? null : changedSincePrompt(asked.own ? 'delete' : 'reset');
+    changedCopy === null || asked === null ? null : changedSincePrompt(asked.own ? 'delete' : 'reset');
   const gone = now?.kind === 'gone';
 
   useEffect(() => {
@@ -158,9 +160,9 @@ export function SpotList({ titles }: SpotListProps): ReactElement {
   }, [promptId]);
 
   useEffect(() => {
-    if (changedSpot === null || changedLine === null) return;
+    if (changedCopy === null || changedLine === null) return;
     setStatus((current) => repeated(current, changedLine));
-  }, [changedSpot, changedLine]);
+  }, [changedCopy, changedLine]);
 
   useEffect(() => {
     if (!gone || asked === null) return;

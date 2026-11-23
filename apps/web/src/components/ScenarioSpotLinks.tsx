@@ -15,6 +15,7 @@ import {
   editOf,
   removeSpot,
   repeated,
+  serialiseLibrary,
 } from '../lib/spot-storage.ts';
 import { useSpotLibrary } from '../lib/use-spot-library.ts';
 
@@ -34,8 +35,9 @@ export function ScenarioSpotLinks({ scenarioId }: { readonly scenarioId: string 
   const request =
     asked === null ? null : { id: asked.id, from: scenarioId, held: { kind: 'copy', spot: asked } as const };
   const now = request === null || !library.ready ? null : askedCopy(library.spots, request);
-  const changedSpot = now?.kind === 'changed' ? now.spot : null;
-  const changedLine = changedSpot === null ? null : changedSincePrompt('reset');
+  // As text, because every write re-reads storage into new objects and the effect below would fire again.
+  const changedCopy = now?.kind === 'changed' ? serialiseLibrary([now.spot]) : null;
+  const changedLine = changedCopy === null ? null : changedSincePrompt('reset');
   const gone = now?.kind === 'gone';
 
   useEffect(() => {
@@ -47,9 +49,9 @@ export function ScenarioSpotLinks({ scenarioId }: { readonly scenarioId: string 
   }, [focusTo]);
 
   useEffect(() => {
-    if (changedSpot === null || changedLine === null) return;
+    if (changedCopy === null || changedLine === null) return;
     setStatus((current) => repeated(current, changedLine));
-  }, [changedSpot, changedLine]);
+  }, [changedCopy, changedLine]);
 
   useEffect(() => {
     if (!gone) return;

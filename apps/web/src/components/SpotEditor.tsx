@@ -60,6 +60,7 @@ import {
   type StorageNotice,
   type StoredSync,
   saveSpot,
+  serialiseLibrary,
   storedCopy,
   syncWithStored,
   type WriteResult,
@@ -600,11 +601,21 @@ function SyncNotice(props: {
 
 const SAME: StoredSync = { kind: 'same' };
 
-/** The stored copy when it is no longer the one the open prompt asked about, else `null`. */
-function changedSincePrompted(prompt: Prompt | null, library: LoadedLibrary): SavedSpot | null {
+/**
+ * The stored copy as text when it is no longer the one the open prompt asked about, else `null`. Text,
+ * because every write re-reads storage into new objects and an effect keyed on one would fire again.
+ */
+function changedSincePrompted(prompt: Prompt | null, library: LoadedLibrary): string | null {
   if (prompt === null || !library.ready) return null;
   const now = askedCopy(library.spots, prompt.asked);
-  return now.kind === 'changed' ? now.spot : null;
+  return now.kind === 'changed' ? serialiseLibrary([now.spot]) : null;
+}
+
+/** The status under the bar, unless it only repeats what the open prompt already says. */
+function shownStatus(status: string, prompt: Prompt | null, changed: boolean): string | null {
+  if (status === '') return null;
+  const repeat = prompt !== null && changed && status.trim() === changedSincePrompt(prompt.write);
+  return repeat ? null : status;
 }
 
 export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement {
@@ -682,7 +693,8 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
   const edited = !draftsMatch(saved ?? original?.draft ?? null, draft);
   const sync = library.ready ? syncWithStored(held, storedCopy(library.spots, editing), edited) : SAME;
   const adoptable = sync.kind === 'adopt' ? sync.spot : null;
-  const changedSpot = changedSincePrompted(confirming, library);
+  const changedCopy = changedSincePrompted(confirming, library);
+  const note = shownStatus(saveStatus, confirming, changedCopy !== null);
   const cardErrors = [
     err('hole'),
     err('board'),
@@ -700,10 +712,10 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
 
   // After the effect above, so with a prompt open the reader hears what pressing on would now do.
   useEffect(() => {
-    if (changedSpot === null || confirming === null) return;
+    if (changedCopy === null || confirming === null) return;
     const line = changedSincePrompt(confirming.write);
     setSaveStatus((current) => repeated(current, line));
-  }, [changedSpot, confirming]);
+  }, [changedCopy, confirming]);
 
   const change = (next: SpotDraft, field: FieldKey | null = null): void => {
     setDraft(next);
@@ -861,7 +873,7 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
       />
       <EditorBar
         confirming={confirming}
-        changed={changedSpot !== null}
+        changed={changedCopy !== null}
         ready={library.ready}
         ownEdit={ownEdit}
         saved={editing.id !== null}
@@ -879,8 +891,7 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
       <p className="prl-live-region" role="status" aria-live="polite">
         {saveStatus}
       </p>
-      {/* An open prompt says what matters now; the last sentence returns when it closes. */}
-      {saveStatus === '' || confirming !== null ? null : <p className="prl-note">{saveStatus}</p>}
+      {note === null ? null : <p className="prl-note">{note}</p>}
 
       <div className="prl-spot-editor__layout">
         <div className="prl-spot-editor__inputs">
