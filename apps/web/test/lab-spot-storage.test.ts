@@ -12,6 +12,7 @@ import {
   deleteSpot,
   duplicateDraft,
   editOf,
+  type HeldCopy,
   isEditOfBuiltIn,
   newSpotId,
   noticeSentence,
@@ -19,11 +20,13 @@ import {
   readLibrary,
   refusalSentence,
   resetToOriginal,
+  type SaveRequest,
   SPOTS_STORAGE_KEY,
   type SpotStore,
   saveSpot,
   serialiseLibrary,
   spotHref,
+  storedCopy,
   syncWithStored,
   writeLibrary,
 } from '../src/lib/spot-storage.ts';
@@ -58,6 +61,17 @@ class MemoryStore implements SpotStore {
   }
 }
 
+/** A save that must go through: a new spot unless `held` names the copy it replaces. */
+function put(
+  spots: readonly SavedSpot[],
+  request: Omit<SaveRequest, 'held'> & { readonly held?: HeldCopy },
+  now: number,
+): { readonly spots: readonly SavedSpot[]; readonly saved: SavedSpot } {
+  const result = saveSpot(spots, { held: { kind: 'none' }, ...request }, now, ids);
+  assert.ok(!('conflict' in result), 'the save was refused');
+  return result;
+}
+
 const THROWING: SpotStore = {
   getItem: () => {
     throw new Error('SecurityError');
@@ -69,7 +83,7 @@ const THROWING: SpotStore = {
 
 describe('create, edit, duplicate, delete, reset', () => {
   it('creates a spot of the player own, with a fresh id', () => {
-    const { spots, saved } = saveSpot([], { id: null, from: null, draft: draft('Mine') }, 10, ids);
+    const { spots, saved } = put([], { id: null, from: null, draft: draft('Mine') }, 10);
     assert.equal(spots.length, 1);
     assert.equal(saved.from, null);
     assert.match(saved.id, /^spot-/u);
@@ -77,12 +91,11 @@ describe('create, edit, duplicate, delete, reset', () => {
   });
 
   it('edits in place: the same id, the new draft, nothing added', () => {
-    const first = saveSpot([], { id: null, from: null, draft: draft('Mine') }, 10, ids);
-    const second = saveSpot(
+    const first = put([], { id: null, from: null, draft: draft('Mine') }, 10);
+    const second = put(
       first.spots,
-      { id: first.saved.id, from: null, draft: draft('Renamed') },
+      { id: first.saved.id, from: null, held: { kind: 'copy', spot: first.saved }, draft: draft('Renamed') },
       20,
-      ids,
     );
     assert.equal(second.spots.length, 1);
     assert.equal(second.saved.id, first.saved.id);
@@ -90,14 +103,22 @@ describe('create, edit, duplicate, delete, reset', () => {
   });
 
   it('keeps one edit per built-in, linked to it', () => {
-    const first = saveSpot([], { id: null, from: 'fl-a', draft: draft('Edit one') }, 10, ids);
-    const again = saveSpot(first.spots, { id: null, from: 'fl-a', draft: draft('Edit two') }, 20, ids);
+    const first = put([], { id: null, from: 'fl-a', draft: draft('Edit one') }, 10);
+    const blind = saveSpot(
+      first.spots,
+      { id: null, from: 'fl-a', held: { kind: 'none' }, draft: draft('Two') },
+      20,
+      ids,
+    );
+    assert.deepEqual(blind, { conflict: first.saved }, 'a copy this tab never held is not replaced');
+    const held = { kind: 'copy', spot: first.saved } as const;
+    const again = put(first.spots, { id: null, from: 'fl-a', held, draft: draft('Edit two') }, 20);
     assert.equal(again.spots.length, 1);
     assert.equal(editOf(again.spots, 'fl-a')?.draft.name, 'Edit two');
   });
 
   it('duplicates as a new spot of the player own, never linked to the built-in', () => {
-    const edit = saveSpot([], { id: null, from: 'fl-a', draft: draft('Edit') }, 10, ids);
+    const edit = put([], { id: null, from: 'fl-a', draft: draft('Edit') }, 10);
     const copy = duplicateDraft(edit.spots, edit.saved.draft, 20, ids);
     assert.equal(copy.spots.length, 2);
     assert.equal(copy.saved.from, null);
@@ -106,8 +127,8 @@ describe('create, edit, duplicate, delete, reset', () => {
   });
 
   it('deletes one spot and leaves the others', () => {
-    const a = saveSpot([], { id: null, from: null, draft: draft('A') }, 1, ids);
-    const b = saveSpot(a.spots, { id: null, from: null, draft: draft('B') }, 2, ids);
+    const a = put([], { id: null, from: null, draft: draft('A') }, 1);
+    const b = put(a.spots, { id: null, from: null, draft: draft('B') }, 2);
     const left = deleteSpot(b.spots, a.saved.id);
     assert.deepEqual(
       left.map((spot) => spot.draft.name),
@@ -116,9 +137,9 @@ describe('create, edit, duplicate, delete, reset', () => {
   });
 
   it('reset to original removes the edit of that built-in only', () => {
-    const a = saveSpot([], { id: null, from: 'fl-a', draft: draft('Edit A') }, 1, ids);
-    const b = saveSpot(a.spots, { id: null, from: 'fl-b', draft: draft('Edit B') }, 2, ids);
-    const mine = saveSpot(b.spots, { id: null, from: null, draft: draft('Mine') }, 3, ids);
+    const a = put([], { id: null, from: 'fl-a', draft: draft('Edit A') }, 1);
+    const b = put(a.spots, { id: null, from: 'fl-b', draft: draft('Edit B') }, 2);
+    const mine = put(b.spots, { id: null, from: null, draft: draft('Mine') }, 3);
     const reset = resetToOriginal(mine.spots, 'fl-a');
     assert.equal(editOf(reset, 'fl-a'), undefined);
     assert.equal(reset.length, 2);
@@ -132,14 +153,14 @@ describe('create, edit, duplicate, delete, reset', () => {
 
 describe('what storage holds', () => {
   it('round-trips a saved spot exactly', () => {
-    const { spots } = saveSpot([], { id: null, from: 'fl-a', draft: draft('Round trip') }, 5, ids);
+    const { spots } = put([], { id: null, from: 'fl-a', draft: draft('Round trip') }, 5);
     const parsed = parseLibrary(serialiseLibrary(spots));
     assert.equal(parsed.notice, null);
     assert.deepEqual(parsed.spots, spots);
   });
 
   it('keeps cards as text, never as engine integers', () => {
-    const { spots } = saveSpot([], { id: null, from: null, draft: draft('Text') }, 5, ids);
+    const { spots } = put([], { id: null, from: null, draft: draft('Text') }, 5);
     const stored = JSON.parse(serialiseLibrary(spots));
     assert.equal(stored.spots[0].cards.hole1, 'Ah');
     assert.equal(stored.version, 1);
@@ -177,7 +198,7 @@ describe('what storage holds', () => {
   });
 
   it('drops entries that are not spots, counts them, and keeps the rest', () => {
-    const { spots } = saveSpot([], { id: null, from: null, draft: draft('Good') }, 5, ids);
+    const { spots } = put([], { id: null, from: null, draft: draft('Good') }, 5);
     const stored = JSON.parse(serialiseLibrary(spots));
     const good = stored.spots[0];
     stored.spots.push(
@@ -217,7 +238,7 @@ describe('what storage holds', () => {
         range: 'x'.repeat(1000),
       })),
     };
-    const { spots } = saveSpot([], { id: null, from: null, draft: padded }, 5, ids);
+    const { spots } = put([], { id: null, from: null, draft: padded }, 5);
     const back = parseLibrary(serialiseLibrary(spots));
     assert.equal(back.notice, null);
     assert.equal(back.spots.length, 1);
@@ -259,7 +280,7 @@ describe('what storage holds', () => {
 
   it('writes what it reads back', () => {
     const store = new MemoryStore();
-    const { spots } = saveSpot([], { id: null, from: null, draft: draft('Stored') }, 5, ids);
+    const { spots } = put([], { id: null, from: null, draft: draft('Stored') }, 5);
     assert.deepEqual(writeLibrary(store, readLibrary(store), spots), { ok: true });
     const back: readonly SavedSpot[] = readLibrary(store).spots;
     assert.deepEqual(back, spots);
@@ -288,12 +309,174 @@ describe('a spot whose built-in is gone, and a spot changed in another tab', () 
 
   it('takes another tab save quietly only when there is nothing here to lose', () => {
     const stored = spot(null);
-    assert.deepEqual(syncWithStored(7, stored, true), { kind: 'same' });
-    assert.deepEqual(syncWithStored(3, stored, false), { kind: 'adopt', spot: stored });
-    assert.deepEqual(syncWithStored(3, stored, true), { kind: 'changed', spot: stored });
-    assert.deepEqual(syncWithStored(null, stored, false), { kind: 'adopt', spot: stored });
-    assert.deepEqual(syncWithStored(null, stored, true), { kind: 'changed', spot: stored });
-    assert.deepEqual(syncWithStored(3, undefined, true), { kind: 'deleted' });
-    assert.deepEqual(syncWithStored(null, undefined, true), { kind: 'same' });
+    const held = { kind: 'copy', spot: stored } as const;
+    const older = { kind: 'copy', spot: { ...stored, updatedAt: 3 } } as const;
+    const none = { kind: 'none' } as const;
+    assert.deepEqual(syncWithStored(held, stored, true), { kind: 'same' });
+    assert.deepEqual(syncWithStored(older, stored, false), { kind: 'adopt', spot: stored });
+    assert.deepEqual(syncWithStored(older, stored, true), { kind: 'changed', spot: stored });
+    assert.deepEqual(syncWithStored(none, stored, false), { kind: 'adopt', spot: stored });
+    assert.deepEqual(syncWithStored(none, stored, true), { kind: 'changed', spot: stored });
+    assert.deepEqual(syncWithStored(older, undefined, true), { kind: 'deleted' });
+    assert.deepEqual(syncWithStored(none, undefined, true), { kind: 'same' });
+  });
+
+  it('compares the whole copy, so two saves in the same millisecond are still told apart', () => {
+    const stored = spot(null);
+    const held = { kind: 'copy', spot: { ...stored, draft: draft('Other') } } as const;
+    assert.deepEqual(syncWithStored(held, stored, true), { kind: 'changed', spot: stored });
+  });
+
+  it('the first read of storage is where a tab starts, never a change from another tab', () => {
+    // A built-in opened with ?from= used to announce its own saved edit as "updated in another tab".
+    const unread = { kind: 'unread' } as const;
+    assert.deepEqual(syncWithStored(unread, spot('eq-flush-draw-turn-small-bet'), false), { kind: 'same' });
+    assert.deepEqual(syncWithStored(unread, undefined, false), { kind: 'same' });
+  });
+});
+
+/** One editor tab, driven only through the storage functions the editor calls. */
+interface Tab {
+  editing: { id: string | null; from: string | null };
+  held: Parameters<typeof syncWithStored>[0];
+  draft: SpotDraft;
+  saved: SpotDraft | null;
+}
+
+const ORIGINAL = draft('The built-in');
+const FROM = 'eq-flush-draw-turn-small-bet';
+const entries = (store: SpotStore): readonly SavedSpot[] => readLibrary(store).spots;
+const same = (a: SavedSpot, b: SavedSpot): boolean => serialiseLibrary([a]) === serialiseLibrary([b]);
+
+function take(tab: Tab, saved: SavedSpot): void {
+  tab.editing = { id: saved.id, from: saved.from };
+  tab.held = { kind: 'copy', spot: saved };
+  tab.draft = saved.draft;
+  tab.saved = saved.draft;
+}
+
+function openTab(store: SpotStore, from: string): Tab {
+  const tab: Tab = { editing: { id: null, from }, held: { kind: 'unread' }, draft: ORIGINAL, saved: null };
+  const found = editOf(entries(store), from);
+  if (found === undefined) tab.held = { kind: 'none' };
+  else take(tab, found);
+  return tab;
+}
+
+const edited = (tab: Tab): boolean => JSON.stringify(tab.saved ?? ORIGINAL) !== JSON.stringify(tab.draft);
+
+/** The `storage` event: a tab with nothing to lose takes the newer copy, as the editor does. */
+function settle(tab: Tab, store: SpotStore): ReturnType<typeof syncWithStored> {
+  const sync = syncWithStored(tab.held, storedCopy(entries(store), tab.editing), edited(tab));
+  if (sync.kind === 'adopt') take(tab, sync.spot);
+  return sync;
+}
+
+function save(tab: Tab, store: SpotStore, now: number): 'saved' | 'refused' {
+  const library = readLibrary(store);
+  const result = saveSpot(library.spots, { ...tab.editing, held: tab.held, draft: tab.draft }, now, ids);
+  if ('conflict' in result) return 'refused';
+  assert.deepEqual(writeLibrary(store, library, result.spots), { ok: true });
+  take(tab, result.saved);
+  return 'saved';
+}
+
+function reset(tab: Tab, store: SpotStore): void {
+  const from = tab.editing.from;
+  assert.ok(from !== null);
+  writeLibrary(store, readLibrary(store), resetToOriginal(entries(store), from));
+  tab.editing = { id: null, from };
+  tab.held = { kind: 'none' };
+  tab.draft = ORIGINAL;
+  tab.saved = null;
+}
+
+const rename = (tab: Tab, name: string): void => {
+  tab.draft = { ...tab.draft, name };
+};
+
+describe('two tabs on one built-in: a save never replaces a copy its tab has not seen', () => {
+  it('a reset and a new edit in tab A are not overwritten by tab B, dirty or clean when A reset', () => {
+    for (const cleanAtReset of [false, true]) {
+      const store = new MemoryStore();
+      const a = openTab(store, FROM);
+      rename(a, 'E by A');
+      assert.equal(save(a, store, 1), 'saved');
+      const b = openTab(store, FROM);
+      assert.equal(b.draft.name, 'E by A');
+      if (!cleanAtReset) rename(b, 'B edit');
+      reset(a, store);
+      settle(b, store);
+      if (cleanAtReset) rename(b, 'B edit');
+      rename(a, 'E2 by A');
+      assert.equal(save(a, store, 2), 'saved');
+      const sync = settle(b, store);
+      assert.equal(sync.kind, 'changed', 'B is told the copy changed, not that it was deleted');
+      assert.equal(save(b, store, 3), 'refused', 'B cannot save over E2 without choosing');
+      assert.deepEqual(
+        entries(store).map((spot) => spot.draft.name),
+        ['E2 by A'],
+      );
+      settle(a, store);
+      assert.equal(a.draft.name, 'E2 by A', 'A keeps its own edit');
+      // "Keep mine" is the reader choosing: B now holds E2, so its save replaces it.
+      if (sync.kind === 'changed') b.held = { kind: 'copy', spot: sync.spot };
+      assert.equal(save(b, store, 4), 'saved');
+      assert.deepEqual(
+        entries(store).map((spot) => spot.draft.name),
+        ['B edit'],
+      );
+    }
+  });
+
+  it('holds for every order of saves, resets, duplicates, deletes and reloads (seeded)', () => {
+    let seed = 20_261_123;
+    const next = (n: number): number => {
+      seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
+      return Math.floor((seed / 2_147_483_648) * n);
+    };
+    const OPS = ['edit', 'save', 'reset', 'duplicate', 'delete', 'keep', 'load', 'reload'] as const;
+    let saves = 0;
+    for (let run = 0; run < 1500; run += 1) {
+      const store = new MemoryStore();
+      const tabs = [openTab(store, FROM), openTab(store, FROM)];
+      for (let step = 0; step < 14; step += 1) {
+        const index = next(2);
+        const tab = tabs[index] as Tab;
+        const op = OPS[next(OPS.length)];
+        const now = run * 100 + step;
+        const sync = settle(tab, store);
+        const before = entries(store);
+        const held = tab.held;
+        if (op === 'edit') rename(tab, `${index}-${now}`);
+        else if (op === 'save') {
+          if (save(tab, store, now) === 'saved') {
+            saves += 1;
+            const after = entries(store);
+            for (const entry of before) {
+              const kept = after.find((candidate) => same(candidate, entry));
+              if (kept !== undefined) continue;
+              assert.ok(
+                held.kind === 'copy' && same(held.spot, entry),
+                `run ${run} step ${step}: tab ${index} replaced "${entry.draft.name}" without holding it`,
+              );
+            }
+          }
+        } else if (op === 'reset' && tab.editing.from !== null && tab.editing.id !== null) reset(tab, store);
+        else if (op === 'duplicate') {
+          const copy = duplicateDraft(before, tab.draft, now, ids);
+          writeLibrary(store, readLibrary(store), copy.spots);
+          take(tab, copy.saved);
+        } else if (op === 'delete' && tab.editing.from === null && tab.editing.id !== null) {
+          writeLibrary(store, readLibrary(store), deleteSpot(before, tab.editing.id));
+          tabs[index] = openTab(store, FROM);
+        } else if (op === 'keep' && sync.kind === 'changed') tab.held = { kind: 'copy', spot: sync.spot };
+        else if (op === 'load' && sync.kind === 'changed') take(tab, sync.spot);
+        else if (op === 'reload') tabs[index] = openTab(store, FROM);
+        const edits = entries(store).filter((entry) => entry.from === FROM);
+        assert.ok(edits.length <= 1, `run ${run} step ${step}: ${edits.length} edits of one built-in`);
+      }
+    }
+    assert.ok(saves > 1000, `only ${saves} saves went through: a sweep of nothing`);
   });
 });

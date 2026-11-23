@@ -45,6 +45,7 @@ import {
   deleteSpot,
   duplicateDraft,
   editOf,
+  type HeldCopy,
   newSpotId,
   noticeSentence,
   refusalSentence,
@@ -575,8 +576,8 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
   const [editing, setEditing] = useState<Editing>({ id: null, from: original === undefined ? null : fromId });
   const [draft, setDraft] = useState<SpotDraft>(original?.draft ?? blankDraft());
   const [saved, setSaved] = useState<SpotDraft | null>(null);
-  // The `updatedAt` of the stored copy this tab last read or wrote, so another tab's save is noticed.
-  const [heldAt, setHeldAt] = useState<number | null>(null);
+  // The stored copy this tab last read or wrote, so a save never replaces one it has not seen.
+  const [held, setHeld] = useState<HeldCopy>({ kind: 'unread' });
   const [missing, setMissing] = useState(false);
   const [unknownFrom, setUnknownFrom] = useState(false);
   const [loaded, setLoaded] = useState(target.mode !== 'id');
@@ -595,7 +596,7 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
     setEditing({ id: spot.id, from: spot.from });
     setDraft(spot.draft);
     setSaved(spot.draft);
-    setHeldAt(spot.updatedAt);
+    setHeld({ kind: 'copy', spot });
     setActive(nextOpenSlot(allSlots(spot.draft), null));
   }, []);
 
@@ -612,8 +613,9 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
       take(found);
       // A spot saved before a rule existed can break it, and says so at once rather than after Save.
       if (!validateDraft(found.draft).ok) setSubmitted(true);
-    } else if (target.mode === 'from' && original === undefined) {
-      setUnknownFrom(true);
+    } else {
+      setHeld({ kind: 'none' });
+      if (target.mode === 'from' && original === undefined) setUnknownFrom(true);
     }
     setLoaded(true);
   }, [library, target, original, take]);
@@ -630,8 +632,7 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
   const linked = editing.from === null ? undefined : originals[editing.from];
   const dirty = !draftsMatch(saved, draft);
   const edited = !draftsMatch(saved ?? original?.draft ?? null, draft);
-  const sync =
-    loaded && library.ready ? syncWithStored(heldAt, storedCopy(library.spots, editing), edited) : SAME;
+  const sync = library.ready ? syncWithStored(held, storedCopy(library.spots, editing), edited) : SAME;
   const adoptable = sync.kind === 'adopt' ? sync.spot : null;
   const cardErrors = [
     err('hole'),
@@ -686,14 +687,13 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
       focusFirstError();
       return;
     }
-    const fresh = read();
-    if (syncWithStored(heldAt, storedCopy(fresh.spots, editing), true).kind === 'changed') {
+    const next = saveSpot(read().spots, { ...editing, held, draft }, Date.now(), () => newSpotId());
+    if ('conflict' in next) {
       setSaveStatus(
         'Not saved. This spot changed in another tab. Load that copy, or keep yours to save over it.',
       );
       return;
     }
-    const next = saveSpot(fresh.spots, { ...editing, draft }, Date.now(), () => newSpotId());
     if (!written(commit(next.spots), 'Saved in this browser.')) return;
     take(next.saved);
     const builtIn = next.saved.from !== null && originals[next.saved.from] !== undefined;
@@ -737,7 +737,7 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
     setEditing({ id: null, from });
     setDraft(back.draft);
     setSaved(null);
-    setHeldAt(null);
+    setHeld({ kind: 'none' });
     setActive(nextOpenSlot(allSlots(back.draft), null));
   };
 
@@ -788,7 +788,8 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
           setSaveStatus('Loaded the copy saved in another tab.');
         }}
         onKeep={(spot) => {
-          setHeldAt(spot.updatedAt);
+          setEditing({ id: spot.id, from: spot.from });
+          setHeld({ kind: 'copy', spot });
           setSaveStatus('Kept your changes. Saving replaces the copy from the other tab.');
         }}
       />

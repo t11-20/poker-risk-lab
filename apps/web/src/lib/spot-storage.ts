@@ -325,13 +325,27 @@ export function spotHref(spot: SavedSpot, isBuiltIn: (id: string) => boolean): s
     : `/lab/spots/edit?id=${encodeURIComponent(spot.id)}`;
 }
 
-/** The stored copy a tab is editing: by id once saved, else the saved edit of its built-in. */
+/**
+ * Where a save of this tab would land: its own id, else the one edit of its built-in. The fallback is
+ * what finds another tab's new edit after a reset there gave that edit a new id.
+ */
 export function storedCopy(
   spots: readonly SavedSpot[],
   editing: { readonly id: string | null; readonly from: string | null },
 ): SavedSpot | undefined {
-  if (editing.id !== null) return spots.find((spot) => spot.id === editing.id);
-  return editing.from === null ? undefined : editOf(spots, editing.from);
+  const own = editing.id === null ? undefined : spots.find((spot) => spot.id === editing.id);
+  return own ?? (editing.from === null ? undefined : editOf(spots, editing.from));
+}
+
+/** What a tab last read or wrote where its spot is kept: nothing read yet, nothing there, or that copy. */
+export type HeldCopy =
+  | { readonly kind: 'unread' }
+  | { readonly kind: 'none' }
+  | { readonly kind: 'copy'; readonly spot: SavedSpot };
+
+/** The whole entry as storage writes it, so two saves in one millisecond are still told apart. */
+function holds(held: HeldCopy, stored: SavedSpot): boolean {
+  return held.kind === 'copy' && serialiseLibrary([held.spot]) === serialiseLibrary([stored]);
 }
 
 export type StoredSync =
@@ -342,18 +356,12 @@ export type StoredSync =
   | { readonly kind: 'changed'; readonly spot: SavedSpot }
   | { readonly kind: 'deleted' };
 
-/**
- * How the stored copy relates to the one this tab holds. `heldAt` is the `updatedAt` this tab last
- * read or wrote, `null` before it has one; another tab's write changes it, and the `storage` event
- * brings that write here.
- */
-export function syncWithStored(
-  heldAt: number | null,
-  stored: SavedSpot | undefined,
-  edited: boolean,
-): StoredSync {
-  if (stored === undefined) return heldAt === null ? { kind: 'same' } : { kind: 'deleted' };
-  if (stored.updatedAt === heldAt) return { kind: 'same' };
+/** How the stored copy relates to the one this tab holds. Another tab's write arrives as `storage`. */
+export function syncWithStored(held: HeldCopy, stored: SavedSpot | undefined, edited: boolean): StoredSync {
+  // The first read is where this tab starts, so nothing in it is another tab's change.
+  if (held.kind === 'unread') return { kind: 'same' };
+  if (stored === undefined) return held.kind === 'none' ? { kind: 'same' } : { kind: 'deleted' };
+  if (holds(held, stored)) return { kind: 'same' };
   return edited ? { kind: 'changed', spot: stored } : { kind: 'adopt', spot: stored };
 }
 
@@ -361,22 +369,27 @@ export interface SaveRequest {
   /** The spot being edited, or `null` for one not saved yet. */
   readonly id: string | null;
   readonly from: string | null;
+  readonly held: HeldCopy;
   readonly draft: SpotDraft;
 }
 
+export type SaveResult =
+  | { readonly spots: readonly SavedSpot[]; readonly saved: SavedSpot }
+  /** A copy this tab never held is where the save would land, so nothing is written. */
+  | { readonly conflict: SavedSpot };
+
 /**
- * Creates or replaces one spot. A first save of a built-in's copy replaces the existing edit of that
- * scenario, so there is at most one edit per built-in for "Reset to original" to remove.
+ * Creates or replaces one spot, and replaces only the copy this tab holds. A first save of a
+ * built-in's copy lands on that scenario's edit, so there is one edit per built-in to reset.
  */
 export function saveSpot(
   spots: readonly SavedSpot[],
   request: SaveRequest,
   now: number,
   makeId: () => string,
-): { readonly spots: readonly SavedSpot[]; readonly saved: SavedSpot } {
-  const existing =
-    (request.id === null ? undefined : spots.find((spot) => spot.id === request.id)) ??
-    (request.from === null ? undefined : editOf(spots, request.from));
+): SaveResult {
+  const existing = storedCopy(spots, request);
+  if (existing !== undefined && !holds(request.held, existing)) return { conflict: existing };
   const saved: SavedSpot = {
     id: existing?.id ?? makeId(),
     from: existing?.from ?? request.from,
