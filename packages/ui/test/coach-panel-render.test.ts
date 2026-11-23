@@ -788,7 +788,7 @@ test('the chips past a short hero are a side pot only when a second opponent can
   assert.match(await render(short('side-pot')), /270 units is a side pot you are not in\./u);
 });
 
-test('a tip opens beside what it explains, so the equity tip never covers the share it is about', async () => {
+test('a tip opens beside what it explains, so neither equity tip covers the share it is about', async () => {
   const tree = markupTree(await render(NINE_OUT_DRAW));
   const tips = findAll(tree, (element) => hasClass(element, 'prl-tip'));
   assert.ok(tips.length >= 6, `only ${tips.length} tips rendered`);
@@ -800,6 +800,7 @@ test('a tip opens beside what it explains, so the equity tip never covers the sh
   const equity = subjectOf('equity');
   assert.ok(equity.inner.includes('Your share of the pot'), 'the share is inside what the equity tip avoids');
   assert.ok(equity.inner.includes('prl-metric__value'), 'and so is its figure');
+  // The method says how the share was found, and at 390px a bubble under its own row sat on the share.
   const method = subjectOf('exact and monte carlo');
-  assert.ok(!method.inner.includes('Your share of the pot'), 'the method tip keeps its own row');
+  assert.ok(method.inner.includes('Your share of the pot'), 'the share is inside what the method tip avoids');
 });

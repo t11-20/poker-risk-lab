@@ -304,7 +304,7 @@ function EquitySection({ equity, interval, surplus }: EquitySectionProps): React
     : {};
 
   return (
-    // The equity tip explains the share below its heading, so the whole section is its subject.
+    // Both tips in the head explain the share below it, so the whole section is their subject.
     <section className="prl-coach__section prl-coach__section--equity" data-tip-subject="">
       {/* Each tip shares a row with its subject, so the head keeps two items for `space-between`. */}
       <div className="prl-coach__section-head">
@@ -312,7 +312,7 @@ function EquitySection({ equity, interval, surplus }: EquitySectionProps): React
           <h3 className="prl-coach__section-heading">Equity</h3>
           <Tip tip={UI_TIPS.equity} />
         </div>
-        <div className="prl-tip-row" data-tip-subject="">
+        <div className="prl-tip-row">
           <Chip
             className="prl-coach__method"
             tone={equity.method === 'exact-enumeration' ? 'accent' : 'info'}
