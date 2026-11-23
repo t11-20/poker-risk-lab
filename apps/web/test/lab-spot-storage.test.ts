@@ -8,10 +8,8 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { parseCardText } from '@prl/ui/cards';
 import { blankDraft, type SavedSpot, type SpotDraft } from '../src/lib/spot.ts';
+import { CLOSED, type Prompt, type Removal, step } from '../src/lib/spot-prompt.ts';
 import {
-  askedCopy,
-  changedSincePrompt,
-  conflictSentence,
   duplicateDraft,
   editOf,
   type HeldCopy,
@@ -21,16 +19,14 @@ import {
   newSpotId,
   noticeSentence,
   parseLibrary,
-  type RemoveRequest,
   readLibrary,
-  refusal,
   refusalSentence,
-  removeSpot,
   repeated,
   type SaveRequest,
   SPOTS_STORAGE_KEY,
   type SpotStore,
   savedAt,
+  saveRefusal,
   saveSpot,
   serialiseLibrary,
   spotHref,
@@ -78,6 +74,12 @@ function put(
   const result = saveSpot(spots, { held: { kind: 'none' }, ...request }, now, ids);
   assert.ok(!('conflict' in result), 'the save was refused');
   return result;
+}
+
+/** What a confirmed prompt on `copy` writes, or `null` when it closes and writes nothing. */
+function removal(spots: readonly SavedSpot[], write: Removal, copy: SavedSpot): readonly SavedSpot[] | null {
+  const opened = step(CLOSED, { type: 'open', surface: 'list', write, copy, spots, yours: false });
+  return step(opened.prompt, { type: 'confirm', spots, yours: false }).write;
 }
 
 const THROWING: SpotStore = {
@@ -137,10 +139,8 @@ describe('create, edit, duplicate, delete, reset', () => {
   it('deletes one spot and leaves the others', () => {
     const a = put([], { id: null, from: null, draft: draft('A') }, 1);
     const b = put(a.spots, { id: null, from: null, draft: draft('B') }, 2);
-    const left = removeSpot(b.spots, { id: a.saved.id, from: null, held: { kind: 'copy', spot: a.saved } });
-    assert.ok('spots' in left);
     assert.deepEqual(
-      left.spots.map((spot) => spot.draft.name),
+      removal(b.spots, 'delete', a.saved)?.map((spot) => spot.draft.name),
       ['B'],
     );
   });
@@ -149,14 +149,9 @@ describe('create, edit, duplicate, delete, reset', () => {
     const a = put([], { id: null, from: 'fl-a', draft: draft('Edit A') }, 1);
     const b = put(a.spots, { id: null, from: 'fl-b', draft: draft('Edit B') }, 2);
     const mine = put(b.spots, { id: null, from: null, draft: draft('Mine') }, 3);
-    const reset = removeSpot(mine.spots, {
-      id: a.saved.id,
-      from: 'fl-a',
-      held: { kind: 'copy', spot: a.saved },
-    });
-    assert.ok('spots' in reset);
-    assert.equal(editOf(reset.spots, 'fl-a'), undefined);
-    assert.equal(reset.spots.length, 2);
+    const reset = removal(mine.spots, 'reset', a.saved) ?? [];
+    assert.equal(editOf(reset, 'fl-a'), undefined);
+    assert.equal(reset.length, 2);
   });
 
   it('makes ids from the random source, prefixed so none reads as a scenario id', () => {
@@ -453,9 +448,9 @@ function settle(tab: Tab, store: SpotStore): ReturnType<typeof syncWithStored> {
   return sync;
 }
 
-/** A refused write re-renders the editor, and a tab with nothing to lose then shows the other copy. */
+/** A refused save re-renders the editor, and a tab with nothing to lose then shows the other copy. */
 function refuse(tab: Tab, conflict: SavedSpot): 'refused' {
-  if (!edited(tab)) take(tab, conflict);
+  if (saveRefusal(edited(tab)).show) take(tab, conflict);
   return 'refused';
 }
 
@@ -468,16 +463,25 @@ function save(tab: Tab, store: SpotStore, now: number): 'saved' | 'refused' {
   return 'saved';
 }
 
-/** The editor's Delete, or its Reset to original for an edit of the built-in, on what its prompt asked. */
-function remove(
-  tab: Tab,
-  store: SpotStore,
-  asked: RemoveRequest = { ...tab.editing, held: tab.held },
-): 'removed' | 'refused' {
+/** The editor's Delete, or its Reset for an edit of the built-in, opened on the copy the tab holds. */
+function openOn(tab: Tab, store: SpotStore): Prompt {
+  const write = tab.editing.from === FROM ? 'reset' : 'delete';
+  // The editor draws Delete or Reset only while it edits a stored id, which it then holds a copy of.
+  if (tab.held.kind !== 'copy') return CLOSED;
+  const copy = tab.held.spot;
+  const yours = edited(tab);
+  const opened = step(CLOSED, { type: 'open', surface: 'editor', write, copy, spots: entries(store), yours });
+  if (opened.shown !== null) take(tab, opened.shown);
+  return opened.prompt;
+}
+
+/** Its confirm, on whatever prompt `opened` is by now. A prompt that closed writes nothing. */
+function remove(tab: Tab, store: SpotStore, opened: Prompt = openOn(tab, store)): 'removed' | 'refused' {
   const library = readLibrary(store);
-  const result = removeSpot(library.spots, asked);
-  if ('conflict' in result) return refuse(tab, result.conflict);
-  assert.deepEqual(writeLibrary(store, library, result.spots), { ok: true });
+  const asked = step(opened, { type: 'confirm', spots: library.spots, yours: edited(tab) });
+  if (asked.shown !== null) take(tab, asked.shown);
+  if (asked.write === null) return 'refused';
+  assert.deepEqual(writeLibrary(store, library, asked.write), { ok: true });
   if (tab.editing.from === FROM) {
     tab.editing = { id: null, from: FROM };
     tab.held = { kind: 'none' };
@@ -490,10 +494,10 @@ function remove(
 /** The list's Delete or Reset to original, aimed at the entry as the list last drew it. */
 function removeListed(target: SavedSpot, store: SpotStore): 'removed' | 'refused' {
   const library = readLibrary(store);
-  const held = { kind: 'copy', spot: target } as const;
-  const result = removeSpot(library.spots, { id: target.id, from: target.from, held });
-  if ('conflict' in result) return 'refused';
-  assert.deepEqual(writeLibrary(store, library, result.spots), { ok: true });
+  const write = target.from === FROM ? 'reset' : 'delete';
+  const spots = removal(library.spots, write, target);
+  if (spots === null) return 'refused';
+  assert.deepEqual(writeLibrary(store, library, spots), { ok: true });
   return 'removed';
 }
 
@@ -568,26 +572,20 @@ describe('two tabs: no save, reset or delete removes a copy its tab has not seen
     assert.equal(save(a, store, 2), 'saved');
     assert.equal(removeListed(drawn, store), 'refused', 'a reset and a new edit elsewhere is not removed');
     assert.equal(removeListed(entries(store)[0] as SavedSpot, store), 'removed');
-    assert.equal(removeListed(drawn, store), 'removed', 'a copy already gone leaves the list as it is');
+    const left = serialiseLibrary(entries(store));
+    assert.equal(removeListed(drawn, store), 'refused', 'a copy already gone closes the prompt');
+    assert.equal(serialiseLibrary(entries(store)), left, 'and writes nothing');
   });
 
-  it('says a refused write was not done, and keeps the sentence a refused save always had', () => {
-    assert.equal(
-      conflictSentence('save', 'choose'),
-      'Not saved. This spot changed in another tab. Load that copy, or keep yours to save over it.',
-    );
-    assert.equal(
-      conflictSentence('reset', 'choose'),
-      'Not reset. This spot changed in another tab. Load that copy or keep yours, then reset again.',
-    );
-    assert.equal(
-      conflictSentence('delete', 'shown'),
-      'Not deleted. This spot changed in another tab. That copy is shown now. Delete again to remove it.',
-    );
-    assert.equal(
-      conflictSentence('reset', 'open'),
-      'Not reset. This spot changed in another tab. Open it to see that copy, or reset again.',
-    );
+  it('says a refused save was not done, and keeps the sentence a refused save always had', () => {
+    assert.deepEqual(saveRefusal(true), {
+      show: false,
+      sentence: 'Not saved. This spot changed in another tab. Load that copy, or keep yours to save over it.',
+    });
+    assert.deepEqual(saveRefusal(false), {
+      show: true,
+      sentence: 'Not saved. This spot changed in another tab. That copy is shown now.',
+    });
   });
 
   it('a reset and a new edit in tab A are not overwritten by tab B, dirty or clean when A reset', () => {
@@ -700,7 +698,7 @@ describe('two tabs: no save, reset or delete removes a copy its tab has not seen
     assert.ok(counts.saves > 4000, `only ${counts.saves} saves went through: a sweep of nothing`);
     const ran = JSON.stringify({ ...counts, refusedList });
     assert.ok(counts.resets > 500 && counts.deletes > 500 && counts.listed > 500, ran);
-    // The run's guards each fired; the counts are read off seed 20261123 (28, 67 and 105 refused).
+    // The run's guards each fired; the counts are read off seed 20261123 (148, 661 and 239 refused).
     assert.ok(counts.refusedResets > 20 && counts.refusedDeletes > 40 && refusedList > 60, ran);
   });
 });
@@ -708,61 +706,27 @@ describe('two tabs: no save, reset or delete removes a copy its tab has not seen
 describe('a Delete or Reset prompt removes only the copy it asked about', () => {
   const copy = (spot: SavedSpot) => ({ kind: 'copy', spot }) as const;
 
-  it('sees the copy behind an open prompt change, move to a new id, or go', () => {
+  it('closes when the copy behind it changes, moves to a new id, or goes', () => {
     const s1 = put([], { id: null, from: null, draft: draft('S1') }, 1);
-    const asked = { id: s1.saved.id, from: null, held: copy(s1.saved) };
-    assert.deepEqual(askedCopy(s1.spots, asked), { kind: 'same', spot: s1.saved });
+    const open = (spots: readonly SavedSpot[], spot: SavedSpot, write: Removal = 'delete'): Prompt =>
+      step(CLOSED, { type: 'open', surface: 'list', write, copy: spot, spots, yours: false }).prompt;
+    const asking = open(s1.spots, s1.saved);
+    assert.equal(asking.kind, 'asking');
+    const same = step(asking, { type: 'stored', spots: s1.spots, yours: false });
+    assert.equal(same.prompt, asking, 'an unchanged copy leaves the prompt as it is');
     const s2 = put(s1.spots, { id: s1.saved.id, from: null, held: copy(s1.saved), draft: draft('S2') }, 2);
-    assert.deepEqual(askedCopy(s2.spots, asked), { kind: 'changed', spot: s2.saved });
-    assert.ok('conflict' in removeSpot(s2.spots, asked), 'confirming after the change removes nothing');
-    assert.deepEqual(askedCopy([], asked), { kind: 'gone' });
+    assert.equal(step(asking, { type: 'stored', spots: s2.spots, yours: false }).prompt.kind, 'closed');
+    assert.equal(step(asking, { type: 'confirm', spots: s2.spots, yours: false }).write, null);
+    assert.equal(step(asking, { type: 'stored', spots: [], yours: false }).prompt.kind, 'closed');
 
     const e1 = put([], { id: null, from: FROM, draft: draft('E1') }, 1);
-    const reset = { id: e1.saved.id, from: FROM, held: copy(e1.saved) };
     const e2 = put([], { id: null, from: FROM, draft: draft('E2') }, 2);
     assert.notEqual(e2.saved.id, e1.saved.id);
-    assert.deepEqual(askedCopy(e2.spots, reset), { kind: 'changed', spot: e2.saved });
+    const moved = step(open(e1.spots, e1.saved, 'reset'), { type: 'stored', spots: e2.spots, yours: false });
+    assert.deepEqual(moved.focus, { on: 'action', id: e2.saved.id, onlyIfLost: true }, 'onto the new edit');
   });
 
-  it('says on the prompt that the copy changed, and what pressing on will do', () => {
-    assert.equal(
-      changedSincePrompt('delete'),
-      'This spot changed in another tab. Delete will not remove the new copy.',
-    );
-    assert.equal(
-      changedSincePrompt('reset'),
-      'This spot changed in another tab. Reset will not remove the new copy.',
-    );
-    assert.equal(
-      conflictSentence('delete', 'kept'),
-      'Not deleted. This spot changed in another tab. You kept yours, so delete again to remove it.',
-    );
-  });
-
-  it('a refusal says what the tab can do next, from what it holds when the refusal lands', () => {
-    const s1 = put([], { id: null, from: null, draft: draft('S1') }, 1);
-    const s2 = put(s1.spots, { id: s1.saved.id, from: null, held: copy(s1.saved), draft: draft('S2') }, 2);
-    const older = copy(s1.saved);
-    assert.deepEqual(refusal('delete', older, s2.saved, true), {
-      show: false,
-      sentence: conflictSentence('delete', 'choose'),
-    });
-    assert.deepEqual(refusal('delete', older, s2.saved, false), {
-      show: true,
-      sentence: conflictSentence('delete', 'shown'),
-    });
-    // "Keep mine" pressed while the prompt was open: the tab holds the newer copy and has changes.
-    assert.deepEqual(refusal('reset', copy(s2.saved), s2.saved, true), {
-      show: false,
-      sentence: conflictSentence('reset', 'kept'),
-    });
-    assert.deepEqual(refusal('delete', copy(s2.saved), s2.saved, false), {
-      show: true,
-      sentence: conflictSentence('delete', 'shown'),
-    });
-  });
-
-  it('a prompt opened before another tab saved stays on the copy it asked about (seeded)', () => {
+  it('a prompt opened before another tab saved removes only the copy it asked about (seeded)', () => {
     let seed = 20_261_124;
     const next = (n: number): number => {
       seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
@@ -780,7 +744,7 @@ describe('a Delete or Reset prompt removes only the copy it asked about', () => 
       const a = openSpot(first);
       const b = openSpot(first);
       if (next(2) === 0) rename(b, 'B edit');
-      const asked = { ...b.editing, held: b.held };
+      const opened = openOn(b, store);
       if (next(3) > 0) {
         if (!own && next(2) === 0) {
           assert.equal(remove(a, store), 'removed');
@@ -788,10 +752,11 @@ describe('a Delete or Reset prompt removes only the copy it asked about', () => 
         } else rename(a, `A ${run}`);
         assert.equal(save(a, store, 1), 'saved');
       }
-      // The render after the press reads storage again, which is how a newer copy reached the confirm.
-      settle(b, store);
+      // Half the time the write reaches B's render before the confirm, half the time only the confirm sees it.
+      const current =
+        next(2) === 0 ? step(opened, { type: 'stored', spots: entries(store), yours: edited(b) }) : null;
       const before = entries(store);
-      const result = remove(b, store, asked);
+      const result = remove(b, store, current?.prompt ?? opened);
       if (result === 'refused') refused += 1;
       else removed += 1;
       for (const entry of before) {

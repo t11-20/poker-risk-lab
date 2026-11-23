@@ -1,7 +1,7 @@
 /**
- * The editor, the list and the scenario page each remove a stored spot only through a prompt, and every
- * render reads storage again. Held over source text, because `apps/web` tests run with no DOM (ADR 0008);
- * the storage decisions they call are driven for real in `lab-spot-storage.test.ts`.
+ * Each page runs its Delete or Reset prompt through `useSpotPrompt`, so the decisions driven for real in
+ * `lab-spot-prompt-flow.test.ts` are the ones the pages make. Held over source text, because `apps/web`
+ * tests run with no DOM (ADR 0008).
  */
 
 import assert from 'node:assert/strict';
@@ -10,101 +10,68 @@ import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-const COMPONENTS = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'components');
+const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 
 /** Source with comments removed, so a sentence ABOUT a call cannot satisfy or trip a check. */
 function code(file: string): string {
-  return readFileSync(join(COMPONENTS, file), 'utf8')
+  return readFileSync(join(SRC, file), 'utf8')
     .replace(/\{\/\*[\s\S]*?\*\/\}/gu, '')
     .replace(/\/\*[\s\S]*?\*\//gu, '')
     .replace(/^\s*\/\/.*$/gmu, '');
 }
 
-const editor = code('SpotEditor.tsx');
-const list = code('SpotList.tsx');
-const scenario = code('ScenarioSpotLinks.tsx');
-const ALL = [
-  ['SpotEditor', editor],
-  ['SpotList', list],
-  ['ScenarioSpotLinks', scenario],
+const editor = code('components/SpotEditor.tsx');
+const list = code('components/SpotList.tsx');
+const scenario = code('components/ScenarioSpotLinks.tsx');
+const hook = code('lib/use-spot-prompt.ts');
+const PAGES = [
+  ['SpotEditor', editor, 'editor'],
+  ['SpotList', list, 'list'],
+  ['ScenarioSpotLinks', scenario, 'scenario'],
 ] as const;
 
-describe('a prompt confirms the copy it was opened on (REGRESSION)', () => {
-  it('captures the request in the press that opens the prompt, from what that render drew', () => {
-    assert.match(
-      editor,
-      /const ask = \(write: Removal\): void => setConfirming\(\{ write, asked: \{ \.\.\.editing, held \} \}\);/u,
-    );
-    assert.match(
-      list,
-      /onAsk=\{\(\) =>\s*setAsked\(\{\s*request: \{ id: spot\.id, from: spot\.from, held: \{ kind: 'copy', spot \} \},/u,
-    );
-    assert.match(scenario, /onClick=\{\(\) => setAsked\(edit\)\}/u);
+describe('every page asks the prompt machine, and writes only what it hands back (REGRESSION)', () => {
+  it('opens a prompt on the copy the page drew, never on a fresh read of storage', () => {
+    assert.match(editor, /if \(held\.kind === 'copy'\) ask\.open\(write, held\.spot\);/u);
+    assert.match(list, /ask\.open\(own \? 'delete' : 'reset', spot\);/u);
+    assert.match(scenario, /ask\.open\('reset', edit\);/u);
+    for (const [name, source] of PAGES) {
+      const opens = [...source.matchAll(/ask\.open\(([^;]*)\);/gu)].map((match) => match[1] ?? '');
+      assert.ok(opens.length > 0, `${name} opens no prompt: a sweep of nothing`);
+      for (const args of opens) {
+        assert.doesNotMatch(args, /read\(|storedCopy\(|editOf\(|library\./u, `${name}: ask.open(${args})`);
+      }
+    }
   });
 
-  for (const [name, source] of ALL) {
-    it(`${name} never builds the request when the confirm is pressed`, () => {
-      const calls = [...source.matchAll(/removeSpot\(([\s\S]*?)\);/gu)].map((match) => match[1] ?? '');
-      assert.ok(calls.length > 0, `${name} calls removeSpot nowhere: a sweep of nothing`);
-      for (const args of calls) {
-        assert.doesNotMatch(args, /\{/u, `${name}: removeSpot(${args}) builds its request from this render`);
-      }
-    });
-
-    it(`${name} says on the prompt that the copy behind it changed`, () => {
-      assert.match(source, /askedCopy\(library\.spots, /u);
-      assert.match(source, /className="prl-note prl-spot-prompt__changed"/u);
-      assert.match(
-        source,
-        /repeated\(current, (changedLine|line)\)/u,
-        `${name} does not announce the change`,
-      );
-      // Keyed on text: every write re-reads storage into new objects, and an object key re-announced
-      // the change over a Duplicate's own sentence on another row.
-      assert.match(
-        source,
-        /serialiseLibrary\(\[now\.spot\]\)/u,
-        `${name} keys the announcement on an object`,
-      );
+  for (const [name, source, surface] of PAGES) {
+    it(`${name} confirms and cancels through the hook, and builds no removal of its own`, () => {
+      assert.match(source, new RegExp(`useSpotPrompt\\(\\{\\s*surface: '${surface}',`, 'u'));
+      assert.match(source, /ask\.cancel/u);
+      assert.match(source, /(=\{ask\.confirm\}|= ask\.confirm\(\);)/u);
+      assert.doesNotMatch(source, /removeSpot|\bstep\(|spot\.id !==/u, `${name} decides a removal itself`);
     });
   }
-});
 
-describe('the caret lands on a named control after a press removes the one it was on (REGRESSION)', () => {
-  it('the editor returns to Delete or Reset after a refusal or Keep it, and to Save after Reset or Keep mine', () => {
-    assert.match(editor, /if \(write !== 'save'\) setFocusTo\(\{ on: 'removal' \}\);/u);
-    assert.match(editor, /setConfirming\(null\);\s*setFocusTo\(\{ on: 'removal' \}\);/u);
+  it('the hook reads storage at every event and commits only the list a step returns', () => {
+    for (const type of ['open', 'cancel', 'confirm']) {
+      assert.match(
+        hook,
+        new RegExp(`step\\(prompt, \\{ type: '${type}',[^}]*spots: read\\(\\)\\.spots`, 'u'),
+      );
+    }
+    assert.match(hook, /step\(asked\.prompt, \{ type: 'written', result: commit\(asked\.write\) \}\)/u);
+    assert.equal(hook.match(/commit\(/gu)?.length, 1, 'one write, and it is the step’s');
+    // No dependency list: storage is read on every render, so the check runs after every render too.
     assert.match(
-      editor,
-      /setActive\(nextOpenSlot\(allSlots\(back\.draft\), null\)\);\s*setFocusTo\(\{ on: 'save' \}\);/u,
+      hook,
+      /useEffect\(\(\) => \{\s*if \(!library\.ready\) return;\s*const next = step\(prompt, \{ type: 'stored', spots: library\.spots, yours \}\);\s*if \(next\.prompt !== prompt\) apply\(next\);\s*\}\);/u,
     );
-    assert.equal(editor.match(/setFocusTo\(\{ on: confirming === null \? 'save' : 'keep' \}\)/gu)?.length, 2);
-    assert.match(editor, /<Button ref=\{refs\.removal\} onClick=\{\(\) => onAsk\('reset'\)\}>/u);
-    assert.match(editor, /<Button ref=\{refs\.removal\} onClick=\{\(\) => onAsk\('delete'\)\}>/u);
-  });
-
-  it('the list goes to the refused row by where it is drawn, not to a node React happened to keep', () => {
-    assert.match(
-      list,
-      /setFocusTo\(\{ row: before\.findIndex\(\(spot\) => spot\.id === conflict\.id\), part: 'removal' \}\);/u,
-    );
-    assert.match(list, /setFocusTo\(\{ row: Math\.max\(row, 0\), part: 'title' \}\);/u);
-    assert.match(
-      list,
-      /<p ref=\{emptyRef\} tabIndex=\{-1\}>/u,
-      'the last row deleted leaves the empty-list sentence',
-    );
-  });
-
-  it('the scenario page goes to Reset after a refusal and to Edit a copy after a reset', () => {
-    assert.match(scenario, /say\(conflictSentence\('reset', 'open'\)\);\s*setFocusTo\(\{ on: 'reset' \}\);/u);
-    assert.match(scenario, /setFocusTo\(\{ on: result\.ok \? 'edit' : 'reset' \}\);/u);
-    assert.match(scenario, /href=\{href\} ref=\{editRef\}/u);
   });
 });
 
 describe('what the pages say is true when it is said (REGRESSION)', () => {
-  for (const [name, source] of ALL) {
+  for (const [name, source] of PAGES) {
     it(`${name} speaks a repeated sentence again`, () => {
       const sets = [...source.matchAll(/set(?:Save)?Status\(([^;]*)\);/gu)].map((match) => match[1] ?? '');
       assert.ok(sets.length > 0, `${name} sets no status: a sweep of nothing`);
@@ -112,12 +79,11 @@ describe('what the pages say is true when it is said (REGRESSION)', () => {
         assert.match(value, /^(''|\(current\) => repeated\(current, )/u, `${name}: set…Status(${value})`);
       }
     });
-  }
 
-  it('the editor still shows a sentence while a prompt is open, unless it repeats the prompt', () => {
-    assert.match(editor, /const note = shownStatus\(saveStatus, confirming, changedCopy !== null\);/u);
-    assert.match(editor, /\{note === null \? null : <p className="prl-note">\{note\}<\/p>\}/u);
-  });
+    it(`${name} shows a prompt's sentence only while storage still holds what it describes`, () => {
+      assert.match(source, /stillTrue\(said, (library\.)?spots\)/u);
+    });
+  }
 
   it('"Keep mine" reads storage when it is pressed', () => {
     assert.match(editor, /const kept = keepMine\(read\(\)\.spots, editing\);/u);
