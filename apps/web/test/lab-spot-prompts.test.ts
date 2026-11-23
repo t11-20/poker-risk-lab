@@ -70,6 +70,19 @@ describe('every page asks the prompt machine, and writes only what it hands back
   });
 });
 
+describe("a closed prompt's caret is lost, not handed to the button drawn in its place (REGRESSION)", () => {
+  // React kept "Keep it" and redrew it as Duplicate, so a background close moved the caret unseen.
+  for (const [name, source] of [
+    ['SpotEditor', editor],
+    ['SpotList', list],
+  ] as const) {
+    it(`${name} keys its prompt row apart from the buttons that replace it`, () => {
+      assert.match(source, /key="ask"/u);
+      assert.match(source, /key="actions"/u);
+    });
+  }
+});
+
 describe('what the pages say is true when it is said (REGRESSION)', () => {
   for (const [name, source] of PAGES) {
     it(`${name} speaks a repeated sentence again`, () => {
