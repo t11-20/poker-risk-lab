@@ -2,7 +2,8 @@
  * The one way from a draft to a `Spot`. Every rule answers with a plain sentence keyed to the field it
  * is about, and a draft with any error yields no spot, so the editor never prices a half-valid one.
  * `test/lab-spot-validate.test.ts` holds each rule to its message, and holds that a spot this passes
- * never makes `buildCoachReport` throw.
+ * makes `buildCoachReport` throw only when its ranges overlap too much to sample, which
+ * `reportForSpot` names.
  */
 
 import { type ParsedRange, parseRange } from '@prl/poker-math';
@@ -46,7 +47,8 @@ export function opponentField(key: string, field: OpponentField): FieldKey {
 export type FieldErrors = ReadonlyMap<FieldKey, string>;
 
 export type Validation =
-  | { readonly ok: true; readonly spot: Spot }
+  /** `dealChecked` is false when the ranges overlap too much to check quickly that all can be dealt. */
+  | { readonly ok: true; readonly spot: Spot; readonly dealChecked: boolean }
   | { readonly ok: false; readonly errors: FieldErrors };
 
 const TOP_PERCENT = /^top:(\d{1,3})$/iu;
@@ -152,14 +154,20 @@ function readHand(opponent: OpponentDraft, dead: readonly number[], name: string
 
 type Combo = readonly [number, number];
 
+/** The search's running count of combos looked at, by the walk and by the cover bound alike. */
+interface Meter {
+  work: number;
+}
+
 /**
  * At most one hand per card of `cover`, when every combo holds one of its cards, so fewer cover cards
  * than opponents proves no deal exists. Greedy, which can only overstate the cover: never a false refusal.
  */
-function coverSize(open: readonly (readonly Combo[])[], enough: number): number {
+function coverSize(open: readonly (readonly Combo[])[], enough: number, meter: Meter): number {
   let left = open.flat();
   let size = 0;
   while (left.length > 0 && size < enough) {
+    meter.work += 2 * left.length + 52;
     const counts = new Uint16Array(52);
     for (const [a, b] of left) {
       counts[a] = (counts[a] ?? 0) + 1;
@@ -173,25 +181,40 @@ function coverSize(open: readonly (readonly Combo[])[], enough: number): number 
 }
 
 /**
- * Combos looked at before the answer is left to the analysis, so a keystroke never waits on the search.
- * A five-seat case built to defeat the cover bound took 23 ms on an M-series laptop.
+ * Work, counted as `Meter` counts it, before the search gives up and says so. Five seats of
+ * "A2s+, A2o+, KK, QQ" behind AhAs on Kc Qd 7h, which neither bound refuses, reach it in about 15 ms
+ * (median of seven) on an M-series laptop. An answer is cached, so only a change to a range pays it.
  */
-const DEAL_SEARCH_BUDGET = 2_000_000;
+export const DEAL_SEARCH_BUDGET = 1_000_000;
+
+export interface DealSearch {
+  /** `null` when the budget ran out first. */
+  readonly answer: boolean | null;
+  /** Combos looked at by this call, so 0 for an answer from the cache. */
+  readonly work: number;
+}
+
+/** Keyed on the combos themselves, so a keystroke in a name or a stack never searches again. */
+const answers = new Map<string, boolean | null>();
+const ANSWERS_KEPT = 64;
 
 /**
- * Whether one hand per opponent can be dealt with no card twice: `true`, `false`, or `null` when the
- * search ran out first. Smallest range first, and the cover bound cuts a branch before it is walked.
+ * Whether one hand per opponent can be dealt with no card twice. Smallest range first, and the cover
+ * bound cuts a branch before it is walked.
  */
-export function canDealAll(hands: readonly (readonly Combo[])[]): boolean | null {
+export function dealSearch(hands: readonly (readonly Combo[])[]): DealSearch {
+  const key = hands.map((combos) => combos.map(([a, b]) => a * 52 + b).join(',')).join('|');
+  const known = answers.get(key);
+  if (known !== undefined) return { answer: known, work: 0 };
   const used = new Uint8Array(52);
-  let work = 0;
+  const meter: Meter = { work: 0 };
   const search = (left: readonly (readonly Combo[])[]): boolean | null => {
     if (left.length === 0) return true;
-    for (const combos of left) work += combos.length;
-    if (work > DEAL_SEARCH_BUDGET) return null;
+    if (meter.work > DEAL_SEARCH_BUDGET) return null;
     const open = left.map((combos) => combos.filter(([a, b]) => used[a] === 0 && used[b] === 0));
+    for (const combos of left) meter.work += combos.length;
     if (open.some((combos) => combos.length === 0)) return false;
-    if (coverSize(open, open.length) < open.length) return false;
+    if (coverSize(open, open.length, meter) < open.length) return false;
     let pick = 0;
     for (const [index, combos] of open.entries()) if (combos.length < (open[pick]?.length ?? 0)) pick = index;
     const rest = open.filter((_combos, index) => index !== pick);
@@ -205,32 +228,64 @@ export function canDealAll(hands: readonly (readonly Combo[])[]): boolean | null
     }
     return false;
   };
-  return search(hands);
+  const answer = search(hands);
+  if (answers.size >= ANSWERS_KEPT) answers.delete(answers.keys().next().value ?? '');
+  answers.set(key, answer);
+  return { answer, work: meter.work };
+}
+
+export function canDealAll(hands: readonly (readonly Combo[])[]): boolean | null {
+  return dealSearch(hands).answer;
+}
+
+/** A seat the dealability check reads: its name, for a sentence about some seats, and its hands. */
+export interface DealSeat {
+  readonly name: string;
+  readonly combos: readonly Combo[];
+}
+
+export type Dealability =
+  | { readonly kind: 'dealable' }
+  | { readonly kind: 'undealable'; readonly sentence: string }
+  /** The search ran out of budget, so the analysis is left to find out. */
+  | { readonly kind: 'unchecked' };
+
+function listed(names: readonly string[]): string {
+  return names.length < 2 ? (names[0] ?? '') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
 }
 
 /**
- * `null` when every opponent can be dealt a hand at once. Ported from the API's thread, where an
- * unchecked five-way `top:1` held a thread for 9.4 s before failing; a deal no blocker allows
+ * Whether these seats can all be dealt a hand at once. `everyone` is false when some seat with a hand
+ * is not among them, and the sentence then names the seats it counted. Ported from the API's thread,
+ * where an unchecked five-way `top:1` held a thread for 9.4 s before failing; a deal no blocker allows
  * otherwise reaches the sampler, which spends 1.6 s before refusing with no reason.
  */
-export function undealableSentence(hands: readonly (readonly Combo[])[]): string | null {
+export function dealability(seats: readonly DealSeat[], everyone: boolean): Dealability {
+  if (seats.length === 0) return { kind: 'dealable' };
   const support = new Set<number>();
-  for (const combos of hands) {
+  for (const { combos } of seats) {
     for (const [a, b] of combos) {
       support.add(a);
       support.add(b);
     }
   }
-  const needed = hands.length * 2;
-  if (hands.length === 0) return null;
+  const needed = seats.length * 2;
+  const who = everyone ? `${seats.length} opponents` : listed(seats.map((seat) => seat.name));
   if (support.size < needed) {
-    return (
-      `These hands cannot all be dealt at once: ${hands.length} opponents need ${needed} different cards, ` +
-      `and their ranges hold only ${support.size}.`
-    );
+    const sentence =
+      `These hands cannot all be dealt at once: ${who} need ${needed} different cards, ` +
+      `and their ranges hold only ${support.size}.`;
+    return { kind: 'undealable', sentence };
   }
-  if (canDealAll(hands) !== false) return null;
-  return 'These ranges cannot all be dealt at once. Whatever one opponent holds, another is left with no hand. Widen a range.';
+  const { answer } = dealSearch(seats.map((seat) => seat.combos));
+  if (answer === true) return { kind: 'dealable' };
+  if (answer === null) return { kind: 'unchecked' };
+  return {
+    kind: 'undealable',
+    sentence: everyone
+      ? 'These ranges cannot all be dealt at once. Whatever one opponent holds, another is left with no hand. Widen a range.'
+      : `The ranges of ${who} cannot all be dealt at once. Whatever one of them holds, another is left with no hand. Widen a range.`,
+  };
 }
 
 /** Keeps the first error per field, because the first rule broken is the one to fix first. */
@@ -285,8 +340,10 @@ function readHero(draft: SpotDraft, out: Collector): { stack: number | null; bet
 interface OpponentsRead {
   /** Only when every seat read cleanly. */
   readonly opponents: readonly SpotOpponent[] | null;
-  readonly modelled: readonly (readonly (readonly [number, number])[])[];
-  readonly unexpanded: boolean;
+  /** Seats whose hand expanded here: not `top:NN`, which the analysis thread expands. */
+  readonly modelled: readonly DealSeat[];
+  /** Seats meant to hold a hand, whether or not it could be read or expanded. */
+  readonly withHand: number;
   readonly allIn: string | null;
 }
 
@@ -315,22 +372,21 @@ function readOpponent(
 
 function readOpponents(draft: SpotDraft, dead: readonly number[], out: Collector): OpponentsRead {
   const seats: SpotOpponent[] = [];
-  const modelled: (readonly (readonly [number, number])[])[] = [];
-  let unexpanded = false;
+  const modelled: DealSeat[] = [];
   let allIn: string | null = null;
-  for (const opponent of draft.opponents) {
+  for (const [index, opponent] of draft.opponents.entries()) {
     const read = readOpponent(opponent, dead, out);
     if (read.seat !== null) seats.push(read.seat);
     if (read.allIn) allIn ??= read.seat?.name ?? 'An opponent';
-    if (read.hand.hand === null || read.hand.hand.kind === 'none') continue;
-    if (read.hand.combos === null) unexpanded = true;
-    else modelled.push(read.hand.combos);
+    if (read.hand.hand?.kind === 'none' || read.hand.combos === null) continue;
+    modelled.push({ name: opponent.name.trim() || `Opponent ${index + 1}`, combos: read.hand.combos });
   }
-  return { opponents: seats.length === draft.opponents.length ? seats : null, modelled, unexpanded, allIn };
+  const withHand = draft.opponents.filter((opponent) => opponent.handKind !== 'none').length;
+  return { opponents: seats.length === draft.opponents.length ? seats : null, modelled, withHand, allIn };
 }
 
-/** Rules about the seats together rather than any one field. */
-function checkTable(draft: SpotDraft, read: OpponentsRead, out: Collector): void {
+/** Rules about the seats together rather than any one field. False when dealability went unchecked. */
+function checkTable(draft: SpotDraft, read: OpponentsRead, out: Collector): boolean {
   const count = draft.opponents.length;
   if (count === 0) out.fail('opponents', 'Add at least one opponent.');
   if (count > MAX_OPPONENTS) out.fail('opponents', `The analysis handles up to ${MAX_OPPONENTS} opponents.`);
@@ -344,8 +400,11 @@ function checkTable(draft: SpotDraft, read: OpponentsRead, out: Collector): void
   if (read.allIn !== null && draft.opponents.some((opponent) => opponent.handKind === 'none')) {
     out.fail('opponents', `${read.allIn} is all in, so every opponent needs a range or cards.`);
   }
-  const undealable = read.unexpanded ? null : undealableSentence(read.modelled);
-  if (undealable !== null) out.fail('opponents', undealable);
+  // The seats that expanded here are checked even beside a `top:NN` one: if they cannot be dealt, no
+  // table that includes them can. The analysis checks every seat once `top:NN` is expanded.
+  const dealt = dealability(read.modelled, read.modelled.length === read.withHand);
+  if (dealt.kind === 'undealable') out.fail('opponents', dealt.sentence);
+  return dealt.kind !== 'unchecked';
 }
 
 function checkPot(
@@ -401,7 +460,7 @@ export function validateDraft(draft: SpotDraft): Validation {
     (card): card is number => card !== null,
   );
   const read = readOpponents(draft, dead, out);
-  checkTable(draft, read, out);
+  const dealChecked = checkTable(draft, read, out);
   checkPot({ potBefore, heroBet: hero.bet, bigBlind }, board, read, out);
 
   if (out.errors.size > 0) return { ok: false, errors: out.errors };
@@ -424,5 +483,6 @@ export function validateDraft(draft: SpotDraft): Validation {
       neverFolds: draft.neverFolds,
       foldRate,
     },
+    dealChecked,
   };
 }

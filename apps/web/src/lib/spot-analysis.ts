@@ -13,11 +13,12 @@ import {
   buildCoachReport,
   type CoachInput,
   deriveLegalActions,
+  EquityError,
   exactRange,
   expandAssumedRange,
 } from '@prl/poker-math';
 import { type OpponentHand, type Spot, streetOf, tablePrice } from './spot.ts';
-import { topPercentOf, undealableSentence } from './spot-validate.ts';
+import { dealability, topPercentOf } from './spot-validate.ts';
 
 /**
  * `SCENARIO_ANALYSIS_SAMPLES` and `SCENARIO_ANALYSIS_SEED` from `@prl/content`, restated because the
@@ -81,8 +82,16 @@ export type SpotReport =
   | { readonly ok: false; readonly message: string };
 
 /**
- * Never throws. The validator should leave nothing for `buildCoachReport` to refuse, so a refusal here
- * is shown as a sentence and never as numbers.
+ * The sampler's refusal when it finds no deal that gives every seat a hand: ranges no bound could
+ * refuse, or ones it can deal too rarely to sample. Matched on its words, which a test holds to.
+ */
+function isOverlapRefusal(error: unknown): boolean {
+  return error instanceof EquityError && /could not be sampled|block each other/u.test(error.message);
+}
+
+/**
+ * Never throws. The validator leaves `buildCoachReport` nothing to refuse but ranges that overlap too
+ * much to sample, so a refusal here is shown as a sentence and never as numbers.
  */
 export function reportForSpot(spot: Spot): SpotReport {
   try {
@@ -91,14 +100,19 @@ export function reportForSpot(spot: Spot): SpotReport {
     if (input.opponents.some((opponent) => opponent.range.combos.length === 0)) {
       return { ok: false, message: 'Every hand in one of these ranges uses a card already in play.' };
     }
-    const undealable = undealableSentence(input.opponents.map((opponent) => opponent.range.combos));
-    if (undealable !== null) return { ok: false, message: undealable };
+    const seats = input.opponents.map((opponent) => ({
+      name: opponent.label,
+      combos: opponent.range.combos,
+    }));
+    const dealt = dealability(seats, true);
+    if (dealt.kind === 'undealable') return { ok: false, message: dealt.sentence };
     return { ok: true, report: buildCoachReport(input) };
-  } catch {
+  } catch (error) {
     return {
       ok: false,
-      message:
-        'These numbers could not be worked out for this spot. Change a field and they will be tried again.',
+      message: isOverlapRefusal(error)
+        ? 'The analysis could not deal every opponent a hand from these ranges, because they overlap too much. Widen a range or remove an opponent.'
+        : 'These numbers could not be worked out for this spot. Change a field and they will be tried again.',
     };
   }
 }

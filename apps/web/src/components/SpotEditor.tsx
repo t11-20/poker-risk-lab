@@ -872,6 +872,12 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
               ))}
             </ol>
             <ErrorLine id={opponentsErrorId} message={err('opponents')} />
+            {validation.ok && !validation.dealChecked ? (
+              <p className="prl-note">
+                These ranges could not be checked. They overlap too much to tell quickly whether every
+                opponent can be dealt a hand at once.
+              </p>
+            ) : null}
             {draft.opponents.length < MAX_OPPONENTS ? (
               <Button size="sm" onClick={() => change(addOpponent(draft))}>
                 Add opponent

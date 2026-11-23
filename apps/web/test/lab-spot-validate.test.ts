@@ -1,7 +1,7 @@
 /**
  * Every validation rule of the spot editor answers with its own sentence on its own field, and a draft
- * with any error yields no spot. The last test is the contract with the maths: a spot this validator
- * passes is never one `buildCoachReport` refuses.
+ * with any error yields no spot. The contract with the maths: a spot this validator passes is one
+ * `buildCoachReport` accepts, but for ranges too tangled to sample, which get their own sentence.
  */
 
 import assert from 'node:assert/strict';
@@ -307,6 +307,37 @@ describe('ranges that cannot all be dealt at once', () => {
     assert.equal(result.ok ? '' : result.message, JOINT);
   });
 
+  it('checks the seats it has combinations for even when another seat is top:NN', () => {
+    const hero = {
+      ...good().cards,
+      hole1: c('Ah'),
+      hole2: c('2d'),
+      flop1: c('Kc'),
+      flop2: c('7h'),
+      flop3: c('3s'),
+    };
+    const draft: SpotDraft = { ...good(), cards: hero, opponents: seats(['top:20', 'AA', 'AA', 'AA']) };
+    assert.equal(
+      errorOn(draft, 'opponents'),
+      'These hands cannot all be dealt at once: P2, P3 and P4 need 6 different cards, and their ranges hold only 3.',
+    );
+  });
+
+  it('names the seats it counted when another seat cannot be read', () => {
+    const draft: SpotDraft = { ...good(), opponents: seats(['AA', 'AA', 'AA, KQs+ nonsense']) };
+    assert.equal(
+      errorOn(draft, 'opponents'),
+      'These hands cannot all be dealt at once: P1 and P2 need 4 different cards, and their ranges hold only 3.',
+    );
+    const joint: SpotDraft = {
+      ...aces(['AKs, AQs, AJs', 'AKs, AQs, AJs', 'top:20']),
+    };
+    assert.equal(
+      errorOn(joint, 'opponents'),
+      'The ranges of P1 and P2 cannot all be dealt at once. Whatever one of them holds, another is left with no hand. Widen a range.',
+    );
+  });
+
   it('answers within a frame for five wide ranges that share four cards', () => {
     const anyAce = 'A2s+, A2o+';
     const started = performance.now();
@@ -317,6 +348,49 @@ describe('ranges that cannot all be dealt at once', () => {
     };
     assert.equal(errorOn(draft, 'opponents'), JOINT);
     assert.ok(performance.now() - started < 50, `${Math.round(performance.now() - started)} ms`);
+  });
+});
+
+describe('ranges too tangled to check or to sample', () => {
+  const tangled = (range: string): SpotDraft => ({
+    ...good(),
+    cards: {
+      ...good().cards,
+      hole1: c('Ah'),
+      hole2: c('As'),
+      flop1: c('Kc'),
+      flop2: c('Qd'),
+      flop3: c('7h'),
+    },
+    opponents: [0, 1, 2, 3, 4].map((index) => ({
+      ...(good().opponents[0] as OpponentDraft),
+      key: `o${index + 1}`,
+      name: `P${index + 1}`,
+      range,
+    })),
+  });
+
+  it('says so when the search runs out, rather than passing in silence', () => {
+    // At most four of these five can be dealt, which neither bound can prove, so the search runs out.
+    const checked = validateDraft(tangled('A2s+, A2o+, KK, QQ'));
+    assert.ok(checked.ok, 'not refused: a spot the search could not finish may still be dealable');
+    assert.equal(checked.dealChecked, false, 'and it says it could not check');
+  });
+
+  it('a spot the sampler cannot deal says what to change, in its own sentence', () => {
+    const checked = validateDraft(tangled('A2s+, A2o+, KK, QQ, JJ'));
+    assert.ok(checked.ok);
+    const result = reportForSpot(checked.spot);
+    assert.equal(
+      result.ok ? '' : result.message,
+      'The analysis could not deal every opponent a hand from these ranges, because they overlap too much. Widen a range or remove an opponent.',
+    );
+  });
+
+  it('a spot one range wider still prices', () => {
+    const checked = validateDraft(tangled('A2s+, A2o+, KK, QQ, JJ, TT'));
+    assert.ok(checked.ok && checked.dealChecked);
+    assert.equal(reportForSpot(checked.spot).ok, true);
   });
 });
 
