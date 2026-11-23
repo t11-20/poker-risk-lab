@@ -597,24 +597,18 @@ function SyncNotice(props: {
 
 const SAME: StoredSync = { kind: 'same' };
 
-function EditorEmpty(props: {
+function LeavingBody(props: {
   readonly message: string;
-  readonly live?: string;
-  readonly linkRef?: RefObject<HTMLAnchorElement | null>;
+  readonly linkRef: RefObject<HTMLAnchorElement | null>;
 }): ReactElement {
-  const { message, live, linkRef } = props;
+  const { message, linkRef } = props;
   return (
-    <div className="prl-spot-editor prl-empty">
-      {live === undefined ? null : (
-        <p className="prl-live-region" role="status" aria-live="polite">
-          {live}
-        </p>
-      )}
+    <>
       <p>{message}</p>
       <a className="prl-btn prl-btn--secondary" href="/lab/spots" ref={linkRef}>
         Your spots
       </a>
-    </div>
+    </>
   );
 }
 
@@ -627,21 +621,15 @@ function cardsErrorText(draft: SpotDraft, shown: FieldErrors): string | undefine
   return parts.filter((message) => message !== undefined).join(' ') || undefined;
 }
 
-/** Spoken, and shown under the bar; a prompt's sentence is shown only while it is still true. */
-function StatusLines(props: {
+/** Shown under the bar; a prompt's sentence is shown only while it is still true. */
+function StatusNote(props: {
   readonly text: string;
   readonly said: Said | null;
   readonly spots: readonly SavedSpot[];
-}): ReactElement {
+}): ReactElement | null {
   const { text, said, spots } = props;
-  return (
-    <>
-      <p className="prl-live-region" role="status" aria-live="polite">
-        {text}
-      </p>
-      {text === '' || (said !== null && !stillTrue(said, spots)) ? null : <p className="prl-note">{text}</p>}
-    </>
-  );
+  if (text === '' || (said !== null && !stillTrue(said, spots))) return null;
+  return <p className="prl-note">{text}</p>;
 }
 
 export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement {
@@ -750,10 +738,10 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
     );
   }, [ask.focus]);
 
-  // Another tab can unmount SyncNotice buttons ("Load that copy" / "Keep mine") while focused.
+  // Another tab can unmount SyncNotice buttons, or an adopted copy can remove a focused field.
   useEffect(() => {
-    if (library.ready) rescue.rescue(saveRef.current);
-  }, [library, rescue]);
+    if (library.ready && held.kind !== 'unread' && !leaving) rescue.rescue(saveRef.current);
+  }, [library, held, leaving, rescue]);
 
   // Another tab saved this spot and nothing here would be lost, so the newer copy is simply shown.
   useEffect(() => {
@@ -856,150 +844,160 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
 
   if (missing) {
     return (
-      <EditorEmpty message="This spot is not saved in this browser. It may have been deleted, or saved in another browser." />
+      <div className="prl-spot-editor prl-empty">
+        <p>This spot is not saved in this browser. It may have been deleted, or saved in another browser.</p>
+        <a className="prl-btn prl-btn--secondary" href="/lab/spots">
+          Your spots
+        </a>
+      </div>
     );
-  }
-
-  if (leaving) {
-    return <EditorEmpty message={saveStatus || 'Deleted.'} live={saveStatus} linkRef={leavingRef} />;
   }
 
   // An edit of a built-in this page still has. One whose built-in is gone is the player's own spot.
   const ownEdit = editing.id !== null && linked !== undefined;
   return (
     <div
-      className="prl-spot-editor"
+      className={leaving ? 'prl-spot-editor prl-empty' : 'prl-spot-editor'}
       onBlurCapture={rescue.onBlurCapture}
       onFocusCapture={rescue.onFocusCapture}
     >
-      <EditorNotes
-        notice={library.notice}
-        unknownFrom={unknownFrom}
-        orphan={editing.from !== null && linked === undefined}
-        linked={linked?.title ?? null}
-        ownEdit={ownEdit}
-      />
+      <p className="prl-live-region" role="status" aria-live="polite">
+        {saveStatus}
+      </p>
+      {leaving ? (
+        <LeavingBody message={saveStatus || 'Deleted.'} linkRef={leavingRef} />
+      ) : (
+        <>
+          <EditorNotes
+            notice={library.notice}
+            unknownFrom={unknownFrom}
+            orphan={editing.from !== null && linked === undefined}
+            linked={linked?.title ?? null}
+            ownEdit={ownEdit}
+          />
 
-      <SyncNotice
-        sync={sync}
-        onLoad={(spot) => {
-          take(spot);
-          say('Loaded the copy saved in another tab.');
-          setFocusSave({});
-        }}
-        onKeep={() => {
-          // Storage now, not the copy the notice drew: another tab may have saved again since.
-          const kept = keepMine(read().spots, editing);
-          setEditing(kept.editing);
-          setHeld(kept.held);
-          say(kept.sentence);
-          setFocusSave({});
-        }}
-      />
-      <EditorBar
-        confirming={asking}
-        ready={library.ready}
-        ownEdit={ownEdit}
-        saved={editing.id !== null}
-        dirty={dirty}
-        refs={{ keep: keepRef, save: saveRef, removal: removalRef }}
-        onSave={save}
-        onDuplicate={duplicate}
-        onAsk={(write) => {
-          if (held.kind === 'copy') ask.open(write, held.spot);
-        }}
-        onCancel={ask.cancel}
-        onConfirmed={confirm}
-      />
-      <StatusLines text={saveStatus} said={said} spots={library.spots} />
+          <SyncNotice
+            sync={sync}
+            onLoad={(spot) => {
+              take(spot);
+              say('Loaded the copy saved in another tab.');
+              setFocusSave({});
+            }}
+            onKeep={() => {
+              // Storage now, not the copy the notice drew: another tab may have saved again since.
+              const kept = keepMine(read().spots, editing);
+              setEditing(kept.editing);
+              setHeld(kept.held);
+              say(kept.sentence);
+              setFocusSave({});
+            }}
+          />
+          <EditorBar
+            confirming={asking}
+            ready={library.ready}
+            ownEdit={ownEdit}
+            saved={editing.id !== null}
+            dirty={dirty}
+            refs={{ keep: keepRef, save: saveRef, removal: removalRef }}
+            onSave={save}
+            onDuplicate={duplicate}
+            onAsk={(write) => {
+              if (held.kind === 'copy') ask.open(write, held.spot);
+            }}
+            onCancel={ask.cancel}
+            onConfirmed={confirm}
+          />
+          <StatusNote text={saveStatus} said={said} spots={library.spots} />
 
-      <div className="prl-spot-editor__layout">
-        <div className="prl-spot-editor__inputs">
-          <Panel title="Cards" headingLevel={2} className="prl-spot-editor__cards">
-            <div data-tour="hand-board">
-              {/* Above the slots, because below the 52-card deck it sat a screen away from them at 390px. */}
-              <ErrorLine id={cardsErrorId} message={cardsError} />
-              <CardPicker
-                groups={pickerGroups(draft)}
-                active={active}
-                onSelectSlot={setActive}
-                onPick={onPick}
-                onRemove={onRemove}
-                status={pickerStatus}
-                {...(cardsError === undefined ? {} : { errorId: cardsErrorId })}
-              />
-              <div className="prl-btn-row prl-spot-editor__card-tools">
-                <Button
-                  size="sm"
-                  onClick={() => {
-                    change(clearBoard(draft));
-                    setActive('flop1');
-                    announce('Board cleared.');
-                  }}
-                >
-                  Clear board
-                </Button>
-                <Button
-                  size="sm"
-                  onClick={() => {
-                    const next = randomHand(draft);
-                    change(next);
-                    setActive(nextOpenSlot(allSlots(next), 'hole2'));
-                    const { hole1, hole2 } = next.cards;
-                    if (hole1 !== null && hole2 !== null) {
-                      announce(`Dealt ${cardName(hole1)} and ${cardName(hole2)}.`);
-                    }
-                  }}
-                >
-                  Random hand
-                </Button>
-              </div>
-            </div>
-          </Panel>
-
-          <PotPanel draft={draft} err={err} change={change} />
-
-          <Panel title="Opponents" headingLevel={2}>
-            <ol className="prl-spot-editor__opponents">
-              {draft.opponents.map((opponent, index) => (
-                <li key={opponent.key}>
-                  <OpponentFields
-                    opponent={opponent}
-                    index={index}
-                    removable={draft.opponents.length > 1}
-                    errors={shown}
-                    onChange={(edit, field) =>
-                      change(
-                        updateOpponent(draft, opponent.key, edit),
-                        field === null ? null : opponentField(opponent.key, field),
-                      )
-                    }
-                    onRemove={() => change(removeOpponent(draft, opponent.key))}
+          <div className="prl-spot-editor__layout">
+            <div className="prl-spot-editor__inputs">
+              <Panel title="Cards" headingLevel={2} className="prl-spot-editor__cards">
+                <div data-tour="hand-board">
+                  {/* Above the slots, because below the 52-card deck it sat a screen away from them at 390px. */}
+                  <ErrorLine id={cardsErrorId} message={cardsError} />
+                  <CardPicker
+                    groups={pickerGroups(draft)}
+                    active={active}
+                    onSelectSlot={setActive}
+                    onPick={onPick}
+                    onRemove={onRemove}
+                    status={pickerStatus}
+                    {...(cardsError === undefined ? {} : { errorId: cardsErrorId })}
                   />
-                </li>
-              ))}
-            </ol>
-            <ErrorLine id={opponentsErrorId} message={err('opponents')} />
-            {validation.ok && !validation.dealChecked ? (
-              <p className="prl-note">
-                These ranges could not be checked. They overlap too much to tell quickly whether every
-                opponent can be dealt a hand at once.
-              </p>
-            ) : null}
-            {draft.opponents.length < MAX_OPPONENTS ? (
-              <Button size="sm" onClick={() => change(addOpponent(draft))}>
-                Add opponent
-              </Button>
-            ) : (
-              <p className="prl-note">{`${MAX_OPPONENTS} opponents is the most the analysis handles.`}</p>
-            )}
-          </Panel>
+                  <div className="prl-btn-row prl-spot-editor__card-tools">
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        change(clearBoard(draft));
+                        setActive('flop1');
+                        announce('Board cleared.');
+                      }}
+                    >
+                      Clear board
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        const next = randomHand(draft);
+                        change(next);
+                        setActive(nextOpenSlot(allSlots(next), 'hole2'));
+                        const { hole1, hole2 } = next.cards;
+                        if (hole1 !== null && hole2 !== null) {
+                          announce(`Dealt ${cardName(hole1)} and ${cardName(hole2)}.`);
+                        }
+                      }}
+                    >
+                      Random hand
+                    </Button>
+                  </div>
+                </div>
+              </Panel>
 
-          <AssumptionsPanel draft={draft} error={err('foldRate')} change={change} />
-        </div>
+              <PotPanel draft={draft} err={err} change={change} />
 
-        <ResultSection state={report} waiting={waiting} />
-      </div>
+              <Panel title="Opponents" headingLevel={2}>
+                <ol className="prl-spot-editor__opponents">
+                  {draft.opponents.map((opponent, index) => (
+                    <li key={opponent.key}>
+                      <OpponentFields
+                        opponent={opponent}
+                        index={index}
+                        removable={draft.opponents.length > 1}
+                        errors={shown}
+                        onChange={(edit, field) =>
+                          change(
+                            updateOpponent(draft, opponent.key, edit),
+                            field === null ? null : opponentField(opponent.key, field),
+                          )
+                        }
+                        onRemove={() => change(removeOpponent(draft, opponent.key))}
+                      />
+                    </li>
+                  ))}
+                </ol>
+                <ErrorLine id={opponentsErrorId} message={err('opponents')} />
+                {validation.ok && !validation.dealChecked ? (
+                  <p className="prl-note">
+                    These ranges could not be checked. They overlap too much to tell quickly whether every
+                    opponent can be dealt a hand at once.
+                  </p>
+                ) : null}
+                {draft.opponents.length < MAX_OPPONENTS ? (
+                  <Button size="sm" onClick={() => change(addOpponent(draft))}>
+                    Add opponent
+                  </Button>
+                ) : (
+                  <p className="prl-note">{`${MAX_OPPONENTS} opponents is the most the analysis handles.`}</p>
+                )}
+              </Panel>
+
+              <AssumptionsPanel draft={draft} error={err('foldRate')} change={change} />
+            </div>
+
+            <ResultSection state={report} waiting={waiting} />
+          </div>
+        </>
+      )}
     </div>
   );
 }

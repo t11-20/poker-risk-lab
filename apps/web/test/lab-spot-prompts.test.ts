@@ -86,22 +86,27 @@ describe("a closed prompt's caret is lost, not handed to the button drawn in its
     });
   }
 
-  it('SpotEditor rescues a lost caret when another tab unmounts SyncNotice buttons', () => {
+  it('SpotEditor rescues a lost caret when another tab unmounts SyncNotice buttons or adopted fields', () => {
     assert.match(editor, /const rescue = useFocusRescue\(\);/u);
     assert.match(editor, /onBlurCapture=\{rescue\.onBlurCapture\}/u);
     assert.match(editor, /onFocusCapture=\{rescue\.onFocusCapture\}/u);
-    assert.match(editor, /if \(library\.ready\) rescue\.rescue\(saveRef\.current\);/u);
+    assert.match(
+      editor,
+      /if \(library\.ready && held\.kind !== 'unread' && !leaving\) rescue\.rescue\(saveRef\.current\);/u,
+    );
   });
 });
 
 describe('what the pages say is true when it is said (REGRESSION)', () => {
-  it('SpotEditor clears held and renders a leaving state on delete so slow navigation never claims another tab deleted it', () => {
+  it('SpotEditor clears held and keeps its live region mounted on delete so slow navigation never claims another tab deleted it', () => {
     assert.match(
       editor,
       /if \(done\.write === 'delete' \|\| back === undefined\) \{\s*setLeaving\(true\);\s*setHeld\(\{ kind: 'none' \}\);\s*setEditing\(\{ id: null, from: null \}\);\s*window\.location\.assign\('\/lab\/spots'\);\s*return;\s*\}/u,
     );
-    assert.match(editor, /if \(leaving\) \{[\s\S]*?<EditorEmpty[\s\S]*?live=\{saveStatus\}/u);
-    assert.match(editor, /function EditorEmpty[\s\S]*?role="status"/u);
+    assert.match(
+      editor,
+      /role="status" aria-live="polite">\s*\{saveStatus\}\s*<\/p>\s*\{leaving \? \(\s*<LeavingBody/u,
+    );
   });
   for (const [name, source] of PAGES) {
     it(`${name} speaks a repeated sentence again`, () => {
