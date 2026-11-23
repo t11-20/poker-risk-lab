@@ -280,6 +280,27 @@ describe('a sentence claims only what happened (REGRESSION)', () => {
     );
   });
 
+  it('the scenario page says changed when its edit changed, and removed only when gone', () => {
+    for (const at of [2, 3]) {
+      const store = new MemoryStore();
+      const first = spot('S1', FROM, 1);
+      seed(store, first);
+      const scenario = new Page('scenario', store);
+      scenario.open('reset', first);
+      const next = saveElsewhere(store, first, 'S2', at);
+      const changed = scenario.render();
+      assert.equal(
+        changed.said?.sentence,
+        'Your edit changed in another tab, so nothing was reset. Open it to see the new copy.',
+        String(at),
+      );
+      assert.deepEqual(changed.focus, { on: 'action', id: next.id, onlyIfLost: true }, String(at));
+      scenario.open('reset', next);
+      deleteElsewhere(store, next);
+      assert.equal(scenario.render().said?.sentence, 'Your edit was removed in another tab.', String(at));
+    }
+  });
+
   it('a change and a deletion seen in one read name the copy that was on screen', () => {
     const store = new MemoryStore();
     const l1 = spot('L1');

@@ -6,7 +6,7 @@
  * calls the API, so an edited spot can never be recorded against a built-in scenario's id.
  */
 
-import { Button, CardPicker, CoachPanel, Panel } from '@prl/ui';
+import { Button, CardPicker, CoachPanel, Panel, useFocusRescue } from '@prl/ui';
 import { nextOpenSlot, pickCard, pickMessage, removeCard } from '@prl/ui/card-picker';
 import { formatChips } from '@prl/ui/format';
 import {
@@ -565,6 +565,17 @@ function fieldOrder(draft: SpotDraft): readonly FieldKey[] {
   ];
 }
 
+// Inputs carry `data-field` before their error is drawn, so this works in the click that marks them.
+function focusFirstError(errors: FieldErrors, draft: SpotDraft): void {
+  const slot = focusSlotFor(errors, draft);
+  const order = fieldOrder(draft);
+  const field = errors.has('opponents') ? order.find((key) => key.startsWith('opponent.')) : undefined;
+  const first = order.find((key) => errors.has(key)) ?? field;
+  const selector =
+    slot !== null ? `[data-slot="${slot}"]` : first === undefined ? null : `[data-field="${first}"]`;
+  if (selector !== null) document.querySelector<HTMLElement>(`.prl-spot-editor ${selector}`)?.focus();
+}
+
 function SyncNotice(props: {
   readonly sync: StoredSync;
   readonly onLoad: (spot: SavedSpot) => void;
@@ -585,6 +596,36 @@ function SyncNotice(props: {
 }
 
 const SAME: StoredSync = { kind: 'same' };
+
+function EditorEmpty(props: {
+  readonly message: string;
+  readonly live?: string;
+  readonly linkRef?: RefObject<HTMLAnchorElement | null>;
+}): ReactElement {
+  const { message, live, linkRef } = props;
+  return (
+    <div className="prl-spot-editor prl-empty">
+      {live === undefined ? null : (
+        <p className="prl-live-region" role="status" aria-live="polite">
+          {live}
+        </p>
+      )}
+      <p>{message}</p>
+      <a className="prl-btn prl-btn--secondary" href="/lab/spots" ref={linkRef}>
+        Your spots
+      </a>
+    </div>
+  );
+}
+
+function cardsErrorText(draft: SpotDraft, shown: FieldErrors): string | undefined {
+  const parts = [
+    shown.get('hole'),
+    shown.get('board'),
+    ...draft.opponents.map((o) => shown.get(opponentField(o.key, 'cards'))),
+  ];
+  return parts.filter((message) => message !== undefined).join(' ') || undefined;
+}
 
 /** Spoken, and shown under the bar; a prompt's sentence is shown only while it is still true. */
 function StatusLines(props: {
@@ -614,6 +655,7 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
   // The stored copy this tab last read or wrote, so a save never replaces one it has not seen.
   const [held, setHeld] = useState<HeldCopy>({ kind: 'unread' });
   const [missing, setMissing] = useState(false);
+  const [leaving, setLeaving] = useState(false);
   const [unknownFrom, setUnknownFrom] = useState(false);
   const [loaded, setLoaded] = useState(target.mode !== 'id');
   const [active, setActive] = useState<string | null>(() => nextOpenSlot(allSlots(draft), null));
@@ -629,6 +671,8 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
   const keepRef = useRef<HTMLButtonElement>(null);
   const saveRef = useRef<HTMLButtonElement>(null);
   const removalRef = useRef<HTMLButtonElement>(null);
+  const leavingRef = useRef<HTMLAnchorElement>(null);
+  const rescue = useFocusRescue();
   const cardsErrorId = useId();
   const opponentsErrorId = useId();
 
@@ -674,12 +718,7 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
   const edited = !draftsMatch(saved ?? original?.draft ?? null, draft);
   const sync = library.ready ? syncWithStored(held, storedCopy(library.spots, editing), edited) : SAME;
   const adoptable = sync.kind === 'adopt' ? sync.spot : null;
-  const cardErrors = [
-    err('hole'),
-    err('board'),
-    ...draft.opponents.map((o) => err(opponentField(o.key, 'cards'))),
-  ];
-  const cardsError = cardErrors.filter((message) => message !== undefined).join(' ') || undefined;
+  const cardsError = cardsErrorText(draft, shown);
   const waiting = shown.size === 0 ? ([...errors.values()][0] ?? null) : null;
 
   const say = useCallback((message: string): void => {
@@ -702,9 +741,19 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
   useEffect(() => {
     moveCaret(
       ask.focus,
-      (focus) => ({ keep: keepRef, action: removalRef, stable: saveRef })[focus.on].current,
+      (focus) =>
+        ({
+          keep: keepRef.current,
+          action: removalRef.current,
+          stable: leavingRef.current ?? saveRef.current,
+        })[focus.on],
     );
   }, [ask.focus]);
+
+  // Another tab can unmount SyncNotice buttons ("Load that copy" / "Keep mine") while focused.
+  useEffect(() => {
+    if (library.ready) rescue.rescue(saveRef.current);
+  }, [library, rescue]);
 
   // Another tab saved this spot and nothing here would be lost, so the newer copy is simply shown.
   useEffect(() => {
@@ -734,24 +783,13 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
     say(sentence);
   };
 
-  // Inputs carry `data-field` before their error is drawn, so this works in the click that marks them.
-  const focusFirstError = (): void => {
-    const slot = focusSlotFor(errors, draft);
-    const order = fieldOrder(draft);
-    const field = errors.has('opponents') ? order.find((key) => key.startsWith('opponent.')) : undefined;
-    const first = order.find((key) => errors.has(key)) ?? field;
-    const selector =
-      slot !== null ? `[data-slot="${slot}"]` : first === undefined ? null : `[data-field="${first}"]`;
-    if (selector !== null) document.querySelector<HTMLElement>(`.prl-spot-editor ${selector}`)?.focus();
-  };
-
   // Until storage is read, `library.spots` is empty, and writing it would erase every saved spot.
   const save = (): void => {
     if (!library.ready) return;
     if (!validation.ok) {
       setSubmitted(true);
       say(`Not saved. Fix the ${errors.size === 1 ? 'marked field' : `${errors.size} marked fields`} first.`);
-      focusFirstError();
+      focusFirstError(errors, draft);
       return;
     }
     const next = saveSpot(read().spots, { ...editing, held, draft }, Date.now(), () => newSpotId());
@@ -770,7 +808,7 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
     if (!validation.ok) {
       setSubmitted(true);
       say('Fix the marked fields before making a copy.');
-      focusFirstError();
+      focusFirstError(errors, draft);
       return;
     }
     const next = duplicateDraft(read().spots, draft, Date.now(), () => newSpotId());
@@ -786,6 +824,9 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
     if (done === null) return;
     const back = done.copy.from === null ? undefined : originals[done.copy.from];
     if (done.write === 'delete' || back === undefined) {
+      setLeaving(true);
+      setHeld({ kind: 'none' });
+      setEditing({ id: null, from: null });
       window.location.assign('/lab/spots');
       return;
     }
@@ -815,19 +856,22 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
 
   if (missing) {
     return (
-      <div className="prl-spot-editor prl-empty">
-        <p>This spot is not saved in this browser. It may have been deleted, or saved in another browser.</p>
-        <a className="prl-btn prl-btn--secondary" href="/lab/spots">
-          Your spots
-        </a>
-      </div>
+      <EditorEmpty message="This spot is not saved in this browser. It may have been deleted, or saved in another browser." />
     );
+  }
+
+  if (leaving) {
+    return <EditorEmpty message={saveStatus || 'Deleted.'} live={saveStatus} linkRef={leavingRef} />;
   }
 
   // An edit of a built-in this page still has. One whose built-in is gone is the player's own spot.
   const ownEdit = editing.id !== null && linked !== undefined;
   return (
-    <div className="prl-spot-editor">
+    <div
+      className="prl-spot-editor"
+      onBlurCapture={rescue.onBlurCapture}
+      onFocusCapture={rescue.onFocusCapture}
+    >
       <EditorNotes
         notice={library.notice}
         unknownFrom={unknownFrom}

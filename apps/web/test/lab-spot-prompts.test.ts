@@ -60,6 +60,10 @@ describe('every page asks the prompt machine, and writes only what it hands back
         new RegExp(`step\\(prompt, \\{ type: '${type}',[^}]*spots: read\\(\\)\\.spots`, 'u'),
       );
     }
+    for (const type of ['open', 'confirm']) {
+      assert.match(hook, new RegExp(`step\\(prompt, \\{ type: '${type}',[^}]*\\byours\\b`, 'u'));
+    }
+    assert.match(editor, /useSpotPrompt\(\{[\s\S]*?\byours: edited\b[\s\S]*?\bshow: take\b/u);
     assert.match(hook, /step\(asked\.prompt, \{ type: 'written', result: commit\(asked\.write\) \}\)/u);
     assert.equal(hook.match(/commit\(/gu)?.length, 1, 'one write, and it is the step’s');
     // No dependency list: storage is read on every render, so the check runs after every render too.
@@ -81,9 +85,24 @@ describe("a closed prompt's caret is lost, not handed to the button drawn in its
       assert.match(source, /key="actions"/u);
     });
   }
+
+  it('SpotEditor rescues a lost caret when another tab unmounts SyncNotice buttons', () => {
+    assert.match(editor, /const rescue = useFocusRescue\(\);/u);
+    assert.match(editor, /onBlurCapture=\{rescue\.onBlurCapture\}/u);
+    assert.match(editor, /onFocusCapture=\{rescue\.onFocusCapture\}/u);
+    assert.match(editor, /if \(library\.ready\) rescue\.rescue\(saveRef\.current\);/u);
+  });
 });
 
 describe('what the pages say is true when it is said (REGRESSION)', () => {
+  it('SpotEditor clears held and renders a leaving state on delete so slow navigation never claims another tab deleted it', () => {
+    assert.match(
+      editor,
+      /if \(done\.write === 'delete' \|\| back === undefined\) \{\s*setLeaving\(true\);\s*setHeld\(\{ kind: 'none' \}\);\s*setEditing\(\{ id: null, from: null \}\);\s*window\.location\.assign\('\/lab\/spots'\);\s*return;\s*\}/u,
+    );
+    assert.match(editor, /if \(leaving\) \{[\s\S]*?<EditorEmpty[\s\S]*?live=\{saveStatus\}/u);
+    assert.match(editor, /function EditorEmpty[\s\S]*?role="status"/u);
+  });
   for (const [name, source] of PAGES) {
     it(`${name} speaks a repeated sentence again`, () => {
       const sets = [...source.matchAll(/set(?:Save)?Status\(([^;]*)\);/gu)].map((match) => match[1] ?? '');
