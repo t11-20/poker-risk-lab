@@ -47,7 +47,12 @@ const JOURNEYS = [
   {
     key: 'lab',
     title: 'Scenario Lab',
-    routes: [{ path: '/lab' }, { path: '/lab/fl-same-cards-under-the-gun' }],
+    routes: [
+      { path: '/lab' },
+      { path: '/lab/fl-same-cards-under-the-gun' },
+      { path: '/lab/spots' },
+      { path: '/lab/spots/edit?from=fl-same-cards-under-the-gun' },
+    ],
   },
   {
     key: 'legends',

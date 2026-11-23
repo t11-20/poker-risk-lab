@@ -48,6 +48,8 @@ const ROUTES = [
   '/play?state=complete',
   '/lab',
   '/lab/fl-same-cards-under-the-gun',
+  '/lab/spots',
+  '/lab/spots/edit?from=fl-same-cards-under-the-gun',
   '/legends',
   '/legends/adaptive-exploiter',
   '/review',

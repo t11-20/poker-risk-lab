@@ -1,0 +1,123 @@
+/* Tip: a `?` beside a control and the one sentence it opens (components/Tip.tsx). */
+
+/** For a label and its tip in a grid or flex parent, so the pair stays one item. */
+.prl-tip-row {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  min-width: 0;
+}
+
+.prl-tip {
+  display: inline-flex;
+  margin-inline-start: var(--prl-space-2);
+  vertical-align: middle;
+}
+
+/**
+ * 24px, WCAG 2.2's target floor rather than the 44px of a consequential control: eight of these sit
+ * beside labels in the Coach, and at 44px each label row would grow by the height of the label again.
+ */
+.prl-tip__button {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: var(--prl-space-8);
+  height: var(--prl-space-8);
+  padding: 0;
+  border: 1px solid var(--prl-line-strong);
+  border-radius: var(--prl-radius-pill);
+  background-color: transparent;
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-semibold);
+  letter-spacing: normal;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background-color var(--prl-dur-fast) var(--prl-ease-material),
+    border-color var(--prl-dur-fast) var(--prl-ease-material),
+    color var(--prl-dur-fast) var(--prl-ease-material);
+}
+
+.prl-tip__button:hover {
+  border-color: var(--prl-accent-edge);
+  color: var(--prl-accent-text);
+}
+
+/** Open is a fill as well as `aria-expanded`, so the state is not carried by the border colour alone. */
+.prl-tip__button[aria-expanded="true"] {
+  border-color: var(--prl-accent-fill);
+  background-color: var(--prl-accent-fill);
+  color: var(--prl-text-on-accent);
+}
+
+/**
+ * Fixed, and in the top layer when the browser has the Popover API. Every inherited text property is
+ * reset, because the bubble sits inside a label, a `<dt>` or a sizer line and would take their style.
+ * Opaque with the 3:1 edge, because it carries a sentence over whatever is behind it.
+ */
+.prl-tip__bubble {
+  position: fixed;
+  z-index: var(--prl-z-toast);
+  inset: auto;
+  top: var(--prl-tip-y, 0);
+  left: var(--prl-tip-x, 0);
+  display: none;
+  box-sizing: border-box;
+  width: max-content;
+  max-width: min(calc(2 * var(--prl-space-16)), calc(100vw - 2 * var(--prl-space-6)));
+  margin: 0;
+  padding: var(--prl-space-4) var(--prl-space-5);
+  overflow: visible;
+  border: 1px solid var(--prl-line-strong);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-panel);
+  color: var(--prl-text);
+  font-family: var(--prl-font-sans);
+  font-size: var(--prl-type-body-sm);
+  font-weight: var(--prl-weight-regular);
+  font-stretch: normal;
+  letter-spacing: normal;
+  line-height: var(--prl-leading-snug);
+  text-align: start;
+  text-transform: none;
+  white-space: normal;
+}
+
+.prl-tip__bubble[data-open="true"] {
+  display: block;
+  animation: prl-tip-in var(--prl-dur-fast) var(--prl-ease-material);
+}
+
+/** A hover bridge over the gap, so a mouse crossing from the button to the bubble does not close it. */
+.prl-tip__bubble::before {
+  position: absolute;
+  inset-inline: 0;
+  height: var(--prl-space-3);
+  content: "";
+}
+
+.prl-tip__bubble[data-side="below"]::before {
+  bottom: 100%;
+}
+
+.prl-tip__bubble[data-side="above"]::before {
+  top: 100%;
+}
+
+@keyframes prl-tip-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .prl-tip__bubble[data-open="true"] {
+    animation: none;
+  }
+}

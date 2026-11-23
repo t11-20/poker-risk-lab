@@ -24,6 +24,8 @@ import {
   PLAY_MONEY_WARNING,
   readLegalDeployment,
 } from '../src/lib/legal-config.ts';
+import { blankDraft, blankOpponent } from '../src/lib/spot.ts';
+import { serialiseLibrary } from '../src/lib/spot-storage.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC = resolve(HERE, '..', 'src');
@@ -251,6 +253,8 @@ describe('the required disclosures are on the pages', () => {
     const timer = read('lib', 'session-sitting.ts');
     const theme = read('lib', 'theme.ts');
     const onboarding = read('components', 'Onboarding.tsx');
+    const spots = read('lib', 'spot-storage.ts');
+    const tour = read('lib', 'tour.ts');
     const keys = [
       'prl.session.startedAt',
       'prl.session.reminderMinutes',
@@ -259,13 +263,90 @@ describe('the required disclosures are on the pages', () => {
       'prl-theme',
       'prl-booted',
       'prl.learn.onboarding.dismissed',
+      'prl.lab.spots',
+      'prl.tour.dismissed',
     ];
     assert.ok(keys.length > 5);
-    const sources = `${timer}\n${theme}\n${onboarding}`;
+    const sources = `${timer}\n${theme}\n${onboarding}\n${spots}\n${tour}`;
     for (const key of keys) {
       assert.ok(sources.includes(key), `${key} must still exist in the source`);
       assert.ok(privacy.includes(key), `/privacy must name ${key}`);
     }
+  });
+
+  it('the privacy page names every field a saved spot keeps', () => {
+    // Read off what storage writes, so a field added to a saved spot fails here until the page says so.
+    const words: Readonly<Record<string, string>> = {
+      version: 'version number',
+      spots: 'For each spot',
+      id: 'random identifier for the spot',
+      from: 'built-in scenario it was copied from',
+      updatedAt: 'when you last saved it',
+      name: 'the name you give',
+      cards: 'cards',
+      heroStack: 'your stack',
+      heroBet: 'what you have put in',
+      potBefore: 'the pot before bets',
+      bigBlind: 'the big blind',
+      opponents: 'for each opponent',
+      key: 'internal label for each opponent',
+      stack: 'their stack',
+      bet: 'bet',
+      hand: 'a range, exact cards or neither',
+      range: 'that range',
+      handLabel: 'own name for the opponent',
+      neverFolds: 'never folds',
+      foldRate: 'fold rate',
+    };
+    // One seat of each hand kind, so a field only one kind writes is read too.
+    const ranged = {
+      ...blankOpponent('o1', 0),
+      range: 'QQ+',
+      handLabel: { label: 'a range', hand: 'range:QQ+' },
+    };
+    const exact = { ...blankOpponent('o2', 1), handKind: 'cards' as const, cards: [12, 13] as const };
+    const unmodelled = { ...blankOpponent('o3', 2), handKind: 'none' as const };
+    const stored = serialiseLibrary([
+      {
+        id: 'spot-000000000001',
+        from: null,
+        updatedAt: 1,
+        draft: { ...blankDraft(), opponents: [ranged, exact, unmodelled] },
+      },
+    ]);
+    const keys = new Set<string>();
+    const walk = (value: unknown): void => {
+      if (Array.isArray(value)) value.forEach(walk);
+      else if (typeof value === 'object' && value !== null) {
+        for (const [key, inner] of Object.entries(value)) {
+          // Slot names and the label's own two fields are parts of one stored field, not fields.
+          if (!/^(hole|flop|turn|river|label$)/u.test(key)) keys.add(key);
+          walk(inner);
+        }
+      }
+    };
+    walk(JSON.parse(stored));
+    assert.ok(keys.size > 15, `only ${keys.size} stored fields: a sweep of nothing`);
+    const spotLine =
+      flat(read(...PAGES.privacy))
+        .split('prl.lab.spots')[1]
+        ?.split('prl.tour.dismissed')[0] ?? '';
+    for (const key of keys) {
+      const phrase = words[key];
+      assert.ok(phrase !== undefined, `storage keeps "${key}", which this test has no wording for`);
+      assert.ok(spotLine.includes(phrase), `/privacy must say it keeps ${key} ("${phrase}")`);
+    }
+    assert.match(spotLine, /whatever you type/u, 'the names are free text, and the page says so');
+  });
+
+  it('the privacy page says the guide opens until it is skipped or closed, not only on a first visit', () => {
+    const tourLine =
+      flat(read(...PAGES.privacy))
+        .split('prl.lab.spots')[1]
+        ?.split('prl.session.startedAt')[0] ?? '';
+    assert.ok(tourLine.includes('prl.tour.dismissed'), 'found the guide line');
+    assert.doesNotMatch(tourLine, /first visit/u);
+    assert.match(tourLine, /Skip or Close/u);
   });
 
   it('every field the pages can be missing renders as a visible gap, never as a plausible default', () => {

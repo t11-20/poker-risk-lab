@@ -198,6 +198,11 @@ export default async function LabIndexPage({ searchParams }: LabIndexProps): Pro
         </p>
       )}
 
+      <p className="prl-note prl-spot-entry">
+        <a href="/lab/spots/edit">Set up your own spot</a> with your cards, stacks and bet, or open{' '}
+        <a href="/lab/spots">your saved spots</a>.
+      </p>
+
       <ScenarioFilters
         topics={optionsFor(all, selection, 'topic', topicLabel)}
         difficulties={optionsFor(all, selection, 'difficulty', difficultyLabel)}
@@ -224,7 +229,7 @@ export default async function LabIndexPage({ searchParams }: LabIndexProps): Pro
           </a>
         </div>
       ) : (
-        <ul className="prl-grid prl-lab-grid">
+        <ul className="prl-grid prl-lab-grid" data-tour="pick-scenario">
           {shown.map((scenario, position) => (
             <ScenarioCard
               key={scenario.id}

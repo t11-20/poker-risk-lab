@@ -62,6 +62,7 @@ import {
   isProbabilityPoints,
   NOT_A_PROBABILITY,
 } from '../probability.ts';
+import { UI_TIPS } from '../tips.ts';
 import { AssumptionList } from './AssumptionList.tsx';
 import { Callout } from './Callout.tsx';
 import { Chip } from './Chip.tsx';
@@ -70,6 +71,7 @@ import { Formula } from './Formula.tsx';
 import { Metric } from './Metric.tsx';
 import { PlayingCard } from './PlayingCard.tsx';
 import { StatTile } from './StatTile.tsx';
+import { Tip } from './Tip.tsx';
 import { UncertaintyNote } from './UncertaintyNote.tsx';
 
 export interface CoachPanelProps {
@@ -302,22 +304,31 @@ function EquitySection({ equity, interval, surplus }: EquitySectionProps): React
     : {};
 
   return (
-    <section className="prl-coach__section prl-coach__section--equity">
+    // Both tips in the head explain the share below it, so the whole section is their subject.
+    <section className="prl-coach__section prl-coach__section--equity" data-tip-subject="">
+      {/* Each tip shares a row with its subject, so the head keeps two items for `space-between`. */}
       <div className="prl-coach__section-head">
-        <h3 className="prl-coach__section-heading">Equity</h3>
-        <Chip
-          className="prl-coach__method"
-          tone={equity.method === 'exact-enumeration' ? 'accent' : 'info'}
-          glyph={method.glyph}
-        >
-          {method.label}
-        </Chip>
+        <div className="prl-tip-row">
+          <h3 className="prl-coach__section-heading">Equity</h3>
+          <Tip tip={UI_TIPS.equity} />
+        </div>
+        <div className="prl-tip-row">
+          <Chip
+            className="prl-coach__method"
+            tone={equity.method === 'exact-enumeration' ? 'accent' : 'info'}
+            glyph={method.glyph}
+          >
+            {method.label}
+          </Chip>
+          <Tip tip={UI_TIPS.method} />
+        </div>
       </div>
 
       {/* Rule 5. `Metric` formats internally, so the check happens before it gets the value. */}
       {isProbabilityFraction(equity.heroEquity) ? (
         <Metric
           label="Your share of the pot"
+          tip={UI_TIPS.heroShare}
           value={equity.heroEquity}
           format="percent"
           size="lg"
@@ -360,6 +371,7 @@ function PriceSection({
       {isProbabilityFraction(potOdds.breakEvenEquity) ? (
         <Metric
           label="Break-even equity"
+          tip={UI_TIPS.breakEven}
           value={potOdds.breakEvenEquity}
           format="percent"
           size="md"
@@ -376,11 +388,12 @@ function PriceSection({
       {potOdds.oddsRatio === null ? (
         <StatTile
           label="Pot odds"
+          tip={UI_TIPS.potOdds}
           value={formatOdds(potOdds.oddsRatio)}
           note="Nothing to call, so any chance of winning is enough to see the next card."
         />
       ) : (
-        <Metric label="Pot odds" value={potOdds.oddsRatio} format="odds" size="sm" />
+        <Metric label="Pot odds" tip={UI_TIPS.potOdds} value={potOdds.oddsRatio} format="odds" size="sm" />
       )}
 
       <StatTile
@@ -423,12 +436,28 @@ function StackSection({
   return (
     <section className="prl-coach__section">
       <h3 className="prl-coach__section-heading">Stack context</h3>
-      <Metric label="Effective stack" value={stack.effectiveStack} format="units" size="md" />
+      <Metric
+        label="Effective stack"
+        tip={UI_TIPS.effectiveStack}
+        value={stack.effectiveStack}
+        format="units"
+        size="md"
+      />
       {noMoreBetting !== null ? (
-        <StatTile label="Stack-to-pot ratio" value="No more betting" note={NO_MORE_BETTING[noMoreBetting]} />
+        <StatTile
+          label="Stack-to-pot ratio"
+          tip={UI_TIPS.stackToPot}
+          value="No more betting"
+          note={NO_MORE_BETTING[noMoreBetting]}
+        />
       ) : (
         <>
-          <StatTile label="Stack-to-pot ratio" value={spr.label} note={spr.meaning} />
+          <StatTile
+            label="Stack-to-pot ratio"
+            tip={UI_TIPS.stackToPot}
+            value={spr.label}
+            note={spr.meaning}
+          />
           {potSizedBetPrice === null ? (
             <RefusedFigure
               label="Price a pot-sized bet would offer"

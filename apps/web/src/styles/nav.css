@@ -505,6 +505,25 @@
   }
 }
 
+/**
+ * Tighter between 860 and 1280, where the bar also holds "How to use" and the theme switch. With these
+ * steps a 999,999 balance keeps one row at 860; without them the bar wrapped to 129px at 860 and 900.
+ */
+@media (860px <= width < 1280px) {
+  :root {
+    --prl-pill-gap: var(--prl-space-4);
+  }
+
+  .prl-nav--pill .prl-nav__link {
+    padding-inline: var(--prl-space-4);
+  }
+
+  .prl-pillbar__cta,
+  .prl-pillbar .prl-units__value {
+    padding-inline: var(--prl-space-5);
+  }
+}
+
 @media (min-width: 1280px) {
   /* Measured: wordmark 323 + navigation 530 + units 190 + gaps 24 = 1067 in a 1200px container. */
   .prl-pillbar__brand .prl-shell__brand-name {

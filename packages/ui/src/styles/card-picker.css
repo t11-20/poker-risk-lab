@@ -1,0 +1,221 @@
+/**
+ * CardPicker. Thirteen 40px cards across, each in a column of at least 44px, need 40rem; below that the
+ * deck turns into four suit columns, read through `grid-auto-flow`, which the component asks for to aim
+ * the arrow keys.
+ */
+
+.prl-picker {
+  container: prl-picker / inline-size;
+  display: grid;
+  gap: var(--prl-space-6);
+  min-width: 0;
+}
+
+/** Board-sized cards, narrowed so five slots and their padding keep one line at 360px. */
+.prl-picker__slots {
+  --prl-picker-slot-w: min(
+    var(--prl-card-board),
+    calc((100cqi - 5 * (2 * var(--prl-space-2) + 2px) - 4 * var(--prl-space-2)) / 5)
+  );
+
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--prl-space-5) var(--prl-space-8);
+}
+
+.prl-picker__group,
+.prl-picker__deck-set {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.prl-picker__group {
+  display: grid;
+  align-content: start;
+  max-width: 100%;
+  gap: var(--prl-space-2);
+}
+
+.prl-picker__group-label {
+  max-width: 100%;
+  margin: 0 0 var(--prl-space-2);
+  padding: 0;
+  overflow-wrap: anywhere;
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-medium);
+  letter-spacing: var(--prl-tracking-label);
+}
+
+.prl-picker__group-slots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--prl-space-2);
+}
+
+.prl-picker__slot {
+  display: grid;
+  justify-items: center;
+  gap: var(--prl-space-1);
+  min-width: var(--prl-target-min);
+  min-height: var(--prl-target-min);
+  padding: var(--prl-space-2);
+  border: 1px solid transparent;
+  border-radius: var(--prl-radius-2);
+  background: none;
+  color: var(--prl-text);
+  cursor: pointer;
+}
+
+.prl-picker__slot:hover {
+  border-color: var(--prl-line-strong);
+}
+
+/** The border and `aria-pressed` both mark the target, so it never rests on colour alone. */
+.prl-picker__slot[data-active="true"] {
+  border-color: var(--prl-accent-edge);
+  background-color: var(--prl-surface-active);
+}
+
+.prl-picker__slot-label {
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-label-sm);
+  letter-spacing: var(--prl-tracking-label-sm);
+  white-space: nowrap;
+}
+
+.prl-picker__slot .prl-card {
+  --prl-card-w: var(--prl-picker-slot-w);
+}
+
+/** The same box as a card, so a slot does not move when it fills. Dashed, as an empty place on the felt. */
+.prl-picker__empty {
+  width: var(--prl-picker-slot-w);
+  aspect-ratio: 5 / 7;
+  border: 1px dashed var(--prl-line-strong);
+  border-radius: calc(var(--prl-picker-slot-w) * 0.072);
+}
+
+.prl-picker__tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--prl-space-4) var(--prl-space-6);
+}
+
+.prl-picker__target,
+.prl-picker__hint {
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+}
+
+/** Rows from 40rem; the four suit columns below are the default, as the narrowest case. */
+.prl-picker__deck {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-rows: repeat(13, auto);
+  grid-auto-flow: column;
+  gap: var(--prl-space-1);
+}
+
+.prl-picker__card {
+  display: grid;
+  grid-template-areas: "face";
+  justify-items: center;
+  min-width: 0;
+  min-height: var(--prl-target-min);
+  padding: var(--prl-space-1);
+  border: 1px solid transparent;
+  border-radius: var(--prl-radius-2);
+  background: none;
+  color: var(--prl-text);
+  cursor: pointer;
+}
+
+.prl-picker__face {
+  display: block;
+  line-height: 0;
+}
+
+.prl-picker__card .prl-picker__face {
+  grid-area: face;
+}
+
+.prl-picker__card .prl-card {
+  --prl-card-w: var(--prl-space-10);
+}
+
+.prl-picker__card:hover:not([aria-disabled="true"]) {
+  border-color: var(--prl-accent-edge);
+}
+
+.prl-picker__card[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+
+/**
+ * In use: the face greyed, a dashed edge round it and the slot's name, so the state is not colour alone.
+ * The fade is on the image only, because on the button it would take the name under 4.5:1.
+ */
+.prl-picker__card[aria-disabled="true"] .prl-card__image {
+  opacity: 0.35;
+  filter: grayscale(1);
+}
+
+.prl-picker__card[aria-disabled="true"] .prl-card {
+  outline: 1px dashed var(--prl-line-strong);
+  outline-offset: 1px;
+}
+
+/** Over the foot of the greyed face in the suit columns, where a line under every card costs 13 rows. */
+.prl-picker__used {
+  grid-area: face;
+  align-self: end;
+  padding-inline: var(--prl-space-2);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-surface-panel);
+  color: var(--prl-text);
+  font-size: var(--prl-type-label-sm);
+  line-height: var(--prl-leading-tight);
+  white-space: nowrap;
+}
+
+.prl-picker__used:empty {
+  display: none;
+}
+
+@container prl-picker (min-width: 40rem) {
+  .prl-picker__deck {
+    grid-template-columns: repeat(13, minmax(0, 1fr));
+    grid-template-rows: none;
+    grid-auto-flow: row;
+  }
+
+  .prl-picker__card {
+    grid-template-areas:
+      "face"
+      "used";
+    grid-template-rows: auto var(--prl-space-6);
+    align-items: center;
+  }
+
+  .prl-picker__used {
+    grid-area: used;
+    align-self: center;
+    padding-inline: 0;
+    background: none;
+    color: var(--prl-text-muted);
+  }
+}
+
+@media (forced-colors: active) {
+  .prl-picker__card[aria-disabled="true"] {
+    color: GrayText;
+  }
+
+  .prl-picker__slot[data-active="true"] {
+    border-color: Highlight;
+  }
+}

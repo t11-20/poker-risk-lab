@@ -1,0 +1,214 @@
+/**
+ * The Lab's spot editor, the spot list, and the "Edit a copy" line on a scenario page. Tokens only.
+ * The analysis sits beside the inputs from 64rem, so a change and its numbers are on one screen.
+ */
+
+.prl-spot-editor {
+  display: grid;
+  gap: var(--prl-space-6);
+  min-width: 0;
+}
+
+.prl-spot-editor__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--prl-space-4);
+}
+
+/** `margin: 0`, or base.css's paragraph margin lifts the word above the buttons it sits beside. */
+.prl-spot-editor__state {
+  margin: 0;
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+}
+
+.prl-spot-editor__confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--prl-space-4);
+}
+
+.prl-spot-editor__layout {
+  display: grid;
+  gap: var(--prl-space-8);
+  min-width: 0;
+}
+
+@media (min-width: 64rem) {
+  .prl-spot-editor__layout {
+    grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+    align-items: start;
+  }
+}
+
+.prl-spot-editor__inputs,
+.prl-spot-editor__result {
+  display: grid;
+  gap: var(--prl-space-6);
+  min-width: 0;
+}
+
+.prl-spot-editor__card-tools {
+  margin-block-start: var(--prl-space-5);
+}
+
+.prl-spot-editor__fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
+  gap: var(--prl-space-6);
+  align-items: start;
+}
+
+.prl-spot-field__control {
+  display: flex;
+  align-items: center;
+  gap: var(--prl-space-3);
+}
+
+.prl-spot-field__suffix {
+  color: var(--prl-text-secondary);
+}
+
+.prl-spot-editor__price {
+  margin-block-start: var(--prl-space-6);
+  color: var(--prl-text);
+  font-weight: var(--prl-weight-medium);
+}
+
+.prl-spot-editor__opponents {
+  display: grid;
+  gap: var(--prl-space-6);
+  margin: 0 0 var(--prl-space-6);
+  padding: 0;
+  list-style: none;
+}
+
+/** `min-width: 0`, because a fieldset's default minimum is its content's width. */
+.prl-spot-editor__opponent {
+  display: grid;
+  gap: var(--prl-space-5);
+  min-width: 0;
+  margin: 0;
+  padding: var(--prl-space-6);
+  border: 1px solid var(--prl-line);
+  border-radius: var(--prl-radius-2);
+}
+
+.prl-spot-editor__legend {
+  padding-inline: var(--prl-space-2);
+  font-weight: var(--prl-weight-semibold);
+  overflow-wrap: anywhere;
+}
+
+.prl-spot-editor__kinds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--prl-space-2) var(--prl-space-6);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.prl-spot-editor__kinds > legend {
+  margin-block-end: var(--prl-space-2);
+}
+
+.prl-spot-editor__kind,
+.prl-spot-editor__check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--prl-space-3);
+  min-height: var(--prl-target-min);
+  cursor: pointer;
+}
+
+.prl-spot-editor__check {
+  margin-block-end: var(--prl-space-5);
+}
+
+.prl-spot-editor__result-title {
+  font-size: var(--prl-type-display-3);
+}
+
+.prl-spot-editor__status {
+  color: var(--prl-text);
+  font-weight: var(--prl-weight-medium);
+}
+
+.prl-spot-editor__status-note {
+  color: var(--prl-text-secondary);
+  font-weight: var(--prl-weight-regular);
+}
+
+.prl-spot-list__items {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 22rem), 1fr));
+  gap: var(--prl-space-6);
+  margin: var(--prl-space-8) 0;
+  padding: 0;
+  list-style: none;
+}
+
+/** `margin: 0`, because base.css spaces every list item but the last, and a row then had two heights. */
+.prl-spot-list__item {
+  display: grid;
+  align-content: start;
+  gap: var(--prl-space-4);
+  min-width: 0;
+  margin: 0;
+  padding: var(--prl-space-6);
+  border: 1px solid var(--prl-line);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-panel);
+}
+
+.prl-spot-list__title {
+  margin: 0;
+  font-size: var(--prl-type-heading);
+  overflow-wrap: anywhere;
+}
+
+.prl-spot-list__cards {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--prl-space-3);
+}
+
+.prl-spot-list__ask {
+  flex-basis: 100%;
+}
+
+.prl-spot-start {
+  display: grid;
+  justify-items: start;
+  gap: var(--prl-space-5);
+  max-width: 40rem;
+  margin-block-start: var(--prl-space-10);
+}
+
+.prl-spot-start .prl-field {
+  width: 100%;
+}
+
+.prl-spot-start__title {
+  font-size: var(--prl-type-display-3);
+}
+
+.prl-spot-links {
+  margin-block-end: var(--prl-space-8);
+}
+
+.prl-spot-links__line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--prl-space-4);
+}
+
+.prl-spot-editor__opponent > .prl-btn {
+  justify-self: start;
+}

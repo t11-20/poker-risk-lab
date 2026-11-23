@@ -16,6 +16,8 @@ import { cx } from '../cx.ts';
 import { formatChips, formatOdds, formatPoints, formatUnits, NOT_AVAILABLE } from '../format.ts';
 import { useCountUp } from '../motion/useCountUp.ts';
 import { NOT_A_PROBABILITY, normaliseProbability } from '../probability.ts';
+import type { TipCopy } from '../tips.ts';
+import { Tip } from './Tip.tsx';
 
 export type MetricFormat = 'number' | 'percent' | 'units' | 'points' | 'odds';
 export type MetricSize = 'sm' | 'md' | 'lg' | 'hero';
@@ -47,6 +49,8 @@ export interface MetricProps {
   readonly tone?: MetricTone;
   readonly size?: MetricSize;
   readonly countUp?: boolean;
+  /** A `?` beside the label. Outside `.prl-metric__label`, so the label's text stays the label. */
+  readonly tip?: TipCopy;
   readonly className?: string;
 }
 
@@ -229,6 +233,7 @@ export function Metric(props: MetricProps): ReactElement {
     tone = 'neutral',
     size = 'md',
     countUp = false,
+    tip,
     className,
   } = props;
 
@@ -242,9 +247,23 @@ export function Metric(props: MetricProps): ReactElement {
   };
   const resolvedDelta = delta === undefined ? null : resolveDelta(delta, format, decimals);
 
+  const labelNode = <span className="prl-metric__label prl-label">{label}</span>;
+
   return (
-    <div className={cx('prl-metric', SIZE_CLASS[size], className)} data-size={size} data-tone={tone}>
-      <span className="prl-metric__label prl-label">{label}</span>
+    <div
+      className={cx('prl-metric', SIZE_CLASS[size], className)}
+      data-size={size}
+      data-tip-subject={tip === undefined ? undefined : ''}
+      data-tone={tone}
+    >
+      {tip === undefined ? (
+        labelNode
+      ) : (
+        <span className="prl-tip-row">
+          {labelNode}
+          <Tip tip={tip} />
+        </span>
+      )}
       {countUp ? <CountedFigure {...figure} /> : <StaticFigure {...figure} />}
       {resolvedDelta === null || delta === undefined ? null : (
         <p className="prl-metric__delta" data-direction={resolvedDelta.direction}>

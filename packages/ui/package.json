@@ -6,8 +6,11 @@
   "description": "Shared React components and native CSS for the Poker Risk Lab web app. Consumed as source and transpiled by Next.js.",
   "exports": {
     ".": "./src/index.ts",
+    "./card-picker": "./src/card-picker.ts",
+    "./cards": "./src/cards.ts",
     "./format": "./src/format.ts",
     "./probability": "./src/probability.ts",
+    "./tips": "./src/tips.ts",
     "./styles.css": "./src/styles/index.css"
   },
   "scripts": {

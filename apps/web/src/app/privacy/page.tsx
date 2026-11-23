@@ -259,6 +259,23 @@ export default function PrivacyPage(): ReactElement {
               <code>prl.learn.onboarding.dismissed</code> in local storage).
             </li>
             <li>
+              <strong>Spots you save in the Lab&rsquo;s spot editor</strong> (<code>prl.lab.spots</code> in
+              local storage), with a version number for the format. For each spot: the name you give it; your
+              cards and the board&rsquo;s cards; your stack, what you have put in, the pot before bets and the
+              big blind; for each opponent, the name you give them, their stack and their bet, whether you set
+              a range, exact cards or neither, and that range or those cards; whether the opponent never
+              folds, and the fold rate you entered; the built-in scenario it was copied from, if any, and that
+              scenario&rsquo;s own name for the opponent&rsquo;s hand; when you last saved it; a random
+              identifier for the spot; and a short internal label for each opponent, such as <code>o1</code>.
+              Both kinds of name are whatever you type, kept as you typed them apart from spaces at either
+              end.
+            </li>
+            <li>
+              <strong>Whether you closed the “How to use” guide</strong> on the Scenario Lab (
+              <code>prl.tour.dismissed</code> in local storage). Until you press Skip or Close in it, the
+              guide can open by itself again whenever you load the Scenario Lab page, not just the first time.
+            </li>
+            <li>
               <strong>The sitting timer in the footer</strong>: when this tab was opened (
               <code>prl.session.startedAt</code> in session storage), the reminder interval you chose if you
               chose one (<code>prl.session.reminderMinutes</code> in local storage), when you last
