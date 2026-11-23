@@ -182,15 +182,6 @@
   flex-basis: 100%;
 }
 
-/**
- * Under the question on a line of its own, so the buttons after it still read as the answer. `.prl-note`'s
- * measure caps the basis, and capped it fitted beside the question at 1440px.
- */
-.prl-spot-prompt__changed {
-  flex-basis: 100%;
-  max-width: none;
-}
-
 .prl-spot-start {
   display: grid;
   justify-items: start;

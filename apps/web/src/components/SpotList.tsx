@@ -5,49 +5,31 @@
  * edit of a built-in, reset to the original, which removes the edit.
  */
 
-import { Button, browserAbandonedFocus, CardRun } from '@prl/ui';
-import { type ReactElement, type RefObject, useEffect, useRef, useState } from 'react';
+import { Button, CardRun, useFocusRescue } from '@prl/ui';
+import { type ReactElement, type RefObject, useCallback, useEffect, useRef, useState } from 'react';
 import { type SavedSpot, streetOf } from '../lib/spot.ts';
+import { askingOn, displayName, type Said, stillTrue } from '../lib/spot-prompt.ts';
 import {
-  askedCopy,
-  changedSincePrompt,
-  conflictSentence,
   duplicateDraft,
   isEditOfBuiltIn,
   newSpotId,
   noticeSentence,
-  type RemoveRequest,
   refusalSentence,
-  removeSpot,
   repeated,
   savedAt,
-  serialiseLibrary,
   spotHref,
-  type WriteResult,
 } from '../lib/spot-storage.ts';
 import { validateDraft } from '../lib/spot-validate.ts';
 import { useSpotLibrary } from '../lib/use-spot-library.ts';
+import { moveCaret, useSpotPrompt } from '../lib/use-spot-prompt.ts';
 
 export interface SpotListProps {
   readonly titles: Readonly<Record<string, string>>;
+  /** The page's heading, focusable, where the caret goes when the row it was on is gone. */
+  readonly headingId: string;
 }
 
 const STREET_WORD = { preflop: 'Preflop', flop: 'Flop', turn: 'Turn', river: 'River' } as const;
-
-/** An open Delete or Reset prompt: the entry as it was drawn when the reader asked. */
-interface Asked {
-  readonly request: RemoveRequest;
-  readonly own: boolean;
-  readonly name: string;
-  /** Its place in the list, so the caret has somewhere to go if it disappears. */
-  readonly row: number;
-}
-
-/** Where the caret goes after a press removes the control it was on: a row's title or its removal button. */
-interface FocusTo {
-  readonly row: number;
-  readonly part: 'title' | 'removal';
-}
 
 function SpotCards({ spot }: { readonly spot: SavedSpot }): ReactElement {
   const checked = validateDraft(spot.draft);
@@ -66,28 +48,21 @@ function SpotCards({ spot }: { readonly spot: SavedSpot }): ReactElement {
   );
 }
 
-function displayName(spot: SavedSpot): string {
-  return spot.draft.name.trim() === '' ? 'Untitled spot' : spot.draft.name.trim();
-}
-
 function SpotItem(props: {
   readonly spot: SavedSpot;
   readonly href: string;
   /** The built-in's title for an edit of one this page still has. */
   readonly original: string | undefined;
   readonly confirming: boolean;
-  /** Why the open prompt will not remove this entry as it is now, or `null` while it still would. */
-  readonly changed: string | null;
-  /** Why the last Delete or Reset of this entry did nothing, shown beside the copy now drawn. */
-  readonly refused: string | null;
+  /** What the last prompt on this entry said, while it is still true of the copy drawn. */
+  readonly said: string | null;
   readonly keepRef: RefObject<HTMLButtonElement | null>;
   readonly onAsk: () => void;
   readonly onCancel: () => void;
   readonly onRemove: () => void;
   readonly onDuplicate: () => void;
 }): ReactElement {
-  const { spot, href, original, confirming, changed, refused, keepRef } = props;
-  const { onAsk, onCancel, onRemove, onDuplicate } = props;
+  const { spot, href, original, confirming, said, keepRef, onAsk, onCancel, onRemove, onDuplicate } = props;
   const name = displayName(spot);
   const own = original === undefined;
   const removal = own ? 'Delete' : 'Reset to original';
@@ -104,13 +79,12 @@ function SpotItem(props: {
         </p>
       )}
       <SpotCards spot={spot} />
-      {refused === null ? null : <p className="prl-note">{refused}</p>}
+      {said === null ? null : <p className="prl-note">{said}</p>}
       {confirming ? (
         <div className="prl-btn-row">
           <p className="prl-spot-list__ask">
             {own ? 'Delete this spot? This cannot be undone.' : 'Remove your edit?'}
           </p>
-          {changed === null ? null : <p className="prl-note prl-spot-prompt__changed">{changed}</p>}
           <Button size="sm" ref={keepRef} onClick={onCancel}>
             Keep it
           </Button>
@@ -126,7 +100,7 @@ function SpotItem(props: {
           <Button size="sm" aria-label={`Duplicate ${name}`} onClick={onDuplicate}>
             Duplicate
           </Button>
-          <Button size="sm" aria-label={`${removal}: ${name}`} data-removal="" onClick={onAsk}>
+          <Button size="sm" aria-label={`${removal}: ${name}`} data-removal={spot.id} onClick={onAsk}>
             {removal}
           </Button>
         </div>
@@ -135,96 +109,66 @@ function SpotItem(props: {
   );
 }
 
-export function SpotList({ titles }: SpotListProps): ReactElement {
-  const { library, read, commit } = useSpotLibrary();
+export function SpotList({ titles, headingId }: SpotListProps): ReactElement {
+  const store = useSpotLibrary();
+  const { library, read, commit } = store;
   const isBuiltIn = (id: string): boolean => titles[id] !== undefined;
-  const [asked, setAsked] = useState<Asked | null>(null);
   const [status, setStatus] = useState('');
-  const [refused, setRefused] = useState<{ readonly id: string; readonly sentence: string } | null>(null);
-  const [focusTo, setFocusTo] = useState<FocusTo | null>(null);
+  const [said, setSaid] = useState<Said | null>(null);
   const keepRef = useRef<HTMLButtonElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
-  const emptyRef = useRef<HTMLParagraphElement>(null);
-
-  // The prompt follows the entry it asked about, onto a new id when another tab reset and edited it.
-  const now = asked === null || !library.ready ? null : askedCopy(library.spots, asked.request);
-  const promptId = now === null || now.kind === 'gone' ? null : now.spot.id;
-  // As text, because every write re-reads storage into new objects and the effect below would fire again.
-  const changedCopy = now?.kind === 'changed' ? serialiseLibrary([now.spot]) : null;
-  const changedLine =
-    changedCopy === null || asked === null ? null : changedSincePrompt(asked.own ? 'delete' : 'reset');
-  const gone = now?.kind === 'gone';
-
-  useEffect(() => {
-    if (promptId !== null) keepRef.current?.focus();
-  }, [promptId]);
-
-  useEffect(() => {
-    if (changedCopy === null || changedLine === null) return;
-    setStatus((current) => repeated(current, changedLine));
-  }, [changedCopy, changedLine]);
-
-  useEffect(() => {
-    if (!gone || asked === null) return;
-    setAsked(null);
-    setStatus((current) => repeated(current, `"${asked.name}" was removed in another tab.`));
-    if (browserAbandonedFocus()) setFocusTo({ row: asked.row, part: 'title' });
-  }, [gone, asked]);
+  const rescue = useFocusRescue();
+  const announce = useCallback((message: string): void => {
+    setStatus((current) => repeated(current, message));
+  }, []);
+  const say = useCallback(
+    (next: Said): void => {
+      setSaid(next);
+      announce(next.sentence);
+    },
+    [announce],
+  );
+  const ask = useSpotPrompt({ surface: 'list', store, say });
+  const asking = askingOn(ask.prompt)?.copy.id ?? null;
+  const shown = said !== null && stillTrue(said, library.spots) ? said : null;
 
   // Rows are found in the DOM because the one to focus is drawn only after the write re-renders the list.
   useEffect(() => {
-    if (focusTo === null) return;
-    const rows = rootRef.current?.querySelectorAll<HTMLElement>('.prl-spot-list__item') ?? [];
-    const row = rows[focusTo.row] ?? rows[focusTo.row - 1];
-    const selector = focusTo.part === 'title' ? '.prl-spot-list__title a' : '[data-removal]';
-    (row?.querySelector<HTMLElement>(selector) ?? emptyRef.current)?.focus();
-  }, [focusTo]);
+    moveCaret(ask.focus, (focus) => {
+      if (focus.on === 'keep') return keepRef.current;
+      const buttons = [...(rootRef.current?.querySelectorAll<HTMLElement>('[data-removal]') ?? [])];
+      const action =
+        focus.on === 'action' ? buttons.find((b) => b.dataset['removal'] === focus.id) : undefined;
+      return action ?? document.getElementById(headingId);
+    });
+  }, [ask.focus, headingId]);
 
-  const say = (message: string): void => setStatus((current) => repeated(current, message));
-
-  const written = (result: WriteResult, success: string): boolean => {
-    say(result.ok ? success : refusalSentence(result.reason));
-    return result.ok;
-  };
-
-  const confirm = (): void => {
-    if (asked === null) return;
-    const { request, own, name } = asked;
-    setAsked(null);
-    const before = read().spots;
-    const next = removeSpot(before, request);
-    if ('conflict' in next) {
-      const sentence = conflictSentence(own ? 'delete' : 'reset', 'shown');
-      const conflict = next.conflict;
-      setRefused({ id: conflict.id, sentence });
-      say(sentence);
-      setFocusTo({ row: before.findIndex((spot) => spot.id === conflict.id), part: 'removal' });
-      return;
-    }
-    setRefused(null);
-    const row = before.findIndex((spot) => !next.spots.includes(spot));
-    if (written(commit(next.spots), own ? `Deleted "${name}".` : `"${name}" is back to the original.`)) {
-      setFocusTo({ row: Math.max(row, 0), part: 'title' });
-    }
-  };
+  // Another tab's write can remove the row the caret is on, and with the last row the whole list.
+  useEffect(() => {
+    if (library.ready) rescue.rescue(document.getElementById(headingId));
+  }, [library, rescue, headingId]);
 
   if (!library.ready) return <p className="prl-note">Reading the spots saved in this browser.</p>;
 
   return (
-    <div className="prl-spot-list" ref={rootRef}>
+    <div
+      className="prl-spot-list"
+      ref={rootRef}
+      onBlurCapture={rescue.onBlurCapture}
+      onFocusCapture={rescue.onFocusCapture}
+    >
       {library.notice === null ? null : <p className="prl-note">{noticeSentence(library.notice)}</p>}
       <p className="prl-live-region" role="status" aria-live="polite">
         {status}
       </p>
+      {shown === null || shown.stored !== undefined ? null : <p className="prl-note">{shown.sentence}</p>}
       {library.spots.length === 0 ? (
         <div className="prl-empty">
-          <p ref={emptyRef} tabIndex={-1}>
-            No spots saved in this browser yet. Start a new one, or copy a scenario below and change it.
-          </p>
+          <p>No spots saved in this browser yet. Start a new one, or copy a scenario below and change it.</p>
         </div>
       ) : (
         <ul className="prl-spot-list__items">
-          {library.spots.map((spot, row) => {
+          {library.spots.map((spot) => {
             const own = !isEditOfBuiltIn(spot, isBuiltIn);
             return (
               <SpotItem
@@ -232,29 +176,23 @@ export function SpotList({ titles }: SpotListProps): ReactElement {
                 spot={spot}
                 href={spotHref(spot, isBuiltIn)}
                 original={!own && spot.from !== null ? titles[spot.from] : undefined}
-                confirming={promptId === spot.id}
-                changed={promptId === spot.id ? changedLine : null}
-                refused={refused?.id === spot.id ? refused.sentence : null}
+                confirming={asking === spot.id}
+                said={shown?.stored?.id === spot.id ? shown.sentence : null}
                 keepRef={keepRef}
-                onAsk={() =>
-                  setAsked({
-                    request: { id: spot.id, from: spot.from, held: { kind: 'copy', spot } },
-                    own,
-                    name: displayName(spot),
-                    row,
-                  })
-                }
-                onCancel={() => {
-                  setAsked(null);
-                  setFocusTo({ row, part: 'removal' });
+                onAsk={() => {
+                  setSaid(null);
+                  ask.open(own ? 'delete' : 'reset', spot);
                 }}
-                onRemove={confirm}
+                onCancel={ask.cancel}
+                onRemove={ask.confirm}
                 onDuplicate={() => {
-                  setRefused(null);
+                  setSaid(null);
                   const next = duplicateDraft(read().spots, spot.draft, Date.now(), () => newSpotId());
-                  written(
-                    commit(next.spots),
-                    `Saved a copy of "${displayName(spot)}" at the end of the list.`,
+                  const result = commit(next.spots);
+                  announce(
+                    result.ok
+                      ? `Saved a copy of "${displayName(spot)}" at the end of the list.`
+                      : refusalSentence(result.reason),
                   );
                 }}
               />

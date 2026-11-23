@@ -5,121 +5,81 @@
  * that edit and "Reset to original". The scenario itself is never changed; resetting deletes the edit.
  */
 
-import { Button, browserAbandonedFocus } from '@prl/ui';
-import { type ReactElement, useEffect, useRef, useState } from 'react';
-import type { SavedSpot } from '../lib/spot.ts';
-import {
-  askedCopy,
-  changedSincePrompt,
-  conflictSentence,
-  editOf,
-  removeSpot,
-  repeated,
-  serialiseLibrary,
-} from '../lib/spot-storage.ts';
+import { Button, useFocusRescue } from '@prl/ui';
+import { type ReactElement, useCallback, useEffect, useRef, useState } from 'react';
+import { askingOn, type Said, stillTrue } from '../lib/spot-prompt.ts';
+import { editOf, repeated } from '../lib/spot-storage.ts';
 import { useSpotLibrary } from '../lib/use-spot-library.ts';
+import { moveCaret, useSpotPrompt } from '../lib/use-spot-prompt.ts';
 
 export function ScenarioSpotLinks({ scenarioId }: { readonly scenarioId: string }): ReactElement {
-  const { library, read, commit } = useSpotLibrary();
-  const [refused, setRefused] = useState(false);
-  // The edit as drawn when Reset was pressed, so a save in another tab since is refused, not removed.
-  const [asked, setAsked] = useState<SavedSpot | null>(null);
+  const store = useSpotLibrary();
+  const { library } = store;
   const [status, setStatus] = useState('');
-  // Set by a press whose control unmounts, so the caret lands on a named control rather than <body>.
-  const [focusTo, setFocusTo] = useState<{ readonly on: 'edit' | 'reset' } | null>(null);
+  const [said, setSaid] = useState<Said | null>(null);
   const keepRef = useRef<HTMLButtonElement>(null);
-  const editRef = useRef<HTMLAnchorElement>(null);
+  // One link, drawn in the same place whether or not an edit exists, so the caret survives either.
+  const linkRef = useRef<HTMLAnchorElement>(null);
   const resetRef = useRef<HTMLButtonElement>(null);
+  const rescue = useFocusRescue();
+  const say = useCallback((next: Said): void => {
+    setSaid(next);
+    setStatus((current) => repeated(current, next.sentence));
+  }, []);
+  const ask = useSpotPrompt({ surface: 'scenario', store, say });
   const href = `/lab/spots/edit?from=${encodeURIComponent(scenarioId)}`;
   const edit = editOf(library.spots, scenarioId);
-  const request =
-    asked === null ? null : { id: asked.id, from: scenarioId, held: { kind: 'copy', spot: asked } as const };
-  const now = request === null || !library.ready ? null : askedCopy(library.spots, request);
-  // As text, because every write re-reads storage into new objects and the effect below would fire again.
-  const changedCopy = now?.kind === 'changed' ? serialiseLibrary([now.spot]) : null;
-  const changedLine = changedCopy === null ? null : changedSincePrompt('reset');
-  const gone = now?.kind === 'gone';
+  const asking = askingOn(ask.prompt) !== null;
 
   useEffect(() => {
-    if (asked !== null) keepRef.current?.focus();
-  }, [asked]);
+    moveCaret(ask.focus, (focus) => ({ keep: keepRef, action: resetRef, stable: linkRef })[focus.on].current);
+  }, [ask.focus]);
 
+  // Another tab can remove the edit while the caret is on its Reset, which unmounts under it.
   useEffect(() => {
-    if (focusTo !== null) (focusTo.on === 'edit' ? editRef : resetRef).current?.focus();
-  }, [focusTo]);
-
-  useEffect(() => {
-    if (changedCopy === null || changedLine === null) return;
-    setStatus((current) => repeated(current, changedLine));
-  }, [changedCopy, changedLine]);
-
-  useEffect(() => {
-    if (!gone) return;
-    setAsked(null);
-    setStatus((current) => repeated(current, 'Your edit was removed in another tab.'));
-    if (browserAbandonedFocus()) setFocusTo({ on: 'edit' });
-  }, [gone]);
-
-  const say = (message: string): void => setStatus((current) => repeated(current, message));
-
-  const confirm = (): void => {
-    if (request === null) return;
-    setAsked(null);
-    const next = removeSpot(read().spots, request);
-    setRefused('conflict' in next);
-    if ('conflict' in next) {
-      say(conflictSentence('reset', 'open'));
-      setFocusTo({ on: 'reset' });
-      return;
-    }
-    const result = commit(next.spots);
-    say(
-      result.ok
-        ? 'Your edit is removed.'
-        : 'Not removed: this browser is not letting the page store anything.',
-    );
-    setFocusTo({ on: result.ok ? 'edit' : 'reset' });
-  };
+    if (library.ready) rescue.rescue(linkRef.current);
+  }, [library, rescue]);
 
   return (
-    <div className="prl-spot-links">
-      {edit === undefined ? (
-        <p className="prl-spot-links__line">
-          <a className="prl-btn prl-btn--secondary prl-btn--sm" href={href} ref={editRef}>
-            Edit a copy
-          </a>
+    <div
+      className="prl-spot-links"
+      onBlurCapture={rescue.onBlurCapture}
+      onFocusCapture={rescue.onFocusCapture}
+    >
+      <p className="prl-spot-links__line">
+        <a className="prl-btn prl-btn--secondary prl-btn--sm" href={href} ref={linkRef}>
+          {edit === undefined ? 'Edit a copy' : 'Open your edit'}
+        </a>
+        {edit === undefined ? (
           <span className="prl-note">Change the cards, stacks or bet. The scenario stays as it is.</span>
-        </p>
-      ) : asked !== null ? (
+        ) : asking ? null : (
+          <>
+            <Button
+              size="sm"
+              ref={resetRef}
+              onClick={() => {
+                setSaid(null);
+                ask.open('reset', edit);
+              }}
+            >
+              Reset to original
+            </Button>
+            <span className="prl-note">You have an edited copy of this scenario, saved in this browser.</span>
+          </>
+        )}
+      </p>
+      {asking ? (
         <div className="prl-btn-row">
           <p className="prl-spot-links__line">Remove your edit of this scenario?</p>
-          {changedLine === null ? null : <p className="prl-note prl-spot-prompt__changed">{changedLine}</p>}
-          <Button
-            size="sm"
-            ref={keepRef}
-            onClick={() => {
-              setAsked(null);
-              setFocusTo({ on: 'reset' });
-            }}
-          >
+          <Button size="sm" ref={keepRef} onClick={ask.cancel}>
             Keep it
           </Button>
-          <Button size="sm" onClick={confirm}>
+          <Button size="sm" onClick={ask.confirm}>
             Reset to original
           </Button>
         </div>
-      ) : (
-        <p className="prl-spot-links__line">
-          <a className="prl-btn prl-btn--secondary prl-btn--sm" href={href}>
-            Open your edit
-          </a>
-          <Button size="sm" ref={resetRef} onClick={() => setAsked(edit)}>
-            Reset to original
-          </Button>
-          <span className="prl-note">You have an edited copy of this scenario, saved in this browser.</span>
-        </p>
-      )}
-      {refused && edit !== undefined ? <p className="prl-note">{conflictSentence('reset', 'open')}</p> : null}
+      ) : null}
+      {said !== null && stillTrue(said, library.spots) ? <p className="prl-note">{said.sentence}</p> : null}
       <p className="prl-live-region" role="status" aria-live="polite">
         {status}
       </p>

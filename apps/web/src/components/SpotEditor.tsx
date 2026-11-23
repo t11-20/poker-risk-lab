@@ -41,26 +41,20 @@ import {
   updateOpponent,
   withSlotCard,
 } from '../lib/spot-editing.ts';
+import { askingOn, type Removal, type Said, stillTrue } from '../lib/spot-prompt.ts';
 import {
-  askedCopy,
-  changedSincePrompt,
   duplicateDraft,
   editOf,
-  type GuardedWrite,
   type HeldCopy,
   keepMine,
   newSpotId,
   noticeSentence,
-  type Removal,
-  type RemoveRequest,
-  refusal,
   refusalSentence,
-  removeSpot,
   repeated,
   type StorageNotice,
   type StoredSync,
+  saveRefusal,
   saveSpot,
-  serialiseLibrary,
   storedCopy,
   syncWithStored,
   type WriteResult,
@@ -72,7 +66,8 @@ import {
   opponentField,
   validateDraft,
 } from '../lib/spot-validate.ts';
-import { type LoadedLibrary, useSpotLibrary } from '../lib/use-spot-library.ts';
+import { useSpotLibrary } from '../lib/use-spot-library.ts';
+import { moveCaret, useSpotPrompt } from '../lib/use-spot-prompt.ts';
 import { type ReportState, useSpotReport } from '../lib/use-spot-report.ts';
 
 export interface BuiltInOriginal {
@@ -94,12 +89,6 @@ export interface SpotEditorProps {
 interface Editing {
   readonly id: string | null;
   readonly from: string | null;
-}
-
-/** An open Delete or Reset prompt, with the request it was opened on. */
-interface Prompt {
-  readonly write: Removal;
-  readonly asked: RemoveRequest;
 }
 
 const HAND_KINDS: readonly { readonly kind: HandKind; readonly label: string }[] = [
@@ -340,9 +329,7 @@ interface BarRefs {
 }
 
 function EditorBar(props: {
-  readonly confirming: Prompt | null;
-  /** The copy the open prompt asked about has changed, so confirming would now remove nothing. */
-  readonly changed: boolean;
+  readonly confirming: Removal | null;
   readonly ready: boolean;
   readonly ownEdit: boolean;
   readonly saved: boolean;
@@ -354,10 +341,10 @@ function EditorBar(props: {
   readonly onCancel: () => void;
   readonly onConfirmed: () => void;
 }): ReactElement {
-  const { confirming, changed, ready, ownEdit, saved, dirty, refs } = props;
+  const { confirming, ready, ownEdit, saved, dirty, refs } = props;
   const { onSave, onDuplicate, onAsk, onCancel, onConfirmed } = props;
   if (confirming !== null) {
-    const deleting = confirming.write === 'delete';
+    const deleting = confirming === 'delete';
     return (
       <div className="prl-spot-editor__bar">
         <p>
@@ -365,9 +352,6 @@ function EditorBar(props: {
             ? 'Delete this spot from this browser? This cannot be undone.'
             : 'Remove your edit and go back to the original?'}
         </p>
-        {changed ? (
-          <p className="prl-note prl-spot-prompt__changed">{changedSincePrompt(confirming.write)}</p>
-        ) : null}
         <Button ref={refs.keep} onClick={onCancel}>
           Keep it
         </Button>
@@ -601,25 +585,26 @@ function SyncNotice(props: {
 
 const SAME: StoredSync = { kind: 'same' };
 
-/**
- * The stored copy as text when it is no longer the one the open prompt asked about, else `null`. Text,
- * because every write re-reads storage into new objects and an effect keyed on one would fire again.
- */
-function changedSincePrompted(prompt: Prompt | null, library: LoadedLibrary): string | null {
-  if (prompt === null || !library.ready) return null;
-  const now = askedCopy(library.spots, prompt.asked);
-  return now.kind === 'changed' ? serialiseLibrary([now.spot]) : null;
-}
-
-/** The status under the bar, unless it only repeats what the open prompt already says. */
-function shownStatus(status: string, prompt: Prompt | null, changed: boolean): string | null {
-  if (status === '') return null;
-  const repeat = prompt !== null && changed && status.trim() === changedSincePrompt(prompt.write);
-  return repeat ? null : status;
+/** Spoken, and shown under the bar; a prompt's sentence is shown only while it is still true. */
+function StatusLines(props: {
+  readonly text: string;
+  readonly said: Said | null;
+  readonly spots: readonly SavedSpot[];
+}): ReactElement {
+  const { text, said, spots } = props;
+  return (
+    <>
+      <p className="prl-live-region" role="status" aria-live="polite">
+        {text}
+      </p>
+      {text === '' || (said !== null && !stillTrue(said, spots)) ? null : <p className="prl-note">{text}</p>}
+    </>
+  );
 }
 
 export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement {
-  const { library, read, commit } = useSpotLibrary();
+  const store = useSpotLibrary();
+  const { library, read, commit } = store;
   const fromId = target.mode === 'from' ? target.scenarioId : null;
   const original = fromId === null ? undefined : originals[fromId];
   const [editing, setEditing] = useState<Editing>({ id: null, from: original === undefined ? null : fromId });
@@ -633,9 +618,10 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
   const [active, setActive] = useState<string | null>(() => nextOpenSlot(allSlots(draft), null));
   const [pickerStatus, setPickerStatus] = useState('');
   const [saveStatus, setSaveStatus] = useState('');
-  const [confirming, setConfirming] = useState<Prompt | null>(null);
-  // Set by a press whose control unmounts, so the caret lands on a named control rather than <body>.
-  const [focusTo, setFocusTo] = useState<{ readonly on: 'save' | 'removal' | 'keep' } | null>(null);
+  // Set when the status is a prompt's, which is shown only while storage still holds what it describes.
+  const [said, setSaid] = useState<Said | null>(null);
+  // Set by Load or Keep, whose buttons unmount, so the caret lands on Save rather than <body>.
+  const [focusSave, setFocusSave] = useState<object | null>(null);
   const [touched, setTouched] = useState<ReadonlySet<FieldKey>>(() => new Set());
   const [submitted, setSubmitted] = useState(false);
   const resolved = useRef(false);
@@ -674,14 +660,8 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
   }, [library, target, original, take]);
 
   useEffect(() => {
-    if (confirming !== null) keepRef.current?.focus();
-  }, [confirming]);
-
-  useEffect(() => {
-    if (focusTo === null) return;
-    const target = { save: saveRef, removal: removalRef, keep: keepRef }[focusTo.on];
-    target.current?.focus();
-  }, [focusTo]);
+    if (focusSave !== null) saveRef.current?.focus();
+  }, [focusSave]);
 
   const validation = validateDraft(draft);
   const errors: FieldErrors = validation.ok ? new Map() : validation.errors;
@@ -693,8 +673,6 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
   const edited = !draftsMatch(saved ?? original?.draft ?? null, draft);
   const sync = library.ready ? syncWithStored(held, storedCopy(library.spots, editing), edited) : SAME;
   const adoptable = sync.kind === 'adopt' ? sync.spot : null;
-  const changedCopy = changedSincePrompted(confirming, library);
-  const note = shownStatus(saveStatus, confirming, changedCopy !== null);
   const cardErrors = [
     err('hole'),
     err('board'),
@@ -703,19 +681,36 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
   const cardsError = cardErrors.filter((message) => message !== undefined).join(' ') || undefined;
   const waiting = shown.size === 0 ? ([...errors.values()][0] ?? null) : null;
 
+  const say = useCallback((message: string): void => {
+    setSaid(null);
+    setSaveStatus((current) => repeated(current, message));
+  }, []);
+  // An open prompt closes when its copy changes and takes the newer one itself, saying both in one sentence.
+  const ask = useSpotPrompt({
+    surface: 'editor',
+    store,
+    yours: edited,
+    say: (next) => {
+      say(next.sentence);
+      setSaid(next);
+    },
+    show: take,
+  });
+  const asking = askingOn(ask.prompt)?.write ?? null;
+
+  useEffect(() => {
+    moveCaret(
+      ask.focus,
+      (focus) => ({ keep: keepRef, action: removalRef, stable: saveRef })[focus.on].current,
+    );
+  }, [ask.focus]);
+
   // Another tab saved this spot and nothing here would be lost, so the newer copy is simply shown.
   useEffect(() => {
-    if (adoptable === null) return;
+    if (adoptable === null || asking !== null) return;
     take(adoptable);
-    setSaveStatus((current) => repeated(current, 'Updated with the copy saved in another tab.'));
-  }, [adoptable, take]);
-
-  // After the effect above, so with a prompt open the reader hears what pressing on would now do.
-  useEffect(() => {
-    if (changedCopy === null || confirming === null) return;
-    const line = changedSincePrompt(confirming.write);
-    setSaveStatus((current) => repeated(current, line));
-  }, [changedCopy, confirming]);
+    say('Updated with the copy saved in another tab.');
+  }, [adoptable, asking, take, say]);
 
   const change = (next: SpotDraft, field: FieldKey | null = null): void => {
     setDraft(next);
@@ -725,7 +720,6 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
   };
 
   const announce = (message: string): void => setPickerStatus((current) => repeated(current, message));
-  const say = (message: string): void => setSaveStatus((current) => repeated(current, message));
 
   const written = (result: WriteResult, success: string): boolean => {
     say(result.ok ? success : refusalSentence(result.reason));
@@ -733,10 +727,8 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
   };
 
   // A tab with nothing to lose shows the other copy at once, so the adopt above cannot hide the refusal.
-  const refuse = (write: GuardedWrite, conflict: SavedSpot): void => {
-    setConfirming(null);
-    if (write !== 'save') setFocusTo({ on: 'removal' });
-    const { show, sentence } = refusal(write, held, conflict, edited);
+  const refuseSave = (conflict: SavedSpot): void => {
+    const { show, sentence } = saveRefusal(edited);
     if (show) take(conflict);
     say(sentence);
   };
@@ -763,7 +755,7 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
     }
     const next = saveSpot(read().spots, { ...editing, held, draft }, Date.now(), () => newSpotId());
     if ('conflict' in next) {
-      refuse('save', next.conflict);
+      refuseSave(next.conflict);
       return;
     }
     if (!written(commit(next.spots), 'Saved in this browser.')) return;
@@ -788,31 +780,19 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
     setQuery('id', next.saved.id);
   };
 
-  // The copy this render drew, so a write after the prompt opened is refused rather than removed.
-  const ask = (write: Removal): void => setConfirming({ write, asked: { ...editing, held } });
-
   const confirm = (): void => {
-    if (confirming === null || !library.ready) return;
-    const { write, asked } = confirming;
-    const back = asked.from === null ? undefined : originals[asked.from];
-    if (write === 'reset' && back === undefined) return;
-    const next = removeSpot(read().spots, asked);
-    if ('conflict' in next) {
-      refuse(write, next.conflict);
+    const done = ask.confirm();
+    if (done === null) return;
+    const back = done.copy.from === null ? undefined : originals[done.copy.from];
+    if (done.write === 'delete' || back === undefined) {
+      window.location.assign('/lab/spots');
       return;
     }
-    if (write === 'delete' || back === undefined) {
-      if (written(commit(next.spots), 'Deleted.')) window.location.assign('/lab/spots');
-      return;
-    }
-    if (!written(commit(next.spots), 'Back to the original. Your edit is removed.')) return;
-    setConfirming(null);
-    setEditing({ id: null, from: asked.from });
+    setEditing({ id: null, from: done.copy.from });
     setDraft(back.draft);
     setSaved(null);
     setHeld({ kind: 'none' });
     setActive(nextOpenSlot(allSlots(back.draft), null));
-    setFocusTo({ on: 'save' });
   };
 
   const onPick = (card: number): void => {
@@ -860,7 +840,7 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
         onLoad={(spot) => {
           take(spot);
           say('Loaded the copy saved in another tab.');
-          setFocusTo({ on: confirming === null ? 'save' : 'keep' });
+          setFocusSave({});
         }}
         onKeep={() => {
           // Storage now, not the copy the notice drew: another tab may have saved again since.
@@ -868,12 +848,11 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
           setEditing(kept.editing);
           setHeld(kept.held);
           say(kept.sentence);
-          setFocusTo({ on: confirming === null ? 'save' : 'keep' });
+          setFocusSave({});
         }}
       />
       <EditorBar
-        confirming={confirming}
-        changed={changedCopy !== null}
+        confirming={asking}
         ready={library.ready}
         ownEdit={ownEdit}
         saved={editing.id !== null}
@@ -881,17 +860,13 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
         refs={{ keep: keepRef, save: saveRef, removal: removalRef }}
         onSave={save}
         onDuplicate={duplicate}
-        onAsk={ask}
-        onCancel={() => {
-          setConfirming(null);
-          setFocusTo({ on: 'removal' });
+        onAsk={(write) => {
+          if (held.kind === 'copy') ask.open(write, held.spot);
         }}
+        onCancel={ask.cancel}
         onConfirmed={confirm}
       />
-      <p className="prl-live-region" role="status" aria-live="polite">
-        {saveStatus}
-      </p>
-      {note === null ? null : <p className="prl-note">{note}</p>}
+      <StatusLines text={saveStatus} said={said} spots={library.spots} />
 
       <div className="prl-spot-editor__layout">
         <div className="prl-spot-editor__inputs">

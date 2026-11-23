@@ -358,8 +358,12 @@ export type HeldCopy =
   | { readonly kind: 'copy'; readonly spot: SavedSpot };
 
 /** The whole entry as storage writes it, so two saves in one millisecond are still told apart. */
+export function sameCopy(a: SavedSpot, b: SavedSpot): boolean {
+  return serialiseLibrary([a]) === serialiseLibrary([b]);
+}
+
 function holds(held: HeldCopy, stored: SavedSpot): boolean {
-  return held.kind === 'copy' && serialiseLibrary([held.spot]) === serialiseLibrary([stored]);
+  return held.kind === 'copy' && sameCopy(held.spot, stored);
 }
 
 export type StoredSync =
@@ -426,91 +430,16 @@ export function duplicateDraft(
   return { spots: [...spots, saved], saved };
 }
 
-export interface RemoveRequest {
-  readonly id: string | null;
-  readonly from: string | null;
-  readonly held: HeldCopy;
-}
-
-export type RemoveResult =
-  | { readonly spots: readonly SavedSpot[] }
-  /** The stored copy is not the one this tab holds, so nothing is removed. */
-  | { readonly conflict: SavedSpot };
-
-/**
- * Delete, and Reset to original, which deletes the edit because the original was never written.
- * Removes only the copy this tab holds; a copy already gone leaves the list as it is.
- */
-export function removeSpot(spots: readonly SavedSpot[], request: RemoveRequest): RemoveResult {
-  const existing = storedCopy(spots, request);
-  if (existing === undefined) return { spots };
-  if (!holds(request.held, existing)) return { conflict: existing };
-  return { spots: spots.filter((spot) => spot.id !== existing.id) };
-}
-
-/** How the copy an open Delete or Reset prompt asked about stands in storage now. */
-export type AskedCopy =
-  | { readonly kind: 'same' | 'changed'; readonly spot: SavedSpot }
-  | { readonly kind: 'gone' };
-
-/**
- * A prompt keeps the request it was opened on and confirms that, never what a later render drew,
- * because every render reads storage again and would otherwise hand the confirm another tab's copy.
- */
-export function askedCopy(spots: readonly SavedSpot[], asked: RemoveRequest): AskedCopy {
-  const stored = storedCopy(spots, asked);
-  if (stored === undefined) return { kind: 'gone' };
-  return { kind: holds(asked.held, stored) ? 'same' : 'changed', spot: stored };
-}
-
-export type GuardedWrite = 'save' | 'delete' | 'reset';
-export type Removal = Exclude<GuardedWrite, 'save'>;
-
-const AGAIN: Readonly<Record<Removal, string>> = { delete: 'Delete', reset: 'Reset' };
-
-export function changedSincePrompt(write: Removal): string {
-  return `This spot changed in another tab. ${AGAIN[write]} will not remove the new copy.`;
-}
-
-/**
- * What a write refused by `saveSpot` or `removeSpot` says. `choose` when the reader has changes and is
- * offered Load or Keep; `shown` when the page now shows the other copy; `kept` when the reader already
- * chose to keep theirs over it; `open` when the page only links to it.
- */
-export function conflictSentence(write: GuardedWrite, next: 'choose' | 'shown' | 'kept' | 'open'): string {
-  const done = { save: 'Not saved', delete: 'Not deleted', reset: 'Not reset' }[write];
-  const tail = {
-    choose:
-      write === 'save'
-        ? 'Load that copy, or keep yours to save over it.'
-        : `Load that copy or keep yours, then ${write} again.`,
-    shown:
-      write === 'save'
-        ? 'That copy is shown now.'
-        : `That copy is shown now. ${AGAIN[write]} again to remove it.`,
-    kept: `You kept yours, so ${write} again to ${write === 'save' ? 'replace' : 'remove'} it.`,
-    open: `Open it to see that copy, or ${write} again.`,
-  }[next];
-  return `${done}. This spot changed in another tab. ${tail}`;
-}
-
-/** What a refused write says, and whether the tab now shows the copy that refused it. */
-export function refusal(
-  write: GuardedWrite,
-  held: HeldCopy,
-  conflict: SavedSpot,
-  edited: boolean,
-): { readonly show: boolean; readonly sentence: string } {
-  const now = syncWithStored(held, conflict, edited);
-  if (now.kind === 'changed') return { show: false, sentence: conflictSentence(write, 'choose') };
-  // "Keep mine" was pressed after the prompt opened, so there is no choice left to offer.
-  if (now.kind === 'same' && edited) return { show: false, sentence: conflictSentence(write, 'kept') };
-  return { show: true, sentence: conflictSentence(write, 'shown') };
+/** What a save refused by `saveSpot` says, and whether the tab now shows the copy that refused it. */
+export function saveRefusal(edited: boolean): { readonly show: boolean; readonly sentence: string } {
+  const tail = edited ? 'Load that copy, or keep yours to save over it.' : 'That copy is shown now.';
+  return { show: !edited, sentence: `Not saved. This spot changed in another tab. ${tail}` };
 }
 
 /**
  * "Keep mine" holds whatever is stored when it is pressed, which may be newer than the copy the notice
- * drew, so the sentence it says is true and the next save replaces exactly that.
+ * drew, so the sentence it says is true and the next save replaces exactly that. With nothing stored the
+ * tab edits no stored id, so it offers no Delete or Reset of a copy that is not there.
  */
 export function keepMine(
   spots: readonly SavedSpot[],
@@ -523,7 +452,7 @@ export function keepMine(
   const stored = storedCopy(spots, editing);
   if (stored === undefined) {
     return {
-      editing,
+      editing: { id: null, from: editing.from },
       held: { kind: 'none' },
       sentence: 'Kept your changes. The other tab deleted this spot, so saving keeps yours.',
     };

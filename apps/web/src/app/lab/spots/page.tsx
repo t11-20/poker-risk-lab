@@ -30,7 +30,9 @@ export default function SpotsPage(): ReactElement {
             Scenario Lab
           </a>
         </p>
-        <h1 className="prl-display-2 prl-page-head__title">Your spots</h1>
+        <h1 className="prl-display-2 prl-page-head__title" id="prl-spots-title" tabIndex={-1}>
+          Your spots
+        </h1>
         <p className="prl-page-head__standfirst">
           Spots you set up yourself: your cards, the board, the stacks and the bet. They are saved in this
           browser and nowhere else.
@@ -43,7 +45,7 @@ export default function SpotsPage(): ReactElement {
         </a>
       </p>
 
-      <SpotList titles={titles} />
+      <SpotList titles={titles} headingId="prl-spots-title" />
 
       <form className="prl-spot-start" action="/lab/spots/edit" method="get">
         <h2 className="prl-spot-start__title">Start from a scenario</h2>
