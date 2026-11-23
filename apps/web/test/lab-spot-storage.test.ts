@@ -9,7 +9,7 @@ import { describe, it } from 'node:test';
 import { parseCardText } from '@prl/ui/cards';
 import { blankDraft, type SavedSpot, type SpotDraft } from '../src/lib/spot.ts';
 import {
-  deleteSpot,
+  conflictSentence,
   duplicateDraft,
   editOf,
   type HeldCopy,
@@ -19,7 +19,7 @@ import {
   parseLibrary,
   readLibrary,
   refusalSentence,
-  resetToOriginal,
+  removeSpot,
   type SaveRequest,
   SPOTS_STORAGE_KEY,
   type SpotStore,
@@ -129,9 +129,10 @@ describe('create, edit, duplicate, delete, reset', () => {
   it('deletes one spot and leaves the others', () => {
     const a = put([], { id: null, from: null, draft: draft('A') }, 1);
     const b = put(a.spots, { id: null, from: null, draft: draft('B') }, 2);
-    const left = deleteSpot(b.spots, a.saved.id);
+    const left = removeSpot(b.spots, { id: a.saved.id, from: null, held: { kind: 'copy', spot: a.saved } });
+    assert.ok('spots' in left);
     assert.deepEqual(
-      left.map((spot) => spot.draft.name),
+      left.spots.map((spot) => spot.draft.name),
       ['B'],
     );
   });
@@ -140,9 +141,14 @@ describe('create, edit, duplicate, delete, reset', () => {
     const a = put([], { id: null, from: 'fl-a', draft: draft('Edit A') }, 1);
     const b = put(a.spots, { id: null, from: 'fl-b', draft: draft('Edit B') }, 2);
     const mine = put(b.spots, { id: null, from: null, draft: draft('Mine') }, 3);
-    const reset = resetToOriginal(mine.spots, 'fl-a');
-    assert.equal(editOf(reset, 'fl-a'), undefined);
-    assert.equal(reset.length, 2);
+    const reset = removeSpot(mine.spots, {
+      id: a.saved.id,
+      from: 'fl-a',
+      held: { kind: 'copy', spot: a.saved },
+    });
+    assert.ok('spots' in reset);
+    assert.equal(editOf(reset.spots, 'fl-a'), undefined);
+    assert.equal(reset.spots.length, 2);
   });
 
   it('makes ids from the random source, prefixed so none reads as a scenario id', () => {
@@ -439,30 +445,139 @@ function settle(tab: Tab, store: SpotStore): ReturnType<typeof syncWithStored> {
   return sync;
 }
 
+/** A refused write re-renders the editor, and a tab with nothing to lose then shows the other copy. */
+function refuse(tab: Tab, conflict: SavedSpot): 'refused' {
+  if (!edited(tab)) take(tab, conflict);
+  return 'refused';
+}
+
 function save(tab: Tab, store: SpotStore, now: number): 'saved' | 'refused' {
   const library = readLibrary(store);
   const result = saveSpot(library.spots, { ...tab.editing, held: tab.held, draft: tab.draft }, now, ids);
-  if ('conflict' in result) return 'refused';
+  if ('conflict' in result) return refuse(tab, result.conflict);
   assert.deepEqual(writeLibrary(store, library, result.spots), { ok: true });
   take(tab, result.saved);
   return 'saved';
 }
 
-function reset(tab: Tab, store: SpotStore): void {
-  const from = tab.editing.from;
-  assert.ok(from !== null);
-  writeLibrary(store, readLibrary(store), resetToOriginal(entries(store), from));
-  tab.editing = { id: null, from };
-  tab.held = { kind: 'none' };
-  tab.draft = ORIGINAL;
-  tab.saved = null;
+/** The editor's Delete, or its Reset to original for an edit of the built-in. */
+function remove(tab: Tab, store: SpotStore): 'removed' | 'refused' {
+  const library = readLibrary(store);
+  const result = removeSpot(library.spots, { ...tab.editing, held: tab.held });
+  if ('conflict' in result) return refuse(tab, result.conflict);
+  assert.deepEqual(writeLibrary(store, library, result.spots), { ok: true });
+  if (tab.editing.from === FROM) {
+    tab.editing = { id: null, from: FROM };
+    tab.held = { kind: 'none' };
+    tab.draft = ORIGINAL;
+    tab.saved = null;
+  }
+  return 'removed';
+}
+
+/** The list's Delete or Reset to original, aimed at the entry as the list last drew it. */
+function removeListed(target: SavedSpot, store: SpotStore): 'removed' | 'refused' {
+  const library = readLibrary(store);
+  const held = { kind: 'copy', spot: target } as const;
+  const result = removeSpot(library.spots, { id: target.id, from: target.from, held });
+  if ('conflict' in result) return 'refused';
+  assert.deepEqual(writeLibrary(store, library, result.spots), { ok: true });
+  return 'removed';
+}
+
+/** A tab opened with `?id=`, on a spot another tab may have open too. */
+function openSpot(spot: SavedSpot): Tab {
+  const tab: Tab = {
+    editing: { id: null, from: null },
+    held: { kind: 'unread' },
+    draft: ORIGINAL,
+    saved: null,
+  };
+  take(tab, spot);
+  return tab;
 }
 
 const rename = (tab: Tab, name: string): void => {
   tab.draft = { ...tab.draft, name };
 };
 
-describe('two tabs on one built-in: a save never replaces a copy its tab has not seen', () => {
+describe('two tabs: no save, reset or delete removes a copy its tab has not seen', () => {
+  it('a reset in tab B before tab A save reaches it removes nothing, and B is told', () => {
+    for (const dirty of [false, true]) {
+      const store = new MemoryStore();
+      const a = openTab(store, FROM);
+      rename(a, 'E1');
+      assert.equal(save(a, store, 1), 'saved');
+      const b = openTab(store, FROM);
+      if (dirty) rename(b, 'B edit');
+      rename(a, 'E2');
+      assert.equal(save(a, store, 2), 'saved');
+      assert.equal(remove(b, store), 'refused', 'B never saw E2, so its reset is refused');
+      assert.deepEqual(
+        entries(store).map((spot) => spot.draft.name),
+        ['E2'],
+      );
+      const sync = settle(b, store);
+      if (dirty) {
+        assert.equal(sync.kind, 'changed', 'B has changes, so it is offered Load or Keep');
+        if (sync.kind === 'changed') b.held = { kind: 'copy', spot: sync.spot };
+      } else assert.equal(b.draft.name, 'E2', 'B had nothing to lose, so it shows E2');
+      assert.equal(remove(b, store), 'removed', 'after being told, B resets E2');
+      assert.deepEqual(entries(store), []);
+    }
+  });
+
+  it('a delete in tab B before tab A save of the same spot reaches it removes nothing', () => {
+    const store = new MemoryStore();
+    const own = put([], { id: null, from: null, draft: draft('S1') }, 1);
+    writeLibrary(store, readLibrary(store), own.spots);
+    const a = openSpot(own.saved);
+    const b = openSpot(own.saved);
+    rename(a, 'S2');
+    assert.equal(save(a, store, 2), 'saved');
+    assert.equal(remove(b, store), 'refused');
+    assert.deepEqual(
+      entries(store).map((spot) => spot.draft.name),
+      ['S2'],
+    );
+    assert.equal(b.draft.name, 'S2', 'B had nothing to lose, so it shows S2');
+    assert.equal(remove(b, store), 'removed');
+    assert.deepEqual(entries(store), []);
+  });
+
+  it('the list removes only the entry as it drew it', () => {
+    const store = new MemoryStore();
+    const a = openTab(store, FROM);
+    rename(a, 'E1');
+    assert.equal(save(a, store, 1), 'saved');
+    const drawn = entries(store)[0] as SavedSpot;
+    assert.equal(remove(a, store), 'removed');
+    rename(a, 'E2');
+    assert.equal(save(a, store, 2), 'saved');
+    assert.equal(removeListed(drawn, store), 'refused', 'a reset and a new edit elsewhere is not removed');
+    assert.equal(removeListed(entries(store)[0] as SavedSpot, store), 'removed');
+    assert.equal(removeListed(drawn, store), 'removed', 'a copy already gone leaves the list as it is');
+  });
+
+  it('says a refused write was not done, and keeps the sentence a refused save always had', () => {
+    assert.equal(
+      conflictSentence('save', 'choose'),
+      'Not saved. This spot changed in another tab. Load that copy, or keep yours to save over it.',
+    );
+    assert.equal(
+      conflictSentence('reset', 'choose'),
+      'Not reset. This spot changed in another tab. Load that copy or keep yours, then reset again.',
+    );
+    assert.equal(
+      conflictSentence('delete', 'shown'),
+      'Not deleted. This spot changed in another tab. That copy is shown now. Delete again to remove it.',
+    );
+    assert.equal(
+      conflictSentence('reset', 'open'),
+      'Not reset. This spot changed in another tab. Open it to see that copy, or reset again.',
+    );
+  });
+
   it('a reset and a new edit in tab A are not overwritten by tab B, dirty or clean when A reset', () => {
     for (const cleanAtReset of [false, true]) {
       const store = new MemoryStore();
@@ -472,7 +587,7 @@ describe('two tabs on one built-in: a save never replaces a copy its tab has not
       const b = openTab(store, FROM);
       assert.equal(b.draft.name, 'E by A');
       if (!cleanAtReset) rename(b, 'B edit');
-      reset(a, store);
+      assert.equal(remove(a, store), 'removed');
       settle(b, store);
       if (cleanAtReset) rename(b, 'B edit');
       rename(a, 'E2 by A');
@@ -502,48 +617,75 @@ describe('two tabs on one built-in: a save never replaces a copy its tab has not
       seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
       return Math.floor((seed / 2_147_483_648) * n);
     };
-    const OPS = ['edit', 'save', 'reset', 'duplicate', 'delete', 'keep', 'load', 'reload'] as const;
-    let saves = 0;
-    for (let run = 0; run < 1500; run += 1) {
+    const OPS = ['edit', 'save', 'reset', 'duplicate', 'delete', 'keep', 'load', 'reload', 'list'] as const;
+    const counts = { saves: 0, resets: 0, deletes: 0, listed: 0, refusedResets: 0, refusedDeletes: 0 };
+    let refusedList = 0;
+    const copyIn = (held: HeldCopy) => (entry: SavedSpot) => held.kind === 'copy' && same(held.spot, entry);
+    for (let run = 0; run < 3000; run += 1) {
       const store = new MemoryStore();
-      const tabs = [openTab(store, FROM), openTab(store, FROM)];
-      for (let step = 0; step < 14; step += 1) {
+      // Every other run starts with both tabs on one spot of the player's own, where Delete applies.
+      const own = run % 2 === 0 ? undefined : put([], { id: null, from: null, draft: draft('Own') }, 0).saved;
+      if (own !== undefined) writeLibrary(store, readLibrary(store), [own]);
+      const tabs =
+        own === undefined ? [openTab(store, FROM), openTab(store, FROM)] : [openSpot(own), openSpot(own)];
+      let listed = entries(store);
+      for (let step = 0; step < 16; step += 1) {
         const index = next(2);
         const tab = tabs[index] as Tab;
         const op = OPS[next(OPS.length)];
         const now = run * 100 + step;
-        const sync = settle(tab, store);
+        // Another tab's write reaches this one as a `storage` event some time later, or not yet.
+        const arrived = next(2) === 0;
+        const sync = arrived ? settle(tab, store) : null;
+        if (arrived) listed = entries(store);
         const before = entries(store);
-        const held = tab.held;
+        let holds = copyIn(tab.held);
         if (op === 'edit') rename(tab, `${index}-${now}`);
         else if (op === 'save') {
-          if (save(tab, store, now) === 'saved') {
-            saves += 1;
-            const after = entries(store);
-            for (const entry of before) {
-              const kept = after.find((candidate) => same(candidate, entry));
-              if (kept !== undefined) continue;
-              assert.ok(
-                held.kind === 'copy' && same(held.spot, entry),
-                `run ${run} step ${step}: tab ${index} replaced "${entry.draft.name}" without holding it`,
-              );
-            }
-          }
-        } else if (op === 'reset' && tab.editing.from !== null && tab.editing.id !== null) reset(tab, store);
-        else if (op === 'duplicate') {
+          if (save(tab, store, now) === 'saved') counts.saves += 1;
+        } else if (op === 'reset' && tab.editing.from === FROM && tab.editing.id !== null) {
+          if (remove(tab, store) === 'refused') counts.refusedResets += 1;
+          else counts.resets += 1;
+        } else if (op === 'duplicate') {
           const copy = duplicateDraft(before, tab.draft, now, ids);
           writeLibrary(store, readLibrary(store), copy.spots);
           take(tab, copy.saved);
-        } else if (op === 'delete' && tab.editing.from === null && tab.editing.id !== null) {
-          writeLibrary(store, readLibrary(store), deleteSpot(before, tab.editing.id));
-          tabs[index] = openTab(store, FROM);
-        } else if (op === 'keep' && sync.kind === 'changed') tab.held = { kind: 'copy', spot: sync.spot };
-        else if (op === 'load' && sync.kind === 'changed') take(tab, sync.spot);
-        else if (op === 'reload') tabs[index] = openTab(store, FROM);
-        const edits = entries(store).filter((entry) => entry.from === FROM);
+        } else if (op === 'delete' && tab.editing.from !== FROM && tab.editing.id !== null) {
+          if (remove(tab, store) === 'refused') counts.refusedDeletes += 1;
+          else {
+            counts.deletes += 1;
+            tabs[index] = openTab(store, FROM);
+          }
+        } else if (op === 'keep' && sync?.kind === 'changed') tab.held = { kind: 'copy', spot: sync.spot };
+        else if (op === 'load' && sync?.kind === 'changed') take(tab, sync.spot);
+        else if (op === 'reload') {
+          // Half the time onto the spot the other tab has open, so two tabs share one of the player's own.
+          const other = (tabs[1 - index] as Tab).editing.id;
+          const spot = next(2) === 0 ? entries(store).find((entry) => entry.id === other) : undefined;
+          tabs[index] = spot === undefined ? openTab(store, FROM) : openSpot(spot);
+        } else if (op === 'list' && listed.length > 0) {
+          const target = listed[next(listed.length)] as SavedSpot;
+          holds = copyIn({ kind: 'copy', spot: target });
+          if (removeListed(target, store) === 'refused') refusedList += 1;
+          else counts.listed += 1;
+          listed = entries(store);
+        }
+        const after = entries(store);
+        for (const entry of before) {
+          if (after.some((candidate) => same(candidate, entry))) continue;
+          assert.ok(
+            holds(entry),
+            `run ${run} step ${step}: ${op} in tab ${index} removed "${entry.draft.name}" without holding it`,
+          );
+        }
+        const edits = after.filter((entry) => entry.from === FROM);
         assert.ok(edits.length <= 1, `run ${run} step ${step}: ${edits.length} edits of one built-in`);
       }
     }
-    assert.ok(saves > 1000, `only ${saves} saves went through: a sweep of nothing`);
+    assert.ok(counts.saves > 4000, `only ${counts.saves} saves went through: a sweep of nothing`);
+    const ran = JSON.stringify({ ...counts, refusedList });
+    assert.ok(counts.resets > 500 && counts.deletes > 500 && counts.listed > 500, ran);
+    // The run's guards each fired; the counts are read off seed 20261123 (28, 67 and 105 refused).
+    assert.ok(counts.refusedResets > 20 && counts.refusedDeletes > 40 && refusedList > 60, ran);
   });
 });

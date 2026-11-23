@@ -7,11 +7,12 @@
 
 import { Button } from '@prl/ui';
 import { type ReactElement, useEffect, useRef, useState } from 'react';
-import { editOf, resetToOriginal } from '../lib/spot-storage.ts';
+import { conflictSentence, editOf, removeSpot } from '../lib/spot-storage.ts';
 import { useSpotLibrary } from '../lib/use-spot-library.ts';
 
 export function ScenarioSpotLinks({ scenarioId }: { readonly scenarioId: string }): ReactElement {
-  const { library, commit } = useSpotLibrary();
+  const { library, read, commit } = useSpotLibrary();
+  const [refused, setRefused] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [status, setStatus] = useState('');
   const keepRef = useRef<HTMLButtonElement>(null);
@@ -41,7 +42,18 @@ export function ScenarioSpotLinks({ scenarioId }: { readonly scenarioId: string 
             size="sm"
             onClick={() => {
               setConfirming(false);
-              const result = commit(resetToOriginal(library.spots, scenarioId));
+              // The edit as drawn is the copy this tab holds; another tab may have changed it since.
+              const next = removeSpot(read().spots, {
+                id: edit.id,
+                from: scenarioId,
+                held: { kind: 'copy', spot: edit },
+              });
+              setRefused('conflict' in next);
+              if ('conflict' in next) {
+                setStatus(conflictSentence('reset', 'open'));
+                return;
+              }
+              const result = commit(next.spots);
               setStatus(
                 result.ok
                   ? 'Your edit is removed.'
@@ -63,6 +75,7 @@ export function ScenarioSpotLinks({ scenarioId }: { readonly scenarioId: string 
           <span className="prl-note">You have an edited copy of this scenario, saved in this browser.</span>
         </p>
       )}
+      {refused && edit !== undefined ? <p className="prl-note">{conflictSentence('reset', 'open')}</p> : null}
       <p className="prl-live-region" role="status" aria-live="polite">
         {status}
       </p>

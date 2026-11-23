@@ -42,14 +42,15 @@ import {
   withSlotCard,
 } from '../lib/spot-editing.ts';
 import {
-  deleteSpot,
+  conflictSentence,
   duplicateDraft,
   editOf,
+  type GuardedWrite,
   type HeldCopy,
   newSpotId,
   noticeSentence,
   refusalSentence,
-  resetToOriginal,
+  removeSpot,
   type StorageNotice,
   type StoredSync,
   saveSpot,
@@ -665,6 +666,17 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
     return result.ok;
   };
 
+  // A tab with nothing to lose shows the other copy at once, so the adopt above cannot hide the refusal.
+  const refuse = (write: GuardedWrite, conflict: SavedSpot): void => {
+    setConfirming(null);
+    if (edited) {
+      setSaveStatus(conflictSentence(write, 'choose'));
+      return;
+    }
+    take(conflict);
+    setSaveStatus(conflictSentence(write, 'shown'));
+  };
+
   // Inputs carry `data-field` before their error is drawn, so this works in the click that marks them.
   const focusFirstError = (): void => {
     const slot = focusSlotFor(errors, draft);
@@ -689,9 +701,7 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
     }
     const next = saveSpot(read().spots, { ...editing, held, draft }, Date.now(), () => newSpotId());
     if ('conflict' in next) {
-      setSaveStatus(
-        'Not saved. This spot changed in another tab. Load that copy, or keep yours to save over it.',
-      );
+      refuse('save', next.conflict);
       return;
     }
     if (!written(commit(next.spots), 'Saved in this browser.')) return;
@@ -718,16 +728,24 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
 
   const confirmDelete = (): void => {
     if (editing.id === null || !library.ready) return;
-    if (written(commit(deleteSpot(read().spots, editing.id)), 'Deleted.'))
-      window.location.assign('/lab/spots');
+    const next = removeSpot(read().spots, { ...editing, held });
+    if ('conflict' in next) {
+      refuse('delete', next.conflict);
+      return;
+    }
+    if (written(commit(next.spots), 'Deleted.')) window.location.assign('/lab/spots');
   };
 
   const confirmReset = (): void => {
     const from = editing.from;
     const back = from === null ? undefined : originals[from];
     if (from === null || back === undefined || !library.ready) return;
-    if (!written(commit(resetToOriginal(read().spots, from)), 'Back to the original. Your edit is removed.'))
+    const next = removeSpot(read().spots, { ...editing, held });
+    if ('conflict' in next) {
+      refuse('reset', next.conflict);
       return;
+    }
+    if (!written(commit(next.spots), 'Back to the original. Your edit is removed.')) return;
     setConfirming(null);
     setEditing({ id: null, from });
     setDraft(back.draft);

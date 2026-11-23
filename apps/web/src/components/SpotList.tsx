@@ -9,13 +9,13 @@ import { Button, CardRun } from '@prl/ui';
 import { type ReactElement, type RefObject, useEffect, useRef, useState } from 'react';
 import { type SavedSpot, streetOf } from '../lib/spot.ts';
 import {
-  deleteSpot,
+  conflictSentence,
   duplicateDraft,
   isEditOfBuiltIn,
   newSpotId,
   noticeSentence,
   refusalSentence,
-  resetToOriginal,
+  removeSpot,
   spotHref,
   type WriteResult,
 } from '../lib/spot-storage.ts';
@@ -59,13 +59,16 @@ function SpotItem(props: {
   /** The built-in's title for an edit of one this page still has. */
   readonly original: string | undefined;
   readonly confirming: boolean;
+  /** Why the last Delete or Reset of this entry did nothing, shown beside the copy now drawn. */
+  readonly refused: string | null;
   readonly keepRef: RefObject<HTMLButtonElement | null>;
   readonly onAsk: () => void;
   readonly onCancel: () => void;
   readonly onRemove: (name: string) => void;
   readonly onDuplicate: (name: string) => void;
 }): ReactElement {
-  const { spot, href, original, confirming, keepRef, onAsk, onCancel, onRemove, onDuplicate } = props;
+  const { spot, href, original, confirming, refused, keepRef, onAsk, onCancel, onRemove, onDuplicate } =
+    props;
   const name = spot.draft.name.trim() === '' ? 'Untitled spot' : spot.draft.name.trim();
   const own = original === undefined;
   const removal = own ? 'Delete' : 'Reset to original';
@@ -80,6 +83,7 @@ function SpotItem(props: {
         .
       </p>
       <SpotCards spot={spot} />
+      {refused === null ? null : <p className="prl-note">{refused}</p>}
       {confirming ? (
         <div className="prl-btn-row">
           <p className="prl-spot-list__ask">
@@ -114,6 +118,7 @@ export function SpotList({ titles }: SpotListProps): ReactElement {
   const isBuiltIn = (id: string): boolean => titles[id] !== undefined;
   const [confirming, setConfirming] = useState<string | null>(null);
   const [status, setStatus] = useState('');
+  const [refused, setRefused] = useState<{ readonly id: string; readonly sentence: string } | null>(null);
   const keepRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -147,18 +152,33 @@ export function SpotList({ titles }: SpotListProps): ReactElement {
                 isEditOfBuiltIn(spot, isBuiltIn) && spot.from !== null ? titles[spot.from] : undefined
               }
               confirming={confirming === spot.id}
+              refused={refused?.id === spot.id ? refused.sentence : null}
               keepRef={keepRef}
               onAsk={() => setConfirming(spot.id)}
               onCancel={() => setConfirming(null)}
               onRemove={(name) => {
                 setConfirming(null);
                 const own = !isEditOfBuiltIn(spot, isBuiltIn);
-                const next = own
-                  ? deleteSpot(read().spots, spot.id)
-                  : resetToOriginal(read().spots, spot.from ?? '');
-                written(commit(next), own ? `Deleted "${name}".` : `"${name}" is back to the original.`);
+                // The entry as drawn is the copy this tab holds; another tab may have changed it since.
+                const next = removeSpot(read().spots, {
+                  id: spot.id,
+                  from: spot.from,
+                  held: { kind: 'copy', spot },
+                });
+                if ('conflict' in next) {
+                  const sentence = conflictSentence(own ? 'delete' : 'reset', 'shown');
+                  setRefused({ id: next.conflict.id, sentence });
+                  setStatus(sentence);
+                  return;
+                }
+                setRefused(null);
+                written(
+                  commit(next.spots),
+                  own ? `Deleted "${name}".` : `"${name}" is back to the original.`,
+                );
               }}
               onDuplicate={(name) => {
+                setRefused(null);
                 const next = duplicateDraft(read().spots, spot.draft, Date.now(), () => newSpotId());
                 written(commit(next.spots), `Saved a copy of "${name}" at the end of the list.`);
               }}

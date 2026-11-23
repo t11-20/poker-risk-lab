@@ -420,13 +420,48 @@ export function duplicateDraft(
   return { spots: [...spots, saved], saved };
 }
 
-export function deleteSpot(spots: readonly SavedSpot[], id: string): readonly SavedSpot[] {
-  return spots.filter((spot) => spot.id !== id);
+export interface RemoveRequest {
+  readonly id: string | null;
+  readonly from: string | null;
+  readonly held: HeldCopy;
 }
 
-/** Removes the edit of `scenarioId`, which is all resetting needs: the original was never written. */
-export function resetToOriginal(spots: readonly SavedSpot[], scenarioId: string): readonly SavedSpot[] {
-  return spots.filter((spot) => spot.from !== scenarioId);
+export type RemoveResult =
+  | { readonly spots: readonly SavedSpot[] }
+  /** The stored copy is not the one this tab holds, so nothing is removed. */
+  | { readonly conflict: SavedSpot };
+
+/**
+ * Delete, and Reset to original, which deletes the edit because the original was never written.
+ * Removes only the copy this tab holds; a copy already gone leaves the list as it is.
+ */
+export function removeSpot(spots: readonly SavedSpot[], request: RemoveRequest): RemoveResult {
+  const existing = storedCopy(spots, request);
+  if (existing === undefined) return { spots };
+  if (!holds(request.held, existing)) return { conflict: existing };
+  return { spots: spots.filter((spot) => spot.id !== existing.id) };
+}
+
+export type GuardedWrite = 'save' | 'delete' | 'reset';
+
+/**
+ * What a write refused by `saveSpot` or `removeSpot` says. `choose` when the reader has changes and is
+ * offered Load or Keep; `shown` when the page now shows the other copy; `open` when it only links to it.
+ */
+export function conflictSentence(write: GuardedWrite, next: 'choose' | 'shown' | 'open'): string {
+  const done = { save: 'Not saved', delete: 'Not deleted', reset: 'Not reset' }[write];
+  const tail = {
+    choose:
+      write === 'save'
+        ? 'Load that copy, or keep yours to save over it.'
+        : `Load that copy or keep yours, then ${write} again.`,
+    shown:
+      write === 'save'
+        ? 'That copy is shown now.'
+        : `That copy is shown now. ${write === 'reset' ? 'Reset' : 'Delete'} again to remove it.`,
+    open: `Open it to see that copy, or ${write} again.`,
+  }[next];
+  return `${done}. This spot changed in another tab. ${tail}`;
 }
 
 export function noticeSentence(notice: StorageNotice): string {
