@@ -67,6 +67,8 @@ function storedCard(value: unknown): CardValue | null | undefined {
 }
 
 const HAND_KINDS: readonly HandKind[] = ['range', 'cards', 'none'];
+/** The furthest a `Date` reaches either side of 1970. Beyond it, formatting the time throws. */
+export const MAX_TIME = 8.64e15;
 /** Amount fields hold what was typed. Bounded so a stored megabyte cannot reach a text box. */
 const FIELD_MAX = 32;
 
@@ -119,7 +121,7 @@ function readSpot(value: unknown): SavedSpot | null {
     text(value[field], FIELD_MAX),
   );
   const [heroStack, heroBet, potBefore, bigBlind, foldRate] = fields;
-  if (id === null || typeof updatedAt !== 'number' || !Number.isFinite(updatedAt)) return null;
+  if (id === null || typeof updatedAt !== 'number' || !(Math.abs(updatedAt) <= MAX_TIME)) return null;
   if (value['from'] !== null && from === null) return null;
   if (name === null || !isRecord(stored) || typeof value['neverFolds'] !== 'boolean') return null;
   if (heroStack == null || heroBet == null || potBefore == null || bigBlind == null || foldRate == null)
@@ -143,7 +145,9 @@ function readSpot(value: unknown): SavedSpot | null {
     heroBet,
     potBefore,
     bigBlind,
-    opponents: opponents.filter((opponent): opponent is OpponentDraft => opponent !== null),
+    opponents: opponents
+      .filter((opponent): opponent is OpponentDraft => opponent !== null)
+      .map((opponent) => (from === null ? { ...opponent, handLabel: null } : opponent)),
     neverFolds: value['neverFolds'],
     foldRate,
   };
@@ -283,9 +287,10 @@ const wholeChips = (text: string): string => {
 /**
  * The draft as it is stored and read back: trimmed, and amounts without leading zeros, because the
  * validator reads `"000…1000"` as 1000 while storage bounds the text it keeps. Only the hand a seat
- * uses is kept, and a built-in's label only while it still names that hand, as `/privacy` says.
+ * uses is kept, and a built-in's label only on a spot linked to it and while it still names that hand,
+ * as `/privacy` says.
  */
-export function storedForm(draft: SpotDraft): SpotDraft {
+export function storedForm(draft: SpotDraft, from: string | null): SpotDraft {
   return {
     ...draft,
     name: draft.name.trim(),
@@ -307,7 +312,7 @@ export function storedForm(draft: SpotDraft): SpotDraft {
         name: opponent.name.trim(),
         stack: wholeChips(opponent.stack),
         bet: wholeChips(opponent.bet),
-        handLabel: label !== null && label.hand === handKey(hand) ? label : null,
+        handLabel: from !== null && label !== null && label.hand === handKey(hand) ? label : null,
       };
     }),
   };
@@ -399,11 +404,12 @@ export function saveSpot(
 ): SaveResult {
   const existing = storedCopy(spots, request);
   if (existing !== undefined && !holds(request.held, existing)) return { conflict: existing };
+  const from = existing?.from ?? request.from;
   const saved: SavedSpot = {
     id: existing?.id ?? makeId(),
-    from: existing?.from ?? request.from,
+    from,
     updatedAt: now,
-    draft: storedForm(request.draft),
+    draft: storedForm(request.draft, from),
   };
   if (existing === undefined) return { spots: [...spots, saved], saved };
   return { spots: spots.map((spot) => (spot.id === saved.id ? saved : spot)), saved };
@@ -416,7 +422,7 @@ export function duplicateDraft(
   now: number,
   makeId: () => string,
 ): { readonly spots: readonly SavedSpot[]; readonly saved: SavedSpot } {
-  const saved: SavedSpot = { id: makeId(), from: null, updatedAt: now, draft: storedForm(draft) };
+  const saved: SavedSpot = { id: makeId(), from: null, updatedAt: now, draft: storedForm(draft, null) };
   return { spots: [...spots, saved], saved };
 }
 
@@ -442,13 +448,36 @@ export function removeSpot(spots: readonly SavedSpot[], request: RemoveRequest):
   return { spots: spots.filter((spot) => spot.id !== existing.id) };
 }
 
+/** How the copy an open Delete or Reset prompt asked about stands in storage now. */
+export type AskedCopy =
+  | { readonly kind: 'same' | 'changed'; readonly spot: SavedSpot }
+  | { readonly kind: 'gone' };
+
+/**
+ * A prompt keeps the request it was opened on and confirms that, never what a later render drew,
+ * because every render reads storage again and would otherwise hand the confirm another tab's copy.
+ */
+export function askedCopy(spots: readonly SavedSpot[], asked: RemoveRequest): AskedCopy {
+  const stored = storedCopy(spots, asked);
+  if (stored === undefined) return { kind: 'gone' };
+  return { kind: holds(asked.held, stored) ? 'same' : 'changed', spot: stored };
+}
+
 export type GuardedWrite = 'save' | 'delete' | 'reset';
+export type Removal = Exclude<GuardedWrite, 'save'>;
+
+const AGAIN: Readonly<Record<Removal, string>> = { delete: 'Delete', reset: 'Reset' };
+
+export function changedSincePrompt(write: Removal): string {
+  return `This spot changed in another tab. ${AGAIN[write]} will not remove the new copy.`;
+}
 
 /**
  * What a write refused by `saveSpot` or `removeSpot` says. `choose` when the reader has changes and is
- * offered Load or Keep; `shown` when the page now shows the other copy; `open` when it only links to it.
+ * offered Load or Keep; `shown` when the page now shows the other copy; `kept` when the reader already
+ * chose to keep theirs over it; `open` when the page only links to it.
  */
-export function conflictSentence(write: GuardedWrite, next: 'choose' | 'shown' | 'open'): string {
+export function conflictSentence(write: GuardedWrite, next: 'choose' | 'shown' | 'kept' | 'open'): string {
   const done = { save: 'Not saved', delete: 'Not deleted', reset: 'Not reset' }[write];
   const tail = {
     choose:
@@ -458,10 +487,72 @@ export function conflictSentence(write: GuardedWrite, next: 'choose' | 'shown' |
     shown:
       write === 'save'
         ? 'That copy is shown now.'
-        : `That copy is shown now. ${write === 'reset' ? 'Reset' : 'Delete'} again to remove it.`,
+        : `That copy is shown now. ${AGAIN[write]} again to remove it.`,
+    kept: `You kept yours, so ${write} again to ${write === 'save' ? 'replace' : 'remove'} it.`,
     open: `Open it to see that copy, or ${write} again.`,
   }[next];
   return `${done}. This spot changed in another tab. ${tail}`;
+}
+
+/** What a refused write says, and whether the tab now shows the copy that refused it. */
+export function refusal(
+  write: GuardedWrite,
+  held: HeldCopy,
+  conflict: SavedSpot,
+  edited: boolean,
+): { readonly show: boolean; readonly sentence: string } {
+  const now = syncWithStored(held, conflict, edited);
+  if (now.kind === 'changed') return { show: false, sentence: conflictSentence(write, 'choose') };
+  // "Keep mine" was pressed after the prompt opened, so there is no choice left to offer.
+  if (now.kind === 'same' && edited) return { show: false, sentence: conflictSentence(write, 'kept') };
+  return { show: true, sentence: conflictSentence(write, 'shown') };
+}
+
+/**
+ * "Keep mine" holds whatever is stored when it is pressed, which may be newer than the copy the notice
+ * drew, so the sentence it says is true and the next save replaces exactly that.
+ */
+export function keepMine(
+  spots: readonly SavedSpot[],
+  editing: { readonly id: string | null; readonly from: string | null },
+): {
+  readonly editing: { readonly id: string | null; readonly from: string | null };
+  readonly held: HeldCopy;
+  readonly sentence: string;
+} {
+  const stored = storedCopy(spots, editing);
+  if (stored === undefined) {
+    return {
+      editing,
+      held: { kind: 'none' },
+      sentence: 'Kept your changes. The other tab deleted this spot, so saving keeps yours.',
+    };
+  }
+  return {
+    editing: { id: stored.id, from: stored.from },
+    held: { kind: 'copy', spot: stored },
+    sentence: 'Kept your changes. Saving replaces the copy from the other tab.',
+  };
+}
+
+/** An identical sentence twice is not spoken again, so a repeat gets an invisible difference. */
+export function repeated(current: string, message: string): string {
+  return current === message ? `${message}\u00a0` : message;
+}
+
+/** A copy keeps its name as typed, so the time it was saved is what tells two of them apart. */
+const SAVED_AT = new Intl.DateTimeFormat('en-GB', {
+  day: 'numeric',
+  month: 'short',
+  hour: '2-digit',
+  minute: '2-digit',
+});
+
+/** `null` for a time no `Date` holds, which formatting would throw on and take the whole list with it. */
+export function savedAt(time: number): { readonly iso: string; readonly text: string } | null {
+  const date = new Date(time);
+  if (Number.isNaN(date.getTime())) return null;
+  return { iso: date.toISOString(), text: SAVED_AT.format(date) };
 }
 
 export function noticeSentence(notice: StorageNotice): string {

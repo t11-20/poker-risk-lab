@@ -101,8 +101,9 @@ export function reportForSpot(spot: Spot): SpotReport {
     if (input.opponents.some((opponent) => opponent.range.combos.length === 0)) {
       return { ok: false, message: 'Every hand in one of these ranges uses a card already in play.' };
     }
-    const seats = input.opponents.map((opponent) => ({
+    const seats = input.opponents.map((opponent, index) => ({
       name: opponent.label,
+      seat: index + 1,
       combos: opponent.range.combos,
     }));
     const dealt = dealability(seats, true);

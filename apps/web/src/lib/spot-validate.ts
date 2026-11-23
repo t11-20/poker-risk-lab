@@ -238,9 +238,11 @@ export function canDealAll(hands: readonly (readonly Combo[])[]): boolean | null
   return dealSearch(hands).answer;
 }
 
-/** A seat the dealability check reads: its name, for a sentence about some seats, and its hands. */
+/** A seat the dealability check reads: its name and number, for a sentence naming seats, and its hands. */
 export interface DealSeat {
   readonly name: string;
+  /** From 1, in the editor's order, for when two seats share a name. */
+  readonly seat: number;
   readonly combos: readonly Combo[];
 }
 
@@ -250,7 +252,11 @@ export type Dealability =
   /** The search ran out of budget, so the analysis is left to find out. */
   | { readonly kind: 'unchecked' };
 
-function listed(names: readonly string[]): string {
+/** "Villain and Villain" tells the reader nothing, so a name two seats share gives way to the seat number. */
+function listed(seats: readonly DealSeat[]): string {
+  const names = seats.map(({ name, seat }) =>
+    seats.filter((other) => other.name === name).length > 1 ? `Opponent ${seat}` : name,
+  );
   return names.length < 2 ? (names[0] ?? '') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
 }
 
@@ -270,7 +276,7 @@ export function dealability(seats: readonly DealSeat[], everyone: boolean): Deal
     }
   }
   const needed = seats.length * 2;
-  const who = everyone ? `${seats.length} opponents` : listed(seats.map((seat) => seat.name));
+  const who = everyone ? `${seats.length} opponents` : listed(seats);
   if (support.size < needed) {
     const sentence =
       `These hands cannot all be dealt at once: ${who} need ${needed} different cards, ` +
@@ -379,7 +385,8 @@ function readOpponents(draft: SpotDraft, dead: readonly number[], out: Collector
     if (read.seat !== null) seats.push(read.seat);
     if (read.allIn) allIn ??= read.seat?.name ?? 'An opponent';
     if (read.hand.hand?.kind === 'none' || read.hand.combos === null) continue;
-    modelled.push({ name: opponent.name.trim() || `Opponent ${index + 1}`, combos: read.hand.combos });
+    const seat = index + 1;
+    modelled.push({ name: opponent.name.trim() || `Opponent ${seat}`, seat, combos: read.hand.combos });
   }
   const withHand = draft.opponents.filter((opponent) => opponent.handKind !== 'none').length;
   return { opponents: seats.length === draft.opponents.length ? seats : null, modelled, withHand, allIn };
