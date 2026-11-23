@@ -81,7 +81,8 @@ function SpotItem(props: {
       <SpotCards spot={spot} />
       {said === null ? null : <p className="prl-note">{said}</p>}
       {confirming ? (
-        <div className="prl-btn-row">
+        // Keyed apart, so "Keep it" unmounts rather than becoming the button drawn in its place.
+        <div className="prl-btn-row" key="ask">
           <p className="prl-spot-list__ask">
             {own ? 'Delete this spot? This cannot be undone.' : 'Remove your edit?'}
           </p>
@@ -93,7 +94,7 @@ function SpotItem(props: {
           </Button>
         </div>
       ) : (
-        <div className="prl-btn-row">
+        <div className="prl-btn-row" key="actions">
           <a className="prl-btn prl-btn--secondary prl-btn--sm" href={href} aria-label={`Edit ${name}`}>
             Edit
           </a>

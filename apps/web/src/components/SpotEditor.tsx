@@ -346,7 +346,8 @@ function EditorBar(props: {
   if (confirming !== null) {
     const deleting = confirming === 'delete';
     return (
-      <div className="prl-spot-editor__bar">
+      // Keyed apart, so "Keep it" unmounts rather than becoming the button drawn in its place.
+      <div className="prl-spot-editor__bar" key="ask">
         <p>
           {deleting
             ? 'Delete this spot from this browser? This cannot be undone.'
@@ -360,7 +361,7 @@ function EditorBar(props: {
     );
   }
   return (
-    <div className="prl-spot-editor__bar">
+    <div className="prl-spot-editor__bar" key="actions">
       <Button variant="primary" ref={refs.save} onClick={onSave} aria-disabled={!ready}>
         Save
       </Button>
