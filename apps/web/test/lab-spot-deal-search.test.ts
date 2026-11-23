@@ -41,6 +41,22 @@ describe('the deal search budget', () => {
     assert.ok(work >= 3 * total, `${work} counted for ${total} combos: the bound's own passes are missing`);
   });
 
+  it('counts each combo the walk looks at, as well as each pass of the cover bound', () => {
+    // One seat holding 4h4s: the walk looks at 1 combo and the cover bound makes one pass of 2 * 1 + 52.
+    assert.deepEqual(dealSearch([[[10, 11]]]), { answer: true, work: 1 + 54 });
+  });
+
+  it('keys an answer on the combos themselves, not on how many each seat has', () => {
+    // Seven and five combos a seat both times; the second pair all need the 2c, so only one seat is dealt.
+    const twos = (from: number, count: number) =>
+      Array.from({ length: count }, (_, index): [number, number] => [0, from + index]);
+    const apart = dealSearch([twos(13, 7), twos(30, 5).map(([, b]): [number, number] => [b, b + 7])]);
+    assert.equal(apart.answer, true);
+    const shared = dealSearch([twos(13, 7), twos(30, 5)]);
+    assert.equal(shared.answer, false, 'the same counts with other combos is another question');
+    assert.ok(shared.work > 0, 'searched, not read from the cache');
+  });
+
   it('keeps an answer, so validating the same ranges again searches nothing', () => {
     const base = blankDraft();
     const hole = cards('Ah As');
