@@ -9,20 +9,28 @@ import { describe, it } from 'node:test';
 import { parseCardText } from '@prl/ui/cards';
 import { blankDraft, type SavedSpot, type SpotDraft } from '../src/lib/spot.ts';
 import {
+  askedCopy,
+  changedSincePrompt,
   conflictSentence,
   duplicateDraft,
   editOf,
   type HeldCopy,
   isEditOfBuiltIn,
+  keepMine,
+  MAX_TIME,
   newSpotId,
   noticeSentence,
   parseLibrary,
+  type RemoveRequest,
   readLibrary,
+  refusal,
   refusalSentence,
   removeSpot,
+  repeated,
   type SaveRequest,
   SPOTS_STORAGE_KEY,
   type SpotStore,
+  savedAt,
   saveSpot,
   serialiseLibrary,
   spotHref,
@@ -460,10 +468,14 @@ function save(tab: Tab, store: SpotStore, now: number): 'saved' | 'refused' {
   return 'saved';
 }
 
-/** The editor's Delete, or its Reset to original for an edit of the built-in. */
-function remove(tab: Tab, store: SpotStore): 'removed' | 'refused' {
+/** The editor's Delete, or its Reset to original for an edit of the built-in, on what its prompt asked. */
+function remove(
+  tab: Tab,
+  store: SpotStore,
+  asked: RemoveRequest = { ...tab.editing, held: tab.held },
+): 'removed' | 'refused' {
   const library = readLibrary(store);
-  const result = removeSpot(library.spots, { ...tab.editing, held: tab.held });
+  const result = removeSpot(library.spots, asked);
   if ('conflict' in result) return refuse(tab, result.conflict);
   assert.deepEqual(writeLibrary(store, library, result.spots), { ok: true });
   if (tab.editing.from === FROM) {
@@ -656,8 +668,11 @@ describe('two tabs: no save, reset or delete removes a copy its tab has not seen
             counts.deletes += 1;
             tabs[index] = openTab(store, FROM);
           }
-        } else if (op === 'keep' && sync?.kind === 'changed') tab.held = { kind: 'copy', spot: sync.spot };
-        else if (op === 'load' && sync?.kind === 'changed') take(tab, sync.spot);
+        } else if (op === 'keep' && sync?.kind === 'changed') {
+          const kept = keepMine(entries(store), tab.editing);
+          tab.editing = kept.editing;
+          tab.held = kept.held;
+        } else if (op === 'load' && sync?.kind === 'changed') take(tab, sync.spot);
         else if (op === 'reload') {
           // Half the time onto the spot the other tab has open, so two tabs share one of the player's own.
           const other = (tabs[1 - index] as Tab).editing.id;
@@ -687,5 +702,196 @@ describe('two tabs: no save, reset or delete removes a copy its tab has not seen
     assert.ok(counts.resets > 500 && counts.deletes > 500 && counts.listed > 500, ran);
     // The run's guards each fired; the counts are read off seed 20261123 (28, 67 and 105 refused).
     assert.ok(counts.refusedResets > 20 && counts.refusedDeletes > 40 && refusedList > 60, ran);
+  });
+});
+
+describe('a Delete or Reset prompt removes only the copy it asked about', () => {
+  const copy = (spot: SavedSpot) => ({ kind: 'copy', spot }) as const;
+
+  it('sees the copy behind an open prompt change, move to a new id, or go', () => {
+    const s1 = put([], { id: null, from: null, draft: draft('S1') }, 1);
+    const asked = { id: s1.saved.id, from: null, held: copy(s1.saved) };
+    assert.deepEqual(askedCopy(s1.spots, asked), { kind: 'same', spot: s1.saved });
+    const s2 = put(s1.spots, { id: s1.saved.id, from: null, held: copy(s1.saved), draft: draft('S2') }, 2);
+    assert.deepEqual(askedCopy(s2.spots, asked), { kind: 'changed', spot: s2.saved });
+    assert.ok('conflict' in removeSpot(s2.spots, asked), 'confirming after the change removes nothing');
+    assert.deepEqual(askedCopy([], asked), { kind: 'gone' });
+
+    const e1 = put([], { id: null, from: FROM, draft: draft('E1') }, 1);
+    const reset = { id: e1.saved.id, from: FROM, held: copy(e1.saved) };
+    const e2 = put([], { id: null, from: FROM, draft: draft('E2') }, 2);
+    assert.notEqual(e2.saved.id, e1.saved.id);
+    assert.deepEqual(askedCopy(e2.spots, reset), { kind: 'changed', spot: e2.saved });
+  });
+
+  it('says on the prompt that the copy changed, and what pressing on will do', () => {
+    assert.equal(
+      changedSincePrompt('delete'),
+      'This spot changed in another tab. Delete will not remove the new copy.',
+    );
+    assert.equal(
+      changedSincePrompt('reset'),
+      'This spot changed in another tab. Reset will not remove the new copy.',
+    );
+    assert.equal(
+      conflictSentence('delete', 'kept'),
+      'Not deleted. This spot changed in another tab. You kept yours, so delete again to remove it.',
+    );
+  });
+
+  it('a refusal says what the tab can do next, from what it holds when the refusal lands', () => {
+    const s1 = put([], { id: null, from: null, draft: draft('S1') }, 1);
+    const s2 = put(s1.spots, { id: s1.saved.id, from: null, held: copy(s1.saved), draft: draft('S2') }, 2);
+    const older = copy(s1.saved);
+    assert.deepEqual(refusal('delete', older, s2.saved, true), {
+      show: false,
+      sentence: conflictSentence('delete', 'choose'),
+    });
+    assert.deepEqual(refusal('delete', older, s2.saved, false), {
+      show: true,
+      sentence: conflictSentence('delete', 'shown'),
+    });
+    // "Keep mine" pressed while the prompt was open: the tab holds the newer copy and has changes.
+    assert.deepEqual(refusal('reset', copy(s2.saved), s2.saved, true), {
+      show: false,
+      sentence: conflictSentence('reset', 'kept'),
+    });
+    assert.deepEqual(refusal('delete', copy(s2.saved), s2.saved, false), {
+      show: true,
+      sentence: conflictSentence('delete', 'shown'),
+    });
+  });
+
+  it('a prompt opened before another tab saved stays on the copy it asked about (seeded)', () => {
+    let seed = 20_261_124;
+    const next = (n: number): number => {
+      seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
+      return Math.floor((seed / 2_147_483_648) * n);
+    };
+    let refused = 0;
+    let removed = 0;
+    for (let run = 0; run < 400; run += 1) {
+      const store = new MemoryStore();
+      const own = run % 2 === 0;
+      const first = own
+        ? put([], { id: null, from: null, draft: draft('Own') }, 0).saved
+        : put([], { id: null, from: FROM, draft: draft('Edit') }, 0).saved;
+      writeLibrary(store, readLibrary(store), [first]);
+      const a = openSpot(first);
+      const b = openSpot(first);
+      if (next(2) === 0) rename(b, 'B edit');
+      const asked = { ...b.editing, held: b.held };
+      if (next(3) > 0) {
+        if (!own && next(2) === 0) {
+          assert.equal(remove(a, store), 'removed');
+          rename(a, `A ${run}`);
+        } else rename(a, `A ${run}`);
+        assert.equal(save(a, store, 1), 'saved');
+      }
+      // The render after the press reads storage again, which is how a newer copy reached the confirm.
+      settle(b, store);
+      const before = entries(store);
+      const result = remove(b, store, asked);
+      if (result === 'refused') refused += 1;
+      else removed += 1;
+      for (const entry of before) {
+        if (entries(store).some((left) => same(left, entry))) continue;
+        assert.ok(same(entry, first), `run ${run}: confirm removed "${entry.draft.name}", not what it asked`);
+      }
+    }
+    assert.ok(refused > 100 && removed > 100, `${refused} refused, ${removed} removed`);
+  });
+
+  it('"Keep mine" holds the copy stored when it is pressed, not the one the notice drew', () => {
+    const other = put([], { id: null, from: null, draft: draft('Other') }, 0);
+    const s1 = put(other.spots, { id: null, from: FROM, draft: draft('K1') }, 1);
+    const s2 = put(s1.spots, { id: s1.saved.id, from: FROM, held: copy(s1.saved), draft: draft('K2') }, 2);
+    const s3 = put(s2.spots, { id: s1.saved.id, from: FROM, held: copy(s2.saved), draft: draft('K3') }, 3);
+    const editing = { id: s1.saved.id, from: FROM };
+    const kept = keepMine(s3.spots, editing);
+    assert.deepEqual(kept.held, copy(s3.saved), 'the newest copy, which a save then replaces');
+    assert.deepEqual(kept.editing, { id: s3.saved.id, from: FROM });
+    assert.equal(kept.sentence, 'Kept your changes. Saving replaces the copy from the other tab.');
+    const gone = keepMine([], editing);
+    assert.deepEqual(gone.held, { kind: 'none' });
+    assert.equal(gone.sentence, 'Kept your changes. The other tab deleted this spot, so saving keeps yours.');
+  });
+
+  it('says a repeated sentence again, with a difference only a screen reader notices', () => {
+    const first = repeated('', 'Not saved.');
+    const second = repeated(first, 'Not saved.');
+    const third = repeated(second, 'Not saved.');
+    assert.equal(first, 'Not saved.');
+    assert.notEqual(second, first);
+    assert.equal(second.trim(), 'Not saved.');
+    assert.notEqual(third, second);
+    assert.equal(repeated('Saved.', 'Not saved.'), 'Not saved.');
+  });
+});
+
+describe('a saved time no Date can hold', () => {
+  const at = (updatedAt: number): string => {
+    const { spots } = put([], { id: null, from: null, draft: draft('Time') }, 5);
+    const stored = JSON.parse(serialiseLibrary(spots));
+    stored.spots[0].updatedAt = updatedAt;
+    return JSON.stringify(stored);
+  };
+
+  it('is an unreadable entry, counted with the rest, on either side of the range', () => {
+    for (const edge of [MAX_TIME, -MAX_TIME, 0]) {
+      assert.equal(parseLibrary(at(edge)).spots.length, 1, String(edge));
+    }
+    for (const beyond of [MAX_TIME + 1, -MAX_TIME - 1, 9e15]) {
+      const parsed = parseLibrary(at(beyond));
+      assert.deepEqual(parsed.spots, [], String(beyond));
+      assert.deepEqual(parsed.notice, { kind: 'skipped', count: 1 }, String(beyond));
+    }
+  });
+
+  it('formats to nothing rather than throw', () => {
+    assert.equal(savedAt(9e15), null);
+    assert.equal(savedAt(Number.NaN), null);
+    assert.deepEqual(savedAt(Date.UTC(2026, 10, 23, 9, 5)), {
+      iso: '2026-11-23T09:05:00.000Z',
+      text: new Intl.DateTimeFormat('en-GB', {
+        day: 'numeric',
+        month: 'short',
+        hour: '2-digit',
+        minute: '2-digit',
+      }).format(Date.UTC(2026, 10, 23, 9, 5)),
+    });
+  });
+});
+
+describe('a spot not linked to a built-in keeps no built-in name for a hand', () => {
+  const labelled = (): SpotDraft => {
+    const base = draft('Label');
+    const opponent = base.opponents[0];
+    assert.ok(opponent !== undefined);
+    const handLabel = { label: 'a tight range', hand: 'range:QQ+' };
+    return { ...base, opponents: [{ ...opponent, range: 'QQ+', handLabel }] };
+  };
+  const storedLabel = (spots: readonly SavedSpot[]): unknown =>
+    JSON.parse(serialiseLibrary(spots)).spots.at(-1).opponents[0].handLabel;
+
+  it('drops the label on a duplicate, and on a save of a spot of the player own', () => {
+    const copied = duplicateDraft([], labelled(), 5, ids);
+    assert.equal(copied.saved.from, null);
+    assert.equal(copied.saved.draft.opponents[0]?.handLabel, null);
+    assert.equal(storedLabel(copied.spots), undefined);
+    const own = put([], { id: null, from: null, draft: labelled() }, 5);
+    assert.equal(storedLabel(own.spots), undefined);
+    const linked = put([], { id: null, from: 'fl-a', draft: labelled() }, 5);
+    assert.deepEqual(storedLabel(linked.spots), { label: 'a tight range', hand: 'range:QQ+' });
+  });
+
+  it('reads a label stored on an unlinked spot as none, so the next write drops it', () => {
+    const linked = put([], { id: null, from: 'fl-a', draft: labelled() }, 5);
+    const stored = JSON.parse(serialiseLibrary(linked.spots));
+    stored.spots[0].from = null;
+    const read = parseLibrary(JSON.stringify(stored));
+    assert.equal(read.notice, null);
+    assert.equal(read.spots[0]?.draft.opponents[0]?.handLabel, null);
+    assert.equal(storedLabel(read.spots), undefined);
   });
 });

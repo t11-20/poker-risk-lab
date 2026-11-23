@@ -338,6 +338,24 @@ describe('ranges that cannot all be dealt at once', () => {
     );
   });
 
+  it('names seats by number when two of them share a typed name', () => {
+    const named = (names: readonly string[]): SpotDraft => {
+      const draft = { ...good(), opponents: seats(['AA', 'AA', 'AA, KQs+ nonsense']) };
+      return {
+        ...draft,
+        opponents: draft.opponents.map((seat, index) => ({ ...seat, name: names[index] ?? '' })),
+      };
+    };
+    assert.equal(
+      errorOn(named(['Villain', 'Villain', 'Third']), 'opponents'),
+      'These hands cannot all be dealt at once: Opponent 1 and Opponent 2 need 4 different cards, and their ranges hold only 3.',
+    );
+    assert.equal(
+      errorOn(named(['Villain', 'Reg', 'Third']), 'opponents'),
+      'These hands cannot all be dealt at once: Villain and Reg need 4 different cards, and their ranges hold only 3.',
+    );
+  });
+
   it('answers within a frame for five wide ranges that share four cards', () => {
     const anyAce = 'A2s+, A2o+';
     const started = performance.now();
