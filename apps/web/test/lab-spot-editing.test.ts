@@ -75,6 +75,8 @@ describe('the picker on a draft', () => {
       allSlots(draft).map((slot) => slot.label),
       ['Hole 1', 'Hole 2', 'Flop 1', 'Flop 2', 'Flop 3', 'Turn', 'River', 'Ledger, card 1', 'Ledger, card 2'],
     );
+    const shown = allSlots(draft).map((slot) => slot.short ?? slot.label);
+    assert.equal(new Set(shown).size, shown.length, `two slots read the same: ${shown.join(', ')}`);
   });
 
   it('a pick lands in the draft, and a card held by an opponent cannot be picked for the board', () => {

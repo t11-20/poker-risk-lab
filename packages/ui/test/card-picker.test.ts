@@ -177,6 +177,19 @@ describe('the rendered picker', () => {
     assert.ok(!markup.includes(`>${long}<`), 'the long label is never drawn');
   });
 
+  it('draws a deck short label where one is given, since a deck column is narrower than a slot', async () => {
+    const slot = {
+      id: 'o1',
+      label: 'Ledger, card 1',
+      short: 'Opp 1 · 1st',
+      deckShort: 'Opp 1',
+      card: card('As'),
+    };
+    const markup = await render({ groups: [{ label: "Ledger's hand", slots: [slot] }], active: null });
+    assert.match(markup, /<span class="prl-picker__used" aria-hidden="true">Opp 1<\/span>/u);
+    assert.match(markup, /<span class="prl-picker__slot-label" aria-hidden="true">Opp 1 · 1st<\/span>/u);
+  });
+
   it('draws 52 deck buttons, one of them in the tab order', async () => {
     const buttons = deckButtons(await render());
     assert.equal(buttons.length, 52);

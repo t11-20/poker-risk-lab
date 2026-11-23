@@ -39,11 +39,24 @@ export function pickerGroups(draft: SpotDraft): readonly CardPickerGroup[] {
     if (opponent.handKind !== 'cards') continue;
     const name = opponentLabel(opponent, index);
     const [first, second] = opponentSlotIds(opponent.key);
+    const seat = `Opp ${index + 1}`;
     groups.push({
       label: `${name}'s hand`,
       slots: [
-        { id: first, label: `${name}, card 1`, card: opponent.cards[0], short: `Opp ${index + 1}` },
-        { id: second, label: `${name}, card 2`, card: opponent.cards[1], short: `Opp ${index + 1}` },
+        {
+          id: first,
+          label: `${name}, card 1`,
+          card: opponent.cards[0],
+          short: `${seat} · 1st`,
+          deckShort: seat,
+        },
+        {
+          id: second,
+          label: `${name}, card 2`,
+          card: opponent.cards[1],
+          short: `${seat} · 2nd`,
+          deckShort: seat,
+        },
       ],
     });
   }

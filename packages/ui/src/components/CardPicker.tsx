@@ -161,7 +161,7 @@ export function CardPicker(props: CardPickerProps): ReactElement {
               >
                 <CardFace card={card} />
                 <span className="prl-picker__used" aria-hidden="true">
-                  {owner === undefined ? '' : (owner.short ?? owner.label)}
+                  {owner === undefined ? '' : (owner.deckShort ?? owner.short ?? owner.label)}
                 </span>
               </button>
             );

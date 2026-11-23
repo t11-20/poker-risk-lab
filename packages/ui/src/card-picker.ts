@@ -13,6 +13,8 @@ export interface PickerSlot {
   readonly card: CardValue | null;
   /** Shown in place of `label` where a long one, such as an opponent's name, would not fit. */
   readonly short?: string;
+  /** On a deck card this slot holds, whose column is narrower than a slot. Defaults to `short`. */
+  readonly deckShort?: string;
 }
 
 const RANKS_HIGH_FIRST = [12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0] as const;
