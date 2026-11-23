@@ -851,6 +851,9 @@ describe('a saved time no Date can hold', () => {
   it('formats to nothing rather than throw', () => {
     assert.equal(savedAt(9e15), null);
     assert.equal(savedAt(Number.NaN), null);
+    assert.equal(savedAt(MAX_TIME + 1), null);
+    // Every time readSpot accepts formats, so an entry that reads back is never a blank row.
+    for (const edge of [MAX_TIME, -MAX_TIME]) assert.notEqual(savedAt(edge), null, String(edge));
     assert.deepEqual(savedAt(Date.UTC(2026, 10, 23, 9, 5)), {
       iso: '2026-11-23T09:05:00.000Z',
       text: new Intl.DateTimeFormat('en-GB', {

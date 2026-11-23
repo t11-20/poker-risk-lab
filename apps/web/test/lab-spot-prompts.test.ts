@@ -59,6 +59,13 @@ describe('a prompt confirms the copy it was opened on (REGRESSION)', () => {
         /repeated\(current, (changedLine|line)\)/u,
         `${name} does not announce the change`,
       );
+      // Keyed on text: every write re-reads storage into new objects, and an object key re-announced
+      // the change over a Duplicate's own sentence on another row.
+      assert.match(
+        source,
+        /serialiseLibrary\(\[now\.spot\]\)/u,
+        `${name} keys the announcement on an object`,
+      );
     });
   }
 });
@@ -106,6 +113,11 @@ describe('what the pages say is true when it is said (REGRESSION)', () => {
       }
     });
   }
+
+  it('the editor still shows a sentence while a prompt is open, unless it repeats the prompt', () => {
+    assert.match(editor, /const note = shownStatus\(saveStatus, confirming, changedCopy !== null\);/u);
+    assert.match(editor, /\{note === null \? null : <p className="prl-note">\{note\}<\/p>\}/u);
+  });
 
   it('"Keep mine" reads storage when it is pressed', () => {
     assert.match(editor, /const kept = keepMine\(read\(\)\.spots, editing\);/u);
