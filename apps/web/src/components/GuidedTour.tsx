@@ -4,7 +4,7 @@
  * The guided tour: five steps from picking a scenario to reviewing a hand, each with a "Show me" that
  * outlines its `[data-tour]` target, going to its page first if need be. A panel in the page's flow
  * under the header, not an overlay: it covers nothing, traps nothing, and a page under test on a fresh
- * profile stays usable with it open. Escape closes it and focus goes back to "How to use".
+ * profile stays usable with it open. Escape closes it for now and focus goes back to "How to use".
  *
  * It renders nothing until the effect has read storage, as `Onboarding` does, so the server render and
  * every return visit are the page alone. State lives in `tourStore` (`lib/tour.ts`) so the header's
@@ -109,9 +109,9 @@ export function GuidedTour(): ReactElement | null {
 
   if (!state.open) return null;
 
-  const close = (): void => {
+  const close = (how: 'button' | 'escape'): void => {
     const hadFocus = panelRef.current?.contains(document.activeElement) ?? false;
-    closeTour(tourStore, storage);
+    closeTour(tourStore, storage, how);
     // The button is in the sticky header, so a plain focus would scroll the page to "reveal" it.
     if (hadFocus) focusReturnTarget()?.focus({ preventScroll: true });
   };
@@ -133,7 +133,7 @@ export function GuidedTour(): ReactElement | null {
   const onKeyDown = (event: ReactKeyboardEvent<HTMLElement>): void => {
     if (event.key !== 'Escape') return;
     event.stopPropagation();
-    close();
+    close('escape');
   };
 
   const current = state.step === null ? null : tourStep(state.step);
@@ -156,7 +156,11 @@ export function GuidedTour(): ReactElement | null {
     >
       <div className="prl-tour__head">
         <p className="prl-tour__title">How to use the Lab</p>
-        <button className="prl-btn prl-btn--ghost prl-btn--sm prl-tour__close" onClick={close} type="button">
+        <button
+          className="prl-btn prl-btn--ghost prl-btn--sm prl-tour__close"
+          onClick={() => close('button')}
+          type="button"
+        >
           {skipping ? 'Skip' : 'Close'}
           <span className="prl-visually-hidden"> the guide</span>
         </button>

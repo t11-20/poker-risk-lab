@@ -2,9 +2,9 @@
  * The guided tour's steps, its one storage key and its state, apart from React so `node --test` can
  * drive them. `GuidedTour` renders the state and `TourButton` opens it, through `tourStore`.
  *
- * It opens by itself once, on a first visit to `/lab`, and never moves focus when it does. The key is
- * written only when the reader skips or closes it, so a reader who never answered it sees it again on
- * their next visit to `/lab`. Storage that throws reads as "unreadable", and the tour then stays shut
+ * It opens by itself on `/lab`, at most once a page load, and never moves focus when it does. The key
+ * is written only when the reader presses Skip or Close, so a reader who never answered it, or put it
+ * away with Escape, sees it again on their next load of `/lab`. Storage that throws reads as "unreadable", and the tour then stays shut
  * rather than reappear on every load; the "How to use" button still opens it.
  */
 
@@ -99,9 +99,9 @@ export function rememberTourDismissal(storage: TourStorage): boolean {
   }
 }
 
-/** What the panel's close does to storage and state. */
-export function closeTour(store: TourStore, storage: TourStorage): void {
-  rememberTourDismissal(storage);
+/** Skip and Close answer the guide and are remembered. Escape only puts it away for this page load. */
+export function closeTour(store: TourStore, storage: TourStorage, how: 'button' | 'escape'): void {
+  if (how === 'button') rememberTourDismissal(storage);
   store.dispatch({ type: 'close' });
 }
 

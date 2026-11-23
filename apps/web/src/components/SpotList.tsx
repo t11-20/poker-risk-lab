@@ -28,6 +28,14 @@ export interface SpotListProps {
 
 const STREET_WORD = { preflop: 'Preflop', flop: 'Flop', turn: 'Turn', river: 'River' } as const;
 
+/** A copy keeps its name as typed, so the time it was saved is what tells two of them apart. */
+const SAVED_AT = new Intl.DateTimeFormat('en-GB', {
+  day: 'numeric',
+  month: 'short',
+  hour: '2-digit',
+  minute: '2-digit',
+});
+
 function SpotCards({ spot }: { readonly spot: SavedSpot }): ReactElement {
   const checked = validateDraft(spot.draft);
   if (!checked.ok) return <p className="prl-note">Has fields to fix.</p>;
@@ -55,7 +63,7 @@ function SpotItem(props: {
   readonly onAsk: () => void;
   readonly onCancel: () => void;
   readonly onRemove: (name: string) => void;
-  readonly onDuplicate: () => void;
+  readonly onDuplicate: (name: string) => void;
 }): ReactElement {
   const { spot, href, original, confirming, keepRef, onAsk, onCancel, onRemove, onDuplicate } = props;
   const name = spot.draft.name.trim() === '' ? 'Untitled spot' : spot.draft.name.trim();
@@ -66,7 +74,11 @@ function SpotItem(props: {
       <h2 className="prl-spot-list__title">
         <a href={href}>{name}</a>
       </h2>
-      <p className="prl-note">{original === undefined ? 'Your own spot' : `Your edit of "${original}"`}</p>
+      <p className="prl-note">
+        {original === undefined ? 'Your own spot' : `Your edit of "${original}"`}
+        {'. Saved '}
+        <time dateTime={new Date(spot.updatedAt).toISOString()}>{SAVED_AT.format(spot.updatedAt)}</time>.
+      </p>
       <SpotCards spot={spot} />
       {confirming ? (
         <div className="prl-btn-row">
@@ -85,7 +97,7 @@ function SpotItem(props: {
           <a className="prl-btn prl-btn--secondary prl-btn--sm" href={href} aria-label={`Edit ${name}`}>
             Edit
           </a>
-          <Button size="sm" aria-label={`Duplicate ${name}`} onClick={onDuplicate}>
+          <Button size="sm" aria-label={`Duplicate ${name}`} onClick={() => onDuplicate(name)}>
             Duplicate
           </Button>
           <Button size="sm" aria-label={`${removal}: ${name}`} onClick={onAsk}>
@@ -146,9 +158,9 @@ export function SpotList({ titles }: SpotListProps): ReactElement {
                   : resetToOriginal(read().spots, spot.from ?? '');
                 written(commit(next), own ? `Deleted "${name}".` : `"${name}" is back to the original.`);
               }}
-              onDuplicate={() => {
+              onDuplicate={(name) => {
                 const next = duplicateDraft(read().spots, spot.draft, Date.now(), () => newSpotId());
-                written(commit(next.spots), `Saved a copy called "${next.saved.draft.name}".`);
+                written(commit(next.spots), `Saved a copy of "${name}" at the end of the list.`);
               }}
             />
           ))}

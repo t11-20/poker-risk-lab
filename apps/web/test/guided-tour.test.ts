@@ -9,6 +9,7 @@ import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { tipSentenceProblems } from '@prl/ui/tips';
 import {
+  closeTour,
   createTourStore,
   INITIAL_TOUR_STATE,
   opensByItself,
@@ -54,7 +55,7 @@ const refusing: TourStorage = () => ({
 const run = (actions: readonly TourAction[], from: TourState = INITIAL_TOUR_STATE): TourState =>
   actions.reduce(tourReducer, from);
 
-describe('it opens by itself once, on a first visit to the Lab', () => {
+describe('it opens by itself on the Lab, at most once a page load', () => {
   it('opens on /lab when nothing has been stored', () => {
     assert.equal(opensByItself('/lab', readTourDismissal(memoryStorage()), false), true);
   });
@@ -71,6 +72,19 @@ describe('it opens by itself once, on a first visit to the Lab', () => {
     assert.equal(rememberTourDismissal(storage), true);
     assert.equal(storage.data.get(TOUR_DISMISSED_KEY), '1');
     assert.equal(opensByItself('/lab', readTourDismissal(storage), false), false);
+  });
+
+  it('Skip and Close are remembered; Escape puts it away for now, so a later load opens it again', () => {
+    for (const how of ['button', 'escape'] as const) {
+      const storage = memoryStorage();
+      const store = createTourStore();
+      store.dispatch({ type: 'open-first-visit' });
+      closeTour(store, storage, how);
+      assert.equal(store.getSnapshot().open, false, `${how} closes it`);
+      assert.equal(storage.data.has(TOUR_DISMISSED_KEY), how === 'button', `${how} and the key`);
+      // The next load of /lab is a fresh page: nothing has settled it yet.
+      assert.equal(opensByItself('/lab', readTourDismissal(storage), false), how === 'escape', how);
+    }
   });
 
   it('opens at most once in a page load, even when the skip could not be stored', () => {
@@ -231,6 +245,8 @@ describe('the panel covers nothing and traps nothing (read from the source)', ()
   it('handles Escape on the panel, not the document, and has no focus trap', () => {
     assert.match(PANEL, /onKeyDown=\{onKeyDown\}/u);
     assert.match(PANEL, /event\.key !== 'Escape'/u);
+    assert.match(PANEL, /close\('escape'\)/u, 'Escape closes without recording an answer');
+    assert.match(PANEL, /onClick=\{\(\) => close\('button'\)\}/u, 'Skip and Close record it');
     assert.doesNotMatch(PANEL, /document\.addEventListener\('keydown'/u);
     assert.doesNotMatch(PANEL, /aria-modal|inert/u);
   });

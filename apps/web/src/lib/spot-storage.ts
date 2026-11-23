@@ -16,9 +16,9 @@ import {
   fillRandom,
   type HandKind,
   type HandLabel,
+  handKey,
   MAX_NAME_LENGTH,
   MAX_OPPONENTS,
-  MAX_RANGE_LENGTH,
   type OpponentDraft,
   type RandomBytes,
   type SavedSpot,
@@ -76,9 +76,10 @@ function readOpponent(value: unknown): OpponentDraft | null {
   const name = text(value['name'], MAX_NAME_LENGTH * 2);
   const stack = text(value['stack'], FIELD_MAX);
   const bet = text(value['bet'], FIELD_MAX);
-  const range = text(value['range'], 400);
+  // Absent when the hand does not use them; spots saved before that rule carry both.
+  const range = value['range'] === undefined ? '' : text(value['range'], 400);
   const handKind = HAND_KINDS.find((kind) => kind === value['hand']);
-  const cards = value['cards'];
+  const cards = value['cards'] === undefined ? [null, null] : value['cards'];
   if (
     key === null ||
     name === null ||
@@ -201,9 +202,11 @@ function storedDraft(spot: SavedSpot): Record<string, unknown> {
       stack: opponent.stack,
       bet: opponent.bet,
       hand: opponent.handKind,
-      range: opponent.range,
-      cards: opponent.cards.map((card) => (card === null ? null : cardToText(card))),
-      handLabel: opponent.handLabel,
+      ...(opponent.handKind === 'range' ? { range: opponent.range } : {}),
+      ...(opponent.handKind === 'cards'
+        ? { cards: opponent.cards.map((card) => (card === null ? null : cardToText(card))) }
+        : {}),
+      ...(opponent.handLabel === null ? {} : { handLabel: opponent.handLabel }),
     })),
     neverFolds: draft.neverFolds,
     foldRate: draft.foldRate,
@@ -279,8 +282,8 @@ const wholeChips = (text: string): string => {
 
 /**
  * The draft as it is stored and read back: trimmed, and amounts without leading zeros, because the
- * validator reads `"000…1000"` as 1000 while storage bounds the text it keeps. A range the hand does
- * not use is kept only while it fits the range field.
+ * validator reads `"000…1000"` as 1000 while storage bounds the text it keeps. Only the hand a seat
+ * uses is kept, and a built-in's label only while it still names that hand, as `/privacy` says.
  */
 export function storedForm(draft: SpotDraft): SpotDraft {
   return {
@@ -292,13 +295,19 @@ export function storedForm(draft: SpotDraft): SpotDraft {
     bigBlind: wholeChips(draft.bigBlind),
     foldRate: draft.foldRate.trim(),
     opponents: draft.opponents.map((opponent) => {
-      const range = opponent.range.trim();
+      const hand = {
+        handKind: opponent.handKind,
+        range: opponent.handKind === 'range' ? opponent.range.trim() : '',
+        cards: opponent.handKind === 'cards' ? opponent.cards : ([null, null] as const),
+      };
+      const label = opponent.handLabel;
       return {
         ...opponent,
+        ...hand,
         name: opponent.name.trim(),
         stack: wholeChips(opponent.stack),
         bet: wholeChips(opponent.bet),
-        range: opponent.handKind === 'range' || range.length <= MAX_RANGE_LENGTH ? range : '',
+        handLabel: label !== null && label.hand === handKey(hand) ? label : null,
       };
     }),
   };
@@ -407,13 +416,7 @@ export function duplicateDraft(
   now: number,
   makeId: () => string,
 ): { readonly spots: readonly SavedSpot[]; readonly saved: SavedSpot } {
-  const name = `${draft.name.trim()} (copy)`.slice(0, MAX_NAME_LENGTH);
-  const saved: SavedSpot = {
-    id: makeId(),
-    from: null,
-    updatedAt: now,
-    draft: storedForm({ ...draft, name }),
-  };
+  const saved: SavedSpot = { id: makeId(), from: null, updatedAt: now, draft: storedForm(draft) };
   return { spots: [...spots, saved], saved };
 }
 

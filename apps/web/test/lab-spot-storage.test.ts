@@ -122,7 +122,7 @@ describe('create, edit, duplicate, delete, reset', () => {
     const copy = duplicateDraft(edit.spots, edit.saved.draft, 20, ids);
     assert.equal(copy.spots.length, 2);
     assert.equal(copy.saved.from, null);
-    assert.equal(copy.saved.draft.name, 'Edit (copy)');
+    assert.equal(copy.saved.draft.name, 'Edit', 'the name is kept as typed, with nothing added');
     assert.notEqual(copy.saved.id, edit.saved.id);
   });
 
@@ -249,6 +249,73 @@ describe('what storage holds', () => {
     assert.equal(stored?.opponents[0]?.name, 'Big blind');
     assert.equal(stored?.opponents[0]?.stack, '900');
     assert.deepEqual(back.spots, spots, 'what is kept in memory is what storage gives back');
+  });
+
+  it('keeps a range only for a range, cards only for exact cards, and neither for an unmodelled seat', () => {
+    const base = draft('Kinds').opponents[0];
+    assert.ok(base !== undefined);
+    const seat = (key: string, handKind: 'range' | 'cards' | 'none') => ({
+      ...base,
+      key,
+      handKind,
+      range: 'my private read: JJ+, AK',
+      cards: [c('Qs'), c('Qc')] as const,
+      handLabel: { label: 'a built-in name', hand: 'range:QQ+' },
+    });
+    const kinds: SpotDraft = {
+      ...draft('Kinds'),
+      opponents: [seat('o1', 'range'), seat('o2', 'cards'), seat('o3', 'none')],
+    };
+    const { spots } = put([], { id: null, from: null, draft: kinds }, 5);
+    const [range, cards, none] = JSON.parse(serialiseLibrary(spots)).spots[0].opponents;
+    assert.equal(range.range, 'my private read: JJ+, AK');
+    assert.equal('cards' in range, false, 'a range seat keeps no cards');
+    assert.deepEqual(cards.cards, ['Qs', 'Qc']);
+    assert.equal('range' in cards, false, 'an exact-cards seat keeps no range');
+    assert.equal('range' in none, false, 'an unmodelled seat keeps no range');
+    assert.equal('cards' in none, false, 'an unmodelled seat keeps no cards');
+    for (const opponent of [range, cards, none]) {
+      assert.equal('handLabel' in opponent, false, 'a label for a hand the seat no longer has is dropped');
+    }
+    assert.deepEqual(
+      parseLibrary(serialiseLibrary(spots)).spots,
+      spots,
+      'and memory holds what storage does',
+    );
+  });
+
+  it('keeps a built-in label while it still names the seat hand', () => {
+    const base = draft('Label').opponents[0];
+    assert.ok(base !== undefined);
+    const opponent = { ...base, range: 'QQ+', handLabel: { label: 'a tight range', hand: 'range:QQ+' } };
+    const { spots } = put(
+      [],
+      { id: null, from: 'fl-a', draft: { ...draft('Label'), opponents: [opponent] } },
+      5,
+    );
+    const stored = JSON.parse(serialiseLibrary(spots)).spots[0].opponents[0];
+    assert.deepEqual(stored.handLabel, { label: 'a tight range', hand: 'range:QQ+' });
+  });
+
+  it('reads a spot saved with the fields an unused hand used to keep, and drops them on the next save', () => {
+    const { spots } = put([], { id: null, from: null, draft: draft('Old') }, 5);
+    const old = JSON.parse(serialiseLibrary(spots));
+    old.spots[0].opponents[0] = {
+      ...old.spots[0].opponents[0],
+      hand: 'none',
+      range: 'my secret read: JJ+, AK',
+      cards: ['Qs', 'Qc'],
+      handLabel: null,
+    };
+    const read = parseLibrary(JSON.stringify(old));
+    assert.equal(read.notice, null);
+    const spot = read.spots[0];
+    assert.ok(spot !== undefined);
+    const held = { kind: 'copy', spot } as const;
+    const again = put(read.spots, { id: spot.id, from: null, held, draft: spot.draft }, 6);
+    const rewritten = serialiseLibrary(again.spots);
+    assert.doesNotMatch(rewritten, /secret|"Qs"/u);
+    assert.equal(JSON.parse(rewritten).version, 1);
   });
 
   it('refuses a write that would not read back, and leaves storage as it was', () => {

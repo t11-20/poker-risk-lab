@@ -298,13 +298,20 @@ describe('the required disclosures are on the pages', () => {
       neverFolds: 'never folds',
       foldRate: 'fold rate',
     };
-    const opponent = { ...blankOpponent('o1', 0), handLabel: { label: 'a range', hand: 'range:QQ+' } };
+    // One seat of each hand kind, so a field only one kind writes is read too.
+    const ranged = {
+      ...blankOpponent('o1', 0),
+      range: 'QQ+',
+      handLabel: { label: 'a range', hand: 'range:QQ+' },
+    };
+    const exact = { ...blankOpponent('o2', 1), handKind: 'cards' as const, cards: [12, 13] as const };
+    const unmodelled = { ...blankOpponent('o3', 2), handKind: 'none' as const };
     const stored = serialiseLibrary([
       {
         id: 'spot-000000000001',
         from: null,
         updatedAt: 1,
-        draft: { ...blankDraft(), opponents: [opponent] },
+        draft: { ...blankDraft(), opponents: [ranged, exact, unmodelled] },
       },
     ]);
     const keys = new Set<string>();

@@ -709,12 +709,7 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
       return;
     }
     const next = duplicateDraft(read().spots, draft, Date.now(), () => newSpotId());
-    if (
-      !written(
-        commit(next.spots),
-        `Saved a copy called "${next.saved.draft.name}". You are now editing the copy.`,
-      )
-    ) {
+    if (!written(commit(next.spots), 'Saved a copy. You are now editing the copy.')) {
       return;
     }
     take(next.saved);
