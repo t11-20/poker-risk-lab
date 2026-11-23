@@ -4,8 +4,9 @@
  *
  * It opens by itself on `/lab`, at most once a page load, and never moves focus when it does. The key
  * is written only when the reader presses Skip or Close, so a reader who never answered it, or put it
- * away with Escape, sees it again on their next load of `/lab`. Storage that throws reads as "unreadable", and the tour then stays shut
- * rather than reappear on every load; the "How to use" button still opens it.
+ * away with Escape, sees it again on their next load of `/lab`. Storage that throws reads as
+ * "unreadable", and the tour then stays shut rather than reappear on every load; the "How to use"
+ * button still opens it.
  */
 
 export const TOUR_DISMISSED_KEY = 'prl.tour.dismissed';
