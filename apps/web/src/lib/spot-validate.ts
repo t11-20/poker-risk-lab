@@ -182,8 +182,8 @@ function coverSize(open: readonly (readonly Combo[])[], enough: number, meter: M
 
 /**
  * Work, counted as `Meter` counts it, before the search gives up and says so. Five seats of
- * "A2s+, A2o+, KK, QQ" behind AhAs on Kc Qd 7h, which neither bound refuses, reach it in about 15 ms
- * (median of seven) on an M-series laptop. An answer is cached, so only a change to a range pays it.
+ * "A2s+, A2o+, KK, QQ" behind AhAs on Kc Qd 7h, which neither bound refuses, reach it in 15 ms warm
+ * and 18 ms on a first call, on an M-series laptop. Answers are cached, so only a range change pays.
  */
 export const DEAL_SEARCH_BUDGET = 1_000_000;
 

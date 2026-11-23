@@ -74,10 +74,10 @@ function SpotItem(props: {
       <h2 className="prl-spot-list__title">
         <a href={href}>{name}</a>
       </h2>
+      <p className="prl-note">{original === undefined ? 'Your own spot' : `Your edit of "${original}"`}</p>
       <p className="prl-note">
-        {original === undefined ? 'Your own spot' : `Your edit of "${original}"`}
-        {'. Saved '}
-        <time dateTime={new Date(spot.updatedAt).toISOString()}>{SAVED_AT.format(spot.updatedAt)}</time>.
+        Saved <time dateTime={new Date(spot.updatedAt).toISOString()}>{SAVED_AT.format(spot.updatedAt)}</time>
+        .
       </p>
       <SpotCards spot={spot} />
       {confirming ? (

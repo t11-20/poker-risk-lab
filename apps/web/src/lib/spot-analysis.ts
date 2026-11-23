@@ -83,10 +83,11 @@ export type SpotReport =
 
 /**
  * The sampler's refusal when it finds no deal that gives every seat a hand: ranges no bound could
- * refuse, or ones it can deal too rarely to sample. Matched on its words, which a test holds to.
+ * refuse, or ones it can deal too rarely to sample. `EquityError` carries no code, so this matches
+ * its words, and `test/lab-spot-validate.test.ts` fails if they change; anything else stays generic.
  */
 function isOverlapRefusal(error: unknown): boolean {
-  return error instanceof EquityError && /could not be sampled|block each other/u.test(error.message);
+  return error instanceof EquityError && /could not be sampled/u.test(error.message);
 }
 
 /**
