@@ -325,6 +325,15 @@ export function spotHref(spot: SavedSpot, isBuiltIn: (id: string) => boolean): s
     : `/lab/spots/edit?id=${encodeURIComponent(spot.id)}`;
 }
 
+/** The stored copy a tab is editing: by id once saved, else the saved edit of its built-in. */
+export function storedCopy(
+  spots: readonly SavedSpot[],
+  editing: { readonly id: string | null; readonly from: string | null },
+): SavedSpot | undefined {
+  if (editing.id !== null) return spots.find((spot) => spot.id === editing.id);
+  return editing.from === null ? undefined : editOf(spots, editing.from);
+}
+
 export type StoredSync =
   | { readonly kind: 'same' }
   /** Saved in another tab, and this tab has no change of its own to lose. */

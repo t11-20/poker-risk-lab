@@ -52,6 +52,7 @@ import {
   type StorageNotice,
   type StoredSync,
   saveSpot,
+  storedCopy,
   syncWithStored,
   type WriteResult,
 } from '../lib/spot-storage.ts';
@@ -531,12 +532,6 @@ function AssumptionsPanel(props: {
   );
 }
 
-/** The stored copy this tab is editing: by id once saved, else the saved edit of its built-in. */
-function storedFor(editing: Editing, spots: readonly SavedSpot[]): SavedSpot | undefined {
-  if (editing.id !== null) return spots.find((spot) => spot.id === editing.id);
-  return editing.from === null ? undefined : editOf(spots, editing.from);
-}
-
 /** Page order of the fields, so Save focuses the first one the reader would meet. Cards come first. */
 function fieldOrder(draft: SpotDraft): readonly FieldKey[] {
   return [
@@ -636,7 +631,7 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
   const dirty = !draftsMatch(saved, draft);
   const edited = !draftsMatch(saved ?? original?.draft ?? null, draft);
   const sync =
-    loaded && library.ready ? syncWithStored(heldAt, storedFor(editing, library.spots), edited) : SAME;
+    loaded && library.ready ? syncWithStored(heldAt, storedCopy(library.spots, editing), edited) : SAME;
   const adoptable = sync.kind === 'adopt' ? sync.spot : null;
   const cardErrors = [
     err('hole'),
@@ -692,7 +687,7 @@ export function SpotEditor({ target, originals }: SpotEditorProps): ReactElement
       return;
     }
     const fresh = read();
-    if (syncWithStored(heldAt, storedFor(editing, fresh.spots), true).kind === 'changed') {
+    if (syncWithStored(heldAt, storedCopy(fresh.spots, editing), true).kind === 'changed') {
       setSaveStatus(
         'Not saved. This spot changed in another tab. Load that copy, or keep yours to save over it.',
       );

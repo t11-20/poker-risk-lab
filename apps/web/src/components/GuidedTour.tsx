@@ -22,10 +22,10 @@ import {
   useSyncExternalStore,
 } from 'react';
 import {
+  closeTour,
   INITIAL_TOUR_STATE,
   opensByItself,
   readTourDismissal,
-  rememberTourDismissal,
   TOUR_STEPS,
   type TourStep,
   tourStep,
@@ -111,8 +111,7 @@ export function GuidedTour(): ReactElement | null {
 
   const close = (): void => {
     const hadFocus = panelRef.current?.contains(document.activeElement) ?? false;
-    rememberTourDismissal(storage);
-    tourStore.dispatch({ type: 'close' });
+    closeTour(tourStore, storage);
     // The button is in the sticky header, so a plain focus would scroll the page to "reveal" it.
     if (hadFocus) focusReturnTarget()?.focus({ preventScroll: true });
   };

@@ -99,6 +99,12 @@ export function rememberTourDismissal(storage: TourStorage): boolean {
   }
 }
 
+/** What the panel's close does to storage and state. */
+export function closeTour(store: TourStore, storage: TourStorage): void {
+  rememberTourDismissal(storage);
+  store.dispatch({ type: 'close' });
+}
+
 /**
  * Not when the address has a fragment: the panel mounts after the browser has scrolled to it, and at
  * 360px its height would push the part the link pointed at off the screen.
