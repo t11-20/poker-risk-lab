@@ -4,10 +4,13 @@
  * normalised; the text shows each raw equity, so a set that does not sum to 100% stays visible.
  * A share outside 0..1 reads `not a probability` (`../probability.ts`), and the readout uses the
  * caller's value, because the `NaN` coerced to 0 for the geometry would print a confident "0.0%".
+ * Past two players only the first row stays open and the rest sit in one disclosure, each still
+ * rendered exactly once, so six rows never push the price below a rail's first screen.
  */
 
 import type { ReactElement } from 'react';
 import { cx, type StyleWithVars } from '../cx.ts';
+import { pluralise } from '../format.ts';
 import { formatProbability, NOT_A_PROBABILITY } from '../probability.ts';
 
 export interface EquityBarPlayer {
@@ -78,9 +81,25 @@ function prepare(players: readonly EquityBarPlayer[]): readonly Prepared[] {
   return out;
 }
 
+function Readout({ entries }: { readonly entries: readonly Prepared[] }): ReactElement {
+  return (
+    <dl className="prl-equity-bar__readout">
+      {entries.map((entry) => (
+        <div className="prl-equity-bar__row" key={entry.key} data-series={entry.series}>
+          <span className="prl-equity-bar__swatch prl-fill" data-series={entry.series} aria-hidden="true" />
+          <dt className="prl-equity-bar__name">{entry.label}</dt>
+          <dd className="prl-equity-bar__value">{entry.valueText}</dd>
+          {entry.detail === null ? null : <dd className="prl-equity-bar__detail">{entry.detail}</dd>}
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 export function EquityBar(props: EquityBarProps): ReactElement {
   const { players, label = 'Equity by player', className } = props;
   const prepared = prepare(players);
+  const multiway = prepared.length > 2;
 
   return (
     <div className={cx('prl-equity-bar', className)}>
@@ -98,16 +117,13 @@ export function EquityBar(props: EquityBarProps): ReactElement {
           );
         })}
       </span>
-      <dl className="prl-equity-bar__readout">
-        {prepared.map((entry) => (
-          <div className="prl-equity-bar__row" key={entry.key} data-series={entry.series}>
-            <span className="prl-equity-bar__swatch prl-fill" data-series={entry.series} aria-hidden="true" />
-            <dt className="prl-equity-bar__name">{entry.label}</dt>
-            <dd className="prl-equity-bar__value">{entry.valueText}</dd>
-            {entry.detail === null ? null : <dd className="prl-equity-bar__detail">{entry.detail}</dd>}
-          </div>
-        ))}
-      </dl>
+      <Readout entries={multiway ? prepared.slice(0, 1) : prepared} />
+      {multiway ? (
+        <details className="prl-disclose prl-equity-bar__more">
+          <summary className="prl-disclose__summary">{`Other ${pluralise(prepared.length - 1, 'player')}`}</summary>
+          <Readout entries={prepared.slice(1)} />
+        </details>
+      ) : null}
     </div>
   );
 }

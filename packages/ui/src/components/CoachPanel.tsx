@@ -4,7 +4,8 @@
  * Always visible, never collapsible: the equity with its method and interval, the pot odds and
  * break-even equity, the suggestion with its confidence, the assumptions and the uncertainty note.
  * An assumption one click away is an assumption nobody reads. Detail (the EV table, outs card by card,
- * explanatory prose, derivations, teaching notes) goes in `<details>`, which works without JavaScript.
+ * explanatory prose, derivations, teaching notes, what would change the reading, every opponent's
+ * share past the second) goes in `<details>`, which works without JavaScript.
  *
  * Rules:
  * 1. The method chip is unconditional, with an `=` or `≈` glyph so it survives without colour.
@@ -31,7 +32,7 @@ import type {
   StackContext,
 } from '@prl/contracts';
 import { callIsAllIn, suggestedCandidate } from '@prl/poker-math';
-import type { ReactElement } from 'react';
+import { type ReactElement, useId } from 'react';
 import { parseCardText } from '../cards.ts';
 import { cx } from '../cx.ts';
 /**
@@ -66,6 +67,7 @@ import { UI_TIPS } from '../tips.ts';
 import { AssumptionList } from './AssumptionList.tsx';
 import { Callout } from './Callout.tsx';
 import { Chip } from './Chip.tsx';
+import { CoachJumpBar } from './CoachJumpBar.tsx';
 import { EquityBar } from './EquityBar.tsx';
 import { Formula } from './Formula.tsx';
 import { Metric } from './Metric.tsx';
@@ -275,6 +277,7 @@ function OutsSection({ outs, equity, street, opponents }: OutsSectionProps): Rea
 }
 
 interface EquitySectionProps {
+  readonly id: string;
   readonly equity: EquitySummary;
   /** Pre-formatted `± 0.35 points`, or `null` when the report carried no half-width. */
   readonly interval: string | null;
@@ -291,7 +294,7 @@ function surplusPreposition(surplus: number): 'over' | 'under' | 'at' {
   return surplus > 0 ? 'over' : 'under';
 }
 
-function EquitySection({ equity, interval, surplus }: EquitySectionProps): ReactElement {
+function EquitySection({ id, equity, interval, surplus }: EquitySectionProps): ReactElement {
   const method = METHOD_CHIP[equity.method];
   const intervalProps = interval === null ? {} : { interval };
 
@@ -305,7 +308,12 @@ function EquitySection({ equity, interval, surplus }: EquitySectionProps): React
 
   return (
     // Both tips in the head explain the share below it, so the whole section is their subject.
-    <section className="prl-coach__section prl-coach__section--equity" data-tip-subject="">
+    <section
+      id={id}
+      tabIndex={-1}
+      className="prl-coach__section prl-coach__section--equity"
+      data-tip-subject=""
+    >
       {/* Each tip shares a row with its subject, so the head keeps two items for `space-between`. */}
       <div className="prl-coach__section-head">
         <div className="prl-tip-row">
@@ -351,50 +359,55 @@ function EquitySection({ equity, interval, surplus }: EquitySectionProps): React
  * The tile names both, so the panel never shows two pot sizes that seem to contradict.
  */
 function PriceSection({
+  id,
   potOdds,
   potTotal,
   outOfReach,
 }: {
+  readonly id: string;
   readonly potOdds: PotOddsSummary;
   readonly potTotal: number;
   readonly outOfReach: CoachReport['outOfReach'];
 }): ReactElement {
   const beyondReach = potTotal - potOdds.pot;
   return (
-    <section className="prl-coach__section prl-coach__section--price">
+    <section id={id} tabIndex={-1} className="prl-coach__section prl-coach__section--price">
       <h3 className="prl-coach__section-heading">The price</h3>
 
-      {/*
-        No `countUp`. The pot, the equity and the suggested EV already announce a change, and break-even
-        moves with the price, so counting it would announce the same event a fourth time.
-      */}
-      {isProbabilityFraction(potOdds.breakEvenEquity) ? (
-        <Metric
-          label="Break-even equity"
-          tip={UI_TIPS.breakEven}
-          value={potOdds.breakEvenEquity}
-          format="percent"
-          size="md"
-          note="The share of the pot a call has to win, on average, to pay for itself."
-        />
-      ) : (
-        <RefusedFigure label="Break-even equity" what="the break-even equity" />
-      )}
+      {/* Side by side when they fit. A tile (a refusal, or nothing to call) takes the whole row. */}
+      <div className="prl-price__figures">
+        {/*
+          No `countUp`. The pot, the equity and the suggested EV already announce a change, and break-even
+          moves with the price, so counting it would announce the same event a fourth time. No note: its
+          tip and the explanation under this section already say what break-even means.
+        */}
+        {isProbabilityFraction(potOdds.breakEvenEquity) ? (
+          <Metric
+            label="Break-even equity"
+            tip={UI_TIPS.breakEven}
+            value={potOdds.breakEvenEquity}
+            format="percent"
+            size="md"
+          />
+        ) : (
+          <RefusedFigure label="Break-even equity" what="the break-even equity" />
+        )}
 
-      {/*
-        `oddsRatio` is `number | null`. A price is a `Metric` with no unit, since `formatOdds` already
-        says "to 1". With nothing to call it is a sentence in a `StatTile`. Never "0 to 1" or "null".
-      */}
-      {potOdds.oddsRatio === null ? (
-        <StatTile
-          label="Pot odds"
-          tip={UI_TIPS.potOdds}
-          value={formatOdds(potOdds.oddsRatio)}
-          note="Nothing to call, so any chance of winning is enough to see the next card."
-        />
-      ) : (
-        <Metric label="Pot odds" tip={UI_TIPS.potOdds} value={potOdds.oddsRatio} format="odds" size="sm" />
-      )}
+        {/*
+          `oddsRatio` is `number | null`. A price is a `Metric` with no unit, since `formatOdds` already
+          says "to 1". With nothing to call it is a sentence in a `StatTile`. Never "0 to 1" or "null".
+        */}
+        {potOdds.oddsRatio === null ? (
+          <StatTile
+            label="Pot odds"
+            tip={UI_TIPS.potOdds}
+            value={formatOdds(potOdds.oddsRatio)}
+            note="Nothing to call, so any chance of winning is enough to see the next card."
+          />
+        ) : (
+          <Metric label="Pot odds" tip={UI_TIPS.potOdds} value={potOdds.oddsRatio} format="odds" size="sm" />
+        )}
+      </div>
 
       <StatTile
         label="Pot and price"
@@ -567,18 +580,19 @@ function allInWords(candidate: ActionCandidate | null, words: string): string {
 }
 
 interface SuggestionBlockProps {
+  readonly id: string;
   readonly suggestion: CoachSuggestion;
   readonly candidate: ActionCandidate | null;
 }
 
-function SuggestionBlock({ suggestion, candidate }: SuggestionBlockProps): ReactElement {
+function SuggestionBlock({ id, suggestion, candidate }: SuggestionBlockProps): ReactElement {
   const changes = withKeys(suggestion.whatWouldChangeIt, 'change');
   const range = suggestion.sizeRange;
   // A bet or raise range is street totals, so "to"; a bare span reads as a raise from one figure to the other.
   const sized = range !== undefined && (suggestion.action === 'bet' || suggestion.action === 'raise');
 
   return (
-    <div className="prl-suggestion">
+    <div id={id} tabIndex={-1} className="prl-suggestion">
       <div className="prl-suggestion__head">
         {/* Never "the correct play". This wording is a product requirement. */}
         <span className="prl-suggestion__label">One reading of this spot</span>
@@ -624,14 +638,13 @@ function SuggestionBlock({ suggestion, candidate }: SuggestionBlockProps): React
       <p className="prl-suggestion__reason">{suggestion.reason}</p>
 
       {changes.length === 0 ? null : (
-        <>
-          <p className="prl-suggestion__reason">What would change this:</p>
+        <Disclose summary={`What would change this (${pluralise(changes.length, 'factor')})`}>
           <ul className="prl-suggestion__changes">
             {changes.map((entry) => (
               <li key={entry.key}>{entry.value}</li>
             ))}
           </ul>
-        </>
+        </Disclose>
       )}
 
       <p className="prl-suggestion__disclaimer">
@@ -718,6 +731,15 @@ export function CoachPanel(props: CoachPanelProps): ReactElement {
   const notes = withKeys(report.teachingNotes, 'teaching-note');
   const rule = equity.ruleOfThumb;
   const suggested = suggestedCandidate(report);
+  // Per instance, because `/legends/compare` and a review can hold more than one panel.
+  const idPrefix = `coach-${useId().replace(/[^A-Za-z0-9_-]/g, '')}`;
+  const ids = {
+    equity: `${idPrefix}-equity`,
+    price: `${idPrefix}-price`,
+    reading: `${idPrefix}-reading`,
+    depth: `${idPrefix}-depth`,
+    details: `${idPrefix}-details`,
+  };
 
   return (
     <div className={cx('prl-coach', className)}>
@@ -733,6 +755,16 @@ export function CoachPanel(props: CoachPanelProps): ReactElement {
         </p>
       </div>
 
+      <CoachJumpBar
+        items={[
+          { id: ids.equity, label: 'Equity' },
+          { id: ids.price, label: 'Price' },
+          { id: ids.reading, label: 'Reading' },
+          { id: ids.depth, label: 'Depth' },
+          { id: ids.details, label: 'Details' },
+        ]}
+      />
+
       {isSampled && halfWidth === null ? (
         <Callout tone="warning" title="This equity was sampled without an error bar">
           {intervalWasRefused
@@ -746,13 +778,23 @@ export function CoachPanel(props: CoachPanelProps): ReactElement {
         pushed the equity 1,480px down the rail (measured in Chrome).
       */}
       <div className="prl-coach__grid">
-        <EquitySection equity={equity} interval={intervalText} surplus={report.potOdds.equitySurplus} />
-        <PriceSection potOdds={report.potOdds} potTotal={report.potTotal} outOfReach={report.outOfReach} />
+        <EquitySection
+          id={ids.equity}
+          equity={equity}
+          interval={intervalText}
+          surplus={report.potOdds.equitySurplus}
+        />
+        <PriceSection
+          id={ids.price}
+          potOdds={report.potOdds}
+          potTotal={report.potTotal}
+          outOfReach={report.outOfReach}
+        />
       </div>
 
-      <SuggestionBlock suggestion={report.suggestion} candidate={suggested} />
+      <SuggestionBlock id={ids.reading} suggestion={report.suggestion} candidate={suggested} />
 
-      <div className="prl-coach__grid">
+      <div id={ids.depth} tabIndex={-1} className="prl-coach__grid">
         <OutsSection
           outs={outs}
           equity={equity}
@@ -762,7 +804,7 @@ export function CoachPanel(props: CoachPanelProps): ReactElement {
         <StackSection stack={report.stackContext} callIsAllIn={callIsAllIn(report.candidates)} />
       </div>
 
-      <div className="prl-coach__disclosures">
+      <div id={ids.details} tabIndex={-1} className="prl-coach__disclosures">
         <Disclose summary={`What each action is worth (${pluralise(report.candidates.length, 'line')})`}>
           <CandidateTable candidates={report.candidates} />
         </Disclose>

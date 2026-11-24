@@ -2749,6 +2749,38 @@ p.prl-seat__status {
   font-size: var(--prl-type-body-lg);
 }
 
+/** A quiet strip of in-page links. The rail makes it sticky (`play.css`). */
+.prl-coach__jump-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--prl-space-1) var(--prl-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prl-coach__jump-list > li {
+  margin: 0;
+}
+
+.prl-coach__jump-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--prl-space-9);
+  padding: var(--prl-space-2) var(--prl-space-3);
+  border-radius: var(--prl-radius-1);
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-medium);
+  letter-spacing: var(--prl-tracking-label);
+  text-decoration: none;
+}
+
+.prl-coach__jump-link:hover {
+  color: var(--prl-accent-text);
+  background-color: var(--prl-surface-hover);
+}
+
 /** A smaller minimum gives more, narrower tracks. 15rem was too narrow for a 95% interval figure. */
 /** `min(100%, …)`, or a 19rem floor scrolls a 360px page sideways (auto-fit-tracks.test.ts). */
 .prl-coach__grid {
@@ -3212,6 +3244,11 @@ td.prl-candidates__ev,
   white-space: nowrap;
 }
 
+/** The opponents past the first, one toggle under hero's row. */
+.prl-equity-bar__more > .prl-equity-bar__readout {
+  padding-block-end: var(--prl-space-3);
+}
+
 /* StatTile */
 
 .prl-stat {
@@ -3270,6 +3307,18 @@ td.prl-candidates__ev,
 
 .prl-stat[data-tone="negative"] .prl-stat__value {
   color: var(--prl-adverse);
+}
+
+/** Break-even and pot odds side by side once each has 8rem. */
+.prl-price__figures {
+  display: grid;
+  gap: var(--prl-space-4);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--prl-space-15)), 1fr));
+}
+
+/** A tile carries a sentence (a refusal, or nothing to call), which a half track would squeeze. */
+.prl-price__figures > .prl-stat {
+  grid-column: 1 / -1;
 }
 
 /* Callout */
