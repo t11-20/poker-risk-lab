@@ -200,6 +200,9 @@
   place-items: center;
   /* A height from the width, not `aspect-ratio`, which with a min-height widened 360px to 718px. */
   min-block-size: clamp(16rem, 42vw, 26rem);
+  /* The default `auto` minimum is the padding sum plus the longest word, which at 320px,
+     200% text and 1.4.12 spacing is 302px and runs 14px past the screen. */
+  min-inline-size: 0;
   /* Clears the seat discs on the rail, so no word runs under one. */
   padding-block: calc(var(--prl-idle-felt-block) + var(--prl-idle-seat-reach) + var(--prl-space-3));
   padding-inline: calc(var(--prl-idle-felt-inline) + var(--prl-space-7));
@@ -284,6 +287,9 @@
   display: grid;
   gap: var(--prl-space-3);
   max-width: 34ch;
+  min-inline-size: 0;
+  /* The line's minimum is its longest word, 142px here. At `auto` that line is
+     start-aligned and runs toward the side seat; zero lets it centre in the felt. */
   color: var(--prl-felt-ink-muted);
   text-align: center;
 }

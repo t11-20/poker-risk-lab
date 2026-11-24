@@ -4,7 +4,9 @@
  * The guided tour: five steps from picking a scenario to reviewing a hand, each with a "Show me" that
  * outlines its `[data-tour]` target, going to its page first if need be. A panel in the page's flow
  * under the header, not an overlay: it covers nothing, traps nothing, and a page under test on a fresh
- * profile stays usable with it open. Escape closes it for now and focus goes back to "How to use".
+ * profile stays usable with it open. On a narrow screen a first visit shows the title and "Show steps"
+ * instead of all five, which measured 462px at 390px. Escape closes it for now and focus goes back
+ * to "How to use".
  *
  * It renders nothing until the effect has read storage, as `Onboarding` does, so the server render and
  * every return visit are the page alone. State lives in `tourStore` (`lib/tour.ts`) so the header's
@@ -19,13 +21,16 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   useEffect,
   useRef,
+  useState,
   useSyncExternalStore,
 } from 'react';
 import {
   closeTour,
+  firstVisitIsCompact,
   INITIAL_TOUR_STATE,
   opensByItself,
   readTourDismissal,
+  TOUR_COMPACT_QUERY,
   TOUR_STEPS,
   type TourStep,
   tourStep,
@@ -37,6 +42,12 @@ const SHOWING_ATTRIBUTE = 'data-tour-showing';
 
 const storage = (): Storage => window.localStorage;
 
+function subscribeNarrow(onChange: () => void): () => void {
+  const media = window.matchMedia(TOUR_COMPACT_QUERY);
+  media.addEventListener('change', onChange);
+  return () => media.removeEventListener('change', onChange);
+}
+
 /** The visible "How to use" button: the header's above 860px, else the Menu trigger it lives behind. */
 function focusReturnTarget(): HTMLElement | null {
   const openers = Array.from(document.querySelectorAll<HTMLElement>('[data-tour-opener]'));
@@ -46,6 +57,13 @@ function focusReturnTarget(): HTMLElement | null {
 
 export function GuidedTour(): ReactElement | null {
   const state = useSyncExternalStore(tourStore.subscribe, tourStore.getSnapshot, () => INITIAL_TOUR_STATE);
+  const narrow = useSyncExternalStore(
+    subscribeNarrow,
+    () => window.matchMedia(TOUR_COMPACT_QUERY).matches,
+    () => false,
+  );
+  const compact = firstVisitIsCompact(state.opener, narrow);
+  const [stepsOpen, setStepsOpen] = useState(false);
   const pathname = usePathname();
   const router = useRouter();
   const panelRef = useRef<HTMLElement | null>(null);
@@ -66,6 +84,11 @@ export function GuidedTour(): ReactElement | null {
     if (state.focusRequest === 0 || !state.open) return;
     panelRef.current?.focus();
   }, [state.focusRequest, state.open]);
+
+  useEffect(() => {
+    if (state.open) return;
+    setStepsOpen(false);
+  }, [state.open]);
 
   const { open, step, awaiting, shown } = state;
   useEffect(() => {
@@ -144,6 +167,35 @@ export function GuidedTour(): ReactElement | null {
         ? `Showing: ${current.title}.`
         : current.missing;
   const skipping = state.opener === 'first-visit';
+  const shownSteps = compact && !stepsOpen ? [] : TOUR_STEPS;
+
+  const stepList = (
+    <ol className="prl-tour__steps">
+      {shownSteps.map((entry) => {
+        const index = TOUR_STEPS.indexOf(entry);
+        const showing = state.step === entry.id;
+        return (
+          <li className="prl-tour__step" data-showing={showing ? 'true' : undefined} key={entry.id}>
+            <span aria-hidden="true" className="prl-tour__index">
+              {formatIndex(index + 1)}
+            </span>
+            <span className="prl-tour__step-title">{entry.title}</span>
+            {/* The link runs on after the sentence, so a step is two lines on a phone, not three. */}
+            <span className="prl-tour__step-text">
+              {`${entry.text} `}
+              <button className="prl-tour__show" onClick={() => showMe(entry)} type="button">
+                Show me
+                <span className="prl-visually-hidden">{`: ${entry.title}`}</span>
+              </button>
+            </span>
+            {showing && state.found === 'missing' ? (
+              <span className="prl-tour__missing">{entry.missing}</span>
+            ) : null}
+          </li>
+        );
+      })}
+    </ol>
+  );
 
   return (
     // A named region rather than a heading, so no heading comes before the page's own `h1`.
@@ -165,30 +217,17 @@ export function GuidedTour(): ReactElement | null {
           <span className="prl-visually-hidden"> the guide</span>
         </button>
       </div>
-      <ol className="prl-tour__steps">
-        {TOUR_STEPS.map((entry, index) => {
-          const showing = state.step === entry.id;
-          return (
-            <li className="prl-tour__step" data-showing={showing ? 'true' : undefined} key={entry.id}>
-              <span aria-hidden="true" className="prl-tour__index">
-                {formatIndex(index + 1)}
-              </span>
-              <span className="prl-tour__step-title">{entry.title}</span>
-              {/* The link runs on after the sentence, so a step is two lines on a phone, not three. */}
-              <span className="prl-tour__step-text">
-                {`${entry.text} `}
-                <button className="prl-tour__show" onClick={() => showMe(entry)} type="button">
-                  Show me
-                  <span className="prl-visually-hidden">{`: ${entry.title}`}</span>
-                </button>
-              </span>
-              {showing && state.found === 'missing' ? (
-                <span className="prl-tour__missing">{entry.missing}</span>
-              ) : null}
-            </li>
-          );
-        })}
-      </ol>
+      {compact ? (
+        <button
+          aria-expanded={stepsOpen}
+          className="prl-tour__reveal"
+          onClick={() => setStepsOpen((open) => !open)}
+          type="button"
+        >
+          {stepsOpen ? 'Hide steps' : 'Show steps'}
+        </button>
+      ) : null}
+      {shownSteps.length > 0 ? stepList : null}
       <p className="prl-visually-hidden" role="status">
         {status}
       </p>
