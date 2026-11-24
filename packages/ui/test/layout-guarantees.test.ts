@@ -213,6 +213,22 @@ describe('nothing can hide content until JavaScript arrives', () => {
   });
 });
 
+/**
+ * A declaration of a token this design removed. The numbered ramp is `--prl-accent-300` through
+ * `--prl-accent-600` only, so `--prl-accent-fill` and `--prl-accent-text` are not in it.
+ */
+const REMOVED_TOKEN_DECLARATION = new RegExp(
+  '(--prl-(?:glass|elevation|page-wash|edge|veil|info|line-accent)\\b[\\w-]*' +
+    '|--prl-accent-(?:300|400|500|600)\\b[\\w-]*)\\s*:',
+  'gu',
+);
+
+/** Comments go first, so a removed name mentioned in prose is not a declaration. */
+function removedTokenDeclarations(css: string): readonly string[] {
+  const code = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  return [...code.matchAll(REMOVED_TOKEN_DECLARATION)].map((match) => match[1] ?? '');
+}
+
 /** Every declaration block, as `{ selector, body }`, comments stripped, for checks over any rule. */
 function allBlocks(css: string): readonly { selector: string; body: string }[] {
   const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, '');
@@ -226,7 +242,7 @@ function allBlocks(css: string): readonly { selector: string; body: string }[] {
   return out;
 }
 
-/** Every component and route stylesheet. tokens.css is not one: it keeps the removed names as aliases. */
+/** Every component and route stylesheet. tokens.css holds declarations, not rules, and is checked on its own. */
 const ROUTE_STYLE_DIR = new URL('../../../apps/web/src/styles/', import.meta.url);
 const STYLESHEETS: readonly (readonly [string, string])[] = [
   ['packages/ui components.css', componentsCss],
@@ -379,6 +395,38 @@ describe('the design system rules that are stated in prose and checked nowhere',
       }
     }
     assert.ok(blocks > 500, `only ${blocks} blocks were read, so the scan missed stylesheets`);
+  });
+
+  it('declares no glass, wash, elevation, info, line-accent or accent-ramp token', () => {
+    const tokens = readFileSync(new URL('../src/styles/tokens.css', import.meta.url), 'utf8');
+    assert.match(tokens, /--prl-surface-page\s*:/u, 'tokens.css was not read');
+    assert.deepEqual(removedTokenDeclarations(tokens), [], 'tokens.css declares a token this design removed');
+  });
+
+  it('still allows a live accent token, and a removed name that is only a comment (NEGATIVE CONTROL)', () => {
+    const live =
+      ':root { --prl-accent-fill: #2f7a55; --prl-accent-text: #86cba5; --prl-accent-edge: #5ea886; }';
+    assert.deepEqual(removedTokenDeclarations(live), []);
+    const comment = ':root { /* --prl-elevation-1: 0 1px 2px; */ --prl-surface-page: #161412; }';
+    assert.deepEqual(removedTokenDeclarations(comment), []);
+    assert.deepEqual(removedTokenDeclarations(':root { --prl-accent-400: red; }'), ['--prl-accent-400']);
+    const declared = [
+      '--prl-glass',
+      '--prl-elevation-1',
+      '--prl-page-wash',
+      '--prl-edge',
+      '--prl-veil',
+      '--prl-info',
+      '--prl-line-accent',
+      '--prl-accent-300',
+      '--prl-accent-400',
+      '--prl-accent-500',
+      '--prl-accent-600',
+    ];
+    assert.deepEqual(
+      removedTokenDeclarations(`:root { ${declared.map((name) => `${name}: red`).join('; ')}; }`),
+      declared,
+    );
   });
 
   it('ticks every native radio and checkbox in the accent', () => {

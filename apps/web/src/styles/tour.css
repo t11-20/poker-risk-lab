@@ -172,6 +172,22 @@
   line-height: var(--prl-leading-snug);
 }
 
+/** The short first-visit head. A 44px target, the same floor as the other controls. */
+.prl-tour__reveal {
+  justify-self: start;
+  min-height: var(--prl-target-min);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--prl-accent-text);
+  font-size: var(--prl-type-body-sm);
+  font-weight: var(--prl-weight-medium);
+  text-align: start;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+  cursor: pointer;
+}
+
 /* The outline on the part being shown. One rule per step, keyed on an attribute of the root. */
 
 :root[data-tour-showing="pick-scenario"] [data-tour="pick-scenario"],

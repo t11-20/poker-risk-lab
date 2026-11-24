@@ -166,11 +166,8 @@ scrolled under them never reads through. `packages/ui/test/layout-guarantees.tes
 `box-shadow` that is not `var(--prl-focus-ring)` on a focus rule, and any `backdrop-filter`, glass,
 wash, edge, veil or elevation token, in any rule, the table's included.
 
-`.prl-material--*` and `.prl-panel--*` keep their names, because components choose a surface by
-role; their rules are now flat. The 4.0 edge and veil tokens are gone, with the navy table and the
-old card tokens, now that the table is flat too. The elevation tokens, and the glass, wash, `info`
-and numbered accent tokens (inert aliases to opaque surfaces), survive only until the parallel
-branches that may still read them merge; delete them then.
+Panel surfaces are `.prl-panel` and `.prl-panel--inset`. The 4.0 edge and
+veil tokens are gone, with the navy table and the old card tokens, now that the table is flat too.
 
 **Removed, and why.** The 4.0 system built depth from translucent "glass" panes over a tinted page
 wash, a five-level elevation ladder of double shadows, lit top hairlines, gradient sheens on
@@ -182,7 +179,7 @@ every tint, a halo beside every shadow, the wash composited into every contrast 
 | --- | --- | --- |
 | `tokens.css`, `base.css` body | `--prl-page-wash` radial gradients on the page | flat `--prl-surface-page` |
 | `globals.css` `.prl-app::before` | fixed four-gradient backdrop field | removed |
-| every `.prl-material--*`, `.prl-panel--floating/--overlay`, header, pills, Coach sheet, replay transport, learn rail and quiz pill, action bar, secondary and danger buttons | glass tint plus `backdrop-filter` | opaque surface token |
+| header, pills, Coach sheet, replay transport, learn rail and quiz pill, action bar, secondary and danger buttons | glass tint plus `backdrop-filter` | opaque surface token |
 | 81 `box-shadow` declarations in 78 rules across `components.css` and the route sheets | `--prl-elevation-1..4` shadows, and the `--_ring` mechanism that kept the halo beside them | none; base.css's halo is the only shadow |
 | 38 rules | lit top / shaded bottom edge (`--prl-edge-lit/-shade`) | one `--prl-line` hairline |
 | `.prl-btn--primary`, `.prl-range` thumb, `.prl-play .prl-action-btn--primary` | gradient sheen | one flat fill, darker on hover |

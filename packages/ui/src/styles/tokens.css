@@ -87,30 +87,6 @@
   --prl-focus-ring: 0 0 0 calc(var(--prl-focus-offset) + var(--prl-focus-width) + var(--prl-focus-halo-width))
     var(--prl-focus-halo);
 
-  /* Read by no rule here, and banned in rules (layout-guarantees.test.ts). Kept because two branches
-     in flight add reads of 1 and 2; delete once they merge. */
-  --prl-elevation-0: none;
-  --prl-elevation-1: 0 1px 2px rgb(0 0 0 / 24%), 0 2px 8px rgb(0 0 0 / 18%);
-  --prl-elevation-2: 0 2px 6px rgb(0 0 0 / 28%), 0 10px 24px rgb(0 0 0 / 26%);
-  --prl-elevation-3: 0 4px 12px rgb(0 0 0 / 32%), 0 20px 48px rgb(0 0 0 / 36%);
-  --prl-elevation-4: 0 8px 24px rgb(0 0 0 / 36%), 0 36px 80px rgb(0 0 0 / 48%);
-
-  /* DEPRECATED ALIASES. Inert, kept only so parallel branches still resolve. Delete once they merge. */
-  --prl-info: var(--prl-text-secondary);
-  --prl-line-accent: var(--prl-accent-edge);
-  --prl-accent-300: var(--prl-focus-color);
-  --prl-accent-400: var(--prl-accent-text);
-  --prl-accent-500: var(--prl-accent-fill);
-  --prl-accent-600: var(--prl-accent-fill-hover);
-  --prl-glass-floating: var(--prl-surface-raised);
-  --prl-glass-floating-hover: var(--prl-surface-hover);
-  --prl-glass-floating-active: var(--prl-surface-active);
-  --prl-glass-overlay: var(--prl-surface-panel);
-  --prl-glass-overlay-hover: var(--prl-surface-hover);
-  --prl-glass-filter: none;
-  --prl-glass-filter-strong: none;
-  --prl-page-wash: none;
-
   /* TYPOGRAPHY. Archivo is self-hosted. Supply-chain policy forbids remote assets and the CSP has no font host. */
   --prl-font-sans:
     "Archivo Variable", "Inter var", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text",
@@ -306,11 +282,6 @@
 
     --prl-focus-color: #174a33;
     --prl-focus-halo: #ffffff;
-
-    --prl-elevation-1: 0 1px 2px rgb(22 27 51 / 6%), 0 2px 8px rgb(22 27 51 / 5%);
-    --prl-elevation-2: 0 2px 6px rgb(22 27 51 / 8%), 0 10px 24px rgb(22 27 51 / 8%);
-    --prl-elevation-3: 0 4px 12px rgb(22 27 51 / 10%), 0 20px 48px rgb(22 27 51 / 12%);
-    --prl-elevation-4: 0 8px 24px rgb(22 27 51 / 12%), 0 36px 80px rgb(22 27 51 / 16%);
   }
 }
 
@@ -358,11 +329,6 @@
 
   --prl-focus-color: #174a33;
   --prl-focus-halo: #ffffff;
-
-  --prl-elevation-1: 0 1px 2px rgb(22 27 51 / 6%), 0 2px 8px rgb(22 27 51 / 5%);
-  --prl-elevation-2: 0 2px 6px rgb(22 27 51 / 8%), 0 10px 24px rgb(22 27 51 / 8%);
-  --prl-elevation-3: 0 4px 12px rgb(22 27 51 / 10%), 0 20px 48px rgb(22 27 51 / 12%);
-  --prl-elevation-4: 0 8px 24px rgb(22 27 51 / 12%), 0 36px 80px rgb(22 27 51 / 16%);
 }
 
 :root[data-theme="dark"] {

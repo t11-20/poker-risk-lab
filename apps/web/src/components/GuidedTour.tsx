@@ -4,7 +4,10 @@
  * The guided tour: five steps from picking a scenario to reviewing a hand, each with a "Show me" that
  * outlines its `[data-tour]` target, going to its page first if need be. A panel in the page's flow
  * under the header, not an overlay: it covers nothing, traps nothing, and a page under test on a fresh
- * profile stays usable with it open. Escape closes it for now and focus goes back to "How to use".
+ * profile stays usable with it open. A narrow first visit opens on the title and "Show steps": the
+ * five steps measured 462px at 390px. That choice is fixed until the guide closes, so rotating the
+ * phone cannot unmount the control that has focus. Escape closes it for now and focus goes back
+ * to "How to use".
  *
  * It renders nothing until the effect has read storage, as `Onboarding` does, so the server render and
  * every return visit are the page alone. State lives in `tourStore` (`lib/tour.ts`) so the header's
@@ -26,6 +29,7 @@ import {
   INITIAL_TOUR_STATE,
   opensByItself,
   readTourDismissal,
+  TOUR_COMPACT_QUERY,
   TOUR_STEPS,
   type TourStep,
   tourStep,
@@ -58,7 +62,10 @@ export function GuidedTour(): ReactElement | null {
     seenPath.current = pathname;
     const { settled } = tourStore.getSnapshot();
     if (opensByItself(pathname, readTourDismissal(storage), settled, window.location.hash !== '')) {
-      tourStore.dispatch({ type: 'open-first-visit' });
+      tourStore.dispatch({
+        type: 'open-first-visit',
+        narrow: window.matchMedia(TOUR_COMPACT_QUERY).matches,
+      });
     }
   }, [pathname]);
 
@@ -144,6 +151,36 @@ export function GuidedTour(): ReactElement | null {
         ? `Showing: ${current.title}.`
         : current.missing;
   const skipping = state.opener === 'first-visit';
+  const { compact, stepsExpanded } = state;
+  const shownSteps = compact && !stepsExpanded ? [] : TOUR_STEPS;
+
+  const stepList = (
+    <ol className="prl-tour__steps">
+      {shownSteps.map((entry) => {
+        const index = TOUR_STEPS.indexOf(entry);
+        const showing = state.step === entry.id;
+        return (
+          <li className="prl-tour__step" data-showing={showing ? 'true' : undefined} key={entry.id}>
+            <span aria-hidden="true" className="prl-tour__index">
+              {formatIndex(index + 1)}
+            </span>
+            <span className="prl-tour__step-title">{entry.title}</span>
+            {/* The link runs on after the sentence, so a step is two lines on a phone, not three. */}
+            <span className="prl-tour__step-text">
+              {`${entry.text} `}
+              <button className="prl-tour__show" onClick={() => showMe(entry)} type="button">
+                Show me
+                <span className="prl-visually-hidden">{`: ${entry.title}`}</span>
+              </button>
+            </span>
+            {showing && state.found === 'missing' ? (
+              <span className="prl-tour__missing">{entry.missing}</span>
+            ) : null}
+          </li>
+        );
+      })}
+    </ol>
+  );
 
   return (
     // A named region rather than a heading, so no heading comes before the page's own `h1`.
@@ -165,30 +202,17 @@ export function GuidedTour(): ReactElement | null {
           <span className="prl-visually-hidden"> the guide</span>
         </button>
       </div>
-      <ol className="prl-tour__steps">
-        {TOUR_STEPS.map((entry, index) => {
-          const showing = state.step === entry.id;
-          return (
-            <li className="prl-tour__step" data-showing={showing ? 'true' : undefined} key={entry.id}>
-              <span aria-hidden="true" className="prl-tour__index">
-                {formatIndex(index + 1)}
-              </span>
-              <span className="prl-tour__step-title">{entry.title}</span>
-              {/* The link runs on after the sentence, so a step is two lines on a phone, not three. */}
-              <span className="prl-tour__step-text">
-                {`${entry.text} `}
-                <button className="prl-tour__show" onClick={() => showMe(entry)} type="button">
-                  Show me
-                  <span className="prl-visually-hidden">{`: ${entry.title}`}</span>
-                </button>
-              </span>
-              {showing && state.found === 'missing' ? (
-                <span className="prl-tour__missing">{entry.missing}</span>
-              ) : null}
-            </li>
-          );
-        })}
-      </ol>
+      {compact ? (
+        <button
+          aria-expanded={stepsExpanded}
+          className="prl-tour__reveal"
+          onClick={() => tourStore.dispatch({ type: 'set-steps-expanded', expanded: !stepsExpanded })}
+          type="button"
+        >
+          {stepsExpanded ? 'Hide steps' : 'Show steps'}
+        </button>
+      ) : null}
+      {shownSteps.length > 0 ? stepList : null}
       <p className="prl-visually-hidden" role="status">
         {status}
       </p>

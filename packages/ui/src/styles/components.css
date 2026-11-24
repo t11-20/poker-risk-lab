@@ -318,66 +318,6 @@
   grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--prl-space-15)), 1fr));
 }
 
-/* Surfaces. Flat: a level is a fill and a hairline, never a shadow, a blur or a tint over a backdrop.
-   The class names stay because components choose a level by role. */
-
-/** A border, not an inset shadow, so it survives forced colors. */
-.prl-material {
-  border: 1px solid var(--prl-line);
-  border-radius: var(--prl-radius-2);
-  transition:
-    background-color var(--prl-dur-fast) var(--prl-ease-material),
-    border-color var(--prl-dur-fast) var(--prl-ease-material);
-}
-
-/** Rows that belong together. */
-.prl-material--grouped {
-  background-color: var(--prl-surface-raised);
-}
-
-/** Where body text lives. */
-.prl-material--raised {
-  background-color: var(--prl-surface-panel);
-}
-
-/** Chrome that travels over the content: toolbars, chips, the transport row. */
-.prl-material--floating {
-  border-color: var(--prl-line-strong);
-  border-radius: var(--prl-radius-3);
-  background-color: var(--prl-surface-raised);
-}
-
-/**
- * Popovers, menus, sheets and dialogs sit over content with no shadow to lift them, so their edge is
- * `--prl-line-strong`, which clears 3:1 against any surface (WCAG 1.4.11).
- */
-.prl-material--overlay,
-.prl-material--modal {
-  border-color: var(--prl-line-strong);
-  border-radius: var(--prl-radius-3);
-  background-color: var(--prl-surface-panel);
-}
-
-.prl-material--floating.prl-material--interactive:hover,
-.prl-material--overlay.prl-material--interactive:hover {
-  background-color: var(--prl-surface-hover);
-}
-
-.prl-material--floating.prl-material--interactive:active {
-  background-color: var(--prl-surface-active);
-}
-
-/** Swaps tokens instead of fading, because `opacity` takes a 4.5:1 label towards 2:1. */
-.prl-material--floating:disabled,
-.prl-material--floating[aria-disabled="true"],
-.prl-material--overlay:disabled,
-.prl-material--overlay[aria-disabled="true"] {
-  border-color: var(--prl-line-subtle);
-  background-color: var(--prl-surface-raised);
-  color: var(--prl-text-disabled);
-  cursor: not-allowed;
-}
-
 /* Panel. Where prose and tables live. */
 
 .prl-panel {
@@ -392,24 +332,6 @@
 
 .prl-panel--inset {
   background-color: var(--prl-surface-inset);
-}
-
-/** No surface, so no edge either. */
-.prl-panel--quiet {
-  border-color: transparent;
-  background-color: transparent;
-}
-
-/** For a panel that travels over content (a sticky summary). Opaque, so nothing reads through. */
-.prl-panel--floating {
-  border-color: var(--prl-line-strong);
-  background-color: var(--prl-surface-raised);
-}
-
-/** Over content with no shadow to lift it, so its edge is `--prl-line-strong`. */
-.prl-panel--overlay {
-  border-color: var(--prl-line-strong);
-  background-color: var(--prl-surface-panel);
 }
 
 /** Matches what `Panel.tsx` emits, or every panel header renders unstyled. */
@@ -1632,6 +1554,18 @@ p.prl-seat__status {
   background-color: var(--prl-surface-inset);
   color: var(--prl-text-secondary);
   font-size: var(--prl-type-body);
+}
+
+/**
+ * The name is an h2, under the page's one h1. The default h2 is a display size and would rival
+ * that title inside a box that only holds a sentence, so it takes the panel-title size instead.
+ */
+.prl-empty > h2 {
+  margin: 0;
+  font-size: var(--prl-type-heading);
+  font-weight: var(--prl-weight-semibold);
+  letter-spacing: var(--prl-tracking-display-3);
+  line-height: var(--prl-leading-snug);
 }
 
 /** The markup also carries the word "error" and a glyph, so it survives forced colors. */

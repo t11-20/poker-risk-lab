@@ -18,6 +18,7 @@ import {
   type RecordFigureName,
 } from '@/lib/record-data.ts';
 import { type RecordEntry, recordLists } from '@/lib/record-links.ts';
+import { recordPanelNumbers } from '@/lib/record-panels.ts';
 import { readerCallOptions } from '@/lib/server-session.ts';
 import { AccountDeletion } from './DeleteAccount.tsx';
 import { UnitsReset } from './UnitsReset.tsx';
@@ -55,10 +56,10 @@ function RecordList({
   );
 }
 
-/** Shown whatever state the figures are in. */
-function ResetPanel(): ReactElement {
+/** Shown in every state. Its number is the page's, because it is 01 when it is the only panel. */
+function ResetPanel({ index }: { readonly index: number }): ReactElement {
   return (
-    <Panel title="Reset your units" eyebrow="Always available" index={2} headingLevel={2}>
+    <Panel title="Reset your units" eyebrow="Always available" index={index} headingLevel={2}>
       <p className="prl-prose">
         Units are free practice counters with no value of any kind: they cannot be bought, transferred,
         redeemed or cashed out. Resetting them puts your balance back to the starting amount and puts every
@@ -77,7 +78,10 @@ function ResetPanel(): ReactElement {
 
 export default async function RecordPage(): Promise<ReactElement> {
   const record = await loadRecord(await readerCallOptions());
+  const numbers = recordPanelNumbers(record.state);
   const lists = record.state === 'ready' ? recordLists(record.progress) : null;
+  const resetIndex = numbers.reset;
+  const deletionIndex = numbers.deletion;
 
   return (
     <div className="prl-container prl-record">
@@ -93,13 +97,16 @@ export default async function RecordPage(): Promise<ReactElement> {
       </header>
 
       {record.state === 'signedOut' ? (
-        <Callout tone="insight" title="This browser has no record yet">
-          A record belongs to one learner, and this browser has not started one — so there is nothing to show
-          you here, and an empty page would look like a record of having done nothing, which is a different
-          claim. Opening a table starts a guest session straight away, with no email and no password, and
-          everything you do from then on is counted here. <Link href="/play">Open a table</Link>, or{' '}
-          <Link href={LEARN_PATH}>start reading</Link>.
-        </Callout>
+        <div className="prl-empty">
+          <h2>This browser has no record yet</h2>
+          <p>
+            A record belongs to one learner, and this browser has not started one — so there is nothing to
+            show you here, and an empty page would look like a record of having done nothing, which is a
+            different claim. Opening a table starts a guest session straight away, with no email and no
+            password, and everything you do from then on is counted here.{' '}
+            <Link href="/play">Open a table</Link>, or <Link href={LEARN_PATH}>start reading</Link>.
+          </p>
+        </div>
       ) : null}
 
       {record.state === 'unavailable' ? (
@@ -108,8 +115,13 @@ export default async function RecordPage(): Promise<ReactElement> {
         </Callout>
       ) : null}
 
-      {record.state === 'ready' ? (
-        <Panel title="What you have covered" eyebrow="Counted, not scored" index={1} headingLevel={2}>
+      {record.state === 'ready' && numbers.covered !== null ? (
+        <Panel
+          title="What you have covered"
+          eyebrow="Counted, not scored"
+          index={numbers.covered}
+          headingLevel={2}
+        >
           <div className="prl-metric-row prl-record__figures">
             {RECORD_FIGURES.map((name) => (
               <Metric
@@ -155,13 +167,13 @@ export default async function RecordPage(): Promise<ReactElement> {
         </Panel>
       ) : null}
 
-      <ResetPanel />
+      <ResetPanel index={resetIndex} />
 
       {/*
         Last, below the reset, so a reader looking for one does not hit the other. Rendered
         unconditionally and kept in this slot, so its receipt survives the refresh after deletion.
       */}
-      <AccountDeletion deletable={record.state !== 'signedOut'} />
+      <AccountDeletion deletable={record.state !== 'signedOut'} index={deletionIndex} />
 
       <p className="prl-page-nav">
         <Link href={LEARN_PATH}>Back to the curriculum</Link>

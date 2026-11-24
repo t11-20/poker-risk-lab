@@ -78,7 +78,7 @@ describe('it opens by itself on the Lab, at most once a page load', () => {
     for (const how of ['button', 'escape'] as const) {
       const storage = memoryStorage();
       const store = createTourStore();
-      store.dispatch({ type: 'open-first-visit' });
+      store.dispatch({ type: 'open-first-visit', narrow: false });
       closeTour(store, storage, how);
       assert.equal(store.getSnapshot().open, false, `${how} closes it`);
       assert.equal(storage.data.has(TOUR_DISMISSED_KEY), how === 'button', `${how} and the key`);
@@ -88,10 +88,10 @@ describe('it opens by itself on the Lab, at most once a page load', () => {
   });
 
   it('opens at most once in a page load, even when the skip could not be stored', () => {
-    const skipped = run([{ type: 'open-first-visit' }, { type: 'close' }]);
+    const skipped = run([{ type: 'open-first-visit', narrow: false }, { type: 'close' }]);
     assert.equal(skipped.open, false);
     assert.equal(opensByItself('/lab', 'not-dismissed', skipped.settled), false);
-    assert.equal(run([{ type: 'open-first-visit' }], skipped).open, false);
+    assert.equal(run([{ type: 'open-first-visit', narrow: false }], skipped).open, false);
   });
 
   it('does not open by itself over a link to a fragment, which it would push off a phone screen', () => {
@@ -99,11 +99,14 @@ describe('it opens by itself on the Lab, at most once a page load', () => {
   });
 
   it('closes, unanswered, when the reader leaves the Lab without using it', () => {
-    const left = run([{ type: 'open-first-visit' }, { type: 'navigated', pathname: '/play' }]);
+    const left = run([
+      { type: 'open-first-visit', narrow: false },
+      { type: 'navigated', pathname: '/play' },
+    ]);
     assert.equal(left.open, false);
     assert.equal(left.settled, true);
     const used = run([
-      { type: 'open-first-visit' },
+      { type: 'open-first-visit', narrow: false },
       { type: 'show', step: 'pick-scenario', awaiting: null },
       { type: 'navigated', pathname: '/play' },
     ]);
@@ -112,8 +115,71 @@ describe('it opens by itself on the Lab, at most once a page load', () => {
     assert.equal(asked.open, true);
   });
 
+  it('a narrow first visit opens compact with the steps hidden, and showing them reveals them', () => {
+    const opened = run([{ type: 'open-first-visit', narrow: true }]);
+    assert.equal(opened.open, true);
+    assert.equal(opened.compact, true);
+    assert.equal(opened.stepsExpanded, false);
+    const revealed = tourReducer(opened, { type: 'set-steps-expanded', expanded: true });
+    assert.equal(revealed.compact, true);
+    assert.equal(revealed.stepsExpanded, true);
+    const hidden = tourReducer(revealed, { type: 'set-steps-expanded', expanded: false });
+    assert.equal(hidden.compact, true);
+    assert.equal(hidden.stepsExpanded, false);
+  });
+
+  it('a wide first visit, and one opened from "How to use", are not compact', () => {
+    assert.equal(run([{ type: 'open-first-visit', narrow: false }]).compact, false);
+    assert.equal(run([{ type: 'open-from-button' }]).compact, false);
+    const reopened = run([
+      { type: 'open-first-visit', narrow: true },
+      { type: 'close' },
+      { type: 'open-from-button' },
+    ]);
+    assert.equal(reopened.compact, false);
+    assert.equal(reopened.stepsExpanded, false);
+  });
+
+  it('close resets compactness and whether the steps were expanded', () => {
+    const closed = run([
+      { type: 'open-first-visit', narrow: true },
+      { type: 'set-steps-expanded', expanded: true },
+      { type: 'close' },
+    ]);
+    assert.equal(closed.open, false);
+    assert.equal(closed.compact, false);
+    assert.equal(closed.stepsExpanded, false);
+  });
+
+  it('no action changes compactness while the guide stays open', () => {
+    const opened = run([
+      { type: 'open-first-visit', narrow: true },
+      { type: 'show', step: 'pick-scenario', awaiting: null },
+    ]);
+    assert.equal(opened.compact, true);
+    const step = 'pick-scenario' as const;
+    // One of every action. `close` is the reset, covered above, so it is not a change while open.
+    const samples = {
+      'open-first-visit': { type: 'open-first-visit', narrow: false },
+      'open-from-button': { type: 'open-from-button' },
+      close: { type: 'close' },
+      'set-steps-expanded': { type: 'set-steps-expanded', expanded: true },
+      show: { type: 'show', step, awaiting: '/review' },
+      found: { type: 'found', step },
+      missing: { type: 'missing', step },
+      navigated: { type: 'navigated', pathname: '/play' },
+    } as const satisfies Record<TourAction['type'], TourAction>;
+    const staying = Object.values(samples).filter((action) => action.type !== 'close');
+    assert.equal(staying.length, Object.keys(samples).length - 1, 'an action was dropped from the check');
+    for (const action of staying) {
+      const next = tourReducer(opened, action);
+      assert.equal(next.open, true, action.type);
+      assert.equal(next.compact, opened.compact, action.type);
+    }
+  });
+
   it('does not take focus when it opens by itself', () => {
-    const opened = run([{ type: 'open-first-visit' }]);
+    const opened = run([{ type: 'open-first-visit', narrow: false }]);
     assert.equal(opened.open, true);
     assert.equal(opened.focusRequest, 0);
     assert.equal(opened.opener, 'first-visit');
@@ -144,7 +210,11 @@ describe('a storage that throws', () => {
 
 describe('skip, reopen and show', () => {
   it('reopens from "How to use" after a skip, takes focus, and offers Close rather than Skip', () => {
-    const reopened = run([{ type: 'open-first-visit' }, { type: 'close' }, { type: 'open-from-button' }]);
+    const reopened = run([
+      { type: 'open-first-visit', narrow: false },
+      { type: 'close' },
+      { type: 'open-from-button' },
+    ]);
     assert.equal(reopened.open, true);
     assert.equal(reopened.opener, 'button');
     assert.equal(reopened.focusRequest, 1);
@@ -181,8 +251,8 @@ describe('skip, reopen and show', () => {
     const unsubscribe = store.subscribe(() => {
       calls += 1;
     });
-    store.dispatch({ type: 'open-first-visit' });
-    store.dispatch({ type: 'open-first-visit' });
+    store.dispatch({ type: 'open-first-visit', narrow: false });
+    store.dispatch({ type: 'open-first-visit', narrow: false });
     unsubscribe();
     store.dispatch({ type: 'close' });
     assert.equal(calls, 1);
