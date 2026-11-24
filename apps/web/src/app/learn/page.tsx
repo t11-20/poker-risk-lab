@@ -126,7 +126,7 @@ export default async function LearnPage(): Promise<ReactElement> {
         {curriculum.completionKnown ? null : (
           // Said once in the lead, rather than hedged on seventeen cards.
           <p className="prl-note">
-            Reading progress appears once you start a session and is tracked on{' '}
+            Shared index: it does not know which lessons you have already finished — see{' '}
             <Link href="/record">your record</Link>.
           </p>
         )}
