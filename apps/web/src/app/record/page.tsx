@@ -97,13 +97,16 @@ export default async function RecordPage(): Promise<ReactElement> {
       </header>
 
       {record.state === 'signedOut' ? (
-        <Callout tone="insight" title="This browser has no record yet">
-          A record belongs to one learner, and this browser has not started one — so there is nothing to show
-          you here, and an empty page would look like a record of having done nothing, which is a different
-          claim. Opening a table starts a guest session straight away, with no email and no password, and
-          everything you do from then on is counted here. <Link href="/play">Open a table</Link>, or{' '}
-          <Link href={LEARN_PATH}>start reading</Link>.
-        </Callout>
+        <div className="prl-empty">
+          <h2>This browser has no record yet</h2>
+          <p>
+            A record belongs to one learner, and this browser has not started one — so there is nothing to
+            show you here, and an empty page would look like a record of having done nothing, which is a
+            different claim. Opening a table starts a guest session straight away, with no email and no
+            password, and everything you do from then on is counted here.{' '}
+            <Link href="/play">Open a table</Link>, or <Link href={LEARN_PATH}>start reading</Link>.
+          </p>
+        </div>
       ) : null}
 
       {record.state === 'unavailable' ? (

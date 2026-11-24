@@ -59,7 +59,8 @@ function NoHandChosen(): ReactElement {
   return (
     <div className="prl-legend-page">
       <HandReviewHeader />
-      <Callout tone="insight" title="Choose a hand to review">
+      <div className="prl-empty">
+        <h2>Choose a hand to review</h2>
         <p>
           This page reviews one of your own finished hands, so it needs to know which. Open a hand from{' '}
           <Link href={REVIEW_PATH}>your hand history</Link> and it will arrive here with the hand id in the
@@ -73,7 +74,7 @@ function NoHandChosen(): ReactElement {
           If you have not played one yet, there is a <Link href={HAND_REVIEW_DEMO_PATH}>worked example</Link>{' '}
           — somebody else's hand, clearly labelled as such.
         </p>
-      </Callout>
+      </div>
     </div>
   );
 }

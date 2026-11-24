@@ -1634,6 +1634,18 @@ p.prl-seat__status {
   font-size: var(--prl-type-body);
 }
 
+/**
+ * The name is an h2, under the page's one h1. The default h2 is a display size and would rival
+ * that title inside a box that only holds a sentence, so it takes the panel-title size instead.
+ */
+.prl-empty > h2 {
+  margin: 0;
+  font-size: var(--prl-type-heading);
+  font-weight: var(--prl-weight-semibold);
+  letter-spacing: var(--prl-tracking-display-3);
+  line-height: var(--prl-leading-snug);
+}
+
 /** The markup also carries the word "error" and a glyph, so it survives forced colors. */
 /* Capped like `.prl-callout`. On `/play` it drew a 1360px band with text in its left half. */
 .prl-error {
