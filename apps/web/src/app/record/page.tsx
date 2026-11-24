@@ -18,6 +18,7 @@ import {
   type RecordFigureName,
 } from '@/lib/record-data.ts';
 import { type RecordEntry, recordLists } from '@/lib/record-links.ts';
+import { recordPanelNumbers } from '@/lib/record-panels.ts';
 import { readerCallOptions } from '@/lib/server-session.ts';
 import { AccountDeletion } from './DeleteAccount.tsx';
 import { UnitsReset } from './UnitsReset.tsx';
@@ -77,11 +78,10 @@ function ResetPanel({ index }: { readonly index: number }): ReactElement {
 
 export default async function RecordPage(): Promise<ReactElement> {
   const record = await loadRecord(await readerCallOptions());
-  // A fixed 02 reads as a missing 01 when the counts panel is not on the page.
-  const showsCovered = record.state === 'ready';
-  const lists = showsCovered ? recordLists(record.progress) : null;
-  const resetIndex = showsCovered ? 2 : 1;
-  const deletionIndex = showsCovered ? 3 : 2;
+  const numbers = recordPanelNumbers(record.state);
+  const lists = record.state === 'ready' ? recordLists(record.progress) : null;
+  const resetIndex = numbers.reset;
+  const deletionIndex = numbers.deletion;
 
   return (
     <div className="prl-container prl-record">
@@ -115,8 +115,13 @@ export default async function RecordPage(): Promise<ReactElement> {
         </Callout>
       ) : null}
 
-      {showsCovered ? (
-        <Panel title="What you have covered" eyebrow="Counted, not scored" index={1} headingLevel={2}>
+      {record.state === 'ready' && numbers.covered !== null ? (
+        <Panel
+          title="What you have covered"
+          eyebrow="Counted, not scored"
+          index={numbers.covered}
+          headingLevel={2}
+        >
           <div className="prl-metric-row prl-record__figures">
             {RECORD_FIGURES.map((name) => (
               <Metric
