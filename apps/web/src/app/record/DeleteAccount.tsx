@@ -46,9 +46,14 @@ export interface AccountDeletionProps {
    * receipt, because a deletion signs the reader out in the same refresh the receipt must survive.
    */
   readonly deletable: boolean;
+  /**
+   * Where this panel sits among the panels the page actually rendered. A fixed 03 is a skipped
+   * number when the counts panel above is not there, and this component cannot see that.
+   */
+  readonly index: number;
 }
 
-export function AccountDeletion({ deletable }: AccountDeletionProps): ReactElement | null {
+export function AccountDeletion({ deletable, index }: AccountDeletionProps): ReactElement | null {
   const [deletion, setDeletion] = useState<DeleteState>({ state: 'closed' });
   const [typed, setTyped] = useState('');
   const fieldId = useId();
@@ -117,7 +122,7 @@ export function AccountDeletion({ deletable }: AccountDeletionProps): ReactEleme
   if (!deletable && deletion.state !== 'done') return null;
 
   return (
-    <Panel title="Delete your account" eyebrow="Irreversible" index={3} headingLevel={2}>
+    <Panel title="Delete your account" eyebrow="Irreversible" index={index} headingLevel={2}>
       {deletion.state === 'done' ? (
         /* The only place these counts can be read, since the account they describe is gone. */
         <div ref={receiptRef} tabIndex={-1}>

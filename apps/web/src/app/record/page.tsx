@@ -55,10 +55,10 @@ function RecordList({
   );
 }
 
-/** Shown whatever state the figures are in. */
-function ResetPanel(): ReactElement {
+/** Shown in every state. Its number is the page's, because it is 01 when it is the only panel. */
+function ResetPanel({ index }: { readonly index: number }): ReactElement {
   return (
-    <Panel title="Reset your units" eyebrow="Always available" index={2} headingLevel={2}>
+    <Panel title="Reset your units" eyebrow="Always available" index={index} headingLevel={2}>
       <p className="prl-prose">
         Units are free practice counters with no value of any kind: they cannot be bought, transferred,
         redeemed or cashed out. Resetting them puts your balance back to the starting amount and puts every
@@ -77,7 +77,11 @@ function ResetPanel(): ReactElement {
 
 export default async function RecordPage(): Promise<ReactElement> {
   const record = await loadRecord(await readerCallOptions());
-  const lists = record.state === 'ready' ? recordLists(record.progress) : null;
+  // A fixed 02 reads as a missing 01 when the counts panel is not on the page.
+  const showsCovered = record.state === 'ready';
+  const lists = showsCovered ? recordLists(record.progress) : null;
+  const resetIndex = showsCovered ? 2 : 1;
+  const deletionIndex = showsCovered ? 3 : 2;
 
   return (
     <div className="prl-container prl-record">
@@ -108,7 +112,7 @@ export default async function RecordPage(): Promise<ReactElement> {
         </Callout>
       ) : null}
 
-      {record.state === 'ready' ? (
+      {showsCovered ? (
         <Panel title="What you have covered" eyebrow="Counted, not scored" index={1} headingLevel={2}>
           <div className="prl-metric-row prl-record__figures">
             {RECORD_FIGURES.map((name) => (
@@ -155,13 +159,13 @@ export default async function RecordPage(): Promise<ReactElement> {
         </Panel>
       ) : null}
 
-      <ResetPanel />
+      <ResetPanel index={resetIndex} />
 
       {/*
         Last, below the reset, so a reader looking for one does not hit the other. Rendered
         unconditionally and kept in this slot, so its receipt survives the refresh after deletion.
       */}
-      <AccountDeletion deletable={record.state !== 'signedOut'} />
+      <AccountDeletion deletable={record.state !== 'signedOut'} index={deletionIndex} />
 
       <p className="prl-page-nav">
         <Link href={LEARN_PATH}>Back to the curriculum</Link>
