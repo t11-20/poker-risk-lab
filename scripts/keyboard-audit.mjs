@@ -1188,6 +1188,15 @@ async function auditBarHoldsOneRow(page) {
 }
 
 /**
+ * Descendants of a closed `<details>` cannot take focus, but Chrome still reports a box for them
+ * under `content-visibility: hidden`, so a centre-point tap would call them covered. The summary
+ * can take focus, so it stays in the set.
+ */
+export function insideClosedDetails(element) {
+  return element.closest('details:not([open]) > :not(summary)') !== null;
+}
+
+/**
  * Below 600px the Coach's closed sheet is a fixed 4rem strip. At 360x780 "Deal me in" rested at y 705
  * to 749 under a strip starting at 716, so a tap on it opened the Coach. Scroll padding cannot help a
  * control that is already in the first viewport. `elementFromPoint` checks what a tap hits, at both
@@ -1223,6 +1232,7 @@ async function auditCoachPeekOcclusion(page) {
         const probe = (end) =>
           page.evaluate(
             `(() => {
+              const insideClosedDetails = ${String(insideClosedDetails)};
               const root = document.documentElement;
               root.style.scrollBehavior = 'auto';
               window.scrollTo(0, ${end ? 'root.scrollHeight' : '0'});
@@ -1232,7 +1242,10 @@ async function auditCoachPeekOcclusion(page) {
                 hb !== undefined && hb.height > 0 &&
                 handle.contains(document.elementFromPoint(hb.left + hb.width / 2, hb.top + hb.height / 2));
               const controls = [...document.querySelectorAll('main :is(${FOCUSABLE})')]
-                .filter((element) => element.closest('.prl-play__coach') === null)
+                .filter(
+                  (element) =>
+                    element.closest('.prl-play__coach') === null && !insideClosedDetails(element),
+                )
                 .map((element) => ({ element, box: element.getBoundingClientRect() }))
                 // A centre past the viewport's edge is not on screen to tap.
                 .filter(({ box }) => {

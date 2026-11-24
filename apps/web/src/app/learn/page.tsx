@@ -66,9 +66,7 @@ function EntryCard({
           {isStart ? <Chip glyph="▸">start here</Chip> : null}
           {summary.quizId === undefined ? null : <Chip glyph="?">has a quiz</Chip>}
         </div>
-        {entry.prerequisites.length === 0 ? (
-          <p className="prl-learn-entry__prereq">Nothing to read first.</p>
-        ) : (
+        {entry.prerequisites.length === 0 ? null : (
           <p className="prl-learn-entry__prereq">
             <span className="prl-label">Read first</span>
             {entry.prerequisites.map((prerequisite, position) => (
@@ -209,11 +207,7 @@ export default async function LearnPage(): Promise<ReactElement> {
       ))}
 
       <Panel className="prl-learn-glossary-cta" eyebrow="Reference" title="The glossary">
-        <p>
-          A hundred and six terms, each with the plain-language version first and the jargon second. Every
-          term a lesson uses is linked from inside its own prose, so you can read a definition without leaving
-          the paragraph.
-        </p>
+        <p>A hundred and six terms, plain language first — linked inline throughout every lesson.</p>
         <Link className="prl-btn prl-btn--secondary prl-btn--md" href={GLOSSARY_PATH}>
           Open the glossary
         </Link>

@@ -36,7 +36,6 @@ export function SiteFooter(): ReactElement {
                   <SuitMark area={destination.area ?? null} />
                   <span className="prl-footer__link-label">{destination.label}</span>
                 </Link>
-                <span className="prl-footer__summary">{destination.summary}</span>
               </li>
             ))}
             {/* After the five and unmarked: see `RECORD_DESTINATION`. */}
@@ -45,7 +44,6 @@ export function SiteFooter(): ReactElement {
                 <SuitMark area={null} />
                 <span className="prl-footer__link-label">{RECORD_DESTINATION.label}</span>
               </Link>
-              <span className="prl-footer__summary">{RECORD_DESTINATION.summary}</span>
             </li>
           </ul>
         </nav>
@@ -83,7 +81,6 @@ export function SiteFooter(): ReactElement {
                 <Link className="prl-footer__link" href={destination.href}>
                   <span className="prl-footer__link-label">{destination.label}</span>
                 </Link>
-                <span className="prl-footer__summary">{destination.summary}</span>
               </li>
             ))}
           </ul>

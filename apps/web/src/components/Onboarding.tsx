@@ -42,7 +42,7 @@ const STEPS: readonly Step[] = [
     ],
   },
   {
-    title: 'Start at the beginning, or anywhere',
+    title: 'Start anywhere, no scores',
     body: [
       'The lessons are numbered and each one lists what it assumes you have read. Nothing is locked: if variance is what you came for, read variance first and come back for the prerequisites when a sentence stops making sense.',
       'Quizzes are not scored. There is no mark, no streak and no pass — getting one wrong opens the explanation and a link back to the lesson, and that is the whole consequence.',

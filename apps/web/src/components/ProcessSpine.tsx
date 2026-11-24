@@ -17,7 +17,7 @@ export interface ProcessStep {
 }
 
 export const PROCESS_STEPS: readonly ProcessStep[] = [
-  { label: 'Learn', area: 'learn', detail: 'What the number means, and what it assumes.' },
+  { label: 'Learn', area: 'learn', detail: 'Core concepts, with every assumption stated.' },
   {
     label: 'Calculate',
     area: 'lab',
@@ -26,12 +26,12 @@ export const PROCESS_STEPS: readonly ProcessStep[] = [
   {
     label: 'Decide',
     area: 'play',
-    detail: 'Act on the price in front of you, with the cost of every option shown.',
+    detail: 'Act with every option’s price in view.',
   },
   {
     label: 'Review',
     area: 'review',
-    detail: 'Price the decision after the fact, separately from how it turned out.',
+    detail: 'Judge each decision apart from the runout.',
   },
 ];
 

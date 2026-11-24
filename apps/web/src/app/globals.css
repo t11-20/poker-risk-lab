@@ -490,18 +490,18 @@
 
 .prl-footer__inner {
   display: grid;
-  gap: var(--prl-space-11);
-  padding-block: var(--prl-space-13) var(--prl-space-11);
+  gap: var(--prl-space-9);
+  padding-block: var(--prl-space-10) var(--prl-space-9);
 }
 
 .prl-footer__heading {
-  margin-block-end: var(--prl-space-5);
+  margin-block-end: var(--prl-space-3);
   color: var(--prl-text-faint);
 }
 
 .prl-footer__list {
   display: grid;
-  gap: var(--prl-space-7);
+  gap: var(--prl-space-1);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -543,7 +543,7 @@
 .prl-footer__prose {
   margin-block-end: var(--prl-space-5);
   color: var(--prl-text-secondary);
-  font-size: var(--prl-type-body);
+  font-size: var(--prl-type-body-sm);
   line-height: var(--prl-leading-body);
 }
 

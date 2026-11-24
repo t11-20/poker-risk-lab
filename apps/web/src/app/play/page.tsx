@@ -51,10 +51,8 @@ interface PlayPageProps {
 }
 
 const STATE_LEDE: Readonly<Record<TableStateName, string>> = {
-  decision:
-    'A fixed decision on the flop. The Coach panel prices it: what the hand is worth, what the call ' +
-    'costs, and what every line is worth against folding.',
-  loading: 'Waiting for the table. The blocks below are the size of the content that will replace them.',
+  decision: 'A fixed flop decision priced by the Coach: equity, pot odds, and expected value.',
+  loading: 'Waiting for the table. The blocks below match the size of the content that replaces them.',
   error: 'The table is unreachable. Nothing was staked and nothing was sent.',
   complete:
     'The hand is over, with three hands shown and the pot split into two layers. There is no decision ' +

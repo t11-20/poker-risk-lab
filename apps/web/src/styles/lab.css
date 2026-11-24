@@ -20,6 +20,11 @@
   font-size: var(--prl-type-body-lg);
 }
 
+/* The guided How to use tour opens above /lab until dismissed, so the title needs less padding above it. */
+.prl-lab-page .prl-page-head {
+  padding-block: var(--prl-space-9) var(--prl-space-7);
+}
+
 .prl-assumptions__item {
   display: grid;
   gap: var(--prl-space-4);
@@ -194,8 +199,22 @@
   outline: none;
 }
 
+.prl-lab-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--prl-space-2) var(--prl-space-7);
+  margin-block-start: var(--prl-space-6);
+}
+
 /** A full `--prl-target-min` target. Unpadded, the link is 271x17. */
 .prl-lab-start-link {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--prl-target-min);
+}
+
+.prl-lab-shortcuts__link {
   display: inline-flex;
   align-items: center;
   min-block-size: var(--prl-target-min);

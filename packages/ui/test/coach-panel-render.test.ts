@@ -889,7 +889,15 @@ test('what would change the reading is collapsed, and the reading and its caveat
     const outside = suggestion.inner.replace(details[0]?.inner ?? '', '');
     assert.ok(outside.includes('One reading of this spot'), 'the label stays open');
     assert.ok(outside.includes(report.suggestion.reason), 'so does the reason');
-    assert.ok(outside.includes('not a claim about the best play'), 'and the disclaimer');
+    // A substring of the caveat stays true after the rest of the sentence is deleted.
+    const disclaimer =
+      'A suggestion that follows from the assumptions listed below \u2014 not a claim about the best ' +
+      'play. Poker has no single correct action in a spot like this, and different assumptions about ' +
+      'the opponent give different answers.';
+    assert.ok(
+      outside.replace(/\s+/gu, ' ').includes(disclaimer),
+      'the full disclaimer, not only the caveat clause',
+    );
   }
 });
 
