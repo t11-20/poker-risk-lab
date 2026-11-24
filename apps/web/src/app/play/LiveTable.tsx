@@ -628,17 +628,24 @@ function ConnectionPanel({ live, inLegendMatch = false }: ConnectionPanelProps):
       <ConnectionControls live={live} inLegendMatch={inLegendMatch} fallbackRef={statusRef} />
 
       {room === null ? null : (
+        // A `div` per pair, so a wrapping row never strands a label from its value.
         <dl className="prl-stat__pair prl-play__facts">
-          <dt className="prl-label">Room</dt>
-          <dd>{describeTable(room, live.table.userId)}</dd>
-          <dt className="prl-label">Blinds</dt>
-          <dd>{`${String(room.smallBlind)} / ${String(room.bigBlind)} units`}</dd>
-          <dt className="prl-label">Your seat</dt>
-          <dd>
-            {live.table.seat === null
-              ? 'watching'
-              : `seat ${String(live.table.seat + 1)}${live.outOfUnits ? ' — out of units' : ''}`}
-          </dd>
+          <div className="prl-play__fact">
+            <dt className="prl-label">Room</dt>
+            <dd>{describeTable(room, live.table.userId)}</dd>
+          </div>
+          <div className="prl-play__fact">
+            <dt className="prl-label">Blinds</dt>
+            <dd>{`${String(room.smallBlind)} / ${String(room.bigBlind)} units`}</dd>
+          </div>
+          <div className="prl-play__fact">
+            <dt className="prl-label">Your seat</dt>
+            <dd>
+              {live.table.seat === null
+                ? 'watching'
+                : `seat ${String(live.table.seat + 1)}${live.outOfUnits ? ' — out of units' : ''}`}
+            </dd>
+          </div>
         </dl>
       )}
     </Panel>
