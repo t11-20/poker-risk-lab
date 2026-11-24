@@ -194,8 +194,22 @@
   outline: none;
 }
 
+.prl-lab-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--prl-space-2) var(--prl-space-7);
+  margin-block-start: var(--prl-space-6);
+}
+
 /** A full `--prl-target-min` target. Unpadded, the link is 271x17. */
 .prl-lab-start-link {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--prl-target-min);
+}
+
+.prl-lab-shortcuts__link {
   display: inline-flex;
   align-items: center;
   min-block-size: var(--prl-target-min);

@@ -94,9 +94,8 @@ export function DifficultyPicker(props: DifficultyPickerProps): ReactElement {
         </span>
         <p className="prl-legend-difficulty__note">
           {/* The children are the no-script sentence, and the only true one outside `/legends`. */}
-          <ScopedDifficultyNote following="Every Play button and link on this page starts a match at the option you tick. Applying it also puts it in the address bar, so the page can be shared exactly as it was read.">
-            The setting is applied when you submit, not while you are moving through the options, and it stays
-            in the address bar so a spot can be shared exactly as it was read.
+          <ScopedDifficultyNote following="Play buttons follow your selection. Apply to save it in the address bar.">
+            Apply to save this setting in the address bar so the spot can be shared.
           </ScopedDifficultyNote>
         </p>
       </div>

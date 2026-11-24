@@ -34,12 +34,9 @@ export const metadata: Metadata = {
 /** The operator's `namingMode`, in the reader's words rather than the config key's. */
 const NAMING_NOTE: Readonly<Record<'archetype' | 'attributed', string>> = {
   archetype:
-    'Each profile is named for the style it plays. The sixteen trait values beneath the name are the ' +
-    'whole model, and nothing about what you can learn here depends on whose name is on the seat.',
+    'Named by playing style. The sixteen traits beneath each name are the entire model.',
   attributed:
-    'Some profiles also show a person’s name. Where one does, it appears BENEATH the style name and ' +
-    'always reads "(modelled style)", because the style is the profile and the name is only a memory ' +
-    'aid for it. No profile reproduces how any person plays.',
+    'Some styles include an attributed name labelled “(modelled style)” as a memory aid only — none reproduce a real person.',
 };
 
 const NAMING_CHIP: Readonly<Record<'archetype' | 'attributed', string>> = {
@@ -129,10 +126,7 @@ export default async function LegendsPage({
         <section className="prl-legend-section">
           <h2>The profiles</h2>
           <p className="prl-prose">
-            Three signature axes are called out on each card so it is readable at a glance; the radar behind
-            them is all sixteen, numbered 01 to 16, with the full table of values available to a screen
-            reader. No axis is ranked and no value is a score — a high figure on "folds under pressure" is a
-            different opponent, not a worse one.
+            Three signature traits on each card; all sixteen on the radar. Values describe style, not skill.
           </p>
           <div className="prl-legend-grid">
             {profiles.data.profiles.map((profile) => (

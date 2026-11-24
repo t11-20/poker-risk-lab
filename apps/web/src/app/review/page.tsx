@@ -233,8 +233,7 @@ export default async function ReviewIndexPage({
         {/* Carries the nav's word, "Review", so the place has one name. */}
         <h1 className="prl-display-2 prl-page-head__title">Review your hand history</h1>
         <p className="prl-page-head__standfirst">
-          Every hand you have finished. Open one to step through it decision by decision, with the analysis
-          for your own choices and the deck proof you can check yourself.
+          Your finished hands. Open any hand to replay decisions and verify the deck proof.
         </p>
       </header>
 

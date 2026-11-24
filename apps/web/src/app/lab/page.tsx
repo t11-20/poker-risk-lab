@@ -145,7 +145,7 @@ function ScenarioCard({
           {/* A glyph and a word, never a tick that means "passed". */}
           <p className="prl-lab-card__state" data-attempted={scenario.attempted ? 'true' : 'false'}>
             <span aria-hidden="true">{scenario.attempted ? '◍ ' : '○ '}</span>
-            {scenario.attempted ? 'You have worked through this one' : 'Not yet attempted'}
+            {scenario.attempted ? 'Attempted' : 'Not attempted'}
           </p>
         </article>
       </Reveal>
@@ -170,19 +170,15 @@ export default async function LabIndexPage({ searchParams }: LabIndexProps): Pro
         </p>
         <h1 className="prl-display-2 prl-page-head__title">Scenario Lab</h1>
         <p className="prl-page-head__standfirst">
-          Situations with the arithmetic already done. Each one states its assumptions before it asks you
-          anything, and the analysis afterwards shows what every action on the table is worth rather than
-          telling you which one was right.
+          Worked spots with assumptions stated up front. Choose an action, then compare the expected value of
+          every line.
         </p>
       </header>
 
       {fromFixture ? (
         <p className="prl-source-note prl-note">
-          <span className="prl-label prl-label--accent">Bundled copy</span> The full list could not be loaded,
-          so this is the copy that ships with the app. The scenarios and their questions are real, and the
-          analysis behind each one was worked out by the same maths — but it is a partial copy rather than the
-          full set, and it does not know which of them you have attempted, so every card reads as unattempted
-          whatever you have actually done.
+          <span className="prl-label prl-label--accent">Bundled copy</span> Partial sample list only — the
+          scenarios and maths are real, though it does not know which of them you have attempted.
         </p>
       ) : null}
 
@@ -190,18 +186,19 @@ export default async function LabIndexPage({ searchParams }: LabIndexProps): Pro
         A link rather than a re-sort, because the first Intro card is #14 (4,574px down at 360x640) and
         a re-sort would renumber every card and change "Next scenario". Unfiltered views only.
       */}
-      {isFilteredSelection(selection) || introCount === 0 ? null : (
-        <p className="prl-note">
+      <div className="prl-lab-shortcuts">
+        {isFilteredSelection(selection) || introCount === 0 ? null : (
           <a className="prl-lab-start-link" href={`${ROUTE}?difficulty=intro#${LAB_RESULTS_ID}`}>
-            {`New here? Start with the ${introCount} Intro scenarios`}
+            {`Start with the ${introCount} Intro scenarios`}
           </a>
-        </p>
-      )}
-
-      <p className="prl-note prl-spot-entry">
-        <a href="/lab/spots/edit">Set up your own spot</a> with your cards, stacks and bet, or open{' '}
-        <a href="/lab/spots">your saved spots</a>.
-      </p>
+        )}
+        <a className="prl-lab-shortcuts__link" href="/lab/spots/edit">
+          Set up your own spot
+        </a>
+        <a className="prl-lab-shortcuts__link" href="/lab/spots">
+          Saved spots
+        </a>
+      </div>
 
       <ScenarioFilters
         topics={optionsFor(all, selection, 'topic', topicLabel)}
@@ -220,10 +217,7 @@ export default async function LabIndexPage({ searchParams }: LabIndexProps): Pro
 
       {shown.length === 0 ? (
         <div className="prl-empty">
-          <p>
-            No scenario matches that combination. The counts in each dropdown are calculated against your
-            other two choices, so widening the one with a zero beside it is the quickest way back to a result.
-          </p>
+          <p>No scenarios match those filters. Widen a filter with a zero beside it or clear all filters.</p>
           <a className="prl-btn prl-btn--secondary" href={ROUTE}>
             Clear all filters
           </a>
