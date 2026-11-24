@@ -15,14 +15,11 @@ export const TOUR_DISMISSED_KEY = 'prl.tour.dismissed';
 export const TOUR_FIRST_VISIT_PATH = '/lab';
 
 /**
- * A first visit below this width shows a short head. The five steps are 462px at 390px and
- * that is what pushes the Lab down. A tour opened from "How to use" still shows every step.
+ * A first visit below this width opens compact. The five steps are 462px at 390px and that is
+ * what pushes the Lab down. Read once, where the open is dispatched, and kept until the guide
+ * closes: a rotation must not unmount the control that has focus.
  */
 export const TOUR_COMPACT_QUERY = '(width < 640px)';
-
-export function firstVisitIsCompact(opener: TourState['opener'], narrow: boolean): boolean {
-  return opener === 'first-visit' && narrow;
-}
 
 /** The spot editor, which holds three steps' targets. With no query it opens a blank spot. */
 export const SPOT_EDITOR_HREF = '/lab/spots/edit';
@@ -144,6 +141,13 @@ export interface TourState {
   readonly focusRequest: number;
   /** Set by any opening or closing, so this page load never opens it by itself a second time. */
   readonly settled: boolean;
+  /**
+   * Chosen when the guide opens and kept until it closes. A resize must not change it: the step
+   * list or the "Show steps" button would unmount under focus, and Escape would miss the panel.
+   */
+  readonly compact: boolean;
+  /** A compact guide's steps stay hidden until the reader asks. Reset when the guide closes. */
+  readonly stepsExpanded: boolean;
 }
 
 export const INITIAL_TOUR_STATE: TourState = {
@@ -155,29 +159,52 @@ export const INITIAL_TOUR_STATE: TourState = {
   shown: 0,
   focusRequest: 0,
   settled: false,
+  compact: false,
+  stepsExpanded: false,
 };
 
 export type TourAction =
-  | { readonly type: 'open-first-visit' }
+  | { readonly type: 'open-first-visit'; readonly narrow: boolean }
   | { readonly type: 'open-from-button' }
   | { readonly type: 'close' }
+  | { readonly type: 'set-steps-expanded'; readonly expanded: boolean }
   | { readonly type: 'show'; readonly step: TourStepId; readonly awaiting: string | null }
   | { readonly type: 'found' | 'missing'; readonly step: TourStepId }
   | { readonly type: 'navigated'; readonly pathname: string };
+
+/**
+ * Compactness is fixed while the guide stays open, so a resize cannot unmount a focused control.
+ * "How to use" and "Show me" never open it compact; a guide already open keeps the choice it opened with.
+ */
+function compactnessOnOpen(state: TourState, compact: boolean): Pick<TourState, 'compact' | 'stepsExpanded'> {
+  if (state.open) return { compact: state.compact, stepsExpanded: state.stepsExpanded };
+  return { compact, stepsExpanded: false };
+}
 
 export function tourReducer(state: TourState, action: TourAction): TourState {
   switch (action.type) {
     case 'open-first-visit':
       if (state.open || state.settled) return state;
-      return { ...state, open: true, opener: 'first-visit', settled: true };
+      return {
+        ...state,
+        open: true,
+        opener: 'first-visit',
+        compact: action.narrow,
+        stepsExpanded: false,
+        settled: true,
+      };
     case 'open-from-button':
       return {
         ...state,
         open: true,
         opener: state.open ? state.opener : 'button',
+        ...compactnessOnOpen(state, false),
         focusRequest: state.focusRequest + 1,
         settled: true,
       };
+    case 'set-steps-expanded':
+      if (!state.open || state.stepsExpanded === action.expanded) return state;
+      return { ...state, stepsExpanded: action.expanded };
     case 'close':
       return { ...INITIAL_TOUR_STATE, focusRequest: state.focusRequest, settled: true };
     case 'show':
@@ -185,6 +212,7 @@ export function tourReducer(state: TourState, action: TourAction): TourState {
         ...state,
         open: true,
         opener: state.opener ?? 'button',
+        ...compactnessOnOpen(state, false),
         step: action.step,
         found: null,
         awaiting: action.awaiting,

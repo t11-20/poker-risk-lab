@@ -4,8 +4,9 @@
  * The guided tour: five steps from picking a scenario to reviewing a hand, each with a "Show me" that
  * outlines its `[data-tour]` target, going to its page first if need be. A panel in the page's flow
  * under the header, not an overlay: it covers nothing, traps nothing, and a page under test on a fresh
- * profile stays usable with it open. On a narrow screen a first visit shows the title and "Show steps"
- * instead of all five, which measured 462px at 390px. Escape closes it for now and focus goes back
+ * profile stays usable with it open. A narrow first visit opens on the title and "Show steps": the
+ * five steps measured 462px at 390px. That choice is fixed until the guide closes, so rotating the
+ * phone cannot unmount the control that has focus. Escape closes it for now and focus goes back
  * to "How to use".
  *
  * It renders nothing until the effect has read storage, as `Onboarding` does, so the server render and
@@ -21,12 +22,10 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   useEffect,
   useRef,
-  useState,
   useSyncExternalStore,
 } from 'react';
 import {
   closeTour,
-  firstVisitIsCompact,
   INITIAL_TOUR_STATE,
   opensByItself,
   readTourDismissal,
@@ -42,12 +41,6 @@ const SHOWING_ATTRIBUTE = 'data-tour-showing';
 
 const storage = (): Storage => window.localStorage;
 
-function subscribeNarrow(onChange: () => void): () => void {
-  const media = window.matchMedia(TOUR_COMPACT_QUERY);
-  media.addEventListener('change', onChange);
-  return () => media.removeEventListener('change', onChange);
-}
-
 /** The visible "How to use" button: the header's above 860px, else the Menu trigger it lives behind. */
 function focusReturnTarget(): HTMLElement | null {
   const openers = Array.from(document.querySelectorAll<HTMLElement>('[data-tour-opener]'));
@@ -57,13 +50,6 @@ function focusReturnTarget(): HTMLElement | null {
 
 export function GuidedTour(): ReactElement | null {
   const state = useSyncExternalStore(tourStore.subscribe, tourStore.getSnapshot, () => INITIAL_TOUR_STATE);
-  const narrow = useSyncExternalStore(
-    subscribeNarrow,
-    () => window.matchMedia(TOUR_COMPACT_QUERY).matches,
-    () => false,
-  );
-  const compact = firstVisitIsCompact(state.opener, narrow);
-  const [stepsOpen, setStepsOpen] = useState(false);
   const pathname = usePathname();
   const router = useRouter();
   const panelRef = useRef<HTMLElement | null>(null);
@@ -76,7 +62,10 @@ export function GuidedTour(): ReactElement | null {
     seenPath.current = pathname;
     const { settled } = tourStore.getSnapshot();
     if (opensByItself(pathname, readTourDismissal(storage), settled, window.location.hash !== '')) {
-      tourStore.dispatch({ type: 'open-first-visit' });
+      tourStore.dispatch({
+        type: 'open-first-visit',
+        narrow: window.matchMedia(TOUR_COMPACT_QUERY).matches,
+      });
     }
   }, [pathname]);
 
@@ -84,11 +73,6 @@ export function GuidedTour(): ReactElement | null {
     if (state.focusRequest === 0 || !state.open) return;
     panelRef.current?.focus();
   }, [state.focusRequest, state.open]);
-
-  useEffect(() => {
-    if (state.open) return;
-    setStepsOpen(false);
-  }, [state.open]);
 
   const { open, step, awaiting, shown } = state;
   useEffect(() => {
@@ -167,7 +151,8 @@ export function GuidedTour(): ReactElement | null {
         ? `Showing: ${current.title}.`
         : current.missing;
   const skipping = state.opener === 'first-visit';
-  const shownSteps = compact && !stepsOpen ? [] : TOUR_STEPS;
+  const { compact, stepsExpanded } = state;
+  const shownSteps = compact && !stepsExpanded ? [] : TOUR_STEPS;
 
   const stepList = (
     <ol className="prl-tour__steps">
@@ -219,12 +204,12 @@ export function GuidedTour(): ReactElement | null {
       </div>
       {compact ? (
         <button
-          aria-expanded={stepsOpen}
+          aria-expanded={stepsExpanded}
           className="prl-tour__reveal"
-          onClick={() => setStepsOpen((open) => !open)}
+          onClick={() => tourStore.dispatch({ type: 'set-steps-expanded', expanded: !stepsExpanded })}
           type="button"
         >
-          {stepsOpen ? 'Hide steps' : 'Show steps'}
+          {stepsExpanded ? 'Hide steps' : 'Show steps'}
         </button>
       ) : null}
       {shownSteps.length > 0 ? stepList : null}
