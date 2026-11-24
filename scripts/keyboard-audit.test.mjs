@@ -20,6 +20,7 @@ import {
   actionControlName,
   ageDeclarationCookies,
   cardElementVerdict,
+  insideClosedDetails,
   isPokerActionName,
   landedOnAgeGate,
   ROUTES,
@@ -338,6 +339,44 @@ describe('the gate starts its own servers, on a port nothing else claims', () =>
     assert.ok(
       gates[1].trim().split(/\s+/u).includes('test:keyboard'),
       'keyboard operability is back to depending on somebody remembering to run it',
+    );
+  });
+});
+
+describe('the Coach peek skips what a closed details cannot focus', () => {
+  const SELECTOR = 'details:not([open]) > :not(summary)';
+
+  // `closest` answers the way the page DOM would for this one selector.
+  const element = (tagName, match) => ({
+    tagName,
+    closest(selector) {
+      assert.equal(selector, SELECTOR);
+      return match;
+    },
+  });
+
+  it('skips a focusable descendant of a closed details', () => {
+    assert.equal(insideClosedDetails(element('BUTTON', { tagName: 'DIV' })), true);
+  });
+
+  it('keeps the summary, which can still take focus', () => {
+    assert.equal(insideClosedDetails(element('SUMMARY', null)), false);
+  });
+
+  it('keeps a control that is not inside a closed details', () => {
+    assert.equal(insideClosedDetails(element('A', null)), false);
+  });
+
+  it('the peek check calls this rule rather than a second copy of the selector', () => {
+    const source = readFileSync(new URL('./keyboard-audit.mjs', import.meta.url), 'utf8');
+    const start = source.indexOf('async function auditCoachPeekOcclusion');
+    assert.ok(start >= 0, 'auditCoachPeekOcclusion was not found, so this checked nothing');
+    const body = source.slice(start);
+    assert.ok(body.includes('insideClosedDetails'), 'the peek check does not call the shared rule');
+    assert.equal(
+      body.includes('details:not([open])'),
+      false,
+      'the selector is copied into the page script instead of the shared function',
     );
   });
 });
