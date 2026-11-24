@@ -21,7 +21,7 @@ export const PROCESS_STEPS: readonly ProcessStep[] = [
   {
     label: 'Calculate',
     area: 'lab',
-    detail: 'Equity, outs, and break-even computed live.',
+    detail: 'Equity, outs, pot odds and break-even — computed, never looked up.',
   },
   {
     label: 'Decide',

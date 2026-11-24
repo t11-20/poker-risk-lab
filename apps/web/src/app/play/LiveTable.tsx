@@ -138,7 +138,7 @@ function statusSentence(live: LiveTableModel, inLegendMatch: boolean): string {
   if (live.phase === 'preparing') {
     return 'Preparing: reading your session, then finding or creating your private room.';
   }
-  if (live.phase === 'failed') return 'Could not prepare the table. See below.';
+  if (live.phase === 'failed') return 'The table could not be prepared. The reason is below.';
   return live.status === null ? 'Ready to connect.' : STATUS_LEDE[live.status];
 }
 
