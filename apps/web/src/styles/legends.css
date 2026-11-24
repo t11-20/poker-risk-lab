@@ -57,8 +57,11 @@
   border-block-end: var(--prl-hairline-strong);
 }
 
-/** A grid item stretches, and `.prl-suit-mark` centres its glyph, so it floated over the title's middle. */
-.prl-legend-head > .prl-suit-mark {
+/**
+ * A stretched grid item centres its glyph, which is how a bare mark sat over the title's middle.
+ * The eyebrow shrinks to the mark and the section name, and stays above the title.
+ */
+.prl-legend-head > .prl-eyebrow {
   justify-self: start;
 }
 

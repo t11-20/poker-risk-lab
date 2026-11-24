@@ -35,7 +35,10 @@ function readHandId(raw: string | string[] | undefined): string | null {
 export function HandReviewHeader(): ReactElement {
   return (
     <div className="prl-legend-head">
-      <SuitMark area="legends" />
+      <p className="prl-eyebrow">
+        <SuitMark area="legends" />
+        Legends
+      </p>
       <h1 className="prl-legend-head__title prl-display-2">A finished hand, reviewed</h1>
       <p className="prl-legend-head__standfirst">
         Every decision in one hand, in order: what was done, what the analysis priced at the time, and what

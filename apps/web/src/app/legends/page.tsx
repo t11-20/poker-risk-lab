@@ -69,7 +69,10 @@ export default async function LegendsPage({
   return (
     <div className="prl-legend-page">
       <div className="prl-legend-head">
-        <SuitMark area="legends" />
+        <p className="prl-eyebrow">
+          <SuitMark area="legends" />
+          Legends
+        </p>
         <h1 className="prl-legend-head__title prl-display-2">AI Legends: opponent profiles</h1>
         <p className="prl-legend-head__standfirst">
           Each opponent is sixteen trait values — how many hands it plays, how hard it bets, how much it cares

@@ -109,7 +109,10 @@ export default async function ComparePage({
   return (
     <div className="prl-legend-page">
       <div className="prl-legend-head">
-        <SuitMark area="legends" />
+        <p className="prl-eyebrow">
+          <SuitMark area="legends" />
+          Legends
+        </p>
         <h1 className="prl-legend-head__title prl-display-2">One spot, several styles</h1>
         <p className="prl-legend-head__standfirst">
           The same cards, the same pot and the same price, handed to each style in turn. The analysis below is
