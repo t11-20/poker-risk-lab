@@ -108,7 +108,7 @@ const HELD: readonly HeldCopy[] = [
     where: 'Onboarding step 1',
     file: 'components/Onboarding.tsx',
     start: 'const STEPS: readonly Step[] = [',
-    end: "title: 'Start anywhere, no scores'",
+    end: '\n];',
     sentences: [
       'Nothing in this app can be bought and nothing can be won. There is no deposit, no cash-out, no ' +
         'prize and no leaderboard. The units exist so that a decision has a size, which is what makes ' +
@@ -119,8 +119,9 @@ const HELD: readonly HeldCopy[] = [
     where: 'Onboarding step 2',
     file: 'components/Onboarding.tsx',
     start: 'const STEPS: readonly Step[] = [',
-    end: "title: 'Start anywhere, no scores'",
+    end: '\n];',
     sentences: [
+      'The Coach shows its working, and can be wrong',
       'It does not tell you the right play. It tells you what the maths says under stated assumptions, ' +
         'and it labels its own confidence. Where a real opponent breaks an assumption, the Coach is the ' +
         'thing that is wrong.',

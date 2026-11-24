@@ -371,8 +371,12 @@ describe('the Coach peek skips what a closed details cannot focus', () => {
     const source = readFileSync(new URL('./keyboard-audit.mjs', import.meta.url), 'utf8');
     const start = source.indexOf('async function auditCoachPeekOcclusion');
     assert.ok(start >= 0, 'auditCoachPeekOcclusion was not found, so this checked nothing');
-    const body = source.slice(start);
-    assert.ok(body.includes('insideClosedDetails'), 'the peek check does not call the shared rule');
+    const next = source.slice(start + 1).search(/\n(?:export )?(?:async )?function /u);
+    const body = next === -1 ? source.slice(start) : source.slice(start, start + 1 + next);
+    assert.ok(
+      body.includes('!insideClosedDetails(element)'),
+      'the peek check does not filter its controls through the shared rule',
+    );
     assert.equal(
       body.includes('details:not([open])'),
       false,
