@@ -66,9 +66,7 @@ function EntryCard({
           {isStart ? <Chip glyph="▸">start here</Chip> : null}
           {summary.quizId === undefined ? null : <Chip glyph="?">has a quiz</Chip>}
         </div>
-        {entry.prerequisites.length === 0 ? (
-          <p className="prl-learn-entry__prereq">Nothing to read first.</p>
-        ) : (
+        {entry.prerequisites.length === 0 ? null : (
           <p className="prl-learn-entry__prereq">
             <span className="prl-label">Read first</span>
             {entry.prerequisites.map((prerequisite, position) => (
@@ -83,10 +81,10 @@ function EntryCard({
             {entry.unlocked === false ? (
               <span className="prl-learn-entry__prereq-note">
                 {entry.prerequisites.length === 1
-                  ? ' — not marked read yet. Nothing stops you reading this one now.'
+                  ? ' — unread (optional)'
                   : entry.outstandingPrerequisites.length === 1
-                    ? ' — one of those is not marked read. Nothing stops you reading this one now.'
-                    : ` — ${entry.outstandingPrerequisites.length} of those are not marked read. Nothing stops you reading this one now.`}
+                    ? ' — 1 unread (optional)'
+                    : ` — ${entry.outstandingPrerequisites.length} unread (optional)`}
               </span>
             ) : null}
           </p>
@@ -122,21 +120,14 @@ export default async function LearnPage(): Promise<ReactElement> {
         </span>
         <h1 className="prl-display-2">The curriculum</h1>
         <p className="prl-learn-page__lead">
-          Seventeen lessons, numbered in the order the ideas depend on one another, and the Next button at the
-          end of each lesson follows the same numbers. Each one states what it assumes you have read, and none
-          of them is locked — the numbering is a route through the material, not a gate across it.
-        </p>
-        <p className="prl-learn-page__lead">
-          Every figure inside a lesson is computed while you read it, from the situation the lesson describes,
-          rather than read out of a table that could have been wrong when it was written. If the calculator
-          cannot be reached, the lesson says so where the figure would have been.
+          Seventeen lessons ordered by concept dependency — nothing is locked, so start anywhere. Every worked
+          figure is computed live as you read.
         </p>
         {curriculum.completionKnown ? null : (
           // Said once in the lead, rather than hedged on seventeen cards.
-          <p className="prl-learn-page__lead">
-            This index is the same for every reader, so it does not know which lessons you have already
-            finished — nothing below is a mark on your record. What you have read is recorded when you press
-            the control at the end of a lesson, and it is counted on <Link href="/record">your record</Link>.
+          <p className="prl-note">
+            Reading progress appears once you start a session and is tracked on{' '}
+            <Link href="/record">your record</Link>.
           </p>
         )}
         <div className="prl-metric-row prl-learn-page__figures">
@@ -148,7 +139,7 @@ export default async function LearnPage(): Promise<ReactElement> {
             format="number"
             unit="minutes"
             size="md"
-            note="An estimate from the content, not a target."
+            note="Estimated reading time."
           />
         </div>
       </header>
@@ -210,9 +201,7 @@ export default async function LearnPage(): Promise<ReactElement> {
 
       <Panel className="prl-learn-glossary-cta" eyebrow="Reference" title="The glossary">
         <p>
-          A hundred and six terms, each with the plain-language version first and the jargon second. Every
-          term a lesson uses is linked from inside its own prose, so you can read a definition without leaving
-          the paragraph.
+          A hundred and six terms, plain language first — linked inline throughout every lesson.
         </p>
         <Link className="prl-btn prl-btn--secondary prl-btn--md" href={GLOSSARY_PATH}>
           Open the glossary
