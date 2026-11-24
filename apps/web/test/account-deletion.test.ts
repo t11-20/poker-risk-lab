@@ -150,7 +150,7 @@ describe('the control asks twice, and says what survives before it asks at all',
     assert.match(PAGE, /import \{ AccountDeletion \} from '\.\/DeleteAccount\.tsx';/u);
     assert.match(
       PAGE,
-      /<AccountDeletion deletable=\{record\.state !== 'signedOut'\} \/>/u,
+      /<AccountDeletion deletable=\{record\.state !== 'signedOut'\} index=\{deletionIndex\} \/>/u,
       'the component exists but the page never renders it',
     );
     // Not offered to a reader with no account, which could only produce a 401.

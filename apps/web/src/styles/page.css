@@ -123,9 +123,10 @@
   }
 }
 
-/** A panel after a panel or a callout gets the gap. Without it they met edge to edge. */
+/** A panel after a panel, a callout or an empty state gets the gap. Without it they met edge to edge. */
 .prl-record > .prl-panel + .prl-panel,
-.prl-record > .prl-callout + .prl-panel {
+.prl-record > .prl-callout + .prl-panel,
+.prl-record > .prl-empty + .prl-panel {
   margin-block-start: var(--prl-space-8);
 }
 

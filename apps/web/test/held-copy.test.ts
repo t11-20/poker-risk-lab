@@ -83,7 +83,7 @@ const HELD: readonly HeldCopy[] = [
   {
     where: 'record page ResetPanel, first paragraph',
     file: 'app/record/page.tsx',
-    start: 'function ResetPanel(): ReactElement {',
+    start: 'function ResetPanel(',
     end: '<UnitsReset />',
     sentences: [
       'Units are free practice counters with no value of any kind: they cannot be bought, transferred, ' +
@@ -95,7 +95,7 @@ const HELD: readonly HeldCopy[] = [
   {
     where: 'record page ResetPanel, second paragraph',
     file: 'app/record/page.tsx',
-    start: 'function ResetPanel(): ReactElement {',
+    start: 'function ResetPanel(',
     end: '<UnitsReset />',
     sentences: [
       'It does not erase anything. The hands you have played stay in your history, and the net figure ' +
