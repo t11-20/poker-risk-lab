@@ -11,6 +11,7 @@ import type { LegendDifficulty } from '@prl/contracts';
 import {
   Button,
   Callout,
+  cx,
   formatUnits,
   Panel,
   type TableAction,
@@ -82,10 +83,10 @@ function coachUnavailableProps(
 const IDLE_TABLE_MESSAGE = 'Your table appears here once you are dealt in.';
 
 const STATUS_LEDE: Readonly<Record<TableSocketStatus, string>> = {
-  connecting: 'Opening a connection to the table.',
-  handshaking: 'Connected. Introducing this page to the table and waiting for its first state.',
-  live: 'Live. Everything on this screen is the server’s own view of the table, redacted for you.',
-  reconnecting: 'The connection dropped. Reconnecting with a widening delay — the table is held server-side.',
+  connecting: 'Connecting to the table…',
+  handshaking: 'Connected. Loading the table…',
+  live: 'Connected.',
+  reconnecting: 'Connection lost. Reconnecting…',
   closed: 'Not connected.',
 };
 
@@ -120,49 +121,41 @@ function statusSentence(live: LiveTableModel, inLegendMatch: boolean): string {
   }
   if (live.phase === 'idle' && live.resuming) return 'Reconnecting you to the table you were at.';
   if (live.phase === 'idle' && inLegendMatch) {
-    return (
-      'Press “Deal me in” to play this style: the match still running, or a new one with 1,000 units. ' +
-      'No sign-up needed. ' +
-      'Each table keeps its own units, and if this would close another table, you are asked first.'
-    );
+    return 'Press “Deal me in” to start this match with 1,000 practice units. No sign-up needed.';
   }
   if (live.phase === 'idle') {
     // `chooseRoom` may reuse a held table or create one, and the page cannot know which yet.
-    return (
-      'Press “Deal me in” to sit at your bot table: the one you already have, or a new one with 1,000 units. ' +
-      'No sign-up needed. ' +
-      'Each table keeps its own units, and if this would close a Legends match, you are asked first.'
-    );
+    return 'Press “Deal me in” to sit with 1,000 practice units. No sign-up needed.';
   }
   if (live.phase === 'preparing') {
-    return 'Preparing: reading your session, then finding or creating your private room.';
+    return 'Preparing your table…';
   }
-  if (live.phase === 'failed') return 'The table could not be prepared. The reason is below.';
+  if (live.phase === 'failed') return 'Could not prepare the table. See below.';
   return live.status === null ? 'Ready to connect.' : STATUS_LEDE[live.status];
 }
 
 function hintSentence(live: LiveTableModel): string {
-  if (live.phase !== 'ready' || live.status !== 'live') return 'The table opens once you are connected.';
+  if (live.phase !== 'ready' || live.status !== 'live') return 'The table opens once connected.';
   if (live.dealingIn) {
     return live.table.seat === null && live.readerSeat !== null
-      ? `Taking seat ${String(live.readerSeat + 1)} for you, then dealing your first hand.`
+      ? `Taking seat ${String(live.readerSeat + 1)} and dealing your first hand.`
       : 'Dealing your first hand.';
   }
   if (live.outOfUnits) {
-    return 'You have no units left at this seat, so the server deals every hand without you.';
+    return 'Out of units at this seat — dealt out until you reset.';
   }
   if (live.table.seat === null) {
     // Not a constant seat. At a room reached by invite code seat 1 is the owner's.
     return live.readerSeat === null
-      ? 'Every seat is taken, so there is nowhere to sit at this table right now.'
-      : `Seat ${String(live.readerSeat + 1)} is free — take it to be dealt in.`;
+      ? 'Every seat is taken.'
+      : `Seat ${String(live.readerSeat + 1)} is open — take it to join.`;
   }
   if (live.table.betweenHands) {
-    return 'No hand is in progress. Dealing is the owner’s to ask for, so nothing starts until you do.';
+    return 'Between hands. Deal when ready.';
   }
   return live.isMyTurn
-    ? 'A hand is in progress and it is your decision.'
-    : 'A hand is in progress. Waiting for another seat to act.';
+    ? 'A hand is in progress — your turn.'
+    : 'A hand is in progress — waiting for another seat.';
 }
 
 function ConnectionNotices({ live }: ConnectionPanelProps): ReactElement {
@@ -580,12 +573,13 @@ function JoinByInviteCode({ live }: ConnectionPanelProps): ReactElement {
 
 function ConnectionPanel({ live, inLegendMatch = false }: ConnectionPanelProps): ReactElement {
   const room = live.table.room;
+  const isLive = live.status === 'live';
   /** Focus target for the rescue. `tabIndex={-1}` adds no tab stop. */
   const statusRef = useRef<HTMLParagraphElement | null>(null);
 
   return (
     <Panel
-      className="prl-play__connection"
+      className={cx('prl-play__connection', isLive && 'prl-play__connection--live')}
       title="This table"
       tone="inset"
       actions={

@@ -27,9 +27,9 @@
 
   width: var(--prl-container);
   margin-inline: auto;
-  padding-block: var(--prl-space-9);
+  padding-block: var(--prl-space-6);
   display: grid;
-  gap: var(--prl-space-8);
+  gap: var(--prl-space-6);
   /* Room for the closed sheet's peek, so the last thing on the page is never behind it. */
   padding-block-end: calc(var(--prl-play-sheet-peek) + var(--prl-space-8));
 }
@@ -108,6 +108,26 @@
 .prl-play__controls {
   display: grid;
   gap: var(--prl-space-6);
+}
+
+/** Once live, compress connection chrome so the table and Coach sit higher on the first screen. */
+.prl-play__connection--live .prl-panel__header {
+  padding: var(--prl-space-4) var(--prl-space-6);
+}
+
+.prl-play__connection--live .prl-panel__body {
+  gap: var(--prl-space-4);
+  padding: var(--prl-space-4) var(--prl-space-6);
+}
+
+.prl-play__connection--live .prl-play__controls {
+  gap: var(--prl-space-4);
+}
+
+@media (min-width: 600px) {
+  .prl-play__connection--live .prl-play__facts {
+    column-gap: var(--prl-space-8);
+  }
 }
 
 /**
@@ -679,6 +699,14 @@
     grid-column: 2;
     grid-row: 1 / span 6;
     align-self: start;
+  }
+
+  .prl-play:has(.prl-play__connection--live) .prl-play__head {
+    align-items: baseline;
+  }
+
+  .prl-play:has(.prl-play__connection--live) .prl-play__lede {
+    font-size: var(--prl-type-body-sm);
   }
 
   .prl-play__stage {
