@@ -36,7 +36,6 @@ export function SiteFooter(): ReactElement {
                   <SuitMark area={destination.area ?? null} />
                   <span className="prl-footer__link-label">{destination.label}</span>
                 </Link>
-                <span className="prl-footer__summary">{destination.summary}</span>
               </li>
             ))}
             {/* After the five and unmarked: see `RECORD_DESTINATION`. */}
@@ -45,7 +44,6 @@ export function SiteFooter(): ReactElement {
                 <SuitMark area={null} />
                 <span className="prl-footer__link-label">{RECORD_DESTINATION.label}</span>
               </Link>
-              <span className="prl-footer__summary">{RECORD_DESTINATION.summary}</span>
             </li>
           </ul>
         </nav>
@@ -53,24 +51,19 @@ export function SiteFooter(): ReactElement {
         <div className="prl-footer__statement">
           <p className="prl-footer__heading prl-label">What this is</p>
           <p className="prl-footer__prose">
-            An educational tool for studying probability, expected value, risk and variance in No-Limit
-            Hold’em. It is <strong>not a gambling product</strong>: there is no real money in it, nothing to
-            buy, nothing to win and no way to cash anything out.
-          </p>
-          <p className="prl-footer__prose">
-            Chips are <strong>units</strong> — free practice counters with no monetary value, which you can{' '}
+            An educational No-Limit Hold’em lab — <strong>not a gambling product</strong>. No real money,
+            purchases or cash-outs. Chips are free practice <strong>units</strong> you can{' '}
             {/* The claim needs this link. Plain, because `prl-footer__link` is an inline-flex box. */}
-            <Link href={RECORD_PATH}>reset to the starting amount whenever you like</Link>. Nothing here is a
-            recommendation, and no figure is presented as the one correct play.
+            <Link href={RECORD_PATH}>reset at any time</Link>.
           </p>
         </div>
 
         <div className="prl-footer__statement">
           <p className="prl-footer__heading prl-label">Where the numbers come from</p>
           <p className="prl-footer__prose">
-            Every figure is computed from the actual deck when you ask for it, never looked up, and arrives
-            with its method and assumptions. <Link href={CHECKS_PATH}>How the numbers are checked</Link> says
-            what tests that, and where a bundled copy is shown instead.
+            Figures are computed from the deck on request with their method and assumptions, never looked up.{' '}
+            <Link href={CHECKS_PATH}>How the numbers are checked</Link> lists the tests and any bundled offline
+            examples.
           </p>
         </div>
 
@@ -83,7 +76,6 @@ export function SiteFooter(): ReactElement {
                 <Link className="prl-footer__link" href={destination.href}>
                   <span className="prl-footer__link-label">{destination.label}</span>
                 </Link>
-                <span className="prl-footer__summary">{destination.summary}</span>
               </li>
             ))}
           </ul>
