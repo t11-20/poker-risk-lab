@@ -121,11 +121,19 @@ function statusSentence(live: LiveTableModel, inLegendMatch: boolean): string {
   }
   if (live.phase === 'idle' && live.resuming) return 'Reconnecting you to the table you were at.';
   if (live.phase === 'idle' && inLegendMatch) {
-    return 'Press “Deal me in” to start this match with 1,000 practice units. No sign-up needed.';
+    return (
+      'Press “Deal me in” to play this style: the match still running, or a new one with 1,000 units. ' +
+      'No sign-up needed. ' +
+      'Each table keeps its own units, and if this would close another table, you are asked first.'
+    );
   }
   if (live.phase === 'idle') {
     // `chooseRoom` may reuse a held table or create one, and the page cannot know which yet.
-    return 'Press “Deal me in” to sit with 1,000 practice units. No sign-up needed.';
+    return (
+      'Press “Deal me in” to sit at your bot table: the one you already have, or a new one with 1,000 units. ' +
+      'No sign-up needed. ' +
+      'Each table keeps its own units, and if this would close a Legends match, you are asked first.'
+    );
   }
   if (live.phase === 'preparing') {
     return 'Preparing your table…';
