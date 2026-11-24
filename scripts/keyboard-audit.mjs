@@ -1232,7 +1232,13 @@ async function auditCoachPeekOcclusion(page) {
                 hb !== undefined && hb.height > 0 &&
                 handle.contains(document.elementFromPoint(hb.left + hb.width / 2, hb.top + hb.height / 2));
               const controls = [...document.querySelectorAll('main :is(${FOCUSABLE})')]
-                .filter((element) => element.closest('.prl-play__coach') === null)
+                .filter(
+                  (element) =>
+                    element.closest('.prl-play__coach') === null &&
+                    // Closed <details> uses content-visibility: hidden in Chrome, leaving descendants
+                    // with non-zero client rects even though they are neither painted nor tappable.
+                    element.closest('details:not([open]) > :not(summary)') === null,
+                )
                 .map((element) => ({ element, box: element.getBoundingClientRect() }))
                 // A centre past the viewport's edge is not on screen to tap.
                 .filter(({ box }) => {
