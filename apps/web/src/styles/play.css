@@ -143,6 +143,18 @@
   background-color: var(--prl-felt);
 }
 
+/** The same faint betting line the dealt table draws inside its rail. */
+.prl-play__idle::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  pointer-events: none;
+  border: 1px solid var(--prl-felt-line);
+  border-radius: var(--prl-radius-pill);
+  inset: calc(var(--prl-idle-felt-block) + var(--prl-rail-width) + var(--prl-space-5))
+    calc(var(--prl-idle-felt-inline) + var(--prl-rail-width) + var(--prl-space-5));
+}
+
 .prl-play__idle-table {
   position: absolute;
   inset: var(--prl-idle-felt-block) var(--prl-idle-felt-inline);

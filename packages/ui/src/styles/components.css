@@ -935,57 +935,82 @@
 /* Table primitives. The felt and the field are in the PokerTable block below. */
 
 /**
- * A seat is a small plain box: name, stack, one status line. Its fill is opaque, so its words are
- * measured against it wherever it crosses the rail. An opponent's cards sit inside the outline.
+ * A seat is a disc over a plate. The disc carries the chair number. The plate is the opaque box the
+ * words sit in, so they are measured against it wherever the seat crosses the rail. An opponent's
+ * cards sit beside the disc. The viewer's cards sit beside both.
  */
-/** `min-content`, so cards never squeeze the words: a seat too narrow for both overflows instead. */
 .prl-seat {
   /* A shown hand is read at a glance on a desktop; on a phone it gives way to the words. */
   --prl-seat-card: var(--prl-space-8);
 
-  display: grid;
-  grid-template-columns: minmax(min-content, 1fr) auto;
+  position: relative;
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: var(--prl-space-3);
-  padding: var(--prl-space-3) var(--prl-space-4);
-  border: 1px solid var(--prl-line);
-  border-radius: var(--prl-radius-2);
-  background-color: var(--prl-surface-raised);
+  gap: var(--prl-space-2);
+  padding: 0;
+  border: 0;
+  background-color: transparent;
   color: var(--prl-text);
   font-size: var(--prl-type-body-sm);
   line-height: var(--prl-leading-snug);
 }
 
+/** Disc and, for an opponent, the two cards beside it. The plate is the next row. */
+.prl-seat__cluster {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: var(--prl-space-1);
+}
+
+.prl-seat__disc {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  inline-size: var(--prl-space-11);
+  block-size: var(--prl-space-11);
+}
+
+/** The chair number. `aria-hidden` in the markup: the plate already names the seat. */
+.prl-seat__avatar {
+  display: grid;
+  place-items: center;
+  inline-size: 100%;
+  block-size: 100%;
+  border: 1px solid var(--prl-line-strong);
+  border-radius: 50%;
+  background-color: var(--prl-surface-inset);
+  color: var(--prl-text);
+  font-size: var(--prl-type-body-sm);
+  font-weight: var(--prl-weight-semibold);
+  font-variant-numeric: var(--prl-numeric);
+  line-height: 1;
+}
+
 /**
- * Name over stack, the position and any turn cues beside the stack, the status line under both. The
- * plate is the box for the viewer, whose cards are too large to sit inside it.
+ * Name, the stack in caution gold, then the one status line. The position is in the plate and
+ * visually hidden: a reader still hears it, and the disc already shows the chair.
  */
 .prl-seat__plate {
   display: grid;
-  grid-template-columns: auto auto;
-  justify-content: space-between;
-  grid-template-areas:
-    "name name"
-    "stats top"
-    "status status";
-  align-items: center;
-  gap: var(--prl-space-1) var(--prl-space-4);
-  min-width: 0;
+  justify-items: center;
+  gap: 0;
+  min-inline-size: min(100%, calc(var(--prl-space-16) - var(--prl-space-6)));
+  max-inline-size: 100%;
+  padding: var(--prl-space-2) var(--prl-space-4);
+  border: 1px solid var(--prl-line);
+  border-radius: var(--prl-radius-3);
+  background-color: var(--prl-surface-raised);
+  text-align: center;
 }
 
-.prl-seat__top {
-  grid-area: top;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: flex-end;
-  gap: var(--prl-space-2) var(--prl-space-3);
-}
-
-.prl-seat__name {
-  grid-area: name;
+p.prl-seat__name {
   margin: 0;
+  max-inline-size: 100%;
   font-weight: var(--prl-weight-semibold);
+  overflow-wrap: anywhere;
 }
 
 .prl-seat__position {
@@ -995,7 +1020,12 @@
   letter-spacing: var(--prl-tracking-label);
 }
 
+/** On the felt side of the disc, above the plate, so the letter never sits on the name. */
 .prl-seat .prl-badge--dealer {
+  position: absolute;
+  z-index: var(--prl-z-raised);
+  inset-block-start: calc(var(--prl-space-3) * -1);
+  inset-inline-start: calc(var(--prl-space-6) * -1);
   min-width: var(--prl-space-7);
   min-height: var(--prl-space-7);
   font-size: var(--prl-type-label-sm);
@@ -1008,7 +1038,6 @@
 }
 
 .prl-seat__stats {
-  grid-area: stats;
   margin: 0;
 }
 
@@ -1016,16 +1045,16 @@
   display: contents;
 }
 
-/** `nowrap`. `1,000` broken across lines reads as "1,00" and "0". */
-.prl-seat__stat-value {
+/** `nowrap`. `1,000` broken across lines reads as "1,00" and "0". Gold, as a stack reads at a table. */
+dd.prl-seat__stat-value {
   margin: 0;
+  color: var(--prl-caution);
   font-weight: var(--prl-weight-semibold);
   font-variant-numeric: var(--prl-numeric);
   white-space: nowrap;
 }
 
-.prl-seat__status {
-  grid-area: status;
+p.prl-seat__status {
   margin: 0;
   color: var(--prl-text-muted);
   font-size: var(--prl-type-label);
@@ -1042,66 +1071,82 @@
   margin: 0;
 }
 
-/** A dashed outline and muted ink, and no cards. Never opacity, which would take a label under 4.5:1. */
-.prl-seat--folded,
-.prl-seat--sitting-out {
+/**
+ * A dashed plate and muted ink, and no cards. Never opacity, which would take a label under 4.5:1.
+ * The stack keeps its own gold: the rule above is on the `<dd>`, so it wins over this inherited ink.
+ */
+.prl-seat--folded .prl-seat__plate,
+.prl-seat--sitting-out .prl-seat__plate,
+.prl-seat--folded .prl-seat__avatar,
+.prl-seat--sitting-out .prl-seat__avatar {
   border-style: dashed;
   border-color: var(--prl-line-strong);
+}
+
+.prl-seat--folded .prl-seat__plate,
+.prl-seat--sitting-out .prl-seat__plate {
   background-color: var(--prl-surface-page);
+}
+
+.prl-seat--folded,
+.prl-seat--sitting-out {
   color: var(--prl-text-muted);
 }
 
 /**
- * The seat to act gets a second line inside its outline, beside the words and the ring. Inside, so it is
- * measured against the seat's own fill: outside, `--prl-text` on light felt was 2.5:1.
+ * The seat to act: a caution rim, a second outline, and the words "to act". The ring is the third
+ * cue and wraps the disc. The outline is measured against the plate's own fill.
  */
-.prl-seat--to-act {
+.prl-seat--to-act .prl-seat__plate {
+  border-color: var(--prl-caution);
   outline: 2px solid var(--prl-text);
-  outline-offset: -4px;
+  outline-offset: 2px;
 }
 
 /** Marked cards are named as such, so the line is a reinforcement, not the message. */
-.prl-seat--marked {
+.prl-seat--marked .prl-seat__plate {
   outline: 2px solid var(--prl-favourable);
-  outline-offset: -4px;
+  outline-offset: 2px;
 }
 
-/** The viewer: large fanned cards beside a plate with a stronger outline. */
+/** The viewer: large fanned cards in the first column, disc over plate in the second. */
 .prl-seat--self {
+  display: grid;
   grid-template-columns: auto auto;
-  gap: var(--prl-space-5);
-  padding: 0;
+  grid-template-areas:
+    "cards disc"
+    "cards plate";
+  align-items: end;
+  justify-content: center;
+  gap: var(--prl-space-2) var(--prl-space-4);
   border: 0;
   background-color: transparent;
 }
 
-.prl-seat--self.prl-seat--to-act,
-.prl-seat--self.prl-seat--marked {
-  outline: 0;
+.prl-seat--self .prl-seat__cluster {
+  grid-area: disc;
 }
 
 .prl-seat--self .prl-seat__plate {
-  grid-column: 2;
-  grid-row: 1;
-  padding: var(--prl-space-3) var(--prl-space-5);
-  border: 2px solid var(--prl-text);
-  border-radius: var(--prl-radius-2);
-  background-color: var(--prl-surface-raised);
+  grid-area: plate;
+  border-width: 2px;
+  border-color: var(--prl-line-strong);
 }
 
 .prl-seat--self.prl-seat--to-act .prl-seat__plate {
-  outline: 2px solid var(--prl-text);
-  outline-offset: -5px;
+  border-color: var(--prl-caution);
+  outline: 2px solid var(--prl-accent-edge);
+  outline-offset: 2px;
 }
 
 .prl-seat--self.prl-seat--marked .prl-seat__plate {
   outline: 2px solid var(--prl-favourable);
-  outline-offset: -5px;
+  outline-offset: 2px;
 }
 
 .prl-seat--self .prl-seat__cards {
-  grid-column: 1;
-  grid-row: 1;
+  grid-area: cards;
+  align-self: end;
 }
 
 .prl-pot {
@@ -1922,10 +1967,10 @@
     calc((100cqi - var(--prl-table-pad) * 2 - var(--prl-space-4)) / 2),
     calc(var(--prl-space-16) + var(--prl-space-6))
   );
-  /* Where the rail runs: through the middle of the top seat and across the viewer's cards. */
-  --prl-felt-inset-top: calc(var(--prl-table-pad) + var(--prl-space-9));
+  /* The rail crosses each disc. Plates hang just inside it and stay opaque, so their ink is not on the felt. */
+  --prl-felt-inset-top: calc(var(--prl-space-11) / 2);
   --prl-felt-inset-side: var(--prl-space-1);
-  --prl-felt-inset-bottom: calc(var(--prl-table-pad) + var(--prl-space-11));
+  --prl-felt-inset-bottom: calc(var(--prl-space-12) + var(--prl-space-4));
   /* From the field's edge to the faint inner line, which the pot and board stay inside. */
   --prl-felt-inner: calc(var(--prl-felt-inset-side) + var(--prl-rail-width) + var(--prl-space-6));
 
@@ -2011,11 +2056,20 @@
   width: auto;
 }
 
-/** Plain text on the felt: the pot, the bet to match, then the board with an outline per card to come. */
+/**
+ * The pot pill, the bet to match, then the board. On a narrow field the three stack. From 42rem the
+ * bet sits on the felt to the left of the board and the pot stays centred above it.
+ */
 .prl-table__centre {
   grid-area: 3 / 1 / 4 / -1;
   align-self: center;
   display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-areas:
+    "pot pot pot"
+    "bet bet bet"
+    "board board board";
+  align-items: center;
   justify-items: center;
   gap: var(--prl-space-3);
   padding: var(--prl-space-4) calc(var(--prl-felt-inner) - var(--prl-table-pad));
@@ -2023,19 +2077,44 @@
   text-align: center;
 }
 
+/** A rail-coloured pill, so the felt ink stays legible in both themes. The chip is on the metric. */
 .prl-table__centre .prl-pot {
+  grid-area: pot;
   gap: var(--prl-space-2);
-  padding: 0;
+  padding: var(--prl-space-1) var(--prl-space-4);
   border: 0;
-  background-color: transparent;
+  border-radius: var(--prl-radius-pill);
+  background-color: var(--prl-rail);
 }
 
 .prl-table__centre .prl-metric {
-  display: flex;
+  position: relative;
+  display: inline-flex;
   flex-wrap: wrap;
   justify-content: center;
-  align-items: baseline;
-  gap: var(--prl-space-2) var(--prl-space-4);
+  align-items: center;
+  gap: var(--prl-space-2);
+}
+
+/** A six-spot chip. Page inks only: the felt colours stay on the listed felt readers. */
+.prl-table__centre .prl-metric::before,
+.prl-table__bet::before {
+  content: "";
+  flex: 0 0 auto;
+  inline-size: var(--prl-space-6);
+  aspect-ratio: 1;
+  border: 1px solid var(--prl-text);
+  border-radius: 50%;
+  background-color: var(--prl-adverse);
+  background-image:
+    radial-gradient(
+      circle,
+      var(--prl-surface-raised) 0 34%,
+      transparent 35% 48%,
+      var(--prl-surface-raised) 49% 62%,
+      transparent 63%
+    ),
+    repeating-conic-gradient(from 0deg, var(--prl-text) 0 18deg, transparent 0 36deg);
 }
 
 .prl-table__centre .prl-metric__label,
@@ -2045,6 +2124,19 @@
 .prl-table__centre .prl-pot__side-index,
 .prl-table__centre .prl-pot__side-seats {
   color: var(--prl-felt-ink-muted);
+}
+
+/** The pill already says "Pot". The unit stays in the name the metric speaks. */
+.prl-table__centre .prl-metric__unit {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  border: 0;
+  white-space: nowrap;
 }
 
 .prl-table__centre .prl-metric__value,
@@ -2062,6 +2154,10 @@
 }
 
 .prl-table__bet {
+  grid-area: bet;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--prl-space-2);
   margin: 0;
   font-size: var(--prl-type-body-sm);
   font-variant-numeric: var(--prl-numeric);
@@ -2077,6 +2173,7 @@
 
 /** Five cards on one line inside the felt's inner line at any width, never past 46px. */
 .prl-table__board {
+  grid-area: board;
   --prl-board-card-w: min(
     var(--prl-card-board),
     calc((100cqi - var(--prl-felt-inner) * 2 - var(--prl-space-3) * 4) / 5)
@@ -2104,9 +2201,36 @@
 
 /* The seats' cards and clock, after the base card, row and timer rules they refine. */
 
-/** The 24px hole holds three bare digits. */
-.prl-seat .prl-turn-timer {
-  --prl-turn-size: var(--prl-space-9);
+/**
+ * The ring wraps the disc. The digits stay in the timer for the countdown, and the chair number is
+ * what the disc shows, so the digits are clipped rather than drawn over it.
+ */
+.prl-seat__disc .prl-turn-timer {
+  --prl-turn-size: calc(var(--prl-space-11) + var(--prl-space-3));
+
+  position: absolute;
+  z-index: var(--prl-z-raised);
+  inset-block-start: 50%;
+  inset-inline-start: 50%;
+  translate: -50% -50%;
+  pointer-events: none;
+}
+
+.prl-seat__disc .prl-turn-timer__value {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  border: 0;
+  white-space: nowrap;
+}
+
+/** Gold, matching the plate's caution rim. Forced colours restate this as Highlight below. */
+.prl-seat .prl-turn-ring {
+  background-image: conic-gradient(var(--prl-caution) var(--prl-turn-progress), transparent 0);
 }
 
 .prl-seat__cards .prl-card-row__cards {
@@ -2122,27 +2246,43 @@
   --prl-card-w: var(--prl-card-back-small);
 }
 
-.prl-seat--self .prl-seat__cards .prl-card-row__cards {
-  gap: var(--prl-space-3);
+/** Two backs, fanned the way a dealt hand sits beside a chair. */
+.prl-seat:not(.prl-seat--self) .prl-card--face-down {
+  transform-origin: 50% 100%;
 }
 
-/** Fanned 4 degrees each way. `rotate`, so it composes with the deal and the highlight lift. */
+.prl-seat:not(.prl-seat--self) .prl-card-row__cards .prl-card--face-down:first-child {
+  rotate: -8deg;
+}
+
+.prl-seat:not(.prl-seat--self) .prl-card-row__cards .prl-card--face-down:last-child {
+  margin-inline-start: calc(var(--prl-space-3) * -1);
+  rotate: 8deg;
+}
+
+.prl-seat--self .prl-seat__cards .prl-card-row__cards {
+  gap: 0;
+}
+
+/** Fanned 4 degrees each way, overlapped. `rotate`, so it composes with a highlight lift. */
 .prl-seat--self .prl-card {
-  --prl-card-w: var(--prl-card-hero);
+  --prl-card-w: min(var(--prl-card-hero), 28cqi);
 
   rotate: -4deg;
   transform-origin: 50% 100%;
 }
 
 .prl-seat--self .prl-card + .prl-card {
+  margin-inline-start: calc(var(--prl-space-5) * -1);
   rotate: 4deg;
 }
 
 @container prl-table (min-width: 42rem) {
   .prl-table__field {
     --prl-table-pad: var(--prl-space-6);
-    --prl-seat-w: calc(var(--prl-space-16) + var(--prl-space-9));
-    --prl-felt-inset-side: calc(var(--prl-table-pad) + var(--prl-seat-w) / 2);
+    --prl-seat-w: var(--prl-space-16);
+    /* Through the disc, which is centred in the seat column. */
+    --prl-felt-inset-side: calc(var(--prl-seat-w) / 2);
 
     grid-template-columns: var(--prl-seat-w) minmax(0, 1fr) var(--prl-seat-w);
     /* A floor on the two middle rows, so the felt keeps an oval's height when every seat is short. */
@@ -2174,11 +2314,27 @@
     grid-area: 4 / 1 / 5 / -1;
   }
 
-  /* The middle column already sits inside the inner line. */
+  /* The middle column already sits inside the inner line. The bet moves beside the board. */
   .prl-table__centre {
     grid-area: 2 / 2 / 4 / 3;
+    grid-template-areas:
+      ". pot ."
+      "bet board .";
     padding-inline: var(--prl-space-0);
   }
+}
+
+/** Toward the felt: right of a left-hand disc, above-left of the viewer. */
+.prl-table__field [data-slot="left-low"] .prl-badge--dealer,
+.prl-table__field [data-slot="left-high"] .prl-badge--dealer,
+.prl-table__field [data-slot="top"] .prl-badge--dealer {
+  inset-inline-start: auto;
+  inset-inline-end: calc(var(--prl-space-4) * -1);
+}
+
+.prl-table__field [data-slot="hero"] .prl-badge--dealer {
+  inset-block-start: calc(var(--prl-space-7) * -1);
+  inset-inline-start: calc(var(--prl-space-9) * -1);
 }
 
 /* ActionBar */
@@ -3440,30 +3596,35 @@ td.prl-candidates__ev,
 
   /** The hairline is background-coloured and vanishes, so plates get a real border. */
   .prl-seat {
+    border: 0;
+    background-color: transparent;
+  }
+
+  .prl-seat__plate,
+  .prl-seat__avatar {
     border: 1px solid CanvasText;
-    border-radius: var(--prl-radius-1);
+    background-color: Canvas;
+    color: CanvasText;
   }
 
-  .prl-seat::before,
-  .prl-seat::after {
-    display: none;
-  }
-
-  .prl-seat--active,
-  .prl-seat--to-act {
+  .prl-seat--to-act .prl-seat__plate,
+  .prl-seat--marked .prl-seat__plate {
     border-color: Highlight;
     outline: var(--prl-focus-width) solid Highlight;
     outline-offset: var(--prl-focus-offset);
   }
 
-  .prl-seat--folded,
-  .prl-seat--sitting-out {
+  .prl-seat--folded .prl-seat__plate,
+  .prl-seat--sitting-out .prl-seat__plate,
+  .prl-seat--folded .prl-seat__avatar,
+  .prl-seat--sitting-out .prl-seat__avatar {
     border-style: dashed;
     color: GrayText;
   }
 
   /* Gradients are not forced, so the ring survives once given a system colour. */
-  .prl-turn-ring {
+  .prl-turn-ring,
+  .prl-seat .prl-turn-ring {
     background-image: conic-gradient(Highlight var(--prl-turn-progress), transparent 0);
   }
 
