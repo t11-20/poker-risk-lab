@@ -20,6 +20,11 @@
   font-size: var(--prl-type-body-lg);
 }
 
+/* The onboarding panel already opens the page, so 48px more above the title only pushed the filters down. */
+.prl-lab-page .prl-page-head {
+  padding-block: var(--prl-space-9) var(--prl-space-7);
+}
+
 .prl-assumptions__item {
   display: grid;
   gap: var(--prl-space-4);
