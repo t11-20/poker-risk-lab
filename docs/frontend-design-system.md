@@ -166,9 +166,8 @@ scrolled under them never reads through. `packages/ui/test/layout-guarantees.tes
 `box-shadow` that is not `var(--prl-focus-ring)` on a focus rule, and any `backdrop-filter`, glass,
 wash, edge, veil or elevation token, in any rule, the table's included.
 
-Panel surfaces are `.prl-panel`, `.prl-panel--inset` and `.prl-panel--quiet`. The 4.0 edge and
+Panel surfaces are `.prl-panel` and `.prl-panel--inset`. The 4.0 edge and
 veil tokens are gone, with the navy table and the old card tokens, now that the table is flat too.
-The elevation tokens survive only until the branches that may still read them merge.
 
 **Removed, and why.** The 4.0 system built depth from translucent "glass" panes over a tinted page
 wash, a five-level elevation ladder of double shadows, lit top hairlines, gradient sheens on

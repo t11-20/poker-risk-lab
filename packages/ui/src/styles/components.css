@@ -334,12 +334,6 @@
   background-color: var(--prl-surface-inset);
 }
 
-/** No surface, so no edge either. */
-.prl-panel--quiet {
-  border-color: transparent;
-  background-color: transparent;
-}
-
 /** Matches what `Panel.tsx` emits, or every panel header renders unstyled. */
 .prl-panel__header {
   display: flex;
