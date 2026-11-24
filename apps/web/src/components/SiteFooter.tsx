@@ -62,8 +62,8 @@ export function SiteFooter(): ReactElement {
           <p className="prl-footer__heading prl-label">Where the numbers come from</p>
           <p className="prl-footer__prose">
             Figures are computed from the deck on request with their method and assumptions, never looked up.{' '}
-            <Link href={CHECKS_PATH}>How the numbers are checked</Link> lists the tests and any bundled offline
-            examples.
+            <Link href={CHECKS_PATH}>How the numbers are checked</Link> lists the tests and any bundled
+            offline examples.
           </p>
         </div>
 

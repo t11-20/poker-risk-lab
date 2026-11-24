@@ -33,8 +33,7 @@ export const metadata: Metadata = {
 
 /** The operator's `namingMode`, in the reader's words rather than the config key's. */
 const NAMING_NOTE: Readonly<Record<'archetype' | 'attributed', string>> = {
-  archetype:
-    'Named by playing style. The sixteen traits beneath each name are the entire model.',
+  archetype: 'Named by playing style. The sixteen traits beneath each name are the entire model.',
   attributed:
     'Some styles include an attributed name labelled “(modelled style)” as a memory aid only — none reproduce a real person.',
 };

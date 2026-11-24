@@ -29,9 +29,7 @@ interface Step {
 const STEPS: readonly Step[] = [
   {
     title: 'The chips are not money',
-    body: [
-      `${UNITS_EXPLANATION} Units exist purely to give decisions a clear size for arithmetic.`,
-    ],
+    body: [`${UNITS_EXPLANATION} Units exist purely to give decisions a clear size for arithmetic.`],
   },
   {
     title: 'The Coach shows its working',
@@ -41,9 +39,7 @@ const STEPS: readonly Step[] = [
   },
   {
     title: 'Start anywhere, no scores',
-    body: [
-      'Nothing is locked and quizzes are ungraded. Start at Lesson 01 or jump straight to any topic.',
-    ],
+    body: ['Nothing is locked and quizzes are ungraded. Start at Lesson 01 or jump straight to any topic.'],
   },
 ];
 

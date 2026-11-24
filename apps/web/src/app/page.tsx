@@ -109,9 +109,8 @@ export default function HomePage(): ReactElement {
 
           <p className="prl-home__guardrail">
             <strong>Not a gambling product.</strong> No real money. Chips are free practice{' '}
-            <strong>units</strong> with no cash value —{' '}
-            <Link href={RECORD_PATH}>reset them any time</Link>. Nothing here is presented as the one correct
-            play.
+            <strong>units</strong> with no cash value — <Link href={RECORD_PATH}>reset them any time</Link>.
+            Nothing here is presented as the one correct play.
           </p>
         </div>
 
@@ -163,8 +162,8 @@ export default function HomePage(): ReactElement {
         <div className="prl-home__section-head">
           <h2 className="prl-home__section-title">What has been checked</h2>
           <p className="prl-home__section-lede">
-            Four verifiable facts —{' '}
-            <Link href={CHECKS_PATH}>how the numbers are checked</Link> names the test behind each one.
+            Four verifiable facts — <Link href={CHECKS_PATH}>how the numbers are checked</Link> names the test
+            behind each one.
           </p>
         </div>
         <MetricsBand />

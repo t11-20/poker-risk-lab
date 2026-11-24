@@ -138,9 +138,7 @@ export default async function RecordPage(): Promise<ReactElement> {
             </dl>
           )}
 
-          <p className="prl-note">
-            {`${pluralise(record.progress.topicsTouched.length, 'topic')} touched.`}
-          </p>
+          <p className="prl-note">{`${pluralise(record.progress.topicsTouched.length, 'topic')} touched.`}</p>
         </Panel>
       ) : null}
 
