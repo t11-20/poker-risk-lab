@@ -8,9 +8,10 @@
  *    is awarded. `showdown` is not settled. "All in" is said on the status line, never as a badge.
  * 4. Folded seats swap the outline and the ink, never the opacity, which would take a 4.5:1 label under
  *    the floor.
- * The plate (`__plate`) is the box with the words in it. An opponent's cards sit inside the seat's
- * outline, the viewer's beside their plate.
- * `as` is a prop, not a wrapper, because the element carries its place at the table (`data-slot`).
+ * The plate (`__plate`) is the box with the words in it, under a round disc that shows the seat
+ * number. An opponent's cards sit beside that disc. The viewer's large cards sit beside the disc
+ * and the plate. The dealer disc sits on the felt edge of the avatar, and the turn ring wraps the
+ * avatar. `as` is a prop, not a wrapper, because the element carries its place (`data-slot`).
  */
 
 import type { ReactElement } from 'react';
@@ -123,20 +124,61 @@ function StatusLine({ text }: { readonly text: string }): ReactElement {
   );
 }
 
+/** Revealed cards, two backs, or an empty row. Sitting out has no row at all. */
+function holeHand(seat: SeatView): { readonly cards: readonly number[]; readonly faceDown: boolean } | null {
+  if (seat.status === 'sittingOut') return null;
+  const holeCards = seat.holeCards;
+  const faceDown = holeCards === null;
+  if (holeCards !== null) return { cards: holeCards, faceDown };
+  const holding = seat.status === 'active' || seat.status === 'allIn';
+  return { cards: holding ? FACE_DOWN_PAIR : [], faceDown };
+}
+
+function HoleCards(props: {
+  readonly seat: SeatView;
+  readonly name: string;
+  readonly highlightedCards?: readonly number[];
+  readonly highlightLabel?: string;
+}): ReactElement | null {
+  const hand = holeHand(props.seat);
+  if (hand === null) return null;
+  const { highlightedCards, highlightLabel } = props;
+  return (
+    <CardRow
+      cards={hand.cards}
+      label={`${props.name} hole cards`}
+      showLabel={false}
+      faceDown={hand.faceDown}
+      size={props.seat.isSelf ? 'lg' : 'sm'}
+      tight
+      {...(highlightedCards === undefined ? {} : { highlightedCards })}
+      {...(highlightLabel === undefined ? {} : { highlightLabel })}
+      emptyText="no cards"
+      emptyTextHidden
+      className="prl-seat__cards"
+    />
+  );
+}
+
+function seatClassName(seat: SeatView, marked: boolean, className: string | undefined): string {
+  return cx(
+    'prl-seat',
+    STATUS_CLASS[seat.status],
+    seat.isSelf && 'prl-seat--self',
+    seat.isToAct && 'prl-seat--to-act',
+    marked && 'prl-seat--marked',
+    className,
+  );
+}
+
 export function Seat(props: SeatProps): ReactElement {
   const { seat, street, name, ringIndex, ringCount, turn = null, highlightedCards, highlightLabel } = props;
   const { as = 'li', className, lastAction = null } = props;
 
   const Tag = as;
   const settled = isSettled(street);
-  const holeCards = seat.holeCards;
-  const faceDown = holeCards === null;
-  const isHoldingCards = seat.status === 'active' || seat.status === 'allIn';
-  let cards: readonly number[] = [];
-  if (holeCards !== null) cards = holeCards;
-  else if (isHoldingCards) cards = FACE_DOWN_PAIR;
-
   const status = seatLine(seat, settled, lastAction);
+  const holeCards = seat.holeCards;
 
   /** The seat-level mark for a seat holding ringed cards. Not `--won`: review marks cards for other reasons. */
   const marked =
@@ -144,39 +186,49 @@ export function Seat(props: SeatProps): ReactElement {
     highlightedCards.length > 0 &&
     holeCards?.some((card) => highlightedCards.includes(card)) === true;
 
+  const hole = (
+    <HoleCards
+      seat={seat}
+      name={name}
+      {...(highlightedCards === undefined ? {} : { highlightedCards })}
+      {...(highlightLabel === undefined ? {} : { highlightLabel })}
+    />
+  );
+
   return (
     <Tag
-      className={cx(
-        'prl-seat',
-        STATUS_CLASS[seat.status],
-        seat.isSelf && 'prl-seat--self',
-        seat.isToAct && 'prl-seat--to-act',
-        marked && 'prl-seat--marked',
-        className,
-      )}
+      className={seatClassName(seat, marked, className)}
       data-slot={seatSlot(ringIndex, ringCount)}
       data-status={seat.status}
       data-to-act={seat.isToAct ? 'true' : 'false'}
     >
-      <div className="prl-seat__plate">
-        <div className="prl-seat__top">
-          {seat.position === null ? (
-            <span className="prl-seat__position prl-label">no position</span>
-          ) : (
-            <span className="prl-seat__position prl-label">{seat.position}</span>
-          )}
+      <div className="prl-seat__cluster">
+        {seat.isSelf ? null : hole}
+        <div className="prl-seat__disc">
+          {seat.isToAct && turn !== null ? (
+            /* "Ada's turn timer" reads correctly, "You turn timer" does not. */
+            <TurnTimer clock={turn} label={seat.isSelf ? 'Your turn timer' : `${name} turn timer`} />
+          ) : null}
+          {/* The name already says which seat. The numeral is the disc, as on the rail. */}
+          <span className="prl-seat__avatar" aria-hidden="true">
+            {String(seat.seat + 1)}
+          </span>
           {seat.isButton ? (
             <span className="prl-badge prl-badge--dealer">
               <span aria-hidden="true">D</span>
               <span className="prl-visually-hidden">dealer button</span>
             </span>
           ) : null}
-          {seat.isToAct ? <span className="prl-seat__turn">to act</span> : null}
-          {seat.isToAct && turn !== null ? (
-            /* "Ada's turn timer" reads correctly, "You turn timer" does not. */
-            <TurnTimer clock={turn} label={seat.isSelf ? 'Your turn timer' : `${name} turn timer`} />
-          ) : null}
         </div>
+      </div>
+
+      <div className="prl-seat__plate">
+        {seat.position === null ? (
+          <span className="prl-seat__position prl-label prl-visually-hidden">no position</span>
+        ) : (
+          <span className="prl-seat__position prl-label prl-visually-hidden">{seat.position}</span>
+        )}
+        {seat.isToAct ? <span className="prl-seat__turn">to act</span> : null}
 
         <p className="prl-seat__name">
           {name}
@@ -194,21 +246,7 @@ export function Seat(props: SeatProps): ReactElement {
         <StatusLine text={status} />
       </div>
 
-      {seat.status === 'sittingOut' ? null : (
-        <CardRow
-          cards={cards}
-          label={`${name} hole cards`}
-          showLabel={false}
-          faceDown={faceDown}
-          size={seat.isSelf ? 'lg' : 'sm'}
-          tight
-          {...(highlightedCards === undefined ? {} : { highlightedCards })}
-          {...(highlightLabel === undefined ? {} : { highlightLabel })}
-          emptyText="no cards"
-          emptyTextHidden
-          className="prl-seat__cards"
-        />
-      )}
+      {seat.isSelf ? hole : null}
     </Tag>
   );
 }

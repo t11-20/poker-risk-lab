@@ -143,6 +143,18 @@
   background-color: var(--prl-felt);
 }
 
+/** The same faint betting line the dealt table draws inside its rail. */
+.prl-play__idle::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  pointer-events: none;
+  border: 1px solid var(--prl-felt-line);
+  border-radius: var(--prl-radius-pill);
+  inset: calc(var(--prl-idle-felt-block) + var(--prl-rail-width) + var(--prl-space-5))
+    calc(var(--prl-idle-felt-inline) + var(--prl-rail-width) + var(--prl-space-5));
+}
+
 .prl-play__idle-table {
   position: absolute;
   inset: var(--prl-idle-felt-block) var(--prl-idle-felt-inline);
@@ -863,18 +875,50 @@
    right-aligned value. */
 
 .prl-play .prl-coach {
-  gap: var(--prl-space-8);
-  padding: var(--prl-space-8);
+  gap: var(--prl-space-5);
+  padding: var(--prl-space-5);
   border-color: var(--prl-line);
   border-radius: var(--prl-radius-3);
 }
 
+/** One baseline row, so the title costs a line of the rail's first screen, not three. */
+.prl-play .prl-coach__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--prl-space-2) var(--prl-space-4);
+}
+
+.prl-play .prl-coach__title {
+  font-size: var(--prl-type-heading);
+}
+
+.prl-play .prl-coach__summary {
+  font-size: var(--prl-type-body-sm);
+}
+
+.prl-play .prl-coach__grid {
+  gap: var(--prl-space-4);
+}
+
 .prl-play .prl-coach__section {
-  gap: var(--prl-space-6);
-  padding: var(--prl-space-6);
+  gap: var(--prl-space-4);
+  padding: var(--prl-space-5);
   border-color: var(--prl-line);
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-raised);
+}
+
+/** The share, its margin over break-even and its sample count read as one figure. */
+.prl-play .prl-coach__section--equity .prl-metric {
+  gap: var(--prl-space-1);
+}
+
+/** A bare `p` keeps 16px under it from `base.css`, which parted a figure from its own note. */
+.prl-play .prl-coach .prl-metric__delta,
+.prl-play .prl-coach .prl-metric__note {
+  margin: 0;
 }
 
 /** The equity block gets a lit top edge and a contact shadow, so the eye lands there first. */
@@ -945,10 +989,24 @@
   border-radius: var(--prl-radius-pill);
 }
 
+.prl-play .prl-equity-bar__readout {
+  gap: var(--prl-space-1);
+}
+
+/** The toggle keeps the summary's 44px target and no more, so it sits directly under hero's row. */
+.prl-play .prl-equity-bar__more {
+  margin: 0;
+}
+
 /** The assumptions keep body size, as the design system requires. The dashed edge says annotation. */
 .prl-play .prl-suggestion,
 .prl-play .prl-uncertainty {
   border-radius: var(--prl-radius-3);
+}
+
+.prl-play .prl-suggestion {
+  gap: var(--prl-space-3);
+  padding: var(--prl-space-5);
 }
 
 .prl-play .prl-assumptions {
@@ -989,6 +1047,11 @@
   .prl-play__coach .prl-suggestion {
     order: -1;
   }
+
+  /* The sheet already leads with the reading, and a strip of links would push it off the first screen. */
+  .prl-play__coach .prl-coach__jump {
+    display: none;
+  }
 }
 
 @media (min-width: 600px) {
@@ -996,6 +1059,56 @@
     border-start-start-radius: var(--prl-radius-0);
     border-start-end-radius: var(--prl-radius-0);
     background-color: transparent;
+  }
+}
+
+/* 12.8.1  THE RAIL'S JUMP STRIP
+   From 900px the rail scrolls on its own, so the strip sticks to its top. Everything a link or Tab can
+   land on clears the strip's 41px (32px link, 8px padding, 1px edge) by scroll padding and margin. */
+
+@media (min-width: 900px) {
+  .prl-play__coach {
+    scroll-padding-block-start: var(--prl-space-11);
+  }
+
+  /* Visual order only, matching the phone sheet. The DOM keeps equity and the price first
+     (commit c722b90e keeps the price explanation uncollapsed before the reading), so screen
+     readers and full-width routes still meet the reasoning before the conclusion. */
+  .prl-play__coach .prl-coach__header {
+    order: -4;
+  }
+
+  .prl-play__coach .prl-coach__jump {
+    order: -3;
+  }
+
+  .prl-play__coach .prl-coach > .prl-callout {
+    order: -2;
+  }
+
+  .prl-play__coach .prl-suggestion {
+    order: -1;
+  }
+
+  /* `--prl-z-sticky` inside the rail's own stacking context, so a focused control (`--prl-z-raised`
+     from base.css) scrolled under the strip does not paint over it. */
+  .prl-play .prl-coach__jump {
+    position: sticky;
+    z-index: var(--prl-z-sticky);
+    inset-block-start: 0;
+    margin-inline: calc(-1 * var(--prl-space-5));
+    padding: var(--prl-space-2) var(--prl-space-5);
+    border-block-end: 1px solid var(--prl-line-strong);
+    background-color: var(--prl-surface-panel);
+  }
+
+  .prl-play .prl-coach__section,
+  .prl-play .prl-suggestion,
+  .prl-play .prl-coach__grid,
+  .prl-play .prl-coach__disclosures,
+  .prl-play .prl-disclose__summary,
+  .prl-play .prl-tip__button {
+    scroll-margin-block-start: var(--prl-space-11);
   }
 }
 
@@ -1046,6 +1159,11 @@
 
   .prl-play__handle-grip {
     border: 1px solid CanvasText;
+  }
+
+  .prl-play .prl-coach__jump {
+    background-color: Canvas;
+    border-block-end-color: CanvasText;
   }
 
   .prl-play__skeleton--header,

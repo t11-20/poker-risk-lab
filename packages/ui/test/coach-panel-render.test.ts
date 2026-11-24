@@ -9,10 +9,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { CoachReport } from '@prl/contracts';
-import { createElement } from 'react';
+import { createElement, Fragment } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { tipSubjectOf } from '../src/tip-state.ts';
-import { findAll, hasClass, markupTree } from './support/markup-tree.ts';
+import { findAll, hasClass, type MarkupElement, markupTree } from './support/markup-tree.ts';
 import { loadComponent } from './support/render-component.ts';
 
 async function render(report: CoachReport): Promise<string> {
@@ -505,7 +505,11 @@ test('the reading of the spot comes after the price and before the detail', asyn
     return index;
   };
   const reading = at('One reading of this spot');
-  assert.ok(at('>Equity<') < reading, 'the equity figure is read before the suggestion');
+  // The heading, not `>Equity<`, which the jump link above every section also renders.
+  assert.ok(
+    at('<h3 class="prl-coach__section-heading">Equity</h3>') < reading,
+    'the equity figure is read before the suggestion',
+  );
   assert.ok(at('>The price<') < reading, 'and so is the price');
   assert.ok(reading < at('Outs — 9 cards in total'), 'the suggestion is read before the outs detail');
   assert.ok(reading < at('>Stack context<'), 'and before the stack context');
@@ -803,4 +807,130 @@ test('a tip opens beside what it explains, so neither equity tip covers the shar
   // The method says how the share was found, and at 390px a bubble under its own row sat on the share.
   const method = subjectOf('exact and monte carlo');
   assert.ok(method.inner.includes('Your share of the pot'), 'the share is inside what the method tip avoids');
+});
+
+/** Inside a `<details>` that is not open, so a reader has to open it to see the element. */
+function collapsed(element: MarkupElement): boolean {
+  for (let node = element.parentElement; node !== null; node = node.parentElement) {
+    if (node.tag === 'details') return !node.hasAttribute('open');
+  }
+  return false;
+}
+
+/** Five players preflop, every share and every win distinct, so a duplicated row cannot hide. */
+const FIVE_WAY: CoachReport = {
+  ...NINE_OUT_DRAW,
+  street: 'preflop',
+  outs: null,
+  equity: {
+    ...NINE_OUT_DRAW.equity,
+    heroEquity: 0.214,
+    ruleOfThumb: null,
+    perPlayer: [
+      { label: 'you', equity: 0.214, win: 0.203, tie: 0.022 },
+      { label: 'seat 2', equity: 0.183, win: 0.172, tie: 0.011 },
+      { label: 'seat 3', equity: 0.197, win: 0.186, tie: 0.012 },
+      { label: 'seat 4', equity: 0.206, win: 0.195, tie: 0.013 },
+      { label: 'seat 5', equity: 0.2, win: 0.189, tie: 0.014 },
+    ],
+  },
+  potOdds: { ...NINE_OUT_DRAW.potOdds, equitySurplus: 0.214 - 1 / 3 },
+};
+
+test('multiway, hero’s share stays open and every other player is one click away, once each', async () => {
+  const tree = markupTree(await render(FIVE_WAY));
+  const rows = findAll(tree, (element) => hasClass(element, 'prl-equity-bar__row'));
+  const shareOf = (row: MarkupElement): string =>
+    findAll(row, (element) => hasClass(element, 'prl-equity-bar__value'))[0]?.inner ?? '';
+  assert.deepEqual(
+    rows.map(shareOf),
+    ['21.4%', '18.3%', '19.7%', '20.6%', '20.0%'],
+    'each player renders exactly once, in order',
+  );
+  assert.equal(collapsed(rows[0] as MarkupElement), false, 'hero’s row is not behind the toggle');
+  assert.ok(rows.slice(1).every(collapsed), 'every other player is');
+
+  const more = findAll(tree, (element) => hasClass(element, 'prl-equity-bar__more'));
+  assert.equal(more.length, 1);
+  assert.match(more[0]?.inner ?? '', /<summary class="prl-disclose__summary">Other 4 players<\/summary>/u);
+  // Both lists are lists of terms, so axe `definition-list` and `dlitem` hold on each.
+  assert.equal(findAll(tree, (element) => hasClass(element, 'prl-equity-bar__readout')).length, 2);
+});
+
+test('heads-up, both players stay open and there is no toggle', async () => {
+  const tree = markupTree(await render(NINE_OUT_DRAW));
+  const rows = findAll(tree, (element) => hasClass(element, 'prl-equity-bar__row'));
+  assert.equal(rows.length, 2);
+  assert.ok(rows.every((row) => !collapsed(row)));
+  assert.equal(findAll(tree, (element) => hasClass(element, 'prl-equity-bar__more')).length, 0);
+});
+
+test('what would change the reading is collapsed, and the reading and its caveat are not', async () => {
+  const two: CoachReport = {
+    ...NINE_OUT_DRAW,
+    suggestion: {
+      ...NINE_OUT_DRAW.suggestion,
+      whatWouldChangeIt: ['A narrower, stronger range does the opposite.', 'A deeper stack would too.'],
+    },
+  };
+  for (const [report, summary] of [
+    [NINE_OUT_DRAW, 'What would change this (1 factor)'],
+    [two, 'What would change this (2 factors)'],
+  ] as const) {
+    const tree = markupTree(await render(report));
+    const suggestion = findAll(tree, (element) => hasClass(element, 'prl-suggestion'))[0];
+    assert.ok(suggestion !== undefined);
+    const details = findAll(suggestion, (element) => element.tag === 'details');
+    assert.equal(details.length, 1);
+    assert.match(details[0]?.inner ?? '', new RegExp(`>${summary.replace(/[()]/gu, '\\$&')}</summary>`, 'u'));
+    for (const change of report.suggestion.whatWouldChangeIt) {
+      assert.ok(details[0]?.inner.includes(change), `"${change}" is behind the toggle`);
+    }
+    const outside = suggestion.inner.replace(details[0]?.inner ?? '', '');
+    assert.ok(outside.includes('One reading of this spot'), 'the label stays open');
+    assert.ok(outside.includes(report.suggestion.reason), 'so does the reason');
+    assert.ok(outside.includes('not a claim about the best play'), 'and the disclaimer');
+  }
+});
+
+test('every jump link lands on an element of its own panel, and two panels share no id', async () => {
+  const CoachPanel = await loadComponent<{ readonly report: CoachReport }>(
+    'components/CoachPanel',
+    'CoachPanel',
+  );
+  // One tree, because two separate renders each restart `useId` and would agree by construction.
+  const markup = renderToStaticMarkup(
+    createElement(
+      Fragment,
+      null,
+      createElement(CoachPanel, { report: NINE_OUT_DRAW }),
+      createElement(CoachPanel, { report: FIVE_WAY }),
+    ),
+  );
+  const tree = markupTree(markup);
+  const ids = findAll(tree, (element) => element.hasAttribute('id')).map(
+    (element) => element.attributes.get('id') ?? '',
+  );
+  assert.equal(new Set(ids).size, ids.length, `duplicate ids: ${ids.join(', ')}`);
+
+  const panels = findAll(tree, (element) => hasClass(element, 'prl-coach'));
+  assert.equal(panels.length, 2);
+  for (const panel of panels) {
+    const links = findAll(panel, (element) => hasClass(element, 'prl-coach__jump-link'));
+    assert.deepEqual(
+      links.map((link) => link.inner),
+      ['Equity', 'Price', 'Reading', 'Depth', 'Details'],
+    );
+    for (const link of links) {
+      const href = link.attributes.get('href') ?? '';
+      assert.match(href, /^#[A-Za-z0-9_-]+$/u, `${href} is a plain fragment`);
+      const target = findAll(panel, (element) => element.attributes.get('id') === href.slice(1));
+      assert.equal(target.length, 1, `${href} lands inside its own panel`);
+    }
+  }
+  // A link to the wrong panel is the failure this guards, so the two panels' targets must differ.
+  const hrefs = findAll(tree, (element) => hasClass(element, 'prl-coach__jump-link')).map((link) =>
+    link.attributes.get('href'),
+  );
+  assert.equal(new Set(hrefs).size, 10);
 });

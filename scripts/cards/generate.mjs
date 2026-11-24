@@ -79,44 +79,101 @@ export function readPalette(css) {
 const W = 250;
 const H = 350;
 const RADIUS = 18;
-const INK_WIDTH = 9;
-const INDEX_SCALE = 1.25;
+const CX = W / 2;
+const CY = H / 2;
 
 /**
- * Rank glyphs, stroked, in a box `w` wide and 60 tall. Monoline so they stay legible at 32px, where a
- * filled serif face closes up.
+ * Filled rank indexes, each in a box `w` by `h`. Court letters carry a serif cap and serif feet.
+ * `evenodd` punches the counter. Paths only: a face must not ask the reader for a font.
  */
 const RANK_GLYPHS = {
-  2: { w: 34, d: 'M2 14C2 5 9 0 17 0C26 0 33 6 33 15C33 24 27 31 2 60H35' },
-  3: {
-    w: 34,
-    d: 'M3 8C7 2 11 0 17 0C26 0 32 6 32 15C32 23 26 28 16 28C27 28 34 34 34 44C34 54 27 60 17 60C9 60 4 57 1 51',
-  },
-  4: { w: 36, d: 'M26 60V0L0 42H36' },
-  5: { w: 34, d: 'M32 0H6L3 27C7 24 12 23 17 23C28 23 34 30 34 41C34 53 26 60 16 60C9 60 4 57 1 52' },
-  6: {
-    w: 34,
-    d: 'M30 4C26 1 22 0 18 0C7 0 1 12 1 32C1 50 7 60 18 60C28 60 34 53 34 42C34 31 27 24 18 24C9 24 2 30 1 38',
-  },
-  7: { w: 34, d: 'M0 0H34L12 60' },
-  8: {
-    w: 34,
+  2: {
+    w: 40,
+    h: 56,
     d:
-      'M17 28C8 28 3 23 3 14C3 5 9 0 17 0C25 0 31 5 31 14C31 23 26 28 17 28C27 28 34 35 34 44' +
-      'C34 54 27 60 17 60C7 60 0 54 0 44C0 35 7 28 17 28Z',
+      'M8 16C8 6 15 0 23 0C33 0 40 7 40 17C40 28 32 34 16 46L8 52H40V56H2V46L22 32' +
+      'C30 26 32 22 32 16C32 10 28 6 23 6C16 6 13 10 13 15H8Z',
+  },
+  3: {
+    w: 40,
+    h: 56,
+    d:
+      'M6 10C10 2 16 0 22 0C32 0 40 6 40 15C40 22 35 27 28 29C36 31 42 37 42 46' +
+      'C42 54 33 56 23 56C12 56 3 52 2 44H11C12 48 17 50 23 50C31 50 33 46 33 42' +
+      'C33 36 27 32 18 32H12V26H20C30 26 32 21 32 16C32 10 27 6 22 6C15 6 11 10 10 14H6Z',
+  },
+  4: {
+    w: 36,
+    h: 56,
+    rule: 'evenodd',
+    d: 'M22 0H32V56H22V36H0V26L22 0ZM24 12L12 28H24Z',
+  },
+  5: {
+    w: 40,
+    h: 56,
+    d:
+      'M4 0H36V8H14L12 20H22C34 20 42 28 42 40C42 52 32 56 22 56C10 56 2 50 2 40H12' +
+      'C12 46 16 48 22 48C30 48 32 44 32 40C32 34 26 30 18 30H6L10 0H4Z',
+  },
+  6: {
+    w: 40,
+    h: 56,
+    d:
+      'M22 26C32 26 38 34 38 44C38 52 32 56 22 56C12 56 4 52 4 44C4 34 12 26 22 26Z' +
+      'M22 34C16 34 12 38 12 44C12 48 16 50 22 50C28 50 30 48 30 44C30 38 28 34 22 34Z' +
+      'M30 6C20 0 8 4 4 16C2 26 6 34 8 38L16 36C14 28 12 20 18 12C22 8 28 8 32 14L30 6Z',
+  },
+  7: { w: 40, h: 56, d: 'M0 0H40L18 56H8L28 10H0Z' },
+  8: {
+    w: 40,
+    h: 56,
+    d:
+      'M20 0C30 0 36 6 36 14C36 22 30 26 20 26C10 26 4 22 4 14C4 6 10 0 20 0Z' +
+      'M20 6C15 6 12 9 12 14C12 18 15 20 20 20C25 20 28 18 28 14C28 9 25 6 20 6Z' +
+      'M20 24C32 24 38 32 38 42C38 52 32 56 20 56C8 56 2 52 2 42C2 32 8 24 20 24Z' +
+      'M20 32C14 32 10 36 10 42C10 48 14 50 20 50C26 50 30 48 30 42C30 36 26 32 20 32Z',
   },
   9: {
-    w: 34,
-    d: 'M4 56C8 59 12 60 16 60C27 60 33 48 33 28C33 10 27 0 16 0C6 0 0 7 0 18C0 29 7 36 16 36C25 36 32 30 33 22',
+    w: 40,
+    h: 56,
+    d:
+      'M20 0C32 0 38 8 38 18C38 28 30 34 20 34C10 34 4 28 4 18C4 8 10 0 20 0Z' +
+      'M20 8C14 8 10 12 10 18C10 24 14 26 20 26C26 26 30 24 30 18C30 12 26 8 20 8Z' +
+      'M28 22L38 26C40 38 38 48 32 54L22 56C28 46 26 36 20 30Z',
   },
-  T: { w: 42, d: 'M0 9L7 2V60M31 0C38 0 42 12 42 30C42 48 38 60 31 60C24 60 20 48 20 30C20 12 24 0 31 0Z' },
-  J: { w: 28, d: 'M27 0V44C27 55 21 60 13 60C5 60 0 55 0 47' },
+  T: {
+    w: 58,
+    h: 56,
+    rule: 'evenodd',
+    d:
+      'M0 0H10V56H0ZM34 0C22 0 16 12 16 28C16 44 22 56 34 56C46 56 52 44 52 28C52 12 46 0 34 0Z' +
+      'M34 10C40 10 42 16 42 28C42 40 40 46 34 46C28 46 26 40 26 28C26 16 28 10 34 10Z',
+  },
+  J: {
+    w: 36,
+    h: 56,
+    d: 'M0 0H36V8H26V34C26 46 18 54 8 54C2 54 0 50 0 44H10C10 46 12 46 14 46' + 'C18 46 18 40 18 34V8H0Z',
+  },
   Q: {
-    w: 38,
-    d: 'M19 0C31 0 37 12 37 30C37 48 31 60 19 60C7 60 1 48 1 30C1 12 7 0 19 0ZM23 44L38 62',
+    w: 46,
+    h: 62,
+    rule: 'evenodd',
+    d:
+      'M23 0C36 0 46 12 46 28C46 44 36 56 23 56C10 56 0 44 0 28C0 12 10 0 23 0Z' +
+      'M23 10C16 10 10 17 10 28C10 39 16 46 23 46C30 46 36 39 36 28C36 17 30 10 23 10Z',
+    extra: 'M34 38L54 56H42L28 44Z',
   },
-  K: { w: 32, d: 'M2 0V60M32 0L2 38M12 27L32 60' },
-  A: { w: 38, d: 'M0 60L19 0L38 60M6 41H32' },
+  K: {
+    w: 44,
+    h: 56,
+    d: 'M0 0H16V5H11V51H16V56H0V51H5V5H0ZM12 22L34 0H44L20 28L44 56H34L12 34Z',
+  },
+  A: {
+    w: 44,
+    h: 56,
+    rule: 'evenodd',
+    d: 'M12 0H32L36 8L44 56H33L30 44H14L11 56H0L8 8ZM22 16L16 36H28Z',
+  },
 };
 
 /**
@@ -143,8 +200,6 @@ const SUIT_SHAPES = {
 
 const RED_SUITS = new Set(['D', 'H']);
 const COURTS = new Set(['J', 'Q', 'K']);
-/** Inside a court card's frame the symbol is smaller, and an ace's is the largest on the deck. */
-const CENTRE_SIZE = { J: 72, Q: 72, K: 72, A: 120 };
 
 const round = (n) => Number(n.toFixed(3)).toString();
 
@@ -154,15 +209,106 @@ function suitAt(suit, cx, cy, size, ink) {
   return `<g transform="${at}" fill="${ink}">${SUIT_SHAPES[suit].map((d) => `<path d="${d}"/>`).join('')}</g>`;
 }
 
-/**
- * Rank over suit, centred on x = 40. The bottom-right copy is the same group turned half a circle. The
- * rank is drawn at 1.25, because at 32px wide a 60-unit rank was under 8px tall.
- */
+/** Rank over a small suit, in the top-left. The bottom-right copy is this group turned half a circle. */
 function cornerIndex(rank, suit, ink) {
   const glyph = RANK_GLYPHS[rank];
-  const rankAt = `translate(${round(40 - (glyph.w * INDEX_SCALE) / 2)} 20) scale(${INDEX_SCALE})`;
-  const stroke = `stroke="${ink}" stroke-width="${INK_WIDTH}" stroke-linecap="round" stroke-linejoin="round"`;
-  return `<path transform="${rankAt}" d="${glyph.d}" fill="none" ${stroke}/>${suitAt(suit, 40, 126, 38, ink)}`;
+  const scale = Math.min(0.62, 46 / glyph.w);
+  const x = 14 + (46 - glyph.w * scale) / 2;
+  const y = 12;
+  const rule = glyph.rule === undefined ? '' : ` fill-rule="${glyph.rule}"`;
+  const rankAt = `translate(${round(x)} ${round(y)}) scale(${round(scale)})`;
+  const rankMark = `<path transform="${rankAt}" d="${glyph.d}" fill="${ink}"${rule}/>`;
+  const extra =
+    glyph.extra === undefined ? '' : `<path transform="${rankAt}" d="${glyph.extra}" fill="${ink}"/>`;
+  const suitY = y + glyph.h * scale + 16;
+  return `${rankMark}${extra}${suitAt(suit, 14 + 23, suitY, 24, ink)}`;
+}
+
+function spot(x, y, s, rot = false) {
+  return { x, y, s, rot };
+}
+
+/** One row of a pip card: two columns, the lower half turned over as on a printed deck. */
+function pairRow(y, s, rot, inset) {
+  return [spot(CX - inset, y, s, rot), spot(CX + inset, y, s, rot)];
+}
+
+/**
+ * Classic pip places. The ace is one large symbol. Ten keeps two centre pips between four rows.
+ * Coordinates are the card's 250 by 350 box, clear of the corner indexes.
+ */
+function pipsFor(rank) {
+  const inset = 40;
+  switch (rank) {
+    case 'A':
+      return [spot(CX, CY + 4, 122)];
+    case '2':
+      return [spot(CX, 120, 52), spot(CX, 236, 52, true)];
+    case '3':
+      return [spot(CX, 108, 46), spot(CX, CY, 46), spot(CX, 246, 46, true)];
+    case '4':
+      return [...pairRow(112, 46, false, inset), ...pairRow(244, 46, true, inset)];
+    case '5':
+      return [...pairRow(110, 42, false, inset), spot(CX, CY, 42), ...pairRow(246, 42, true, inset)];
+    case '6':
+      return [
+        ...pairRow(102, 40, false, inset),
+        ...pairRow(CY, 40, false, inset),
+        ...pairRow(252, 40, true, inset),
+      ];
+    case '7':
+      return [
+        ...pairRow(98, 36, false, inset),
+        spot(CX, 140, 34),
+        ...pairRow(CY + 4, 36, false, inset),
+        ...pairRow(256, 36, true, inset),
+      ];
+    case '8':
+      return [
+        ...pairRow(94, 34, false, 42),
+        spot(CX, 136, 32),
+        ...pairRow(CY + 2, 34, false, 42),
+        spot(CX, 216, 32, true),
+        ...pairRow(260, 34, true, 42),
+      ];
+    case '9':
+      return [
+        ...pairRow(80, 32, false, 40),
+        ...pairRow(120, 32, false, 40),
+        spot(CX, CY, 32),
+        ...pairRow(230, 32, true, 40),
+        ...pairRow(270, 32, true, 40),
+      ];
+    case 'T':
+      return [
+        ...pairRow(74, 28, false, 40),
+        ...pairRow(110, 28, false, 40),
+        spot(CX, 150, 26),
+        spot(CX, 198, 26, true),
+        ...pairRow(240, 28, true, 40),
+        ...pairRow(276, 28, true, 40),
+      ];
+    default:
+      return [];
+  }
+}
+
+function pip(suit, place, ink) {
+  const mark = suitAt(suit, place.x, place.y, place.s, ink);
+  if (!place.rot) return mark;
+  return `<g transform="rotate(180 ${place.x} ${place.y})">${mark}</g>`;
+}
+
+/** A court card: a frame, a small suit in each corner of it, and one suit in the middle. */
+function courtFace(suit, ink) {
+  const frame = `<rect x="70" y="108" width="110" height="134" rx="8" fill="none" stroke="${ink}" stroke-width="3.5"/>`;
+  const corners = [
+    spot(92, 128, 18, false),
+    spot(158, 128, 18, false),
+    spot(92, 222, 18, true),
+    spot(158, 222, 18, true),
+  ];
+  return `${frame}${corners.map((place) => pip(suit, place, ink)).join('')}${suitAt(suit, CX, CY, 58, ink)}`;
 }
 
 function frame(palette, fill) {
@@ -179,15 +325,11 @@ export const faceTitle = (rank, suit) => `${RANK_WORDS[rank]} of ${SUIT_WORDS[su
 
 function face(rank, suit, palette) {
   const ink = RED_SUITS.has(suit) ? palette.red : palette.black;
-  const parts = [frame(palette, palette.face), cornerIndex(rank, suit, ink)];
-  parts.push(`<g transform="rotate(180 ${W / 2} ${H / 2})">${cornerIndex(rank, suit, ink)}</g>`);
-  // A court card is told from a pip card by a frame round its symbol, as on a printed deck.
-  if (COURTS.has(rank)) {
-    parts.push(
-      `<rect x="80" y="44" width="90" height="262" rx="6" fill="none" stroke="${ink}" stroke-width="4"/>`,
-    );
-  }
-  parts.push(suitAt(suit, W / 2, H / 2, CENTRE_SIZE[rank] ?? 96, ink));
+  const index = cornerIndex(rank, suit, ink);
+  const parts = [frame(palette, palette.face), index];
+  parts.push(`<g transform="rotate(180 ${CX} ${CY})">${index}</g>`);
+  if (COURTS.has(rank)) parts.push(courtFace(suit, ink));
+  else for (const place of pipsFor(rank)) parts.push(pip(suit, place, ink));
   return svg(faceTitle(rank, suit), parts.join(''));
 }
 
