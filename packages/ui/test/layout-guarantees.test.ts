@@ -226,7 +226,7 @@ function allBlocks(css: string): readonly { selector: string; body: string }[] {
   return out;
 }
 
-/** Every component and route stylesheet. tokens.css is not one: it keeps the removed names as aliases. */
+/** Every component and route stylesheet. tokens.css holds declarations, not rules, and is checked on its own. */
 const ROUTE_STYLE_DIR = new URL('../../../apps/web/src/styles/', import.meta.url);
 const STYLESHEETS: readonly (readonly [string, string])[] = [
   ['packages/ui components.css', componentsCss],
@@ -379,6 +379,17 @@ describe('the design system rules that are stated in prose and checked nowhere',
       }
     }
     assert.ok(blocks > 500, `only ${blocks} blocks were read, so the scan missed stylesheets`);
+  });
+
+  it('declares no glass, wash or elevation token for a rule to bring back', () => {
+    const tokens = readFileSync(new URL('../src/styles/tokens.css', import.meta.url), 'utf8');
+    assert.match(tokens, /--prl-surface-page\s*:/u, 'tokens.css was not read');
+    const removed = [...tokens.matchAll(/(--prl-(?:glass|elevation|page-wash|edge|veil)\b[\w-]*)\s*:/gu)];
+    assert.deepEqual(
+      removed.map((match) => match[1]),
+      [],
+      'tokens.css declares a material this design removed',
+    );
   });
 
   it('ticks every native radio and checkbox in the accent', () => {
