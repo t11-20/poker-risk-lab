@@ -25,7 +25,7 @@ export function HomeSpot({ spot }: { readonly spot: Spot }): ReactElement {
     <figure aria-labelledby="home-spot-caption" className="prl-spot">
       <div className="prl-spot__table">
         <div className="prl-spot__hand prl-spot__hand--theirs">
-          <p className="prl-spot__who">Their hand, face up for this example</p>
+          <p className="prl-spot__who">Opponent (face up)</p>
           <div className="prl-spot__cards">
             {spot.theirs.map((card) => (
               <PlayingCard card={card} key={card} size="sm" />
@@ -34,7 +34,7 @@ export function HomeSpot({ spot }: { readonly spot: Spot }): ReactElement {
         </div>
 
         <div className="prl-spot__board">
-          <p className="prl-spot__who">The flop, with the turn and river to come</p>
+          <p className="prl-spot__who">Flop</p>
           <div className="prl-spot__cards">
             {spot.board.map((card) => (
               <PlayingCard card={card} key={card} size="md" />
@@ -57,16 +57,15 @@ export function HomeSpot({ spot }: { readonly spot: Spot }): ReactElement {
 
       <div className="prl-spot__price">
         <p className="prl-spot__bet">
-          They bet. There are <strong>{formatUnits(spot.pot)}</strong> in the pot and calling costs{' '}
-          <strong>{formatUnits(spot.toCall)}</strong>.
+          Pot: <strong>{formatUnits(spot.pot)}</strong> · Call: <strong>{formatUnits(spot.toCall)}</strong>
         </p>
         <dl className="prl-spot__figures">
           <div className="prl-spot__figure">
-            <dt>Your share must be at least</dt>
+            <dt>Break-even needed</dt>
             <dd>{need}</dd>
           </div>
           <div className="prl-spot__figure prl-spot__figure--have">
-            <dt>Your share is</dt>
+            <dt>Your equity</dt>
             <dd>{have}</dd>
           </div>
         </dl>
@@ -76,15 +75,12 @@ export function HomeSpot({ spot }: { readonly spot: Spot }): ReactElement {
           <span className="prl-spot__bar-need" />
         </div>
         <figcaption className="prl-spot__caption" id="home-spot-caption">
-          Your {formatUnits(spot.toCall)} would be {need} of a {formatUnits(total)} pot, so that is the share
-          you need to break even. Over all {spot.runouts.toLocaleString('en-GB')} ways the turn and river can
-          fall, you win {formatPercent(spot.win)}
-          {spot.tie > 0 ? ` and split the pot ${formatPercent(spot.tie)}` : ''} of the time.{' '}
+          Calling {formatUnits(spot.toCall)} into {formatUnits(total)} needs {need}. Across all{' '}
+          {spot.runouts.toLocaleString('en-GB')} runouts, you win {formatPercent(spot.win)}
+          {spot.tie > 0 ? ` and tie ${formatPercent(spot.tie)}` : ''}.{' '}
           {/* Equity assumes no more betting to the river (`equity.ts`), so the conclusion states that. */}
-          If nobody bets again before the river, the call {pays ? 'pays' : 'costs'} at this price. A bet on
-          the turn can make you fold before you see that share;{' '}
-          <Link href={lessonHref('pot-odds')}>the pot odds lesson</Link> covers what later betting does to a
-          price.
+          If nobody bets again before the river, calling {pays ? 'pays' : 'costs'}.{' '}
+          <Link href={lessonHref('pot-odds')}>Read the pot odds lesson</Link>.
         </figcaption>
       </div>
     </figure>

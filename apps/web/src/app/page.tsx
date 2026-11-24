@@ -47,12 +47,11 @@ const MODULES: readonly CapabilityModule[] = [
   {
     area: 'learn',
     title: 'Read the reasoning',
-    summary:
-      'Lessons that build one idea at a time, each ending in a quiz that asks you to reason rather than to recall.',
+    summary: 'Lessons ordered one concept at a time, ending with worked reasoning quizzes.',
     points: [
       '17 lessons across 10 topics',
-      'A glossary of 106 terms, linked from wherever a term first appears',
-      'Every worked figure recomputed live, so no example can drift out of date',
+      'A glossary of 106 terms linked inline',
+      'Worked figures recomputed live',
     ],
     href: FOUNDATIONS_HREF,
     action: 'Start with the foundations',
@@ -60,12 +59,11 @@ const MODULES: readonly CapabilityModule[] = [
   {
     area: 'play',
     title: 'Take the decisions',
-    summary:
-      'Six-max no-limit hold’em against strategy simulations, with the price of every option printed on the button that takes it.',
+    summary: 'Six-max no-limit hold’em with the price of every call and raise shown beside you.',
     points: [
-      'Equity, outs, pot odds and break-even, updated street by street',
-      'A Coach panel whose assumptions are never collapsible',
-      'Twelve opponent profiles, each a trait vector rather than a script',
+      'Equity, outs, pot odds, and break-even by street',
+      'Assumptions always visible beside the Coach',
+      'Twelve opponent styles with inspectable traits',
     ],
     href: '/play',
     action: 'Sit at a table',
@@ -73,12 +71,11 @@ const MODULES: readonly CapabilityModule[] = [
   {
     area: 'lab',
     title: 'Change one input',
-    summary:
-      'The Scenario Lab isolates a single variable — a card, a bet size, an opponent’s range — so you can watch what it does to the maths.',
+    summary: 'Isolate one card, bet size, or range in the Scenario Lab and watch the maths move.',
     points: [
-      '36 scenarios, each carrying a claim the maths re-checks on every build',
-      'Hand review that prices the decision separately from the result',
-      'Variance and confidence intervals shown wherever a figure was sampled',
+      '36 scenarios, each carrying a claim tested on every build',
+      'Hand review that prices decisions apart from runouts',
+      'Confidence intervals shown on every sampled figure',
     ],
     href: '/lab',
     action: 'Open the Scenario Lab',
@@ -96,9 +93,8 @@ export default function HomePage(): ReactElement {
           </h1>
 
           <p className="prl-home__lede">
-            Play no-limit hold’em with practice units while the odds, the price of each call and what it is
-            worth over time are worked out from the cards in front of you — every figure with how it was
-            computed and what it assumes.
+            Play No-Limit Hold’em with practice units while equity, pot odds and expected value are computed
+            live from the cards, alongside the assumptions behind every figure.
           </p>
 
           <div className="prl-home__actions">
@@ -112,11 +108,10 @@ export default function HomePage(): ReactElement {
           </div>
 
           <p className="prl-home__guardrail">
-            <strong>Not a gambling product.</strong> There is no real money in this app. Chips are{' '}
-            <strong>units</strong>: free practice counters with no monetary value, which cannot be bought,
-            sold, transferred or cashed out, and which you can{' '}
-            <Link href={RECORD_PATH}>reset to the starting amount at any time</Link>. Nothing here is a
-            recommendation, and no figure is presented as the one correct play.
+            <strong>Not a gambling product.</strong> No real money. Chips are free practice{' '}
+            <strong>units</strong> with no cash value —{' '}
+            <Link href={RECORD_PATH}>reset them any time</Link>. Nothing here is presented as the one correct
+            play.
           </p>
         </div>
 
@@ -128,9 +123,7 @@ export default function HomePage(): ReactElement {
           <div className="prl-home__section-head">
             <h2 className="prl-home__section-title">The loop this is built around</h2>
             <p className="prl-home__section-lede">
-              Playing a hand is one step of four, and the one most products leave out is the last. Reviewing a
-              decision is where the learning happens, because it is the only place the decision can be judged
-              apart from how it happened to turn out.
+              Judge each choice on the information and price you faced, separately from how the board ran out.
             </p>
           </div>
           <ProcessSpine />
@@ -141,8 +134,8 @@ export default function HomePage(): ReactElement {
         <div className="prl-home__section-head">
           <h2 className="prl-home__section-title">Three ways in</h2>
           <p className="prl-home__section-lede">
-            The same maths underneath all three, presented for reading, for deciding under time pressure, and
-            for taking apart one variable at a time.
+            Same live maths underneath — built for reading, playing under a clock, or testing one variable at
+            a time.
           </p>
         </div>
         <ul className="prl-home__ways">
@@ -170,8 +163,8 @@ export default function HomePage(): ReactElement {
         <div className="prl-home__section-head">
           <h2 className="prl-home__section-title">What has been checked</h2>
           <p className="prl-home__section-lede">
-            Four figures, each of them a fact you can verify yourself rather than a claim you have to take on
-            trust. <Link href={CHECKS_PATH}>How the numbers are checked</Link> names the test behind each one.
+            Four verifiable facts —{' '}
+            <Link href={CHECKS_PATH}>how the numbers are checked</Link> names the test behind each one.
           </p>
         </div>
         <MetricsBand />
