@@ -297,7 +297,7 @@ function TableRegion(props: TableRegionProps): ReactElement {
       )}
 
       {hasSummary ? (
-        <Callout tone="insight" title="How the hand ended">
+        <Callout tone="note" title="How the hand ended">
           <ul className="prl-play__summary">
             {summary.map((line) => (
               <li key={line}>{line}</li>

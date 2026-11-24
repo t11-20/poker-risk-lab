@@ -431,7 +431,7 @@ function DecisionQuestion(props: {
   const { question, answer, onAnswer } = props;
   return (
     <div className="prl-stack">
-      <Callout tone="insight" title="This one is not marked">
+      <Callout tone="note" title="This one is not marked">
         Decide it first, then read the reasoning. There is no right answer recorded for a decision — only an
         analysis, and the assumptions it rests on.
       </Callout>

@@ -442,7 +442,7 @@ export function ScenarioStage(props: ScenarioStageProps): ReactElement {
           >
             <Verdict judgement={judgement} action={committed.action} server={server} />
 
-            <Callout tone="insight" title="This is a comparison, not a mark">
+            <Callout tone="note" title="This is a comparison, not a mark">
               {foldAssumptionSentence(analysis)}
               {/* Only when a row was written, which `recorded` says. */}
               {server.state === 'live' && server.recorded ? (

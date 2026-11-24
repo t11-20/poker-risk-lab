@@ -1,13 +1,14 @@
 /**
- * A tonal aside. Tones match the `LessonBlock` callout tones in `@prl/contracts`, so a lesson passes
- * its tone straight through. Each tone shows a marker word; the two that warn also carry a glyph.
+ * A tonal aside. The lesson tones in `@prl/contracts` are a subset of these: a lesson passes its
+ * tone straight through, and `note` is for a receipt or an honesty line that is not an insight.
+ * Each tone shows a marker word; warning and misconception also carry a glyph.
  * `role="note"` and not `<aside>`, because six lesson callouts would add six `complementary` landmarks.
  */
 
 import type { ReactElement, ReactNode } from 'react';
 import { cx } from '../cx.ts';
 
-export type CalloutTone = 'insight' | 'warning' | 'misconception';
+export type CalloutTone = 'insight' | 'warning' | 'misconception' | 'note';
 
 export interface CalloutProps {
   readonly tone: CalloutTone;
@@ -16,17 +17,19 @@ export interface CalloutProps {
   readonly className?: string;
 }
 
-/** No glyph on an insight: the word says it, and a diamond beside it was decoration. */
+/** No glyph on an insight or a note: the word says it, and a diamond beside it was decoration. */
 const MARKERS: Readonly<Record<CalloutTone, { readonly word: string; readonly glyph?: string }>> = {
   insight: { word: 'Insight' },
   warning: { word: 'Watch out', glyph: '▲' },
   misconception: { word: 'Common misconception', glyph: '✕' },
+  note: { word: 'Note' },
 };
 
 const TONE_CLASS: Readonly<Record<CalloutTone, string>> = {
   insight: 'prl-callout--insight',
   warning: 'prl-callout--warning',
   misconception: 'prl-callout--misconception',
+  note: 'prl-callout--note',
 };
 
 export function Callout(props: CalloutProps): ReactElement {

@@ -81,7 +81,7 @@ describe('"Deal the next hand" is in the band once the hand is complete', () => 
 
 const reviewInCard = (source: string): boolean => {
   const card =
-    /<Callout tone="insight" title="How the hand ended">([\s\S]*?)<\/Callout>/u.exec(source)?.[1] ?? '';
+    /<Callout tone="note" title="How the hand ended">([\s\S]*?)<\/Callout>/u.exec(source)?.[1] ?? '';
   return card.includes('<Link href={reviewHref}>Review this hand</Link>');
 };
 
@@ -132,7 +132,9 @@ describe('NEGATIVE CONTROLS: each predicate fails the code it replaced', () => {
   });
 
   it('the result card before, which named the review and did not link it', () => {
-    const old = `        <Callout tone="insight" title="How the hand ended">
+    // The predicate matches tone and title, so this fixture uses the current tone.
+    // A leftover `insight` would miss the card and pass without seeing the missing link.
+    const old = `        <Callout tone="note" title="How the hand ended">
           <p className="prl-play__summary-note">
             The result of one hand says almost nothing about the decision that produced it. The hand’s review,
             which prices each decision in it, is where the useful feedback is.
