@@ -648,7 +648,9 @@ function SuggestionBlock({ id, suggestion, candidate }: SuggestionBlockProps): R
       )}
 
       <p className="prl-suggestion__disclaimer">
-        Based on the assumptions below — not a claim about the best play.
+        A suggestion that follows from the assumptions listed below — not a claim about the best play. Poker
+        has no single correct action in a spot like this, and different assumptions about the opponent give
+        different answers.
       </p>
     </div>
   );
