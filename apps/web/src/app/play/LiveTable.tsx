@@ -85,7 +85,7 @@ const IDLE_TABLE_MESSAGE = 'Your table appears here once you are dealt in.';
 const STATUS_LEDE: Readonly<Record<TableSocketStatus, string>> = {
   connecting: 'Connecting to the table…',
   handshaking: 'Connected. Loading the table…',
-  live: 'Connected.',
+  live: 'Live. Everything on this screen is the server’s own view of the table, redacted for you.',
   reconnecting: 'Connection lost. Reconnecting…',
   closed: 'Not connected.',
 };
@@ -136,7 +136,7 @@ function statusSentence(live: LiveTableModel, inLegendMatch: boolean): string {
     );
   }
   if (live.phase === 'preparing') {
-    return 'Preparing your table…';
+    return 'Preparing: reading your session, then finding or creating your private room.';
   }
   if (live.phase === 'failed') return 'Could not prepare the table. See below.';
   return live.status === null ? 'Ready to connect.' : STATUS_LEDE[live.status];
