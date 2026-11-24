@@ -14,6 +14,16 @@ export const TOUR_DISMISSED_KEY = 'prl.tour.dismissed';
 /** The only page the tour opens on by itself. */
 export const TOUR_FIRST_VISIT_PATH = '/lab';
 
+/**
+ * A first visit below this width shows a short head. The five steps are 462px at 390px and
+ * that is what pushes the Lab down. A tour opened from "How to use" still shows every step.
+ */
+export const TOUR_COMPACT_QUERY = '(width < 640px)';
+
+export function firstVisitIsCompact(opener: TourState['opener'], narrow: boolean): boolean {
+  return opener === 'first-visit' && narrow;
+}
+
 /** The spot editor, which holds three steps' targets. With no query it opens a blank spot. */
 export const SPOT_EDITOR_HREF = '/lab/spots/edit';
 

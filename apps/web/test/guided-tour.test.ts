@@ -11,6 +11,7 @@ import { tipSentenceProblems } from '@prl/ui/tips';
 import {
   closeTour,
   createTourStore,
+  firstVisitIsCompact,
   INITIAL_TOUR_STATE,
   opensByItself,
   readTourDismissal,
@@ -110,6 +111,19 @@ describe('it opens by itself on the Lab, at most once a page load', () => {
     assert.equal(used.open, true);
     const asked = run([{ type: 'open-from-button' }, { type: 'navigated', pathname: '/play' }]);
     assert.equal(asked.open, true);
+  });
+
+  it('a narrow first visit is the short guide, and one the reader opened is not', () => {
+    assert.equal(firstVisitIsCompact('first-visit', true), true);
+    assert.equal(firstVisitIsCompact('button', true), false);
+    assert.equal(firstVisitIsCompact('first-visit', false), false);
+    assert.equal(firstVisitIsCompact(null, true), false);
+  });
+
+  it('NEGATIVE CONTROL: width alone would shorten a tour the reader opened', () => {
+    const widthOnly = (narrow: boolean): boolean => narrow;
+    assert.equal(widthOnly(true), true);
+    assert.equal(firstVisitIsCompact('button', true), false);
   });
 
   it('does not take focus when it opens by itself', () => {
@@ -258,6 +272,10 @@ describe('the panel covers nothing and traps nothing (read from the source)', ()
 
   it('renders nothing while closed, so the server render is the page alone', () => {
     assert.match(PANEL, /if \(!state\.open\) return null;/u);
+  });
+
+  it('asks the pure rule before a first visit is shortened', () => {
+    assert.match(PANEL, /firstVisitIsCompact\(/u);
   });
 
   it('is reachable from the header and from the phone menu', () => {
