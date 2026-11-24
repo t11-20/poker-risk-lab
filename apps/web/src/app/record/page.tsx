@@ -60,8 +60,15 @@ function ResetPanel(): ReactElement {
   return (
     <Panel title="Reset your units" eyebrow="Always available" index={2} headingLevel={2}>
       <p className="prl-prose">
-        Units are free practice counters with no cash value. Resetting restores your balance and open table
-        stacks to the starting amount without changing your hand history or lifetime net.
+        Units are free practice counters with no value of any kind: they cannot be bought, transferred,
+        redeemed or cashed out. Resetting them puts your balance back to the starting amount and puts every
+        seat you currently hold back to its table’s starting stack. It costs nothing, it is not recorded as
+        anything, and you may do it as often as you like.
+      </p>
+      <p className="prl-prose">
+        It does not erase anything. The hands you have played stay in your history, and the net figure above
+        is a sum over those hands rather than a balance — so it does not move either. A reset that quietly
+        rewrote a finished table’s numbers would be editing the record instead of clearing the board.
       </p>
       <UnitsReset />
     </Panel>
@@ -79,15 +86,19 @@ export default async function RecordPage(): Promise<ReactElement> {
         <h1 className="prl-page-head__title prl-display-2">What you have actually done</h1>
         {/* A fact, not a design choice. `prl` has no column a score could be stored in. */}
         <p className="prl-page-head__standfirst">
-          Six counts and three lists — what you have done is counted, never scored, with no percentages,
-          streaks or ranks.
+          Six counts and three lists, and nothing else. There is no score on this page, no percentage
+          complete, no streak and no rank, and there is nowhere in Poker Risk Lab for one to be kept: what you
+          have done is counted, never graded.
         </p>
       </header>
 
       {record.state === 'signedOut' ? (
         <Callout tone="insight" title="This browser has no record yet">
-          Open a table to start a guest session automatically — no sign-up or password needed.{' '}
-          <Link href="/play">Open a table</Link>, or <Link href={LEARN_PATH}>start reading</Link>.
+          A record belongs to one learner, and this browser has not started one — so there is nothing to show
+          you here, and an empty page would look like a record of having done nothing, which is a different
+          claim. Opening a table starts a guest session straight away, with no email and no password, and
+          everything you do from then on is counted here. <Link href="/play">Open a table</Link>, or{' '}
+          <Link href={LEARN_PATH}>start reading</Link>.
         </Callout>
       ) : null}
 
@@ -138,7 +149,9 @@ export default async function RecordPage(): Promise<ReactElement> {
             </dl>
           )}
 
-          <p className="prl-note">{`${pluralise(record.progress.topicsTouched.length, 'topic')} touched.`}</p>
+          <p className="prl-note">
+            {`A topic counts once you have finished a lesson or tried a scenario in it. ${pluralise(record.progress.topicsTouched.length, 'topic')} so far.`}
+          </p>
         </Panel>
       ) : null}
 

@@ -86,7 +86,7 @@ const STATUS_LEDE: Readonly<Record<TableSocketStatus, string>> = {
   connecting: 'Connecting to the table…',
   handshaking: 'Connected. Loading the table…',
   live: 'Live. Everything on this screen is the server’s own view of the table, redacted for you.',
-  reconnecting: 'Connection lost. Reconnecting…',
+  reconnecting: 'The connection dropped. Reconnecting with a widening delay — the table is held server-side.',
   closed: 'Not connected.',
 };
 
@@ -150,7 +150,7 @@ function hintSentence(live: LiveTableModel): string {
       : 'Dealing your first hand.';
   }
   if (live.outOfUnits) {
-    return 'Out of units at this seat — dealt out until you reset.';
+    return 'You have no units left at this seat, so the server deals every hand without you.';
   }
   if (live.table.seat === null) {
     // Not a constant seat. At a room reached by invite code seat 1 is the owner's.

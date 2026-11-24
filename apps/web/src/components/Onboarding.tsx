@@ -29,17 +29,24 @@ interface Step {
 const STEPS: readonly Step[] = [
   {
     title: 'The chips are not money',
-    body: [`${UNITS_EXPLANATION} Units exist purely to give decisions a clear size for arithmetic.`],
+    body: [
+      UNITS_EXPLANATION,
+      'Nothing in this app can be bought and nothing can be won. There is no deposit, no cash-out, no prize and no leaderboard. The units exist so that a decision has a size, which is what makes the arithmetic mean anything.',
+    ],
   },
   {
-    title: 'The Coach shows its working',
+    title: 'The Coach shows its working, and can be wrong',
     body: [
-      'Every figure shows how it was computed, its uncertainty, and the assumptions it rests on — always visible so you can spot when an assumption breaks.',
+      'Every figure the Coach gives you arrives with how it was computed, how uncertain it is, and the assumptions it rests on. Those assumptions are always on screen — never behind a toggle — because a number without them is a guess wearing a lab coat.',
+      'It does not tell you the right play. It tells you what the maths says under stated assumptions, and it labels its own confidence. Where a real opponent breaks an assumption, the Coach is the thing that is wrong.',
     ],
   },
   {
     title: 'Start anywhere, no scores',
-    body: ['Nothing is locked and quizzes are ungraded. Start at Lesson 01 or jump straight to any topic.'],
+    body: [
+      'The lessons are numbered and each one lists what it assumes you have read. Nothing is locked: if variance is what you came for, read variance first and come back for the prerequisites when a sentence stops making sense.',
+      'Quizzes are not scored. There is no mark, no streak and no pass — getting one wrong opens the explanation and a link back to the lesson, and that is the whole consequence.',
+    ],
   },
 ];
 
@@ -124,7 +131,7 @@ export function Onboarding(props: OnboardingProps): ReactElement | null {
         </Button>
         {isLast ? (
           <Button variant="secondary" onClick={dismiss}>
-            Got it
+            Got it — don't show this again
           </Button>
         ) : (
           <Button variant="secondary" onClick={() => setStep(step + 1)}>

@@ -51,7 +51,7 @@ const MODULES: readonly CapabilityModule[] = [
     points: [
       '17 lessons across 10 topics',
       'A glossary of 106 terms linked inline',
-      'Worked figures recomputed live',
+      'Every worked figure recomputed live, so no example can drift out of date',
     ],
     href: FOUNDATIONS_HREF,
     action: 'Start with the foundations',
@@ -62,7 +62,7 @@ const MODULES: readonly CapabilityModule[] = [
     summary: 'Six-max no-limit hold’em with the price of every call and raise shown beside you.',
     points: [
       'Equity, outs, pot odds, and break-even by street',
-      'Assumptions always visible beside the Coach',
+      'A Coach panel whose assumptions are never collapsible',
       'Twelve opponent styles with inspectable traits',
     ],
     href: '/play',
@@ -93,8 +93,9 @@ export default function HomePage(): ReactElement {
           </h1>
 
           <p className="prl-home__lede">
-            Play No-Limit Hold’em with practice units while equity, pot odds and expected value are computed
-            live from the cards, alongside the assumptions behind every figure.
+            Play no-limit hold’em with practice units while the odds, the price of each call and what it is
+            worth over time are worked out from the cards in front of you — every figure with how it was
+            computed and what it assumes.
           </p>
 
           <div className="prl-home__actions">
@@ -108,9 +109,11 @@ export default function HomePage(): ReactElement {
           </div>
 
           <p className="prl-home__guardrail">
-            <strong>Not a gambling product.</strong> No real money. Chips are free practice{' '}
-            <strong>units</strong> with no cash value — <Link href={RECORD_PATH}>reset them any time</Link>.
-            Nothing here is presented as the one correct play.
+            <strong>Not a gambling product.</strong> There is no real money in this app. Chips are{' '}
+            <strong>units</strong>: free practice counters with no monetary value, which cannot be bought,
+            sold, transferred or cashed out, and which you can{' '}
+            <Link href={RECORD_PATH}>reset to the starting amount at any time</Link>. Nothing here is a
+            recommendation, and no figure is presented as the one correct play.
           </p>
         </div>
 

@@ -54,7 +54,9 @@ const STATE_LEDE: Readonly<Record<TableStateName, string>> = {
   decision: 'A fixed flop decision priced by the Coach: equity, pot odds, and expected value.',
   loading: 'Waiting for the table. The blocks below match the size of the content that replaces them.',
   error: 'The table is unreachable. Nothing was staked and nothing was sent.',
-  complete: 'Hand complete with a split pot. Open the hand’s review to inspect each decision.',
+  complete:
+    'The hand is over, with three hands shown and the pot split into two layers. There is no decision ' +
+    'left for the Coach to price; the useful feedback is in the hand’s review, not in the result.',
 };
 
 /**
@@ -62,7 +64,9 @@ const STATE_LEDE: Readonly<Record<TableStateName, string>> = {
  * friend's table. `describeTable` says who is actually seated.
  */
 const LIVE_LEDE =
-  'Play against five bots, or open a private table with seats kept for people you invite. Practice units only.';
+  'A play-money table dealt and settled by the server: five bots to practise against, or a private ' +
+  'table with seats kept for people you invite. Every card, every stack, every pot and every legal ' +
+  'action on this screen arrived over the socket — nothing here is decided in your browser.';
 
 function stagePropsFor(state: TableStateName): {
   readonly status: TableStageStatus;

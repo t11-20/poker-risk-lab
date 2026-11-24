@@ -81,10 +81,10 @@ function EntryCard({
             {entry.unlocked === false ? (
               <span className="prl-learn-entry__prereq-note">
                 {entry.prerequisites.length === 1
-                  ? ' — unread (optional)'
+                  ? ' — not marked read yet. Nothing stops you reading this one now.'
                   : entry.outstandingPrerequisites.length === 1
-                    ? ' — 1 unread (optional)'
-                    : ` — ${entry.outstandingPrerequisites.length} unread (optional)`}
+                    ? ' — one of those is not marked read. Nothing stops you reading this one now.'
+                    : ` — ${entry.outstandingPrerequisites.length} of those are not marked read. Nothing stops you reading this one now.`}
               </span>
             ) : null}
           </p>
@@ -120,14 +120,21 @@ export default async function LearnPage(): Promise<ReactElement> {
         </span>
         <h1 className="prl-display-2">The curriculum</h1>
         <p className="prl-learn-page__lead">
-          Seventeen lessons ordered by concept dependency — nothing is locked, so start anywhere. Every worked
-          figure is computed live as you read.
+          Seventeen lessons, numbered in the order the ideas depend on one another, and the Next button at the
+          end of each lesson follows the same numbers. Each one states what it assumes you have read, and none
+          of them is locked — the numbering is a route through the material, not a gate across it.
+        </p>
+        <p className="prl-learn-page__lead">
+          Every figure inside a lesson is computed while you read it, from the situation the lesson describes,
+          rather than read out of a table that could have been wrong when it was written. If the calculator
+          cannot be reached, the lesson says so where the figure would have been.
         </p>
         {curriculum.completionKnown ? null : (
           // Said once in the lead, rather than hedged on seventeen cards.
-          <p className="prl-note">
-            Shared index: it does not know which lessons you have already finished — see{' '}
-            <Link href="/record">your record</Link>.
+          <p className="prl-learn-page__lead">
+            This index is the same for every reader, so it does not know which lessons you have already
+            finished — nothing below is a mark on your record. What you have read is recorded when you press
+            the control at the end of a lesson, and it is counted on <Link href="/record">your record</Link>.
           </p>
         )}
         <div className="prl-metric-row prl-learn-page__figures">
@@ -139,7 +146,7 @@ export default async function LearnPage(): Promise<ReactElement> {
             format="number"
             unit="minutes"
             size="md"
-            note="Estimated reading time."
+            note="An estimate from the content, not a target."
           />
         </div>
       </header>

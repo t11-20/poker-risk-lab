@@ -22,22 +22,22 @@ const FIGURES: readonly ProjectFigure[] = [
   {
     label: 'Seven-card hands verified',
     value: 133_784_560,
-    note: 'Every hand in the deck verified against exact combinatorial frequencies.',
+    note: 'Every hand in the deck, classified and matched against the published category frequencies.',
   },
   {
     label: 'Teaching scenarios',
     value: 36,
-    note: 'Each checked against its mathematical claim on every build.',
+    note: 'Each carrying a claim the maths re-checks on every build, so a scenario cannot go stale quietly.',
   },
   {
     label: 'Opponent profiles',
     value: 12,
-    note: 'Sixteen-trait strategy simulations — styles, not real people.',
+    note: 'Strategy simulations, each a vector across sixteen behavioural axes. Styles, not people.',
   },
   {
     label: 'Figures read from an odds table',
     value: 0,
-    note: 'Computed from the deck on request; offline examples are labelled.',
+    note: 'Every figure is computed from the deck on request. Where the calculator cannot be reached a bundled example is shown instead, and the page says so.',
   },
 ];
 
