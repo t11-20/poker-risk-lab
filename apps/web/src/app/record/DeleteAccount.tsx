@@ -126,7 +126,7 @@ export function AccountDeletion({ deletable, index }: AccountDeletionProps): Rea
       {deletion.state === 'done' ? (
         /* The only place these counts can be read, since the account they describe is gone. */
         <div ref={receiptRef} tabIndex={-1}>
-          <Callout tone="insight" title="Your account has been deleted">
+          <Callout tone="note" title="Your account has been deleted">
             <p className="prl-prose">
               {`Gone for good: ${pluralise(deletion.outcome.sessions, 'sign-in')}, ` +
                 `${pluralise(deletion.outcome.lessonsCompleted, 'lesson')} marked as read, ` +

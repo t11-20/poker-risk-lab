@@ -396,7 +396,7 @@ export default async function ProfilePage({
               note={`Measured by playing this model — not declared by it, and not your own play: ${pluralise(stats.stats.simulationHands, 'hand')} heads-up against the ${stats.stats.referenceName} at the ${stats.stats.simulationDifficulty} setting, from seed ${stats.stats.simulationSeed}. The run is deterministic, so these are the same figures every time and anyone can reproduce them.`}
             />
             <Callout
-              tone={stats.stats.divergences.length === 0 ? 'insight' : 'warning'}
+              tone={stats.stats.divergences.length === 0 ? 'note' : 'warning'}
               title={
                 stats.stats.divergences.length === 0
                   ? 'The card and the play agree'

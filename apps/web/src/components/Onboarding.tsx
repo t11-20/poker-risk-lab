@@ -115,7 +115,7 @@ export function Onboarding(props: OnboardingProps): ReactElement | null {
       ))}
 
       {isLast && startHref !== null ? (
-        <Callout tone="insight" title="Suggested first lesson">
+        <Callout tone="note" title="Suggested first lesson">
           <Link className="prl-learn-onboarding__start" href={startHref}>
             <span className="prl-index" aria-hidden="true">
               {startPosition === null ? '' : formatIndex(startPosition)}
