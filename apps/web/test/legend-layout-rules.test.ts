@@ -13,6 +13,28 @@ import { fileURLToPath } from 'node:url';
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 const css = readFileSync(join(SRC, 'styles', 'legends.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//gu, '');
 const traitBars = readFileSync(join(SRC, 'components', 'TraitBars.tsx'), 'utf8');
+const legendCard = readFileSync(join(SRC, 'components', 'LegendCard.tsx'), 'utf8');
+const postHand = readFileSync(join(SRC, 'components', 'PostHandComparison.tsx'), 'utf8');
+const comparePage = readFileSync(join(SRC, 'app', 'legends', 'compare', 'page.tsx'), 'utf8');
+const tokens = readFileSync(
+  join(SRC, '..', '..', '..', 'packages', 'ui', 'src', 'styles', 'tokens.css'),
+  'utf8',
+);
+
+/** A `calc()` of `--prl-space-*` tokens, sums and products only, in rem. */
+function rem(expression: string): number {
+  const resolved = expression.replace(/var\((--prl-space-\d+)\)/gu, (_, name: string) => {
+    const value = new RegExp(`${name}: ([\\d.]+)rem;`, 'u').exec(tokens)?.[1];
+    assert.ok(value !== undefined, `no rem value for ${name} in tokens.css`);
+    return value;
+  });
+  const sum = /^calc\(([\d.\s+*]+)\)$/u.exec(resolved)?.[1];
+  assert.ok(sum !== undefined, `not a sum of space tokens: ${expression}`);
+  return sum
+    .split('+')
+    .map((term) => term.split('*').reduce((product, factor) => product * Number(factor), 1))
+    .reduce((total, term) => total + term, 0);
+}
 
 function rule(selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
@@ -103,5 +125,72 @@ describe('legends layout rules', () => {
       css,
       /@media \(720px <= width < 900px\) \{\s*\.prl-legend-grid \{\s*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/u,
     );
+  });
+
+  it('a card shares its row lines with its neighbours, one line per child, so the actions align', () => {
+    const card = rule('.prl-legend-grid > .prl-legend-card');
+    assert.match(card, /grid-template-rows: subgrid;/u);
+    const span = Number(/grid-row: span (\d+);/u.exec(card)?.[1]);
+    const body =
+      /<article className=\{cx\('prl-legend-card', className\)\}>\n([\s\S]*?)\n {4}<\/article>/u.exec(
+        legendCard,
+      )?.[1];
+    assert.ok(body !== undefined, 'no card article in LegendCard.tsx');
+    const children = body.split('\n').filter((line) => /^ {6}<[A-Za-z]/u.test(line));
+    assert.equal(children.length, span, `LegendCard has ${children.length} children and spans ${span} rows`);
+  });
+
+  it('two-column cards put the name under the sigil, so a name has the card’s width', () => {
+    assert.match(
+      css,
+      /@media \(720px <= width < 900px\) \{\s*\.prl-legend-grid \.prl-legend-identity \{\s*flex-direction: column;/u,
+    );
+  });
+
+  /* Two plus one left a 250-290px hole at 600-834; the grids are 291px in a card and 707px on a profile. */
+  it('the three-item grids are three across or one column, decided by their own width', () => {
+    const shared = rule('.prl-legend-card__metrics,\n.prl-legend-contrast,\n.prl-legend-maths');
+    assert.match(
+      shared.replace(/\s+/gu, ' '),
+      /repeat\( auto-fit, minmax\(min\(100%, max\(25%, \(var\(--prl-legend-thirds-at\) - 100%\) \* 999\)\), 1fr\) \)/u,
+    );
+    assert.match(
+      shared,
+      /--prl-legend-thirds-at: calc\(3 \* var\(--prl-space-16\) \+ 2 \* var\(--prl-legend-thirds-gap\)\);/u,
+    );
+    for (const selector of ['.prl-legend-card__metrics', '.prl-legend-contrast', '.prl-legend-maths']) {
+      const own = new RegExp(`\\}\\s*${selector.replace('.', '\\.')} \\{([^}]*)\\}`, 'u').exec(css)?.[1];
+      assert.ok(own !== undefined, `no rule of its own for ${selector}`);
+      assert.match(own, /--prl-legend-thirds-gap: var\(--prl-space-\d+\);/u, `${selector} sets no gap`);
+      assert.doesNotMatch(
+        own,
+        /grid-template-columns|(?:^|\s)gap:/u,
+        `${selector} overrides the shared tracks`,
+      );
+    }
+  });
+
+  it('a compare checkbox is wide enough for the longest name on one line', () => {
+    assert.match(
+      rule('.prl-legend-picker__options'),
+      /minmax\(min\(100%, var\(--prl-legend-pick-min\)\), 1fr\)/u,
+    );
+    const floor = /--prl-legend-pick-min: (calc\([^;]+\));/u.exec(css)?.[1];
+    assert.ok(floor !== undefined, 'no --prl-legend-pick-min');
+    // 233px of "High-Variance Tournament Aggressor" at 14px, plus 47px of padding, border, box and gap.
+    assert.ok(rem(floor) * 16 >= 233 + 47, `the floor is ${rem(floor) * 16}px`);
+  });
+
+  it('the "what would change it" lists are held to the measure', () => {
+    for (const [name, source] of [
+      ['compare', comparePage],
+      ['PostHandComparison', postHand],
+    ] as const) {
+      assert.match(source, /What would (?:have )?changed? it<\/span>\s*<ul className="prl-prose">/u, name);
+    }
+  });
+
+  it('the hand-review board is drawn at the size of the other boards, not beside its label at 32px', () => {
+    assert.match(postHand, /label="Community cards" size="md"/u);
   });
 });

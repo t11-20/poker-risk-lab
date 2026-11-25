@@ -15,12 +15,30 @@
  *   --prl-legend-card-min     a portrait card: sigil, three metrics, a radar, prose
  *   --prl-legend-column-min   a comparison column, or a block of metrics
  *   --prl-legend-option-min   one radio option with a description
+ *   --prl-legend-pick-min     one compare checkbox, whose longest name needs 233px plus 47px of chrome
  * At a 20rem card floor 1440px packed four 310px cards and the disclaimers ran ~35 characters a line.
  */
 :root {
   --prl-legend-card-min: calc(2 * var(--prl-space-16) + var(--prl-space-12));
   --prl-legend-column-min: calc(1.5 * var(--prl-space-16));
   --prl-legend-option-min: calc(1.5 * var(--prl-space-16));
+  --prl-legend-pick-min: calc(var(--prl-space-16) + var(--prl-space-15));
+}
+
+/**
+ * Three equal tracks once each clears 10rem, else one: never two plus an orphan. It reads the grid's own
+ * width (291px in a card, 707px on a profile at 768). Under the threshold `* 999` floors a track at
+ * 100%; over it the 25% floor fits exactly three, and two children still share the row in halves.
+ */
+.prl-legend-card__metrics,
+.prl-legend-contrast,
+.prl-legend-maths {
+  --prl-legend-thirds-at: calc(3 * var(--prl-space-16) + 2 * var(--prl-legend-thirds-gap));
+  gap: var(--prl-legend-thirds-gap);
+  grid-template-columns: repeat(
+      auto-fit,
+      minmax(min(100%, max(25%, (var(--prl-legend-thirds-at) - 100%) * 999)), 1fr)
+    );
 }
 
 /** Reduced motion removes the rotation, because 1ms durations would make it snap instead. */
@@ -373,11 +391,34 @@
   border-color: var(--prl-accent-edge);
 }
 
+/**
+ * Each card spans six rows of the grid and shares them with its neighbours, so names, metrics, radars
+ * and actions sit on common lines. `6` is `LegendCard`'s child count. Subgrid is Safari 16, Chrome 117.
+ */
+.prl-legend-grid > .prl-legend-card {
+  grid-row: span 6;
+  grid-template-rows: subgrid;
+}
+
+/** A shorter disclaimer leaves its spare space above the box, so the box stays on its actions. */
+.prl-legend-grid > .prl-legend-card > .prl-legend-disclaimers {
+  align-self: end;
+}
+
+/**
+ * Two columns leave the name 227px beside the sigil, and "Technician" and "Communicator" fell to a line
+ * of their own. Above the name it has the card's full 289px.
+ */
+@media (720px <= width < 900px) {
+  .prl-legend-grid .prl-legend-identity {
+    flex-direction: column;
+  }
+}
+
 /** `--prl-line-subtle`, because these rules divide a card's contents, not an object's edge. */
 .prl-legend-card__metrics {
+  --prl-legend-thirds-gap: var(--prl-space-6);
   display: grid;
-  gap: var(--prl-space-6);
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--prl-legend-column-min)), 1fr));
   padding-block: var(--prl-space-6);
   border-block: var(--prl-hairline);
 }
@@ -730,7 +771,7 @@
 .prl-legend-picker__options {
   display: grid;
   gap: var(--prl-space-4);
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--prl-legend-option-min)), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--prl-legend-pick-min)), 1fr));
 }
 
 .prl-legend-picker__option {
@@ -914,9 +955,8 @@
 }
 
 .prl-legend-maths {
+  --prl-legend-thirds-gap: var(--prl-space-7);
   display: grid;
-  gap: var(--prl-space-7);
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--prl-legend-column-min)), 1fr));
 }
 
 .prl-legend-table-wrap {
@@ -1003,9 +1043,8 @@
 }
 
 .prl-legend-contrast {
+  --prl-legend-thirds-gap: var(--prl-space-8);
   display: grid;
-  gap: var(--prl-space-8);
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--prl-legend-column-min)), 1fr));
 }
 
 .prl-legend-contrast__group {
