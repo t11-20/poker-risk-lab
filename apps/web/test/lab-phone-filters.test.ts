@@ -33,6 +33,26 @@ function rule(source: string, selector: string): string {
   return match[1] ?? '';
 }
 
+/** Each top-level rule's selector and its offset. Rules inside an at-rule are skipped. */
+function topLevelRules(source: string): { readonly selector: string; readonly at: number }[] {
+  const found: { selector: string; at: number }[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    if (char === '{') {
+      const head = source.slice(start, index).trim();
+      if (depth === 0 && !head.startsWith('@')) found.push({ selector: head, at: start });
+      depth += 1;
+      start = index + 1;
+    } else if (char === '}') {
+      depth -= 1;
+      start = index + 1;
+    }
+  }
+  return found;
+}
+
 describe('lab filters on a phone', () => {
   const phone = mediaBlock('width < 600px');
 
@@ -75,13 +95,31 @@ describe('lab filters on a phone', () => {
     ).replace(/\/\*[\s\S]*?\*\//gu, '');
     assert.match(rule(grid, '.prl-grid'), /grid-template-columns:\s*minmax\(0,\s*1fr\)/u);
     assert.doesNotMatch(rule(grid, '.prl-grid'), /repeat\(12/u, 'twelve tracks below 600px');
-    const card = rule(phone, '.prl-lab-card');
+    const wide = grid.indexOf('@media (min-width: 600px) {\n  .prl-grid {');
+    assert.ok(wide >= 0, 'no 600px query gives .prl-grid its twelve tracks back');
+    assert.match(
+      rule(grid.slice(wide), '.prl-grid'),
+      /grid-template-columns:\s*repeat\(12,\s*minmax\(0,\s*1fr\)\)/u,
+    );
+    // At every width, because 600px at 200% text overflowed too. The nowrap chip set the card's width.
+    const card = rule(code, '.prl-lab-card');
     assert.match(card, /min-inline-size:\s*0/u);
     assert.match(card, /max-inline-size:\s*100%/u);
-    // The nowrap chip was the column's min-content, and the state strip then cleared the screen.
-    const chip = rule(phone, '.prl-lab-card .prl-chip');
+    const chip = rule(code, '.prl-lab-card .prl-chip');
     assert.match(chip, /white-space:\s*normal/u);
     assert.match(chip, /overflow-wrap:\s*break-word/u);
+  });
+
+  it('sits after every base rule it overrides, because a media query adds no specificity', () => {
+    const media = code.indexOf('@media (width < 600px)');
+    const inside = topLevelRules(phone).map((one) => one.selector);
+    assert.ok(inside.length >= 6, `read ${inside.length} phone rules`);
+    const later = topLevelRules(code).filter((one) => inside.includes(one.selector) && one.at > media);
+    assert.deepEqual(
+      later.map((one) => one.selector),
+      [],
+      'a later base rule of equal specificity wins over the phone block',
+    );
   });
 
   it('leaves the form a GET form whose count line is still the jump target', () => {

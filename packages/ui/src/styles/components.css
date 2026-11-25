@@ -28,10 +28,10 @@
   padding-block: var(--prl-space-11);
 }
 
-/** Spans only inside the wide query. A `span 8` in a six-column grid grows the implicit grid. */
 /**
  * One track below 600px, where every cell spans the row anyway. Twelve tracks put eleven gaps
- * inside each cell: 528px at 200% text, wider than a 320px screen.
+ * inside each cell: 528px at 200% text, wider than a 320px screen. Spans only inside the wide
+ * query, because a `span 8` in a six-column grid grows the implicit grid.
  */
 .prl-grid {
   display: grid;

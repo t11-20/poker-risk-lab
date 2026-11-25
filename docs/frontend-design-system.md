@@ -888,7 +888,7 @@ unrelated marker. `components.css` already uses `--prl-space-1` this way on `.pr
 
 | Range | Layout |
 | --- | --- |
-| < 600px | single column; table stacks vertically; Coach becomes a bottom sheet with a drag handle |
+| < 600px | single column; table stacks vertically; Coach becomes a bottom sheet with a drag handle. The Lab filters pair Difficulty and Street from 380px, and stack all three below it |
 | 600–899px | two-column content; table still stacked; Coach in a full-width panel below |
 | 900–1279px | table in oval form once the column itself passes 46rem; Coach in a right rail at 22rem |
 | ≥ 1280px | 12-column grid; table centred with Coach rail and the decision band in the same viewport, no scrolling during a decision |
