@@ -15,7 +15,7 @@ const stripComments = (css: string): string => css.replace(/\/\*[\s\S]*?\*\//gu,
 const style = (file: string): string => stripComments(readFileSync(join(SRC, 'styles', file), 'utf8'));
 const source = (...parts: readonly string[]): string => readFileSync(join(SRC, ...parts), 'utf8');
 
-const SPACE = new Map(
+const SPACE = new Map<string, number>(
   [...readFileSync(TOKENS, 'utf8').matchAll(/--prl-space-(\d+): ([\d.]+)rem;/gu)].map(
     (m) => [`var(--prl-space-${m[1]})`, Number(m[2])] as const,
   ),
