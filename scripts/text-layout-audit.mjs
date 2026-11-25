@@ -7,11 +7,12 @@
  *
  * Findings: `collision` (glyphs of two independent in-flow elements intersect), `escapes` (glyphs
  * leave their own non-scrolling block), `clipped` (cut off by a non-scrolling ancestor without an
- * ellipsis), `squeezed` (a block narrower than its longest word), `spills` (glyphs cross the left or
- * right edge of the nearest box that draws one, with nothing clipping them), `page` (the document
- * scrolls sideways), and `unscaled` (the root font size is not the text size the reader set, which
- * `--text-scale` sets in Chrome itself). The page only measures. `findTextDefects()` judges in Node,
- * so tests can feed it the collapsed row's real numbers.
+ * ellipsis), `squeezed` (a block narrower than its longest word), `broken` (a word torn one or two
+ * characters a line, which `squeezed` cannot see because each piece fits), `spills` (glyphs cross
+ * the left or right edge of the nearest box that draws one, with nothing clipping them), `page` (the
+ * document scrolls sideways), and `unscaled` (the root font size is not the text size the reader
+ * set, which `--text-scale` sets in Chrome itself). The page only measures. `findTextDefects()`
+ * judges in Node, so tests can feed it the collapsed row's real numbers.
  *
  * Negative controls run on every invocation (`--controls-only` runs only them). Each injects CSS that
  * re-creates one defect shape and must be caught.
@@ -106,16 +107,25 @@ const FIXED_FONT_SIZE = 13;
 const WORD_TOLERANCE = 2;
 
 /**
- * Coverage floors, so a sweep or detector that examined nothing fails. Each is about a third of what
- * a full sweep measures today.
+ * A word broken into lines of at most this many characters was torn by a column too narrow for it.
+ * "Result" on `/review` at 360px with 200% text stood one letter a line.
  */
+const MAX_PIECE = 2;
+
 const MIN_TEXT_BOXES_PER_PAGE = 15;
-const MIN_MEASUREMENTS = 100;
-const MIN_TEXT_BOXES_TOTAL = 5000;
-const MIN_OWN_BOX_CHECKS = 8000;
-const MIN_CLIP_TESTS = 2000;
-const MIN_PAIRS_COMPARED = 8000;
-const MIN_FRAME_TESTS = 8000;
+
+/**
+ * Coverage floors per measurement asked for, about a third of the leanest slice measured: 62 routes,
+ * light, 360px, 200% text averaged 141 blocks, 12.6 clip tests, 83 frames, 26.6 pairs, 165 breaks.
+ */
+const FLOOR_PER_MEASUREMENT = {
+  textBoxes: 45,
+  ownBox: 45,
+  clipTests: 4,
+  frameTests: 25,
+  pairs: 8,
+  breakTests: 50,
+};
 
 /**
  * @typedef {object} Exemption
@@ -224,6 +234,15 @@ const CONTROLS = [
     expect: 'escapes',
     what: 'a Legends card title escaping its box, inside the `display: contents` difficulty scope',
     css: '.prl-legend-scope .prl-legend-identity__archetype { white-space: nowrap; max-width: 60px; }',
+  },
+  {
+    id: 'letter-by-letter',
+    route: '/learn',
+    width: 1024,
+    expect: 'broken',
+    what: 'a paragraph in a column two characters wide, its words torn a letter or two a line',
+    // Wider than any one letter, so every piece fits its column and `squeezed` stays silent.
+    css: '.prl-learn-page__lead { inline-size: 2ch; overflow-wrap: anywhere; }',
   },
   {
     id: 'root-in-px',
@@ -453,7 +472,86 @@ const WALKER = String.raw`(() => {
     return el;
   };
 
+  /** Preserved white space hangs past the line box at a wrap, and it paints nothing. */
+  const preservesSpaces = (style) => {
+    const collapse = style.whiteSpaceCollapse;
+    if (typeof collapse === 'string' && collapse !== '') {
+      return collapse === 'preserve' || collapse === 'break-spaces' || collapse === 'preserve-spaces';
+    }
+    const ws = style.whiteSpace;
+    return ws === 'pre' || ws === 'pre-wrap' || ws === 'break-spaces';
+  };
+
+  /** text-indent in px; a percentage is of the block's own inline size. */
+  const indentOf = (style, width) => {
+    const raw = style.textIndent;
+    const n = Number.parseFloat(raw);
+    if (!Number.isFinite(n)) return 0;
+    return raw.trim().endsWith('%') ? (n * width) / 100 : n;
+  };
+
+  /** The top of a block's first line, which is the only line text-indent moves. */
+  const firstLineTop = (block) => {
+    const range = document.createRange();
+    range.selectNodeContents(block);
+    let top = null;
+    for (const r of range.getClientRects()) {
+      if (r.height > 0.5 && (top === null || r.top < top)) top = r.top;
+    }
+    return top;
+  };
+
+  /** Word rectangles merged along each line, so the hanging space between them is not counted. */
+  const addInk = (ink, r) => {
+    const prev = ink[ink.length - 1];
+    if (prev !== undefined && Math.abs(prev.top - r.top) < 0.5 && Math.abs(prev.height - r.height) < 0.5) {
+      const left = Math.min(prev.left, r.left);
+      prev.width = Math.max(prev.left + prev.width, r.right) - left;
+      prev.left = left;
+      return;
+    }
+    ink.push({ left: r.left, top: r.top, width: r.width, height: r.height });
+  };
+
+  /** How many lines a set of rectangles sits on: a new line starts half a line below the last. */
+  const lineCount = (rects) => {
+    const tops = rects.map((r) => r.top).sort((a, b) => a - b);
+    let lines = 0;
+    let at = null;
+    for (let k = 0; k < tops.length; k += 1) {
+      if (at === null || tops[k] - at > rects[0].height / 2) {
+        lines += 1;
+        at = tops[k];
+      }
+    }
+    return lines;
+  };
+
+  /** A word's characters grouped by the line each was painted on. Only run for a word that broke. */
+  const piecesOf = (node, start, word) => {
+    const pieces = [];
+    let piece = '';
+    let at = null;
+    let k = start;
+    for (const ch of word) {
+      const c = document.createRange();
+      c.setStart(node, k);
+      c.setEnd(node, k + ch.length);
+      k += ch.length;
+      const r = [...c.getClientRects()].find((x) => x.height > 0.5);
+      if (r !== undefined && at !== null && Math.abs(r.top - at) > r.height / 2 && piece !== '') {
+        pieces.push(piece);
+        piece = '';
+      }
+      if (r !== undefined) at = r.top;
+      piece += ch;
+    }
+    pieces.push(piece);
+    return { text: word.slice(0, 40), pieces: pieces.slice(0, 80) };
+  };
+
   const boxes = [];
+  const ariaHidden = [];
   const clippers = [];
   const frames = [];
   const docRoot = document.documentElement;
@@ -506,10 +604,9 @@ const WALKER = String.raw`(() => {
       skipped.invisible += 1;
       continue;
     }
-    if (el.closest('[aria-hidden="true"]') !== null) {
-      skipped.ariaHidden += 1;
-      continue;
-    }
+    // Hidden from a screen reader, not from the eye: such text is measured, and Node judges it only
+    // for a word broken letter by letter, since its overlaps are often decorative by design.
+    const silent = el.closest('[aria-hidden="true"]') !== null;
     if (el.closest('[hidden], [inert], details:not([open]) > *:not(summary), dialog:not([open])') !== null) {
       skipped.inert += 1;
       continue;
@@ -528,9 +625,19 @@ const WALKER = String.raw`(() => {
       continue;
     }
 
+    const block = blockOf(el);
+    const blockStyle = styleOf(block);
+    const { pad, content } = boxesOf(block, blockStyle);
+    const indent = indentOf(blockStyle, content.w);
+    const firstTop = indent === 0 ? null : firstLineTop(block);
+    const preserved = preservesSpaces(style);
+
     // Glyph rectangles, and the widest word, from the text nodes themselves.
     const rects = [];
+    const ink = [];
+    const broken = [];
     let widest = null;
+    let later = null;
     for (const node of own) {
       textNodes += 1;
       const value = node.nodeValue;
@@ -550,11 +657,18 @@ const WALKER = String.raw`(() => {
         const w = document.createRange();
         w.setStart(node, match.index);
         w.setEnd(node, match.index + match[0].length);
+        const pieces = [...w.getClientRects()];
         let wide = 0;
-        for (const r of w.getClientRects()) wide = Math.max(wide, r.width);
-        if (widest === null || wide > widest.width) {
-          widest = { text: match[0].slice(0, 40), width: Math.round(wide * 100) / 100 };
+        for (const r of pieces) wide = Math.max(wide, r.width);
+        const word = { text: match[0].slice(0, 40), width: Math.round(wide * 100) / 100 };
+        if (firstTop !== null && pieces.length > 0) {
+          word.first = pieces[0].top < firstTop + pieces[0].height / 2;
+          if (!word.first && (later === null || word.width > later.width)) later = word;
         }
+        if (widest === null || word.width > widest.width) widest = word;
+        const shown = pieces.filter((r) => r.width > 0.5 && r.height > 0.5);
+        if (preserved) for (const r of shown) addInk(ink, r);
+        if (lineCount(shown) > 1) broken.push(piecesOf(node, match.index, match[0]));
         match = pattern.exec(value);
       }
     }
@@ -566,10 +680,6 @@ const WALKER = String.raw`(() => {
       skipped.offscreen += 1;
       continue;
     }
-
-    const block = blockOf(el);
-    const blockStyle = styleOf(block);
-    const { pad, content } = boxesOf(block, blockStyle);
 
     const text = own
       .map((n) => n.nodeValue)
@@ -587,7 +697,7 @@ const WALKER = String.raw`(() => {
       }
     }
 
-    boxes.push({
+    const measured = {
       i: order.get(el),
       end: ends.get(el),
       sel: describe(el),
@@ -602,8 +712,19 @@ const WALKER = String.raw`(() => {
       scrollHost: scrollHostOf(el),
       blockScrolls: scrollsHorizontally(blockStyle),
       ellipsis: style.textOverflow === 'ellipsis' || blockStyle.textOverflow === 'ellipsis',
+      broken,
+      fills: style.wordBreak === 'break-all' || style.lineBreak === 'anywhere' || style.hyphens === 'auto',
       exempt,
-    });
+    };
+    if (preserved && ink.length > 0) measured.ink = ink.map(asRect);
+    if (indent !== 0) {
+      measured.indent = Math.round(indent * 100) / 100;
+      measured.later = later;
+    }
+    if (silent) {
+      skipped.ariaHidden += 1;
+      ariaHidden.push(measured);
+    } else boxes.push(measured);
   }
 
   const h1 = document.querySelector('h1');
@@ -612,6 +733,7 @@ const WALKER = String.raw`(() => {
   return {
     heading: h1 === null ? '' : (h1.textContent || '').trim().slice(0, 120).toLowerCase(),
     boxes,
+    ariaHidden,
     clippers,
     frames,
     page: {
@@ -701,14 +823,61 @@ export function clippedRects(rects, clips) {
   return shown;
 }
 
+/** Glyphs without the preserved white space that hangs past a wrapped line and paints nothing. */
+const glyphsOf = (box) => box.ink ?? box.rects;
+
+/** A break after one of these is the text's own break opportunity, not a word torn apart. */
+const BREAK_AFTER = /[-\u00AD\u2010\u2013\u2014/]$/u;
+
+/**
+ * The part of a broken word torn one or two characters a line, or null, whatever allowed the breaks.
+ * Where the browser splits words to fill a line (`break-all`, `hyphens: auto`) it takes three pieces.
+ */
+export function letterByLetter(pieces, fills = false) {
+  let run = [];
+  const runs = [];
+  for (const piece of pieces) {
+    run.push(piece);
+    if (BREAK_AFTER.test(piece)) {
+      runs.push(run);
+      run = [];
+    }
+  }
+  if (run.length > 0) runs.push(run);
+  const least = fills ? 3 : 2;
+  return runs.find((r) => r.length >= least && r.every((p) => [...p].length <= MAX_PIECE)) ?? null;
+}
+
+/** The widest word, or the widest beyond the first line, short of the room its own line has. */
+function squeezeOf(box) {
+  let worst = null;
+  for (const word of [box.word, box.later]) {
+    if (word === null || word === undefined) continue;
+    // A negative text-indent starts the first line that far before the content box.
+    const room = box.content.w - (word.first === true ? (box.indent ?? 0) : 0);
+    const short = word.width - room;
+    if (worst === null || short > worst.short) worst = { word, room, short };
+  }
+  return worst;
+}
+
 /** `measurement` is what `WALKER` returns. `context` names route, theme and width. */
 export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIONS) {
   const findings = [];
   const usedExemptions = new Set();
   const { boxes, clippers } = measurement;
   const frames = measurement.frames ?? [];
+  const ariaHidden = measurement.ariaHidden ?? [];
   // What each detector looked at, floored in `coverageFailures`.
-  const counts = { ownBox: 0, scrollExcused: 0, ellipsisExcused: 0, clipTests: 0, frameTests: 0, pairs: 0 };
+  const counts = {
+    ownBox: 0,
+    scrollExcused: 0,
+    ellipsisExcused: 0,
+    clipTests: 0,
+    frameTests: 0,
+    pairs: 0,
+    breakTests: 0,
+  };
 
   const exemptFor = (box, check, otherSel) => {
     for (const index of box.exempt) {
@@ -727,6 +896,25 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
     findings.push({ check, ...context, ...detail });
   };
 
+  // A scroller does not mend a stacked word, and aria-hidden text is still painted.
+  for (const box of [...boxes, ...ariaHidden]) {
+    if (!Array.isArray(box.broken)) continue;
+    counts.breakTests += 1;
+    for (const word of box.broken) {
+      const torn = letterByLetter(word.pieces, box.fills === true);
+      if (torn === null) continue;
+      if (exemptFor(box, 'broken') !== null) break;
+      add('broken', {
+        sel: box.sel,
+        text: box.text,
+        word: word.text,
+        pieces: word.pieces,
+        ariaHidden: ariaHidden.includes(box),
+      });
+      break;
+    }
+  }
+
   for (const box of boxes) {
     // Only the block's own overflow excuses this. The Coach rail sits inside a horizontal scroller,
     // and skipping scrolling ancestors made this blind to the 0px column.
@@ -736,22 +924,23 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
     }
     counts.ownBox += 1;
 
-    if (box.word !== null && box.word.width > box.content.w + WORD_TOLERANCE) {
+    const squeeze = squeezeOf(box);
+    if (squeeze !== null && squeeze.short > WORD_TOLERANCE) {
       if (exemptFor(box, 'squeezed') === null) {
         add('squeezed', {
           sel: box.sel,
           text: box.text,
-          word: box.word.text,
-          needs: box.word.width,
-          has: box.content.w,
-          short: Math.round((box.word.width - box.content.w) * 100) / 100,
+          word: squeeze.word.text,
+          needs: squeeze.word.width,
+          has: Math.round(squeeze.room * 100) / 100,
+          short: Math.round(squeeze.short * 100) / 100,
         });
       }
     }
 
     if (box.ellipsis) counts.ellipsisExcused += 1;
     else {
-      const escaped = escapeAmount(box.rects, box.pad);
+      const escaped = escapeAmount(glyphsOf(box), box.pad);
       if (escaped.amount > EDGE_TOLERANCE && exemptFor(box, 'escapes') === null) {
         add('escapes', {
           sel: box.sel,
@@ -770,7 +959,7 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
       if (box.ellipsis) continue;
       if (box.scrollHost !== null && box.scrollHost > clipper.i) continue;
       counts.clipTests += 1;
-      const escaped = escapeAmount(box.rects, clipper.pad);
+      const escaped = escapeAmount(glyphsOf(box), clipper.pad);
       if (escaped.amount <= EDGE_TOLERANCE) continue;
       if (exemptFor(box, 'clipped', clipper.sel) !== null) continue;
       add('clipped', {
@@ -792,7 +981,7 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
     if (box.scrollHost !== null && box.scrollHost >= frame.i) continue;
     counts.frameTests += 1;
     const clips = clippers.filter((c) => c.i >= frame.i && c.i <= box.i && box.i < c.end);
-    const spilled = escapeAmount(clippedRects(box.rects, clips), drawnEdges(frame));
+    const spilled = escapeAmount(clippedRects(glyphsOf(box), clips), drawnEdges(frame));
     if (spilled.amount <= EDGE_TOLERANCE) continue;
     if (exemptFor(box, 'spills', frame.sel) !== null) continue;
     add('spills', {
@@ -807,9 +996,9 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
 
   // Sorted by top edge so the scan can exit early. The key must be the TOPMOST rect, not `rects[0]`,
   // or the early exit skips pairs and reports no collision.
-  const topOf = (box) => Math.min(...box.rects.map((r) => r.y));
+  const topOf = (box) => Math.min(...glyphsOf(box).map((r) => r.y));
   const sorted = [...boxes].sort((a, b) => topOf(a) - topOf(b));
-  const lowestOf = sorted.map((box) => Math.max(...box.rects.map(bottom)));
+  const lowestOf = sorted.map((box) => Math.max(...glyphsOf(box).map(bottom)));
   for (let a = 0; a < sorted.length; a += 1) {
     const first = sorted[a];
     for (let b = a + 1; b < sorted.length; b += 1) {
@@ -820,8 +1009,8 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
       counts.pairs += 1;
       let worst = null;
       let pair = null;
-      for (const one of first.rects) {
-        for (const two of second.rects) {
+      for (const one of glyphsOf(first)) {
+        for (const two of glyphsOf(second)) {
           const hit = intersection(one, two);
           if (!isRealOverlap(hit, one, two)) continue;
           if (worst === null || hit.area > worst.area) {
@@ -885,6 +1074,12 @@ export function formatFinding(finding) {
         `${where}\n      SQUEEZED   ${finding.sel}${quote}\n` +
         `      the column is ${String(finding.has)}px and the word "${finding.word}" needs ` +
         `${String(finding.needs)}px — short by ${String(finding.short)}px`
+      );
+    case 'broken':
+      return (
+        `${where}\n      BROKEN     ${finding.sel}${quote}${finding.ariaHidden ? ' (aria-hidden)' : ''}\n` +
+        `      the word "${finding.word}" is torn over ${String(finding.pieces.length)} lines: ` +
+        `${finding.pieces.slice(0, 12).join(' | ')}`
       );
     case 'escapes':
       return (
@@ -964,8 +1159,9 @@ ${bold('pnpm run test:layout')} — the PAINTED TEXT of this app, in real Chrome
     --out <file>          also write the findings as JSON
     -h, --help            this text
 
-  Exits 0 when nothing collided, escaped, was clipped, spilled past a drawn frame or
-  was squeezed, every negative control was caught and every exemption was used.
+  Exits 0 when nothing collided, escaped, was clipped, spilled past a drawn frame,
+  was squeezed or was broken letter by letter, every negative control was caught and
+  every exemption was used.
 `;
 
 export function parseArgs(argv) {
@@ -1040,6 +1236,13 @@ export function parseArgs(argv) {
   if (!Number.isFinite(scale) || scale < 1 || scale > 3 || !Number.isInteger(scale * ROOT_FONT_SIZE)) {
     throw new Error('--text-scale takes a number from 1 to 3 in sixteenths, such as 1.25, 1.5 or 2');
   }
+  for (const [flag, list] of [
+    ['--routes', options.routes],
+    ['--widths', options.widths],
+    ['--themes', options.themes],
+  ]) {
+    if (list !== null && list.length === 0) throw new Error(`${flag} was given an empty list`);
+  }
   if (options.themes?.some((t) => !THEMES.includes(t)) === true) {
     throw new Error(`--themes takes ${THEMES.join(' and ')}`);
   }
@@ -1067,30 +1270,46 @@ export function sweepMatrix(options) {
   return out;
 }
 
+/** The floor for `key` in a run that asked for `wanted` measurements: never below one. */
+export function coverageFloor(key, wanted) {
+  return Math.max(1, Math.floor(FLOOR_PER_MEASUREMENT[key] * wanted));
+}
+
 /** Every condition that makes a green result meaningless, as failure lines. */
 export function coverageFailures(tally, exemptions = EXEMPTIONS) {
   const problems = [];
-  if (tally.measurements < MIN_MEASUREMENTS) {
-    problems.push(
-      `only ${String(tally.measurements)} page measurement(s) were taken; a sweep of nothing is not a pass`,
-    );
+  // The matrix asked for, not what was measured, so a run that measured less cannot lower its floor.
+  const wanted = tally.measurementsWanted ?? 0;
+  if (!(wanted >= 1)) {
+    problems.push('the sweep asked for no measurement at all; a sweep of nothing is not a pass');
   }
-  if (tally.textBoxes < MIN_TEXT_BOXES_TOTAL) {
+  if (tally.measurements < Math.max(1, wanted)) {
     problems.push(
-      `only ${String(tally.textBoxes)} text element(s) were measured across the whole sweep; ` +
+      `only ${String(tally.measurements)} of ${String(wanted)} page measurement(s) were taken; ` +
         'a sweep of nothing is not a pass',
     );
   }
-  for (const [what, seen, floor] of [
-    ['text blocks measured against their own box', tally.detector.ownBox, MIN_OWN_BOX_CHECKS],
-    ['text blocks measured against a clipping ancestor', tally.detector.clipTests, MIN_CLIP_TESTS],
-    ['text blocks measured against the frame drawn around them', tally.detector.frameTests, MIN_FRAME_TESTS],
-    ['pairs of text blocks compared for a collision', tally.detector.pairs, MIN_PAIRS_COMPARED],
+  const per = `for ${String(wanted)} measurement(s)`;
+  const textFloor = coverageFloor('textBoxes', wanted);
+  if (tally.textBoxes < textFloor) {
+    problems.push(
+      `only ${String(tally.textBoxes)} text element(s) were measured across the whole sweep ` +
+        `(floor ${String(textFloor)} ${per}); a sweep of nothing is not a pass`,
+    );
+  }
+  for (const [what, key] of [
+    ['text blocks measured against their own box', 'ownBox'],
+    ['text blocks measured against a clipping ancestor', 'clipTests'],
+    ['text blocks measured against the frame drawn around them', 'frameTests'],
+    ['pairs of text blocks compared for a collision', 'pairs'],
+    ['text blocks whose words were checked for a break letter by letter', 'breakTests'],
   ]) {
-    if ((seen ?? 0) < floor) {
+    const seen = tally.detector[key] ?? 0;
+    const floor = coverageFloor(key, wanted);
+    if (seen < floor) {
       problems.push(
-        `only ${String(seen ?? 0)} ${what} (floor ${String(floor)}) — a detector that examined nothing ` +
-          'reports what a detector that found nothing reports',
+        `only ${String(seen)} ${what} (floor ${String(floor)} ${per}) — a detector that examined ` +
+          'nothing reports what a detector that found nothing reports',
       );
     }
   }
@@ -1336,7 +1555,16 @@ async function main() {
     clippers: 0,
     skipped: { ariaHidden: 0, visuallyHidden: 0, invisible: 0, offscreen: 0, inert: 0 },
     usedExemptions: new Set(),
-    detector: { ownBox: 0, scrollExcused: 0, ellipsisExcused: 0, clipTests: 0, frameTests: 0, pairs: 0 },
+    detector: {
+      ownBox: 0,
+      scrollExcused: 0,
+      ellipsisExcused: 0,
+      clipTests: 0,
+      frameTests: 0,
+      pairs: 0,
+      breakTests: 0,
+    },
+    measurementsWanted: matrix.length,
     routesLoaded: 0,
     routesWanted: 0,
     textSize: { scale: options.textScale, method: 'not applied' },
@@ -1494,7 +1722,8 @@ async function main() {
     `  detectors examined  ${String(tally.detector.ownBox)} block(s) against their own box, ` +
       `${String(tally.detector.clipTests)} against a clipping ancestor, ` +
       `${String(tally.detector.frameTests)} against a drawn frame, ` +
-      `${String(tally.detector.pairs)} pair(s) for a collision`,
+      `${String(tally.detector.pairs)} pair(s) for a collision, ` +
+      `${String(tally.detector.breakTests)} for a word broken letter by letter`,
   );
   console.log(
     dim(
@@ -1505,10 +1734,11 @@ async function main() {
   console.log(
     dim(
       `  not painted, so not measured: ${String(tally.skipped.visuallyHidden)} visually hidden, ` +
-        `${String(tally.skipped.ariaHidden)} aria-hidden, ${String(tally.skipped.invisible)} invisible, ` +
+        `${String(tally.skipped.invisible)} invisible, ` +
         `${String(tally.skipped.inert)} inert, ${String(tally.skipped.offscreen)} off-screen`,
     ),
   );
+  console.log(dim(`  aria-hidden, judged only for a broken word: ${String(tally.skipped.ariaHidden)}`));
   console.log(
     `  negative controls   ${String(controlResults.filter((r) => r.caught).length)}/${String(controlResults.length)} caught`,
   );
@@ -1583,7 +1813,7 @@ async function main() {
       green(
         bold(
           `\nPASS — ${String(tally.textBoxes)} painted text elements over ${String(tally.measurements)} ` +
-            'measurements, nothing collided, escaped, was clipped, spilled or was squeezed,\n' +
+            'measurements, nothing collided, escaped, was clipped, spilled, was squeezed or broken,\n' +
             `and all ${String(controlResults.length)} negative controls were caught.`,
         ),
       ),

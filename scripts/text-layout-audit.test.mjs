@@ -12,6 +12,7 @@ import {
   clippedRects,
   colorAlpha,
   coverageFailures,
+  coverageFloor,
   drawnEdges,
   EXEMPTIONS,
   escapeAmount,
@@ -21,6 +22,7 @@ import {
   frameSides,
   intersection,
   isRealOverlap,
+  letterByLetter,
   nearestFrame,
   parseArgs,
   ROUTES,
@@ -28,6 +30,9 @@ import {
   THEMES,
   WIDTHS,
 } from './text-layout-audit.mjs';
+
+/** Every finding shape the audit reports. */
+const CHECKS = ['collision', 'escapes', 'clipped', 'spills', 'squeezed', 'broken', 'page', 'unscaled'];
 
 let nextIndex = 0;
 
@@ -51,6 +56,12 @@ function box(overrides = {}) {
     blockScrolls: overrides.blockScrolls ?? false,
     ellipsis: overrides.ellipsis ?? false,
     exempt: overrides.exempt ?? [],
+    // What the walker sends only when it applies: preserved-space glyphs, a text-indent, broken words.
+    ...Object.fromEntries(
+      ['ink', 'indent', 'later', 'broken', 'fills']
+        .filter((key) => overrides[key] !== undefined)
+        .map((key) => [key, overrides[key]]),
+    ),
   };
 }
 
@@ -596,6 +607,305 @@ describe('which edges of a box a reader sees', () => {
   });
 });
 
+/**
+ * `/learn/pot-odds`, light, 360px, 200% text: "price = pot / call" in a `pre-wrap` formula line. The
+ * 15.81px rectangle after the first line is the space before "call", hanging past the line box.
+ */
+function formulaLine() {
+  return measurement([
+    box({
+      i: 249,
+      end: 250,
+      sel: 'pre.prl-formula__expression > span.prl-formula__line > code',
+      tag: 'code',
+      text: 'price = pot / call',
+      rects: [
+        { x: 139, y: 10893.75, w: 173.84, h: 30 },
+        { x: 312.84, y: 10893.75, w: 15.81, h: 30 },
+        { x: 172.7, y: 10930.14, w: 94.83, h: 30 },
+      ],
+      ink: [
+        { x: 139, y: 10893.75, w: 173.84, h: 30 },
+        { x: 172.7, y: 10930.14, w: 94.83, h: 30 },
+      ],
+      pad: { x: 139, y: 10890.75, w: 182.69, h: 72.78 },
+      content: { x: 172.71, y: 10890.75, w: 148.97, h: 72.78 },
+      word: { text: 'price', width: 79.03, first: true },
+    }),
+  ]);
+}
+
+describe('preserved white space hanging past a wrapped line', () => {
+  it('is not counted as glyphs escaping the line (FALSE POSITIVE)', () => {
+    const { findings, counts } = findTextDefects(formulaLine(), { route: '/learn/pot-odds', width: 360 });
+    assert.deepEqual(findings, [], 'only a space reaches past the line, and a space paints nothing');
+    assert.equal(counts.ownBox, 1);
+  });
+
+  it('was the whole escape: the same line measured with its space reaches 6.96px out', () => {
+    const withSpace = formulaLine();
+    withSpace.boxes[0].ink = undefined;
+    const escapes = findTextDefects(withSpace, {}).findings.find((f) => f.check === 'escapes');
+    assert.equal(escapes?.past, 6.96);
+  });
+
+  it('crosses no clip, frame or neighbour either', () => {
+    const framed = formulaLine();
+    const [line] = framed.boxes;
+    framed.frames.push({ i: 248, end: 251, sel: 'span', border: line.pad, left: true, right: true });
+    framed.clippers.push({ i: 247, end: 251, sel: 'pre', pad: line.pad });
+    const beside = { x: 322, y: 10893.75, w: 30, h: 30 };
+    const after = box({ i: 260, end: 261, rects: [beside], pad: beside });
+    framed.boxes.push(after);
+    assert.deepEqual(findTextDefects(framed, {}).findings, []);
+    framed.boxes[0].ink = undefined;
+    assert.deepEqual(
+      findTextDefects(framed, {})
+        .findings.map((f) => f.check)
+        .sort(),
+      ['clipped', 'collision', 'escapes', 'spills'],
+    );
+  });
+
+  it('still reports a preserved-space word that really leaves its box', () => {
+    const wide = formulaLine();
+    wide.boxes[0].ink[0].w = 200;
+    const escapes = findTextDefects(wide, {}).findings.find((f) => f.check === 'escapes');
+    assert.equal(escapes?.past, 17.31);
+  });
+});
+
+/**
+ * `/learn/pot-odds`, light, 360px, 200% text: "break-even" opens a formula line set with
+ * `padding-inline-start: 2ch; text-indent: -2ch`, so it starts 33.71px before the content box.
+ */
+function hangingIndent() {
+  return measurement([
+    box({
+      i: 247,
+      end: 248,
+      sel: 'pre.prl-formula__expression > span.prl-formula__line > code',
+      tag: 'code',
+      text: 'break-even equity = call / (pot + call)',
+      rects: [
+        { x: 139, y: 10711.8, w: 158.05, h: 30 },
+        { x: 172.7, y: 10748.19, w: 126.44, h: 30 },
+        { x: 172.7, y: 10784.58, w: 94.83, h: 30 },
+        { x: 172.7, y: 10820.97, w: 94.83, h: 30 },
+        { x: 172.7, y: 10857.36, w: 79.03, h: 30 },
+      ],
+      pad: { x: 139, y: 10708.8, w: 182.69, h: 181.95 },
+      content: { x: 172.71, y: 10708.8, w: 148.97, h: 181.95 },
+      word: { text: 'break-even', width: 158.05, first: true },
+      later: { text: 'equity', width: 94.83, first: false },
+      indent: -33.71,
+    }),
+  ]);
+}
+
+describe('a hanging indent', () => {
+  it('gives the first line the room it opens, so its first word is not squeezed (FALSE POSITIVE)', () => {
+    const { findings } = findTextDefects(hangingIndent(), {});
+    assert.deepEqual(findings, [], '158.05px of word on a first line 182.68px long fits');
+  });
+
+  it('was the whole squeeze: without the indent the word is 9.08px short', () => {
+    const flat = hangingIndent();
+    flat.boxes[0].indent = undefined;
+    const squeezed = findTextDefects(flat, {}).findings.find((f) => f.check === 'squeezed');
+    assert.equal(squeezed?.short, 9.08);
+    assert.equal(squeezed?.has, 148.97);
+  });
+
+  it('gives a later line no extra room: a wide word there is still squeezed', () => {
+    const later = hangingIndent();
+    later.boxes[0].later = { text: 'break-even', width: 158.05, first: false };
+    const squeezed = findTextDefects(later, {}).findings.find((f) => f.check === 'squeezed');
+    assert.equal(squeezed?.has, 148.97, 'a continuation line starts at the content box');
+    assert.equal(squeezed?.short, 9.08);
+  });
+
+  it('takes room away from the first line when the indent is positive', () => {
+    const pushed = hangingIndent();
+    Object.assign(pushed.boxes[0], { indent: 33.71, word: { text: 'break-even', width: 140, first: true } });
+    const squeezed = findTextDefects(pushed, {}).findings.find((f) => f.check === 'squeezed');
+    assert.equal(squeezed?.has, 115.26);
+  });
+});
+
+/**
+ * `/review`, light, 360px, 200% text. The row's `minmax(0, 1fr) auto` track left the result cell
+ * 0px wide and `overflow-wrap: break-word` stood its label one letter a line. The label is
+ * `aria-hidden` (the column header names it for a screen reader) and is painted all the same.
+ */
+function reviewRow() {
+  return {
+    ...measurement([
+      box({
+        i: 220,
+        end: 221,
+        sel: 'tbody > tr > td.prl-review-table__when',
+        tag: 'td',
+        text: '17 Aug 2026, 18:42 UTC',
+        rects: [
+          { x: 90, y: 2776.19, w: 15.92, h: 31 },
+          { x: 90, y: 2818.19, w: 15.92, h: 31 },
+          { x: 90, y: 2860.19, w: 19.09, h: 31 },
+        ],
+        pad: { x: 90, y: 2771.19, w: 0, h: 756 },
+        content: { x: 90, y: 2771.19, w: 0, h: 756 },
+        word: { text: 'UTC', width: 20.48 },
+        broken: [
+          { text: '17', pieces: ['1', '7'] },
+          { text: 'Aug', pieces: ['A', 'u', 'g'] },
+          { text: 'UTC', pieces: ['U', 'T', 'C'] },
+        ],
+      }),
+    ]),
+    ariaHidden: [
+      box({
+        i: 236,
+        end: 237,
+        sel: 'tr > td.prl-review-table__net > span.prl-review-table__cell-label',
+        tag: 'span',
+        text: 'Result',
+        rects: [
+          { x: 90, y: 2310.59, w: 19.17, h: 28 },
+          { x: 90, y: 2349.59, w: 14.5, h: 28 },
+          { x: 90, y: 2388.59, w: 13.52, h: 28 },
+          { x: 90, y: 2427.59, w: 14.89, h: 28 },
+          { x: 90, y: 2466.59, w: 6.13, h: 28 },
+          { x: 90, y: 2505.59, w: 7.98, h: 28 },
+        ],
+        pad: { x: 90, y: 2305.59, w: 0, h: 234 },
+        content: { x: 90, y: 2305.59, w: 0, h: 234 },
+        word: { text: 'Result', width: 19.17 },
+        broken: [{ text: 'Result', pieces: ['R', 'e', 's', 'u', 'l', 't'] }],
+      }),
+    ],
+  };
+}
+
+/**
+ * The `letter-by-letter` control as Chrome measured it at 1024px: a 20.61px column, wider than any
+ * letter in it, so the widest piece (20.39px) fits and `squeezed` has nothing to say.
+ */
+function tornParagraph() {
+  return measurement([
+    box({
+      i: 150,
+      end: 151,
+      sel: 'div.prl-learn-page > header.prl-learn-page__head > p.prl-learn-page__lead',
+      text: 'Seventeen lessons, numbered in the order the ideas depend on one another, and th',
+      rects: [
+        { x: 40, y: 224.11, w: 12.11, h: 20 },
+        { x: 40, y: 251.11, w: 18.94, h: 20 },
+        { x: 40, y: 278.11, w: 20, h: 20 },
+      ],
+      pad: { x: 40, y: 221.11, w: 20.61, h: 3618 },
+      content: { x: 40, y: 221.11, w: 20.61, h: 3618 },
+      word: { text: 'lessons,', width: 20.39 },
+      broken: [
+        { text: 'Seventeen', pieces: ['S', 'ev', 'en', 'te', 'en'] },
+        { text: 'follows', pieces: ['fol', 'lo', 'w', 's'] },
+      ],
+    }),
+  ]);
+}
+
+describe('a word broken letter by letter', () => {
+  it('reports the stacked "Result" on /review, aria-hidden or not (REGRESSION)', () => {
+    const { findings, counts } = findTextDefects(reviewRow(), { route: '/review', width: 360, scale: 2 });
+    const broken = findings.filter((f) => f.check === 'broken');
+    assert.deepEqual(
+      broken.map((f) => [f.word, f.ariaHidden]),
+      [
+        ['17', false],
+        ['Result', true],
+      ],
+    );
+    assert.deepEqual(broken[1].pieces, ['R', 'e', 's', 'u', 'l', 't']);
+    assert.match(
+      formatFinding(broken[1]),
+      /BROKEN .*\(aria-hidden\)\n.*"Result" is torn over 6 lines: R \| e/u,
+    );
+    assert.equal(counts.breakTests, 2, 'both the cell and the hidden label were checked');
+  });
+
+  it('judges aria-hidden text for nothing else: its overlaps are often decorative', () => {
+    const { findings } = findTextDefects(reviewRow(), {});
+    for (const finding of findings) {
+      if (finding.check !== 'broken') assert.doesNotMatch(finding.sel, /cell-label/u);
+    }
+  });
+
+  it('catches a column a letter wide, where squeezed is silent because every piece fits', () => {
+    const { findings } = findTextDefects(tornParagraph(), { route: '/learn', width: 1024 });
+    assert.deepEqual(
+      findings.map((f) => f.check),
+      ['broken'],
+    );
+    assert.equal(findings[0].word, 'Seventeen');
+  });
+
+  it('is not excused by a block that scrolls sideways', () => {
+    const scroller = tornParagraph();
+    scroller.boxes[0].blockScrolls = true;
+    assert.deepEqual(
+      findTextDefects(scroller, {}).findings.map((f) => f.check),
+      ['broken'],
+    );
+  });
+
+  it('leaves a token wrapped across full lines alone, however its breaks were allowed', () => {
+    // The deal's Merkle root on /review/hand-0042 at 360px, 200%: `overflow-wrap: anywhere`, six a line.
+    const root = ['9e1f07', 'f25216', '506575', 'ad44f6', '2e0827', '411aad', 'b092a9', 'a1fe53', '52df3b'];
+    assert.equal(letterByLetter([...root, '69045b', '1612']), null);
+    // At 1024px it wraps 31, 31, 2: a short last line is a full token, not a torn one.
+    assert.equal(
+      letterByLetter(['9e1f07f25216506575ad44f62e08274', '11aadb092a9a1fe5352df3b69045b16', '12']),
+      null,
+    );
+    // The same root in a column two characters wide is unreadable, and `anywhere` does not excuse it.
+    assert.notEqual(letterByLetter(['9e', '1f', '07', 'f2', '52']), null);
+  });
+
+  it('leaves an emergency break of a long word alone', () => {
+    // `/learn/sample-size-and-risk-of-ruin` at 360px, 200%.
+    assert.equal(letterByLetter(['reachin', 'g']), null);
+    assert.equal(letterByLetter(['sensible', '.']), null);
+  });
+
+  it('counts a break after a hyphen, dash or slash as the text own, and judges each side of it', () => {
+    assert.equal(letterByLetter(['(open-', 'raise)']), null);
+    assert.equal(letterByLetter(['a-', 'b']), null);
+    assert.deepEqual(letterByLetter(['br', 'ea', 'k-', 'ev', 'en']), ['br', 'ea', 'k-']);
+    assert.deepEqual(letterByLetter(['d', 'o', 'c', 's', '/', 'T', 'H']), ['d', 'o', 'c', 's', '/']);
+  });
+
+  it('needs three pieces where the browser itself splits words to fill a line', () => {
+    // Under `word-break: break-all` "the" at a line end is "t" and "he", which is filling, not tearing.
+    assert.equal(letterByLetter(['t', 'he'], true), null);
+    assert.notEqual(letterByLetter(['t', 'he']), null);
+    assert.deepEqual(letterByLetter(['U', 'T', 'C'], true), ['U', 'T', 'C']);
+    const filled = tornParagraph();
+    filled.boxes[0].broken = [{ text: 'the', pieces: ['th', 'e'] }];
+    filled.boxes[0].fills = true;
+    assert.deepEqual(findTextDefects(filled, {}).findings, []);
+  });
+
+  it('counts a box the walker sent no break data for as unexamined', () => {
+    const { counts } = findTextDefects(measurement([box({})]), {});
+    assert.equal(counts.breakTests, 0);
+    const exempted = tornParagraph();
+    exempted.boxes[0].exempt = [0];
+    const rules = [{ check: 'broken', selector: '.prl-learn-page__lead', why: 'because' }];
+    const result = findTextDefects(exempted, {}, rules);
+    assert.deepEqual(result.findings, []);
+    assert.deepEqual(result.usedExemptions, [0]);
+  });
+});
+
 describe('the page itself', () => {
   it('reports a document that scrolls sideways', () => {
     const wide = healthyRow();
@@ -635,17 +945,7 @@ describe('exemptions', () => {
   });
 
   it('a rule that matched nothing anywhere fails the gate (REGRESSION)', () => {
-    const problems = coverageFailures(
-      {
-        measurements: 150,
-        textBoxes: 34098,
-        detector: { ownBox: 34028, clipTests: 4168, frameTests: 25211, pairs: 25744 },
-        routesLoaded: 30,
-        routesWanted: 30,
-        usedExemptions: new Set(),
-      },
-      rules,
-    );
+    const problems = coverageFailures({ ...FULL_DEFAULT_RUN, usedExemptions: new Set() }, rules);
     assert.equal(problems.length, 1);
     assert.match(problems[0], /matched nothing/u);
   });
@@ -654,40 +954,107 @@ describe('exemptions', () => {
     for (const rule of EXEMPTIONS) {
       assert.ok(typeof rule.selector === 'string' && rule.selector.length > 0);
       assert.ok(typeof rule.why === 'string' && rule.why.length > 30, 'an exemption needs a reason');
-      assert.ok(
-        ['collision', 'escapes', 'clipped', 'spills', 'squeezed', 'page', 'unscaled'].includes(rule.check),
-      );
+      assert.ok(CHECKS.includes(rule.check));
     }
   });
 });
 
+/** The tally of the default run (every route, both themes, five widths, 100% text) on 2026-11-25. */
+const FULL_DEFAULT_RUN = {
+  measurements: 200,
+  measurementsWanted: 200,
+  textBoxes: 38970,
+  detector: { ownBox: 38970, clipTests: 4280, frameTests: 28610, pairs: 33050, breakTests: 43956 },
+  routesLoaded: 40,
+  routesWanted: 40,
+  usedExemptions: new Set(),
+};
+
+/** 62 routes, light only, 360px only, 200% text: the shape of a small CI pass, measured the same day. */
+const ONE_WIDTH_ONE_THEME = {
+  measurements: 62,
+  measurementsWanted: 62,
+  textBoxes: 8761,
+  detector: { ownBox: 8761, clipTests: 780, frameTests: 5166, pairs: 1648, breakTests: 10232 },
+  routesLoaded: 62,
+  routesWanted: 62,
+  usedExemptions: new Set(),
+};
+
 describe('a sweep of nothing is not a pass', () => {
-  const healthy = {
-    measurements: 150,
-    textBoxes: 34098,
-    detector: { ownBox: 34028, clipTests: 4168, frameTests: 25211, pairs: 25744 },
-    routesLoaded: 30,
-    routesWanted: 30,
-    usedExemptions: new Set(),
-  };
+  const healthy = FULL_DEFAULT_RUN;
 
   it('a full sweep of this app clears every floor', () => {
     assert.deepEqual(coverageFailures(healthy, []), []);
+  });
+
+  it('a run of one width and one theme is held to its own size, not refused (REGRESSION)', () => {
+    // The fixed floors asked every run for 100 measurements and 8,000 pairs, so this was refused four times.
+    assert.deepEqual(coverageFailures(ONE_WIDTH_ONE_THEME, []), []);
+    assert.equal(coverageFloor('pairs', 62), 496);
+    assert.equal(coverageFloor('pairs', 200), 1600);
+  });
+
+  it('the floor follows the matrix asked for and is never zero', () => {
+    for (const key of ['textBoxes', 'ownBox', 'clipTests', 'frameTests', 'pairs', 'breakTests']) {
+      assert.ok(coverageFloor(key, 1) >= 1, `${key} has no floor for a single measurement`);
+      assert.equal(coverageFloor(key, 0), 1, `${key} must still ask for something when nothing was asked`);
+      assert.ok(coverageFloor(key, 200) > coverageFloor(key, 62));
+    }
   });
 
   it('refuses a run that measured almost nothing', () => {
     const problems = coverageFailures({ ...healthy, measurements: 2, textBoxes: 40 }, []);
     assert.equal(problems.length, 2);
     for (const problem of problems) assert.match(problem, /a sweep of nothing is not a pass/u);
+    assert.match(problems[0], /only 2 of 200 page measurement/u);
+  });
+
+  it('refuses a sweep that asked for nothing, or reports no matrix at all', () => {
+    const empty = {
+      ...healthy,
+      measurements: 0,
+      measurementsWanted: 0,
+      textBoxes: 0,
+      detector: { ownBox: 0, clipTests: 0, frameTests: 0, pairs: 0, breakTests: 0 },
+    };
+    const problems = coverageFailures(empty, []);
+    assert.match(problems[0], /asked for no measurement/u);
+    assert.ok(problems.length >= 7, problems.join('\n'));
+    const { measurementsWanted: _, ...unsized } = healthy;
+    assert.match(coverageFailures(unsized, [])[0], /asked for no measurement/u);
+  });
+
+  it('a run that measured less than it asked cannot lower its own floor', () => {
+    // Twelve of 200 pages measured, each one rich: the floors still follow the 200 asked for.
+    const short = { ...healthy, measurements: 12, textBoxes: 9000 };
+    const problems = coverageFailures(short, []);
+    assert.match(problems[0], /only 12 of 200/u);
   });
 
   it('refuses a run where a detector examined nothing, even with pages measured', () => {
     // A busy sweep with one detector out of the loop must still fail.
-    for (const key of ['ownBox', 'clipTests', 'frameTests', 'pairs']) {
+    for (const key of ['ownBox', 'clipTests', 'frameTests', 'pairs', 'breakTests']) {
       const problems = coverageFailures({ ...healthy, detector: { ...healthy.detector, [key]: 0 } }, []);
       assert.equal(problems.length, 1, `${key} at zero must be reported`);
       assert.match(problems[0], /a detector that examined nothing/u);
     }
+  });
+
+  it('refuses a narrow run in which a detector examined nothing, naming the floor it missed', () => {
+    // `/learn`, dark, 1024px, as measured: no text sits inside a clipping ancestor there.
+    const learn = {
+      measurements: 1,
+      measurementsWanted: 1,
+      textBoxes: 216,
+      detector: { ownBox: 216, clipTests: 0, frameTests: 180, pairs: 146, breakTests: 266 },
+      routesLoaded: 1,
+      routesWanted: 1,
+      usedExemptions: new Set(),
+    };
+    const problems = coverageFailures(learn, []);
+    assert.equal(problems.length, 1);
+    assert.match(problems[0], /only 0 text blocks measured against a clipping ancestor \(floor 4 for 1 /u);
   });
 
   it('counts a detector missing from the tally as one that examined nothing', () => {
@@ -700,7 +1067,7 @@ describe('a sweep of nothing is not a pass', () => {
   it('refuses a run where a route never loaded', () => {
     const problems = coverageFailures({ ...healthy, routesLoaded: 28 }, []);
     assert.equal(problems.length, 1);
-    assert.match(problems[0], /2 route\(s\) never loaded/u);
+    assert.match(problems[0], /12 route\(s\) never loaded/u);
   });
 });
 
@@ -753,7 +1120,7 @@ describe('the scope of the sweep', () => {
 
   it('every check has a negative control that runs on every invocation', () => {
     const covered = new Set(CONTROLS.map((control) => control.expect));
-    for (const check of ['collision', 'escapes', 'clipped', 'spills', 'squeezed', 'page', 'unscaled']) {
+    for (const check of CHECKS) {
       assert.ok(covered.has(check), `${check} has no negative control, so nobody has seen it fire`);
     }
     for (const control of CONTROLS) {
@@ -774,6 +1141,12 @@ describe('the command line', () => {
     assert.throws(() => parseArgs(['--ready-timeout', '0']), /positive whole number/u);
     assert.throws(() => parseArgs(['--nonsense']), /unknown option/u);
     assert.throws(() => parseArgs(['--routes']), /needs a value/u);
+  });
+
+  it('refuses an empty list, which would ask for a sweep of nothing', () => {
+    assert.throws(() => parseArgs(['--routes', ',']), /--routes was given an empty list/u);
+    assert.throws(() => parseArgs(['--themes', '']), /--themes was given an empty list/u);
+    assert.throws(() => parseArgs(['--widths', '']), /at least 200/u);
   });
 
   it('self-test is on unless it is turned off', () => {
