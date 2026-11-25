@@ -15,7 +15,7 @@
  * the row gap becomes a margin, because a gap is charged for empty rows. `--prl-space-5` matches
  * `.prl-page-head`'s gap in `page.css`. The full reasoning is at `.prl-legend-head` in `legends.css`.
  */
-@media (min-width: 900px) {
+@media (min-width: 56.25em) {
   /* `:has()` because `/review/[handId]` has no standfirst, and an empty second track would still
      claim its width. Equal halves scale with the viewport, where a fixed track left 138px at 900. */
   .prl-review-page .prl-page-head:has(> .prl-page-head__standfirst) {
@@ -123,7 +123,7 @@
   flex: none;
 }
 
-@media (width < 600px) {
+@media (width < 37.5em) {
   .prl-review-sorts {
     margin-block: var(--prl-space-8) var(--prl-space-6);
   }
@@ -316,7 +316,7 @@ span.prl-review-table__cell-label {
    which dropped every `columnheader`. Each card prints its own `aria-hidden` column names. The card
    reorders the grid only, so DOM, reading and tab order stay the table's own. */
 
-@media (width < 1024px) {
+@media (width < 64em) {
   .prl-review-table,
   .prl-review-table caption {
     display: block;
@@ -709,7 +709,7 @@ span.prl-review-table__cell-label {
   line-height: var(--prl-leading-tight);
 }
 
-@media (width < 600px) {
+@media (width < 37.5em) {
   .prl-replay__transport {
     gap: var(--prl-space-4);
     padding: var(--prl-space-4);

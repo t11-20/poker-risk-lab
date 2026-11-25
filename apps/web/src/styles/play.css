@@ -86,7 +86,7 @@
   gap: var(--prl-space-4);
 }
 
-@media (min-width: 900px) {
+@media (min-width: 56.25em) {
   .prl-play__connection-lines {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--prl-space-4) var(--prl-space-9);
@@ -103,7 +103,7 @@
   gap: var(--prl-space-2);
 }
 
-@media (min-width: 600px) {
+@media (min-width: 37.5em) {
   .prl-play__facts {
     display: flex;
     flex-wrap: wrap;
@@ -146,7 +146,7 @@
 }
 
 /* The closed invite disclosure shares the button row; opened, it takes a row of its own. */
-@media (min-width: 900px) {
+@media (min-width: 56.25em) {
   .prl-play__connection--live .prl-play__connection-lines {
     grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
   }
@@ -528,7 +528,7 @@
  * With nothing to price the closed sheet can only open "No analysis", and at 360x780 it rested over
  * "Deal me in". Scroll padding cannot clear a control already in the first viewport, so the sheet goes.
  */
-@media (width < 600px) {
+@media (width < 37.5em) {
   .prl-play__stage:is([data-state="idle"], [data-state="error"])
     .prl-play__coach:has(> .prl-play__coach-body > .prl-empty) {
     display: none;
@@ -667,7 +667,7 @@
 /* 7. 600px, THE SHEET BECOMES A PANEL */
 
 /* The footer is outside `.prl-play`, and the closed sheet covered its last 16px at 390. */
-@media (width < 600px) {
+@media (width < 37.5em) {
   :root:has(.prl-play) .prl-footer {
     margin-block-end: var(--prl-space-12);
   }
@@ -686,7 +686,7 @@
   }
 }
 
-@media (min-width: 600px) {
+@media (min-width: 37.5em) {
   .prl-play {
     --prl-play-sheet-peek: var(--prl-space-0);
 
@@ -725,7 +725,7 @@
    make it keyboard-scrollable without a `tabindex`. The table's own container query, not this viewport
    query, decides its shape. */
 
-@media (min-width: 900px) {
+@media (min-width: 56.25em) {
   /**
    * Section 1. The lede gets its own column. `span 6` with a margin, not a row gap, avoids the
    * `grid-row: 1 / -1` trap described at `.prl-legend-head` in `legends.css`.
@@ -866,7 +866,7 @@
  * The rail stays 22rem. 24rem at 1440x900 made the band 24px taller, which is 24px of table lost for
  * 32px of Coach measure.
  */
-@media (min-width: 1280px) {
+@media (min-width: 80em) {
   .prl-play__stage {
     gap: var(--prl-space-10);
   }
@@ -1140,7 +1140,7 @@
   height: var(--prl-space-3);
 }
 
-@media (width < 600px) {
+@media (width < 37.5em) {
   /* The sheet is the surface, and the panel's own frame pushed the reading off the sheet's first screen. */
   .prl-play__coach .prl-coach {
     padding: var(--prl-space-0);
@@ -1164,7 +1164,7 @@
   }
 }
 
-@media (min-width: 600px) {
+@media (min-width: 37.5em) {
   .prl-play__coach {
     border-start-start-radius: var(--prl-radius-0);
     border-start-end-radius: var(--prl-radius-0);
@@ -1176,7 +1176,7 @@
    From 900px the rail scrolls on its own, so the strip sticks to its top. Everything a link or Tab can
    land on clears the strip's 41px (32px link, 8px padding, 1px edge) by scroll padding and margin. */
 
-@media (min-width: 900px) {
+@media (min-width: 56.25em) {
   .prl-play__coach {
     scroll-padding-block-start: var(--prl-space-11);
   }

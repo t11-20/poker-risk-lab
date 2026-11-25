@@ -82,7 +82,7 @@
    when stacked. `row-gap: 0` with margins, because `grid-row: 1 / span 8` creates implicit rows and a
    `row-gap` pays for each of them. The 1000px arithmetic is in `page.css`. */
 
-@media (min-width: 1000px) {
+@media (min-width: 62.5em) {
   /** Capped at two measures plus the gutter, the widest real arrangement on this page. */
   .prl-learn-page {
     width: min(var(--prl-container), calc(2 * var(--prl-measure) + var(--prl-space-11)));
@@ -1350,13 +1350,13 @@
  * A phone gets a 16px sheet, not 32px. At 360 the prose went from 262px to 294px wide. The width
  * arithmetic above 1280 and the gutter index at 900 never see this value.
  */
-@media (width < 600px) {
+@media (width < 37.5em) {
   .prl-learn-lesson {
     --prl-learn-sheet-x: var(--prl-space-6);
   }
 }
 
-@media (min-width: 600px) {
+@media (min-width: 37.5em) {
   .prl-learn-entry {
     padding: var(--prl-space-7);
   }
@@ -1366,7 +1366,7 @@
   }
 }
 
-@media (min-width: 900px) {
+@media (min-width: 56.25em) {
   /* 48px, so the hanging index clears the sheet's border. At 32px index and gap filled it exactly. */
   .prl-learn-lesson {
     --prl-learn-sheet-x: var(--prl-space-11);
@@ -1388,7 +1388,7 @@
   }
 }
 
-@media (min-width: 1280px) {
+@media (min-width: 80em) {
   /**
    * Lesson cards and glossary entries go to two columns, because both are lookup lists. Row-major flow
    * keeps 01 beside 02.

@@ -39,7 +39,7 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
-@media (min-width: 600px) {
+@media (min-width: 37.5em) {
   .prl-grid {
     grid-template-columns: repeat(12, minmax(0, 1fr));
   }
@@ -54,7 +54,7 @@
 }
 
 /** 600 to 899px. Two columns; a cell asking for more than half stays full width. */
-@media (min-width: 600px) {
+@media (min-width: 37.5em) {
   .prl-span-1,
   .prl-span-2,
   .prl-span-3,
@@ -65,7 +65,7 @@
   }
 }
 
-@media (min-width: 900px) {
+@media (min-width: 56.25em) {
   .prl-span-1 {
     grid-column: span 1;
   }

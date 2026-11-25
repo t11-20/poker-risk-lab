@@ -95,7 +95,7 @@
   line-height: var(--prl-leading-snug);
 }
 
-@media (min-width: 600px) {
+@media (min-width: 37.5em) {
   .prl-legal__meta {
     grid-template-columns: auto 1fr;
     align-items: baseline;

@@ -41,14 +41,14 @@
 }
 
 /** Below 860px the bar has no width to spare (see nav.css), so the button lives in the menu sheet. */
-@media (width < 860px) {
+@media (width < 53.75em) {
   .prl-shell__header-tools > .prl-tour-button {
     display: none;
   }
 }
 
 /** Between 860 and 960 the destinations need the width, so the bar keeps the mark and the name. */
-@media (860px <= width < 960px) {
+@media (53.75em <= width < 60em) {
   .prl-shell__header-tools > .prl-tour-button {
     justify-content: center;
     inline-size: var(--prl-target-min);

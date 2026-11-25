@@ -56,7 +56,7 @@
 
 /* Each claim keeps one line (326-390px), and the rows share the tracks so the evidence aligns. A 30ch
    track left "enumerated" and "classification" alone on a second line. The detail caps its own measure. */
-@media (min-width: 900px) {
+@media (min-width: 56.25em) {
   .prl-checks {
     grid-template-columns: minmax(min-content, max-content) minmax(0, 1fr);
     column-gap: var(--prl-space-11);

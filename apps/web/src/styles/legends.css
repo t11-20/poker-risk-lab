@@ -93,7 +93,7 @@
  * deeper, and a descendant match opened an empty 656px column. Equal `1fr` tracks, because a fixed
  * measure track left 138px for the title at 900.
  */
-@media (min-width: 900px) {
+@media (min-width: 56.25em) {
   .prl-legend-head:has(> .prl-legend-head__standfirst) {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     column-gap: var(--prl-space-11);
@@ -197,7 +197,7 @@
 }
 
 /** On a phone the form is unboxed, because boxed it cut names at 375 and 360. */
-@media (width < 600px) {
+@media (width < 37.5em) {
   .prl-legend-quick {
     padding: var(--prl-space-0);
     border: 0;
@@ -242,7 +242,7 @@
  * The page-level block takes two columns of capped prose from 900px, because one capped column left
  * 775px of the panel empty. Not `auto-fit`, which would split into 270px columns at 600.
  */
-@media (min-width: 900px) {
+@media (min-width: 56.25em) {
   .prl-legend-disclaimers--wide .prl-legend-disclaimers__list {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--prl-space-5) var(--prl-space-10);
@@ -346,7 +346,7 @@
  * Two columns from 720px, below the 24rem floor, because two floors need 792px and a 768px tablet has
  * 706px. A card fits in ~337px since the disclaimer is printed once above the grid.
  */
-@media (720px <= width < 900px) {
+@media (45em <= width < 56.25em) {
   .prl-legend-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -393,7 +393,7 @@
  * Two columns leave the name 227px beside the sigil, and "Technician" and "Communicator" fell to a line
  * of their own. Above the name it has the card's full 289px.
  */
-@media (720px <= width < 900px) {
+@media (45em <= width < 56.25em) {
   .prl-legend-grid .prl-legend-identity {
     flex-direction: column;
   }
@@ -703,7 +703,7 @@
 }
 
 /** Below 600px the description runs full width under the dot and name, which saves a line per option. */
-@media (width < 600px) {
+@media (width < 37.5em) {
   .prl-legend-difficulty {
     padding: var(--prl-space-6);
   }
@@ -731,7 +731,7 @@
  *  - the picker below the first card: its Play is reached before the setting it starts.
  * This one keeps everything and saves 247px. "Start a match" (`LegendQuickStart.tsx`) is the fast way in.
  */
-@media (width < 600px) {
+@media (width < 37.5em) {
   .prl-legend-difficulty__option:not(:has(.prl-legend-difficulty__control:checked))
     > .prl-legend-difficulty__description {
     position: absolute;
@@ -819,7 +819,7 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
-@media (min-width: 900px) {
+@media (min-width: 56.25em) {
   .prl-legend-outcome {
     grid-template-areas: "result wall quality";
     grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
@@ -847,7 +847,7 @@
 }
 
 /* The column cap is for the side-by-side layout only. Stacked at 390 it squeezed the wall to 240px. */
-@media (min-width: 900px) {
+@media (min-width: 56.25em) {
   .prl-legend-outcome__wall {
     max-inline-size: var(--prl-legend-column-min);
     padding-block: 0;
