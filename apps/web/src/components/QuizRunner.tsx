@@ -11,7 +11,8 @@
  * answered. A failed POST never throws. `VERDICT_SOURCE_NOTE` says who made the comparison, and says
  * "recorded" only when a row exists.
  *
- * A step change moves focus to the question heading, which carries "Question N of M" as hidden text.
+ * A step the learner takes moves focus to the question heading, which carries "Question N of M" as
+ * hidden text. Restoring the place from the URL on load moves nothing.
  * A checked answer moves nothing, because its button stays. "Show the reasoning" unmounts itself, so it
  * moves focus to the reasoning it revealed. The verdict regions are `role="status"`, so the verdict and
  * its source note are read as one atomic message.
@@ -52,6 +53,7 @@ import {
   submitQuizAttempt,
   VERDICT_SOURCE_NOTE,
 } from '@/lib/quiz-attempts.ts';
+import { parseQuizPlace, searchWithQuizPlace } from '@/lib/quiz-place.ts';
 import { quizAnswerLabel, quizBandWords, withinTolerance } from '@/lib/quiz-tolerance.ts';
 import { CHOICE_MARKER, numericVerdictSentence, verdictMarker } from '@/lib/quiz-verdict.ts';
 import { RECORD_PATH } from '@/lib/record-data.ts';
@@ -487,13 +489,26 @@ function questionBody(
 /** One object so the identity is stable across renders. */
 const IDLE_VERDICT: QuizVerdict = { state: 'idle' };
 
+/**
+ * Replaces the current entry, so stepping adds no history. `null` state, because Next's patched
+ * `replaceState` passes any state carrying `__NA` straight through and the router never sees the URL.
+ */
+function writeSearch(search: string): void {
+  if (search === window.location.search) return;
+  const url = new URL(window.location.href);
+  url.search = search;
+  window.history.replaceState(null, '', url);
+}
+
 export function QuizRunner(props: QuizRunnerProps): ReactElement {
   const { quiz, lessonTitleId, lessonTitle, nextLesson } = props;
   const [step, setStep] = useState(0);
+  /** Counts the learner's own steps. Focus follows this, not `step`, so a restored place moves nothing. */
+  const [moves, setMoves] = useState(0);
   const [answers, setAnswers] = useState<ReadonlyMap<ContentId, Answer>>(new Map());
   const [verdicts, setVerdicts] = useState<ReadonlyMap<ContentId, QuizVerdict>>(new Map());
   const headingRef = useRef<HTMLHeadingElement>(null);
-  useFocusOnChange(headingRef, step);
+  useFocusOnChange(headingRef, moves);
   const explanationRef = useRef<HTMLDivElement>(null);
   /** Set by "Show the reasoning" and nothing else, so paging back to a revealed question moves nothing. */
   const revealing = useRef(false);
@@ -505,6 +520,25 @@ export function QuizRunner(props: QuizRunnerProps): ReactElement {
 
   const total = quiz.questions.length;
   const onReview = step >= total;
+
+  const go = (to: number): void => {
+    setStep(to);
+    setMoves((count) => count + 1);
+    writeSearch(searchWithQuizPlace(window.location.search, to, total));
+  };
+
+  // After mount, not `useSearchParams`, which would client-render the quiz out of the static page.
+  useEffect(() => {
+    const search = window.location.search;
+    const restored = parseQuizPlace(search, total);
+    setStep(restored);
+    // Deferred: Next patches `replaceState` in an ancestor's effect, which runs after this one, and the
+    // unpatched call wipes the router's history state, so Back to this entry showed the previous page.
+    const tidy = window.setTimeout(() => {
+      writeSearch(searchWithQuizPlace(window.location.search, restored, total));
+    }, 0);
+    return () => window.clearTimeout(tidy);
+  }, [total]);
   const question = onReview ? undefined : quiz.questions[step];
 
   const record = (id: ContentId, answer: Answer): void => {
@@ -588,7 +622,7 @@ export function QuizRunner(props: QuizRunnerProps): ReactElement {
               {`Next: ${nextLesson.title}`}
             </Link>
           )}
-          <Button variant="secondary" onClick={() => setStep(0)}>
+          <Button variant="secondary" onClick={() => go(0)}>
             Back to the first question
           </Button>
           {lessonTitleId === null ? null : (
@@ -651,10 +685,10 @@ export function QuizRunner(props: QuizRunnerProps): ReactElement {
       ) : null}
 
       <div className="prl-btn-row prl-learn-quiz__nav">
-        <Button variant="ghost" disabled={step === 0} onClick={() => setStep(step - 1)}>
+        <Button variant="ghost" disabled={step === 0} onClick={() => go(step - 1)}>
           Previous
         </Button>
-        <Button variant="secondary" onClick={() => setStep(step + 1)}>
+        <Button variant="secondary" onClick={() => go(step + 1)}>
           {step + 1 === total ? 'Finish' : 'Next question'}
         </Button>
         {answered ? null : (
