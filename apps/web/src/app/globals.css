@@ -507,6 +507,11 @@
   list-style: none;
 }
 
+.prl-footer__list--described {
+  /* At 2px a description sat 19px under its own label and 18px above the next, so it read as either's. */
+  gap: var(--prl-space-6);
+}
+
 .prl-footer__item {
   display: grid;
   gap: var(--prl-space-1);
@@ -514,7 +519,6 @@
 }
 
 /** The underline is left to `base.css`, whose hover thickens it, a cue that does not depend on colour. */
-/** Centred, so a description sits nearer its own link than the next one. */
 .prl-footer__link {
   display: inline-flex;
   align-items: center;
