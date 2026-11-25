@@ -130,7 +130,7 @@ function FigureMetric(props: {
 function Inputs(props: { readonly inputs: readonly CalculationInput[] }): ReactElement | null {
   if (props.inputs.length === 0) return null;
   return (
-    <dl className="prl-learn-calc__inputs">
+    <dl className="prl-learn-calc__inputs" data-inputs={props.inputs.length}>
       {props.inputs.map((input) => (
         <div className="prl-learn-calc__input" key={input.label}>
           <dt className="prl-label">{input.label}</dt>

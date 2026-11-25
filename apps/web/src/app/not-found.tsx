@@ -29,7 +29,7 @@ export function NotFoundBody(): ReactElement {
       </p>
 
       <nav aria-label="All sections">
-        <ul className="prl-footer__list">
+        <ul className="prl-footer__list prl-footer__list--described">
           {NAV_DESTINATIONS.map((destination) => (
             <li className="prl-footer__item" key={destination.href}>
               <Link className="prl-footer__link" href={destination.href}>

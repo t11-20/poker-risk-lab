@@ -15,13 +15,32 @@ export interface FormulaProps {
   readonly className?: string;
 }
 
+/**
+ * One block per written line, so a wrapped line can hang its continuation. Each keeps its newline, so
+ * the element's text is the expression unchanged.
+ */
+export function expressionLines(expression: string): readonly { offset: number; text: string }[] {
+  const lines: { offset: number; text: string }[] = [];
+  let offset = 0;
+  for (const text of expression.split(/(?<=\n)/u)) {
+    lines.push({ offset, text });
+    offset += text.length;
+  }
+  return lines;
+}
+
 export function Formula(props: FormulaProps): ReactElement {
   const { expression, explanation, eyebrow, className } = props;
   return (
     <figure className={cx('prl-formula', className)}>
       {eyebrow === undefined ? null : <span className="prl-formula__eyebrow prl-label">{eyebrow}</span>}
       <pre className="prl-formula__expression">
-        <code>{expression}</code>
+        {/* The block is outside `code`, so its line boxes keep the `pre` font's strut and pitch. */}
+        {expressionLines(expression).map((line) => (
+          <span className="prl-formula__line" key={line.offset}>
+            <code>{line.text}</code>
+          </span>
+        ))}
       </pre>
       <figcaption className="prl-formula__explanation">{explanation}</figcaption>
     </figure>
