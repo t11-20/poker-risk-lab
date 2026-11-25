@@ -5,8 +5,9 @@
  */
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import {
   ALLOWED_ROUTES,
@@ -15,6 +16,7 @@ import {
   collectWorkers,
   parseClientManifest,
   REPO_ROOT,
+  readBuild,
   workerChunkLists,
 } from './client-bundle-audit.mjs';
 
@@ -217,6 +219,41 @@ describe('the build readers', () => {
       },
     ]);
     assert.deepEqual(workerChunkLists('no workers here'), []);
+  });
+});
+
+describe('readBuild', () => {
+  it('reads a chunk in a nested directory and every page the route manifest names', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'prl-bundle-audit-'));
+    try {
+      const write = (path, text) => {
+        mkdirSync(dirname(join(dir, path)), { recursive: true });
+        writeFileSync(join(dir, path), text);
+      };
+      write('BUILD_ID', 'test');
+      write('build-manifest.json', JSON.stringify({ rootMainFiles: ['static/chunks/runtime.js'] }));
+      write(
+        'app-path-routes-manifest.json',
+        JSON.stringify({ '/lab/page': '/lab', '/icon.svg/route': '/icon.svg' }),
+      );
+      write(
+        'server/app/lab/page_client-reference-manifest.js',
+        `globalThis.__RSC_MANIFEST = {};\nglobalThis.__RSC_MANIFEST["/lab/page"] = ${JSON.stringify({
+          entryJSFiles: { '[project]/apps/web/src/app/lab/page': ['static/chunks/nested/lab.js'] },
+        })};\n`,
+      );
+      write('static/chunks/runtime.js', 'runtime');
+      write('static/chunks/nested/lab.js', 'lab');
+      const build = readBuild(dir);
+      assert.deepEqual(build.expectedRoutes, ['/lab']);
+      assert.deepEqual(build.routes.get('/lab'), ['static/chunks/runtime.js', 'static/chunks/nested/lab.js']);
+      assert.deepEqual([...build.chunks.keys()].sort(), [
+        'static/chunks/nested/lab.js',
+        'static/chunks/runtime.js',
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
