@@ -51,16 +51,102 @@
   background-color: var(--prl-surface-raised);
 }
 
-/* One step tighter on a phone. Difficulty and Street side by side clip "Advanced (14)" at 360, and
-   collapsing the panel would hide the filters. */
+/*
+ * Phone only. At 390×844 with the guide dismissed the first card started at 1150px. Topic stays
+ * full width: "Fold equity and bluffing (2)" is 187px and a half column has 144px of text room.
+ * Difficulty and Street share a row from 380px up. The index opener is scoped with
+ * `:has(.prl-lab-filters)` so a scenario page keeps its padding.
+ */
 @media (width < 600px) {
+  .prl-lab-page:has(.prl-lab-filters) .prl-page-head {
+    padding-block: var(--prl-space-6) var(--prl-space-5);
+  }
+
+  .prl-lab-page:has(.prl-lab-filters) .prl-page-head__standfirst {
+    margin-block-start: 0;
+  }
+
+  .prl-lab-page:has(.prl-lab-filters) .prl-source-note {
+    margin-block-start: var(--prl-space-5);
+    padding: var(--prl-space-5) var(--prl-space-6);
+  }
+
+  .prl-lab-shortcuts {
+    margin-block-start: var(--prl-space-4);
+    gap: var(--prl-space-1) var(--prl-space-5);
+  }
+
   .prl-lab-filters {
-    margin-block: var(--prl-space-7);
+    margin-block: var(--prl-space-5);
   }
 
   .prl-lab-filters__set {
-    gap: var(--prl-space-6);
-    padding: var(--prl-space-7);
+    gap: var(--prl-space-4);
+    padding: var(--prl-space-5);
+  }
+
+  .prl-lab-filters__row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--prl-space-4);
+  }
+
+  /* First field is Topic. See the comment on this media block. */
+  .prl-lab-filters__field:first-child {
+    grid-column: 1 / -1;
+  }
+
+  /* 113px wide, so "Apply filters" and "Showing N scenarios." share a line at 390 (they were 9px short). */
+  .prl-lab-filters .prl-btn {
+    padding-inline: var(--prl-space-5);
+  }
+
+  /* 22px of spare on "Every street (36)" in the 390 half column. The wider padding was short of it. */
+  .prl-lab-filters .prl-select {
+    padding-inline: var(--prl-space-4);
+  }
+
+  /*
+   * A phone card spans all 12 columns, so the column gap sits inside the card. Eleven
+   * `--prl-space-8` gaps are 528px at a 32px root and the card was wider than the screen.
+   * The row gap still separates the cards.
+   */
+  .prl-lab-grid {
+    column-gap: var(--prl-space-0);
+  }
+
+  /*
+   * The chip is nowrap, so "Fold equity and bluffing" set the card's column and the state
+   * strip ran past the screen. The label has spaces, so on a phone it may wrap.
+   */
+  .prl-lab-card {
+    min-inline-size: 0;
+    max-inline-size: 100%;
+  }
+
+  .prl-lab-card__chips,
+  .prl-lab-card__chips > li {
+    min-inline-size: 0;
+    max-inline-size: 100%;
+  }
+
+  .prl-lab-card .prl-chip {
+    max-inline-size: 100%;
+    overflow-wrap: break-word;
+    white-space: normal;
+  }
+}
+
+/*
+ * A half column at 360 left 7px of spare on "Every street (36)", too little for the arrow.
+ * Below 380 the three selects stack, and the face stays the body size.
+ */
+@media (width < 380px) {
+  .prl-lab-filters__row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .prl-lab-filters__field:first-child {
+    grid-column: auto;
   }
 }
 
@@ -74,7 +160,8 @@
 
 /**
  * Explicit columns, not `auto-fit`. An 8rem auto-fit track clipped the longest option mid-word at
- * 390px. One field per row on a phone, two from 600 and three from 1280.
+ * 390px. From 380 to 599 Topic is full width and the other two share a row; below 380 they stack.
+ * Two columns from 600, three from 1280.
  */
 .prl-lab-filters__row {
   display: grid;
