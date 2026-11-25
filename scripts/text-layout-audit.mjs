@@ -1262,6 +1262,8 @@ const LARGE_TEXT_CELLS = [
   `${LARGE_TEXT.widths.join(',')}px`,
 ].join(', ');
 const LARGE_TEXT_LAYOUTS = LARGE_TEXT.widths.map((w) => `${String(w / LARGE_TEXT.scale)}px`).join(' and ');
+const LARGE_TEXT_PHONE_CELLS =
+  `${String(LARGE_TEXT_PHONE_ROUTES.length)} route(s) at ` + `${String(LARGE_TEXT.phoneWidth)}px`;
 
 const HELP = `
 ${bold('pnpm run test:layout')} — the PAINTED TEXT of this app, in real Chrome
@@ -1288,7 +1290,7 @@ ${bold('pnpm run test:layout')} — the PAINTED TEXT of this app, in real Chrome
     Unless --widths, --themes or --text-scale is given, the matrix above runs at 100%
     text and then a large-text pass runs at ${LARGE_TEXT_CELLS}. Em breakpoints give
     those widths the ${LARGE_TEXT_LAYOUTS} layouts with doubled text. It also measures
-    ${String(LARGE_TEXT_PHONE_ROUTES.length)} route(s) at ${String(LARGE_TEXT.phoneWidth)}px, the ones clean there today. Any of the three
+    ${LARGE_TEXT_PHONE_CELLS}, the ones clean there today. Any of the three
     flags replaces both passes with exactly the matrix it names, at one text size.
 
   Reporting
@@ -1617,7 +1619,8 @@ export class Page {
     } catch (error) {
       throw new Error(
         `Chrome refused Page.setFontSizes for ${textSizeLabel(scale)} ` +
-          `(${error instanceof Error ? error.message : String(error)}), so no layout at that size can be measured`,
+          `(${error instanceof Error ? error.message : String(error)}), ` +
+          'so no layout at that size can be measured',
       );
     }
     this.textScale = scale;
