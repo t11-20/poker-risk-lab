@@ -25,7 +25,7 @@
 }
 
 /**
- * One gap under every head, whatever follows it: 48px, the floor of `--prl-section-y` and the gap Learn
+ * One gap under every head, whatever follows it: 48px, the head's own top padding and the gap Learn
  * and Legends already keep. Two classes, so a block's own top margin cannot win on import order.
  * The age gate keeps its 40px because it is held for the owner.
  */
