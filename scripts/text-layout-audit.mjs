@@ -872,9 +872,19 @@ const glyphsOf = (box) => box.ink ?? box.rects;
 const BREAK_AFTER = /[-\u00AD\u2010\u2013\u2014/]$/u;
 
 /**
- * The part of a broken word torn one or two characters a line, or null, whatever allowed the breaks.
- * Where the browser splits words to fill a line (`break-all`, `hyphens: auto`) it takes three pieces.
+ * Two short pieces, or most of three or more, so one longer piece cannot clear "Br|illi|an|t" while
+ * "reachin|g" stays an emergency break. Where the browser splits words to fill a line (`break-all`,
+ * `hyphens: auto`) the first and last pieces are leftovers of a full line, so only the middle counts.
  */
+function isTorn(run, fills) {
+  const short = (p) => [...p].length <= MAX_PIECE;
+  const judged = fills ? run.slice(1, -1) : run;
+  if (fills && judged.length === 1) return short(judged[0]);
+  if (judged.length === 2) return judged.every(short);
+  return judged.length > 2 && judged.filter(short).length * 2 > judged.length;
+}
+
+/** The part of a broken word torn one or two characters a line, or null, whatever allowed the breaks. */
 export function letterByLetter(pieces, fills = false) {
   let run = [];
   const runs = [];
@@ -886,8 +896,7 @@ export function letterByLetter(pieces, fills = false) {
     }
   }
   if (run.length > 0) runs.push(run);
-  const least = fills ? 3 : 2;
-  return runs.find((r) => r.length >= least && r.every((p) => [...p].length <= MAX_PIECE)) ?? null;
+  return runs.find((r) => isTorn(r, fills)) ?? null;
 }
 
 /** The widest word, or the widest beyond the first line, short of the room its own line has. */

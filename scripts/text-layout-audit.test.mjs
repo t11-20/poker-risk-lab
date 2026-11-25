@@ -879,6 +879,21 @@ describe('a word broken letter by letter', () => {
     assert.notEqual(letterByLetter(['9e', '1f', '07', 'f2', '52']), null);
   });
 
+  it('is not cleared by one piece of three characters or more (REGRESSION)', () => {
+    assert.deepEqual(letterByLetter(['Br', 'illi', 'an', 't']), ['Br', 'illi', 'an', 't']);
+    assert.notEqual(letterByLetter(['R', 'e', 's', 'u', 'l', 'ti', 'lli', 'ng']), null);
+    assert.notEqual(letterByLetter(['ab', 'cdef', 'gh']), null, 'two of three pieces are short');
+    assert.equal(letterByLetter(['abcdef', 'gh']), null, 'one short piece of two is a last line');
+    assert.equal(letterByLetter(['abcdef', 'ghijkl', 'mn']), null, 'one short piece of three');
+  });
+
+  it('judges only the full lines where the browser fills, since the ends are leftovers', () => {
+    assert.equal(letterByLetter(['ex', 'traordinari', 'ly'], true), null);
+    assert.equal(letterByLetter(['Br', 'illi', 'an', 't'], true), null);
+    assert.notEqual(letterByLetter(['Br', 'il', 'li', 'ant'], true), null);
+    assert.notEqual(letterByLetter(['abcd', 'ef', 'gh', 'i', 'jklm'], true), null);
+  });
+
   it('leaves an emergency break of a long word alone', () => {
     // `/learn/sample-size-and-risk-of-ruin` at 360px, 200%.
     assert.equal(letterByLetter(['reachin', 'g']), null);
