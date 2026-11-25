@@ -26,14 +26,14 @@
 }
 
 /**
- * Three equal tracks once each clears 10rem, else one: never two plus an orphan. It reads the grid's own
- * width (291px in a card, 707px on a profile at 768). Under the threshold `* 999` floors a track at
- * 100%; over it the 25% floor fits exactly three, and two children still share the row in halves.
+ * Three equal tracks once each clears its floor, else one: never two plus an orphan. It reads the
+ * grid's own width (291px in a card, 707px on a profile at 768). Under the threshold `* 999` floors a
+ * track at 100%; over it the 25% floor fits exactly three, and two children still share the row in halves.
  */
 .prl-legend-card__metrics,
 .prl-legend-contrast,
 .prl-legend-maths {
-  --prl-legend-thirds-at: calc(3 * var(--prl-space-16) + 2 * var(--prl-legend-thirds-gap));
+  --prl-legend-thirds-at: calc(3 * var(--prl-legend-thirds-min) + 2 * var(--prl-legend-thirds-gap));
   gap: var(--prl-legend-thirds-gap);
   grid-template-columns: repeat(
       auto-fit,
@@ -417,6 +417,7 @@
 
 /** `--prl-line-subtle`, because these rules divide a card's contents, not an object's edge. */
 .prl-legend-card__metrics {
+  --prl-legend-thirds-min: var(--prl-space-16);
   --prl-legend-thirds-gap: var(--prl-space-6);
   display: grid;
   padding-block: var(--prl-space-6);
@@ -955,6 +956,7 @@
 }
 
 .prl-legend-maths {
+  --prl-legend-thirds-min: var(--prl-space-16);
   --prl-legend-thirds-gap: var(--prl-space-7);
   display: grid;
 }
@@ -1042,7 +1044,9 @@
   font-size: var(--prl-type-body-sm);
 }
 
+/** 13rem, because a group is a title and a two-column list: at 168px each label took three lines. */
 .prl-legend-contrast {
+  --prl-legend-thirds-min: calc(var(--prl-space-16) + var(--prl-space-11));
   --prl-legend-thirds-gap: var(--prl-space-8);
   display: grid;
 }

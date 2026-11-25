@@ -156,12 +156,19 @@ describe('legends layout rules', () => {
     );
     assert.match(
       shared,
-      /--prl-legend-thirds-at: calc\(3 \* var\(--prl-space-16\) \+ 2 \* var\(--prl-legend-thirds-gap\)\);/u,
+      /--prl-legend-thirds-at: calc\(3 \* var\(--prl-legend-thirds-min\) \+ 2 \* var\(--prl-legend-thirds-gap\)\);/u,
     );
     for (const selector of ['.prl-legend-card__metrics', '.prl-legend-contrast', '.prl-legend-maths']) {
       const own = new RegExp(`\\}\\s*${selector.replace('.', '\\.')} \\{([^}]*)\\}`, 'u').exec(css)?.[1];
       assert.ok(own !== undefined, `no rule of its own for ${selector}`);
       assert.match(own, /--prl-legend-thirds-gap: var\(--prl-space-\d+\);/u, `${selector} sets no gap`);
+      const floor = /--prl-legend-thirds-min: ([^;]+);/u.exec(own)?.[1];
+      assert.ok(floor !== undefined, `${selector} sets no floor`);
+      // "Three across once each clears about 160px": never a narrower floor than that.
+      assert.ok(
+        rem(floor.startsWith('calc(') ? floor : `calc(${floor})`) >= 10,
+        `${selector} floor ${floor}`,
+      );
       assert.doesNotMatch(
         own,
         /grid-template-columns|(?:^|\s)gap:/u,
