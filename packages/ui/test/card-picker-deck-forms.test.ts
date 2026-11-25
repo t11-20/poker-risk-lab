@@ -7,7 +7,15 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
-import { DECK_FOLD, DECK_RANKS, DECK_SUITS, deckFlowFor, moveInDeck } from '../src/card-picker.ts';
+import {
+  DECK_FOLD,
+  DECK_RANKS,
+  DECK_SUITS,
+  deckFlowFor,
+  deckFlowOf,
+  moveInDeck,
+  PICKER_COLUMNS_PROPERTY,
+} from '../src/card-picker.ts';
 
 const css = readFileSync(new URL('../src/styles/card-picker.css', import.meta.url), 'utf8').replace(
   /\/\*[\s\S]*?\*\//gu,
@@ -50,26 +58,43 @@ describe('keys in the folded deck follow what is drawn', () => {
     assert.equal(moveInDeck(45, 'ArrowDown', 'folded'), 45, 'the last suit has nothing under its hole');
   });
 
-  it('every arrow from every card lands on a card one drawn step away, or stays at an edge', () => {
+  it('every arrow from every card lands where the drawn grid says, or stays at an edge', () => {
+    const cellAt = new Map<string, number>();
     for (let index = 0; index < DECK_RANKS * DECK_SUITS; index++) {
-      const from = drawn(index);
+      const { line, column } = drawn(index);
+      cellAt.set(`${line},${column}`, index);
+    }
+    const card = (line: number, column: number): number | undefined => cellAt.get(`${line},${column}`);
+    for (let index = 0; index < DECK_RANKS * DECK_SUITS; index++) {
+      const { line, column } = drawn(index);
+      // Only a second line has a hole, under the seventh card, so only there does a move skip a line.
+      const vertical = (step: number): number =>
+        card(line + step, column) ??
+        (column === DECK_FOLD - 1 ? card(line + 2 * step, column) : undefined) ??
+        index;
+      const expected: Readonly<Record<(typeof ARROWS)[number], number>> = {
+        ArrowRight: card(line, column + 1) ?? index,
+        ArrowLeft: card(line, column - 1) ?? index,
+        ArrowDown: vertical(1),
+        ArrowUp: vertical(-1),
+      };
       for (const key of ARROWS) {
-        const next = moveInDeck(index, key, 'folded');
-        assert.ok(next !== null && next >= 0 && next < 52, `${key} from ${index}`);
-        if (next === index) continue;
-        const to = drawn(next);
-        const label = `${key} from ${index} to ${next}`;
-        if (key === 'ArrowRight' || key === 'ArrowLeft') {
-          assert.equal(to.line, from.line, label);
-          assert.equal(to.column - from.column, key === 'ArrowRight' ? 1 : -1, label);
-        } else {
-          const step = to.line - from.line;
-          assert.equal(to.column, from.column, label);
-          assert.ok(key === 'ArrowDown' ? step === 1 || step === 2 : step === -1 || step === -2, label);
-          if (Math.abs(step) === 2) assert.equal(from.column, 6, `${label} skipped a real card`);
-        }
+        assert.equal(moveInDeck(index, key, 'folded'), expected[key], `${key} from ${index}`);
       }
     }
+  });
+
+  it('the component reads the same custom property the stylesheet sets', () => {
+    const style = (value: string) => ({
+      getPropertyValue: (name: string) => (name === PICKER_COLUMNS_PROPERTY ? value : ''),
+    });
+    assert.equal(deckFlowOf(style(' 7')), 'folded');
+    assert.equal(deckFlowOf(style('13')), 'rows');
+    assert.equal(deckFlowOf(style(' 4')), 'columns');
+    assert.equal(deckFlowOf(style('')), 'rows');
+    assert.match(css, new RegExp(`${PICKER_COLUMNS_PROPERTY}:\\s*7;`, 'u'), 'the stylesheet never sets 7');
+    const picker = readFileSync(new URL('../src/components/CardPicker.tsx', import.meta.url), 'utf8');
+    assert.match(picker, /deckFlowOf\(window\.getComputedStyle\(deck\)\)/u, 'the keys do not read the deck');
   });
 
   it('up undoes down, and left undoes right, wherever the first move went somewhere', () => {

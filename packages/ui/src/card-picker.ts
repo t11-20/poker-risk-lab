@@ -104,11 +104,19 @@ export type DeckFlow = 'rows' | 'folded' | 'columns';
 /** The length of a folded suit's first line. */
 export const DECK_FOLD = Math.ceil(DECK_RANKS / 2);
 
+/** The one value the stylesheet and the arrow keys share: how many cards the deck draws across. */
+export const PICKER_COLUMNS_PROPERTY = '--prl-picker-cols';
+
 /** The flow for the column count in the stylesheet's `--prl-picker-cols`. Anything unknown reads as rows. */
 export function deckFlowFor(columns: number): DeckFlow {
   if (columns === DECK_SUITS) return 'columns';
   if (columns === DECK_FOLD) return 'folded';
   return 'rows';
+}
+
+/** The flow a computed style names. A custom property's value keeps its leading space. */
+export function deckFlowOf(style: { getPropertyValue(name: string): string }): DeckFlow {
+  return deckFlowFor(Number(style.getPropertyValue(PICKER_COLUMNS_PROPERTY).trim()));
 }
 
 const at = (suit: number, rank: number): number => suit * DECK_RANKS + rank;
