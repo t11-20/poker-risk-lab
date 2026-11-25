@@ -219,8 +219,10 @@ describe('legends layout rules', () => {
       'utf8',
     ).replace(/\/\*[\s\S]*?\*\//gu, '');
     for (const selector of ['.prl-coach__list', '.prl-uncertainty__limitations']) {
-      const rules = [...shared.matchAll(/([^{}]+)\{([^}]*)\}/gu)].filter(([, head]) =>
-        (head ?? '').split(',').some((part) => part.trim() === selector),
+      // Innermost rules at any depth, so a cap inside a media or container query is read too.
+      const subject = new RegExp(`${selector.replace('.', '\\.')}(?![\\w-])[^\\s>+~]*$`, 'u');
+      const rules = [...shared.matchAll(/([^{};]+)\{([^{}]*)\}/gu)].filter(([, head]) =>
+        (head ?? '').split(',').some((part) => subject.test(part.trim())),
       );
       assert.ok(rules.length > 0, `components.css has no rule for ${selector}`);
       for (const [, , body] of rules) assert.doesNotMatch(body ?? '', /max-width|max-inline-size/u, selector);
