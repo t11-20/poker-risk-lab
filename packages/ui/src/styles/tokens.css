@@ -89,8 +89,8 @@
 
   /* TYPOGRAPHY. Archivo is self-hosted. Supply-chain policy forbids remote assets and the CSP has no font host. */
   --prl-font-sans:
-    "Archivo Variable", "Inter var", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text",
-    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    "Archivo Variable", "Archivo Fallback", "Inter var", "Inter", -apple-system, BlinkMacSystemFont,
+    "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   /* One family at two widths. Headlines are Archivo condensed, body is the same family at normal width. */
   --prl-font-display: var(--prl-font-sans);
   --prl-stretch-display: 72%;
