@@ -106,17 +106,24 @@ function ScenarioUnavailable({
         </p>
       </header>
 
-      {summary === null ? null : (
-        <p className="prl-note">
-          <span className="prl-label">The question it asks</span> {summary.question}
-        </p>
-      )}
-      <p className="prl-note">
-        <span className="prl-label">Scenario</span> <code className="prl-mono">{scenarioId}</code>
-      </p>
-      <p className="prl-note">
-        <span className="prl-label">What happened</span> <span className="prl-mono">{detail}</span>
-      </p>
+      <dl className="prl-unavailable-facts">
+        {summary === null ? null : (
+          <div>
+            <dt className="prl-label">The question it asks</dt>
+            <dd>{summary.question}</dd>
+          </div>
+        )}
+        <div>
+          <dt className="prl-label">Scenario</dt>
+          <dd>
+            <code className="prl-mono">{scenarioId}</code>
+          </dd>
+        </div>
+        <div>
+          <dt className="prl-label">What happened</dt>
+          <dd className="prl-mono">{detail}</dd>
+        </div>
+      </dl>
       <p className="prl-note">
         Nothing is shown in place of the analysis. Every figure in a scenario is computed from the situation
         when you open it, so an approximation drawn from somewhere else would be a different spot wearing this

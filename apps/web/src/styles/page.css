@@ -98,6 +98,26 @@
   margin-inline-end: var(--prl-space-4);
 }
 
+/** A scenario that could not load: each label over its value, a step between pairs. */
+.prl-unavailable-facts {
+  display: grid;
+  gap: var(--prl-space-5);
+  max-width: var(--prl-measure);
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+  line-height: var(--prl-leading-snug);
+}
+
+.prl-unavailable-facts > div {
+  display: grid;
+  gap: var(--prl-space-2);
+}
+
+/* The API's message is one unbroken URL in mono, so it may break anywhere rather than overflow. */
+.prl-unavailable-facts dd {
+  overflow-wrap: anywhere;
+}
+
 /* Sibling-route links. */
 
 /* A section seam above, only the gap before the footer rule below. */
