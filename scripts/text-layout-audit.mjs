@@ -453,6 +453,47 @@ const WALKER = String.raw`(() => {
     return el;
   };
 
+  /** Preserved white space hangs past the line box at a wrap, and it paints nothing. */
+  const preservesSpaces = (style) => {
+    const collapse = style.whiteSpaceCollapse;
+    if (typeof collapse === 'string' && collapse !== '') {
+      return collapse === 'preserve' || collapse === 'break-spaces' || collapse === 'preserve-spaces';
+    }
+    const ws = style.whiteSpace;
+    return ws === 'pre' || ws === 'pre-wrap' || ws === 'break-spaces';
+  };
+
+  /** text-indent in px; a percentage is of the block's own inline size. */
+  const indentOf = (style, width) => {
+    const raw = style.textIndent;
+    const n = Number.parseFloat(raw);
+    if (!Number.isFinite(n)) return 0;
+    return raw.trim().endsWith('%') ? (n * width) / 100 : n;
+  };
+
+  /** The top of a block's first line, which is the only line text-indent moves. */
+  const firstLineTop = (block) => {
+    const range = document.createRange();
+    range.selectNodeContents(block);
+    let top = null;
+    for (const r of range.getClientRects()) {
+      if (r.height > 0.5 && (top === null || r.top < top)) top = r.top;
+    }
+    return top;
+  };
+
+  /** Word rectangles merged along each line, so the hanging space between them is not counted. */
+  const addInk = (ink, r) => {
+    const prev = ink[ink.length - 1];
+    if (prev !== undefined && Math.abs(prev.top - r.top) < 0.5 && Math.abs(prev.height - r.height) < 0.5) {
+      const left = Math.min(prev.left, r.left);
+      prev.width = Math.max(prev.left + prev.width, r.right) - left;
+      prev.left = left;
+      return;
+    }
+    ink.push({ left: r.left, top: r.top, width: r.width, height: r.height });
+  };
+
   const boxes = [];
   const clippers = [];
   const frames = [];
@@ -528,9 +569,18 @@ const WALKER = String.raw`(() => {
       continue;
     }
 
+    const block = blockOf(el);
+    const blockStyle = styleOf(block);
+    const { pad, content } = boxesOf(block, blockStyle);
+    const indent = indentOf(blockStyle, content.w);
+    const firstTop = indent === 0 ? null : firstLineTop(block);
+    const preserved = preservesSpaces(style);
+
     // Glyph rectangles, and the widest word, from the text nodes themselves.
     const rects = [];
+    const ink = [];
     let widest = null;
+    let later = null;
     for (const node of own) {
       textNodes += 1;
       const value = node.nodeValue;
@@ -550,11 +600,17 @@ const WALKER = String.raw`(() => {
         const w = document.createRange();
         w.setStart(node, match.index);
         w.setEnd(node, match.index + match[0].length);
+        const pieces = [...w.getClientRects()];
         let wide = 0;
-        for (const r of w.getClientRects()) wide = Math.max(wide, r.width);
-        if (widest === null || wide > widest.width) {
-          widest = { text: match[0].slice(0, 40), width: Math.round(wide * 100) / 100 };
+        for (const r of pieces) wide = Math.max(wide, r.width);
+        const word = { text: match[0].slice(0, 40), width: Math.round(wide * 100) / 100 };
+        if (firstTop !== null && pieces.length > 0) {
+          word.first = pieces[0].top < firstTop + pieces[0].height / 2;
+          if (!word.first && (later === null || word.width > later.width)) later = word;
         }
+        if (widest === null || word.width > widest.width) widest = word;
+        const shown = pieces.filter((r) => r.width > 0.5 && r.height > 0.5);
+        if (preserved) for (const r of shown) addInk(ink, r);
         match = pattern.exec(value);
       }
     }
@@ -566,10 +622,6 @@ const WALKER = String.raw`(() => {
       skipped.offscreen += 1;
       continue;
     }
-
-    const block = blockOf(el);
-    const blockStyle = styleOf(block);
-    const { pad, content } = boxesOf(block, blockStyle);
 
     const text = own
       .map((n) => n.nodeValue)
@@ -587,7 +639,7 @@ const WALKER = String.raw`(() => {
       }
     }
 
-    boxes.push({
+    const measured = {
       i: order.get(el),
       end: ends.get(el),
       sel: describe(el),
@@ -603,7 +655,13 @@ const WALKER = String.raw`(() => {
       blockScrolls: scrollsHorizontally(blockStyle),
       ellipsis: style.textOverflow === 'ellipsis' || blockStyle.textOverflow === 'ellipsis',
       exempt,
-    });
+    };
+    if (preserved && ink.length > 0) measured.ink = ink.map(asRect);
+    if (indent !== 0) {
+      measured.indent = Math.round(indent * 100) / 100;
+      measured.later = later;
+    }
+    boxes.push(measured);
   }
 
   const h1 = document.querySelector('h1');
@@ -701,6 +759,22 @@ export function clippedRects(rects, clips) {
   return shown;
 }
 
+/** Glyphs without the preserved white space that hangs past a wrapped line and paints nothing. */
+const glyphsOf = (box) => box.ink ?? box.rects;
+
+/** The widest word, or the widest beyond the first line, short of the room its own line has. */
+function squeezeOf(box) {
+  let worst = null;
+  for (const word of [box.word, box.later]) {
+    if (word === null || word === undefined) continue;
+    // A negative text-indent starts the first line that far before the content box.
+    const room = box.content.w - (word.first === true ? (box.indent ?? 0) : 0);
+    const short = word.width - room;
+    if (worst === null || short > worst.short) worst = { word, room, short };
+  }
+  return worst;
+}
+
 /** `measurement` is what `WALKER` returns. `context` names route, theme and width. */
 export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIONS) {
   const findings = [];
@@ -736,22 +810,23 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
     }
     counts.ownBox += 1;
 
-    if (box.word !== null && box.word.width > box.content.w + WORD_TOLERANCE) {
+    const squeeze = squeezeOf(box);
+    if (squeeze !== null && squeeze.short > WORD_TOLERANCE) {
       if (exemptFor(box, 'squeezed') === null) {
         add('squeezed', {
           sel: box.sel,
           text: box.text,
-          word: box.word.text,
-          needs: box.word.width,
-          has: box.content.w,
-          short: Math.round((box.word.width - box.content.w) * 100) / 100,
+          word: squeeze.word.text,
+          needs: squeeze.word.width,
+          has: Math.round(squeeze.room * 100) / 100,
+          short: Math.round(squeeze.short * 100) / 100,
         });
       }
     }
 
     if (box.ellipsis) counts.ellipsisExcused += 1;
     else {
-      const escaped = escapeAmount(box.rects, box.pad);
+      const escaped = escapeAmount(glyphsOf(box), box.pad);
       if (escaped.amount > EDGE_TOLERANCE && exemptFor(box, 'escapes') === null) {
         add('escapes', {
           sel: box.sel,
@@ -770,7 +845,7 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
       if (box.ellipsis) continue;
       if (box.scrollHost !== null && box.scrollHost > clipper.i) continue;
       counts.clipTests += 1;
-      const escaped = escapeAmount(box.rects, clipper.pad);
+      const escaped = escapeAmount(glyphsOf(box), clipper.pad);
       if (escaped.amount <= EDGE_TOLERANCE) continue;
       if (exemptFor(box, 'clipped', clipper.sel) !== null) continue;
       add('clipped', {
@@ -792,7 +867,7 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
     if (box.scrollHost !== null && box.scrollHost >= frame.i) continue;
     counts.frameTests += 1;
     const clips = clippers.filter((c) => c.i >= frame.i && c.i <= box.i && box.i < c.end);
-    const spilled = escapeAmount(clippedRects(box.rects, clips), drawnEdges(frame));
+    const spilled = escapeAmount(clippedRects(glyphsOf(box), clips), drawnEdges(frame));
     if (spilled.amount <= EDGE_TOLERANCE) continue;
     if (exemptFor(box, 'spills', frame.sel) !== null) continue;
     add('spills', {
@@ -807,9 +882,9 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
 
   // Sorted by top edge so the scan can exit early. The key must be the TOPMOST rect, not `rects[0]`,
   // or the early exit skips pairs and reports no collision.
-  const topOf = (box) => Math.min(...box.rects.map((r) => r.y));
+  const topOf = (box) => Math.min(...glyphsOf(box).map((r) => r.y));
   const sorted = [...boxes].sort((a, b) => topOf(a) - topOf(b));
-  const lowestOf = sorted.map((box) => Math.max(...box.rects.map(bottom)));
+  const lowestOf = sorted.map((box) => Math.max(...glyphsOf(box).map(bottom)));
   for (let a = 0; a < sorted.length; a += 1) {
     const first = sorted[a];
     for (let b = a + 1; b < sorted.length; b += 1) {
@@ -820,8 +895,8 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
       counts.pairs += 1;
       let worst = null;
       let pair = null;
-      for (const one of first.rects) {
-        for (const two of second.rects) {
+      for (const one of glyphsOf(first)) {
+        for (const two of glyphsOf(second)) {
           const hit = intersection(one, two);
           if (!isRealOverlap(hit, one, two)) continue;
           if (worst === null || hit.area > worst.area) {

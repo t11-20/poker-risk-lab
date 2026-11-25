@@ -51,6 +51,12 @@ function box(overrides = {}) {
     blockScrolls: overrides.blockScrolls ?? false,
     ellipsis: overrides.ellipsis ?? false,
     exempt: overrides.exempt ?? [],
+    // What the walker sends only when it applies: preserved-space glyphs and a text-indent.
+    ...Object.fromEntries(
+      ['ink', 'indent', 'later']
+        .filter((key) => overrides[key] !== undefined)
+        .map((key) => [key, overrides[key]]),
+    ),
   };
 }
 
@@ -593,6 +599,132 @@ describe('which edges of a box a reader sees', () => {
       'it composites',
     );
     assert.deepEqual(frameSides(edges({}), 'rgb(12, 14, 18)'), { left: false, right: false });
+  });
+});
+
+/**
+ * `/learn/pot-odds`, light, 360px, 200% text: "price = pot / call" in a `pre-wrap` formula line. The
+ * 15.81px rectangle after the first line is the space before "call", hanging past the line box.
+ */
+function formulaLine() {
+  return measurement([
+    box({
+      i: 249,
+      end: 250,
+      sel: 'pre.prl-formula__expression > span.prl-formula__line > code',
+      tag: 'code',
+      text: 'price = pot / call',
+      rects: [
+        { x: 139, y: 10893.75, w: 173.84, h: 30 },
+        { x: 312.84, y: 10893.75, w: 15.81, h: 30 },
+        { x: 172.7, y: 10930.14, w: 94.83, h: 30 },
+      ],
+      ink: [
+        { x: 139, y: 10893.75, w: 173.84, h: 30 },
+        { x: 172.7, y: 10930.14, w: 94.83, h: 30 },
+      ],
+      pad: { x: 139, y: 10890.75, w: 182.69, h: 72.78 },
+      content: { x: 172.71, y: 10890.75, w: 148.97, h: 72.78 },
+      word: { text: 'price', width: 79.03, first: true },
+    }),
+  ]);
+}
+
+describe('preserved white space hanging past a wrapped line', () => {
+  it('is not counted as glyphs escaping the line (FALSE POSITIVE)', () => {
+    const { findings, counts } = findTextDefects(formulaLine(), { route: '/learn/pot-odds', width: 360 });
+    assert.deepEqual(findings, [], 'only a space reaches past the line, and a space paints nothing');
+    assert.equal(counts.ownBox, 1);
+  });
+
+  it('was the whole escape: the same line measured with its space reaches 6.96px out', () => {
+    const withSpace = formulaLine();
+    withSpace.boxes[0].ink = undefined;
+    const escapes = findTextDefects(withSpace, {}).findings.find((f) => f.check === 'escapes');
+    assert.equal(escapes?.past, 6.96);
+  });
+
+  it('crosses no clip, frame or neighbour either', () => {
+    const framed = formulaLine();
+    const [line] = framed.boxes;
+    framed.frames.push({ i: 248, end: 251, sel: 'span', border: line.pad, left: true, right: true });
+    framed.clippers.push({ i: 247, end: 251, sel: 'pre', pad: line.pad });
+    const beside = { x: 322, y: 10893.75, w: 30, h: 30 };
+    const after = box({ i: 260, end: 261, rects: [beside], pad: beside });
+    framed.boxes.push(after);
+    assert.deepEqual(findTextDefects(framed, {}).findings, []);
+    framed.boxes[0].ink = undefined;
+    assert.deepEqual(
+      findTextDefects(framed, {})
+        .findings.map((f) => f.check)
+        .sort(),
+      ['clipped', 'collision', 'escapes', 'spills'],
+    );
+  });
+
+  it('still reports a preserved-space word that really leaves its box', () => {
+    const wide = formulaLine();
+    wide.boxes[0].ink[0].w = 200;
+    const escapes = findTextDefects(wide, {}).findings.find((f) => f.check === 'escapes');
+    assert.equal(escapes?.past, 17.31);
+  });
+});
+
+/**
+ * `/learn/pot-odds`, light, 360px, 200% text: "break-even" opens a formula line set with
+ * `padding-inline-start: 2ch; text-indent: -2ch`, so it starts 33.71px before the content box.
+ */
+function hangingIndent() {
+  return measurement([
+    box({
+      i: 247,
+      end: 248,
+      sel: 'pre.prl-formula__expression > span.prl-formula__line > code',
+      tag: 'code',
+      text: 'break-even equity = call / (pot + call)',
+      rects: [
+        { x: 139, y: 10711.8, w: 158.05, h: 30 },
+        { x: 172.7, y: 10748.19, w: 126.44, h: 30 },
+        { x: 172.7, y: 10784.58, w: 94.83, h: 30 },
+        { x: 172.7, y: 10820.97, w: 94.83, h: 30 },
+        { x: 172.7, y: 10857.36, w: 79.03, h: 30 },
+      ],
+      pad: { x: 139, y: 10708.8, w: 182.69, h: 181.95 },
+      content: { x: 172.71, y: 10708.8, w: 148.97, h: 181.95 },
+      word: { text: 'break-even', width: 158.05, first: true },
+      later: { text: 'equity', width: 94.83, first: false },
+      indent: -33.71,
+    }),
+  ]);
+}
+
+describe('a hanging indent', () => {
+  it('gives the first line the room it opens, so its first word is not squeezed (FALSE POSITIVE)', () => {
+    const { findings } = findTextDefects(hangingIndent(), {});
+    assert.deepEqual(findings, [], '158.05px of word on a first line 182.68px long fits');
+  });
+
+  it('was the whole squeeze: without the indent the word is 9.08px short', () => {
+    const flat = hangingIndent();
+    flat.boxes[0].indent = undefined;
+    const squeezed = findTextDefects(flat, {}).findings.find((f) => f.check === 'squeezed');
+    assert.equal(squeezed?.short, 9.08);
+    assert.equal(squeezed?.has, 148.97);
+  });
+
+  it('gives a later line no extra room: a wide word there is still squeezed', () => {
+    const later = hangingIndent();
+    later.boxes[0].later = { text: 'break-even', width: 158.05, first: false };
+    const squeezed = findTextDefects(later, {}).findings.find((f) => f.check === 'squeezed');
+    assert.equal(squeezed?.has, 148.97, 'a continuation line starts at the content box');
+    assert.equal(squeezed?.short, 9.08);
+  });
+
+  it('takes room away from the first line when the indent is positive', () => {
+    const pushed = hangingIndent();
+    Object.assign(pushed.boxes[0], { indent: 33.71, word: { text: 'break-even', width: 140, first: true } });
+    const squeezed = findTextDefects(pushed, {}).findings.find((f) => f.check === 'squeezed');
+    assert.equal(squeezed?.has, 115.26);
   });
 });
 
