@@ -1443,10 +1443,9 @@ export function formatExemption({ rule, count, status }) {
   return `${rule.check} ${rule.selector}${size}: ${said}\n      why: ${rule.why}`;
 }
 
-class Page {
+export class Page {
   textScale = 1;
-  /** How the text size was applied: Chrome's setting, or an inline root size when Chrome refused it. */
-  textSizeMethod = 'Page.setFontSizes';
+  textSizeMethod = "Chrome's default, nothing sent";
   #socket;
   #nextId = 1;
   #replies = new DevtoolsReplies();
@@ -1507,17 +1506,23 @@ class Page {
     });
   }
 
-  /** Chrome's own text-size setting, which moves em media queries as a reader's setting does. */
+  /**
+   * Chrome's own text-size setting, which moves em media queries as a reader's setting does. Chrome
+   * starts at 16/13 and a reused profile keeps no size set this way (measured), so 100% sends nothing
+   * until another size was set. A refusal throws: an inline root size would move no em query.
+   */
   async setTextScale(scale) {
-    this.textScale = scale;
-    if (this.textSizeMethod !== 'Page.setFontSizes') return;
-    await this.send('Page.setFontSizes', { fontSizes: fontSizesFor(scale) }).catch((error) => {
-      this.textSizeMethod = 'inline root font-size';
-      console.log(
-        red(`  Chrome refused Page.setFontSizes (${error.message}); falling back to an inline root`),
+    if (scale === this.textScale) return;
+    try {
+      await this.send('Page.setFontSizes', { fontSizes: fontSizesFor(scale) });
+    } catch (error) {
+      throw new Error(
+        `Chrome refused Page.setFontSizes for ${textSizeLabel(scale)} ` +
+          `(${error instanceof Error ? error.message : String(error)}), so no layout at that size can be measured`,
       );
-      console.log(red('  font-size, which moves no em media query and so is not the reader setting.'));
-    });
+    }
+    this.textScale = scale;
+    this.textSizeMethod = 'Page.setFontSizes';
   }
 
   async goto(url) {
@@ -1564,7 +1569,6 @@ async function withPage(headful, textScale, run) {
     await page.send('Emulation.setEmulatedMedia', {
       features: [{ name: 'prefers-reduced-motion', value: 'reduce' }],
     });
-    // Sent at 1 too, so a size left over in a reused profile is reset rather than measured.
     await page.setTextScale(textScale);
     try {
       await run(page);
@@ -1585,9 +1589,6 @@ async function measure(page, route, theme, width) {
   await page.setWidth(width);
   // On the root element, where `tokens.css` keys its light scope.
   await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`);
-  if (page.textSizeMethod !== 'Page.setFontSizes') {
-    await page.evaluate(`document.documentElement.style.fontSize = '${String(page.textScale * 100)}%'`);
-  }
   await delay(180);
   const measurement = await page.evaluate(walkerSource());
   // `PRL_LAYOUT_DUMP=<dir>` writes every rectangle, for tuning thresholds.

@@ -30,6 +30,7 @@ import {
   LARGE_TEXT,
   letterByLetter,
   nearestFrame,
+  Page,
   parseArgs,
   passCoverageFailures,
   ROUTES,
@@ -1410,6 +1411,67 @@ describe("the reader's text size", () => {
     assert.deepEqual(fontSizesFor(1), { standard: 16, fixed: 13 });
     assert.deepEqual(fontSizesFor(2), { standard: 32, fixed: 26 });
     assert.deepEqual(fontSizesFor(1.5), { standard: 24, fixed: 20 });
+  });
+});
+
+/** A DevTools socket that answers every call, refusing the ones `refuse` picks as Chrome does. */
+class FakeSocket {
+  sent = [];
+  #onMessage = [];
+
+  constructor(refuse = () => false) {
+    this.refuse = refuse;
+  }
+
+  addEventListener(type, listener) {
+    if (type === 'message') this.#onMessage.push(listener);
+  }
+
+  send(text) {
+    const call = JSON.parse(text);
+    this.sent.push(call);
+    const reply = this.refuse(call, this.sent.length)
+      ? { id: call.id, error: { code: -32601, message: `'${call.method}' wasn't found` } }
+      : { id: call.id, result: {} };
+    queueMicrotask(() => {
+      for (const listener of this.#onMessage) listener({ data: JSON.stringify(reply) });
+    });
+  }
+}
+
+describe("Chrome's text size setting", () => {
+  const fontCalls = (socket) =>
+    socket.sent.filter((call) => call.method === 'Page.setFontSizes').map((call) => call.params.fontSizes);
+
+  it('refuses the run when Chrome refuses a size other than 100%, naming the refusal', async () => {
+    const socket = new FakeSocket(() => true);
+    const page = new Page(socket);
+    await assert.rejects(page.setTextScale(2), /refused Page\.setFontSizes for 200% text .*wasn't found/u);
+    assert.equal(page.textScale, 1, 'a refused size must not be reported as the one measured');
+  });
+
+  it('sends nothing at 100%, so the default run does not depend on the method at all', async () => {
+    const socket = new FakeSocket(() => true);
+    const page = new Page(socket);
+    await page.setTextScale(1);
+    assert.deepEqual(socket.sent, []);
+    assert.match(page.textSizeMethod, /default/u);
+  });
+
+  it('goes back to 16px and 13px after 200%, and refuses a refused return', async () => {
+    const socket = new FakeSocket();
+    const page = new Page(socket);
+    await page.setTextScale(2);
+    await page.setTextScale(1);
+    assert.deepEqual(fontCalls(socket), [
+      { standard: 32, fixed: 26 },
+      { standard: 16, fixed: 13 },
+    ]);
+    assert.equal(page.textScale, 1);
+    const stuck = new Page(new FakeSocket((_, n) => n > 1));
+    await stuck.setTextScale(2);
+    await assert.rejects(stuck.setTextScale(1), /refused Page\.setFontSizes for 100% text/u);
+    assert.equal(stuck.textScale, 2, 'the page is still at 200%, and says so');
   });
 });
 
