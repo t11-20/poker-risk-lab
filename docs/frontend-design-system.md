@@ -888,6 +888,11 @@ unrelated marker. `components.css` already uses `--prl-space-1` this way on `.pr
 
 ## 10. Responsive
 
+Every viewport breakpoint is written in `em` (the px below divided by 16, so 600px is `37.5em`), in the
+stylesheets and in the `matchMedia` strings that mirror them, and `apps/web/test/em-breakpoints.test.ts`
+fails a px one. A media query's `em` is the reader's text size, so at the default size each range lands
+on the pixel shown here, and at 200% text a 1440px window takes the 720px layout.
+
 | Range | Layout |
 | --- | --- |
 | < 600px | single column; table stacks vertically; Coach becomes a bottom sheet with a drag handle. The Lab filters pair Difficulty and Street from 380px, and stack all three below it |
