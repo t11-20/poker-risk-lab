@@ -1,7 +1,7 @@
 /**
- * Before hydration the saved-spot list cannot be read, and its placeholder was one line where the
- * empty state is a box, so the form below jumped about 120 px. The placeholder is now that box, sized
- * by the empty-state sentence itself, hidden, so the two cannot drift apart.
+ * Before hydration the saved-spot list cannot be read. Its placeholder is the empty-state box, sized by
+ * the empty-state sentence laid hidden under the visible one, so an empty list lands without moving the
+ * form below it and the two heights cannot drift apart.
  */
 
 import assert from 'node:assert/strict';
