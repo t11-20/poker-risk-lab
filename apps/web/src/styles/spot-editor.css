@@ -41,6 +41,11 @@
     grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
     align-items: start;
   }
+
+  /* Level with the Cards panel. base.css's first-child reset loses to `h2` on specificity. */
+  .prl-spot-editor__result-title {
+    margin-block-start: 0;
+  }
 }
 
 .prl-spot-editor__inputs,

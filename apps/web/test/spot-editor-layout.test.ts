@@ -43,4 +43,8 @@ describe('spot editor field grids', () => {
     );
   });
 
+  it('starts the Numbers heading level with the Cards panel when the two sit side by side', () => {
+    const wide = /@media \(min-width: 64rem\) \{([\s\S]*?)\n\}/u.exec(css)?.[1] ?? '';
+    assert.match(wide, /\.prl-spot-editor__result-title \{\s*margin-block-start: 0;/u);
+  });
 });
