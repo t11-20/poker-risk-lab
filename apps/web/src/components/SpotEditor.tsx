@@ -120,14 +120,26 @@ function TextField(props: {
   readonly numeric?: boolean;
   readonly suffix?: string;
   readonly disabled?: boolean;
+  readonly wide?: boolean;
 }): ReactElement {
-  const { label, field, value, onChange, error, hint, numeric = false, suffix, disabled = false } = props;
+  const {
+    label,
+    field,
+    value,
+    onChange,
+    error,
+    hint,
+    numeric = false,
+    suffix,
+    disabled = false,
+    wide = false,
+  } = props;
   const id = useId();
   const described = [hint === undefined ? null : `${id}-hint`, error === undefined ? null : `${id}-error`]
     .filter((part) => part !== null)
     .join(' ');
   return (
-    <div className="prl-field">
+    <div className={wide ? 'prl-field prl-spot-field--wide' : 'prl-field'}>
       <label className="prl-field__label" htmlFor={id}>
         {label}
       </label>
@@ -236,6 +248,7 @@ function OpponentFields(props: {
       <div className="prl-spot-editor__fields">
         <TextField
           label="Name"
+          wide
           field={key('name')}
           value={opponent.name}
           onChange={(name) => onChange({ name }, 'name')}
@@ -456,6 +469,7 @@ function PotPanel(props: {
       <div className="prl-spot-editor__fields">
         <TextField
           label="Name"
+          wide
           field="name"
           value={draft.name}
           onChange={(name) => change({ ...draft, name }, 'name')}

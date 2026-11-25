@@ -50,15 +50,32 @@
   min-width: 0;
 }
 
+.prl-spot-editor__inputs {
+  container: prl-spot-inputs / inline-size;
+}
+
 .prl-spot-editor__card-tools {
   margin-block-start: var(--prl-space-5);
 }
 
+/**
+ * Name takes a row, so four amounts go 2 + 2 and an opponent's two go side by side, never 2 + 1. At
+ * 30rem an opponent's columns are about 12rem, inside its fieldset.
+ */
 .prl-spot-editor__fields {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
   gap: var(--prl-space-6);
   align-items: start;
+}
+
+@container prl-spot-inputs (min-width: 30rem) {
+  .prl-spot-editor__fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .prl-spot-field--wide {
+    grid-column: 1 / -1;
+  }
 }
 
 .prl-spot-field__control {
