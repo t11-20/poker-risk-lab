@@ -112,17 +112,21 @@ const WORD_TOLERANCE = 2;
  */
 const MAX_PIECE = 2;
 
-/**
- * Coverage floors, so a sweep or detector that examined nothing fails. Each is about a third of what
- * a full sweep measures today.
- */
 const MIN_TEXT_BOXES_PER_PAGE = 15;
-const MIN_MEASUREMENTS = 100;
-const MIN_TEXT_BOXES_TOTAL = 5000;
-const MIN_OWN_BOX_CHECKS = 8000;
-const MIN_CLIP_TESTS = 2000;
-const MIN_PAIRS_COMPARED = 8000;
-const MIN_FRAME_TESTS = 8000;
+
+/**
+ * Coverage floors per measurement asked for, so a narrow run is held to its own size. Each is about a
+ * third of the leanest slice measured: 62 routes, light, 360px, 200% text averaged 141 text blocks,
+ * 12.6 clip tests, 83 frame tests, 26.6 pairs and 165 break tests a page. A floor is never below one.
+ */
+const FLOOR_PER_MEASUREMENT = {
+  textBoxes: 45,
+  ownBox: 45,
+  clipTests: 4,
+  frameTests: 25,
+  pairs: 8,
+  breakTests: 50,
+};
 
 /**
  * @typedef {object} Exemption
@@ -1235,6 +1239,13 @@ export function parseArgs(argv) {
   if (!Number.isFinite(scale) || scale < 1 || scale > 3 || !Number.isInteger(scale * ROOT_FONT_SIZE)) {
     throw new Error('--text-scale takes a number from 1 to 3 in sixteenths, such as 1.25, 1.5 or 2');
   }
+  for (const [flag, list] of [
+    ['--routes', options.routes],
+    ['--widths', options.widths],
+    ['--themes', options.themes],
+  ]) {
+    if (list !== null && list.length === 0) throw new Error(`${flag} was given an empty list`);
+  }
   if (options.themes?.some((t) => !THEMES.includes(t)) === true) {
     throw new Error(`--themes takes ${THEMES.join(' and ')}`);
   }
@@ -1262,30 +1273,46 @@ export function sweepMatrix(options) {
   return out;
 }
 
+/** The floor for `key` in a run that asked for `wanted` measurements: never below one. */
+export function coverageFloor(key, wanted) {
+  return Math.max(1, Math.floor(FLOOR_PER_MEASUREMENT[key] * wanted));
+}
+
 /** Every condition that makes a green result meaningless, as failure lines. */
 export function coverageFailures(tally, exemptions = EXEMPTIONS) {
   const problems = [];
-  if (tally.measurements < MIN_MEASUREMENTS) {
-    problems.push(
-      `only ${String(tally.measurements)} page measurement(s) were taken; a sweep of nothing is not a pass`,
-    );
+  // The matrix asked for, not what was measured, so a run that measured less cannot lower its floor.
+  const wanted = tally.measurementsWanted ?? 0;
+  if (!(wanted >= 1)) {
+    problems.push('the sweep asked for no measurement at all; a sweep of nothing is not a pass');
   }
-  if (tally.textBoxes < MIN_TEXT_BOXES_TOTAL) {
+  if (tally.measurements < Math.max(1, wanted)) {
     problems.push(
-      `only ${String(tally.textBoxes)} text element(s) were measured across the whole sweep; ` +
+      `only ${String(tally.measurements)} of ${String(wanted)} page measurement(s) were taken; ` +
         'a sweep of nothing is not a pass',
     );
   }
-  for (const [what, seen, floor] of [
-    ['text blocks measured against their own box', tally.detector.ownBox, MIN_OWN_BOX_CHECKS],
-    ['text blocks measured against a clipping ancestor', tally.detector.clipTests, MIN_CLIP_TESTS],
-    ['text blocks measured against the frame drawn around them', tally.detector.frameTests, MIN_FRAME_TESTS],
-    ['pairs of text blocks compared for a collision', tally.detector.pairs, MIN_PAIRS_COMPARED],
+  const per = `for ${String(wanted)} measurement(s)`;
+  const textFloor = coverageFloor('textBoxes', wanted);
+  if (tally.textBoxes < textFloor) {
+    problems.push(
+      `only ${String(tally.textBoxes)} text element(s) were measured across the whole sweep ` +
+        `(floor ${String(textFloor)} ${per}); a sweep of nothing is not a pass`,
+    );
+  }
+  for (const [what, key] of [
+    ['text blocks measured against their own box', 'ownBox'],
+    ['text blocks measured against a clipping ancestor', 'clipTests'],
+    ['text blocks measured against the frame drawn around them', 'frameTests'],
+    ['pairs of text blocks compared for a collision', 'pairs'],
+    ['text blocks whose words were checked for a break letter by letter', 'breakTests'],
   ]) {
-    if ((seen ?? 0) < floor) {
+    const seen = tally.detector[key] ?? 0;
+    const floor = coverageFloor(key, wanted);
+    if (seen < floor) {
       problems.push(
-        `only ${String(seen ?? 0)} ${what} (floor ${String(floor)}) — a detector that examined nothing ` +
-          'reports what a detector that found nothing reports',
+        `only ${String(seen)} ${what} (floor ${String(floor)} ${per}) — a detector that examined ` +
+          'nothing reports what a detector that found nothing reports',
       );
     }
   }
@@ -1540,6 +1567,7 @@ async function main() {
       pairs: 0,
       breakTests: 0,
     },
+    measurementsWanted: matrix.length,
     routesLoaded: 0,
     routesWanted: 0,
     textSize: { scale: options.textScale, method: 'not applied' },

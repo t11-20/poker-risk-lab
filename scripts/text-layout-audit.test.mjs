@@ -12,6 +12,7 @@ import {
   clippedRects,
   colorAlpha,
   coverageFailures,
+  coverageFloor,
   drawnEdges,
   EXEMPTIONS,
   escapeAmount,
@@ -944,17 +945,7 @@ describe('exemptions', () => {
   });
 
   it('a rule that matched nothing anywhere fails the gate (REGRESSION)', () => {
-    const problems = coverageFailures(
-      {
-        measurements: 150,
-        textBoxes: 34098,
-        detector: { ownBox: 34028, clipTests: 4168, frameTests: 25211, pairs: 25744 },
-        routesLoaded: 30,
-        routesWanted: 30,
-        usedExemptions: new Set(),
-      },
-      rules,
-    );
+    const problems = coverageFailures({ ...FULL_DEFAULT_RUN, usedExemptions: new Set() }, rules);
     assert.equal(problems.length, 1);
     assert.match(problems[0], /matched nothing/u);
   });
@@ -968,33 +959,102 @@ describe('exemptions', () => {
   });
 });
 
+/** The tally of the default run (every route, both themes, five widths, 100% text) on 2026-11-25. */
+const FULL_DEFAULT_RUN = {
+  measurements: 200,
+  measurementsWanted: 200,
+  textBoxes: 38970,
+  detector: { ownBox: 38970, clipTests: 4280, frameTests: 28610, pairs: 33050, breakTests: 43956 },
+  routesLoaded: 40,
+  routesWanted: 40,
+  usedExemptions: new Set(),
+};
+
+/** 62 routes, light only, 360px only, 200% text: the shape of a small CI pass, measured the same day. */
+const ONE_WIDTH_ONE_THEME = {
+  measurements: 62,
+  measurementsWanted: 62,
+  textBoxes: 8761,
+  detector: { ownBox: 8761, clipTests: 780, frameTests: 5166, pairs: 1648, breakTests: 10232 },
+  routesLoaded: 62,
+  routesWanted: 62,
+  usedExemptions: new Set(),
+};
+
 describe('a sweep of nothing is not a pass', () => {
-  const healthy = {
-    measurements: 150,
-    textBoxes: 34098,
-    detector: { ownBox: 34028, clipTests: 4168, frameTests: 25211, pairs: 25744 },
-    routesLoaded: 30,
-    routesWanted: 30,
-    usedExemptions: new Set(),
-  };
+  const healthy = FULL_DEFAULT_RUN;
 
   it('a full sweep of this app clears every floor', () => {
     assert.deepEqual(coverageFailures(healthy, []), []);
+  });
+
+  it('a run of one width and one theme is held to its own size, not refused (REGRESSION)', () => {
+    // The fixed floors asked every run for 100 measurements and 8,000 pairs, so this was refused four times.
+    assert.deepEqual(coverageFailures(ONE_WIDTH_ONE_THEME, []), []);
+    assert.equal(coverageFloor('pairs', 62), 496);
+    assert.equal(coverageFloor('pairs', 200), 1600);
+  });
+
+  it('the floor follows the matrix asked for and is never zero', () => {
+    for (const key of ['textBoxes', 'ownBox', 'clipTests', 'frameTests', 'pairs', 'breakTests']) {
+      assert.ok(coverageFloor(key, 1) >= 1, `${key} has no floor for a single measurement`);
+      assert.equal(coverageFloor(key, 0), 1, `${key} must still ask for something when nothing was asked`);
+      assert.ok(coverageFloor(key, 200) > coverageFloor(key, 62));
+    }
   });
 
   it('refuses a run that measured almost nothing', () => {
     const problems = coverageFailures({ ...healthy, measurements: 2, textBoxes: 40 }, []);
     assert.equal(problems.length, 2);
     for (const problem of problems) assert.match(problem, /a sweep of nothing is not a pass/u);
+    assert.match(problems[0], /only 2 of 200 page measurement/u);
+  });
+
+  it('refuses a sweep that asked for nothing, or reports no matrix at all', () => {
+    const empty = {
+      ...healthy,
+      measurements: 0,
+      measurementsWanted: 0,
+      textBoxes: 0,
+      detector: { ownBox: 0, clipTests: 0, frameTests: 0, pairs: 0, breakTests: 0 },
+    };
+    const problems = coverageFailures(empty, []);
+    assert.match(problems[0], /asked for no measurement/u);
+    assert.ok(problems.length >= 7, problems.join('\n'));
+    const { measurementsWanted: _, ...unsized } = healthy;
+    assert.match(coverageFailures(unsized, [])[0], /asked for no measurement/u);
+  });
+
+  it('a run that measured less than it asked cannot lower its own floor', () => {
+    // Twelve of 200 pages measured, each one rich: the floors still follow the 200 asked for.
+    const short = { ...healthy, measurements: 12, textBoxes: 9000 };
+    const problems = coverageFailures(short, []);
+    assert.match(problems[0], /only 12 of 200/u);
   });
 
   it('refuses a run where a detector examined nothing, even with pages measured', () => {
     // A busy sweep with one detector out of the loop must still fail.
-    for (const key of ['ownBox', 'clipTests', 'frameTests', 'pairs']) {
+    for (const key of ['ownBox', 'clipTests', 'frameTests', 'pairs', 'breakTests']) {
       const problems = coverageFailures({ ...healthy, detector: { ...healthy.detector, [key]: 0 } }, []);
       assert.equal(problems.length, 1, `${key} at zero must be reported`);
       assert.match(problems[0], /a detector that examined nothing/u);
     }
+  });
+
+  it('refuses a narrow run in which a detector examined nothing, naming the floor it missed', () => {
+    // `/learn`, dark, 1024px, as measured: no text sits inside a clipping ancestor there.
+    const learn = {
+      measurements: 1,
+      measurementsWanted: 1,
+      textBoxes: 216,
+      detector: { ownBox: 216, clipTests: 0, frameTests: 180, pairs: 146, breakTests: 266 },
+      routesLoaded: 1,
+      routesWanted: 1,
+      usedExemptions: new Set(),
+    };
+    const problems = coverageFailures(learn, []);
+    assert.equal(problems.length, 1);
+    assert.match(problems[0], /only 0 text blocks measured against a clipping ancestor \(floor 4 for 1 /u);
   });
 
   it('counts a detector missing from the tally as one that examined nothing', () => {
@@ -1007,7 +1067,7 @@ describe('a sweep of nothing is not a pass', () => {
   it('refuses a run where a route never loaded', () => {
     const problems = coverageFailures({ ...healthy, routesLoaded: 28 }, []);
     assert.equal(problems.length, 1);
-    assert.match(problems[0], /2 route\(s\) never loaded/u);
+    assert.match(problems[0], /12 route\(s\) never loaded/u);
   });
 });
 
@@ -1081,6 +1141,12 @@ describe('the command line', () => {
     assert.throws(() => parseArgs(['--ready-timeout', '0']), /positive whole number/u);
     assert.throws(() => parseArgs(['--nonsense']), /unknown option/u);
     assert.throws(() => parseArgs(['--routes']), /needs a value/u);
+  });
+
+  it('refuses an empty list, which would ask for a sweep of nothing', () => {
+    assert.throws(() => parseArgs(['--routes', ',']), /--routes was given an empty list/u);
+    assert.throws(() => parseArgs(['--themes', '']), /--themes was given an empty list/u);
+    assert.throws(() => parseArgs(['--widths', '']), /at least 200/u);
   });
 
   it('self-test is on unless it is turned off', () => {
