@@ -3143,17 +3143,20 @@ td.prl-candidates__ev,
   font-size: var(--prl-type-body-sm);
 }
 
-/** Wraps, because two `nowrap` children would make the row unshrinkable. */
+/**
+ * Three tracks, so a long name wraps in its own column: as a wrapping flex row the swatch was left on a
+ * line by itself. The value sits at the end of the first line and the detail under the name.
+ */
 .prl-equity-bar__row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: baseline;
   gap: var(--prl-space-2) var(--prl-space-3);
   margin: 0;
 }
 
+/** On the baseline, an empty box's bottom edge, so it sits on a wrapped name's first line. */
 .prl-equity-bar__swatch {
-  flex: 0 0 auto;
   width: var(--prl-space-5);
   height: var(--prl-space-5);
   border: 1px solid var(--prl-text);
@@ -3161,18 +3164,20 @@ td.prl-candidates__ev,
 }
 
 .prl-equity-bar__name {
-  flex: 1 1 auto;
   min-width: 0;
   overflow-wrap: break-word;
 }
 
 .prl-equity-bar__value {
+  grid-column: 3;
+  text-align: end;
   font-weight: var(--prl-weight-semibold);
   font-variant-numeric: var(--prl-numeric);
   white-space: nowrap;
 }
 
 .prl-equity-bar__detail {
+  grid-column: 2 / -1;
   color: var(--prl-text-secondary);
   font-size: var(--prl-type-body-sm);
   white-space: nowrap;
