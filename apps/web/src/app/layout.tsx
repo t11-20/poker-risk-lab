@@ -9,10 +9,6 @@
 
 // Self-hosted and served from this origin (`font-src 'self'`).
 import '@fontsource-variable/archivo/wdth.css';
-// The latin file every first paint needs. Turbopack emits it once, at the URL the stylesheet's `url()` uses.
-import archivoLatin from '@fontsource-variable/archivo/files/archivo-latin-wdth-normal.woff2' with {
-  turbopackModuleType: 'asset',
-};
 import '@prl/ui/styles.css';
 import './globals.css';
 import '@/styles/nav.css';
@@ -58,10 +54,6 @@ export default async function RootLayout({
   const nonce = (await headers()).get('x-nonce') ?? undefined;
   return (
     <html lang="en" suppressHydrationWarning>
-      <head>
-        {/* Fonts are fetched in CORS mode, so a preload without `crossOrigin` would be a second download. */}
-        <link rel="preload" href={archivoLatin} as="font" type="font/woff2" crossOrigin="anonymous" />
-      </head>
       <body>
         <script nonce={nonce}>{THEME_BOOT_SCRIPT}</script>
         <a className="prl-skip-link" href={`#${MAIN_ID}`}>
