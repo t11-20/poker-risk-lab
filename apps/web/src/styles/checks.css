@@ -12,6 +12,8 @@
 
 .prl-checks__row {
   display: grid;
+  /* A command's `width: max-content` floored an implicit track at its whole line: 605px at 360/200%. */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--prl-space-4);
   padding-block: var(--prl-space-8);
   border-block-start: var(--prl-hairline);
