@@ -233,8 +233,8 @@
 }
 
 /*
- * A chip is nowrap, so at 200% text "Fold equity and bluffing" set the card's width and the card
- * ran past its column at 320 and at 600. The label has spaces, so it may wrap inside the chip.
+ * At 200% text "Fold equity and bluffing" set the card's width, and the card ran past its column at
+ * 320 and at 600. The label wraps between words inside the chip, and a word wider than it may break.
  */
 .prl-lab-card .prl-chip {
   max-inline-size: 100%;

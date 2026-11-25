@@ -669,8 +669,8 @@
 }
 
 /**
- * A grid item's `min-width` is `auto` and `.prl-chip` is nowrap, so a 210px chip pushed a 164px
- * option out of its track and scrolled the page sideways.
+ * A grid item's `min-width` is `auto`, so a 210px one-line chip pushed a 164px option out of its track
+ * and scrolled the page sideways.
  */
 .prl-legend-difficulty__label,
 .prl-legend-difficulty__description,

@@ -900,11 +900,13 @@ on the pixel shown here, and at 200% text a 1440px window takes the 720px layout
 | 900–1279px | table in oval form once the column itself passes 46rem; Coach in a right rail at 22rem |
 | ≥ 1280px | 12-column grid; table centred with Coach rail and the decision band in the same viewport, no scrolling during a decision |
 
-Two narrower ranges exist only for large text. Below `20em` (320px at the default size, 640px at 200%)
-paired items stack: a lesson card's number above its text, a quiz radio above its answer, a Legends sigil
-above the names, the equity readout's figures under the name. Below `18em` a review row card and the
-deck-proof terms give each value its own row. Coach prose, lesson headings and glossary terms may
-hyphenate below `20em`, never above it. No default size at 360px or wider reaches either range.
+Two narrower ranges exist for large text. Below `20em` (a window under 320px at the default size, under
+640px at 200%) paired items stack: a lesson card's number above its text, a quiz radio above its answer,
+a Legends sigil above the names, the equity readout's figures under the name. Below `18em` a review row
+card and the deck-proof terms give each value its own row. Below `20em` the Coach's prose, stat notes
+and assumptions, lesson headings and glossary terms may hyphenate, never above it. One container query
+does the same for the Legends difficulty picker: below `15rem` of its own width the radio takes a row
+above the name. A default-size window of 320px or wider reaches none of these.
 
 **The ≥1280px rule is a functional requirement, not an aesthetic one:** a player must be
 able to see the pot, their cards, the price and the Coach's equity figure *at the same

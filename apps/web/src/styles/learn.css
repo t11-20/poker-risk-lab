@@ -168,8 +168,8 @@
 }
 
 /**
- * A lesson card is a bordered panel, so seventeen read as objects. The number keeps its own column at
- * every width. Hover is a surface step and a stronger edge, never a lift.
+ * A lesson card is a bordered panel, so seventeen read as objects. The number has its own column, above
+ * the text below 20em. Hover is a surface step and a stronger edge, never a lift.
  */
 .prl-learn-entry {
   /* The containing block for the title link's stretched `::after`. */
@@ -1370,6 +1370,11 @@
 
   .prl-learn-quiz__option .prl-choice {
     flex-direction: column;
+  }
+
+  /* The radio is above the answer now, so the note starts where the answer does. */
+  .prl-learn-quiz__option-feedback {
+    padding-inline-start: var(--prl-space-6);
   }
 
   /* Not a quiz question, whose 240px column broke nearly every line. Chrome never hyphenates a capital,

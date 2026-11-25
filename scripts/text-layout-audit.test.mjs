@@ -1404,14 +1404,14 @@ describe('the large-text pass', () => {
   const cells = (argv) => sweepMatrix(parseArgs(argv));
   const large = (argv) => cells(argv).filter((cell) => cell.scale !== 1);
 
-  it('the default run also measures every route at 200% text, light, at 768 and 1024', () => {
+  it('the default run also measures every route at 200% text, light, at 768, 1024 and 1440', () => {
     const extra = large([]).filter((cell) => cell.width !== 360);
-    assert.equal(extra.length, ROUTES.length * 2, 'the default run has no large-text pass');
+    assert.equal(extra.length, ROUTES.length * 3, 'the default run has no large-text pass');
     assert.deepEqual([...new Set(extra.map((cell) => cell.scale))], [2]);
     assert.deepEqual([...new Set(extra.map((cell) => cell.theme))], ['light']);
-    assert.deepEqual([...new Set(extra.map((cell) => cell.width))], [768, 1024]);
+    assert.deepEqual([...new Set(extra.map((cell) => cell.width))], [768, 1024, 1440]);
     assert.deepEqual([...new Set(extra.map((cell) => cell.route))], ROUTES);
-    const total = ROUTES.length * (THEMES.length * WIDTHS.length + 2) + LARGE_TEXT_PHONE_ROUTES.length;
+    const total = ROUTES.length * (THEMES.length * WIDTHS.length + 3) + LARGE_TEXT_PHONE_ROUTES.length;
     assert.equal(cells([]).length, total);
   });
 
@@ -1446,7 +1446,15 @@ describe('the large-text pass', () => {
     const [phone] = LARGE_TEXT_PHONE_ROUTES;
     assert.deepEqual(
       large(['--routes', `${phone},${other}`]).map((cell) => `${cell.route} ${String(cell.width)}`),
-      [`${phone} 768`, `${phone} 1024`, `${other} 768`, `${other} 1024`, `${phone} 360`],
+      [
+        `${phone} 768`,
+        `${phone} 1024`,
+        `${phone} 1440`,
+        `${other} 768`,
+        `${other} 1024`,
+        `${other} 1440`,
+        `${phone} 360`,
+      ],
     );
     assert.deepEqual(sweepPasses(parseArgs(['--routes', other]))[1].also, []);
   });
@@ -1455,6 +1463,7 @@ describe('the large-text pass', () => {
     assert.deepEqual(large(['--routes', '/legends']), [
       { route: '/legends', theme: 'light', width: 768, scale: 2 },
       { route: '/legends', theme: 'light', width: 1024, scale: 2 },
+      { route: '/legends', theme: 'light', width: 1440, scale: 2 },
     ]);
     assert.deepEqual(
       sweepPasses(parseArgs(['--routes', '/legends'])).map((pass) => pass.narrowed),

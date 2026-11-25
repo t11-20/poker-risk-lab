@@ -103,6 +103,13 @@ describe('Learn at 360px with 200% text', () => {
     assert.ok(declares(phone(), '.prl-learn-quiz__option .prl-choice', 'flex-direction', 'column'));
   });
 
+  // Indented past a radio no longer beside it, the note had about 100px under a 164px answer.
+  it('starts a quiz answer’s note where the answer starts', () => {
+    assert.ok(
+      declares(phone(), '.prl-learn-quiz__option-feedback', 'padding-inline-start', 'var(--prl-space-6)'),
+    );
+  });
+
   // "consequences" and "(combinatorics)" were wider than their columns.
   it('hyphenates a lesson heading and a glossary term', () => {
     for (const selector of ['.prl-learn-lesson__heading', '.prl-learn-glossary__term'])

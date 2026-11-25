@@ -76,15 +76,14 @@ const VIEWPORT_HEIGHT = 1200;
 const THEMES = ['dark', 'light'];
 
 /**
- * With em breakpoints, 768 and 1024 at 200% take the 384px and 512px layouts with doubled text, which
- * the 100% sweep never measures. One theme keeps it short.
+ * With em breakpoints, 768, 1024 and 1440 at 200% take the 384, 512 and 720px layouts with doubled text,
+ * which the 100% sweep never measures. One theme keeps it short.
  */
-const LARGE_TEXT = { scale: 2, themes: ['light'], widths: [768, 1024], phoneWidth: 360 };
+const LARGE_TEXT = { scale: 2, themes: ['light'], widths: [768, 1024, 1440], phoneWidth: 360 };
 
 /**
- * The routes the large-text pass also measures at `phoneWidth`, where a layout wider than the phone
- * scrolls sideways that a 768 or 1024 window still holds. The rest still fail there on held work.
- * None of these hyphenates at 360px: a CI Chrome may have no hyphenation dictionary.
+ * The routes clean at `phoneWidth`, where content wider than a phone scrolls sideways that a 768px window
+ * still holds. None hyphenates there, since a CI Chrome may have no hyphenation dictionary.
  */
 const LARGE_TEXT_PHONE_ROUTES = [
   '/',
