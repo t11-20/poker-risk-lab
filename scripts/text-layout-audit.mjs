@@ -123,7 +123,8 @@ const MIN_TEXT_BOXES_PER_PAGE = 15;
 
 /**
  * Coverage floors per measurement asked for, about a third of the leanest slice measured: 62 routes,
- * light, 360px, 200% text averaged 141 blocks, 12.6 clip tests, 83 frames, 26.6 pairs, 165 breaks.
+ * light, 360px, 200% text averaged 141 blocks, 12.6 clip tests, 83 frames and 26.6 pairs. Words break
+ * least at 100% text and 768px or wider: 1.05 judged a measurement there, against 10.5 in that slice.
  */
 const FLOOR_PER_MEASUREMENT = {
   textBoxes: 45,
@@ -131,7 +132,7 @@ const FLOOR_PER_MEASUREMENT = {
   clipTests: 4,
   frameTests: 25,
   pairs: 8,
-  breakTests: 50,
+  breakTests: 0.35,
 };
 
 /**
@@ -948,14 +949,16 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
     findings.push({ check, ...context, ...detail });
   };
 
-  // A scroller does not mend a stacked word, and aria-hidden text is still painted.
+  // A scroller does not mend a stacked word, and aria-hidden text is still painted. Only a word on
+  // two lines or more is counted as judged, so a dead line count or piece split examines nothing.
   for (const box of [...boxes, ...ariaHidden]) {
-    if (!Array.isArray(box.broken)) continue;
-    counts.breakTests += 1;
-    for (const word of box.broken) {
-      const torn = letterByLetter(word.pieces, box.fills === true);
-      if (torn === null) continue;
-      if (exemptFor(box, 'broken') !== null) break;
+    let reported = false;
+    for (const word of box.broken ?? []) {
+      if (!Array.isArray(word.pieces) || word.pieces.length < 2) continue;
+      counts.breakTests += 1;
+      if (reported || letterByLetter(word.pieces, box.fills === true) === null) continue;
+      reported = true;
+      if (exemptFor(box, 'broken') !== null) continue;
       add('broken', {
         sel: box.sel,
         text: box.text,
@@ -963,7 +966,6 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
         pieces: word.pieces,
         ariaHidden: ariaHidden.includes(box),
       });
-      break;
     }
   }
 
@@ -1390,7 +1392,7 @@ export function coverageFailures(tally) {
     ['text blocks measured against a clipping ancestor', 'clipTests'],
     ['text blocks measured against the frame drawn around them', 'frameTests'],
     ['pairs of text blocks compared for a collision', 'pairs'],
-    ['text blocks whose words were checked for a break letter by letter', 'breakTests'],
+    ['words on two lines or more judged for a tear letter by letter', 'breakTests'],
   ]) {
     const seen = tally.detector[key] ?? 0;
     const floor = coverageFloor(key, wanted);
@@ -1910,7 +1912,7 @@ async function main() {
         `${String(tally.detector.clipTests)} against a clipping ancestor, ` +
         `${String(tally.detector.frameTests)} against a drawn frame, ` +
         `${String(tally.detector.pairs)} pair(s) for a collision, ` +
-        `${String(tally.detector.breakTests)} for a word broken letter by letter`,
+        `${String(tally.detector.breakTests)} word(s) on two lines or more for a tear`,
     );
     console.log(
       dim(

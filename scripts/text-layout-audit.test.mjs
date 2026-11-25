@@ -838,7 +838,7 @@ describe('a word broken letter by letter', () => {
       formatFinding(broken[1]),
       /BROKEN .*\(aria-hidden\)\n.*"Result" is torn over 6 lines: R \| e/u,
     );
-    assert.equal(counts.breakTests, 2, 'both the cell and the hidden label were checked');
+    assert.equal(counts.breakTests, 4, 'every word on two lines, in the cell and the hidden label');
   });
 
   it('judges aria-hidden text for nothing else: its overlaps are often decorative', () => {
@@ -916,6 +916,21 @@ describe('a word broken letter by letter', () => {
     filled.boxes[0].broken = [{ text: 'the', pieces: ['th', 'e'] }];
     filled.boxes[0].fills = true;
     assert.deepEqual(findTextDefects(filled, {}).findings, []);
+  });
+
+  it('counts the words it judged, so a dead line count or piece split examines nothing (REGRESSION)', () => {
+    // What the walker sends when lineCount never finds a second line, and when piecesOf never splits.
+    const deadLines = measurement([box({ broken: [] }), box({ broken: [] })]);
+    assert.equal(findTextDefects(deadLines, {}).counts.breakTests, 0);
+    const deadPieces = measurement([box({ broken: [{ text: 'Result', pieces: ['Result'] }] })]);
+    assert.equal(findTextDefects(deadPieces, {}).counts.breakTests, 0);
+    const problems = coverageFailures({
+      ...FULL_DEFAULT_RUN,
+      detector: { ...FULL_DEFAULT_RUN.detector, breakTests: 0 },
+    });
+    assert.match(problems.join('\n'), /only 0 words on two lines or more judged/u);
+    // A torn word is reported once, and the words after it are still counted.
+    assert.equal(findTextDefects(tornParagraph(), {}).counts.breakTests, 2);
   });
 
   it('counts a box the walker sent no break data for as unexamined', () => {
@@ -1085,7 +1100,7 @@ const FULL_DEFAULT_RUN = {
   measurements: 200,
   measurementsWanted: 200,
   textBoxes: 38970,
-  detector: { ownBox: 38970, clipTests: 4280, frameTests: 28610, pairs: 33050, breakTests: 43956 },
+  detector: { ownBox: 38970, clipTests: 4280, frameTests: 28610, pairs: 33050, breakTests: 232 },
   routesLoaded: 40,
   routesWanted: 40,
   usedExemptions: new Set(),
@@ -1096,7 +1111,7 @@ const ONE_WIDTH_ONE_THEME = {
   measurements: 62,
   measurementsWanted: 62,
   textBoxes: 8761,
-  detector: { ownBox: 8761, clipTests: 780, frameTests: 5166, pairs: 1648, breakTests: 10232 },
+  detector: { ownBox: 8761, clipTests: 780, frameTests: 5166, pairs: 1648, breakTests: 648 },
   routesLoaded: 62,
   routesWanted: 62,
   usedExemptions: new Set(),
@@ -1163,19 +1178,20 @@ describe('a sweep of nothing is not a pass', () => {
   });
 
   it('refuses a narrow run in which a detector examined nothing, naming the floor it missed', () => {
-    // `/learn`, dark, 1024px, as measured: no text sits inside a clipping ancestor there.
+    // `/learn`, dark, 1024px, as measured: no text sits inside a clipping ancestor, no word breaks.
     const learn = {
       measurements: 1,
       measurementsWanted: 1,
       textBoxes: 216,
-      detector: { ownBox: 216, clipTests: 0, frameTests: 180, pairs: 146, breakTests: 266 },
+      detector: { ownBox: 216, clipTests: 0, frameTests: 180, pairs: 146, breakTests: 0 },
       routesLoaded: 1,
       routesWanted: 1,
       usedExemptions: new Set(),
     };
     const problems = coverageFailures(learn, []);
-    assert.equal(problems.length, 1);
+    assert.equal(problems.length, 2);
     assert.match(problems[0], /only 0 text blocks measured against a clipping ancestor \(floor 4 for 1 /u);
+    assert.match(problems[1], /only 0 words on two lines or more judged .*\(floor 1 for 1 /u);
   });
 
   it('counts a detector missing from the tally as one that examined nothing', () => {
@@ -1260,7 +1276,7 @@ const LARGE_TEXT_RUN = {
   measurements: 40,
   measurementsWanted: 40,
   textBoxes: 7530,
-  detector: { ownBox: 7530, clipTests: 856, frameTests: 5474, pairs: 3218, breakTests: 8462 },
+  detector: { ownBox: 7530, clipTests: 856, frameTests: 5474, pairs: 3218, breakTests: 57 },
   routesLoaded: 20,
   routesWanted: 20,
 };
