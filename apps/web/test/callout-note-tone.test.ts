@@ -1,5 +1,5 @@
 /**
- * Receipts, proof results and honesty lines are notes. Two callouts stay insights: each one
+ * Receipts, statuses, measured results and pointers are notes. Two callouts stay insights: each one
  * says what a comparison is telling the reader, which is the teaching point the marker names.
  * The tone is read off the opening tag, so a moved title has to stay on that line.
  */

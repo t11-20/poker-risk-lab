@@ -1,7 +1,7 @@
 /**
  * Phone layout for the Scenario Lab filters. At 390×844 with the guide dismissed the first card
  * started at 1150px, and the three stacked selects were 254px of that. Topic stays alone: "Fold
- * equity and bluffing (2)" is 187px and a half column has 144px of text room. Difficulty and Street
+ * equity and bluffing (2)" is 187px and a half column has 136px of text room at 390. Difficulty and Street
  * share the next row. From 600px the row is the one it was.
  */
 
@@ -91,7 +91,7 @@ describe('lab filters on a phone', () => {
     const narrow = mediaBlock('width < 380px');
     assert.match(rule(narrow, '.prl-lab-filters__row'), /grid-template-columns:\s*minmax\(0,\s*1fr\)/u);
     assert.match(rule(narrow, '.prl-lab-filters__field:first-child'), /grid-column:\s*auto/u);
-    // The face stays the body size. A smaller face was 2px short of "Every street (36)" at 320.
+    // The face stays the body size: below 380 the fields stack instead of shrinking the text.
     assert.doesNotMatch(narrow, /font-size/u);
   });
 
