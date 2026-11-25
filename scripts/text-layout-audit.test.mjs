@@ -31,6 +31,7 @@ import {
   letterByLetter,
   nearestFrame,
   parseArgs,
+  passCoverageFailures,
   ROUTES,
   sweepMatrix,
   sweepPasses,
@@ -1005,7 +1006,7 @@ function radarLabel(clipperSel = RADAR) {
   );
 }
 
-describe('the radar label exemption (OWNER-1)', () => {
+describe('the radar label exemption', () => {
   const clippedAt = (m, context) => findTextDefects(m, context).findings.filter((f) => f.check === 'clipped');
 
   it('suppresses the label clipped by its own radar at 200% text, and counts it', () => {
@@ -1057,7 +1058,7 @@ describe('the radar label exemption (OWNER-1)', () => {
   it('prints its reason and what it suppressed', () => {
     const [used] = exemptionReport(sweepPasses(parseArgs([])), { [RADAR_RULE]: 312 });
     assert.match(formatExemption(used), /^clipped text\.prl-radar__label above 100% text: 312 finding/u);
-    assert.match(formatExemption(used), /why: .*OWNER-1/u);
+    assert.match(formatExemption(used), /why: .*held for the owner/u);
     const [unreached] = exemptionReport(sweepPasses(parseArgs(['--text-scale', '1'])), {});
     assert.match(formatExemption(unreached), /not reached/u);
   });
@@ -1237,6 +1238,17 @@ describe('the scope of the sweep', () => {
   });
 });
 
+// The large-text pass as first measured: ROUTES, light, 768 and 1024, 200% text on 2026-11-26.
+// Its clip tests come from three routes only.
+const LARGE_TEXT_RUN = {
+  measurements: 40,
+  measurementsWanted: 40,
+  textBoxes: 7530,
+  detector: { ownBox: 7530, clipTests: 856, frameTests: 5474, pairs: 3218, breakTests: 8462 },
+  routesLoaded: 20,
+  routesWanted: 20,
+};
+
 describe('the large-text pass', () => {
   const cells = (argv) => sweepMatrix(parseArgs(argv));
   const large = (argv) => cells(argv).filter((cell) => cell.scale !== 1);
@@ -1276,6 +1288,15 @@ describe('the large-text pass', () => {
     );
   });
 
+  it('cannot borrow coverage from the 100% pass (REGRESSION)', () => {
+    const passes = sweepPasses(parseArgs([]));
+    const unclipped = { ...LARGE_TEXT_RUN, detector: { ...LARGE_TEXT_RUN.detector, clipTests: 0 } };
+    const problems = passCoverageFailures(passes, [FULL_DEFAULT_RUN, unclipped]);
+    assert.equal(problems.length, 1, '4,280 clip tests at 100% must not cover a pass with none');
+    assert.match(problems[0], /^200% text pass: only 0 text blocks .*clipping ancestor \(floor 160 for 40 /u);
+    assert.deepEqual(passCoverageFailures(passes, [FULL_DEFAULT_RUN, LARGE_TEXT_RUN]), []);
+  });
+
   it('is a large size Chrome can set, in a theme and widths the audit knows', () => {
     assert.ok(LARGE_TEXT.scale > 1);
     assert.doesNotThrow(() => parseArgs(['--text-scale', String(LARGE_TEXT.scale)]));
@@ -1284,17 +1305,8 @@ describe('the large-text pass', () => {
   });
 
   it('holds its own cells to the coverage floors, as its first run measured them', () => {
-    // ROUTES, light, 768 and 1024, 200% text on 2026-11-26: clip tests come from three routes only.
-    const measured = {
-      measurements: 40,
-      measurementsWanted: 40,
-      textBoxes: 7530,
-      detector: { ownBox: 7530, clipTests: 856, frameTests: 5474, pairs: 3218, breakTests: 8462 },
-      routesLoaded: 20,
-      routesWanted: 20,
-    };
-    assert.deepEqual(coverageFailures(measured), []);
-    const unclipped = { ...measured, detector: { ...measured.detector, clipTests: 100 } };
+    assert.deepEqual(coverageFailures(LARGE_TEXT_RUN), []);
+    const unclipped = { ...LARGE_TEXT_RUN, detector: { ...LARGE_TEXT_RUN.detector, clipTests: 100 } };
     assert.match(
       coverageFailures(unclipped)[0],
       /only 100 text blocks .*clipping ancestor \(floor 160 for 40 /u,

@@ -158,7 +158,7 @@ const EXEMPTIONS = [
     aboveScale: 1,
     why:
       'the radar keeps a fixed 64-unit label gutter (RADAR_LABEL_GUTTER) while its labels are in rem, ' +
-      'so larger text outgrows it; the chart geometry is held for the owner (OWNER-1)',
+      'so larger text outgrows it; changing the chart geometry is held for the owner',
   },
 ];
 
@@ -1400,6 +1400,16 @@ export function coverageFailures(tally) {
   return problems;
 }
 
+/** Each pass held to its own floors, so a small pass cannot borrow coverage from the large one. */
+export function passCoverageFailures(passes, tallies) {
+  const failures = [];
+  for (const [k, tally] of tallies.entries()) {
+    const prefix = passes.length > 1 ? `${textSizeLabel(passes[k].scale)} pass: ` : '';
+    for (const problem of coverageFailures(tally)) failures.push(`${prefix}${problem}`);
+  }
+  return failures;
+}
+
 /**
  * Each rule's standing after a run, from the findings it suppressed across every pass. A rule no pass
  * could reach is `unreached`, said aloud; one a full pass reached and never used is `stale`.
@@ -1865,10 +1875,7 @@ async function main() {
 
   const exemptions = exemptionReport(options.controlsOnly ? [] : passes, suppressed);
   if (!options.controlsOnly) {
-    for (const [k, tally] of tallies.entries()) {
-      const prefix = passes.length > 1 ? `${textSizeLabel(passes[k].scale)} pass: ` : '';
-      for (const problem of coverageFailures(tally)) failures.push(`${prefix}${problem}`);
-    }
+    for (const problem of passCoverageFailures(passes, tallies)) failures.push(problem);
     for (const problem of exemptionFailures(exemptions)) failures.push(problem);
   }
 
