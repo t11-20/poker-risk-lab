@@ -29,7 +29,7 @@
 }
 
 /** From 1000px the heading and lede sit side by side, the app's one wide breakpoint (`.prl-page-head` in `page.css`). */
-@media (min-width: 1000px) {
+@media (min-width: 62.5em) {
   .prl-home__section-head {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     column-gap: var(--prl-space-11);
@@ -141,8 +141,10 @@
   font-size: var(--prl-type-body-sm);
 }
 
+/* Wraps, because the panel clips: five cards are 544px at 200% text. */
 .prl-spot__cards {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--prl-space-3);
   justify-content: center;
 }
@@ -173,6 +175,13 @@
   align-items: end;
   gap: var(--prl-space-6);
   margin: 0;
+}
+
+/* Below 20em the two figures stack: side by side at 360/200% they broke "25.0%" a digit a line. */
+@media (width < 20em) {
+  .prl-spot__figures {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .prl-spot__figure dt {
@@ -356,13 +365,13 @@
 
 /* Responsive. Two columns at 600px and more at 900px, per design system section 10. */
 
-@media (min-width: 600px) {
+@media (min-width: 37.5em) {
   .prl-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
-@media (min-width: 900px) {
+@media (min-width: 56.25em) {
   .prl-metrics {
     grid-template-columns: repeat(4, minmax(0, 1fr));
     /* The rules between cells stand in for the gap. */
@@ -394,7 +403,7 @@
  * From 1000px the priced hand takes the right column. DOM order is unchanged, so reading and tab order
  * stay pitch, then hand. A half shell at 1000px holds about 60 characters of 16px type.
  */
-@media (min-width: 1000px) {
+@media (min-width: 62.5em) {
   .prl-home__hero {
     grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
     column-gap: var(--prl-space-11);

@@ -1,16 +1,19 @@
 #!/usr/bin/env node
 /**
  * `pnpm run test:layout`: measures where text was painted, with `Range.getClientRects()` over each
- * element's own text nodes, on every route in both themes at five widths. Bounding boxes do not
- * overlap when a grid track collapses; the text overflows the box. That is how
- * `grid-template-columns: minmax(0, 1fr) auto` on the Coach rail shipped past every other gate.
+ * element's own text nodes, on every route in both themes at five widths, then again at 200% text in
+ * a smaller large-text pass. Bounding boxes do not overlap when a grid track collapses; the text
+ * overflows the box. That is how `grid-template-columns: minmax(0, 1fr) auto` on the Coach rail
+ * shipped past every other gate.
  *
  * Findings: `collision` (glyphs of two independent in-flow elements intersect), `escapes` (glyphs
  * leave their own non-scrolling block), `clipped` (cut off by a non-scrolling ancestor without an
- * ellipsis), `squeezed` (a block narrower than its longest word), `spills` (glyphs cross the left or
- * right edge of the nearest box that draws one, with nothing clipping them), and `page` (the document
- * scrolls sideways). The page only measures. `findTextDefects()` judges in Node, so tests can feed it the
- * collapsed row's real numbers.
+ * ellipsis), `squeezed` (a block narrower than its longest word), `broken` (a word torn one or two
+ * characters a line, which `squeezed` cannot see because each piece fits), `spills` (glyphs cross
+ * the left or right edge of the nearest box that draws one, with nothing clipping them), `page` (the
+ * document scrolls sideways), and `unscaled` (the root font size is not the text size the reader
+ * set, which `--text-scale` sets in Chrome itself). The page only measures. `findTextDefects()`
+ * judges in Node, so tests can feed it the collapsed row's real numbers.
  *
  * Negative controls run on every invocation (`--controls-only` runs only them). Each injects CSS that
  * re-creates one defect shape and must be caught.
@@ -72,6 +75,32 @@ const VIEWPORT_HEIGHT = 1200;
 
 const THEMES = ['dark', 'light'];
 
+/**
+ * With em breakpoints, 768, 1024 and 1440 at 200% take the 384, 512 and 720px layouts with doubled text,
+ * which the 100% sweep never measures. One theme keeps it short.
+ */
+const LARGE_TEXT = { scale: 2, themes: ['light'], widths: [768, 1024, 1440], phoneWidth: 360 };
+
+/**
+ * The routes clean at `phoneWidth`, where content wider than a phone scrolls sideways that a 768px window
+ * still holds. In the gate's run, which has no API, none hyphenates: CI Chrome may have no dictionary.
+ */
+const LARGE_TEXT_PHONE_ROUTES = [
+  '/',
+  '/learn',
+  '/play',
+  '/lab',
+  '/lab/fl-same-cards-under-the-gun',
+  '/lab/spots',
+  '/legends/adaptive-exploiter',
+  '/review',
+  '/checks',
+];
+
+const LARGE_TEXT_PHONE_WHY =
+  'content wider than 360px fits a 768px window, so only a phone at 200% text shows it; ' +
+  'the routes not listed still fail at 360px and 200% on work held for the owner';
+
 /** An error boundary returns 200 with good markup, so it counts as a failed render. */
 const ERROR_BOUNDARY_HEADINGS = [
   'this screen did not load',
@@ -97,38 +126,93 @@ const OVERLAP_MIN_AREA = 8;
 const OVERLAP_MIN_WIDTH = 2;
 const OVERLAP_MIN_HEIGHT_SHARE = 0.4;
 
+/** Chrome's default text size, which `--text-scale` multiplies, and its default monospace size. */
+const ROOT_FONT_SIZE = 16;
+const FIXED_FONT_SIZE = 13;
+
 /** A word must exceed its own content box by more than this to count as a collapsed column. */
 const WORD_TOLERANCE = 2;
 
 /**
- * Coverage floors, so a sweep or detector that examined nothing fails. Each is about a third of what
- * a full sweep measures today.
+ * A word broken into lines of at most this many characters was torn by a column too narrow for it.
+ * "Result" on `/review` at 360px with 200% text stood one letter a line.
  */
+const MAX_PIECE = 2;
+
+/** The pieces of one broken word the page sends at most, so a longer word's count is a lower bound. */
+const PIECES_SENT = 80;
+
 const MIN_TEXT_BOXES_PER_PAGE = 15;
-const MIN_MEASUREMENTS = 100;
-const MIN_TEXT_BOXES_TOTAL = 5000;
-const MIN_OWN_BOX_CHECKS = 8000;
-const MIN_CLIP_TESTS = 2000;
-const MIN_PAIRS_COMPARED = 8000;
-const MIN_FRAME_TESTS = 8000;
+
+/**
+ * Coverage floors per measurement asked for, about a third of the leanest slice measured: 62 routes,
+ * light, 360px, 200% text averaged 141 blocks, 12.6 clip tests, 83 frames and 26.6 pairs. Words break
+ * least at 100% text and 768px or wider: 1.05 judged a measurement there, against 10.5 in that slice.
+ */
+const FLOOR_PER_MEASUREMENT = {
+  textBoxes: 45,
+  ownBox: 45,
+  clipTests: 4,
+  frameTests: 25,
+  pairs: 8,
+  breakTests: 0.35,
+};
+
+/**
+ * The default run's own floors, since the rates above held its 100% pass to 1,600 pairs of 33,050:
+ * about a third of each pass on 2026-11-26 (clip tests from `/` and two Legends routes only).
+ */
+const DEFAULT_RUN_FLOORS = {
+  main: { textBoxes: 13000, ownBox: 13000, clipTests: 2000, frameTests: 9500, pairs: 11000, breakTests: 75 },
+  'large-text': {
+    textBoxes: 4000,
+    ownBox: 4000,
+    clipTests: 440,
+    frameTests: 2850,
+    pairs: 1950,
+    breakTests: 35,
+  },
+};
+
+const COVERAGE = [
+  ['textBoxes', 'text element(s) measured across the whole sweep'],
+  ['ownBox', 'text blocks measured against their own box'],
+  ['clipTests', 'text blocks measured against a clipping ancestor'],
+  ['frameTests', 'text blocks measured against the frame drawn around them'],
+  ['pairs', 'pairs of text blocks compared for a collision'],
+  ['breakTests', 'words on two lines or more judged for a tear letter by letter'],
+];
 
 /**
  * @typedef {object} Exemption
  * @property {string} check    which finding this suppresses
  * @property {string} selector CSS selector the element must match
  * @property {string} why      the reason, in a sentence somebody can disagree with
- * @property {string[]} [also] when set, the OTHER element of a collision must match one of these
+ * @property {string[]} [also] when set, the other element of a collision, or the clipper or frame,
+ *   must contain one of these in its description
+ * @property {number} [aboveScale] when set, applies only at a text scale above this
  */
 
 /**
  * @type {Exemption[]}
  *
- * Empty because a full sweep (34,000 text elements, 150 measurements) reports nothing. Pseudo-element
- * glyphs, separate positioned layers, hidden subtrees and letter-spacing are excluded by the
- * measurement. A rule that matches nothing fails the gate, so add one only with the finding it
- * suppresses.
+ * A rule that a full sweep at a size it applies to never uses fails the gate, so add one only with
+ * the finding it suppresses. Every run prints each rule, its reason and what it suppressed.
  */
-const EXEMPTIONS = [];
+const EXEMPTIONS = [
+  {
+    check: 'clipped',
+    selector: 'text.prl-radar__label',
+    also: ['prl-radar'],
+    aboveScale: 1,
+    why:
+      'the radar keeps a fixed 64-unit label gutter (RADAR_LABEL_GUTTER) while its labels are in rem, ' +
+      'so larger text outgrows it; changing the chart geometry is held for the owner',
+  },
+];
+
+/** Whether a rule applies at this text size. A measurement that names no size is at 100%. */
+const appliesAtScale = (rule, scale) => rule.aboveScale === undefined || (scale ?? 1) > rule.aboveScale;
 
 /**
  * @typedef {object} Control
@@ -137,6 +221,9 @@ const EXEMPTIONS = [];
  * @property {string} expect  the check that must fire
  * @property {string} css     injected into the page after load
  * @property {string} what    what it re-creates, for the log
+ * @property {number} [scale] a text size the defect needs; it is then also measured at 100% and
+ *   must be silent there, or it would be catching an ordinary defect
+ * @property {string} [theme] default dark
  */
 
 const NARROW_COACH = '.prl-play .prl-play__coach { inline-size: 15rem; }';
@@ -221,6 +308,23 @@ const CONTROLS = [
     css: '.prl-legend-scope .prl-legend-identity__archetype { white-space: nowrap; max-width: 60px; }',
   },
   {
+    id: 'letter-by-letter',
+    route: '/learn',
+    width: 1024,
+    expect: 'broken',
+    what: 'a paragraph in a column two characters wide, its words torn a letter or two a line',
+    // Wider than any one letter, so every piece fits its column and `squeezed` stays silent.
+    css: '.prl-learn-page__lead { inline-size: 2ch; overflow-wrap: anywhere; }',
+  },
+  {
+    id: 'root-in-px',
+    route: '/learn',
+    width: 1024,
+    expect: 'unscaled',
+    what: 'a root font size set in px, which overrides the text size the reader chose',
+    css: 'html { font-size: 10px; }',
+  },
+  {
     id: 'bordered-spill',
     route: '/terms',
     width: 1440,
@@ -228,6 +332,25 @@ const CONTROLS = [
     what: 'a paragraph wider than the bordered banner around it, painted across its border',
     // The paragraph keeps its glyphs inside its own box, so only the banner's edge is crossed.
     css: '.prl-legal__banner { max-width: 200px; } .prl-legal__banner p { width: 480px; }',
+  },
+  {
+    id: 'header-px-breakpoint',
+    route: '/learn',
+    width: 1024,
+    scale: 2,
+    theme: 'light',
+    expect: 'page',
+    what: 'the desktop header kept under a px breakpoint, wider than the window at 200% text',
+    // The 53.75em and 37.5em header rules put back in px: at 1024px and 32px text they still apply.
+    css:
+      '@media (min-width: 600px) { .prl-pillbar__brand .prl-shell__brand-name, ' +
+      '.prl-pillbar__brand .prl-shell__brand-tail { display: inline; } } ' +
+      '@media (min-width: 860px) { .prl-nav { display: block; } .prl-shell__theme { display: flex; } ' +
+      '.prl-nav-trigger, .prl-sheet { display: none; } ' +
+      '.prl-shell__header-inner { grid-template-columns: auto 1fr auto; } ' +
+      '.prl-pillbar__brand .prl-shell__brand-name { display: none; } ' +
+      '.prl-pillbar .prl-pillbar__nav { display: flex; align-items: center; justify-content: center; ' +
+      'gap: var(--prl-pill-gap); } }',
   },
 ];
 
@@ -256,12 +379,46 @@ export function frameSides(style, backdrop) {
   return { left: fill || border('Left'), right: fill || border('Right') };
 }
 
+/**
+ * Folds one word's rectangles into the widest piece, and with `firstTop` known the widest on the first
+ * line and on any later one, so each piece meets the room of its own line. Runs in the page.
+ */
+export function foldWord(widest, text, rects, firstTop) {
+  for (const r of rects) {
+    const piece = { text, width: Math.round(r.width * 100) / 100 };
+    if (widest.word === null || piece.width > widest.word.width) widest.word = piece;
+    if (firstTop === null) continue;
+    piece.first = r.top < firstTop + r.height / 2;
+    const line = piece.first ? 'opening' : 'later';
+    if (widest[line] === null || piece.width > widest[line].width) widest[line] = piece;
+  }
+  return widest;
+}
+
+/**
+ * A computed text-indent in px, a percentage being of the block's inline size, and whether it names
+ * `hanging` or `each-line`, which indent other lines than the first. Runs in the page.
+ */
+export function parseTextIndent(raw, width) {
+  const parts = String(raw ?? '')
+    .trim()
+    .split(/\s+/u);
+  const keywords = parts.some((part) => part === 'hanging' || part === 'each-line');
+  const length = parts.filter((part) => part !== 'hanging' && part !== 'each-line').join(' ');
+  const n = Number.parseFloat(length);
+  if (!Number.isFinite(n)) return { px: 0, keywords };
+  return { px: length.endsWith('%') ? (n * width) / 100 : n, keywords };
+}
+
 // The walker measures and decides nothing. Comments inside it are part of the page script.
 
 const WALKER = String.raw`(() => {
   const EXEMPT_SELECTORS = EXEMPT_SELECTORS_ARGUMENT;
   const colorAlpha = COLOR_ALPHA_ARGUMENT;
   const frameSides = FRAME_SIDES_ARGUMENT;
+  const foldWord = FOLD_WORD_ARGUMENT;
+  const PIECES_SENT = PIECES_SENT_ARGUMENT;
+  const parseTextIndent = PARSE_TEXT_INDENT_ARGUMENT;
 
   const skipped = { ariaHidden: 0, visuallyHidden: 0, invisible: 0, offscreen: 0, inert: 0 };
 
@@ -440,7 +597,78 @@ const WALKER = String.raw`(() => {
     return el;
   };
 
+  /** Preserved white space hangs past the line box at a wrap, and it paints nothing. */
+  const preservesSpaces = (style) => {
+    const collapse = style.whiteSpaceCollapse;
+    if (typeof collapse === 'string' && collapse !== '') {
+      return collapse === 'preserve' || collapse === 'break-spaces' || collapse === 'preserve-spaces';
+    }
+    const ws = style.whiteSpace;
+    return ws === 'pre' || ws === 'pre-wrap' || ws === 'break-spaces';
+  };
+
+  /** The top of a block's first line, which is the only line text-indent moves. */
+  const firstLineTop = (block) => {
+    const range = document.createRange();
+    range.selectNodeContents(block);
+    let top = null;
+    for (const r of range.getClientRects()) {
+      if (r.height > 0.5 && (top === null || r.top < top)) top = r.top;
+    }
+    return top;
+  };
+
+  /** Word rectangles merged along each line, so the hanging space between them is not counted. */
+  const addInk = (ink, r) => {
+    const prev = ink[ink.length - 1];
+    if (prev !== undefined && Math.abs(prev.top - r.top) < 0.5 && Math.abs(prev.height - r.height) < 0.5) {
+      const left = Math.min(prev.left, r.left);
+      prev.width = Math.max(prev.left + prev.width, r.right) - left;
+      prev.left = left;
+      return;
+    }
+    ink.push({ left: r.left, top: r.top, width: r.width, height: r.height });
+  };
+
+  /** How many lines a set of rectangles sits on: a new line starts half a line below the last. */
+  const lineCount = (rects) => {
+    const tops = rects.map((r) => r.top).sort((a, b) => a - b);
+    let lines = 0;
+    let at = null;
+    for (let k = 0; k < tops.length; k += 1) {
+      if (at === null || tops[k] - at > rects[0].height / 2) {
+        lines += 1;
+        at = tops[k];
+      }
+    }
+    return lines;
+  };
+
+  /** A word's characters grouped by the line each was painted on. Only run for a word that broke. */
+  const piecesOf = (node, start, word) => {
+    const pieces = [];
+    let piece = '';
+    let at = null;
+    let k = start;
+    for (const ch of word) {
+      const c = document.createRange();
+      c.setStart(node, k);
+      c.setEnd(node, k + ch.length);
+      k += ch.length;
+      const r = [...c.getClientRects()].find((x) => x.height > 0.5);
+      if (r !== undefined && at !== null && Math.abs(r.top - at) > r.height / 2 && piece !== '') {
+        pieces.push(piece);
+        piece = '';
+      }
+      if (r !== undefined) at = r.top;
+      piece += ch;
+    }
+    pieces.push(piece);
+    return { text: word.slice(0, 40), pieces: pieces.slice(0, PIECES_SENT) };
+  };
+
   const boxes = [];
+  const ariaHidden = [];
   const clippers = [];
   const frames = [];
   const docRoot = document.documentElement;
@@ -493,10 +721,9 @@ const WALKER = String.raw`(() => {
       skipped.invisible += 1;
       continue;
     }
-    if (el.closest('[aria-hidden="true"]') !== null) {
-      skipped.ariaHidden += 1;
-      continue;
-    }
+    // Hidden from a screen reader, not from the eye: such text is measured, and Node judges it only
+    // for a word broken letter by letter, since its overlaps are often decorative by design.
+    const silent = el.closest('[aria-hidden="true"]') !== null;
     if (el.closest('[hidden], [inert], details:not([open]) > *:not(summary), dialog:not([open])') !== null) {
       skipped.inert += 1;
       continue;
@@ -515,9 +742,19 @@ const WALKER = String.raw`(() => {
       continue;
     }
 
+    const block = blockOf(el);
+    const blockStyle = styleOf(block);
+    const { pad, content } = boxesOf(block, blockStyle);
+    const indent = parseTextIndent(blockStyle.textIndent, content.w);
+    // Which lines hanging or each-line indents is not measured, so no piece is placed on a line.
+    const firstTop = indent.px === 0 || indent.keywords ? null : firstLineTop(block);
+    const preserved = preservesSpaces(style);
+
     // Glyph rectangles, and the widest word, from the text nodes themselves.
     const rects = [];
-    let widest = null;
+    const ink = [];
+    const broken = [];
+    const widest = { word: null, opening: null, later: null };
     for (const node of own) {
       textNodes += 1;
       const value = node.nodeValue;
@@ -537,11 +774,11 @@ const WALKER = String.raw`(() => {
         const w = document.createRange();
         w.setStart(node, match.index);
         w.setEnd(node, match.index + match[0].length);
-        let wide = 0;
-        for (const r of w.getClientRects()) wide = Math.max(wide, r.width);
-        if (widest === null || wide > widest.width) {
-          widest = { text: match[0].slice(0, 40), width: Math.round(wide * 100) / 100 };
-        }
+        const pieces = [...w.getClientRects()];
+        foldWord(widest, match[0].slice(0, 40), pieces, firstTop);
+        const shown = pieces.filter((r) => r.width > 0.5 && r.height > 0.5);
+        if (preserved) for (const r of shown) addInk(ink, r);
+        if (lineCount(shown) > 1) broken.push(piecesOf(node, match.index, match[0]));
         match = pattern.exec(value);
       }
     }
@@ -553,10 +790,6 @@ const WALKER = String.raw`(() => {
       skipped.offscreen += 1;
       continue;
     }
-
-    const block = blockOf(el);
-    const blockStyle = styleOf(block);
-    const { pad, content } = boxesOf(block, blockStyle);
 
     const text = own
       .map((n) => n.nodeValue)
@@ -574,7 +807,7 @@ const WALKER = String.raw`(() => {
       }
     }
 
-    boxes.push({
+    const measured = {
       i: order.get(el),
       end: ends.get(el),
       sel: describe(el),
@@ -583,14 +816,26 @@ const WALKER = String.raw`(() => {
       rects,
       pad: round(pad),
       content: round(content),
-      word: widest,
+      word: widest.word,
       flow: flowRootOf(el),
       layer: layerOf(el),
       scrollHost: scrollHostOf(el),
       blockScrolls: scrollsHorizontally(blockStyle),
       ellipsis: style.textOverflow === 'ellipsis' || blockStyle.textOverflow === 'ellipsis',
+      broken,
+      fills: style.wordBreak === 'break-all' || style.lineBreak === 'anywhere' || style.hyphens === 'auto',
       exempt,
-    });
+    };
+    if (preserved && ink.length > 0) measured.ink = ink.map(asRect);
+    if (indent.px !== 0) {
+      measured.indent = Math.round(indent.px * 100) / 100;
+      if (indent.keywords) measured.indentKeyword = true;
+      else Object.assign(measured, { opening: widest.opening, later: widest.later });
+    }
+    if (silent) {
+      skipped.ariaHidden += 1;
+      ariaHidden.push(measured);
+    } else boxes.push(measured);
   }
 
   const h1 = document.querySelector('h1');
@@ -599,12 +844,14 @@ const WALKER = String.raw`(() => {
   return {
     heading: h1 === null ? '' : (h1.textContent || '').trim().slice(0, 120).toLowerCase(),
     boxes,
+    ariaHidden,
     clippers,
     frames,
     page: {
       scrollWidth: docEl.scrollWidth,
       clientWidth: docEl.clientWidth,
       innerWidth: window.innerWidth,
+      rootFontSize: Number.parseFloat(window.getComputedStyle(docEl).fontSize),
     },
     counts: {
       scanned,
@@ -687,23 +934,84 @@ export function clippedRects(rects, clips) {
   return shown;
 }
 
+/** Glyphs without the preserved white space that hangs past a wrapped line and paints nothing. */
+const glyphsOf = (box) => box.ink ?? box.rects;
+
+/** A break after one of these is the text's own break opportunity, not a word torn apart. */
+const BREAK_AFTER = /[-\u00AD\u2010\u2013\u2014/]$/u;
+
+/**
+ * Two short pieces, or most of three or more, so one longer piece cannot clear "Br|illi|an|t" while
+ * "reachin|g" stays an emergency break. Where the browser fills lines (`break-all`, `hyphens: auto`)
+ * every middle piece is a whole line and the ends are leftovers, so one short middle piece is torn.
+ */
+function isTorn(run, fills) {
+  const short = (p) => [...p].length <= MAX_PIECE;
+  if (fills) return run.slice(1, -1).some(short);
+  if (run.length === 2) return run.every(short);
+  return run.length > 2 && run.filter(short).length * 2 > run.length;
+}
+
+/** The part of a broken word torn one or two characters a line, or null, whatever allowed the breaks. */
+export function letterByLetter(pieces, fills = false) {
+  let run = [];
+  const runs = [];
+  for (const piece of pieces) {
+    run.push(piece);
+    if (BREAK_AFTER.test(piece)) {
+      runs.push(run);
+      run = [];
+    }
+  }
+  if (run.length > 0) runs.push(run);
+  return runs.find((r) => isTorn(r, fills)) ?? null;
+}
+
+/** The widest piece on the first line or a later one, whichever is shortest of its own line's room. */
+function squeezeOf(box) {
+  const indent = box.indent ?? 0;
+  let worst = null;
+  for (const word of [box.word, box.opening, box.later]) {
+    if (word === null || word === undefined) continue;
+    // A negative text-indent starts the first line that far before the content box. Under hanging or
+    // each-line the lines it moves are unknown, so no line gains room and every line may lose it.
+    const room =
+      box.indentKeyword === true
+        ? box.content.w - Math.max(0, indent)
+        : box.content.w - (word.first === true ? indent : 0);
+    const short = word.width - room;
+    if (worst === null || short > worst.short) worst = { word, room, short };
+  }
+  return worst;
+}
+
 /** `measurement` is what `WALKER` returns. `context` names route, theme and width. */
 export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIONS) {
   const findings = [];
-  const usedExemptions = new Set();
+  const suppressed = {};
   const { boxes, clippers } = measurement;
   const frames = measurement.frames ?? [];
+  const ariaHidden = measurement.ariaHidden ?? [];
   // What each detector looked at, floored in `coverageFailures`.
-  const counts = { ownBox: 0, scrollExcused: 0, ellipsisExcused: 0, clipTests: 0, frameTests: 0, pairs: 0 };
+  const counts = {
+    ownBox: 0,
+    scrollExcused: 0,
+    ellipsisExcused: 0,
+    clipTests: 0,
+    frameTests: 0,
+    pairs: 0,
+    breakTests: 0,
+  };
 
   const exemptFor = (box, check, otherSel) => {
     for (const index of box.exempt) {
       const rule = exemptions[index];
       if (rule === undefined || rule.check !== check) continue;
+      if (!appliesAtScale(rule, context.scale)) continue;
       if (rule.also !== undefined && otherSel !== undefined) {
         if (!rule.also.some((needle) => otherSel.includes(needle))) continue;
       }
-      usedExemptions.add(index);
+      suppressed[index] = (suppressed[index] ?? 0) + 1;
       return rule;
     }
     return null;
@@ -712,6 +1020,26 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
   const add = (check, detail) => {
     findings.push({ check, ...context, ...detail });
   };
+
+  // A scroller does not mend a stacked word, and aria-hidden text is still painted. Only a word on
+  // two lines or more is counted as judged, so a dead line count or piece split examines nothing.
+  for (const box of [...boxes, ...ariaHidden]) {
+    let reported = false;
+    for (const word of box.broken ?? []) {
+      if (!Array.isArray(word.pieces) || word.pieces.length < 2) continue;
+      counts.breakTests += 1;
+      if (reported || letterByLetter(word.pieces, box.fills === true) === null) continue;
+      reported = true;
+      if (exemptFor(box, 'broken') !== null) continue;
+      add('broken', {
+        sel: box.sel,
+        text: box.text,
+        word: word.text,
+        pieces: word.pieces,
+        ariaHidden: ariaHidden.includes(box),
+      });
+    }
+  }
 
   for (const box of boxes) {
     // Only the block's own overflow excuses this. The Coach rail sits inside a horizontal scroller,
@@ -722,22 +1050,23 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
     }
     counts.ownBox += 1;
 
-    if (box.word !== null && box.word.width > box.content.w + WORD_TOLERANCE) {
+    const squeeze = squeezeOf(box);
+    if (squeeze !== null && squeeze.short > WORD_TOLERANCE) {
       if (exemptFor(box, 'squeezed') === null) {
         add('squeezed', {
           sel: box.sel,
           text: box.text,
-          word: box.word.text,
-          needs: box.word.width,
-          has: box.content.w,
-          short: Math.round((box.word.width - box.content.w) * 100) / 100,
+          word: squeeze.word.text,
+          needs: squeeze.word.width,
+          has: Math.round(squeeze.room * 100) / 100,
+          short: Math.round(squeeze.short * 100) / 100,
         });
       }
     }
 
     if (box.ellipsis) counts.ellipsisExcused += 1;
     else {
-      const escaped = escapeAmount(box.rects, box.pad);
+      const escaped = escapeAmount(glyphsOf(box), box.pad);
       if (escaped.amount > EDGE_TOLERANCE && exemptFor(box, 'escapes') === null) {
         add('escapes', {
           sel: box.sel,
@@ -756,7 +1085,7 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
       if (box.ellipsis) continue;
       if (box.scrollHost !== null && box.scrollHost > clipper.i) continue;
       counts.clipTests += 1;
-      const escaped = escapeAmount(box.rects, clipper.pad);
+      const escaped = escapeAmount(glyphsOf(box), clipper.pad);
       if (escaped.amount <= EDGE_TOLERANCE) continue;
       if (exemptFor(box, 'clipped', clipper.sel) !== null) continue;
       add('clipped', {
@@ -778,7 +1107,7 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
     if (box.scrollHost !== null && box.scrollHost >= frame.i) continue;
     counts.frameTests += 1;
     const clips = clippers.filter((c) => c.i >= frame.i && c.i <= box.i && box.i < c.end);
-    const spilled = escapeAmount(clippedRects(box.rects, clips), drawnEdges(frame));
+    const spilled = escapeAmount(clippedRects(glyphsOf(box), clips), drawnEdges(frame));
     if (spilled.amount <= EDGE_TOLERANCE) continue;
     if (exemptFor(box, 'spills', frame.sel) !== null) continue;
     add('spills', {
@@ -793,9 +1122,9 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
 
   // Sorted by top edge so the scan can exit early. The key must be the TOPMOST rect, not `rects[0]`,
   // or the early exit skips pairs and reports no collision.
-  const topOf = (box) => Math.min(...box.rects.map((r) => r.y));
+  const topOf = (box) => Math.min(...glyphsOf(box).map((r) => r.y));
   const sorted = [...boxes].sort((a, b) => topOf(a) - topOf(b));
-  const lowestOf = sorted.map((box) => Math.max(...box.rects.map(bottom)));
+  const lowestOf = sorted.map((box) => Math.max(...glyphsOf(box).map(bottom)));
   for (let a = 0; a < sorted.length; a += 1) {
     const first = sorted[a];
     for (let b = a + 1; b < sorted.length; b += 1) {
@@ -806,8 +1135,8 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
       counts.pairs += 1;
       let worst = null;
       let pair = null;
-      for (const one of first.rects) {
-        for (const two of second.rects) {
+      for (const one of glyphsOf(first)) {
+        for (const two of glyphsOf(second)) {
           const hit = intersection(one, two);
           if (!isRealOverlap(hit, one, two)) continue;
           if (worst === null || hit.area > worst.area) {
@@ -834,6 +1163,19 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
 
   // No tolerance: `scrollWidth` counts whole pixels of layout, and 2px of sideways scroll still scrolls.
   const { page } = measurement;
+
+  // Without this a page that pins its root in px passes a 200% sweep while measuring 100% text. A root
+  // that could not be read is judged the same way, so a missing measurement cannot pass.
+  const expected = ROOT_FONT_SIZE * (context.scale ?? 1);
+  if (!(Math.abs(page.rootFontSize - expected) < 0.5)) {
+    add('unscaled', {
+      sel: 'html',
+      text: '',
+      rootFontSize: page.rootFontSize ?? null,
+      expected,
+    });
+  }
+
   if (page.scrollWidth > page.clientWidth) {
     add('page', {
       sel: 'html',
@@ -844,11 +1186,14 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
     });
   }
 
-  return { findings, usedExemptions: [...usedExemptions], counts };
+  const usedExemptions = Object.keys(suppressed).map(Number);
+  return { findings, usedExemptions, suppressed, counts };
 }
 
 export function formatFinding(finding) {
-  const where = `${finding.route}  ${finding.theme}  ${String(finding.width)}px`;
+  const scale =
+    finding.scale === undefined || finding.scale === 1 ? '' : `  ${String(finding.scale * 100)}% text`;
+  const where = `${finding.route}  ${finding.theme}  ${String(finding.width)}px${scale}`;
   const quote = finding.text === '' ? '' : `  "${finding.text}"`;
   switch (finding.check) {
     case 'squeezed':
@@ -857,6 +1202,15 @@ export function formatFinding(finding) {
         `      the column is ${String(finding.has)}px and the word "${finding.word}" needs ` +
         `${String(finding.needs)}px — short by ${String(finding.short)}px`
       );
+    case 'broken': {
+      const count = String(finding.pieces.length);
+      const lines = finding.pieces.length >= PIECES_SENT ? `at least ${count}` : count;
+      return (
+        `${where}\n      BROKEN     ${finding.sel}${quote}${finding.ariaHidden ? ' (aria-hidden)' : ''}\n` +
+        `      the word "${finding.word}" is torn over ${lines} lines: ` +
+        `${finding.pieces.slice(0, 12).join(' | ')}`
+      );
+    }
     case 'escapes':
       return (
         `${where}\n      ESCAPES    ${finding.sel}${quote}\n` +
@@ -883,6 +1237,11 @@ export function formatFinding(finding) {
         `${where}\n      PAGE       the document scrolls sideways: ${String(finding.scrollWidth)}px ` +
         `of content in a ${String(finding.clientWidth)}px viewport`
       );
+    case 'unscaled':
+      return (
+        `${where}\n      UNSCALED   the root font size is ${String(finding.rootFontSize)}px ` +
+        `where the reader set ${String(finding.expected)}px: the page ignored their text size`
+      );
     default:
       return `${where}  ${finding.check}  ${finding.sel}`;
   }
@@ -900,8 +1259,19 @@ const DEFAULTS = {
   themes: null,
   selfTest: true,
   controlsOnly: false,
+  textScale: 1,
+  textScaleGiven: false,
   out: null,
 };
+
+const LARGE_TEXT_CELLS = [
+  `${String(LARGE_TEXT.scale * 100)}%`,
+  LARGE_TEXT.themes.join(','),
+  `${LARGE_TEXT.widths.join(',')}px`,
+].join(', ');
+const LARGE_TEXT_LAYOUTS = LARGE_TEXT.widths.map((w) => `${String(w / LARGE_TEXT.scale)}px`).join(', ');
+const LARGE_TEXT_PHONE_CELLS =
+  `${String(LARGE_TEXT_PHONE_ROUTES.length)} route(s) at ` + `${String(LARGE_TEXT.phoneWidth)}px`;
 
 const HELP = `
 ${bold('pnpm run test:layout')} — the PAINTED TEXT of this app, in real Chrome
@@ -916,19 +1286,30 @@ ${bold('pnpm run test:layout')} — the PAINTED TEXT of this app, in real Chrome
     --ready-timeout <s>   how long to wait for it          (default ${DEFAULTS.readyTimeoutSeconds})
 
   Scope
-    --routes <a,b>        sweep only these routes          (default: all ${String(ROUTES.length)})
+    --routes <a,b>        sweep only these routes, in both passes (default: all ${String(ROUTES.length)})
     --widths <n,n>        sweep only these widths          (default ${WIDTHS.join(',')})
     --themes <a,b>        sweep only these themes          (default ${THEMES.join(',')})
+    --text-scale <n>      the reader's text size, as Chrome's own setting: 2 is 32px text
+                          (1 to 3 in sixteenths, so the sizes Chrome takes stay whole; default 1)
     --no-self-test        skip the injected negative controls (they are the gate's own proof)
     --controls-only       run ONLY the negative controls and stop
+
+  Passes
+    Unless --widths, --themes or --text-scale is given, the matrix above runs at 100%
+    text and then a large-text pass runs at ${LARGE_TEXT_CELLS}. Em breakpoints give
+    those widths the ${LARGE_TEXT_LAYOUTS} layouts with doubled text. It also measures
+    ${LARGE_TEXT_PHONE_CELLS}, the ones clean there today. Any of the three
+    flags replaces both passes with exactly the matrix it names, at one text size.
 
   Reporting
     --headful             run Chrome with a window, to watch it
     --out <file>          also write the findings as JSON
     -h, --help            this text
 
-  Exits 0 when nothing collided, escaped, was clipped, spilled past a drawn frame or
-  was squeezed, every negative control was caught and every exemption was used.
+  Exits 0 when nothing collided, escaped, was clipped, spilled past a drawn frame,
+  was squeezed or was broken letter by letter, every negative control was caught and
+  every exemption a full pass could reach was used. Each exemption is printed with
+  its reason on every run.
 `;
 
 export function parseArgs(argv) {
@@ -968,6 +1349,10 @@ export function parseArgs(argv) {
       case '--ready-timeout':
         options.readyTimeoutSeconds = Number(need());
         break;
+      case '--text-scale':
+        options.textScale = Number(need());
+        options.textScaleGiven = true;
+        break;
       case '--routes':
         options.routes = need()
           .split(',')
@@ -995,6 +1380,18 @@ export function parseArgs(argv) {
   if (options.widths?.some((w) => !Number.isInteger(w) || w < 200) === true) {
     throw new Error('--widths takes whole numbers of at least 200');
   }
+  // `Page.setFontSizes` takes whole pixels, so 1.3 (20.8px) would be measured as something else.
+  const scale = options.textScale;
+  if (!Number.isFinite(scale) || scale < 1 || scale > 3 || !Number.isInteger(scale * ROOT_FONT_SIZE)) {
+    throw new Error('--text-scale takes a number from 1 to 3 in sixteenths, such as 1.25, 1.5 or 2');
+  }
+  for (const [flag, list] of [
+    ['--routes', options.routes],
+    ['--widths', options.widths],
+    ['--themes', options.themes],
+  ]) {
+    if (list !== null && list.length === 0) throw new Error(`${flag} was given an empty list`);
+  }
   if (options.themes?.some((t) => !THEMES.includes(t)) === true) {
     throw new Error(`--themes takes ${THEMES.join(' and ')}`);
   }
@@ -1004,63 +1401,160 @@ export function parseArgs(argv) {
   return options;
 }
 
-export function sweepMatrix(options) {
+/** What `Page.setFontSizes` is sent. Its fields are integers, and the fixed size has no exact 13·n. */
+export function fontSizesFor(scale) {
+  return { standard: ROOT_FONT_SIZE * scale, fixed: Math.round(FIXED_FONT_SIZE * scale) };
+}
+
+/**
+ * The passes a run measures. `narrowed` marks a pass that left out part of its own matrix, which
+ * cannot prove an exemption stale.
+ */
+export function sweepPasses(options) {
   const routes = options.routes ?? ROUTES;
-  const themes = options.themes ?? THEMES;
-  const widths = options.widths ?? WIDTHS;
+  const asked = options.widths !== null || options.themes !== null || options.textScaleGiven === true;
+  // Only the run with none of the four scope flags is held to DEFAULT_RUN_FLOORS.
+  const whole = !asked && options.routes === null;
+  const main = {
+    id: 'main',
+    scale: options.textScale,
+    routes,
+    themes: options.themes ?? THEMES,
+    widths: options.widths ?? WIDTHS,
+    also: [],
+    narrowed: options.routes !== null || options.widths !== null || options.themes !== null,
+    floors: whole ? DEFAULT_RUN_FLOORS.main : null,
+  };
+  if (asked) return [main];
+  const phoneRoutes = LARGE_TEXT_PHONE_ROUTES.filter((route) => routes.includes(route));
+  const phone = { routes: phoneRoutes, themes: LARGE_TEXT.themes, widths: [LARGE_TEXT.phoneWidth] };
+  const large = {
+    id: 'large-text',
+    scale: LARGE_TEXT.scale,
+    routes,
+    themes: LARGE_TEXT.themes,
+    widths: LARGE_TEXT.widths,
+    also: phoneRoutes.length === 0 ? [] : [{ ...phone, why: LARGE_TEXT_PHONE_WHY }],
+    narrowed: options.routes !== null,
+    floors: whole ? DEFAULT_RUN_FLOORS['large-text'] : null,
+  };
+  return [main, large];
+}
+
+/** A pass's own matrix, then each further block of cells it measures at the same text size. */
+export function passBlocks(pass) {
+  return [{ routes: pass.routes, themes: pass.themes, widths: pass.widths }, ...(pass.also ?? [])];
+}
+
+const blockCells = (block) => block.routes.length * block.themes.length * block.widths.length;
+
+export function sweepMatrix(options) {
   const out = [];
-  for (const route of routes) {
-    for (const theme of themes) {
-      for (const width of widths) out.push({ route, theme, width });
+  for (const pass of sweepPasses(options)) {
+    for (const block of passBlocks(pass)) {
+      for (const route of block.routes) {
+        for (const theme of block.themes) {
+          for (const width of block.widths) out.push({ route, theme, width, scale: pass.scale });
+        }
+      }
     }
   }
   return out;
 }
 
+/** The floor for `key` in a run that asked for `wanted` measurements: never below one. */
+export function coverageFloor(key, wanted) {
+  return Math.max(1, Math.floor(FLOOR_PER_MEASUREMENT[key] * wanted));
+}
+
+/** What each detector examined against its floor: the rate for the run's size, or `floors` if higher. */
+export function coverageChecks(tally, floors = null) {
+  const wanted = tally.measurementsWanted ?? 0;
+  return COVERAGE.map(([key, what]) => ({
+    key,
+    what,
+    seen: (key === 'textBoxes' ? tally.textBoxes : tally.detector[key]) ?? 0,
+    floor: Math.max(coverageFloor(key, wanted), floors?.[key] ?? 0),
+  }));
+}
+
 /** Every condition that makes a green result meaningless, as failure lines. */
-export function coverageFailures(tally, exemptions = EXEMPTIONS) {
+export function coverageFailures(tally, floors = null) {
   const problems = [];
-  if (tally.measurements < MIN_MEASUREMENTS) {
-    problems.push(
-      `only ${String(tally.measurements)} page measurement(s) were taken; a sweep of nothing is not a pass`,
-    );
+  // The matrix asked for, not what was measured, so a run that measured less cannot lower its floor.
+  const wanted = tally.measurementsWanted ?? 0;
+  if (!(wanted >= 1)) {
+    problems.push('the sweep asked for no measurement at all; a sweep of nothing is not a pass');
   }
-  if (tally.textBoxes < MIN_TEXT_BOXES_TOTAL) {
+  if (tally.measurements < Math.max(1, wanted)) {
     problems.push(
-      `only ${String(tally.textBoxes)} text element(s) were measured across the whole sweep; ` +
+      `only ${String(tally.measurements)} of ${String(wanted)} page measurement(s) were taken; ` +
         'a sweep of nothing is not a pass',
     );
   }
-  for (const [what, seen, floor] of [
-    ['text blocks measured against their own box', tally.detector.ownBox, MIN_OWN_BOX_CHECKS],
-    ['text blocks measured against a clipping ancestor', tally.detector.clipTests, MIN_CLIP_TESTS],
-    ['text blocks measured against the frame drawn around them', tally.detector.frameTests, MIN_FRAME_TESTS],
-    ['pairs of text blocks compared for a collision', tally.detector.pairs, MIN_PAIRS_COMPARED],
-  ]) {
-    if ((seen ?? 0) < floor) {
-      problems.push(
-        `only ${String(seen ?? 0)} ${what} (floor ${String(floor)}) — a detector that examined nothing ` +
-          'reports what a detector that found nothing reports',
-      );
-    }
+  const per = `for ${String(wanted)} measurement(s)`;
+  for (const { key, what, seen, floor } of coverageChecks(tally, floors)) {
+    if (seen >= floor) continue;
+    const why =
+      key === 'textBoxes'
+        ? 'a sweep of nothing is not a pass'
+        : 'a detector that examined nothing reports what a detector that found nothing reports';
+    problems.push(`only ${String(seen)} ${what} (floor ${String(floor)} ${per}) — ${why}`);
   }
   if (tally.routesLoaded < (tally.routesWanted ?? 0)) {
     problems.push(
       `${String((tally.routesWanted ?? 0) - tally.routesLoaded)} route(s) never loaded, so nothing was measured on them`,
     );
   }
-  for (let i = 0; i < exemptions.length; i += 1) {
-    if (!tally.usedExemptions.has(i)) {
-      problems.push(
-        `exemption ${String(i)} (${exemptions[i].check} ${exemptions[i].selector}) matched nothing ` +
-          'in the whole sweep — a stale exemption is a hole that looks like a decision',
-      );
-    }
-  }
   return problems;
 }
 
-class Page {
+/** Each pass held to its own floors, so a small pass cannot borrow coverage from the large one. */
+export function passCoverageFailures(passes, tallies) {
+  const failures = [];
+  for (const [k, tally] of tallies.entries()) {
+    const prefix = passes.length > 1 ? `${textSizeLabel(passes[k].scale)} pass: ` : '';
+    for (const problem of coverageFailures(tally, passes[k].floors)) failures.push(`${prefix}${problem}`);
+  }
+  return failures;
+}
+
+/**
+ * Each rule's standing after a run, from the findings it suppressed across every pass. A rule no pass
+ * could reach is `unreached`, said aloud; one a full pass reached and never used is `stale`.
+ */
+export function exemptionReport(passes, suppressed, exemptions = EXEMPTIONS) {
+  return exemptions.map((rule, index) => {
+    const count = suppressed[index] ?? 0;
+    const reached = passes.some((pass) => pass.narrowed !== true && appliesAtScale(rule, pass.scale));
+    const status = count > 0 ? 'used' : reached ? 'stale' : 'unreached';
+    return { index, rule, count, status };
+  });
+}
+
+export function exemptionFailures(report) {
+  return report
+    .filter((entry) => entry.status === 'stale')
+    .map(
+      ({ index, rule }) =>
+        `exemption ${String(index)} (${rule.check} ${rule.selector}) matched nothing in a full pass it ` +
+        'applies to — a stale exemption is a hole that looks like a decision',
+    );
+}
+
+export function formatExemption({ rule, count, status }) {
+  const size = rule.aboveScale === undefined ? '' : ` above ${String(rule.aboveScale * 100)}% text`;
+  const said = {
+    used: `${String(count)} finding(s) suppressed`,
+    stale: 'matched nothing',
+    unreached: 'not reached: no full pass in this run measured at a size it applies to',
+  }[status];
+  return `${rule.check} ${rule.selector}${size}: ${said}\n      why: ${rule.why}`;
+}
+
+export class Page {
+  textScale = 1;
+  textSizeMethod = "Chrome's default, nothing sent";
   #socket;
   #nextId = 1;
   #replies = new DevtoolsReplies();
@@ -1121,6 +1615,25 @@ class Page {
     });
   }
 
+  /**
+   * Chrome's own text-size setting, which moves em media queries; an inline root size would not, so a
+   * refusal throws. Chrome starts at 16/13 and a reused profile keeps no size set this way (measured).
+   */
+  async setTextScale(scale) {
+    if (scale === this.textScale) return;
+    try {
+      await this.send('Page.setFontSizes', { fontSizes: fontSizesFor(scale) });
+    } catch (error) {
+      throw new Error(
+        `Chrome refused Page.setFontSizes for ${textSizeLabel(scale)} ` +
+          `(${error instanceof Error ? error.message : String(error)}), ` +
+          'so no layout at that size can be measured',
+      );
+    }
+    this.textScale = scale;
+    this.textSizeMethod = 'Page.setFontSizes';
+  }
+
   async goto(url) {
     await this.send('Page.navigate', { url });
     for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -1141,12 +1654,26 @@ class Page {
   }
 }
 
-async function withPage(headful, run) {
+/**
+ * The DevTools port and profile, clear of ax-tree-audit's port range unless overridden, so a second
+ * run beside the gate keeps off the profile one Chrome locks. An empty profile would be Chrome's own.
+ */
+export function chromeTarget(env, pid) {
+  const port = env.PRL_LAYOUT_CDP_PORT ?? String(9650 + (pid % 140));
+  if (!/^\d+$/u.test(port) || Number(port) < 1 || Number(port) > 65535) {
+    throw new Error(`PRL_LAYOUT_CDP_PORT takes a port from 1 to 65535, not "${port}"`);
+  }
+  const profile = env.PRL_LAYOUT_PROFILE ?? '/tmp/prl-text-layout-audit-profile';
+  if (profile.trim() === '') {
+    throw new Error('PRL_LAYOUT_PROFILE is set but empty: name a folder or unset it');
+  }
+  return { port: Number(port), profile };
+}
+
+async function withPage(headful, target, textScale, run) {
   const chrome = {
     headful,
-    // Clear of ax-tree-audit's debugging-port range.
-    port: 9650 + Math.floor(process.pid % 140),
-    profile: '/tmp/prl-text-layout-audit-profile',
+    ...target,
     flags: [
       '--hide-scrollbars',
       '--force-device-scale-factor=1',
@@ -1164,6 +1691,7 @@ async function withPage(headful, run) {
     await page.send('Emulation.setEmulatedMedia', {
       features: [{ name: 'prefers-reduced-motion', value: 'reduce' }],
     });
+    await page.setTextScale(textScale);
     try {
       await run(page);
     } finally {
@@ -1175,7 +1703,10 @@ async function withPage(headful, run) {
 const walkerSource = () =>
   WALKER.replace('EXEMPT_SELECTORS_ARGUMENT', JSON.stringify(EXEMPTIONS.map((rule) => rule.selector)))
     .replace('COLOR_ALPHA_ARGUMENT', () => String(colorAlpha))
-    .replace('FRAME_SIDES_ARGUMENT', () => String(frameSides));
+    .replace('FRAME_SIDES_ARGUMENT', () => String(frameSides))
+    .replace('FOLD_WORD_ARGUMENT', () => String(foldWord))
+    .replace('PIECES_SENT_ARGUMENT', String(PIECES_SENT))
+    .replace('PARSE_TEXT_INDENT_ARGUMENT', () => String(parseTextIndent));
 
 let dumpCount = 0;
 
@@ -1196,7 +1727,7 @@ async function measure(page, route, theme, width) {
   if (measurement.selectorError !== undefined) {
     throw new Error(`an EXEMPTIONS selector is not valid CSS — ${measurement.selectorError}`);
   }
-  return { measurement, context: { route, theme, width } };
+  return { measurement, context: { route, theme, width, scale: page.textScale } };
 }
 
 /**
@@ -1216,33 +1747,202 @@ async function injectControl(page, css) {
   await delay(250);
 }
 
+async function controlFindings(page, baseUrl, control, scale) {
+  await page.setTextScale(scale);
+  await page.goto(`${baseUrl}${control.route}`);
+  await injectControl(page, control.css);
+  const theme = control.theme ?? 'dark';
+  const { measurement, context } = await measure(page, control.route, theme, control.width);
+  const { findings } = findTextDefects(measurement, context);
+  return { findings: findings.filter((f) => f.check === control.expect), measurement };
+}
+
+/**
+ * A control is caught when its check fired. One with its own text size must also be silent at 100%,
+ * or it is catching an ordinary defect and no longer proves the larger text was measured.
+ */
+export function judgeControl(control, atScale, atDefaultSize) {
+  if (atScale.length === 0) return { caught: false, why: 'missed' };
+  if (control.scale !== undefined && !(atDefaultSize?.length === 0)) {
+    return { caught: false, why: 'fires at 100% text' };
+  }
+  return { caught: true, why: '' };
+}
+
 /** Each control returns whether it was caught and the measurement, so a pass prints its evidence. */
-async function runControls(page, baseUrl) {
+async function runControls(page, baseUrl, runScale) {
   const results = [];
   for (const control of CONTROLS) {
-    await page.goto(`${baseUrl}${control.route}`);
-    await injectControl(page, control.css);
-    const { measurement, context } = await measure(page, control.route, 'dark', control.width);
-    const { findings } = findTextDefects(measurement, context);
-    const caught = findings.filter((finding) => finding.check === control.expect);
-    results.push({
+    const scale = control.scale ?? runScale;
+    const { findings, measurement } = await controlFindings(page, baseUrl, control, scale);
+    const result = {
       id: control.id,
       what: control.what,
       expect: control.expect,
       route: control.route,
       width: control.width,
-      caught: caught.length > 0,
-      evidence: caught.slice(0, 2),
+      scale,
+      evidence: findings.slice(0, 2),
       textBoxes: measurement.counts.textBoxes,
-    });
+    };
+    let atOne;
+    if (control.scale !== undefined) {
+      atOne = (await controlFindings(page, baseUrl, control, 1)).findings;
+      result.atDefaultSize = atOne.length;
+    }
+    Object.assign(result, judgeControl(control, findings, atOne));
+    results.push(result);
   }
+  await page.setTextScale(runScale);
   return results;
+}
+
+const textSizeLabel = (scale) => `${String(scale * 100)}% text`;
+
+function newTally(pass) {
+  return {
+    scale: pass.scale,
+    narrowed: pass.narrowed,
+    measurements: 0,
+    textBoxes: 0,
+    textNodes: 0,
+    words: 0,
+    clippers: 0,
+    skipped: { ariaHidden: 0, visuallyHidden: 0, invisible: 0, offscreen: 0, inert: 0 },
+    detector: {
+      ownBox: 0,
+      scrollExcused: 0,
+      ellipsisExcused: 0,
+      clipTests: 0,
+      frameTests: 0,
+      pairs: 0,
+      breakTests: 0,
+    },
+    measurementsWanted: passBlocks(pass).reduce((sum, block) => sum + blockCells(block), 0),
+    routesLoaded: 0,
+    routesWanted: passBlocks(pass).reduce((sum, block) => sum + block.routes.length * block.themes.length, 0),
+    textSize: { scale: pass.scale, method: 'not applied' },
+  };
+}
+
+async function sweepPass(page, baseUrl, pass, tally, findings, failures, suppressed) {
+  const label = textSizeLabel(pass.scale);
+  await page.setTextScale(pass.scale);
+  tally.textSize.method = page.textSizeMethod;
+  const size = (block) =>
+    [
+      `${String(block.routes.length)} route(s)`,
+      `${String(block.themes.length)} theme(s)`,
+      `${String(block.widths.length)} width(s)`,
+    ].join(' x ');
+  const sizes = passBlocks(pass).map(size).join(' + ');
+  console.log(bold(`\nSweep at ${label} — ${sizes} = ${String(tally.measurementsWanted)} measurements`));
+  for (const block of passBlocks(pass)) {
+    if (block.why !== undefined) {
+      console.log(
+        `  then at ${block.widths.map((w) => `${String(w)}px`).join(', ')}, ${block.themes.join(', ')}`,
+      );
+      console.log(dim(`  on ${block.routes.join(', ')}`));
+      console.log(dim(`  because ${block.why}`));
+    }
+    await sweepBlock(page, baseUrl, label, block, tally, findings, failures, suppressed);
+  }
+}
+
+async function sweepBlock(page, baseUrl, label, block, tally, findings, failures, suppressed) {
+  for (const route of block.routes) {
+    const perRoute = [];
+    for (const theme of block.themes) {
+      try {
+        await page.goto(`${baseUrl}${route}`);
+      } catch (error) {
+        const why = error instanceof Error ? error.message : String(error);
+        failures.push(`${route} (${theme}, ${label}) did not load: ${why}`);
+        continue;
+      }
+      let loaded = true;
+      for (const width of block.widths) {
+        const { measurement, context } = await measure(page, route, theme, width);
+        const where = `${route} (${theme}, ${String(width)}px, ${label})`;
+        const heading = measurement.heading;
+        if (ERROR_BOUNDARY_HEADINGS.some((boundary) => heading.startsWith(boundary))) {
+          failures.push(`${where} rendered an error boundary ("${heading}") — nothing on it was measured`);
+          loaded = false;
+          break;
+        }
+        if (measurement.counts.textBoxes < MIN_TEXT_BOXES_PER_PAGE) {
+          failures.push(
+            `${where} produced only ${String(measurement.counts.textBoxes)} text element(s) — ` +
+              'that is not a page',
+          );
+          loaded = false;
+          break;
+        }
+        tally.measurements += 1;
+        tally.textBoxes += measurement.counts.textBoxes;
+        tally.textNodes += measurement.counts.textNodes;
+        tally.words += measurement.counts.words;
+        tally.clippers += measurement.counts.clippers;
+        for (const key of Object.keys(tally.skipped)) {
+          tally.skipped[key] += measurement.skipped[key] ?? 0;
+        }
+        const result = findTextDefects(measurement, context);
+        for (const key of Object.keys(tally.detector)) tally.detector[key] += result.counts[key];
+        for (const [index, count] of Object.entries(result.suppressed)) {
+          suppressed[index] = (suppressed[index] ?? 0) + count;
+        }
+        for (const finding of result.findings) findings.push(finding);
+        perRoute.push({ theme, width, findings: result.findings.length });
+      }
+      if (loaded) tally.routesLoaded += 1;
+    }
+    const hits = perRoute.reduce((sum, entry) => sum + entry.findings, 0);
+    const mark = hits === 0 ? green('ok  ') : red('FAIL');
+    console.log(
+      `  ${mark} ${route.padEnd(36)} ${dim(`${String(perRoute.length)} measurement(s), ${String(hits)} finding(s)`)}`,
+    );
+  }
+}
+
+function printControl(result, failures) {
+  const size = result.scale === 1 ? '' : `, ${textSizeLabel(result.scale)}`;
+  const head = `  ${result.caught ? green('CAUGHT ') : red('MISSED ')} ${result.expect.padEnd(9)} ${result.id}`;
+  console.log(`${head}  ${dim(result.what)}`);
+  console.log(
+    dim(
+      `      ${result.route} at ${String(result.width)}px${size}, ${String(result.textBoxes)} text elements`,
+    ),
+  );
+  if (result.atDefaultSize !== undefined) {
+    console.log(dim(`      at 100% text: ${String(result.atDefaultSize)} ${result.expect} finding(s)`));
+  }
+  if (result.caught) {
+    for (const line of result.evidence.slice(0, 1)) {
+      console.log(dim(`      ${formatFinding(line).split('\n').slice(1).join('\n      ').trim()}`));
+    }
+    return;
+  }
+  const where = `${result.route} at ${String(result.width)}px${size}`;
+  if (result.why === 'missed') {
+    failures.push(
+      `negative control "${result.id}" was NOT caught: ${result.what} produced no ` +
+        `${result.expect} finding on ${where}`,
+    );
+  } else {
+    failures.push(
+      `negative control "${result.id}" fires at 100% text too, so it no longer proves the larger ` +
+        `text is measured: ${String(result.atDefaultSize)} ${result.expect} finding(s) on ` +
+        `${result.route} at ${String(result.width)}px`,
+    );
+  }
 }
 
 async function main() {
   let options;
+  let target;
   try {
     options = parseArgs(process.argv.slice(2));
+    target = chromeTarget(process.env, process.pid);
   } catch (err) {
     console.error(red(`text-layout-audit — ${err.message}`));
     process.exit(1);
@@ -1258,22 +1958,12 @@ async function main() {
   console.log(yellow('  boxes are. A collapsed grid track does not overlap anything; its text does.'));
   console.log(dim(`  ${options.baseUrl}\n`));
 
-  const matrix = sweepMatrix(options);
+  const passes = sweepPasses(options);
+  const tallies = passes.map(newTally);
   const failures = [];
   const findings = [];
   const controlResults = [];
-  const tally = {
-    measurements: 0,
-    textBoxes: 0,
-    textNodes: 0,
-    words: 0,
-    clippers: 0,
-    skipped: { ariaHidden: 0, visuallyHidden: 0, invisible: 0, offscreen: 0, inert: 0 },
-    usedExemptions: new Set(),
-    detector: { ownBox: 0, scrollExcused: 0, ellipsisExcused: 0, clipTests: 0, frameTests: 0, pairs: 0 },
-    routesLoaded: 0,
-    routesWanted: 0,
-  };
+  const suppressed = {};
   const servers = [];
   let exitCode = 0;
 
@@ -1301,98 +1991,19 @@ async function main() {
       }
     }
 
-    await withPage(options.headful, async (page) => {
+    await withPage(options.headful, target, passes[0].scale, async (page) => {
       if (options.selfTest) {
         console.log(bold('\nNegative controls — a defect of each shape, put back into a real page'));
-        for (const result of await runControls(page, options.baseUrl)) {
+        for (const result of await runControls(page, options.baseUrl, passes[0].scale)) {
           controlResults.push(result);
-          const head = `  ${result.caught ? green('CAUGHT ') : red('MISSED ')} ${result.expect.padEnd(9)} ${result.id}`;
-          console.log(`${head}  ${dim(result.what)}`);
-          console.log(
-            dim(
-              `      ${result.route} at ${String(result.width)}px, ${String(result.textBoxes)} text elements`,
-            ),
-          );
-          if (result.caught) {
-            for (const line of result.evidence.slice(0, 1)) {
-              console.log(dim(`      ${formatFinding(line).split('\n').slice(1).join('\n      ').trim()}`));
-            }
-          } else {
-            failures.push(
-              `negative control "${result.id}" was NOT caught: ${result.what} produced no ` +
-                `${result.expect} finding on ${result.route} at ${String(result.width)}px`,
-            );
-          }
+          printControl(result, failures);
         }
       }
 
       if (options.controlsOnly) return;
 
-      console.log(
-        bold(
-          `\nSweep — ${String((options.routes ?? ROUTES).length)} route(s) x ` +
-            `${String((options.themes ?? THEMES).length)} theme(s) x ` +
-            `${String((options.widths ?? WIDTHS).length)} width(s) = ${String(matrix.length)} measurements`,
-        ),
-      );
-
-      const routes = options.routes ?? ROUTES;
-      const themes = options.themes ?? THEMES;
-      const widths = options.widths ?? WIDTHS;
-      tally.routesWanted = routes.length * themes.length;
-
-      for (const route of routes) {
-        const perRoute = [];
-        for (const theme of themes) {
-          try {
-            await page.goto(`${options.baseUrl}${route}`);
-          } catch (error) {
-            failures.push(
-              `${route} (${theme}) did not load: ${error instanceof Error ? error.message : String(error)}`,
-            );
-            continue;
-          }
-          let loaded = true;
-          for (const width of widths) {
-            const { measurement, context } = await measure(page, route, theme, width);
-            const heading = measurement.heading;
-            if (ERROR_BOUNDARY_HEADINGS.some((boundary) => heading.startsWith(boundary))) {
-              failures.push(
-                `${route} (${theme}, ${String(width)}px) rendered an error boundary ("${heading}") — ` +
-                  'nothing on it was measured',
-              );
-              loaded = false;
-              break;
-            }
-            if (measurement.counts.textBoxes < MIN_TEXT_BOXES_PER_PAGE) {
-              failures.push(
-                `${route} (${theme}, ${String(width)}px) produced only ` +
-                  `${String(measurement.counts.textBoxes)} text element(s) — that is not a page`,
-              );
-              loaded = false;
-              break;
-            }
-            tally.measurements += 1;
-            tally.textBoxes += measurement.counts.textBoxes;
-            tally.textNodes += measurement.counts.textNodes;
-            tally.words += measurement.counts.words;
-            tally.clippers += measurement.counts.clippers;
-            for (const key of Object.keys(tally.skipped)) {
-              tally.skipped[key] += measurement.skipped[key] ?? 0;
-            }
-            const result = findTextDefects(measurement, context);
-            for (const key of Object.keys(tally.detector)) tally.detector[key] += result.counts[key];
-            for (const index of result.usedExemptions) tally.usedExemptions.add(index);
-            for (const finding of result.findings) findings.push(finding);
-            perRoute.push({ theme, width, findings: result.findings.length });
-          }
-          if (loaded) tally.routesLoaded += 1;
-        }
-        const hits = perRoute.reduce((sum, entry) => sum + entry.findings, 0);
-        const mark = hits === 0 ? green('ok  ') : red('FAIL');
-        console.log(
-          `  ${mark} ${route.padEnd(36)} ${dim(`${String(perRoute.length)} measurement(s), ${String(hits)} finding(s)`)}`,
-        );
+      for (const [k, pass] of passes.entries()) {
+        await sweepPass(page, options.baseUrl, pass, tallies[k], findings, failures, suppressed);
       }
     });
   } catch (error) {
@@ -1403,8 +2014,10 @@ async function main() {
     for (const server of servers) server.stop();
   }
 
+  const exemptions = exemptionReport(options.controlsOnly ? [] : passes, suppressed);
   if (!options.controlsOnly) {
-    for (const problem of coverageFailures(tally)) failures.push(problem);
+    for (const problem of passCoverageFailures(passes, tallies)) failures.push(problem);
+    for (const problem of exemptionFailures(exemptions)) failures.push(problem);
   }
 
   const byCheck = new Map();
@@ -1413,32 +2026,51 @@ async function main() {
   }
 
   console.log(bold('\nSummary'));
-  console.log(`  measurements        ${String(tally.measurements)}`);
-  console.log(`  text elements       ${String(tally.textBoxes)}`);
-  console.log(`  text nodes / words  ${String(tally.textNodes)} / ${String(tally.words)}`);
-  console.log(`  clipping ancestors  ${String(tally.clippers)}`);
-  console.log(
-    `  detectors examined  ${String(tally.detector.ownBox)} block(s) against their own box, ` +
-      `${String(tally.detector.clipTests)} against a clipping ancestor, ` +
-      `${String(tally.detector.frameTests)} against a drawn frame, ` +
-      `${String(tally.detector.pairs)} pair(s) for a collision`,
-  );
-  console.log(
-    dim(
-      `  excused by construction: ${String(tally.detector.scrollExcused)} inside a block that ` +
-        `scrolls horizontally, ${String(tally.detector.ellipsisExcused)} truncated with an ellipsis`,
-    ),
-  );
-  console.log(
-    dim(
-      `  not painted, so not measured: ${String(tally.skipped.visuallyHidden)} visually hidden, ` +
-        `${String(tally.skipped.ariaHidden)} aria-hidden, ${String(tally.skipped.invisible)} invisible, ` +
-        `${String(tally.skipped.inert)} inert, ${String(tally.skipped.offscreen)} off-screen`,
-    ),
-  );
+  for (const [k, tally] of options.controlsOnly ? [] : tallies.entries()) {
+    console.log(
+      `  text size           ${textSizeLabel(tally.textSize.scale)} ` +
+        `(${String(fontSizesFor(tally.textSize.scale).standard)}px), ` +
+        `via ${tally.textSize.method}`,
+    );
+    console.log(`  measurements        ${String(tally.measurements)}`);
+    console.log(`  text elements       ${String(tally.textBoxes)}`);
+    console.log(`  text nodes / words  ${String(tally.textNodes)} / ${String(tally.words)}`);
+    console.log(`  clipping ancestors  ${String(tally.clippers)}`);
+    console.log(
+      `  detectors examined  ${String(tally.detector.ownBox)} block(s) against their own box, ` +
+        `${String(tally.detector.clipTests)} against a clipping ancestor, ` +
+        `${String(tally.detector.frameTests)} against a drawn frame, ` +
+        `${String(tally.detector.pairs)} pair(s) for a collision, ` +
+        `${String(tally.detector.breakTests)} word(s) on two lines or more for a tear`,
+    );
+    console.log(
+      dim(
+        `  excused by construction: ${String(tally.detector.scrollExcused)} inside a block that ` +
+          `scrolls horizontally, ${String(tally.detector.ellipsisExcused)} truncated with an ellipsis`,
+      ),
+    );
+    console.log(
+      dim(
+        `  not painted, so not measured: ${String(tally.skipped.visuallyHidden)} visually hidden, ` +
+          `${String(tally.skipped.invisible)} invisible, ` +
+          `${String(tally.skipped.inert)} inert, ${String(tally.skipped.offscreen)} off-screen`,
+      ),
+    );
+    console.log(dim(`  aria-hidden, judged only for a broken word: ${String(tally.skipped.ariaHidden)}`));
+    const whose = passes[k].floors === null ? 'scaled to the measurements asked for' : "the default run's";
+    const floors = coverageChecks(tally, passes[k].floors).map(
+      ({ key, seen, floor }) => `${key} ${String(seen)} ${seen >= floor ? '>=' : '<'} ${String(floor)}`,
+    );
+    console.log(`  coverage floors     ${whose}: ${floors.join(', ')}`);
+  }
   console.log(
     `  negative controls   ${String(controlResults.filter((r) => r.caught).length)}/${String(controlResults.length)} caught`,
   );
+  console.log(`  exemptions          ${String(exemptions.length)}`);
+  for (const entry of exemptions) {
+    const line = `    - ${formatExemption(entry)}`;
+    console.log(entry.status === 'used' ? yellow(line) : entry.status === 'stale' ? red(line) : dim(line));
+  }
   console.log(`  findings            ${String(findings.length)}`);
   for (const [check, count] of [...byCheck].sort()) {
     console.log(`    ${check.padEnd(18)}${String(count)}`);
@@ -1458,7 +2090,7 @@ async function main() {
       if (group.length > 1) {
         const where = group
           .slice(1)
-          .map((f) => `${f.route} ${f.theme} ${String(f.width)}px`)
+          .map((f) => `${f.route} ${f.theme} ${String(f.width)}px ${textSizeLabel(f.scale ?? 1)}`)
           .slice(0, 6);
         console.log(dim(`      and ${String(group.length - 1)} more: ${where.join('; ')}`));
       }
@@ -1483,13 +2115,16 @@ async function main() {
             'not where the boxes are.',
           baseUrl: options.baseUrl,
           generatedAt: new Date().toISOString(),
+          // The first pass, in the shape a single-size run has always written.
           matrix: {
-            routes: options.routes ?? ROUTES,
-            themes: options.themes ?? THEMES,
-            widths: options.widths ?? WIDTHS,
+            routes: passes[0].routes,
+            themes: passes[0].themes,
+            widths: passes[0].widths,
+            textScale: passes[0].scale,
           },
-          tally: { ...tally, usedExemptions: [...tally.usedExemptions] },
-          exemptions: EXEMPTIONS,
+          tally: tallies[0],
+          passes: passes.map((pass, k) => ({ ...pass, tally: tallies[k] })),
+          exemptions: exemptions.map(({ rule, count, status }) => ({ ...rule, suppressed: count, status })),
           controls: controlResults,
           findings,
           failures,
@@ -1504,12 +2139,15 @@ async function main() {
 
   if (findings.length > 0 || failures.length > 0) exitCode = 1;
 
+  const measured = tallies.reduce((sum, t) => sum + t.measurements, 0);
+  const elements = tallies.reduce((sum, t) => sum + t.textBoxes, 0);
+  const sizes = passes.map((pass) => textSizeLabel(pass.scale)).join(' and ');
   if (exitCode === 0) {
     console.log(
       green(
         bold(
-          `\nPASS — ${String(tally.textBoxes)} painted text elements over ${String(tally.measurements)} ` +
-            'measurements, nothing collided, escaped, was clipped, spilled or was squeezed,\n' +
+          `\nPASS — ${String(elements)} painted text elements over ${String(measured)} measurements at ` +
+            `${sizes}, nothing collided, escaped, was clipped, spilled, was squeezed or broken,\n` +
             `and all ${String(controlResults.length)} negative controls were caught.`,
         ),
       ),
@@ -1519,15 +2157,15 @@ async function main() {
   }
   console.log(
     dim(
-      '\n  Caveat: this measures the RESTING page at five widths in two themes. It has no opinion\n' +
-        '  about whether the layout is good, and it sees no hover, focus or open state, and no\n' +
-        '  animation mid-flight.\n',
+      '\n  Caveat: this measures the RESTING page at the widths, themes and text sizes above. It has\n' +
+        '  no opinion about whether the layout is good, and it sees no hover, focus or open state,\n' +
+        '  and no animation mid-flight.\n',
     ),
   );
 
   process.exit(exitCode);
 }
 
-export { CONTROLS, EXEMPTIONS, ROUTES, THEMES, WIDTHS };
+export { CONTROLS, EXEMPTIONS, LARGE_TEXT, LARGE_TEXT_PHONE_ROUTES, ROUTES, THEMES, WIDTHS };
 
 if (import.meta.main) await main();

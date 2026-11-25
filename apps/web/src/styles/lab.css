@@ -233,8 +233,8 @@
 }
 
 /*
- * A chip is nowrap, so at 200% text "Fold equity and bluffing" set the card's width and the card
- * ran past its column at 320 and at 600. The label has spaces, so it may wrap inside the chip.
+ * At 200% text "Fold equity and bluffing" set the card's width, and the card ran past its column at
+ * 320 and at 600. The label wraps between words inside the chip, and a word wider than it may break.
  */
 .prl-lab-card .prl-chip {
   max-inline-size: 100%;
@@ -432,7 +432,7 @@
  * Difficulty and Street share a row from 380px up. The shortcuts' top margin only spaces them from the
  * bundled-copy note: straight after the page head, page.css's 48px head gap wins, as on every page.
  */
-@media (width < 600px) {
+@media (width < 37.5em) {
   .prl-lab-shortcuts {
     margin-block-start: var(--prl-space-4);
     gap: var(--prl-space-1) var(--prl-space-5);
@@ -472,7 +472,7 @@
  * "Every street (36)" has 13px to spare in a half column at 380, and about 3px at 360, so below
  * 380 the three selects stack. The face stays the body size.
  */
-@media (width < 380px) {
+@media (width < 23.75em) {
   .prl-lab-filters__row {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -482,7 +482,7 @@
   }
 }
 
-@media (min-width: 600px) {
+@media (min-width: 37.5em) {
   .prl-lab-filters__row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -493,7 +493,7 @@
   }
 }
 
-@media (min-width: 1280px) {
+@media (min-width: 80em) {
   .prl-lab-filters__row {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }

@@ -8,6 +8,7 @@ import { Callout } from '@prl/ui';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import type { ReactElement } from 'react';
+import { FallbackText } from '@/components/FallbackText.tsx';
 import { GlossaryBrowser } from '@/components/GlossaryBrowser.tsx';
 import { LEARN_PATH, loadGlossary } from '@/lib/learn-data.ts';
 
@@ -45,7 +46,7 @@ export default async function GlossaryPage(): Promise<ReactElement> {
 
       {glossary.source === 'fixture' && glossary.fallbackReason !== null ? (
         <Callout tone="warning" title="These definitions are the bundled copy">
-          {glossary.fallbackReason}
+          <FallbackText reason={glossary.fallbackReason} />
         </Callout>
       ) : null}
 

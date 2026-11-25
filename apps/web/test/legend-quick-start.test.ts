@@ -118,7 +118,7 @@ describe('the closed select is wide enough for every archetype name', () => {
   it('on a phone the form gives up its panel padding, so the select is the page’s width', () => {
     assert.match(
       css,
-      /@media \(width < 600px\) \{\s*\.prl-legend-quick \{\s*padding: var\(--prl-space-0\);\s*border: 0;/u,
+      /@media \(width < 37\.5em\) \{\s*\.prl-legend-quick \{\s*padding: var\(--prl-space-0\);\s*border: 0;/u,
     );
   });
 });

@@ -23,6 +23,7 @@ import { Fragment, type ReactElement } from 'react';
 import { ActionDistribution } from '@/components/ActionDistribution.tsx';
 import { CompareChoiceLimit } from '@/components/CompareChoiceLimit.tsx';
 import { DifficultyPicker } from '@/components/DifficultyPicker.tsx';
+import { FallbackText } from '@/components/FallbackText.tsx';
 import { LegendSigil } from '@/components/LegendSigil.tsx';
 import { ProfileDisclaimers } from '@/components/ProfileDisclaimers.tsx';
 import { SuitMark } from '@/components/SuitMark.tsx';
@@ -142,7 +143,9 @@ export default async function ComparePage({
 
       {comparison.fallbackReason === null ? null : (
         <Callout tone="warning" title="This comparison is a bundled sample spot">
-          <p>{comparison.fallbackReason}</p>
+          <p>
+            <FallbackText reason={comparison.fallbackReason} />
+          </p>
         </Callout>
       )}
 

@@ -32,7 +32,7 @@
  * the safe side, because a bar taller than its padding hides the target. `test:keyboard` fails a
  * control landing under the bar at 360x640.
  */
-@media (360px <= width < 412px), (min-width: 860px) {
+@media (22.5em <= width < 25.75em), (min-width: 53.75em) {
   :root {
     --prl-pillbar-h: calc(var(--prl-pill-h) + 2 * var(--prl-pillbar-pad-block));
   }
@@ -259,7 +259,7 @@
  * Below 860px the note hangs from the header, not the pill. Anchored to the pill it starts at x=-40
  * at 360. From the header it spans x=16 to 344.
  */
-@media (width < 860px) {
+@media (width < 53.75em) {
   .prl-shell__units {
     position: static;
   }
@@ -351,7 +351,7 @@
  * the bar wrapped to 129px at 360. 412, not 382, keeps a six-figure balance on one row (about 9px a
  * digit).
  */
-@media (width < 412px) {
+@media (width < 25.75em) {
   .prl-nav-trigger {
     justify-content: center;
     inline-size: var(--prl-pill-h);
@@ -476,9 +476,9 @@
   }
 }
 
-/* Responsive. 860 is mirrored by `NAV_SHEET_QUERY` in `src/lib/nav.ts`. */
+/* Responsive. 53.75em (860px) is mirrored by `NAV_SHEET_QUERY` in `src/lib/nav.ts`. */
 
-@media (min-width: 600px) {
+@media (min-width: 37.5em) {
   /** The full name, with the ` Lab` `globals.css` drops below 860px, fits below 860 and above 1280. */
   .prl-pillbar__brand .prl-shell__brand-name,
   .prl-pillbar__brand .prl-shell__brand-tail {
@@ -486,7 +486,7 @@
   }
 }
 
-@media (min-width: 860px) {
+@media (min-width: 53.75em) {
   /** `auto 1fr auto`, because equal side columns wrapped the bar to two rows at 1280px. */
   .prl-shell__header-inner {
     grid-template-columns: auto 1fr auto;
@@ -509,7 +509,7 @@
  * Tighter between 860 and 1280, where the bar also holds "How to use" and the theme switch. With these
  * steps a 999,999 balance keeps one row at 860; without them the bar wrapped to 129px at 860 and 900.
  */
-@media (860px <= width < 1280px) {
+@media (53.75em <= width < 80em) {
   :root {
     --prl-pill-gap: var(--prl-space-4);
   }
@@ -524,7 +524,7 @@
   }
 }
 
-@media (min-width: 1280px) {
+@media (min-width: 80em) {
   /* Measured: wordmark 323 + navigation 530 + units 190 + gaps 24 = 1067 in a 1200px container. */
   .prl-pillbar__brand .prl-shell__brand-name {
     display: inline;

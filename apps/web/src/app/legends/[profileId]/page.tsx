@@ -23,6 +23,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { Fragment, type ReactElement } from 'react';
 import { NotFoundBody } from '@/app/not-found.tsx';
+import { FallbackText } from '@/components/FallbackText.tsx';
 import { LegendSigil } from '@/components/LegendSigil.tsx';
 import { ProfileDisclaimers } from '@/components/ProfileDisclaimers.tsx';
 import { ScrollRegion } from '@/components/ScrollRegion.tsx';
@@ -303,7 +304,9 @@ export default async function ProfilePage({
 
       {profiles.fallbackReason === null ? null : (
         <Callout tone="warning" title="This profile is bundled sample data">
-          <p>{profiles.fallbackReason}</p>
+          <p>
+            <FallbackText reason={profiles.fallbackReason} />
+          </p>
         </Callout>
       )}
 
@@ -387,7 +390,9 @@ export default async function ProfilePage({
       <section className="prl-legend-section">
         <h2>What this profile declares, against what it actually does</h2>
         {stats.stats === null ? (
-          <p className="prl-prose">{stats.unavailableReason}</p>
+          <p className="prl-prose">
+            <FallbackText reason={stats.unavailableReason} />
+          </p>
         ) : (
           <>
             <ObservedTable
@@ -443,7 +448,11 @@ export default async function ProfilePage({
             note={`Measured over ${pluralise(learn.data.observedBasis.handsObserved, 'hand')} of your own play against this style, not declared by the profile.`}
           />
         )}
-        {learn.fallbackReason === null ? null : <p className="prl-note">{learn.fallbackReason}</p>}
+        {learn.fallbackReason === null ? null : (
+          <p className="prl-note">
+            <FallbackText reason={learn.fallbackReason} />
+          </p>
+        )}
       </section>
 
       <section className="prl-legend-section">

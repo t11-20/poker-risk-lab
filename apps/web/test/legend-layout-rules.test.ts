@@ -71,14 +71,14 @@ describe('legends layout rules', () => {
   /* At 360px the picker was 849px; `legends.css` records the alternatives measured and turned down. */
   describe('on a phone only the ticked difficulty shows its description', () => {
     const picker = readFileSync(join(SRC, 'components', 'DifficultyPicker.tsx'), 'utf8');
-    const PHONE = /@media \(width < 600px\) \{([\s\S]*?)\n\}/gu;
+    const PHONE = /@media \(width < 37\.5em\) \{([\s\S]*?)\n\}/gu;
     const phoneBlocks = [...css.matchAll(PHONE)].map((match) => match[1] ?? '');
     const UNTICKED =
       '.prl-legend-difficulty__option:not(:has(.prl-legend-difficulty__control:checked))\n' +
       '    > .prl-legend-difficulty__description {';
 
     function untickedRule(): string {
-      assert.ok(phoneBlocks.length > 0, 'no `@media (width < 600px)` block in legends.css');
+      assert.ok(phoneBlocks.length > 0, 'no `@media (width < 37.5em)` block in legends.css');
       for (const block of phoneBlocks) {
         const at = block.indexOf(UNTICKED);
         if (at >= 0) return block.slice(at + UNTICKED.length, block.indexOf('}', at));
@@ -102,7 +102,7 @@ describe('legends layout rules', () => {
     });
 
     it('the Coach chip is never hidden: every option shows what it does to the Coach', () => {
-      assert.ok(phoneBlocks.length > 0, 'no `@media (width < 600px)` block in legends.css');
+      assert.ok(phoneBlocks.length > 0, 'no `@media (width < 37.5em)` block in legends.css');
       for (const block of phoneBlocks) {
         const hides = /([^{}]*)\{[^}]*(?:clip-path|display: none)[^}]*\}/gu;
         for (const [, selector] of block.matchAll(hides)) {
@@ -123,7 +123,7 @@ describe('legends layout rules', () => {
   it('the card grid takes two columns at tablet width', () => {
     assert.match(
       css,
-      /@media \(720px <= width < 900px\) \{\s*\.prl-legend-grid \{\s*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/u,
+      /@media \(45em <= width < 56\.25em\) \{\s*\.prl-legend-grid \{\s*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/u,
     );
   });
 
@@ -143,7 +143,36 @@ describe('legends layout rules', () => {
   it('two-column cards put the name under the sigil, so a name has the card’s width', () => {
     assert.match(
       css,
-      /@media \(720px <= width < 900px\) \{\s*\.prl-legend-grid \.prl-legend-identity \{\s*flex-direction: column;/u,
+      /@media \(45em <= width < 56\.25em\) \{\s*\.prl-legend-grid \.prl-legend-identity \{\s*flex-direction: column;/u,
+    );
+  });
+
+  /* At 360px with 200% text the names beside the sigil had 96px in a card and 130px on a profile. */
+  it('below 20em every identity puts the sigil above the names, in their reading order', () => {
+    assert.match(
+      css,
+      /@media \(width < 20em\) \{\s*\.prl-legend-identity \{\s*flex-direction: column;\s*\}/u,
+    );
+    // The archetype heading before the attributed name is the guardrail, so nothing may reorder it.
+    assert.doesNotMatch(css, /column-reverse|row-reverse|(?:^|[\s;{])order:/u);
+  });
+
+  it('below 20em a contrast figure sits under its trait instead of beside it', () => {
+    assert.match(
+      css,
+      /@media \(width < 20em\) \{\s*\.prl-legend-contrast__list \{\s*grid-template-columns: minmax\(0, 1fr\);/u,
+    );
+  });
+
+  it('below 15rem the difficulty radio takes its own row, so "Educational" is not cut', () => {
+    assert.match(
+      css,
+      /@container prl-legend-difficulty \(width < 15rem\) \{\s*\.prl-legend-difficulty__option \{\s*grid-template-columns: minmax\(0, 1fr\);/u,
+    );
+    // One track stretches the radio, which draws its dot in the middle of the option.
+    assert.match(
+      css,
+      /@container prl-legend-difficulty \(width < 15rem\) \{[^@]*\.prl-legend-difficulty__control \{\s*justify-self: start;/u,
     );
   });
 

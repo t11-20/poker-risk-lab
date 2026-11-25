@@ -62,7 +62,7 @@ function topLevelRule(source: string, selector: string): string {
 }
 
 describe('lab filters on a phone', () => {
-  const phone = mediaBlock('width < 600px');
+  const phone = mediaBlock('width < 37.5em');
 
   it('keeps topic full width and pairs the two shorter selects (REGRESSION)', () => {
     assert.match(
@@ -76,19 +76,19 @@ describe('lab filters on a phone', () => {
 
   it('does not apply that span from 600px up (REGRESSION)', () => {
     assert.match(
-      rule(mediaBlock('min-width: 600px'), '.prl-lab-filters__row'),
+      rule(mediaBlock('min-width: 37.5em'), '.prl-lab-filters__row'),
       /grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/u,
     );
     assert.match(
-      rule(mediaBlock('min-width: 1280px'), '.prl-lab-filters__row'),
+      rule(mediaBlock('min-width: 80em'), '.prl-lab-filters__row'),
       /grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/u,
     );
-    assert.doesNotMatch(mediaBlock('min-width: 600px'), /grid-column:\s*1\s*\/\s*-1/u);
-    assert.doesNotMatch(mediaBlock('min-width: 1280px'), /grid-column:\s*1\s*\/\s*-1/u);
+    assert.doesNotMatch(mediaBlock('min-width: 37.5em'), /grid-column:\s*1\s*\/\s*-1/u);
+    assert.doesNotMatch(mediaBlock('min-width: 80em'), /grid-column:\s*1\s*\/\s*-1/u);
   });
 
   it('stacks the selects below 380px, where the half column clips (REGRESSION)', () => {
-    const narrow = mediaBlock('width < 380px');
+    const narrow = mediaBlock('width < 23.75em');
     assert.match(rule(narrow, '.prl-lab-filters__row'), /grid-template-columns:\s*minmax\(0,\s*1fr\)/u);
     assert.match(rule(narrow, '.prl-lab-filters__field:first-child'), /grid-column:\s*auto/u);
     // The face stays the body size: below 380 the fields stack instead of shrinking the text.
@@ -103,7 +103,7 @@ describe('lab filters on a phone', () => {
     ).replace(/\/\*[\s\S]*?\*\//gu, '');
     assert.match(rule(grid, '.prl-grid'), /grid-template-columns:\s*minmax\(0,\s*1fr\)/u);
     assert.doesNotMatch(rule(grid, '.prl-grid'), /repeat\(12/u, 'twelve tracks below 600px');
-    const wide = grid.indexOf('@media (min-width: 600px) {\n  .prl-grid {');
+    const wide = grid.indexOf('@media (min-width: 37.5em) {\n  .prl-grid {');
     assert.ok(wide >= 0, 'no 600px query gives .prl-grid its twelve tracks back');
     assert.match(
       rule(grid.slice(wide), '.prl-grid'),
@@ -119,7 +119,7 @@ describe('lab filters on a phone', () => {
   });
 
   it('sits after every base rule it overrides, because a media query adds no specificity', () => {
-    const media = code.indexOf('@media (width < 600px)');
+    const media = code.indexOf('@media (width < 37.5em)');
     const inside = topLevelRules(phone).map((one) => one.selector);
     assert.ok(inside.length >= 6, `read ${inside.length} phone rules`);
     const later = topLevelRules(code).filter((one) => inside.includes(one.selector) && one.at > media);
@@ -129,7 +129,10 @@ describe('lab filters on a phone', () => {
       'a later base rule of equal specificity wins over the phone block',
     );
     // The stack below 380 overrides the pairing, so it has to come after it.
-    assert.ok(code.indexOf('@media (width < 380px)') > media, 'the 380px block sits before the 600px block');
+    assert.ok(
+      code.indexOf('@media (width < 23.75em)') > media,
+      'the 380px block sits before the 600px block',
+    );
   });
 
   it('leaves the form a GET form whose count line is still the jump target', () => {

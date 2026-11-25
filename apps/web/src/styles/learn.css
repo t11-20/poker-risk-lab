@@ -82,7 +82,7 @@
    when stacked. `row-gap: 0` with margins, because `grid-row: 1 / span 8` creates implicit rows and a
    `row-gap` pays for each of them. The 1000px arithmetic is in `page.css`. */
 
-@media (min-width: 1000px) {
+@media (min-width: 62.5em) {
   /** Capped at two measures plus the gutter, the widest real arrangement on this page. */
   .prl-learn-page {
     width: min(var(--prl-container), calc(2 * var(--prl-measure) + var(--prl-space-11)));
@@ -168,8 +168,8 @@
 }
 
 /**
- * A lesson card is a bordered panel, so seventeen read as objects. The number keeps its own column at
- * every width. Hover is a surface step and a stronger edge, never a lift.
+ * A lesson card is a bordered panel, so seventeen read as objects. The number has its own column, above
+ * the text below 20em. Hover is a surface step and a stronger edge, never a lift.
  */
 .prl-learn-entry {
   /* The containing block for the title link's stretched `::after`. */
@@ -463,6 +463,8 @@
  */
 .prl-learn-lesson__blocks {
   display: grid;
+  /* An implicit track is floored at its widest block, so a display-size heading widened the sheet. */
+  grid-template-columns: minmax(0, 1fr);
   align-content: start;
   gap: var(--prl-space-7);
   min-width: 0;
@@ -992,8 +994,8 @@
   font-variant-numeric: var(--prl-numeric);
 }
 
-/* A `<fieldset>` defaults to `min-inline-size: min-content`, which includes the nowrap chip once
-   answered. At 360 the options overflowed by ~15px. */
+/* A `<fieldset>` defaults to `min-inline-size: min-content`, which included the answered chip's whole
+   line before chips wrapped. At 360 the options overflowed by ~15px. */
 .prl-learn-quiz__options {
   display: grid;
   gap: var(--prl-space-5);
@@ -1350,13 +1352,40 @@
  * A phone gets a 16px sheet, not 32px. At 360 the prose went from 262px to 294px wide. The width
  * arithmetic above 1280 and the gutter index at 900 never see this value.
  */
-@media (width < 600px) {
+@media (width < 37.5em) {
   .prl-learn-lesson {
     --prl-learn-sheet-x: var(--prl-space-6);
   }
 }
 
-@media (min-width: 600px) {
+/**
+ * Below 20em, 320px at the default size and 640px at 200% text. At 360/200% the number's column left a
+ * card's text 141-172px, the radio left a quiz answer 110px, and one long word sat past its heading.
+ */
+@media (width < 20em) {
+  .prl-learn-entry,
+  .prl-learn-glossary__related {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .prl-learn-quiz__option .prl-choice {
+    flex-direction: column;
+  }
+
+  /* The radio is above the answer now, so the note starts where the answer does. */
+  .prl-learn-quiz__option-feedback {
+    padding-inline-start: var(--prl-space-6);
+  }
+
+  /* Not a quiz question, whose 240px column broke nearly every line. Chrome never hyphenates a capital,
+     so the lesson h1 "Tournaments:" is left too. */
+  .prl-learn-lesson__heading,
+  .prl-learn-glossary__term {
+    hyphens: auto;
+  }
+}
+
+@media (min-width: 37.5em) {
   .prl-learn-entry {
     padding: var(--prl-space-7);
   }
@@ -1366,7 +1395,7 @@
   }
 }
 
-@media (min-width: 900px) {
+@media (min-width: 56.25em) {
   /* 48px, so the hanging index clears the sheet's border. At 32px index and gap filled it exactly. */
   .prl-learn-lesson {
     --prl-learn-sheet-x: var(--prl-space-11);
@@ -1388,7 +1417,7 @@
   }
 }
 
-@media (min-width: 1280px) {
+@media (min-width: 80em) {
   /**
    * Lesson cards and glossary entries go to two columns, because both are lookup lists. Row-major flow
    * keeps 01 beside 02.

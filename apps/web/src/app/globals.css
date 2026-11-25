@@ -619,9 +619,9 @@
   color: var(--prl-accent-text);
 }
 
-/* Responsive. 860px is the shell's breakpoint, mirrored by `NAV_SHEET_QUERY`. */
+/* Responsive. 53.75em (860px) is the shell's breakpoint, mirrored by `NAV_SHEET_QUERY`. */
 
-@media (min-width: 860px) {
+@media (min-width: 53.75em) {
   .prl-nav {
     display: block;
   }
@@ -640,7 +640,7 @@
   }
 }
 
-@media (min-width: 600px) {
+@media (min-width: 37.5em) {
   /* Two by two before four across, so each detail line keeps the ~30 characters it needs. */
   .prl-spine {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -665,14 +665,14 @@
 
 /* From 1000px, the app's wide breakpoint, the four boxes take one row: the two lists at their own
    width, the prose between them at ~36 characters or more. */
-@media (min-width: 1000px) {
+@media (min-width: 62.5em) {
   .prl-footer__inner {
     gap: var(--prl-space-11);
     grid-template-columns: max-content repeat(2, minmax(0, 1fr)) max-content;
   }
 }
 
-@media (min-width: 900px) {
+@media (min-width: 56.25em) {
   .prl-spine {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
@@ -706,4 +706,12 @@
   .prl-theme__input:checked:focus-visible + .prl-theme__word {
     outline-color: CanvasText;
   }
+}
+
+/**
+ * A fallback notice's transport message, a token with a URL in it: "http://localhost:3001:" is wider than a
+ * phone's column at 200% text, so it may break anywhere. The sentence beside it keeps its word breaks.
+ */
+.prl-fallback-cause {
+  overflow-wrap: anywhere;
 }

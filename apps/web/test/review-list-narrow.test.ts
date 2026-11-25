@@ -36,7 +36,7 @@ function rule(source: string, selector: string): string {
 }
 
 describe('/review below 1024px', () => {
-  const narrow = mediaBlock('width < 1024px');
+  const narrow = mediaBlock('width < 64em');
 
   it('draws each row as a card instead of a table wider than the screen (REGRESSION)', () => {
     assert.match(rule(narrow, '.prl-review-table tbody tr'), /display:\s*grid/u);
@@ -73,7 +73,7 @@ describe('/review at every width', () => {
       /<select className="prl-select" id=\{SORT_SELECT_ID\} name="sort" defaultValue=\{sort\}>/u,
     );
     assert.match(page, /\{SORTS\.map\(\(candidate\) => \(\s*<option key=\{candidate\} value=\{candidate\}>/u);
-    const phone = mediaBlock('width < 600px');
+    const phone = mediaBlock('width < 37.5em');
     assert.match(rule(phone, '.prl-review-sorts__form'), /display:\s*flex/u);
     assert.match(rule(phone, '.prl-review-sorts__heading,\n  .prl-review-sorts__list'), /display:\s*none/u);
     assert.match(rule(code, '.prl-review-sorts__form'), /display:\s*none/u);
@@ -82,6 +82,70 @@ describe('/review at every width', () => {
   it('does not let the select squeeze the submit button below its word (REGRESSION)', () => {
     // test:layout at 360px measured the "Sort" column at 16.02px against 29.34px needed.
     assert.match(rule(code, '.prl-review-sorts__form .prl-btn'), /flex:\s*none/u);
+  });
+
+  it('wraps the sort form instead of running it off the screen at large text (REGRESSION)', () => {
+    // 360px with 200% text: the label, select and button needed 398px of 296px.
+    assert.match(rule(code, '.prl-review-sorts__form'), /flex-wrap:\s*wrap/u);
+    // The select's width is 100%, so an `auto` basis would put it on a row of its own at every size.
+    assert.match(rule(code, '.prl-review-sorts__form .prl-select'), /flex:\s*1 1 var\(--prl-space-\d+\)/u);
+  });
+});
+
+/** Every `@media (query)` block in review.css, joined, since one query can head several blocks. */
+function mediaBlocks(query: string): string {
+  const blocks: string[] = [];
+  for (let at = code.indexOf(`@media (${query})`); at >= 0; at = code.indexOf(`@media (${query})`, at + 1)) {
+    const open = code.indexOf('{', at);
+    let depth = 0;
+    for (let index = open; index < code.length; index += 1) {
+      if (code[index] === '{') depth += 1;
+      if (code[index] === '}') depth -= 1;
+      if (depth === 0) {
+        blocks.push(code.slice(open + 1, index));
+        break;
+      }
+    }
+  }
+  assert.ok(blocks.length > 0, `review.css has no @media (${query}) block`);
+  return blocks.join('\n');
+}
+
+/* At 360px with 200% text: the row card's `auto` column left "Result" and the date 0px, the verifier's
+   terms left its values 0px, and the hand's summary needed 376px of 322px. */
+describe('/review at large text on a phone', () => {
+  const narrow = (): string => mediaBlocks('width < 18em');
+
+  it('gives every area of a row card its own row (REGRESSION)', () => {
+    const row = rule(narrow(), '.prl-review-table tbody tr');
+    assert.match(row, /grid-template-areas:\s*"net" "ending" "board" "when" "pot" "hand";/u);
+    assert.match(row, /grid-template-columns:\s*minmax\(0, 1fr\);/u);
+  });
+
+  it('lets the pot and the replay link wrap inside the stacked card (REGRESSION)', () => {
+    assert.match(
+      rule(narrow(), '.prl-review-table tbody td.prl-review-table__pot'),
+      /white-space:\s*normal/u,
+    );
+    assert.match(rule(narrow(), 'a.prl-review-table__link'), /white-space:\s*normal/u);
+  });
+
+  it('wraps the board inside the stacked card, where five cards need 352px of 180px (REGRESSION)', () => {
+    assert.match(rule(narrow(), '.prl-review-board'), /flex-wrap:\s*wrap/u);
+  });
+
+  it('puts each verifier value under its term (REGRESSION)', () => {
+    assert.match(rule(narrow(), '.prl-verifier__facts'), /grid-template-columns:\s*minmax\(0, 1fr\);/u);
+  });
+
+  it('puts one summary figure on each row, without the inline padding (REGRESSION)', () => {
+    const phone = mediaBlocks('width < 20em');
+    assert.match(rule(phone, '.prl-review-summary'), /flex-direction:\s*column/u);
+    assert.match(rule(phone, '.prl-review-summary > li'), /padding-inline:\s*var\(--prl-space-0\)/u);
+  });
+
+  it('wraps a timeline marker rather than tearing the name in it (REGRESSION)', () => {
+    assert.match(rule(code, '.prl-timeline__marker'), /flex-wrap:\s*wrap/u);
   });
 });
 

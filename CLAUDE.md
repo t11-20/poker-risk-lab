@@ -61,10 +61,20 @@ construction**: `package.json`, `.github/workflows/ci.yml`, `.github/workflows/r
 
 `pnpm run test:layout` is the newest and the one whose absence cost the most. It measures
 **`Range.getClientRects()` over each element's own text nodes** — where the glyphs landed — on
-every route, in both themes, at 360/768/1024/1440/1920, and reports six shapes of one failure:
+every route, in both themes, at 360/768/1024/1440/1920, and reports eight shapes of one failure:
 glyphs of two independent in-flow elements overlapping, glyphs painted outside their own box,
 glyphs cut off by a non-scrolling ancestor, glyphs painted across the border or fill of the nearest
-box that draws one, a block narrower than its own longest word, and a page that scrolls sideways.
+box that draws one, a block narrower than its own longest word, a word torn one or two characters
+a line (each piece fits its column, so the previous shape cannot see it), a page that scrolls
+sideways, and a root font size that ignores the reader's text size (`--text-scale`). Unless
+`--widths`, `--themes` or `--text-scale` names another matrix, it then measures every route again at
+200% text, light, at 768, 1024 and 1440: with em breakpoints those are the 384, 512 and 720px
+layouts with doubled text. Those windows still hold content up to 768px wide, so the same pass also
+measures `LARGE_TEXT_PHONE_ROUTES` at 360px, the routes clean there today. The rest still fail at 360
+and 200% on held owner work. Its one exemption, the Legends radar labels clipped above 100% (their
+label gutter does not grow with the text), is printed every run. The run with none of `--routes`,
+`--widths`, `--themes` or `--text-scale` is held to coverage floors of its own, which the summary
+prints. A narrowed run is held to floors scaled to its size, never zero.
 
 It exists because `.prl-play .prl-coach__section .prl-stat__pair` shipped as
 `grid-template-columns: minmax(0, 1fr) auto`. A bare `auto` track is floored at max-content, so a

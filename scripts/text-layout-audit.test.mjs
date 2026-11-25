@@ -6,27 +6,47 @@
  */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import {
   CONTROLS,
+  chromeTarget,
   clippedRects,
   colorAlpha,
+  coverageChecks,
   coverageFailures,
+  coverageFloor,
   drawnEdges,
   EXEMPTIONS,
   escapeAmount,
+  exemptionFailures,
+  exemptionReport,
   findTextDefects,
+  foldWord,
+  fontSizesFor,
+  formatExemption,
   formatFinding,
   frameSides,
   intersection,
   isRealOverlap,
+  judgeControl,
+  LARGE_TEXT,
+  LARGE_TEXT_PHONE_ROUTES,
+  letterByLetter,
   nearestFrame,
+  Page,
   parseArgs,
+  parseTextIndent,
+  passCoverageFailures,
   ROUTES,
   sweepMatrix,
+  sweepPasses,
   THEMES,
   WIDTHS,
 } from './text-layout-audit.mjs';
+
+/** Every finding shape the audit reports. */
+const CHECKS = ['collision', 'escapes', 'clipped', 'spills', 'squeezed', 'broken', 'page', 'unscaled'];
 
 let nextIndex = 0;
 
@@ -50,6 +70,12 @@ function box(overrides = {}) {
     blockScrolls: overrides.blockScrolls ?? false,
     ellipsis: overrides.ellipsis ?? false,
     exempt: overrides.exempt ?? [],
+    // What the walker sends only when it applies: preserved-space glyphs, a text-indent, broken words.
+    ...Object.fromEntries(
+      ['ink', 'indent', 'later', 'broken', 'fills']
+        .filter((key) => overrides[key] !== undefined)
+        .map((key) => [key, overrides[key]]),
+    ),
   };
 }
 
@@ -59,7 +85,7 @@ function measurement(boxes, extra = {}) {
     boxes,
     clippers: extra.clippers ?? [],
     frames: extra.frames ?? [],
-    page: extra.page ?? { scrollWidth: 1440, clientWidth: 1440, innerWidth: 1440 },
+    page: extra.page ?? { scrollWidth: 1440, clientWidth: 1440, innerWidth: 1440, rootFontSize: 16 },
     counts: {
       scanned: 900,
       textBoxes: boxes.length,
@@ -595,10 +621,407 @@ describe('which edges of a box a reader sees', () => {
   });
 });
 
+/**
+ * `/learn/pot-odds`, light, 360px, 200% text: "price = pot / call" in a `pre-wrap` formula line. The
+ * 15.81px rectangle after the first line is the space before "call", hanging past the line box.
+ */
+function formulaLine() {
+  return measurement([
+    box({
+      i: 249,
+      end: 250,
+      sel: 'pre.prl-formula__expression > span.prl-formula__line > code',
+      tag: 'code',
+      text: 'price = pot / call',
+      rects: [
+        { x: 139, y: 10893.75, w: 173.84, h: 30 },
+        { x: 312.84, y: 10893.75, w: 15.81, h: 30 },
+        { x: 172.7, y: 10930.14, w: 94.83, h: 30 },
+      ],
+      ink: [
+        { x: 139, y: 10893.75, w: 173.84, h: 30 },
+        { x: 172.7, y: 10930.14, w: 94.83, h: 30 },
+      ],
+      pad: { x: 139, y: 10890.75, w: 182.69, h: 72.78 },
+      content: { x: 172.71, y: 10890.75, w: 148.97, h: 72.78 },
+      word: { text: 'price', width: 79.03, first: true },
+    }),
+  ]);
+}
+
+describe('preserved white space hanging past a wrapped line', () => {
+  it('is not counted as glyphs escaping the line (FALSE POSITIVE)', () => {
+    const { findings, counts } = findTextDefects(formulaLine(), { route: '/learn/pot-odds', width: 360 });
+    assert.deepEqual(findings, [], 'only a space reaches past the line, and a space paints nothing');
+    assert.equal(counts.ownBox, 1);
+  });
+
+  it('was the whole escape: the same line measured with its space reaches 6.96px out', () => {
+    const withSpace = formulaLine();
+    withSpace.boxes[0].ink = undefined;
+    const escapes = findTextDefects(withSpace, {}).findings.find((f) => f.check === 'escapes');
+    assert.equal(escapes?.past, 6.96);
+  });
+
+  it('crosses no clip, frame or neighbour either', () => {
+    const framed = formulaLine();
+    const [line] = framed.boxes;
+    framed.frames.push({ i: 248, end: 251, sel: 'span', border: line.pad, left: true, right: true });
+    framed.clippers.push({ i: 247, end: 251, sel: 'pre', pad: line.pad });
+    const beside = { x: 322, y: 10893.75, w: 30, h: 30 };
+    const after = box({ i: 260, end: 261, rects: [beside], pad: beside });
+    framed.boxes.push(after);
+    assert.deepEqual(findTextDefects(framed, {}).findings, []);
+    framed.boxes[0].ink = undefined;
+    assert.deepEqual(
+      findTextDefects(framed, {})
+        .findings.map((f) => f.check)
+        .sort(),
+      ['clipped', 'collision', 'escapes', 'spills'],
+    );
+  });
+
+  it('still reports a preserved-space word that really leaves its box', () => {
+    const wide = formulaLine();
+    wide.boxes[0].ink[0].w = 200;
+    const escapes = findTextDefects(wide, {}).findings.find((f) => f.check === 'escapes');
+    assert.equal(escapes?.past, 17.31);
+  });
+});
+
+/**
+ * `/learn/pot-odds`, light, 360px, 200% text: "break-even" opens a formula line set with
+ * `padding-inline-start: 2ch; text-indent: -2ch`, so it starts 33.71px before the content box.
+ */
+function hangingIndent() {
+  return measurement([
+    box({
+      i: 247,
+      end: 248,
+      sel: 'pre.prl-formula__expression > span.prl-formula__line > code',
+      tag: 'code',
+      text: 'break-even equity = call / (pot + call)',
+      rects: [
+        { x: 139, y: 10711.8, w: 158.05, h: 30 },
+        { x: 172.7, y: 10748.19, w: 126.44, h: 30 },
+        { x: 172.7, y: 10784.58, w: 94.83, h: 30 },
+        { x: 172.7, y: 10820.97, w: 94.83, h: 30 },
+        { x: 172.7, y: 10857.36, w: 79.03, h: 30 },
+      ],
+      pad: { x: 139, y: 10708.8, w: 182.69, h: 181.95 },
+      content: { x: 172.71, y: 10708.8, w: 148.97, h: 181.95 },
+      word: { text: 'break-even', width: 158.05, first: true },
+      later: { text: 'equity', width: 94.83, first: false },
+      indent: -33.71,
+    }),
+  ]);
+}
+
+describe('a hanging indent', () => {
+  it('gives the first line the room it opens, so its first word is not squeezed (FALSE POSITIVE)', () => {
+    const { findings } = findTextDefects(hangingIndent(), {});
+    assert.deepEqual(findings, [], '158.05px of word on a first line 182.68px long fits');
+  });
+
+  it('was the whole squeeze: without the indent the word is 9.08px short', () => {
+    const flat = hangingIndent();
+    flat.boxes[0].indent = undefined;
+    const squeezed = findTextDefects(flat, {}).findings.find((f) => f.check === 'squeezed');
+    assert.equal(squeezed?.short, 9.08);
+    assert.equal(squeezed?.has, 148.97);
+  });
+
+  it('gives a later line no extra room: a wide word there is still squeezed', () => {
+    const later = hangingIndent();
+    later.boxes[0].later = { text: 'break-even', width: 158.05, first: false };
+    const squeezed = findTextDefects(later, {}).findings.find((f) => f.check === 'squeezed');
+    assert.equal(squeezed?.has, 148.97, 'a continuation line starts at the content box');
+    assert.equal(squeezed?.short, 9.08);
+  });
+
+  it('takes room away from the first line when the indent is positive', () => {
+    const pushed = hangingIndent();
+    Object.assign(pushed.boxes[0], { indent: 33.71, word: { text: 'break-even', width: 140, first: true } });
+    const squeezed = findTextDefects(pushed, {}).findings.find((f) => f.check === 'squeezed');
+    assert.equal(squeezed?.has, 115.26);
+  });
+
+  /** The hanging-indent block with its words folded as the walker folds them, line by line. */
+  const folded = (indent, words) => {
+    const widest = { word: null, opening: null, later: null };
+    for (const [text, rects] of words) foldWord(widest, text, rects, 10708.8);
+    const page = hangingIndent();
+    Object.assign(page.boxes[0], { indent, ...widest });
+    return findTextDefects(page, {}).findings.filter((f) => f.check === 'squeezed');
+  };
+  const line = (n, width) => ({ top: 10708.8 + 36.39 * n, width, height: 30 });
+
+  it('judges a wrapped word by the line its widest piece is on, not its first (REGRESSION)', () => {
+    // "a-" ends the long first line, and "verylongpart" on the next has only the content box.
+    const squeezed = folded(-33.71, [
+      ['some', [line(0, 60)]],
+      ['a-verylongpart', [line(0, 20), line(1, 170)]],
+    ]);
+    assert.deepEqual(
+      squeezed.map((f) => [f.word, f.has, f.short]),
+      [['a-verylongpart', 148.97, 21.03]],
+    );
+  });
+
+  it('judges the first line by its own room when a wider word sits on a later one', () => {
+    // A positive indent: "Opening" has 115.26px on the first line, the 140px word below has 148.97.
+    const squeezed = folded(33.71, [
+      ['Opening', [line(0, 130)]],
+      ['widest', [line(2, 140)]],
+    ]);
+    assert.deepEqual(
+      squeezed.map((f) => [f.word, f.has]),
+      [['Opening', 115.26]],
+    );
+    assert.deepEqual(folded(-33.71, [['fits', [line(0, 170)]]]), [], 'the first line has 182.68px');
+  });
+});
+
+describe('a text-indent that names hanging or each-line', () => {
+  it('is read as its length and its keywords, never as a plain length', () => {
+    assert.deepEqual(parseTextIndent('-32px hanging', 300), { px: -32, keywords: true });
+    assert.deepEqual(parseTextIndent('each-line 10%', 300), { px: 30, keywords: true });
+    assert.deepEqual(parseTextIndent('10% hanging each-line', 300), { px: 30, keywords: true });
+    assert.deepEqual(parseTextIndent('-33.71px', 300), { px: -33.71, keywords: false });
+    assert.deepEqual(parseTextIndent('0px', 300), { px: 0, keywords: false });
+  });
+
+  it('gives no line extra room and takes it from every line, since which lines it moves is unknown', () => {
+    const hanging = hangingIndent();
+    Object.assign(hanging.boxes[0], { indentKeyword: true, later: undefined });
+    const squeezed = findTextDefects(hanging, {}).findings.find((f) => f.check === 'squeezed');
+    assert.equal(squeezed?.has, 148.97, 'a negative hanging indent opens no line');
+    const pushed = hangingIndent();
+    Object.assign(pushed.boxes[0], {
+      indent: 20,
+      indentKeyword: true,
+      word: { text: 'equity', width: 140 },
+      later: undefined,
+    });
+    assert.equal(findTextDefects(pushed, {}).findings.find((f) => f.check === 'squeezed')?.has, 128.97);
+  });
+});
+
+/**
+ * `/review`, light, 360px, 200% text. The row's `minmax(0, 1fr) auto` track left the result cell
+ * 0px wide and `overflow-wrap: break-word` stood its label one letter a line. The label is
+ * `aria-hidden` (the column header names it for a screen reader) and is painted all the same.
+ */
+function reviewRow() {
+  return {
+    ...measurement([
+      box({
+        i: 220,
+        end: 221,
+        sel: 'tbody > tr > td.prl-review-table__when',
+        tag: 'td',
+        text: '17 Aug 2026, 18:42 UTC',
+        rects: [
+          { x: 90, y: 2776.19, w: 15.92, h: 31 },
+          { x: 90, y: 2818.19, w: 15.92, h: 31 },
+          { x: 90, y: 2860.19, w: 19.09, h: 31 },
+        ],
+        pad: { x: 90, y: 2771.19, w: 0, h: 756 },
+        content: { x: 90, y: 2771.19, w: 0, h: 756 },
+        word: { text: 'UTC', width: 20.48 },
+        broken: [
+          { text: '17', pieces: ['1', '7'] },
+          { text: 'Aug', pieces: ['A', 'u', 'g'] },
+          { text: 'UTC', pieces: ['U', 'T', 'C'] },
+        ],
+      }),
+    ]),
+    ariaHidden: [
+      box({
+        i: 236,
+        end: 237,
+        sel: 'tr > td.prl-review-table__net > span.prl-review-table__cell-label',
+        tag: 'span',
+        text: 'Result',
+        rects: [
+          { x: 90, y: 2310.59, w: 19.17, h: 28 },
+          { x: 90, y: 2349.59, w: 14.5, h: 28 },
+          { x: 90, y: 2388.59, w: 13.52, h: 28 },
+          { x: 90, y: 2427.59, w: 14.89, h: 28 },
+          { x: 90, y: 2466.59, w: 6.13, h: 28 },
+          { x: 90, y: 2505.59, w: 7.98, h: 28 },
+        ],
+        pad: { x: 90, y: 2305.59, w: 0, h: 234 },
+        content: { x: 90, y: 2305.59, w: 0, h: 234 },
+        word: { text: 'Result', width: 19.17 },
+        broken: [{ text: 'Result', pieces: ['R', 'e', 's', 'u', 'l', 't'] }],
+      }),
+    ],
+  };
+}
+
+/**
+ * The `letter-by-letter` control as Chrome measured it at 1024px: a 20.61px column, wider than any
+ * letter in it, so the widest piece (20.39px) fits and `squeezed` has nothing to say.
+ */
+function tornParagraph() {
+  return measurement([
+    box({
+      i: 150,
+      end: 151,
+      sel: 'div.prl-learn-page > header.prl-learn-page__head > p.prl-learn-page__lead',
+      text: 'Seventeen lessons, numbered in the order the ideas depend on one another, and th',
+      rects: [
+        { x: 40, y: 224.11, w: 12.11, h: 20 },
+        { x: 40, y: 251.11, w: 18.94, h: 20 },
+        { x: 40, y: 278.11, w: 20, h: 20 },
+      ],
+      pad: { x: 40, y: 221.11, w: 20.61, h: 3618 },
+      content: { x: 40, y: 221.11, w: 20.61, h: 3618 },
+      word: { text: 'lessons,', width: 20.39 },
+      broken: [
+        { text: 'Seventeen', pieces: ['S', 'ev', 'en', 'te', 'en'] },
+        { text: 'follows', pieces: ['fol', 'lo', 'w', 's'] },
+      ],
+    }),
+  ]);
+}
+
+describe('a word broken letter by letter', () => {
+  it('reports the stacked "Result" on /review, aria-hidden or not (REGRESSION)', () => {
+    const { findings, counts } = findTextDefects(reviewRow(), { route: '/review', width: 360, scale: 2 });
+    const broken = findings.filter((f) => f.check === 'broken');
+    assert.deepEqual(
+      broken.map((f) => [f.word, f.ariaHidden]),
+      [
+        ['17', false],
+        ['Result', true],
+      ],
+    );
+    assert.deepEqual(broken[1].pieces, ['R', 'e', 's', 'u', 'l', 't']);
+    assert.match(
+      formatFinding(broken[1]),
+      /BROKEN .*\(aria-hidden\)\n.*"Result" is torn over 6 lines: R \| e/u,
+    );
+    assert.equal(counts.breakTests, 4, 'every word on two lines, in the cell and the hidden label');
+  });
+
+  it('says "at least" when the page sent only the first pieces of a longer word', () => {
+    const finding = { check: 'broken', route: '/review', theme: 'light', width: 360, sel: 'td', text: '' };
+    const many = Array.from({ length: 80 }, () => 'a');
+    assert.match(formatFinding({ ...finding, word: 'a', pieces: many }), /torn over at least 80 lines/u);
+    assert.match(formatFinding({ ...finding, word: 'Result', pieces: ['R', 'e'] }), /torn over 2 lines/u);
+  });
+
+  it('judges aria-hidden text for nothing else: its overlaps are often decorative', () => {
+    const { findings } = findTextDefects(reviewRow(), {});
+    for (const finding of findings) {
+      if (finding.check !== 'broken') assert.doesNotMatch(finding.sel, /cell-label/u);
+    }
+  });
+
+  it('catches a column a letter wide, where squeezed is silent because every piece fits', () => {
+    const { findings } = findTextDefects(tornParagraph(), { route: '/learn', width: 1024 });
+    assert.deepEqual(
+      findings.map((f) => f.check),
+      ['broken'],
+    );
+    assert.equal(findings[0].word, 'Seventeen');
+  });
+
+  it('is not excused by a block that scrolls sideways', () => {
+    const scroller = tornParagraph();
+    scroller.boxes[0].blockScrolls = true;
+    assert.deepEqual(
+      findTextDefects(scroller, {}).findings.map((f) => f.check),
+      ['broken'],
+    );
+  });
+
+  it('leaves a token wrapped across full lines alone, however its breaks were allowed', () => {
+    // The deal's Merkle root on /review/hand-0042 at 360px, 200%: `overflow-wrap: anywhere`, six a line.
+    const root = ['9e1f07', 'f25216', '506575', 'ad44f6', '2e0827', '411aad', 'b092a9', 'a1fe53', '52df3b'];
+    assert.equal(letterByLetter([...root, '69045b', '1612']), null);
+    // At 1024px it wraps 31, 31, 2: a short last line is a full token, not a torn one.
+    assert.equal(
+      letterByLetter(['9e1f07f25216506575ad44f62e08274', '11aadb092a9a1fe5352df3b69045b16', '12']),
+      null,
+    );
+    // The same root in a column two characters wide is unreadable, and `anywhere` does not excuse it.
+    assert.notEqual(letterByLetter(['9e', '1f', '07', 'f2', '52']), null);
+  });
+
+  it('is not cleared by one piece of three characters or more (REGRESSION)', () => {
+    assert.deepEqual(letterByLetter(['Br', 'illi', 'an', 't']), ['Br', 'illi', 'an', 't']);
+    assert.notEqual(letterByLetter(['R', 'e', 's', 'u', 'l', 'ti', 'lli', 'ng']), null);
+    assert.notEqual(letterByLetter(['ab', 'cdef', 'gh']), null, 'two of three pieces are short');
+    assert.equal(letterByLetter(['abcdef', 'gh']), null, 'one short piece of two is a last line');
+    assert.equal(letterByLetter(['abcdef', 'ghijkl', 'mn']), null, 'one short piece of three');
+  });
+
+  it('judges only the full lines where the browser fills, since the ends are leftovers', () => {
+    assert.equal(letterByLetter(['ex', 'traordinari', 'ly'], true), null);
+    assert.notEqual(letterByLetter(['Br', 'illi', 'an', 't'], true), null, '"an" filled a whole line');
+    assert.equal(letterByLetter(['ex', 'traordin', 'arily'], true), null);
+    assert.notEqual(letterByLetter(['Br', 'il', 'li', 'ant'], true), null);
+    assert.notEqual(letterByLetter(['abcd', 'ef', 'gh', 'i', 'jklm'], true), null);
+  });
+
+  it('leaves an emergency break of a long word alone', () => {
+    // `/learn/sample-size-and-risk-of-ruin` at 360px, 200%.
+    assert.equal(letterByLetter(['reachin', 'g']), null);
+    assert.equal(letterByLetter(['sensible', '.']), null);
+  });
+
+  it('counts a break after a hyphen, dash or slash as the text own, and judges each side of it', () => {
+    assert.equal(letterByLetter(['(open-', 'raise)']), null);
+    assert.equal(letterByLetter(['a-', 'b']), null);
+    assert.deepEqual(letterByLetter(['br', 'ea', 'k-', 'ev', 'en']), ['br', 'ea', 'k-']);
+    assert.deepEqual(letterByLetter(['d', 'o', 'c', 's', '/', 'T', 'H']), ['d', 'o', 'c', 's', '/']);
+  });
+
+  it('needs three pieces where the browser itself splits words to fill a line', () => {
+    // Under `word-break: break-all` "the" at a line end is "t" and "he", which is filling, not tearing.
+    assert.equal(letterByLetter(['t', 'he'], true), null);
+    assert.notEqual(letterByLetter(['t', 'he']), null);
+    assert.deepEqual(letterByLetter(['U', 'T', 'C'], true), ['U', 'T', 'C']);
+    const filled = tornParagraph();
+    filled.boxes[0].broken = [{ text: 'the', pieces: ['th', 'e'] }];
+    filled.boxes[0].fills = true;
+    assert.deepEqual(findTextDefects(filled, {}).findings, []);
+  });
+
+  it('counts the words it judged, so a dead line count or piece split examines nothing (REGRESSION)', () => {
+    // What the walker sends when lineCount never finds a second line, and when piecesOf never splits.
+    const deadLines = measurement([box({ broken: [] }), box({ broken: [] })]);
+    assert.equal(findTextDefects(deadLines, {}).counts.breakTests, 0);
+    const deadPieces = measurement([box({ broken: [{ text: 'Result', pieces: ['Result'] }] })]);
+    assert.equal(findTextDefects(deadPieces, {}).counts.breakTests, 0);
+    const problems = coverageFailures({
+      ...FULL_DEFAULT_RUN,
+      detector: { ...FULL_DEFAULT_RUN.detector, breakTests: 0 },
+    });
+    assert.match(problems.join('\n'), /only 0 words on two lines or more judged/u);
+    // A torn word is reported once, and the words after it are still counted.
+    assert.equal(findTextDefects(tornParagraph(), {}).counts.breakTests, 2);
+  });
+
+  it('counts a box the walker sent no break data for as unexamined', () => {
+    const { counts } = findTextDefects(measurement([box({})]), {});
+    assert.equal(counts.breakTests, 0);
+    const exempted = tornParagraph();
+    exempted.boxes[0].exempt = [0];
+    const rules = [{ check: 'broken', selector: '.prl-learn-page__lead', why: 'because' }];
+    const result = findTextDefects(exempted, {}, rules);
+    assert.deepEqual(result.findings, []);
+    assert.deepEqual(result.usedExemptions, [0]);
+  });
+});
+
 describe('the page itself', () => {
   it('reports a document that scrolls sideways', () => {
     const wide = healthyRow();
-    wide.page = { scrollWidth: 412, clientWidth: 360, innerWidth: 360 };
+    wide.page = { scrollWidth: 412, clientWidth: 360, innerWidth: 360, rootFontSize: 16 };
     const { findings } = findTextDefects(wide, { route: '/', theme: 'dark', width: 360 });
     const finding = findings.find((f) => f.check === 'page');
     assert.ok(finding !== undefined);
@@ -608,7 +1031,7 @@ describe('the page itself', () => {
 
   it('reports 2px of sideways scroll, which the scenario link on /learn/counting-outs made (REGRESSION)', () => {
     const nudged = healthyRow();
-    nudged.page = { scrollWidth: 362, clientWidth: 360, innerWidth: 360 };
+    nudged.page = { scrollWidth: 362, clientWidth: 360, innerWidth: 360, rootFontSize: 16 };
     const { findings } = findTextDefects(nudged, {
       route: '/learn/counting-outs',
       theme: 'dark',
@@ -634,70 +1057,273 @@ describe('exemptions', () => {
   });
 
   it('a rule that matched nothing anywhere fails the gate (REGRESSION)', () => {
-    const problems = coverageFailures(
-      {
-        measurements: 150,
-        textBoxes: 34098,
-        detector: { ownBox: 34028, clipTests: 4168, frameTests: 25211, pairs: 25744 },
-        routesLoaded: 30,
-        routesWanted: 30,
-        usedExemptions: new Set(),
-      },
-      rules,
-    );
+    const problems = exemptionFailures(exemptionReport([{ scale: 1, narrowed: false }], {}, rules));
     assert.equal(problems.length, 1);
     assert.match(problems[0], /matched nothing/u);
+    assert.deepEqual(exemptionFailures(exemptionReport([{ scale: 1 }], { 0: 3 }, rules)), []);
   });
 
-  it('the shipped list is empty, and every rule in it must carry a reason', () => {
+  it('a pass that does not say whether it was narrowed is held to its rules', () => {
+    assert.equal(exemptionReport([{}], {}, rules)[0].status, 'stale');
+  });
+
+  it('every shipped rule carries a reason, and the list holds only the radar labels', () => {
     for (const rule of EXEMPTIONS) {
       assert.ok(typeof rule.selector === 'string' && rule.selector.length > 0);
       assert.ok(typeof rule.why === 'string' && rule.why.length > 30, 'an exemption needs a reason');
-      assert.ok(['collision', 'escapes', 'clipped', 'spills', 'squeezed', 'page'].includes(rule.check));
+      assert.ok(CHECKS.includes(rule.check));
     }
+    assert.deepEqual(
+      EXEMPTIONS.map((rule) => [rule.check, rule.selector, rule.aboveScale]),
+      [['clipped', 'text.prl-radar__label', 1]],
+    );
   });
 });
 
+/**
+ * `/legends`, light, 768px, 200% text: radar label "04" cut 4.5px past the radar that hides overflow.
+ * `exempt` is what the walker sends when the element matches the rule's selector; the root is 32px.
+ */
+const RADAR_RULE = EXEMPTIONS.findIndex((rule) => rule.selector === 'text.prl-radar__label');
+const RADAR = 'article.prl-legend-card > div.prl-radar.prl-legend-radar > svg.prl-radar__svg';
+
+function radarLabel(clipperSel = RADAR) {
+  const label = { x: 395.5, y: 140, w: 9, h: 20 };
+  return measurement(
+    [
+      box({
+        i: 300,
+        end: 301,
+        sel: 'svg.prl-radar__svg > g.prl-radar__labels > text.prl-radar__label.prl-index',
+        tag: 'text',
+        text: '04',
+        rects: [label],
+        pad: label,
+        word: { text: '04', width: 9 },
+        exempt: [RADAR_RULE],
+      }),
+    ],
+    {
+      clippers: [{ i: 298, end: 302, sel: clipperSel, pad: { x: 100, y: 0, w: 300, h: 300 } }],
+      page: { scrollWidth: 768, clientWidth: 768, innerWidth: 768, rootFontSize: 32 },
+    },
+  );
+}
+
+describe('the radar label exemption', () => {
+  const clippedAt = (m, context) => findTextDefects(m, context).findings.filter((f) => f.check === 'clipped');
+
+  it('suppresses the label clipped by its own radar at 200% text, and counts it', () => {
+    assert.ok(RADAR_RULE >= 0, 'no shipped exemption names text.prl-radar__label');
+    const result = findTextDefects(radarLabel(), { route: '/legends', width: 768, scale: 2 });
+    assert.deepEqual(result.findings, []);
+    assert.deepEqual(result.usedExemptions, [RADAR_RULE]);
+    assert.deepEqual(result.suppressed, { [RADAR_RULE]: 1 });
+  });
+
+  it('still reports the same finding at 100% text, or with no size given (REGRESSION)', () => {
+    assert.equal(clippedAt(radarLabel(), { route: '/legends', width: 768, scale: 1 })[0]?.past, 4.5);
+    assert.equal(clippedAt(radarLabel(), { route: '/legends', width: 768 }).length, 1);
+    assert.deepEqual(findTextDefects(radarLabel(), { scale: 1 }).usedExemptions, []);
+  });
+
+  it('still reports the label cut off by an ancestor that is not the radar', () => {
+    const byCard = radarLabel('section.prl-legend-section > div.prl-legend-grid > article.prl-legend-card');
+    assert.equal(clippedAt(byCard, { scale: 2 }).length, 1);
+  });
+
+  it('suppresses no other shape on the same label', () => {
+    const framed = radarLabel();
+    framed.clippers = [];
+    framed.frames.push({
+      i: 298,
+      end: 302,
+      sel: RADAR,
+      border: { x: 100, y: 0, w: 300, h: 300 },
+      left: true,
+      right: true,
+    });
+    const checks = findTextDefects(framed, { scale: 2 }).findings.map((f) => f.check);
+    assert.deepEqual(checks, ['spills']);
+  });
+
+  it('is held to having matched by a full pass above 100%, and said aloud when none ran', () => {
+    const report = (argv, suppressed) =>
+      exemptionReport(sweepPasses(parseArgs(argv)), suppressed)[RADAR_RULE].status;
+    assert.equal(report([], { [RADAR_RULE]: 312 }), 'used');
+    assert.equal(report([], {}), 'stale', 'the default run reaches the rule through its large-text pass');
+    assert.equal(report(['--text-scale', '2'], {}), 'stale');
+    assert.equal(report(['--text-scale', '1'], {}), 'unreached', 'a 100% run cannot use it');
+    assert.equal(report(['--routes', '/learn'], {}), 'unreached', 'a narrowed run cannot prove it stale');
+    const stale = exemptionReport(sweepPasses(parseArgs([])), {});
+    assert.match(exemptionFailures(stale)[0], /text\.prl-radar__label\) matched nothing/u);
+  });
+
+  it('prints its reason and what it suppressed', () => {
+    const [used] = exemptionReport(sweepPasses(parseArgs([])), { [RADAR_RULE]: 312 });
+    assert.match(formatExemption(used), /^clipped text\.prl-radar__label above 100% text: 312 finding/u);
+    assert.match(formatExemption(used), /why: .*held for the owner/u);
+    const [unreached] = exemptionReport(sweepPasses(parseArgs(['--text-scale', '1'])), {});
+    assert.match(formatExemption(unreached), /not reached/u);
+  });
+});
+
+/** The tally of the default run (every route, both themes, five widths, 100% text) on 2026-11-25. */
+const FULL_DEFAULT_RUN = {
+  measurements: 200,
+  measurementsWanted: 200,
+  textBoxes: 38970,
+  detector: { ownBox: 38970, clipTests: 4280, frameTests: 28610, pairs: 33050, breakTests: 232 },
+  routesLoaded: 40,
+  routesWanted: 40,
+  usedExemptions: new Set(),
+};
+
+/** 62 routes, light only, 360px only, 200% text: the shape of a small CI pass, measured the same day. */
+const ONE_WIDTH_ONE_THEME = {
+  measurements: 62,
+  measurementsWanted: 62,
+  textBoxes: 8761,
+  detector: { ownBox: 8761, clipTests: 780, frameTests: 5166, pairs: 1648, breakTests: 648 },
+  routesLoaded: 62,
+  routesWanted: 62,
+  usedExemptions: new Set(),
+};
+
 describe('a sweep of nothing is not a pass', () => {
-  const healthy = {
-    measurements: 150,
-    textBoxes: 34098,
-    detector: { ownBox: 34028, clipTests: 4168, frameTests: 25211, pairs: 25744 },
-    routesLoaded: 30,
-    routesWanted: 30,
-    usedExemptions: new Set(),
-  };
+  const healthy = FULL_DEFAULT_RUN;
 
   it('a full sweep of this app clears every floor', () => {
-    assert.deepEqual(coverageFailures(healthy, []), []);
+    assert.deepEqual(coverageFailures(healthy), []);
+  });
+
+  it('the default run is held at least as hard as main held it, in both passes (REGRESSION)', () => {
+    const passes = sweepPasses(parseArgs([]));
+    assert.deepEqual(passCoverageFailures(passes, [FULL_DEFAULT_RUN, LARGE_TEXT_RUN]), []);
+    // 5% of the pairs and 20% of the clip and frame tests cleared the per-measurement rates.
+    const thinned = (run, share) => ({
+      ...run,
+      detector: {
+        ...run.detector,
+        pairs: Math.floor(run.detector.pairs * 0.05),
+        clipTests: Math.floor(run.detector.clipTests * share),
+        frameTests: Math.floor(run.detector.frameTests * share),
+      },
+    });
+    const problems = passCoverageFailures(passes, [
+      thinned(FULL_DEFAULT_RUN, 0.2),
+      thinned(LARGE_TEXT_RUN, 0.2),
+    ]);
+    assert.equal(problems.length, 6, problems.join('\n'));
+    assert.match(problems[0], /^100% text pass: only 856 text blocks .*clipping ancestor \(floor 2000 /u);
+    assert.match(problems.join('\n'), /100% text pass: only 1652 pairs .*\(floor 11000 /u);
+    // main's fixed floors for the full 100% sweep, before they were scaled.
+    const main = { textBoxes: 5000, ownBox: 8000, clipTests: 2000, frameTests: 8000, pairs: 8000 };
+    for (const [key, floor] of Object.entries(main)) {
+      const held = coverageChecks(FULL_DEFAULT_RUN, passes[0].floors).find((c) => c.key === key);
+      assert.ok(
+        held.floor >= floor,
+        `${key} is held to ${String(held.floor)}, below main's ${String(floor)}`,
+      );
+    }
+  });
+
+  it('a narrowed run is held to floors scaled to its size, never the default run floors', () => {
+    for (const argv of [
+      ['--routes', '/legends'],
+      ['--widths', '360'],
+      ['--themes', 'dark'],
+      ['--text-scale', '2'],
+    ]) {
+      for (const pass of sweepPasses(parseArgs(argv))) assert.equal(pass.floors, null, argv.join(' '));
+    }
+    assert.ok(sweepPasses(parseArgs(['--no-self-test'])).every((pass) => pass.floors !== null));
+    for (const { floor } of coverageChecks({ measurementsWanted: 1, textBoxes: 0, detector: {} })) {
+      assert.ok(floor >= 1, 'a floor of zero would pass a sweep of nothing');
+    }
+  });
+
+  it('a run of one width and one theme is held to its own size, not refused (REGRESSION)', () => {
+    // The fixed floors asked every run for 100 measurements and 8,000 pairs, so this was refused four times.
+    assert.deepEqual(coverageFailures(ONE_WIDTH_ONE_THEME), []);
+    assert.equal(coverageFloor('pairs', 62), 496);
+    assert.equal(coverageFloor('pairs', 200), 1600);
+  });
+
+  it('the floor follows the matrix asked for and is never zero', () => {
+    for (const key of ['textBoxes', 'ownBox', 'clipTests', 'frameTests', 'pairs', 'breakTests']) {
+      assert.ok(coverageFloor(key, 1) >= 1, `${key} has no floor for a single measurement`);
+      assert.equal(coverageFloor(key, 0), 1, `${key} must still ask for something when nothing was asked`);
+      assert.ok(coverageFloor(key, 200) > coverageFloor(key, 62));
+    }
   });
 
   it('refuses a run that measured almost nothing', () => {
-    const problems = coverageFailures({ ...healthy, measurements: 2, textBoxes: 40 }, []);
+    const problems = coverageFailures({ ...healthy, measurements: 2, textBoxes: 40 });
     assert.equal(problems.length, 2);
     for (const problem of problems) assert.match(problem, /a sweep of nothing is not a pass/u);
+    assert.match(problems[0], /only 2 of 200 page measurement/u);
+  });
+
+  it('refuses a sweep that asked for nothing, or reports no matrix at all', () => {
+    const empty = {
+      ...healthy,
+      measurements: 0,
+      measurementsWanted: 0,
+      textBoxes: 0,
+      detector: { ownBox: 0, clipTests: 0, frameTests: 0, pairs: 0, breakTests: 0 },
+    };
+    const problems = coverageFailures(empty);
+    assert.match(problems[0], /asked for no measurement/u);
+    assert.ok(problems.length >= 7, problems.join('\n'));
+    const { measurementsWanted: _, ...unsized } = healthy;
+    assert.match(coverageFailures(unsized)[0], /asked for no measurement/u);
+  });
+
+  it('a run that measured less than it asked cannot lower its own floor', () => {
+    // Twelve of 200 pages measured, each one rich: the floors still follow the 200 asked for.
+    const short = { ...healthy, measurements: 12, textBoxes: 9000 };
+    const problems = coverageFailures(short);
+    assert.match(problems[0], /only 12 of 200/u);
   });
 
   it('refuses a run where a detector examined nothing, even with pages measured', () => {
     // A busy sweep with one detector out of the loop must still fail.
-    for (const key of ['ownBox', 'clipTests', 'frameTests', 'pairs']) {
-      const problems = coverageFailures({ ...healthy, detector: { ...healthy.detector, [key]: 0 } }, []);
+    for (const key of ['ownBox', 'clipTests', 'frameTests', 'pairs', 'breakTests']) {
+      const problems = coverageFailures({ ...healthy, detector: { ...healthy.detector, [key]: 0 } });
       assert.equal(problems.length, 1, `${key} at zero must be reported`);
       assert.match(problems[0], /a detector that examined nothing/u);
     }
   });
 
+  it('refuses a narrow run in which a detector examined nothing, naming the floor it missed', () => {
+    // `/learn`, dark, 1024px, as measured: no text sits inside a clipping ancestor, no word breaks.
+    const learn = {
+      measurements: 1,
+      measurementsWanted: 1,
+      textBoxes: 216,
+      detector: { ownBox: 216, clipTests: 0, frameTests: 180, pairs: 146, breakTests: 0 },
+      routesLoaded: 1,
+      routesWanted: 1,
+      usedExemptions: new Set(),
+    };
+    const problems = coverageFailures(learn);
+    assert.equal(problems.length, 2);
+    assert.match(problems[0], /only 0 text blocks measured against a clipping ancestor \(floor 4 for 1 /u);
+    assert.match(problems[1], /only 0 words on two lines or more judged .*\(floor 1 for 1 /u);
+  });
+
   it('counts a detector missing from the tally as one that examined nothing', () => {
     const { frameTests: _, ...withoutFrames } = healthy.detector;
-    const problems = coverageFailures({ ...healthy, detector: withoutFrames }, []);
+    const problems = coverageFailures({ ...healthy, detector: withoutFrames });
     assert.equal(problems.length, 1);
     assert.match(problems[0], /frame drawn around them/u);
   });
 
   it('refuses a run where a route never loaded', () => {
-    const problems = coverageFailures({ ...healthy, routesLoaded: 28 }, []);
+    const problems = coverageFailures({ ...healthy, routesLoaded: 28 });
     assert.equal(problems.length, 1);
-    assert.match(problems[0], /2 route\(s\) never loaded/u);
+    assert.match(problems[0], /12 route\(s\) never loaded/u);
   });
 });
 
@@ -741,16 +1367,16 @@ describe('the scope of the sweep', () => {
   });
 
   it('the matrix is every combination, and a narrowed one is smaller', () => {
-    const full = sweepMatrix(parseArgs([]));
+    const full = sweepMatrix(parseArgs([])).filter((cell) => cell.scale === 1);
     assert.equal(full.length, ROUTES.length * THEMES.length * WIDTHS.length);
     assert.ok(full.length >= 100, `${String(full.length)} measurements is not a sweep`);
     const narrow = sweepMatrix(parseArgs(['--routes', '/learn', '--widths', '360', '--themes', 'dark']));
-    assert.deepEqual(narrow, [{ route: '/learn', theme: 'dark', width: 360 }]);
+    assert.deepEqual(narrow, [{ route: '/learn', theme: 'dark', width: 360, scale: 1 }]);
   });
 
   it('every check has a negative control that runs on every invocation', () => {
     const covered = new Set(CONTROLS.map((control) => control.expect));
-    for (const check of ['collision', 'escapes', 'clipped', 'spills', 'squeezed', 'page']) {
+    for (const check of CHECKS) {
       assert.ok(covered.has(check), `${check} has no negative control, so nobody has seen it fire`);
     }
     for (const control of CONTROLS) {
@@ -760,6 +1386,199 @@ describe('the scope of the sweep', () => {
     }
     assert.match(CONTROLS[0].css, /grid-template-columns:\s*minmax\(0,\s*1fr\)\s*auto/u);
     assert.equal(CONTROLS[0].route, '/play?state=decision');
+  });
+});
+
+// The large-text pass in verify on 2026-11-26: ROUTES, light, 768, 1024 and 1440, and the nine phone
+// routes at 360, 200% text. Its clip tests come from three routes only.
+const LARGE_TEXT_RUN = {
+  measurements: 69,
+  measurementsWanted: 69,
+  textBoxes: 12170,
+  detector: { ownBox: 12170, clipTests: 1328, frameTests: 8630, pairs: 5903, breakTests: 111 },
+  routesLoaded: 29,
+  routesWanted: 29,
+};
+
+describe('the large-text pass', () => {
+  const cells = (argv) => sweepMatrix(parseArgs(argv));
+  const large = (argv) => cells(argv).filter((cell) => cell.scale !== 1);
+
+  it('the default run also measures every route at 200% text, light, at 768, 1024 and 1440', () => {
+    const extra = large([]).filter((cell) => cell.width !== 360);
+    assert.equal(extra.length, ROUTES.length * 3, 'the default run has no large-text pass');
+    assert.deepEqual([...new Set(extra.map((cell) => cell.scale))], [2]);
+    assert.deepEqual([...new Set(extra.map((cell) => cell.theme))], ['light']);
+    assert.deepEqual([...new Set(extra.map((cell) => cell.width))], [768, 1024, 1440]);
+    assert.deepEqual([...new Set(extra.map((cell) => cell.route))], ROUTES);
+    const total = ROUTES.length * (THEMES.length * WIDTHS.length + 3) + LARGE_TEXT_PHONE_ROUTES.length;
+    assert.equal(cells([]).length, total);
+  });
+
+  it('and the routes clean there at 360px, where content wider than a phone fits 768 (REGRESSION)', () => {
+    // The twelve-track grid below 600px puts 560px of /lab in the window: 768 and 1024 hold it.
+    const phone = large([]).filter((cell) => cell.width === 360);
+    assert.deepEqual(
+      phone.map((cell) => cell.route),
+      LARGE_TEXT_PHONE_ROUTES,
+    );
+    assert.ok(phone.every((cell) => cell.theme === 'light' && cell.scale === 2));
+    for (const route of [
+      '/',
+      '/learn',
+      '/play',
+      '/lab',
+      '/lab/fl-same-cards-under-the-gun',
+      '/lab/spots',
+      '/legends/adaptive-exploiter',
+      '/review',
+      '/checks',
+    ]) {
+      assert.ok(LARGE_TEXT_PHONE_ROUTES.includes(route), `${route} is no longer measured at 360px`);
+    }
+    for (const route of LARGE_TEXT_PHONE_ROUTES) assert.ok(ROUTES.includes(route), `${route} is not swept`);
+    const [, pass] = sweepPasses(parseArgs([]));
+    assert.match(pass.also[0].why, /360px/u, 'the run prints why these routes and no others');
+  });
+
+  it('measures at 360px only the phone routes --routes keeps', () => {
+    const other = ROUTES.find((route) => !LARGE_TEXT_PHONE_ROUTES.includes(route));
+    const [phone] = LARGE_TEXT_PHONE_ROUTES;
+    assert.deepEqual(
+      large(['--routes', `${phone},${other}`]).map((cell) => `${cell.route} ${String(cell.width)}`),
+      [
+        `${phone} 768`,
+        `${phone} 1024`,
+        `${phone} 1440`,
+        `${other} 768`,
+        `${other} 1024`,
+        `${other} 1440`,
+        `${phone} 360`,
+      ],
+    );
+    assert.deepEqual(sweepPasses(parseArgs(['--routes', other]))[1].also, []);
+  });
+
+  it('follows --routes, so one route can be checked the way the gate checks it', () => {
+    assert.deepEqual(large(['--routes', '/legends']), [
+      { route: '/legends', theme: 'light', width: 768, scale: 2 },
+      { route: '/legends', theme: 'light', width: 1024, scale: 2 },
+      { route: '/legends', theme: 'light', width: 1440, scale: 2 },
+    ]);
+    assert.deepEqual(
+      sweepPasses(parseArgs(['--routes', '/legends'])).map((pass) => pass.narrowed),
+      [true, true],
+    );
+  });
+
+  it('is replaced by exactly the matrix --text-scale, --widths or --themes names', () => {
+    const asked = cells(['--text-scale', '2', '--themes', 'light', '--widths', '768,1024']);
+    assert.equal(asked.length, ROUTES.length * 2, 'the cells a --text-scale run named, and no more');
+    assert.ok(asked.every((cell) => cell.scale === 2));
+    assert.ok(cells(['--text-scale', '1']).every((cell) => cell.scale === 1));
+    assert.ok(cells(['--text-scale', '1.5']).every((cell) => cell.scale === 1.5));
+    assert.deepEqual(large(['--widths', '360']), []);
+    assert.deepEqual(large(['--themes', 'dark']), []);
+    assert.deepEqual(
+      sweepPasses(parseArgs(['--text-scale', '2'])).map((pass) => [pass.scale, pass.narrowed]),
+      [[2, false]],
+    );
+  });
+
+  it('cannot borrow coverage from the 100% pass (REGRESSION)', () => {
+    const passes = sweepPasses(parseArgs([]));
+    const unclipped = { ...LARGE_TEXT_RUN, detector: { ...LARGE_TEXT_RUN.detector, clipTests: 0 } };
+    const problems = passCoverageFailures(passes, [FULL_DEFAULT_RUN, unclipped]);
+    assert.equal(problems.length, 1, '4,280 clip tests at 100% must not cover a pass with none');
+    assert.match(problems[0], /^200% text pass: only 0 text blocks .*clipping ancestor \(floor 440 for 69 /u);
+    assert.deepEqual(passCoverageFailures(passes, [FULL_DEFAULT_RUN, LARGE_TEXT_RUN]), []);
+  });
+
+  it('is a large size Chrome can set, in a theme and widths the audit knows', () => {
+    assert.ok(LARGE_TEXT.scale > 1);
+    assert.doesNotThrow(() => parseArgs(['--text-scale', String(LARGE_TEXT.scale)]));
+    for (const theme of LARGE_TEXT.themes) assert.ok(THEMES.includes(theme));
+    for (const width of LARGE_TEXT.widths) assert.ok(WIDTHS.includes(width));
+  });
+
+  it('holds its own cells to the coverage floors, as its first run measured them', () => {
+    const { floors } = sweepPasses(parseArgs([]))[1];
+    assert.deepEqual(coverageFailures(LARGE_TEXT_RUN, floors), []);
+    const unclipped = { ...LARGE_TEXT_RUN, detector: { ...LARGE_TEXT_RUN.detector, clipTests: 100 } };
+    assert.match(
+      coverageFailures(unclipped, floors)[0],
+      /only 100 text blocks .*clipping ancestor \(floor 440 for 69 /u,
+    );
+    assert.match(coverageFailures(unclipped)[0], /\(floor 276 for 69 /u, 'the same cells, narrowed');
+  });
+});
+
+describe('the large-text negative control', () => {
+  const header = CONTROLS.find((control) => control.id === 'header-px-breakpoint');
+  const styles = ['apps/web/src/styles/nav.css', 'apps/web/src/app/globals.css'].map((path) =>
+    readFileSync(new URL(`../${path}`, import.meta.url), 'utf8'),
+  );
+
+  it('puts the desktop header back under px breakpoints, at the pass size and a pass cell', () => {
+    assert.ok(header !== undefined, 'no control re-creates the header that only 200% text catches');
+    assert.equal(header.expect, 'page');
+    assert.equal(header.scale, LARGE_TEXT.scale);
+    assert.ok(LARGE_TEXT.themes.includes(header.theme));
+    assert.ok(LARGE_TEXT.widths.includes(header.width));
+    assert.ok(ROUTES.includes(header.route));
+    assert.match(header.css, /\.prl-shell__header-inner \{ grid-template-columns: auto 1fr auto; \}/u);
+    assert.doesNotMatch(header.css, /\d+(\.\d+)?em\)/u, 'an em condition would move with the text');
+  });
+
+  it('mirrors breakpoints the stylesheets still state in em, so it re-creates their px forms', () => {
+    const px = [...header.css.matchAll(/min-width: (\d+)px/gu)].map((m) => Number(m[1]));
+    assert.deepEqual(px, [600, 860]);
+    for (const width of px) {
+      const em = `(min-width: ${String(width / 16)}em)`;
+      assert.ok(
+        styles.some((css) => css.includes(em)),
+        `${em} is no longer in the stylesheets`,
+      );
+    }
+    assert.ok(styles[0].includes('grid-template-columns: auto 1fr auto;'));
+  });
+
+  it('counts only when caught at its size and silent at 100% text', () => {
+    const page = [{ check: 'page' }];
+    assert.deepEqual(judgeControl(header, page, []), { caught: true, why: '' });
+    assert.deepEqual(judgeControl(header, page, page), { caught: false, why: 'fires at 100% text' });
+    assert.deepEqual(judgeControl(header, page, undefined).caught, false, 'never measured at 100%');
+    assert.deepEqual(judgeControl(header, [], []), { caught: false, why: 'missed' });
+  });
+
+  it('every control with its own size needs more than 100%, and the others need no second look', () => {
+    for (const control of CONTROLS.filter((c) => c.scale !== undefined)) assert.ok(control.scale > 1);
+    const plain = CONTROLS.find((control) => control.id === 'coach-track');
+    assert.equal(plain.scale, undefined);
+    assert.equal(judgeControl(plain, [{ check: 'squeezed' }], undefined).caught, true);
+  });
+});
+
+describe("the audit's own Chrome", () => {
+  it('takes a port and a profile from the environment, or its own defaults', () => {
+    assert.deepEqual(chromeTarget({ PRL_LAYOUT_CDP_PORT: '9985', PRL_LAYOUT_PROFILE: 'scratch/p' }, 1), {
+      port: 9985,
+      profile: 'scratch/p',
+    });
+    assert.equal(chromeTarget({}, 141).port, 9651);
+  });
+
+  it('refuses an empty or non-numeric port and an empty profile at start', () => {
+    for (const bad of ['', ' ', 'abc', '99x', '0', '70000', '-1', '9985.5']) {
+      assert.throws(() => chromeTarget({ PRL_LAYOUT_CDP_PORT: bad }, 1), /PRL_LAYOUT_CDP_PORT/u, `"${bad}"`);
+    }
+    // Chrome given an empty --user-data-dir opens the user's own profile.
+    for (const bad of ['', '  ']) {
+      assert.throws(
+        () => chromeTarget({ PRL_LAYOUT_PROFILE: bad }, 1),
+        /PRL_LAYOUT_PROFILE is set but empty/u,
+      );
+    }
   });
 });
 
@@ -773,8 +1592,140 @@ describe('the command line', () => {
     assert.throws(() => parseArgs(['--routes']), /needs a value/u);
   });
 
+  it('refuses an empty list, which would ask for a sweep of nothing', () => {
+    assert.throws(() => parseArgs(['--routes', ',']), /--routes was given an empty list/u);
+    assert.throws(() => parseArgs(['--themes', '']), /--themes was given an empty list/u);
+    assert.throws(() => parseArgs(['--widths', '']), /at least 200/u);
+  });
+
   it('self-test is on unless it is turned off', () => {
     assert.equal(parseArgs([]).selfTest, true);
     assert.equal(parseArgs(['--no-self-test']).selfTest, false);
+  });
+});
+
+describe("the reader's text size", () => {
+  it('is 1 unless asked, and takes Chrome sizes from 1 to 3', () => {
+    assert.equal(parseArgs([]).textScale, 1);
+    assert.equal(parseArgs(['--text-scale', '2']).textScale, 2);
+    assert.equal(parseArgs(['--text-scale', '1.5']).textScale, 1.5);
+    assert.equal(parseArgs(['--text-scale', '3']).textScale, 3);
+  });
+
+  it('refuses a size out of range, one that is not a number, and one Chrome cannot set exactly', () => {
+    for (const bad of ['0.5', '0', '3.5', '4', '-2']) {
+      assert.throws(() => parseArgs(['--text-scale', bad]), /from 1 to 3/u, `${bad} was accepted`);
+    }
+    for (const bad of ['big', '', '2x', 'NaN', 'Infinity']) {
+      assert.throws(() => parseArgs(['--text-scale', bad]), /from 1 to 3/u, `${bad} was accepted`);
+    }
+    // 1.3 is 20.8px, and Page.setFontSizes takes whole pixels.
+    assert.throws(() => parseArgs(['--text-scale', '1.3']), /sixteenths/u);
+    assert.throws(() => parseArgs(['--text-scale']), /needs a value/u);
+  });
+
+  it('accepts the 320px reflow width', () => {
+    assert.deepEqual(parseArgs(['--widths', '320,360']).widths, [320, 360]);
+  });
+
+  it('sends Chrome whole pixels for both faces', () => {
+    assert.deepEqual(fontSizesFor(1), { standard: 16, fixed: 13 });
+    assert.deepEqual(fontSizesFor(2), { standard: 32, fixed: 26 });
+    assert.deepEqual(fontSizesFor(1.5), { standard: 24, fixed: 20 });
+  });
+});
+
+/** A DevTools socket that answers every call, refusing the ones `refuse` picks as Chrome does. */
+class FakeSocket {
+  sent = [];
+  #onMessage = [];
+
+  constructor(refuse = () => false) {
+    this.refuse = refuse;
+  }
+
+  addEventListener(type, listener) {
+    if (type === 'message') this.#onMessage.push(listener);
+  }
+
+  send(text) {
+    const call = JSON.parse(text);
+    this.sent.push(call);
+    const reply = this.refuse(call, this.sent.length)
+      ? { id: call.id, error: { code: -32601, message: `'${call.method}' wasn't found` } }
+      : { id: call.id, result: {} };
+    queueMicrotask(() => {
+      for (const listener of this.#onMessage) listener({ data: JSON.stringify(reply) });
+    });
+  }
+}
+
+describe("Chrome's text size setting", () => {
+  const fontCalls = (socket) =>
+    socket.sent.filter((call) => call.method === 'Page.setFontSizes').map((call) => call.params.fontSizes);
+
+  it('refuses the run when Chrome refuses a size other than 100%, naming the refusal', async () => {
+    const socket = new FakeSocket(() => true);
+    const page = new Page(socket);
+    await assert.rejects(page.setTextScale(2), /refused Page\.setFontSizes for 200% text .*wasn't found/u);
+    assert.equal(page.textScale, 1, 'a refused size must not be reported as the one measured');
+  });
+
+  it('sends nothing at 100%, so the default run does not depend on the method at all', async () => {
+    const socket = new FakeSocket(() => true);
+    const page = new Page(socket);
+    await page.setTextScale(1);
+    assert.deepEqual(socket.sent, []);
+    assert.match(page.textSizeMethod, /default/u);
+  });
+
+  it('goes back to 16px and 13px after 200%, and refuses a refused return', async () => {
+    const socket = new FakeSocket();
+    const page = new Page(socket);
+    await page.setTextScale(2);
+    await page.setTextScale(1);
+    assert.deepEqual(fontCalls(socket), [
+      { standard: 32, fixed: 26 },
+      { standard: 16, fixed: 13 },
+    ]);
+    assert.equal(page.textScale, 1);
+    const stuck = new Page(new FakeSocket((_, n) => n > 1));
+    await stuck.setTextScale(2);
+    await assert.rejects(stuck.setTextScale(1), /refused Page\.setFontSizes for 100% text/u);
+    assert.equal(stuck.textScale, 2, 'the page is still at 200%, and says so');
+  });
+});
+
+describe('a page that ignores the reader text size', () => {
+  const at = (rootFontSize, scale) => {
+    const page = healthyRow();
+    page.page = { ...page.page, rootFontSize };
+    const context = { route: '/lab', theme: 'light', width: 600 };
+    if (scale !== undefined) context.scale = scale;
+    return findTextDefects(page, context).findings.filter((f) => f.check === 'unscaled');
+  };
+
+  it('is reported when the root stays at 16px under a 200% setting, with both numbers', () => {
+    const [finding] = at(16, 2);
+    assert.ok(finding !== undefined, 'a 16px root under 32px text was not reported');
+    assert.equal(finding.rootFontSize, 16);
+    assert.equal(finding.expected, 32);
+    assert.equal(finding.scale, 2);
+    assert.match(formatFinding(finding), /600px {2}200% text\n.*UNSCALED .*16px where the reader set 32px/u);
+  });
+
+  it('is reported for a root pinned in px at the default size too', () => {
+    assert.equal(at(10).length, 1);
+  });
+
+  it('is reported when the root size could not be read, so a missing measurement cannot pass', () => {
+    assert.equal(at(undefined, 2).length, 1);
+    assert.equal(at(Number.NaN, 1).length, 1);
+  });
+
+  it('says nothing when the root follows the setting', () => {
+    assert.deepEqual(at(32, 2), []);
+    assert.deepEqual(at(24, 1.5), []);
+    assert.deepEqual(at(16), []);
   });
 });

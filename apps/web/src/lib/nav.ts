@@ -81,7 +81,7 @@ export function isCurrentDestination(href: string, pathname: string): boolean {
 }
 
 /**
- * Duplicates the `860px` breakpoint in `globals.css`, because `var()` is invalid inside a media
- * feature and `matchMedia` needs a string.
+ * Duplicates the `53.75em` breakpoint in `globals.css`, because `var()` is invalid inside a media
+ * feature and `matchMedia` needs a string. In em like the CSS, so a larger text size keeps the sheet.
  */
-export const NAV_SHEET_QUERY = '(min-width: 860px)';
+export const NAV_SHEET_QUERY = '(min-width: 53.75em)';
