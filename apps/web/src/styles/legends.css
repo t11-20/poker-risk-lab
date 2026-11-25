@@ -1128,6 +1128,25 @@
   color: var(--prl-text-muted);
 }
 
+/**
+ * Below 20em each figure sits under its trait. Side by side at 360px with 200% text, "Aggression", the
+ * gap and the figure needed 244px of a 240px group, and two profiles scrolled sideways.
+ */
+@media (width < 20em) {
+  .prl-legend-contrast__list {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: var(--prl-space-1);
+  }
+
+  .prl-legend-contrast__label:not(:first-of-type) {
+    margin-block-start: var(--prl-space-4);
+  }
+
+  .prl-legend-contrast__delta {
+    text-align: start;
+  }
+}
+
 /* Forced colors. Tints are discarded, so every tinted state is restated as a border, and accent
    edges become `Highlight`. */
 

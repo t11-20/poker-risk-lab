@@ -157,6 +157,13 @@ describe('legends layout rules', () => {
     assert.doesNotMatch(css, /column-reverse|row-reverse|(?:^|[\s;{])order:/u);
   });
 
+  it('below 20em a contrast figure sits under its trait instead of beside it', () => {
+    assert.match(
+      css,
+      /@media \(width < 20em\) \{\s*\.prl-legend-contrast__list \{\s*grid-template-columns: minmax\(0, 1fr\);/u,
+    );
+  });
+
   it('below 15rem the difficulty radio takes its own row, so "Educational" is not cut', () => {
     assert.match(
       css,
