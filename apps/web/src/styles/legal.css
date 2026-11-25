@@ -24,7 +24,8 @@
   /* The section seam is wider than the paragraph gap, or fourteen sections read as one column. */
   gap: var(--prl-space-12);
   max-width: var(--prl-measure);
-  padding-block: var(--prl-space-11) var(--prl-space-10);
+  /* No top padding: the 48px under the page head is `.prl-page-head`'s gap in page.css. */
+  padding-block: var(--prl-space-0) var(--prl-space-10);
 }
 
 /** A hairline between sections, centred in the seam by the padding. */

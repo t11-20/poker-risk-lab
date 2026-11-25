@@ -3307,6 +3307,11 @@ td.prl-candidates__ev,
   line-height: var(--prl-leading-body);
 }
 
+/** The box's padding is the bottom edge. A last `<p>` kept its 16px, which made the box 33px deep there. */
+.prl-callout__body > :last-child {
+  margin-block-end: 0;
+}
+
 /** Caution and adverse only where the callout is about a risk or a mistake. */
 .prl-callout--warning .prl-callout__marker {
   color: var(--prl-caution);
