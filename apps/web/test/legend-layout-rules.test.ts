@@ -147,6 +147,35 @@ describe('legends layout rules', () => {
     );
   });
 
+  /* At 360px with 200% text the names beside the sigil had 96px in a card and 130px on a profile. */
+  it('below 20em every identity puts the sigil above the names, in their reading order', () => {
+    assert.match(
+      css,
+      /@media \(width < 20em\) \{\s*\.prl-legend-identity \{\s*flex-direction: column;\s*\}/u,
+    );
+    // The archetype heading before the attributed name is the guardrail, so nothing may reorder it.
+    assert.doesNotMatch(css, /column-reverse|row-reverse|(?:^|[\s;{])order:/u);
+  });
+
+  it('below 20em a contrast figure sits under its trait instead of beside it', () => {
+    assert.match(
+      css,
+      /@media \(width < 20em\) \{\s*\.prl-legend-contrast__list \{\s*grid-template-columns: minmax\(0, 1fr\);/u,
+    );
+  });
+
+  it('below 15rem the difficulty radio takes its own row, so "Educational" is not cut', () => {
+    assert.match(
+      css,
+      /@container prl-legend-difficulty \(width < 15rem\) \{\s*\.prl-legend-difficulty__option \{\s*grid-template-columns: minmax\(0, 1fr\);/u,
+    );
+    // One track stretches the radio, which draws its dot in the middle of the option.
+    assert.match(
+      css,
+      /@container prl-legend-difficulty \(width < 15rem\) \{[^@]*\.prl-legend-difficulty__control \{\s*justify-self: start;/u,
+    );
+  });
+
   /* Two plus one left a 250-290px hole at 600-834; the grids are 291px in a card and 707px on a profile. */
   it('the three-item grids are three across or one column, decided by their own width', () => {
     const shared = rule(

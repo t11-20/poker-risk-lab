@@ -329,6 +329,16 @@
   font-size: var(--prl-type-body-sm);
 }
 
+/**
+ * The sigil stacks above the names below 20em, where beside it they get under 10rem. At 360px with 200%
+ * text that was 96px in a card and 130px on a profile, and every page scrolled sideways.
+ */
+@media (width < 20em) {
+  .prl-legend-identity {
+    flex-direction: column;
+  }
+}
+
 /* Card grid. `auto-fit` with a floor, and `min-width: 0` on the cell so a nowrap figure cannot
    push the page sideways. */
 
@@ -649,7 +659,7 @@
 
 /**
  * The dot stays small. `base.css` gives every `input` a 44px `min-height`, wrong for a radio, and the
- * `<label>` around the option is the WCAG 2.5.8 target. It sits on the name's row at every width.
+ * `<label>` around the option is the WCAG 2.5.8 target. It sits on the name's row, or above it below 15rem.
  */
 .prl-legend-difficulty__control {
   grid-row: 1;
@@ -718,6 +728,21 @@
   .prl-legend-difficulty__description,
   .prl-legend-difficulty__coach {
     grid-column: 1 / -1;
+  }
+}
+
+/**
+ * Below 15rem the radio takes a row above the name. Beside it at 360px with 200% text the name had
+ * 153px, and "Educational" needs 176px.
+ */
+@container prl-legend-difficulty (width < 15rem) {
+  .prl-legend-difficulty__option {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* At the start of its row, because in a one-track grid a stretched radio draws its dot centred. */
+  .prl-legend-difficulty__control {
+    justify-self: start;
   }
 }
 
@@ -1106,6 +1131,25 @@
 
 .prl-legend-contrast__delta[data-direction="lower"] {
   color: var(--prl-text-muted);
+}
+
+/**
+ * Below 20em each figure sits under its trait. Side by side at 360px with 200% text, "Aggression", the
+ * gap and the figure needed 244px of a 240px group, and two profiles scrolled sideways.
+ */
+@media (width < 20em) {
+  .prl-legend-contrast__list {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: var(--prl-space-1);
+  }
+
+  .prl-legend-contrast__label:not(:first-of-type) {
+    margin-block-start: var(--prl-space-4);
+  }
+
+  .prl-legend-contrast__delta {
+    text-align: start;
+  }
 }
 
 /* Forced colors. Tints are discarded, so every tinted state is restated as a border, and accent
