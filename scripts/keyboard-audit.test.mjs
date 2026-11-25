@@ -20,6 +20,7 @@ import {
   actionControlName,
   ageDeclarationCookies,
   cardElementVerdict,
+  computedOnVerdict,
   insideClosedDetails,
   isPokerActionName,
   landedOnAgeGate,
@@ -382,5 +383,24 @@ describe('the Coach peek skips what a closed details cannot focus', () => {
       false,
       'the selector is copied into the page script instead of the shared function',
     );
+  });
+});
+
+describe('where the deferred figures were computed', () => {
+  it('passes only when every figure arrived and came from the expected thread', () => {
+    assert.equal(computedOnVerdict({ marks: ['worker', 'worker'], pending: 0 }, 'worker'), null);
+    assert.equal(computedOnVerdict({ marks: ['here'], pending: 0 }, 'here'), null);
+  });
+
+  it('NEGATIVE CONTROL — names a figure the fallback computed', () => {
+    assert.match(
+      computedOnVerdict({ marks: ['worker', 'here'], pending: 0 }, 'worker') ?? '',
+      /1 of 2 deferred figure\(s\) computed on "here", not "worker"/u,
+    );
+  });
+
+  it('refuses a figure still pending, and a page with no marked figure', () => {
+    assert.match(computedOnVerdict({ marks: ['worker'], pending: 1 }, 'worker') ?? '', /never arrived/u);
+    assert.match(computedOnVerdict({ marks: [], pending: 0 }, 'worker') ?? '', /nothing was checked/u);
   });
 });

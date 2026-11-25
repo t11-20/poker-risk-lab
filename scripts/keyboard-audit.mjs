@@ -110,11 +110,15 @@ class Page {
   #socket;
   #nextId = 1;
   #replies = new DevtoolsReplies();
+  #handlers = new Map();
 
   constructor(socket) {
     this.#socket = socket;
     socket.addEventListener('message', (event) => {
       const message = JSON.parse(String(event.data));
+      if (message.method !== undefined) {
+        for (const handler of this.#handlers.get(message.method) ?? []) handler(message.params);
+      }
       this.#replies.settle(message);
     });
     socket.addEventListener('close', () => this.#replies.fail(new Error('the DevTools socket closed')));
@@ -129,6 +133,17 @@ class Page {
       });
     });
     return new Page(socket);
+  }
+
+  /** Returns the unsubscribe. */
+  on(method, handler) {
+    this.#handlers.set(method, [...(this.#handlers.get(method) ?? []), handler]);
+    return () => {
+      this.#handlers.set(
+        method,
+        (this.#handlers.get(method) ?? []).filter((h) => h !== handler),
+      );
+    };
   }
 
   send(method, params = {}) {
@@ -1583,6 +1598,70 @@ async function auditQuizBackPlace(page) {
   }
 }
 
+/** Turbopack's worker entry, which every worker loads first; blocking it is a worker that cannot start. */
+export const WORKER_ENTRY_PATTERN = '*turbopack-worker-*';
+
+/** What is wrong with where the page's deferred figures were computed, or `null`. */
+export function computedOnVerdict({ marks, pending }, expected) {
+  if (pending > 0) return `${String(pending)} deferred figure(s) never arrived`;
+  if (marks.length === 0) return 'no deferred figure carries data-computed, so nothing was checked';
+  const off = marks.filter((mark) => mark !== expected);
+  if (off.length > 0) {
+    return `${String(off.length)} of ${String(marks.length)} deferred figure(s) computed on "${off.join('", "')}", not "${expected}"`;
+  }
+  return null;
+}
+
+/**
+ * The main-thread fallback would hide a worker that never runs, so the figure must say it came from the
+ * worker. The control blocks the worker's entry and must then see the fallback, or the check proves nothing.
+ */
+async function auditDeferredOnWorker(page) {
+  const path = '/learn/hand-flow';
+  section(`Deferred figure on the worker  ${DIM}${path}${RESET}`);
+  const READ = `(() => ({ marks: [...document.querySelectorAll('[data-computed]')].map((e) => e.dataset.computed), pending: document.querySelectorAll('.prl-learn-calc__skeleton').length }))()`;
+  const settle = async () => {
+    // A preflop equity takes ~260 ms; 30 s leaves room for a loaded machine without timing anything.
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      const state = await page.evaluate(READ).catch(() => null);
+      if (state !== null && state.pending === 0 && state.marks.length > 0) return state;
+      await delay(250);
+    }
+    return (await page.evaluate(READ).catch(() => null)) ?? { marks: [], pending: 0 };
+  };
+
+  await page.goto(`${WEB_ORIGIN}${path}`);
+  const live = await settle();
+  const problem = computedOnVerdict(live, 'worker');
+  if (problem === null) ok(`Deferred figure: ${String(live.marks.length)} computed on the worker`);
+  else bad('Deferred figure', problem);
+
+  // `Fetch`, because `Network.setBlockedURLs` on the page does not reach a worker's script (Chrome 158).
+  let refused = 0;
+  const off = page.on('Fetch.requestPaused', ({ requestId }) => {
+    refused += 1;
+    page
+      .send('Fetch.failRequest', { requestId, errorReason: 'BlockedByClient' })
+      .catch((error) => bad('Deferred figure control', `could not refuse the worker: ${String(error)}`));
+  });
+  try {
+    await page.send('Fetch.enable', { patterns: [{ urlPattern: WORKER_ENTRY_PATTERN }] });
+    await page.goto(`${WEB_ORIGIN}${path}`);
+    const dead = await settle();
+    // The check above must fail on this page, and the page must still show the fallback's figure.
+    const missed = computedOnVerdict(dead, 'worker');
+    const fallback = computedOnVerdict(dead, 'here');
+    if (refused === 0) bad('Deferred figure control', `no request matched ${WORKER_ENTRY_PATTERN}`);
+    else if (missed === null)
+      bad('Deferred figure control', 'the worker check passed with the worker refused');
+    else if (fallback !== null) bad('Deferred figure control', `with the worker refused, ${fallback}`);
+    else ok(`Deferred figure control: with the worker refused, the check fails (${missed})`);
+  } finally {
+    off();
+    await page.send('Fetch.disable');
+  }
+}
+
 /** "Show the reasoning" unmounts itself when pressed, so it must hand focus to the reasoning it revealed. */
 async function auditQuizRevealFocus(page) {
   const path = '/learn/counting-outs';
@@ -2048,6 +2127,11 @@ async function main() {
         await auditQuizBackPlace(page);
       } catch (error) {
         bad('Quiz Back: audit', error instanceof Error ? error.message : String(error));
+      }
+      try {
+        await auditDeferredOnWorker(page);
+      } catch (error) {
+        bad('Deferred figure: audit', error instanceof Error ? error.message : String(error));
       }
     });
     if (journeys === 0) bad('scope', 'no journey ran, so nothing was audited');
