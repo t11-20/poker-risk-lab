@@ -106,12 +106,17 @@
 .prl-review-sorts__form {
   display: none;
   flex: 1 1 100%;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--prl-space-4);
 }
 
+/**
+ * A basis, because the select's own width is 100% and would always wrap to a row of its own. At 360px
+ * with 200% text the label, select and button needed 398px of 296px, so the select now wraps under them.
+ */
 .prl-review-sorts__form .prl-select {
-  flex: 1 1 auto;
+  flex: 1 1 var(--prl-space-14);
   min-width: 0;
 }
 
@@ -411,6 +416,30 @@ span.prl-review-table__cell-label {
   }
 }
 
+/**
+ * One area a row below 18em. Side by side at 360px with 200% text, the `auto` column took 156px for the
+ * ending and left "Result" and the date 0px, torn one letter a line.
+ */
+@media (width < 18em) {
+  .prl-review-table tbody tr {
+    grid-template-areas: "net" "ending" "board" "when" "pot" "hand";
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .prl-review-table tbody td.prl-review-table__ending {
+    justify-self: start;
+  }
+
+  .prl-review-table tbody td.prl-review-table__pot {
+    text-align: start;
+    white-space: normal;
+  }
+
+  a.prl-review-table__link {
+    white-space: normal;
+  }
+}
+
 .prl-review-paging {
   display: flex;
   flex-wrap: wrap;
@@ -455,6 +484,26 @@ span.prl-review-table__cell-label {
 
 .prl-review-summary > li + li {
   border-inline-start: var(--prl-hairline);
+}
+
+/**
+ * One figure a row below 20em, with the rule between rows. Each wrapped item kept its 1.5rem inline
+ * padding, so at 360px with 200% text "Ending ⇄showdown" needed 376px of 322px.
+ */
+@media (width < 20em) {
+  .prl-review-summary {
+    flex-direction: column;
+  }
+
+  .prl-review-summary > li {
+    padding-inline: var(--prl-space-0);
+  }
+
+  .prl-review-summary > li + li {
+    padding-block-start: var(--prl-space-6);
+    border-inline-start: 0;
+    border-block-start: var(--prl-hairline);
+  }
 }
 
 /** `metric-md`, because the hand's headline figures at 18px were barely above the body text. */
@@ -559,8 +608,10 @@ span.prl-review-table__cell-label {
  * accent fill lifted 2px. Rest uses `--prl-line`, because its edge carries no meaning. WCAG 1.4.11's
  * 3:1 applies to the current and hovered states, which both take the accent.
  */
+/* Wraps, so a narrow marker puts its action under the name instead of tearing "You" one letter a line. */
 .prl-timeline__marker {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--prl-space-3);
   /* 44px, above WCAG 2.2's 24px floor, because a scrub marker is often used one-handed. */
@@ -881,6 +932,13 @@ span.prl-review-table__cell-label {
   margin: 0;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: baseline;
+}
+
+/* Each value under its term below 18em: at 360px with 200% text the terms took 274px and left 0px. */
+@media (width < 18em) {
+  .prl-verifier__facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 /* Mono with tabular figures, because the root is compared character by character. */
