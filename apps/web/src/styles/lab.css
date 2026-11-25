@@ -428,7 +428,7 @@
 
 /*
  * Phone only. It sits after the base rules because a media query adds no specificity. Topic stays
- * full width: "Fold equity and bluffing (2)" is 187px and a half column has 144px of text room.
+ * full width: "Fold equity and bluffing (2)" is 187px and a half column has 136px of text room at 390.
  * Difficulty and Street share a row from 380px up.
  */
 @media (width < 600px) {
@@ -468,8 +468,8 @@
 }
 
 /*
- * A half column at 360 left 7px of spare on "Every street (36)", too little for the arrow.
- * Below 380 the three selects stack, and the face stays the body size.
+ * "Every street (36)" has 13px to spare in a half column at 380, and about 3px at 360, so below
+ * 380 the three selects stack. The face stays the body size.
  */
 @media (width < 380px) {
   .prl-lab-filters__row {

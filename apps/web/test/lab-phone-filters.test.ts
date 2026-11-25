@@ -53,6 +53,14 @@ function topLevelRules(source: string): { readonly selector: string; readonly at
   return found;
 }
 
+/** The body of a rule outside every at-rule, so a rule moved into a media query is not found. */
+function topLevelRule(source: string, selector: string): string {
+  const found = topLevelRules(source).find((one) => one.selector === selector);
+  assert.ok(found !== undefined, `no top-level rule for "${selector}"`);
+  const open = source.indexOf('{', found.at);
+  return source.slice(open + 1, source.indexOf('}', open));
+}
+
 describe('lab filters on a phone', () => {
   const phone = mediaBlock('width < 600px');
 
@@ -102,10 +110,10 @@ describe('lab filters on a phone', () => {
       /grid-template-columns:\s*repeat\(12,\s*minmax\(0,\s*1fr\)\)/u,
     );
     // At every width, because 600px at 200% text overflowed too. The nowrap chip set the card's width.
-    const card = rule(code, '.prl-lab-card');
+    const card = topLevelRule(code, '.prl-lab-card');
     assert.match(card, /min-inline-size:\s*0/u);
     assert.match(card, /max-inline-size:\s*100%/u);
-    const chip = rule(code, '.prl-lab-card .prl-chip');
+    const chip = topLevelRule(code, '.prl-lab-card .prl-chip');
     assert.match(chip, /white-space:\s*normal/u);
     assert.match(chip, /overflow-wrap:\s*break-word/u);
   });
@@ -120,6 +128,8 @@ describe('lab filters on a phone', () => {
       [],
       'a later base rule of equal specificity wins over the phone block',
     );
+    // The stack below 380 overrides the pairing, so it has to come after it.
+    assert.ok(code.indexOf('@media (width < 380px)') > media, 'the 380px block sits before the 600px block');
   });
 
   it('leaves the form a GET form whose count line is still the jump target', () => {

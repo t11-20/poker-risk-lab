@@ -30,8 +30,8 @@
 
 /**
  * One track below 600px, where every cell spans the row anyway. Twelve tracks put eleven gaps
- * inside each cell: 528px at 200% text, wider than a 320px screen. Spans only inside the wide
- * query, because a `span 8` in a six-column grid grows the implicit grid.
+ * inside each cell: 528px at 200% text, wider than a 320px screen. Spans apply only inside the wide
+ * queries, because any span wider than the tracks there grows the implicit grid.
  */
 .prl-grid {
   display: grid;
@@ -3267,8 +3267,10 @@ td.prl-candidates__ev,
 
 /* Callout */
 
-/** The marker carries a word ("Insight", "Note", "Watch out"), so the callout reads without colour. */
-/** The box is capped too. On `/play` at 1440 it drew a 1360px band around a 612px paragraph. */
+/**
+ * The marker carries a word ("Insight", "Note", "Watch out"), so the callout reads without colour.
+ * The box is capped too. On `/play` at 1440 it drew a 1360px band around a 612px paragraph.
+ */
 .prl-callout {
   display: grid;
   max-width: calc(var(--prl-measure) + 2 * var(--prl-space-6));
@@ -3313,7 +3315,7 @@ td.prl-candidates__ev,
 }
 
 /**
- * Quieter than an insight: a receipt or an honesty line, not a teaching point.
+ * Quieter than an insight: a receipt, a status, a measured result or a pointer, not a teaching point.
  * The edge is `--prl-line`, which is decorative; the strong edge stays on the other tones.
  */
 .prl-callout--note {

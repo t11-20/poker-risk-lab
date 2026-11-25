@@ -1,5 +1,5 @@
 /**
- * A note is a receipt or an honesty line, so it must not wear the Insight marker.
+ * A note is a receipt, a status, a measured result or a pointer, so it must not wear the Insight marker.
  * Rendered, because the marker word is what a reader sees and what a screen reader speaks.
  */
 

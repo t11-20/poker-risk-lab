@@ -358,13 +358,14 @@ describe('ranges that cannot all be dealt at once', () => {
 
   it('answers within a frame for five wide ranges that share four cards', () => {
     const anyAce = 'A2s+, A2o+';
-    const draft: SpotDraft = {
-      ...good(),
-      cards: { ...good().cards, flop1: null, flop2: null, flop3: null, hole1: c('2c'), hole2: c('3d') },
-      opponents: seats([anyAce, anyAce, anyAce, anyAce, anyAce]),
-    };
     // The fastest of five, because the suite runs beside the other packages: one run took 71ms there.
-    const runs = Array.from({ length: 5 }, () => {
+    // A different second hole card each run, because `dealSearch` caches by combos and a hit takes 0.3ms.
+    const runs = ['3d', '4d', '5d', '6d', '7d'].map((hole2) => {
+      const draft: SpotDraft = {
+        ...good(),
+        cards: { ...good().cards, flop1: null, flop2: null, flop3: null, hole1: c('2c'), hole2: c(hole2) },
+        opponents: seats([anyAce, anyAce, anyAce, anyAce, anyAce]),
+      };
       const started = performance.now();
       assert.equal(errorOn(draft, 'opponents'), JOINT);
       return performance.now() - started;
