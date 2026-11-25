@@ -3257,7 +3257,7 @@ td.prl-candidates__ev,
 
 /* Callout */
 
-/** The marker carries a word ("Insight", "Watch out"), so the callout reads without colour. */
+/** The marker carries a word ("Insight", "Note", "Watch out"), so the callout reads without colour. */
 /** The box is capped too. On `/play` at 1440 it drew a 1360px band around a 612px paragraph. */
 .prl-callout {
   display: grid;
@@ -3300,6 +3300,20 @@ td.prl-candidates__ev,
 
 .prl-callout--misconception .prl-callout__marker {
   color: var(--prl-adverse);
+}
+
+/**
+ * Quieter than an insight: a receipt or an honesty line, not a teaching point.
+ * The edge is `--prl-line`, which is decorative; the strong edge stays on the other tones.
+ */
+.prl-callout--note {
+  border: 1px solid var(--prl-line);
+}
+
+/** A label, not a heading. Muted and medium, where an insight's marker is secondary and semibold. */
+.prl-callout--note .prl-callout__marker {
+  color: var(--prl-text-muted);
+  font-weight: var(--prl-weight-medium);
 }
 
 /* Formula */

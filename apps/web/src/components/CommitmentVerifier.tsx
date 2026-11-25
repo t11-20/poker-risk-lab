@@ -100,7 +100,7 @@ export function CommitmentVerifier(props: CommitmentVerifierProps): ReactElement
       ) : null}
 
       {outcome === 'proved' ? (
-        <Callout tone="insight" title={`${pluralise(proved, 'position')} proved against the published root`}>
+        <Callout tone="note" title={`${pluralise(proved, 'position')} proved against the published root`}>
           {/* The binding check is stated first, because it is what makes the rest true. */}
           {`Your browser first checked that the reveal names the same Merkle root and the same hand context as the ones published above, and refused to go any further unless they matched. Then it recomputed each leaf hash from the card, its salt and its deck position, walked the six sibling hashes up the tree, and arrived at that same root — ${pluralise(
             proved,
@@ -111,7 +111,7 @@ export function CommitmentVerifier(props: CommitmentVerifierProps): ReactElement
 
       {/* An empty reveal is the CORRECT result for a hand nobody showed in. See the header. */}
       {outcome === 'nothing-to-prove' ? (
-        <Callout tone="insight" title="Nothing became public in this hand, so there is nothing to prove">
+        <Callout tone="note" title="Nothing became public in this hand, so there is nothing to prove">
           Every player folded, so no community card was dealt and no hand was shown. The reveal is empty
           because no card legitimately became public — and an empty reveal that checks out is the right answer
           here, not a missing proof. Publishing more would mean publishing the cards of players who folded,
