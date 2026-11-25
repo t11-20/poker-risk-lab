@@ -101,6 +101,11 @@ export function removeCard(slots: readonly PickerSlot[], id: string): PickResult
  */
 export type DeckFlow = 'rows' | 'columns';
 
+/** The flow for the column count in the stylesheet's `--prl-picker-cols`. Anything unknown reads as rows. */
+export function deckFlowFor(columns: number): DeckFlow {
+  return columns === DECK_SUITS ? 'columns' : 'rows';
+}
+
 /** Where an arrow, Home or End key moves focus from `index`, or `null` for any other key. Never wraps. */
 export function moveInDeck(index: number, key: string, flow: DeckFlow): number | null {
   const suit = Math.floor(index / DECK_RANKS);

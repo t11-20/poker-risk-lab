@@ -1,7 +1,7 @@
 /**
- * CardPicker. Thirteen 40px cards across, each in a column of at least 44px, need 40rem; below that the
- * deck turns into four suit columns, read through `grid-auto-flow`, which the component asks for to aim
- * the arrow keys.
+ * CardPicker. The deck is thirteen across from 572px (13 x 44) and four suit columns below that, each
+ * of 44px targets. The component reads `--prl-picker-cols` to aim the arrow keys. Pixels, because the
+ * target is 44px.
  */
 
 .prl-picker {
@@ -111,10 +111,12 @@
   font-size: var(--prl-type-body-sm);
 }
 
-/** Rows from 40rem; the four suit columns below are the default, as the narrowest case. */
+/** The four suit columns are the default, as the narrowest case. */
 .prl-picker__deck {
+  --prl-picker-cols: 4;
+
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(var(--prl-picker-cols), minmax(0, 1fr));
   grid-template-rows: repeat(13, auto);
   grid-auto-flow: column;
   gap: var(--prl-space-1);
@@ -169,11 +171,11 @@
   outline-offset: 1px;
 }
 
-/** Over the foot of the greyed face in the suit columns, where a line under every card costs 13 rows. */
+/** Over the foot of the greyed face, since a line under every card costs a row. No wider than the face. */
 .prl-picker__used {
   grid-area: face;
   align-self: end;
-  padding-inline: var(--prl-space-2);
+  padding-inline: var(--prl-space-1);
   border-radius: var(--prl-radius-1);
   background-color: var(--prl-surface-panel);
   color: var(--prl-text);
@@ -186,11 +188,26 @@
   display: none;
 }
 
-@container prl-picker (min-width: 40rem) {
+/**
+ * Below 622px the face narrows to as little as 38px and, below 596px, the column gap to nothing, so
+ * every cell keeps 44px. From 622px both are as they were.
+ */
+@container prl-picker (min-width: 572px) {
   .prl-picker__deck {
-    grid-template-columns: repeat(13, minmax(0, 1fr));
+    --prl-picker-cols: 13;
+    --prl-picker-gap: clamp(0px, (100cqi - 572px) / 12, var(--prl-space-1));
+
+    grid-template-columns: repeat(var(--prl-picker-cols), minmax(0, 1fr));
     grid-template-rows: none;
     grid-auto-flow: row;
+    column-gap: var(--prl-picker-gap);
+  }
+
+  .prl-picker__card .prl-card {
+    --prl-card-w: min(
+      var(--prl-space-10),
+      calc((100cqi - 12 * var(--prl-picker-gap)) / 13 - 2 * var(--prl-space-1) - 2px)
+    );
   }
 
   .prl-picker__card {
