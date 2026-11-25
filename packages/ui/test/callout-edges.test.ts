@@ -15,12 +15,9 @@ const base = read('../src/styles/base.css');
 const callout = read('../src/components/Callout.tsx');
 
 describe('callout edges', () => {
-  it('wraps its children in `.prl-callout__body`, which a paragraph margin would otherwise push open', () => {
+  it('takes the paragraph margin off the last child of `.prl-callout__body`', () => {
     assert.match(callout, /<div className="prl-callout__body">\{children\}<\/div>/u);
     assert.match(base, /(?:^|\n)p \{[^}]*margin-block-end: var\(--prl-space-6\);/u);
-  });
-
-  it('takes the margin off the body’s last child', () => {
     assert.match(components, /(?:^|\n)\.prl-callout__body > :last-child \{\s*margin-block-end: 0;\s*\}/u);
   });
 });
