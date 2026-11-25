@@ -1049,7 +1049,7 @@
  * Three equal tracks once each clears its floor, else one: never two plus an orphan. It reads the
  * grid's own width (291px in a card, 707px on a profile at 768). Under the threshold `* 999` floors a
  * track at 100%; over it the 25% floor fits exactly three, and two children still share the row in halves.
- * The live profile sends eleven contrast groups, so contrast takes it only when it has three.
+ * Contrast takes it only with exactly three groups, which is what the profile page always sends.
  */
 .prl-legend-card__metrics,
 .prl-legend-maths,

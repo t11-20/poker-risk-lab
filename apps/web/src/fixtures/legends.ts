@@ -811,9 +811,8 @@ export function contrastsFor(profileId: string): LearnFromProfileResponse['contr
         label: TRAIT_LABELS[key],
         delta: subject.traits[key] - other.traits[key],
       }))
-        .sort(
-          (left, right) => Math.abs(right.delta) - Math.abs(left.delta) || left.key.localeCompare(right.key),
-        )
+        // A stable sort, so tied axes keep the trait order, as the server's `biggestTraitDifferences` does.
+        .sort((left, right) => Math.abs(right.delta) - Math.abs(left.delta))
         .slice(0, CONTRAST_AXES),
     }));
 }

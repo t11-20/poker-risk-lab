@@ -26,6 +26,7 @@ import {
   TRAIT_LABELS,
 } from '@prl/poker-ai';
 import { evOfBet, evOfCall, evOfRaise } from '@prl/poker-math';
+import { profileContrasts } from '../src/routes/rooms.ts';
 
 const FIXTURE = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -52,7 +53,16 @@ const HAND = exported<HandComparison>('HAND_COMPARISON_FIXTURE');
 const BIG_BLIND = exported<number>('HAND_COMPARISON_BIG_BLIND');
 const COMPARE = exported<CompareProfilesResponse>('COMPARE_FIXTURE');
 const PROFILE_CARDS = exported<readonly LegendProfileCardDto[]>('LEGEND_PROFILE_FIXTURES');
-const learnFromFixture = exported<(id: string) => { readonly observed: unknown } | null>('learnFromFixture');
+const learnFromFixture =
+  exported<
+    (id: string) => {
+      readonly observed: unknown;
+      readonly contrasts: readonly {
+        readonly otherProfileId: string;
+        readonly differences: readonly { readonly key: string; readonly delta: number }[];
+      }[];
+    } | null
+  >('learnFromFixture');
 
 /**
  * `pot` is `report.potTotal`, the pot before the action including the bet faced. A raise's
@@ -276,6 +286,24 @@ describe('the Legends fixture is a fixture, not a measurement', () => {
       assert.ok(learn !== null, `${card.id} has a card but no learn-from payload`);
       assert.equal(learn.observed, null, `${card.id} offers observed statistics it cannot have`);
     }
+  });
+
+  it('contrasts the same profiles, on the same axes in the same order, as the profile route', () => {
+    let compared = 0;
+    for (const card of PROFILE_CARDS) {
+      const profile = PROFILES.find((one) => one.naming.id === card.id);
+      assert.ok(profile !== undefined, `${card.id} is not a server profile`);
+      const shape = (contrasts: NonNullable<ReturnType<typeof learnFromFixture>>['contrasts']) =>
+        contrasts.map((contrast) => ({
+          id: contrast.otherProfileId,
+          axes: contrast.differences.map((difference) => `${difference.key} ${difference.delta.toFixed(9)}`),
+        }));
+      const bundled = learnFromFixture(card.id);
+      assert.ok(bundled !== null, card.id);
+      assert.deepEqual(shape(bundled.contrasts), shape(profileContrasts(profile, 'archetype')), card.id);
+      compared += bundled.contrasts.length;
+    }
+    assert.ok(compared >= PROFILE_CARDS.length, 'compared no contrasts');
   });
 
   it('asks for a trial count the endpoint will actually run', () => {

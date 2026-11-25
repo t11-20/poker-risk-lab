@@ -72,6 +72,28 @@ import { registerLegendStatsRoute } from './legends.ts';
 export const CONTRAST_PROFILES = 3;
 
 /**
+ * The three furthest profiles by `traitDistance`, ties by id, each with its biggest trait gaps. The
+ * bundled copy shows the same, and a test holds the two together. Names follow this deployment's mode.
+ */
+export function profileContrasts(
+  profile: (typeof PROFILES)[number],
+  mode: ReturnType<typeof resolveNamingMode>,
+): LearnFromProfileResponse['contrasts'] {
+  return PROFILES.filter((other) => other.naming.id !== profile.naming.id)
+    .map((other) => ({ other, distance: traitDistance(profile.traits, other.traits) }))
+    .sort(
+      (left, right) =>
+        right.distance - left.distance || left.other.naming.id.localeCompare(right.other.naming.id),
+    )
+    .slice(0, CONTRAST_PROFILES)
+    .map(({ other }) => ({
+      otherProfileId: other.naming.id,
+      otherDisplayName: profileDisclosure(other.naming, mode).displayName,
+      differences: biggestTraitDifferences(profile.traits, other.traits),
+    }));
+}
+
+/**
  * Schemas for Legends bodies that `@prl/contracts` types but does not schema. Passed inline with
  * no `$id`, so the contract has no second addressable definition.
  */
@@ -352,20 +374,7 @@ export function createRoomRoutes(options: RoomRoutesOptions = {}): FastifyPlugin
             others: PROFILES,
           }),
           observedBasis: null,
-          // Re-derived through `profileDisclosure` so contrasts use this deployment's naming mode. The three
-          // most different, as the page says and the bundled copy shows; all eleven made a wall of figures.
-          contrasts: PROFILES.filter((other) => other.naming.id !== profile.naming.id)
-            .map((other) => ({ other, distance: traitDistance(profile.traits, other.traits) }))
-            .sort(
-              (left, right) =>
-                right.distance - left.distance || left.other.naming.id.localeCompare(right.other.naming.id),
-            )
-            .slice(0, CONTRAST_PROFILES)
-            .map(({ other }) => ({
-              otherProfileId: other.naming.id,
-              otherDisplayName: profileDisclosure(other.naming, mode).displayName,
-              differences: biggestTraitDifferences(profile.traits, other.traits),
-            })),
+          contrasts: profileContrasts(profile, mode),
         };
       },
     );

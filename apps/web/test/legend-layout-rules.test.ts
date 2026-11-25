@@ -171,7 +171,7 @@ describe('legends layout rules', () => {
         rem(floor.startsWith('calc(') ? floor : `calc(${floor})`) >= 10,
         `${selector} floor ${floor}`,
       );
-      // Contrast keeps its own tracks for the eleven groups the live profile sends; the rest never override.
+      // Contrast keeps its own tracks as a fallback for any count but three; the rest never override.
       if (selector === '.prl-legend-contrast') continue;
       assert.doesNotMatch(
         own,
