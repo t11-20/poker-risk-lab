@@ -331,12 +331,45 @@ export function frameSides(style, backdrop) {
   return { left: fill || border('Left'), right: fill || border('Right') };
 }
 
+/**
+ * Folds one word's rectangles into the widest piece, and with `firstTop` known the widest on the first
+ * line and on any later one, so each piece meets the room of its own line. Runs in the page.
+ */
+export function foldWord(widest, text, rects, firstTop) {
+  for (const r of rects) {
+    const piece = { text, width: Math.round(r.width * 100) / 100 };
+    if (widest.word === null || piece.width > widest.word.width) widest.word = piece;
+    if (firstTop === null) continue;
+    piece.first = r.top < firstTop + r.height / 2;
+    const line = piece.first ? 'opening' : 'later';
+    if (widest[line] === null || piece.width > widest[line].width) widest[line] = piece;
+  }
+  return widest;
+}
+
+/**
+ * A computed text-indent in px, a percentage being of the block's inline size, and whether it names
+ * `hanging` or `each-line`, which indent other lines than the first. Runs in the page.
+ */
+export function parseTextIndent(raw, width) {
+  const parts = String(raw ?? '')
+    .trim()
+    .split(/\s+/u);
+  const keywords = parts.some((part) => part === 'hanging' || part === 'each-line');
+  const length = parts.filter((part) => part !== 'hanging' && part !== 'each-line').join(' ');
+  const n = Number.parseFloat(length);
+  if (!Number.isFinite(n)) return { px: 0, keywords };
+  return { px: length.endsWith('%') ? (n * width) / 100 : n, keywords };
+}
+
 // The walker measures and decides nothing. Comments inside it are part of the page script.
 
 const WALKER = String.raw`(() => {
   const EXEMPT_SELECTORS = EXEMPT_SELECTORS_ARGUMENT;
   const colorAlpha = COLOR_ALPHA_ARGUMENT;
   const frameSides = FRAME_SIDES_ARGUMENT;
+  const foldWord = FOLD_WORD_ARGUMENT;
+  const parseTextIndent = PARSE_TEXT_INDENT_ARGUMENT;
 
   const skipped = { ariaHidden: 0, visuallyHidden: 0, invisible: 0, offscreen: 0, inert: 0 };
 
@@ -525,14 +558,6 @@ const WALKER = String.raw`(() => {
     return ws === 'pre' || ws === 'pre-wrap' || ws === 'break-spaces';
   };
 
-  /** text-indent in px; a percentage is of the block's own inline size. */
-  const indentOf = (style, width) => {
-    const raw = style.textIndent;
-    const n = Number.parseFloat(raw);
-    if (!Number.isFinite(n)) return 0;
-    return raw.trim().endsWith('%') ? (n * width) / 100 : n;
-  };
-
   /** The top of a block's first line, which is the only line text-indent moves. */
   const firstLineTop = (block) => {
     const range = document.createRange();
@@ -671,16 +696,16 @@ const WALKER = String.raw`(() => {
     const block = blockOf(el);
     const blockStyle = styleOf(block);
     const { pad, content } = boxesOf(block, blockStyle);
-    const indent = indentOf(blockStyle, content.w);
-    const firstTop = indent === 0 ? null : firstLineTop(block);
+    const indent = parseTextIndent(blockStyle.textIndent, content.w);
+    // Which lines hanging or each-line indents is not measured, so no piece is placed on a line.
+    const firstTop = indent.px === 0 || indent.keywords ? null : firstLineTop(block);
     const preserved = preservesSpaces(style);
 
     // Glyph rectangles, and the widest word, from the text nodes themselves.
     const rects = [];
     const ink = [];
     const broken = [];
-    let widest = null;
-    let later = null;
+    const widest = { word: null, opening: null, later: null };
     for (const node of own) {
       textNodes += 1;
       const value = node.nodeValue;
@@ -701,14 +726,7 @@ const WALKER = String.raw`(() => {
         w.setStart(node, match.index);
         w.setEnd(node, match.index + match[0].length);
         const pieces = [...w.getClientRects()];
-        let wide = 0;
-        for (const r of pieces) wide = Math.max(wide, r.width);
-        const word = { text: match[0].slice(0, 40), width: Math.round(wide * 100) / 100 };
-        if (firstTop !== null && pieces.length > 0) {
-          word.first = pieces[0].top < firstTop + pieces[0].height / 2;
-          if (!word.first && (later === null || word.width > later.width)) later = word;
-        }
-        if (widest === null || word.width > widest.width) widest = word;
+        foldWord(widest, match[0].slice(0, 40), pieces, firstTop);
         const shown = pieces.filter((r) => r.width > 0.5 && r.height > 0.5);
         if (preserved) for (const r of shown) addInk(ink, r);
         if (lineCount(shown) > 1) broken.push(piecesOf(node, match.index, match[0]));
@@ -749,7 +767,7 @@ const WALKER = String.raw`(() => {
       rects,
       pad: round(pad),
       content: round(content),
-      word: widest,
+      word: widest.word,
       flow: flowRootOf(el),
       layer: layerOf(el),
       scrollHost: scrollHostOf(el),
@@ -760,9 +778,10 @@ const WALKER = String.raw`(() => {
       exempt,
     };
     if (preserved && ink.length > 0) measured.ink = ink.map(asRect);
-    if (indent !== 0) {
-      measured.indent = Math.round(indent * 100) / 100;
-      measured.later = later;
+    if (indent.px !== 0) {
+      measured.indent = Math.round(indent.px * 100) / 100;
+      if (indent.keywords) measured.indentKeyword = true;
+      else Object.assign(measured, { opening: widest.opening, later: widest.later });
     }
     if (silent) {
       skipped.ariaHidden += 1;
@@ -900,13 +919,18 @@ export function letterByLetter(pieces, fills = false) {
   return runs.find((r) => isTorn(r, fills)) ?? null;
 }
 
-/** The widest word, or the widest beyond the first line, short of the room its own line has. */
+/** The widest piece on the first line or a later one, whichever is shortest of its own line's room. */
 function squeezeOf(box) {
+  const indent = box.indent ?? 0;
   let worst = null;
-  for (const word of [box.word, box.later]) {
+  for (const word of [box.word, box.opening, box.later]) {
     if (word === null || word === undefined) continue;
-    // A negative text-indent starts the first line that far before the content box.
-    const room = box.content.w - (word.first === true ? (box.indent ?? 0) : 0);
+    // A negative text-indent starts the first line that far before the content box. Under hanging or
+    // each-line the lines it moves are unknown, so no line gains room and every line may lose it.
+    const room =
+      box.indentKeyword === true
+        ? box.content.w - Math.max(0, indent)
+        : box.content.w - (word.first === true ? indent : 0);
     const short = word.width - room;
     if (worst === null || short > worst.short) worst = { word, room, short };
   }
@@ -1592,7 +1616,9 @@ async function withPage(headful, textScale, run) {
 const walkerSource = () =>
   WALKER.replace('EXEMPT_SELECTORS_ARGUMENT', JSON.stringify(EXEMPTIONS.map((rule) => rule.selector)))
     .replace('COLOR_ALPHA_ARGUMENT', () => String(colorAlpha))
-    .replace('FRAME_SIDES_ARGUMENT', () => String(frameSides));
+    .replace('FRAME_SIDES_ARGUMENT', () => String(frameSides))
+    .replace('FOLD_WORD_ARGUMENT', () => String(foldWord))
+    .replace('PARSE_TEXT_INDENT_ARGUMENT', () => String(parseTextIndent));
 
 let dumpCount = 0;
 

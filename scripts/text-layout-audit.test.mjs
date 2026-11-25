@@ -20,6 +20,7 @@ import {
   exemptionFailures,
   exemptionReport,
   findTextDefects,
+  foldWord,
   fontSizesFor,
   formatExemption,
   formatFinding,
@@ -32,6 +33,7 @@ import {
   nearestFrame,
   Page,
   parseArgs,
+  parseTextIndent,
   passCoverageFailures,
   ROUTES,
   sweepMatrix,
@@ -739,6 +741,66 @@ describe('a hanging indent', () => {
     Object.assign(pushed.boxes[0], { indent: 33.71, word: { text: 'break-even', width: 140, first: true } });
     const squeezed = findTextDefects(pushed, {}).findings.find((f) => f.check === 'squeezed');
     assert.equal(squeezed?.has, 115.26);
+  });
+
+  /** The hanging-indent block with its words folded as the walker folds them, line by line. */
+  const folded = (indent, words) => {
+    const widest = { word: null, opening: null, later: null };
+    for (const [text, rects] of words) foldWord(widest, text, rects, 10708.8);
+    const page = hangingIndent();
+    Object.assign(page.boxes[0], { indent, ...widest });
+    return findTextDefects(page, {}).findings.filter((f) => f.check === 'squeezed');
+  };
+  const line = (n, width) => ({ top: 10708.8 + 36.39 * n, width, height: 30 });
+
+  it('judges a wrapped word by the line its widest piece is on, not its first (REGRESSION)', () => {
+    // "a-" ends the long first line, and "verylongpart" on the next has only the content box.
+    const squeezed = folded(-33.71, [
+      ['some', [line(0, 60)]],
+      ['a-verylongpart', [line(0, 20), line(1, 170)]],
+    ]);
+    assert.deepEqual(
+      squeezed.map((f) => [f.word, f.has, f.short]),
+      [['a-verylongpart', 148.97, 21.03]],
+    );
+  });
+
+  it('judges the first line by its own room when a wider word sits on a later one', () => {
+    // A positive indent: "Opening" has 115.26px on the first line, the 140px word below has 148.97.
+    const squeezed = folded(33.71, [
+      ['Opening', [line(0, 130)]],
+      ['widest', [line(2, 140)]],
+    ]);
+    assert.deepEqual(
+      squeezed.map((f) => [f.word, f.has]),
+      [['Opening', 115.26]],
+    );
+    assert.deepEqual(folded(-33.71, [['fits', [line(0, 170)]]]), [], 'the first line has 182.68px');
+  });
+});
+
+describe('a text-indent that names hanging or each-line', () => {
+  it('is read as its length and its keywords, never as a plain length', () => {
+    assert.deepEqual(parseTextIndent('-32px hanging', 300), { px: -32, keywords: true });
+    assert.deepEqual(parseTextIndent('each-line 10%', 300), { px: 30, keywords: true });
+    assert.deepEqual(parseTextIndent('10% hanging each-line', 300), { px: 30, keywords: true });
+    assert.deepEqual(parseTextIndent('-33.71px', 300), { px: -33.71, keywords: false });
+    assert.deepEqual(parseTextIndent('0px', 300), { px: 0, keywords: false });
+  });
+
+  it('gives no line extra room and takes it from every line, since which lines it moves is unknown', () => {
+    const hanging = hangingIndent();
+    Object.assign(hanging.boxes[0], { indentKeyword: true, later: undefined });
+    const squeezed = findTextDefects(hanging, {}).findings.find((f) => f.check === 'squeezed');
+    assert.equal(squeezed?.has, 148.97, 'a negative hanging indent opens no line');
+    const pushed = hangingIndent();
+    Object.assign(pushed.boxes[0], {
+      indent: 20,
+      indentKeyword: true,
+      word: { text: 'equity', width: 140 },
+      later: undefined,
+    });
+    assert.equal(findTextDefects(pushed, {}).findings.find((f) => f.check === 'squeezed')?.has, 128.97);
   });
 });
 
