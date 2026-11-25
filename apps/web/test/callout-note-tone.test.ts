@@ -106,3 +106,20 @@ describe('callouts that are not insights use the note tone', () => {
     }
   });
 });
+
+describe('status receipts on the table are notes; only an unreachable table warns', () => {
+  it('a retryable close and a sent or applied decision use the note tone', () => {
+    const live = read('apps', 'web', 'src', 'app', 'play', 'LiveTable.tsx');
+    assert.match(
+      live,
+      /tone=\{closed\.retryable \? 'note' : 'warning'\}/u,
+      'a retryable close is not a note',
+    );
+    const stage = read('apps', 'web', 'src', 'components', 'TableStage.tsx');
+    assert.match(
+      stage,
+      /tone=\{isLive && submission\.status !== 'held' \? 'note' : 'warning'\}/u,
+      'a sent or applied decision is not a note',
+    );
+  });
+});

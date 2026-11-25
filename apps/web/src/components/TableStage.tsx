@@ -504,8 +504,8 @@ function DecisionBand(props: DecisionBandProps): ReactElement {
             </div>
           ) : (
             <Callout
-              // `held` is a warning, not an insight, because the table is unreachable.
-              tone={isLive && submission.status !== 'held' ? 'insight' : 'warning'}
+              // `held` is a warning, not a note, because the table is unreachable.
+              tone={isLive && submission.status !== 'held' ? 'note' : 'warning'}
               title={isLive ? SUBMISSION_TITLE[submission.status] : 'Nothing was sent'}
             >
               {submission.message}

@@ -187,7 +187,7 @@ function ConnectionNotices({ live }: ConnectionPanelProps): ReactElement {
         </Callout>
       )}
       {closed === null ? null : (
-        <Callout tone={closed.retryable ? 'insight' : 'warning'} title={closed.title}>
+        <Callout tone={closed.retryable ? 'note' : 'warning'} title={closed.title}>
           {closed.detail}
         </Callout>
       )}
