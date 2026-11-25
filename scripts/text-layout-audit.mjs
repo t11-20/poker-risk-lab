@@ -119,6 +119,9 @@ const WORD_TOLERANCE = 2;
  */
 const MAX_PIECE = 2;
 
+/** The pieces of one broken word the page sends at most, so a longer word's count is a lower bound. */
+const PIECES_SENT = 80;
+
 const MIN_TEXT_BOXES_PER_PAGE = 15;
 
 /**
@@ -369,6 +372,7 @@ const WALKER = String.raw`(() => {
   const colorAlpha = COLOR_ALPHA_ARGUMENT;
   const frameSides = FRAME_SIDES_ARGUMENT;
   const foldWord = FOLD_WORD_ARGUMENT;
+  const PIECES_SENT = PIECES_SENT_ARGUMENT;
   const parseTextIndent = PARSE_TEXT_INDENT_ARGUMENT;
 
   const skipped = { ariaHidden: 0, visuallyHidden: 0, invisible: 0, offscreen: 0, inert: 0 };
@@ -615,7 +619,7 @@ const WALKER = String.raw`(() => {
       piece += ch;
     }
     pieces.push(piece);
-    return { text: word.slice(0, 40), pieces: pieces.slice(0, 80) };
+    return { text: word.slice(0, 40), pieces: pieces.slice(0, PIECES_SENT) };
   };
 
   const boxes = [];
@@ -1154,12 +1158,15 @@ export function formatFinding(finding) {
         `      the column is ${String(finding.has)}px and the word "${finding.word}" needs ` +
         `${String(finding.needs)}px — short by ${String(finding.short)}px`
       );
-    case 'broken':
+    case 'broken': {
+      const count = String(finding.pieces.length);
+      const lines = finding.pieces.length >= PIECES_SENT ? `at least ${count}` : count;
       return (
         `${where}\n      BROKEN     ${finding.sel}${quote}${finding.ariaHidden ? ' (aria-hidden)' : ''}\n` +
-        `      the word "${finding.word}" is torn over ${String(finding.pieces.length)} lines: ` +
+        `      the word "${finding.word}" is torn over ${lines} lines: ` +
         `${finding.pieces.slice(0, 12).join(' | ')}`
       );
+    }
     case 'escapes':
       return (
         `${where}\n      ESCAPES    ${finding.sel}${quote}\n` +
@@ -1580,13 +1587,26 @@ export class Page {
   }
 }
 
-async function withPage(headful, textScale, run) {
+/**
+ * The DevTools port and profile, clear of ax-tree-audit's port range unless overridden, so a second
+ * run beside the gate keeps off the profile one Chrome locks. An empty profile would be Chrome's own.
+ */
+export function chromeTarget(env, pid) {
+  const port = env.PRL_LAYOUT_CDP_PORT ?? String(9650 + (pid % 140));
+  if (!/^\d+$/u.test(port) || Number(port) < 1 || Number(port) > 65535) {
+    throw new Error(`PRL_LAYOUT_CDP_PORT takes a port from 1 to 65535, not "${port}"`);
+  }
+  const profile = env.PRL_LAYOUT_PROFILE ?? '/tmp/prl-text-layout-audit-profile';
+  if (profile.trim() === '') {
+    throw new Error('PRL_LAYOUT_PROFILE is set but empty: name a folder or unset it');
+  }
+  return { port: Number(port), profile };
+}
+
+async function withPage(headful, target, textScale, run) {
   const chrome = {
     headful,
-    // Clear of ax-tree-audit's debugging-port range. The overrides let a second run beside the gate keep
-    // off its port and its profile, which one Chrome locks.
-    port: Number(process.env.PRL_LAYOUT_CDP_PORT ?? 9650 + Math.floor(process.pid % 140)),
-    profile: process.env.PRL_LAYOUT_PROFILE ?? '/tmp/prl-text-layout-audit-profile',
+    ...target,
     flags: [
       '--hide-scrollbars',
       '--force-device-scale-factor=1',
@@ -1618,6 +1638,7 @@ const walkerSource = () =>
     .replace('COLOR_ALPHA_ARGUMENT', () => String(colorAlpha))
     .replace('FRAME_SIDES_ARGUMENT', () => String(frameSides))
     .replace('FOLD_WORD_ARGUMENT', () => String(foldWord))
+    .replace('PIECES_SENT_ARGUMENT', String(PIECES_SENT))
     .replace('PARSE_TEXT_INDENT_ARGUMENT', () => String(parseTextIndent));
 
 let dumpCount = 0;
@@ -1838,8 +1859,10 @@ function printControl(result, failures) {
 
 async function main() {
   let options;
+  let target;
   try {
     options = parseArgs(process.argv.slice(2));
+    target = chromeTarget(process.env, process.pid);
   } catch (err) {
     console.error(red(`text-layout-audit — ${err.message}`));
     process.exit(1);
@@ -1888,7 +1911,7 @@ async function main() {
       }
     }
 
-    await withPage(options.headful, passes[0].scale, async (page) => {
+    await withPage(options.headful, target, passes[0].scale, async (page) => {
       if (options.selfTest) {
         console.log(bold('\nNegative controls — a defect of each shape, put back into a real page'));
         for (const result of await runControls(page, options.baseUrl, passes[0].scale)) {

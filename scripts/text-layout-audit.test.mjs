@@ -10,6 +10,7 @@ import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import {
   CONTROLS,
+  chromeTarget,
   clippedRects,
   colorAlpha,
   coverageFailures,
@@ -903,6 +904,13 @@ describe('a word broken letter by letter', () => {
     assert.equal(counts.breakTests, 4, 'every word on two lines, in the cell and the hidden label');
   });
 
+  it('says "at least" when the page sent only the first pieces of a longer word', () => {
+    const finding = { check: 'broken', route: '/review', theme: 'light', width: 360, sel: 'td', text: '' };
+    const many = Array.from({ length: 80 }, () => 'a');
+    assert.match(formatFinding({ ...finding, word: 'a', pieces: many }), /torn over at least 80 lines/u);
+    assert.match(formatFinding({ ...finding, word: 'Result', pieces: ['R', 'e'] }), /torn over 2 lines/u);
+  });
+
   it('judges aria-hidden text for nothing else: its overlaps are often decorative', () => {
     const { findings } = findTextDefects(reviewRow(), {});
     for (const finding of findings) {
@@ -1451,6 +1459,29 @@ describe('the large-text negative control', () => {
     const plain = CONTROLS.find((control) => control.id === 'coach-track');
     assert.equal(plain.scale, undefined);
     assert.equal(judgeControl(plain, [{ check: 'squeezed' }], undefined).caught, true);
+  });
+});
+
+describe("the audit's own Chrome", () => {
+  it('takes a port and a profile from the environment, or its own defaults', () => {
+    assert.deepEqual(chromeTarget({ PRL_LAYOUT_CDP_PORT: '9985', PRL_LAYOUT_PROFILE: 'scratch/p' }, 1), {
+      port: 9985,
+      profile: 'scratch/p',
+    });
+    assert.equal(chromeTarget({}, 141).port, 9651);
+  });
+
+  it('refuses an empty or non-numeric port and an empty profile at start', () => {
+    for (const bad of ['', ' ', 'abc', '99x', '0', '70000', '-1', '9985.5']) {
+      assert.throws(() => chromeTarget({ PRL_LAYOUT_CDP_PORT: bad }, 1), /PRL_LAYOUT_CDP_PORT/u, `"${bad}"`);
+    }
+    // Chrome given an empty --user-data-dir opens the user's own profile.
+    for (const bad of ['', '  ']) {
+      assert.throws(
+        () => chromeTarget({ PRL_LAYOUT_PROFILE: bad }, 1),
+        /PRL_LAYOUT_PROFILE is set but empty/u,
+      );
+    }
   });
 });
 
