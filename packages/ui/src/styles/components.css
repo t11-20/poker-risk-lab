@@ -3495,6 +3495,23 @@ td.prl-candidates__ev,
   line-height: var(--prl-leading-snug);
 }
 
+/*
+ * At 360px with 200% text the Coach's nested boxes leave 108-148px for prose, narrower than
+ * "representative," (212px), so its prose may hyphenate. Only under 20em, so no other size reflows.
+ */
+@media (width < 20em) {
+  .prl-coach__prose,
+  .prl-suggestion__reason,
+  .prl-suggestion__disclaimer,
+  .prl-outs__meaning,
+  .prl-stat__note,
+  .prl-uncertainty__summary,
+  .prl-uncertainty__limitations,
+  .prl-assumptions__text {
+    hyphens: auto;
+  }
+}
+
 /* UnitsBadge */
 
 /** Units, never currency. No symbol, no "balance", no purchase affordance. "units" stays visible. */

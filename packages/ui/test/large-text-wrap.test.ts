@@ -1,6 +1,6 @@
 /**
- * At 360px with 200% text a nowrap chip and a nowrap equity detail each pushed pages past the
- * screen. These read the rules that let them wrap instead.
+ * At 360px with 200% text a nowrap chip, a nowrap equity detail and unbreakable words in the Coach's
+ * nested boxes each pushed pages past the screen. These read the rules that let them wrap instead.
  */
 
 import assert from 'node:assert/strict';
@@ -82,5 +82,30 @@ describe('the equity detail', () => {
     const detail = cascaded(everySize, '.prl-equity-bar__detail');
     assert.equal(detail.get('grid-column'), '2 / -1');
     assert.equal(detail.get('white-space'), 'normal');
+  });
+});
+
+describe('Coach prose under 20em', () => {
+  const PROSE = [
+    '.prl-coach__prose',
+    '.prl-suggestion__reason',
+    '.prl-suggestion__disclaimer',
+    '.prl-outs__meaning',
+    '.prl-stat__note',
+    '.prl-uncertainty__summary',
+    '.prl-uncertainty__limitations',
+    '.prl-assumptions__text',
+  ];
+  const narrow = mediaBody(css, '(width < 20em)');
+
+  for (const selector of PROSE) {
+    it(`hyphenates ${selector}`, () => {
+      assert.equal(cascaded(narrow, selector).get('hyphens'), 'auto');
+    });
+  }
+
+  it('hyphenates nothing at any other size', () => {
+    assert.ok(everySize.includes('.prl-coach'), 'read no rules outside @media');
+    assert.doesNotMatch(everySize, /hyphens\s*:\s*auto/);
   });
 });
