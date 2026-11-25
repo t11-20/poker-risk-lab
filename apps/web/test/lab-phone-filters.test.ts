@@ -129,7 +129,10 @@ describe('lab filters on a phone', () => {
       'a later base rule of equal specificity wins over the phone block',
     );
     // The stack below 380 overrides the pairing, so it has to come after it.
-    assert.ok(code.indexOf('@media (width < 23.75em)') > media, 'the 380px block sits before the 600px block');
+    assert.ok(
+      code.indexOf('@media (width < 23.75em)') > media,
+      'the 380px block sits before the 600px block',
+    );
   });
 
   it('leaves the form a GET form whose count line is still the jump target', () => {
