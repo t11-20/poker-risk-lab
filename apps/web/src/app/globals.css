@@ -333,6 +333,11 @@
   border-block-start: var(--prl-hairline);
 }
 
+.prl-sheet__item:first-child {
+  /* The bar's accent rule already opens the list; a hairline 24px under it read as a double rule. */
+  border-block-start: 0;
+}
+
 .prl-sheet__item:last-child {
   border-block-end: var(--prl-hairline);
 }
