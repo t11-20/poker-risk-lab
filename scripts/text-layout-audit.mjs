@@ -1693,12 +1693,12 @@ async function sweepPass(page, baseUrl, pass, tally, findings, failures, suppres
   const label = textSizeLabel(pass.scale);
   await page.setTextScale(pass.scale);
   tally.textSize.method = page.textSizeMethod;
-  console.log(
-    bold(
-      `\nSweep at ${label} — ${String(pass.routes.length)} route(s) x ${String(pass.themes.length)} ` +
-        `theme(s) x ${String(pass.widths.length)} width(s) = ${String(tally.measurementsWanted)} measurements`,
-    ),
-  );
+  const size = [
+    `${String(pass.routes.length)} route(s)`,
+    `${String(pass.themes.length)} theme(s)`,
+    `${String(pass.widths.length)} width(s)`,
+  ].join(' x ');
+  console.log(bold(`\nSweep at ${label} — ${size} = ${String(tally.measurementsWanted)} measurements`));
   tally.routesWanted = pass.routes.length * pass.themes.length;
 
   for (const route of pass.routes) {
@@ -1707,9 +1707,8 @@ async function sweepPass(page, baseUrl, pass, tally, findings, failures, suppres
       try {
         await page.goto(`${baseUrl}${route}`);
       } catch (error) {
-        failures.push(
-          `${route} (${theme}, ${label}) did not load: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        const why = error instanceof Error ? error.message : String(error);
+        failures.push(`${route} (${theme}, ${label}) did not load: ${why}`);
         continue;
       }
       let loaded = true;
