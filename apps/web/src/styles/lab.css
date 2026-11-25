@@ -54,23 +54,9 @@
 /*
  * Phone only. At 390×844 with the guide dismissed the first card started at 1150px. Topic stays
  * full width: "Fold equity and bluffing (2)" is 187px and a half column has 144px of text room.
- * Difficulty and Street share a row from 380px up. The index opener is scoped with
- * `:has(.prl-lab-filters)` so a scenario page keeps its padding.
+ * Difficulty and Street share a row from 380px up.
  */
 @media (width < 600px) {
-  .prl-lab-page:has(.prl-lab-filters) .prl-page-head {
-    padding-block: var(--prl-space-6) var(--prl-space-5);
-  }
-
-  .prl-lab-page:has(.prl-lab-filters) .prl-page-head__standfirst {
-    margin-block-start: 0;
-  }
-
-  .prl-lab-page:has(.prl-lab-filters) .prl-source-note {
-    margin-block-start: var(--prl-space-5);
-    padding: var(--prl-space-5) var(--prl-space-6);
-  }
-
   .prl-lab-shortcuts {
     margin-block-start: var(--prl-space-4);
     gap: var(--prl-space-1) var(--prl-space-5);
@@ -103,15 +89,6 @@
   /* 22px of spare on "Every street (36)" in the 390 half column. The wider padding was short of it. */
   .prl-lab-filters .prl-select {
     padding-inline: var(--prl-space-4);
-  }
-
-  /*
-   * A phone card spans all 12 columns, so the column gap sits inside the card. Eleven
-   * `--prl-space-8` gaps are 528px at a 32px root and the card was wider than the screen.
-   * The row gap still separates the cards.
-   */
-  .prl-lab-grid {
-    column-gap: var(--prl-space-0);
   }
 
   /*

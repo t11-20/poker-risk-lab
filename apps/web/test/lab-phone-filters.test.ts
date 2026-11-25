@@ -68,9 +68,13 @@ describe('lab filters on a phone', () => {
   });
 
   it('stops a card from widening the page when text is enlarged (REGRESSION)', () => {
-    // Eleven column gaps are inside the spanned card. At a 32px root they were 528px.
-    assert.match(rule(phone, '.prl-lab-grid'), /column-gap:\s*var\(--prl-space-0\)/u);
-    assert.doesNotMatch(rule(phone, '.prl-lab-grid'), /row-gap:\s*var\(--prl-space-0\)/u);
+    // Twelve tracks put eleven gaps inside a spanned card: 528px at a 32px root.
+    const grid = readFileSync(
+      new URL('../../../packages/ui/src/styles/components.css', import.meta.url),
+      'utf8',
+    ).replace(/\/\*[\s\S]*?\*\//gu, '');
+    assert.match(rule(grid, '.prl-grid'), /grid-template-columns:\s*minmax\(0,\s*1fr\)/u);
+    assert.doesNotMatch(rule(grid, '.prl-grid'), /repeat\(12/u, 'twelve tracks below 600px');
     const card = rule(phone, '.prl-lab-card');
     assert.match(card, /min-inline-size:\s*0/u);
     assert.match(card, /max-inline-size:\s*100%/u);
@@ -78,15 +82,6 @@ describe('lab filters on a phone', () => {
     const chip = rule(phone, '.prl-lab-card .prl-chip');
     assert.match(chip, /white-space:\s*normal/u);
     assert.match(chip, /overflow-wrap:\s*break-word/u);
-  });
-
-  it('tightens the index opener on a phone and leaves the other lab routes alone (REGRESSION)', () => {
-    const head = rule(phone, '.prl-lab-page:has(.prl-lab-filters) .prl-page-head');
-    assert.match(head, /padding-block:\s*var\(--prl-space-6\)\s+var\(--prl-space-5\)/u);
-    assert.doesNotMatch(
-      rule(code, '.prl-lab-page .prl-page-head'),
-      /--prl-space-6\)\s+var\(--prl-space-5\)/u,
-    );
   });
 
   it('leaves the form a GET form whose count line is still the jump target', () => {
