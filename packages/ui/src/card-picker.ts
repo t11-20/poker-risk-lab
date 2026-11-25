@@ -96,15 +96,53 @@ export function removeCard(slots: readonly PickerSlot[], id: string): PickResult
 }
 
 /**
- * `rows` is four suit rows of thirteen; `columns` is four suit columns of thirteen, used when the
- * picker is too narrow for thirteen targets across. The DOM order is `PICKER_DECK` in both.
+ * `rows` is four suit rows of thirteen; `folded` is the same rows each wrapped into lines of seven and
+ * six; `columns` is four suit columns of thirteen. The DOM order is `PICKER_DECK` in all three.
  */
-export type DeckFlow = 'rows' | 'columns';
+export type DeckFlow = 'rows' | 'folded' | 'columns';
 
-/** Where an arrow, Home or End key moves focus from `index`, or `null` for any other key. Never wraps. */
+/** The length of a folded suit's first line. */
+export const DECK_FOLD = Math.ceil(DECK_RANKS / 2);
+
+/** The flow for the column count in the stylesheet's `--prl-picker-cols`. Anything unknown reads as rows. */
+export function deckFlowFor(columns: number): DeckFlow {
+  if (columns === DECK_SUITS) return 'columns';
+  if (columns === DECK_FOLD) return 'folded';
+  return 'rows';
+}
+
+const at = (suit: number, rank: number): number => suit * DECK_RANKS + rank;
+
+/**
+ * Up and down move to the card drawn above or below. Under a first line's seventh card the second line
+ * has a hole, so the move skips it to the next suit's seventh card.
+ */
+function moveInFolded(suit: number, rank: number, key: string): number | null {
+  const line = suit * 2 + Math.floor(rank / DECK_FOLD);
+  const column = rank % DECK_FOLD;
+  const cell = (l: number, c: number): number | null => {
+    const r = (l % 2) * DECK_FOLD + c;
+    const real = l >= 0 && l < DECK_SUITS * 2 && c >= 0 && c < DECK_FOLD && r < DECK_RANKS;
+    return real ? at(Math.floor(l / 2), r) : null;
+  };
+  const here = at(suit, rank);
+  if (key === 'ArrowRight') return cell(line, column + 1) ?? here;
+  if (key === 'ArrowLeft') return cell(line, column - 1) ?? here;
+  if (key === 'ArrowDown') return cell(line + 1, column) ?? cell(line + 2, column) ?? here;
+  if (key === 'ArrowUp') return cell(line - 1, column) ?? cell(line - 2, column) ?? here;
+  return null;
+}
+
+/**
+ * Where an arrow, Home or End key moves focus from `index`, or `null` for any other key. Never wraps.
+ * Home and End go to the ends of the suit in every flow.
+ */
 export function moveInDeck(index: number, key: string, flow: DeckFlow): number | null {
   const suit = Math.floor(index / DECK_RANKS);
   const rank = index % DECK_RANKS;
+  if (key === 'Home') return at(suit, 0);
+  if (key === 'End') return at(suit, DECK_RANKS - 1);
+  if (flow === 'folded') return moveInFolded(suit, rank, key);
   const along =
     flow === 'rows'
       ? { next: 'ArrowRight', previous: 'ArrowLeft' }
@@ -113,13 +151,10 @@ export function moveInDeck(index: number, key: string, flow: DeckFlow): number |
     flow === 'rows'
       ? { next: 'ArrowDown', previous: 'ArrowUp' }
       : { next: 'ArrowRight', previous: 'ArrowLeft' };
-  const at = (s: number, r: number): number => s * DECK_RANKS + r;
   if (key === along.next) return at(suit, Math.min(DECK_RANKS - 1, rank + 1));
   if (key === along.previous) return at(suit, Math.max(0, rank - 1));
   if (key === across.next) return at(Math.min(DECK_SUITS - 1, suit + 1), rank);
   if (key === across.previous) return at(Math.max(0, suit - 1), rank);
-  if (key === 'Home') return at(suit, 0);
-  if (key === 'End') return at(suit, DECK_RANKS - 1);
   return null;
 }
 

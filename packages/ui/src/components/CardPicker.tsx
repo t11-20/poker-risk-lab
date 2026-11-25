@@ -11,6 +11,7 @@ import {
   cardOwners,
   type DeckFlow,
   deckCardName,
+  deckFlowFor,
   moveInDeck,
   PICKER_DECK,
   type PickerSlot,
@@ -51,7 +52,7 @@ function CardFace({ card }: { readonly card: number }): ReactElement {
 /** Read off the stylesheet, so the arrow keys follow the layout the reader is looking at. */
 function flowOf(deck: HTMLElement | null): DeckFlow {
   if (deck === null || typeof window === 'undefined') return 'rows';
-  return window.getComputedStyle(deck).gridAutoFlow.includes('column') ? 'columns' : 'rows';
+  return deckFlowFor(Number(window.getComputedStyle(deck).getPropertyValue('--prl-picker-cols')));
 }
 
 export function CardPicker(props: CardPickerProps): ReactElement {
