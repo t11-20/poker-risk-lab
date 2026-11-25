@@ -83,7 +83,7 @@ const LARGE_TEXT = { scale: 2, themes: ['light'], widths: [768, 1024, 1440], pho
 
 /**
  * The routes clean at `phoneWidth`, where content wider than a phone scrolls sideways that a 768px window
- * still holds. None hyphenates there, since a CI Chrome may have no hyphenation dictionary.
+ * still holds. In the gate's run, which has no API, none hyphenates: CI Chrome may have no dictionary.
  */
 const LARGE_TEXT_PHONE_ROUTES = [
   '/',
@@ -98,7 +98,7 @@ const LARGE_TEXT_PHONE_ROUTES = [
 ];
 
 const LARGE_TEXT_PHONE_WHY =
-  'content wider than 360px fits a 768 or 1024 window, so only a phone at 200% text shows it; ' +
+  'content wider than 360px fits a 768px window, so only a phone at 200% text shows it; ' +
   'the routes not listed still fail at 360px and 200% on work held for the owner';
 
 /** An error boundary returns 200 with good markup, so it counts as a failed render. */
@@ -165,12 +165,12 @@ const FLOOR_PER_MEASUREMENT = {
 const DEFAULT_RUN_FLOORS = {
   main: { textBoxes: 13000, ownBox: 13000, clipTests: 2000, frameTests: 9500, pairs: 11000, breakTests: 75 },
   'large-text': {
-    textBoxes: 2500,
-    ownBox: 2500,
-    clipTests: 400,
-    frameTests: 1800,
-    pairs: 1100,
-    breakTests: 22,
+    textBoxes: 4000,
+    ownBox: 4000,
+    clipTests: 440,
+    frameTests: 2850,
+    pairs: 1950,
+    breakTests: 35,
   },
 };
 
@@ -1269,7 +1269,7 @@ const LARGE_TEXT_CELLS = [
   LARGE_TEXT.themes.join(','),
   `${LARGE_TEXT.widths.join(',')}px`,
 ].join(', ');
-const LARGE_TEXT_LAYOUTS = LARGE_TEXT.widths.map((w) => `${String(w / LARGE_TEXT.scale)}px`).join(' and ');
+const LARGE_TEXT_LAYOUTS = LARGE_TEXT.widths.map((w) => `${String(w / LARGE_TEXT.scale)}px`).join(', ');
 const LARGE_TEXT_PHONE_CELLS =
   `${String(LARGE_TEXT_PHONE_ROUTES.length)} route(s) at ` + `${String(LARGE_TEXT.phoneWidth)}px`;
 

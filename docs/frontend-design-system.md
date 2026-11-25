@@ -903,8 +903,9 @@ on the pixel shown here, and at 200% text a 1440px window takes the 720px layout
 Two narrower ranges exist for large text. Below `20em` (a window under 320px at the default size, under
 640px at 200%) paired items stack: a lesson card's number above its text, a quiz radio above its answer,
 a Legends sigil above the names, the equity readout's figures under the name. Below `18em` a review row
-card and the deck-proof terms give each value its own row. Below `20em` the Coach's prose, stat notes
-and assumptions, lesson headings and glossary terms may hyphenate, never above it. One container query
+card and the deck-proof terms give each value its own row. Below `20em` prose in the Coach, a stat's
+note, an assumption list, a calculation's outs, a lesson heading and a glossary term may hyphenate,
+wherever they appear (lessons, Lab scenarios, the replay), never above it. One container query
 does the same for the Legends difficulty picker: below `15rem` of its own width the radio takes a row
 above the name. A default-size window of 320px or wider reaches none of these.
 

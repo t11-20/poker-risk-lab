@@ -1389,15 +1389,15 @@ describe('the scope of the sweep', () => {
   });
 });
 
-// The large-text pass on 2026-11-26: ROUTES, light, 768 and 1024, and the phone routes at 360, 200%
-// text. Its clip tests come from three routes only.
+// The large-text pass in verify on 2026-11-26: ROUTES, light, 768, 1024 and 1440, and the nine phone
+// routes at 360, 200% text. Its clip tests come from three routes only.
 const LARGE_TEXT_RUN = {
-  measurements: 44,
-  measurementsWanted: 44,
-  textBoxes: 7720,
-  detector: { ownBox: 7720, clipTests: 856, frameTests: 5538, pairs: 3218, breakTests: 67 },
-  routesLoaded: 24,
-  routesWanted: 24,
+  measurements: 69,
+  measurementsWanted: 69,
+  textBoxes: 12170,
+  detector: { ownBox: 12170, clipTests: 1328, frameTests: 8630, pairs: 5903, breakTests: 111 },
+  routesLoaded: 29,
+  routesWanted: 29,
 };
 
 describe('the large-text pass', () => {
@@ -1490,7 +1490,7 @@ describe('the large-text pass', () => {
     const unclipped = { ...LARGE_TEXT_RUN, detector: { ...LARGE_TEXT_RUN.detector, clipTests: 0 } };
     const problems = passCoverageFailures(passes, [FULL_DEFAULT_RUN, unclipped]);
     assert.equal(problems.length, 1, '4,280 clip tests at 100% must not cover a pass with none');
-    assert.match(problems[0], /^200% text pass: only 0 text blocks .*clipping ancestor \(floor 400 for 44 /u);
+    assert.match(problems[0], /^200% text pass: only 0 text blocks .*clipping ancestor \(floor 440 for 69 /u);
     assert.deepEqual(passCoverageFailures(passes, [FULL_DEFAULT_RUN, LARGE_TEXT_RUN]), []);
   });
 
@@ -1507,9 +1507,9 @@ describe('the large-text pass', () => {
     const unclipped = { ...LARGE_TEXT_RUN, detector: { ...LARGE_TEXT_RUN.detector, clipTests: 100 } };
     assert.match(
       coverageFailures(unclipped, floors)[0],
-      /only 100 text blocks .*clipping ancestor \(floor 400 for 44 /u,
+      /only 100 text blocks .*clipping ancestor \(floor 440 for 69 /u,
     );
-    assert.match(coverageFailures(unclipped)[0], /\(floor 176 for 44 /u, 'the same cells, narrowed');
+    assert.match(coverageFailures(unclipped)[0], /\(floor 276 for 69 /u, 'the same cells, narrowed');
   });
 });
 

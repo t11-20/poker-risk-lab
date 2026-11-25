@@ -994,8 +994,8 @@
   font-variant-numeric: var(--prl-numeric);
 }
 
-/* A `<fieldset>` defaults to `min-inline-size: min-content`, which includes the nowrap chip once
-   answered. At 360 the options overflowed by ~15px. */
+/* A `<fieldset>` defaults to `min-inline-size: min-content`, which included the answered chip's whole
+   line before chips wrapped. At 360 the options overflowed by ~15px. */
 .prl-learn-quiz__options {
   display: grid;
   gap: var(--prl-space-5);
