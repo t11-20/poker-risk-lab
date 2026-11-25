@@ -449,8 +449,8 @@ export default async function ProfilePage({
       <section className="prl-legend-section">
         <h2>Where it differs most from the other profiles</h2>
         <p className="prl-prose">
-          The three axes with the largest gap against each of the other profiles. A positive figure means
-          this style sits higher on that axis; it does not mean better. Two styles that disagree by 0.4
+          The axes with the largest gap against each of the three most different profiles. A positive figure
+          means this style sits higher on that axis; it does not mean better. Two styles that disagree by 0.4
           on how much they fold are the pair worth playing back to back.
         </p>
         {learn.data.contrasts.length === 0 ? (
