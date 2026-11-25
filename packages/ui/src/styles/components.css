@@ -801,6 +801,19 @@
   font-weight: var(--prl-weight-medium);
   letter-spacing: var(--prl-tracking-label);
   line-height: var(--prl-leading-snug);
+}
+
+/*
+ * At 360px with 200% text nowrap chips set page widths (the hand-review demo 564px, 448px once they wrap).
+ * Half the one-line height keeps a one-line chip a capsule; a pill radius on three lines cut the glyphs.
+ */
+.prl-chip {
+  max-inline-size: 100%;
+  border-radius: calc(var(--prl-space-7) / 2);
+  white-space: normal;
+}
+
+.prl-badge {
   white-space: nowrap;
 }
 
@@ -3188,11 +3201,25 @@ td.prl-candidates__ev,
   white-space: nowrap;
 }
 
+/** It spans the name and value tracks, so it wraps there instead of setting the readout's width. */
 .prl-equity-bar__detail {
   grid-column: 2 / -1;
   color: var(--prl-text-secondary);
   font-size: var(--prl-type-body-sm);
-  white-space: nowrap;
+  white-space: normal;
+}
+
+/* At 360px with 200% text the row is about 148px and the value took all but 16px, tearing "you". */
+@media (width < 20em) {
+  .prl-equity-bar__row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .prl-equity-bar__value,
+  .prl-equity-bar__detail {
+    grid-column: 2;
+    text-align: start;
+  }
 }
 
 /** The opponents past the first, one toggle under hero's row. */
@@ -3447,11 +3474,11 @@ td.prl-candidates__ev,
   font-weight: var(--prl-weight-semibold);
 }
 
+/** A `Chip`, so it takes the chip's wrapping and its corner. */
 .prl-uncertainty__method {
   display: inline-block;
   padding-inline: var(--prl-space-4);
   border: 1px solid var(--prl-text-secondary);
-  border-radius: var(--prl-radius-pill);
   color: var(--prl-text-secondary);
   font-family: var(--prl-font-mono);
   font-size: var(--prl-type-label);
@@ -3479,6 +3506,23 @@ td.prl-candidates__ev,
   padding-inline-start: var(--prl-space-7);
   font-size: var(--prl-type-body);
   line-height: var(--prl-leading-snug);
+}
+
+/*
+ * At 360px with 200% text the Coach's nested boxes leave 108-148px for prose, narrower than
+ * "representative," (212px), so its prose may hyphenate. Only under 20em, so no other size reflows.
+ */
+@media (width < 20em) {
+  .prl-coach__prose,
+  .prl-suggestion__reason,
+  .prl-suggestion__disclaimer,
+  .prl-outs__meaning,
+  .prl-stat__note,
+  .prl-uncertainty__summary,
+  .prl-uncertainty__limitations,
+  .prl-assumptions__text {
+    hyphens: auto;
+  }
 }
 
 /* UnitsBadge */
