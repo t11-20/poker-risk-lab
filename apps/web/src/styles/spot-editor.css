@@ -165,6 +165,15 @@
   font-weight: var(--prl-weight-regular);
 }
 
+/* One cell, so the box takes the height of the hidden empty-state sentence it will be replaced by. */
+.prl-spot-list__pending > * {
+  grid-area: 1 / 1;
+}
+
+.prl-spot-list__pending > [aria-hidden="true"] {
+  visibility: hidden;
+}
+
 .prl-spot-list__items {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 22rem), 1fr));
