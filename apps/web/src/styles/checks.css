@@ -17,8 +17,9 @@
   border-block-start: var(--prl-hairline);
 }
 
-/* The page head's rule is already above it, and two drew one 2px rule. */
+/* The page head's rule and its 48px gap are above it, so a second rule and more padding only add space. */
 .prl-checks__row:first-child {
+  padding-block-start: 0;
   border-block-start: 0;
 }
 

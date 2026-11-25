@@ -213,6 +213,18 @@ describe('legends layout rules', () => {
       );
       assert.match(sheet, scoped, name);
     }
+    // The Coach on /play is held, so the shared rules carry no cap of their own.
+    const shared = readFileSync(
+      join(SRC, '..', '..', '..', 'packages', 'ui', 'src', 'styles', 'components.css'),
+      'utf8',
+    ).replace(/\/\*[\s\S]*?\*\//gu, '');
+    for (const selector of ['.prl-coach__list', '.prl-uncertainty__limitations']) {
+      const rules = [...shared.matchAll(/([^{}]+)\{([^}]*)\}/gu)].filter(([, head]) =>
+        (head ?? '').split(',').some((part) => part.trim() === selector),
+      );
+      assert.ok(rules.length > 0, `components.css has no rule for ${selector}`);
+      for (const [, , body] of rules) assert.doesNotMatch(body ?? '', /max-width|max-inline-size/u, selector);
+    }
   });
 
   it('the hand-review board is drawn at the size of the other boards, not beside its label at 32px', () => {

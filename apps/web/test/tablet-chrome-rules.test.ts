@@ -97,7 +97,7 @@ describe('the guided tour', () => {
     const steps = rule(TOUR, '.prl-tour__steps');
     assert.doesNotMatch(steps, /auto-fit|auto-fill/u);
     assert.match(steps, /grid-template-columns: minmax\(0, 1fr\);/u);
-    const across = rule(blocks(TOUR, '@container prl-tour (width >= 66rem)').join('\n'), '.prl-tour__steps');
+    const across = rule(blocks(TOUR, '@container prl-tour (width >= 64rem)').join('\n'), '.prl-tour__steps');
     const count = /repeat\((\d+), minmax\(0, 1fr\)\)/u.exec(across);
     assert.ok(count !== null, 'no all-across track list');
     assert.equal(Number(count[1]), TOUR_STEPS.length, 'one track per step, or the last row is short');

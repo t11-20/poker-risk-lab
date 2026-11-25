@@ -102,7 +102,7 @@
 
 /**
  * Five across only when all five fit at 12rem, and one column until then: an auto-fit grid left a
- * step alone, 4+1 at 1024 and 3+2 at 768. 66rem is five 12rem tracks and four gaps.
+ * step alone, 4+1 at 1024 and 3+2 at 768. 64rem is five 12rem tracks and four 1rem gaps.
  */
 .prl-tour__steps {
   display: grid;
@@ -113,7 +113,7 @@
   list-style: none;
 }
 
-@container prl-tour (width >= 66rem) {
+@container prl-tour (width >= 64rem) {
   .prl-tour__steps {
     grid-template-columns: repeat(5, minmax(0, 1fr));
   }
@@ -146,7 +146,7 @@
 }
 
 /** In one column with room to spare, a step is one row: its title in an 11rem column, its sentence after. */
-@container prl-tour (30rem <= width < 66rem) {
+@container prl-tour (30rem <= width < 64rem) {
   .prl-tour__step {
     grid-template-columns: auto calc(var(--prl-space-16) + var(--prl-space-6)) minmax(0, 1fr);
     align-items: baseline;

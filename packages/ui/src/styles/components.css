@@ -49,7 +49,7 @@
   grid-column: 1 / -1;
   /* `min-width: auto` would refuse to shrink below a `nowrap` descendant and overflow the track. */
   min-width: 0;
-  /* The gap spaces the cells. base.css's `li` margin skipped the last cell, so a last row stood 4px uneven. */
+  /* The gap spaces the cells. base.css's `li` margin skips the last cell, so a last row stood 4px uneven. */
   margin: 0;
 }
 

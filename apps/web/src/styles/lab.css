@@ -429,7 +429,8 @@
 /*
  * Phone only. It sits after the base rules because a media query adds no specificity. Topic stays
  * full width: "Fold equity and bluffing (2)" is 187px and a half column has 136px of text room at 390.
- * Difficulty and Street share a row from 380px up.
+ * Difficulty and Street share a row from 380px up. The shortcuts' top margin only spaces them from the
+ * bundled-copy note: straight after the page head, page.css's 48px head gap wins, as on every page.
  */
 @media (width < 600px) {
   .prl-lab-shortcuts {
