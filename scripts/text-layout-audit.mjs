@@ -7,11 +7,12 @@
  *
  * Findings: `collision` (glyphs of two independent in-flow elements intersect), `escapes` (glyphs
  * leave their own non-scrolling block), `clipped` (cut off by a non-scrolling ancestor without an
- * ellipsis), `squeezed` (a block narrower than its longest word), `spills` (glyphs cross the left or
- * right edge of the nearest box that draws one, with nothing clipping them), `page` (the document
- * scrolls sideways), and `unscaled` (the root font size is not the text size the reader set, which
- * `--text-scale` sets in Chrome itself). The page only measures. `findTextDefects()` judges in Node,
- * so tests can feed it the collapsed row's real numbers.
+ * ellipsis), `squeezed` (a block narrower than its longest word), `broken` (a word torn one or two
+ * characters a line, which `squeezed` cannot see because each piece fits), `spills` (glyphs cross
+ * the left or right edge of the nearest box that draws one, with nothing clipping them), `page` (the
+ * document scrolls sideways), and `unscaled` (the root font size is not the text size the reader
+ * set, which `--text-scale` sets in Chrome itself). The page only measures. `findTextDefects()`
+ * judges in Node, so tests can feed it the collapsed row's real numbers.
  *
  * Negative controls run on every invocation (`--controls-only` runs only them). Each injects CSS that
  * re-creates one defect shape and must be caught.
@@ -104,6 +105,12 @@ const FIXED_FONT_SIZE = 13;
 
 /** A word must exceed its own content box by more than this to count as a collapsed column. */
 const WORD_TOLERANCE = 2;
+
+/**
+ * A word broken into lines of at most this many characters was torn by a column too narrow for it.
+ * "Result" on `/review` at 360px with 200% text stood one letter a line.
+ */
+const MAX_PIECE = 2;
 
 /**
  * Coverage floors, so a sweep or detector that examined nothing fails. Each is about a third of what
@@ -224,6 +231,15 @@ const CONTROLS = [
     expect: 'escapes',
     what: 'a Legends card title escaping its box, inside the `display: contents` difficulty scope',
     css: '.prl-legend-scope .prl-legend-identity__archetype { white-space: nowrap; max-width: 60px; }',
+  },
+  {
+    id: 'letter-by-letter',
+    route: '/learn',
+    width: 1024,
+    expect: 'broken',
+    what: 'a paragraph in a column two characters wide, its words torn a letter or two a line',
+    // Wider than any one letter, so every piece fits its column and `squeezed` stays silent.
+    css: '.prl-learn-page__lead { inline-size: 2ch; overflow-wrap: anywhere; }',
   },
   {
     id: 'root-in-px',
@@ -494,7 +510,45 @@ const WALKER = String.raw`(() => {
     ink.push({ left: r.left, top: r.top, width: r.width, height: r.height });
   };
 
+  /** How many lines a set of rectangles sits on: a new line starts half a line below the last. */
+  const lineCount = (rects) => {
+    const tops = rects.map((r) => r.top).sort((a, b) => a - b);
+    let lines = 0;
+    let at = null;
+    for (let k = 0; k < tops.length; k += 1) {
+      if (at === null || tops[k] - at > rects[0].height / 2) {
+        lines += 1;
+        at = tops[k];
+      }
+    }
+    return lines;
+  };
+
+  /** A word's characters grouped by the line each was painted on. Only run for a word that broke. */
+  const piecesOf = (node, start, word) => {
+    const pieces = [];
+    let piece = '';
+    let at = null;
+    let k = start;
+    for (const ch of word) {
+      const c = document.createRange();
+      c.setStart(node, k);
+      c.setEnd(node, k + ch.length);
+      k += ch.length;
+      const r = [...c.getClientRects()].find((x) => x.height > 0.5);
+      if (r !== undefined && at !== null && Math.abs(r.top - at) > r.height / 2 && piece !== '') {
+        pieces.push(piece);
+        piece = '';
+      }
+      if (r !== undefined) at = r.top;
+      piece += ch;
+    }
+    pieces.push(piece);
+    return { text: word.slice(0, 40), pieces: pieces.slice(0, 80) };
+  };
+
   const boxes = [];
+  const ariaHidden = [];
   const clippers = [];
   const frames = [];
   const docRoot = document.documentElement;
@@ -547,10 +601,9 @@ const WALKER = String.raw`(() => {
       skipped.invisible += 1;
       continue;
     }
-    if (el.closest('[aria-hidden="true"]') !== null) {
-      skipped.ariaHidden += 1;
-      continue;
-    }
+    // Hidden from a screen reader, not from the eye: such text is measured, and Node judges it only
+    // for a word broken letter by letter, since its overlaps are often decorative by design.
+    const silent = el.closest('[aria-hidden="true"]') !== null;
     if (el.closest('[hidden], [inert], details:not([open]) > *:not(summary), dialog:not([open])') !== null) {
       skipped.inert += 1;
       continue;
@@ -579,6 +632,7 @@ const WALKER = String.raw`(() => {
     // Glyph rectangles, and the widest word, from the text nodes themselves.
     const rects = [];
     const ink = [];
+    const broken = [];
     let widest = null;
     let later = null;
     for (const node of own) {
@@ -611,6 +665,7 @@ const WALKER = String.raw`(() => {
         if (widest === null || word.width > widest.width) widest = word;
         const shown = pieces.filter((r) => r.width > 0.5 && r.height > 0.5);
         if (preserved) for (const r of shown) addInk(ink, r);
+        if (lineCount(shown) > 1) broken.push(piecesOf(node, match.index, match[0]));
         match = pattern.exec(value);
       }
     }
@@ -654,6 +709,8 @@ const WALKER = String.raw`(() => {
       scrollHost: scrollHostOf(el),
       blockScrolls: scrollsHorizontally(blockStyle),
       ellipsis: style.textOverflow === 'ellipsis' || blockStyle.textOverflow === 'ellipsis',
+      broken,
+      fills: style.wordBreak === 'break-all' || style.lineBreak === 'anywhere' || style.hyphens === 'auto',
       exempt,
     };
     if (preserved && ink.length > 0) measured.ink = ink.map(asRect);
@@ -661,7 +718,10 @@ const WALKER = String.raw`(() => {
       measured.indent = Math.round(indent * 100) / 100;
       measured.later = later;
     }
-    boxes.push(measured);
+    if (silent) {
+      skipped.ariaHidden += 1;
+      ariaHidden.push(measured);
+    } else boxes.push(measured);
   }
 
   const h1 = document.querySelector('h1');
@@ -670,6 +730,7 @@ const WALKER = String.raw`(() => {
   return {
     heading: h1 === null ? '' : (h1.textContent || '').trim().slice(0, 120).toLowerCase(),
     boxes,
+    ariaHidden,
     clippers,
     frames,
     page: {
@@ -762,6 +823,30 @@ export function clippedRects(rects, clips) {
 /** Glyphs without the preserved white space that hangs past a wrapped line and paints nothing. */
 const glyphsOf = (box) => box.ink ?? box.rects;
 
+/** A break after one of these is the text's own break opportunity, not a word torn apart. */
+const BREAK_AFTER = /[-\u00AD\u2010\u2013\u2014/]$/u;
+
+/**
+ * The part of a broken word that was torn one or two characters a line, or null. A token wrapped
+ * across full lines is left alone however its breaks were allowed; letters stacked never are.
+ * Where the browser itself splits words to fill a line (`break-all`, `hyphens: auto`), a short word
+ * split at a line end is two short pieces, so there it takes three.
+ */
+export function letterByLetter(pieces, fills = false) {
+  let run = [];
+  const runs = [];
+  for (const piece of pieces) {
+    run.push(piece);
+    if (BREAK_AFTER.test(piece)) {
+      runs.push(run);
+      run = [];
+    }
+  }
+  if (run.length > 0) runs.push(run);
+  const least = fills ? 3 : 2;
+  return runs.find((r) => r.length >= least && r.every((p) => [...p].length <= MAX_PIECE)) ?? null;
+}
+
 /** The widest word, or the widest beyond the first line, short of the room its own line has. */
 function squeezeOf(box) {
   let worst = null;
@@ -781,8 +866,17 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
   const usedExemptions = new Set();
   const { boxes, clippers } = measurement;
   const frames = measurement.frames ?? [];
+  const ariaHidden = measurement.ariaHidden ?? [];
   // What each detector looked at, floored in `coverageFailures`.
-  const counts = { ownBox: 0, scrollExcused: 0, ellipsisExcused: 0, clipTests: 0, frameTests: 0, pairs: 0 };
+  const counts = {
+    ownBox: 0,
+    scrollExcused: 0,
+    ellipsisExcused: 0,
+    clipTests: 0,
+    frameTests: 0,
+    pairs: 0,
+    breakTests: 0,
+  };
 
   const exemptFor = (box, check, otherSel) => {
     for (const index of box.exempt) {
@@ -800,6 +894,25 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
   const add = (check, detail) => {
     findings.push({ check, ...context, ...detail });
   };
+
+  // A scroller does not mend a stacked word, and aria-hidden text is still painted.
+  for (const box of [...boxes, ...ariaHidden]) {
+    if (!Array.isArray(box.broken)) continue;
+    counts.breakTests += 1;
+    for (const word of box.broken) {
+      const torn = letterByLetter(word.pieces, box.fills === true);
+      if (torn === null) continue;
+      if (exemptFor(box, 'broken') !== null) break;
+      add('broken', {
+        sel: box.sel,
+        text: box.text,
+        word: word.text,
+        pieces: word.pieces,
+        ariaHidden: ariaHidden.includes(box),
+      });
+      break;
+    }
+  }
 
   for (const box of boxes) {
     // Only the block's own overflow excuses this. The Coach rail sits inside a horizontal scroller,
@@ -961,6 +1074,12 @@ export function formatFinding(finding) {
         `      the column is ${String(finding.has)}px and the word "${finding.word}" needs ` +
         `${String(finding.needs)}px — short by ${String(finding.short)}px`
       );
+    case 'broken':
+      return (
+        `${where}\n      BROKEN     ${finding.sel}${quote}${finding.ariaHidden ? ' (aria-hidden)' : ''}\n` +
+        `      the word "${finding.word}" is torn over ${String(finding.pieces.length)} lines: ` +
+        `${finding.pieces.slice(0, 12).join(' | ')}`
+      );
     case 'escapes':
       return (
         `${where}\n      ESCAPES    ${finding.sel}${quote}\n` +
@@ -1039,8 +1158,9 @@ ${bold('pnpm run test:layout')} — the PAINTED TEXT of this app, in real Chrome
     --out <file>          also write the findings as JSON
     -h, --help            this text
 
-  Exits 0 when nothing collided, escaped, was clipped, spilled past a drawn frame or
-  was squeezed, every negative control was caught and every exemption was used.
+  Exits 0 when nothing collided, escaped, was clipped, spilled past a drawn frame,
+  was squeezed or was broken letter by letter, every negative control was caught and
+  every exemption was used.
 `;
 
 export function parseArgs(argv) {
@@ -1411,7 +1531,15 @@ async function main() {
     clippers: 0,
     skipped: { ariaHidden: 0, visuallyHidden: 0, invisible: 0, offscreen: 0, inert: 0 },
     usedExemptions: new Set(),
-    detector: { ownBox: 0, scrollExcused: 0, ellipsisExcused: 0, clipTests: 0, frameTests: 0, pairs: 0 },
+    detector: {
+      ownBox: 0,
+      scrollExcused: 0,
+      ellipsisExcused: 0,
+      clipTests: 0,
+      frameTests: 0,
+      pairs: 0,
+      breakTests: 0,
+    },
     routesLoaded: 0,
     routesWanted: 0,
     textSize: { scale: options.textScale, method: 'not applied' },
@@ -1569,7 +1697,8 @@ async function main() {
     `  detectors examined  ${String(tally.detector.ownBox)} block(s) against their own box, ` +
       `${String(tally.detector.clipTests)} against a clipping ancestor, ` +
       `${String(tally.detector.frameTests)} against a drawn frame, ` +
-      `${String(tally.detector.pairs)} pair(s) for a collision`,
+      `${String(tally.detector.pairs)} pair(s) for a collision, ` +
+      `${String(tally.detector.breakTests)} for a word broken letter by letter`,
   );
   console.log(
     dim(
@@ -1580,10 +1709,11 @@ async function main() {
   console.log(
     dim(
       `  not painted, so not measured: ${String(tally.skipped.visuallyHidden)} visually hidden, ` +
-        `${String(tally.skipped.ariaHidden)} aria-hidden, ${String(tally.skipped.invisible)} invisible, ` +
+        `${String(tally.skipped.invisible)} invisible, ` +
         `${String(tally.skipped.inert)} inert, ${String(tally.skipped.offscreen)} off-screen`,
     ),
   );
+  console.log(dim(`  aria-hidden, judged only for a broken word: ${String(tally.skipped.ariaHidden)}`));
   console.log(
     `  negative controls   ${String(controlResults.filter((r) => r.caught).length)}/${String(controlResults.length)} caught`,
   );
@@ -1658,7 +1788,7 @@ async function main() {
       green(
         bold(
           `\nPASS — ${String(tally.textBoxes)} painted text elements over ${String(tally.measurements)} ` +
-            'measurements, nothing collided, escaped, was clipped, spilled or was squeezed,\n' +
+            'measurements, nothing collided, escaped, was clipped, spilled, was squeezed or broken,\n' +
             `and all ${String(controlResults.length)} negative controls were caught.`,
         ),
       ),
