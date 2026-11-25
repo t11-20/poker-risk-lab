@@ -243,7 +243,9 @@ measured.
 in the lockfile and through every supply-chain gate) is imported in `layout.tsx`; Next bundles the
 woff2 files and serves them from this origin, which `font-src 'self'` already permitted. `h1`, `h2`
 and display figures are set at `font-stretch: var(--prl-stretch-display)` (72%) and weight 800;
-body text is the same family at its normal width. The system stack below is the fallback.
+body text is the same family at its normal width. Second in the stack is "Archivo Fallback"
+(`packages/ui/src/styles/font-fallback.css`): local Arial scaled to Archivo's widths and metrics, so
+the swap to Archivo does not reflow the page. The system stack below follows it.
 
 The 3.0 text follows, kept for its reasoning: the rule it states was about a third-party font
 request, and a self-hosted file makes none.
