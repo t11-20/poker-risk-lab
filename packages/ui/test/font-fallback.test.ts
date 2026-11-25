@@ -6,6 +6,7 @@
 
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { join, relative } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -40,6 +41,40 @@ const percent = (value: string | undefined): number => {
   return Number.parseFloat(value ?? '');
 };
 
+/** `100 449` or `62% 99%`, both ends inclusive. */
+function span(value: string | undefined, unit: '' | '%'): readonly [number, number] {
+  const match = new RegExp(`^(\\d+)${unit} (\\d+)${unit}$`).exec(value ?? '');
+  assert.ok(match, `expected a range like "1${unit} 2${unit}", got ${value}`);
+  return [Number(match[1]), Number(match[2])];
+}
+
+function codePoints(range: string | undefined): Set<number> {
+  const points = new Set<number>();
+  for (const part of (range ?? '').split(',')) {
+    const match = /^U\+([0-9A-F]+)(?:-([0-9A-F]+))?$/i.exec(part.trim());
+    assert.ok(match, `not a unicode-range part: "${part}"`);
+    const from = Number.parseInt(match[1] ?? '', 16);
+    const to = match[2] === undefined ? from : Number.parseInt(match[2], 16);
+    for (let point = from; point <= to; point += 1) points.add(point);
+  }
+  return points;
+}
+
+const DIGITS = 'U+0030-0039';
+const WEIGHTS = [100, 900] as const;
+const STRETCH_BANDS = ['62-99', '100-125'];
+
+/** The latin subset the app loads, so the fallback answers for exactly the glyphs Archivo will. */
+function archivoLatinRange(): Set<number> {
+  const require = createRequire(join(REPO, 'apps/web/package.json'));
+  const css = readFileSync(require.resolve('@fontsource-variable/archivo/wdth.css'), 'utf8');
+  const block = /\/\* archivo-latin-wdth-normal \*\/\s*@font-face\s*\{([^}]*)\}/.exec(css);
+  assert.ok(block, 'no archivo-latin-wdth-normal face in wdth.css');
+  const range = /unicode-range:\s*([^;]+);/.exec(block[1] ?? '');
+  assert.ok(range, 'the latin face has no unicode-range');
+  return codePoints(range[1]);
+}
+
 describe('the Archivo fallback face', () => {
   const fallback = faces(read('font-fallback.css')).filter(
     (face) => face.get('font-family') === '"Archivo Fallback"',
@@ -68,6 +103,52 @@ describe('the Archivo fallback face', () => {
         'src must be local() only',
       );
       assert.ok(face.get('unicode-range'), 'a face without unicode-range would catch glyphs Archivo lacks');
+      const [low, high] = span(face.get('font-weight'), '');
+      assert.ok(low >= WEIGHTS[0] && high <= WEIGHTS[1] && low <= high, `font-weight ${low} ${high}`);
+      assert.ok(STRETCH_BANDS.includes(span(face.get('font-stretch'), '%').join('-')), 'font-stretch');
+    }
+  });
+
+  it('tiles 100 to 900 in each width band with no gap or overlap, one text and one digit face per bucket', () => {
+    for (const digits of [false, true]) {
+      const kind = digits ? 'digit' : 'text';
+      const bands = new Map<string, (readonly [number, number])[]>();
+      for (const face of fallback.filter((f) => (f.get('unicode-range') === DIGITS) === digits)) {
+        const band = span(face.get('font-stretch'), '%').join('-');
+        bands.set(band, [...(bands.get(band) ?? []), span(face.get('font-weight'), '')]);
+      }
+      assert.deepEqual([...bands.keys()].sort(), [...STRETCH_BANDS].sort(), `${kind} width bands`);
+      for (const [band, weights] of bands) {
+        const sorted = [...weights].sort((a, b) => a[0] - b[0]);
+        assert.equal(sorted[0]?.[0], WEIGHTS[0], `${kind} ${band}% starts at ${sorted[0]?.[0]}`);
+        assert.equal(sorted.at(-1)?.[1], WEIGHTS[1], `${kind} ${band}% ends at ${sorted.at(-1)?.[1]}`);
+        sorted.slice(1).forEach(([low], at) => {
+          const before = sorted[at]?.[1];
+          assert.equal(low, (before ?? 0) + 1, `${kind} ${band}%: ${before} is followed by ${low}`);
+        });
+      }
+    }
+    const buckets = (digits: boolean) =>
+      fallback
+        .filter((f) => (f.get('unicode-range') === DIGITS) === digits)
+        .map((f) => `${f.get('font-weight')} / ${f.get('font-stretch')}`)
+        .sort();
+    assert.deepEqual(buckets(true), buckets(false), 'every text bucket has its digit face');
+  });
+
+  it("splits Archivo's latin range between the text and digit faces, nothing more and nothing less", () => {
+    const latin = archivoLatinRange();
+    assert.ok(latin.size > 256, `read ${latin.size} code points from wdth.css`);
+    const digits = codePoints(DIGITS);
+    for (const face of fallback) {
+      const points = codePoints(face.get('unicode-range'));
+      if (face.get('unicode-range') === DIGITS) continue;
+      const shared = [...points].filter((point) => digits.has(point));
+      assert.deepEqual(shared, [], 'a text face also claims a digit');
+      const union = new Set([...points, ...digits]);
+      const missing = [...latin].filter((point) => !union.has(point)).map((p) => p.toString(16));
+      const extra = [...union].filter((point) => !latin.has(point)).map((p) => p.toString(16));
+      assert.deepEqual({ missing, extra }, { missing: [], extra: [] }, face.get('font-weight'));
     }
   });
 
