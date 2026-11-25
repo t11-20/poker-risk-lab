@@ -1,7 +1,7 @@
 /**
- * CardPicker. The deck is thirteen across from 572px (13 x 44) and four suit columns below that, each
- * of 44px targets. The component reads `--prl-picker-cols` to aim the arrow keys. Pixels, because the
- * target is 44px.
+ * CardPicker. The deck has three forms, each of 44px targets: thirteen across from 572px (13 x 44), each
+ * suit on a line of seven and one of six from 334px (7 x 46 + 6 x 2), and four suit columns below that.
+ * The component reads `--prl-picker-cols` to aim the arrow keys. Pixels, because the target is 44px.
  */
 
 .prl-picker {
@@ -188,6 +188,38 @@
   display: none;
 }
 
+/** Tracks hug the 46px card, so the deck stays a compact block rather than seven stretched cells. */
+@container prl-picker (min-width: 334px) {
+  .prl-picker__deck {
+    --prl-picker-cols: 7;
+
+    grid-template-columns: repeat(var(--prl-picker-cols), max-content);
+    grid-template-rows: none;
+    grid-auto-flow: row;
+    justify-content: start;
+  }
+
+  /* Each suit starts a line, so a suit's second line of six leaves the seventh cell empty. */
+  .prl-picker__card:nth-child(13n + 1) {
+    grid-column-start: 1;
+  }
+}
+
+/* Bounded, because this selector outranks any reset in the wider form. Four suits, not eight lines. */
+@container prl-picker (334px <= width < 572px) {
+  .prl-picker__card:nth-child(n + 14):is(
+    :nth-child(13n + 1),
+    :nth-child(13n + 2),
+    :nth-child(13n + 3),
+    :nth-child(13n + 4),
+    :nth-child(13n + 5),
+    :nth-child(13n + 6),
+    :nth-child(13n + 7)
+  ) {
+    margin-block-start: var(--prl-space-4);
+  }
+}
+
 /**
  * Below 622px the face narrows to as little as 38px and, below 596px, the column gap to nothing, so
  * every cell keeps 44px. From 622px both are as they were.
@@ -198,8 +230,6 @@
     --prl-picker-gap: clamp(0px, (100cqi - 572px) / 12, var(--prl-space-1));
 
     grid-template-columns: repeat(var(--prl-picker-cols), minmax(0, 1fr));
-    grid-template-rows: none;
-    grid-auto-flow: row;
     column-gap: var(--prl-picker-gap);
   }
 
