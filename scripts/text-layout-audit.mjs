@@ -1197,9 +1197,10 @@ class Page {
 async function withPage(headful, textScale, run) {
   const chrome = {
     headful,
-    // Clear of ax-tree-audit's debugging-port range.
-    port: 9650 + Math.floor(process.pid % 140),
-    profile: '/tmp/prl-text-layout-audit-profile',
+    // Clear of ax-tree-audit's debugging-port range. The overrides let a second run beside the gate keep
+    // off its port and its profile, which one Chrome locks.
+    port: Number(process.env.PRL_LAYOUT_CDP_PORT ?? 9650 + Math.floor(process.pid % 140)),
+    profile: process.env.PRL_LAYOUT_PROFILE ?? '/tmp/prl-text-layout-audit-profile',
     flags: [
       '--hide-scrollbars',
       '--force-device-scale-factor=1',
