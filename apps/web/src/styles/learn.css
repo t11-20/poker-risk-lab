@@ -463,6 +463,8 @@
  */
 .prl-learn-lesson__blocks {
   display: grid;
+  /* An implicit track is floored at its widest block, so a display-size heading widened the sheet. */
+  grid-template-columns: minmax(0, 1fr);
   align-content: start;
   gap: var(--prl-space-7);
   min-width: 0;
@@ -1353,6 +1355,28 @@
 @media (width < 37.5em) {
   .prl-learn-lesson {
     --prl-learn-sheet-x: var(--prl-space-6);
+  }
+}
+
+/**
+ * Below 20em, 320px at the default size and 640px at 200% text. At 360/200% the number's column left a
+ * card's text 141-172px, the radio left a quiz answer 110px, and one long word sat past its heading.
+ */
+@media (width < 20em) {
+  .prl-learn-entry,
+  .prl-learn-glossary__related {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .prl-learn-quiz__option .prl-choice {
+    flex-direction: column;
+  }
+
+  /* Not a quiz question, whose 240px column broke nearly every line. Chrome never hyphenates a capital,
+     so the lesson h1 "Tournaments:" is left too. */
+  .prl-learn-lesson__heading,
+  .prl-learn-glossary__term {
+    hyphens: auto;
   }
 }
 
