@@ -233,7 +233,7 @@ export default async function ComparePage({
 
               <div className="prl-stack prl-stack--tight">
                 <span className="prl-label">What would change it</span>
-                <ul>
+                <ul className="prl-prose">
                   {withKeys(entry.reasoning.whatChangedIt, `changed-${entry.profileId}`).map((note) => (
                     <li key={note.key}>{note.value}</li>
                   ))}
