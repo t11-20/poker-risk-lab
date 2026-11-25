@@ -8,9 +8,10 @@
  * Findings: `collision` (glyphs of two independent in-flow elements intersect), `escapes` (glyphs
  * leave their own non-scrolling block), `clipped` (cut off by a non-scrolling ancestor without an
  * ellipsis), `squeezed` (a block narrower than its longest word), `spills` (glyphs cross the left or
- * right edge of the nearest box that draws one, with nothing clipping them), and `page` (the document
- * scrolls sideways). The page only measures. `findTextDefects()` judges in Node, so tests can feed it the
- * collapsed row's real numbers.
+ * right edge of the nearest box that draws one, with nothing clipping them), `page` (the document
+ * scrolls sideways), and `unscaled` (the root font size is not the text size the reader set, which
+ * `--text-scale` sets in Chrome itself). The page only measures. `findTextDefects()` judges in Node,
+ * so tests can feed it the collapsed row's real numbers.
  *
  * Negative controls run on every invocation (`--controls-only` runs only them). Each injects CSS that
  * re-creates one defect shape and must be caught.
@@ -96,6 +97,10 @@ const EDGE_TOLERANCE = 2;
 const OVERLAP_MIN_AREA = 8;
 const OVERLAP_MIN_WIDTH = 2;
 const OVERLAP_MIN_HEIGHT_SHARE = 0.4;
+
+/** Chrome's default text size, which `--text-scale` multiplies, and its default monospace size. */
+const ROOT_FONT_SIZE = 16;
+const FIXED_FONT_SIZE = 13;
 
 /** A word must exceed its own content box by more than this to count as a collapsed column. */
 const WORD_TOLERANCE = 2;
@@ -219,6 +224,14 @@ const CONTROLS = [
     expect: 'escapes',
     what: 'a Legends card title escaping its box, inside the `display: contents` difficulty scope',
     css: '.prl-legend-scope .prl-legend-identity__archetype { white-space: nowrap; max-width: 60px; }',
+  },
+  {
+    id: 'root-in-px',
+    route: '/learn',
+    width: 1024,
+    expect: 'unscaled',
+    what: 'a root font size set in px, which overrides the text size the reader chose',
+    css: 'html { font-size: 10px; }',
   },
   {
     id: 'bordered-spill',
@@ -605,6 +618,7 @@ const WALKER = String.raw`(() => {
       scrollWidth: docEl.scrollWidth,
       clientWidth: docEl.clientWidth,
       innerWidth: window.innerWidth,
+      rootFontSize: Number.parseFloat(window.getComputedStyle(docEl).fontSize),
     },
     counts: {
       scanned,
@@ -834,6 +848,19 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
 
   // No tolerance: `scrollWidth` counts whole pixels of layout, and 2px of sideways scroll still scrolls.
   const { page } = measurement;
+
+  // Without this a page that pins its root in px passes a 200% sweep while measuring 100% text. A root
+  // that could not be read is judged the same way, so a missing measurement cannot pass.
+  const expected = ROOT_FONT_SIZE * (context.scale ?? 1);
+  if (!(Math.abs(page.rootFontSize - expected) < 0.5)) {
+    add('unscaled', {
+      sel: 'html',
+      text: '',
+      rootFontSize: page.rootFontSize ?? null,
+      expected,
+    });
+  }
+
   if (page.scrollWidth > page.clientWidth) {
     add('page', {
       sel: 'html',
@@ -848,7 +875,9 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
 }
 
 export function formatFinding(finding) {
-  const where = `${finding.route}  ${finding.theme}  ${String(finding.width)}px`;
+  const scale =
+    finding.scale === undefined || finding.scale === 1 ? '' : `  ${String(finding.scale * 100)}% text`;
+  const where = `${finding.route}  ${finding.theme}  ${String(finding.width)}px${scale}`;
   const quote = finding.text === '' ? '' : `  "${finding.text}"`;
   switch (finding.check) {
     case 'squeezed':
@@ -883,6 +912,11 @@ export function formatFinding(finding) {
         `${where}\n      PAGE       the document scrolls sideways: ${String(finding.scrollWidth)}px ` +
         `of content in a ${String(finding.clientWidth)}px viewport`
       );
+    case 'unscaled':
+      return (
+        `${where}\n      UNSCALED   the root font size is ${String(finding.rootFontSize)}px ` +
+        `where the reader set ${String(finding.expected)}px: the page ignored their text size`
+      );
     default:
       return `${where}  ${finding.check}  ${finding.sel}`;
   }
@@ -900,6 +934,7 @@ const DEFAULTS = {
   themes: null,
   selfTest: true,
   controlsOnly: false,
+  textScale: 1,
   out: null,
 };
 
@@ -919,6 +954,8 @@ ${bold('pnpm run test:layout')} — the PAINTED TEXT of this app, in real Chrome
     --routes <a,b>        sweep only these routes          (default: all ${String(ROUTES.length)})
     --widths <n,n>        sweep only these widths          (default ${WIDTHS.join(',')})
     --themes <a,b>        sweep only these themes          (default ${THEMES.join(',')})
+    --text-scale <n>      the reader's text size, as Chrome's own setting: 2 is 32px text
+                          (1 to 3 in sixteenths, so the sizes Chrome takes stay whole; default 1)
     --no-self-test        skip the injected negative controls (they are the gate's own proof)
     --controls-only       run ONLY the negative controls and stop
 
@@ -968,6 +1005,9 @@ export function parseArgs(argv) {
       case '--ready-timeout':
         options.readyTimeoutSeconds = Number(need());
         break;
+      case '--text-scale':
+        options.textScale = Number(need());
+        break;
       case '--routes':
         options.routes = need()
           .split(',')
@@ -995,6 +1035,11 @@ export function parseArgs(argv) {
   if (options.widths?.some((w) => !Number.isInteger(w) || w < 200) === true) {
     throw new Error('--widths takes whole numbers of at least 200');
   }
+  // `Page.setFontSizes` takes whole pixels, so 1.3 (20.8px) would be measured as something else.
+  const scale = options.textScale;
+  if (!Number.isFinite(scale) || scale < 1 || scale > 3 || !Number.isInteger(scale * ROOT_FONT_SIZE)) {
+    throw new Error('--text-scale takes a number from 1 to 3 in sixteenths, such as 1.25, 1.5 or 2');
+  }
   if (options.themes?.some((t) => !THEMES.includes(t)) === true) {
     throw new Error(`--themes takes ${THEMES.join(' and ')}`);
   }
@@ -1002,6 +1047,11 @@ export function parseArgs(argv) {
     throw new Error('--controls-only and --no-self-test together leave nothing to run');
   }
   return options;
+}
+
+/** What `Page.setFontSizes` is sent. Its fields are integers, and the fixed size has no exact 13·n. */
+export function fontSizesFor(scale) {
+  return { standard: ROOT_FONT_SIZE * scale, fixed: Math.round(FIXED_FONT_SIZE * scale) };
 }
 
 export function sweepMatrix(options) {
@@ -1061,6 +1111,9 @@ export function coverageFailures(tally, exemptions = EXEMPTIONS) {
 }
 
 class Page {
+  textScale = 1;
+  /** How the text size was applied: Chrome's setting, or an inline root size when Chrome refused it. */
+  textSizeMethod = 'Page.setFontSizes';
   #socket;
   #nextId = 1;
   #replies = new DevtoolsReplies();
@@ -1141,7 +1194,7 @@ class Page {
   }
 }
 
-async function withPage(headful, run) {
+async function withPage(headful, textScale, run) {
   const chrome = {
     headful,
     // Clear of ax-tree-audit's debugging-port range.
@@ -1164,6 +1217,15 @@ async function withPage(headful, run) {
     await page.send('Emulation.setEmulatedMedia', {
       features: [{ name: 'prefers-reduced-motion', value: 'reduce' }],
     });
+    // Sent at 1 too, so a size left over in a reused profile is reset rather than measured.
+    page.textScale = textScale;
+    await page.send('Page.setFontSizes', { fontSizes: fontSizesFor(textScale) }).catch((error) => {
+      page.textSizeMethod = 'inline root font-size';
+      console.log(
+        red(`  Chrome refused Page.setFontSizes (${error.message}); falling back to an inline root`),
+      );
+      console.log(red('  font-size, which moves no em media query and so is not the reader setting.'));
+    });
     try {
       await run(page);
     } finally {
@@ -1183,6 +1245,9 @@ async function measure(page, route, theme, width) {
   await page.setWidth(width);
   // On the root element, where `tokens.css` keys its light scope.
   await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`);
+  if (page.textSizeMethod !== 'Page.setFontSizes') {
+    await page.evaluate(`document.documentElement.style.fontSize = '${String(page.textScale * 100)}%'`);
+  }
   await delay(180);
   const measurement = await page.evaluate(walkerSource());
   // `PRL_LAYOUT_DUMP=<dir>` writes every rectangle, for tuning thresholds.
@@ -1196,7 +1261,7 @@ async function measure(page, route, theme, width) {
   if (measurement.selectorError !== undefined) {
     throw new Error(`an EXEMPTIONS selector is not valid CSS — ${measurement.selectorError}`);
   }
-  return { measurement, context: { route, theme, width } };
+  return { measurement, context: { route, theme, width, scale: page.textScale } };
 }
 
 /**
@@ -1273,6 +1338,7 @@ async function main() {
     detector: { ownBox: 0, scrollExcused: 0, ellipsisExcused: 0, clipTests: 0, frameTests: 0, pairs: 0 },
     routesLoaded: 0,
     routesWanted: 0,
+    textSize: { scale: options.textScale, method: 'not applied' },
   };
   const servers = [];
   let exitCode = 0;
@@ -1301,7 +1367,8 @@ async function main() {
       }
     }
 
-    await withPage(options.headful, async (page) => {
+    await withPage(options.headful, options.textScale, async (page) => {
+      tally.textSize.method = page.textSizeMethod;
       if (options.selfTest) {
         console.log(bold('\nNegative controls — a defect of each shape, put back into a real page'));
         for (const result of await runControls(page, options.baseUrl)) {
@@ -1413,6 +1480,11 @@ async function main() {
   }
 
   console.log(bold('\nSummary'));
+  console.log(
+    `  text size           ${String(tally.textSize.scale * 100)}% ` +
+      `(${String(fontSizesFor(tally.textSize.scale).standard)}px), ` +
+      `via ${tally.textSize.method}`,
+  );
   console.log(`  measurements        ${String(tally.measurements)}`);
   console.log(`  text elements       ${String(tally.textBoxes)}`);
   console.log(`  text nodes / words  ${String(tally.textNodes)} / ${String(tally.words)}`);
@@ -1487,6 +1559,7 @@ async function main() {
             routes: options.routes ?? ROUTES,
             themes: options.themes ?? THEMES,
             widths: options.widths ?? WIDTHS,
+            textScale: options.textScale,
           },
           tally: { ...tally, usedExemptions: [...tally.usedExemptions] },
           exemptions: EXEMPTIONS,

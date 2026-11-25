@@ -16,6 +16,7 @@ import {
   EXEMPTIONS,
   escapeAmount,
   findTextDefects,
+  fontSizesFor,
   formatFinding,
   frameSides,
   intersection,
@@ -59,7 +60,7 @@ function measurement(boxes, extra = {}) {
     boxes,
     clippers: extra.clippers ?? [],
     frames: extra.frames ?? [],
-    page: extra.page ?? { scrollWidth: 1440, clientWidth: 1440, innerWidth: 1440 },
+    page: extra.page ?? { scrollWidth: 1440, clientWidth: 1440, innerWidth: 1440, rootFontSize: 16 },
     counts: {
       scanned: 900,
       textBoxes: boxes.length,
@@ -598,7 +599,7 @@ describe('which edges of a box a reader sees', () => {
 describe('the page itself', () => {
   it('reports a document that scrolls sideways', () => {
     const wide = healthyRow();
-    wide.page = { scrollWidth: 412, clientWidth: 360, innerWidth: 360 };
+    wide.page = { scrollWidth: 412, clientWidth: 360, innerWidth: 360, rootFontSize: 16 };
     const { findings } = findTextDefects(wide, { route: '/', theme: 'dark', width: 360 });
     const finding = findings.find((f) => f.check === 'page');
     assert.ok(finding !== undefined);
@@ -608,7 +609,7 @@ describe('the page itself', () => {
 
   it('reports 2px of sideways scroll, which the scenario link on /learn/counting-outs made (REGRESSION)', () => {
     const nudged = healthyRow();
-    nudged.page = { scrollWidth: 362, clientWidth: 360, innerWidth: 360 };
+    nudged.page = { scrollWidth: 362, clientWidth: 360, innerWidth: 360, rootFontSize: 16 };
     const { findings } = findTextDefects(nudged, {
       route: '/learn/counting-outs',
       theme: 'dark',
@@ -653,7 +654,9 @@ describe('exemptions', () => {
     for (const rule of EXEMPTIONS) {
       assert.ok(typeof rule.selector === 'string' && rule.selector.length > 0);
       assert.ok(typeof rule.why === 'string' && rule.why.length > 30, 'an exemption needs a reason');
-      assert.ok(['collision', 'escapes', 'clipped', 'spills', 'squeezed', 'page'].includes(rule.check));
+      assert.ok(
+        ['collision', 'escapes', 'clipped', 'spills', 'squeezed', 'page', 'unscaled'].includes(rule.check),
+      );
     }
   });
 });
@@ -750,7 +753,7 @@ describe('the scope of the sweep', () => {
 
   it('every check has a negative control that runs on every invocation', () => {
     const covered = new Set(CONTROLS.map((control) => control.expect));
-    for (const check of ['collision', 'escapes', 'clipped', 'spills', 'squeezed', 'page']) {
+    for (const check of ['collision', 'escapes', 'clipped', 'spills', 'squeezed', 'page', 'unscaled']) {
       assert.ok(covered.has(check), `${check} has no negative control, so nobody has seen it fire`);
     }
     for (const control of CONTROLS) {
@@ -776,5 +779,70 @@ describe('the command line', () => {
   it('self-test is on unless it is turned off', () => {
     assert.equal(parseArgs([]).selfTest, true);
     assert.equal(parseArgs(['--no-self-test']).selfTest, false);
+  });
+});
+
+describe("the reader's text size", () => {
+  it('is 1 unless asked, and takes Chrome sizes from 1 to 3', () => {
+    assert.equal(parseArgs([]).textScale, 1);
+    assert.equal(parseArgs(['--text-scale', '2']).textScale, 2);
+    assert.equal(parseArgs(['--text-scale', '1.5']).textScale, 1.5);
+    assert.equal(parseArgs(['--text-scale', '3']).textScale, 3);
+  });
+
+  it('refuses a size out of range, one that is not a number, and one Chrome cannot set exactly', () => {
+    for (const bad of ['0.5', '0', '3.5', '4', '-2']) {
+      assert.throws(() => parseArgs(['--text-scale', bad]), /from 1 to 3/u, `${bad} was accepted`);
+    }
+    for (const bad of ['big', '', '2x', 'NaN', 'Infinity']) {
+      assert.throws(() => parseArgs(['--text-scale', bad]), /from 1 to 3/u, `${bad} was accepted`);
+    }
+    // 1.3 is 20.8px, and Page.setFontSizes takes whole pixels.
+    assert.throws(() => parseArgs(['--text-scale', '1.3']), /sixteenths/u);
+    assert.throws(() => parseArgs(['--text-scale']), /needs a value/u);
+  });
+
+  it('accepts the 320px reflow width', () => {
+    assert.deepEqual(parseArgs(['--widths', '320,360']).widths, [320, 360]);
+  });
+
+  it('sends Chrome whole pixels for both faces', () => {
+    assert.deepEqual(fontSizesFor(1), { standard: 16, fixed: 13 });
+    assert.deepEqual(fontSizesFor(2), { standard: 32, fixed: 26 });
+    assert.deepEqual(fontSizesFor(1.5), { standard: 24, fixed: 20 });
+  });
+});
+
+describe('a page that ignores the reader text size', () => {
+  const at = (rootFontSize, scale) => {
+    const page = healthyRow();
+    page.page = { ...page.page, rootFontSize };
+    const context = { route: '/lab', theme: 'light', width: 600 };
+    if (scale !== undefined) context.scale = scale;
+    return findTextDefects(page, context).findings.filter((f) => f.check === 'unscaled');
+  };
+
+  it('is reported when the root stays at 16px under a 200% setting, with both numbers', () => {
+    const [finding] = at(16, 2);
+    assert.ok(finding !== undefined, 'a 16px root under 32px text was not reported');
+    assert.equal(finding.rootFontSize, 16);
+    assert.equal(finding.expected, 32);
+    assert.equal(finding.scale, 2);
+    assert.match(formatFinding(finding), /600px {2}200% text\n.*UNSCALED .*16px where the reader set 32px/u);
+  });
+
+  it('is reported for a root pinned in px at the default size too', () => {
+    assert.equal(at(10).length, 1);
+  });
+
+  it('is reported when the root size could not be read, so a missing measurement cannot pass', () => {
+    assert.equal(at(undefined, 2).length, 1);
+    assert.equal(at(Number.NaN, 1).length, 1);
+  });
+
+  it('says nothing when the root follows the setting', () => {
+    assert.deepEqual(at(32, 2), []);
+    assert.deepEqual(at(24, 1.5), []);
+    assert.deepEqual(at(16), []);
   });
 });
