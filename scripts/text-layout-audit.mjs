@@ -149,6 +149,32 @@ const FLOOR_PER_MEASUREMENT = {
 };
 
 /**
+ * The default run's own floors, since the rates above held its 100% pass to 1,600 pairs of 33,050.
+ * About a third of what each pass measured on 2026-11-26 and never below main's fixed 100% floors.
+ * Clip tests come from `/`, `/legends` and `/legends/adaptive-exploiter` only.
+ */
+const DEFAULT_RUN_FLOORS = {
+  main: { textBoxes: 13000, ownBox: 13000, clipTests: 2000, frameTests: 9500, pairs: 11000, breakTests: 75 },
+  'large-text': {
+    textBoxes: 2500,
+    ownBox: 2500,
+    clipTests: 400,
+    frameTests: 1800,
+    pairs: 1100,
+    breakTests: 22,
+  },
+};
+
+const COVERAGE = [
+  ['textBoxes', 'text element(s) measured across the whole sweep'],
+  ['ownBox', 'text blocks measured against their own box'],
+  ['clipTests', 'text blocks measured against a clipping ancestor'],
+  ['frameTests', 'text blocks measured against the frame drawn around them'],
+  ['pairs', 'pairs of text blocks compared for a collision'],
+  ['breakTests', 'words on two lines or more judged for a tear letter by letter'],
+];
+
+/**
  * @typedef {object} Exemption
  * @property {string} check    which finding this suppresses
  * @property {string} selector CSS selector the element must match
@@ -1377,6 +1403,8 @@ export function fontSizesFor(scale) {
 export function sweepPasses(options) {
   const routes = options.routes ?? ROUTES;
   const asked = options.widths !== null || options.themes !== null || options.textScaleGiven === true;
+  // Only the run with none of the four scope flags is held to DEFAULT_RUN_FLOORS.
+  const whole = !asked && options.routes === null;
   const main = {
     id: 'main',
     scale: options.textScale,
@@ -1385,6 +1413,7 @@ export function sweepPasses(options) {
     widths: options.widths ?? WIDTHS,
     also: [],
     narrowed: options.routes !== null || options.widths !== null || options.themes !== null,
+    floors: whole ? DEFAULT_RUN_FLOORS.main : null,
   };
   if (asked) return [main];
   const phoneRoutes = LARGE_TEXT_PHONE_ROUTES.filter((route) => routes.includes(route));
@@ -1397,6 +1426,7 @@ export function sweepPasses(options) {
     widths: LARGE_TEXT.widths,
     also: phoneRoutes.length === 0 ? [] : [{ ...phone, why: LARGE_TEXT_PHONE_WHY }],
     narrowed: options.routes !== null,
+    floors: whole ? DEFAULT_RUN_FLOORS['large-text'] : null,
   };
   return [main, large];
 }
@@ -1427,8 +1457,19 @@ export function coverageFloor(key, wanted) {
   return Math.max(1, Math.floor(FLOOR_PER_MEASUREMENT[key] * wanted));
 }
 
+/** What each detector examined against its floor: the rate for the run's size, or `floors` if higher. */
+export function coverageChecks(tally, floors = null) {
+  const wanted = tally.measurementsWanted ?? 0;
+  return COVERAGE.map(([key, what]) => ({
+    key,
+    what,
+    seen: (key === 'textBoxes' ? tally.textBoxes : tally.detector[key]) ?? 0,
+    floor: Math.max(coverageFloor(key, wanted), floors?.[key] ?? 0),
+  }));
+}
+
 /** Every condition that makes a green result meaningless, as failure lines. */
-export function coverageFailures(tally) {
+export function coverageFailures(tally, floors = null) {
   const problems = [];
   // The matrix asked for, not what was measured, so a run that measured less cannot lower its floor.
   const wanted = tally.measurementsWanted ?? 0;
@@ -1442,28 +1483,13 @@ export function coverageFailures(tally) {
     );
   }
   const per = `for ${String(wanted)} measurement(s)`;
-  const textFloor = coverageFloor('textBoxes', wanted);
-  if (tally.textBoxes < textFloor) {
-    problems.push(
-      `only ${String(tally.textBoxes)} text element(s) were measured across the whole sweep ` +
-        `(floor ${String(textFloor)} ${per}); a sweep of nothing is not a pass`,
-    );
-  }
-  for (const [what, key] of [
-    ['text blocks measured against their own box', 'ownBox'],
-    ['text blocks measured against a clipping ancestor', 'clipTests'],
-    ['text blocks measured against the frame drawn around them', 'frameTests'],
-    ['pairs of text blocks compared for a collision', 'pairs'],
-    ['words on two lines or more judged for a tear letter by letter', 'breakTests'],
-  ]) {
-    const seen = tally.detector[key] ?? 0;
-    const floor = coverageFloor(key, wanted);
-    if (seen < floor) {
-      problems.push(
-        `only ${String(seen)} ${what} (floor ${String(floor)} ${per}) — a detector that examined ` +
-          'nothing reports what a detector that found nothing reports',
-      );
-    }
+  for (const { key, what, seen, floor } of coverageChecks(tally, floors)) {
+    if (seen >= floor) continue;
+    const why =
+      key === 'textBoxes'
+        ? 'a sweep of nothing is not a pass'
+        : 'a detector that examined nothing reports what a detector that found nothing reports';
+    problems.push(`only ${String(seen)} ${what} (floor ${String(floor)} ${per}) — ${why}`);
   }
   if (tally.routesLoaded < (tally.routesWanted ?? 0)) {
     problems.push(
@@ -1478,7 +1504,7 @@ export function passCoverageFailures(passes, tallies) {
   const failures = [];
   for (const [k, tally] of tallies.entries()) {
     const prefix = passes.length > 1 ? `${textSizeLabel(passes[k].scale)} pass: ` : '';
-    for (const problem of coverageFailures(tally)) failures.push(`${prefix}${problem}`);
+    for (const problem of coverageFailures(tally, passes[k].floors)) failures.push(`${prefix}${problem}`);
   }
   return failures;
 }
@@ -1990,7 +2016,7 @@ async function main() {
   }
 
   console.log(bold('\nSummary'));
-  for (const tally of options.controlsOnly ? [] : tallies) {
+  for (const [k, tally] of options.controlsOnly ? [] : tallies.entries()) {
     console.log(
       `  text size           ${textSizeLabel(tally.textSize.scale)} ` +
         `(${String(fontSizesFor(tally.textSize.scale).standard)}px), ` +
@@ -2021,6 +2047,11 @@ async function main() {
       ),
     );
     console.log(dim(`  aria-hidden, judged only for a broken word: ${String(tally.skipped.ariaHidden)}`));
+    const whose = passes[k].floors === null ? 'scaled to the measurements asked for' : "the default run's";
+    const floors = coverageChecks(tally, passes[k].floors).map(
+      ({ key, seen, floor }) => `${key} ${String(seen)} ${seen >= floor ? '>=' : '<'} ${String(floor)}`,
+    );
+    console.log(`  coverage floors     ${whose}: ${floors.join(', ')}`);
   }
   console.log(
     `  negative controls   ${String(controlResults.filter((r) => r.caught).length)}/${String(controlResults.length)} caught`,

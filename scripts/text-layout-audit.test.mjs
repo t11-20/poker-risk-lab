@@ -13,6 +13,7 @@ import {
   chromeTarget,
   clippedRects,
   colorAlpha,
+  coverageChecks,
   coverageFailures,
   coverageFloor,
   drawnEdges,
@@ -1192,12 +1193,58 @@ describe('a sweep of nothing is not a pass', () => {
   const healthy = FULL_DEFAULT_RUN;
 
   it('a full sweep of this app clears every floor', () => {
-    assert.deepEqual(coverageFailures(healthy, []), []);
+    assert.deepEqual(coverageFailures(healthy), []);
+  });
+
+  it('the default run is held at least as hard as main held it, in both passes (REGRESSION)', () => {
+    const passes = sweepPasses(parseArgs([]));
+    assert.deepEqual(passCoverageFailures(passes, [FULL_DEFAULT_RUN, LARGE_TEXT_RUN]), []);
+    // 5% of the pairs and 20% of the clip and frame tests cleared the per-measurement rates.
+    const thinned = (run, share) => ({
+      ...run,
+      detector: {
+        ...run.detector,
+        pairs: Math.floor(run.detector.pairs * 0.05),
+        clipTests: Math.floor(run.detector.clipTests * share),
+        frameTests: Math.floor(run.detector.frameTests * share),
+      },
+    });
+    const problems = passCoverageFailures(passes, [
+      thinned(FULL_DEFAULT_RUN, 0.2),
+      thinned(LARGE_TEXT_RUN, 0.2),
+    ]);
+    assert.equal(problems.length, 6, problems.join('\n'));
+    assert.match(problems[0], /^100% text pass: only 856 text blocks .*clipping ancestor \(floor 2000 /u);
+    assert.match(problems.join('\n'), /100% text pass: only 1652 pairs .*\(floor 11000 /u);
+    // main's fixed floors for the full 100% sweep, before they were scaled.
+    const main = { textBoxes: 5000, ownBox: 8000, clipTests: 2000, frameTests: 8000, pairs: 8000 };
+    for (const [key, floor] of Object.entries(main)) {
+      const held = coverageChecks(FULL_DEFAULT_RUN, passes[0].floors).find((c) => c.key === key);
+      assert.ok(
+        held.floor >= floor,
+        `${key} is held to ${String(held.floor)}, below main's ${String(floor)}`,
+      );
+    }
+  });
+
+  it('a narrowed run is held to floors scaled to its size, never the default run floors', () => {
+    for (const argv of [
+      ['--routes', '/legends'],
+      ['--widths', '360'],
+      ['--themes', 'dark'],
+      ['--text-scale', '2'],
+    ]) {
+      for (const pass of sweepPasses(parseArgs(argv))) assert.equal(pass.floors, null, argv.join(' '));
+    }
+    assert.ok(sweepPasses(parseArgs(['--no-self-test'])).every((pass) => pass.floors !== null));
+    for (const { floor } of coverageChecks({ measurementsWanted: 1, textBoxes: 0, detector: {} })) {
+      assert.ok(floor >= 1, 'a floor of zero would pass a sweep of nothing');
+    }
   });
 
   it('a run of one width and one theme is held to its own size, not refused (REGRESSION)', () => {
     // The fixed floors asked every run for 100 measurements and 8,000 pairs, so this was refused four times.
-    assert.deepEqual(coverageFailures(ONE_WIDTH_ONE_THEME, []), []);
+    assert.deepEqual(coverageFailures(ONE_WIDTH_ONE_THEME), []);
     assert.equal(coverageFloor('pairs', 62), 496);
     assert.equal(coverageFloor('pairs', 200), 1600);
   });
@@ -1211,7 +1258,7 @@ describe('a sweep of nothing is not a pass', () => {
   });
 
   it('refuses a run that measured almost nothing', () => {
-    const problems = coverageFailures({ ...healthy, measurements: 2, textBoxes: 40 }, []);
+    const problems = coverageFailures({ ...healthy, measurements: 2, textBoxes: 40 });
     assert.equal(problems.length, 2);
     for (const problem of problems) assert.match(problem, /a sweep of nothing is not a pass/u);
     assert.match(problems[0], /only 2 of 200 page measurement/u);
@@ -1225,24 +1272,24 @@ describe('a sweep of nothing is not a pass', () => {
       textBoxes: 0,
       detector: { ownBox: 0, clipTests: 0, frameTests: 0, pairs: 0, breakTests: 0 },
     };
-    const problems = coverageFailures(empty, []);
+    const problems = coverageFailures(empty);
     assert.match(problems[0], /asked for no measurement/u);
     assert.ok(problems.length >= 7, problems.join('\n'));
     const { measurementsWanted: _, ...unsized } = healthy;
-    assert.match(coverageFailures(unsized, [])[0], /asked for no measurement/u);
+    assert.match(coverageFailures(unsized)[0], /asked for no measurement/u);
   });
 
   it('a run that measured less than it asked cannot lower its own floor', () => {
     // Twelve of 200 pages measured, each one rich: the floors still follow the 200 asked for.
     const short = { ...healthy, measurements: 12, textBoxes: 9000 };
-    const problems = coverageFailures(short, []);
+    const problems = coverageFailures(short);
     assert.match(problems[0], /only 12 of 200/u);
   });
 
   it('refuses a run where a detector examined nothing, even with pages measured', () => {
     // A busy sweep with one detector out of the loop must still fail.
     for (const key of ['ownBox', 'clipTests', 'frameTests', 'pairs', 'breakTests']) {
-      const problems = coverageFailures({ ...healthy, detector: { ...healthy.detector, [key]: 0 } }, []);
+      const problems = coverageFailures({ ...healthy, detector: { ...healthy.detector, [key]: 0 } });
       assert.equal(problems.length, 1, `${key} at zero must be reported`);
       assert.match(problems[0], /a detector that examined nothing/u);
     }
@@ -1259,7 +1306,7 @@ describe('a sweep of nothing is not a pass', () => {
       routesWanted: 1,
       usedExemptions: new Set(),
     };
-    const problems = coverageFailures(learn, []);
+    const problems = coverageFailures(learn);
     assert.equal(problems.length, 2);
     assert.match(problems[0], /only 0 text blocks measured against a clipping ancestor \(floor 4 for 1 /u);
     assert.match(problems[1], /only 0 words on two lines or more judged .*\(floor 1 for 1 /u);
@@ -1267,13 +1314,13 @@ describe('a sweep of nothing is not a pass', () => {
 
   it('counts a detector missing from the tally as one that examined nothing', () => {
     const { frameTests: _, ...withoutFrames } = healthy.detector;
-    const problems = coverageFailures({ ...healthy, detector: withoutFrames }, []);
+    const problems = coverageFailures({ ...healthy, detector: withoutFrames });
     assert.equal(problems.length, 1);
     assert.match(problems[0], /frame drawn around them/u);
   });
 
   it('refuses a run where a route never loaded', () => {
-    const problems = coverageFailures({ ...healthy, routesLoaded: 28 }, []);
+    const problems = coverageFailures({ ...healthy, routesLoaded: 28 });
     assert.equal(problems.length, 1);
     assert.match(problems[0], /12 route\(s\) never loaded/u);
   });
@@ -1341,15 +1388,15 @@ describe('the scope of the sweep', () => {
   });
 });
 
-// The large-text pass as first measured: ROUTES, light, 768 and 1024, 200% text on 2026-11-26.
-// Its clip tests come from three routes only.
+// The large-text pass on 2026-11-26: ROUTES, light, 768 and 1024, and the phone routes at 360, 200%
+// text. Its clip tests come from three routes only.
 const LARGE_TEXT_RUN = {
-  measurements: 40,
-  measurementsWanted: 40,
-  textBoxes: 7530,
-  detector: { ownBox: 7530, clipTests: 856, frameTests: 5474, pairs: 3218, breakTests: 57 },
-  routesLoaded: 20,
-  routesWanted: 20,
+  measurements: 44,
+  measurementsWanted: 44,
+  textBoxes: 7720,
+  detector: { ownBox: 7720, clipTests: 856, frameTests: 5538, pairs: 3218, breakTests: 67 },
+  routesLoaded: 24,
+  routesWanted: 24,
 };
 
 describe('the large-text pass', () => {
@@ -1421,7 +1468,7 @@ describe('the large-text pass', () => {
     const unclipped = { ...LARGE_TEXT_RUN, detector: { ...LARGE_TEXT_RUN.detector, clipTests: 0 } };
     const problems = passCoverageFailures(passes, [FULL_DEFAULT_RUN, unclipped]);
     assert.equal(problems.length, 1, '4,280 clip tests at 100% must not cover a pass with none');
-    assert.match(problems[0], /^200% text pass: only 0 text blocks .*clipping ancestor \(floor 160 for 40 /u);
+    assert.match(problems[0], /^200% text pass: only 0 text blocks .*clipping ancestor \(floor 400 for 44 /u);
     assert.deepEqual(passCoverageFailures(passes, [FULL_DEFAULT_RUN, LARGE_TEXT_RUN]), []);
   });
 
@@ -1433,12 +1480,14 @@ describe('the large-text pass', () => {
   });
 
   it('holds its own cells to the coverage floors, as its first run measured them', () => {
-    assert.deepEqual(coverageFailures(LARGE_TEXT_RUN), []);
+    const { floors } = sweepPasses(parseArgs([]))[1];
+    assert.deepEqual(coverageFailures(LARGE_TEXT_RUN, floors), []);
     const unclipped = { ...LARGE_TEXT_RUN, detector: { ...LARGE_TEXT_RUN.detector, clipTests: 100 } };
     assert.match(
-      coverageFailures(unclipped)[0],
-      /only 100 text blocks .*clipping ancestor \(floor 160 for 40 /u,
+      coverageFailures(unclipped, floors)[0],
+      /only 100 text blocks .*clipping ancestor \(floor 400 for 44 /u,
     );
+    assert.match(coverageFailures(unclipped)[0], /\(floor 176 for 44 /u, 'the same cells, narrowed');
   });
 });
 
