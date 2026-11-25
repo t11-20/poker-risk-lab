@@ -137,6 +137,14 @@ describe('the quiz restores its place from the URL without moving focus', () => 
     }
   });
 
+  it("tidies the URL on load only after Next has patched replaceState, so the router's state survives", () => {
+    assert.match(
+      restore,
+      /const tidy = window\.setTimeout\(\(\) => \{\s*writeSearch\(searchWithQuizPlace\(window\.location\.search, restored, total\)\);\s*\}, 0\);\s*return \(\) => window\.clearTimeout\(tidy\);/u,
+    );
+    assert.equal(restore.match(/writeSearch\(/gu)?.length, 1, 'no synchronous write in the mount effect');
+  });
+
   it('replaces the history entry with null state, and reads no search params on render', () => {
     assert.match(runner, /window\.history\.replaceState\(null, '', url\);/u);
     assert.doesNotMatch(runner, /pushState|useSearchParams|localStorage|sessionStorage|indexedDB|cookie/u);

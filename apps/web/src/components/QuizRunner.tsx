@@ -532,7 +532,12 @@ export function QuizRunner(props: QuizRunnerProps): ReactElement {
     const search = window.location.search;
     const restored = parseQuizPlace(search, total);
     setStep(restored);
-    writeSearch(searchWithQuizPlace(search, restored, total));
+    // Deferred: Next patches `replaceState` in an ancestor's effect, which runs after this one, and the
+    // unpatched call wipes the router's history state, so Back to this entry showed the previous page.
+    const tidy = window.setTimeout(() => {
+      writeSearch(searchWithQuizPlace(window.location.search, restored, total));
+    }, 0);
+    return () => window.clearTimeout(tidy);
   }, [total]);
   const question = onReview ? undefined : quiz.questions[step];
 
