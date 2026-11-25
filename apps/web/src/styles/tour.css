@@ -74,7 +74,9 @@
 
 /* The panel. In flow under the header: it pushes the page down and covers none of it. */
 
+/** A container, so the steps are laid out by the panel's own width. */
 .prl-tour {
+  container: prl-tour / inline-size;
   display: grid;
   gap: var(--prl-space-4);
   margin-block-start: var(--prl-space-6);
@@ -98,17 +100,23 @@
   font-weight: var(--prl-weight-semibold);
 }
 
-/** One column on a phone, five across once each can hold its sentence on about three lines. */
+/**
+ * Five across only when all five fit at 12rem, and one column until then: an auto-fit grid left a
+ * step alone, 4+1 at 1024 and 3+2 at 768. 66rem is five 12rem tracks and four gaps.
+ */
 .prl-tour__steps {
   display: grid;
   gap: var(--prl-space-4) var(--prl-space-6);
-  grid-template-columns: repeat(
-      auto-fit,
-      minmax(min(100%, calc(var(--prl-space-15) + var(--prl-space-12))), 1fr)
-    );
+  grid-template-columns: minmax(0, 1fr);
   margin: 0;
   padding: 0;
   list-style: none;
+}
+
+@container prl-tour (width >= 66rem) {
+  .prl-tour__steps {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
 }
 
 .prl-tour__step {
@@ -135,6 +143,19 @@
 .prl-tour__step-text,
 .prl-tour__missing {
   grid-column: 2;
+}
+
+/** In one column with room to spare, a step is one row: its title in an 11rem column, its sentence after. */
+@container prl-tour (30rem <= width < 66rem) {
+  .prl-tour__step {
+    grid-template-columns: auto calc(var(--prl-space-16) + var(--prl-space-6)) minmax(0, 1fr);
+    align-items: baseline;
+  }
+
+  .prl-tour__step-text,
+  .prl-tour__missing {
+    grid-column: 3;
+  }
 }
 
 .prl-tour__step-text {
