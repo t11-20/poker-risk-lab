@@ -6,6 +6,7 @@
  */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import {
   CONTROLS,
@@ -16,17 +17,23 @@ import {
   drawnEdges,
   EXEMPTIONS,
   escapeAmount,
+  exemptionFailures,
+  exemptionReport,
   findTextDefects,
   fontSizesFor,
+  formatExemption,
   formatFinding,
   frameSides,
   intersection,
   isRealOverlap,
+  judgeControl,
+  LARGE_TEXT,
   letterByLetter,
   nearestFrame,
   parseArgs,
   ROUTES,
   sweepMatrix,
+  sweepPasses,
   THEMES,
   WIDTHS,
 } from './text-layout-audit.mjs';
@@ -945,17 +952,114 @@ describe('exemptions', () => {
   });
 
   it('a rule that matched nothing anywhere fails the gate (REGRESSION)', () => {
-    const problems = coverageFailures({ ...FULL_DEFAULT_RUN, usedExemptions: new Set() }, rules);
+    const problems = exemptionFailures(exemptionReport([{ scale: 1, narrowed: false }], {}, rules));
     assert.equal(problems.length, 1);
     assert.match(problems[0], /matched nothing/u);
+    assert.deepEqual(exemptionFailures(exemptionReport([{ scale: 1 }], { 0: 3 }, rules)), []);
   });
 
-  it('the shipped list is empty, and every rule in it must carry a reason', () => {
+  it('a pass that does not say whether it was narrowed is held to its rules', () => {
+    assert.equal(exemptionReport([{}], {}, rules)[0].status, 'stale');
+  });
+
+  it('every shipped rule carries a reason, and the list holds only the radar labels', () => {
     for (const rule of EXEMPTIONS) {
       assert.ok(typeof rule.selector === 'string' && rule.selector.length > 0);
       assert.ok(typeof rule.why === 'string' && rule.why.length > 30, 'an exemption needs a reason');
       assert.ok(CHECKS.includes(rule.check));
     }
+    assert.deepEqual(
+      EXEMPTIONS.map((rule) => [rule.check, rule.selector, rule.aboveScale]),
+      [['clipped', 'text.prl-radar__label', 1]],
+    );
+  });
+});
+
+/**
+ * `/legends`, light, 768px, 200% text: radar label "04" cut 4.5px past the radar that hides overflow.
+ * `exempt` is what the walker sends when the element matches the rule's selector; the root is 32px.
+ */
+const RADAR_RULE = EXEMPTIONS.findIndex((rule) => rule.selector === 'text.prl-radar__label');
+const RADAR = 'article.prl-legend-card > div.prl-radar.prl-legend-radar > svg.prl-radar__svg';
+
+function radarLabel(clipperSel = RADAR) {
+  const label = { x: 395.5, y: 140, w: 9, h: 20 };
+  return measurement(
+    [
+      box({
+        i: 300,
+        end: 301,
+        sel: 'svg.prl-radar__svg > g.prl-radar__labels > text.prl-radar__label.prl-index',
+        tag: 'text',
+        text: '04',
+        rects: [label],
+        pad: label,
+        word: { text: '04', width: 9 },
+        exempt: [RADAR_RULE],
+      }),
+    ],
+    {
+      clippers: [{ i: 298, end: 302, sel: clipperSel, pad: { x: 100, y: 0, w: 300, h: 300 } }],
+      page: { scrollWidth: 768, clientWidth: 768, innerWidth: 768, rootFontSize: 32 },
+    },
+  );
+}
+
+describe('the radar label exemption (OWNER-1)', () => {
+  const clippedAt = (m, context) => findTextDefects(m, context).findings.filter((f) => f.check === 'clipped');
+
+  it('suppresses the label clipped by its own radar at 200% text, and counts it', () => {
+    assert.ok(RADAR_RULE >= 0, 'no shipped exemption names text.prl-radar__label');
+    const result = findTextDefects(radarLabel(), { route: '/legends', width: 768, scale: 2 });
+    assert.deepEqual(result.findings, []);
+    assert.deepEqual(result.usedExemptions, [RADAR_RULE]);
+    assert.deepEqual(result.suppressed, { [RADAR_RULE]: 1 });
+  });
+
+  it('still reports the same finding at 100% text, or with no size given (REGRESSION)', () => {
+    assert.equal(clippedAt(radarLabel(), { route: '/legends', width: 768, scale: 1 })[0]?.past, 4.5);
+    assert.equal(clippedAt(radarLabel(), { route: '/legends', width: 768 }).length, 1);
+    assert.deepEqual(findTextDefects(radarLabel(), { scale: 1 }).usedExemptions, []);
+  });
+
+  it('still reports the label cut off by an ancestor that is not the radar', () => {
+    const byCard = radarLabel('section.prl-legend-section > div.prl-legend-grid > article.prl-legend-card');
+    assert.equal(clippedAt(byCard, { scale: 2 }).length, 1);
+  });
+
+  it('suppresses no other shape on the same label', () => {
+    const framed = radarLabel();
+    framed.clippers = [];
+    framed.frames.push({
+      i: 298,
+      end: 302,
+      sel: RADAR,
+      border: { x: 100, y: 0, w: 300, h: 300 },
+      left: true,
+      right: true,
+    });
+    const checks = findTextDefects(framed, { scale: 2 }).findings.map((f) => f.check);
+    assert.deepEqual(checks, ['spills']);
+  });
+
+  it('is held to having matched by a full pass above 100%, and said aloud when none ran', () => {
+    const report = (argv, suppressed) =>
+      exemptionReport(sweepPasses(parseArgs(argv)), suppressed)[RADAR_RULE].status;
+    assert.equal(report([], { [RADAR_RULE]: 312 }), 'used');
+    assert.equal(report([], {}), 'stale', 'the default run reaches the rule through its large-text pass');
+    assert.equal(report(['--text-scale', '2'], {}), 'stale');
+    assert.equal(report(['--text-scale', '1'], {}), 'unreached', 'a 100% run cannot use it');
+    assert.equal(report(['--routes', '/learn'], {}), 'unreached', 'a narrowed run cannot prove it stale');
+    const stale = exemptionReport(sweepPasses(parseArgs([])), {});
+    assert.match(exemptionFailures(stale)[0], /text\.prl-radar__label\) matched nothing/u);
+  });
+
+  it('prints its reason and what it suppressed', () => {
+    const [used] = exemptionReport(sweepPasses(parseArgs([])), { [RADAR_RULE]: 312 });
+    assert.match(formatExemption(used), /^clipped text\.prl-radar__label above 100% text: 312 finding/u);
+    assert.match(formatExemption(used), /why: .*OWNER-1/u);
+    const [unreached] = exemptionReport(sweepPasses(parseArgs(['--text-scale', '1'])), {});
+    assert.match(formatExemption(unreached), /not reached/u);
   });
 });
 
@@ -1111,11 +1215,11 @@ describe('the scope of the sweep', () => {
   });
 
   it('the matrix is every combination, and a narrowed one is smaller', () => {
-    const full = sweepMatrix(parseArgs([]));
+    const full = sweepMatrix(parseArgs([])).filter((cell) => cell.scale === 1);
     assert.equal(full.length, ROUTES.length * THEMES.length * WIDTHS.length);
     assert.ok(full.length >= 100, `${String(full.length)} measurements is not a sweep`);
     const narrow = sweepMatrix(parseArgs(['--routes', '/learn', '--widths', '360', '--themes', 'dark']));
-    assert.deepEqual(narrow, [{ route: '/learn', theme: 'dark', width: 360 }]);
+    assert.deepEqual(narrow, [{ route: '/learn', theme: 'dark', width: 360, scale: 1 }]);
   });
 
   it('every check has a negative control that runs on every invocation', () => {
@@ -1130,6 +1234,117 @@ describe('the scope of the sweep', () => {
     }
     assert.match(CONTROLS[0].css, /grid-template-columns:\s*minmax\(0,\s*1fr\)\s*auto/u);
     assert.equal(CONTROLS[0].route, '/play?state=decision');
+  });
+});
+
+describe('the large-text pass', () => {
+  const cells = (argv) => sweepMatrix(parseArgs(argv));
+  const large = (argv) => cells(argv).filter((cell) => cell.scale !== 1);
+
+  it('the default run also measures every route at 200% text, light, at 768 and 1024', () => {
+    const extra = large([]);
+    assert.equal(extra.length, ROUTES.length * 2, 'the default run has no large-text pass');
+    assert.deepEqual([...new Set(extra.map((cell) => cell.scale))], [2]);
+    assert.deepEqual([...new Set(extra.map((cell) => cell.theme))], ['light']);
+    assert.deepEqual([...new Set(extra.map((cell) => cell.width))], [768, 1024]);
+    assert.deepEqual([...new Set(extra.map((cell) => cell.route))], ROUTES);
+    assert.equal(cells([]).length, ROUTES.length * (THEMES.length * WIDTHS.length + 2));
+  });
+
+  it('follows --routes, so one route can be checked the way the gate checks it', () => {
+    assert.deepEqual(large(['--routes', '/legends']), [
+      { route: '/legends', theme: 'light', width: 768, scale: 2 },
+      { route: '/legends', theme: 'light', width: 1024, scale: 2 },
+    ]);
+    assert.deepEqual(
+      sweepPasses(parseArgs(['--routes', '/legends'])).map((pass) => pass.narrowed),
+      [true, true],
+    );
+  });
+
+  it('is replaced by exactly the matrix --text-scale, --widths or --themes names', () => {
+    const asked = cells(['--text-scale', '2', '--themes', 'light', '--widths', '768,1024']);
+    assert.equal(asked.length, ROUTES.length * 2, 'the cells a --text-scale run named, and no more');
+    assert.ok(asked.every((cell) => cell.scale === 2));
+    assert.ok(cells(['--text-scale', '1']).every((cell) => cell.scale === 1));
+    assert.ok(cells(['--text-scale', '1.5']).every((cell) => cell.scale === 1.5));
+    assert.deepEqual(large(['--widths', '360']), []);
+    assert.deepEqual(large(['--themes', 'dark']), []);
+    assert.deepEqual(
+      sweepPasses(parseArgs(['--text-scale', '2'])).map((pass) => [pass.scale, pass.narrowed]),
+      [[2, false]],
+    );
+  });
+
+  it('is a large size Chrome can set, in a theme and widths the audit knows', () => {
+    assert.ok(LARGE_TEXT.scale > 1);
+    assert.doesNotThrow(() => parseArgs(['--text-scale', String(LARGE_TEXT.scale)]));
+    for (const theme of LARGE_TEXT.themes) assert.ok(THEMES.includes(theme));
+    for (const width of LARGE_TEXT.widths) assert.ok(WIDTHS.includes(width));
+  });
+
+  it('holds its own cells to the coverage floors, as its first run measured them', () => {
+    // ROUTES, light, 768 and 1024, 200% text on 2026-11-26: clip tests come from three routes only.
+    const measured = {
+      measurements: 40,
+      measurementsWanted: 40,
+      textBoxes: 7530,
+      detector: { ownBox: 7530, clipTests: 856, frameTests: 5474, pairs: 3218, breakTests: 8462 },
+      routesLoaded: 20,
+      routesWanted: 20,
+    };
+    assert.deepEqual(coverageFailures(measured), []);
+    const unclipped = { ...measured, detector: { ...measured.detector, clipTests: 100 } };
+    assert.match(
+      coverageFailures(unclipped)[0],
+      /only 100 text blocks .*clipping ancestor \(floor 160 for 40 /u,
+    );
+  });
+});
+
+describe('the large-text negative control', () => {
+  const header = CONTROLS.find((control) => control.id === 'header-px-breakpoint');
+  const styles = ['apps/web/src/styles/nav.css', 'apps/web/src/app/globals.css'].map((path) =>
+    readFileSync(new URL(`../${path}`, import.meta.url), 'utf8'),
+  );
+
+  it('puts the desktop header back under px breakpoints, at the pass size and a pass cell', () => {
+    assert.ok(header !== undefined, 'no control re-creates the header that only 200% text catches');
+    assert.equal(header.expect, 'page');
+    assert.equal(header.scale, LARGE_TEXT.scale);
+    assert.ok(LARGE_TEXT.themes.includes(header.theme));
+    assert.ok(LARGE_TEXT.widths.includes(header.width));
+    assert.ok(ROUTES.includes(header.route));
+    assert.match(header.css, /\.prl-shell__header-inner \{ grid-template-columns: auto 1fr auto; \}/u);
+    assert.doesNotMatch(header.css, /\d+(\.\d+)?em\)/u, 'an em condition would move with the text');
+  });
+
+  it('mirrors breakpoints the stylesheets still state in em, so it re-creates their px forms', () => {
+    const px = [...header.css.matchAll(/min-width: (\d+)px/gu)].map((m) => Number(m[1]));
+    assert.deepEqual(px, [600, 860]);
+    for (const width of px) {
+      const em = `(min-width: ${String(width / 16)}em)`;
+      assert.ok(
+        styles.some((css) => css.includes(em)),
+        `${em} is no longer in the stylesheets`,
+      );
+    }
+    assert.ok(styles[0].includes('grid-template-columns: auto 1fr auto;'));
+  });
+
+  it('counts only when caught at its size and silent at 100% text', () => {
+    const page = [{ check: 'page' }];
+    assert.deepEqual(judgeControl(header, page, []), { caught: true, why: '' });
+    assert.deepEqual(judgeControl(header, page, page), { caught: false, why: 'fires at 100% text' });
+    assert.deepEqual(judgeControl(header, page, undefined).caught, false, 'never measured at 100%');
+    assert.deepEqual(judgeControl(header, [], []), { caught: false, why: 'missed' });
+  });
+
+  it('every control with its own size needs more than 100%, and the others need no second look', () => {
+    for (const control of CONTROLS.filter((c) => c.scale !== undefined)) assert.ok(control.scale > 1);
+    const plain = CONTROLS.find((control) => control.id === 'coach-track');
+    assert.equal(plain.scale, undefined);
+    assert.equal(judgeControl(plain, [{ check: 'squeezed' }], undefined).caught, true);
   });
 });
 
