@@ -84,8 +84,19 @@ const LARGE_TEXT = { scale: 2, themes: ['light'], widths: [768, 1024], phoneWidt
 /**
  * The routes the large-text pass also measures at `phoneWidth`, where a layout wider than the phone
  * scrolls sideways that a 768 or 1024 window still holds. The rest still fail there on held work.
+ * None of these hyphenates at 360px: a CI Chrome may have no hyphenation dictionary.
  */
-const LARGE_TEXT_PHONE_ROUTES = ['/play', '/lab', '/lab/fl-same-cards-under-the-gun', '/lab/spots'];
+const LARGE_TEXT_PHONE_ROUTES = [
+  '/',
+  '/learn',
+  '/play',
+  '/lab',
+  '/lab/fl-same-cards-under-the-gun',
+  '/lab/spots',
+  '/legends/adaptive-exploiter',
+  '/review',
+  '/checks',
+];
 
 const LARGE_TEXT_PHONE_WHY =
   'content wider than 360px fits a 768 or 1024 window, so only a phone at 200% text shows it; ' +

@@ -1423,7 +1423,17 @@ describe('the large-text pass', () => {
       LARGE_TEXT_PHONE_ROUTES,
     );
     assert.ok(phone.every((cell) => cell.theme === 'light' && cell.scale === 2));
-    for (const route of ['/play', '/lab', '/lab/fl-same-cards-under-the-gun', '/lab/spots']) {
+    for (const route of [
+      '/',
+      '/learn',
+      '/play',
+      '/lab',
+      '/lab/fl-same-cards-under-the-gun',
+      '/lab/spots',
+      '/legends/adaptive-exploiter',
+      '/review',
+      '/checks',
+    ]) {
       assert.ok(LARGE_TEXT_PHONE_ROUTES.includes(route), `${route} is no longer measured at 360px`);
     }
     for (const route of LARGE_TEXT_PHONE_ROUTES) assert.ok(ROUTES.includes(route), `${route} is not swept`);
