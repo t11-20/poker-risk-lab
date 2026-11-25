@@ -24,7 +24,10 @@ against the repo — if a statement here and the code disagree, the code is righ
     test:a11y  test:ax  test:keyboard  test:layout  test:csp  test:age-gate
     test:exhaustive  test:simulation  db:verify
 
-It runs every gate even after one fails, then exits non-zero listing them. `security:audit` is
+It runs every gate even after one fails, then exits non-zero listing them. `build` ends with `pnpm run
+test:bundle` (`scripts/client-bundle-audit.mjs`), which reads the production build and fails if the Node
+`crypto` polyfill reaches any route but `/review/[handId]`, the one page that hashes in the browser. It is
+part of the `build` gate, not a seventeenth one, so it touched neither workflow. `security:audit` is
 itself **fifteen** supply-chain gates (`scripts/supply-chain/audit.mjs`). Those two counts were
 equal for a while — worse than being different, because the lists are unrelated and equal numbers
 look interchangeable — and `test:layout`, `test:keyboard` and then `pinned-action-advisories` have
