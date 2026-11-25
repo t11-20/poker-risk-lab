@@ -17,6 +17,7 @@ import { LEARN_QUIZZES } from '../src/fixtures/learn-quizzes.ts';
 import {
   type CalculationReply,
   type CalculationThread,
+  type ComputedOn,
   computeDeferred,
   type DeferredHost,
 } from '../src/lib/deferred-calculation.ts';
@@ -118,7 +119,11 @@ describe('a deferred lesson figure, computed on the worker', () => {
     );
     assert.ok(existsSync(WORKER_FILE));
     assert.match(source, /new Worker\(new URL\('\.\.\/lib\/calculation-worker\.ts', import\.meta\.url\)/u);
-    assert.match(source, /return computeDeferred\(calculation, BROWSER_HOST, setComputed\);/u);
+    assert.match(
+      source,
+      /return computeDeferred\(calculation, BROWSER_HOST, \(outcome, on\) => setComputed\(/u,
+    );
+    assert.match(source, /data-computed=\{computedOn \?\? undefined\}/u);
   });
 });
 
@@ -144,10 +149,12 @@ class FakeThread implements CalculationThread {
   }
 }
 
-function harness(start: () => CalculationThread | null) {
+/** `cancelable: false` is a timer whose task was already queued when it was cleared. */
+function harness(start: () => CalculationThread | null, { cancelable = true } = {}) {
   const timers: (() => void)[] = [];
   let computedHere = 0;
   const outcomes: CalculationOutcome[] = [];
+  const computedOn: ComputedOn[] = [];
   const host: DeferredHost = {
     startThread: start,
     computeHere: () => {
@@ -158,14 +165,18 @@ function harness(start: () => CalculationThread | null) {
       timers.push(run);
       return () => {
         const at = timers.indexOf(run);
-        if (at >= 0) timers.splice(at, 1);
+        if (cancelable && at >= 0) timers.splice(at, 1);
       };
     },
   };
-  const cancel = computeDeferred(SAMPLE, host, (outcome) => outcomes.push(outcome));
+  const cancel = computeDeferred(SAMPLE, host, (outcome, on) => {
+    outcomes.push(outcome);
+    computedOn.push(on);
+  });
   return {
     cancel,
     outcomes,
+    computedOn,
     runTimers: () => {
       for (const run of timers.splice(0)) run();
     },
@@ -183,6 +194,7 @@ describe('computeDeferred', () => {
     run.runTimers();
     assert.equal(run.computedHere(), 0);
     assert.deepEqual(run.outcomes, [ANSWER]);
+    assert.deepEqual(run.computedOn, ['worker']);
     assert.equal(thread.terminated, true);
   });
 
@@ -197,33 +209,69 @@ describe('computeDeferred', () => {
       assert.deepEqual(run.outcomes, [], 'not during the render that mounted it');
       run.runTimers();
       assert.deepEqual(run.outcomes, [HERE]);
+      assert.deepEqual(run.computedOn, ['here']);
     }
   });
 
-  it('computes here once when the worker fails to load or to deliver', () => {
-    for (const failure of ['error', 'messageerror']) {
+  for (const failure of ['error', 'messageerror']) {
+    it(`computes here once when the worker raises ${failure}`, () => {
       const thread = new FakeThread();
       const run = harness(() => thread);
       thread.fire(failure);
-      thread.fire('error');
-      assert.equal(thread.terminated, true);
+      assert.equal(thread.terminated, true, failure);
+      assert.equal(run.computedHere(), 0, 'not before the timer');
       run.runTimers();
       assert.equal(run.computedHere(), 1, failure);
       assert.deepEqual(run.outcomes, [HERE]);
-    }
+      assert.deepEqual(run.computedOn, ['here']);
+    });
+  }
+
+  it('computes here once when the worker raises both failures', () => {
+    const thread = new FakeThread();
+    const run = harness(() => thread);
+    thread.fire('messageerror');
+    thread.fire('error');
+    run.runTimers();
+    assert.equal(run.computedHere(), 1);
+    assert.deepEqual(run.outcomes, [HERE]);
   });
 
-  it('reports nothing after it is cancelled', () => {
+  it('does not compute here when a worker reply lands after a failure scheduled the fallback', () => {
+    const thread = new FakeThread();
+    const run = harness(() => thread);
+    thread.fire('error');
+    thread.fire('message', { outcome: ANSWER });
+    run.runTimers();
+    assert.equal(run.computedHere(), 0);
+    assert.deepEqual(run.outcomes, [ANSWER]);
+  });
+
+  it('computes and reports nothing after it is cancelled', () => {
     const thread = new FakeThread();
     const run = harness(() => thread);
     run.cancel();
     thread.fire('message', { outcome: ANSWER });
+    thread.fire('error');
+    run.runTimers();
     assert.equal(thread.terminated, true);
+    assert.equal(run.computedHere(), 0);
     assert.deepEqual(run.outcomes, []);
 
-    const fallback = harness(() => null);
-    fallback.cancel();
-    fallback.runTimers();
-    assert.deepEqual(fallback.outcomes, []);
+    for (const cancelable of [true, false]) {
+      const fallback = harness(() => null, { cancelable });
+      fallback.cancel();
+      fallback.runTimers();
+      assert.equal(fallback.computedHere(), 0, `cancelable: ${String(cancelable)}`);
+      assert.deepEqual(fallback.outcomes, []);
+
+      const failed = new FakeThread();
+      const late = harness(() => failed, { cancelable });
+      failed.fire('error');
+      late.cancel();
+      late.runTimers();
+      assert.equal(late.computedHere(), 0, `after a failure, cancelable: ${String(cancelable)}`);
+      assert.deepEqual(late.outcomes, []);
+    }
   });
 });

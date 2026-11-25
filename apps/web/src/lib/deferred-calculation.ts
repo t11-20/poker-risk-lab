@@ -22,6 +22,9 @@ export interface CalculationThread {
   terminate(): void;
 }
 
+/** Where the figure was computed, so a gate can tell a dead worker from a working one. */
+export type ComputedOn = 'worker' | 'here';
+
 export interface DeferredHost {
   /** `null` where workers are unavailable. May throw, which is treated the same way. */
   readonly startThread: () => CalculationThread | null;
@@ -34,25 +37,28 @@ export interface DeferredHost {
 export function computeDeferred(
   calculation: LiveCalculation,
   host: DeferredHost,
-  onOutcome: (outcome: CalculationOutcome) => void,
+  onOutcome: (outcome: CalculationOutcome, on: ComputedOn) => void,
 ): () => void {
   let done = false;
   let thread: CalculationThread | null = null;
   let cancelTimer: (() => void) | null = null;
 
-  const finish = (outcome: CalculationOutcome): void => {
+  const finish = (outcome: CalculationOutcome, on: ComputedOn): void => {
     if (done) return;
     done = true;
     thread?.terminate();
     thread = null;
-    onOutcome(outcome);
+    onOutcome(outcome, on);
   };
 
   const fallBack = (): void => {
     if (done || cancelTimer !== null) return;
     thread?.terminate();
     thread = null;
-    cancelTimer = host.later(() => finish(host.computeHere(calculation)));
+    // A worker reply that lands before the timer has already finished, so the figure is not computed twice.
+    cancelTimer = host.later(() => {
+      if (!done) finish(host.computeHere(calculation), 'here');
+    });
   };
 
   try {
@@ -64,7 +70,7 @@ export function computeDeferred(
     fallBack();
   } else {
     thread.addEventListener('message', (event) => {
-      finish((event as MessageEvent<CalculationReply>).data.outcome);
+      finish((event as MessageEvent<CalculationReply>).data.outcome, 'worker');
     });
     thread.addEventListener('error', fallBack);
     thread.addEventListener('messageerror', fallBack);

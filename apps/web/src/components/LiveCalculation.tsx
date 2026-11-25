@@ -32,7 +32,12 @@ import {
   pluralise,
 } from '@prl/ui';
 import { type ReactElement, useEffect, useMemo, useState } from 'react';
-import { type CalculationThread, computeDeferred, type DeferredHost } from '@/lib/deferred-calculation.ts';
+import {
+  type CalculationThread,
+  type ComputedOn,
+  computeDeferred,
+  type DeferredHost,
+} from '@/lib/deferred-calculation.ts';
 import { type Definition, shownAbove } from '@/lib/definition-repeats.ts';
 import {
   type CalculationDetail,
@@ -96,18 +101,23 @@ const BROWSER_HOST: DeferredHost = {
 export function useCalculationOutcome(calculation: LiveCalculationSpec): {
   readonly outcome: CalculationOutcome | null;
   readonly pending: boolean;
+  /** Set only for a deferred figure once it lands. */
+  readonly computedOn: ComputedOn | null;
 } {
   const deferred = useMemo(() => isDeferred(calculation), [calculation]);
   const inline = useMemo(() => (deferred ? null : computeCalculation(calculation)), [calculation, deferred]);
-  const [computed, setComputed] = useState<CalculationOutcome | null>(null);
+  const [computed, setComputed] = useState<{
+    readonly outcome: CalculationOutcome;
+    readonly on: ComputedOn;
+  } | null>(null);
 
   useEffect(() => {
     if (!deferred) return undefined;
-    return computeDeferred(calculation, BROWSER_HOST, setComputed);
+    return computeDeferred(calculation, BROWSER_HOST, (outcome, on) => setComputed({ outcome, on }));
   }, [calculation, deferred]);
 
-  if (!deferred) return { outcome: inline, pending: false };
-  return { outcome: computed, pending: computed === null };
+  if (!deferred) return { outcome: inline, pending: false, computedOn: null };
+  return { outcome: computed?.outcome ?? null, pending: computed === null, computedOn: computed?.on ?? null };
 }
 
 /**
@@ -314,7 +324,7 @@ function CalculationSkeleton(): ReactElement {
 
 export function LiveCalculation(props: LiveCalculationProps): ReactElement {
   const { calculation, caption, index, headingLevel = 3, earlier = NO_EARLIER } = props;
-  const { outcome, pending } = useCalculationOutcome(calculation);
+  const { outcome, pending, computedOn } = useCalculationOutcome(calculation);
 
   const body = (): ReactElement => {
     if (pending || outcome === null) return <CalculationSkeleton />;
@@ -340,7 +350,8 @@ export function LiveCalculation(props: LiveCalculationProps): ReactElement {
 
     return (
       <>
-        <div className="prl-metric-row">
+        {/* `data-computed` lets test:keyboard tell a figure the worker computed from the fallback's. */}
+        <div className="prl-metric-row" data-computed={computedOn ?? undefined}>
           {lead.map((figure) => (
             <FigureMetric figure={figure} key={figure.key} size="lg" />
           ))}
