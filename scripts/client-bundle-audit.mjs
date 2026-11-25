@@ -10,7 +10,7 @@
  */
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 
@@ -68,6 +68,15 @@ export function parseClientManifest(text) {
   return { route, files };
 }
 
+/** Every worker spawned anywhere, one entry per spawn site: Turbopack gives all workers one entry file. */
+export function collectWorkers(chunks) {
+  const workers = [];
+  for (const [chunk, text] of chunks) {
+    for (const { worker, files } of workerChunkLists(text)) workers.push({ worker, spawnedBy: chunk, files });
+  }
+  return workers;
+}
+
 export function workerChunkLists(chunkText) {
   return [...chunkText.matchAll(WORKER_CHUNK_LIST)].map((match) => ({
     worker: match[1],
@@ -85,6 +94,10 @@ export function readBuild(dir = DEFAULT_BUILD_DIR) {
   if (!Array.isArray(rootMainFiles) || rootMainFiles.length === 0) {
     throw new Error('build-manifest.json lists no rootMainFiles');
   }
+  const routeManifest = JSON.parse(readFileSync(join(dir, 'app-path-routes-manifest.json'), 'utf8'));
+  const expectedRoutes = Object.keys(routeManifest)
+    .filter((key) => key.endsWith('/page'))
+    .map((key) => key.slice(0, -'/page'.length) || '/');
   const routes = new Map();
   for (const path of manifestFiles(join(dir, 'server', 'app'))) {
     const { route, files } = parseClientManifest(readFileSync(path, 'utf8'));
@@ -92,27 +105,41 @@ export function readBuild(dir = DEFAULT_BUILD_DIR) {
   }
   const chunks = new Map();
   const chunkDir = join(dir, 'static', 'chunks');
-  for (const name of readdirSync(chunkDir)) {
-    if (name.endsWith('.js')) chunks.set(`static/chunks/${name}`, readFileSync(join(chunkDir, name), 'utf8'));
+  for (const name of readdirSync(chunkDir, { recursive: true })) {
+    if (name.endsWith('.js')) {
+      chunks.set(`static/chunks/${name.split(sep).join('/')}`, readFileSync(join(chunkDir, name), 'utf8'));
+    }
   }
-  const workers = new Map();
-  for (const text of chunks.values()) {
-    for (const { worker, files } of workerChunkLists(text)) workers.set(worker, files);
-  }
-  return { dir, routes, chunks, workers };
+  return { dir, expectedRoutes, routes, chunks, workers: collectWorkers(chunks) };
 }
 
 const gzipBytes = (text) => gzipSync(text, { level: 6 }).length;
 
 /** Problems, empty when the build is clean, plus each route's first-load JS size for the report. */
-export function audit({ routes, chunks, workers }) {
+export function audit({ expectedRoutes, routes, chunks, workers }) {
   const problems = [];
-  // A sweep of nothing would pass, so the build has to look like the app.
-  if (routes.size < 10) problems.push(`read only ${routes.size} routes out of the build`);
+  // A sweep of nothing would pass, so every page the build's own route manifest names must be read.
+  if (expectedRoutes.length === 0) problems.push('the route manifest lists no pages');
+  for (const route of expectedRoutes) {
+    if (!routes.has(route))
+      problems.push(`${route} is a page in the route manifest whose chunks were not read`);
+  }
+  for (const route of routes.keys()) {
+    if (!expectedRoutes.includes(route)) problems.push(`${route} was read but is not in the route manifest`);
+  }
   if (chunks.size === 0) problems.push('read no JS chunks out of the build');
   for (const name of chunks.keys()) {
-    if (name.startsWith('static/chunks/turbopack-worker-') && !workers.has(name)) {
+    if (name.startsWith('static/chunks/turbopack-worker-') && !workers.some((w) => w.worker === name)) {
       problems.push(`${name} is a worker whose chunk list this gate could not find, so it is unchecked`);
+    }
+  }
+  const lists = [
+    ...[...routes].map(([route, files]) => ({ who: route, files })),
+    ...workers.map(({ worker, spawnedBy, files }) => ({ who: `worker ${worker} from ${spawnedBy}`, files })),
+  ];
+  for (const { who, files } of lists) {
+    for (const file of files) {
+      if (!chunks.has(file)) problems.push(`${who} lists ${file}, which was never read, so it is unchecked`);
     }
   }
 
@@ -145,9 +172,11 @@ export function audit({ routes, chunks, workers }) {
     const found = carries(files);
     if (found.length > 0) problems.push(`${route} ships the crypto polyfill in ${found.join(', ')}`);
   }
-  for (const [worker, files] of workers) {
+  for (const { worker, spawnedBy, files } of workers) {
     const found = carries(files);
-    if (found.length > 0) problems.push(`worker ${worker} ships the crypto polyfill in ${found.join(', ')}`);
+    if (found.length > 0) {
+      problems.push(`worker ${worker} from ${spawnedBy} ships the crypto polyfill in ${found.join(', ')}`);
+    }
   }
   for (const file of marked) {
     if (!allowedFiles.has(file)) {

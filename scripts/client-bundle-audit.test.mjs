@@ -12,6 +12,7 @@ import {
   ALLOWED_ROUTES,
   audit,
   CRYPTO_POLYFILL_MARKERS,
+  collectWorkers,
   parseClientManifest,
   REPO_ROOT,
   workerChunkLists,
@@ -47,11 +48,7 @@ function cleanBuild() {
   ]);
   const routes = new Map(ROUTES.map((route) => [route, [...ROOT, 'static/chunks/layout.js']]));
   routes.get('/review/[handId]').push('static/chunks/proof.js');
-  return {
-    routes,
-    chunks,
-    workers: new Map([['static/chunks/turbopack-worker-a.js', ['static/chunks/w.js']]]),
-  };
+  return { expectedRoutes: [...ROUTES], routes, chunks, workers: collectWorkers(chunks) };
 }
 
 describe('client bundle audit', () => {
@@ -92,9 +89,56 @@ describe('client bundle audit', () => {
     build.chunks.set('static/chunks/w.js', POLYFILL);
     const { problems } = audit(build);
     assert.ok(
-      problems.some((p) => p.startsWith('worker static/chunks/turbopack-worker-a.js ships')),
+      problems.some((p) => p.startsWith('worker static/chunks/turbopack-worker-a.js from')),
       problems,
     );
+  });
+
+  it('NEGATIVE CONTROL — checks every chunk list of a worker entry that two chunks spawn', () => {
+    const build = cleanBuild();
+    const spawn = (files) => `e.v(e.r(1).f("static/chunks/turbopack-worker-a.js",${JSON.stringify(files)}))`;
+    // Ahead of the clean spawner, and listing the allowed route's own polyfill chunk, so only the
+    // worker check can see it.
+    build.chunks = new Map([
+      ['static/chunks/first.js', spawn(['static/chunks/proof.js'])],
+      ...build.chunks,
+      ['static/chunks/second.js', spawn(['static/chunks/w.js'])],
+    ]);
+    build.workers = collectWorkers(build.chunks);
+    assert.deepEqual(audit(build).problems, [
+      'worker static/chunks/turbopack-worker-a.js from static/chunks/first.js ships the crypto polyfill in ' +
+        'static/chunks/proof.js',
+    ]);
+    assert.equal(build.workers.length, 3);
+  });
+
+  it('NEGATIVE CONTROL — names a listed chunk that was never read, such as one in a nested directory', () => {
+    const build = cleanBuild();
+    build.routes.get('/lab').push('static/chunks/nested/lazy.js');
+    build.workers[0].files.push('static/chunks/nested/w.js');
+    const { problems } = audit(build);
+    assert.ok(
+      problems.includes('/lab lists static/chunks/nested/lazy.js, which was never read, so it is unchecked'),
+    );
+    assert.ok(
+      problems.some(
+        (p) =>
+          p.startsWith('worker static/chunks/turbopack-worker-a.js from static/chunks/runtime.js') &&
+          p.includes('lists static/chunks/nested/w.js, which was never read'),
+      ),
+      problems,
+    );
+  });
+
+  it('NEGATIVE CONTROL — refuses a build missing one page its route manifest names', () => {
+    const build = cleanBuild();
+    build.routes.delete('/terms');
+    assert.deepEqual(audit(build).problems, [
+      '/terms is a page in the route manifest whose chunks were not read',
+    ]);
+    const extra = cleanBuild();
+    extra.expectedRoutes = extra.expectedRoutes.filter((route) => route !== '/terms');
+    assert.deepEqual(audit(extra).problems, ['/terms was read but is not in the route manifest']);
   });
 
   it('NEGATIVE CONTROL — catches a lazily loaded chunk that no route lists', () => {
@@ -109,7 +153,7 @@ describe('client bundle audit', () => {
 
   it('refuses a worker whose chunk list it could not read', () => {
     const build = cleanBuild();
-    build.workers.clear();
+    build.workers = [];
     assert.ok(
       audit(build).problems.some((p) => p.includes('is a worker whose chunk list this gate could not')),
     );
@@ -122,8 +166,8 @@ describe('client bundle audit', () => {
   });
 
   it('refuses a sweep of nothing', () => {
-    const { problems } = audit({ routes: new Map(), chunks: new Map(), workers: new Map() });
-    assert.ok(problems.some((p) => p.startsWith('read only 0 routes')));
+    const { problems } = audit({ expectedRoutes: [], routes: new Map(), chunks: new Map(), workers: [] });
+    assert.ok(problems.includes('the route manifest lists no pages'));
     assert.ok(problems.some((p) => p.startsWith('read no JS chunks')));
     assert.ok(problems.some((p) => p.includes('but the build has no such route')));
   });
