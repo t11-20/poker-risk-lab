@@ -682,6 +682,11 @@
     border-color: Highlight;
   }
 
+  /** The accent rule is a fill and goes, so the first destination takes its hairline back. */
+  .prl-sheet__item:first-child {
+    border-block-start: var(--prl-hairline);
+  }
+
   /**
    * The selected option uses the `Highlight` pair, unadjusted. Adjusted, Chrome laid a `Canvas`
    * backplate under the word and painted `HighlightText` on it, which hid the word.

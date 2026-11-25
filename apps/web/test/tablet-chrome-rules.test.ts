@@ -62,13 +62,10 @@ describe('the footer', () => {
   /** Boxes the footer always renders. `SessionDuration` adds a fifth until it is hidden. */
   const boxes = (footer.match(/className="prl-footer__(?:map|statement)"/gu) ?? []).length;
 
-  it('renders four boxes of its own, then the session reminder last', () => {
+  it('pairs the four from 600px and gives the reminder its own row, so neither state leaves a hole', () => {
     assert.equal(boxes, 4);
     assert.match(footer, /<SessionDuration \/>\s*<\/div>\s*<\/footer>/u);
     assert.match(read('../src/components/SessionDuration.tsx'), /<div className="prl-footer__statement">/u);
-  });
-
-  it('pairs the four from 600px and gives the reminder its own row, so neither state leaves a hole', () => {
     const tablet = blocks(SHELL, '@media (min-width: 600px)').join('\n');
     assert.match(
       rule(tablet, '.prl-footer__inner'),
@@ -115,6 +112,9 @@ describe('the menu sheet', () => {
   it('draws no hairline above the first destination, under the bar’s accent rule', () => {
     assert.match(SHELL, /\.prl-sheet__bar::after \{[^}]*background-color: var\(--prl-accent-edge\);/u);
     assert.match(rule(SHELL, '.prl-sheet__item:first-child'), /border-block-start: 0;/u);
+    // Forced colours drop the accent fill, so the hairline has to come back there.
+    const forced = blocks(SHELL, '@media (forced-colors: active)').join('\n');
+    assert.match(rule(forced, '.prl-sheet__item:first-child'), /border-block-start: var\(--prl-hairline\);/u);
   });
 });
 
