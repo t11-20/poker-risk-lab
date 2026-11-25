@@ -37,7 +37,7 @@ const FIRST_LOAD_ENTRY = /\/(?:layout|page|template|loading)$/u;
 
 const WORKER_CHUNK_LIST = /"(static\/chunks\/turbopack-worker-[^"]+\.js)",\[([^\]]*)\]/gu;
 
-/** How a chunk names the worker entry, parsed or not, so a spawn whose list is not inline is still counted. */
+/** How a chunk names the worker entry, so a spawn whose list is not inline is still counted. */
 const WORKER_REFERENCE = '"static/chunks/turbopack-worker-';
 
 function manifestFiles(dir) {
