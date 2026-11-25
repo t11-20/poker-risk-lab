@@ -142,17 +142,15 @@ export {
   type SeatView,
 } from './redact.ts';
 export {
-  commitToDeck,
-  commitToKnownDeck,
   createDeterministicRandomForTests,
   createSamplingRandom,
-  createSecureRandom,
   RandomnessError,
   type RandomSource,
   shuffledDeck,
   shuffleInPlace,
   unbiasedInt,
 } from './rng.ts';
+export { commitToDeck, commitToKnownDeck, createSecureRandom } from './secure-random.ts';
 
 export type {
   Action,

@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "sideEffects": false,
   "description": "Typed lesson, quiz, glossary and scenario content. Situations only — every number is computed at runtime by @prl/poker-math, never hard-coded.",
   "exports": {
     ".": {

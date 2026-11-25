@@ -8,9 +8,10 @@
  * `checkDeckProof` first binds the reveal to the published root and context, because a payload's
  * proofs always verify against the root they carry (`test/deck-proof-binding.test.ts`).
  *
- * Through `lib/deck-proof.ts` this is the only engine code in the browser bundle. Next's bundler
- * supplies `crypto` and `Buffer`, checked in a real browser on a nine-position proof. A hand-rolled
- * SHA-256 could disagree with the server's.
+ * Through `lib/deck-proof.ts` this is the only browser code that hashes, so /review/[handId] is the one
+ * route that ships the bundler's `crypto` and `Buffer` polyfills (`scripts/client-bundle-audit.mjs`).
+ * They were checked in a real browser on a nine-position proof. A hand-rolled SHA-256 could disagree
+ * with the server's.
  *
  * An empty reveal is a result, not a failure. A hand where everybody folded has nothing public to
  * prove, and revealing more would publish folded hole cards. The proof shows cards were fixed before

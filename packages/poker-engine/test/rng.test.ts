@@ -4,13 +4,8 @@ import { dirname, join, relative } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { DECK_SIZE, orderedDeck } from '../src/cards.ts';
-import {
-  createDeterministicRandomForTests,
-  createSecureRandom,
-  shuffledDeck,
-  shuffleInPlace,
-  unbiasedInt,
-} from '../src/rng.ts';
+import { createDeterministicRandomForTests, shuffledDeck, shuffleInPlace, unbiasedInt } from '../src/rng.ts';
+import { createSecureRandom } from '../src/secure-random.ts';
 
 const SRC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 
