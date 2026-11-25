@@ -149,7 +149,9 @@ describe('legends layout rules', () => {
 
   /* Two plus one left a 250-290px hole at 600-834; the grids are 291px in a card and 707px on a profile. */
   it('the three-item grids are three across or one column, decided by their own width', () => {
-    const shared = rule('.prl-legend-card__metrics,\n.prl-legend-contrast,\n.prl-legend-maths');
+    const shared = rule(
+      '.prl-legend-card__metrics,\n.prl-legend-maths,\n.prl-legend-contrast:has(> :nth-child(3):last-child)',
+    );
     assert.match(
       shared.replace(/\s+/gu, ' '),
       /repeat\( auto-fit, minmax\(min\(100%, max\(25%, \(var\(--prl-legend-thirds-at\) - 100%\) \* 999\)\), 1fr\) \)/u,
@@ -169,6 +171,8 @@ describe('legends layout rules', () => {
         rem(floor.startsWith('calc(') ? floor : `calc(${floor})`) >= 10,
         `${selector} floor ${floor}`,
       );
+      // Contrast keeps its own tracks for the eleven groups the live profile sends; the rest never override.
+      if (selector === '.prl-legend-contrast') continue;
       assert.doesNotMatch(
         own,
         /grid-template-columns|(?:^|\s)gap:/u,
@@ -194,6 +198,20 @@ describe('legends layout rules', () => {
       ['PostHandComparison', postHand],
     ] as const) {
       assert.match(source, /What would (?:have )?changed? it<\/span>\s*<ul className="prl-prose">/u, name);
+    }
+  });
+
+  it('the Coach’s lists take the measure on the Legends and review pages, not on /play', () => {
+    const review = readFileSync(join(SRC, 'styles', 'review.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//gu, '');
+    for (const [name, sheet, page] of [
+      ['legends.css', css, '.prl-legend-page'],
+      ['review.css', review, '.prl-review-page'],
+    ] as const) {
+      const scoped = new RegExp(
+        `\\n\\${page} :is\\(\\.prl-coach__list, \\.prl-uncertainty__limitations\\) \\{\\s*max-width: var\\(--prl-measure\\);`,
+        'u',
+      );
+      assert.match(sheet, scoped, name);
     }
   });
 

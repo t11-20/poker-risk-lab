@@ -25,22 +25,6 @@
   --prl-legend-pick-min: calc(var(--prl-space-16) + var(--prl-space-15));
 }
 
-/**
- * Three equal tracks once each clears its floor, else one: never two plus an orphan. It reads the
- * grid's own width (291px in a card, 707px on a profile at 768). Under the threshold `* 999` floors a
- * track at 100%; over it the 25% floor fits exactly three, and two children still share the row in halves.
- */
-.prl-legend-card__metrics,
-.prl-legend-contrast,
-.prl-legend-maths {
-  --prl-legend-thirds-at: calc(3 * var(--prl-legend-thirds-min) + 2 * var(--prl-legend-thirds-gap));
-  gap: var(--prl-legend-thirds-gap);
-  grid-template-columns: repeat(
-      auto-fit,
-      minmax(min(100%, max(25%, (var(--prl-legend-thirds-at) - 100%) * 999)), 1fr)
-    );
-}
-
 /** Reduced motion removes the rotation, because 1ms durations would make it snap instead. */
 @media (prefers-reduced-motion: reduce) {
   .prl-legend-card,
@@ -1035,6 +1019,14 @@
   background-color: var(--prl-surface-panel);
 }
 
+/**
+ * The Coach's lists at the measure their prose already has. Scoped to these pages because the Coach on
+ * /play is being redesigned; at full width on compare they ran 88 characters a line.
+ */
+.prl-legend-page :is(.prl-coach__list, .prl-uncertainty__limitations) {
+  max-width: var(--prl-measure);
+}
+
 /* Observed versus declared, and the contrast section */
 
 .prl-legend-observed__note {
@@ -1049,6 +1041,25 @@
   --prl-legend-thirds-min: calc(var(--prl-space-16) + var(--prl-space-11));
   --prl-legend-thirds-gap: var(--prl-space-8);
   display: grid;
+  gap: var(--prl-legend-thirds-gap);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--prl-legend-column-min)), 1fr));
+}
+
+/**
+ * Three equal tracks once each clears its floor, else one: never two plus an orphan. It reads the
+ * grid's own width (291px in a card, 707px on a profile at 768). Under the threshold `* 999` floors a
+ * track at 100%; over it the 25% floor fits exactly three, and two children still share the row in halves.
+ * The live profile sends eleven contrast groups, so contrast takes it only when it has three.
+ */
+.prl-legend-card__metrics,
+.prl-legend-maths,
+.prl-legend-contrast:has(> :nth-child(3):last-child) {
+  --prl-legend-thirds-at: calc(3 * var(--prl-legend-thirds-min) + 2 * var(--prl-legend-thirds-gap));
+  gap: var(--prl-legend-thirds-gap);
+  grid-template-columns: repeat(
+      auto-fit,
+      minmax(min(100%, max(25%, (var(--prl-legend-thirds-at) - 100%) * 999)), 1fr)
+    );
 }
 
 .prl-legend-contrast__group {

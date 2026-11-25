@@ -42,6 +42,11 @@
   }
 }
 
+/** The Coach's lists at the measure of their prose. At full width the limitations ran 87-120 characters. */
+.prl-review-page :is(.prl-coach__list, .prl-uncertainty__limitations) {
+  max-width: var(--prl-measure);
+}
+
 /* History table. Dense on purpose, with tabular numerals in every numeric column. */
 
 .prl-review-sorts {

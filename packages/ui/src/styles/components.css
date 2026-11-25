@@ -2801,12 +2801,10 @@ p.prl-seat__status {
   line-height: var(--prl-leading-body);
 }
 
-/** At the measure like the prose beside it. At full width on /legends/compare it ran 88 characters a line. */
 .prl-coach__list {
   display: grid;
   gap: var(--prl-space-3);
   margin: 0;
-  max-width: var(--prl-measure);
   padding-inline-start: var(--prl-space-7);
   font-size: var(--prl-type-body);
 }
@@ -3429,12 +3427,10 @@ td.prl-candidates__ev,
   font-variant-numeric: var(--prl-numeric);
 }
 
-/** At the measure like the summary above it. At full width on /review it ran 87 to 120 characters a line. */
 .prl-uncertainty__limitations {
   display: grid;
   gap: var(--prl-space-2);
   margin: 0;
-  max-width: var(--prl-measure);
   padding-inline-start: var(--prl-space-7);
   font-size: var(--prl-type-body);
   line-height: var(--prl-leading-snug);
