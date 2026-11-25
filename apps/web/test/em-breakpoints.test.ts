@@ -55,19 +55,20 @@ describe('viewport media queries follow the reader’s text size', () => {
     for (const root of ROOTS) {
       const sources = filesUnder(join(repo, root), (name) => /\.tsx?$/u.test(name));
       assert.ok(sources.length > 0, `read no source under ${root}`);
+      // The whole file, not only string literals, so `screen and (…)` or a `${n}px` template is still read.
       for (const source of sources) {
         const code = readFileSync(source, 'utf8');
-        for (const literal of code.matchAll(/(['"`])(\([^'"`\n]*\))\1/gu)) {
-          const text = literal[2] ?? '';
+        for (const feature of code.matchAll(WIDTH_FEATURE)) {
+          const text = feature[1] ?? '';
           if (/(?:min-|max-)?width\s*(?::|<|>)|[<>]=?\s*width\b/u.test(text))
-            queries.push({ file: relative(repo, source), query: text });
+            queries.push({ file: relative(repo, source), query: `(${text})` });
         }
       }
     }
     const found = queries.map((one) => one.query);
     for (const exported of [NAV_SHEET_QUERY, TOUR_COMPACT_QUERY])
       assert.ok(found.includes(exported), `the scan did not find ${exported}, so it cannot judge it`);
-    const px = queries.filter((one) => PX.test(one.query));
+    const px = queries.filter((one) => /px\b/u.test(one.query));
     assert.deepEqual(
       px.map((one) => `${one.file}: ${one.query}`),
       [],
