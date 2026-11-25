@@ -537,7 +537,13 @@ export function QuizRunner(props: QuizRunnerProps): ReactElement {
     const tidy = window.setTimeout(() => {
       writeSearch(searchWithQuizPlace(window.location.search, restored, total));
     }, 0);
-    return () => window.clearTimeout(tidy);
+    // Back to an entry a fragment link added shows that entry's place. Not a move, so focus stays.
+    const onBack = (): void => setStep(parseQuizPlace(window.location.search, total));
+    window.addEventListener('popstate', onBack);
+    return () => {
+      window.clearTimeout(tidy);
+      window.removeEventListener('popstate', onBack);
+    };
   }, [total]);
   const question = onReview ? undefined : quiz.questions[step];
 

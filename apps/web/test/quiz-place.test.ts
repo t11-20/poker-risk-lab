@@ -130,7 +130,7 @@ describe('the quiz restores its place from the URL without moving focus', () => 
       runner,
       /const go = \(to: number\): void => \{\s*setStep\(to\);\s*setMoves\(\(count\) => count \+ 1\);\s*writeSearch\(searchWithQuizPlace\(window\.location\.search, to, total\)\);\s*\};/u,
     );
-    assert.equal(runner.match(/setStep\(/gu)?.length, 2, 'setStep only in `go` and the restore effect');
+    assert.equal(runner.match(/setStep\(/gu)?.length, 3, 'setStep only in `go`, the restore and Back');
     assert.equal(runner.match(/setMoves\(/gu)?.length, 1, 'only `go` counts a move');
     for (const press of ['go(0)', 'go(step - 1)', 'go(step + 1)']) {
       assert.ok(runner.includes(`onClick={() => ${press}}`), press);
@@ -140,9 +140,18 @@ describe('the quiz restores its place from the URL without moving focus', () => 
   it("tidies the URL on load only after Next has patched replaceState, so the router's state survives", () => {
     assert.match(
       restore,
-      /const tidy = window\.setTimeout\(\(\) => \{\s*writeSearch\(searchWithQuizPlace\(window\.location\.search, restored, total\)\);\s*\}, 0\);\s*return \(\) => window\.clearTimeout\(tidy\);/u,
+      /const tidy = window\.setTimeout\(\(\) => \{\s*writeSearch\(searchWithQuizPlace\(window\.location\.search, restored, total\)\);\s*\}, 0\);/u,
     );
+    assert.match(restore, /return \(\) => \{\s*window\.clearTimeout\(tidy\);/u);
     assert.equal(restore.match(/writeSearch\(/gu)?.length, 1, 'no synchronous write in the mount effect');
+  });
+
+  it('shows the place a Back press returns to, without counting a move, and stops listening on unmount', () => {
+    assert.match(
+      restore,
+      /const onBack = \(\): void => setStep\(parseQuizPlace\(window\.location\.search, total\)\);\s*window\.addEventListener\('popstate', onBack\);/u,
+    );
+    assert.match(restore, /window\.removeEventListener\('popstate', onBack\);/u);
   });
 
   it('replaces the history entry with null state, and reads no search params on render', () => {
