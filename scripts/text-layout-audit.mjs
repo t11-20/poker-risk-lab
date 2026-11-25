@@ -149,9 +149,8 @@ const FLOOR_PER_MEASUREMENT = {
 };
 
 /**
- * The default run's own floors, since the rates above held its 100% pass to 1,600 pairs of 33,050.
- * About a third of what each pass measured on 2026-11-26 and never below main's fixed 100% floors.
- * Clip tests come from `/`, `/legends` and `/legends/adaptive-exploiter` only.
+ * The default run's own floors, since the rates above held its 100% pass to 1,600 pairs of 33,050:
+ * about a third of each pass on 2026-11-26 (clip tests from `/` and two Legends routes only).
  */
 const DEFAULT_RUN_FLOORS = {
   main: { textBoxes: 13000, ownBox: 13000, clipTests: 2000, frameTests: 9500, pairs: 11000, breakTests: 75 },
@@ -933,15 +932,14 @@ const BREAK_AFTER = /[-\u00AD\u2010\u2013\u2014/]$/u;
 
 /**
  * Two short pieces, or most of three or more, so one longer piece cannot clear "Br|illi|an|t" while
- * "reachin|g" stays an emergency break. Where the browser splits words to fill a line (`break-all`,
- * `hyphens: auto`) the first and last pieces are leftovers of a full line, so only the middle counts.
+ * "reachin|g" stays an emergency break. Where the browser fills lines (`break-all`, `hyphens: auto`)
+ * every middle piece is a whole line and the ends are leftovers, so one short middle piece is torn.
  */
 function isTorn(run, fills) {
   const short = (p) => [...p].length <= MAX_PIECE;
-  const judged = fills ? run.slice(1, -1) : run;
-  if (fills && judged.length === 1) return short(judged[0]);
-  if (judged.length === 2) return judged.every(short);
-  return judged.length > 2 && judged.filter(short).length * 2 > judged.length;
+  if (fills) return run.slice(1, -1).some(short);
+  if (run.length === 2) return run.every(short);
+  return run.length > 2 && run.filter(short).length * 2 > run.length;
 }
 
 /** The part of a broken word torn one or two characters a line, or null, whatever allowed the breaks. */
@@ -1608,9 +1606,8 @@ export class Page {
   }
 
   /**
-   * Chrome's own text-size setting, which moves em media queries as a reader's setting does. Chrome
-   * starts at 16/13 and a reused profile keeps no size set this way (measured), so 100% sends nothing
-   * until another size was set. A refusal throws: an inline root size would move no em query.
+   * Chrome's own text-size setting, which moves em media queries; an inline root size would not, so a
+   * refusal throws. Chrome starts at 16/13 and a reused profile keeps no size set this way (measured).
    */
   async setTextScale(scale) {
     if (scale === this.textScale) return;

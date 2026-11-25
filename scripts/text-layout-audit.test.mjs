@@ -961,7 +961,8 @@ describe('a word broken letter by letter', () => {
 
   it('judges only the full lines where the browser fills, since the ends are leftovers', () => {
     assert.equal(letterByLetter(['ex', 'traordinari', 'ly'], true), null);
-    assert.equal(letterByLetter(['Br', 'illi', 'an', 't'], true), null);
+    assert.notEqual(letterByLetter(['Br', 'illi', 'an', 't'], true), null, '"an" filled a whole line');
+    assert.equal(letterByLetter(['ex', 'traordin', 'arily'], true), null);
     assert.notEqual(letterByLetter(['Br', 'il', 'li', 'ant'], true), null);
     assert.notEqual(letterByLetter(['abcd', 'ef', 'gh', 'i', 'jklm'], true), null);
   });
@@ -1431,11 +1432,13 @@ describe('the large-text pass', () => {
   });
 
   it('measures at 360px only the phone routes --routes keeps', () => {
+    const other = ROUTES.find((route) => !LARGE_TEXT_PHONE_ROUTES.includes(route));
+    const [phone] = LARGE_TEXT_PHONE_ROUTES;
     assert.deepEqual(
-      large(['--routes', '/lab,/legends']).map((cell) => `${cell.route} ${String(cell.width)}`),
-      ['/lab 768', '/lab 1024', '/legends 768', '/legends 1024', '/lab 360'],
+      large(['--routes', `${phone},${other}`]).map((cell) => `${cell.route} ${String(cell.width)}`),
+      [`${phone} 768`, `${phone} 1024`, `${other} 768`, `${other} 1024`, `${phone} 360`],
     );
-    assert.deepEqual(sweepPasses(parseArgs(['--routes', '/legends']))[1].also, []);
+    assert.deepEqual(sweepPasses(parseArgs(['--routes', other]))[1].also, []);
   });
 
   it('follows --routes, so one route can be checked the way the gate checks it', () => {
