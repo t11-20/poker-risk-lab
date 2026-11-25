@@ -130,6 +130,10 @@ describe('/review at large text on a phone', () => {
     assert.match(rule(narrow(), 'a.prl-review-table__link'), /white-space:\s*normal/u);
   });
 
+  it('wraps the board inside the stacked card, where five cards need 352px of 180px (REGRESSION)', () => {
+    assert.match(rule(narrow(), '.prl-review-board'), /flex-wrap:\s*wrap/u);
+  });
+
   it('puts each verifier value under its term (REGRESSION)', () => {
     assert.match(rule(narrow(), '.prl-verifier__facts'), /grid-template-columns:\s*minmax\(0, 1fr\);/u);
   });

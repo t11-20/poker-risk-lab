@@ -659,7 +659,7 @@
 
 /**
  * The dot stays small. `base.css` gives every `input` a 44px `min-height`, wrong for a radio, and the
- * `<label>` around the option is the WCAG 2.5.8 target. It sits on the name's row at every width.
+ * `<label>` around the option is the WCAG 2.5.8 target. It sits on the name's row, or above it below 15rem.
  */
 .prl-legend-difficulty__control {
   grid-row: 1;
@@ -738,6 +738,11 @@
 @container prl-legend-difficulty (width < 15rem) {
   .prl-legend-difficulty__option {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* At the start of its row, because in a one-track grid a stretched radio draws its dot centred. */
+  .prl-legend-difficulty__control {
+    justify-self: start;
   }
 }
 

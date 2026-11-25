@@ -169,6 +169,11 @@ describe('legends layout rules', () => {
       css,
       /@container prl-legend-difficulty \(width < 15rem\) \{\s*\.prl-legend-difficulty__option \{\s*grid-template-columns: minmax\(0, 1fr\);/u,
     );
+    // One track stretches the radio, which draws its dot in the middle of the option.
+    assert.match(
+      css,
+      /@container prl-legend-difficulty \(width < 15rem\) \{[^@]*\.prl-legend-difficulty__control \{\s*justify-self: start;/u,
+    );
   });
 
   /* Two plus one left a 250-290px hole at 600-834; the grids are 291px in a card and 707px on a profile. */

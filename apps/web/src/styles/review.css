@@ -438,6 +438,11 @@ span.prl-review-table__cell-label {
   a.prl-review-table__link {
     white-space: normal;
   }
+
+  /* Five cards need 352px and the stacked card had 180px, so the last three ran past its edge. */
+  .prl-review-board {
+    flex-wrap: wrap;
+  }
 }
 
 .prl-review-paging {
