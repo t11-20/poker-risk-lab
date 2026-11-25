@@ -637,14 +637,33 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
     column-gap: var(--prl-space-8);
   }
+
+  /* Four boxes pair off, and "This sitting" takes its own row, so neither state leaves a hole.
+     It is the only statement that can come last: hiding it removes it. */
+  .prl-footer__inner {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .prl-footer__inner > .prl-footer__statement:last-child {
+    grid-column: 1 / -1;
+  }
+
+  /* Its own row is the container's width, and "No reminder" needs a sixth of it. */
+  .prl-footer__inner .prl-select {
+    max-inline-size: calc(2 * var(--prl-space-16));
+  }
+}
+
+/* From 1000px, the app's wide breakpoint, the four boxes take one row: the two lists at their own
+   width, the prose between them at ~36 characters or more. */
+@media (min-width: 1000px) {
+  .prl-footer__inner {
+    gap: var(--prl-space-11);
+    grid-template-columns: max-content repeat(2, minmax(0, 1fr)) max-content;
+  }
 }
 
 @media (min-width: 900px) {
-  .prl-footer__inner {
-    gap: var(--prl-space-11);
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
   .prl-spine {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
