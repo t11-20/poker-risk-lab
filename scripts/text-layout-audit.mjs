@@ -77,9 +77,19 @@ const THEMES = ['dark', 'light'];
 
 /**
  * With em breakpoints, 768 and 1024 at 200% take the 384px and 512px layouts with doubled text, which
- * the 100% sweep never measures. 360 at 200% still fails on held owner work; one theme keeps it short.
+ * the 100% sweep never measures. One theme keeps it short.
  */
-const LARGE_TEXT = { scale: 2, themes: ['light'], widths: [768, 1024] };
+const LARGE_TEXT = { scale: 2, themes: ['light'], widths: [768, 1024], phoneWidth: 360 };
+
+/**
+ * The routes the large-text pass also measures at `phoneWidth`, where a layout wider than the phone
+ * scrolls sideways that a 768 or 1024 window still holds. The rest still fail there on held work.
+ */
+const LARGE_TEXT_PHONE_ROUTES = ['/play', '/lab', '/lab/fl-same-cards-under-the-gun', '/lab/spots'];
+
+const LARGE_TEXT_PHONE_WHY =
+  'content wider than 360px fits a 768 or 1024 window, so only a phone at 200% text shows it; ' +
+  'the routes not listed still fail at 360px and 200% on work held for the owner';
 
 /** An error boundary returns 200 with good markup, so it counts as a failed render. */
 const ERROR_BOUNDARY_HEADINGS = [
@@ -1251,7 +1261,8 @@ ${bold('pnpm run test:layout')} — the PAINTED TEXT of this app, in real Chrome
   Passes
     Unless --widths, --themes or --text-scale is given, the matrix above runs at 100%
     text and then a large-text pass runs at ${LARGE_TEXT_CELLS}. Em breakpoints give
-    those widths the ${LARGE_TEXT_LAYOUTS} layouts with doubled text. Any of the three
+    those widths the ${LARGE_TEXT_LAYOUTS} layouts with doubled text. It also measures
+    ${String(LARGE_TEXT_PHONE_ROUTES.length)} route(s) at ${String(LARGE_TEXT.phoneWidth)}px, the ones clean there today. Any of the three
     flags replaces both passes with exactly the matrix it names, at one text size.
 
   Reporting
@@ -1372,19 +1383,39 @@ export function sweepPasses(options) {
     routes,
     themes: options.themes ?? THEMES,
     widths: options.widths ?? WIDTHS,
+    also: [],
     narrowed: options.routes !== null || options.widths !== null || options.themes !== null,
   };
   if (asked) return [main];
-  const large = { id: 'large-text', ...LARGE_TEXT, routes, narrowed: options.routes !== null };
+  const phoneRoutes = LARGE_TEXT_PHONE_ROUTES.filter((route) => routes.includes(route));
+  const phone = { routes: phoneRoutes, themes: LARGE_TEXT.themes, widths: [LARGE_TEXT.phoneWidth] };
+  const large = {
+    id: 'large-text',
+    scale: LARGE_TEXT.scale,
+    routes,
+    themes: LARGE_TEXT.themes,
+    widths: LARGE_TEXT.widths,
+    also: phoneRoutes.length === 0 ? [] : [{ ...phone, why: LARGE_TEXT_PHONE_WHY }],
+    narrowed: options.routes !== null,
+  };
   return [main, large];
 }
+
+/** A pass's own matrix, then each further block of cells it measures at the same text size. */
+export function passBlocks(pass) {
+  return [{ routes: pass.routes, themes: pass.themes, widths: pass.widths }, ...(pass.also ?? [])];
+}
+
+const blockCells = (block) => block.routes.length * block.themes.length * block.widths.length;
 
 export function sweepMatrix(options) {
   const out = [];
   for (const pass of sweepPasses(options)) {
-    for (const route of pass.routes) {
-      for (const theme of pass.themes) {
-        for (const width of pass.widths) out.push({ route, theme, width, scale: pass.scale });
+    for (const block of passBlocks(pass)) {
+      for (const route of block.routes) {
+        for (const theme of block.themes) {
+          for (const width of block.widths) out.push({ route, theme, width, scale: pass.scale });
+        }
       }
     }
   }
@@ -1751,9 +1782,9 @@ function newTally(pass) {
       pairs: 0,
       breakTests: 0,
     },
-    measurementsWanted: pass.routes.length * pass.themes.length * pass.widths.length,
+    measurementsWanted: passBlocks(pass).reduce((sum, block) => sum + blockCells(block), 0),
     routesLoaded: 0,
-    routesWanted: 0,
+    routesWanted: passBlocks(pass).reduce((sum, block) => sum + block.routes.length * block.themes.length, 0),
     textSize: { scale: pass.scale, method: 'not applied' },
   };
 }
@@ -1762,17 +1793,30 @@ async function sweepPass(page, baseUrl, pass, tally, findings, failures, suppres
   const label = textSizeLabel(pass.scale);
   await page.setTextScale(pass.scale);
   tally.textSize.method = page.textSizeMethod;
-  const size = [
-    `${String(pass.routes.length)} route(s)`,
-    `${String(pass.themes.length)} theme(s)`,
-    `${String(pass.widths.length)} width(s)`,
-  ].join(' x ');
-  console.log(bold(`\nSweep at ${label} — ${size} = ${String(tally.measurementsWanted)} measurements`));
-  tally.routesWanted = pass.routes.length * pass.themes.length;
+  const size = (block) =>
+    [
+      `${String(block.routes.length)} route(s)`,
+      `${String(block.themes.length)} theme(s)`,
+      `${String(block.widths.length)} width(s)`,
+    ].join(' x ');
+  const sizes = passBlocks(pass).map(size).join(' + ');
+  console.log(bold(`\nSweep at ${label} — ${sizes} = ${String(tally.measurementsWanted)} measurements`));
+  for (const block of passBlocks(pass)) {
+    if (block.why !== undefined) {
+      console.log(
+        `  then at ${block.widths.map((w) => `${String(w)}px`).join(', ')}, ${block.themes.join(', ')}`,
+      );
+      console.log(dim(`  on ${block.routes.join(', ')}`));
+      console.log(dim(`  because ${block.why}`));
+    }
+    await sweepBlock(page, baseUrl, label, block, tally, findings, failures, suppressed);
+  }
+}
 
-  for (const route of pass.routes) {
+async function sweepBlock(page, baseUrl, label, block, tally, findings, failures, suppressed) {
+  for (const route of block.routes) {
     const perRoute = [];
-    for (const theme of pass.themes) {
+    for (const theme of block.themes) {
       try {
         await page.goto(`${baseUrl}${route}`);
       } catch (error) {
@@ -1781,7 +1825,7 @@ async function sweepPass(page, baseUrl, pass, tally, findings, failures, suppres
         continue;
       }
       let loaded = true;
-      for (const width of pass.widths) {
+      for (const width of block.widths) {
         const { measurement, context } = await measure(page, route, theme, width);
         const where = `${route} (${theme}, ${String(width)}px, ${label})`;
         const heading = measurement.heading;
@@ -2081,6 +2125,6 @@ async function main() {
   process.exit(exitCode);
 }
 
-export { CONTROLS, EXEMPTIONS, LARGE_TEXT, ROUTES, THEMES, WIDTHS };
+export { CONTROLS, EXEMPTIONS, LARGE_TEXT, LARGE_TEXT_PHONE_ROUTES, ROUTES, THEMES, WIDTHS };
 
 if (import.meta.main) await main();

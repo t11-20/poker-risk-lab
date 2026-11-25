@@ -30,6 +30,7 @@ import {
   isRealOverlap,
   judgeControl,
   LARGE_TEXT,
+  LARGE_TEXT_PHONE_ROUTES,
   letterByLetter,
   nearestFrame,
   Page,
@@ -1356,13 +1357,38 @@ describe('the large-text pass', () => {
   const large = (argv) => cells(argv).filter((cell) => cell.scale !== 1);
 
   it('the default run also measures every route at 200% text, light, at 768 and 1024', () => {
-    const extra = large([]);
+    const extra = large([]).filter((cell) => cell.width !== 360);
     assert.equal(extra.length, ROUTES.length * 2, 'the default run has no large-text pass');
     assert.deepEqual([...new Set(extra.map((cell) => cell.scale))], [2]);
     assert.deepEqual([...new Set(extra.map((cell) => cell.theme))], ['light']);
     assert.deepEqual([...new Set(extra.map((cell) => cell.width))], [768, 1024]);
     assert.deepEqual([...new Set(extra.map((cell) => cell.route))], ROUTES);
-    assert.equal(cells([]).length, ROUTES.length * (THEMES.length * WIDTHS.length + 2));
+    const total = ROUTES.length * (THEMES.length * WIDTHS.length + 2) + LARGE_TEXT_PHONE_ROUTES.length;
+    assert.equal(cells([]).length, total);
+  });
+
+  it('and the routes clean there at 360px, where content wider than a phone fits 768 (REGRESSION)', () => {
+    // The twelve-track grid below 600px puts 560px of /lab in the window: 768 and 1024 hold it.
+    const phone = large([]).filter((cell) => cell.width === 360);
+    assert.deepEqual(
+      phone.map((cell) => cell.route),
+      LARGE_TEXT_PHONE_ROUTES,
+    );
+    assert.ok(phone.every((cell) => cell.theme === 'light' && cell.scale === 2));
+    for (const route of ['/play', '/lab', '/lab/fl-same-cards-under-the-gun', '/lab/spots']) {
+      assert.ok(LARGE_TEXT_PHONE_ROUTES.includes(route), `${route} is no longer measured at 360px`);
+    }
+    for (const route of LARGE_TEXT_PHONE_ROUTES) assert.ok(ROUTES.includes(route), `${route} is not swept`);
+    const [, pass] = sweepPasses(parseArgs([]));
+    assert.match(pass.also[0].why, /360px/u, 'the run prints why these routes and no others');
+  });
+
+  it('measures at 360px only the phone routes --routes keeps', () => {
+    assert.deepEqual(
+      large(['--routes', '/lab,/legends']).map((cell) => `${cell.route} ${String(cell.width)}`),
+      ['/lab 768', '/lab 1024', '/legends 768', '/legends 1024', '/lab 360'],
+    );
+    assert.deepEqual(sweepPasses(parseArgs(['--routes', '/legends']))[1].also, []);
   });
 
   it('follows --routes, so one route can be checked the way the gate checks it', () => {
