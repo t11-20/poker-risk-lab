@@ -8,6 +8,7 @@ import { Callout, Chip, formatIndex, Metric, Panel, pluralise } from '@prl/ui';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import type { ReactElement } from 'react';
+import { FallbackText } from '@/components/FallbackText.tsx';
 import { Onboarding } from '@/components/Onboarding.tsx';
 import { SuitMark } from '@/components/SuitMark.tsx';
 import {
@@ -153,7 +154,7 @@ export default async function LearnPage(): Promise<ReactElement> {
 
       {lessons.source === 'fixture' && lessons.fallbackReason !== null ? (
         <Callout tone="warning" title="This index is not live">
-          {lessons.fallbackReason}
+          <FallbackText reason={lessons.fallbackReason} />
         </Callout>
       ) : null}
 

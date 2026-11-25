@@ -14,6 +14,7 @@ import {
   lessonResponseFixture,
 } from '@/fixtures/learn.ts';
 import { API_PATHS, apiGet, isApiUnavailable, isMissingResource, safeFetch } from './api.ts';
+import type { FallbackReason } from './fallback.ts';
 import { readerCallOptions } from './server-session.ts';
 
 export const LEARN_PATH = '/learn';
@@ -28,16 +29,16 @@ export type LearnDataSource = 'api' | 'fixture';
 export interface LearnData<T> {
   readonly data: T;
   readonly source: LearnDataSource;
-  /** One sentence a screen can show a reader. Null when the content is live. */
-  readonly fallbackReason: string | null;
+  /** What a screen can show a reader. Null when the content is live. */
+  readonly fallbackReason: FallbackReason | null;
 }
 
 function live<T>(data: T): LearnData<T> {
   return { data, source: 'api', fallbackReason: null };
 }
 
-function sampled<T>(data: T, reason: string): LearnData<T> {
-  return { data, source: 'fixture', fallbackReason: reason };
+function sampled<T>(data: T, text: string, cause: string): LearnData<T> {
+  return { data, source: 'fixture', fallbackReason: { text, cause } };
 }
 
 const LESSONS_FALLBACK =
@@ -58,7 +59,7 @@ export async function loadLessonList(): Promise<LearnData<LessonListResponse>> {
   );
   if (result.ok) return live(result.data);
   if (!isApiUnavailable(result.error)) throw result.error;
-  return sampled(LEARN_LESSON_LIST_FIXTURE, `${LESSONS_FALLBACK} (${result.error.message})`);
+  return sampled(LEARN_LESSON_LIST_FIXTURE, LESSONS_FALLBACK, result.error.message);
 }
 
 /** `null` when the API answers 404, or when there is no API and the fixture (8 of 17) lacks the body. */
@@ -70,14 +71,14 @@ export async function loadLesson(lessonId: ContentId): Promise<LearnData<LessonR
   if (!isApiUnavailable(result.error)) throw result.error;
   const fixture = lessonResponseFixture(lessonId);
   if (fixture === null) return null;
-  return sampled(fixture, `${LESSON_FALLBACK} (${result.error.message})`);
+  return sampled(fixture, LESSON_FALLBACK, result.error.message);
 }
 
 export async function loadGlossary(): Promise<LearnData<GlossaryResponse>> {
   const result = await safeFetch<GlossaryResponse>(() => apiGet<GlossaryResponse>(API_PATHS.glossary()));
   if (result.ok) return live(result.data);
   if (!isApiUnavailable(result.error)) throw result.error;
-  return sampled(LEARN_GLOSSARY_FIXTURE, `${GLOSSARY_FALLBACK} (${result.error.message})`);
+  return sampled(LEARN_GLOSSARY_FIXTURE, GLOSSARY_FALLBACK, result.error.message);
 }
 
 /** Derived from the fixture, so a new bundled body updates the index with no second edit. */

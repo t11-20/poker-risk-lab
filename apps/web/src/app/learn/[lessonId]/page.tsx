@@ -10,6 +10,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import type { ReactElement } from 'react';
 import { NotFoundBody } from '@/app/not-found.tsx';
+import { FallbackText } from '@/components/FallbackText.tsx';
 import { LessonBlockRenderer } from '@/components/LessonBlockRenderer.tsx';
 import { LessonContents } from '@/components/LessonContents.tsx';
 import { LessonRead } from '@/components/LessonRead.tsx';
@@ -138,7 +139,7 @@ export default async function LessonPage({ params }: LessonPageProps): Promise<R
 
       {loaded.source === 'fixture' && loaded.fallbackReason !== null ? (
         <Callout tone="warning" title="This lesson is the bundled copy">
-          {loaded.fallbackReason}
+          <FallbackText reason={loaded.fallbackReason} />
         </Callout>
       ) : null}
 

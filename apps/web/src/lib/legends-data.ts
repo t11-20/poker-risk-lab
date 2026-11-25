@@ -36,6 +36,7 @@ import {
   safeFetch,
   serverCsrfHandshake,
 } from './api.ts';
+import type { FallbackReason } from './fallback.ts';
 
 export type LegendDataSource = 'api' | 'fixture';
 
@@ -43,15 +44,15 @@ export type LegendDataSource = 'api' | 'fixture';
 export interface LegendData<T> {
   readonly data: T;
   readonly source: LegendDataSource;
-  readonly fallbackReason: string | null;
+  readonly fallbackReason: FallbackReason | null;
 }
 
 function live<T>(data: T): LegendData<T> {
   return { data, source: 'api', fallbackReason: null };
 }
 
-function sampled<T>(data: T, reason: string): LegendData<T> {
-  return { data, source: 'fixture', fallbackReason: reason };
+function sampled<T>(data: T, text: string, cause: string): LegendData<T> {
+  return { data, source: 'fixture', fallbackReason: { text, cause } };
 }
 
 const PROFILES_FALLBACK =
@@ -64,7 +65,7 @@ export async function loadLegendProfiles(): Promise<LegendData<LegendProfilesRes
   );
   if (result.ok) return live(result.data);
   if (!isApiUnavailable(result.error)) throw result.error;
-  return sampled(LEGEND_PROFILES_FIXTURE, `${PROFILES_FALLBACK} (${result.error.message})`);
+  return sampled(LEGEND_PROFILES_FIXTURE, PROFILES_FALLBACK, result.error.message);
 }
 
 /** Null turns into a 404. */
@@ -92,7 +93,7 @@ export async function loadLearnFromProfile(
   if (!isApiUnavailable(result.error)) throw result.error;
   const fixture = learnFromFixture(profileId);
   if (fixture === null) return null;
-  return sampled(fixture, `${LEARN_FALLBACK} (${result.error.message})`);
+  return sampled(fixture, LEARN_FALLBACK, result.error.message);
 }
 
 const COMPARE_FALLBACK =
@@ -129,7 +130,8 @@ export async function loadProfileComparison(input: {
   if (handshake === null) {
     return sampled(
       COMPARE_FIXTURE,
-      `${COMPARE_FALLBACK} (the API did not issue a CSRF token, so the comparison could not be requested)`,
+      COMPARE_FALLBACK,
+      'the API did not issue a CSRF token, so the comparison could not be requested',
     );
   }
   const result = await safeFetch<CompareProfilesResponse>(() =>
@@ -140,7 +142,7 @@ export async function loadProfileComparison(input: {
   );
   if (result.ok) return live(result.data);
   if (!isApiUnavailable(result.error)) throw result.error;
-  return sampled(COMPARE_FIXTURE, `${COMPARE_FALLBACK} (${result.error.message})`);
+  return sampled(COMPARE_FIXTURE, COMPARE_FALLBACK, result.error.message);
 }
 
 const STATS_FALLBACK =
@@ -152,10 +154,9 @@ const STATS_FALLBACK =
  * Not a `LegendData<T>`, because a measurement has no honest bundled stand-in, unlike the authored
  * material the other loaders fall back to. The shape has room for an absence and none for an invention.
  */
-export interface ProfileStatsData {
-  readonly stats: ProfileStatsResponse | null;
-  readonly unavailableReason: string | null;
-}
+export type ProfileStatsData =
+  | { readonly stats: ProfileStatsResponse; readonly unavailableReason: null }
+  | { readonly stats: null; readonly unavailableReason: FallbackReason };
 
 export async function loadProfileStats(profileId: string): Promise<ProfileStatsData> {
   const result = await safeFetch<ProfileStatsResponse>(() =>
@@ -164,7 +165,7 @@ export async function loadProfileStats(profileId: string): Promise<ProfileStatsD
   if (result.ok) return { stats: result.data, unavailableReason: null };
   // A 404 has already become the page's not-found screen. Anything else that is not an outage is a fault.
   if (!isMissingResource(result.error) && !isApiUnavailable(result.error)) throw result.error;
-  return { stats: null, unavailableReason: `${STATS_FALLBACK} (${result.error.message})` };
+  return { stats: null, unavailableReason: { text: STATS_FALLBACK, cause: result.error.message } };
 }
 
 /**

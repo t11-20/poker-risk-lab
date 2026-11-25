@@ -9,6 +9,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import type { ReactElement } from 'react';
 import { DifficultyPicker } from '@/components/DifficultyPicker.tsx';
+import { FallbackText } from '@/components/FallbackText.tsx';
 import { LegendCard } from '@/components/LegendCard.tsx';
 import { LegendDifficultyScope } from '@/components/LegendDifficultyScope.tsx';
 import { LegendQuickStart } from '@/components/LegendQuickStart.tsx';
@@ -90,7 +91,9 @@ export default async function LegendsPage({
 
       {profiles.fallbackReason === null ? null : (
         <Callout tone="warning" title="These profiles are bundled sample data">
-          <p>{profiles.fallbackReason}</p>
+          <p>
+            <FallbackText reason={profiles.fallbackReason} />
+          </p>
         </Callout>
       )}
 

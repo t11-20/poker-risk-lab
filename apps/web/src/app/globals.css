@@ -707,3 +707,11 @@
     outline-color: CanvasText;
   }
 }
+
+/**
+ * A fallback notice's transport message, a token with a URL in it: "http://localhost:3001:" is wider than a
+ * phone's column at 200% text, so it may break anywhere. The sentence beside it keeps its word breaks.
+ */
+.prl-fallback-cause {
+  overflow-wrap: anywhere;
+}
