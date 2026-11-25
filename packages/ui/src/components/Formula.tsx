@@ -17,7 +17,7 @@ export interface FormulaProps {
 
 /**
  * One block per written line, so a wrapped line can hang its continuation. Each keeps its newline, so
- * the text a reader copies is the expression unchanged.
+ * the element's text is the expression unchanged.
  */
 export function expressionLines(expression: string): readonly { offset: number; text: string }[] {
   const lines: { offset: number; text: string }[] = [];
