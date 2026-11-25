@@ -164,6 +164,11 @@ export function describeClose(code: number, wasClean: boolean): CloseMeaning {
   }
 }
 
+/** Nothing is wrong after a normal close or a hidden page. Every other close leaves the table unreachable. */
+export function closeIsQuiet(meaning: CloseMeaning): boolean {
+  return meaning.code === WS_CLOSE.normal || meaning.code === 1001;
+}
+
 type JsonObject = Record<string, unknown>;
 
 function isObject(value: unknown): value is JsonObject {

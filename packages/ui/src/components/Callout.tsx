@@ -1,6 +1,7 @@
 /**
  * A tonal aside. The lesson tones in `@prl/contracts` are a subset of these: a lesson passes its
- * tone straight through, and `note` is for a receipt or an honesty line that is not an insight.
+ * tone straight through. `note` is for a receipt, a status, a measured result or a pointer, none of
+ * which is a teaching point.
  * Each tone shows a marker word; warning and misconception also carry a glyph.
  * `role="note"` and not `<aside>`, because six lesson callouts would add six `complementary` landmarks.
  */

@@ -107,13 +107,20 @@ describe('callouts that are not insights use the note tone', () => {
   });
 });
 
-describe('status receipts on the table are notes; only an unreachable table warns', () => {
-  it('a retryable close and a sent or applied decision use the note tone', () => {
+describe('a measured result on a Legends profile is a note, and a mismatch still warns', () => {
+  it('"The card and the play agree" uses the note tone', () => {
+    const page = read('apps', 'web', 'src', 'app', 'legends', '[profileId]', 'page.tsx');
+    assert.match(page, /tone=\{stats\.stats\.divergences\.length === 0 \? 'note' : 'warning'\}/u);
+  });
+});
+
+describe('status receipts on the table are notes; a table that cannot be reached warns', () => {
+  it('a quiet close and a sent or applied decision use the note tone', () => {
     const live = read('apps', 'web', 'src', 'app', 'play', 'LiveTable.tsx');
     assert.match(
       live,
-      /tone=\{closed\.retryable \? 'note' : 'warning'\}/u,
-      'a retryable close is not a note',
+      /tone=\{closeIsQuiet\(closed\) \? 'note' : 'warning'\}/u,
+      'a dropped or refused table is not a warning',
     );
     const stage = read('apps', 'web', 'src', 'components', 'TableStage.tsx');
     assert.match(

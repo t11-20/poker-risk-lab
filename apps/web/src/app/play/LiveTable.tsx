@@ -28,7 +28,7 @@ import { sizerFollowDelta, type WatchGeometry, watchDelta } from '@/lib/follow-t
 import { LEGENDS_PATH, legendMatchHref, PLAY_PATH } from '@/lib/legend-links.ts';
 import { describeTable } from '@/lib/table-description.ts';
 import { INVITE_CODE_EXAMPLE, MAX_INVITE_CODE_INPUT } from '@/lib/table-rooms.ts';
-import type { TableSocketStatus } from '@/lib/table-socket.ts';
+import { closeIsQuiet, type TableSocketStatus } from '@/lib/table-socket.ts';
 import { keepLabel } from '@/lib/table-switch.ts';
 import { type LiveTable as LiveTableModel, type SwitchWarning, useLiveTable } from '@/lib/use-live-table.ts';
 
@@ -187,7 +187,7 @@ function ConnectionNotices({ live }: ConnectionPanelProps): ReactElement {
         </Callout>
       )}
       {closed === null ? null : (
-        <Callout tone={closed.retryable ? 'note' : 'warning'} title={closed.title}>
+        <Callout tone={closeIsQuiet(closed) ? 'note' : 'warning'} title={closed.title}>
           {closed.detail}
         </Callout>
       )}

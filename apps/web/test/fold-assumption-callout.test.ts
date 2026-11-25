@@ -1,5 +1,5 @@
 /**
- * The Lab's insight callout names the rows the fold assumption actually moves. It once said "the
+ * The Lab's comparison callout names the rows the fold assumption actually moves. It once said "the
  * raise row" unconditionally, though some fixtures assume folds on BET rows and an all-in spot has
  * no fold assumption at all.
  */

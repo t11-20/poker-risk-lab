@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { WS_CLOSE, WS_LIMITS, WS_PROTOCOL_VERSION } from '@prl/contracts';
 import {
+  closeIsQuiet,
   describeClose,
   newRequestId,
   openTableSocket,
@@ -360,6 +361,12 @@ test('the codes a reader cannot retry past are not retried, and the ones they ca
   }
   assert.equal(describeClose(WS_CLOSE.unauthenticated, true).action, 'signIn');
   assert.equal(describeClose(WS_CLOSE.protocolMismatch, true).action, 'reload');
+});
+
+test('only a normal close or a hidden page is quiet; a dropped or refused table is not', () => {
+  const codes = [...Object.values(WS_CLOSE), 1001, 1006, 1011, 4999];
+  const quiet = codes.filter((code) => closeIsQuiet(describeClose(code, true)));
+  assert.deepEqual(quiet.sort(), [1001, WS_CLOSE.normal].sort());
 });
 
 test('the first frame is hello, carrying the protocol version and the room', () => {
