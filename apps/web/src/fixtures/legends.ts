@@ -780,9 +780,9 @@ export function profileFixtureById(profileId: string): LegendProfileCardDto | nu
 
 // Contrasts, derived from the trait vectors
 
-/** How many other profiles a contrast section shows, and how many axes each one lists. */
+/** How many other profiles a contrast section shows, and how many axes each lists, as the API sends. */
 const CONTRAST_PROFILES = 3;
-const CONTRAST_AXES = 4;
+const CONTRAST_AXES = 3;
 
 /** Mean absolute difference across all sixteen axes: how far apart two styles actually are. */
 function traitDistance(left: LegendTraits, right: LegendTraits): number {
