@@ -29,6 +29,9 @@ export interface SpotListProps {
   readonly headingId: string;
 }
 
+const NONE_SAVED =
+  'No spots saved in this browser yet. Start a new one, or copy a scenario below and change it.';
+
 const STREET_WORD = { preflop: 'Preflop', flop: 'Flop', turn: 'Turn', river: 'River' } as const;
 
 function SpotCards({ spot }: { readonly spot: SavedSpot }): ReactElement {
@@ -149,7 +152,18 @@ export function SpotList({ titles, headingId }: SpotListProps): ReactElement {
     if (library.ready) rescue.rescue(document.getElementById(headingId));
   }, [library, rescue, headingId]);
 
-  if (!library.ready) return <p className="prl-note">Reading the spots saved in this browser.</p>;
+  // Sized by the empty-state sentence beneath it, the shortest list there can be, so a first visit's
+  // arrival moves nothing below it and a saved list moves it less.
+  if (!library.ready) {
+    return (
+      <div className="prl-spot-list">
+        <div className="prl-empty prl-spot-list__pending">
+          <p className="prl-note">Reading the spots saved in this browser.</p>
+          <p aria-hidden="true">{NONE_SAVED}</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -165,7 +179,7 @@ export function SpotList({ titles, headingId }: SpotListProps): ReactElement {
       {shown === null || shown.stored !== undefined ? null : <p className="prl-note">{shown.sentence}</p>}
       {library.spots.length === 0 ? (
         <div className="prl-empty">
-          <p>No spots saved in this browser yet. Start a new one, or copy a scenario below and change it.</p>
+          <p>{NONE_SAVED}</p>
         </div>
       ) : (
         <ul className="prl-spot-list__items">
