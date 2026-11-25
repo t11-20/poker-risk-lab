@@ -780,9 +780,9 @@ export function profileFixtureById(profileId: string): LegendProfileCardDto | nu
 
 // Contrasts, derived from the trait vectors
 
-/** How many other profiles a contrast section shows, and how many axes each one lists. */
+/** How many other profiles a contrast section shows, and how many axes each lists, as the API sends. */
 const CONTRAST_PROFILES = 3;
-const CONTRAST_AXES = 4;
+const CONTRAST_AXES = 3;
 
 /** Mean absolute difference across all sixteen axes: how far apart two styles actually are. */
 function traitDistance(left: LegendTraits, right: LegendTraits): number {
@@ -811,9 +811,8 @@ export function contrastsFor(profileId: string): LearnFromProfileResponse['contr
         label: TRAIT_LABELS[key],
         delta: subject.traits[key] - other.traits[key],
       }))
-        .sort(
-          (left, right) => Math.abs(right.delta) - Math.abs(left.delta) || left.key.localeCompare(right.key),
-        )
+        // A stable sort, so tied axes keep the trait order, as the server's `biggestTraitDifferences` does.
+        .sort((left, right) => Math.abs(right.delta) - Math.abs(left.delta))
         .slice(0, CONTRAST_AXES),
     }));
 }

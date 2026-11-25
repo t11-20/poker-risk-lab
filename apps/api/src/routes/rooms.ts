@@ -32,12 +32,15 @@ import {
   DIFFICULTIES,
   DIFFICULTY_SETTINGS,
   learnFromSummary,
+  type NamingMode,
   PROFILES,
   profileCard,
   profileDisclosure,
   radarAxes,
   requireProfile,
   resolveNamingMode,
+  type StrategyProfile,
+  traitDistance,
   UNIVERSAL_DISCLAIMER,
 } from '@prl/poker-ai';
 import { parseCards } from '@prl/poker-engine';
@@ -66,6 +69,31 @@ import {
 } from '../rooms/registry.ts';
 import { createAuthStore } from './auth.ts';
 import { registerLegendStatsRoute } from './legends.ts';
+
+/** How many other profiles a profile page contrasts with: the most different, as its copy says. */
+export const CONTRAST_PROFILES = 3;
+
+/**
+ * The three furthest profiles by `traitDistance`, ties by id, each with its biggest trait gaps. The
+ * bundled copy shows the same, and a test holds the two together. Names follow this deployment's mode.
+ */
+export function profileContrasts(
+  profile: StrategyProfile,
+  mode: NamingMode,
+): LearnFromProfileResponse['contrasts'] {
+  return PROFILES.filter((other) => other.naming.id !== profile.naming.id)
+    .map((other) => ({ other, distance: traitDistance(profile.traits, other.traits) }))
+    .sort(
+      (left, right) =>
+        right.distance - left.distance || left.other.naming.id.localeCompare(right.other.naming.id),
+    )
+    .slice(0, CONTRAST_PROFILES)
+    .map(({ other }) => ({
+      otherProfileId: other.naming.id,
+      otherDisplayName: profileDisclosure(other.naming, mode).displayName,
+      differences: biggestTraitDifferences(profile.traits, other.traits),
+    }));
+}
 
 /**
  * Schemas for Legends bodies that `@prl/contracts` types but does not schema. Passed inline with
@@ -348,12 +376,7 @@ export function createRoomRoutes(options: RoomRoutesOptions = {}): FastifyPlugin
             others: PROFILES,
           }),
           observedBasis: null,
-          // Re-derived through `profileDisclosure` so contrasts use this deployment's naming mode.
-          contrasts: PROFILES.filter((other) => other.naming.id !== profile.naming.id).map((other) => ({
-            otherProfileId: other.naming.id,
-            otherDisplayName: profileDisclosure(other.naming, mode).displayName,
-            differences: biggestTraitDifferences(profile.traits, other.traits),
-          })),
+          contrasts: profileContrasts(profile, mode),
         };
       },
     );

@@ -359,7 +359,7 @@ describe('ranges that cannot all be dealt at once', () => {
   it('answers within a frame for five wide ranges that share four cards', () => {
     const anyAce = 'A2s+, A2o+';
     // The fastest of five, because the suite runs beside the other packages: one run took 71ms there.
-    // A different second hole card each run, because `dealSearch` caches by combos and a hit takes 0.3ms.
+    // A different second hole card each run, because `dealSearch` caches by combos and a hit never searches.
     const runs = ['3d', '4d', '5d', '6d', '7d'].map((hole2) => {
       const draft: SpotDraft = {
         ...good(),

@@ -49,6 +49,8 @@
   grid-column: 1 / -1;
   /* `min-width: auto` would refuse to shrink below a `nowrap` descendant and overflow the track. */
   min-width: 0;
+  /* The gap spaces the cells. base.css's `li` margin skips the last cell, so a last row stood 4px uneven. */
+  margin: 0;
 }
 
 /** 600 to 899px. Two columns; a cell asking for more than half stays full width. */
@@ -3153,17 +3155,20 @@ td.prl-candidates__ev,
   font-size: var(--prl-type-body-sm);
 }
 
-/** Wraps, because two `nowrap` children would make the row unshrinkable. */
+/**
+ * Three tracks, so a long name wraps in its own column: as a wrapping flex row the swatch was left on a
+ * line by itself. The value sits at the end of the first line and the detail under the name.
+ */
 .prl-equity-bar__row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: baseline;
   gap: var(--prl-space-2) var(--prl-space-3);
   margin: 0;
 }
 
+/** On the baseline, an empty box's bottom edge, so it sits on a wrapped name's first line. */
 .prl-equity-bar__swatch {
-  flex: 0 0 auto;
   width: var(--prl-space-5);
   height: var(--prl-space-5);
   border: 1px solid var(--prl-text);
@@ -3171,18 +3176,20 @@ td.prl-candidates__ev,
 }
 
 .prl-equity-bar__name {
-  flex: 1 1 auto;
   min-width: 0;
   overflow-wrap: break-word;
 }
 
 .prl-equity-bar__value {
+  grid-column: 3;
+  text-align: end;
   font-weight: var(--prl-weight-semibold);
   font-variant-numeric: var(--prl-numeric);
   white-space: nowrap;
 }
 
 .prl-equity-bar__detail {
+  grid-column: 2 / -1;
   color: var(--prl-text-secondary);
   font-size: var(--prl-type-body-sm);
   white-space: nowrap;
@@ -3305,6 +3312,11 @@ td.prl-candidates__ev,
   line-height: var(--prl-leading-body);
 }
 
+/** The box's padding is the bottom edge. A last `<p>` kept its 16px, which made the box 33px deep there. */
+.prl-callout__body > :last-child {
+  margin-block-end: 0;
+}
+
 /** Caution and adverse only where the callout is about a risk or a mistake. */
 .prl-callout--warning .prl-callout__marker {
   color: var(--prl-caution);
@@ -3352,6 +3364,13 @@ td.prl-candidates__ev,
   line-height: var(--prl-leading-snug);
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* A wrapped line hangs two characters in, so its continuation does not read as a new line. */
+.prl-formula__line {
+  display: block;
+  padding-inline-start: 2ch;
+  text-indent: -2ch;
 }
 
 .prl-formula__explanation {

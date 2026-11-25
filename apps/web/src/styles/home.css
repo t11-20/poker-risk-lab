@@ -166,9 +166,11 @@
   line-height: var(--prl-leading-body);
 }
 
+/* End-aligned, so the two figures share a line when only one label wraps (1024px). */
 .prl-spot__figures {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: end;
   gap: var(--prl-space-6);
   margin: 0;
 }

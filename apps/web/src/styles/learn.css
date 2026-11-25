@@ -10,8 +10,7 @@
   /* 14rem, the narrowest rail that still fits two words of a heading per line. */
   --prl-learn-rail: calc(var(--prl-space-16) + var(--prl-space-12));
 
-  /* The sheet's inline padding, named so the page width can add it back around the measure.
-     `--prl-space-9` is also the heading index's negative margin at 900px. Change both together. */
+  /* The sheet's inline padding, named so the page width can add it back around the measure. */
   --prl-learn-sheet-x: var(--prl-space-9);
 }
 
@@ -693,6 +692,7 @@
 
 .prl-learn-calc {
   margin-block: var(--prl-space-4);
+  container: prl-learn-calc / inline-size;
 }
 
 .prl-learn-calc__caption {
@@ -714,6 +714,30 @@
   border: 1px solid var(--prl-line-subtle);
   border-radius: var(--prl-radius-2);
   background-color: var(--prl-surface-inset);
+}
+
+/* Three or four inputs never leave one alone on a row: three go down or across, four go 1, 2 or 4
+   wide. Each width is that many 8rem tracks, the 1.5rem gaps, 1rem padding and 1px border a side. */
+.prl-learn-calc__inputs:is([data-inputs="3"], [data-inputs="4"]) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@container prl-learn-calc (width >= 19.625rem) {
+  .prl-learn-calc__inputs[data-inputs="4"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container prl-learn-calc (width >= 29.125rem) {
+  .prl-learn-calc__inputs[data-inputs="3"] {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@container prl-learn-calc (width >= 38.625rem) {
+  .prl-learn-calc__inputs[data-inputs="4"] {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
 }
 
 .prl-learn-calc__input {
@@ -1343,11 +1367,24 @@
 }
 
 @media (min-width: 900px) {
+  /* 48px, so the hanging index clears the sheet's border. At 32px index and gap filled it exactly. */
+  .prl-learn-lesson {
+    --prl-learn-sheet-x: var(--prl-space-11);
+  }
+
+  /* The rule spans the column and the title starts on the prose edge, so the measure is on the track. */
   .prl-learn-lesson__heading {
-    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-columns: 0 minmax(0, var(--prl-measure));
     align-items: baseline;
-    gap: var(--prl-space-5);
-    margin-inline-start: calc(-1 * var(--prl-space-9));
+    gap: 0;
+    max-width: none;
+  }
+
+  /* Hangs in the sheet's padding. Its margins cancel its width, so it adds nothing to the 0 track. */
+  .prl-learn-lesson__heading-index {
+    inline-size: var(--prl-space-8);
+    margin-inline: calc(-1 * (var(--prl-space-8) + var(--prl-space-5))) var(--prl-space-5);
+    text-align: end;
   }
 }
 

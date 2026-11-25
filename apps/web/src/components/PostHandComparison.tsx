@@ -222,7 +222,7 @@ function ModelReasoningBlock({
       </div>
       <div className="prl-stack prl-stack--tight">
         <span className="prl-label">What would have changed it</span>
-        <ul>
+        <ul className="prl-prose">
           {withKeys(reasoning.whatChangedIt, 'changed').map((entry) => (
             <li key={entry.key}>{entry.value}</li>
           ))}
@@ -384,7 +384,7 @@ export function PostHandComparison(props: PostHandComparisonProps): ReactElement
         </div>
       </div>
 
-      <CardRow cards={boardCards(comparison.board)} label="Community cards" size="sm" />
+      <CardRow cards={boardCards(comparison.board)} label="Community cards" size="md" />
 
       <ProfileDisclaimers disclosure={disclosure} />
 

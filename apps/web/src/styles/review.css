@@ -42,6 +42,11 @@
   }
 }
 
+/** The Coach's lists at the measure of their prose. At full width the limitations ran 87-120 characters. */
+.prl-review-page :is(.prl-coach__list, .prl-uncertainty__limitations) {
+  max-width: var(--prl-measure);
+}
+
 /* History table. Dense on purpose, with tabular numerals in every numeric column. */
 
 .prl-review-sorts {
@@ -643,7 +648,8 @@ span.prl-review-table__cell-label {
   position: sticky;
   z-index: var(--prl-z-sticky);
   isolation: isolate;
-  inset-block-start: var(--prl-space-13);
+  /* The one-row bar's height with its 1px edge, 77px. At 80px a 3px strip of the stage showed between. */
+  inset-block-start: calc(var(--prl-pill-h) + 2 * var(--prl-pillbar-pad-block) + 1px);
   /* Three tracks, never wrapping. A wrapping row took 126px of sticky bar at 360. */
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;

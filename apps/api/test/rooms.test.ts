@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { ERROR_MESSAGES } from '@prl/contracts';
-import { PROFILES } from '@prl/poker-ai';
+import { PROFILES, traitDistance } from '@prl/poker-ai';
 import { createSecureRandom } from '@prl/poker-engine';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.ts';
@@ -28,7 +28,7 @@ import {
 } from '../src/rooms/registry.ts';
 import { type ArchivedAction, LiveTable } from '../src/rooms/table.ts';
 import { createManualClock, type ManualClock, TurnTimer } from '../src/rooms/timers.ts';
-import { createRoomRoutes } from '../src/routes/rooms.ts';
+import { CONTRAST_PROFILES, createRoomRoutes } from '../src/routes/rooms.ts';
 
 const ALLOWED_ORIGIN = 'http://localhost:3000';
 
@@ -961,7 +961,20 @@ describe('the Legends endpoints', () => {
     assert.ok(body.learnFrom.length >= 2);
     assert.ok(body.counterStrategy.length >= 2);
     assert.equal(body.observed, null, 'no hands played means no observed frequencies to report');
-    assert.ok(body.contrasts.length >= 1);
+    // The page says "the three most different profiles", so the route sends exactly those, furthest first.
+    const subject = PROFILES.find((profile) => profile.naming.id === 'calling-station');
+    assert.ok(subject !== undefined);
+    const furthest = PROFILES.filter((other) => other !== subject)
+      .map((other) => ({ id: other.naming.id, distance: traitDistance(subject.traits, other.traits) }))
+      .sort((left, right) => right.distance - left.distance || left.id.localeCompare(right.id))
+      .slice(0, 3)
+      .map((other) => other.id);
+    assert.equal(CONTRAST_PROFILES, 3);
+    assert.deepEqual(
+      body.contrasts.map((contrast) => contrast.otherProfileId),
+      furthest,
+    );
+    for (const contrast of body.contrasts) assert.equal(contrast.differences.length, 3);
 
     const missing = await test.app.inject({ method: 'GET', url: '/api/v1/legends/profiles/nobody' });
     assert.equal(missing.statusCode, 404);

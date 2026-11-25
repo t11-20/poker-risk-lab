@@ -333,6 +333,11 @@
   border-block-start: var(--prl-hairline);
 }
 
+.prl-sheet__item:first-child {
+  /* The bar's accent rule already opens the list; a hairline 24px under it read as a double rule. */
+  border-block-start: 0;
+}
+
 .prl-sheet__item:last-child {
   border-block-end: var(--prl-hairline);
 }
@@ -507,6 +512,11 @@
   list-style: none;
 }
 
+.prl-footer__list--described {
+  /* At 2px a description sat 19px under its own label and 18px above the next, so it read as either's. */
+  gap: var(--prl-space-6);
+}
+
 .prl-footer__item {
   display: grid;
   gap: var(--prl-space-1);
@@ -514,7 +524,6 @@
 }
 
 /** The underline is left to `base.css`, whose hover thickens it, a cue that does not depend on colour. */
-/** Centred, so a description sits nearer its own link than the next one. */
 .prl-footer__link {
   display: inline-flex;
   align-items: center;
@@ -637,14 +646,33 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
     column-gap: var(--prl-space-8);
   }
+
+  /* Four boxes pair off, and "This sitting" takes its own row, so neither state leaves a hole.
+     It is the only statement that can come last: hiding it removes it. */
+  .prl-footer__inner {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .prl-footer__inner > .prl-footer__statement:last-child {
+    grid-column: 1 / -1;
+  }
+
+  /* Its own row is the container's width, and "No reminder" needs a sixth of it. */
+  .prl-footer__inner .prl-select {
+    max-inline-size: calc(2 * var(--prl-space-16));
+  }
+}
+
+/* From 1000px, the app's wide breakpoint, the four boxes take one row: the two lists at their own
+   width, the prose between them at ~36 characters or more. */
+@media (min-width: 1000px) {
+  .prl-footer__inner {
+    gap: var(--prl-space-11);
+    grid-template-columns: max-content repeat(2, minmax(0, 1fr)) max-content;
+  }
 }
 
 @media (min-width: 900px) {
-  .prl-footer__inner {
-    gap: var(--prl-space-11);
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
   .prl-spine {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
@@ -656,6 +684,11 @@
   .prl-nav__link[aria-current="page"],
   .prl-sheet__link[aria-current="page"] {
     border-color: Highlight;
+  }
+
+  /** The accent rule is a fill and goes, so the first destination takes its hairline back. */
+  .prl-sheet__item:first-child {
+    border-block-start: var(--prl-hairline);
   }
 
   /**

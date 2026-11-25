@@ -17,6 +17,12 @@
   border-block-start: var(--prl-hairline);
 }
 
+/* The page head's rule and its 48px gap are above it, so a second rule and more padding only add space. */
+.prl-checks__row:first-child {
+  padding-block-start: 0;
+  border-block-start: 0;
+}
+
 .prl-checks__claim {
   color: var(--prl-text);
   font-size: var(--prl-type-heading);
@@ -48,17 +54,29 @@
   overflow-wrap: anywhere;
 }
 
+/* Each claim keeps one line (326-390px), and the rows share the tracks so the evidence aligns. A 30ch
+   track left "enumerated" and "classification" alone on a second line. The detail caps its own measure. */
 @media (min-width: 900px) {
+  .prl-checks {
+    grid-template-columns: minmax(min-content, max-content) minmax(0, 1fr);
+    column-gap: var(--prl-space-11);
+  }
+
   .prl-checks__row {
-    grid-template-columns: minmax(0, 30ch) minmax(0, var(--prl-measure));
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
     column-gap: var(--prl-space-11);
   }
 }
 
+/* The rule spans the rows above it, and the measure is on the text. */
 .prl-checks__source {
-  max-width: var(--prl-measure);
   padding-block-start: var(--prl-space-8);
   border-block-start: var(--prl-hairline);
+}
+
+.prl-checks__source > * {
+  max-width: var(--prl-measure);
 }
 
 .prl-checks__prose {

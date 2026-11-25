@@ -125,12 +125,18 @@ function ReviewUnavailable({
         </p>
       </header>
 
-      <p className="prl-note">
-        <span className="prl-label">Hand</span> <code className="prl-mono">{handId}</code>
-      </p>
-      <p className="prl-note">
-        <span className="prl-label">What happened</span> <span className="prl-mono">{detail}</span>
-      </p>
+      <dl className="prl-unavailable-facts">
+        <div>
+          <dt className="prl-label">Hand</dt>
+          <dd>
+            <code className="prl-mono">{handId}</code>
+          </dd>
+        </div>
+        <div>
+          <dt className="prl-label">What happened</dt>
+          <dd className="prl-mono">{detail}</dd>
+        </div>
+      </dl>
       <p className="prl-note">
         {cause === 'signedOut'
           ? 'Opening a table creates a guest session in one request, with no email and no password. Hands ' +

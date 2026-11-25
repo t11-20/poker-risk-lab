@@ -24,6 +24,15 @@
   border-block-end: var(--prl-hairline);
 }
 
+/**
+ * One gap under every head, whatever follows it: 48px, the head's own top padding and the gap Learn
+ * and Legends already keep. Two classes, so a block's own top margin cannot win on import order.
+ * The age gate keeps its 40px because it is held for the owner.
+ */
+.prl-page-head + :not(.prl-gate) {
+  margin-block-start: var(--prl-space-11);
+}
+
 .prl-page-head__title {
   margin: 0;
   max-width: var(--prl-measure-display);
@@ -87,6 +96,26 @@
 
 .prl-source-note .prl-label {
   margin-inline-end: var(--prl-space-4);
+}
+
+/** A scenario that could not load: each label over its value, a step between pairs. */
+.prl-unavailable-facts {
+  display: grid;
+  gap: var(--prl-space-5);
+  max-width: var(--prl-measure);
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+  line-height: var(--prl-leading-snug);
+}
+
+.prl-unavailable-facts > div {
+  display: grid;
+  gap: var(--prl-space-2);
+}
+
+/* The API's message is one unbroken URL in mono, so it may break anywhere rather than overflow. */
+.prl-unavailable-facts dd {
+  overflow-wrap: anywhere;
 }
 
 /* Sibling-route links. */
