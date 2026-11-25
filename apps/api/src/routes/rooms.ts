@@ -32,12 +32,14 @@ import {
   DIFFICULTIES,
   DIFFICULTY_SETTINGS,
   learnFromSummary,
+  type NamingMode,
   PROFILES,
   profileCard,
   profileDisclosure,
   radarAxes,
   requireProfile,
   resolveNamingMode,
+  type StrategyProfile,
   traitDistance,
   UNIVERSAL_DISCLAIMER,
 } from '@prl/poker-ai';
@@ -76,8 +78,8 @@ export const CONTRAST_PROFILES = 3;
  * bundled copy shows the same, and a test holds the two together. Names follow this deployment's mode.
  */
 export function profileContrasts(
-  profile: (typeof PROFILES)[number],
-  mode: ReturnType<typeof resolveNamingMode>,
+  profile: StrategyProfile,
+  mode: NamingMode,
 ): LearnFromProfileResponse['contrasts'] {
   return PROFILES.filter((other) => other.naming.id !== profile.naming.id)
     .map((other) => ({ other, distance: traitDistance(profile.traits, other.traits) }))

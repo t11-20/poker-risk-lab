@@ -1526,6 +1526,63 @@ async function auditAccountDeletionFocus(page) {
   else bad('Account deletion', `keeping the account left focus on "${opener || 'body'}"`);
 }
 
+/**
+ * The quiz keeps its place in `?question=N`, and Back to an entry a fragment link added must show that
+ * entry's place. Focus on a control of the question that leaves goes to the new heading; elsewhere it stays.
+ */
+async function auditQuizBackPlace(page) {
+  const path = '/learn/hand-flow';
+  section(`Quiz place follows Back  ${DIM}${path}${RESET}`);
+  const readQuiz = () =>
+    page.evaluate(
+      `(() => { const a = document.activeElement; return { place: document.querySelector('.prl-learn-quiz__position')?.textContent.trim() ?? '', query: location.search, heading: a?.classList.contains('prl-learn-quiz__heading') ?? false, inQuiz: a?.closest('.prl-learn-quiz') !== null && a !== null, tag: a === null || a === document.body ? 'body' : a.tagName }; })()`,
+    );
+  for (const focusInside of [true, false]) {
+    const label = focusInside ? 'focus on an answer' : 'focus outside the quiz';
+    await page.goto(`${WEB_ORIGIN}${path}`);
+    await page.evaluate(`location.hash = 'main'`);
+    for (let press = 0; press < 2; press += 1) {
+      const focused = await page.evaluate(
+        `(() => { const b = [...document.querySelectorAll('.prl-learn-quiz__nav button')].find((x) => /^Next question$/.test(x.textContent.trim())); if (b === undefined) return false; b.focus(); return true; })()`,
+      );
+      if (!focused) {
+        bad('Quiz Back', `no "Next question" button on ${path}`);
+        return;
+      }
+      await page.press('Enter');
+      await delay(200);
+    }
+    const before = await readQuiz();
+    if (!before.place.includes('03') || !before.query.includes('question=3')) {
+      bad('Quiz Back', `two Next presses showed "${before.place}" at "${before.query}", not question 3`);
+      return;
+    }
+    const placed = await page.evaluate(
+      focusInside
+        ? `(() => { const c = document.querySelector('.prl-learn-quiz__options input'); c?.focus(); return c !== null && document.activeElement === c; })()`
+        : `(() => { const c = document.querySelector('header a'); c?.focus(); return c !== null && document.activeElement === c; })()`,
+    );
+    if (!placed) {
+      bad('Quiz Back', `${label}: could not place focus before pressing Back`);
+      return;
+    }
+    await page.evaluate('history.back()');
+    await delay(500);
+    const after = await readQuiz();
+    if (!after.place.includes('01') || after.query.includes('question=')) {
+      bad('Quiz Back', `${label}: Back showed "${after.place}" at "${after.query}", not question 1`);
+    } else if (focusInside && !after.heading) {
+      bad('Quiz Back', `${label}: Back left focus on ${after.tag}, not the new question's heading`);
+    } else if (!focusInside && after.inQuiz) {
+      bad('Quiz Back', `${label}: Back pulled focus into the quiz`);
+    } else {
+      ok(
+        `Quiz Back (${label}): shows question 1, ${focusInside ? 'focus on its heading' : 'focus left alone'}`,
+      );
+    }
+  }
+}
+
 /** "Show the reasoning" unmounts itself when pressed, so it must hand focus to the reasoning it revealed. */
 async function auditQuizRevealFocus(page) {
   const path = '/learn/counting-outs';
@@ -1986,6 +2043,11 @@ async function main() {
         await auditQuizRevealFocus(page);
       } catch (error) {
         bad('Quiz reveal: audit', error instanceof Error ? error.message : String(error));
+      }
+      try {
+        await auditQuizBackPlace(page);
+      } catch (error) {
+        bad('Quiz Back: audit', error instanceof Error ? error.message : String(error));
       }
     });
     if (journeys === 0) bad('scope', 'no journey ran, so nothing was audited');
