@@ -66,7 +66,7 @@ describe('the footer', () => {
     assert.equal(boxes, 4);
     assert.match(footer, /<SessionDuration \/>\s*<\/div>\s*<\/footer>/u);
     assert.match(read('../src/components/SessionDuration.tsx'), /<div className="prl-footer__statement">/u);
-    const tablet = blocks(SHELL, '@media (min-width: 600px)').join('\n');
+    const tablet = blocks(SHELL, '@media (min-width: 37.5em)').join('\n');
     assert.match(
       rule(tablet, '.prl-footer__inner'),
       /grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/u,
@@ -79,7 +79,7 @@ describe('the footer', () => {
   });
 
   it('puts all four on one row from 1000px', () => {
-    const wide = rule(blocks(SHELL, '@media (min-width: 1000px)').join('\n'), '.prl-footer__inner');
+    const wide = rule(blocks(SHELL, '@media (min-width: 62.5em)').join('\n'), '.prl-footer__inner');
     const tracks = /grid-template-columns: max-content repeat\((\d+), minmax\(0, 1fr\)\) max-content;/u.exec(
       wide,
     );

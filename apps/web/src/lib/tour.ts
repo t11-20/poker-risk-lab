@@ -19,7 +19,7 @@ export const TOUR_FIRST_VISIT_PATH = '/lab';
  * what pushes the Lab down. Read once, where the open is dispatched, and kept until the guide
  * closes: a rotation must not unmount the control that has focus.
  */
-export const TOUR_COMPACT_QUERY = '(width < 640px)';
+export const TOUR_COMPACT_QUERY = '(width < 40em)';
 
 /** The spot editor, which holds three steps' targets. With no query it opens a blank spot. */
 export const SPOT_EDITOR_HREF = '/lab/spots/edit';

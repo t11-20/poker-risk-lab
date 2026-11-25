@@ -59,7 +59,7 @@ function declared(declarations: string, property: string): string {
 
 describe('a lesson heading from 900px', () => {
   const learn = style('learn.css');
-  const wide = block(learn, '@media (min-width: 900px)');
+  const wide = block(learn, '@media (min-width: 56.25em)');
 
   it('hangs its index inside the sheet padding, clear of the border', () => {
     const sheetX = rem(declared(rule(wide, '.prl-learn-lesson'), '--prl-learn-sheet-x'));
@@ -154,7 +154,7 @@ describe('/checks', () => {
   });
 
   it('gives each claim one line beside its evidence, the evidence aligned across rows', () => {
-    const wide = block(checks, '@media (min-width: 900px)');
+    const wide = block(checks, '@media (min-width: 56.25em)');
     const claim = declared(rule(wide, '.prl-checks'), 'grid-template-columns').split(') ')[0] ?? '';
     assert.match(claim, /max-content$/u, 'the claim track grows to its longest claim');
     const row = rule(wide, '.prl-checks__row');

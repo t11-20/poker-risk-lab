@@ -619,7 +619,7 @@
   color: var(--prl-accent-text);
 }
 
-/* Responsive. 860px is the shell's breakpoint, mirrored by `NAV_SHEET_QUERY`. */
+/* Responsive. 53.75em (860px) is the shell's breakpoint, mirrored by `NAV_SHEET_QUERY`. */
 
 @media (min-width: 53.75em) {
   .prl-nav {

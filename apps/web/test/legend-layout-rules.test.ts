@@ -71,14 +71,14 @@ describe('legends layout rules', () => {
   /* At 360px the picker was 849px; `legends.css` records the alternatives measured and turned down. */
   describe('on a phone only the ticked difficulty shows its description', () => {
     const picker = readFileSync(join(SRC, 'components', 'DifficultyPicker.tsx'), 'utf8');
-    const PHONE = /@media \(width < 600px\) \{([\s\S]*?)\n\}/gu;
+    const PHONE = /@media \(width < 37\.5em\) \{([\s\S]*?)\n\}/gu;
     const phoneBlocks = [...css.matchAll(PHONE)].map((match) => match[1] ?? '');
     const UNTICKED =
       '.prl-legend-difficulty__option:not(:has(.prl-legend-difficulty__control:checked))\n' +
       '    > .prl-legend-difficulty__description {';
 
     function untickedRule(): string {
-      assert.ok(phoneBlocks.length > 0, 'no `@media (width < 600px)` block in legends.css');
+      assert.ok(phoneBlocks.length > 0, 'no `@media (width < 37.5em)` block in legends.css');
       for (const block of phoneBlocks) {
         const at = block.indexOf(UNTICKED);
         if (at >= 0) return block.slice(at + UNTICKED.length, block.indexOf('}', at));
@@ -102,7 +102,7 @@ describe('legends layout rules', () => {
     });
 
     it('the Coach chip is never hidden: every option shows what it does to the Coach', () => {
-      assert.ok(phoneBlocks.length > 0, 'no `@media (width < 600px)` block in legends.css');
+      assert.ok(phoneBlocks.length > 0, 'no `@media (width < 37.5em)` block in legends.css');
       for (const block of phoneBlocks) {
         const hides = /([^{}]*)\{[^}]*(?:clip-path|display: none)[^}]*\}/gu;
         for (const [, selector] of block.matchAll(hides)) {
@@ -123,7 +123,7 @@ describe('legends layout rules', () => {
   it('the card grid takes two columns at tablet width', () => {
     assert.match(
       css,
-      /@media \(720px <= width < 900px\) \{\s*\.prl-legend-grid \{\s*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/u,
+      /@media \(45em <= width < 56\.25em\) \{\s*\.prl-legend-grid \{\s*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/u,
     );
   });
 
@@ -143,7 +143,7 @@ describe('legends layout rules', () => {
   it('two-column cards put the name under the sigil, so a name has the card’s width', () => {
     assert.match(
       css,
-      /@media \(720px <= width < 900px\) \{\s*\.prl-legend-grid \.prl-legend-identity \{\s*flex-direction: column;/u,
+      /@media \(45em <= width < 56\.25em\) \{\s*\.prl-legend-grid \.prl-legend-identity \{\s*flex-direction: column;/u,
     );
   });
 

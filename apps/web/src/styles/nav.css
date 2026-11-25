@@ -476,7 +476,7 @@
   }
 }
 
-/* Responsive. 860 is mirrored by `NAV_SHEET_QUERY` in `src/lib/nav.ts`. */
+/* Responsive. 53.75em (860px) is mirrored by `NAV_SHEET_QUERY` in `src/lib/nav.ts`. */
 
 @media (min-width: 37.5em) {
   /** The full name, with the ` Lab` `globals.css` drops below 860px, fits below 860 and above 1280. */

@@ -36,7 +36,7 @@ function rule(source: string, selector: string): string {
 }
 
 describe('/review below 1024px', () => {
-  const narrow = mediaBlock('width < 1024px');
+  const narrow = mediaBlock('width < 64em');
 
   it('draws each row as a card instead of a table wider than the screen (REGRESSION)', () => {
     assert.match(rule(narrow, '.prl-review-table tbody tr'), /display:\s*grid/u);
@@ -73,7 +73,7 @@ describe('/review at every width', () => {
       /<select className="prl-select" id=\{SORT_SELECT_ID\} name="sort" defaultValue=\{sort\}>/u,
     );
     assert.match(page, /\{SORTS\.map\(\(candidate\) => \(\s*<option key=\{candidate\} value=\{candidate\}>/u);
-    const phone = mediaBlock('width < 600px');
+    const phone = mediaBlock('width < 37.5em');
     assert.match(rule(phone, '.prl-review-sorts__form'), /display:\s*flex/u);
     assert.match(rule(phone, '.prl-review-sorts__heading,\n  .prl-review-sorts__list'), /display:\s*none/u);
     assert.match(rule(code, '.prl-review-sorts__form'), /display:\s*none/u);

@@ -612,7 +612,7 @@ class Page {
   }
 
   // A device-metrics override, because a smaller headless window does not reliably move the
-  // `min-width: 860px` media query or the container query.
+  // `min-width: 53.75em` media query or the container query.
   async setViewport(viewport) {
     if (viewport === null || viewport === undefined) {
       await this.send('Emulation.clearDeviceMetricsOverride');

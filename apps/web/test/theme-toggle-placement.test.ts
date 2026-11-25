@@ -43,7 +43,7 @@ describe('the theme switch is in the header, and only there', () => {
   it('shows the header copy only where the sheet is not, from 860px', () => {
     const shell = css('app/globals.css');
     assert.match(shell, /\n\.prl-shell__theme \{\s*display: none;\s*\}/u, 'not hidden below 860px');
-    const wide = /@media \(min-width: 860px\) \{([\s\S]*?)\n\}/u.exec(shell)?.[1] ?? '';
+    const wide = /@media \(min-width: 53\.75em\) \{([\s\S]*?)\n\}/u.exec(shell)?.[1] ?? '';
     assert.match(wide, /\.prl-shell__theme \{\s*display: flex;\s*\}/u, 'not shown from 860px');
     assert.match(wide, /\.prl-sheet \{\s*display: none;\s*\}|\.prl-sheet\s*\{[^}]*display: none/u);
   });
