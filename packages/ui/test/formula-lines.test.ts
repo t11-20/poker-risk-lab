@@ -18,7 +18,9 @@ interface FormulaProps {
 async function lines(expression: string): Promise<readonly string[]> {
   const Formula = await loadComponent<FormulaProps>('components/Formula', 'Formula');
   const markup = renderToStaticMarkup(createElement(Formula, { expression, explanation: 'Why.' }));
-  return [...markup.matchAll(/<span class="prl-formula__line">([\s\S]*?)<\/span>/gu)].map((m) => m[1] ?? '');
+  return [...markup.matchAll(/<span class="prl-formula__line"><code>([\s\S]*?)<\/code><\/span>/gu)].map(
+    (m) => m[1] ?? '',
+  );
 }
 
 test('each written line of an expression is its own block, newline kept', async () => {
