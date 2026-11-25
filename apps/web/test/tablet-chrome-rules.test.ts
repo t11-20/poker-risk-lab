@@ -144,4 +144,13 @@ describe('a scenario that could not load', () => {
   it('spaces the pairs apart', () => {
     assert.match(rule(PAGE, '.prl-unavailable-facts'), /gap: var\(--prl-space-5\);/u);
   });
+
+  it('is the same list on a hand replay that could not load', () => {
+    const replay = read('../src/app/review/[handId]/page.tsx');
+    assert.match(replay, /<dl className="prl-unavailable-facts">/u);
+    for (const label of ['Hand', 'What happened']) {
+      assert.match(replay, new RegExp(`<dt className="prl-label">${label}</dt>\\s*<dd`, 'u'));
+    }
+    assert.doesNotMatch(replay, /<span className="prl-label">(?:Hand|What happened)</u);
+  });
 });
