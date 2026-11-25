@@ -3209,6 +3209,19 @@ td.prl-candidates__ev,
   white-space: normal;
 }
 
+/* At 360px with 200% text the row is about 148px and the value took all but 16px, tearing "you". */
+@media (width < 20em) {
+  .prl-equity-bar__row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .prl-equity-bar__value,
+  .prl-equity-bar__detail {
+    grid-column: 2;
+    text-align: start;
+  }
+}
+
 /** The opponents past the first, one toggle under hero's row. */
 .prl-equity-bar__more > .prl-equity-bar__readout {
   padding-block-end: var(--prl-space-3);

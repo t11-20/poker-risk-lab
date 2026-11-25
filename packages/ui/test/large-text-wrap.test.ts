@@ -12,27 +12,37 @@ const css = readFileSync(new URL('../src/styles/components.css', import.meta.url
   '',
 );
 
-/** The body of the first `@media` block whose prelude is exactly `prelude`, braces matched. */
+/** The bodies of every `@media` block whose prelude is exactly `prelude`, braces matched, joined. */
 function mediaBody(sheet: string, prelude: string): string {
-  const head = sheet.indexOf(`@media ${prelude} {`);
-  assert.ok(head >= 0, `no @media ${prelude} block`);
-  const start = sheet.indexOf('{', head) + 1;
-  let depth = 1;
-  for (let i = start; i < sheet.length; i += 1) {
-    if (sheet[i] === '{') depth += 1;
-    if (sheet[i] === '}') depth -= 1;
-    if (depth === 0) return sheet.slice(start, i);
+  const bodies: string[] = [];
+  for (let head = sheet.indexOf(`@media ${prelude} {`); head >= 0; ) {
+    const start = sheet.indexOf('{', head) + 1;
+    let depth = 1;
+    let end = start;
+    for (; end < sheet.length && depth > 0; end += 1) {
+      if (sheet[end] === '{') depth += 1;
+      if (sheet[end] === '}') depth -= 1;
+    }
+    assert.equal(depth, 0, `@media ${prelude} is never closed`);
+    bodies.push(sheet.slice(start, end - 1));
+    head = sheet.indexOf(`@media ${prelude} {`, end);
   }
-  throw new Error(`@media ${prelude} is never closed`);
+  assert.ok(bodies.length > 0, `no @media ${prelude} block`);
+  return bodies.join('\n');
 }
 
 /** `sheet` with every `@media` block removed, so only rules that apply at every size remain. */
 function withoutMedia(sheet: string): string {
   let out = sheet;
   for (let head = out.indexOf('@media'); head >= 0; head = out.indexOf('@media')) {
-    const prelude = out.slice(head + '@media'.length, out.indexOf('{', head)).trim();
-    const body = mediaBody(out, prelude);
-    out = out.slice(0, head) + out.slice(out.indexOf(body, head) + body.length + 1);
+    let depth = 0;
+    let end = out.indexOf('{', head);
+    do {
+      if (out[end] === '{') depth += 1;
+      if (out[end] === '}') depth -= 1;
+      end += 1;
+    } while (depth > 0 && end < out.length);
+    out = out.slice(0, head) + out.slice(end);
   }
   return out;
 }
@@ -77,11 +87,22 @@ describe('a chip at large text', () => {
   });
 });
 
-describe('the equity detail', () => {
-  it('wraps inside the two tracks it spans', () => {
+describe('the equity readout', () => {
+  it('wraps the detail inside the two tracks it spans', () => {
     const detail = cascaded(everySize, '.prl-equity-bar__detail');
     assert.equal(detail.get('grid-column'), '2 / -1');
     assert.equal(detail.get('white-space'), 'normal');
+  });
+
+  it('puts the value and detail under the name under 20em, so the name keeps the row', () => {
+    const narrow = mediaBody(css, '(width < 20em)');
+    assert.equal(
+      cascaded(narrow, '.prl-equity-bar__row').get('grid-template-columns'),
+      'auto minmax(0, 1fr)',
+    );
+    for (const selector of ['.prl-equity-bar__value', '.prl-equity-bar__detail']) {
+      assert.equal(cascaded(narrow, selector).get('grid-column'), '2', selector);
+    }
   });
 });
 
