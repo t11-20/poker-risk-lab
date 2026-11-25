@@ -120,7 +120,9 @@ describe('the quiz restores its place from the URL without moving focus', () => 
 
   it('opens the restored step without counting it as a move, which is what focus follows', () => {
     assert.match(restore, /setStep\(restored\);/u);
-    assert.doesNotMatch(restore, /setMoves|\.focus\(/u, 'restoring the place on load must not move focus');
+    const onLoad = restore.slice(0, restore.indexOf('const onBack'));
+    assert.ok(onLoad.length > 0, 'no Back listener after the load path');
+    assert.doesNotMatch(onLoad, /setMoves|\.focus\(/u, 'restoring the place on load must not move focus');
     assert.match(runner, /useFocusOnChange\(headingRef, moves\);/u);
     assert.doesNotMatch(runner, /useFocusOnChange\(headingRef, step\)/u);
   });
@@ -131,7 +133,11 @@ describe('the quiz restores its place from the URL without moving focus', () => 
       /const go = \(to: number\): void => \{\s*setStep\(to\);\s*setMoves\(\(count\) => count \+ 1\);\s*writeSearch\(searchWithQuizPlace\(window\.location\.search, to, total\)\);\s*\};/u,
     );
     assert.equal(runner.match(/setStep\(/gu)?.length, 3, 'setStep only in `go`, the restore and Back');
-    assert.equal(runner.match(/setMoves\(/gu)?.length, 1, 'only `go` counts a move');
+    assert.equal(
+      runner.match(/setMoves\(/gu)?.length,
+      2,
+      'only `go` and a Back off a focused question count',
+    );
     for (const press of ['go(0)', 'go(step - 1)', 'go(step + 1)']) {
       assert.ok(runner.includes(`onClick={() => ${press}}`), press);
     }
@@ -146,11 +152,12 @@ describe('the quiz restores its place from the URL without moving focus', () => 
     assert.equal(restore.match(/writeSearch\(/gu)?.length, 1, 'no synchronous write in the mount effect');
   });
 
-  it('shows the place a Back press returns to, without counting a move, and stops listening on unmount', () => {
-    assert.match(
-      restore,
-      /const onBack = \(\): void => setStep\(parseQuizPlace\(window\.location\.search, total\)\);\s*window\.addEventListener\('popstate', onBack\);/u,
-    );
+  it('shows the place a Back press returns to, and moves focus only off a question that is leaving', () => {
+    assert.match(restore, /const place = parseQuizPlace\(window\.location\.search, total\);/u);
+    assert.match(restore, /const leavingFocus = quizBox\?\.contains\(document\.activeElement\) === true;/u);
+    assert.match(restore, /if \(place === stepRef\.current\) return;/u);
+    assert.match(restore, /setStep\(place\);\s*if \(leavingFocus\) setMoves\(\(count\) => count \+ 1\);/u);
+    assert.match(restore, /window\.addEventListener\('popstate', onBack\);/u);
     assert.match(restore, /window\.removeEventListener\('popstate', onBack\);/u);
   });
 

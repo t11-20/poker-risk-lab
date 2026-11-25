@@ -503,6 +503,11 @@ function writeSearch(search: string): void {
 export function QuizRunner(props: QuizRunnerProps): ReactElement {
   const { quiz, lessonTitleId, lessonTitle, nextLesson } = props;
   const [step, setStep] = useState(0);
+  /** The step a Back press compares against, because the listener outlives the render it was made in. */
+  const stepRef = useRef(step);
+  useEffect(() => {
+    stepRef.current = step;
+  }, [step]);
   /** Counts the learner's own steps. Focus follows this, not `step`, so a restored place moves nothing. */
   const [moves, setMoves] = useState(0);
   const [answers, setAnswers] = useState<ReadonlyMap<ContentId, Answer>>(new Map());
@@ -537,8 +542,16 @@ export function QuizRunner(props: QuizRunnerProps): ReactElement {
     const tidy = window.setTimeout(() => {
       writeSearch(searchWithQuizPlace(window.location.search, restored, total));
     }, 0);
-    // Back to an entry a fragment link added shows that entry's place. Not a move, so focus stays.
-    const onBack = (): void => setStep(parseQuizPlace(window.location.search, total));
+    // Back to an entry a fragment link added shows that entry's place. Focus stays, unless it was on a
+    // control of the question that is leaving: then it is a move, and focus goes to the new question.
+    const onBack = (): void => {
+      const place = parseQuizPlace(window.location.search, total);
+      if (place === stepRef.current) return;
+      const quizBox = headingRef.current?.closest('.prl-learn-quiz');
+      const leavingFocus = quizBox?.contains(document.activeElement) === true;
+      setStep(place);
+      if (leavingFocus) setMoves((count) => count + 1);
+    };
     window.addEventListener('popstate', onBack);
     return () => {
       window.clearTimeout(tidy);
