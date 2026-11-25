@@ -801,6 +801,19 @@
   font-weight: var(--prl-weight-medium);
   letter-spacing: var(--prl-tracking-label);
   line-height: var(--prl-leading-snug);
+}
+
+/*
+ * At 200% text on a phone a nowrap chip ran up to 236px past the screen, so a chip wraps between words.
+ * Half the one-line height keeps a one-line chip a capsule; a pill radius on three lines cut the glyphs.
+ */
+.prl-chip {
+  max-inline-size: 100%;
+  border-radius: calc(var(--prl-space-7) / 2);
+  white-space: normal;
+}
+
+.prl-badge {
   white-space: nowrap;
 }
 
@@ -3188,11 +3201,12 @@ td.prl-candidates__ev,
   white-space: nowrap;
 }
 
+/** It spans the name and value tracks, so it wraps there instead of setting the readout's width. */
 .prl-equity-bar__detail {
   grid-column: 2 / -1;
   color: var(--prl-text-secondary);
   font-size: var(--prl-type-body-sm);
-  white-space: nowrap;
+  white-space: normal;
 }
 
 /** The opponents past the first, one toggle under hero's row. */
@@ -3447,11 +3461,11 @@ td.prl-candidates__ev,
   font-weight: var(--prl-weight-semibold);
 }
 
+/** A `Chip`, so it takes the chip's wrapping and its corner. */
 .prl-uncertainty__method {
   display: inline-block;
   padding-inline: var(--prl-space-4);
   border: 1px solid var(--prl-text-secondary);
-  border-radius: var(--prl-radius-pill);
   color: var(--prl-text-secondary);
   font-family: var(--prl-font-mono);
   font-size: var(--prl-type-label);
