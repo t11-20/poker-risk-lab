@@ -77,9 +77,19 @@ const THEMES = ['dark', 'light'];
 
 /**
  * With em breakpoints, 768 and 1024 at 200% take the 384px and 512px layouts with doubled text, which
- * the 100% sweep never measures. 360 at 200% still fails on held owner work; one theme keeps it short.
+ * the 100% sweep never measures. One theme keeps it short.
  */
-const LARGE_TEXT = { scale: 2, themes: ['light'], widths: [768, 1024] };
+const LARGE_TEXT = { scale: 2, themes: ['light'], widths: [768, 1024], phoneWidth: 360 };
+
+/**
+ * The routes the large-text pass also measures at `phoneWidth`, where a layout wider than the phone
+ * scrolls sideways that a 768 or 1024 window still holds. The rest still fail there on held work.
+ */
+const LARGE_TEXT_PHONE_ROUTES = ['/play', '/lab', '/lab/fl-same-cards-under-the-gun', '/lab/spots'];
+
+const LARGE_TEXT_PHONE_WHY =
+  'content wider than 360px fits a 768 or 1024 window, so only a phone at 200% text shows it; ' +
+  'the routes not listed still fail at 360px and 200% on work held for the owner';
 
 /** An error boundary returns 200 with good markup, so it counts as a failed render. */
 const ERROR_BOUNDARY_HEADINGS = [
@@ -119,11 +129,15 @@ const WORD_TOLERANCE = 2;
  */
 const MAX_PIECE = 2;
 
+/** The pieces of one broken word the page sends at most, so a longer word's count is a lower bound. */
+const PIECES_SENT = 80;
+
 const MIN_TEXT_BOXES_PER_PAGE = 15;
 
 /**
  * Coverage floors per measurement asked for, about a third of the leanest slice measured: 62 routes,
- * light, 360px, 200% text averaged 141 blocks, 12.6 clip tests, 83 frames, 26.6 pairs, 165 breaks.
+ * light, 360px, 200% text averaged 141 blocks, 12.6 clip tests, 83 frames and 26.6 pairs. Words break
+ * least at 100% text and 768px or wider: 1.05 judged a measurement there, against 10.5 in that slice.
  */
 const FLOOR_PER_MEASUREMENT = {
   textBoxes: 45,
@@ -131,8 +145,33 @@ const FLOOR_PER_MEASUREMENT = {
   clipTests: 4,
   frameTests: 25,
   pairs: 8,
-  breakTests: 50,
+  breakTests: 0.35,
 };
+
+/**
+ * The default run's own floors, since the rates above held its 100% pass to 1,600 pairs of 33,050:
+ * about a third of each pass on 2026-11-26 (clip tests from `/` and two Legends routes only).
+ */
+const DEFAULT_RUN_FLOORS = {
+  main: { textBoxes: 13000, ownBox: 13000, clipTests: 2000, frameTests: 9500, pairs: 11000, breakTests: 75 },
+  'large-text': {
+    textBoxes: 2500,
+    ownBox: 2500,
+    clipTests: 400,
+    frameTests: 1800,
+    pairs: 1100,
+    breakTests: 22,
+  },
+};
+
+const COVERAGE = [
+  ['textBoxes', 'text element(s) measured across the whole sweep'],
+  ['ownBox', 'text blocks measured against their own box'],
+  ['clipTests', 'text blocks measured against a clipping ancestor'],
+  ['frameTests', 'text blocks measured against the frame drawn around them'],
+  ['pairs', 'pairs of text blocks compared for a collision'],
+  ['breakTests', 'words on two lines or more judged for a tear letter by letter'],
+];
 
 /**
  * @typedef {object} Exemption
@@ -330,12 +369,46 @@ export function frameSides(style, backdrop) {
   return { left: fill || border('Left'), right: fill || border('Right') };
 }
 
+/**
+ * Folds one word's rectangles into the widest piece, and with `firstTop` known the widest on the first
+ * line and on any later one, so each piece meets the room of its own line. Runs in the page.
+ */
+export function foldWord(widest, text, rects, firstTop) {
+  for (const r of rects) {
+    const piece = { text, width: Math.round(r.width * 100) / 100 };
+    if (widest.word === null || piece.width > widest.word.width) widest.word = piece;
+    if (firstTop === null) continue;
+    piece.first = r.top < firstTop + r.height / 2;
+    const line = piece.first ? 'opening' : 'later';
+    if (widest[line] === null || piece.width > widest[line].width) widest[line] = piece;
+  }
+  return widest;
+}
+
+/**
+ * A computed text-indent in px, a percentage being of the block's inline size, and whether it names
+ * `hanging` or `each-line`, which indent other lines than the first. Runs in the page.
+ */
+export function parseTextIndent(raw, width) {
+  const parts = String(raw ?? '')
+    .trim()
+    .split(/\s+/u);
+  const keywords = parts.some((part) => part === 'hanging' || part === 'each-line');
+  const length = parts.filter((part) => part !== 'hanging' && part !== 'each-line').join(' ');
+  const n = Number.parseFloat(length);
+  if (!Number.isFinite(n)) return { px: 0, keywords };
+  return { px: length.endsWith('%') ? (n * width) / 100 : n, keywords };
+}
+
 // The walker measures and decides nothing. Comments inside it are part of the page script.
 
 const WALKER = String.raw`(() => {
   const EXEMPT_SELECTORS = EXEMPT_SELECTORS_ARGUMENT;
   const colorAlpha = COLOR_ALPHA_ARGUMENT;
   const frameSides = FRAME_SIDES_ARGUMENT;
+  const foldWord = FOLD_WORD_ARGUMENT;
+  const PIECES_SENT = PIECES_SENT_ARGUMENT;
+  const parseTextIndent = PARSE_TEXT_INDENT_ARGUMENT;
 
   const skipped = { ariaHidden: 0, visuallyHidden: 0, invisible: 0, offscreen: 0, inert: 0 };
 
@@ -524,14 +597,6 @@ const WALKER = String.raw`(() => {
     return ws === 'pre' || ws === 'pre-wrap' || ws === 'break-spaces';
   };
 
-  /** text-indent in px; a percentage is of the block's own inline size. */
-  const indentOf = (style, width) => {
-    const raw = style.textIndent;
-    const n = Number.parseFloat(raw);
-    if (!Number.isFinite(n)) return 0;
-    return raw.trim().endsWith('%') ? (n * width) / 100 : n;
-  };
-
   /** The top of a block's first line, which is the only line text-indent moves. */
   const firstLineTop = (block) => {
     const range = document.createRange();
@@ -589,7 +654,7 @@ const WALKER = String.raw`(() => {
       piece += ch;
     }
     pieces.push(piece);
-    return { text: word.slice(0, 40), pieces: pieces.slice(0, 80) };
+    return { text: word.slice(0, 40), pieces: pieces.slice(0, PIECES_SENT) };
   };
 
   const boxes = [];
@@ -670,16 +735,16 @@ const WALKER = String.raw`(() => {
     const block = blockOf(el);
     const blockStyle = styleOf(block);
     const { pad, content } = boxesOf(block, blockStyle);
-    const indent = indentOf(blockStyle, content.w);
-    const firstTop = indent === 0 ? null : firstLineTop(block);
+    const indent = parseTextIndent(blockStyle.textIndent, content.w);
+    // Which lines hanging or each-line indents is not measured, so no piece is placed on a line.
+    const firstTop = indent.px === 0 || indent.keywords ? null : firstLineTop(block);
     const preserved = preservesSpaces(style);
 
     // Glyph rectangles, and the widest word, from the text nodes themselves.
     const rects = [];
     const ink = [];
     const broken = [];
-    let widest = null;
-    let later = null;
+    const widest = { word: null, opening: null, later: null };
     for (const node of own) {
       textNodes += 1;
       const value = node.nodeValue;
@@ -700,14 +765,7 @@ const WALKER = String.raw`(() => {
         w.setStart(node, match.index);
         w.setEnd(node, match.index + match[0].length);
         const pieces = [...w.getClientRects()];
-        let wide = 0;
-        for (const r of pieces) wide = Math.max(wide, r.width);
-        const word = { text: match[0].slice(0, 40), width: Math.round(wide * 100) / 100 };
-        if (firstTop !== null && pieces.length > 0) {
-          word.first = pieces[0].top < firstTop + pieces[0].height / 2;
-          if (!word.first && (later === null || word.width > later.width)) later = word;
-        }
-        if (widest === null || word.width > widest.width) widest = word;
+        foldWord(widest, match[0].slice(0, 40), pieces, firstTop);
         const shown = pieces.filter((r) => r.width > 0.5 && r.height > 0.5);
         if (preserved) for (const r of shown) addInk(ink, r);
         if (lineCount(shown) > 1) broken.push(piecesOf(node, match.index, match[0]));
@@ -748,7 +806,7 @@ const WALKER = String.raw`(() => {
       rects,
       pad: round(pad),
       content: round(content),
-      word: widest,
+      word: widest.word,
       flow: flowRootOf(el),
       layer: layerOf(el),
       scrollHost: scrollHostOf(el),
@@ -759,9 +817,10 @@ const WALKER = String.raw`(() => {
       exempt,
     };
     if (preserved && ink.length > 0) measured.ink = ink.map(asRect);
-    if (indent !== 0) {
-      measured.indent = Math.round(indent * 100) / 100;
-      measured.later = later;
+    if (indent.px !== 0) {
+      measured.indent = Math.round(indent.px * 100) / 100;
+      if (indent.keywords) measured.indentKeyword = true;
+      else Object.assign(measured, { opening: widest.opening, later: widest.later });
     }
     if (silent) {
       skipped.ariaHidden += 1;
@@ -872,9 +931,18 @@ const glyphsOf = (box) => box.ink ?? box.rects;
 const BREAK_AFTER = /[-\u00AD\u2010\u2013\u2014/]$/u;
 
 /**
- * The part of a broken word torn one or two characters a line, or null, whatever allowed the breaks.
- * Where the browser splits words to fill a line (`break-all`, `hyphens: auto`) it takes three pieces.
+ * Two short pieces, or most of three or more, so one longer piece cannot clear "Br|illi|an|t" while
+ * "reachin|g" stays an emergency break. Where the browser fills lines (`break-all`, `hyphens: auto`)
+ * every middle piece is a whole line and the ends are leftovers, so one short middle piece is torn.
  */
+function isTorn(run, fills) {
+  const short = (p) => [...p].length <= MAX_PIECE;
+  if (fills) return run.slice(1, -1).some(short);
+  if (run.length === 2) return run.every(short);
+  return run.length > 2 && run.filter(short).length * 2 > run.length;
+}
+
+/** The part of a broken word torn one or two characters a line, or null, whatever allowed the breaks. */
 export function letterByLetter(pieces, fills = false) {
   let run = [];
   const runs = [];
@@ -886,17 +954,21 @@ export function letterByLetter(pieces, fills = false) {
     }
   }
   if (run.length > 0) runs.push(run);
-  const least = fills ? 3 : 2;
-  return runs.find((r) => r.length >= least && r.every((p) => [...p].length <= MAX_PIECE)) ?? null;
+  return runs.find((r) => isTorn(r, fills)) ?? null;
 }
 
-/** The widest word, or the widest beyond the first line, short of the room its own line has. */
+/** The widest piece on the first line or a later one, whichever is shortest of its own line's room. */
 function squeezeOf(box) {
+  const indent = box.indent ?? 0;
   let worst = null;
-  for (const word of [box.word, box.later]) {
+  for (const word of [box.word, box.opening, box.later]) {
     if (word === null || word === undefined) continue;
-    // A negative text-indent starts the first line that far before the content box.
-    const room = box.content.w - (word.first === true ? (box.indent ?? 0) : 0);
+    // A negative text-indent starts the first line that far before the content box. Under hanging or
+    // each-line the lines it moves are unknown, so no line gains room and every line may lose it.
+    const room =
+      box.indentKeyword === true
+        ? box.content.w - Math.max(0, indent)
+        : box.content.w - (word.first === true ? indent : 0);
     const short = word.width - room;
     if (worst === null || short > worst.short) worst = { word, room, short };
   }
@@ -939,14 +1011,16 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
     findings.push({ check, ...context, ...detail });
   };
 
-  // A scroller does not mend a stacked word, and aria-hidden text is still painted.
+  // A scroller does not mend a stacked word, and aria-hidden text is still painted. Only a word on
+  // two lines or more is counted as judged, so a dead line count or piece split examines nothing.
   for (const box of [...boxes, ...ariaHidden]) {
-    if (!Array.isArray(box.broken)) continue;
-    counts.breakTests += 1;
-    for (const word of box.broken) {
-      const torn = letterByLetter(word.pieces, box.fills === true);
-      if (torn === null) continue;
-      if (exemptFor(box, 'broken') !== null) break;
+    let reported = false;
+    for (const word of box.broken ?? []) {
+      if (!Array.isArray(word.pieces) || word.pieces.length < 2) continue;
+      counts.breakTests += 1;
+      if (reported || letterByLetter(word.pieces, box.fills === true) === null) continue;
+      reported = true;
+      if (exemptFor(box, 'broken') !== null) continue;
       add('broken', {
         sel: box.sel,
         text: box.text,
@@ -954,7 +1028,6 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
         pieces: word.pieces,
         ariaHidden: ariaHidden.includes(box),
       });
-      break;
     }
   }
 
@@ -1119,12 +1192,15 @@ export function formatFinding(finding) {
         `      the column is ${String(finding.has)}px and the word "${finding.word}" needs ` +
         `${String(finding.needs)}px — short by ${String(finding.short)}px`
       );
-    case 'broken':
+    case 'broken': {
+      const count = String(finding.pieces.length);
+      const lines = finding.pieces.length >= PIECES_SENT ? `at least ${count}` : count;
       return (
         `${where}\n      BROKEN     ${finding.sel}${quote}${finding.ariaHidden ? ' (aria-hidden)' : ''}\n` +
-        `      the word "${finding.word}" is torn over ${String(finding.pieces.length)} lines: ` +
+        `      the word "${finding.word}" is torn over ${lines} lines: ` +
         `${finding.pieces.slice(0, 12).join(' | ')}`
       );
+    }
     case 'escapes':
       return (
         `${where}\n      ESCAPES    ${finding.sel}${quote}\n` +
@@ -1184,6 +1260,8 @@ const LARGE_TEXT_CELLS = [
   `${LARGE_TEXT.widths.join(',')}px`,
 ].join(', ');
 const LARGE_TEXT_LAYOUTS = LARGE_TEXT.widths.map((w) => `${String(w / LARGE_TEXT.scale)}px`).join(' and ');
+const LARGE_TEXT_PHONE_CELLS =
+  `${String(LARGE_TEXT_PHONE_ROUTES.length)} route(s) at ` + `${String(LARGE_TEXT.phoneWidth)}px`;
 
 const HELP = `
 ${bold('pnpm run test:layout')} — the PAINTED TEXT of this app, in real Chrome
@@ -1209,7 +1287,8 @@ ${bold('pnpm run test:layout')} — the PAINTED TEXT of this app, in real Chrome
   Passes
     Unless --widths, --themes or --text-scale is given, the matrix above runs at 100%
     text and then a large-text pass runs at ${LARGE_TEXT_CELLS}. Em breakpoints give
-    those widths the ${LARGE_TEXT_LAYOUTS} layouts with doubled text. Any of the three
+    those widths the ${LARGE_TEXT_LAYOUTS} layouts with doubled text. It also measures
+    ${LARGE_TEXT_PHONE_CELLS}, the ones clean there today. Any of the three
     flags replaces both passes with exactly the matrix it names, at one text size.
 
   Reporting
@@ -1324,25 +1403,49 @@ export function fontSizesFor(scale) {
 export function sweepPasses(options) {
   const routes = options.routes ?? ROUTES;
   const asked = options.widths !== null || options.themes !== null || options.textScaleGiven === true;
+  // Only the run with none of the four scope flags is held to DEFAULT_RUN_FLOORS.
+  const whole = !asked && options.routes === null;
   const main = {
     id: 'main',
     scale: options.textScale,
     routes,
     themes: options.themes ?? THEMES,
     widths: options.widths ?? WIDTHS,
+    also: [],
     narrowed: options.routes !== null || options.widths !== null || options.themes !== null,
+    floors: whole ? DEFAULT_RUN_FLOORS.main : null,
   };
   if (asked) return [main];
-  const large = { id: 'large-text', ...LARGE_TEXT, routes, narrowed: options.routes !== null };
+  const phoneRoutes = LARGE_TEXT_PHONE_ROUTES.filter((route) => routes.includes(route));
+  const phone = { routes: phoneRoutes, themes: LARGE_TEXT.themes, widths: [LARGE_TEXT.phoneWidth] };
+  const large = {
+    id: 'large-text',
+    scale: LARGE_TEXT.scale,
+    routes,
+    themes: LARGE_TEXT.themes,
+    widths: LARGE_TEXT.widths,
+    also: phoneRoutes.length === 0 ? [] : [{ ...phone, why: LARGE_TEXT_PHONE_WHY }],
+    narrowed: options.routes !== null,
+    floors: whole ? DEFAULT_RUN_FLOORS['large-text'] : null,
+  };
   return [main, large];
 }
+
+/** A pass's own matrix, then each further block of cells it measures at the same text size. */
+export function passBlocks(pass) {
+  return [{ routes: pass.routes, themes: pass.themes, widths: pass.widths }, ...(pass.also ?? [])];
+}
+
+const blockCells = (block) => block.routes.length * block.themes.length * block.widths.length;
 
 export function sweepMatrix(options) {
   const out = [];
   for (const pass of sweepPasses(options)) {
-    for (const route of pass.routes) {
-      for (const theme of pass.themes) {
-        for (const width of pass.widths) out.push({ route, theme, width, scale: pass.scale });
+    for (const block of passBlocks(pass)) {
+      for (const route of block.routes) {
+        for (const theme of block.themes) {
+          for (const width of block.widths) out.push({ route, theme, width, scale: pass.scale });
+        }
       }
     }
   }
@@ -1354,8 +1457,19 @@ export function coverageFloor(key, wanted) {
   return Math.max(1, Math.floor(FLOOR_PER_MEASUREMENT[key] * wanted));
 }
 
+/** What each detector examined against its floor: the rate for the run's size, or `floors` if higher. */
+export function coverageChecks(tally, floors = null) {
+  const wanted = tally.measurementsWanted ?? 0;
+  return COVERAGE.map(([key, what]) => ({
+    key,
+    what,
+    seen: (key === 'textBoxes' ? tally.textBoxes : tally.detector[key]) ?? 0,
+    floor: Math.max(coverageFloor(key, wanted), floors?.[key] ?? 0),
+  }));
+}
+
 /** Every condition that makes a green result meaningless, as failure lines. */
-export function coverageFailures(tally) {
+export function coverageFailures(tally, floors = null) {
   const problems = [];
   // The matrix asked for, not what was measured, so a run that measured less cannot lower its floor.
   const wanted = tally.measurementsWanted ?? 0;
@@ -1369,28 +1483,13 @@ export function coverageFailures(tally) {
     );
   }
   const per = `for ${String(wanted)} measurement(s)`;
-  const textFloor = coverageFloor('textBoxes', wanted);
-  if (tally.textBoxes < textFloor) {
-    problems.push(
-      `only ${String(tally.textBoxes)} text element(s) were measured across the whole sweep ` +
-        `(floor ${String(textFloor)} ${per}); a sweep of nothing is not a pass`,
-    );
-  }
-  for (const [what, key] of [
-    ['text blocks measured against their own box', 'ownBox'],
-    ['text blocks measured against a clipping ancestor', 'clipTests'],
-    ['text blocks measured against the frame drawn around them', 'frameTests'],
-    ['pairs of text blocks compared for a collision', 'pairs'],
-    ['text blocks whose words were checked for a break letter by letter', 'breakTests'],
-  ]) {
-    const seen = tally.detector[key] ?? 0;
-    const floor = coverageFloor(key, wanted);
-    if (seen < floor) {
-      problems.push(
-        `only ${String(seen)} ${what} (floor ${String(floor)} ${per}) — a detector that examined ` +
-          'nothing reports what a detector that found nothing reports',
-      );
-    }
+  for (const { key, what, seen, floor } of coverageChecks(tally, floors)) {
+    if (seen >= floor) continue;
+    const why =
+      key === 'textBoxes'
+        ? 'a sweep of nothing is not a pass'
+        : 'a detector that examined nothing reports what a detector that found nothing reports';
+    problems.push(`only ${String(seen)} ${what} (floor ${String(floor)} ${per}) — ${why}`);
   }
   if (tally.routesLoaded < (tally.routesWanted ?? 0)) {
     problems.push(
@@ -1405,7 +1504,7 @@ export function passCoverageFailures(passes, tallies) {
   const failures = [];
   for (const [k, tally] of tallies.entries()) {
     const prefix = passes.length > 1 ? `${textSizeLabel(passes[k].scale)} pass: ` : '';
-    for (const problem of coverageFailures(tally)) failures.push(`${prefix}${problem}`);
+    for (const problem of coverageFailures(tally, passes[k].floors)) failures.push(`${prefix}${problem}`);
   }
   return failures;
 }
@@ -1443,10 +1542,9 @@ export function formatExemption({ rule, count, status }) {
   return `${rule.check} ${rule.selector}${size}: ${said}\n      why: ${rule.why}`;
 }
 
-class Page {
+export class Page {
   textScale = 1;
-  /** How the text size was applied: Chrome's setting, or an inline root size when Chrome refused it. */
-  textSizeMethod = 'Page.setFontSizes';
+  textSizeMethod = "Chrome's default, nothing sent";
   #socket;
   #nextId = 1;
   #replies = new DevtoolsReplies();
@@ -1507,17 +1605,23 @@ class Page {
     });
   }
 
-  /** Chrome's own text-size setting, which moves em media queries as a reader's setting does. */
+  /**
+   * Chrome's own text-size setting, which moves em media queries; an inline root size would not, so a
+   * refusal throws. Chrome starts at 16/13 and a reused profile keeps no size set this way (measured).
+   */
   async setTextScale(scale) {
-    this.textScale = scale;
-    if (this.textSizeMethod !== 'Page.setFontSizes') return;
-    await this.send('Page.setFontSizes', { fontSizes: fontSizesFor(scale) }).catch((error) => {
-      this.textSizeMethod = 'inline root font-size';
-      console.log(
-        red(`  Chrome refused Page.setFontSizes (${error.message}); falling back to an inline root`),
+    if (scale === this.textScale) return;
+    try {
+      await this.send('Page.setFontSizes', { fontSizes: fontSizesFor(scale) });
+    } catch (error) {
+      throw new Error(
+        `Chrome refused Page.setFontSizes for ${textSizeLabel(scale)} ` +
+          `(${error instanceof Error ? error.message : String(error)}), ` +
+          'so no layout at that size can be measured',
       );
-      console.log(red('  font-size, which moves no em media query and so is not the reader setting.'));
-    });
+    }
+    this.textScale = scale;
+    this.textSizeMethod = 'Page.setFontSizes';
   }
 
   async goto(url) {
@@ -1540,13 +1644,26 @@ class Page {
   }
 }
 
-async function withPage(headful, textScale, run) {
+/**
+ * The DevTools port and profile, clear of ax-tree-audit's port range unless overridden, so a second
+ * run beside the gate keeps off the profile one Chrome locks. An empty profile would be Chrome's own.
+ */
+export function chromeTarget(env, pid) {
+  const port = env.PRL_LAYOUT_CDP_PORT ?? String(9650 + (pid % 140));
+  if (!/^\d+$/u.test(port) || Number(port) < 1 || Number(port) > 65535) {
+    throw new Error(`PRL_LAYOUT_CDP_PORT takes a port from 1 to 65535, not "${port}"`);
+  }
+  const profile = env.PRL_LAYOUT_PROFILE ?? '/tmp/prl-text-layout-audit-profile';
+  if (profile.trim() === '') {
+    throw new Error('PRL_LAYOUT_PROFILE is set but empty: name a folder or unset it');
+  }
+  return { port: Number(port), profile };
+}
+
+async function withPage(headful, target, textScale, run) {
   const chrome = {
     headful,
-    // Clear of ax-tree-audit's debugging-port range. The overrides let a second run beside the gate keep
-    // off its port and its profile, which one Chrome locks.
-    port: Number(process.env.PRL_LAYOUT_CDP_PORT ?? 9650 + Math.floor(process.pid % 140)),
-    profile: process.env.PRL_LAYOUT_PROFILE ?? '/tmp/prl-text-layout-audit-profile',
+    ...target,
     flags: [
       '--hide-scrollbars',
       '--force-device-scale-factor=1',
@@ -1564,7 +1681,6 @@ async function withPage(headful, textScale, run) {
     await page.send('Emulation.setEmulatedMedia', {
       features: [{ name: 'prefers-reduced-motion', value: 'reduce' }],
     });
-    // Sent at 1 too, so a size left over in a reused profile is reset rather than measured.
     await page.setTextScale(textScale);
     try {
       await run(page);
@@ -1577,7 +1693,10 @@ async function withPage(headful, textScale, run) {
 const walkerSource = () =>
   WALKER.replace('EXEMPT_SELECTORS_ARGUMENT', JSON.stringify(EXEMPTIONS.map((rule) => rule.selector)))
     .replace('COLOR_ALPHA_ARGUMENT', () => String(colorAlpha))
-    .replace('FRAME_SIDES_ARGUMENT', () => String(frameSides));
+    .replace('FRAME_SIDES_ARGUMENT', () => String(frameSides))
+    .replace('FOLD_WORD_ARGUMENT', () => String(foldWord))
+    .replace('PIECES_SENT_ARGUMENT', String(PIECES_SENT))
+    .replace('PARSE_TEXT_INDENT_ARGUMENT', () => String(parseTextIndent));
 
 let dumpCount = 0;
 
@@ -1585,9 +1704,6 @@ async function measure(page, route, theme, width) {
   await page.setWidth(width);
   // On the root element, where `tokens.css` keys its light scope.
   await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`);
-  if (page.textSizeMethod !== 'Page.setFontSizes') {
-    await page.evaluate(`document.documentElement.style.fontSize = '${String(page.textScale * 100)}%'`);
-  }
   await delay(180);
   const measurement = await page.evaluate(walkerSource());
   // `PRL_LAYOUT_DUMP=<dir>` writes every rectangle, for tuning thresholds.
@@ -1692,9 +1808,9 @@ function newTally(pass) {
       pairs: 0,
       breakTests: 0,
     },
-    measurementsWanted: pass.routes.length * pass.themes.length * pass.widths.length,
+    measurementsWanted: passBlocks(pass).reduce((sum, block) => sum + blockCells(block), 0),
     routesLoaded: 0,
-    routesWanted: 0,
+    routesWanted: passBlocks(pass).reduce((sum, block) => sum + block.routes.length * block.themes.length, 0),
     textSize: { scale: pass.scale, method: 'not applied' },
   };
 }
@@ -1703,17 +1819,30 @@ async function sweepPass(page, baseUrl, pass, tally, findings, failures, suppres
   const label = textSizeLabel(pass.scale);
   await page.setTextScale(pass.scale);
   tally.textSize.method = page.textSizeMethod;
-  const size = [
-    `${String(pass.routes.length)} route(s)`,
-    `${String(pass.themes.length)} theme(s)`,
-    `${String(pass.widths.length)} width(s)`,
-  ].join(' x ');
-  console.log(bold(`\nSweep at ${label} — ${size} = ${String(tally.measurementsWanted)} measurements`));
-  tally.routesWanted = pass.routes.length * pass.themes.length;
+  const size = (block) =>
+    [
+      `${String(block.routes.length)} route(s)`,
+      `${String(block.themes.length)} theme(s)`,
+      `${String(block.widths.length)} width(s)`,
+    ].join(' x ');
+  const sizes = passBlocks(pass).map(size).join(' + ');
+  console.log(bold(`\nSweep at ${label} — ${sizes} = ${String(tally.measurementsWanted)} measurements`));
+  for (const block of passBlocks(pass)) {
+    if (block.why !== undefined) {
+      console.log(
+        `  then at ${block.widths.map((w) => `${String(w)}px`).join(', ')}, ${block.themes.join(', ')}`,
+      );
+      console.log(dim(`  on ${block.routes.join(', ')}`));
+      console.log(dim(`  because ${block.why}`));
+    }
+    await sweepBlock(page, baseUrl, label, block, tally, findings, failures, suppressed);
+  }
+}
 
-  for (const route of pass.routes) {
+async function sweepBlock(page, baseUrl, label, block, tally, findings, failures, suppressed) {
+  for (const route of block.routes) {
     const perRoute = [];
-    for (const theme of pass.themes) {
+    for (const theme of block.themes) {
       try {
         await page.goto(`${baseUrl}${route}`);
       } catch (error) {
@@ -1722,7 +1851,7 @@ async function sweepPass(page, baseUrl, pass, tally, findings, failures, suppres
         continue;
       }
       let loaded = true;
-      for (const width of pass.widths) {
+      for (const width of block.widths) {
         const { measurement, context } = await measure(page, route, theme, width);
         const where = `${route} (${theme}, ${String(width)}px, ${label})`;
         const heading = measurement.heading;
@@ -1800,8 +1929,10 @@ function printControl(result, failures) {
 
 async function main() {
   let options;
+  let target;
   try {
     options = parseArgs(process.argv.slice(2));
+    target = chromeTarget(process.env, process.pid);
   } catch (err) {
     console.error(red(`text-layout-audit — ${err.message}`));
     process.exit(1);
@@ -1850,7 +1981,7 @@ async function main() {
       }
     }
 
-    await withPage(options.headful, passes[0].scale, async (page) => {
+    await withPage(options.headful, target, passes[0].scale, async (page) => {
       if (options.selfTest) {
         console.log(bold('\nNegative controls — a defect of each shape, put back into a real page'));
         for (const result of await runControls(page, options.baseUrl, passes[0].scale)) {
@@ -1885,7 +2016,7 @@ async function main() {
   }
 
   console.log(bold('\nSummary'));
-  for (const tally of options.controlsOnly ? [] : tallies) {
+  for (const [k, tally] of options.controlsOnly ? [] : tallies.entries()) {
     console.log(
       `  text size           ${textSizeLabel(tally.textSize.scale)} ` +
         `(${String(fontSizesFor(tally.textSize.scale).standard)}px), ` +
@@ -1900,7 +2031,7 @@ async function main() {
         `${String(tally.detector.clipTests)} against a clipping ancestor, ` +
         `${String(tally.detector.frameTests)} against a drawn frame, ` +
         `${String(tally.detector.pairs)} pair(s) for a collision, ` +
-        `${String(tally.detector.breakTests)} for a word broken letter by letter`,
+        `${String(tally.detector.breakTests)} word(s) on two lines or more for a tear`,
     );
     console.log(
       dim(
@@ -1916,6 +2047,11 @@ async function main() {
       ),
     );
     console.log(dim(`  aria-hidden, judged only for a broken word: ${String(tally.skipped.ariaHidden)}`));
+    const whose = passes[k].floors === null ? 'scaled to the measurements asked for' : "the default run's";
+    const floors = coverageChecks(tally, passes[k].floors).map(
+      ({ key, seen, floor }) => `${key} ${String(seen)} ${seen >= floor ? '>=' : '<'} ${String(floor)}`,
+    );
+    console.log(`  coverage floors     ${whose}: ${floors.join(', ')}`);
   }
   console.log(
     `  negative controls   ${String(controlResults.filter((r) => r.caught).length)}/${String(controlResults.length)} caught`,
@@ -2020,6 +2156,6 @@ async function main() {
   process.exit(exitCode);
 }
 
-export { CONTROLS, EXEMPTIONS, LARGE_TEXT, ROUTES, THEMES, WIDTHS };
+export { CONTROLS, EXEMPTIONS, LARGE_TEXT, LARGE_TEXT_PHONE_ROUTES, ROUTES, THEMES, WIDTHS };
 
 if (import.meta.main) await main();
