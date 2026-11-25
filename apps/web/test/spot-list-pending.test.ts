@@ -37,6 +37,7 @@ describe('the saved-spot list before it is read', () => {
   });
 
   it('stacks the two sentences in one cell and paints only the visible one', () => {
+    assert.match(css, /\.prl-spot-list__pending \{[^}]*\bdisplay: grid;[^}]*\}/u);
     assert.match(css, /\.prl-spot-list__pending > \* \{\s*grid-area: 1 \/ 1;\s*\}/u);
     assert.match(css, /\.prl-spot-list__pending > \[aria-hidden="true"\] \{\s*visibility: hidden;\s*\}/u);
   });

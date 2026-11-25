@@ -165,7 +165,12 @@
   font-weight: var(--prl-weight-regular);
 }
 
-/* One cell, so the box takes the height of the hidden empty-state sentence it will be replaced by. */
+/* One cell, so the box takes the height of the hidden empty-state sentence it will be replaced by. Its own
+   grid, so the stacking does not rest on `.prl-empty` staying one. */
+.prl-spot-list__pending {
+  display: grid;
+}
+
 .prl-spot-list__pending > * {
   grid-area: 1 / 1;
 }
