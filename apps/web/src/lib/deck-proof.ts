@@ -8,7 +8,7 @@
  * `other-hand` and `mismatch` stay distinct. The first proves nothing either way, and the second is
  * the one result that should never happen.
  * A module so `node --test` drives it against the real engine. This is the one deliberate use of
- * `@prl/poker-engine` in the browser, a pure function over data already published.
+ * the engine's hashing in the browser, a pure function over data already published.
  */
 
 import type { DeckReveal, RevealVerification } from '@prl/poker-engine';

@@ -26,7 +26,8 @@ import {
   orderFrom,
 } from './positions.ts';
 import { awardPots, buildPotLayers, computeShowdowns } from './pots.ts';
-import { commitToDeck, commitToKnownDeck, type RandomSource } from './rng.ts';
+import type { RandomSource } from './rng.ts';
+import { commitToDeck, commitToKnownDeck } from './secure-random.ts';
 import type {
   Action,
   BettingStreet,

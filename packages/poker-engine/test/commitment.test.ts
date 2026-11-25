@@ -11,7 +11,8 @@ import {
   SALT_BYTES,
   verifyDeckReveal,
 } from '../src/commitment.ts';
-import { commitToDeck, commitToKnownDeck, createSecureRandom, shuffledDeck } from '../src/rng.ts';
+import { shuffledDeck } from '../src/rng.ts';
+import { commitToDeck, commitToKnownDeck, createSecureRandom } from '../src/secure-random.ts';
 
 const random = createSecureRandom();
 

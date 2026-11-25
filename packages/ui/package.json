@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "sideEffects": [
+    "*.css"
+  ],
   "description": "Shared React components and native CSS for the Poker Risk Lab web app. Consumed as source and transpiled by Next.js.",
   "exports": {
     ".": "./src/index.ts",
