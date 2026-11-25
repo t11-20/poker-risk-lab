@@ -66,7 +66,10 @@ glyphs of two independent in-flow elements overlapping, glyphs painted outside t
 glyphs cut off by a non-scrolling ancestor, glyphs painted across the border or fill of the nearest
 box that draws one, a block narrower than its own longest word, a word torn one or two characters
 a line (each piece fits its column, so the previous shape cannot see it), a page that scrolls
-sideways, and a root font size that ignores the reader's text size (`--text-scale`).
+sideways, and a root font size that ignores the reader's text size (`--text-scale`). With no
+flags it then measures every route again at 200% text, light, at 768 and 1024: with em breakpoints
+those are the 384px and 512px layouts with doubled text, and 360 at 200% still fails on held owner
+work. Its one exemption, the Legends radar labels clipped above 100% (OWNER-1), is printed every run.
 
 It exists because `.prl-play .prl-coach__section .prl-stat__pair` shipped as
 `grid-template-columns: minmax(0, 1fr) auto`. A bare `auto` track is floored at max-content, so a
