@@ -114,6 +114,22 @@ describe('client bundle audit', () => {
     assert.equal(build.workers.length, 3);
   });
 
+  it('NEGATIVE CONTROL — counts a spawn site whose chunk list is not written inline', () => {
+    const build = cleanBuild();
+    // The list sits in a variable, so the inline pattern cannot read it, while another site parses.
+    build.chunks.set(
+      'static/chunks/third.js',
+      'var t=["static/chunks/proof.js"];e.v(e.r(1).f("static/chunks/turbopack-worker-a.js",t))',
+    );
+    build.workers = collectWorkers(build.chunks);
+    assert.ok(
+      audit(build).problems.includes(
+        'static/chunks/third.js spawns 1 worker(s) but this gate read 0 chunk list(s) there',
+      ),
+      'a spawn site the parser cannot read passed unchecked',
+    );
+  });
+
   it('NEGATIVE CONTROL — names a listed chunk that was never read, such as one in a nested directory', () => {
     const build = cleanBuild();
     build.routes.get('/lab').push('static/chunks/nested/lazy.js');

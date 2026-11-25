@@ -37,6 +37,9 @@ const FIRST_LOAD_ENTRY = /\/(?:layout|page|template|loading)$/u;
 
 const WORKER_CHUNK_LIST = /"(static\/chunks\/turbopack-worker-[^"]+\.js)",\[([^\]]*)\]/gu;
 
+/** How a chunk names the worker entry, parsed or not, so a spawn whose list is not inline is still counted. */
+const WORKER_REFERENCE = '"static/chunks/turbopack-worker-';
+
 function manifestFiles(dir) {
   const found = [];
   const walk = (path) => {
@@ -131,6 +134,14 @@ export function audit({ expectedRoutes, routes, chunks, workers }) {
   for (const name of chunks.keys()) {
     if (name.startsWith('static/chunks/turbopack-worker-') && !workers.some((w) => w.worker === name)) {
       problems.push(`${name} is a worker whose chunk list this gate could not find, so it is unchecked`);
+    }
+  }
+  // All workers share one entry file, so the check above passes once any site parses. Count each site.
+  for (const [name, text] of chunks) {
+    const named = text.split(WORKER_REFERENCE).length - 1;
+    const parsed = workers.filter((worker) => worker.spawnedBy === name).length;
+    if (named > parsed) {
+      problems.push(`${name} spawns ${named} worker(s) but this gate read ${parsed} chunk list(s) there`);
     }
   }
   const lists = [
