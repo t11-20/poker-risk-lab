@@ -804,7 +804,7 @@
 }
 
 /*
- * At 200% text on a phone a nowrap chip ran up to 236px past the screen, so a chip wraps between words.
+ * At 360px with 200% text nowrap chips set page widths (the hand-review demo 564px, 448px once they wrap).
  * Half the one-line height keeps a one-line chip a capsule; a pill radius on three lines cut the glyphs.
  */
 .prl-chip {
