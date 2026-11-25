@@ -329,6 +329,16 @@
   font-size: var(--prl-type-body-sm);
 }
 
+/**
+ * The sigil stacks above the names below 20em, where beside it they get under 10rem. At 360px with 200%
+ * text that was 96px in a card and 130px on a profile, and every page scrolled sideways.
+ */
+@media (width < 20em) {
+  .prl-legend-identity {
+    flex-direction: column;
+  }
+}
+
 /* Card grid. `auto-fit` with a floor, and `min-width: 0` on the cell so a nowrap figure cannot
    push the page sideways. */
 
@@ -718,6 +728,16 @@
   .prl-legend-difficulty__description,
   .prl-legend-difficulty__coach {
     grid-column: 1 / -1;
+  }
+}
+
+/**
+ * Below 15rem the radio takes a row above the name. Beside it at 360px with 200% text the name had
+ * 153px, and "Educational" needs 176px.
+ */
+@container prl-legend-difficulty (width < 15rem) {
+  .prl-legend-difficulty__option {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
