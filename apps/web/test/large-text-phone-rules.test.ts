@@ -79,7 +79,7 @@ describe('the phone query', () => {
 
 describe('Learn at 360px with 200% text', () => {
   const learn = style('learn.css');
-  const phone = blocks(learn, PHONE_AT_200).join('\n');
+  const phone = (): string => blocks(learn, PHONE_AT_200).join('\n');
 
   // A display-3 heading floored the sheet's implicit track, so the sheet ran past the page.
   it('gives the lesson sheet one track that can shrink', () => {
@@ -90,17 +90,17 @@ describe('Learn at 360px with 200% text', () => {
 
   // The number's column left a card's text 141-172px.
   it('stacks a lesson card’s number above its text', () => {
-    assert.ok(declares(phone, '.prl-learn-entry', 'grid-template-columns', 'minmax(0, 1fr)'));
+    assert.ok(declares(phone(), '.prl-learn-entry', 'grid-template-columns', 'minmax(0, 1fr)'));
   });
 
   // "Combos (combinatorics)" was wider than the column beside the "See also" label.
   it('stacks a glossary entry’s See also label above its links', () => {
-    assert.ok(declares(phone, '.prl-learn-glossary__related', 'grid-template-columns', 'minmax(0, 1fr)'));
+    assert.ok(declares(phone(), '.prl-learn-glossary__related', 'grid-template-columns', 'minmax(0, 1fr)'));
   });
 
   // Beside the radio an answer had 110px, so "immediately" was wider than its column.
   it('puts a quiz answer’s radio above its text', () => {
-    assert.ok(declares(phone, '.prl-learn-quiz__option .prl-choice', 'flex-direction', 'column'));
+    assert.ok(declares(phone(), '.prl-learn-quiz__option .prl-choice', 'flex-direction', 'column'));
   });
 
   it('hyphenates a lesson heading, a quiz question and a glossary term', () => {
@@ -109,7 +109,7 @@ describe('Learn at 360px with 200% text', () => {
       '.prl-learn-quiz__heading',
       '.prl-learn-glossary__term',
     ])
-      assert.ok(declares(phone, selector, 'hyphens', 'auto'), selector);
+      assert.ok(declares(phone(), selector, 'hyphens', 'auto'), selector);
   });
 
   // Unconditional hyphens would re-break line ends at the default size on every lesson.
@@ -141,8 +141,13 @@ describe('/checks at 360px with 200% text', () => {
     assert.ok(declares(unconditional(checks), '.prl-checks__row', 'grid-template-columns', 'minmax(0, 1fr)'));
   });
 
-  it('keeps the wide layout’s subgrid, which comes later and wins', () => {
-    const wide = blocks(checks, '@media (min-width: 56.25em)').join('\n');
-    assert.ok(declares(wide, '.prl-checks__row', 'grid-template-columns', 'subgrid'));
+  // Same specificity, so the wide layout's subgrid wins only by coming later.
+  it('declares the one track before the wide layout’s subgrid', () => {
+    const one = checks.search(/\.prl-checks__row \{[^}]*grid-template-columns: minmax\(0, 1fr\);/u);
+    const wide = checks.indexOf('@media (min-width: 56.25em)');
+    assert.ok(one >= 0 && wide >= 0, 'both rules are present');
+    assert.ok(one < wide, 'the one-track rule comes first');
+    const body = blocks(checks, '@media (min-width: 56.25em)').join('\n');
+    assert.ok(declares(body, '.prl-checks__row', 'grid-template-columns', 'subgrid'));
   });
 });
