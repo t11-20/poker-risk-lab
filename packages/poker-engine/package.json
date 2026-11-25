@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "sideEffects": false,
   "description": "Pure, deterministic No-Limit Hold'em rules engine: cards, CSPRNG shuffle, deck commitment, 7-card evaluation, betting state machine, side pots. Zero runtime dependencies.",
   "exports": {
     ".": {

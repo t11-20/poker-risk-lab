@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "sideEffects": false,
   "description": "Pure poker probability and decision math: outs, exact equity enumeration, bounded Monte Carlo with confidence intervals, pot odds, EV, fold equity, SPR, variance, risk of ruin.",
   "exports": {
     ".": {

@@ -199,14 +199,14 @@ describe('the detectors can actually fail', () => {
   });
 
   it('drops a re-export of the generator but still catches a call to it', () => {
-    const barrel = "export { createDeterministicRandomForTests, createSecureRandom } from './rng.ts';";
+    const barrel = "export { createDeterministicRandomForTests, createSamplingRandom } from './rng.ts';";
     assert.ok(
       !stripReExports(barrel).includes('createDeterministicRandomForTests'),
       'a plain re-export names the symbol without reaching it, and must not be an offence',
     );
     assert.ok(!stripReExports("export * from './rng.ts';").includes('rng.ts'));
     const smuggled =
-      "export { createSecureRandom } from './rng.ts';\nconst r = createDeterministicRandomForTests(1);";
+      "export { createSecureRandom } from './secure-random.ts';\nconst r = createDeterministicRandomForTests(1);";
     assert.ok(
       stripReExports(smuggled).includes('createDeterministicRandomForTests'),
       'a call in a barrel must still be caught',

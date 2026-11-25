@@ -6,7 +6,7 @@
  * ADR 0006 says no lesson stores a computed number. The figure comes from `@prl/poker-math` every time,
  * so it cannot go stale against the engine. A cheap calculation runs during render, so it is in the
  * server HTML. A preflop equity spot (about 1.7 million run-outs, ~260ms) shows sized skeletons and
- * computes in a `setTimeout(…, 0)`, not `requestAnimationFrame`, which never fires in a background tab.
+ * computes on a worker (`deferred-calculation.ts`).
  *
  * Only the derivation, the EV term table and the card-by-card outs notes may sit behind a `<details>`
  * (§6.2). Everything else is always shown.
@@ -32,6 +32,12 @@ import {
   pluralise,
 } from '@prl/ui';
 import { type ReactElement, useEffect, useMemo, useState } from 'react';
+import {
+  type CalculationThread,
+  type ComputedOn,
+  computeDeferred,
+  type DeferredHost,
+} from '@/lib/deferred-calculation.ts';
 import { type Definition, shownAbove } from '@/lib/definition-repeats.ts';
 import {
   type CalculationDetail,
@@ -79,29 +85,39 @@ export interface LiveCalculationProps {
   readonly earlier?: readonly LiveCalculationSpec[];
 }
 
+const BROWSER_HOST: DeferredHost = {
+  startThread: (): CalculationThread | null =>
+    typeof Worker === 'undefined'
+      ? null
+      : new Worker(new URL('../lib/calculation-worker.ts', import.meta.url), { type: 'module' }),
+  computeHere: computeCalculation,
+  later: (run) => {
+    const task = window.setTimeout(run, 0);
+    return () => window.clearTimeout(task);
+  },
+};
+
 /** Exported for `QuizRunner`, so a numeric question's target is computed by the same deferred path. */
 export function useCalculationOutcome(calculation: LiveCalculationSpec): {
   readonly outcome: CalculationOutcome | null;
   readonly pending: boolean;
+  /** Set only for a deferred figure once it lands. */
+  readonly computedOn: ComputedOn | null;
 } {
   const deferred = useMemo(() => isDeferred(calculation), [calculation]);
   const inline = useMemo(() => (deferred ? null : computeCalculation(calculation)), [calculation, deferred]);
-  const [computed, setComputed] = useState<CalculationOutcome | null>(null);
+  const [computed, setComputed] = useState<{
+    readonly outcome: CalculationOutcome;
+    readonly on: ComputedOn;
+  } | null>(null);
 
   useEffect(() => {
     if (!deferred) return undefined;
-    let cancelled = false;
-    const task = window.setTimeout(() => {
-      if (!cancelled) setComputed(computeCalculation(calculation));
-    }, 0);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(task);
-    };
+    return computeDeferred(calculation, BROWSER_HOST, (outcome, on) => setComputed({ outcome, on }));
   }, [calculation, deferred]);
 
-  if (!deferred) return { outcome: inline, pending: false };
-  return { outcome: computed, pending: computed === null };
+  if (!deferred) return { outcome: inline, pending: false, computedOn: null };
+  return { outcome: computed?.outcome ?? null, pending: computed === null, computedOn: computed?.on ?? null };
 }
 
 /**
@@ -308,7 +324,7 @@ function CalculationSkeleton(): ReactElement {
 
 export function LiveCalculation(props: LiveCalculationProps): ReactElement {
   const { calculation, caption, index, headingLevel = 3, earlier = NO_EARLIER } = props;
-  const { outcome, pending } = useCalculationOutcome(calculation);
+  const { outcome, pending, computedOn } = useCalculationOutcome(calculation);
 
   const body = (): ReactElement => {
     if (pending || outcome === null) return <CalculationSkeleton />;
@@ -334,7 +350,8 @@ export function LiveCalculation(props: LiveCalculationProps): ReactElement {
 
     return (
       <>
-        <div className="prl-metric-row">
+        {/* `data-computed` lets test:keyboard tell a figure the worker computed from the fallback's. */}
+        <div className="prl-metric-row" data-computed={computedOn ?? undefined}>
           {lead.map((figure) => (
             <FigureMetric figure={figure} key={figure.key} size="lg" />
           ))}

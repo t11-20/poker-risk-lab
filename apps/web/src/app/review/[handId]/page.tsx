@@ -1,8 +1,8 @@
 /**
- * One hand, replayed. The reconstruction runs here, not in the client, so the only engine code in the
- * browser is what `CommitmentVerifier` needs (`src/lib/hand-replay.ts`). "No such hand" and "could not
- * find out" are different screens, and `missing` comes only from the API's own 404. `unavailable` renders a
- * 200, because a server component can set 401 only through the experimental `unauthorized()`.
+ * One hand, replayed. The reconstruction runs here, not in the client (`src/lib/hand-replay.ts`), so
+ * the browser receives the replay as data. "No such hand" and "could not find out" are different
+ * screens, and `missing` comes only from the API's own 404. `unavailable` renders a 200, because a
+ * server component can set 401 only through the experimental `unauthorized()`.
  */
 
 import type { HandReviewResponse } from '@prl/contracts';
