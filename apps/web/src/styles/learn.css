@@ -1372,9 +1372,9 @@
     flex-direction: column;
   }
 
-  /* Chrome does not hyphenate a capitalised word, so a title such as "Tournaments:" still overflows. */
+  /* Not a quiz question, whose 240px column broke nearly every line. Chrome never hyphenates a capital,
+     so the lesson h1 "Tournaments:" is left too. */
   .prl-learn-lesson__heading,
-  .prl-learn-quiz__heading,
   .prl-learn-glossary__term {
     hyphens: auto;
   }

@@ -103,13 +103,15 @@ describe('Learn at 360px with 200% text', () => {
     assert.ok(declares(phone(), '.prl-learn-quiz__option .prl-choice', 'flex-direction', 'column'));
   });
 
-  it('hyphenates a lesson heading, a quiz question and a glossary term', () => {
-    for (const selector of [
-      '.prl-learn-lesson__heading',
-      '.prl-learn-quiz__heading',
-      '.prl-learn-glossary__term',
-    ])
+  // "consequences" and "(combinatorics)" were wider than their columns.
+  it('hyphenates a lesson heading and a glossary term', () => {
+    for (const selector of ['.prl-learn-lesson__heading', '.prl-learn-glossary__term'])
       assert.ok(declares(phone(), selector, 'hyphens', 'auto'), selector);
+  });
+
+  // In a 240px column it broke "be-hind", "op-ponent" and "eq-uity" in one question.
+  it('does not hyphenate a quiz question', () => {
+    assert.ok(!rulesFor(learn, '.prl-learn-quiz__heading').some((body) => /\bhyphens:/u.test(body)));
   });
 
   // Unconditional hyphens would re-break line ends at the default size on every lesson.
