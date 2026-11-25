@@ -115,9 +115,8 @@ const MAX_PIECE = 2;
 const MIN_TEXT_BOXES_PER_PAGE = 15;
 
 /**
- * Coverage floors per measurement asked for, so a narrow run is held to its own size. Each is about a
- * third of the leanest slice measured: 62 routes, light, 360px, 200% text averaged 141 text blocks,
- * 12.6 clip tests, 83 frame tests, 26.6 pairs and 165 break tests a page. A floor is never below one.
+ * Coverage floors per measurement asked for, about a third of the leanest slice measured: 62 routes,
+ * light, 360px, 200% text averaged 141 blocks, 12.6 clip tests, 83 frames, 26.6 pairs, 165 breaks.
  */
 const FLOOR_PER_MEASUREMENT = {
   textBoxes: 45,
@@ -831,10 +830,8 @@ const glyphsOf = (box) => box.ink ?? box.rects;
 const BREAK_AFTER = /[-\u00AD\u2010\u2013\u2014/]$/u;
 
 /**
- * The part of a broken word that was torn one or two characters a line, or null. A token wrapped
- * across full lines is left alone however its breaks were allowed; letters stacked never are.
- * Where the browser itself splits words to fill a line (`break-all`, `hyphens: auto`), a short word
- * split at a line end is two short pieces, so there it takes three.
+ * The part of a broken word torn one or two characters a line, or null, whatever allowed the breaks.
+ * Where the browser splits words to fill a line (`break-all`, `hyphens: auto`) it takes three pieces.
  */
 export function letterByLetter(pieces, fills = false) {
   let run = [];
