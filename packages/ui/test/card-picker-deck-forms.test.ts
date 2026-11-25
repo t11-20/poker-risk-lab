@@ -138,7 +138,13 @@ describe('every form keeps 44px targets', () => {
     assert.equal(spaced[0]?.[1], `${threshold(DECK_FOLD)}px <= width < ${threshold(DECK_RANKS)}px`);
   });
 
-  it('the folded deck hugs its cards rather than stretching seven cells across the panel', () => {
-    assert.match(css, /grid-template-columns: repeat\(var\(--prl-picker-cols\), max-content\);/u);
+  it('the folded deck hugs its cards, and keeps 44px cells inside the panel at any root font size', () => {
+    assert.match(
+      css,
+      /grid-template-columns: repeat\(var\(--prl-picker-cols\), minmax\(var\(--prl-target-min\), max-content\)\);/u,
+    );
+    const capped =
+      /@container prl-picker \(min-width: \d+px\) \{[^@]*?--prl-picker-cols: 7;[^@]*?\.prl-picker__card \.prl-card \{\s*--prl-card-w: min\(\s*var\(--prl-space-10\),\s*calc\(\(100cqi - 6 \* var\(--prl-space-1\)\) \/ 7/u;
+    assert.match(css, capped, 'the folded face is not capped by the picker width');
   });
 });

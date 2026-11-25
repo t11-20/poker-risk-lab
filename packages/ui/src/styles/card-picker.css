@@ -188,15 +188,26 @@
   display: none;
 }
 
-/** Tracks hug the 46px card, so the deck stays a compact block rather than seven stretched cells. */
+/**
+ * Tracks hug the 46px card, so the deck stays a compact block rather than seven stretched cells. The
+ * face is capped and the track floored because the card is in rem and this threshold is not: at a 20px
+ * root the deck overflowed at 480px, and at 13px the cells were 38px.
+ */
 @container prl-picker (min-width: 334px) {
   .prl-picker__deck {
     --prl-picker-cols: 7;
 
-    grid-template-columns: repeat(var(--prl-picker-cols), max-content);
+    grid-template-columns: repeat(var(--prl-picker-cols), minmax(var(--prl-target-min), max-content));
     grid-template-rows: none;
     grid-auto-flow: row;
     justify-content: start;
+  }
+
+  .prl-picker__card .prl-card {
+    --prl-card-w: min(
+      var(--prl-space-10),
+      calc((100cqi - 6 * var(--prl-space-1)) / 7 - 2 * var(--prl-space-1) - 2px)
+    );
   }
 
   /* Each suit starts a line, so a suit's second line of six leaves the seventh cell empty. */
