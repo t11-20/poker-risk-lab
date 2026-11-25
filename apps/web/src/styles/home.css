@@ -141,8 +141,10 @@
   font-size: var(--prl-type-body-sm);
 }
 
+/* Wraps, because the panel clips: five cards are 544px at 200% text. */
 .prl-spot__cards {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--prl-space-3);
   justify-content: center;
 }
@@ -173,6 +175,13 @@
   align-items: end;
   gap: var(--prl-space-6);
   margin: 0;
+}
+
+/* Below 20em the two figures stack: side by side at 360/200% they broke "25.0%" a digit a line. */
+@media (width < 20em) {
+  .prl-spot__figures {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .prl-spot__figure dt {
