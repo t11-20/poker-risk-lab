@@ -272,6 +272,21 @@ describe('the radar stylesheet takes label room from the plot', () => {
     }
   });
 
+  it('keeps a shrink computed wrong to a plot of at least half and a slide out of at most 0.5', () => {
+    const [factor = ''] = argumentsOf(plot.get('transform') ?? '', 'scale');
+    const [x = ''] = argumentsOf(label.get('transform') ?? '', 'translate');
+    for (const wrong of ['0', '-0.4', '0.9', '2', '-3']) {
+      for (const size of LABEL_SIZES) {
+        const vars = scope(size, RADAR_MARKER_WIDTH_EM, 0);
+        vars.set('--prl-radar-plot-shrink', wrong);
+        vars.set('--prl-radar-dx', '1');
+        const scale = evaluate(factor, vars);
+        assert.ok(scale >= 0.5 && scale <= 1, `shrink ${wrong} at ${size}px: scale ${scale}`);
+        assert.ok(evaluate(x, vars) <= 0.5, `shrink ${wrong} at ${size}px: slides out ${evaluate(x, vars)}`);
+      }
+    }
+  });
+
   it("keeps the label at the reader's text size: no px size, no clamp", () => {
     assert.equal(label.get('font-size'), 'var(--prl-type-label-sm)');
     for (const value of [...svg.values(), ...plot.values(), ...label.values()]) {

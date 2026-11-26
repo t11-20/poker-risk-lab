@@ -1454,10 +1454,10 @@ p.prl-seat__status {
   block-size: 100%;
 }
 
-/** About the centre, so a smaller plot keeps its place among the labels. */
+/** About the centre, so a smaller plot keeps its place among the labels. Never below the 44-unit floor. */
 .prl-radar__plot {
   transform-origin: 120px 120px;
-  transform: scale(calc(1 - max(0, var(--prl-radar-plot-shrink))));
+  transform: scale(calc(1 - min(0.5, max(0, var(--prl-radar-plot-shrink)))));
 }
 
 /** Rings are decoration (`--prl-line`). Spokes are axes, so `--prl-line-strong`. */
@@ -1488,10 +1488,14 @@ p.prl-seat__status {
   font-size: var(--prl-type-body-sm);
 }
 
-/** The slide is radius + clearance - 102, taken from the shrink so it is 0 wherever the shrink is -1. */
+/**
+ * The slide is radius + clearance - 102, taken from the shrink so it is 0 wherever the shrink is -1.
+ * Out it is at most 0.43 up to Chrome's largest text, so 0.5 bounds a shrink computed wrong as 0.
+ */
 .prl-radar__label {
-  --prl-radar-label-shift: calc(
-    (var(--prl-radar-label-clearance) - 14px - 88px * max(0, var(--prl-radar-plot-shrink))) *
+  --prl-radar-label-shift: min(
+    0.5px,
+    (var(--prl-radar-label-clearance) - 14px - 88px * min(0.5, max(0, var(--prl-radar-plot-shrink)))) *
     min(1, max(0, 2 * var(--prl-radar-plot-shrink) + 1))
   );
   fill: var(--prl-text-muted);
