@@ -1409,9 +1409,25 @@ p.prl-seat__status {
 }
 
 /**
- * Without explicit size an `<svg>` sizes to its viewBox. The label is in rem and the plot in viewBox
- * units, so larger text takes its room from the plot: `radarLabelRoom()` in radar.ts, held equal by a test.
- * Each term clamps to a literal at the default label size, so default text draws the chart unchanged.
+ * Registered, so `var()` hands `atan2()` a computed px length: Safari before 18 can mis-resolve the rem
+ * inside an unregistered one (WebKit 248513). 176px is no answer: it computes the shrink's own -1.
+ */
+@property --prl-radar-plot-radius {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 176px;
+}
+
+/** -1 is no answer, so a browser that cannot compute the shrink draws neither it nor the label slide. */
+@property --prl-radar-plot-shrink {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: -1;
+}
+
+/**
+ * Without explicit size an `<svg>` sizes to its viewBox. Labels are in rem and the plot in viewBox units,
+ * so larger text takes the labels' room from the plot, as `radarLabelRoom()` in radar.ts does.
  */
 .prl-radar__svg {
   --prl-radar-label-clearance: max(14px, 0.6 * var(--prl-type-label-sm) + 6px);
@@ -1426,18 +1442,22 @@ p.prl-seat__status {
       var(--prl-type-label-sm)
     )
   );
+  /*
+   * (88 - radius) / 88 as sin/cos: dividing two lengths is past the Chrome 120 / Safari 17 floor, and
+   * colour-literals.test.ts reads `tan()` as the colour.
+   */
+  --prl-radar-plot-shrink: calc(
+    sin(atan2(88px - var(--prl-radar-plot-radius), 88px)) /
+    cos(atan2(88px - var(--prl-radar-plot-radius), 88px))
+  );
   inline-size: 100%;
   block-size: 100%;
 }
 
-/**
- * `sin(θ) / cos(θ)` of `atan2(a, b)` is a/b as a number, which `scale()` needs and which dividing two
- * lengths cannot give in Chrome 120 or Safari 17. At the default label a is 0, so the scale is exactly 1.
- */
+/** About the centre, so a smaller plot keeps its place among the labels. */
 .prl-radar__plot {
-  --prl-radar-plot-turn: atan2(88px - var(--prl-radar-plot-radius), 88px);
   transform-origin: 120px 120px;
-  transform: scale(calc(1 - sin(var(--prl-radar-plot-turn)) / cos(var(--prl-radar-plot-turn))));
+  transform: scale(calc(1 - max(0, var(--prl-radar-plot-shrink))));
 }
 
 /** Rings are decoration (`--prl-line`). Spokes are axes, so `--prl-line-strong`. */
@@ -1468,8 +1488,12 @@ p.prl-seat__status {
   font-size: var(--prl-type-body-sm);
 }
 
+/** The slide is radius + clearance - 102, taken from the shrink so it is 0 wherever the shrink is -1. */
 .prl-radar__label {
-  --prl-radar-label-shift: calc(var(--prl-radar-plot-radius) + var(--prl-radar-label-clearance) - 102px);
+  --prl-radar-label-shift: calc(
+    (var(--prl-radar-label-clearance) - 14px - 88px * max(0, var(--prl-radar-plot-shrink))) *
+    min(1, max(0, 2 * var(--prl-radar-plot-shrink) + 1))
+  );
   fill: var(--prl-text-muted);
   font-size: var(--prl-type-label-sm);
   letter-spacing: var(--prl-tracking-label-sm);
