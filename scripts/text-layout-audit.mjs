@@ -1772,6 +1772,12 @@ async function injectSheet(page, css) {
   await delay(250);
 }
 
+/** The sweep and its control both open a page here, so the control proves the sweep's own injection. */
+async function openPage(page, url, unhyphenated) {
+  await page.goto(url);
+  if (unhyphenated) await injectSheet(page, NO_HYPHENATION);
+}
+
 /** Read back from the page rather than trusted, since a Chrome with no dictionary looks the same. */
 async function refuseHyphenation(page, route) {
   const left = await page.evaluate(
@@ -1784,8 +1790,7 @@ async function refuseHyphenation(page, route) {
 
 async function controlFindings(page, baseUrl, control, scale, unhyphenated = control.unhyphenated === true) {
   await page.setTextScale(scale);
-  await page.goto(`${baseUrl}${control.route}`);
-  if (unhyphenated) await injectSheet(page, NO_HYPHENATION);
+  await openPage(page, `${baseUrl}${control.route}`, unhyphenated);
   await injectSheet(page, control.css);
   const theme = control.theme ?? 'dark';
   const { measurement, context } = await measure(page, control.route, theme, control.width, unhyphenated);
@@ -1893,13 +1898,12 @@ async function sweepBlock(page, baseUrl, label, block, tally, findings, failures
     const perRoute = [];
     for (const theme of block.themes) {
       try {
-        await page.goto(`${baseUrl}${route}`);
+        await openPage(page, `${baseUrl}${route}`, block.unhyphenated === true);
       } catch (error) {
         const why = error instanceof Error ? error.message : String(error);
         failures.push(`${route} (${theme}, ${label}) did not load: ${why}`);
         continue;
       }
-      if (block.unhyphenated === true) await injectSheet(page, NO_HYPHENATION);
       let loaded = true;
       for (const width of block.widths) {
         const { measurement, context } = await measure(page, route, theme, width, block.unhyphenated);
