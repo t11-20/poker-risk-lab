@@ -1,6 +1,6 @@
 /**
- * The server-rendered page is readable at first paint, so nothing may be laid over it, and no session
- * key may exist that `/privacy` does not name.
+ * The server-rendered page is readable at first paint, so nothing may be laid over it, and the removed
+ * overlay's session key must not come back without a `/privacy` line.
  */
 
 import assert from 'node:assert/strict';

@@ -503,8 +503,7 @@ Equity, EV, pot odds and pot size count up on change over `--prl-dur-count`, eas
 ```
 
 Plus, in JS: reveals resolve to their final state on mount and count-ups jump to the value.
-**The app must be fully usable and fully
-legible with every animation disabled** — motion is never the only carrier of meaning.
+**The app must be fully usable and fully legible with every animation disabled** — motion is never the only carrier of meaning.
 
 "Disabled" has four causes, not one, and the fourth is the one that is easy to miss:
 `prefers-reduced-motion`, `scripting: none`, an observer that never fires, and **a hydration that
@@ -786,8 +785,7 @@ anything laid over it only delays reading: the first-visit overlay this section 
 kept a painted page hidden until about 1.2s, at 390x844 and at 1440x900, while LCP had already
 happened underneath it at about 0.1s.
 
-* Route changes get a 2px accent progress bar at the top instead. Data fetches get skeleton
-  blocks at the real content's dimensions, so nothing reflows on arrival.
+* Data fetches get skeleton blocks at the real content's dimensions, so nothing reflows on arrival.
 
 ---
 

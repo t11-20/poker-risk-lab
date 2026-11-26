@@ -1674,28 +1674,6 @@ p.prl-seat__status {
   letter-spacing: var(--prl-tracking-label);
 }
 
-@keyframes prl-wipe {
-  from {
-    transform: scaleX(0);
-  }
-
-  to {
-    transform: scaleX(1);
-  }
-}
-
-/** Route changes get this bar. */
-.prl-route-progress {
-  position: fixed;
-  z-index: var(--prl-z-toast);
-  inset-block-start: 0;
-  inset-inline: 0;
-  height: var(--prl-focus-width);
-  background-color: var(--prl-accent-edge);
-  transform-origin: left center;
-  animation: prl-wipe var(--prl-dur-count) var(--prl-ease-standard) forwards;
-}
-
 /* PlayingCard */
 
 /**
