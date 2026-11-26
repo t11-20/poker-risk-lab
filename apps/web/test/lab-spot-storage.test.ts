@@ -19,8 +19,10 @@ import {
   newSpotId,
   noticeSentence,
   parseLibrary,
+  type RemovableSpotStore,
   readLibrary,
   refusalSentence,
+  removeLibrary,
   repeated,
   type SaveRequest,
   SPOTS_STORAGE_KEY,
@@ -861,5 +863,61 @@ describe('a spot not linked to a built-in keeps no built-in name for a hand', ()
     assert.equal(read.notice, null);
     assert.equal(read.spots[0]?.draft.opponents[0]?.handLabel, null);
     assert.equal(storedLabel(read.spots), undefined);
+  });
+});
+
+describe('removing the spots when the account is deleted', () => {
+  class RemovableStore extends MemoryStore implements RemovableSpotStore {
+    removeItem(key: string): void {
+      this.items.delete(key);
+    }
+  }
+
+  const holding = (text: string): RemovableStore => {
+    const store = new RemovableStore();
+    store.setItem(SPOTS_STORAGE_KEY, text);
+    store.setItem('prl.tour.dismissed', '1');
+    store.setItem('prl-theme', 'dark');
+    store.setItem('prl.session.reminderMinutes', '30');
+    return store;
+  };
+
+  it('removes the spots key and nothing else', () => {
+    const store = holding(serialiseLibrary(put([], { id: null, from: null, draft: draft('Mine') }, 1).spots));
+    assert.equal(removeLibrary(store), 'removed');
+    assert.equal(store.getItem(SPOTS_STORAGE_KEY), null);
+    assert.deepEqual([...store.items.keys()].sort(), [
+      'prl-theme',
+      'prl.session.reminderMinutes',
+      'prl.tour.dismissed',
+    ]);
+  });
+
+  it('removes spots a newer version wrote, because the account they belonged to is gone', () => {
+    const store = holding('{"version":2,"spots":[]}');
+    assert.equal(removeLibrary(store), 'removed');
+    assert.equal(store.getItem(SPOTS_STORAGE_KEY), null);
+  });
+
+  it('says kept, never removed, when storage cannot be reached or throws', () => {
+    assert.equal(removeLibrary(null), 'kept');
+    const throwing: RemovableSpotStore = {
+      getItem: () => null,
+      removeItem: () => {
+        throw new Error('SecurityError');
+      },
+    };
+    assert.equal(removeLibrary(throwing), 'kept');
+  });
+
+  it('says kept when a removal that did not throw left the spots in place', () => {
+    const store = holding('{"version":1,"spots":[]}');
+    const ignoring: RemovableSpotStore = {
+      getItem: (key) => store.getItem(key),
+      // Answers without removing anything, as a storage shim might.
+      removeItem: () => undefined,
+    };
+    assert.equal(removeLibrary(ignoring), 'kept');
+    assert.notEqual(store.getItem(SPOTS_STORAGE_KEY), null);
   });
 });

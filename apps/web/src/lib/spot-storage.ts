@@ -266,6 +266,37 @@ export function writeLibrary(
   }
 }
 
+/** The narrow part of `Storage` removal needs, read back so a removal that did nothing is seen. */
+export interface RemovableSpotStore {
+  getItem(key: string): string | null;
+  removeItem(key: string): void;
+}
+
+/** `localStorage` itself can throw on access where site data is blocked. */
+export function browserSpotStore(): (SpotStore & RemovableSpotStore) | null {
+  try {
+    return typeof window === 'undefined' ? null : window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+export type SpotRemoval = 'removed' | 'kept';
+
+/**
+ * Every spot in this browser, whatever version wrote it, because the account is gone. `removed` only
+ * when a read-back finds nothing, so nothing can say the spots are gone while they are still here.
+ */
+export function removeLibrary(store: RemovableSpotStore | null): SpotRemoval {
+  if (store === null) return 'kept';
+  try {
+    store.removeItem(SPOTS_STORAGE_KEY);
+    return store.getItem(SPOTS_STORAGE_KEY) === null ? 'removed' : 'kept';
+  } catch {
+    return 'kept';
+  }
+}
+
 export function refusalSentence(reason: WriteRefusal): string {
   switch (reason) {
     case 'unavailable':

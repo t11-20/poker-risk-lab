@@ -9,10 +9,10 @@
 import { useCallback, useSyncExternalStore } from 'react';
 import type { SavedSpot } from './spot.ts';
 import {
+  browserSpotStore,
   readLibrary,
   SPOTS_STORAGE_KEY,
   type SpotLibrary,
-  type SpotStore,
   type WriteResult,
   writeLibrary,
 } from './spot-storage.ts';
@@ -24,21 +24,12 @@ export interface LoadedLibrary extends SpotLibrary {
 
 const PENDING: LoadedLibrary = { spots: [], notice: null, writable: false, ready: false };
 
-/** `localStorage` itself can throw on access where site data is blocked. */
-function browserStore(): SpotStore | null {
-  try {
-    return typeof window === 'undefined' ? null : window.localStorage;
-  } catch {
-    return null;
-  }
-}
-
 const listeners = new Set<() => void>();
 let cached: { readonly raw: string | null | undefined; readonly library: LoadedLibrary } | null = null;
 
 function rawValue(): string | null | undefined {
   try {
-    return browserStore()?.getItem(SPOTS_STORAGE_KEY) ?? null;
+    return browserSpotStore()?.getItem(SPOTS_STORAGE_KEY) ?? null;
   } catch {
     return undefined;
   }
@@ -48,7 +39,7 @@ function rawValue(): string | null | undefined {
 function snapshot(): LoadedLibrary {
   const raw = rawValue();
   if (cached !== null && cached.raw === raw) return cached.library;
-  const library = { ...readLibrary(raw === undefined ? null : browserStore()), ready: true };
+  const library = { ...readLibrary(raw === undefined ? null : browserSpotStore()), ready: true };
   cached = { raw, library };
   return library;
 }
@@ -73,7 +64,7 @@ export function useSpotLibrary(): {
 } {
   const library = useSyncExternalStore(subscribe, snapshot, () => PENDING);
   const commit = useCallback((spots: readonly SavedSpot[]): WriteResult => {
-    const result = writeLibrary(browserStore(), snapshot(), spots);
+    const result = writeLibrary(browserSpotStore(), snapshot(), spots);
     for (const listener of listeners) listener();
     return result;
   }, []);

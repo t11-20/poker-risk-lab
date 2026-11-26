@@ -14,6 +14,7 @@ import { Button, Callout, Panel, pluralise } from '@prl/ui';
 import { useRouter } from 'next/navigation';
 import { type FormEvent, type ReactElement, useEffect, useId, useRef, useState } from 'react';
 import { deleteAccount, fetchSession } from '@/lib/api.ts';
+import { browserSpotStore, removeLibrary, type SpotRemoval } from '@/lib/spot-storage.ts';
 
 /**
  * Trimmed and case-folded, because phone keyboards autocapitalise. The API compares strictly, so the
@@ -31,6 +32,7 @@ interface Outcome {
   readonly roomMemberships: number;
   readonly handSeats: number;
   readonly roomsCreated: number;
+  readonly spots: SpotRemoval;
 }
 
 type DeleteState =
@@ -99,6 +101,8 @@ export function AccountDeletion({ deletable, index }: AccountDeletionProps): Rea
         setDeletion({ state: 'failed', message: `${result.error.message} Nothing was deleted.` });
         return;
       }
+      // Only once the server has confirmed, so a refused deletion leaves the spots where they were.
+      const spots = removeLibrary(browserSpotStore());
       setDeletion({
         state: 'done',
         outcome: {
@@ -109,6 +113,7 @@ export function AccountDeletion({ deletable, index }: AccountDeletionProps): Rea
           roomMemberships: result.data.deleted.roomMemberships,
           handSeats: result.data.anonymised.handSeats,
           roomsCreated: result.data.anonymised.roomsCreated,
+          spots,
         },
       });
       /*
@@ -133,6 +138,12 @@ export function AccountDeletion({ deletable, index }: AccountDeletionProps): Rea
                 `${pluralise(deletion.outcome.quizAttempts, 'quiz answer')}, ` +
                 `${pluralise(deletion.outcome.scenarioAttempts, 'scenario decision')} and ` +
                 `${pluralise(deletion.outcome.roomMemberships, 'seat')} at a table.`}
+            </p>
+            <p className="prl-prose">
+              {deletion.outcome.spots === 'removed'
+                ? 'The spots you saved in the Lab are gone from this browser too.'
+                : 'This browser would not let the page remove the spots you saved in the Lab, so any that ' +
+                  'were here are still here, and you can delete them in the Lab.'}
             </p>
             <p className="prl-prose">
               {`Kept, with your name taken off them: ${pluralise(deletion.outcome.handSeats, 'seat')} in ` +
@@ -184,6 +195,10 @@ export function AccountDeletion({ deletable, index }: AccountDeletionProps): Rea
                   Deleted outright: your sign-ins, the lessons you have marked as read, every quiz answer,
                   every scenario decision, and your seat at every table — the ones you are sitting at and the
                   ones you have left.
+                </p>
+                <p className="prl-prose">
+                  The spots you saved in the Lab are removed from this browser too; spots saved in another
+                  browser stay there.
                 </p>
                 <p className="prl-prose">
                   Kept, with your name removed: the hands you have played, and any table you created. A hand

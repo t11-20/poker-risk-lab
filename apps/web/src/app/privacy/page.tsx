@@ -416,6 +416,10 @@ export default function PrivacyPage(): ReactElement {
             </li>
           </ul>
           <p>
+            Deleting your account in a browser also removes the spots saved in that browser; spots saved in
+            another browser stay there until you delete them there.
+          </p>
+          <p>
             The operation verifies itself: it counts what was there, deletes, counts again inside the same
             transaction, and refuses to commit if anything that should have gone is still present. If your
             deployment shows no control for this, the feature has not been wired up in that build, and nothing
