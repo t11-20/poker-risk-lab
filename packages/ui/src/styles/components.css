@@ -2665,6 +2665,37 @@ p.prl-seat__status {
   max-width: none;
 }
 
+/*
+ * At 360px with 200% text a fieldset's own `min-inline-size: min-content`, the label beside the 208px
+ * number field and the slider's 256px floor made the sizer 367px, so /lab pages were 450-507px wide.
+ * Below 20em each block may shrink, the label goes above the field, and both controls fit the sizer.
+ */
+@media (width < 20em) {
+  .prl-action-bar {
+    min-width: 0;
+    padding-inline: var(--prl-space-3);
+  }
+
+  .prl-sizer {
+    min-inline-size: 0;
+    padding-inline: var(--prl-space-3);
+  }
+
+  .prl-sizer__controls,
+  .prl-sizer__field,
+  .prl-sizer__slider {
+    min-width: 0;
+  }
+
+  .prl-sizer__field {
+    flex-wrap: wrap;
+  }
+
+  .prl-sizer__number {
+    max-width: 100%;
+  }
+}
+
 .prl-action-help__list {
   display: grid;
   gap: var(--prl-space-3);
@@ -3506,6 +3537,39 @@ td.prl-candidates__ev,
   padding-inline-start: var(--prl-space-7);
   font-size: var(--prl-type-body);
   line-height: var(--prl-leading-snug);
+}
+
+/*
+ * At 360px with 200% text a lesson calculator nests three padded boxes in a 296px column and left its
+ * body 148px, under "approximation," (212px). Below 20em each inset is 12px, so the body gets 244px.
+ */
+@media (width < 20em) {
+  .prl-panel,
+  .prl-callout,
+  .prl-formula,
+  .prl-assumptions {
+    padding-inline: var(--prl-space-3);
+  }
+}
+
+/*
+ * At 360px with 200% text the Coach's own 40px and its boxes' 32px a side floored it at 315px in a 296px
+ * column, and a limitation's 212px word needed 400px. Below 20em each box keeps 12px, each list 24px.
+ */
+@media (width < 20em) {
+  .prl-coach,
+  .prl-coach__section,
+  .prl-suggestion,
+  .prl-uncertainty,
+  .prl-stat {
+    padding-inline: var(--prl-space-3);
+  }
+
+  .prl-coach__list,
+  .prl-suggestion__changes,
+  .prl-uncertainty__limitations {
+    padding-inline-start: var(--prl-space-5);
+  }
 }
 
 /*
