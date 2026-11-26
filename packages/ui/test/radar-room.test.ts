@@ -5,7 +5,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { LEGEND_TRAIT_KEYS, type LegendTraitAxis } from '@prl/contracts';
 import { createElement } from 'react';
@@ -39,6 +39,30 @@ function declarations(selector: string): Map<string, string> {
     }
   }
   assert.ok(found.size > 0, `components.css has no ${selector} rule`);
+  return found;
+}
+
+interface Registration {
+  readonly syntax: string;
+  readonly inherits: string;
+  readonly initial: string;
+}
+
+/** Every `@property` rule in `sheet`, by name. */
+function registrations(sheet: string): Map<string, Registration> {
+  const found = new Map<string, Registration>();
+  for (const [, name = '', body = ''] of sheet.matchAll(/@property\s+(--[\w-]+)\s*\{([^{}]*)\}/g)) {
+    const descriptor = (key: string): string =>
+      new RegExp(`(?:^|;)\\s*${key}\\s*:\\s*([^;]+)`)
+        .exec(body)?.[1]
+        ?.trim()
+        .replace(/^"(.*)"$/, '$1') ?? '';
+    found.set(name, {
+      syntax: descriptor('syntax'),
+      inherits: descriptor('inherits'),
+      initial: descriptor('initial-value'),
+    });
+  }
   return found;
 }
 
@@ -212,6 +236,57 @@ describe('the radar stylesheet takes label room from the plot', () => {
     }
   });
 
+  it('registers the radius and the shrink on the svg, where both the plot and the labels inherit it', () => {
+    const registered = registrations(css);
+    assert.deepEqual(registered.get('--prl-radar-plot-radius'), {
+      syntax: '<length>',
+      inherits: 'false',
+      initial: '176px',
+    });
+    assert.deepEqual(registered.get('--prl-radar-plot-shrink'), {
+      syntax: '<number>',
+      inherits: 'true',
+      initial: '-1',
+    });
+    assert.ok(svg.has('--prl-radar-plot-radius') && svg.has('--prl-radar-plot-shrink'));
+  });
+
+  it('draws the old chart at every label size when the shrink or the radius cannot be computed', () => {
+    const registered = registrations(css);
+    const [factor = ''] = argumentsOf(plot.get('transform') ?? '', 'scale');
+    const [x = '', y = ''] = argumentsOf(label.get('transform') ?? '', 'translate');
+    for (const name of ['--prl-radar-plot-shrink', '--prl-radar-plot-radius']) {
+      const initial = registered.get(name)?.initial;
+      assert.ok(initial !== undefined, `${name} is not registered`);
+      for (const kind of KINDS) {
+        for (const size of LABEL_SIZES) {
+          const vars = scope(size, kind.widthEm, kind.gutter);
+          vars.set(name, initial);
+          vars.set('--prl-radar-dx', '0.6');
+          vars.set('--prl-radar-dy', '-0.8');
+          const where: string = `${name} at ${initial}, ${kind.name} at ${size}px`;
+          assert.equal(evaluate(factor, vars), 1, `${where}: scale`);
+          assert.ok(evaluate(x, vars) === 0 && evaluate(y, vars) === 0, `${where}: the label slides`);
+        }
+      }
+    }
+  });
+
+  it('keeps a shrink computed wrong to a plot of at least half and a slide out of at most 0.5', () => {
+    const [factor = ''] = argumentsOf(plot.get('transform') ?? '', 'scale');
+    const [x = ''] = argumentsOf(label.get('transform') ?? '', 'translate');
+    for (const wrong of ['0', '-0.4', '0.9', '2', '-3']) {
+      for (const size of LABEL_SIZES) {
+        const vars = scope(size, RADAR_MARKER_WIDTH_EM, 0);
+        vars.set('--prl-radar-plot-shrink', wrong);
+        vars.set('--prl-radar-dx', '1');
+        const scale = evaluate(factor, vars);
+        assert.ok(scale >= 0.5 && scale <= 1, `shrink ${wrong} at ${size}px: scale ${scale}`);
+        assert.ok(evaluate(x, vars) <= 0.5, `shrink ${wrong} at ${size}px: slides out ${evaluate(x, vars)}`);
+      }
+    }
+  });
+
   it("keeps the label at the reader's text size: no px size, no clamp", () => {
     assert.equal(label.get('font-size'), 'var(--prl-type-label-sm)');
     for (const value of [...svg.values(), ...plot.values(), ...label.values()]) {
@@ -273,5 +348,78 @@ describe('RadarChart markup for the label room', () => {
         `${element.inner} does not point outward`,
       );
     }
+  });
+});
+
+/** Syntaxes whose computed value is absolute, so `var()` substitutes a number, px or deg. */
+const ABSOLUTE_SYNTAXES = new Set(['<length>', '<number>', '<integer>', '<angle>']);
+const RELATIVE_UNIT =
+  /[\d.](?:r?em|r?ex|r?cap|r?ch|r?ic|r?lh|[sld]?v(?:w|h|i|b|min|max)|cq(?:w|h|i|b|min|max)|%)(?![\w-])/;
+
+/**
+ * Each trig call in `sheet` whose arguments hold a relative unit or a `var()` that is not registered with
+ * an absolute syntax: Safari before 18 can mis-resolve either inside `atan2()` (WebKit 248513, 242629).
+ */
+function trigProblems(sheet: string, registered: ReadonlyMap<string, Registration>) {
+  const calls: string[] = [];
+  const problems: string[] = [];
+  for (const match of sheet.matchAll(/(?<![\w-])(?:sin|cos|tan|asin|acos|atan|atan2)\(/g)) {
+    const start = match.index + match[0].length;
+    let depth = 1;
+    let end = start;
+    for (; end < sheet.length && depth > 0; end += 1) {
+      if (sheet[end] === '(') depth += 1;
+      if (sheet[end] === ')') depth -= 1;
+    }
+    const call = `${match[0]}${sheet.slice(start, end)}`.replace(/\s+/g, ' ');
+    calls.push(call);
+    const unit = RELATIVE_UNIT.exec(call)?.[0];
+    if (unit !== undefined) problems.push(`${call} holds a relative length (${unit})`);
+    for (const [, name = ''] of call.matchAll(/var\(\s*(--[\w-]+)/g)) {
+      const rule = registered.get(name);
+      if (rule === undefined) problems.push(`${call} reads ${name}, which is not registered`);
+      else if (rule.inherits === '' || rule.initial === '') {
+        problems.push(`${call} reads ${name}, whose @property a browser drops: a descriptor is missing`);
+      } else if (!ABSOLUTE_SYNTAXES.has(rule.syntax))
+        problems.push(`${call} reads ${name}, a ${rule.syntax}`);
+    }
+  }
+  return { calls, problems };
+}
+
+describe('trig functions in the stylesheets read only absolute values', () => {
+  const directory = new URL('../src/styles/', import.meta.url);
+  const sheets = readdirSync(directory)
+    .filter((name) => name.endsWith('.css'))
+    .map((name) => ({ name, text: stylesheet(name) }));
+
+  it('reads the stylesheets and finds the radar trig among them', () => {
+    assert.ok(sheets.length > 0, 'no stylesheets under src/styles');
+    const calls = sheets.flatMap((sheet) => trigProblems(sheet.text, new Map()).calls);
+    assert.ok(
+      calls.some((call) => call.startsWith('atan2(')),
+      `no atan2() among ${calls.length} trig calls`,
+    );
+  });
+
+  it('catches a rem, an unregistered property and a dropped @property, and passes a registered length', () => {
+    const lengths = new Map<string, Registration>([
+      ['--set', { syntax: '<length>', inherits: 'true', initial: '0px' }],
+      ['--mixed', { syntax: '<length-percentage>', inherits: 'true', initial: '0px' }],
+      ['--dropped', { syntax: '<length>', inherits: 'true', initial: '' }],
+    ]);
+    assert.equal(trigProblems('a { b: sin(var(--dropped)); }', lengths).problems.length, 1);
+    assert.equal(trigProblems('a { b: atan2(88px - 1rem, 88px); }', lengths).problems.length, 1);
+    assert.equal(trigProblems('a { b: sin(var(--loose)); }', lengths).problems.length, 1);
+    assert.equal(trigProblems('a { b: sin(var(--mixed)); }', lengths).problems.length, 1);
+    assert.deepEqual(trigProblems('a { b: atan2(88px - var(--set), 88px); }', lengths).problems, []);
+  });
+
+  it('has no relative length and no unregistered property inside any trig call', () => {
+    const registered = new Map(sheets.flatMap((sheet) => [...registrations(sheet.text)]));
+    const problems = sheets.flatMap((sheet) =>
+      trigProblems(sheet.text, registered).problems.map((problem) => `${sheet.name}: ${problem}`),
+    );
+    assert.deepEqual(problems, []);
   });
 });

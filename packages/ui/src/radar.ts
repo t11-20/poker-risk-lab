@@ -39,9 +39,8 @@ export const RADAR_DEFAULT_GEOMETRY: RadarGeometry = {
 export const RADAR_LABEL_GUTTER = 64;
 
 /**
- * Labels are sized in rem and the plot in viewBox units, so larger text takes its room from the plot.
- * `.prl-radar__svg` computes the same rule in CSS, and `radar-room.test.ts` holds the two equal.
- * Widths are in em of the label size. Two tabular digits measured 1.17em; words get what the gutter holds.
+ * Room a label claims, in em of its rem size, which `.prl-radar__svg` takes from the plot as
+ * `radarLabelRoom()` does. Two tabular digits measured 1.17em; words get what the gutter holds.
  */
 export const RADAR_MARKER_WIDTH_EM = 1.25;
 export const RADAR_WORD_WIDTH_EM = 6.5;
