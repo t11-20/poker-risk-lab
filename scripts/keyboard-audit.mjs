@@ -1931,7 +1931,7 @@ function portFromOrigin(origin) {
 async function withPage(run) {
   const chrome = {
     headful: HEADFUL,
-    port: 9222 + Math.floor(process.pid % 500),
+    port: 0,
     // A profile per run, because a shared one would carry the seeded age cookie into the next run.
     freshProfile: 'prl-keyboard-audit-',
     flags: ['--window-size=1440,900'],

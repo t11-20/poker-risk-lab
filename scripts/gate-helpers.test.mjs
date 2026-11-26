@@ -262,7 +262,7 @@ describe('Chrome, as each gate launches it', () => {
     {
       script: 'ax-tree-audit.mjs',
       args: (url) => ['--base-url', url, '--no-assertions'],
-      port: (pid) => 9800 + (pid % 150),
+      port: () => 0,
       profile: '/tmp/prl-ax-tree-audit-profile',
       flags: ['--window-size=1440,900'],
     },
@@ -276,14 +276,14 @@ describe('Chrome, as each gate launches it', () => {
     {
       script: 'csp-negative-control.mjs',
       args: (url) => ['--base-url', url],
-      port: (pid) => 9400 + (pid % 150),
+      port: () => 0,
       freshProfile: 'prl-csp-negative-control-',
       flags: ['--window-size=1440,900'],
     },
     {
       script: 'keyboard-audit.mjs',
       args: (url) => ['--web', url],
-      port: (pid) => 9222 + (pid % 500),
+      port: () => 0,
       freshProfile: 'prl-keyboard-audit-',
       flags: ['--window-size=1440,900'],
     },

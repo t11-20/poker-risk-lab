@@ -118,7 +118,7 @@ export async function waitForDevtoolsFile(child, profile, timeoutMs = DEVTOOLS_S
   }
 }
 
-/** A missing or half-written file reads as not written yet. */
+/** A missing file, or one without both lines yet, reads as not written yet. */
 function readDevtoolsFile(file) {
   let text = '';
   try {

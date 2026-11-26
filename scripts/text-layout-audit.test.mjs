@@ -1390,8 +1390,8 @@ describe('the scope of the sweep', () => {
   });
 });
 
-// The large-text pass of the default run on 2026-11-26: ROUTES, light, 768, 1024 and 1440, and the
-// twenty phone routes at 360 with hyphenation off, 200% text.
+// The large-text pass of the default run on 2026-11-26, before the assumption list stacked (224 break
+// tests after): ROUTES, light, 768, 1024 and 1440, and the twenty phone routes at 360, 200%, no hyphens.
 const LARGE_TEXT_RUN = {
   measurements: 83,
   measurementsWanted: 83,
