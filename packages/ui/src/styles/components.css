@@ -3509,6 +3509,19 @@ td.prl-candidates__ev,
 }
 
 /*
+ * At 360px with 200% text a lesson calculator nests three padded boxes in a 296px column and left its
+ * body 148px, under "approximation," (212px). Below 20em each inset is 12px, so the body gets 244px.
+ */
+@media (width < 20em) {
+  .prl-panel,
+  .prl-callout,
+  .prl-formula,
+  .prl-assumptions {
+    padding-inline: var(--prl-space-3);
+  }
+}
+
+/*
  * At 360px with 200% text the Coach's nested boxes leave 108-148px for prose, narrower than
  * "representative," (212px), so its prose may hyphenate. Only under 20em, so no other size reflows.
  */
