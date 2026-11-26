@@ -93,7 +93,7 @@ describe('the legal pages at 320px, and at 360px with 200% text', () => {
     assert.ok(360 / 32 < em, `a 360px window at 32px text would keep the wide padding at ${em}em`);
   });
 
-  // An `auto` track floors at its widest token: "(PRL_LEGEND_NAMING=attributed)," made /terms 329px at 320,
+  // An `auto` track floors at its widest token: the naming flag's setting made /terms 329px at 320,
   // a contact address with no hyphen made /privacy 399px at 360 and 200%, an env name widened the gate.
   it('gives every grid one track that can shrink by default', () => {
     const grids = ALL.filter((rule) => !rule.conditional && value(rule.body, 'display') === 'grid');

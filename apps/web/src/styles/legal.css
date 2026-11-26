@@ -23,7 +23,7 @@
   display: grid;
   /*
    * Tracks that shrink, here and in every grid inside: an `auto` track is floored at its widest token,
-   * and "(PRL_LEGEND_NAMING=attributed)," alone made /terms 329px wide in a 320px window.
+   * and the naming flag's setting, one token, alone made /terms 329px wide in a 320px window.
    */
   grid-template-columns: minmax(0, 1fr);
   /* The section seam is wider than the paragraph gap, or fourteen sections read as one column. */
