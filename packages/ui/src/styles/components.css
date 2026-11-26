@@ -3522,6 +3522,26 @@ td.prl-candidates__ev,
 }
 
 /*
+ * At 360px with 200% text the Coach's own 40px and its boxes' 32px a side floored it at 315px in a 296px
+ * column, and a limitation's 212px word needed 400px. Below 20em each box keeps 12px, each list 24px.
+ */
+@media (width < 20em) {
+  .prl-coach,
+  .prl-coach__section,
+  .prl-suggestion,
+  .prl-uncertainty,
+  .prl-stat {
+    padding-inline: var(--prl-space-3);
+  }
+
+  .prl-coach__list,
+  .prl-suggestion__changes,
+  .prl-uncertainty__limitations {
+    padding-inline-start: var(--prl-space-5);
+  }
+}
+
+/*
  * At 360px with 200% text the Coach's nested boxes leave 108-148px for prose, narrower than
  * "representative," (212px), so its prose may hyphenate. Only under 20em, so no other size reflows.
  */
