@@ -396,7 +396,7 @@
 
 /**
  * At 360px with 200% text the card's padding left the name 198px, and "Fundamentalist" needs 282px at
- * the heading size. One step down and half the padding give it 254px of 262px.
+ * the heading size. One step down and a third of the padding give it 254px of 262px.
  */
 @media (width < 20em) {
   .prl-legend-card {
