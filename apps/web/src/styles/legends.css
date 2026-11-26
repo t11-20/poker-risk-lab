@@ -394,6 +394,21 @@
   grid-template-rows: subgrid;
 }
 
+/**
+ * At 360px with 200% text the card's padding left the name 198px, and "Fundamentalist" needs 282px at
+ * the heading size. One step down and a third of the padding give it 254px of 262px.
+ */
+@media (width < 20em) {
+  .prl-legend-card {
+    padding-inline: var(--prl-space-4);
+  }
+
+  /* A card's or a compare column's name only: the same class heads a hand review above its h3s. */
+  :is(.prl-legend-card, .prl-legend-column) .prl-legend-identity__archetype {
+    font-size: var(--prl-type-body-lg);
+  }
+}
+
 /** A shorter disclaimer leaves its spare space above the box, so the box stays on its actions. */
 .prl-legend-grid > .prl-legend-card > .prl-legend-disclaimers {
   align-self: end;
@@ -1149,6 +1164,28 @@
 
   .prl-legend-contrast__delta {
     text-align: start;
+  }
+}
+
+/**
+ * Below 20em nested padding gives way. At 360px with 200% text a padded disclaimer needed 287px of a
+ * card's 262px and 260px of a compare column's 198px, "Educational" 176px of 164px, a compare checkbox
+ * 273px of 230px, and a hand review's callout widened the page to 409px. Last, to win over 37.5em.
+ */
+@media (width < 20em) {
+  .prl-legend-column,
+  .prl-legend-decision,
+  .prl-legend-difficulty {
+    padding-inline: var(--prl-space-4);
+  }
+
+  .prl-legend-disclaimers {
+    padding-inline: var(--prl-space-5);
+  }
+
+  .prl-legend-picker__option {
+    gap: var(--prl-space-3);
+    padding-inline: var(--prl-space-4);
   }
 }
 

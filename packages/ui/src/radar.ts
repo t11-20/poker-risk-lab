@@ -39,7 +39,41 @@ export const RADAR_DEFAULT_GEOMETRY: RadarGeometry = {
 export const RADAR_LABEL_GUTTER = 64;
 
 /**
- * Widens the window rather than shrinking the chart, so the geometry never depends on labels.
+ * Room a label claims, in em of its rem size, which `.prl-radar__svg` takes from the plot as
+ * `radarLabelRoom()` does. Two tabular digits measured 1.17em; words get what the gutter holds.
+ */
+export const RADAR_MARKER_WIDTH_EM = 1.25;
+export const RADAR_WORD_WIDTH_EM = 6.5;
+/** A label's glyphs measured 0.58em either side of its centre line, and keep this gap from the ring. */
+export const RADAR_LABEL_HALF_HEIGHT_EM = 0.6;
+export const RADAR_LABEL_MIN_GAP = 6;
+/** Half the drawn radius. Below it the plot stops reading as a shape, so very long labels clip instead. */
+export const RADAR_MIN_RADIUS = 44;
+
+/** In viewBox units. */
+export interface RadarLabelRoom {
+  readonly plotRadius: number;
+  readonly labelRadius: number;
+}
+
+/**
+ * `labelSize` is the label's CSS font size, which inside the SVG is viewBox units. At the default 12 both
+ * clamps pick their literal, so default text draws exactly `RADAR_RADIUS` and `RADAR_LABEL_RADIUS`.
+ */
+export function radarLabelRoom(labelSize: number, labelWidthEm: number, gutter = 0): RadarLabelRoom {
+  const clearance = Math.max(
+    RADAR_LABEL_RADIUS - RADAR_RADIUS,
+    RADAR_LABEL_HALF_HEIGHT_EM * labelSize + RADAR_LABEL_MIN_GAP,
+  );
+  const plotRadius = Math.max(
+    RADAR_MIN_RADIUS,
+    Math.min(RADAR_RADIUS, RADAR_CENTRE + gutter - clearance - labelWidthEm * labelSize),
+  );
+  return { plotRadius, labelRadius: plotRadius + clearance };
+}
+
+/**
+ * Widens the window rather than shrinking the chart, so at default text the geometry never depends on labels.
  * A negative `min-x` buys the room without relying on `overflow: visible` in a stylesheet.
  */
 export function radarViewBox(gutter = 0): string {
@@ -62,6 +96,14 @@ export function roundCoordinate(value: number): number {
 export function axisAngle(index: number, count: number): number {
   if (!Number.isFinite(index) || !Number.isFinite(count) || count <= 0) return 0;
   return (2 * Math.PI * index) / count;
+}
+
+/** The direction a label moves when larger text pushes it out, to four places. */
+export function outwardUnit(angle: number): RadarPoint {
+  return {
+    x: Math.round(Math.sin(angle) * 10_000) / 10_000,
+    y: Math.round(-Math.cos(angle) * 10_000) / 10_000,
+  };
 }
 
 /** Unrounded. Callers that emit an attribute round on the way out. */

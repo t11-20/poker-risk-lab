@@ -157,6 +157,44 @@ describe('legends layout rules', () => {
     assert.doesNotMatch(css, /column-reverse|row-reverse|(?:^|[\s;{])order:/u);
   });
 
+  /* At 360px with 200% text "Fundamentalist" was 282px at the heading size in a 198px card. */
+  it('below 20em a card name is one step smaller and the card pads less, never a word broken', () => {
+    const phone = [...css.matchAll(/@media \(width < 20em\) \{([\s\S]*?)\n\}/gu)].map((m) => m[1] ?? '');
+    assert.ok(phone.length > 0, 'no `@media (width < 20em)` block in legends.css');
+    const inside = (selector: string): string => {
+      const escaped = selector.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+      const bodies = phone.flatMap((b) => [
+        ...b.matchAll(new RegExp(`\\n\\s*${escaped} \\{([^}]*)\\}`, 'gu')),
+      ]);
+      assert.ok(bodies.length > 0, `no rule for ${selector} below 20em`);
+      return bodies.map((m) => m[1] ?? '').join('\n');
+    };
+    assert.match(
+      inside(':is(.prl-legend-card, .prl-legend-column) .prl-legend-identity__archetype'),
+      /font-size: var\(--prl-type-body-lg\);/u,
+    );
+    // The class is also a hand review's h2, which must stay above its h3s; it keeps the heading size.
+    assert.doesNotMatch(phone.join('\n'), /\n\s*\.prl-legend-identity__archetype \{/u);
+    assert.match(inside('.prl-legend-card'), /padding-inline: var\(--prl-space-4\);/u);
+    assert.doesNotMatch(css, /overflow-wrap: anywhere|word-break: break-all/u);
+  });
+
+  /* At 360px with 200% text a padded disclaimer needed 260px of a compare column's 198px. */
+  it('below 20em the nested frames pad less, after every wider rule that pads them', () => {
+    const PHONE = '@media (width < 20em) {';
+    const frames = '.prl-legend-column,\n  .prl-legend-decision,\n  .prl-legend-difficulty {';
+    const at = css.lastIndexOf(frames);
+    assert.ok(at > css.lastIndexOf(PHONE, at) && css.lastIndexOf(PHONE, at) >= 0, 'not inside a 20em block');
+    const body = (head: string): string =>
+      css.slice(css.indexOf(head, at), css.indexOf('}', css.indexOf(head, at)));
+    assert.match(body(frames), /padding-inline: var\(--prl-space-4\);/u);
+    assert.match(body('.prl-legend-disclaimers {'), /padding-inline: var\(--prl-space-5\);/u);
+    assert.match(body('.prl-legend-picker__option {'), /padding-inline: var\(--prl-space-4\);/u);
+    // Equal specificity, so the phone rule must come after the 37.5em one that pads the picker.
+    const wider = /@media \(width < 37\.5em\) \{\s*\.prl-legend-difficulty \{\s*padding:/u.exec(css);
+    assert.ok(wider !== null && wider.index < at, 'the 37.5em picker padding comes after the 20em one');
+  });
+
   it('below 20em a contrast figure sits under its trait instead of beside it', () => {
     assert.match(
       css,

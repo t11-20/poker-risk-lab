@@ -1363,8 +1363,21 @@
  * card's text 141-172px, the radio left a quiz answer 110px, and one long word sat past its heading.
  */
 @media (width < 20em) {
+  /* With the calculator's own boxes, a 32px sheet left its body 148px. The words need 212px. */
+  .prl-learn-lesson {
+    --prl-learn-sheet-x: var(--prl-space-3);
+  }
+
+  /* Inside 82px of entry and 50px of its own box, a glossary formula's 235px run had 164px. */
+  .prl-learn-glossary__entry,
+  .prl-learn-glossary__formula {
+    padding-inline: var(--prl-space-3);
+  }
+
+  /* An assumption's index stacks too: beside it, "approximation," (212px) had 154px. */
   .prl-learn-entry,
-  .prl-learn-glossary__related {
+  .prl-learn-glossary__related,
+  .prl-assumptions__item {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -1375,13 +1388,6 @@
   /* The radio is above the answer now, so the note starts where the answer does. */
   .prl-learn-quiz__option-feedback {
     padding-inline-start: var(--prl-space-6);
-  }
-
-  /* Not a quiz question, whose 240px column broke nearly every line. Chrome never hyphenates a capital,
-     so the lesson h1 "Tournaments:" is left too. */
-  .prl-learn-lesson__heading,
-  .prl-learn-glossary__term {
-    hyphens: auto;
   }
 }
 

@@ -12,15 +12,20 @@ import {
   axisLabelAnchor,
   axisMarker,
   clampUnit,
+  outwardUnit,
   polarPoint,
   polygonPoints,
   RADAR_CENTRE,
   RADAR_DEFAULT_GEOMETRY,
   RADAR_LABEL_GUTTER,
+  RADAR_LABEL_MIN_GAP,
   RADAR_LABEL_RADIUS,
+  RADAR_MARKER_WIDTH_EM,
   RADAR_RADIUS,
   RADAR_RING_FRACTIONS,
   RADAR_VIEWBOX,
+  RADAR_WORD_WIDTH_EM,
+  radarLabelRoom,
   radarViewBox,
   ringPoints,
   roundCoordinate,
@@ -55,6 +60,120 @@ describe('the chart frame', () => {
   it('ignores a nonsensical gutter rather than emitting a broken viewBox', () => {
     assert.equal(radarViewBox(-40), '0 0 240 240');
     assert.equal(radarViewBox(Number.NaN), '0 0 240 240');
+  });
+});
+
+/** What Chrome drew for a two-digit marker, in em: glyph width, and reach either side of centre. */
+const MEASURED_MARKER = { width: 1.17, halfHeight: 0.58 };
+
+interface Box {
+  readonly left: number;
+  readonly right: number;
+  readonly top: number;
+  readonly bottom: number;
+}
+
+/** Where each marker's glyphs land on a chart of `count` axes, anchored as `RadarChart` anchors them. */
+function markerBoxes(count: number, labelSize: number, labelRadius: number): Box[] {
+  const width = MEASURED_MARKER.width * labelSize;
+  const half = MEASURED_MARKER.halfHeight * labelSize;
+  const boxes: Box[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const angle = axisAngle(index, count);
+    const at = polarPoint(RADAR_CENTRE, RADAR_CENTRE, labelRadius, angle);
+    const anchor = axisLabelAnchor(angle);
+    const left = anchor === 'start' ? at.x : anchor === 'end' ? at.x - width : at.x - width / 2;
+    boxes.push({ left, right: left + width, top: at.y - half, bottom: at.y + half });
+  }
+  return boxes;
+}
+
+/** The nearest any glyph comes to the centre, which must stay outside the outer ring. */
+function nearestToCentre(box: Box): number {
+  const x = Math.max(box.left, Math.min(RADAR_CENTRE, box.right));
+  const y = Math.max(box.top, Math.min(RADAR_CENTRE, box.bottom));
+  return Math.hypot(x - RADAR_CENTRE, y - RADAR_CENTRE);
+}
+
+function overlaps(a: Box, b: Box): boolean {
+  return a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+}
+
+/** Every way a marker can fail at one label size, as sentences, so a failure names the size and the axis. */
+function markerFaults(labelSize: number, room: { plotRadius: number; labelRadius: number }): string[] {
+  const faults: string[] = [];
+  for (const count of [5, 8, 16]) {
+    const boxes = markerBoxes(count, labelSize, room.labelRadius);
+    for (const [index, box] of boxes.entries()) {
+      const where = `${labelSize}px label, axis ${index + 1} of ${count}`;
+      if (box.left < 0 || box.top < 0 || box.right > RADAR_VIEWBOX || box.bottom > RADAR_VIEWBOX) {
+        faults.push(`${where} leaves the viewBox`);
+      }
+      if (nearestToCentre(box) < room.plotRadius + RADAR_LABEL_MIN_GAP) {
+        faults.push(`${where} comes within ${RADAR_LABEL_MIN_GAP} of the outer ring`);
+      }
+      const next = boxes[(index + 1) % count];
+      if (next !== undefined && next !== box && overlaps(box, next))
+        faults.push(`${where} overlaps the next`);
+    }
+  }
+  return faults;
+}
+
+describe('the room labels take from the plot', () => {
+  it('is no room at all at the default 12px label, so default text draws the chart unchanged', () => {
+    for (const [width, gutter] of [
+      [RADAR_MARKER_WIDTH_EM, 0],
+      [RADAR_WORD_WIDTH_EM, RADAR_LABEL_GUTTER],
+      [0, 0],
+    ] as const) {
+      const room = radarLabelRoom(12, width, gutter);
+      assert.equal(room.plotRadius, RADAR_RADIUS);
+      assert.equal(room.labelRadius, RADAR_LABEL_RADIUS);
+    }
+  });
+
+  // Past 200% sixteen markers touch their diagonal neighbours: a 240-unit window has no wider ring to give.
+  it('keeps every marker inside the window, clear of the ring and of its neighbour, up to 200% text', () => {
+    for (let labelSize = 12; labelSize <= 24; labelSize += 0.25) {
+      assert.deepEqual(markerFaults(labelSize, radarLabelRoom(labelSize, RADAR_MARKER_WIDTH_EM)), []);
+    }
+  });
+
+  it('is what the fixed geometry lacked: at 150% text its markers already left the window', () => {
+    const fixed = { plotRadius: RADAR_RADIUS, labelRadius: RADAR_LABEL_RADIUS };
+    assert.deepEqual(markerFaults(12, fixed), []);
+    assert.ok(markerFaults(18, fixed).some((fault) => fault.endsWith('leaves the viewBox')));
+    assert.ok(markerFaults(24, fixed).some((fault) => fault.endsWith('of the outer ring')));
+  });
+
+  it('shrinks the plot by about a fifth at 200% text, so the chart is still a chart', () => {
+    const { plotRadius } = radarLabelRoom(24, RADAR_MARKER_WIDTH_EM);
+    assert.ok(plotRadius / RADAR_RADIUS > 0.75, `the plot is ${plotRadius} of ${RADAR_RADIUS}`);
+    assert.ok(plotRadius < RADAR_RADIUS);
+  });
+
+  it('never grows the plot past its default, even for labels smaller than the default', () => {
+    assert.deepEqual(radarLabelRoom(9, RADAR_MARKER_WIDTH_EM), {
+      plotRadius: RADAR_RADIUS,
+      labelRadius: RADAR_LABEL_RADIUS,
+    });
+  });
+
+  it('gives word labels the gutter, and stops shrinking at half the plot', () => {
+    assert.ok(radarLabelRoom(18, RADAR_WORD_WIDTH_EM, RADAR_LABEL_GUTTER).plotRadius > RADAR_RADIUS / 2);
+    assert.equal(radarLabelRoom(24, RADAR_WORD_WIDTH_EM, RADAR_LABEL_GUTTER).plotRadius, RADAR_RADIUS / 2);
+  });
+
+  it('moves each label straight away from the centre', () => {
+    for (let index = 0; index < 16; index += 1) {
+      const angle = axisAngle(index, 16);
+      const away = outwardUnit(angle);
+      const at = polarPoint(RADAR_CENTRE, RADAR_CENTRE, RADAR_LABEL_RADIUS, angle);
+      assert.ok(Math.abs(Math.hypot(away.x, away.y) - 1) < 1e-4, `axis ${index} is not a unit vector`);
+      const along = (away.x * (at.x - RADAR_CENTRE) + away.y * (at.y - RADAR_CENTRE)) / RADAR_LABEL_RADIUS;
+      assert.ok(Math.abs(along - 1) < 1e-4, `axis ${index} does not point away from the centre`);
+    }
   });
 });
 

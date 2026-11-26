@@ -282,6 +282,10 @@ typography rather than chosen by taste):
 | `--prl-type-body` | `1.0625rem` (17px) | 400 | `-0.003em` | 1.65 | prose — the default |
 | `--prl-type-body-sm` | `0.9375rem` (15px) | 400 | `0` | 1.65 | secondary, captions, cells |
 
+Below `20em` (§10: a phone at 200% text) the display ramp steps down to `2rem`, `1.5rem` and `1.375rem`
+for display-1, -2 and -3. A display word such as "Fundamentalist" was wider than the column there, and
+Chrome never hyphenates a capitalised word. The steps stay in rem, so they still follow the reader's size.
+
 **Tracking is a function of size, not of role**, and the ramp now says so all the way down:
 
 ```css
@@ -901,13 +905,32 @@ on the pixel shown here, and at 200% text a 1440px window takes the 720px layout
 | ≥ 1280px | 12-column grid; table centred with Coach rail and the decision band in the same viewport, no scrolling during a decision |
 
 Two narrower ranges exist for large text. Below `20em` (a window under 320px at the default size, under
-640px at 200%) paired items stack: a lesson card's number above its text, a quiz radio above its answer,
-a Legends sigil above the names, the equity readout's figures under the name. Below `18em` a review row
-card and the deck-proof terms give each value its own row. Below `20em` prose in the Coach, a stat's
-note, an assumption list, a calculation's outs, a lesson heading and a glossary term may hyphenate,
-wherever they appear (lessons, Lab scenarios, the replay), never above it. One container query
-does the same for the Legends difficulty picker: below `15rem` of its own width the radio takes a row
-above the name. A default-size window of 320px or wider reaches none of these.
+640px at 200%):
+
+- **Paired items stack.** A lesson card's number goes above its text, an assumption's index above its
+  sentence, a quiz radio above its answer and a Legends sigil above the names. The glossary's related
+  terms, the Legends contrast list, the home spot figures and the review summary take one track. The
+  equity readout's figures go under the name.
+- **Nested padding gives way.** These keep `0.375rem` a side:
+  - the lesson sheet;
+  - `.prl-panel`, `.prl-callout`, `.prl-formula` and `.prl-assumptions` (the lesson calculators);
+  - a glossary entry and its formula;
+  - the Coach with its sections, suggestion, uncertainty note and stats. Its lists indent `0.75rem`.
+
+  Legends cards, compare columns, decisions, difficulty frames and picker options pad `0.5rem`.
+  Disclaimers pad `0.75rem`.
+- **The bet sizer fits.** The action bar, the sizer, its controls, field and slider may shrink. The
+  field wraps and the number field is never wider than it. The bar and the sizer keep `0.375rem` a side.
+- **The display ramp steps down** (§3.2), and a Legends card's or compare column's name takes
+  `body-lg`. A hand review's heading keeps its size, so it stays above its decisions.
+- **Only an assumption's text may hyphenate.** Without it, "measurement" and "combinations" break
+  mid-word. Nothing else needs it. `test:layout` measures its 360px cell at 200% with hyphenation off,
+  because CI's Chrome may have no hyphenation dictionary.
+
+Below `18em` a review row card and the deck-proof terms give each value its own row, and a review
+board's cards wrap. One container query does the same for the Legends difficulty picker: below `15rem`
+of its own width the radio takes a row above the name. A default-size window of 320px or wider reaches
+none of these.
 
 **The ≥1280px rule is a functional requirement, not an aesthetic one:** a player must be
 able to see the pot, their cards, the price and the Coach's equity figure *at the same

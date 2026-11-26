@@ -1408,10 +1408,56 @@ p.prl-seat__status {
   max-inline-size: var(--prl-space-15);
 }
 
-/** Without explicit size an `<svg>` sizes to its viewBox. */
+/**
+ * Registered, so `var()` hands `atan2()` a computed px length: Safari before 18 can mis-resolve the rem
+ * inside an unregistered one (WebKit 248513). 176px is no answer: it computes the shrink's own -1.
+ */
+@property --prl-radar-plot-radius {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 176px;
+}
+
+/** -1 is no answer, so a browser that cannot compute the shrink draws neither it nor the label slide. */
+@property --prl-radar-plot-shrink {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: -1;
+}
+
+/**
+ * Without explicit size an `<svg>` sizes to its viewBox. Labels are in rem and the plot in viewBox units,
+ * so larger text takes the labels' room from the plot, as `radarLabelRoom()` in radar.ts does.
+ */
 .prl-radar__svg {
+  --prl-radar-label-clearance: max(14px, 0.6 * var(--prl-type-label-sm) + 6px);
+  --prl-radar-plot-radius: max(
+    44px,
+    min(
+      88px,
+      120px +
+      var(--prl-radar-gutter) -
+      var(--prl-radar-label-clearance) -
+      var(--prl-radar-label-width) *
+      var(--prl-type-label-sm)
+    )
+  );
+  /*
+   * (88 - radius) / 88 as sin/cos: dividing two lengths is past the Chrome 120 / Safari 17 floor, and
+   * colour-literals.test.ts reads `tan()` as the colour.
+   */
+  --prl-radar-plot-shrink: calc(
+    sin(atan2(88px - var(--prl-radar-plot-radius), 88px)) /
+    cos(atan2(88px - var(--prl-radar-plot-radius), 88px))
+  );
   inline-size: 100%;
   block-size: 100%;
+}
+
+/** About the centre, so a smaller plot keeps its place among the labels. Never below the 44-unit floor. */
+.prl-radar__plot {
+  transform-origin: 120px 120px;
+  transform: scale(calc(1 - min(0.5, max(0, var(--prl-radar-plot-shrink)))));
 }
 
 /** Rings are decoration (`--prl-line`). Spokes are axes, so `--prl-line-strong`. */
@@ -1442,10 +1488,23 @@ p.prl-seat__status {
   font-size: var(--prl-type-body-sm);
 }
 
+/**
+ * The slide is radius + clearance - 102, taken from the shrink so it is 0 wherever the shrink is -1.
+ * Out it is at most 0.43 up to Chrome's largest text, so 0.5 bounds a shrink computed wrong as 0.
+ */
 .prl-radar__label {
+  --prl-radar-label-shift: min(
+    0.5px,
+    (var(--prl-radar-label-clearance) - 14px - 88px * min(0.5, max(0, var(--prl-radar-plot-shrink)))) *
+    min(1, max(0, 2 * var(--prl-radar-plot-shrink) + 1))
+  );
   fill: var(--prl-text-muted);
   font-size: var(--prl-type-label-sm);
   letter-spacing: var(--prl-tracking-label-sm);
+  transform: translate(
+    calc(var(--prl-radar-dx) * var(--prl-radar-label-shift)),
+    calc(var(--prl-radar-dy) * var(--prl-radar-label-shift))
+  );
 }
 
 .prl-sparkline {
@@ -2665,6 +2724,37 @@ p.prl-seat__status {
   max-width: none;
 }
 
+/*
+ * At 360px with 200% text a fieldset's own `min-inline-size: min-content`, the label beside the 208px
+ * number field and the slider's 256px floor made the sizer 367px, so /lab pages were 450-507px wide.
+ * Below 20em each block may shrink, the label goes above the field, and both controls fit the sizer.
+ */
+@media (width < 20em) {
+  .prl-action-bar {
+    min-width: 0;
+    padding-inline: var(--prl-space-3);
+  }
+
+  .prl-sizer {
+    min-inline-size: 0;
+    padding-inline: var(--prl-space-3);
+  }
+
+  .prl-sizer__controls,
+  .prl-sizer__field,
+  .prl-sizer__slider {
+    min-width: 0;
+  }
+
+  .prl-sizer__field {
+    flex-wrap: wrap;
+  }
+
+  .prl-sizer__number {
+    max-width: 100%;
+  }
+}
+
 .prl-action-help__list {
   display: grid;
   gap: var(--prl-space-3);
@@ -3509,17 +3599,43 @@ td.prl-candidates__ev,
 }
 
 /*
- * At 360px with 200% text the Coach's nested boxes leave 108-148px for prose, narrower than
- * "representative," (212px), so its prose may hyphenate. Only under 20em, so no other size reflows.
+ * At 360px with 200% text a lesson calculator nests three padded boxes in a 296px column and left its
+ * body 148px, under "approximation," (212px). Below 20em each inset is 12px, so the body gets 244px.
  */
 @media (width < 20em) {
-  .prl-coach__prose,
-  .prl-suggestion__reason,
-  .prl-suggestion__disclaimer,
-  .prl-outs__meaning,
-  .prl-stat__note,
-  .prl-uncertainty__summary,
-  .prl-uncertainty__limitations,
+  .prl-panel,
+  .prl-callout,
+  .prl-formula,
+  .prl-assumptions {
+    padding-inline: var(--prl-space-3);
+  }
+}
+
+/*
+ * At 360px with 200% text the Coach's own 40px and its boxes' 32px a side floored it at 315px in a 296px
+ * column, and a limitation's 212px word needed 400px. Below 20em each box keeps 12px, each list 24px.
+ */
+@media (width < 20em) {
+  .prl-coach,
+  .prl-coach__section,
+  .prl-suggestion,
+  .prl-uncertainty,
+  .prl-stat {
+    padding-inline: var(--prl-space-3);
+  }
+
+  .prl-coach__list,
+  .prl-suggestion__changes,
+  .prl-uncertainty__limitations {
+    padding-inline-start: var(--prl-space-5);
+  }
+}
+
+/*
+ * At 360px with 200% text "measurement" and "combinations" are wider than an assumption's column, and
+ * unhyphenated they break mid-word. Only under 20em, so no other size reflows.
+ */
+@media (width < 20em) {
   .prl-assumptions__text {
     hyphens: auto;
   }
