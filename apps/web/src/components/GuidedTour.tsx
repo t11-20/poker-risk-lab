@@ -55,10 +55,13 @@ export function GuidedTour(): ReactElement | null {
   const router = useRouter();
   const panelRef = useRef<HTMLElement | null>(null);
   const seenPath = useRef<string | null>(null);
+  const measureInset = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     if (seenPath.current !== null && seenPath.current !== pathname) {
       tourStore.dispatch({ type: 'navigated', pathname });
+      // The panel stays open across a navigation, and `/play` keeps it in the flow, at the same size.
+      measureInset.current?.();
     }
     seenPath.current = pathname;
     const { settled } = tourStore.getSnapshot();
@@ -91,10 +94,12 @@ export function GuidedTour(): ReactElement | null {
       root.style.setProperty(TOUR_INSET_PROPERTY, `${Math.max(0, inset)}px`);
     };
     measure();
+    measureInset.current = measure;
     const observer = new ResizeObserver(measure);
     observer.observe(panel);
     window.addEventListener('resize', measure);
     return () => {
+      measureInset.current = null;
       observer.disconnect();
       window.removeEventListener('resize', measure);
       root.style.removeProperty(TOUR_INSET_PROPERTY);

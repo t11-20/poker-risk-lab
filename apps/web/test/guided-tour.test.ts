@@ -331,7 +331,10 @@ describe('the panel moves nothing and traps nothing (read from the source)', () 
       ruleOf(CSS, ':root:has(.prl-tour):not(:has(.prl-play))'),
       /scroll-padding-block-end: calc\(var\(--prl-tour-inset, 0px\) \+ /u,
     );
-    assert.match(ruleOf(CSS, 'body:has(.prl-tour)'), /padding-block-end: var\(--prl-tour-inset, 0px\);/u);
+    assert.match(
+      ruleOf(CSS, 'body:has(.prl-tour):not(:has(.prl-play))'),
+      /padding-block-end: var\(--prl-tour-inset, 0px\);/u,
+    );
     assert.match(PANEL, /root\.style\.setProperty\(TOUR_INSET_PROPERTY, /u);
     assert.match(PANEL, /new ResizeObserver\(measure\)/u);
     assert.match(PANEL, /root\.style\.removeProperty\(TOUR_INSET_PROPERTY\);\n {4}\};\n {2}\}, \[open\]\);/u);
@@ -351,6 +354,9 @@ describe('the panel moves nothing and traps nothing (read from the source)', () 
   it('stays in the flow on /play, whose own controls are pinned to the bottom of the window', () => {
     assert.match(ruleOf(CSS, ':root:has(.prl-play) .prl-tour'), /position: static;/u);
     assert.match(PANEL, /getComputedStyle\(panel\)\.position !== 'fixed'/u);
+    // Open across a navigation at the same size, so the route change itself re-measures.
+    assert.match(PANEL, /type: 'navigated', pathname \}\);\n {6}measureInset\.current\?\.\(\);/u);
+    assert.match(PANEL, /measureInset\.current = measure;/u);
   });
 
   it('handles Escape on the panel, not the document, and has no focus trap', () => {

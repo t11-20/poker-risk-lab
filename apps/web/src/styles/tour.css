@@ -107,7 +107,7 @@
 }
 
 /** Body, not `.prl-app`: that is a `100dvh` column, and padding there would pull the footer up. */
-body:has(.prl-tour) {
+body:has(.prl-tour):not(:has(.prl-play)) {
   padding-block-end: var(--prl-tour-inset, 0px);
 }
 
