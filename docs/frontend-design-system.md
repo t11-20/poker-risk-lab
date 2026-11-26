@@ -918,7 +918,8 @@ Two narrower ranges exist for large text. Below `20em` (a window under 320px at 
   - the Coach with its sections, suggestion, uncertainty note and stats. Its lists indent `0.75rem`.
 
   Legends cards, compare columns, decisions, difficulty frames and picker options pad `0.5rem`.
-  Disclaimers pad `0.75rem`.
+  Disclaimers pad `0.75rem`. On the legal pages the banner and a naming flag pad `1rem`; the age
+  check's panel pads `0.75rem` and its caveats `0.5rem` a side (`apps/web/src/styles/legal.css`).
 - **The bet sizer fits.** The action bar, the sizer, its controls, field and slider may shrink. The
   field wraps and the number field is never wider than it. The bar and the sizer keep `0.375rem` a side.
 - **The display ramp steps down** (§3.2), and a Legends card's or compare column's name takes

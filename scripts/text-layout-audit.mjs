@@ -60,6 +60,7 @@ const ROUTES = [
   '/terms',
   '/privacy',
   '/responsible-use',
+  '/age-check',
   // The evidence behind the home page's figures, moved off the home page in the 4.0 re-identity.
   '/checks',
 ];
@@ -107,12 +108,16 @@ const LARGE_TEXT_PHONE_ROUTES = [
   '/legends/adaptive-exploiter',
   '/review',
   '/legends/hand-review/demo',
+  '/terms',
+  '/privacy',
+  '/responsible-use',
+  '/age-check',
   '/checks',
 ];
 
 const LARGE_TEXT_PHONE_WHY =
   'content wider than 360px fits a 768px window, so only a phone at 200% text shows it; ' +
-  'the routes not listed still fail at 360px and 200% on work held for the owner';
+  'the route not listed still fails at 360px and 200% on work held for the owner';
 
 /** An error boundary returns 200 with good markup, so it counts as a failed render. */
 const ERROR_BOUNDARY_HEADINGS = [
@@ -172,18 +177,18 @@ const FLOOR_PER_MEASUREMENT = {
 };
 
 /**
- * The default run's own floors, since the rates above held its 100% pass to 1,600 pairs of 33,050:
+ * The default run's own floors, since the rates above held its 100% pass to 1,680 pairs of 33,528:
  * about a third of each pass on 2026-11-26 (clip tests from `/` and two Legends routes only).
  */
 const DEFAULT_RUN_FLOORS = {
-  main: { textBoxes: 13000, ownBox: 13000, clipTests: 2000, frameTests: 9500, pairs: 11000, breakTests: 75 },
+  main: { textBoxes: 13150, ownBox: 13150, clipTests: 2000, frameTests: 9600, pairs: 11150, breakTests: 78 },
   'large-text': {
-    textBoxes: 4900,
-    ownBox: 4900,
+    textBoxes: 5050,
+    ownBox: 5050,
     clipTests: 570,
     frameTests: 3650,
     pairs: 2150,
-    breakTests: 57,
+    breakTests: 76,
   },
 };
 
