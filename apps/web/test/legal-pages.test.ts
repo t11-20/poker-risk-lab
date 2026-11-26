@@ -261,7 +261,6 @@ describe('the required disclosures are on the pages', () => {
       'prl.session.hidden',
       'prl.session.acknowledgedAt',
       'prl-theme',
-      'prl-booted',
       'prl.learn.onboarding.dismissed',
       'prl.lab.spots',
       'prl.tour.dismissed',

@@ -103,6 +103,10 @@ From the **running image**, `GET /learn`:
 - Two consecutive GETs minted **different** nonces
 - Companion: `x-content-type-options: nosniff`, `x-frame-options: DENY`, `referrer-policy: same-origin`, `cross-origin-opener-policy: same-origin`
 
+The theme script's hash recorded here is the one of that date. Since 2026-11-26 it is
+`sha256-MaxHIYcm3xBWyY7wpSDoc+efsawG6MCxRrOVEVxIQQw=`, because the first-visit overlay's session
+check left the script; `apps/web/src/lib/theme.ts` holds the current value.
+
 Config-file presence was not used as proof. Residual: `style-src-attr 'unsafe-inline'` is present and confined to that directive.
 
 ### 12-profile SIGTERM rehydrate — PASS

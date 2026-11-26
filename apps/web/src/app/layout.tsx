@@ -1,7 +1,7 @@
 /**
  * The root layout. `@prl/ui/styles.css` is imported first so tokens precede every route's CSS.
  * `THEME_BOOT_SCRIPT` is the only inline script. It is the first child of `<body>` so the stored theme
- * and boot flag land before first paint. CSP allows it by nonce and by hash. It edits `<html>` before
+ * lands before first paint. CSP allows it by nonce and by hash. It edits `<html>` before
  * React hydrates, hence `suppressHydrationWarning`. `RouteAnnouncer` sits above every route so it
  * outlives navigations, and outside the skip link's target. `data-theme` is not written here, because
  * its absence means "follow the system".
@@ -17,7 +17,6 @@ import '@/styles/tour.css';
 import type { Metadata, Viewport } from 'next';
 import { headers } from 'next/headers';
 import type { ReactElement, ReactNode } from 'react';
-import { BootSequence } from '@/components/BootSequence.tsx';
 import { GuidedTour } from '@/components/GuidedTour.tsx';
 import { RouteAnnouncer } from '@/components/RouteAnnouncer.tsx';
 import { SiteFooter } from '@/components/SiteFooter.tsx';
@@ -59,7 +58,6 @@ export default async function RootLayout({
         <a className="prl-skip-link" href={`#${MAIN_ID}`}>
           Skip to main content
         </a>
-        <BootSequence />
         <RouteAnnouncer />
         <div className="prl-app">
           <SiteHeader fallbackUnits={STARTING_UNITS} />

@@ -211,7 +211,7 @@ class Page {
     for (let attempt = 0; attempt < 100; attempt += 1) {
       await delay(100);
       const state = await this.evaluate(
-        `(() => ({ ready: document.readyState, url: location.href, path: location.pathname, hydrated: document.documentElement.dataset.boot !== undefined || document.querySelectorAll('script[src]').length > 0 }))()`,
+        '(() => ({ ready: document.readyState, url: location.href, path: location.pathname }))()',
       ).catch(() => null);
       if (state === null || state.ready !== 'complete') continue;
       // Name the age gate's 303 here rather than timing out below.
@@ -406,8 +406,8 @@ const ACTION_CONTROLS = `(() => {
   };
 })()`;
 
-// Identity is a stamp, not a DOM path. `BootSequence` unmounts an overlay after first paint and
-// shifts sibling indices. Idempotent.
+// Identity is a stamp, not a DOM path, because a client render that mounts or unmounts a node shifts
+// sibling indices. Idempotent.
 const STAMP_FOCUSABLE = `(() => {
   const SELECTOR = [
     'a[href]', 'button', 'input', 'select', 'textarea', 'summary',
@@ -1358,14 +1358,6 @@ async function auditCoachSheetOpen(page) {
       ]) {
         const label = `Coach sheet: ${where} at ${width}x${height}`;
         await page.goto(`${WEB_ORIGIN}/play?state=decision`);
-        // The first-visit overlay covers the page, and every tap would land on it.
-        for (
-          let wait = 0;
-          wait < 30 && (await page.evaluate(`document.querySelector('.prl-boot') !== null`));
-          wait += 1
-        ) {
-          await delay(100);
-        }
         await page.evaluate(
           `(() => {
             document.documentElement.style.scrollBehavior = 'auto';
@@ -1462,13 +1454,6 @@ async function auditCoachSheetOpen(page) {
       mobile: true,
     });
     await page.goto(`${WEB_ORIGIN}/play?state=decision`);
-    for (
-      let wait = 0;
-      wait < 30 && (await page.evaluate(`document.querySelector('.prl-boot') !== null`));
-      wait += 1
-    ) {
-      await delay(100);
-    }
     await page.evaluate(
       `(() => {
         document.querySelector('.prl-play__coach').style.transition = 'none';

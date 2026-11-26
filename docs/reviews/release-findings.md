@@ -1690,6 +1690,9 @@ Full detail in the working notes; both are carried into the fix list.
   CSP that blocks the one script that exists to prevent a theme flash. The root cause is
   that the value was reviewable but not verifiable, so the fix adds a test that recomputes
   it.
+  The theme script's hash recorded here is the one of that date. Since 2026-11-26 it is
+  `sha256-MaxHIYcm3xBWyY7wpSDoc+efsawG6MCxRrOVEVxIQQw=`, because the first-visit overlay's session
+  check left the script; `apps/web/src/lib/theme.ts` holds the current value.
 - **LEAD-3 (P1)** — reviewer agents left 818 lines of scratch probe tests in the repository
   (`packages/poker-ai/test/zz-review-*.test.ts`,
   `packages/poker-math/test/zz-review-coach.test.ts`), which break `lint` (6 errors) and

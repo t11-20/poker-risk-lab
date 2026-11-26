@@ -7,9 +7,6 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 import {
-  BOOT_ATTRIBUTE,
-  BOOT_SESSION_KEY,
-  BOOT_SKIP,
   THEME_ATTRIBUTE,
   THEME_BOOT_SCRIPT,
   THEME_BOOT_SCRIPT_CSP_HASH,
@@ -55,7 +52,7 @@ test('THEME_BOOT_SCRIPT_CSP_HASH is a well-formed script-src source expression',
 test('THEME_BOOT_SCRIPT stays hashable: fixed bytes, its own keys, no closing-tag sequence', () => {
   // The hash is only meaningful for fixed bytes. The script reads this module's exported keys, and must
   // not contain a sequence that ends the element early.
-  for (const constant of [THEME_STORAGE_KEY, BOOT_SESSION_KEY, THEME_ATTRIBUTE, BOOT_ATTRIBUTE, BOOT_SKIP]) {
+  for (const constant of [THEME_STORAGE_KEY, THEME_ATTRIBUTE]) {
     assert.ok(
       THEME_BOOT_SCRIPT.includes(constant),
       `THEME_BOOT_SCRIPT must interpolate ${JSON.stringify(constant)} from this module rather than ` +
@@ -67,5 +64,15 @@ test('THEME_BOOT_SCRIPT stays hashable: fixed bytes, its own keys, no closing-ta
   assert.ok(
     !THEME_BOOT_SCRIPT.toLowerCase().includes('</script'),
     'an inline script containing </script would be terminated early by the HTML parser',
+  );
+});
+
+test('THEME_BOOT_SCRIPT only resolves the theme', () => {
+  // Byte for byte, so a second job added to the script fails here and not only through its hash.
+  assert.equal(
+    THEME_BOOT_SCRIPT,
+    "(function(){try{var d=document.documentElement;var t=window.localStorage.getItem('prl-theme');" +
+      "if(t==='light'||t==='dark'){d.setAttribute('data-theme',t);}" +
+      "else{d.removeAttribute('data-theme');}}catch(e){}})();",
   );
 });

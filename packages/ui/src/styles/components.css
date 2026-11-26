@@ -1674,70 +1674,7 @@ p.prl-seat__status {
   letter-spacing: var(--prl-tracking-label);
 }
 
-/* Boot sequence. First paint of the shell only, 900ms at most, 1ms under reduced motion. */
-
-/**
- * The cap is also CSS, because `data-state="done"` needs hydration, and a failed bundle left an
- * opaque `z-index: 900` sheet over the page for good. It animates `visibility`, not `opacity`,
- * which would out-rank the done state and stop the fade and the unmount.
- */
-.prl-boot {
-  position: fixed;
-  z-index: var(--prl-z-boot);
-  inset: 0;
-  display: grid;
-  align-content: center;
-  justify-items: start;
-  gap: var(--prl-space-5);
-  padding: var(--prl-gutter);
-  background-color: var(--prl-surface-page);
-  /* `--prl-dur-out`, because this overlay only ever leaves. */
-  transition: opacity var(--prl-dur-out) var(--prl-ease-exit);
-  animation: prl-boot-deadline var(--prl-dur-out) var(--prl-ease-exit) var(--prl-dur-count) forwards;
-}
-
-@keyframes prl-boot-deadline {
-  from {
-    pointer-events: none;
-  }
-
-  to {
-    pointer-events: none;
-    visibility: hidden;
-  }
-}
-
-/** The component then removes the node. A fixed overlay left in place is a hazard. */
-.prl-boot[data-state="done"] {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.prl-boot__label {
-  color: var(--prl-text-muted);
-  font-family: var(--prl-font-mono);
-  font-size: var(--prl-type-label);
-  letter-spacing: var(--prl-tracking-label);
-}
-
-.prl-boot__count {
-  color: var(--prl-text);
-  font-family: var(--prl-font-mono);
-  font-size: var(--prl-type-display-3);
-  font-variant-numeric: var(--prl-numeric);
-  letter-spacing: var(--prl-tracking-display-3);
-  line-height: var(--prl-leading-tight);
-}
-
-.prl-boot__rule {
-  width: min(100%, var(--prl-space-16));
-  height: 1px;
-  background-color: var(--prl-accent-edge);
-  transform-origin: left center;
-  animation: prl-boot-wipe var(--prl-dur-count) var(--prl-ease-standard) forwards;
-}
-
-@keyframes prl-boot-wipe {
+@keyframes prl-wipe {
   from {
     transform: scaleX(0);
   }
@@ -1747,7 +1684,7 @@ p.prl-seat__status {
   }
 }
 
-/** Route changes get this bar instead of the boot sequence. */
+/** Route changes get this bar. */
 .prl-route-progress {
   position: fixed;
   z-index: var(--prl-z-toast);
@@ -1756,7 +1693,7 @@ p.prl-seat__status {
   height: var(--prl-focus-width);
   background-color: var(--prl-accent-edge);
   transform-origin: left center;
-  animation: prl-boot-wipe var(--prl-dur-count) var(--prl-ease-standard) forwards;
+  animation: prl-wipe var(--prl-dur-count) var(--prl-ease-standard) forwards;
 }
 
 /* PlayingCard */

@@ -250,9 +250,8 @@ export default function PrivacyPage(): ReactElement {
               forward, and no amount of visiting carries it past sixty days from when it was issued.
             </li>
             <li>
-              <strong>Your theme choice</strong> (<code>prl-theme</code> in local storage) and whether the
-              opening animation has already played in this tab (<code>prl-booted</code> in session storage).
-              Both are read before the first paint so the page does not flash.
+              <strong>Your theme choice</strong> (<code>prl-theme</code> in local storage). It is read before
+              the first paint so the page does not flash.
             </li>
             <li>
               <strong>Whether you dismissed the first-run explainer</strong> on the curriculum page (
