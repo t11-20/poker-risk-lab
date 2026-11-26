@@ -116,3 +116,22 @@ describe('/age-check at 360px with 200% text', () => {
     assert.ok(declares(unconditional(legal), '.prl-gate code', 'overflow-wrap', 'anywhere'));
   });
 });
+
+describe('the age gate’s panel at 360px with 200% text', () => {
+  // 80px sides left 134px for "deployment" (225px) and 'jurisdiction' (205px inside a caveat's 40px sides).
+  it('narrows the gate and its caveats only with large text on a phone', () => {
+    assert.ok(declares(phone(), '.prl-gate', 'padding', 'var(--prl-space-5)'));
+    assert.ok(declares(phone(), '.prl-gate__caveat', 'padding-inline', 'var(--prl-space-4)'));
+  });
+
+  // Same specificity, so the narrow caveat padding wins only by coming later.
+  it('declares the narrow caveat padding after the caveat’s own', () => {
+    const own = legal.search(/\.prl-gate__caveat \{[^}]*padding: /u);
+    const openers = [...legal.matchAll(/@media \(width < 20em\) \{/gu)].map((m) => m.index ?? -1);
+    const narrow = openers.find((at) =>
+      (blocks(legal.slice(at), PHONE_AT_200)[0] ?? '').includes('.prl-gate__caveat {'),
+    );
+    assert.ok(own >= 0 && narrow !== undefined, 'both rules are present');
+    assert.ok(own < narrow, 'the narrow rule comes later');
+  });
+});

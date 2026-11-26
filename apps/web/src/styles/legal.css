@@ -235,6 +235,20 @@ p.prl-legal-flag__mark {
   color: var(--prl-text);
 }
 
+/*
+ * Only with large text on a phone, and after the caveat so it wins: 80px sides left the gate 134px, and
+ * "deployment" in the title needs 225; "jurisdiction" in a caveat needs 205.
+ */
+@media (width < 20em) {
+  .prl-gate {
+    padding: var(--prl-space-5);
+  }
+
+  .prl-gate__caveat {
+    padding-inline: var(--prl-space-4);
+  }
+}
+
 .prl-gate__form {
   margin: 0;
 }
