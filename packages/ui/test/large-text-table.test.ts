@@ -68,7 +68,7 @@ describe('side pots under 20em', () => {
 });
 
 describe('seat names under 20em', () => {
-  // Two seats a row left a name 111-127px; the widest seat-name word, a Legends seat's "Fundamentalist", is 200px.
+  // Two seats a row left a name 111-127px, and a Legends seat's "Fundamentalist" is 200px.
   holds([
     ['.prl-table__field', 'grid-template-columns', 'minmax(0, 1fr)', 'one seat a row'],
     ['.prl-table__field', '--prl-seat-w', '100%', 'a seat is the whole row'],
@@ -83,7 +83,10 @@ describe('seat names under 20em', () => {
     rules.splice(3, 0, '.prl-table__centre');
     for (const selector of rules) {
       const at = css.indexOf(`\n${selector} {`);
-      assert.ok(at >= 0 && at < (narrow(selector, 'grid-area')?.at ?? -1), `${selector}'s own rule would win`);
+      assert.ok(
+        at >= 0 && at < (narrow(selector, 'grid-area')?.at ?? -1),
+        `${selector}'s own rule would win`,
+      );
     }
     const rows = rules.map((selector) => narrow(selector, 'grid-area')?.value);
     assert.deepEqual(rows, ['1 / 1', '2 / 1', '3 / 1', '4 / 1', '5 / 1', '6 / 1', '7 / 1']);

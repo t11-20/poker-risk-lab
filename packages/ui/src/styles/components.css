@@ -1028,7 +1028,7 @@ p.prl-seat__status {
   margin: 0;
 }
 
-/** It draws nothing, so out of flow it leaves the cluster's gap: in flow it set the disc 6px off the plate. */
+/** It draws nothing. Out of flow it takes none of the cluster's gap, which set the disc 6px off its plate. */
 .prl-seat__cluster > .prl-seat__cards--empty {
   position: absolute;
 }

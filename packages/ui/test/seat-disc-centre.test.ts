@@ -34,7 +34,7 @@ function clusterGap(): number {
   return Number(rem) * 16;
 }
 
-/** Classes the stylesheet takes out of the cluster's flow, as `.prl-seat__cluster > .x { position: absolute }`. */
+/** Classes taken out of the cluster's flow by `.prl-seat__cluster > .x { position: absolute }`. */
 function outOfFlow(): Set<string> {
   const found = new Set<string>();
   for (const [, list = '', body = ''] of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
