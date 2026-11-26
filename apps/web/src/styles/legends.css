@@ -354,7 +354,8 @@
 
 /**
  * Two columns from 720px, below the 24rem floor, because two floors need 792px and a 768px tablet has
- * 706px. A card fits in ~337px since the disclaimer is printed once above the grid.
+ * 706px. A card fits in ~337px because it prints a one-line pointer to the universal disclaimer above
+ * the grid, and only its own disclaimers in full.
  */
 @media (45em <= width < 56.25em) {
   .prl-legend-grid {

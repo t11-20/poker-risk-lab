@@ -213,8 +213,8 @@ AND CARDS block of `tokens.css`, which the generator reads.
 | `--prl-deck-red` | hearts, diamonds | `#b3262d` | 6.28:1 |
 
 The backs are a white margin round a lattice panel; the margin is what separates a dark back from
-the felt. Three are generated (charcoal, deep green, dark wine) and `back.svg` is charcoal until the
-owner picks one.
+the felt. There is one back, charcoal (`back.svg`): a green back sinks into the felt and a wine back
+sits close to the red suit ink.
 
 **Two inks, as on a real deck, and never colour alone.** Each card carries its rank, a large suit
 symbol and its `aria-label` ("ace of hearts"). The deck was four-colour with a suit letter under
