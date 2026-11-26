@@ -64,7 +64,7 @@ export function RadarChart(props: RadarChartProps): ReactElement {
   }
 
   const count = axes.length;
-  // Word labels need room outside the ring. The window widens; the chart does not move.
+  // Word labels widen the window. Larger text takes its room from the plot instead, in the stylesheet.
   const gutter = axisLabels === 'text' ? RADAR_LABEL_GUTTER : 0;
   const viewBox = radarViewBox(gutter);
   const room: StyleWithVars = {
