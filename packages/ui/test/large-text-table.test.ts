@@ -93,6 +93,17 @@ describe('seat names under 20em', () => {
     assert.equal(narrow('.prl-table__field', 'grid-template-rows')?.value, 'repeat(7, auto)');
   });
 
+  // In a whole-row seat the cards beside the disc set it 52px (backs) and 62px (face up) off its plate.
+  it('puts an opponent’s cards above the disc, so the disc stays over its plate', () => {
+    assert.equal(narrow('.prl-seat__cluster', 'flex-direction')?.value, 'column');
+    assert.equal(narrow('.prl-seat__cluster', 'align-items')?.value, 'center');
+    assert.equal(
+      ownValue('.prl-seat__cluster', 'align-items'),
+      'flex-end',
+      'beside the disc at every other size',
+    );
+  });
+
   it('keeps two seats a row and the seat padding at every other size', () => {
     assert.equal(ownValue('.prl-table__field', 'grid-template-columns'), 'repeat(2, minmax(0, 1fr))');
     assert.equal(ownValue('.prl-seat__plate', 'padding'), 'var(--prl-space-2) var(--prl-space-4)');

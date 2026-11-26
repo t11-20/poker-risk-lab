@@ -906,7 +906,7 @@
 
 /**
  * Disc and an opponent's cards. 12px keeps the second back, which leans 8deg into the disc, 5px off the
- * turn ring; wrapped, the cards go above the disc by the same gap, clear of the dealer button.
+ * turn ring; stacked or wrapped, the cards go above the disc by the same gap, clear of the dealer button.
  */
 .prl-seat__cluster {
   display: flex;
@@ -2409,6 +2409,12 @@ p.prl-seat__status {
 
   .prl-seat__plate {
     padding-inline: var(--prl-space-2);
+  }
+
+  /* Cards beside the disc set it 52-62px off its plate in a whole-row seat, so they go above it. */
+  .prl-seat__cluster {
+    flex-direction: column;
+    align-items: center;
   }
 }
 
