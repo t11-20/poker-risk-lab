@@ -33,10 +33,12 @@ import {
   LARGE_TEXT,
   LARGE_TEXT_PHONE_ROUTES,
   letterByLetter,
+  NO_HYPHENATION,
   nearestFrame,
   Page,
   parseArgs,
   parseTextIndent,
+  passBlocks,
   passCoverageFailures,
   ROUTES,
   sweepMatrix,
@@ -1067,24 +1069,23 @@ describe('exemptions', () => {
     assert.equal(exemptionReport([{}], {}, rules)[0].status, 'stale');
   });
 
-  it('every shipped rule carries a reason, and the list holds only the radar labels', () => {
-    for (const rule of EXEMPTIONS) {
-      assert.ok(typeof rule.selector === 'string' && rule.selector.length > 0);
-      assert.ok(typeof rule.why === 'string' && rule.why.length > 30, 'an exemption needs a reason');
-      assert.ok(CHECKS.includes(rule.check));
-    }
-    assert.deepEqual(
-      EXEMPTIONS.map((rule) => [rule.check, rule.selector, rule.aboveScale]),
-      [['clipped', 'text.prl-radar__label', 1]],
-    );
+  // The radar labels were the last rule; since the plot gives way to larger text they clip nowhere.
+  it('ships none', () => {
+    assert.deepEqual(EXEMPTIONS, []);
   });
 });
 
-/**
- * `/legends`, light, 768px, 200% text: radar label "04" cut 4.5px past the radar that hides overflow.
- * `exempt` is what the walker sends when the element matches the rule's selector; the root is 32px.
- */
-const RADAR_RULE = EXEMPTIONS.findIndex((rule) => rule.selector === 'text.prl-radar__label');
+/** A rule above 100% text, held to the clipper it names, as the radar labels' rule was. */
+const LABEL_RULES = [
+  {
+    check: 'clipped',
+    selector: 'text.prl-radar__label',
+    also: ['prl-radar'],
+    aboveScale: 1,
+    why: 'a fixture: the label clipped by its own radar, at a text size above 100% only',
+  },
+];
+const RADAR_RULE = 0;
 const RADAR = 'article.prl-legend-card > div.prl-radar.prl-legend-radar > svg.prl-radar__svg';
 
 function radarLabel(clipperSel = RADAR) {
@@ -1110,12 +1111,12 @@ function radarLabel(clipperSel = RADAR) {
   );
 }
 
-describe('the radar label exemption', () => {
-  const clippedAt = (m, context) => findTextDefects(m, context).findings.filter((f) => f.check === 'clipped');
+describe('an exemption above a text size, held to the clipper it names', () => {
+  const defects = (m, context) => findTextDefects(m, context, LABEL_RULES);
+  const clippedAt = (m, context) => defects(m, context).findings.filter((f) => f.check === 'clipped');
 
   it('suppresses the label clipped by its own radar at 200% text, and counts it', () => {
-    assert.ok(RADAR_RULE >= 0, 'no shipped exemption names text.prl-radar__label');
-    const result = findTextDefects(radarLabel(), { route: '/legends', width: 768, scale: 2 });
+    const result = defects(radarLabel(), { route: '/legends', width: 768, scale: 2 });
     assert.deepEqual(result.findings, []);
     assert.deepEqual(result.usedExemptions, [RADAR_RULE]);
     assert.deepEqual(result.suppressed, { [RADAR_RULE]: 1 });
@@ -1124,7 +1125,7 @@ describe('the radar label exemption', () => {
   it('still reports the same finding at 100% text, or with no size given (REGRESSION)', () => {
     assert.equal(clippedAt(radarLabel(), { route: '/legends', width: 768, scale: 1 })[0]?.past, 4.5);
     assert.equal(clippedAt(radarLabel(), { route: '/legends', width: 768 }).length, 1);
-    assert.deepEqual(findTextDefects(radarLabel(), { scale: 1 }).usedExemptions, []);
+    assert.deepEqual(defects(radarLabel(), { scale: 1 }).usedExemptions, []);
   });
 
   it('still reports the label cut off by an ancestor that is not the radar', () => {
@@ -1143,27 +1144,27 @@ describe('the radar label exemption', () => {
       left: true,
       right: true,
     });
-    const checks = findTextDefects(framed, { scale: 2 }).findings.map((f) => f.check);
+    const checks = defects(framed, { scale: 2 }).findings.map((f) => f.check);
     assert.deepEqual(checks, ['spills']);
   });
 
   it('is held to having matched by a full pass above 100%, and said aloud when none ran', () => {
     const report = (argv, suppressed) =>
-      exemptionReport(sweepPasses(parseArgs(argv)), suppressed)[RADAR_RULE].status;
+      exemptionReport(sweepPasses(parseArgs(argv)), suppressed, LABEL_RULES)[RADAR_RULE].status;
     assert.equal(report([], { [RADAR_RULE]: 312 }), 'used');
     assert.equal(report([], {}), 'stale', 'the default run reaches the rule through its large-text pass');
     assert.equal(report(['--text-scale', '2'], {}), 'stale');
     assert.equal(report(['--text-scale', '1'], {}), 'unreached', 'a 100% run cannot use it');
     assert.equal(report(['--routes', '/learn'], {}), 'unreached', 'a narrowed run cannot prove it stale');
-    const stale = exemptionReport(sweepPasses(parseArgs([])), {});
+    const stale = exemptionReport(sweepPasses(parseArgs([])), {}, LABEL_RULES);
     assert.match(exemptionFailures(stale)[0], /text\.prl-radar__label\) matched nothing/u);
   });
 
   it('prints its reason and what it suppressed', () => {
-    const [used] = exemptionReport(sweepPasses(parseArgs([])), { [RADAR_RULE]: 312 });
+    const [used] = exemptionReport(sweepPasses(parseArgs([])), { [RADAR_RULE]: 312 }, LABEL_RULES);
     assert.match(formatExemption(used), /^clipped text\.prl-radar__label above 100% text: 312 finding/u);
-    assert.match(formatExemption(used), /why: .*held for the owner/u);
-    const [unreached] = exemptionReport(sweepPasses(parseArgs(['--text-scale', '1'])), {});
+    assert.match(formatExemption(used), /why: a fixture/u);
+    const [unreached] = exemptionReport(sweepPasses(parseArgs(['--text-scale', '1'])), {}, LABEL_RULES);
     assert.match(formatExemption(unreached), /not reached/u);
   });
 });
@@ -1389,15 +1390,15 @@ describe('the scope of the sweep', () => {
   });
 });
 
-// The large-text pass in verify on 2026-11-26: ROUTES, light, 768, 1024 and 1440, and the nine phone
-// routes at 360, 200% text. Its clip tests come from three routes only.
+// The large-text pass of the default run on 2026-11-26: ROUTES, light, 768, 1024 and 1440, and the
+// sixteen phone routes at 360 with hyphenation off, 200% text. Three runs gave the same tally.
 const LARGE_TEXT_RUN = {
-  measurements: 69,
-  measurementsWanted: 69,
-  textBoxes: 12170,
-  detector: { ownBox: 12170, clipTests: 1328, frameTests: 8630, pairs: 5903, breakTests: 111 },
-  routesLoaded: 29,
-  routesWanted: 29,
+  measurements: 76,
+  measurementsWanted: 76,
+  textBoxes: 14733,
+  detector: { ownBox: 14733, clipTests: 1712, frameTests: 10925, pairs: 6430, breakTests: 173 },
+  routesLoaded: 36,
+  routesWanted: 36,
 };
 
 describe('the large-text pass', () => {
@@ -1423,15 +1424,23 @@ describe('the large-text pass', () => {
       LARGE_TEXT_PHONE_ROUTES,
     );
     assert.ok(phone.every((cell) => cell.theme === 'light' && cell.scale === 2));
+    // Every route clean at 360px and 200% text with hyphenation off, the API down, on 2026-11-26.
     for (const route of [
       '/',
       '/learn',
+      '/learn/pot-odds',
+      '/learn/counting-outs',
+      '/learn/glossary',
       '/play',
+      '/play?state=decision',
       '/lab',
       '/lab/fl-same-cards-under-the-gun',
       '/lab/spots',
+      '/lab/spots/edit?from=fl-same-cards-under-the-gun',
+      '/legends',
       '/legends/adaptive-exploiter',
       '/review',
+      '/legends/hand-review/demo',
       '/checks',
     ]) {
       assert.ok(LARGE_TEXT_PHONE_ROUTES.includes(route), `${route} is no longer measured at 360px`);
@@ -1439,6 +1448,29 @@ describe('the large-text pass', () => {
     for (const route of LARGE_TEXT_PHONE_ROUTES) assert.ok(ROUTES.includes(route), `${route} is not swept`);
     const [, pass] = sweepPasses(parseArgs([]));
     assert.match(pass.also[0].why, /360px/u, 'the run prints why these routes and no others');
+  });
+
+  it('measures the 360px cell with hyphenation off, and no other cell (REGRESSION)', () => {
+    // CI's Linux Chrome may have no dictionary, so a word that fits only hyphenated passes only locally.
+    assert.equal(NO_HYPHENATION, '* { hyphens: manual !important; }');
+    const [main, pass] = sweepPasses(parseArgs([]));
+    assert.deepEqual(
+      pass.also.map((block) => [block.widths, block.unhyphenated]),
+      [[[LARGE_TEXT.phoneWidth], true]],
+    );
+    for (const block of [...passBlocks(main), passBlocks(pass)[0]]) assert.notEqual(block.unhyphenated, true);
+  });
+
+  it('has a negative control measured as that cell is: a word that fits only hyphenated', () => {
+    const control = CONTROLS.find((entry) => entry.unhyphenated === true);
+    assert.ok(control, 'no negative control is measured with hyphenation off');
+    assert.equal(control.expect, 'squeezed');
+    assert.ok(LARGE_TEXT_PHONE_ROUTES.includes(control.route));
+    assert.equal(control.width, LARGE_TEXT.phoneWidth);
+    assert.equal(control.scale, LARGE_TEXT.scale);
+    assert.ok(LARGE_TEXT.themes.includes(control.theme));
+    // Without `normal` the word breaks mid-word instead, which no check reports.
+    assert.match(control.css, /hyphens: auto; overflow-wrap: normal;/u);
   });
 
   it('measures at 360px only the phone routes --routes keeps', () => {
@@ -1460,13 +1492,13 @@ describe('the large-text pass', () => {
   });
 
   it('follows --routes, so one route can be checked the way the gate checks it', () => {
-    assert.deepEqual(large(['--routes', '/legends']), [
-      { route: '/legends', theme: 'light', width: 768, scale: 2 },
-      { route: '/legends', theme: 'light', width: 1024, scale: 2 },
-      { route: '/legends', theme: 'light', width: 1440, scale: 2 },
+    assert.deepEqual(large(['--routes', '/terms']), [
+      { route: '/terms', theme: 'light', width: 768, scale: 2 },
+      { route: '/terms', theme: 'light', width: 1024, scale: 2 },
+      { route: '/terms', theme: 'light', width: 1440, scale: 2 },
     ]);
     assert.deepEqual(
-      sweepPasses(parseArgs(['--routes', '/legends'])).map((pass) => pass.narrowed),
+      sweepPasses(parseArgs(['--routes', '/terms'])).map((pass) => pass.narrowed),
       [true, true],
     );
   });
@@ -1490,7 +1522,7 @@ describe('the large-text pass', () => {
     const unclipped = { ...LARGE_TEXT_RUN, detector: { ...LARGE_TEXT_RUN.detector, clipTests: 0 } };
     const problems = passCoverageFailures(passes, [FULL_DEFAULT_RUN, unclipped]);
     assert.equal(problems.length, 1, '4,280 clip tests at 100% must not cover a pass with none');
-    assert.match(problems[0], /^200% text pass: only 0 text blocks .*clipping ancestor \(floor 440 for 69 /u);
+    assert.match(problems[0], /^200% text pass: only 0 text blocks .*clipping ancestor \(floor 570 for 76 /u);
     assert.deepEqual(passCoverageFailures(passes, [FULL_DEFAULT_RUN, LARGE_TEXT_RUN]), []);
   });
 
@@ -1507,9 +1539,9 @@ describe('the large-text pass', () => {
     const unclipped = { ...LARGE_TEXT_RUN, detector: { ...LARGE_TEXT_RUN.detector, clipTests: 100 } };
     assert.match(
       coverageFailures(unclipped, floors)[0],
-      /only 100 text blocks .*clipping ancestor \(floor 440 for 69 /u,
+      /only 100 text blocks .*clipping ancestor \(floor 570 for 76 /u,
     );
-    assert.match(coverageFailures(unclipped)[0], /\(floor 276 for 69 /u, 'the same cells, narrowed');
+    assert.match(coverageFailures(unclipped)[0], /\(floor 304 for 76 /u, 'the same cells, narrowed');
   });
 });
 

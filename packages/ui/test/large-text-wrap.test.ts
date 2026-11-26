@@ -107,23 +107,20 @@ describe('the equity readout', () => {
 });
 
 describe('Coach prose under 20em', () => {
-  const PROSE = [
-    '.prl-coach__prose',
-    '.prl-suggestion__reason',
-    '.prl-suggestion__disclaimer',
-    '.prl-outs__meaning',
-    '.prl-stat__note',
-    '.prl-uncertainty__summary',
-    '.prl-uncertainty__limitations',
-    '.prl-assumptions__text',
-  ];
   const narrow = mediaBody(css, '(width < 20em)');
 
-  for (const selector of PROSE) {
-    it(`hyphenates ${selector}`, () => {
-      assert.equal(cascaded(narrow, selector).get('hyphens'), 'auto');
-    });
-  }
+  // Unhyphenated, "measurement" broke mid-word on every bundled /lab scenario.
+  it('hyphenates an assumption', () => {
+    assert.equal(cascaded(narrow, '.prl-assumptions__text').get('hyphens'), 'auto');
+  });
+
+  // With hyphenation off every other Coach box fits its words at 360px and 200% text.
+  it('hyphenates nothing else', () => {
+    const hyphenated = [...narrow.matchAll(/([^{}]+)\{[^{}]*hyphens\s*:\s*auto[^{}]*\}/g)].flatMap((m) =>
+      (m[1] ?? '').split(',').map((part) => part.trim()),
+    );
+    assert.deepEqual(hyphenated, ['.prl-assumptions__text']);
+  });
 
   it('hyphenates nothing at any other size', () => {
     assert.ok(everySize.includes('.prl-coach'), 'read no rules outside @media');

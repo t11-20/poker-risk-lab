@@ -70,9 +70,11 @@ sideways, and a root font size that ignores the reader's text size (`--text-scal
 `--widths`, `--themes` or `--text-scale` names another matrix, it then measures every route again at
 200% text, light, at 768, 1024 and 1440: with em breakpoints those are the 384, 512 and 720px
 layouts with doubled text. Those windows still hold content up to 768px wide, so the same pass also
-measures `LARGE_TEXT_PHONE_ROUTES` at 360px, the routes clean there today. The rest still fail at 360
-and 200% on held owner work. Its one exemption, the Legends radar labels clipped above 100% (their
-label gutter does not grow with the text), is printed every run. The run with none of `--routes`,
+measures `LARGE_TEXT_PHONE_ROUTES` at 360px, the routes clean there today, with `hyphens: manual`
+injected so a local Chrome and CI's, which may have no hyphenation dictionary, measure the same page.
+The four routes left out fail there on work held for the owner: `/play?state=complete`'s side pots
+(the `/play` redesign) and the three legal pages (`legal.css`). There are no exemptions; the machinery
+stays, and a rule a full pass never uses fails the gate. The run with none of `--routes`,
 `--widths`, `--themes` or `--text-scale` is held to coverage floors of its own, which the summary
 prints. A narrowed run is held to floors scaled to its size, never zero.
 

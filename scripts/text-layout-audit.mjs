@@ -82,18 +82,31 @@ const THEMES = ['dark', 'light'];
 const LARGE_TEXT = { scale: 2, themes: ['light'], widths: [768, 1024, 1440], phoneWidth: 360 };
 
 /**
- * The routes clean at `phoneWidth`, where content wider than a phone scrolls sideways that a 768px window
- * still holds. In the gate's run, which has no API, none hyphenates: CI Chrome may have no dictionary.
+ * Injected before the `phoneWidth` cell is measured. CI's Linux Chrome may have no hyphenation dictionary,
+ * so a word that fits only hyphenated would pass here and fail there.
+ */
+const NO_HYPHENATION = '* { hyphens: manual !important; }';
+
+/**
+ * The routes clean at `phoneWidth` with hyphenation off, where content wider than a phone scrolls sideways
+ * that a 768px window still holds.
  */
 const LARGE_TEXT_PHONE_ROUTES = [
   '/',
   '/learn',
+  '/learn/pot-odds',
+  '/learn/counting-outs',
+  '/learn/glossary',
   '/play',
+  '/play?state=decision',
   '/lab',
   '/lab/fl-same-cards-under-the-gun',
   '/lab/spots',
+  '/lab/spots/edit?from=fl-same-cards-under-the-gun',
+  '/legends',
   '/legends/adaptive-exploiter',
   '/review',
+  '/legends/hand-review/demo',
   '/checks',
 ];
 
@@ -165,12 +178,12 @@ const FLOOR_PER_MEASUREMENT = {
 const DEFAULT_RUN_FLOORS = {
   main: { textBoxes: 13000, ownBox: 13000, clipTests: 2000, frameTests: 9500, pairs: 11000, breakTests: 75 },
   'large-text': {
-    textBoxes: 4000,
-    ownBox: 4000,
-    clipTests: 440,
-    frameTests: 2850,
-    pairs: 1950,
-    breakTests: 35,
+    textBoxes: 4900,
+    ownBox: 4900,
+    clipTests: 570,
+    frameTests: 3650,
+    pairs: 2150,
+    breakTests: 57,
   },
 };
 
@@ -199,17 +212,7 @@ const COVERAGE = [
  * A rule that a full sweep at a size it applies to never uses fails the gate, so add one only with
  * the finding it suppresses. Every run prints each rule, its reason and what it suppressed.
  */
-const EXEMPTIONS = [
-  {
-    check: 'clipped',
-    selector: 'text.prl-radar__label',
-    also: ['prl-radar'],
-    aboveScale: 1,
-    why:
-      'the radar keeps a fixed 64-unit label gutter (RADAR_LABEL_GUTTER) while its labels are in rem, ' +
-      'so larger text outgrows it; changing the chart geometry is held for the owner',
-  },
-];
+const EXEMPTIONS = [];
 
 /** Whether a rule applies at this text size. A measurement that names no size is at 100%. */
 const appliesAtScale = (rule, scale) => rule.aboveScale === undefined || (scale ?? 1) > rule.aboveScale;
@@ -224,6 +227,8 @@ const appliesAtScale = (rule, scale) => rule.aboveScale === undefined || (scale 
  * @property {number} [scale] a text size the defect needs; it is then also measured at 100% and
  *   must be silent there, or it would be catching an ordinary defect
  * @property {string} [theme] default dark
+ * @property {boolean} [unhyphenated] measured with `NO_HYPHENATION`, as the phone cell is; also measured
+ *   without it for the log only, since a Chrome with no dictionary catches it either way
  */
 
 const NARROW_COACH = '.prl-play .prl-play__coach { inline-size: 15rem; }';
@@ -351,6 +356,20 @@ const CONTROLS = [
       '.prl-pillbar__brand .prl-shell__brand-name { display: none; } ' +
       '.prl-pillbar .prl-pillbar__nav { display: flex; align-items: center; justify-content: center; ' +
       'gap: var(--prl-pill-gap); } }',
+  },
+  {
+    id: 'unhyphenated-word',
+    route: '/',
+    width: 360,
+    scale: 2,
+    theme: 'light',
+    unhyphenated: true,
+    expect: 'squeezed',
+    what: 'a word that fits its box only hyphenated, measured with hyphenation off as the phone cell is',
+    // "foundations" is 88px at 16px and 176px at 32px, where "founda-" and "tions" fit 120px.
+    css:
+      '.prl-home__way:first-child .prl-home__way-link ' +
+      '{ inline-size: 120px; hyphens: auto; overflow-wrap: normal; }',
   },
 ];
 
@@ -1298,7 +1317,7 @@ ${bold('pnpm run test:layout')} — the PAINTED TEXT of this app, in real Chrome
     Unless --widths, --themes or --text-scale is given, the matrix above runs at 100%
     text and then a large-text pass runs at ${LARGE_TEXT_CELLS}. Em breakpoints give
     those widths the ${LARGE_TEXT_LAYOUTS} layouts with doubled text. It also measures
-    ${LARGE_TEXT_PHONE_CELLS}, the ones clean there today. Any of the three
+    ${LARGE_TEXT_PHONE_CELLS} with hyphenation off, the ones clean there today. Any of the three
     flags replaces both passes with exactly the matrix it names, at one text size.
 
   Reporting
@@ -1427,7 +1446,12 @@ export function sweepPasses(options) {
   };
   if (asked) return [main];
   const phoneRoutes = LARGE_TEXT_PHONE_ROUTES.filter((route) => routes.includes(route));
-  const phone = { routes: phoneRoutes, themes: LARGE_TEXT.themes, widths: [LARGE_TEXT.phoneWidth] };
+  const phone = {
+    routes: phoneRoutes,
+    themes: LARGE_TEXT.themes,
+    widths: [LARGE_TEXT.phoneWidth],
+    unhyphenated: true,
+  };
   const large = {
     id: 'large-text',
     scale: LARGE_TEXT.scale,
@@ -1710,11 +1734,12 @@ const walkerSource = () =>
 
 let dumpCount = 0;
 
-async function measure(page, route, theme, width) {
+async function measure(page, route, theme, width, unhyphenated = false) {
   await page.setWidth(width);
   // On the root element, where `tokens.css` keys its light scope.
   await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`);
   await delay(180);
+  if (unhyphenated) await refuseHyphenation(page, route);
   const measurement = await page.evaluate(walkerSource());
   // `PRL_LAYOUT_DUMP=<dir>` writes every rectangle, for tuning thresholds.
   if (process.env.PRL_LAYOUT_DUMP !== undefined) {
@@ -1734,7 +1759,7 @@ async function measure(page, route, theme, width) {
  * A constructed stylesheet, because the CSP has no `'unsafe-inline'` for `style-src` and an injected
  * `<style>` never applies.
  */
-async function injectControl(page, css) {
+async function injectSheet(page, css) {
   const applied = await page.evaluate(
     `(() => {
       const sheet = new CSSStyleSheet();
@@ -1743,16 +1768,32 @@ async function injectControl(page, css) {
       return sheet.cssRules.length;
     })()`,
   );
-  if (applied === 0) throw new Error(`a negative control's stylesheet parsed to no rules: ${css}`);
+  if (applied === 0) throw new Error(`an injected stylesheet parsed to no rules: ${css}`);
   await delay(250);
 }
 
-async function controlFindings(page, baseUrl, control, scale) {
+/** The sweep and its control both open a page here, so the control proves the sweep's own injection. */
+async function openPage(page, url, unhyphenated) {
+  await page.goto(url);
+  if (unhyphenated) await injectSheet(page, NO_HYPHENATION);
+}
+
+/** Read back from the page rather than trusted, since a Chrome with no dictionary looks the same. */
+async function refuseHyphenation(page, route) {
+  const left = await page.evaluate(
+    "[...document.querySelectorAll('*')].filter((el) => getComputedStyle(el).hyphens === 'auto').length",
+  );
+  if (left !== 0) {
+    throw new Error(`${route}: ${String(left)} element(s) still hyphenate with ${NO_HYPHENATION} injected`);
+  }
+}
+
+async function controlFindings(page, baseUrl, control, scale, unhyphenated = control.unhyphenated === true) {
   await page.setTextScale(scale);
-  await page.goto(`${baseUrl}${control.route}`);
-  await injectControl(page, control.css);
+  await openPage(page, `${baseUrl}${control.route}`, unhyphenated);
+  await injectSheet(page, control.css);
   const theme = control.theme ?? 'dark';
-  const { measurement, context } = await measure(page, control.route, theme, control.width);
+  const { measurement, context } = await measure(page, control.route, theme, control.width, unhyphenated);
   const { findings } = findTextDefects(measurement, context);
   return { findings: findings.filter((f) => f.check === control.expect), measurement };
 }
@@ -1789,6 +1830,9 @@ async function runControls(page, baseUrl, runScale) {
     if (control.scale !== undefined) {
       atOne = (await controlFindings(page, baseUrl, control, 1)).findings;
       result.atDefaultSize = atOne.length;
+    }
+    if (control.unhyphenated === true) {
+      result.hyphenated = (await controlFindings(page, baseUrl, control, scale, false)).findings.length;
     }
     Object.assign(result, judgeControl(control, findings, atOne));
     results.push(result);
@@ -1839,9 +1883,9 @@ async function sweepPass(page, baseUrl, pass, tally, findings, failures, suppres
   console.log(bold(`\nSweep at ${label} — ${sizes} = ${String(tally.measurementsWanted)} measurements`));
   for (const block of passBlocks(pass)) {
     if (block.why !== undefined) {
-      console.log(
-        `  then at ${block.widths.map((w) => `${String(w)}px`).join(', ')}, ${block.themes.join(', ')}`,
-      );
+      const widths = block.widths.map((w) => `${String(w)}px`).join(', ');
+      const hyphens = block.unhyphenated === true ? ', hyphenation off' : '';
+      console.log(`  then at ${widths}, ${block.themes.join(', ')}${hyphens}`);
       console.log(dim(`  on ${block.routes.join(', ')}`));
       console.log(dim(`  because ${block.why}`));
     }
@@ -1854,7 +1898,7 @@ async function sweepBlock(page, baseUrl, label, block, tally, findings, failures
     const perRoute = [];
     for (const theme of block.themes) {
       try {
-        await page.goto(`${baseUrl}${route}`);
+        await openPage(page, `${baseUrl}${route}`, block.unhyphenated === true);
       } catch (error) {
         const why = error instanceof Error ? error.message : String(error);
         failures.push(`${route} (${theme}, ${label}) did not load: ${why}`);
@@ -1862,7 +1906,7 @@ async function sweepBlock(page, baseUrl, label, block, tally, findings, failures
       }
       let loaded = true;
       for (const width of block.widths) {
-        const { measurement, context } = await measure(page, route, theme, width);
+        const { measurement, context } = await measure(page, route, theme, width, block.unhyphenated);
         const where = `${route} (${theme}, ${String(width)}px, ${label})`;
         const heading = measurement.heading;
         if (ERROR_BOUNDARY_HEADINGS.some((boundary) => heading.startsWith(boundary))) {
@@ -1915,6 +1959,13 @@ function printControl(result, failures) {
   );
   if (result.atDefaultSize !== undefined) {
     console.log(dim(`      at 100% text: ${String(result.atDefaultSize)} ${result.expect} finding(s)`));
+  }
+  if (result.hyphenated !== undefined) {
+    const why =
+      result.hyphenated === 0
+        ? 'this Chrome hyphenated the word, so only the injected sheet caught it'
+        : 'this Chrome did not hyphenate it (no dictionary?), so this run shows only that the sheet applied';
+    console.log(yellow(`      hyphenation allowed: ${String(result.hyphenated)} finding(s) — ${why}`));
   }
   if (result.caught) {
     for (const line of result.evidence.slice(0, 1)) {
@@ -2166,6 +2217,6 @@ async function main() {
   process.exit(exitCode);
 }
 
-export { CONTROLS, EXEMPTIONS, LARGE_TEXT, LARGE_TEXT_PHONE_ROUTES, ROUTES, THEMES, WIDTHS };
+export { CONTROLS, EXEMPTIONS, LARGE_TEXT, LARGE_TEXT_PHONE_ROUTES, NO_HYPHENATION, ROUTES, THEMES, WIDTHS };
 
 if (import.meta.main) await main();
