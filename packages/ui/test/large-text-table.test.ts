@@ -66,3 +66,22 @@ describe('side pots under 20em', () => {
     assert.equal(ownValue('.prl-pot__side', 'grid-template-columns'), 'auto auto minmax(0, 1fr)');
   });
 });
+
+describe('seat names under 20em', () => {
+  holds([
+    ['.prl-table__field', '--prl-table-pad', 'var(--prl-space-1)', 'its 16px a side came off both seats'],
+    [
+      '.prl-table__field',
+      '--prl-seat-w',
+      'calc((100cqi - var(--prl-table-pad) * 2 - var(--prl-space-1)) / 2)',
+      'half the field, less the narrower pads and gap',
+    ],
+    ['.prl-table__field', 'column-gap', 'var(--prl-space-1)', 'the gap the seat width subtracts'],
+    ['.prl-seat__plate', 'padding-inline', 'var(--prl-space-2)', 'its 16px a side left "Quartile" 77px'],
+  ]);
+
+  it('keeps the seat padding at every other size', () => {
+    assert.equal(ownValue('.prl-seat__plate', 'padding'), 'var(--prl-space-2) var(--prl-space-4)');
+    assert.equal(ownValue('.prl-table__field', '--prl-table-pad'), 'var(--prl-space-4)');
+  });
+});

@@ -2353,6 +2353,23 @@ p.prl-seat__status {
   }
 }
 
+/*
+ * At 360px with 200% text a seat was 111-124px and its plate left a name 77-90px, so "Quartile" (103px)
+ * and "Balanced" (122px) tore mid-word. Below 20em the field and the plate give their padding to the name.
+ */
+@media (width < 20em) {
+  .prl-table__field {
+    --prl-table-pad: var(--prl-space-1);
+    --prl-seat-w: calc((100cqi - var(--prl-table-pad) * 2 - var(--prl-space-1)) / 2);
+
+    column-gap: var(--prl-space-1);
+  }
+
+  .prl-seat__plate {
+    padding-inline: var(--prl-space-2);
+  }
+}
+
 /** Toward the felt: right of a left-hand disc, above-left of the viewer. */
 .prl-table__field [data-slot="left-low"] .prl-badge--dealer,
 .prl-table__field [data-slot="left-high"] .prl-badge--dealer,
