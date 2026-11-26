@@ -1408,10 +1408,36 @@ p.prl-seat__status {
   max-inline-size: var(--prl-space-15);
 }
 
-/** Without explicit size an `<svg>` sizes to its viewBox. */
+/**
+ * Without explicit size an `<svg>` sizes to its viewBox. The label is in rem and the plot in viewBox
+ * units, so larger text takes its room from the plot: `radarLabelRoom()` in radar.ts, held equal by a test.
+ * Each term clamps to a literal at the default label size, so default text draws the chart unchanged.
+ */
 .prl-radar__svg {
+  --prl-radar-label-clearance: max(14px, 0.6 * var(--prl-type-label-sm) + 6px);
+  --prl-radar-plot-radius: max(
+    44px,
+    min(
+      88px,
+      120px +
+      var(--prl-radar-gutter) -
+      var(--prl-radar-label-clearance) -
+      var(--prl-radar-label-width) *
+      var(--prl-type-label-sm)
+    )
+  );
   inline-size: 100%;
   block-size: 100%;
+}
+
+/**
+ * `sin(θ) / cos(θ)` of `atan2(a, b)` is a/b as a number, which `scale()` needs and which dividing two
+ * lengths cannot give in Chrome 120 or Safari 17. At the default label a is 0, so the scale is exactly 1.
+ */
+.prl-radar__plot {
+  --prl-radar-plot-turn: atan2(88px - var(--prl-radar-plot-radius), 88px);
+  transform-origin: 120px 120px;
+  transform: scale(calc(1 - sin(var(--prl-radar-plot-turn)) / cos(var(--prl-radar-plot-turn))));
 }
 
 /** Rings are decoration (`--prl-line`). Spokes are axes, so `--prl-line-strong`. */
@@ -1443,9 +1469,14 @@ p.prl-seat__status {
 }
 
 .prl-radar__label {
+  --prl-radar-label-shift: calc(var(--prl-radar-plot-radius) + var(--prl-radar-label-clearance) - 102px);
   fill: var(--prl-text-muted);
   font-size: var(--prl-type-label-sm);
   letter-spacing: var(--prl-tracking-label-sm);
+  transform: translate(
+    calc(var(--prl-radar-dx) * var(--prl-radar-label-shift)),
+    calc(var(--prl-radar-dy) * var(--prl-radar-label-shift))
+  );
 }
 
 .prl-sparkline {

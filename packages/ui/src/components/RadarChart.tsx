@@ -7,19 +7,22 @@
 
 import type { LegendTraitAxis } from '@prl/contracts';
 import type { ReactElement } from 'react';
-import { cx } from '../cx.ts';
+import { cx, type StyleWithVars } from '../cx.ts';
 import { formatChips } from '../format.ts';
 import {
   axisAngle,
   axisLabelAnchor,
   axisMarker,
+  outwardUnit,
   polarPoint,
   polygonPoints,
   RADAR_CENTRE,
   RADAR_LABEL_GUTTER,
   RADAR_LABEL_RADIUS,
+  RADAR_MARKER_WIDTH_EM,
   RADAR_RADIUS,
   RADAR_RING_FRACTIONS,
+  RADAR_WORD_WIDTH_EM,
   radarViewBox,
   ringPoints,
   roundCoordinate,
@@ -40,6 +43,13 @@ export interface RadarChartProps {
 /** Values are 0..1 by contract; the table prints two decimals, matching `@prl/poker-ai`. */
 const VALUE_DECIMALS = 2;
 
+/** The room each kind of label claims beside the ring, in em of the label size. */
+const LABEL_WIDTH_EM: Record<RadarAxisLabels, number> = {
+  text: RADAR_WORD_WIDTH_EM,
+  index: RADAR_MARKER_WIDTH_EM,
+  none: 0,
+};
+
 export function RadarChart(props: RadarChartProps): ReactElement {
   const { axes, label, axisLabels = 'text', className } = props;
   const summary = summariseAxes(axes);
@@ -55,7 +65,12 @@ export function RadarChart(props: RadarChartProps): ReactElement {
 
   const count = axes.length;
   // Word labels need room outside the ring. The window widens; the chart does not move.
-  const viewBox = radarViewBox(axisLabels === 'text' ? RADAR_LABEL_GUTTER : 0);
+  const gutter = axisLabels === 'text' ? RADAR_LABEL_GUTTER : 0;
+  const viewBox = radarViewBox(gutter);
+  const room: StyleWithVars = {
+    '--prl-radar-gutter': `${gutter}px`,
+    '--prl-radar-label-width': LABEL_WIDTH_EM[axisLabels],
+  };
   const shape = polygonPoints(axes.map((axis) => axis.value));
 
   return (
@@ -63,41 +78,46 @@ export function RadarChart(props: RadarChartProps): ReactElement {
       <svg
         className="prl-radar__svg"
         viewBox={viewBox}
+        style={room}
         role="img"
         aria-label={label === undefined ? summary : `${label}. ${summary}`}
       >
-        <g className="prl-radar__rings">
-          {RADAR_RING_FRACTIONS.map((fraction) => (
-            <polygon
-              key={`prl-radar-ring-${fraction}`}
-              className="prl-radar__ring"
-              points={ringPoints(count, fraction)}
-              vectorEffect="non-scaling-stroke"
-            />
-          ))}
-        </g>
-        <g className="prl-radar__spokes">
-          {axes.map((axis, index) => {
-            const end = polarPoint(RADAR_CENTRE, RADAR_CENTRE, RADAR_RADIUS, axisAngle(index, count));
-            return (
-              <line
-                key={axis.key}
-                className="prl-radar__spoke"
-                x1={RADAR_CENTRE}
-                y1={RADAR_CENTRE}
-                x2={roundCoordinate(end.x)}
-                y2={roundCoordinate(end.y)}
+        <g className="prl-radar__plot">
+          <g className="prl-radar__rings">
+            {RADAR_RING_FRACTIONS.map((fraction) => (
+              <polygon
+                key={`prl-radar-ring-${fraction}`}
+                className="prl-radar__ring"
+                points={ringPoints(count, fraction)}
                 vectorEffect="non-scaling-stroke"
               />
-            );
-          })}
+            ))}
+          </g>
+          <g className="prl-radar__spokes">
+            {axes.map((axis, index) => {
+              const end = polarPoint(RADAR_CENTRE, RADAR_CENTRE, RADAR_RADIUS, axisAngle(index, count));
+              return (
+                <line
+                  key={axis.key}
+                  className="prl-radar__spoke"
+                  x1={RADAR_CENTRE}
+                  y1={RADAR_CENTRE}
+                  x2={roundCoordinate(end.x)}
+                  y2={roundCoordinate(end.y)}
+                  vectorEffect="non-scaling-stroke"
+                />
+              );
+            })}
+          </g>
+          <polygon className="prl-radar__shape" points={shape} vectorEffect="non-scaling-stroke" />
         </g>
-        <polygon className="prl-radar__shape" points={shape} vectorEffect="non-scaling-stroke" />
         {axisLabels === 'none' ? null : (
           <g className="prl-radar__labels">
             {axes.map((axis, index) => {
               const angle = axisAngle(index, count);
               const at = polarPoint(RADAR_CENTRE, RADAR_CENTRE, RADAR_LABEL_RADIUS, angle);
+              const away = outwardUnit(angle);
+              const shift: StyleWithVars = { '--prl-radar-dx': away.x, '--prl-radar-dy': away.y };
               return (
                 <text
                   key={axis.key}
@@ -106,6 +126,7 @@ export function RadarChart(props: RadarChartProps): ReactElement {
                   y={roundCoordinate(at.y)}
                   textAnchor={axisLabelAnchor(angle)}
                   dominantBaseline="middle"
+                  style={shift}
                 >
                   {axisLabels === 'index' ? axisMarker(index) : axis.label}
                 </text>
