@@ -905,10 +905,8 @@
 }
 
 /**
- * Disc and, for an opponent, the two cards beside it. The plate is the next row. The second back leans
- * 8deg into the disc: at 2px it crossed the disc by 1.7px, and 12px leaves the turn ring 5px clear.
- * Wider than its seat (220px in 142px at 360px with 200% text) the cards go above the disc, by the same
- * gap, which clears the dealer button where it rises above the disc.
+ * Disc and an opponent's cards. 12px keeps the second back, which leans 8deg into the disc, 5px off the
+ * turn ring; wrapped, the cards go above the disc by the same gap, clear of the dealer button.
  */
 .prl-seat__cluster {
   display: flex;
@@ -999,10 +997,7 @@ p.prl-seat__name {
   display: contents;
 }
 
-/**
- * `nowrap`. `1,000` broken across lines reads as "1,00" and "0". The text ink, because amber means a
- * risk (design system 2.2) and a stack is a figure.
- */
+/** `nowrap`, as "1,000" broken reads "1,00" and "0". The text ink: a stack is a figure, not a risk (2.2). */
 dd.prl-seat__stat-value {
   margin: 0;
   color: var(--prl-text);

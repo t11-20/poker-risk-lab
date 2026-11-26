@@ -29,9 +29,14 @@ describe('a seat’s stack', () => {
     assert.deepEqual(colours('.prl-pot__side-amount'), ['var(--prl-text)']);
   });
 
-  it('is never set in a risk or result colour', () => {
-    const stack = colours('dd.prl-seat__stat-value');
-    assert.ok(stack.length > 0, 'no rule sets the stack’s colour');
-    for (const colour of stack) assert.doesNotMatch(colour, /caution|adverse|favourable/);
+  // The test above reads the bare selector only, and a state rule could still recolour the stack.
+  it('is never set in a risk or result colour by any rule naming it', () => {
+    const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(([, list = '']) =>
+      list.includes('prl-seat__stat-value'),
+    );
+    assert.ok(rules.length > 0, 'no rule names the stack');
+    for (const [, list = '', body = ''] of rules) {
+      assert.doesNotMatch(body, /(?:^|;)\s*color:[^;]*(?:caution|adverse|favourable)/, list.trim());
+    }
   });
 });

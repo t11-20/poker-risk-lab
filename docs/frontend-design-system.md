@@ -910,7 +910,12 @@ Two narrower ranges exist for large text. Below `20em` (a window under 320px at 
 - **Paired items stack.** A lesson card's number goes above its text, an assumption's index above its
   sentence, a quiz radio above its answer and a Legends sigil above the names. The glossary's related
   terms, the Legends contrast list, the home spot figures and the review summary take one track. The
-  equity readout's figures go under the name.
+  equity readout's figures go under the name, on `/play` as in the Coach, and a side pot's seats go
+  under its amount.
+- **Each seat at the table takes a row.** The field is one track, and the seats and the board keep the
+  two-column order: the top seat, the two high seats, the board, the two low seats, then yours. Two a
+  row left a name 111-127px, and the longest word in a seat name, a Legends seat's "Fundamentalist", is
+  200px. The field pads `0.125rem` and a seat plate `0.25rem` a side, which gives the name 244-270px.
 - **Nested padding gives way.** These keep `0.375rem` a side:
   - the lesson sheet;
   - `.prl-panel`, `.prl-callout`, `.prl-formula` and `.prl-assumptions` (the lesson calculators);
@@ -971,10 +976,10 @@ enforceable by reading a stylesheet:
    never return a node inside `.prl-play__decision`. It currently returns 0/9 at every point, at
    every one of those sizes, in both themes.
 
-At 1440×900 and above the whole field and the whole band are on screen together (486 of 520px of
-field at 1440×900, all 520 at 1920×1080, six seats of six). At 1280×800 they are not, and cannot
-be: 63px of sticky header plus a 520px field plus a 419px band is 1002px of content for 800px of
-screen. The top of the field is then above the fold while the whole band is visible — a small
+With the band's foot on the screen's, the whole band and most of the field are on screen together:
+430 of 580px of field at 1440×900, all 580 at 1920×1080 with six seats of six (live `/play`, dark,
+2026-11-26). At 1280×800 they are not, and cannot be: 63px of sticky header plus a 520px field plus
+a 419px band is 1002px of content for 800px of screen. The top of the field is then above the fold while the whole band is visible — a small
 viewport, not an occlusion, and 90px of scroll recovers it. The distinction the design system cares
 about is exactly that one: **content above the fold is reachable, content under an opaque overlay is
 not.**
