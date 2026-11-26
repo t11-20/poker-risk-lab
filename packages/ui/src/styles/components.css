@@ -1028,6 +1028,11 @@ p.prl-seat__status {
   margin: 0;
 }
 
+/** It draws nothing, so out of flow it leaves the cluster's gap: in flow it set the disc 6px off the plate. */
+.prl-seat__cluster > .prl-seat__cards--empty {
+  position: absolute;
+}
+
 /**
  * A dashed plate and muted ink, and no cards. Never opacity, which would take a label under 4.5:1.
  * The stack keeps the full ink: the rule above is on the `<dd>`, so it wins over this inherited one.
