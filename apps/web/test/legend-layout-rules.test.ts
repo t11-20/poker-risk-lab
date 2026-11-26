@@ -174,6 +174,22 @@ describe('legends layout rules', () => {
     assert.doesNotMatch(css, /overflow-wrap: anywhere|word-break: break-all/u);
   });
 
+  /* At 360px with 200% text a padded disclaimer needed 260px of a compare column's 198px. */
+  it('below 20em the nested frames pad less, after every wider rule that pads them', () => {
+    const PHONE = '@media (width < 20em) {';
+    const frames = '.prl-legend-column,\n  .prl-legend-decision,\n  .prl-legend-difficulty {';
+    const at = css.lastIndexOf(frames);
+    assert.ok(at > css.lastIndexOf(PHONE, at) && css.lastIndexOf(PHONE, at) >= 0, 'not inside a 20em block');
+    const body = (head: string): string =>
+      css.slice(css.indexOf(head, at), css.indexOf('}', css.indexOf(head, at)));
+    assert.match(body(frames), /padding-inline: var\(--prl-space-4\);/u);
+    assert.match(body('.prl-legend-disclaimers {'), /padding-inline: var\(--prl-space-5\);/u);
+    assert.match(body('.prl-legend-picker__option {'), /padding-inline: var\(--prl-space-4\);/u);
+    // Equal specificity, so the phone rule must come after the 37.5em one that pads the picker.
+    const wider = /@media \(width < 37\.5em\) \{\s*\.prl-legend-difficulty \{\s*padding:/u.exec(css);
+    assert.ok(wider !== null && wider.index < at, 'the 37.5em picker padding comes after the 20em one');
+  });
+
   it('below 20em a contrast figure sits under its trait instead of beside it', () => {
     assert.match(
       css,

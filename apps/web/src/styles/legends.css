@@ -1166,6 +1166,28 @@
   }
 }
 
+/**
+ * Below 20em nested padding gives way. At 360px with 200% text a padded disclaimer needed 287px of a
+ * card's 262px and 260px of a compare column's 198px, "Educational" 176px of 164px, a compare checkbox
+ * 273px of 230px, and a hand review's callout widened the page to 409px. Last, to win over 37.5em.
+ */
+@media (width < 20em) {
+  .prl-legend-column,
+  .prl-legend-decision,
+  .prl-legend-difficulty {
+    padding-inline: var(--prl-space-4);
+  }
+
+  .prl-legend-disclaimers {
+    padding-inline: var(--prl-space-5);
+  }
+
+  .prl-legend-picker__option {
+    gap: var(--prl-space-3);
+    padding-inline: var(--prl-space-4);
+  }
+}
+
 /* Forced colors. Tints are discarded, so every tinted state is restated as a border, and accent
    edges become `Highlight`. */
 
