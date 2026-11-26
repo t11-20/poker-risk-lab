@@ -105,7 +105,7 @@ describe('an opponent’s disc with no cards beside it', () => {
   const states: [string, SeatView, Street][] = [
     ['folded', opponent('folded', null), 'flop'],
     ['folded and the hand over', opponent('folded', null), 'complete'],
-    ['sitting out', opponent('sittingOut', null), 'flop'],
+    ['sitting out, which renders no row at all', opponent('sittingOut', null), 'flop'],
   ];
 
   for (const [state, seat, street] of states) {

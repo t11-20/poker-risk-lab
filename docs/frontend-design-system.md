@@ -916,8 +916,9 @@ Two narrower ranges exist for large text. Below `20em` (a window under 320px at 
   two-column order: the top seat, the two high seats, the board, the two low seats, then yours. Two a
   row left a name 111-127px, and the longest word in a seat name, a Legends seat's "Fundamentalist", is
   200px. The field pads `0.125rem` and a seat plate `0.25rem` a side, which gives the name 244-270px.
-  An opponent's cards go above the disc, so every disc stays over its plate, and the rows are spaced by
-  their items, so a row no seat takes on a shorter table leaves no gap.
+  An opponent's cards go above the disc, so every disc stays over its plate. The rows are spaced by
+  their items, so a row no seat takes on a shorter table leaves no gap, and by `2rem`, more than the
+  `0.75rem` between a seat's cards and its disc, so the cards read as that seat's.
 - **Nested padding gives way.** These keep `0.375rem` a side:
   - the lesson sheet;
   - `.prl-panel`, `.prl-callout`, `.prl-formula` and `.prl-assumptions` (the lesson calculators);

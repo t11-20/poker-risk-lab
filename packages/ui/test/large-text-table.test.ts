@@ -97,7 +97,7 @@ describe('seat names under 20em', () => {
   it('spaces the rows on the items, so an empty row takes no space', () => {
     assert.equal(narrow('.prl-table__field', 'row-gap')?.value, '0');
     for (const item of ['.prl-table__field .prl-seat:not([data-slot="hero"])', '.prl-table__centre']) {
-      assert.equal(narrow(item, 'margin-block-end')?.value, 'var(--prl-space-5)', item);
+      assert.equal(narrow(item, 'margin-block-end')?.value, 'var(--prl-space-9)', item);
     }
     const rise = /inset-block-start: calc\((var\(--[\w-]+\)) \* -1\)/.exec(
       css.slice(css.indexOf('.prl-table__field [data-slot="hero"] .prl-badge--dealer {')),
@@ -106,6 +106,11 @@ describe('seat names under 20em', () => {
       narrow('.prl-table__field [data-slot="hero"]', 'margin-block-start')?.value,
       rise,
       'the space above your seat is at least your dealer button’s rise',
+    );
+    assert.notEqual(
+      ownValue('.prl-seat__cluster', 'gap'),
+      'var(--prl-space-9)',
+      'a seat’s cards sit nearer their own disc than the seat above',
     );
     assert.equal(
       ownValue('.prl-table__field', 'gap'),

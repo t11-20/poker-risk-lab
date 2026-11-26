@@ -2380,10 +2380,13 @@ p.prl-seat__status {
     row-gap: 0;
   }
 
-  /* On the item, not the grid, so a row no seat takes on a shorter table leaves no gap. */
+  /*
+   * On the item, not the grid, so an empty row leaves no gap. Wider than the cluster's gap, or a seat's
+   * stacked cards sit as near the plate above and read as that player's hand.
+   */
   .prl-table__field .prl-seat:not([data-slot="hero"]),
   .prl-table__centre {
-    margin-block-end: var(--prl-space-5);
+    margin-block-end: var(--prl-space-9);
   }
 
   /* Your dealer button rises `--prl-space-7` above your disc, so the row above leaves at least that. */
