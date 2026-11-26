@@ -2,12 +2,12 @@
 
 /**
  * The guided tour: five steps from picking a scenario to reviewing a hand, each with a "Show me" that
- * outlines its `[data-tour]` target, going to its page first if need be. A panel in the page's flow
- * under the header, not an overlay: it covers nothing, traps nothing, and a page under test on a fresh
- * profile stays usable with it open. A narrow first visit opens on the title and "Show steps": the
- * five steps measured 462px at 390px. That choice is fixed until the guide closes, so rotating the
- * phone cannot unmount the control that has focus. Escape closes it for now and focus goes back
- * to "How to use".
+ * outlines its `[data-tour]` target, going to its page first if need be. A panel fixed to the bottom of
+ * the window, so opening it by itself moves nothing on the page, and not modal: it traps nothing, and
+ * while it is open the page keeps its height as room below every scroll target and below its own end.
+ * A narrow first visit opens on the title and "Show steps": the five steps measured 462px at 390px.
+ * That choice is fixed until the guide closes, so rotating the phone cannot unmount the control that
+ * has focus. Escape closes it for now and focus goes back to "How to use".
  *
  * It renders nothing until the effect has read storage, as `Onboarding` does, so the server render and
  * every return visit are the page alone. State lives in `tourStore` (`lib/tour.ts`) so the header's
@@ -30,6 +30,7 @@ import {
   opensByItself,
   readTourDismissal,
   TOUR_COMPACT_QUERY,
+  TOUR_INSET_PROPERTY,
   TOUR_STEPS,
   type TourStep,
   tourStep,
@@ -75,6 +76,30 @@ export function GuidedTour(): ReactElement | null {
   }, [state.focusRequest, state.open]);
 
   const { open, step, awaiting, shown } = state;
+
+  // Measured, because the panel's height follows its text and the reader's text size.
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (!open || panel === null) return;
+    const root = document.documentElement;
+    const measure = (): void => {
+      if (getComputedStyle(panel).position !== 'fixed') {
+        root.style.removeProperty(TOUR_INSET_PROPERTY);
+        return;
+      }
+      const inset = Math.ceil(window.innerHeight - panel.getBoundingClientRect().top);
+      root.style.setProperty(TOUR_INSET_PROPERTY, `${Math.max(0, inset)}px`);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(panel);
+    window.addEventListener('resize', measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', measure);
+      root.style.removeProperty(TOUR_INSET_PROPERTY);
+    };
+  }, [open]);
   useEffect(() => {
     if (!open || step === null || awaiting !== null || shown === 0) return;
     const root = document.documentElement;
@@ -212,7 +237,7 @@ export function GuidedTour(): ReactElement | null {
           {stepsExpanded ? 'Hide steps' : 'Show steps'}
         </button>
       ) : null}
-      {shownSteps.length > 0 ? stepList : null}
+      {shownSteps.length > 0 ? <div className="prl-tour__body">{stepList}</div> : null}
       <p className="prl-visually-hidden" role="status">
         {status}
       </p>

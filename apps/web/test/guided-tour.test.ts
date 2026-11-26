@@ -17,6 +17,7 @@ import {
   rememberTourDismissal,
   TOUR_DISMISSED_KEY,
   TOUR_FIRST_VISIT_PATH,
+  TOUR_INSET_PROPERTY,
   TOUR_STEPS,
   type TourAction,
   type TourState,
@@ -300,16 +301,56 @@ const CSS = read('../src/styles/tour.css').replace(/\/\*[\s\S]*?\*\//gu, '');
 /** The declarations of `.prl-tour` itself, the panel. */
 const panelRule = (css: string): string => /(?:^|\n)\.prl-tour\s*\{([^}]*)\}/u.exec(css)?.[1] ?? '';
 
-describe('the panel covers nothing and traps nothing (read from the source)', () => {
-  it('is in the flow, never fixed, sticky or absolute', () => {
+/** The declarations of one rule, by its exact selector. */
+const ruleOf = (css: string, selector: string): string => {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+  return new RegExp(`(?:^|\\n)${escaped}\\s*\\{([^}]*)\\}`, 'u').exec(css)?.[1] ?? '';
+};
+
+describe('the panel moves nothing and traps nothing (read from the source)', () => {
+  it('is fixed to the bottom of the window, out of the flow, so opening it shifts nothing', () => {
     const rule = panelRule(CSS);
     assert.ok(rule.length > 0, 'no .prl-tour rule was read');
-    assert.doesNotMatch(rule, /position\s*:/u);
+    assert.match(rule, /position: fixed;/u);
+    assert.match(rule, /inset-block-end: /u);
+    assert.doesNotMatch(rule, /margin-block/u, 'a margin would mean it still sat in the flow');
+  });
+
+  it('is at most half the window, and past that its steps scroll while the title and Skip stay', () => {
+    assert.match(panelRule(CSS), /max-block-size: min\(\s*calc\(50dvh - /u);
+    assert.match(panelRule(CSS), /calc\(100dvh - var\(--prl-pillbar-h\) - var\(--prl-target-min\) - /u);
+    const body = ruleOf(CSS, '.prl-tour__body');
+    assert.match(body, /overflow-y: auto;/u);
+    assert.match(body, /min-block-size: 0;/u);
+    assert.match(PANEL, /<div className="prl-tour__body">\{stepList\}<\/div>/u);
+  });
+
+  it('keeps its height as room below every scroll target and the page, and gives it back on close', () => {
+    assert.equal(TOUR_INSET_PROPERTY, '--prl-tour-inset');
     assert.match(
-      panelRule('.prl-tour { position: fixed; }'),
-      /position/u,
-      'NEGATIVE CONTROL: the reader sees one',
+      ruleOf(CSS, ':root:has(.prl-tour):not(:has(.prl-play))'),
+      /scroll-padding-block-end: calc\(var\(--prl-tour-inset, 0px\) \+ /u,
     );
+    assert.match(ruleOf(CSS, 'body:has(.prl-tour)'), /padding-block-end: var\(--prl-tour-inset, 0px\);/u);
+    assert.match(PANEL, /root\.style\.setProperty\(TOUR_INSET_PROPERTY, /u);
+    assert.match(PANEL, /new ResizeObserver\(measure\)/u);
+    assert.match(PANEL, /root\.style\.removeProperty\(TOUR_INSET_PROPERTY\);\n {4}\};\n {2}\}, \[open\]\);/u);
+  });
+
+  it('in a window short of text lines scrolls as a whole, and in a very short one goes back in flow', () => {
+    const media = (query: string): string => {
+      const start = CSS.indexOf(`@media (${query}) {`);
+      assert.ok(start >= 0, `no @media (${query})`);
+      return CSS.slice(start, CSS.indexOf('\n}\n', start));
+    };
+    assert.match(ruleOf(media('height < 30em'), '  .prl-tour'), /overflow-y: auto;/u);
+    assert.match(ruleOf(media('height < 30em'), '  .prl-tour__body'), /flex-shrink: 0;/u);
+    assert.match(ruleOf(media('height < 18em'), '  .prl-tour'), /position: static;/u);
+  });
+
+  it('stays in the flow on /play, whose own controls are pinned to the bottom of the window', () => {
+    assert.match(ruleOf(CSS, ':root:has(.prl-play) .prl-tour'), /position: static;/u);
+    assert.match(PANEL, /getComputedStyle\(panel\)\.position !== 'fixed'/u);
   });
 
   it('handles Escape on the panel, not the document, and has no focus trap', () => {

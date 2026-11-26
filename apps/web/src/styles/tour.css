@@ -72,18 +72,88 @@
   padding-block: var(--prl-space-6);
 }
 
-/* The panel. In flow under the header: it pushes the page down and covers none of it. */
+/* The panel. Fixed to the bottom of the window, so opening it by itself moves nothing on the page. */
 
-/** A container, so the steps are laid out by the panel's own width. */
+/**
+ * A container, so the steps are laid out by the panel's own width. Under the menu sheet, tips and
+ * toasts. Half the window at most, and never so tall that the header's scroll padding and its own leave
+ * no room for one focused control: at 568x320 the two met and 59 tab stops landed under the panel.
+ */
 .prl-tour {
   container: prl-tour / inline-size;
-  display: grid;
+  position: fixed;
+  z-index: var(--prl-z-nav);
+  inset-inline: 0;
+  inset-block-end: calc(var(--prl-space-4) + env(safe-area-inset-bottom, 0px));
+  display: flex;
+  flex-direction: column;
   gap: var(--prl-space-4);
-  margin-block-start: var(--prl-space-6);
+  max-block-size: min(
+    calc(50dvh - var(--prl-space-4)),
+    calc(100dvh - var(--prl-pillbar-h) - var(--prl-target-min) - 4 * var(--prl-space-6))
+  );
   padding: var(--prl-space-5) var(--prl-space-6);
   border: 1px solid var(--prl-line-strong);
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-panel);
+}
+
+/**
+ * Focus, anchors and "Show me" stop above the panel, and the page's end can scroll clear of it. Not on
+ * `/play`, whose own bottom padding this would replace.
+ */
+:root:has(.prl-tour):not(:has(.prl-play)) {
+  scroll-padding-block-end: calc(var(--prl-tour-inset, 0px) + var(--prl-space-6));
+}
+
+/** Body, not `.prl-app`: that is a `100dvh` column, and padding there would pull the footer up. */
+body:has(.prl-tour) {
+  padding-block-end: var(--prl-tour-inset, 0px);
+}
+
+/** The steps scroll here, and each "Show me" in them is a tab stop the scroll follows. */
+.prl-tour__body {
+  min-block-size: 0;
+  overflow-y: auto;
+  overscroll-behavior-block: contain;
+}
+
+/**
+ * A window under 30 lines of text tall, a phone on its side or 200% text, scrolls the whole panel: at
+ * 360x640 with 200% text the title and Skip took 156px and left the steps a 22px strip.
+ */
+@media (height < 30em) {
+  .prl-tour {
+    overflow-y: auto;
+    overscroll-behavior-block: contain;
+  }
+
+  .prl-tour__body {
+    flex-shrink: 0;
+    overflow-y: visible;
+  }
+}
+
+/**
+ * `/play` pins its own action row and Coach sheet to the bottom of the window, and the panel would
+ * cover a live hand's buttons. The guide never opens there by itself, so there it stays in the flow.
+ */
+:root:has(.prl-play) .prl-tour {
+  position: static;
+  max-block-size: none;
+  margin-block-start: var(--prl-space-6);
+}
+
+/**
+ * Under 18 lines of text tall, the header's scroll padding and the panel's left no room for a focused
+ * control: at 844x390 with 200% text 109 of 121 tab stops landed under the panel. It goes back in flow.
+ */
+@media (height < 18em) {
+  .prl-tour {
+    position: static;
+    max-block-size: none;
+    margin-block-start: var(--prl-space-6);
+  }
 }
 
 .prl-tour__head {
@@ -195,7 +265,7 @@
 
 /** The short first-visit head. A 44px target, the same floor as the other controls. */
 .prl-tour__reveal {
-  justify-self: start;
+  align-self: start;
   min-height: var(--prl-target-min);
   padding: 0;
   border: 0;
