@@ -160,4 +160,12 @@ describe('a cluster wider than its seat', () => {
     assert.equal(value('.prl-seat__cluster', 'flex-wrap'), 'wrap');
     assert.equal(value('.prl-seat__cluster', 'justify-content'), 'center');
   });
+
+  // At 8px a wrapped back's corner met the dealer button, which rises a step above the disc.
+  it('clears the dealer button above the disc when it wraps', () => {
+    const rows = px(value('.prl-seat__cluster', 'gap').split(' ')[0] ?? '');
+    const raw = value('.prl-seat .prl-badge--dealer', 'inset-block-start');
+    const rise = px(raw.replace(/^calc\((.+) \* -1\)$/, '$1'));
+    assert.ok(rows - rise >= 4, `${rows}px between rows, the button ${rise}px above the disc`);
+  });
 });
