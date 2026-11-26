@@ -57,3 +57,13 @@ describe('the assumptions list', () => {
     });
   }
 });
+
+describe("an assumption's sentence under 20em", () => {
+  // components.css spans the sentence across the row, which stacks it only where the item is a grid.
+  for (const [route, sheet] of Object.entries(ROUTE_SHEETS)) {
+    it(`spans the row the /${route} grid gives it, and nothing there moves it back`, () => {
+      assert.equal(cascaded('.prl-assumptions__item', componentsCss, sheet).display, 'grid');
+      assert.equal(declarationsOf(sheet, '.prl-assumptions__text').has('grid-column'), false);
+    });
+  }
+});

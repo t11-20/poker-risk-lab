@@ -924,9 +924,9 @@ Two narrower ranges exist for large text. Below `20em` (a window under 320px at 
   field wraps and the number field is never wider than it. The bar and the sizer keep `0.375rem` a side.
 - **The display ramp steps down** (§3.2), and a Legends card's or compare column's name takes
   `body-lg`. A hand review's heading keeps its size, so it stays above its decisions.
-- **Only an assumption's text may hyphenate.** Without it, "measurement" and "combinations" break
-  mid-word. Nothing else needs it. `test:layout` measures its 360px cell at 200% with hyphenation off,
-  because CI's Chrome may have no hyphenation dictionary.
+- **Nothing hyphenates.** CI's Chrome may have no hyphenation dictionary, so `test:layout` measures its
+  360px cell at 200% with hyphenation off, and a word must fit its column whole. On the Lab an
+  assumption's sentence spans the row under its index, where "measurement" fits.
 
 Below `18em` a review row card and the deck-proof terms give each value its own row, and a review
 board's cards wrap. One container query does the same for the Legends difficulty picker: below `15rem`
