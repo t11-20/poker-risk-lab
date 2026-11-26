@@ -937,7 +937,7 @@
 }
 
 /**
- * Name, the stack in caution gold, then the one status line. The position is in the plate and
+ * Name, the stack in the text ink, then the one status line. The position is in the plate and
  * visually hidden: a reader still hears it, and the disc already shows the chair.
  */
 .prl-seat__plate {
@@ -992,10 +992,13 @@ p.prl-seat__name {
   display: contents;
 }
 
-/** `nowrap`. `1,000` broken across lines reads as "1,00" and "0". Gold, as a stack reads at a table. */
+/**
+ * `nowrap`. `1,000` broken across lines reads as "1,00" and "0". The text ink, because amber means a
+ * risk (design system 2.2) and a stack is a figure.
+ */
 dd.prl-seat__stat-value {
   margin: 0;
-  color: var(--prl-caution);
+  color: var(--prl-text);
   font-weight: var(--prl-weight-semibold);
   font-variant-numeric: var(--prl-numeric);
   white-space: nowrap;
@@ -1020,7 +1023,7 @@ p.prl-seat__status {
 
 /**
  * A dashed plate and muted ink, and no cards. Never opacity, which would take a label under 4.5:1.
- * The stack keeps its own gold: the rule above is on the `<dd>`, so it wins over this inherited ink.
+ * The stack keeps the full ink: the rule above is on the `<dd>`, so it wins over this inherited one.
  */
 .prl-seat--folded .prl-seat__plate,
 .prl-seat--sitting-out .prl-seat__plate,
