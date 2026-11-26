@@ -15,11 +15,14 @@ export const TOUR_DISMISSED_KEY = 'prl.tour.dismissed';
 export const TOUR_FIRST_VISIT_PATH = '/lab';
 
 /**
- * A first visit below this width opens compact. The five steps are 462px at 390px and that is
- * what pushes the Lab down. Read once, where the open is dispatched, and kept until the guide
- * closes: a rotation must not unmount the control that has focus.
+ * A first visit below this width opens compact. The five steps are 462px at 390px, more than half
+ * of a phone's window. Read once, where the open is dispatched, and kept until the guide closes: a
+ * rotation must not unmount the control that has focus.
  */
 export const TOUR_COMPACT_QUERY = '(width < 40em)';
+
+/** The open panel's height above the window's bottom edge, set on the root and read by tour.css. */
+export const TOUR_INSET_PROPERTY = '--prl-tour-inset';
 
 /** The spot editor, which holds three steps' targets. With no query it opens a blank spot. */
 export const SPOT_EDITOR_HREF = '/lab/spots/edit';
@@ -114,8 +117,8 @@ export function closeTour(store: TourStore, storage: TourStorage, how: 'button' 
 }
 
 /**
- * Not when the address has a fragment: the panel mounts after the browser has scrolled to it, and at
- * 360px its height would push the part the link pointed at off the screen.
+ * Not when the address has a fragment: the panel mounts after the browser has scrolled to it, and a
+ * part near the end of the page, which cannot scroll to the top, would sit under the panel.
  */
 export function opensByItself(
   pathname: string,
@@ -242,7 +245,7 @@ export interface TourStore {
   readonly dispatch: (action: TourAction) => void;
 }
 
-/** A store outside React, so the header's button and the panel below it share one state. */
+/** A store outside React, so the header's button and the panel share one state. */
 export function createTourStore(initial: TourState = INITIAL_TOUR_STATE): TourStore {
   let state = initial;
   const listeners = new Set<() => void>();

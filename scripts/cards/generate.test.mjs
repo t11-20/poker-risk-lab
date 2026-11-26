@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
-import { BACK_TITLE, BACKS, DECK_DIR, faceTitle, readPalette, renderDeck, TOKENS } from './generate.mjs';
+import { BACK, BACK_TITLE, DECK_DIR, faceTitle, readPalette, renderDeck, TOKENS } from './generate.mjs';
 
 const tokens = readFileSync(TOKENS, 'utf8');
 const palette = readPalette(tokens);
@@ -23,9 +23,9 @@ const characterData = (svg) =>
 const titles = (svg) => [...svg.matchAll(/<title>([^<]*)<\/title>/gu)].map((m) => m[1]);
 
 describe('the committed deck', () => {
-  it('is 52 faces and the backs, each committed', () => {
-    assert.equal(deck.size, 52 + BACKS.length + 1);
-    for (const name of ['2C.svg', 'TD.svg', 'KH.svg', 'AS.svg', 'back.svg', 'back-wine.svg']) {
+  it('is 52 faces and the back, each committed', () => {
+    assert.equal(deck.size, 52 + 1);
+    for (const name of ['2C.svg', 'TD.svg', 'KH.svg', 'AS.svg', 'back.svg']) {
       assert.ok(deck.has(name), `the generator makes no ${name}`);
     }
     assert.deepEqual([...onDisk].sort(), [...deck.keys()].sort(), 'files on disk and generated files differ');
@@ -38,7 +38,7 @@ describe('the committed deck', () => {
   });
 
   it('draws every rank and suit as a path: no text, font or description to carry a letter', () => {
-    assert.ok(onDisk.length >= 56, 'read no card files');
+    assert.ok(onDisk.length >= 53, 'read no card files');
     for (const name of onDisk) {
       const svg = readFileSync(join(DECK_DIR, name), 'utf8');
       assert.doesNotMatch(svg, /<(text|tspan|desc|foreignObject|style)\b|font|@import/iu, name);
@@ -67,9 +67,10 @@ describe('the committed deck', () => {
     }
   });
 
-  it('shows a back that is the default option, until the owner picks one', () => {
-    assert.equal(deck.get('back.svg'), deck.get(`back-${BACKS[0]}.svg`));
-    assert.equal(BACKS[0], 'charcoal');
+  it('has one back, charcoal: green sinks into the felt and wine sits close to the red ink', () => {
+    assert.equal(BACK, 'charcoal');
+    const backs = [...deck.keys()].filter((name) => name.startsWith('back'));
+    assert.deepEqual(backs, ['back.svg']);
   });
 });
 

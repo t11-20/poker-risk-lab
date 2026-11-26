@@ -708,8 +708,7 @@ class Page {
 async function withPage(headful, run) {
   const chrome = {
     headful,
-    // Offset by pid so two audits on one machine do not share a port.
-    port: 9800 + Math.floor(process.pid % 150),
+    port: 0,
     profile: '/tmp/prl-ax-tree-audit-profile',
     flags: ['--window-size=1440,900'],
     dim,

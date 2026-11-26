@@ -403,8 +403,7 @@ class Page {
 function withPage(headful, run) {
   const chrome = {
     headful,
-    // Clear of keyboard-audit (9222+) and ax-tree-audit (9800+).
-    port: 9400 + Math.floor(process.pid % 150),
+    port: 0,
     // A fresh profile per run, so a seeded age cookie cannot carry into a later run.
     freshProfile: 'prl-csp-negative-control-',
     flags: ['--window-size=1440,900'],
