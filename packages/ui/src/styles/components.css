@@ -907,12 +907,14 @@
 /**
  * Disc and, for an opponent, the two cards beside it. The plate is the next row. The second back leans
  * 8deg into the disc: at 2px it crossed the disc by 1.7px, and 12px leaves the turn ring 5px clear.
+ * Wider than its seat (220px in 142px at 360px with 200% text) the cards go above the disc.
  */
 .prl-seat__cluster {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
   justify-content: center;
-  gap: var(--prl-space-5);
+  gap: var(--prl-space-2) var(--prl-space-5);
 }
 
 .prl-seat__disc {

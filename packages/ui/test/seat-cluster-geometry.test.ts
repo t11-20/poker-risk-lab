@@ -121,7 +121,7 @@ describe('an opponent’s second card back beside the disc', () => {
   const [w = 0, h = 0] = value('.prl-card', 'aspect-ratio').split('/').map(Number);
   const height = (width * h) / w;
   const turn = (Number.parseFloat(value(LAST_BACK, 'rotate')) * Math.PI) / 180;
-  const gap = px(value('.prl-seat__cluster', 'gap'));
+  const gap = px(value('.prl-seat__cluster', 'gap').split(' ').at(-1) ?? '');
 
   // Origin at the back's bottom centre; the cluster aligns the back's and the disc's bottom edges.
   const corners: Point[] = [
@@ -151,5 +151,13 @@ describe('an opponent’s second card back beside the disc', () => {
       clear >= 4,
       `${gap}px gap: the back is ${nearest.toFixed(2)}px from the disc's centre, ${clear.toFixed(2)}px`,
     );
+  });
+});
+
+describe('a cluster wider than its seat', () => {
+  // At 360px with 200% text the backs, gap and disc were 220px in a 142px seat, and a disc left the page.
+  it('wraps, so the cards go above the disc rather than past the seat', () => {
+    assert.equal(value('.prl-seat__cluster', 'flex-wrap'), 'wrap');
+    assert.equal(value('.prl-seat__cluster', 'justify-content'), 'center');
   });
 });
