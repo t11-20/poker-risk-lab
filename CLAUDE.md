@@ -72,8 +72,7 @@ sideways, and a root font size that ignores the reader's text size (`--text-scal
 layouts with doubled text. Those windows still hold content up to 768px wide, so the same pass also
 measures `LARGE_TEXT_PHONE_ROUTES` at 360px, the routes clean there today, with `hyphens: manual`
 injected so a local Chrome and CI's, which may have no hyphenation dictionary, measure the same page.
-The one route left out fails there on work held for the owner: `/play?state=complete`'s side pots
-(the `/play` redesign). There are no exemptions; the machinery
+Every route is on that list today. There are no exemptions; the machinery
 stays, and a rule a full pass never uses fails the gate. The run with none of `--routes`,
 `--widths`, `--themes` or `--text-scale` is held to coverage floors of its own, which the summary
 prints. A narrowed run is held to floors scaled to its size, never zero.

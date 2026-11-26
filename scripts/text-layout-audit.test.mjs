@@ -1433,6 +1433,7 @@ describe('the large-text pass', () => {
       '/learn/glossary',
       '/play',
       '/play?state=decision',
+      '/play?state=complete',
       '/lab',
       '/lab/fl-same-cards-under-the-gun',
       '/lab/spots',
@@ -1478,21 +1479,12 @@ describe('the large-text pass', () => {
   });
 
   it('measures at 360px only the phone routes --routes keeps', () => {
-    const other = ROUTES.find((route) => !LARGE_TEXT_PHONE_ROUTES.includes(route));
-    const [phone] = LARGE_TEXT_PHONE_ROUTES;
+    const [phone, other] = LARGE_TEXT_PHONE_ROUTES;
     assert.deepEqual(
-      large(['--routes', `${phone},${other}`]).map((cell) => `${cell.route} ${String(cell.width)}`),
-      [
-        `${phone} 768`,
-        `${phone} 1024`,
-        `${phone} 1440`,
-        `${other} 768`,
-        `${other} 1024`,
-        `${other} 1440`,
-        `${phone} 360`,
-      ],
+      large(['--routes', phone]).map((cell) => `${cell.route} ${String(cell.width)}`),
+      [`${phone} 768`, `${phone} 1024`, `${phone} 1440`, `${phone} 360`],
     );
-    assert.deepEqual(sweepPasses(parseArgs(['--routes', other]))[1].also, []);
+    assert.ok(!large(['--routes', phone]).some((cell) => cell.route === other), `${other} was measured`);
   });
 
   it('follows --routes, so one route can be checked the way the gate checks it', () => {
