@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { readdirSync, readFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { describe, it } from 'node:test';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { after, describe, it } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
-import { DevtoolsReplies, waitForDevtools } from './chrome-devtools.mjs';
+import { DevtoolsReplies, waitForDevtools, withChrome } from './chrome-devtools.mjs';
 
 const VERSION = { Browser: 'Stand-in/1.0' };
 
@@ -119,6 +121,110 @@ describe('waitForDevtools', () => {
     } finally {
       child.kill();
       await stalled.close();
+    }
+  });
+});
+
+/**
+ * A stand-in Chrome that serves DevTools on a port of its own and, for port 0, writes it where Chrome
+ * does. `PRL_FAKE_CHROME_PATH` makes it name another browser than the one it serves.
+ */
+const FAKE_CHROME = `#!${process.execPath}
+const { writeFileSync } = require('node:fs');
+const { createServer } = require('node:http');
+const arg = (name) => process.argv.find((a) => a.startsWith(name + '='))?.slice(name.length + 1);
+if (process.env.PRL_FAKE_CHROME_EXIT_MS) setTimeout(() => process.exit(3), Number(process.env.PRL_FAKE_CHROME_EXIT_MS));
+if (process.env.PRL_FAKE_CHROME_SILENT) setInterval(() => {}, 60_000);
+else {
+  const server = createServer((request, response) => {
+    const { port } = server.address();
+    response.setHeader('content-type', 'application/json');
+    response.end(JSON.stringify(request.url === '/json/version'
+      ? { Browser: 'Fake/1.0', webSocketDebuggerUrl: 'ws://127.0.0.1:' + port + '/devtools/browser/fake' }
+      : { webSocketDebuggerUrl: 'ws://127.0.0.1:' + port + '/devtools/page/fake' }));
+  });
+  server.listen(Number(arg('--remote-debugging-port')), '127.0.0.1', () => {
+    const { port } = server.address();
+    const path = process.env.PRL_FAKE_CHROME_PATH ?? '/devtools/browser/fake';
+    writeFileSync(arg('--user-data-dir') + '/DevToolsActivePort', port + '\\n' + path);
+  });
+}
+`;
+
+describe('withChrome', () => {
+  const scratch = mkdtempSync(join(tmpdir(), 'prl-chrome-devtools-test-'));
+  const fake = join(scratch, 'fake-chrome');
+  writeFileSync(fake, FAKE_CHROME);
+  chmodSync(fake, 0o755);
+  const saved = { ...process.env };
+  after(() => {
+    process.env = saved;
+    rmSync(scratch, { recursive: true, force: true });
+  });
+
+  const launch = (options, env = {}) => {
+    process.env = { ...saved, CHROME_PATH: fake, ...env };
+    return withChrome(
+      { headful: false, freshProfile: 'prl-chrome-devtools-test-', flags: [], dim: (s) => s, ...options },
+      async ({ version, openTab }) => ({ version, tab: await openTab() }),
+    );
+  };
+
+  /** Answers as a leftover Chrome would, for the browser path `stale`. */
+  async function standIn() {
+    const server = createServer((_request, response) => {
+      const url = `ws://127.0.0.1:${server.address().port}/devtools/browser/stale`;
+      response.setHeader('content-type', 'application/json');
+      response.end(JSON.stringify({ Browser: 'Stranger/1.0', webSocketDebuggerUrl: url }));
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    return { port: server.address().port, close: () => new Promise((resolve) => server.close(resolve)) };
+  }
+
+  it('drives the Chrome it launched on port 0, at the port that Chrome wrote', async () => {
+    const stranger = await standIn();
+    try {
+      const { version, tab } = await launch({ port: 0 });
+      assert.equal(version.Browser, 'Fake/1.0');
+      assert.match(tab, /^ws:\/\/127\.0\.0\.1:\d+\/devtools\/page\/fake$/u);
+      assert.doesNotMatch(tab, new RegExp(`:${stranger.port}/`));
+    } finally {
+      await stranger.close();
+    }
+  });
+
+  // On CI a gate's fixed port met another gate's leftover Chrome, which it then drove (REGRESSION).
+  it('refuses a fixed port something already answers on, before it launches Chrome', async () => {
+    const stranger = await standIn();
+    try {
+      await assert.rejects(
+        launch({ port: stranger.port }, { PRL_FAKE_CHROME_SILENT: '1' }),
+        new RegExp(`something is already listening on 127\\.0\\.0\\.1:${stranger.port}`),
+      );
+    } finally {
+      await stranger.close();
+    }
+  });
+
+  it('refuses a port that serves another browser than the one the file names', async () => {
+    await assert.rejects(
+      launch({ port: 0 }, { PRL_FAKE_CHROME_PATH: '/devtools/browser/other' }),
+      /answered as ws:\/\/127\.0\.0\.1:\d+\/devtools\/browser\/fake, not as the Chrome that wrote/u,
+    );
+  });
+
+  it("does not read a fixed profile's file from the last run", async () => {
+    const stranger = await standIn();
+    const profile = join(scratch, 'fixed-profile');
+    mkdirSync(profile, { recursive: true });
+    writeFileSync(join(profile, 'DevToolsActivePort'), `${stranger.port}\n/devtools/browser/stale`);
+    try {
+      await assert.rejects(
+        launch({ port: 0, profile }, { PRL_FAKE_CHROME_SILENT: '1', PRL_FAKE_CHROME_EXIT_MS: '500' }),
+        /Chrome exited \(code 3, signal null\) before it wrote .*DevToolsActivePort/u,
+      );
+    } finally {
+      await stranger.close();
     }
   });
 });

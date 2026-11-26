@@ -1593,23 +1593,24 @@ describe('the large-text negative control', () => {
 
 describe("the audit's own Chrome", () => {
   it('takes a port and a profile from the environment, or its own defaults', () => {
-    assert.deepEqual(chromeTarget({ PRL_LAYOUT_CDP_PORT: '9985', PRL_LAYOUT_PROFILE: 'scratch/p' }, 1), {
+    assert.deepEqual(chromeTarget({ PRL_LAYOUT_CDP_PORT: '9985', PRL_LAYOUT_PROFILE: 'scratch/p' }), {
       port: 9985,
       profile: 'scratch/p',
     });
-    assert.equal(chromeTarget({}, 141).port, 9651);
+  });
+
+  // Two gates whose `9650 + pid % 140` ports met attached to each other's Chrome on CI.
+  it('lets Chrome pick its port in a profile of its own by default', () => {
+    assert.deepEqual(chromeTarget({}), { port: 0, freshProfile: 'prl-text-layout-audit-' });
   });
 
   it('refuses an empty or non-numeric port and an empty profile at start', () => {
     for (const bad of ['', ' ', 'abc', '99x', '0', '70000', '-1', '9985.5']) {
-      assert.throws(() => chromeTarget({ PRL_LAYOUT_CDP_PORT: bad }, 1), /PRL_LAYOUT_CDP_PORT/u, `"${bad}"`);
+      assert.throws(() => chromeTarget({ PRL_LAYOUT_CDP_PORT: bad }), /PRL_LAYOUT_CDP_PORT/u, `"${bad}"`);
     }
     // Chrome given an empty --user-data-dir opens the user's own profile.
     for (const bad of ['', '  ']) {
-      assert.throws(
-        () => chromeTarget({ PRL_LAYOUT_PROFILE: bad }, 1),
-        /PRL_LAYOUT_PROFILE is set but empty/u,
-      );
+      assert.throws(() => chromeTarget({ PRL_LAYOUT_PROFILE: bad }), /PRL_LAYOUT_PROFILE is set but empty/u);
     }
   });
 });

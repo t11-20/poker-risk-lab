@@ -1397,9 +1397,9 @@ class Page {
 async function withPage(headful, run) {
   const chrome = {
     headful,
-    // Clear of the keyboard-audit and ax-tree-audit port ranges.
-    port: 9650 + Math.floor(process.pid % 140),
-    profile: '/tmp/prl-contrast-paint-profile',
+    // Chrome picks the port, so no other gate's Chrome can answer on it.
+    port: 0,
+    freshProfile: 'prl-contrast-paint-',
     flags: [`--window-size=${PAINTED_VIEWPORT.width},${PAINTED_VIEWPORT.height}`],
     dim,
   };

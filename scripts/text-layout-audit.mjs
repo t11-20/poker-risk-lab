@@ -1679,15 +1679,17 @@ export class Page {
 }
 
 /**
- * The DevTools port and profile, clear of ax-tree-audit's port range unless overridden, so a second
- * run beside the gate keeps off the profile one Chrome locks. An empty profile would be Chrome's own.
+ * Port 0 and a fresh profile unless overridden, so Chrome picks the port and no other gate's Chrome can
+ * answer on it. An empty profile would be Chrome's own.
  */
-export function chromeTarget(env, pid) {
-  const port = env.PRL_LAYOUT_CDP_PORT ?? String(9650 + (pid % 140));
-  if (!/^\d+$/u.test(port) || Number(port) < 1 || Number(port) > 65535) {
+export function chromeTarget(env) {
+  const port = env.PRL_LAYOUT_CDP_PORT ?? '0';
+  const valid = /^\d+$/u.test(port) && Number(port) >= 1 && Number(port) <= 65535;
+  if (env.PRL_LAYOUT_CDP_PORT !== undefined && !valid) {
     throw new Error(`PRL_LAYOUT_CDP_PORT takes a port from 1 to 65535, not "${port}"`);
   }
-  const profile = env.PRL_LAYOUT_PROFILE ?? '/tmp/prl-text-layout-audit-profile';
+  const profile = env.PRL_LAYOUT_PROFILE;
+  if (profile === undefined) return { port: Number(port), freshProfile: 'prl-text-layout-audit-' };
   if (profile.trim() === '') {
     throw new Error('PRL_LAYOUT_PROFILE is set but empty: name a folder or unset it');
   }
@@ -1993,7 +1995,7 @@ async function main() {
   let target;
   try {
     options = parseArgs(process.argv.slice(2));
-    target = chromeTarget(process.env, process.pid);
+    target = chromeTarget(process.env);
   } catch (err) {
     console.error(red(`text-layout-audit — ${err.message}`));
     process.exit(1);

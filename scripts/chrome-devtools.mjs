@@ -7,10 +7,11 @@
  */
 
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { refuseOccupiedPort } from './gate-servers.mjs';
 
 export const DEVTOOLS_STARTUP_TIMEOUT_MS = 30_000;
 /**
@@ -73,10 +74,79 @@ export async function waitForDevtools(child, port, timeoutMs = DEVTOOLS_STARTUP_
   }
 }
 
-/** Without a fixed `profile` each run gets a fresh one, removed after, so no seeded cookie carries over. */
+/**
+ * For port 0, which Chrome answers by picking a free port and writing it to `DevToolsActivePort` in the
+ * profile, so a gate drives only the Chrome it launched. The port must serve the browser the file names.
+ */
+export async function waitForDevtoolsFile(child, profile, timeoutMs = DEVTOOLS_STARTUP_TIMEOUT_MS) {
+  const file = join(profile, 'DevToolsActivePort');
+  let exited = null;
+  const onExit = (code, signal) => {
+    exited = { code, signal };
+  };
+  child.once('exit', onExit);
+  try {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (exited !== null || child.exitCode !== null) {
+        const how = exited ?? { code: child.exitCode, signal: child.signalCode };
+        throw new Error(
+          `Chrome exited (code ${String(how.code)}, signal ${String(how.signal)}) before it wrote ${file}`,
+        );
+      }
+      const [port, path] = readDevtoolsFile(file);
+      if (port !== undefined) {
+        const signal = AbortSignal.timeout(Math.max(1, Math.min(POLL_TIMEOUT_MS, deadline - Date.now())));
+        const version = await fetch(`http://127.0.0.1:${port}/json/version`, { signal })
+          .then((response) => response.json())
+          .catch(() => null);
+        if (version !== null) {
+          if (version.webSocketDebuggerUrl !== `ws://127.0.0.1:${port}${path}`) {
+            throw new Error(
+              `port ${port} answered as ${String(version.webSocketDebuggerUrl)}, not as the Chrome that ` +
+                `wrote ${path} to ${file}`,
+            );
+          }
+          return { port: Number(port), version };
+        }
+      }
+      await delay(POLL_MS);
+    }
+    throw new Error(`Chrome did not write a debugging port to ${file} within ${timeoutMs / 1000}s`);
+  } finally {
+    child.off('exit', onExit);
+  }
+}
+
+/** A missing or half-written file reads as not written yet. */
+function readDevtoolsFile(file) {
+  let text = '';
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch {
+    return [];
+  }
+  const [port, path] = text.split('\n');
+  if (!/^\d+$/u.test(port ?? '') || !(path ?? '').startsWith('/devtools/browser/')) return [];
+  return [port, path];
+}
+
+/**
+ * Without a fixed `profile` each run gets a fresh one, removed after, so no seeded cookie carries over.
+ * A non-zero `port` is refused when something already answers on it, since Chrome writes no
+ * `DevToolsActivePort` for one and the poll could not tell a stranger from its own child.
+ */
 export async function withChrome({ headful, port, profile, freshProfile, flags, dim }, run) {
   const binary = chromePath();
+  if (port !== 0) {
+    await refuseOccupiedPort(
+      `http://127.0.0.1:${port}`,
+      'A Chrome launched there could not be told from it. Stop it, or pick another port.',
+    );
+  }
   const userDataDir = profile ?? mkdtempSync(join(tmpdir(), freshProfile));
+  // A fixed profile keeps the last run's file, which names a port that Chrome may no longer hold.
+  if (profile !== undefined) rmSync(join(profile, 'DevToolsActivePort'), { force: true });
   const child = spawn(
     binary,
     [
@@ -93,14 +163,17 @@ export async function withChrome({ headful, port, profile, freshProfile, flags, 
   );
 
   try {
-    const version = await waitForDevtools(child, port);
+    const opened =
+      port === 0
+        ? await waitForDevtoolsFile(child, userDataDir)
+        : { port, version: await waitForDevtools(child, port) };
     const openTab = async () => {
-      const target = await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: 'PUT' }).then(
-        (r) => r.json(),
-      );
+      const target = await fetch(`http://127.0.0.1:${opened.port}/json/new?about:blank`, {
+        method: 'PUT',
+      }).then((r) => r.json());
       return target.webSocketDebuggerUrl;
     };
-    return await run({ version, openTab });
+    return await run({ version: opened.version, openTab });
   } finally {
     child.kill('SIGTERM');
     if (profile === undefined) {
