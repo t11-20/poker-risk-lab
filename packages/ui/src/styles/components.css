@@ -2377,6 +2377,18 @@ p.prl-seat__status {
 
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: repeat(7, auto);
+    row-gap: 0;
+  }
+
+  /* On the item, not the grid, so a row no seat takes on a shorter table leaves no gap. */
+  .prl-table__field .prl-seat:not([data-slot="hero"]),
+  .prl-table__centre {
+    margin-block-end: var(--prl-space-5);
+  }
+
+  /* Your dealer button rises `--prl-space-7` above your disc, so the row above leaves at least that. */
+  .prl-table__field [data-slot="hero"] {
+    margin-block-start: var(--prl-space-7);
   }
 
   .prl-table__field [data-slot="top"] {
