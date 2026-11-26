@@ -166,7 +166,7 @@ describe('nothing can hide content until JavaScript arrives', () => {
     const animation = /animation\s*:\s*([^;]+)/.exec(hidden)?.[1];
     assert.ok(animation !== undefined, 'the hidden state must carry its own expiry');
     assert.match(animation, /prl-reveal-deadline/);
-    assert.match(animation, /var\(--prl-dur-count\)/, 'the delay is the 900ms cap section 8 states');
+    assert.match(animation, /var\(--prl-dur-count\)/, 'the delay is the 900ms --prl-dur-count');
     assert.match(animation, /forwards/, 'the deadline must hold once it has passed');
     assert.doesNotMatch(
       animation,

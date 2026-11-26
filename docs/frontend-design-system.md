@@ -784,7 +784,7 @@ does. Re-measure them before relying on either step in 4.0.
 There is none on first paint. The page is server-rendered and readable when it first paints, so
 anything laid over it only delays reading: the first-visit overlay this section used to describe
 kept a painted page hidden until about 1.2s, at 390x844 and at 1440x900, while LCP had already
-happened underneath it at under 0.1s.
+happened underneath it at about 0.1s.
 
 * Route changes get a 2px accent progress bar at the top instead. Data fetches get skeleton
   blocks at the real content's dimensions, so nothing reflows on arrival.

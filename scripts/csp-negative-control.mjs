@@ -677,8 +677,8 @@ async function checkPositiveControls(page, serverHtml) {
       'positive',
       'React hydrated the page',
       `#prl-main has no React fiber property after ${HYDRATION_TIMEOUT_MS}ms, so the client bundle ` +
-        'never took over. The page is server markup and nothing more — which is also a page on which ' +
-        'no injection could have run, so the refusals above prove nothing.',
+        'never took over, or React renamed the property. The page is server markup and nothing more — ' +
+        'which is also a page on which no injection could have run, so the refusals above prove nothing.',
     );
   }
 }

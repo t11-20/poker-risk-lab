@@ -1,7 +1,6 @@
 /**
- * The server-rendered page is the first thing a reader sees. A first-visit overlay covered it until
- * about 1.2s after first paint while LCP had already happened underneath, and it kept a session key
- * `/privacy` had to name. Nothing in the app may bring either back.
+ * The server-rendered page is readable at first paint, so nothing may be laid over it, and no session
+ * key may exist that `/privacy` does not name.
  */
 
 import assert from 'node:assert/strict';
