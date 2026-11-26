@@ -90,7 +90,7 @@ export function GuidedTour(): ReactElement | null {
         root.style.removeProperty(TOUR_INSET_PROPERTY);
         return;
       }
-      const inset = Math.ceil(window.innerHeight - panel.getBoundingClientRect().top);
+      const inset = Math.ceil(panel.getBoundingClientRect().height);
       root.style.setProperty(TOUR_INSET_PROPERTY, `${Math.max(0, inset)}px`);
     };
     measure();

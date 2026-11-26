@@ -382,3 +382,25 @@ describe('the panel moves nothing and traps nothing (read from the source)', () 
     assert.match(read('../src/components/MobileNav.tsx'), /<TourButton beforeOpen=\{close\} \/>/u);
   });
 });
+
+// The menu sheet stacks inside the header, so a panel level with the header painted over the sheet's foot.
+describe('the panel’s stacking', () => {
+  const blocks = (selector: string): string[] =>
+    [...CSS.matchAll(/([^{}]+)\{([^{}]*)\}/gu)]
+      .filter((match) => match[1]?.trim() === selector)
+      .map((match) => match[2] ?? '');
+
+  it('sits below the header, so an open menu sheet covers it', () => {
+    const [fixed] = blocks('.prl-tour');
+    assert.match(fixed ?? '', /position: fixed;/u);
+    assert.match(fixed ?? '', /z-index: var\(--prl-z-sticky\);/u);
+  });
+
+  it('drops its z-index wherever it goes back into the flow, so it scrolls under the header', () => {
+    const inFlow = [...blocks(':root:has(.prl-play) .prl-tour'), ...blocks('.prl-tour')].filter((body) =>
+      /position: static;/u.test(body),
+    );
+    assert.equal(inFlow.length, 2, 'expected the /play and the short-window rules');
+    for (const body of inFlow) assert.match(body, /z-index: auto;/u);
+  });
+});

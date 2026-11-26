@@ -75,14 +75,14 @@
 /* The panel. Fixed to the bottom of the window, so opening it by itself moves nothing on the page. */
 
 /**
- * A container, so the steps are laid out by the panel's own width. Under the menu sheet, tips and
- * toasts. Half the window at most, and never so tall that the header's scroll padding and its own leave
+ * A container, so the steps are laid out by the panel's own width. Below the header, whose stacking
+ * context holds the menu sheet, so an open sheet covers it. Half the window at most, and never so tall that the header's scroll padding and its own leave
  * no room for one focused control: at 568x320 the two met and 59 tab stops landed under the panel.
  */
 .prl-tour {
   container: prl-tour / inline-size;
   position: fixed;
-  z-index: var(--prl-z-nav);
+  z-index: var(--prl-z-sticky);
   inset-inline: 0;
   inset-block-end: 0;
   display: flex;
@@ -115,6 +115,9 @@ body:has(.prl-tour):not(:has(.prl-play)) {
 /** The steps scroll here, and each "Show me" in them is a tab stop the scroll follows. */
 .prl-tour__body {
   min-block-size: 0;
+  /* Room for a focused "Show me" ring, which the scroller would otherwise clip at its edge. */
+  margin: calc(-1 * var(--prl-space-2));
+  padding: var(--prl-space-2);
   overflow-y: auto;
   overscroll-behavior-block: contain;
 }
@@ -141,6 +144,7 @@ body:has(.prl-tour):not(:has(.prl-play)) {
  */
 :root:has(.prl-play) .prl-tour {
   position: static;
+  z-index: auto;
   max-block-size: none;
   margin-block-start: var(--prl-space-6);
   padding-block-end: var(--prl-space-5);
@@ -155,6 +159,7 @@ body:has(.prl-tour):not(:has(.prl-play)) {
 @media (height < 18em) {
   .prl-tour {
     position: static;
+    z-index: auto;
     max-block-size: none;
     margin-block-start: var(--prl-space-6);
     padding-block-end: var(--prl-space-5);

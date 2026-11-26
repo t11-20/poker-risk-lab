@@ -343,7 +343,6 @@ export function renderDeck(palette) {
   const files = new Map();
   for (const rank of RANKS)
     for (const suit of SUITS) files.set(`${rank}${suit}.svg`, face(rank, suit, palette));
-  files.set(`back-${BACK}.svg`, back(BACK, palette));
   files.set('back.svg', back(BACK, palette));
   return files;
 }

@@ -245,7 +245,7 @@ export interface TourStore {
   readonly dispatch: (action: TourAction) => void;
 }
 
-/** A store outside React, so the header's button and the panel below it share one state. */
+/** A store outside React, so the header's button and the panel share one state. */
 export function createTourStore(initial: TourState = INITIAL_TOUR_STATE): TourStore {
   let state = initial;
   const listeners = new Set<() => void>();

@@ -24,8 +24,8 @@ const titles = (svg) => [...svg.matchAll(/<title>([^<]*)<\/title>/gu)].map((m) =
 
 describe('the committed deck', () => {
   it('is 52 faces and the back, each committed', () => {
-    assert.equal(deck.size, 52 + 2);
-    for (const name of ['2C.svg', 'TD.svg', 'KH.svg', 'AS.svg', 'back.svg', 'back-charcoal.svg']) {
+    assert.equal(deck.size, 52 + 1);
+    for (const name of ['2C.svg', 'TD.svg', 'KH.svg', 'AS.svg', 'back.svg']) {
       assert.ok(deck.has(name), `the generator makes no ${name}`);
     }
     assert.deepEqual([...onDisk].sort(), [...deck.keys()].sort(), 'files on disk and generated files differ');
@@ -38,7 +38,7 @@ describe('the committed deck', () => {
   });
 
   it('draws every rank and suit as a path: no text, font or description to carry a letter', () => {
-    assert.ok(onDisk.length >= 54, 'read no card files');
+    assert.ok(onDisk.length >= 53, 'read no card files');
     for (const name of onDisk) {
       const svg = readFileSync(join(DECK_DIR, name), 'utf8');
       assert.doesNotMatch(svg, /<(text|tspan|desc|foreignObject|style)\b|font|@import/iu, name);
@@ -69,9 +69,8 @@ describe('the committed deck', () => {
 
   it('has one back, charcoal: green sinks into the felt and wine sits close to the red ink', () => {
     assert.equal(BACK, 'charcoal');
-    assert.equal(deck.get('back.svg'), deck.get('back-charcoal.svg'));
     const backs = [...deck.keys()].filter((name) => name.startsWith('back'));
-    assert.deepEqual(backs.sort(), ['back-charcoal.svg', 'back.svg']);
+    assert.deepEqual(backs, ['back.svg']);
   });
 });
 
