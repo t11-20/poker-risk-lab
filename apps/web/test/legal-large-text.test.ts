@@ -109,3 +109,10 @@ describe('the legal pages at 320px, and at 360px with 200% text', () => {
     assert.doesNotMatch(legal, /\bhyphens:/u);
   });
 });
+
+describe('/age-check at 360px with 200% text', () => {
+  // "docs/production/legal-review-requirements.md" ran 190px past the panel and made the page 518px.
+  it('lets a code path in the gate break anywhere', () => {
+    assert.ok(declares(unconditional(legal), '.prl-gate code', 'overflow-wrap', 'anywhere'));
+  });
+});

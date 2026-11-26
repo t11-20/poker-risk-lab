@@ -221,6 +221,11 @@ p.prl-legal-flag__mark {
   line-height: var(--prl-leading-body);
 }
 
+/* The path to the legal register is one token, 190px past the panel at 360px with 200% text. */
+.prl-gate code {
+  overflow-wrap: anywhere;
+}
+
 /** Inset rather than small print, because these paragraphs say what the control does not do. */
 .prl-gate__caveat {
   padding: var(--prl-space-6) var(--prl-space-7);
