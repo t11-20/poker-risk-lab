@@ -1389,13 +1389,6 @@
   .prl-learn-quiz__option-feedback {
     padding-inline-start: var(--prl-space-6);
   }
-
-  /* Not a quiz question, whose 240px column broke nearly every line. Chrome never hyphenates a capital,
-     so the lesson h1 "Tournaments:" is left too. */
-  .prl-learn-lesson__heading,
-  .prl-learn-glossary__term {
-    hyphens: auto;
-  }
 }
 
 @media (min-width: 37.5em) {
