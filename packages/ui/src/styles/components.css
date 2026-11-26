@@ -2372,15 +2372,44 @@ p.prl-seat__status {
 }
 
 /*
- * At 360px with 200% text a seat was 111-124px and its plate left a name 77-90px, so "Quartile" (103px)
- * and "Balanced" (122px) tore mid-word. Below 20em the field and the plate give their padding to the name.
+ * At 360px with 200% text two seats a row leave a name 111-127px, and a Legends seat's "Fundamentalist"
+ * is 200px. Below 20em each seat takes a row, and the field and the plate give their padding to the name.
  */
 @media (width < 20em) {
   .prl-table__field {
     --prl-table-pad: var(--prl-space-1);
-    --prl-seat-w: calc((100cqi - var(--prl-table-pad) * 2 - var(--prl-space-1)) / 2);
+    --prl-seat-w: 100%;
 
-    column-gap: var(--prl-space-1);
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: repeat(7, auto);
+  }
+
+  .prl-table__field [data-slot="top"] {
+    grid-area: 1 / 1;
+  }
+
+  .prl-table__field [data-slot="left-high"] {
+    grid-area: 2 / 1;
+  }
+
+  .prl-table__field [data-slot="right-high"] {
+    grid-area: 3 / 1;
+  }
+
+  .prl-table__centre {
+    grid-area: 4 / 1;
+  }
+
+  .prl-table__field [data-slot="left-low"] {
+    grid-area: 5 / 1;
+  }
+
+  .prl-table__field [data-slot="right-low"] {
+    grid-area: 6 / 1;
+  }
+
+  .prl-table__field [data-slot="hero"] {
+    grid-area: 7 / 1;
   }
 
   .prl-seat__plate {
