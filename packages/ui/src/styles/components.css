@@ -1153,10 +1153,13 @@ p.prl-seat__status {
   letter-spacing: var(--prl-tracking-label);
 }
 
-/* At 360px with 200% text the index and amount took the row and left the names a 0px track. */
+/*
+ * At 360px with 200% text the index and amount took the row and left the names a 0px track. The amount
+ * keeps an auto track: in a shrinking one "600 units" ran 34px past it, and the page scrolled.
+ */
 @media (width < 20em) {
   .prl-pot__side {
-    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-columns: auto auto;
   }
 
   .prl-pot__side-seats {

@@ -58,7 +58,7 @@ function holds(rules: readonly (readonly [string, string, string, string])[]): v
 
 describe('side pots under 20em', () => {
   holds([
-    ['.prl-pot__side', 'grid-template-columns', 'auto minmax(0, 1fr)', 'two auto figures left 0px'],
+    ['.prl-pot__side', 'grid-template-columns', 'auto auto', 'two auto figures left the names 0px'],
     ['.prl-pot__side-seats', 'grid-column', '2', 'the names go under the amount'],
   ]);
 
