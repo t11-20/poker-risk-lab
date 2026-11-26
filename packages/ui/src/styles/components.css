@@ -2665,6 +2665,37 @@ p.prl-seat__status {
   max-width: none;
 }
 
+/*
+ * At 360px with 200% text a fieldset's own `min-inline-size: min-content`, the label beside the 208px
+ * number field and the slider's 256px floor made the sizer 367px, so /lab pages were 450-507px wide.
+ * Below 20em each block may shrink, the label goes above the field, and both controls fit the sizer.
+ */
+@media (width < 20em) {
+  .prl-action-bar {
+    min-width: 0;
+    padding-inline: var(--prl-space-3);
+  }
+
+  .prl-sizer {
+    min-inline-size: 0;
+    padding-inline: var(--prl-space-3);
+  }
+
+  .prl-sizer__controls,
+  .prl-sizer__field,
+  .prl-sizer__slider {
+    min-width: 0;
+  }
+
+  .prl-sizer__field {
+    flex-wrap: wrap;
+  }
+
+  .prl-sizer__number {
+    max-width: 100%;
+  }
+}
+
 .prl-action-help__list {
   display: grid;
   gap: var(--prl-space-3);
