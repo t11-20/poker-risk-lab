@@ -376,9 +376,12 @@ function trigProblems(sheet: string, registered: ReadonlyMap<string, Registratio
     const unit = RELATIVE_UNIT.exec(call)?.[0];
     if (unit !== undefined) problems.push(`${call} holds a relative length (${unit})`);
     for (const [, name = ''] of call.matchAll(/var\(\s*(--[\w-]+)/g)) {
-      const syntax = registered.get(name)?.syntax;
-      if (syntax === undefined) problems.push(`${call} reads ${name}, which is not registered`);
-      else if (!ABSOLUTE_SYNTAXES.has(syntax)) problems.push(`${call} reads ${name}, a ${syntax}`);
+      const rule = registered.get(name);
+      if (rule === undefined) problems.push(`${call} reads ${name}, which is not registered`);
+      else if (rule.inherits === '' || rule.initial === '') {
+        problems.push(`${call} reads ${name}, whose @property a browser drops: a descriptor is missing`);
+      } else if (!ABSOLUTE_SYNTAXES.has(rule.syntax))
+        problems.push(`${call} reads ${name}, a ${rule.syntax}`);
     }
   }
   return { calls, problems };
@@ -399,11 +402,13 @@ describe('trig functions in the stylesheets read only absolute values', () => {
     );
   });
 
-  it('catches a rem and an unregistered property, and passes a registered length', () => {
+  it('catches a rem, an unregistered property and a dropped @property, and passes a registered length', () => {
     const lengths = new Map<string, Registration>([
       ['--set', { syntax: '<length>', inherits: 'true', initial: '0px' }],
       ['--mixed', { syntax: '<length-percentage>', inherits: 'true', initial: '0px' }],
+      ['--dropped', { syntax: '<length>', inherits: 'true', initial: '' }],
     ]);
+    assert.equal(trigProblems('a { b: sin(var(--dropped)); }', lengths).problems.length, 1);
     assert.equal(trigProblems('a { b: atan2(88px - 1rem, 88px); }', lengths).problems.length, 1);
     assert.equal(trigProblems('a { b: sin(var(--loose)); }', lengths).problems.length, 1);
     assert.equal(trigProblems('a { b: sin(var(--mixed)); }', lengths).problems.length, 1);
