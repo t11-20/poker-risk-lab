@@ -394,6 +394,20 @@
   grid-template-rows: subgrid;
 }
 
+/**
+ * At 360px with 200% text the card's padding left the name 198px, and "Fundamentalist" needs 282px at
+ * the heading size. One step down and half the padding give it 254px of 262px.
+ */
+@media (width < 20em) {
+  .prl-legend-card {
+    padding-inline: var(--prl-space-4);
+  }
+
+  .prl-legend-identity__archetype {
+    font-size: var(--prl-type-body-lg);
+  }
+}
+
 /** A shorter disclaimer leaves its spare space above the box, so the box stays on its actions. */
 .prl-legend-grid > .prl-legend-card > .prl-legend-disclaimers {
   align-self: end;

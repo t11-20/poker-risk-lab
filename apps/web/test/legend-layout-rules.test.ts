@@ -157,6 +157,23 @@ describe('legends layout rules', () => {
     assert.doesNotMatch(css, /column-reverse|row-reverse|(?:^|[\s;{])order:/u);
   });
 
+  /* At 360px with 200% text "Fundamentalist" was 282px at the heading size in a 198px card. */
+  it('below 20em a card name is one step smaller and the card pads less, never a word broken', () => {
+    const phone = [...css.matchAll(/@media \(width < 20em\) \{([\s\S]*?)\n\}/gu)].map((m) => m[1] ?? '');
+    assert.ok(phone.length > 0, 'no `@media (width < 20em)` block in legends.css');
+    const inside = (selector: string): string => {
+      const escaped = selector.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+      const bodies = phone.flatMap((b) => [
+        ...b.matchAll(new RegExp(`\\n\\s*${escaped} \\{([^}]*)\\}`, 'gu')),
+      ]);
+      assert.ok(bodies.length > 0, `no rule for ${selector} below 20em`);
+      return bodies.map((m) => m[1] ?? '').join('\n');
+    };
+    assert.match(inside('.prl-legend-identity__archetype'), /font-size: var\(--prl-type-body-lg\);/u);
+    assert.match(inside('.prl-legend-card'), /padding-inline: var\(--prl-space-4\);/u);
+    assert.doesNotMatch(css, /overflow-wrap: anywhere|word-break: break-all/u);
+  });
+
   it('below 20em a contrast figure sits under its trait instead of beside it', () => {
     assert.match(
       css,
