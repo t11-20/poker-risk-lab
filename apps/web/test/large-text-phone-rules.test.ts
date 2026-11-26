@@ -165,6 +165,12 @@ describe('/play’s equity readout at 360px with 200% text', () => {
     }
   });
 
+  // Centred on a two-line name, the swatch sat between its lines.
+  it('puts the swatch back on the name’s first line', () => {
+    assert.ok(declares(unconditional(play), '.prl-play .prl-equity-bar__swatch', 'align-self', 'center'));
+    assert.ok(declares(phone(), '.prl-play .prl-equity-bar__swatch', 'align-self', 'auto'));
+  });
+
   // Same specificity, so the narrow rule wins only by coming later.
   it('comes after the three tracks it replaces', () => {
     const own = play.search(/\.prl-play \.prl-equity-bar__row \{[^}]*grid-template-columns: auto minmax/u);
