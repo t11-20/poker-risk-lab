@@ -213,8 +213,8 @@ AND CARDS block of `tokens.css`, which the generator reads.
 | `--prl-deck-red` | hearts, diamonds | `#b3262d` | 6.28:1 |
 
 The backs are a white margin round a lattice panel; the margin is what separates a dark back from
-the felt. Three are generated (charcoal, deep green, dark wine) and `back.svg` is charcoal until the
-owner picks one.
+the felt. There is one back, charcoal (`back.svg`): a green back sinks into the felt and a wine back
+sits close to the red suit ink.
 
 **Two inks, as on a real deck, and never colour alone.** Each card carries its rank, a large suit
 symbol and its `aria-label` ("ace of hearts"). The deck was four-colour with a suit letter under
@@ -926,14 +926,15 @@ Two narrower ranges exist for large text. Below `20em` (a window under 320px at 
   - the Coach with its sections, suggestion, uncertainty note and stats. Its lists indent `0.75rem`.
 
   Legends cards, compare columns, decisions, difficulty frames and picker options pad `0.5rem`.
-  Disclaimers pad `0.75rem`.
+  Disclaimers pad `0.75rem`. On the legal pages the banner and a naming flag pad `1rem`; the age
+  check's panel pads `0.75rem` and its caveats `0.5rem` a side (`apps/web/src/styles/legal.css`).
 - **The bet sizer fits.** The action bar, the sizer, its controls, field and slider may shrink. The
   field wraps and the number field is never wider than it. The bar and the sizer keep `0.375rem` a side.
 - **The display ramp steps down** (§3.2), and a Legends card's or compare column's name takes
   `body-lg`. A hand review's heading keeps its size, so it stays above its decisions.
-- **Only an assumption's text may hyphenate.** Without it, "measurement" and "combinations" break
-  mid-word. Nothing else needs it. `test:layout` measures its 360px cell at 200% with hyphenation off,
-  because CI's Chrome may have no hyphenation dictionary.
+- **Nothing hyphenates.** CI's Chrome may have no hyphenation dictionary, so `test:layout` measures its
+  360px cell at 200% with hyphenation off, and a word must fit its column whole. On the Lab an
+  assumption's sentence spans the row under its index, where "measurement" fits.
 
 Below `18em` a review row card and the deck-proof terms give each value its own row, and a review
 board's cards wrap. One container query does the same for the Legends difficulty picker: below `15rem`

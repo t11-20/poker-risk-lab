@@ -3726,12 +3726,12 @@ td.prl-candidates__ev,
 }
 
 /*
- * At 360px with 200% text "measurement" and "combinations" are wider than an assumption's column, and
- * unhyphenated they break mid-word. Only under 20em, so no other size reflows.
+ * At 360px with 200% text "measurement" (197px) broke mid-word in the 180px beside the index. Below 20em
+ * the sentence spans the row under it (244px), so it holds whatever tracks a page's stylesheet sets.
  */
 @media (width < 20em) {
   .prl-assumptions__text {
-    hyphens: auto;
+    grid-column: 1 / -1;
   }
 }
 
