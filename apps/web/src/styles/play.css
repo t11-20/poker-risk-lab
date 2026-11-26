@@ -1095,6 +1095,19 @@
   grid-column: 2 / -1;
 }
 
+/* The shared readout stacks below 20em, and the tracks above outrank it, so they stack here too. */
+@media (width < 20em) {
+  .prl-play .prl-equity-bar__row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .prl-play .prl-equity-bar__value,
+  .prl-play .prl-equity-bar__detail {
+    grid-column: 2;
+    text-align: start;
+  }
+}
+
 .prl-play .prl-equity-bar__track {
   border-radius: var(--prl-radius-pill);
 }
