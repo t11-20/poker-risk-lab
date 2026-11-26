@@ -2645,8 +2645,11 @@ p.prl-seat__status {
   min-width: var(--prl-space-15);
 }
 
+/** A capsule, as the preset pills beside it and every `.prl-input` are. The spinner sits in the end cap. */
 .prl-sizer__number {
   width: var(--prl-space-14);
+  padding-inline: var(--prl-control-pad-field);
+  border-radius: var(--prl-control-radius);
   font-variant-numeric: var(--prl-numeric);
   text-align: end;
 }
