@@ -21,6 +21,11 @@
 
 .prl-legal {
   display: grid;
+  /*
+   * Tracks that shrink, here and in every grid inside: an `auto` track is floored at its widest token,
+   * and "(PRL_LEGEND_NAMING=attributed)," alone made /terms 329px wide in a 320px window.
+   */
+  grid-template-columns: minmax(0, 1fr);
   /* The section seam is wider than the paragraph gap, or fourteen sections read as one column. */
   gap: var(--prl-space-12);
   max-width: var(--prl-measure);
@@ -36,6 +41,7 @@
 
 .prl-legal__section {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--prl-space-6);
 }
 
@@ -106,6 +112,7 @@
 
 .prl-legal__banner {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--prl-space-5);
   padding: var(--prl-space-8);
   border: 1px solid var(--prl-caution);
@@ -131,6 +138,7 @@ p.prl-legal__banner-mark {
 
 .prl-legal-flag {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--prl-space-4);
   padding: var(--prl-space-7);
   border: 1px solid var(--prl-caution);
@@ -149,10 +157,19 @@ p.prl-legal-flag__mark {
   color: var(--prl-caution);
 }
 
+/* Only with large text on a phone: at 360px and 200% the banner's 48px sides tore "unenforceable". */
+@media (width < 20em) {
+  .prl-legal__banner,
+  .prl-legal-flag {
+    padding: var(--prl-space-6);
+  }
+}
+
 /* The data inventory. A `<dl>` of terms, because a table would need a horizontal scroll on a phone. */
 
 .prl-legal__inventory {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--prl-space-7);
   margin: 0;
 }
@@ -162,7 +179,9 @@ p.prl-legal-flag__mark {
   border-block-start: var(--prl-hairline);
 }
 
+/* A term is a table name, a token: unlike `dd` it has no `overflow-wrap` from reset.css. */
 .prl-legal__inventory dt {
+  overflow-wrap: anywhere;
   color: var(--prl-text);
   font-family: var(--prl-font-mono);
   font-size: var(--prl-type-body-sm);
