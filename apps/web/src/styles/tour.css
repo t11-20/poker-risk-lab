@@ -84,17 +84,18 @@
   position: fixed;
   z-index: var(--prl-z-nav);
   inset-inline: 0;
-  inset-block-end: calc(var(--prl-space-4) + env(safe-area-inset-bottom, 0px));
+  inset-block-end: 0;
   display: flex;
   flex-direction: column;
   gap: var(--prl-space-4);
   max-block-size: min(
-    calc(50dvh - var(--prl-space-4)),
+    50dvh,
     calc(100dvh - var(--prl-pillbar-h) - var(--prl-target-min) - 4 * var(--prl-space-6))
   );
-  padding: var(--prl-space-5) var(--prl-space-6);
+  padding: var(--prl-space-5) var(--prl-space-6) calc(var(--prl-space-5) + env(safe-area-inset-bottom, 0px));
   border: 1px solid var(--prl-line-strong);
-  border-radius: var(--prl-radius-3);
+  border-block-end: 0;
+  border-radius: var(--prl-radius-3) var(--prl-radius-3) 0 0;
   background-color: var(--prl-surface-panel);
 }
 
@@ -142,6 +143,9 @@ body:has(.prl-tour):not(:has(.prl-play)) {
   position: static;
   max-block-size: none;
   margin-block-start: var(--prl-space-6);
+  padding-block-end: var(--prl-space-5);
+  border-block-end: 1px solid var(--prl-line-strong);
+  border-radius: var(--prl-radius-3);
 }
 
 /**
@@ -153,6 +157,9 @@ body:has(.prl-tour):not(:has(.prl-play)) {
     position: static;
     max-block-size: none;
     margin-block-start: var(--prl-space-6);
+    padding-block-end: var(--prl-space-5);
+    border-block-end: 1px solid var(--prl-line-strong);
+    border-radius: var(--prl-radius-3);
   }
 }
 

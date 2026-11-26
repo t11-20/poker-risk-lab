@@ -317,7 +317,7 @@ describe('the panel moves nothing and traps nothing (read from the source)', () 
   });
 
   it('is at most half the window, and past that its steps scroll while the title and Skip stay', () => {
-    assert.match(panelRule(CSS), /max-block-size: min\(\s*calc\(50dvh - /u);
+    assert.match(panelRule(CSS), /max-block-size: min\(\s*50dvh,/u);
     assert.match(panelRule(CSS), /calc\(100dvh - var\(--prl-pillbar-h\) - var\(--prl-target-min\) - /u);
     const body = ruleOf(CSS, '.prl-tour__body');
     assert.match(body, /overflow-y: auto;/u);
