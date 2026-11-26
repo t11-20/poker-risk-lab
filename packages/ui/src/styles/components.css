@@ -1146,6 +1146,17 @@ p.prl-seat__status {
   letter-spacing: var(--prl-tracking-label);
 }
 
+/* At 360px with 200% text the index and amount took the row and left the names a 0px track. */
+@media (width < 20em) {
+  .prl-pot__side {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .prl-pot__side-seats {
+    grid-column: 2;
+  }
+}
+
 /**
  * A registered `@property` drives the conic gradient, or the keyframes would jump. A paint, so it
  * is the only continuously animated thing on the table. `TurnTimer` sets the duration and a negative
