@@ -156,18 +156,31 @@ describe('withChrome', () => {
   const fake = join(scratch, 'fake-chrome');
   writeFileSync(fake, FAKE_CHROME);
   chmodSync(fake, 0o755);
-  const saved = { ...process.env };
+  const KEYS = ['CHROME_PATH', 'PRL_FAKE_CHROME_PATH', 'PRL_FAKE_CHROME_SILENT', 'PRL_FAKE_CHROME_EXIT_MS'];
+  const saved = Object.fromEntries(KEYS.map((key) => [key, process.env[key]]));
+  const restore = () => {
+    for (const key of KEYS) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  };
   after(() => {
-    process.env = saved;
+    restore();
     rmSync(scratch, { recursive: true, force: true });
   });
 
-  const launch = (options, env = {}) => {
-    process.env = { ...saved, CHROME_PATH: fake, ...env };
-    return withChrome(
-      { headful: false, freshProfile: 'prl-chrome-devtools-test-', flags: [], dim: (s) => s, ...options },
-      async ({ version, openTab }) => ({ version, tab: await openTab() }),
-    );
+  // The fake reads these when it is spawned, so they are set for the launch and put back after it.
+  const launch = async (options, env = {}) => {
+    restore();
+    Object.assign(process.env, { CHROME_PATH: fake, ...env });
+    try {
+      return await withChrome(
+        { headful: false, freshProfile: 'prl-chrome-devtools-test-', flags: [], dim: (s) => s, ...options },
+        async ({ version, openTab }) => ({ version, tab: await openTab() }),
+      );
+    } finally {
+      restore();
+    }
   };
 
   /** Answers as a leftover Chrome would, for the browser path `stale`. */
@@ -194,7 +207,7 @@ describe('withChrome', () => {
   });
 
   // On CI a gate's fixed port met another gate's leftover Chrome, which it then drove (REGRESSION).
-  it('refuses a fixed port something already answers on, before it launches Chrome', async () => {
+  it('refuses a fixed port something already answers on', async () => {
     const stranger = await standIn();
     try {
       await assert.rejects(
