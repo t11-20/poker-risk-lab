@@ -904,12 +904,15 @@
   line-height: var(--prl-leading-snug);
 }
 
-/** Disc and, for an opponent, the two cards beside it. The plate is the next row. */
+/**
+ * Disc and, for an opponent, the two cards beside it. The plate is the next row. The second back leans
+ * 8deg into the disc: at 2px it crossed the disc by 1.7px, and 12px leaves the turn ring 5px clear.
+ */
 .prl-seat__cluster {
   display: flex;
   align-items: flex-end;
   justify-content: center;
-  gap: var(--prl-space-1);
+  gap: var(--prl-space-5);
 }
 
 .prl-seat__disc {

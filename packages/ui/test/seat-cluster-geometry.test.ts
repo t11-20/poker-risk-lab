@@ -101,3 +101,55 @@ describe('the disc over its plate', () => {
     });
   }
 });
+
+/** The shortest distance from point `p` to the segment `a`-`b`. */
+function toSegment(p: Point, a: Point, b: Point): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy)));
+  return Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy);
+}
+
+interface Point {
+  readonly x: number;
+  readonly y: number;
+}
+
+describe('an opponent’s second card back beside the disc', () => {
+  const LAST_BACK = '.prl-seat:not(.prl-seat--self) .prl-card-row__cards .prl-card--face-down:last-child';
+  const width = px(value('.prl-seat .prl-card--face-down', '--prl-card-w'));
+  const [w = 0, h = 0] = value('.prl-card', 'aspect-ratio').split('/').map(Number);
+  const height = (width * h) / w;
+  const turn = (Number.parseFloat(value(LAST_BACK, 'rotate')) * Math.PI) / 180;
+  const gap = px(value('.prl-seat__cluster', 'gap'));
+
+  // Origin at the back's bottom centre; the cluster aligns the back's and the disc's bottom edges.
+  const corners: Point[] = [
+    [-width / 2, -height],
+    [width / 2, -height],
+    [width / 2, 0],
+    [-width / 2, 0],
+  ].map(([x = 0, y = 0]) => ({
+    x: x * Math.cos(turn) - y * Math.sin(turn),
+    y: x * Math.sin(turn) + y * Math.cos(turn),
+  }));
+  const centre: Point = { x: width / 2 + gap + disc / 2, y: -disc / 2 };
+  const nearest = Math.min(...corners.map((a, i) => toSegment(centre, a, corners[(i + 1) % 4] as Point)));
+
+  it('reads a back that leans toward the disc, about its bottom centre', () => {
+    assert.ok(turn > 0, `the last back turns ${turn}rad`);
+    assert.equal(
+      value('.prl-seat:not(.prl-seat--self) .prl-card--face-down', 'transform-origin'),
+      '50% 100%',
+    );
+    assert.equal(value('.prl-seat__cluster', 'align-items'), 'flex-end');
+  });
+
+  it('stays at least 4px clear of the turn ring, so it never crosses the disc', () => {
+    const clear = nearest - ring / 2;
+    assert.ok(
+      clear >= 4,
+      `${gap}px gap: the back is ${nearest.toFixed(2)}px from the disc's centre, ${clear.toFixed(2)}px`,
+    );
+  });
+});
