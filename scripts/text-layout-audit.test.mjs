@@ -1169,14 +1169,14 @@ describe('an exemption above a text size, held to the clipper it names', () => {
   });
 });
 
-/** The tally of the default run (every route, both themes, five widths, 100% text) on 2026-11-25. */
+/** The tally of the default run (every route, both themes, five widths, 100% text) on 2026-11-26. */
 const FULL_DEFAULT_RUN = {
-  measurements: 200,
-  measurementsWanted: 200,
-  textBoxes: 38970,
-  detector: { ownBox: 38970, clipTests: 4280, frameTests: 28610, pairs: 33050, breakTests: 232 },
-  routesLoaded: 40,
-  routesWanted: 40,
+  measurements: 210,
+  measurementsWanted: 210,
+  textBoxes: 39486,
+  detector: { ownBox: 39486, clipTests: 4280, frameTests: 28806, pairs: 33528, breakTests: 236 },
+  routesLoaded: 42,
+  routesWanted: 42,
   usedExemptions: new Set(),
 };
 
@@ -1217,7 +1217,7 @@ describe('a sweep of nothing is not a pass', () => {
     ]);
     assert.equal(problems.length, 6, problems.join('\n'));
     assert.match(problems[0], /^100% text pass: only 856 text blocks .*clipping ancestor \(floor 2000 /u);
-    assert.match(problems.join('\n'), /100% text pass: only 1652 pairs .*\(floor 11000 /u);
+    assert.match(problems.join('\n'), /100% text pass: only 1676 pairs .*\(floor 11150 /u);
     // main's fixed floors for the full 100% sweep, before they were scaled.
     const main = { textBoxes: 5000, ownBox: 8000, clipTests: 2000, frameTests: 8000, pairs: 8000 };
     for (const [key, floor] of Object.entries(main)) {
@@ -1263,7 +1263,7 @@ describe('a sweep of nothing is not a pass', () => {
     const problems = coverageFailures({ ...healthy, measurements: 2, textBoxes: 40 });
     assert.equal(problems.length, 2);
     for (const problem of problems) assert.match(problem, /a sweep of nothing is not a pass/u);
-    assert.match(problems[0], /only 2 of 200 page measurement/u);
+    assert.match(problems[0], /only 2 of 210 page measurement/u);
   });
 
   it('refuses a sweep that asked for nothing, or reports no matrix at all', () => {
@@ -1282,10 +1282,10 @@ describe('a sweep of nothing is not a pass', () => {
   });
 
   it('a run that measured less than it asked cannot lower its own floor', () => {
-    // Twelve of 200 pages measured, each one rich: the floors still follow the 200 asked for.
+    // Twelve of 210 pages measured, each one rich: the floors still follow the 210 asked for.
     const short = { ...healthy, measurements: 12, textBoxes: 9000 };
     const problems = coverageFailures(short);
-    assert.match(problems[0], /only 12 of 200/u);
+    assert.match(problems[0], /only 12 of 210/u);
   });
 
   it('refuses a run where a detector examined nothing, even with pages measured', () => {
@@ -1322,7 +1322,7 @@ describe('a sweep of nothing is not a pass', () => {
   });
 
   it('refuses a run where a route never loaded', () => {
-    const problems = coverageFailures({ ...healthy, routesLoaded: 28 });
+    const problems = coverageFailures({ ...healthy, routesLoaded: 30 });
     assert.equal(problems.length, 1);
     assert.match(problems[0], /12 route\(s\) never loaded/u);
   });
@@ -1390,15 +1390,15 @@ describe('the scope of the sweep', () => {
   });
 });
 
-// The large-text pass of the default run on 2026-11-26: ROUTES, light, 768, 1024 and 1440, and the
-// sixteen phone routes at 360 with hyphenation off, 200% text. Three runs gave the same tally.
+// The large-text pass of the default run on 2026-11-26, before the assumption list stacked (224 break
+// tests after): ROUTES, light, 768, 1024 and 1440, and the twenty phone routes at 360, 200%, no hyphens.
 const LARGE_TEXT_RUN = {
-  measurements: 76,
-  measurementsWanted: 76,
-  textBoxes: 14733,
-  detector: { ownBox: 14733, clipTests: 1712, frameTests: 10925, pairs: 6430, breakTests: 173 },
-  routesLoaded: 36,
-  routesWanted: 36,
+  measurements: 83,
+  measurementsWanted: 83,
+  textBoxes: 15227,
+  detector: { ownBox: 15227, clipTests: 1712, frameTests: 11036, pairs: 6457, breakTests: 228 },
+  routesLoaded: 41,
+  routesWanted: 41,
 };
 
 describe('the large-text pass', () => {
@@ -1441,6 +1441,10 @@ describe('the large-text pass', () => {
       '/legends/adaptive-exploiter',
       '/review',
       '/legends/hand-review/demo',
+      '/terms',
+      '/privacy',
+      '/responsible-use',
+      '/age-check',
       '/checks',
     ]) {
       assert.ok(LARGE_TEXT_PHONE_ROUTES.includes(route), `${route} is no longer measured at 360px`);
@@ -1496,6 +1500,7 @@ describe('the large-text pass', () => {
       { route: '/terms', theme: 'light', width: 768, scale: 2 },
       { route: '/terms', theme: 'light', width: 1024, scale: 2 },
       { route: '/terms', theme: 'light', width: 1440, scale: 2 },
+      { route: '/terms', theme: 'light', width: 360, scale: 2 },
     ]);
     assert.deepEqual(
       sweepPasses(parseArgs(['--routes', '/terms'])).map((pass) => pass.narrowed),
@@ -1522,7 +1527,7 @@ describe('the large-text pass', () => {
     const unclipped = { ...LARGE_TEXT_RUN, detector: { ...LARGE_TEXT_RUN.detector, clipTests: 0 } };
     const problems = passCoverageFailures(passes, [FULL_DEFAULT_RUN, unclipped]);
     assert.equal(problems.length, 1, '4,280 clip tests at 100% must not cover a pass with none');
-    assert.match(problems[0], /^200% text pass: only 0 text blocks .*clipping ancestor \(floor 570 for 76 /u);
+    assert.match(problems[0], /^200% text pass: only 0 text blocks .*clipping ancestor \(floor 570 for 83 /u);
     assert.deepEqual(passCoverageFailures(passes, [FULL_DEFAULT_RUN, LARGE_TEXT_RUN]), []);
   });
 
@@ -1539,9 +1544,9 @@ describe('the large-text pass', () => {
     const unclipped = { ...LARGE_TEXT_RUN, detector: { ...LARGE_TEXT_RUN.detector, clipTests: 100 } };
     assert.match(
       coverageFailures(unclipped, floors)[0],
-      /only 100 text blocks .*clipping ancestor \(floor 570 for 76 /u,
+      /only 100 text blocks .*clipping ancestor \(floor 570 for 83 /u,
     );
-    assert.match(coverageFailures(unclipped)[0], /\(floor 304 for 76 /u, 'the same cells, narrowed');
+    assert.match(coverageFailures(unclipped)[0], /\(floor 332 for 83 /u, 'the same cells, narrowed');
   });
 });
 
@@ -1593,23 +1598,24 @@ describe('the large-text negative control', () => {
 
 describe("the audit's own Chrome", () => {
   it('takes a port and a profile from the environment, or its own defaults', () => {
-    assert.deepEqual(chromeTarget({ PRL_LAYOUT_CDP_PORT: '9985', PRL_LAYOUT_PROFILE: 'scratch/p' }, 1), {
+    assert.deepEqual(chromeTarget({ PRL_LAYOUT_CDP_PORT: '9985', PRL_LAYOUT_PROFILE: 'scratch/p' }), {
       port: 9985,
       profile: 'scratch/p',
     });
-    assert.equal(chromeTarget({}, 141).port, 9651);
+  });
+
+  // Two gates whose `9650 + pid % 140` ports met attached to each other's Chrome on CI.
+  it('lets Chrome pick its port in a profile of its own by default', () => {
+    assert.deepEqual(chromeTarget({}), { port: 0, freshProfile: 'prl-text-layout-audit-' });
   });
 
   it('refuses an empty or non-numeric port and an empty profile at start', () => {
     for (const bad of ['', ' ', 'abc', '99x', '0', '70000', '-1', '9985.5']) {
-      assert.throws(() => chromeTarget({ PRL_LAYOUT_CDP_PORT: bad }, 1), /PRL_LAYOUT_CDP_PORT/u, `"${bad}"`);
+      assert.throws(() => chromeTarget({ PRL_LAYOUT_CDP_PORT: bad }), /PRL_LAYOUT_CDP_PORT/u, `"${bad}"`);
     }
     // Chrome given an empty --user-data-dir opens the user's own profile.
     for (const bad of ['', '  ']) {
-      assert.throws(
-        () => chromeTarget({ PRL_LAYOUT_PROFILE: bad }, 1),
-        /PRL_LAYOUT_PROFILE is set but empty/u,
-      );
+      assert.throws(() => chromeTarget({ PRL_LAYOUT_PROFILE: bad }), /PRL_LAYOUT_PROFILE is set but empty/u);
     }
   });
 });

@@ -396,10 +396,6 @@
   --prl-deck-black: #1f1d1a;
   --prl-deck-back-charcoal: #2e2c29;
   --prl-deck-back-charcoal-line: #4a4640;
-  --prl-deck-back-green: #1f4a37;
-  --prl-deck-back-green-line: #33664f;
-  --prl-deck-back-wine: #5b1f2b;
-  --prl-deck-back-wine-line: #7a3543;
   /* The notch on a highlighted card. On the face, so it is the same in both themes. */
   --prl-card-mark: #1e5c40;
 

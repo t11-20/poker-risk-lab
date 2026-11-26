@@ -71,6 +71,19 @@ describe('the record page', () => {
     assert.match(page, /recordLists\(record\.progress\)/u);
   });
 
+  it('puts the unavailable reason in a paragraph of its own, since a reason may end without a stop', () => {
+    const callout = /title="Your record could not be fetched">([\s\S]*?)<\/Callout>/u.exec(page)?.[1];
+    assert.ok(callout !== undefined, 'read no unavailable callout');
+    const paragraphs = [...callout.matchAll(/<p>([\s\S]*?)<\/p>/gu)].map((m) =>
+      (m[1] ?? '').replace(/\s+/gu, ' ').trim(),
+    );
+    assert.deepEqual(paragraphs, [
+      '{record.reason}',
+      'Nothing is shown rather than zeroes: a zero here would be a claim about your record, and this page ' +
+        'does not have one to make.',
+    ]);
+  });
+
   it('formats the reset amount the way every other surface does (REGRESSION)', () => {
     assert.doesNotMatch(reset, /String\(reset\.units\)/u);
     assert.match(reset, /formatUnits\(reset\.units\)/u);

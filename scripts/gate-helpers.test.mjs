@@ -262,36 +262,36 @@ describe('Chrome, as each gate launches it', () => {
     {
       script: 'ax-tree-audit.mjs',
       args: (url) => ['--base-url', url, '--no-assertions'],
-      port: (pid) => 9800 + (pid % 150),
+      port: () => 0,
       profile: '/tmp/prl-ax-tree-audit-profile',
       flags: ['--window-size=1440,900'],
     },
     {
       script: 'check-contrast.mjs',
       args: (url) => ['--no-start', '--base-url', url],
-      port: (pid) => 9650 + (pid % 140),
-      profile: '/tmp/prl-contrast-paint-profile',
+      port: () => 0,
+      freshProfile: 'prl-contrast-paint-',
       flags: ['--window-size=1440,900'],
     },
     {
       script: 'csp-negative-control.mjs',
       args: (url) => ['--base-url', url],
-      port: (pid) => 9400 + (pid % 150),
+      port: () => 0,
       freshProfile: 'prl-csp-negative-control-',
       flags: ['--window-size=1440,900'],
     },
     {
       script: 'keyboard-audit.mjs',
       args: (url) => ['--web', url],
-      port: (pid) => 9222 + (pid % 500),
+      port: () => 0,
       freshProfile: 'prl-keyboard-audit-',
       flags: ['--window-size=1440,900'],
     },
     {
       script: 'text-layout-audit.mjs',
       args: (url) => ['--base-url', url],
-      port: (pid) => 9650 + (pid % 140),
-      profile: '/tmp/prl-text-layout-audit-profile',
+      port: () => 0,
+      freshProfile: 'prl-text-layout-audit-',
       flags: ['--hide-scrollbars', '--force-device-scale-factor=1', '--window-size=1920,1200'],
     },
   ];
@@ -304,19 +304,16 @@ describe('Chrome, as each gate launches it', () => {
         PRL_FAKE_CHROME_LOG: LOG,
       });
       const port = row.port(run.pid);
-      assert.ok(
-        run.output.includes(
-          `Chrome exited (code 3, signal null) before it opened a debugging port on ${port}`,
-        ),
-        run.output,
-      );
-      assert.equal(run.code, 1, run.output);
-
       const launches = readFileSync(LOG, 'utf8').trim().split('\n').map(JSON.parse);
       assert.equal(launches.length, 1, `Chrome was launched ${launches.length} times`);
       const [argv] = launches;
       const profileFlag = argv.find((arg) => arg.startsWith('--user-data-dir='));
       const profile = profileFlag?.slice('--user-data-dir='.length);
+      const before =
+        port === 0 ? `wrote ${join(profile, 'DevToolsActivePort')}` : `opened a debugging port on ${port}`;
+      assert.ok(run.output.includes(`Chrome exited (code 3, signal null) before it ${before}`), run.output);
+      assert.equal(run.code, 1, run.output);
+
       if (row.freshProfile !== undefined) {
         assert.ok(profile?.startsWith(join(tmpdir(), row.freshProfile)), `profile ${profile}`);
         assert.equal(existsSync(profile), false, `the fresh profile ${profile} was left behind`);

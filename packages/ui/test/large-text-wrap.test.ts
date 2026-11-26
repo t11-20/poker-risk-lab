@@ -109,21 +109,15 @@ describe('the equity readout', () => {
 describe('Coach prose under 20em', () => {
   const narrow = mediaBody(css, '(width < 20em)');
 
-  // Unhyphenated, "measurement" broke mid-word on every bundled /lab scenario.
-  it('hyphenates an assumption', () => {
-    assert.equal(cascaded(narrow, '.prl-assumptions__text').get('hyphens'), 'auto');
+  // Beside its index, "measurement" broke mid-word on every bundled /lab scenario.
+  it("puts an assumption's sentence on the row under its index", () => {
+    assert.equal(cascaded(narrow, '.prl-assumptions__text').get('grid-column'), '1 / -1');
   });
 
-  // With hyphenation off every other Coach box fits its words at 360px and 200% text.
-  it('hyphenates nothing else', () => {
-    const hyphenated = [...narrow.matchAll(/([^{}]+)\{[^{}]*hyphens\s*:\s*auto[^{}]*\}/g)].flatMap((m) =>
-      (m[1] ?? '').split(',').map((part) => part.trim()),
-    );
-    assert.deepEqual(hyphenated, ['.prl-assumptions__text']);
-  });
-
-  it('hyphenates nothing at any other size', () => {
+  // CI's Chrome may have no hyphenation dictionary, so a rule that needs one fits nothing there.
+  it('hyphenates nothing, under 20em or at any other size', () => {
+    assert.ok(narrow.includes('.prl-assumptions__text'), 'read no rules under 20em');
     assert.ok(everySize.includes('.prl-coach'), 'read no rules outside @media');
-    assert.doesNotMatch(everySize, /hyphens\s*:\s*auto/);
+    assert.doesNotMatch(css, /hyphens\s*:\s*auto/);
   });
 });

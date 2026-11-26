@@ -111,7 +111,12 @@ export default async function RecordPage(): Promise<ReactElement> {
 
       {record.state === 'unavailable' ? (
         <Callout tone="warning" title="Your record could not be fetched">
-          {`${record.reason} Nothing is shown rather than zeroes: a zero here would be a claim about your record, and this page does not have one to make.`}
+          {/* Its own paragraph, because a transport or status reason ends without a full stop. */}
+          <p>{record.reason}</p>
+          <p>
+            Nothing is shown rather than zeroes: a zero here would be a claim about your record, and this page
+            does not have one to make.
+          </p>
         </Callout>
       ) : null}
 

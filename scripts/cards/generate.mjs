@@ -19,21 +19,10 @@ const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 export const TOKENS = join(REPO, 'packages/ui/src/styles/tokens.css');
 export const DECK_DIR = join(REPO, 'apps/web/public/cards');
 
-const PALETTE_KEYS = [
-  'face',
-  'edge',
-  'red',
-  'black',
-  'back-charcoal',
-  'back-charcoal-line',
-  'back-green',
-  'back-green-line',
-  'back-wine',
-  'back-wine-line',
-];
+const PALETTE_KEYS = ['face', 'edge', 'red', 'black', 'back-charcoal', 'back-charcoal-line'];
 
-/** The first back is the one `back.svg` copies until the owner picks. */
-export const BACKS = ['charcoal', 'green', 'wine'];
+/** Charcoal, because a green back sinks into the felt and a wine back sits close to the red suit ink. */
+export const BACK = 'charcoal';
 
 const RANKS = ['2', '3', '4', '5', '6', '7', '8', '9', 'T', 'J', 'Q', 'K', 'A'];
 const SUITS = ['C', 'D', 'H', 'S'];
@@ -354,8 +343,7 @@ export function renderDeck(palette) {
   const files = new Map();
   for (const rank of RANKS)
     for (const suit of SUITS) files.set(`${rank}${suit}.svg`, face(rank, suit, palette));
-  for (const name of BACKS) files.set(`back-${name}.svg`, back(name, palette));
-  files.set('back.svg', back(BACKS[0], palette));
+  files.set('back.svg', back(BACK, palette));
   return files;
 }
 

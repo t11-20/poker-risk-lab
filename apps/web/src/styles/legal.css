@@ -21,6 +21,11 @@
 
 .prl-legal {
   display: grid;
+  /*
+   * Tracks that shrink, here and in every grid inside: an `auto` track is floored at its widest token,
+   * and the naming flag's setting, one token, alone made /terms 329px wide in a 320px window.
+   */
+  grid-template-columns: minmax(0, 1fr);
   /* The section seam is wider than the paragraph gap, or fourteen sections read as one column. */
   gap: var(--prl-space-12);
   max-width: var(--prl-measure);
@@ -36,6 +41,7 @@
 
 .prl-legal__section {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--prl-space-6);
 }
 
@@ -70,6 +76,7 @@
 /** An inset well for the document's metadata. */
 .prl-legal__meta {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--prl-space-4) var(--prl-space-8);
   margin: 0;
   padding: var(--prl-space-7) var(--prl-space-8);
@@ -106,6 +113,7 @@
 
 .prl-legal__banner {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--prl-space-5);
   padding: var(--prl-space-8);
   border: 1px solid var(--prl-caution);
@@ -131,6 +139,7 @@ p.prl-legal__banner-mark {
 
 .prl-legal-flag {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--prl-space-4);
   padding: var(--prl-space-7);
   border: 1px solid var(--prl-caution);
@@ -149,10 +158,19 @@ p.prl-legal-flag__mark {
   color: var(--prl-caution);
 }
 
+/* Only with large text on a phone: at 360px and 200% the banner's 48px sides tore "unenforceable". */
+@media (width < 20em) {
+  .prl-legal__banner,
+  .prl-legal-flag {
+    padding: var(--prl-space-6);
+  }
+}
+
 /* The data inventory. A `<dl>` of terms, because a table would need a horizontal scroll on a phone. */
 
 .prl-legal__inventory {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--prl-space-7);
   margin: 0;
 }
@@ -162,7 +180,9 @@ p.prl-legal-flag__mark {
   border-block-start: var(--prl-hairline);
 }
 
+/* A term is a table name, a token: unlike `dd` it has no `overflow-wrap` from reset.css. */
 .prl-legal__inventory dt {
+  overflow-wrap: anywhere;
   color: var(--prl-text);
   font-family: var(--prl-font-mono);
   font-size: var(--prl-type-body-sm);
@@ -182,6 +202,7 @@ p.prl-legal-flag__mark {
 /** A bordered panel, above the inset metadata well. */
 .prl-gate {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--prl-space-7);
   max-width: var(--prl-measure);
   margin-block: var(--prl-space-10);
@@ -202,6 +223,11 @@ p.prl-legal-flag__mark {
   line-height: var(--prl-leading-body);
 }
 
+/* The path to the legal register is one token, 190px past the panel at 360px with 200% text. */
+.prl-gate code {
+  overflow-wrap: anywhere;
+}
+
 /** Inset rather than small print, because these paragraphs say what the control does not do. */
 .prl-gate__caveat {
   padding: var(--prl-space-6) var(--prl-space-7);
@@ -209,6 +235,20 @@ p.prl-legal-flag__mark {
   border-radius: var(--prl-radius-2);
   background-color: var(--prl-surface-inset);
   color: var(--prl-text);
+}
+
+/*
+ * Only with large text on a phone, and after the caveat so it wins: 80px sides left the gate 134px, and
+ * "deployment" in the title needs 225; "jurisdiction" in a caveat needs 205.
+ */
+@media (width < 20em) {
+  .prl-gate {
+    padding: var(--prl-space-5);
+  }
+
+  .prl-gate__caveat {
+    padding-inline: var(--prl-space-4);
+  }
 }
 
 .prl-gate__form {
@@ -227,6 +267,7 @@ p.prl-legal-flag__mark {
 
 .prl-gate__problems {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--prl-space-4);
   padding: var(--prl-space-7);
   border: 1px solid var(--prl-caution);
