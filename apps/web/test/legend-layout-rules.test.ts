@@ -170,10 +170,10 @@ describe('legends layout rules', () => {
       return bodies.map((m) => m[1] ?? '').join('\n');
     };
     assert.match(
-      inside('.prl-legend-card .prl-legend-identity__archetype'),
+      inside(':is(.prl-legend-card, .prl-legend-column) .prl-legend-identity__archetype'),
       /font-size: var\(--prl-type-body-lg\);/u,
     );
-    // The class is also a hand review's h2 and the compare page's names; only a card's steps down.
+    // The class is also a hand review's h2, which must stay above its h3s; it keeps the heading size.
     assert.doesNotMatch(phone.join('\n'), /\n\s*\.prl-legend-identity__archetype \{/u);
     assert.match(inside('.prl-legend-card'), /padding-inline: var\(--prl-space-4\);/u);
     assert.doesNotMatch(css, /overflow-wrap: anywhere|word-break: break-all/u);

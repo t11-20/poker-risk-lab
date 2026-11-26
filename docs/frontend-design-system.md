@@ -921,10 +921,11 @@ Two narrower ranges exist for large text. Below `20em` (a window under 320px at 
   Disclaimers pad `0.75rem`.
 - **The bet sizer fits.** The action bar, the sizer, its controls, field and slider may shrink. The
   field wraps and the number field is never wider than it. The bar and the sizer keep `0.375rem` a side.
-- **The display ramp steps down** (§3.2), and a Legends card name takes `body-lg`.
+- **The display ramp steps down** (§3.2), and a Legends card's or compare column's name takes
+  `body-lg`. A hand review's heading keeps its size, so it stays above its decisions.
 - **Only an assumption's text may hyphenate.** Without it, "measurement" and "combinations" break
-  mid-word. Nothing else may, because CI's Chrome may have no hyphenation dictionary.
-  `test:layout` measures its 360px cell at 200% with hyphenation off.
+  mid-word. Nothing else needs it. `test:layout` measures its 360px cell at 200% with hyphenation off,
+  because CI's Chrome may have no hyphenation dictionary.
 
 Below `18em` a review row card and the deck-proof terms give each value its own row, and a review
 board's cards wrap. One container query does the same for the Legends difficulty picker: below `15rem`
