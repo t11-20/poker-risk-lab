@@ -403,7 +403,8 @@
     padding-inline: var(--prl-space-4);
   }
 
-  .prl-legend-identity__archetype {
+  /* Scoped: the same class is the h2 above a hand review's h3s, which must stay the larger. */
+  .prl-legend-card .prl-legend-identity__archetype {
     font-size: var(--prl-type-body-lg);
   }
 }

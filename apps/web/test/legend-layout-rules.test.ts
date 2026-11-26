@@ -169,7 +169,12 @@ describe('legends layout rules', () => {
       assert.ok(bodies.length > 0, `no rule for ${selector} below 20em`);
       return bodies.map((m) => m[1] ?? '').join('\n');
     };
-    assert.match(inside('.prl-legend-identity__archetype'), /font-size: var\(--prl-type-body-lg\);/u);
+    assert.match(
+      inside('.prl-legend-card .prl-legend-identity__archetype'),
+      /font-size: var\(--prl-type-body-lg\);/u,
+    );
+    // The class is also a hand review's h2 and the compare page's names; only a card's steps down.
+    assert.doesNotMatch(phone.join('\n'), /\n\s*\.prl-legend-identity__archetype \{/u);
     assert.match(inside('.prl-legend-card'), /padding-inline: var\(--prl-space-4\);/u);
     assert.doesNotMatch(css, /overflow-wrap: anywhere|word-break: break-all/u);
   });
