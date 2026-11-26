@@ -16,56 +16,75 @@ const legal = readFileSync(
 
 const PHONE_AT_200 = '@media (width < 20em)';
 
-/** The body of each block opened by `opener`, braces balanced. */
-function blocks(css: string, opener: string): string[] {
-  const bodies: string[] = [];
-  for (let at = css.indexOf(`${opener} {`); at >= 0; at = css.indexOf(`${opener} {`, at + 1)) {
-    const open = css.indexOf('{', at);
-    let depth = 0;
-    for (let i = open; i < css.length; i += 1) {
-      if (css[i] === '{') depth += 1;
-      else if (css[i] === '}' && --depth === 0) {
-        bodies.push(css.slice(open + 1, i));
-        break;
+interface Rule {
+  readonly selectors: readonly string[];
+  readonly body: string;
+  readonly at: number;
+  /** Inside an at-rule block, so it applies only some of the time. */
+  readonly conditional: boolean;
+}
+
+/** Every style rule in source order, each marked by whether an at-rule block holds it. */
+function rules(css: string): Rule[] {
+  const found: Rule[] = [];
+  const atRuleDepths: number[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < css.length; i += 1) {
+    if (css[i] === '{') {
+      const prelude = css.slice(start, i).trim();
+      depth += 1;
+      if (prelude.startsWith('@')) atRuleDepths.push(depth);
+      else {
+        const close = css.indexOf('}', i);
+        found.push({
+          selectors: prelude.split(',').map((one) => one.trim()),
+          body: css.slice(i + 1, close),
+          at: start,
+          conditional: atRuleDepths.length > 0,
+        });
+        i = close;
+        depth -= 1;
       }
+      start = i + 1;
+    } else if (css[i] === '}') {
+      if (atRuleDepths.at(-1) === depth) atRuleDepths.pop();
+      depth -= 1;
+      start = i + 1;
     }
   }
-  assert.ok(bodies.length > 0, `no "${opener}" block`);
-  return bodies;
-}
-
-/** The stylesheet with every at-rule block removed, so only unconditional rules remain. */
-function unconditional(css: string): string {
-  let out = css;
-  for (let at = out.indexOf('@'); at >= 0; at = out.indexOf('@')) {
-    const open = out.indexOf('{', at);
-    let depth = 0;
-    let end = open;
-    for (; end < out.length; end += 1) {
-      if (out[end] === '{') depth += 1;
-      else if (out[end] === '}' && --depth === 0) break;
-    }
-    out = out.slice(0, at) + out.slice(end + 1);
-  }
-  return out;
-}
-
-/** Every declaration list whose selector list names `selector` exactly. */
-function rulesFor(css: string, selector: string): string[] {
-  const found = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/gu)]
-    .filter((m) => (m[1] ?? '').split(',').some((one) => one.trim() === selector))
-    .map((m) => m[2] ?? '');
-  assert.ok(found.length > 0, `no rule names ${selector}`);
+  assert.ok(found.length > 0, 'read no rules from legal.css');
   return found;
 }
 
-function declares(css: string, selector: string, property: string, value: string): boolean {
-  return rulesFor(css, selector).some((body) =>
-    new RegExp(`(?:^|[;\\s])${property}: ${value.replace(/[()]/gu, '\\$&')};`, 'u').test(body),
-  );
+const ALL = rules(legal);
+
+function value(body: string, property: string): string | undefined {
+  return [...body.matchAll(new RegExp(`(?:^|[;{\\s])${property}:\\s*([^;]+);`, 'gu'))].at(-1)?.[1]?.trim();
 }
 
-const phone = (): string => blocks(legal, PHONE_AT_200).join('\n');
+/** The value the cascade gives `property` on `selector` from unconditional rules: the last one wins. */
+function unconditionalValue(selector: string, property: string): string | undefined {
+  const named = ALL.filter((rule) => !rule.conditional && rule.selectors.includes(selector));
+  assert.ok(named.length > 0, `no unconditional rule names ${selector}`);
+  return named
+    .map((rule) => value(rule.body, property))
+    .filter((one) => one !== undefined)
+    .at(-1);
+}
+
+const narrow = ALL.filter(
+  (rule) =>
+    rule.conditional && legal.lastIndexOf('@media', rule.at) === legal.lastIndexOf(PHONE_AT_200, rule.at),
+);
+
+function narrowValue(selector: string, property: string): string | undefined {
+  return narrow
+    .filter((rule) => rule.selectors.includes(selector))
+    .map((rule) => value(rule.body, property))
+    .filter((one) => one !== undefined)
+    .at(-1);
+}
 
 describe('the legal pages at 320px, and at 360px with 200% text', () => {
   it('reach the phone query only with large text', () => {
@@ -74,33 +93,30 @@ describe('the legal pages at 320px, and at 360px with 200% text', () => {
     assert.ok(360 / 32 < em, `a 360px window at 32px text would keep the wide padding at ${em}em`);
   });
 
-  // An `auto` track floors at its widest token: "(PRL_LEGEND_NAMING=attributed)," made /terms 329px at 320.
-  it('gives every grid that holds prose or a token one track that can shrink', () => {
-    const grids = [
-      '.prl-legal',
-      '.prl-legal__section',
-      '.prl-legal__banner',
-      '.prl-legal-flag',
-      '.prl-legal__inventory',
-    ];
-    for (const selector of grids) {
-      assert.ok(declares(unconditional(legal), selector, 'display', 'grid'), `${selector} is not a grid`);
-      assert.ok(
-        declares(unconditional(legal), selector, 'grid-template-columns', 'minmax(0, 1fr)'),
-        selector,
-      );
+  // An `auto` track floors at its widest token: "(PRL_LEGEND_NAMING=attributed)," made /terms 329px at 320,
+  // a contact address with no hyphen made /privacy 399px at 360 and 200%, an env name widened the gate.
+  it('gives every grid one track that can shrink by default', () => {
+    const grids = ALL.filter((rule) => !rule.conditional && value(rule.body, 'display') === 'grid');
+    assert.ok(grids.length >= 8, `found only ${String(grids.length)} grids in legal.css`);
+    for (const selector of grids.flatMap((rule) => rule.selectors)) {
+      assert.equal(unconditionalValue(selector, 'grid-template-columns'), 'minmax(0, 1fr)', selector);
     }
   });
 
-  // A table name such as "prl.oidc_login_attempts" was 388px at 200%; unlike `dd`, a `dt` has no wrap.
-  it('lets an inventory term, a table name, break anywhere', () => {
-    assert.ok(declares(unconditional(legal), '.prl-legal__inventory dt', 'overflow-wrap', 'anywhere'));
+  // `anywhere` breaks a prose word mid-letter, so it is kept to elements that hold one token each.
+  it('lets only tokens break anywhere: a table name and a code path', () => {
+    const anywhere = ALL.filter((rule) => value(rule.body, 'overflow-wrap') === 'anywhere');
+    assert.deepEqual(
+      anywhere.flatMap((rule) => rule.selectors),
+      ['.prl-legal__inventory dt', '.prl-gate code'],
+    );
   });
 
   // Inside 48px sides the shrunken banner tore "unenforceable" one letter short of its end.
   it('narrows the banner and the clause flag only with large text on a phone', () => {
     for (const selector of ['.prl-legal__banner', '.prl-legal-flag']) {
-      assert.ok(declares(phone(), selector, 'padding', 'var(--prl-space-6)'), selector);
+      assert.equal(narrowValue(selector, 'padding'), 'var(--prl-space-6)', selector);
+      assert.notEqual(unconditionalValue(selector, 'padding'), 'var(--prl-space-6)', selector);
     }
   });
 
@@ -110,28 +126,23 @@ describe('the legal pages at 320px, and at 360px with 200% text', () => {
   });
 });
 
-describe('/age-check at 360px with 200% text', () => {
-  // "docs/production/legal-review-requirements.md" ran 190px past the panel and made the page 518px.
-  it('lets a code path in the gate break anywhere', () => {
-    assert.ok(declares(unconditional(legal), '.prl-gate code', 'overflow-wrap', 'anywhere'));
+describe('the age gate’s panel at 360px with 200% text', () => {
+  // 80px sides left 134px for "deployment" (225px), and a caveat's 40px sides too little for "jurisdiction".
+  it('narrows the gate and its caveats only with large text on a phone', () => {
+    assert.equal(narrowValue('.prl-gate', 'padding'), 'var(--prl-space-5)');
+    assert.equal(narrowValue('.prl-gate__caveat', 'padding-inline'), 'var(--prl-space-4)');
   });
 });
 
-describe('the age gate’s panel at 360px with 200% text', () => {
-  // 80px sides left 134px for "deployment" (225px) and 'jurisdiction' (205px inside a caveat's 40px sides).
-  it('narrows the gate and its caveats only with large text on a phone', () => {
-    assert.ok(declares(phone(), '.prl-gate', 'padding', 'var(--prl-space-5)'));
-    assert.ok(declares(phone(), '.prl-gate__caveat', 'padding-inline', 'var(--prl-space-4)'));
-  });
-
-  // Same specificity, so the narrow caveat padding wins only by coming later.
-  it('declares the narrow caveat padding after the caveat’s own', () => {
-    const own = legal.search(/\.prl-gate__caveat \{[^}]*padding: /u);
-    const openers = [...legal.matchAll(/@media \(width < 20em\) \{/gu)].map((m) => m.index ?? -1);
-    const narrow = openers.find((at) =>
-      (blocks(legal.slice(at), PHONE_AT_200)[0] ?? '').includes('.prl-gate__caveat {'),
-    );
-    assert.ok(own >= 0 && narrow !== undefined, 'both rules are present');
-    assert.ok(own < narrow, 'the narrow rule comes later');
-  });
+// A narrow rule has the same specificity as the rule it overrides, so it wins only by coming later.
+it('puts every narrow rule after each unconditional rule for the same selector', () => {
+  const selectors = narrow.flatMap((rule) => rule.selectors);
+  assert.ok(selectors.length >= 4, `found only ${String(selectors.length)} narrow selectors`);
+  for (const rule of narrow) {
+    for (const selector of rule.selectors) {
+      const base = ALL.filter((one) => !one.conditional && one.selectors.includes(selector));
+      assert.ok(base.length > 0, `no unconditional rule for ${selector}`);
+      for (const one of base) assert.ok(one.at < rule.at, `${selector}: the narrow rule comes first`);
+    }
+  }
 });

@@ -76,6 +76,7 @@
 /** An inset well for the document's metadata. */
 .prl-legal__meta {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--prl-space-4) var(--prl-space-8);
   margin: 0;
   padding: var(--prl-space-7) var(--prl-space-8);
@@ -201,6 +202,7 @@ p.prl-legal-flag__mark {
 /** A bordered panel, above the inset metadata well. */
 .prl-gate {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--prl-space-7);
   max-width: var(--prl-measure);
   margin-block: var(--prl-space-10);
@@ -265,6 +267,7 @@ p.prl-legal-flag__mark {
 
 .prl-gate__problems {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--prl-space-4);
   padding: var(--prl-space-7);
   border: 1px solid var(--prl-caution);
