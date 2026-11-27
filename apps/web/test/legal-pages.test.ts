@@ -247,6 +247,26 @@ describe('the required disclosures are on the pages', () => {
     }
   });
 
+  it('the privacy page says deletion removes the spots in this browser exactly when the control does', () => {
+    // Both ways: a promise with no removal behind it, or a removal the page never mentions, fails.
+    const privacy = flat(read(...PAGES.privacy));
+    const deletion =
+      privacy.split('6. Deleting your account')[1]?.split('7. Who else sees any of this')[0] ?? '';
+    assert.ok(deletion.length > 1000, 'read no section 6');
+    const says = deletion.includes(
+      'Deleting your account in a browser also removes the spots saved in that browser; spots saved in ' +
+        'another browser stay there until you delete them there.',
+    );
+    const removes = read('app', 'record', 'DeleteAccount.tsx').includes('removeLibrary(browserSpotStore())');
+    assert.equal(
+      says,
+      removes,
+      removes
+        ? '/privacy section 6 must say that deleting an account removes the spots saved in that browser'
+        : '/privacy section 6 promises a removal the deletion control does not perform',
+    );
+  });
+
   it('the privacy page describes the browser storage this product actually uses', () => {
     // A key renamed in the source but not on the page leaves the page describing storage that is gone.
     const privacy = read(...PAGES.privacy);
@@ -261,7 +281,6 @@ describe('the required disclosures are on the pages', () => {
       'prl.session.hidden',
       'prl.session.acknowledgedAt',
       'prl-theme',
-      'prl-booted',
       'prl.learn.onboarding.dismissed',
       'prl.lab.spots',
       'prl.tour.dismissed',

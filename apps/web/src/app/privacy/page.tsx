@@ -250,9 +250,8 @@ export default function PrivacyPage(): ReactElement {
               forward, and no amount of visiting carries it past sixty days from when it was issued.
             </li>
             <li>
-              <strong>Your theme choice</strong> (<code>prl-theme</code> in local storage) and whether the
-              opening animation has already played in this tab (<code>prl-booted</code> in session storage).
-              Both are read before the first paint so the page does not flash.
+              <strong>Your theme choice</strong> (<code>prl-theme</code> in local storage). It is read before
+              the first paint so the page does not flash.
             </li>
             <li>
               <strong>Whether you dismissed the first-run explainer</strong> on the curriculum page (
@@ -416,6 +415,10 @@ export default function PrivacyPage(): ReactElement {
               deleting it would be editing theirs. Your identity is removed from it; the hand is not.
             </li>
           </ul>
+          <p>
+            Deleting your account in a browser also removes the spots saved in that browser; spots saved in
+            another browser stay there until you delete them there.
+          </p>
           <p>
             The operation verifies itself: it counts what was there, deletes, counts again inside the same
             transaction, and refuses to commit if anything that should have gone is still present. If your

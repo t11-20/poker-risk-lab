@@ -48,7 +48,7 @@ and extracted its **computed** design decisions rather than guessing at them:
 | em-based spacing ramp, 18 steps to `10.25em` | Spacing that scales with type size | Adopted, with rem for layout and em for intra-component |
 | Signature easing `cubic-bezier(0.675, 0.15, 0.1, 1)`, in `0.425s` / out `0.375s` | Asymmetric timing feels deliberate rather than springy | **Our own curve** on the same asymmetric principle |
 | Chamfered CTA corner, not a pill | A cut corner is a signature; a pill is a default | Adopted as a notch on the primary action only |
-| Preloader `PLEASE WAIT // LOADING… 0%` | A loading state can carry brand confidence | Adopted **selectively** — first paint only, see §8 |
+| Preloader `PLEASE WAIT // LOADING… 0%` | A loading state can carry brand confidence | **Not adopted**: it hid a page that had already painted, see §8 |
 
 Nothing was copied: no code, no assets, no copy, no colour value, no layout. What is shared
 is method — restraint, hairlines over shadows, one accent, technical labels, big numbers.
@@ -502,18 +502,16 @@ Equity, EV, pot odds and pot size count up on change over `--prl-dur-count`, eas
 }
 ```
 
-Plus, in JS: reveals resolve to their final state on mount, count-ups jump to the value,
-and the loading transition (§8) is skipped. **The app must be fully usable and fully
-legible with every animation disabled** — motion is never the only carrier of meaning.
+Plus, in JS: reveals resolve to their final state on mount and count-ups jump to the value.
+**The app must be fully usable and fully legible with every animation disabled** — motion is never the only carrier of meaning.
 
 "Disabled" has four causes, not one, and the fourth is the one that is easy to miss:
 `prefers-reduced-motion`, `scripting: none`, an observer that never fires, and **a hydration that
 never happens**. The first two are media queries and the third resolves itself; the fourth matches
 no query at all, because scripting is enabled — the bundle simply never arrived. A reveal whose
-hidden state survives that is a blank page, so the hidden state carries a deadline (§5.6) keyed on
-the boot overlay still being `pending`. Verified by blocking `/_next/static/chunks/*.js` with
-scripting left on: `h1` opacity 1, all six home-page reveals at opacity 1, and the boot overlay not
-hit-testable at the viewport centre.
+hidden state survives that is a blank page, so the hidden state carries its own deadline (§5.6).
+Verified by blocking `/_next/static/chunks/*.js` with scripting left on: `h1` opacity 1 and all six
+home-page reveals at opacity 1.
 
 ### 5.4 Performance rules
 
@@ -552,7 +550,6 @@ inline styles:
 | Published by | Contract |
 | --- | --- |
 | `Reveal` / `useReveal` | `data-revealed="true" \| "false"`. The **hidden** state must be written as `[data-revealed='false']` — styling `.prl-reveal` bare would leave content invisible whenever the observer never runs |
-| `BootSequence` | `.prl-boot[data-state='pending']` is, for CSS, the **proof that no JavaScript has run**: the overlay is server-rendered `pending` and only ever leaves that state by hydration. `:root:has(.prl-boot[data-state='pending']) .prl-reveal[data-revealed='false']` is therefore the one honest way to say "reveal it, nothing is coming", and it stops applying the instant the app is alive |
 | `Reveal` | `--prl-reveal-index`, a unitless stagger position: `transition-delay: calc(var(--prl-reveal-index, 0) * var(--prl-dur-deal-stagger))` |
 | `Metric` with `countUp` | `.prl-count` on the animated (and `aria-hidden`) figure |
 
@@ -783,28 +780,12 @@ does. Re-measure them before relying on either step in 4.0.
 
 ## 8. The loading transition
 
-Used **once**, on first paint of the app shell — not between routes, and never as a
-spinner on a data fetch.
+There is none on first paint. The page is server-rendered and readable when it first paints, so
+anything laid over it only delays reading: the first-visit overlay this section used to describe
+kept a painted page hidden until about 1.2s, at 390x844 and at 1440x900, while LCP had already
+happened underneath it at about 0.1s.
 
-`READY // CALIBRATING` with a monospace 0→100 counter and a 1px accent rule that wipes
-left-to-right, then the shell cross-fades in over `--prl-dur-in`.
-
-Hard limits:
-
-* Capped at **900ms**, and dismissed early the moment the shell is ready. It must never
-  delay interaction — a loading animation that makes a fast app slower is a net loss.
-  **The cap is in CSS as well as in the component** (`animation: prl-boot-deadline … var(--prl-dur-count)
-  forwards` on `.prl-boot`), because the one failure the overlay has to survive is the bundle not
-  arriving — and in that failure every JavaScript exit is unavailable while an opaque, page-coloured,
-  `z-index: 900` sheet is already painted. The deadline animates `visibility`, never `opacity`: a
-  filling `opacity` animation would out-rank the `data-state="done"` declaration, the fade would
-  never start, `transitionend` would never fire, and the component's own unmount would silently stop
-  happening. Observed for real twice before it existed: a stale chunk manifest after a rebuild
-  (`ChunkLoadError`) and a backgrounded tab whose `requestAnimationFrame` never fires.
-* Skipped entirely under `prefers-reduced-motion`, and on repeat visits within the session
-  (`sessionStorage`).
-* Route changes get a 2px accent progress bar at the top instead. Data fetches get skeleton
-  blocks at the real content's dimensions, so nothing reflows on arrival.
+* Data fetches get skeleton blocks at the real content's dimensions, so nothing reflows on arrival.
 
 ---
 

@@ -98,7 +98,7 @@ const SETTLE_MS = 500;
 const DEFAULTS = {
   baseUrl: process.env.PRL_WEB_ORIGIN ?? 'http://127.0.0.1:3000',
   apiUrl: process.env.PRL_API_ORIGIN ?? 'http://127.0.0.1:3001',
-  // `/` renders without the API and carries the boot overlay and theme control the positive controls use.
+  // `/` renders without the API, with the `#prl-main` and theme control the positive controls use.
   route: '/',
   start: false,
   withApi: false,
@@ -604,20 +604,18 @@ function judgeNegativeControls(state, executed, disallowedRequests, cases) {
 }
 
 /**
- * Hydration signal: `.prl-boot` is server-rendered and removed by client React, so its absence is
- * something only the client bundle can produce. It is counted in the DOM, so `display: none` cannot
- * fake it, and the captured server HTML must contain it. Under `'strict-dynamic'` the app's own
- * bundles load only by nonce, so hydration also proves the nonce worked.
+ * Hydration signal: the `__reactFiber$…` property React attaches to `#prl-main` when it hydrates. It
+ * is a JavaScript property, so neither the server HTML nor a stylesheet can produce it. Under
+ * `'strict-dynamic'` the app's own bundles load only by nonce, so hydration also proves the nonce worked.
  */
 async function checkPositiveControls(page, serverHtml) {
-  const serverRenderedOverlay = serverHtml.includes('prl-boot');
-  if (!serverRenderedOverlay) {
+  const serverRenderedMain = serverHtml.includes('id="prl-main"');
+  if (!serverRenderedMain) {
     bad(
       'positive',
       'React hydrated the page',
-      'the server HTML contains no "prl-boot" overlay, so its absence from the live DOM proves ' +
-        'nothing. The hydration signal this check depends on is gone — find a new one rather than ' +
-        'reading this as a pass.',
+      'the server HTML contains no #prl-main, so the node whose React property this check reads is ' +
+        'not server-rendered. Find a new hydration signal rather than reading this as a pass.',
     );
   }
 
@@ -626,13 +624,15 @@ async function checkPositiveControls(page, serverHtml) {
   for (;;) {
     live = await page.evaluate(
       `(() => ({
-         overlays: document.querySelectorAll('.prl-boot').length,
          main: document.getElementById('prl-main') !== null,
+         hydrated: Object.keys(document.getElementById('prl-main') ?? {}).some((key) =>
+           key.startsWith('__reactFiber$'),
+         ),
          probeRan: typeof window.__prlCsp === 'object' && window.__prlCsp !== null,
          themeControls: document.querySelectorAll('.prl-theme__input').length,
        }))()`,
     );
-    if (live.overlays === 0 || Date.now() >= deadline) break;
+    if (live.hydrated || Date.now() >= deadline) break;
     await delay(200);
   }
 
@@ -664,20 +664,20 @@ async function checkPositiveControls(page, serverHtml) {
     );
   }
 
-  if (serverRenderedOverlay && live.overlays === 0) {
+  if (serverRenderedMain && live.hydrated) {
     ok(
       'positive',
       'React hydrated the page',
-      'the server-rendered .prl-boot overlay was removed from the DOM by client code, which only ' +
-        "the app's own nonce-admitted bundles can do",
+      "#prl-main carries React's own fiber property, which only the app's own nonce-admitted " +
+        'bundles can attach',
     );
-  } else if (serverRenderedOverlay) {
+  } else if (serverRenderedMain) {
     bad(
       'positive',
       'React hydrated the page',
-      `the server-rendered .prl-boot overlay is still in the DOM after ${HYDRATION_TIMEOUT_MS}ms, ` +
-        'so the client bundle never took over. The page is server markup and nothing more — which ' +
-        'is also a page on which no injection could have run, so the refusals above prove nothing.',
+      `#prl-main has no React fiber property after ${HYDRATION_TIMEOUT_MS}ms, so the client bundle ` +
+        'never took over, or React renamed the property. The page is server markup and nothing more — ' +
+        'which is also a page on which no injection could have run, so the refusals above prove nothing.',
     );
   }
 }

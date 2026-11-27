@@ -1,7 +1,7 @@
 /**
  * Stylesheet invariants a browser would otherwise be the only witness to, asserted on the CSS text.
- * A sticky `.prl-play__decision` from 900px up covers the pot, the board and all six seats. The boot
- * overlay's 900ms cap and the reveal's hidden state need an exit in CSS, or a failed bundle leaves them up.
+ * A sticky `.prl-play__decision` from 900px up covers the pot, the board and all six seats. The reveal's
+ * hidden state needs an exit in CSS, or a failed bundle leaves it up.
  * It reads `apps/web`'s stylesheets too, because the occlusion came from both packages together.
  */
 
@@ -11,6 +11,7 @@ import { describe, it } from 'node:test';
 
 const componentsCss = readFileSync(new URL('../src/styles/components.css', import.meta.url), 'utf8');
 const playCss = readFileSync(new URL('../../../apps/web/src/styles/play.css', import.meta.url), 'utf8');
+const globalsCss = readFileSync(new URL('../../../apps/web/src/app/globals.css', import.meta.url), 'utf8');
 
 /**
  * The declarations of every block whose selector list contains `selector`, including inside media
@@ -145,36 +146,27 @@ describe('the sticky action row is bounded by a bar that stays in flow', () => {
 });
 
 describe('nothing can hide content until JavaScript arrives', () => {
-  it('gives the boot overlay a CSS deadline on the budget it enforces', () => {
-    const blocks = declarationsFor(componentsCss, '.prl-boot');
-    const animation = blocks.map((block) => /animation\s*:\s*([^;]+)/.exec(block)?.[1]).find(Boolean);
-    assert.ok(animation !== undefined, '.prl-boot needs a deadline animation, not only a transition');
-    assert.match(animation, /var\(--prl-dur-count\)/, 'the delay is the 900ms cap section 8 states');
-    assert.match(animation, /forwards/, 'the deadline must hold once it has passed');
-  });
-
-  it('ends that deadline on visibility, never on opacity', () => {
-    const keyframes = /@keyframes\s+prl-boot-deadline\s*\{([\s\S]*?)\n\}/.exec(componentsCss)?.[1];
-    assert.ok(keyframes !== undefined, 'expected a prl-boot-deadline keyframes block');
-    assert.match(keyframes, /visibility\s*:\s*hidden/);
-    assert.match(keyframes, /pointer-events\s*:\s*none/);
-    assert.doesNotMatch(
-      keyframes,
-      /opacity/,
-      'a filling opacity animation out-ranks the data-state="done" declaration, so the fade would ' +
-        'never start, transitionend would never fire, and BootSequence would never unmount itself',
-    );
+  it('has no first-visit overlay over a page that has already painted', () => {
+    // The page is server-rendered and readable at first paint, and the overlay hid it for 1.2s.
+    for (const [name, css] of [
+      ['components.css', componentsCss],
+      ['globals.css', globalsCss],
+    ] as const) {
+      assert.ok(css.length > 0, `read nothing from ${name}`);
+      const found = /[^\n]*(\.prl-boot\b|prl-boot-|data-boot)[^\n]*/.exec(css)?.[0];
+      assert.equal(found, undefined, `${name} styles a boot overlay`);
+    }
   });
 
   it('releases every hidden reveal on an UNCONDITIONAL deadline', () => {
-    // A deadline scoped to boot stops matching once boot ends, leaving a reveal whose observer never
-    // fires hidden for good. The deadline belongs to the hidden state itself.
+    // A deadline scoped to page load stops matching once loading ends, leaving a reveal whose observer
+    // never fires hidden for good. The deadline belongs to the hidden state itself.
     const hidden = declarationsFor(componentsCss, '.prl-reveal[data-revealed="false"]')[0];
     assert.ok(hidden !== undefined, 'expected a .prl-reveal[data-revealed="false"] block');
     const animation = /animation\s*:\s*([^;]+)/.exec(hidden)?.[1];
     assert.ok(animation !== undefined, 'the hidden state must carry its own expiry');
     assert.match(animation, /prl-reveal-deadline/);
-    assert.match(animation, /var\(--prl-dur-count\)/, 'the delay is the 900ms cap section 8 states');
+    assert.match(animation, /var\(--prl-dur-count\)/, 'the delay is the 900ms --prl-dur-count');
     assert.match(animation, /forwards/, 'the deadline must hold once it has passed');
     assert.doesNotMatch(
       animation,

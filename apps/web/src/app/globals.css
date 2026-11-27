@@ -1,6 +1,6 @@
 /**
- * App-shell rules only: the sticky header, both navigations, the theme control, the footer and the
- * boot overlay's guards. A route's own patterns live in a stylesheet the route imports.
+ * App-shell rules only: the sticky header, both navigations, the theme control and the footer. A route's
+ * own patterns live in a stylesheet the route imports.
  * `layout.tsx` imports `@prl/ui/styles.css` before this file, not via `@import`, so the tokens exist
  * before any rule here reads them. Every value is a `--prl-*` token, with the exceptions
  * `components.css` lists. The `860px` nav breakpoint is mirrored by `NAV_SHEET_QUERY` in `src/lib/nav.ts`.
@@ -456,27 +456,6 @@
 
 /** After `.prl-theme`, because both are one class and source order decides. */
 .prl-shell__theme {
-  display: none;
-}
-
-/* Boot overlay guards. CSS, because it applies before first paint. Without scripting
-   nothing ever dismisses the overlay, so `scripting: none` must hide it. */
-
-@media (scripting: none) {
-  .prl-boot {
-    display: none;
-  }
-}
-
-/** Skipped entirely under reduced motion (§8), before it can paint rather than after. */
-@media (prefers-reduced-motion: reduce) {
-  .prl-boot {
-    display: none;
-  }
-}
-
-/** On a repeat visit `data-boot="skip"` is set before paint by the inline script in `src/lib/theme.ts`. */
-:root[data-boot="skip"] .prl-boot {
   display: none;
 }
 
