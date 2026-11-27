@@ -149,3 +149,44 @@ describe('/checks at 360px with 200% text', () => {
     assert.ok(declares(body, '.prl-checks__row', 'grid-template-columns', 'subgrid'));
   });
 });
+
+describe('/play’s equity readout at 360px with 200% text', () => {
+  const play = style('play.css');
+  const phone = (): string => blocks(play, PHONE_AT_200).join('\n');
+
+  // Its own three tracks outrank the shared readout's narrow rule, so the name had 114px of a 246px row.
+  it('stacks the value and detail under the name, as the shared readout does', () => {
+    assert.ok(
+      declares(phone(), '.prl-play .prl-equity-bar__row', 'grid-template-columns', 'auto minmax(0, 1fr)'),
+    );
+    for (const selector of ['.prl-play .prl-equity-bar__value', '.prl-play .prl-equity-bar__detail']) {
+      assert.ok(declares(phone(), selector, 'grid-column', '2'), selector);
+      assert.ok(declares(phone(), selector, 'text-align', 'start'), selector);
+    }
+  });
+
+  // Centred on a two-line name, the swatch sat between its lines.
+  it('puts the swatch back on the name’s first line', () => {
+    assert.ok(declares(unconditional(play), '.prl-play .prl-equity-bar__swatch', 'align-self', 'center'));
+    assert.ok(declares(phone(), '.prl-play .prl-equity-bar__swatch', 'align-self', 'auto'));
+  });
+
+  // Same specificity, so the narrow rule wins only by coming later.
+  it('comes after the three tracks it replaces', () => {
+    const own = play.search(/\.prl-play \.prl-equity-bar__row \{[^}]*grid-template-columns: auto minmax/u);
+    const narrow = play.indexOf(`${PHONE_AT_200} {\n  .prl-play .prl-equity-bar__row`);
+    assert.ok(own >= 0 && narrow >= 0, 'both rules are present');
+    assert.ok(own < narrow, 'the narrow rule comes later');
+  });
+
+  it('keeps three tracks at every other size', () => {
+    assert.ok(
+      declares(
+        unconditional(play),
+        '.prl-play .prl-equity-bar__row',
+        'grid-template-columns',
+        'auto minmax(0, 1fr) auto',
+      ),
+    );
+  });
+});

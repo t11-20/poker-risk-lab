@@ -155,7 +155,7 @@ function HoleCards(props: {
       {...(highlightLabel === undefined ? {} : { highlightLabel })}
       emptyText="no cards"
       emptyTextHidden
-      className="prl-seat__cards"
+      className={cx('prl-seat__cards', hand.cards.length === 0 && 'prl-seat__cards--empty')}
     />
   );
 }

@@ -100,6 +100,7 @@ const LARGE_TEXT_PHONE_ROUTES = [
   '/learn/glossary',
   '/play',
   '/play?state=decision',
+  '/play?state=complete',
   '/lab',
   '/lab/fl-same-cards-under-the-gun',
   '/lab/spots',
@@ -116,8 +117,7 @@ const LARGE_TEXT_PHONE_ROUTES = [
 ];
 
 const LARGE_TEXT_PHONE_WHY =
-  'content wider than 360px fits a 768px window, so only a phone at 200% text shows it; ' +
-  'the route not listed still fails at 360px and 200% on work held for the owner';
+  'content wider than 360px fits a 768px window, so only a phone at 200% text shows it';
 
 /** An error boundary returns 200 with good markup, so it counts as a failed render. */
 const ERROR_BOUNDARY_HEADINGS = [
