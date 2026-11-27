@@ -345,6 +345,42 @@ function withoutComments(text: string): string {
     .join('\n');
 }
 
+/**
+ * The spots live only in this browser, so the server cannot delete them. The control removes them once
+ * the server has confirmed, and the receipt says which way it went, because storage can refuse.
+ */
+describe('deleting an account removes the spots saved in this browser', () => {
+  it('removes them only after the server confirms, and before the receipt is shown', () => {
+    assert.match(
+      CONTROL,
+      /import \{ browserSpotStore, removeLibrary, type SpotRemoval \} from '@\/lib\/spot-storage\.ts';/u,
+    );
+    const refused = CONTROL.indexOf('if (!result.ok) {');
+    const removed = CONTROL.indexOf('removeLibrary(browserSpotStore())');
+    const done = CONTROL.indexOf("state: 'done',");
+    assert.ok(refused > 0 && done > 0, 'the ordering check read nothing');
+    assert.ok(removed > refused, 'the spots are removed before the server has confirmed the deletion');
+    assert.ok(removed < done, 'the receipt reaches state without knowing what happened to the spots');
+  });
+
+  it('says so before the reader confirms, and in the receipt, without claiming a removal that failed', () => {
+    const form = CONTROL_PROSE.slice(CONTROL_PROSE.indexOf('<form'));
+    assert.match(
+      form,
+      /The spots you saved in the Lab are removed from this browser too; spots saved in another browser stay there\./u,
+    );
+    const receipt = CONTROL_PROSE.slice(0, CONTROL_PROSE.indexOf('<form'));
+    assert.match(
+      receipt,
+      /deletion\.outcome\.spots === 'removed' \? 'The spots you saved in the Lab are gone from this browser too\.'/u,
+    );
+    assert.match(
+      receipt,
+      /'This browser would not let the page remove the spots you saved in the Lab, so any that ' \+/u,
+    );
+  });
+});
+
 describe('no screen in this client confirms anything with a native dialog', () => {
   const FILES = sources(SRC);
 

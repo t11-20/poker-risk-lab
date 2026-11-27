@@ -193,6 +193,10 @@ script-src 'self' 'nonce-…' 'sha256-pFr/J6mAOwOBw+OUbWRw3SFuJuxHv7yTRXbAhz9wOx
 connect-src 'self'; upgrade-insecure-requests
 ```
 
+The theme script's hash recorded here is the one of that date. Since 2026-11-26 it is
+`sha256-MaxHIYcm3xBWyY7wpSDoc+efsawG6MCxRrOVEVxIQQw=`, because the first-visit overlay's session
+check left the script; `apps/web/src/lib/theme.ts` holds the current value.
+
 - The theme script is allowed **twice**: by the nonce and by its exact bytes. Belt and braces, not
   redundancy — if the nonce plumbing breaks the page still resolves its theme before paint.
 - No `unsafe-inline` and no `unsafe-eval` anywhere in `script-src`.

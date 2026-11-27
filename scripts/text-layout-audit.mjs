@@ -1717,8 +1717,7 @@ async function withPage(headful, target, textScale, run) {
     const page = await Page.open(await openTab());
     await page.send('Page.enable');
     await page.send('Runtime.enable');
-    // Motion off, so an entrance animation cannot move geometry between walk and layout. It also
-    // removes the boot overlay.
+    // Motion off, so an entrance animation cannot move geometry between walk and layout.
     await page.send('Emulation.setEmulatedMedia', {
       features: [{ name: 'prefers-reduced-motion', value: 'reduce' }],
     });

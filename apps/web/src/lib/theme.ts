@@ -3,24 +3,15 @@
  *
  * A stored choice is in `localStorage`, which CSS cannot read, and anything React does runs after
  * first paint, so a reader who chose light on a dark system would see a full-screen flash.
- * `THEME_BOOT_SCRIPT` runs before paint and sets `data-theme`, plus `data-boot="skip"` so the
- * server-rendered boot overlay (§8) does not replay within a session. It is a constant, allowed by
+ * `THEME_BOOT_SCRIPT` runs before paint and sets `data-theme`. It is a constant, allowed by
  * `THEME_BOOT_SCRIPT_CSP_HASH`. Storage throws in some privacy modes, so every access is guarded.
  */
 
 /** The `localStorage` key holding the reader's explicit choice, if they have made one. */
 export const THEME_STORAGE_KEY = 'prl-theme';
 
-/** The `sessionStorage` key marking "the boot sequence has already played this session". */
-export const BOOT_SESSION_KEY = 'prl-booted';
-
 /** The attribute `tokens.css` reads. Absent means "follow the system". */
 export const THEME_ATTRIBUTE = 'data-theme';
-
-/** The attribute `globals.css` reads to suppress the boot overlay before it can paint. */
-export const BOOT_ATTRIBUTE = 'data-boot';
-
-export const BOOT_SKIP = 'skip';
 
 /** `system` is a real preference, so a two-state toggle would overwrite it on first touch. */
 export const THEME_CHOICES = ['light', 'dark', 'system'] as const;
@@ -49,19 +40,19 @@ export function isThemeChoice(value: unknown): value is ThemeChoice {
  * Storage access THROWS in Safari private mode and where site data is blocked, which would blank the
  * page. Every access in this file goes through these two helpers.
  */
-function readStorage(storage: 'localStorage' | 'sessionStorage', key: string): string | null {
+function readStorage(key: string): string | null {
   if (typeof window === 'undefined') return null;
   try {
-    return window[storage].getItem(key);
+    return window.localStorage.getItem(key);
   } catch {
     return null;
   }
 }
 
-function writeStorage(storage: 'localStorage' | 'sessionStorage', key: string, value: string): void {
+function writeStorage(key: string, value: string): void {
   if (typeof window === 'undefined') return;
   try {
-    window[storage].setItem(key, value);
+    window.localStorage.setItem(key, value);
   } catch {
     // Losing the preference is the correct degradation. Throwing would lose the page.
   }
@@ -69,12 +60,12 @@ function writeStorage(storage: 'localStorage' | 'sessionStorage', key: string, v
 
 /** The stored choice, or `system` when there is none, it is unreadable, or it is not a choice. */
 export function readStoredTheme(): ThemeChoice {
-  const stored = readStorage('localStorage', THEME_STORAGE_KEY);
+  const stored = readStorage(THEME_STORAGE_KEY);
   return isThemeChoice(stored) ? stored : 'system';
 }
 
 export function storeTheme(choice: ThemeChoice): void {
-  writeStorage('localStorage', THEME_STORAGE_KEY, choice);
+  writeStorage(THEME_STORAGE_KEY, choice);
 }
 
 /** `system` removes the attribute, which hands control back to `prefers-color-scheme`. */
@@ -95,14 +86,6 @@ export function readAppliedTheme(): ThemeChoice {
   return isThemeChoice(applied) ? applied : 'system';
 }
 
-export function hasBooted(): boolean {
-  return readStorage('sessionStorage', BOOT_SESSION_KEY) === '1';
-}
-
-export function markBooted(): void {
-  writeStorage('sessionStorage', BOOT_SESSION_KEY, '1');
-}
-
 /**
  * The pre-paint resolver. Synchronous, as the first child of `<body>`, because a deferred script runs
  * after paint. Wrapped in `try` because storage can throw. Built only from this module's constants, so
@@ -114,8 +97,6 @@ export const THEME_BOOT_SCRIPT =
   `var t=window.localStorage.getItem('${THEME_STORAGE_KEY}');` +
   `if(t==='light'||t==='dark'){d.setAttribute('${THEME_ATTRIBUTE}',t);}` +
   `else{d.removeAttribute('${THEME_ATTRIBUTE}');}` +
-  `if(window.sessionStorage.getItem('${BOOT_SESSION_KEY}')==='1'){` +
-  `d.setAttribute('${BOOT_ATTRIBUTE}','${BOOT_SKIP}');}` +
   '}catch(e){}})();';
 
 /**
@@ -127,4 +108,4 @@ export const THEME_BOOT_SCRIPT =
  *     const m = await import('./apps/web/src/lib/theme.ts');\
  *     console.log('sha256-'+createHash('sha256').update(m.THEME_BOOT_SCRIPT).digest('base64'))"
  */
-export const THEME_BOOT_SCRIPT_CSP_HASH = 'sha256-pFr/J6mAOwOBw+OUbWRw3SFuJuxHv7yTRXbAhz9wOxo=';
+export const THEME_BOOT_SCRIPT_CSP_HASH = 'sha256-MaxHIYcm3xBWyY7wpSDoc+efsawG6MCxRrOVEVxIQQw=';

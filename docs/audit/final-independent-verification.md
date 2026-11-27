@@ -106,6 +106,10 @@ Locations: `apps/api/src/rooms/bot-profile.ts`, `apps/api/src/rooms/registry.ts`
 | Page interactive after policy | `document.readyState=complete`, 69 controls, title `Learn — Poker Risk Lab` |
 | Negative control | `button.setAttribute('onclick', "window.__prlInjected='EXECUTED'")` then real click: handler did **not** run; `securitypolicyviolation` `violatedDirective: script-src-attr`, `blockedURI: inline` |
 
+The theme script's hash recorded here is the one of that date. Since 2026-11-26 it is
+`sha256-MaxHIYcm3xBWyY7wpSDoc+efsawG6MCxRrOVEVxIQQw=`, because the first-visit overlay's session
+check left the script; `apps/web/src/lib/theme.ts` holds the current value.
+
 Companion headers: `x-content-type-options: nosniff`, `x-frame-options: DENY`, `referrer-policy: same-origin`, `cross-origin-opener-policy: same-origin`.
 
 `style-src-attr 'unsafe-inline'` is present and confined to that directive. Stated residual, not a script-src hole.
